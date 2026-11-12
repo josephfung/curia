@@ -5886,6 +5886,13 @@ describe('sendPrincipalDraft (#2474)', () => {
     withoutLedger?: true;
     conversationEntities?: import('../../../src/entity-context/conversation-entities.js').ConversationEntityState;
     withoutProvenance?: true;
+    /** Several principal mailboxes (#2475 Task 17): a client per id (null: none connected). */
+    mailboxes?: Record<string, ReturnType<typeof mailboxClient> | null>;
+    /** Per-mailbox send levels; a mailbox not listed reads `level`. */
+    levels?: Record<string, 'off' | 'on_request' | 'routine' | 'all'>;
+    /** The live mailbox ids the gateway may probe; absent: just the default. */
+    mailboxIds?: () => Promise<string[]>;
+    defaultMailboxId?: () => Promise<string>;
   } = {}) {
     const client = o.client === undefined ? mailboxClient() : o.client;
     const review = o.review ?? vi.fn().mockResolvedValue({ kind: 'send' });
@@ -5909,7 +5916,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       sentForDraft: vi.fn().mockResolvedValue(false),
       ...(o.ledger ?? { recordSending: vi.fn().mockResolvedValue(undefined), recordSent: vi.fn().mockResolvedValue(undefined) }),
     };
-    const readSendLevel = vi.fn().mockResolvedValue(o.level ?? 'on_request');
+    const readSendLevel = vi.fn(async (id: string) => o.levels?.[id] ?? o.level ?? 'on_request');
     const actionLogRepo = o.actionLogRepo ?? makeActionLogRepo();
     (mocks.contactService as unknown as { createContact: ReturnType<typeof vi.fn> }).createContact = vi.fn().mockResolvedValue({ id: 'new' });
     const gw = new OutboundGateway({
@@ -5928,7 +5935,9 @@ describe('sendPrincipalDraft (#2474)', () => {
       ...(o.withoutBandReview ? {} : { bandReview: { review: review as unknown as BandSendReview['review'] } }),
       ...(o.piiRedactor ? { piiRedactor: o.piiRedactor } : {}),
       ...(o.conversationEntities ? { conversationEntities: o.conversationEntities } : {}),
-      principalMailbox: async () => client as unknown as NylasClient | null,
+      principalMailbox: async (id: string) => (o.mailboxes ? (o.mailboxes[id] ?? null) : client) as unknown as NylasClient | null,
+      ...(o.mailboxIds ? { principalMailboxIds: o.mailboxIds } : {}),
+      ...(o.defaultMailboxId ? { defaultMailboxId: o.defaultMailboxId } : {}),
       readSendLevel,
       ...(o.withoutProvenance ? {} : { draftProvenance: { createdByCuria, editedByCuria, curiaWritesInTask } }),
       ...(o.withoutLedger ? {} : { sendLedger: ledger as unknown as Pick<import('../../../src/skills/principal-send/send-ledger.js').PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentAutonomousSends' | 'sentForDraft'> }),
@@ -5956,6 +5965,81 @@ describe('sendPrincipalDraft (#2474)', () => {
       redact: vi.fn(),
     } as unknown as PiiRedactor & { detect: ReturnType<typeof vi.fn> };
   }
+
+
+  // ---- #2475 Task 17: the draft's own mailbox ----
+
+  describe('several principal mailboxes (#2475 Task 17)', () => {
+    const both = () => ({ work: mailboxClient(null), personal: mailboxClient(null) });
+
+    it('sends from the mailbox holding the draft', async () => {
+      const mailboxes = { ...both(), personal: mailboxClient(draft()) };
+      const { gw } = make({ mailboxes, mailboxIds: async () => ['work', 'personal'] });
+      const r = await gw.sendPrincipalDraft('d1', opts);
+      expect(r.success).toBe(true);
+      expect(mailboxes.personal.sendDraft).toHaveBeenCalledWith('d1');
+      expect(mailboxes.work.sendDraft).not.toHaveBeenCalled();
+    });
+
+    it("reads the level of the draft's mailbox", async () => {
+      const mailboxes = { ...both(), personal: mailboxClient(draft()) };
+      const { gw, readSendLevel } = make({
+        mailboxes, mailboxIds: async () => ['work', 'personal'],
+        levels: { work: 'all', personal: 'on_request' },
+      });
+      // An autonomous send of a personal draft reads personal's on_request, not work's level.
+      const system = { originator: { contactId: 'system', systemRole: 'system', channel: 'scheduler', initiatedAt: '2026-11-07T10:00:00.000Z' } };
+      const r = await gw.sendPrincipalDraft('d1', { ...opts, authority: { taskMetadata: system } });
+      expect(readSendLevel).toHaveBeenCalledWith('personal');
+      expect(readSendLevel).not.toHaveBeenCalledWith('work');
+      expect(r).toMatchObject({ success: false, refusal: 'not_requested' });
+      // The same draft with the level off is refused setting_off.
+      const off = make({ mailboxes: { ...both(), personal: mailboxClient(draft()) }, mailboxIds: async () => ['work', 'personal'], levels: { work: 'all', personal: 'off' } });
+      expect(await off.gw.sendPrincipalDraft('d1', opts)).toMatchObject({ refusal: 'setting_off' });
+    });
+
+    it('refuses a draft id found in two mailboxes', async () => {
+      const mailboxes = { work: mailboxClient(draft()), personal: mailboxClient(draft()) };
+      const { gw } = make({ mailboxes, mailboxIds: async () => ['work', 'personal'] });
+      const r = await gw.sendPrincipalDraft('d1', opts);
+      expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'ambiguous_mailbox' });
+      expect(r.blockedReason).toMatch(/more than one/i);
+      expect(mailboxes.work.sendDraft).not.toHaveBeenCalled();
+      expect(mailboxes.personal.sendDraft).not.toHaveBeenCalled();
+    });
+
+    it('an explicit mailbox that does not hold the draft is refused, trying no other mailbox', async () => {
+      const mailboxes = { work: mailboxClient(null), personal: mailboxClient(draft()) };
+      const { gw } = make({ mailboxes, mailboxIds: async () => ['work', 'personal'] });
+      const r = await gw.sendPrincipalDraft('d1', { ...opts, mailbox: 'work' });
+      expect(r).toMatchObject({ success: false, refusal: 'not_found' });
+      expect(mailboxes.personal.getDraft).not.toHaveBeenCalled();
+      expect(mailboxes.personal.sendDraft).not.toHaveBeenCalled();
+    });
+
+    it('an unknown or removed mailbox is an error, not the default', async () => {
+      const mailboxes = { work: mailboxClient(draft()) };
+      const { gw } = make({ mailboxes, mailboxIds: async () => ['work'] });
+      const r = await gw.sendPrincipalDraft('d1', { ...opts, mailbox: 'gone' });
+      expect(r).toMatchObject({ success: false, refusal: 'unknown_mailbox' });
+      expect(mailboxes.work.getDraft).not.toHaveBeenCalled();
+    });
+
+    it('keys provenance on the mailbox that held the draft, even if the default moves mid-send (one resolution)', async () => {
+      const mailboxes = { ...both(), personal: mailboxClient(draft()) };
+      let defaultId = 'work';
+      const { gw, createdByCuria, editedByCuria } = make({
+        mailboxes, mailboxIds: async () => ['work', 'personal'],
+        defaultMailboxId: async () => defaultId,
+      });
+      // The default changes after the draft is located; the key must stay personal.
+      mailboxes.personal.getDraft.mockImplementation(async () => { defaultId = 'personal2'; return draft(); });
+      expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+      const refs = [...createdByCuria.mock.calls, ...editedByCuria.mock.calls].flatMap((c) => (c as unknown as Array<Array<{ mailbox: string; draftId: string }>>)[0]!);
+      expect(refs.length).toBeGreaterThan(0);
+      expect(refs.every((r) => r.mailbox === 'personal' && r.draftId === 'd1')).toBe(true);
+    });
+  });
 
   // ---- one test per step ----
 

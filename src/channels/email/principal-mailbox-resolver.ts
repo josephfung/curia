@@ -4,32 +4,30 @@ import { MissingNylasApiKeyError } from '../../principal-mailboxes/types.js';
 import type { PrincipalMailboxes } from '../../principal-mailboxes/service.js';
 
 /**
- * Resolves a Nylas client bound to the principal's default mailbox (#2474, #2475),
- * or null when it is not available.
+ * Resolves a Nylas client bound to the named principal mailbox (#2474, #2475), or null when it
+ * is not available. An unknown or removed id is null, never the default mailbox.
  */
-export type PrincipalMailboxResolver = () => Promise<NylasClient | null>;
+export type PrincipalMailboxResolver = (mailboxId: string) => Promise<NylasClient | null>;
 
 /**
- * Build a resolver that reads the default mailbox's grant from the registry on every call,
- * so a grant rotated in the vault takes effect without a restart. The client is cached per
- * grant id and only rebuilt when the grant changes.
+ * Build a resolver that reads a mailbox's grant from the registry on every call, so a grant
+ * rotated in the vault takes effect without a restart. The client is cached per mailbox and
+ * only rebuilt when its grant changes.
  */
 export function createPrincipalMailboxResolver(deps: {
-  mailboxes: Pick<PrincipalMailboxes, 'defaultMailbox' | 'credentials'>;
+  mailboxes: Pick<PrincipalMailboxes, 'credentials'>;
   logger: Logger;
   createClient?: (apiKey: string, grantId: string) => NylasClient;
 }): PrincipalMailboxResolver {
   const { mailboxes, logger } = deps;
   const createClient = deps.createClient ?? ((key: string, grant: string) => new NylasClient(key, grant, logger));
-  let cached: { key: string; grantId: string; client: NylasClient } | null = null;
+  const cached = new Map<string, { key: string; grantId: string; client: NylasClient }>();
 
-  return async () => {
+  return async (mailboxId) => {
     let creds: { apiKey: string; grantId: string };
     try {
-      const mailbox = await mailboxes.defaultMailbox();
-      // Fail closed: no mailbox registered means no principal mailbox.
-      if (!mailbox) return null;
-      creds = await mailboxes.credentials(mailbox.id);
+      // Throws for an unknown or removed id: fail closed below, never another mailbox.
+      creds = await mailboxes.credentials(mailboxId);
     } catch (err) {
       if (err instanceof MissingNylasApiKeyError) {
         logger.warn('Principal mailbox is registered but the Nylas API key (channel.email.nylas_api_key) is missing; treating mailbox as unavailable');
@@ -47,9 +45,10 @@ export function createPrincipalMailboxResolver(deps: {
       return null;
     }
 
-    if (cached && cached.grantId === grantId && cached.key === key) return cached.client;
+    const hit = cached.get(mailboxId);
+    if (hit && hit.grantId === grantId && hit.key === key) return hit.client;
     const client = createClient(key, grantId);
-    cached = { key, grantId, client };
+    cached.set(mailboxId, { key, grantId, client });
     return client;
   };
 }

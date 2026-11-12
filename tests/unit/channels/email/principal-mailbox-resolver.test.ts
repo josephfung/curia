@@ -38,7 +38,7 @@ function services(opts: {
 }
 
 describe('createPrincipalMailboxResolver', () => {
-  it("resolver uses the default mailbox's grant from the registry", async () => {
+  it("resolver uses the named mailbox's grant from the registry", async () => {
     const createClient = vi.fn((_k: string, g: string) => fakeClient(g));
     const get = vi.fn(async (n: string) => (n === 'principal.mailbox.work.nylas_grant_id' ? 'grant-w' : null));
     const resolve = createPrincipalMailboxResolver({
@@ -46,7 +46,7 @@ describe('createPrincipalMailboxResolver', () => {
       logger,
       createClient,
     });
-    expect(await resolve()).toEqual({ grant: 'grant-w' });
+    expect(await resolve('work')).toEqual({ grant: 'grant-w' });
     expect(createClient).toHaveBeenCalledWith('key', 'grant-w');
   });
 
@@ -57,7 +57,14 @@ describe('createPrincipalMailboxResolver', () => {
       logger,
       createClient,
     });
-    expect(await resolve()).toBeNull();
+    expect(await resolve('work')).toBeNull();
+    expect(createClient).not.toHaveBeenCalled();
+  });
+
+  it('an id that is not a live mailbox is null, never the default mailbox (#2475)', async () => {
+    const createClient = vi.fn();
+    const resolve = createPrincipalMailboxResolver({ mailboxes: services({}), logger: { ...logger, error: vi.fn() } as unknown as typeof logger, createClient });
+    expect(await resolve('personal')).toBeNull();
     expect(createClient).not.toHaveBeenCalled();
   });
 
@@ -68,7 +75,7 @@ describe('createPrincipalMailboxResolver', () => {
       logger,
       createClient,
     });
-    expect(await resolve()).toBeNull();
+    expect(await resolve('work')).toBeNull();
     expect(createClient).not.toHaveBeenCalled();
   });
 
@@ -82,7 +89,7 @@ describe('createPrincipalMailboxResolver', () => {
       logger: log,
       createClient,
     });
-    expect(await resolve()).toBeNull();
+    expect(await resolve('work')).toBeNull();
     expect(createClient).not.toHaveBeenCalled();
     expect(errorSpy).not.toHaveBeenCalled();
     expect(String(warnSpy.mock.calls[0]!.at(-1))).toMatch(/channel\.email\.nylas_api_key/);
@@ -94,7 +101,7 @@ describe('createPrincipalMailboxResolver', () => {
     const log = { ...logger, warn: warnSpy } as unknown as typeof logger;
     const mailboxes = { defaultMailbox: async () => ({ id: 'work', label: 'Work', address: '', isDefault: true, triageStartAt: null }), credentials: async () => ({ apiKey: 'key', grantId: '   ' }) };
     const resolve = createPrincipalMailboxResolver({ mailboxes, logger: log, createClient: vi.fn() });
-    expect(await resolve()).toBeNull();
+    expect(await resolve('work')).toBeNull();
     expect(warnSpy).toHaveBeenCalledWith({ hasGrant: false, hasApiKey: true }, expect.stringContaining('blank'));
   });
 
@@ -106,7 +113,7 @@ describe('createPrincipalMailboxResolver', () => {
       logger: log,
       createClient: vi.fn(),
     });
-    expect(await resolve()).toBeNull();
+    expect(await resolve('work')).toBeNull();
     expect(errorSpy).toHaveBeenCalled();
   });
 
@@ -117,8 +124,8 @@ describe('createPrincipalMailboxResolver', () => {
       logger,
       createClient,
     });
-    const a = await resolve();
-    const b = await resolve();
+    const a = await resolve('work');
+    const b = await resolve('work');
     expect(a).toBe(b);
     expect(createClient).toHaveBeenCalledTimes(1);
   });
@@ -131,9 +138,9 @@ describe('createPrincipalMailboxResolver', () => {
       logger,
       createClient,
     });
-    const a = await resolve();
+    const a = await resolve('work');
     grant = 'grant-2';
-    const b = await resolve();
+    const b = await resolve('work');
     expect(a).not.toBe(b);
     expect(createClient).toHaveBeenCalledTimes(2);
     expect(createClient).toHaveBeenLastCalledWith('key', 'grant-2');

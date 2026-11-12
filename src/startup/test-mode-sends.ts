@@ -345,7 +345,10 @@ export function createRecordingTransports(recorder: SendRecorder, accountNames: 
  * re-read, listMessages for an autonomous send's thread, sendDraft); nothing here can reach a
  * network.
  */
-export function createRecordingPrincipalMailbox(recorder: SendRecorder, principalAddress: () => string): () => NylasClient | null {
+export function createRecordingPrincipalMailbox(recorder: SendRecorder, principalAddress: () => string): (mailboxId?: string) => NylasClient | null {
+  // Asked by mailbox id since #2475, but a test run has one principal mailbox and its drafts are
+  // one set (read per call, so each run sees its own): every id the run's gateway lists resolves
+  // to a fake over that set. Not cached, since the calling run changes between calls.
   return () => {
     const drafts = recorder.principalDrafts?.();
     if (!drafts) return null;
@@ -411,7 +414,7 @@ export function createRecordingOutboundGateway(deps: {
    * The principal's own mailbox (#2474; createRecordingPrincipalMailbox), never in the Curia
    * accounts' map. Absent: sendPrincipalDraft refuses, as production does with no grant.
    */
-  principalMailbox?: () => NylasClient | null;
+  principalMailbox?: (mailboxId?: string) => NylasClient | null;
 }): OutboundGateway {
   const transports = createRecordingTransports(deps.recorder, deps.emailAccounts.map(a => a.name));
   const { review, recorder, principalMailbox } = deps;
@@ -443,7 +446,7 @@ export function createRecordingOutboundGateway(deps: {
     ...(review.relayBudget ? { relayBudget: review.relayBudget } : {}),
     ...(principalMailbox
       ? {
-          principalMailbox: async () => principalMailbox(),
+          principalMailbox: async (mailboxId) => principalMailbox(mailboxId),
           // The calling run's level (seed.principal_mailbox.send_level), else production's default.
           readSendLevel: async () => recorder.sendLevel?.() ?? DEFAULT_SEND_LEVEL,
           draftProvenance: {
