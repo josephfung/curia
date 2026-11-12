@@ -4,6 +4,7 @@ import { PrincipalMailboxAdmin } from '../../../src/principal-mailboxes/admin.js
 import type { PrincipalMailboxStore } from '../../../src/principal-mailboxes/store.js';
 import type { PrincipalMailboxRecord } from '../../../src/principal-mailboxes/types.js';
 import { principalMailboxGrantSecretName } from '../../../src/principal-mailboxes/secrets.js';
+import { ContactService } from '../../../src/contacts/contact-service.js';
 
 const logger = pino({ level: 'silent' });
 const PRINCIPAL = 'principal-contact';
@@ -575,5 +576,42 @@ describe('PrincipalMailboxAdmin.add during the deferred-migration fallback (I5)'
   it('adds normally once the fallback is gone', async () => {
     const { admin } = setup({ isFallbackActive: async () => false, grants: { g: google('pat@work.example.com') } });
     expect(await admin.add({ id: 'work', label: 'Work', grantId: 'g' })).toMatchObject({ ok: true });
+  });
+});
+
+describe('PrincipalMailboxAdmin.remove "No, forget it" with a real contact service (R30 + R32)', () => {
+  it('a forgotten address no longer resolves as a verified principal identity', async () => {
+    const contacts = ContactService.createInMemory();
+    const principal = await contacts.createContact({ displayName: 'Pat', source: 'test' });
+    await contacts.linkIdentity({ contactId: principal.id, channel: 'email', channelIdentifier: 'pat@gmail.com', source: 'ceo_stated' });
+    expect((await contacts.resolveByChannelIdentity('email', 'pat@gmail.com'))?.verified).toBe(true);
+
+    const records: PrincipalMailboxRecord[] = [rec()];
+    const store = {
+      listLive: async () => records.filter((r) => !r.removedAt),
+      getAny: async (id: string) => records.find((r) => r.id === id) ?? null,
+      insert: async () => {},
+      setDefault: async () => {},
+      tombstone: async (id: string) => { records.find((r) => r.id === id)!.removedAt = new Date(); },
+    } as unknown as PrincipalMailboxStore;
+    const vault: Record<string, string> = { [principalMailboxGrantSecretName('personal')]: 'g' };
+    const admin = new PrincipalMailboxAdmin({
+      store,
+      secrets: {
+        get: async (n) => vault[n] ?? null,
+        set: async (n, v) => { vault[n] = v; },
+        delete: async (n) => { delete vault[n]; },
+      },
+      contacts,
+      principalContactId: principal.id,
+      curiaAccountAddresses: async () => [],
+      lookupGrant: async () => google('pat@gmail.com'),
+      logger,
+    });
+
+    await admin.remove({ id: 'personal', stillOwned: false });
+    const resolved = await contacts.resolveByChannelIdentity('email', 'pat@gmail.com');
+    expect(resolved?.contactId).toBe(principal.id);
+    expect(resolved?.verified).toBe(false);
   });
 });
