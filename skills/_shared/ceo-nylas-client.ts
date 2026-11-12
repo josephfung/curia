@@ -96,6 +96,8 @@ export interface NylasDraftFull extends NylasDraftSummary {
   body: string;
   /** How many attachments the draft carries, inline parts included. The bytes are not read. */
   attachmentCount?: number;
+  /** The message this draft replies to; empty for a draft that is not a reply. */
+  replyToMessageId?: string;
 }
 
 // Partial update payload for an existing draft. Only the provided fields are
@@ -904,6 +906,7 @@ interface NylasApiDraftFull {
   snippet?: string;
   date?: number;
   attachments?: NylasApiAttachment[];
+  reply_to_message_id?: string;
 }
 
 interface NylasApiFolder {
@@ -994,6 +997,7 @@ function normalizeDraftFull(draft: NylasApiDraftFull): NylasDraftFull {
     bcc: (draft.bcc ?? []).map(normParticipant),
     body: draft.body ?? '',
     attachmentCount: draft.attachments?.length ?? 0,
+    replyToMessageId: draft.reply_to_message_id ?? '',
   };
 }
 

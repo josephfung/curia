@@ -2130,7 +2130,7 @@ async function main(): Promise<void> {
         : {}),
       // Provenance rows from before #2475 carry no mailbox and belong to the default mailbox.
       defaultMailboxId,
-      draftProvenance: new DraftProvenance(auditLogRepo, logger, undefined, defaultMailboxId),
+      draftProvenance: new DraftProvenance(auditLogRepo, logger, undefined, defaultMailboxId, async () => (await principalMailboxes.list()).map((m) => m.id)),
       sendLedger: new PrincipalSendLedger(workingDocsRepo, logger),
     });
     outboundGateway.start();

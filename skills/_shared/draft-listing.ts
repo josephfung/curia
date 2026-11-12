@@ -49,7 +49,7 @@ export async function annotateDrafts(ctx: ToolContext, drafts: Array<NylasDraftS
         if (!def) throw new Error('No default principal mailbox');
         return def.id;
       };
-      curiaIds = await new DraftProvenance(ctx.auditLogRepo, ctx.log, undefined, defaultMailboxId)
+      curiaIds = await new DraftProvenance(ctx.auditLogRepo, ctx.log, undefined, defaultMailboxId, async () => (await ctx.principalMailboxes?.list() ?? []).map((m) => m.id))
         .createdByCuria(drafts.map((d) => ({ mailbox: d.mailbox, draftId: d.id })));
     } catch (err) {
       ctx.log.warn({ err }, `${toolName}: draft provenance lookup failed — created_by_curia unknown`);

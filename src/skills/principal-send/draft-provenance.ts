@@ -107,7 +107,29 @@ export class DraftProvenance {
     private readonly logger: Logger,
     private readonly now: () => Date = () => new Date(),
     private readonly defaultMailboxId: DefaultMailboxId = async () => DEFAULT_MAILBOX,
+    /**
+     * Ids of the live mailboxes. With it, the review lookups (createdByCuria, editedByCuria, move
+     * sources) match a row with no mailbox, or one whose mailbox is no longer live (the migration
+     * fallback id, a removed mailbox), on its draft id in ANY mailbox: a changed default must never
+     * make a Curia draft read as the principal's (R40). Over-matching only adds review.
+     */
+    private readonly liveMailboxIds?: () => Promise<readonly string[]>,
   ) {}
+
+  /** Which wanted drafts a result row speaks for. */
+  private matcher(wanted: readonly DraftRef[], defaultId: string, live: ReadonlySet<string> | null): (row: ParsedResult) => string[] {
+    return (row) => {
+      const loose = live !== null && (row.mailbox === null || !live.has(row.mailbox));
+      const mailbox = row.mailbox ?? defaultId;
+      return wanted
+        .filter((w) => w.draftId === row.draftId && (loose || w.mailbox === mailbox))
+        .map((w) => draftKey(w.mailbox, w.draftId));
+    };
+  }
+
+  private async liveSet(): Promise<ReadonlySet<string> | null> {
+    return this.liveMailboxIds ? new Set(await this.liveMailboxIds()) : null;
+  }
 
   /**
    * Keys of the drafts a successful draft-reply/compose created (already_exists !== true) in the
@@ -122,30 +144,29 @@ export class DraftProvenance {
     const remaining = drafts.filter((d) => !found.has(draftKey(d.mailbox, d.draftId)));
     if (remaining.length === 0) return found;
     // A draft that is not a create may be a move of one. Read the moves, then ask about the sources.
-    const wanted = new Set(remaining.map((d) => draftKey(d.mailbox, d.draftId)));
-    const sources = new Map<string, DraftRef | null>();
+    const sources = new Map<string, Array<DraftRef | null>>();
     const defaultId = await this.defaultMailboxId();
+    const match = this.matcher(remaining, defaultId, await this.liveSet());
     await this.scan(CURIA_EDIT_TOOLS, false, lookbackDays, (row) => {
       if (row.movedFrom === undefined) return;
-      const key = draftKey(row.mailbox ?? defaultId, row.draftId);
-      if (!wanted.has(key)) return;
-      sources.set(key, row.movedFrom === null ? null : { mailbox: row.movedFrom.mailbox ?? defaultId, draftId: row.movedFrom.draftId });
+      const source = row.movedFrom === null ? null : { mailbox: row.movedFrom.mailbox ?? defaultId, draftId: row.movedFrom.draftId };
+      for (const key of match(row)) sources.set(key, [...(sources.get(key) ?? []), source]);
     });
     if (sources.size === 0) return found;
-    const known = [...sources.values()].filter((s): s is DraftRef => s !== null);
+    const known = [...sources.values()].flat().filter((x): x is DraftRef => x !== null);
     let sourceCreated = new Set<string>();
     if (known.length > 0) {
       if (depth >= MAX_MOVE_DEPTH) {
         // A chain this long is not real: fail toward review.
         this.logger.warn({ depth }, 'draft-provenance: move chain too deep — treating the draft as Curia\'s');
-        sourceCreated = new Set(known.map((s) => draftKey(s.mailbox, s.draftId)));
+        sourceCreated = new Set(known.map((x) => draftKey(x.mailbox, x.draftId)));
       } else {
         sourceCreated = await this.createdWithMoves(known, lookbackDays, depth + 1);
       }
     }
-    for (const [key, source] of sources) {
-      // An unreadable source is Curia's.
-      if (source === null || sourceCreated.has(draftKey(source.mailbox, source.draftId))) found.add(key);
+    for (const [key, list] of sources) {
+      // Curia's if any source is Curia's, and an unreadable source is Curia's.
+      if (list.some((x) => x === null || sourceCreated.has(draftKey(x.mailbox, x.draftId)))) found.add(key);
     }
     return found;
   }
@@ -200,10 +221,9 @@ export class DraftProvenance {
     const wanted = new Set(drafts.map((d) => draftKey(d.mailbox, d.draftId)));
     const found = new Set<string>();
     if (wanted.size === 0) return found;
-    const defaultId = await this.defaultMailboxId();
+    const match = this.matcher(drafts, await this.defaultMailboxId(), await this.liveSet());
     await this.scan(tools, skipExisting, lookbackDays, (row) => {
-      const key = draftKey(row.mailbox ?? defaultId, row.draftId);
-      if (wanted.has(key)) found.add(key);
+      for (const key of match(row)) found.add(key);
     }, () => found.size === wanted.size);
     return found;
   }

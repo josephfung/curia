@@ -20,7 +20,13 @@
     "draft_id": "string (Nylas draft ID)",
     "subject": "string (subject as saved)",
     "to": "array of { name?, email }",
-    "cc": "array of { name?, email }"
+    "cc": "array of { name?, email }",
+    "mailbox": "string (mailbox holding the draft)",
+    "mailbox_label": "string",
+    "moved_from": "{ mailbox, draft_id }? (after move_to_mailbox)",
+    "new_thread": "boolean? (after a move: a moved reply starts a new thread)",
+    "note": "string? (after a move)",
+    "warning": "string? (after a move: the original still exists)"
   },
   "permissions": [],
   "secrets": [],
