@@ -141,6 +141,30 @@ describe('PrincipalMailboxesSection', () => {
     expect((byLabel('Still mine: no') as HTMLInputElement).checked).toBe(true);
   });
 
+  it('a removal whose cleanup did not finish still reloads, and says so with the restart', async () => {
+    const base = mocks.respond;
+    mocks.respond = (path, init) => init?.method === 'DELETE'
+      ? json({ ok: true, removed: true, cleanup_incomplete: ['identity'], restart_required: true })
+      : base(path, init);
+    await mount();
+    await click('Remove');
+    await type('New default mailbox', 'personal');
+    const loadsBefore = mocks.calls.filter(c => c.path === '/api/registry/principal-mailboxes' && !c.init).length;
+    await click('Remove mailbox');
+    expect(byLabel('New default mailbox')).toBeNull();
+    expect(mocks.calls.filter(c => c.path === '/api/registry/principal-mailboxes' && !c.init).length).toBe(loadsBefore + 1);
+    expect(container.textContent).toContain('some cleanup did not finish (identity)');
+    expect(container.textContent).toContain('Restart Curia');
+  });
+
+  it('shows the warning of a change that committed with a pending copy', async () => {
+    const base = mocks.respond;
+    mocks.respond = (path, init) => init?.method === 'PATCH' ? json({ ok: true, warning: 'Saved. Copying pending.' }) : base(path, init);
+    await mount();
+    await click('Make default');
+    expect(container.textContent).toContain('Saved. Copying pending.');
+  });
+
   it('remove asks for a new default when removing the default', async () => {
     await mount();
     await click('Remove');

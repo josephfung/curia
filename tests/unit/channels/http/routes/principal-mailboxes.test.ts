@@ -28,10 +28,10 @@ function makeOptions(over: Partial<PrincipalMailboxesRouteOptions> = {}): Princi
     store: { relabel: vi.fn(async () => {}) },
     admin: {
       add: vi.fn(async () => ({ ok: true as const, mailbox: view() })),
-      setDefault: vi.fn(async () => {}),
+      setDefault: vi.fn(async () => ({})),
       replaceGrant: vi.fn(async () => ({ ok: true as const })),
       removalPreview: vi.fn(async () => preview),
-      remove: vi.fn(async () => {}),
+      remove: vi.fn(async () => ({ cleanupIncomplete: [], restartRequired: false })),
     },
     lookupGrant: vi.fn(async () => ({ email: 'boss@example.com', provider: 'google' })),
     webAppBootstrapSecret: BOOTSTRAP,
@@ -103,27 +103,25 @@ describe('principal-mailboxes routes', () => {
     expect(a.body + b.body + lines.join('')).not.toContain('SECRET-GRANT-XYZ');
   });
 
-  it('PATCH validates both fields before applying, and sets the default before relabelling', async () => {
-    const order: string[] = [];
-    const opts = makeOptions({
-      store: { relabel: vi.fn(async () => { order.push('relabel'); }) },
-      admin: { ...makeOptions().admin, setDefault: vi.fn(async () => { order.push('default'); }) },
-    });
+  it('PATCH takes exactly one change per request and applies nothing otherwise', async () => {
+    const opts = makeOptions();
     await build(opts);
     expect((await req('PATCH', '/api/registry/principal-mailboxes/work', { label: 'X', make_default: false })).statusCode).toBe(400);
-    expect(order).toEqual([]);
-    expect((await req('PATCH', '/api/registry/principal-mailboxes/work', { label: 'X', make_default: true })).statusCode).toBe(200);
-    expect(order).toEqual(['default', 'relabel']);
+    expect((await req('PATCH', '/api/registry/principal-mailboxes/work', { label: 'X', make_default: true })).statusCode).toBe(400);
+    expect((await req('PATCH', '/api/registry/principal-mailboxes/work', { grant_id: 'grant-0003', label: 'X' })).statusCode).toBe(400);
+    expect(opts.store.relabel).not.toHaveBeenCalled();
+    expect(opts.admin.setDefault).not.toHaveBeenCalled();
+    expect(opts.admin.replaceGrant).not.toHaveBeenCalled();
   });
 
   it('POST adds a mailbox and returns 201', async () => {
     const opts = makeOptions();
     await build(opts);
-    const res = await req('POST', '/api/registry/principal-mailboxes', { id: 'work', label: 'Work', grant_id: 'g1', make_default: true });
+    const res = await req('POST', '/api/registry/principal-mailboxes', { id: 'work', label: 'Work', grant_id: 'grant-0001', make_default: true });
     expect(res.statusCode).toBe(201);
-    expect(opts.admin.add).toHaveBeenCalledWith({ id: 'work', label: 'Work', grantId: 'g1', makeDefault: true });
+    expect(opts.admin.add).toHaveBeenCalledWith({ id: 'work', label: 'Work', grantId: 'grant-0001', makeDefault: true });
     expect(res.json().mailbox.id).toBe('work');
-    expect(res.body).not.toContain('g1');
+    expect(res.body).not.toContain('grant-0001');
   });
 
   it('POST maps a refusal to 422 with the refusal code', async () => {
@@ -131,7 +129,7 @@ describe('principal-mailboxes routes', () => {
       admin: { ...makeOptions().admin, add: vi.fn(async () => ({ ok: false as const, refusal: 'address_is_another_contact' as const, detail: 'x belongs to another contact' })) },
     });
     await build(opts);
-    const res = await req('POST', '/api/registry/principal-mailboxes', { id: 'work', label: 'Work', grant_id: 'g1' });
+    const res = await req('POST', '/api/registry/principal-mailboxes', { id: 'work', label: 'Work', grant_id: 'grant-0001' });
     expect(res.statusCode).toBe(422);
     expect(res.json()).toEqual({ refusal: 'address_is_another_contact', detail: 'x belongs to another contact' });
   });
@@ -144,14 +142,14 @@ describe('principal-mailboxes routes', () => {
 
   it('POST add and test return 503 when no Nylas API key is configured', async () => {
     await build(makeOptions({ lookupGrant: undefined }));
-    expect((await req('POST', '/api/registry/principal-mailboxes', { id: 'work', label: 'W', grant_id: 'g' })).statusCode).toBe(503);
-    expect((await req('POST', '/api/registry/principal-mailboxes/test', { grant_id: 'g' })).statusCode).toBe(503);
+    expect((await req('POST', '/api/registry/principal-mailboxes', { id: 'work', label: 'W', grant_id: 'grant-0002' })).statusCode).toBe(503);
+    expect((await req('POST', '/api/registry/principal-mailboxes/test', { grant_id: 'grant-0002' })).statusCode).toBe(503);
   });
 
   it('POST /test returns email and provider, storing nothing', async () => {
     const opts = makeOptions();
     await build(opts);
-    const res = await req('POST', '/api/registry/principal-mailboxes/test', { grant_id: 'g1' });
+    const res = await req('POST', '/api/registry/principal-mailboxes/test', { grant_id: 'grant-0001' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ email: 'boss@example.com', provider: 'google' });
     expect(opts.admin.add).not.toHaveBeenCalled();
@@ -159,19 +157,61 @@ describe('principal-mailboxes routes', () => {
 
   it('POST /test returns 422 when Nylas cannot read the grant', async () => {
     await build(makeOptions({ lookupGrant: vi.fn(async () => { throw new Error('404'); }) }));
-    const res = await req('POST', '/api/registry/principal-mailboxes/test', { grant_id: 'bad' });
+    const res = await req('POST', '/api/registry/principal-mailboxes/test', { grant_id: 'grant-bad1' });
     expect(res.statusCode).toBe(422);
     expect(res.json().refusal).toBe('grant_unreadable');
-    expect(res.body).not.toContain('bad');
+    expect(res.body).not.toContain('grant-bad1');
   });
 
-  it('PATCH relabels and sets default', async () => {
+  it('PATCH relabels, or sets the default', async () => {
     const opts = makeOptions();
     await build(opts);
-    const res = await req('PATCH', '/api/registry/principal-mailboxes/work', { label: 'Office', make_default: true });
-    expect(res.statusCode).toBe(200);
+    expect((await req('PATCH', '/api/registry/principal-mailboxes/work', { label: 'Office' })).statusCode).toBe(200);
     expect(opts.store.relabel).toHaveBeenCalledWith('work', 'Office');
+    expect((await req('PATCH', '/api/registry/principal-mailboxes/work', { make_default: true })).statusCode).toBe(200);
     expect(opts.admin.setDefault).toHaveBeenCalledWith('work');
+  });
+
+  it('PATCH returns 200 with the warning when the change committed but the flat-key copy is pending', async () => {
+    const opts = makeOptions({ admin: { ...makeOptions().admin, setDefault: vi.fn(async () => ({ warning: 'copy pending' })) } });
+    await build(opts);
+    const res = await req('PATCH', '/api/registry/principal-mailboxes/work', { make_default: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, warning: 'copy pending' });
+  });
+
+  it('rejects malformed grant ids and labels with control characters (F4)', async () => {
+    const opts = makeOptions();
+    await build(opts);
+    for (const grant of ['short', 'has space-0000', 'https://x/grants/abc', 'a'.repeat(129)]) {
+      expect((await req('POST', '/api/registry/principal-mailboxes/test', { grant_id: grant })).statusCode, grant).toBe(400);
+      expect((await req('POST', '/api/registry/principal-mailboxes', { id: 'work', label: 'Work', grant_id: grant })).statusCode, grant).toBe(400);
+      expect((await req('PATCH', '/api/registry/principal-mailboxes/work', { grant_id: grant })).statusCode, grant).toBe(400);
+    }
+    for (const label of ['Wo\nrk', 'Tab\there', 'x'.repeat(81)]) {
+      expect((await req('POST', '/api/registry/principal-mailboxes', { id: 'work', label, grant_id: '8a1d2c3e-0000-4000-8000-000000000001' })).statusCode).toBe(400);
+      expect((await req('PATCH', '/api/registry/principal-mailboxes/work', { label })).statusCode).toBe(400);
+    }
+    expect((await req('POST', '/api/registry/principal-mailboxes/test', { grant_id: '8a1d2c3e-0000-4000-8000-000000000001' })).statusCode).toBe(200);
+    expect(opts.admin.add).not.toHaveBeenCalled();
+    expect(opts.store.relabel).not.toHaveBeenCalled();
+  });
+
+  it('POST /test explains the failure by Nylas status, never by its text (silent-failure 7)', async () => {
+    const cases: Array<[number | undefined, string, RegExp]> = [
+      [401, 'NylasApiError', /API key/],
+      [404, 'NylasApiError', /No such grant/],
+      [503, 'NylasApiError', /did not answer/],
+      [undefined, 'NylasSdkTimeoutError', /did not answer/],
+    ];
+    for (const [statusCode, name, detail] of cases) {
+      await app?.close();
+      await build(makeOptions({ lookupGrant: vi.fn(async () => { throw Object.assign(new Error('grants/grant-hidden-1'), { name, ...(statusCode ? { statusCode } : {}) }); }) }));
+      const res = await req('POST', '/api/registry/principal-mailboxes/test', { grant_id: 'grant-0001' });
+      expect(res.statusCode).toBe(422);
+      expect(res.json().detail).toMatch(detail);
+      expect(res.body).not.toContain('grant-hidden-1');
+    }
   });
 
   it('PATCH maps unknown and removed ids to 404', async () => {
@@ -215,6 +255,15 @@ describe('principal-mailboxes routes', () => {
     const res = await req('DELETE', '/api/registry/principal-mailboxes/work', { still_owned: false, new_default_id: 'personal', new_primary_email: 'a@example.com' });
     expect(res.statusCode).toBe(200);
     expect(opts.admin.remove).toHaveBeenCalledWith({ id: 'work', stillOwned: false, newDefaultId: 'personal', newPrimaryEmail: 'a@example.com' });
+    expect(res.json()).toEqual({ ok: true, removed: true, cleanup_incomplete: [], restart_required: false });
+  });
+
+  it('DELETE reports unfinished cleanup and a needed restart as a 200, never a failure', async () => {
+    const opts = makeOptions({ admin: { ...makeOptions().admin, remove: vi.fn(async () => ({ cleanupIncomplete: ['identity'], restartRequired: true })) } });
+    await build(opts);
+    const res = await req('DELETE', '/api/registry/principal-mailboxes/work', { still_owned: false });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, removed: true, cleanup_incomplete: ['identity'], restart_required: true });
   });
 
   it('DELETE maps a removal precondition error to 422 and unknown to 404', async () => {
@@ -230,12 +279,12 @@ describe('principal-mailboxes routes', () => {
   it('PATCH grant_id replaces the grant and never echoes it', async () => {
     const opts = makeOptions();
     await build(opts);
-    const res = await req('PATCH', '/api/registry/principal-mailboxes/work', { grant_id: ' g-new ' });
+    const res = await req('PATCH', '/api/registry/principal-mailboxes/work', { grant_id: ' grant-new1 ' });
     expect(res.statusCode).toBe(200);
-    expect(opts.admin.replaceGrant).toHaveBeenCalledWith('work', 'g-new');
+    expect(opts.admin.replaceGrant).toHaveBeenCalledWith('work', 'grant-new1');
     expect(opts.admin.setDefault).not.toHaveBeenCalled();
     expect(opts.store.relabel).not.toHaveBeenCalled();
-    expect(res.body).not.toContain('g-new');
+    expect(res.body).not.toContain('grant-new1');
   });
 
   it('PATCH grant_id maps a refusal to 422 and applies nothing else', async () => {
@@ -243,7 +292,7 @@ describe('principal-mailboxes routes', () => {
       admin: { ...makeOptions().admin, replaceGrant: vi.fn(async () => ({ ok: false as const, refusal: 'address_mismatch' as const, detail: 'wrong account' })) },
     });
     await build(opts);
-    const res = await req('PATCH', '/api/registry/principal-mailboxes/work', { grant_id: 'g', label: 'X', make_default: true });
+    const res = await req('PATCH', '/api/registry/principal-mailboxes/work', { grant_id: 'grant-0002' });
     expect(res.statusCode).toBe(422);
     expect(res.json()).toEqual({ refusal: 'address_mismatch', detail: 'wrong account' });
     expect(opts.admin.setDefault).not.toHaveBeenCalled();
@@ -256,7 +305,7 @@ describe('principal-mailboxes routes', () => {
     expect((await req('PATCH', '/api/registry/principal-mailboxes/work', { grant_id: 5 })).statusCode).toBe(400);
     await app.close();
     await build(makeOptions({ lookupGrant: undefined }));
-    expect((await req('PATCH', '/api/registry/principal-mailboxes/work', { grant_id: 'g' })).statusCode).toBe(503);
+    expect((await req('PATCH', '/api/registry/principal-mailboxes/work', { grant_id: 'grant-0002' })).statusCode).toBe(503);
   });
 
   it('logs the message of a non-Nylas failure, but only the class of a Nylas one', async () => {

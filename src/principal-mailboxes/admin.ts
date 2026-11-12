@@ -7,6 +7,7 @@ import type { ContactService } from '../contacts/contact-service.js';
 import type { PrincipalMailboxStore } from './store.js';
 import type { PrincipalMailboxView } from './service.js';
 import { principalMailboxGrantSecretName } from './secrets.js';
+import { grantLookupFailureDetail, grantSafeErrorFields, mayCarryGrantId } from './error-fields.js';
 import {
   MAILBOX_ID_RE,
   MAX_LIVE_MAILBOXES,
@@ -45,6 +46,19 @@ export interface RemovalPreview {
   calendars: Array<{ calendarId: string; label: string }>;
 }
 
+/** Outcome of a removal that went through: the tombstone is committed whatever else failed. */
+export interface RemovalOutcome {
+  /** Cleanup steps after the tombstone that did not finish (names only). Empty when all did. */
+  cleanupIncomplete: string[];
+  /** The removed mailbox was the default, so calendar and the acquaintance check still hold its
+   *  grant (bound at boot) until a restart. */
+  restartRequired: boolean;
+}
+
+/** Shown when the registry change committed but copying the default into the flat keys failed. */
+export const MIRROR_PENDING_WARNING =
+  'Saved. Copying the default mailbox to the settings the inbox tools read failed; Curia retries at the next restart and health check.';
+
 /** A removal request that breaks a precondition; nothing was changed. */
 export class MailboxRemovalError extends Error {
   constructor(message: string) {
@@ -72,6 +86,11 @@ export interface PrincipalMailboxAdminDeps {
   >;
   principalContactId: string;
   curiaAccountAddresses: () => Promise<string[]>;
+  /** Grant ids of Curia's own email accounts (F6): a mailbox may never reuse one. */
+  curiaAccountGrantIds?: () => Promise<string[]>;
+  /** Re-derives the flat keys from the registry (flat-mirror.ts). Run when a mirror write
+   *  after a committed change fails, and after every removal, so they never keep a stale grant. */
+  reconcileFlatKeys?: () => Promise<unknown>;
   lookupGrant: (grantId: string) => Promise<{ email: string; provider: string }>;
   onRemoved?: Array<(id: string) => Promise<void>>;
   /** True while the deferred-migration fallback is served. An add then would end the
@@ -109,7 +128,7 @@ export class PrincipalMailboxAdmin {
     grantId: string;
     makeDefault?: boolean;
   }): Promise<
-    | { ok: true; mailbox: PrincipalMailboxView }
+    | { ok: true; mailbox: PrincipalMailboxView; warning?: string }
     | { ok: false; refusal: AddMailboxRefusal; detail: string }
   > {
     const refuse = (refusal: AddMailboxRefusal, detail: string) => ({ ok: false as const, refusal, detail });
@@ -137,8 +156,8 @@ export class PrincipalMailboxAdmin {
       grant = await this.deps.lookupGrant(grantId);
     } catch (err) {
       // Class name only: a lookup error's message could carry the grant id.
-      this.log.warn({ errName: err instanceof Error ? err.name : 'unknown', mailboxId: id }, 'Could not read the Nylas grant for a new mailbox');
-      return refuse('grant_unreadable', 'The grant could not be read from Nylas');
+      this.log.warn({ ...grantSafeErrorFields(err), mailboxId: id }, 'Could not read the Nylas grant for a new mailbox');
+      return refuse('grant_unreadable', grantLookupFailureDetail(err));
     }
     if (grant.provider !== 'google') {
       return refuse('not_google', `Only Google mailboxes are supported (got ${grant.provider})`);
@@ -149,6 +168,9 @@ export class PrincipalMailboxAdmin {
       if (stored === grantId) {
         return refuse('grant_in_use', `That grant is already connected as "${m.label}"`);
       }
+    }
+    if (this.deps.curiaAccountGrantIds && (await this.deps.curiaAccountGrantIds()).includes(grantId)) {
+      return refuse('curia_account_address', "That grant is one of Curia's own email accounts");
     }
 
     const address = lower(grant.email);
@@ -211,15 +233,19 @@ export class PrincipalMailboxAdmin {
 
     const rec = await this.deps.store.getAny(id);
     if (!rec) throw new Error(`Mailbox "${id}" vanished after insert`);
-    if (rec.isDefault) await this.mirrorFlatKeys(id, grantId, rec.address);
-    return { ok: true, mailbox: toView(rec) };
+    const warning = rec.isDefault
+      ? await this.mirrorAfterCommit(id, () => this.mirrorFlatKeys(id, grantId, rec.address))
+      : undefined;
+    return { ok: true, mailbox: toView(rec), ...(warning ? { warning } : {}) };
   }
 
-  async setDefault(id: string): Promise<void> {
+  /** The new default is committed first; a failed flat-key copy after it is a warning, not a failure. */
+  async setDefault(id: string): Promise<{ warning?: string }> {
     await this.deps.store.setDefault(id);
     const rec = await this.deps.store.getAny(id);
     if (!rec) throw new UnknownMailboxError(id);
-    await this.mirrorDefaultFromVault(rec);
+    const warning = await this.mirrorAfterCommit(id, () => this.mirrorDefaultFromVault(rec));
+    return warning ? { warning } : {};
   }
 
   /**
@@ -230,7 +256,7 @@ export class PrincipalMailboxAdmin {
   async replaceGrant(
     id: string,
     grantId: string,
-  ): Promise<{ ok: true } | { ok: false; refusal: ReplaceGrantRefusal; detail: string }> {
+  ): Promise<{ ok: true; warning?: string } | { ok: false; refusal: ReplaceGrantRefusal; detail: string }> {
     const refuse = (refusal: ReplaceGrantRefusal, detail: string) => ({ ok: false as const, refusal, detail });
     const { rec, others } = await this.liveTarget(id);
 
@@ -239,8 +265,8 @@ export class PrincipalMailboxAdmin {
       grant = await this.deps.lookupGrant(grantId);
     } catch (err) {
       // Class name only: a lookup error's message could carry the grant id.
-      this.log.warn({ errName: err instanceof Error ? err.name : 'unknown', mailboxId: id }, 'Could not read the replacement Nylas grant');
-      return refuse('grant_unreadable', 'The grant could not be read from Nylas');
+      this.log.warn({ ...grantSafeErrorFields(err), mailboxId: id }, 'Could not read the replacement Nylas grant');
+      return refuse('grant_unreadable', grantLookupFailureDetail(err));
     }
     if (grant.provider !== 'google') {
       return refuse('not_google', `Only Google mailboxes are supported (got ${grant.provider})`);
@@ -256,9 +282,11 @@ export class PrincipalMailboxAdmin {
     }
 
     await this.deps.secrets.set(principalMailboxGrantSecretName(id), grantId);
-    if (rec.isDefault) await this.mirrorFlatKeys(id, grantId, rec.address);
     this.log.info({ mailboxId: id }, 'Principal mailbox grant replaced');
-    return { ok: true };
+    const warning = rec.isDefault
+      ? await this.mirrorAfterCommit(id, () => this.mirrorFlatKeys(id, grantId, rec.address))
+      : undefined;
+    return warning ? { ok: true, warning } : { ok: true };
   }
 
   async removalPreview(id: string): Promise<RemovalPreview> {
@@ -290,7 +318,7 @@ export class PrincipalMailboxAdmin {
     stillOwned: boolean;
     newDefaultId?: string;
     newPrimaryEmail?: string;
-  }): Promise<void> {
+  }): Promise<RemovalOutcome> {
     const { id } = input;
     // 1. Validate.
     const { rec, others } = await this.liveTarget(id);
@@ -350,9 +378,29 @@ export class PrincipalMailboxAdmin {
       throw err;
     }
 
-    // 4-6. Past the tombstone: log and rethrow, never un-tombstone.
-    try {
-      if (!input.stillOwned) {
+    // 4-7. Past the tombstone the removal stands: each cleanup step runs on its own, a failure
+    // is logged and named in the outcome, and the rest still run. The grant and the flat keys
+    // go first, so a later failure cannot leave the inbox tools acting on the removed mailbox.
+    const cleanupIncomplete: string[] = [];
+    const step = async (name: string, work: () => Promise<void>): Promise<void> => {
+      try {
+        await work();
+      } catch (err) {
+        cleanupIncomplete.push(name);
+        this.log.error({ ...this.safeErrFields(err), mailboxId: id, step: name }, 'Principal mailbox removed but a cleanup step failed');
+      }
+    };
+    await step('grant_secret', () => this.deps.secrets.delete(principalMailboxGrantSecretName(id)));
+    if (wasDefault) {
+      await step('flat_keys', async () => {
+        if (newDefault === null) return this.clearFlatKeys(id);
+        const next = await this.deps.store.getAny(newDefault);
+        if (!next) throw new UnknownMailboxError(newDefault);
+        await this.mirrorDefaultFromVault(next);
+      });
+    }
+    if (!input.stillOwned) {
+      await step('identity', async () => {
         if (rec.addedIdentityId) await this.deps.contacts.unlinkIdentity(rec.addedIdentityId);
         // R30: the address is no longer the principal's, whoever created its identity (a
         // migrated mailbox or an R16 pre-existing one). Inactive, not deleted: reversible.
@@ -366,22 +414,21 @@ export class PrincipalMailboxAdmin {
             await this.deps.contacts.setIdentityStatus(i.id, 'defunct');
           }
         }
-      }
-      await this.deps.secrets.delete(principalMailboxGrantSecretName(id));
-      if (wasDefault) {
-        if (newDefault !== null) {
-          const next = await this.deps.store.getAny(newDefault);
-          if (!next) throw new UnknownMailboxError(newDefault);
-          await this.mirrorDefaultFromVault(next);
-        } else {
-          await this.clearFlatKeys(id);
-        }
-      }
-      for (const hook of this.deps.onRemoved ?? []) await hook(id);
-    } catch (err) {
-      this.log.error({ err, mailboxId: id }, 'Principal mailbox removed but cleanup failed part-way');
-      throw err;
+      });
     }
+    for (const [n, hook] of (this.deps.onRemoved ?? []).entries()) await step(`on_removed_${n + 1}`, () => hook(id));
+    // Always re-derive the flat keys from the registry: it repairs a failed copy above too.
+    if (this.deps.reconcileFlatKeys) {
+      try {
+        await this.deps.reconcileFlatKeys();
+        const at = cleanupIncomplete.indexOf('flat_keys');
+        if (at >= 0) cleanupIncomplete.splice(at, 1);
+      } catch (err) {
+        if (!cleanupIncomplete.includes('flat_keys')) cleanupIncomplete.push('flat_keys');
+        this.log.error({ ...this.safeErrFields(err), mailboxId: id }, 'Could not reconcile the flat keys after removing a principal mailbox');
+      }
+    }
+    return { cleanupIncomplete, restartRequired: wasDefault };
   }
 
   private async liveTarget(id: string): Promise<{ rec: PrincipalMailboxRecord; others: PrincipalMailboxRecord[] }> {
@@ -425,12 +472,49 @@ export class PrincipalMailboxAdmin {
     }
   }
 
+  /** Undo steps run on their own, so a failed unlink still deletes the secret and vice versa. */
   private async undoAdd(secretName: string, identityId: string | null): Promise<void> {
+    if (identityId) {
+      try {
+        await this.deps.contacts.unlinkIdentity(identityId);
+      } catch (err) {
+        this.log.error({ err, identityId }, 'Could not unlink the identity of a failed mailbox add; remove it by hand in Contacts');
+      }
+    }
     try {
-      if (identityId) await this.deps.contacts.unlinkIdentity(identityId);
       await this.deps.secrets.delete(secretName);
     } catch (err) {
-      this.log.error({ err, secretName }, 'Could not undo a failed mailbox add; remove the leftovers by hand');
+      this.log.error({ err, secretName }, 'Could not delete the grant of a failed mailbox add; clear it on the Secrets page');
     }
+  }
+
+  /**
+   * A flat-key copy after a committed registry change. On failure the change still stands: the
+   * flat keys are re-derived at once, and only if that fails too is a warning returned (the next
+   * restart or canary repairs them). Never throws.
+   */
+  private async mirrorAfterCommit(id: string, mirror: () => Promise<void>): Promise<string | undefined> {
+    try {
+      await mirror();
+      return undefined;
+    } catch (err) {
+      this.log.warn({ ...this.safeErrFields(err), mailboxId: id }, 'Copying the default mailbox into the flat keys failed after the change committed; reconciling');
+      if (!this.deps.reconcileFlatKeys) return MIRROR_PENDING_WARNING;
+      try {
+        await this.deps.reconcileFlatKeys();
+        this.log.info({ mailboxId: id }, 'Flat keys repaired by reconcile after a failed copy');
+        return undefined;
+      } catch (err) {
+        this.log.error({ ...this.safeErrFields(err), mailboxId: id }, 'Flat-key reconcile after a failed copy failed too');
+        return MIRROR_PENDING_WARNING;
+      }
+    }
+  }
+
+  /** Class and status, plus the message when the error cannot carry a grant id (R20). */
+  private safeErrFields(err: unknown): Record<string, unknown> {
+    return err instanceof Error && !mayCarryGrantId(err)
+      ? { ...grantSafeErrorFields(err), errMessage: err.message }
+      : { ...grantSafeErrorFields(err) };
   }
 }

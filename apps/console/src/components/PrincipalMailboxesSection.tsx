@@ -47,6 +47,25 @@ async function errorMessage(res: Response): Promise<string> {
   return `HTTP ${res.status}`;
 }
 
+// A change that committed but left follow-up work: shown after the list reloads.
+async function successNotice(res: Response): Promise<string | null> {
+  try {
+    const d = await res.json() as {
+      warning?: string; cleanup_incomplete?: string[]; restart_required?: boolean;
+    };
+    const parts: string[] = [];
+    if (d.warning) parts.push(d.warning);
+    if (d.cleanup_incomplete && d.cleanup_incomplete.length > 0) {
+      parts.push(`Removed, but some cleanup did not finish (${d.cleanup_incomplete.join(', ')}); check the server logs.`);
+    }
+    if (d.restart_required) parts.push("Restart Curia so calendar stops using the removed mailbox's account.");
+    return parts.length > 0 ? parts.join(' ') : null;
+  } catch (err) {
+    console.error('[PrincipalMailboxesSection successNotice] failed to parse the response body:', err);
+    return null;
+  }
+}
+
 const jsonInit = (method: string, body: unknown): RequestInit => ({
   method,
   headers: { 'Content-Type': 'application/json' },
@@ -55,7 +74,7 @@ const jsonInit = (method: string, body: unknown): RequestInit => ({
 
 function RemovePanel({ preview, onDone, onCancel }: {
   preview: RemovalPreview;
-  onDone: () => void;
+  onDone: (notice: string | null) => void;
   onCancel: () => void;
 }) {
   const [stillOwned, setStillOwned] = useState(preview.stillOwnedDefault);
@@ -78,7 +97,7 @@ function RemovePanel({ preview, onDone, onCancel }: {
       if (needsPrimary) body['new_primary_email'] = newPrimary;
       const res = await apiFetch(`${BASE}/${encodeURIComponent(preview.mailbox.id)}`, jsonInit('DELETE', body));
       if (!res.ok) throw new Error(await errorMessage(res));
-      onDone();
+      onDone(await successNotice(res));
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to remove mailbox');
     } finally {
@@ -160,6 +179,7 @@ function RemovePanel({ preview, onDone, onCancel }: {
 export function PrincipalMailboxesSection() {
   const [mailboxes, setMailboxes] = useState<Mailbox[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState<RemovalPreview | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; label: string } | null>(null);
@@ -194,6 +214,7 @@ export function PrincipalMailboxesSection() {
   const run = useCallback(async (fn: () => Promise<void>, fallback: string) => {
     setBusy(true);
     setErr(null);
+    setNotice(null);
     try { await fn(); } catch (e) { setErr(e instanceof Error ? e.message : fallback); } finally { setBusy(false); }
   }, []);
 
@@ -211,16 +232,20 @@ export function PrincipalMailboxesSection() {
       id: id.trim(), label: label.trim(), grant_id: grantId.trim(), make_default: makeDefault,
     }));
     if (!res.ok) throw new Error(await errorMessage(res));
+    const added = await successNotice(res);
     setId(''); setLabel(''); setGrantId(''); grantInput.current = ''; setMakeDefault(false); setTested(null); // drop the grant from state
     await load();
+    setNotice(added);
   }, 'Failed to add mailbox');
 
   const patch = (mid: string, body: Record<string, unknown>) => run(async () => {
     const res = await apiFetch(`${BASE}/${encodeURIComponent(mid)}`, jsonInit('PATCH', body));
     if (!res.ok) throw new Error(await errorMessage(res));
+    const updated = await successNotice(res);
     setRenaming(null);
     setReplacing(null); // drop any replacement grant from state
     await load();
+    setNotice(updated);
   }, 'Failed to update mailbox');
 
   const startRemove = (mid: string) => run(async () => {
@@ -244,6 +269,7 @@ export function PrincipalMailboxesSection() {
         not Curia's email accounts above.
       </p>
       {err && <p className="autonomy-error" style={{ margin: '0 0 8px' }}>{err}</p>}
+      {notice && <p className="settings-page-sub" role="status" style={{ margin: '0 0 8px' }}>{notice}</p>}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {mailboxes.map(m => (
@@ -308,7 +334,7 @@ export function PrincipalMailboxesSection() {
           key={removing.mailbox.id}
           preview={removing}
           onCancel={() => setRemoving(null)}
-          onDone={() => { setRemoving(null); void load(); }}
+          onDone={(n) => { setRemoving(null); setNotice(n); void load(); }}
         />
       )}
 
