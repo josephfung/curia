@@ -66,9 +66,10 @@ describe('reconcileFlatMailboxKeys', () => {
     expect(await s.run()).toBe('in_sync');
   });
 
-  it('leaves the flat keys as they are when the default has no grant to copy', async () => {
-    const s = setup([rec()], { ceo_nylas_grant_id: 'g-old' });
+  it('clears the flat keys when the default has no grant (the registry refuses it too)', async () => {
+    const s = setup([rec()], { ceo_nylas_grant_id: 'g-old', ceo_self_email: 'pat@work.example.com' });
     expect(await s.run()).toBe('no_grant');
-    expect(s.secrets['ceo_nylas_grant_id']).toBe('g-old');
+    expect(s.secrets['ceo_nylas_grant_id']).toBeUndefined();
+    expect(s.secrets['ceo_self_email']).toBeUndefined();
   });
 });

@@ -5,7 +5,7 @@
 // writes them on every change, and this re-derives them at boot and on each health-canary
 // tick. So a copy that failed part-way (after a grant replacement, a new default, or the clear
 // after removing the default) or a value written from outside the console is repaired without
-// the operator. While the registry is empty the flat keys are the source, and nothing changes.
+// the operator. Flat keys for a default the registry cannot serve (no grant) are cleared. While the registry is empty the flat keys are the source, and nothing changes.
 //
 // Logs name keys and mailbox ids only, never a grant id (R20).
 import type { Logger } from '../logger.js';
@@ -46,7 +46,11 @@ export async function reconcileFlatMailboxKeys(deps: FlatMirrorDeps): Promise<Fl
 
   const grant = await secrets.get(principalMailboxGrantSecretName(def.id));
   if (!grant) {
-    logger.error({ mailboxId: def.id }, 'The default principal mailbox has no grant in the vault; the flat keys were left as they are');
+    // The registry refuses a mailbox without a grant (credentials() throws), so ceo-inbox must
+    // not keep acting through a flat copy of it either.
+    if (flatGrant !== null) await secrets.delete(FLAT_GRANT_KEY);
+    if (flatEmail !== null) await secrets.delete(FLAT_EMAIL_KEY);
+    logger.error({ mailboxId: def.id }, 'The default principal mailbox has no grant in the vault; cleared the flat principal-mailbox keys');
     return 'no_grant';
   }
   const address = def.address.trim().toLowerCase();
