@@ -28,6 +28,8 @@ import {
 import type { NylasClient } from '../channels/email/nylas-client.js';
 import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
 import type { PrincipalMailboxes, PrincipalMailboxView } from '../principal-mailboxes/service.js';
+import { MissingNylasApiKeyError } from '../principal-mailboxes/types.js';
+import { grantSafeErrorFields } from '../principal-mailboxes/error-fields.js';
 import type { FlatMailboxMigrationOutcome } from '../principal-mailboxes/migrate-flat-mailbox.js';
 import type { MailboxOutageNotifier } from './mailbox-outage-notifier.js';
 
@@ -384,8 +386,8 @@ export class HealthService {
 
   /**
    * True once a live principal mailbox has passed its canary (the setup catalog's
-   * `principal_mailbox_ready` check). A mailbox not probed yet is probed now rather than
-   * reported pending until the next scheduled canary.
+   * `principal_mailbox_ready` check). A mailbox not probed yet, or whose last probe was not
+   * ok, is probed now rather than reported pending until the next scheduled canary.
    */
   async principalMailboxReady(): Promise<boolean> {
     const { principalMailboxes, logger } = this.deps;
@@ -393,7 +395,7 @@ export class HealthService {
     try {
       const live = await principalMailboxes.list();
       for (const view of live) {
-        if (!this.mailboxOk.has(view.id)) await this.probeMailbox(view);
+        if (this.mailboxOk.get(view.id) !== true) await this.probeMailbox(view);
       }
       return live.some((m) => this.mailboxOk.get(m.id) === true);
     } catch (err) {
@@ -414,7 +416,8 @@ export class HealthService {
     } catch (err) {
       outcome = 'error';
       if (this.lastMigrationOutcome !== outcome) {
-        logger.warn({ err }, 'Mailbox migration retry failed; still serving the flat grant');
+        // Class and status only: a Nylas error can carry the grant id (R20).
+        logger.warn(grantSafeErrorFields(err), 'Mailbox migration retry failed; still serving the flat grant');
       }
       this.lastMigrationOutcome = outcome;
       return;
@@ -475,16 +478,21 @@ export class HealthService {
       ]);
       result = { name, status: 'ok' };
     } catch (err) {
-      const code = typeof err === 'object' && err !== null ? (err as { statusCode?: unknown }).statusCode : undefined;
-      const errorName = err instanceof Error ? err.name : typeof err;
-      logger.warn({ mailboxId: view.id, errorName, statusCode: code }, 'Principal mailbox probe failed');
+      if (err instanceof MissingNylasApiKeyError) {
+        // Nylas is not configured at all: nothing to be unhealthy about, and no outage to
+        // alert on (as the old nylas_calendar canary reported it).
+        this.mailboxOk.set(view.id, false);
+        return { name, status: 'skipped', detail: 'No Nylas API key configured' };
+      }
+      const { errName, statusCode: code } = grantSafeErrorFields(err);
+      logger.warn({ mailboxId: view.id, errorName: errName, statusCode: code }, 'Principal mailbox probe failed');
       // Reconnecting only fixes auth failures (401/403); don't prescribe it for timeouts or 5xx.
       result = {
         name,
         status: 'fail',
         detail: code === 401 || code === 403
-          ? `Mailbox "${view.label}" grant auth failed (401/403) — reconnect it in the console`
-          : `Mailbox "${view.label}" probe failed (${errorName}) — check Nylas connectivity`,
+          ? `Mailbox "${view.label}" grant auth failed (401/403) — reconnect it in Nylas, then use Replace grant on it in the console (Channels → Email → Principal's mailboxes)`
+          : `Mailbox "${view.label}" probe failed (${errName}) — check Nylas connectivity`,
       };
     } finally {
       if (timer !== undefined) clearTimeout(timer);

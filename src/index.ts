@@ -97,6 +97,7 @@ import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
 import { migrateFlatPrincipalMailbox } from './principal-mailboxes/migrate-flat-mailbox.js';
+import { grantSafeErrorFields } from './principal-mailboxes/error-fields.js';
 import { PrincipalAcquaintanceCheck } from './contacts/principal-acquaintance.js';
 import { NylasPrincipalMailbox } from './contacts/nylas-principal-mailbox.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
@@ -1196,10 +1197,19 @@ async function main(): Promise<void> {
   const retryMailboxMigration = config.nylasApiKey
     ? (() => {
         const nylasApiKey = config.nylasApiKey;
+        const principalId = principalContact?.id;
         return () => migrateFlatPrincipalMailbox({
           store: principalMailboxStore,
           secrets: secretsService,
           lookupGrant: (grantId) => new NylasClient(nylasApiKey, grantId, logger).getGrant(),
+          isVerifiedPrincipalEmail: principalId
+            ? async (address) => {
+                const found = await contactService.getContactWithIdentities(principalId);
+                return (found?.identities ?? []).some((i) =>
+                  i.channel === 'email' && i.verified && i.status === 'active' &&
+                  i.channelIdentifier.trim().toLowerCase() === address);
+              }
+            : undefined,
           logger,
         });
       })()
@@ -1214,7 +1224,8 @@ async function main(): Promise<void> {
         principalMailboxes.setFallback(null);
       }
     } catch (err) {
-      logger.warn({ err }, 'Principal mailbox migration failed; serving the flat grant until it succeeds');
+      // Class and status only: a Nylas error can carry the grant id (R20).
+      logger.warn(grantSafeErrorFields(err), 'Principal mailbox migration failed; serving the flat grant until it succeeds');
       try {
         const flatGrant = (await secretsService.get('ceo_nylas_grant_id'))?.trim();
         if (flatGrant) principalMailboxes.setFallback({ id: 'mailbox', grantId: flatGrant });
@@ -1275,7 +1286,7 @@ async function main(): Promise<void> {
     } else if (!grantReadFailed) {
       // Genuine absence (the read-failure path logged its own error above).
       logger.warn(
-        'Calendar disabled — no principal mailbox is configured. Set the principal Nylas grant (ceo_nylas_grant_id) to enable calendar (RSVP/holds/events run as the principal).',
+        "Calendar disabled — no principal mailbox is configured. Add one in the console under Channels → Email → Principal's mailboxes, then restart, to enable calendar (RSVP/holds/events run as the principal).",
       );
     }
   }

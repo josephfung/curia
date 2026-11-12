@@ -11,6 +11,7 @@ import type { Logger } from '../logger.js';
 import type { PrincipalMailboxStore } from './store.js';
 import { principalMailboxGrantSecretName } from './secrets.js';
 import { RESERVED_MAILBOX_IDS } from './types.js';
+import { grantSafeErrorFields } from './error-fields.js';
 
 export type FlatMailboxMigrationOutcome = 'migrated' | 'already' | 'nothing' | 'deferred';
 
@@ -22,6 +23,9 @@ export interface FlatMailboxMigrationDeps {
     delete(name: string): Promise<void>;
   };
   lookupGrant: (grantId: string) => Promise<{ email: string; provider: string }>;
+  /** D1: whether the address is a verified principal email identity. Read only, to warn;
+   *  the migration never writes identities. Absent (no principal contact yet) → no check. */
+  isVerifiedPrincipalEmail?: (address: string) => Promise<boolean>;
   logger: Logger;
 }
 
@@ -62,7 +66,8 @@ export async function migrateFlatPrincipalMailbox(
     const grant = await lookupGrant(grantId);
     address = grant.email.trim().toLowerCase() || undefined;
   } catch (err) {
-    logger.warn({ err }, 'Mailbox migration: Nylas grant lookup failed; trying ceo_self_email');
+    // Class and status only: a Nylas error can carry the grant id (R20).
+    logger.warn(grantSafeErrorFields(err), 'Mailbox migration: Nylas grant lookup failed; trying ceo_self_email');
   }
   if (!address) {
     address = (await secrets.get(FLAT_EMAIL_KEY))?.trim().toLowerCase() || undefined;
@@ -88,6 +93,12 @@ export async function migrateFlatPrincipalMailbox(
       addedIdentityId: null,
     });
   } catch (err) {
+    // A concurrent boot inserted the same mailbox first: its row needs the secret we both
+    // wrote (same id, same grant), so it stays.
+    if ((err as { code?: unknown } | null)?.code === '23505') {
+      logger.info({ mailboxId: id }, 'Mailbox migration: another process registered the mailbox first');
+      return 'already';
+    }
     try {
       await secrets.delete(secretName);
     } catch (delErr) {
@@ -96,5 +107,19 @@ export async function migrateFlatPrincipalMailbox(
     throw err;
   }
   logger.info({ mailboxId: id }, 'Migrated the principal mailbox into the registry');
+  await warnIfUnverified(deps, id, address);
   return 'migrated';
+}
+
+// D1: the migration leaves identities alone, so an address that is not a verified principal
+// email is only reported. No address in the log (public logs).
+async function warnIfUnverified(deps: FlatMailboxMigrationDeps, id: string, address: string): Promise<void> {
+  if (!deps.isVerifiedPrincipalEmail) return;
+  try {
+    if (!(await deps.isVerifiedPrincipalEmail(address))) {
+      deps.logger.warn({ mailboxId: id }, "Mailbox migration: the migrated mailbox's address is not a verified principal email");
+    }
+  } catch (err) {
+    deps.logger.warn({ mailboxId: id, ...grantSafeErrorFields(err) }, 'Mailbox migration: could not check the principal identity for the migrated address');
+  }
 }

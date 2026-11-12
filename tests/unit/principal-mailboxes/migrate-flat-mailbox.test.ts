@@ -9,11 +9,16 @@ import { MAILBOX_ID_RE, RESERVED_MAILBOX_IDS, type PrincipalMailboxRecord } from
 
 const logger = pino({ level: 'silent' });
 
-function setup(flat: Record<string, string>, lookup: () => Promise<{ email: string; provider: string }>, opts: { insertFails?: boolean } = {}) {
+function setup(
+  flat: Record<string, string>,
+  lookup: () => Promise<{ email: string; provider: string }>,
+  opts: { insertFails?: boolean; insertError?: unknown; log?: pino.Logger; isVerifiedPrincipalEmail?: (a: string) => Promise<boolean> } = {},
+) {
   const rows: Array<Omit<PrincipalMailboxRecord, 'removedAt'>> = [];
   const store = {
     hasAnyRow: vi.fn(async () => rows.length > 0),
     insert: vi.fn(async (r: Omit<PrincipalMailboxRecord, 'removedAt'>) => {
+      if (opts.insertError) throw opts.insertError;
       if (opts.insertFails) throw new Error('insert failed');
       rows.push(r);
     }),
@@ -25,7 +30,10 @@ function setup(flat: Record<string, string>, lookup: () => Promise<{ email: stri
     delete: vi.fn(async (n: string) => { delete vault[n]; }),
   };
   const lookupGrant = vi.fn(lookup);
-  return { rows, store, secrets, vault, lookupGrant, deps: { store, secrets, lookupGrant, logger } };
+  return {
+    rows, store, secrets, vault, lookupGrant,
+    deps: { store, secrets, lookupGrant, logger: opts.log ?? logger, isVerifiedPrincipalEmail: opts.isVerifiedPrincipalEmail },
+  };
 }
 
 describe('migrateFlatPrincipalMailbox', () => {
@@ -92,6 +100,60 @@ describe('migrateFlatPrincipalMailbox', () => {
     up = true;
     expect(await migrateFlatPrincipalMailbox(t.deps)).toBe('migrated');
     expect(t.rows).toHaveLength(1);
+  });
+});
+
+function capture(): { log: pino.Logger; lines: string[] } {
+  const lines: string[] = [];
+  return { log: pino({ level: 'debug' }, { write: (s: string) => { lines.push(s); } }), lines };
+}
+
+describe('migrateFlatPrincipalMailbox hardening (#2475 Part-1 fixes)', () => {
+  it('never logs the grant id carried by a Nylas timeout error (R20)', async () => {
+    const { log, lines } = capture();
+    const timeout = Object.assign(new Error('Nylas SDK timed out'), {
+      name: 'NylasSdkTimeoutError', url: 'https://api.us.nylas.com/v3/grants/grant-secret-1',
+    });
+    const t = setup({ ceo_nylas_grant_id: 'grant-secret-1', ceo_self_email: 'pat@gmail.com' }, async () => { throw timeout; }, { log });
+    expect(await migrateFlatPrincipalMailbox(t.deps)).toBe('migrated');
+    const out = lines.join('');
+    expect(out).toContain('NylasSdkTimeoutError');
+    expect(out).not.toContain('grant-secret-1');
+  });
+
+  it('keeps the secret and reports already when a concurrent boot inserted first (23505)', async () => {
+    const t = setup({ ceo_nylas_grant_id: 'g1' }, async () => ({ email: 'pat@ops.example.org', provider: 'google' }), {
+      insertError: Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' }),
+    });
+    expect(await migrateFlatPrincipalMailbox(t.deps)).toBe('already');
+    expect(t.secrets.delete).not.toHaveBeenCalled();
+    expect(t.vault['principal.mailbox.ops.nylas_grant_id']).toBe('g1');
+  });
+
+  it('still removes the secret and rethrows on any other insert failure', async () => {
+    const t = setup({ ceo_nylas_grant_id: 'g1' }, async () => ({ email: 'pat@ops.example.org', provider: 'google' }), {
+      insertError: Object.assign(new Error('check violation'), { code: '23514' }),
+    });
+    await expect(migrateFlatPrincipalMailbox(t.deps)).rejects.toThrow('check violation');
+    expect(t.vault['principal.mailbox.ops.nylas_grant_id']).toBeUndefined();
+  });
+
+  it('warns, without the address, when the migrated address is not a verified principal email (D1)', async () => {
+    const { log, lines } = capture();
+    const check = vi.fn(async () => false);
+    const t = setup({ ceo_nylas_grant_id: 'g1' }, async () => ({ email: 'pat@ops.example.org', provider: 'google' }), { log, isVerifiedPrincipalEmail: check });
+    expect(await migrateFlatPrincipalMailbox(t.deps)).toBe('migrated');
+    expect(check).toHaveBeenCalledWith('pat@ops.example.org');
+    const out = lines.join('');
+    expect(out).toContain("the migrated mailbox's address is not a verified principal email");
+    expect(out).not.toContain('pat@ops.example.org');
+  });
+
+  it('does not warn when the migrated address is a verified principal email', async () => {
+    const { log, lines } = capture();
+    const t = setup({ ceo_nylas_grant_id: 'g1' }, async () => ({ email: 'pat@ops.example.org', provider: 'google' }), { log, isVerifiedPrincipalEmail: async () => true });
+    await migrateFlatPrincipalMailbox(t.deps);
+    expect(lines.join('')).not.toContain('not a verified principal email');
   });
 });
 
