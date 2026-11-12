@@ -119,6 +119,8 @@ import { resolveBypassLadder } from '../autonomy/effective-standing.js';
 import { applyChannelVaultSecrets } from '../channels/apply-channel-vault-secrets.js';
 import { EmailAccountsRepo } from '../channels/email/email-accounts-repo.js';
 import { resolveEmailAccounts } from '../channels/email/resolve-email-accounts.js';
+import { PrincipalMailboxStore } from '../principal-mailboxes/store.js';
+import { PrincipalMailboxes } from '../principal-mailboxes/service.js';
 import { resolvePrincipalCalendarGrant } from '../channels/calendar/resolve-calendar-grant.js';
 import { ContactService } from '../contacts/contact-service.js';
 import { ContactResolver } from '../contacts/contact-resolver.js';
@@ -1175,7 +1177,18 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       reachClients = reachClientsFrom(resolved);
       if (resolved.nylasApiKey) {
         try {
-          calendarConfigured = (await resolvePrincipalCalendarGrant(vault)) !== undefined;
+          // The registry's default mailbox, as production reads it. A database production has
+          // not booted against yet has no row; its boot migration would create one from the
+          // flat grant, so that grant counts as configured too.
+          const mailboxes = new PrincipalMailboxes({
+            store: new PrincipalMailboxStore(pool, logger),
+            secrets: vault,
+            apiKey: () => resolved.nylasApiKey,
+            logger,
+          });
+          calendarConfigured =
+            (await mailboxes.defaultMailbox()) !== null ||
+            (await resolvePrincipalCalendarGrant(vault)) !== undefined;
         } catch (err) {
           // Production logs this and boots without calendar; mirror that rather than fail.
           logger.error({ err }, 'test-mode: failed to read ceo_nylas_grant_id; treating calendar as unconfigured');
