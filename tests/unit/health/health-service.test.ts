@@ -201,33 +201,144 @@ describe('HealthService.getStatus()', () => {
     expect(result.checks.nylas_calendar).toBe('fail');
   });
 
-  it('nylas_calendar canary fails independently of the email nylas canary (#1561)', async () => {
-    const listMessages = vi.fn().mockResolvedValue([]);
-    const listCalendars = vi.fn().mockRejectedValue(Object.assign(new Error('Forbidden'), { statusCode: 403 }));
-    const svc = new HealthService(makeDeps({
-      nylasClient: { listMessages },
-      nylasCalendarClient: { listCalendars },
-    }) as never);
+  describe('principal mailbox canaries (#2475)', () => {
+    afterEach(() => { vi.unstubAllGlobals(); });
+    function mailbox(id: string, opts: { grant?: unknown; messages?: unknown; calendars?: unknown; isDefault?: boolean } = {}) {
+      return {
+        view: { id, label: id[0]!.toUpperCase() + id.slice(1), address: `${id}@example.com`, isDefault: opts.isDefault ?? false, triageStartAt: null },
+        client: {
+          getGrant: opts.grant ?? vi.fn().mockResolvedValue({ email: `${id}@example.com`, provider: 'google' }),
+          listMessages: opts.messages ?? vi.fn().mockResolvedValue([]),
+        },
+        calendar: { listCalendars: opts.calendars ?? vi.fn().mockResolvedValue([]) },
+      };
+    }
+    function mailboxDeps(boxes: ReturnType<typeof mailbox>[], extra: Record<string, unknown> = {}) {
+      const principalMailboxes = {
+        list: vi.fn().mockResolvedValue(boxes.map((b) => b.view)),
+        gatewayClient: vi.fn(async (id: string) => boxes.find((b) => b.view.id === id)!.client),
+        calendarClient: vi.fn(async (id: string) => boxes.find((b) => b.view.id === id)!.calendar),
+        isFallbackActive: vi.fn().mockResolvedValue(false),
+      };
+      const mailboxOutageNotifier = { record: vi.fn().mockResolvedValue(undefined) };
+      return { principalMailboxes, mailboxOutageNotifier, ...extra };
+    }
 
-    const results = await svc.runCanaries();
-    const email = results.find((r) => r.name === 'nylas');
-    const calendar = results.find((r) => r.name === 'nylas_calendar');
-    expect(email?.status).toBe('ok');
-    expect(calendar?.status).toBe('fail');
-    expect(calendar?.detail).toMatch(/reconnect|grant/i);
-  });
+    it('one canary per live mailbox', async () => {
+      const boxes = [mailbox('work', { isDefault: true }), mailbox('personal')];
+      const svc = new HealthService(makeDeps(mailboxDeps(boxes)) as never);
+      const results = await svc.runCanaries();
+      const names = results.filter((r) => r.name.startsWith('principal_mailbox:')).map((r) => r.name);
+      expect(names).toEqual(['principal_mailbox:work', 'principal_mailbox:personal']);
+      expect(results.find((r) => r.name === 'principal_mailbox:work')?.status).toBe('ok');
+      expect(results.find((r) => r.name === 'nylas_calendar')).toBeUndefined();
+    });
 
-  it('nylas_calendar canary omits reconnect guidance for non-auth failures (#1561)', async () => {
-    // A 500 is a connectivity/server problem, not a bad grant — reconnect won't help.
-    const listCalendars = vi.fn().mockRejectedValue(Object.assign(new Error('Server Error'), { statusCode: 500 }));
-    const svc = new HealthService(makeDeps({
-      nylasCalendarClient: { listCalendars },
-    }) as never);
+    it('probes the grant, one message and the calendars', async () => {
+      const b = mailbox('work', { isDefault: true });
+      const svc = new HealthService(makeDeps(mailboxDeps([b])) as never);
+      await svc.runCanaries();
+      expect(b.client.getGrant).toHaveBeenCalled();
+      expect(b.client.listMessages).toHaveBeenCalledWith({ limit: 1 });
+      expect(b.calendar.listCalendars).toHaveBeenCalled();
+    });
 
-    const calendar = (await svc.runCanaries()).find((r) => r.name === 'nylas_calendar');
-    expect(calendar?.status).toBe('fail');
-    expect(calendar?.detail).not.toMatch(/reconnect/i);
-    expect(calendar?.detail).toMatch(/connectivity/i);
+    it('one failing mailbox does not fail the other, and reports to the outage notifier', async () => {
+      const bad = mailbox('personal', { calendars: vi.fn().mockRejectedValue(Object.assign(new Error('Forbidden'), { statusCode: 403 })) });
+      const good = mailbox('work', { isDefault: true });
+      const deps = mailboxDeps([good, bad]);
+      const svc = new HealthService(makeDeps(deps) as never);
+      const results = await svc.runCanaries();
+      expect(results.find((r) => r.name === 'principal_mailbox:work')?.status).toBe('ok');
+      const failed = results.find((r) => r.name === 'principal_mailbox:personal');
+      expect(failed?.status).toBe('fail');
+      expect(failed?.detail).toMatch(/reconnect/i);
+      expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledWith('work', 'Work', true);
+      expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledWith('personal', 'Personal', false);
+    });
+
+    it('omits reconnect guidance for non-auth failures and never leaks the error text', async () => {
+      const b = mailbox('work', { isDefault: true, messages: vi.fn().mockRejectedValue(Object.assign(new Error('boom grant-abc123'), { statusCode: 500 })) });
+      const svc = new HealthService(makeDeps(mailboxDeps([b])) as never);
+      const r = (await svc.runCanaries()).find((x) => x.name === 'principal_mailbox:work');
+      expect(r?.status).toBe('fail');
+      expect(r?.detail).not.toMatch(/reconnect/i);
+      expect(r?.detail).not.toContain('grant-abc123');
+    });
+
+    it('maps the default mailbox result to the existing nylas_calendar heartbeat', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+      vi.stubGlobal('fetch', fetchMock);
+      const config = { ...DEFAULT_HEALTH_CONFIG, heartbeats: { ...DEFAULT_HEALTH_CONFIG.heartbeats, nylas_calendar: 'https://hb.example.com/cal' } };
+      const boxes = [mailbox('personal'), mailbox('work', { isDefault: true })];
+      const svc = new HealthService(makeDeps({ ...mailboxDeps(boxes), config }) as never);
+      await svc.runCanaries();
+      const urls = fetchMock.mock.calls.map((c) => c[0]);
+      expect(urls.filter((u) => u === 'https://hb.example.com/cal')).toHaveLength(1);
+    });
+
+    it('does not ping the heartbeat when the default mailbox fails', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+      vi.stubGlobal('fetch', fetchMock);
+      const config = { ...DEFAULT_HEALTH_CONFIG, heartbeats: { ...DEFAULT_HEALTH_CONFIG.heartbeats, nylas_calendar: 'https://hb.example.com/cal' } };
+      const bad = mailbox('work', { isDefault: true, calendars: vi.fn().mockRejectedValue(new Error('x')) });
+      const svc = new HealthService(makeDeps({ ...mailboxDeps([bad]), config }) as never);
+      await svc.runCanaries();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('reports the fallback grant under principal_mailbox:mailbox', async () => {
+      const b = mailbox('mailbox', { isDefault: true });
+      const deps = mailboxDeps([b]);
+      deps.principalMailboxes.isFallbackActive.mockResolvedValue(true);
+      const svc = new HealthService(makeDeps(deps) as never);
+      const names = (await svc.runCanaries()).map((r) => r.name);
+      expect(names).toContain('principal_mailbox:mailbox');
+    });
+
+    it('retries the deferred migration on the tick and clears the fallback when it migrates', async () => {
+      const deps = mailboxDeps([mailbox('mailbox', { isDefault: true })]);
+      deps.principalMailboxes.isFallbackActive.mockResolvedValue(true);
+      const setFallback = vi.fn();
+      const retry = vi.fn().mockResolvedValue('migrated');
+      const svc = new HealthService(makeDeps({
+        ...deps,
+        principalMailboxes: { ...deps.principalMailboxes, setFallback },
+        retryMailboxMigration: retry,
+      }) as never);
+      await svc.runCanaries();
+      expect(retry).toHaveBeenCalledTimes(1);
+      expect(setFallback).toHaveBeenCalledWith(null);
+    });
+
+    it('logs the migration outcome only when it changes', async () => {
+      const deps = mailboxDeps([mailbox('mailbox', { isDefault: true })]);
+      deps.principalMailboxes.isFallbackActive.mockResolvedValue(true);
+      const retry = vi.fn().mockResolvedValue('deferred');
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      const svc = new HealthService(makeDeps({
+        ...deps,
+        logger,
+        principalMailboxes: { ...deps.principalMailboxes, setFallback: vi.fn() },
+        retryMailboxMigration: retry,
+      }) as never);
+      await svc.runCanaries();
+      await svc.runCanaries();
+      const logged = [...logger.info.mock.calls, ...logger.warn.mock.calls]
+        .filter((c) => typeof c[1] === 'string' && c[1].includes('Mailbox migration retry'));
+      expect(logged).toHaveLength(1);
+    });
+
+    it('principalMailboxReady is true once a live mailbox passes its canary', async () => {
+      const svc = new HealthService(makeDeps(mailboxDeps([mailbox('work', { isDefault: true })])) as never);
+      expect(await svc.principalMailboxReady()).toBe(true);
+    });
+
+    it('principalMailboxReady is false when the only mailbox fails', async () => {
+      const bad = mailbox('work', { isDefault: true, messages: vi.fn().mockRejectedValue(new Error('x')) });
+      const svc = new HealthService(makeDeps(mailboxDeps([bad])) as never);
+      expect(await svc.principalMailboxReady()).toBe(false);
+    });
   });
 
   it('returns degraded when a non-critical check fails', async () => {

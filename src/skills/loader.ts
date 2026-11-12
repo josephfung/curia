@@ -52,6 +52,7 @@ export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
   'voiceSessions',
   'phoneAppReady',
   'emailChannelStatus',
+  'principalMailboxReady',
   'curiaEmailAddresses',
 ]);
 

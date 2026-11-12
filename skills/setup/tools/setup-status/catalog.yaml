@@ -53,6 +53,17 @@ tasks:
     credential_how_to: "Get your Nylas API key at app.nylas.com (free tier works) and connect Curia's mailbox there to get its grant ID. In Settings → Channels → Email, install the channel, save the API key, add the mailbox under Email accounts (name, address, grant ID), then enable the channel and restart."
     docs_url: /channels/email-setup
 
+  - id: principal_mailboxes
+    label: "Principal mailboxes and calendars"
+    value_prop: "Connect your own Gmail accounts so Curia can triage your inbox, draft and send mail, and book on your calendars - work and personal."
+    tier: heavy
+    handoff: console
+    handoff_path: /channels
+    completion_check:
+      type: principal_mailbox_ready
+    credential_how_to: "In Nylas, connect each Gmail account you want Curia to work in and copy its grant ID. In the console under Channels, open Principal mailboxes, add the mailbox (a short id, a label, the grant ID), use Test to confirm the address, and mark one as the default."
+    docs_url: /get-started/principal-email-calendar
+
   - id: signal
     label: "Signal"
     value_prop: "Private, end-to-end encrypted messaging — Curia's highest-trust channel."

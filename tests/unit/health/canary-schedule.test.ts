@@ -220,7 +220,7 @@ describe('CanarySchedule driving HealthService.runCanaries', () => {
       .map(([fields]) => (fields as { canary: string }).canary);
     expect(results.sort()).toEqual([
       'embeddings', 'google_workspace', 'image_gen', 'llm_fast', 'llm_powerful',
-      'llm_standard', 'nylas', 'nylas_calendar', 'signal', 'tavily',
+      'llm_standard', 'nylas', 'signal', 'tavily',
     ]);
     expect(fetchMock).toHaveBeenCalledWith(HEARTBEAT);
   });
