@@ -1,5 +1,11 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { namedOrDefaultMailbox } from '../../../_shared/principal-mailbox-client.js';
+import {
+  locateInMailbox,
+  mailboxClient,
+  mailboxFields,
+  type MailboxClient,
+} from '../../../_shared/principal-mailbox-client.js';
+import { MissingNylasApiKeyError, RemovedMailboxError, UnknownMailboxError } from '../../../../src/principal-mailboxes/types.js';
 import {
   htmlToPlainText,
   type NylasDraftFull,
@@ -208,10 +214,6 @@ async function editRecipients(
  */
 export class CeoInboxDraftEditHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const picked = await namedOrDefaultMailbox(ctx, ctx.input, 'ceo-inbox-draft-edit');
-    if (!picked.ok) return { success: false, error: picked.error };
-    const client = picked.at.client;
-
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
 
@@ -257,10 +259,17 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
     const hasSubject = input.subject !== undefined;
     const hasBody = input.body !== undefined;
 
-    if (!hasRecipients && !hasSubject && !hasBody) {
+    // `move_to_mailbox` is checked here, before any call, so a malformed value changes nothing.
+    const moveTo = input.move_to_mailbox;
+    if (moveTo !== undefined && moveTo !== null && (typeof moveTo !== 'string' || !moveTo.trim())) {
+      return { success: false, error: `move_to_mailbox must be a mailbox id. ${NOT_CHANGED}` };
+    }
+    const moveTarget = typeof moveTo === 'string' ? moveTo.trim() : undefined;
+
+    if (!hasRecipients && !hasSubject && !hasBody && moveTarget === undefined) {
       return {
         success: false,
-        error: 'At least one of add_to, add_cc, add_to_addresses, add_cc_addresses, remove, subject, or body must be provided to update the draft',
+        error: 'At least one of add_to, add_cc, add_to_addresses, add_cc_addresses, remove, subject, body, or move_to_mailbox must be provided to update the draft',
       };
     }
 
@@ -289,6 +298,15 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
         ctx.log.error({ err, draftId }, 'ceo-inbox-draft-edit: failed to convert body to HTML');
         return { success: false, error: 'Failed to convert email body to HTML' };
       }
+    }
+
+    // The draft is wherever it is: an explicit `mailbox`, else the one that holds it (#2475).
+    const picked = await locateInMailbox(ctx, input, 'ceo-inbox-draft-edit', 'draft', draftId);
+    if (!picked.ok) return { success: false, error: picked.error };
+    const client = picked.at.client;
+
+    if (moveTarget !== undefined) {
+      return this.moveDraft(ctx, { source: picked.at, targetId: moveTarget, draftId, updates, lists, hasRecipients, markdownBody: hasBody ? String(input.body).trim() : undefined });
     }
 
     if (hasRecipients) {
@@ -342,6 +360,8 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
         success: true,
         data: {
           draft_id: draft.id,
+          // Provenance reads this audit row: the mailbox keys the draft it names (#2475).
+          ...mailboxFields(picked.at.mailbox),
           subject: draft.subject,
           to: draft.to,
           cc: draft.cc,
@@ -351,5 +371,128 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
       ctx.log.error({ err, draftId }, 'ceo-inbox-draft-edit: Nylas API call failed');
       return { success: false, error: 'Failed to update draft in principal inbox' };
     }
+  }
+
+  /**
+   * Move a draft to another mailbox (#2475, design D5 "Correction"): create it there, and only
+   * after that succeeds delete the original, so the principal is never left without a draft.
+   * Any other edits in the call apply to the new draft. The result carries `moved_from`, which
+   * draft provenance reads: the new draft keeps the original's authorship class for send review.
+   */
+  private async moveDraft(
+    ctx: ToolContext,
+    args: {
+      source: MailboxClient;
+      targetId: string;
+      draftId: string;
+      updates: UpdateDraftOptions;
+      lists: Record<RecipientField, string[]>;
+      hasRecipients: boolean;
+      markdownBody: string | undefined;
+    },
+  ): Promise<ToolResult> {
+    const { source, draftId, updates, lists } = args;
+    const log = ctx.log;
+
+    if (args.targetId === source.mailbox.id) {
+      return { success: false, error: `That draft is already in the ${source.mailbox.label} mailbox (${source.mailbox.id}). ${NOT_CHANGED}` };
+    }
+    let target: MailboxClient;
+    try {
+      target = await mailboxClient(ctx, args.targetId);
+    } catch (err) {
+      log.error({ err, draftId }, 'ceo-inbox-draft-edit: move target mailbox unavailable');
+      const known = err instanceof UnknownMailboxError || err instanceof RemovedMailboxError || err instanceof MissingNylasApiKeyError;
+      return { success: false, error: `${known ? err.message : 'The target mailbox is unavailable.'} ${NOT_CHANGED}` };
+    }
+
+    let current: NylasDraftFull;
+    try {
+      current = await source.client.getDraft(draftId);
+    } catch (err) {
+      log.error({ err, draftId }, 'ceo-inbox-draft-edit: could not read the draft to move it');
+      return { success: false, error: `Failed to read the draft in the ${source.mailbox.label} mailbox. ${NOT_CHANGED}` };
+    }
+    // The Nylas client reads a draft's attachments as a count only and cannot copy their bytes to
+    // another account, so a draft with any is not moved: dropping them silently would send an
+    // email missing its attachments.
+    if ((current.attachmentCount ?? 0) > 0) {
+      return {
+        success: false,
+        error: `This draft has ${current.attachmentCount} attachment(s), which cannot be carried to another mailbox. ${NOT_CHANGED} Ask the principal to move it in Gmail, or recreate it in ${target.mailbox.label} without them.`,
+      };
+    }
+
+    let to = current.to;
+    let cc = current.cc;
+    if (args.hasRecipients) {
+      const edited = await editRecipients(ctx, current, lists);
+      if (!edited.ok) return { success: false, error: edited.error };
+      to = edited.to;
+      cc = edited.cc;
+    }
+    const subject = updates.subject ?? current.subject;
+    const body = updates.body ?? current.body;
+
+    // A reply's thread lives in the source account, so the moved draft starts a new thread there.
+    // LIVE-CHECK (#2475): the client's createDraft sends no In-Reply-To / References (only
+    // createDraftReply's reply_to_message_id, which names a message in the source account and
+    // cannot be used here). Verify once on a live grant whether the recipient's client still
+    // threads a moved reply, and whether Nylas accepts those headers on a draft, before relying on it.
+    const newThread = current.threadId !== '';
+
+    let created: Awaited<ReturnType<MailboxClient['client']['createDraft']>>;
+    try {
+      created = await target.client.createDraft({
+        subject,
+        body,
+        to,
+        ...(cc.length > 0 ? { cc } : {}),
+        ...(current.bcc.length > 0 ? { bcc: current.bcc } : {}),
+      });
+    } catch (err) {
+      // Nothing was created, and the original is untouched.
+      log.error({ err, draftId, targetMailbox: target.mailbox.id }, 'ceo-inbox-draft-edit: creating the draft in the target mailbox failed');
+      return { success: false, error: `Failed to create the draft in the ${target.mailbox.label} mailbox. The original draft is unchanged in ${source.mailbox.label}.` };
+    }
+
+    // Best-effort voice-learning snapshot of the new draft, as for any edit.
+    void captureDraftSnapshot(ctx, {
+      draftId: created.id,
+      threadId: created.threadId,
+      subject: created.subject,
+      to: created.to,
+      cc: created.cc,
+      body: args.markdownBody ?? htmlToPlainText(body),
+    }).catch((err) => log.error({ err }, 'ceo-inbox-draft-edit: voice snapshot capture rejected'));
+
+    let warning: string | undefined;
+    try {
+      await source.client.deleteDraft(draftId);
+    } catch (err) {
+      // The new draft exists: this is a success, never a failure, or the agent would retry the move.
+      log.error({ err, draftId, newDraftId: created.id }, 'ceo-inbox-draft-edit: deleting the original after the move failed');
+      warning = `The draft was created in ${target.mailbox.label}, but the original could not be deleted and still exists in ${source.mailbox.label} (draft ${draftId}).`;
+    }
+
+    log.info(
+      { draftId, newDraftId: created.id, from: source.mailbox.id, to: target.mailbox.id, deleted: warning === undefined },
+      'ceo-inbox-draft-edit: moved draft between mailboxes',
+    );
+    return {
+      success: true,
+      data: {
+        draft_id: created.id,
+        ...mailboxFields(target.mailbox),
+        // Provenance reads this: the new draft keeps the original's authorship class.
+        moved_from: { mailbox: source.mailbox.id, draft_id: draftId },
+        new_thread: newThread,
+        subject: created.subject,
+        to: created.to,
+        cc: created.cc,
+        note: `The draft now lives in the ${target.mailbox.label} mailbox; store the principal's account preference for this contact and topic with memory-store so the next draft goes to the right account.`,
+        ...(warning ? { warning } : {}),
+      },
+    };
   }
 }

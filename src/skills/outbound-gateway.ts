@@ -90,7 +90,7 @@ import type { PrincipalMailboxResolver } from '../channels/email/principal-mailb
 import { DEFAULT_MAILBOX, type SendLevel, type SendLevelReader } from './principal-send/send-level.js';
 import { isPrincipalDirectedMailboxSend, type SendAuthorityInput } from './principal-send/authority.js';
 import { dropOwnIdentityItems, quoteHeaderParticipants, splitReplyQuote } from './principal-send/own-text.js';
-import { PROVENANCE_LOOKBACK_DAYS, type CuriaDraftWrites, type DraftProvenance } from './principal-send/draft-provenance.js';
+import { PROVENANCE_LOOKBACK_DAYS, draftKey, type CuriaDraftWrites, type DraftProvenance } from './principal-send/draft-provenance.js';
 import type { PrincipalSendEntry, PrincipalSendLedger } from './principal-send/send-ledger.js';
 import {
   AUTONOMOUS_DAILY_CAP, AUTONOMOUS_DAILY_CAP_WINDOW_MS, AUTONOMOUS_THREAD_COOLDOWN_MS, checkAutonomousLimits, repliedToLatest,
@@ -419,6 +419,11 @@ export interface OutboundGatewayConfig {
    * refuses (fail-closed).
    */
   principalMailbox?: PrincipalMailboxResolver;
+  /**
+   * The default mailbox's id, which draft provenance is keyed on (#2475). Absent: `default`, the
+   * send-level key. Until Task 17 every principal-mailbox send is from the default mailbox.
+   */
+  defaultMailboxId?: () => Promise<string>;
   /** The ceo_inbox/sending level per mailbox (#2474). Absent: on_request, the default. */
   readSendLevel?: SendLevelReader;
   /**
@@ -996,6 +1001,7 @@ export class OutboundGateway {
   private readonly bandReview?: Pick<BandSendReview, 'review'>;
   private readonly relayBudget?: RelayBudget;
   private readonly principalMailbox?: PrincipalMailboxResolver;
+  private readonly defaultMailboxId?: () => Promise<string>;
   private readonly readSendLevel?: SendLevelReader;
   private readonly draftProvenance?: OutboundGatewayConfig['draftProvenance'];
   private readonly sendLedger?: OutboundGatewayConfig['sendLedger'];
@@ -1031,6 +1037,7 @@ export class OutboundGateway {
     this.bandReview = config.bandReview;
     this.relayBudget = config.relayBudget;
     this.principalMailbox = config.principalMailbox;
+    this.defaultMailboxId = config.defaultMailboxId;
     this.readSendLevel = config.readSendLevel;
     this.draftProvenance = config.draftProvenance;
     this.sendLedger = config.sendLedger;
@@ -4282,6 +4289,11 @@ export class OutboundGateway {
     return { success: true, messageId: sentMessage.id, ...(sentMessage.threadId ? { threadId: sentMessage.threadId } : {}) };
   }
 
+  /** The mailbox id draft provenance is looked up under. Throws when it cannot be resolved. */
+  private async provenanceMailboxId(): Promise<string> {
+    return this.defaultMailboxId ? this.defaultMailboxId() : DEFAULT_MAILBOX;
+  }
+
   /**
    * Send a draft from the principal's own mailbox (#2474, design D1–D6, D8, D9).
    *
@@ -4401,11 +4413,15 @@ export class OutboundGateway {
     let author: DraftAuthor = 'curia';
     if (!autonomous && this.draftProvenance) {
       try {
-        if (!(await this.draftProvenance.createdByCuria([draftId])).has(draftId)) {
+        // Until #2475 Task 17 the gateway sends from the default mailbox only (R6). An unresolvable
+        // id throws into the catch below: the draft is reviewed as Curia's.
+        const ref = { mailbox: await this.provenanceMailboxId(), draftId };
+        const refKey = draftKey(ref.mailbox, ref.draftId);
+        if (!(await this.draftProvenance.createdByCuria([ref])).has(refKey)) {
           const lookbackStartSec = (Date.now() - PROVENANCE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000) / 1000;
           // A missing or unreadable date is not recent: who wrote the draft is unknown.
           const recent = Number.isFinite(draft.date) && draft.date >= lookbackStartSec;
-          const edited = (await this.draftProvenance.editedByCuria([draftId])).has(draftId);
+          const edited = (await this.draftProvenance.editedByCuria([ref])).has(refKey);
           author = edited || !recent ? 'curia-edited' : 'principal';
         }
       } catch (err) {
@@ -4440,7 +4456,7 @@ export class OutboundGateway {
       }
       let curiaWrites: CuriaDraftWrites;
       try {
-        curiaWrites = await this.draftProvenance!.curiaWritesInTask(draftId, options.taskEventId!);
+        curiaWrites = await this.draftProvenance!.curiaWritesInTask({ mailbox: await this.provenanceMailboxId(), draftId }, options.taskEventId!);
       } catch (err) {
         // Fail closed: nothing shows Curia drafted it in this task.
         this.log.warn({ err, draftId }, 'outbound-gateway: task draft writes unreadable — not sending on its own');

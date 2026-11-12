@@ -2082,6 +2082,11 @@ async function main(): Promise<void> {
     // The ceo_inbox/sending level lives in the config store (#2474). No knowledge graph: no
     // reader, and the gateway uses the default level (on_request).
     const sendLevelStore = entityMemory ? new ConfigStore(entityMemory, logger) : undefined;
+    const defaultMailboxId = async (): Promise<string> => {
+      const def = await principalMailboxes.defaultMailbox();
+      if (!def) throw new Error('No default principal mailbox');
+      return def.id;
+    };
     outboundGateway = new OutboundGateway({
       nylasClients: registryGatedOutbound.nylasClients,
       // Each mailbox's own address, so the gateway can tell the principal's mailbox
@@ -2123,7 +2128,9 @@ async function main(): Promise<void> {
       ...(sendLevelStore
         ? { readSendLevel: createSendLevelReader({ get: (ns, k) => sendLevelStore.get(ns, k), logger }) }
         : {}),
-      draftProvenance: new DraftProvenance(auditLogRepo, logger),
+      // Provenance rows from before #2475 carry no mailbox and belong to the default mailbox.
+      defaultMailboxId,
+      draftProvenance: new DraftProvenance(auditLogRepo, logger, undefined, defaultMailboxId),
       sendLedger: new PrincipalSendLedger(workingDocsRepo, logger),
     });
     outboundGateway.start();
