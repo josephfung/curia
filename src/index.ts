@@ -93,7 +93,9 @@ import { ContactResolver } from './contacts/contact-resolver.js';
 import { createContactDuplicateDetected, createContactElevated, createContactMerged } from './bus/events.js';
 import { NylasClient } from './channels/email/nylas-client.js';
 import { NylasCalendarClient } from './channels/calendar/nylas-calendar-client.js';
-import { resolvePrincipalCalendarGrant } from './channels/calendar/resolve-calendar-grant.js';
+import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
+import { PrincipalMailboxes } from './principal-mailboxes/service.js';
+import { migrateFlatPrincipalMailbox } from './principal-mailboxes/migrate-flat-mailbox.js';
 import { PrincipalAcquaintanceCheck } from './contacts/principal-acquaintance.js';
 import { NylasPrincipalMailbox } from './contacts/nylas-principal-mailbox.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
@@ -1176,26 +1178,66 @@ async function main(): Promise<void> {
   let nylasCalendarClient: NylasCalendarClient | undefined;
   // The principal's own grant, kept for the dispatcher's principal-mailbox lookup (#2227).
   let principalNylasGrantId: string | undefined;
+
+  // Principal mailbox registry (#2475). The flat ceo_nylas_grant_id moves into it BEFORE the
+  // resolver, calendar client and acquaintance mailbox are built, so they all read the registry.
+  // Non-fatal: a failed or deferred migration serves the flat grant as a fallback while the
+  // registry is empty (setFallback is ignored once any row exists); a later retry clears it.
+  const principalMailboxStore = new PrincipalMailboxStore(pool, logger);
+  const principalMailboxes = new PrincipalMailboxes({
+    store: principalMailboxStore,
+    secrets: secretsService,
+    apiKey: () => config.nylasApiKey,
+    logger,
+  });
+  if (config.nylasApiKey) {
+    const nylasApiKey = config.nylasApiKey;
+    try {
+      const outcome = await migrateFlatPrincipalMailbox({
+        store: principalMailboxStore,
+        secrets: secretsService,
+        lookupGrant: (grantId) => new NylasClient(nylasApiKey, grantId, logger).getGrant(),
+        logger,
+      });
+      if (outcome === 'deferred') {
+        const flatGrant = (await secretsService.get('ceo_nylas_grant_id'))?.trim();
+        if (flatGrant) principalMailboxes.setFallback({ id: 'mailbox', grantId: flatGrant });
+      } else {
+        principalMailboxes.setFallback(null);
+      }
+    } catch (err) {
+      logger.warn({ err }, 'Principal mailbox migration failed; serving the flat grant until it succeeds');
+      try {
+        const flatGrant = (await secretsService.get('ceo_nylas_grant_id'))?.trim();
+        if (flatGrant) principalMailboxes.setFallback({ id: 'mailbox', grantId: flatGrant });
+      } catch (readErr) {
+        logger.error({ err: readErr }, 'Could not read ceo_nylas_grant_id for the mailbox fallback');
+      }
+    }
+  }
+
   if (!config.nylasApiKey) {
     // Calendar shares the Nylas API key with email; its absence is already reported as a
     // warning by the email-channel bootstrap above. Logged at debug here to keep this path
     // non-silent without duplicating that warning for the common "no Nylas at all" case.
     logger.debug('Calendar disabled — no Nylas API key configured');
   } else {
-    // Read the principal grant. Absence -> undefined (calendar simply not set up). A DB or decrypt
-    // failure THROWS (SecretsService lets those propagate); catch it here so a single
-    // channel's secret read can't crash boot, but log at `error` with the real cause — a
-    // wrong SECRET_ENCRYPTION_KEY breaks every secret, and must not be mistaken for "the
-    // grant isn't set". Keep the causes distinct so the warn below only fires on genuine absence.
+    // Read the default mailbox's grant. Absence -> undefined (calendar simply not set up). A DB
+    // or decrypt failure THROWS; catch it here so a single channel's secret read can't crash
+    // boot, but log at `error` with the real cause — a wrong SECRET_ENCRYPTION_KEY breaks every
+    // secret, and must not be mistaken for "the grant isn't set".
     let principalCalendarGrant: string | undefined;
     let grantReadFailed = false;
     try {
-      principalCalendarGrant = await resolvePrincipalCalendarGrant(secretsService);
+      const defaultMailbox = await principalMailboxes.defaultMailbox();
+      if (defaultMailbox) {
+        principalCalendarGrant = (await principalMailboxes.credentials(defaultMailbox.id)).grantId;
+      }
     } catch (err) {
       grantReadFailed = true;
       logger.error(
         { err },
-        'Failed to read ceo_nylas_grant_id — calendar disabled this boot. Check the database and SECRET_ENCRYPTION_KEY (a wrong key breaks all secrets, not just calendar).',
+        'Failed to read the principal mailbox grant — calendar disabled this boot. Check the database and SECRET_ENCRYPTION_KEY (a wrong key breaks all secrets, not just calendar).',
       );
     }
     principalNylasGrantId = principalCalendarGrant;
@@ -1205,7 +1247,7 @@ async function main(): Promise<void> {
     } else if (!grantReadFailed) {
       // Genuine absence (the read-failure path logged its own error above).
       logger.warn(
-        'Calendar disabled — ceo_nylas_grant_id is not configured. Set the principal Nylas grant to enable calendar (RSVP/holds/events run as the principal).',
+        'Calendar disabled — no principal mailbox is configured. Set the principal Nylas grant (ceo_nylas_grant_id) to enable calendar (RSVP/holds/events run as the principal).',
       );
     }
   }
@@ -1995,7 +2037,7 @@ async function main(): Promise<void> {
       relayBudget: new RelayBudget({ perHour: resolveRelayBudgetConfig(yamlConfig.autonomy).perHour }),
       // Sends from the principal's own mailbox (#2474). Its own entry, never in nylasClients;
       // the grant is read per call so a re-sign-in applies without a restart.
-      principalMailbox: createPrincipalMailboxResolver({ secrets: secretsService, apiKey: () => config.nylasApiKey, logger }),
+      principalMailbox: createPrincipalMailboxResolver({ mailboxes: principalMailboxes, logger }),
       ...(sendLevelStore
         ? { readSendLevel: createSendLevelReader({ get: (ns, k) => sendLevelStore.get(ns, k), logger }) }
         : {}),
@@ -2751,7 +2793,7 @@ async function main(): Promise<void> {
   // the principal's yes, and settles denials and expiries. Shared by the execution layer's
   // cardUse capability and the deny / expiry paths below.
   const cardUseService = new CardUseService({ repo: cardUseRepo, secrets: secretsService, approvalTrigger, bus, logger });
-  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, cardUseRepo, cardUseService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
+  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, principalMailboxes, cardUseRepo, cardUseService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
     findInFlight: (targetAgent: string, originConversationId: string) =>
       findInFlightPendingDelegation(pool, { targetAgent, originConversationId }),
     acquireRunning: (params: Parameters<typeof acquireRunningDelegation>[1]) =>
