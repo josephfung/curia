@@ -5891,11 +5891,11 @@ describe('sendPrincipalDraft (#2474)', () => {
     const review = o.review ?? vi.fn().mockResolvedValue({ kind: 'send' });
     const createdByCuria = vi.fn(async () => {
       if (o.createdByCuria instanceof Error) throw o.createdByCuria;
-      return new Set(o.createdByCuria ?? []);
+      return new Set((o.createdByCuria ?? []).map((id) => `default:${id}`));
     });
     const editedByCuria = vi.fn(async () => {
       if (o.editedByCuria instanceof Error) throw o.editedByCuria;
-      return new Set(o.editedByCuria ?? []);
+      return new Set((o.editedByCuria ?? []).map((id) => `default:${id}`));
     });
     const curiaWritesInTask = vi.fn(async () => {
       if (o.curiaWrites instanceof Error) throw o.curiaWrites;
@@ -6059,7 +6059,7 @@ describe('sendPrincipalDraft (#2474)', () => {
   it('6. classes a draft Curia edited as curia-edited: reviewed, and the identity gate runs', async () => {
     const { gw, review, editedByCuria } = make({ editedByCuria: ['d1'] });
     expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
-    expect(editedByCuria).toHaveBeenCalledWith(['d1']);
+    expect(editedByCuria).toHaveBeenCalledWith([{ mailbox: 'default', draftId: 'd1' }]);
     expect(review).toHaveBeenCalledWith(expect.objectContaining({ draftAuthor: 'curia-edited', principalDirected: true }));
 
     const { ConversationEntityState } = await import('../../../src/entity-context/conversation-entities.js');
@@ -6086,7 +6086,7 @@ describe('sendPrincipalDraft (#2474)', () => {
   it('7. reviews through checkDraftSend with the principal-mailbox profile', async () => {
     const { gw, review, createdByCuria } = make({ createdByCuria: ['d1'] });
     await gw.sendPrincipalDraft('d1', opts);
-    expect(createdByCuria).toHaveBeenCalledWith(['d1']);
+    expect(createdByCuria).toHaveBeenCalledWith([{ mailbox: 'default', draftId: 'd1' }]);
     expect(review).toHaveBeenCalledWith(expect.objectContaining({
       senderProfile: 'principal-mailbox', draftAuthor: 'curia', principalDirected: true, recipients: ['dana@example.org'], principalRecipients: [],
     }));
@@ -6588,7 +6588,7 @@ describe('sendPrincipalDraft (#2474)', () => {
     it('7. refuses with not_curia_draft when the task\'s draft writes cannot be read', async () => {
       const { gw, curiaWritesInTask } = makeAuto({ curiaWrites: new Error('db down') });
       expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_curia_draft' });
-      expect(curiaWritesInTask).toHaveBeenCalledWith('d1', 't1');
+      expect(curiaWritesInTask).toHaveBeenCalledWith({ mailbox: 'default', draftId: 'd1' }, 't1');
     });
 
     it('7. refuses with not_curia_draft when Curia did not create the draft in this task', async () => {

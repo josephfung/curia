@@ -13,6 +13,7 @@
     "remove": "string[]? (recipients to take off the To and CC lines: a contact ID, or an address exactly as it appears on the draft)",
     "subject": "string? (new subject line)",
     "body": "string? (new email body; markdown supported, converted to HTML automatically)",
+    "move_to_mailbox": "string? (Mailbox id to move the draft to when it is in the wrong account. Not with attachments.)",
     "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {

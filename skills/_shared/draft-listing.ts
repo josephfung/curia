@@ -5,7 +5,7 @@
 // drafts from the principal's own.
 
 import type { ToolContext } from '../../src/skills/types.js';
-import { DraftProvenance } from '../../src/skills/principal-send/draft-provenance.js';
+import { DraftProvenance, draftKey } from '../../src/skills/principal-send/draft-provenance.js';
 import { toLocalIso, formatDisplayTimezone, normalizeTimestamp } from '../../src/time/timestamp.js';
 import type { NylasDraftSummary } from './ceo-nylas-client.js';
 
@@ -40,11 +40,17 @@ export function filterModifiedSince(drafts: NylasDraftSummary[], seconds: number
  * `created_by_curia: null` (unknown). Nothing is sent from this listing; the send path
  * re-checks provenance itself and fails toward review.
  */
-export async function annotateDrafts(ctx: ToolContext, drafts: NylasDraftSummary[], toolName: string) {
+export async function annotateDrafts(ctx: ToolContext, drafts: Array<NylasDraftSummary & { mailbox: string }>, toolName: string) {
   let curiaIds: Set<string> | null = null;
   if (ctx.auditLogRepo) {
     try {
-      curiaIds = await new DraftProvenance(ctx.auditLogRepo, ctx.log).createdByCuria(drafts.map((d) => d.id));
+      const defaultMailboxId = async (): Promise<string> => {
+        const def = await ctx.principalMailboxes?.defaultMailbox();
+        if (!def) throw new Error('No default principal mailbox');
+        return def.id;
+      };
+      curiaIds = await new DraftProvenance(ctx.auditLogRepo, ctx.log, undefined, defaultMailboxId)
+        .createdByCuria(drafts.map((d) => ({ mailbox: d.mailbox, draftId: d.id })));
     } catch (err) {
       ctx.log.warn({ err }, `${toolName}: draft provenance lookup failed — created_by_curia unknown`);
     }
@@ -54,7 +60,7 @@ export async function annotateDrafts(ctx: ToolContext, drafts: NylasDraftSummary
   return {
     drafts: drafts.map((d) => ({
       ...d,
-      created_by_curia: curiaIds ? curiaIds.has(d.id) : null,
+      created_by_curia: curiaIds ? curiaIds.has(draftKey(d.mailbox, d.id)) : null,
       date_local: toLocalIso(d.date, ctx.timezone),
     })),
     displayTimezone: ctx.timezone ? formatDisplayTimezone(ctx.timezone, new Date()) : 'UTC',

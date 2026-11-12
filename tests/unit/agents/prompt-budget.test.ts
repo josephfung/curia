@@ -151,7 +151,8 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // #2475 the optional `mailbox` input on all 15 ceo-inbox tools (+1,900 bytes, the description fixed by the
   // design): 48,427 over 46 local tools. Needs the maintainer's approval at review.
   // #2475 D5 account-choice guidance on draft-compose
-  { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 48_948, allowMcpPins: false },
+  // #2475 move_to_mailbox on draft-edit (+139 bytes), approved by the maintainer: 49,087 over 46 local tools.
+  { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 49_087, allowMcpPins: false },
   // contacts: YAML 15,595 → 11,423 chars (~4,831 → ~3,788 tokens always-on with its SKILL.md bodies);
   // 35,311 bytes over its local tools.
   { agent: 'contacts', alwaysOnPromptTokens: 3_900, localToolDefinitionBytes: 36_400, allowMcpPins: false },

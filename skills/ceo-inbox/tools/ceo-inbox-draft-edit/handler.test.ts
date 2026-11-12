@@ -8,17 +8,21 @@ import {
   sourcesWith,
   type DraftRecipientFixture,
 } from '../../../_shared/ceo-draft-recipients-test-helpers.js';
-import { stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
+import { stubPrincipalMailboxes, twoMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 let fixture: DraftRecipientFixture;
 
-function buildCtx(input: Record<string, unknown>, sources: IdentifierSources = sourcesWith()): ToolContext {
+function buildCtx(
+  input: Record<string, unknown>,
+  sources: IdentifierSources = sourcesWith(),
+  principalMailboxes: ToolContext['principalMailboxes'] = stubPrincipalMailboxes({}),
+): ToolContext {
   return {
     toolName: 'ceo-inbox-draft-edit',
     toolVersion: '0.3.0',
     input,
     timezone: 'America/Toronto',
-    principalMailboxes: stubPrincipalMailboxes({}),
+    principalMailboxes,
     log: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -47,6 +51,11 @@ function draftResponse(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** Any GET or PUT answers with a fresh copy of the sample draft. */
+function serveEverything(): void {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(draftResponse()), { status: 200 }));
+}
+
 /** The JSON body of the PUT that updated the draft. */
 function putPayload(mockFetch: ReturnType<typeof vi.spyOn>): Record<string, unknown> {
   const put = mockFetch.mock.calls.find((call: unknown[]) => (call[1] as RequestInit | undefined)?.method === 'PUT');
@@ -69,7 +78,7 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
   });
 
   it('updates subject/body and returns the updated draft (round-trip)', async () => {
-    mockFetch.mockResolvedValue(new Response(JSON.stringify(draftResponse()), { status: 200 }));
+    serveEverything();
 
     const ctx = buildCtx({
       draft_id: 'draft-1',
@@ -86,8 +95,8 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
       to: [{ name: undefined, email: 'corrected@example.com' }],
     });
 
-    // Verify it hit PUT /drafts/{id}
-    const call = mockFetch.mock.calls[0]!;
+    // Verify it hit PUT /drafts/{id} (after locating the draft with a GET)
+    const call = mockFetch.mock.calls.find((c: unknown[]) => (c[1] as RequestInit | undefined)?.method === 'PUT')!;
     const url = new URL(call[0] as string);
     const init = call[1] as RequestInit;
     expect(url.pathname.endsWith('/drafts/draft-1')).toBe(true);
@@ -95,7 +104,7 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
   });
 
   it('converts the markdown body to HTML before sending', async () => {
-    mockFetch.mockResolvedValue(new Response(JSON.stringify(draftResponse()), { status: 200 }));
+    serveEverything();
 
     const ctx = buildCtx({ draft_id: 'draft-1', body: 'Updated body' });
     await handler.execute(ctx);
@@ -107,7 +116,7 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
   });
 
   it('sends only the fields the caller provided (subject-only update)', async () => {
-    mockFetch.mockResolvedValue(new Response(JSON.stringify(draftResponse()), { status: 200 }));
+    serveEverything();
 
     const ctx = buildCtx({ draft_id: 'draft-1', subject: 'New subject only' });
     await handler.execute(ctx);
@@ -118,8 +127,8 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
     expect(sent).not.toHaveProperty('to');
     expect(sent).not.toHaveProperty('cc');
     expect(sent).not.toHaveProperty('body');
-    // A subject-only edit does not read the draft first.
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    // A subject-only edit reads the draft only to find its mailbox (one GET), then one PUT.
+    expect(mockFetch.mock.calls.map((c: unknown[]) => (c[1] as RequestInit | undefined)?.method ?? 'GET')).toEqual(['GET', 'PUT']);
   });
 
   it('rejects when draft_id is missing', async () => {
@@ -380,7 +389,172 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
     it('returns an error and changes nothing when the draft cannot be read', async () => {
       mockFetch.mockResolvedValue(new Response('nope', { status: 404 }));
       const error = refusedUnchanged(await handler.execute(buildCtx({ draft_id: 'missing', add_to: [fixture.aliceId] })));
-      expect(error).toContain('Failed to read the draft');
+      expect(error).toContain('No such draft');
+    });
+  });
+
+  // Two mailboxes: `work` (default, grant-work) and `personal` (grant-personal) (#2475).
+  describe('moving a draft between mailboxes', () => {
+    interface Call { grant: string; method: string; path: string; body?: Record<string, unknown> }
+    let calls: Call[];
+    let store: Record<string, Record<string, Record<string, unknown>>>;
+    let failCreate: boolean;
+    let failDelete: boolean;
+
+    const SOURCE = {
+      id: 'src-1', thread_id: 'thread-1', subject: 'Audit follow-up',
+      to: [{ name: 'Alice Archer', email: 'alice@example.com' }], cc: [{ email: 'cc@example.com' }], bcc: [],
+      body: '<p>Original body</p>', snippet: 'Original body', date: 1_700_000_000,
+    };
+
+    function serveNylas(): void {
+      mockFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+        const u = new URL(String(url));
+        const grant = /\/grants\/([^/]+)/.exec(u.pathname)![1]!;
+        const method = (init?.method ?? 'GET').toUpperCase();
+        const path = u.pathname.replace(/^.*\/grants\/[^/]+/, '');
+        const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+        calls.push({ grant, method, path, ...(body ? { body } : {}) });
+        const drafts = store[grant] ?? {};
+        const id = decodeURIComponent(path.split('/')[2] ?? '');
+        const json = (data: unknown, status = 200) => new Response(JSON.stringify({ data }), { status });
+        if (method === 'POST') {
+          if (failCreate) return new Response('boom', { status: 500 });
+          const created = { id: 'new-1', thread_id: '', ...body };
+          drafts['new-1'] = created;
+          store[grant] = drafts;
+          return json(created);
+        }
+        if (method === 'DELETE') {
+          if (failDelete) return new Response('boom', { status: 500 });
+          delete drafts[id];
+          return json({});
+        }
+        const found = drafts[id];
+        if (!found) return new Response('{"error":{"message":"not found"}}', { status: 404 });
+        if (method === 'PUT') {
+          const updated = { ...found, ...body };
+          drafts[id] = updated;
+          return json(updated);
+        }
+        return json(found);
+      });
+    }
+
+    const twoCtx = (input: Record<string, unknown>) => buildCtx(input, sourcesWith(), twoMailboxes());
+    const methods = () => calls.map((c) => `${c.method} ${c.grant}`);
+
+    beforeEach(() => {
+      calls = [];
+      failCreate = false;
+      failDelete = false;
+      store = { 'grant-work': { 'src-1': { ...SOURCE } }, 'grant-personal': {} };
+      serveNylas();
+    });
+
+    it('moves and deletes the original only after create succeeds', async () => {
+      const result = await handler.execute(twoCtx({ draft_id: 'src-1', move_to_mailbox: 'personal' }));
+
+      expect(result.success).toBe(true);
+      const data = (result as { data: Record<string, unknown> }).data;
+      expect(data).toMatchObject({
+        draft_id: 'new-1',
+        mailbox: 'personal',
+        mailbox_label: 'Personal',
+        moved_from: { mailbox: 'work', draft_id: 'src-1' },
+        new_thread: true,
+      });
+      expect(String(data.note)).toContain('memory-store');
+      expect(String(data.note).match(/\./g)).toHaveLength(1);
+      expect(data).not.toHaveProperty('warning');
+      // The create in the target comes before the delete in the source.
+      const order = methods();
+      expect(order.indexOf('POST grant-personal')).toBeGreaterThan(-1);
+      expect(order.indexOf('DELETE grant-work')).toBeGreaterThan(order.indexOf('POST grant-personal'));
+      const created = calls.find((c) => c.method === 'POST')!;
+      expect(created.body).toMatchObject({
+        subject: 'Audit follow-up',
+        body: '<p>Original body</p>',
+        to: [{ name: 'Alice Archer', email: 'alice@example.com' }],
+        cc: [{ email: 'cc@example.com' }],
+      });
+      expect(store['grant-work']).not.toHaveProperty('src-1');
+    });
+
+    it('failed create leaves the original', async () => {
+      failCreate = true;
+      const result = await handler.execute(twoCtx({ draft_id: 'src-1', move_to_mailbox: 'personal' }));
+
+      expect(result.success).toBe(false);
+      expect(methods()).not.toContain('DELETE grant-work');
+      expect(store['grant-work']).toHaveProperty('src-1');
+    });
+
+    it('a failed delete after a successful create is a success with a warning', async () => {
+      failDelete = true;
+      const result = await handler.execute(twoCtx({ draft_id: 'src-1', move_to_mailbox: 'personal' }));
+
+      expect(result.success).toBe(true);
+      const data = (result as { data: Record<string, unknown> }).data;
+      expect(data).toMatchObject({ draft_id: 'new-1', mailbox: 'personal', moved_from: { mailbox: 'work', draft_id: 'src-1' } });
+      expect(String(data.warning)).toContain('original');
+      expect(String(data.warning)).toContain('Work');
+      expect(store['grant-work']).toHaveProperty('src-1');
+    });
+
+    it('refuses a move to the mailbox the draft is already in and changes nothing', async () => {
+      const result = await handler.execute(twoCtx({ draft_id: 'src-1', move_to_mailbox: 'work' }));
+
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('already in') });
+      expect(methods()).not.toContain('POST grant-work');
+      expect(methods().filter((m) => m.startsWith('DELETE') || m.startsWith('POST'))).toEqual([]);
+    });
+
+    it('refuses an unknown or removed target mailbox', async () => {
+      const result = await handler.execute(twoCtx({ draft_id: 'src-1', move_to_mailbox: 'nope' }));
+
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('nope') });
+      expect(methods().filter((m) => m.startsWith('DELETE') || m.startsWith('POST'))).toEqual([]);
+    });
+
+    it('applies the other edits of the call to the new draft', async () => {
+      const result = await handler.execute(twoCtx({
+        draft_id: 'src-1', move_to_mailbox: 'personal', subject: 'Taxes', body: 'New text', remove: ['cc@example.com'],
+      }));
+
+      expect(result.success).toBe(true);
+      const created = calls.find((c) => c.method === 'POST')!;
+      expect(created.body).toMatchObject({ subject: 'Taxes', to: [{ name: 'Alice Archer', email: 'alice@example.com' }] });
+      expect(String(created.body!.body)).toContain('New text');
+      expect(created.body).not.toHaveProperty('cc');
+      // The original is not edited; it is deleted.
+      expect(methods()).not.toContain('PUT grant-work');
+    });
+
+    it('refuses to move a draft with attachments rather than dropping them', async () => {
+      store['grant-work']!['src-1'] = { ...SOURCE, attachments: [{ id: 'a1', filename: 'f.pdf', content_type: 'application/pdf', size: 10 }] };
+      const result = await handler.execute(twoCtx({ draft_id: 'src-1', move_to_mailbox: 'personal' }));
+
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('attachment') });
+      expect(methods().filter((m) => m.startsWith('DELETE') || m.startsWith('POST'))).toEqual([]);
+    });
+
+    it('a draft that is not a reply moves as a new thread of its own (new_thread false)', async () => {
+      store['grant-work']!['src-1'] = { ...SOURCE, thread_id: '' };
+      const result = await handler.execute(twoCtx({ draft_id: 'src-1', move_to_mailbox: 'personal' }));
+
+      expect((result as { data: Record<string, unknown> }).data).toMatchObject({ new_thread: false });
+    });
+
+    it('edits a draft that exists only in the non-default mailbox, and says which mailbox', async () => {
+      store['grant-work'] = {};
+      store['grant-personal'] = { 'src-1': { ...SOURCE } };
+      const result = await handler.execute(twoCtx({ draft_id: 'src-1', subject: 'Fixed' }));
+
+      expect(result.success).toBe(true);
+      expect((result as { data: Record<string, unknown> }).data).toMatchObject({ draft_id: 'src-1', mailbox: 'personal', subject: 'Fixed' });
+      expect(methods()).toContain('PUT grant-personal');
+      expect(methods()).not.toContain('PUT grant-work');
     });
   });
 });

@@ -94,6 +94,8 @@ export interface NylasDraftSummary {
 export interface NylasDraftFull extends NylasDraftSummary {
   bcc: NylasParticipant[];
   body: string;
+  /** How many attachments the draft carries, inline parts included. The bytes are not read. */
+  attachmentCount?: number;
 }
 
 // Partial update payload for an existing draft. Only the provided fields are
@@ -372,6 +374,7 @@ export class CeoNylasClient {
     body: string;
     to: NylasParticipant[];
     cc?: NylasParticipant[];
+    bcc?: NylasParticipant[];
     attachments?: DraftAttachment[];
   }): Promise<NylasDraft> {
     const url = `${this.baseUrl}/drafts`;
@@ -382,6 +385,9 @@ export class CeoNylasClient {
     };
     if (options.cc && options.cc.length > 0) {
       messagePayload.cc = options.cc;
+    }
+    if (options.bcc && options.bcc.length > 0) {
+      messagePayload.bcc = options.bcc;
     }
     const data = await this.requestDraft(url, 'createDraft', messagePayload, options.attachments);
     return {
@@ -897,6 +903,7 @@ interface NylasApiDraftFull {
   body?: string;
   snippet?: string;
   date?: number;
+  attachments?: NylasApiAttachment[];
 }
 
 interface NylasApiFolder {
@@ -986,6 +993,7 @@ function normalizeDraftFull(draft: NylasApiDraftFull): NylasDraftFull {
     ...normalizeDraftSummary(draft),
     bcc: (draft.bcc ?? []).map(normParticipant),
     body: draft.body ?? '',
+    attachmentCount: draft.attachments?.length ?? 0,
   };
 }
 

@@ -42,6 +42,7 @@ import type { AgentPersona } from '../skills/types.js';
 import { REPLY_QUOTE_HTML_OPEN } from '../skills/_shared/reply-quote.js';
 import { DEFAULT_SEND_LEVEL, type SendLevel } from '../skills/principal-send/send-level.js';
 import type { PrincipalSendEntry } from '../skills/principal-send/send-ledger.js';
+import { draftKey, type DraftRef } from '../skills/principal-send/draft-provenance.js';
 
 /** One message a recording transport took: what would have left the process. */
 export interface RecordedSend {
@@ -446,23 +447,25 @@ export function createRecordingOutboundGateway(deps: {
           // The calling run's level (seed.principal_mailbox.send_level), else production's default.
           readSendLevel: async () => recorder.sendLevel?.() ?? DEFAULT_SEND_LEVEL,
           draftProvenance: {
-            createdByCuria: async (draftIds: readonly string[]) => {
+            // The run's records are by draft id alone (one mailbox in a test run); the result keeps
+            // the gateway's (mailbox, id) keys.
+            createdByCuria: async (drafts: readonly DraftRef[]) => {
               const curia = recorder.curiaDraftIds?.();
               // Fail toward more review, as the gateway does without provenance: no run's
               // record means every draft reads as Curia's.
-              return new Set(curia ? draftIds.filter(id => curia.has(id)) : draftIds);
+              return new Set(drafts.filter(d => !curia || curia.has(d.draftId)).map(d => draftKey(d.mailbox, d.draftId)));
             },
-            editedByCuria: async (draftIds: readonly string[]) => {
+            editedByCuria: async (drafts: readonly DraftRef[]) => {
               const edited = recorder.curiaEditedDraftIds?.();
               // Fail toward more review, as above.
-              return new Set(edited ? draftIds.filter(id => edited.has(id)) : draftIds);
+              return new Set(drafts.filter(d => !edited || edited.has(d.draftId)).map(d => draftKey(d.mailbox, d.draftId)));
             },
             // An autonomous send's D4.1 check (#2474 PR 2): only a draft the run's own task created
             // (a `same_task` seed, or a stubbed compose or reply this run), last written at the run
             // clock's now, so only a draft dated after that reads as changed. A draft Curia wrote in
             // an earlier task is not one. No record proves nothing, so nothing reads as created in
             // the task (fail closed, unlike the review default above).
-            curiaWritesInTask: async (draftId: string) => {
+            curiaWritesInTask: async ({ draftId }: DraftRef) => {
               const task = recorder.curiaTaskDrafts?.();
               if (!task?.ids.has(draftId)) return { created: false, lastWriteAt: null, replyToMessageId: null };
               return { created: true, lastWriteAt: task.now, replyToMessageId: task.replyTo?.get(draftId) ?? null };
