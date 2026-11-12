@@ -217,6 +217,7 @@ describe('HealthService.getStatus()', () => {
     function mailboxDeps(boxes: ReturnType<typeof mailbox>[], extra: Record<string, unknown> = {}) {
       const principalMailboxes = {
         list: vi.fn().mockResolvedValue(boxes.map((b) => b.view)),
+        credentials: vi.fn(async (id: string) => ({ apiKey: 'k', grantId: `g-${id}` })),
         gatewayClient: vi.fn(async (id: string) => boxes.find((b) => b.view.id === id)!.client),
         calendarClient: vi.fn(async (id: string) => boxes.find((b) => b.view.id === id)!.calendar),
         isFallbackActive: vi.fn().mockResolvedValue(false),
@@ -256,8 +257,8 @@ describe('HealthService.getStatus()', () => {
       expect(failed?.detail).toMatch(/reconnect/i);
       // Names the console control that does it (R29).
       expect(failed?.detail).toContain('Replace grant');
-      expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledWith('work', 'Work', true);
-      expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledWith('personal', 'Personal', false);
+      expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledWith('work', 'Work', true, { authFailure: false });
+      expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledWith('personal', 'Personal', false, { authFailure: true });
     });
 
     it('omits reconnect guidance for non-auth failures and never leaks the error text', async () => {
@@ -334,7 +335,7 @@ describe('HealthService.getStatus()', () => {
 
     it('principalMailboxReady is true once a live mailbox passes its canary', async () => {
       const svc = new HealthService(makeDeps(mailboxDeps([mailbox('work', { isDefault: true })])) as never);
-      expect(await svc.principalMailboxReady()).toBe(true);
+      expect(await svc.principalMailboxReady()).toBe('ready');
     });
 
     it('reports skipped, and does not notify, when no Nylas API key is configured', async () => {
@@ -369,8 +370,8 @@ describe('HealthService.getStatus()', () => {
     it('principalMailboxReady re-probes a mailbox whose last result was not ok', async () => {
       const messages = vi.fn().mockRejectedValueOnce(new Error('x')).mockResolvedValue([]);
       const svc = new HealthService(makeDeps(mailboxDeps([mailbox('work', { isDefault: true, messages })])) as never);
-      expect(await svc.principalMailboxReady()).toBe(false);
-      expect(await svc.principalMailboxReady()).toBe(true);
+      expect(await svc.principalMailboxReady()).toBe('pending');
+      expect(await svc.principalMailboxReady()).toBe('ready');
       expect(messages).toHaveBeenCalledTimes(2);
     });
 
@@ -385,7 +386,61 @@ describe('HealthService.getStatus()', () => {
     it('principalMailboxReady is false when the only mailbox fails', async () => {
       const bad = mailbox('work', { isDefault: true, messages: vi.fn().mockRejectedValue(new Error('x')) });
       const svc = new HealthService(makeDeps(mailboxDeps([bad])) as never);
-      expect(await svc.principalMailboxReady()).toBe(false);
+      expect(await svc.principalMailboxReady()).toBe('pending');
+    });
+
+    it('principalMailboxReady re-probes a mailbox whose grant was replaced since it passed', async () => {
+      const b = mailbox('work', { isDefault: true });
+      const deps = mailboxDeps([b]);
+      const svc = new HealthService(makeDeps(deps) as never);
+      expect(await svc.principalMailboxReady()).toBe('ready');
+      deps.principalMailboxes.credentials.mockImplementation(async () => ({ apiKey: 'k', grantId: 'g-replaced' }));
+      const listMessages = b.client.listMessages as ReturnType<typeof vi.fn>;
+      listMessages.mockRejectedValueOnce(Object.assign(new Error('Unauthorized'), { statusCode: 401 }));
+      expect(await svc.principalMailboxReady()).toBe('pending');
+      expect(listMessages).toHaveBeenCalledTimes(2);
+    });
+
+    it('principalMailboxReady is restart_required while calendar runs on another grant than the default', async () => {
+      const deps = mailboxDeps([mailbox('work', { isDefault: true })]);
+      let bound: string | null = null;
+      const svc = new HealthService(makeDeps({ ...deps, calendarBoundGrant: () => bound }) as never);
+      expect(await svc.principalMailboxReady()).toBe('restart_required');
+      bound = 'g-work';
+      expect(await svc.principalMailboxReady()).toBe('ready');
+    });
+
+    it('the probe deadline covers reading the credentials', async () => {
+      vi.useFakeTimers();
+      try {
+        const deps = mailboxDeps([mailbox('work', { isDefault: true })]);
+        deps.principalMailboxes.credentials.mockImplementation(() => new Promise(() => {}));
+        const svc = new HealthService(makeDeps(deps) as never);
+        const done = svc.principalMailboxReady();
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(await done).toBe('pending');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('tells the outage notifier whether the failure was an auth failure', async () => {
+      const auth = mailbox('work', { isDefault: true, messages: vi.fn().mockRejectedValue(Object.assign(new Error('x'), { statusCode: 401 })) });
+      const other = mailbox('personal', { messages: vi.fn().mockRejectedValue(Object.assign(new Error('x'), { statusCode: 503 })) });
+      const deps = mailboxDeps([auth, other]);
+      const svc = new HealthService(makeDeps(deps) as never);
+      await svc.runCanaries();
+      expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledWith('work', 'Work', false, { authFailure: true });
+      expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledWith('personal', 'Personal', false, { authFailure: false });
+    });
+
+    it('reconciles the flat principal-mailbox keys on each canary tick, and survives its failure', async () => {
+      const reconcile = vi.fn().mockRejectedValueOnce(new Error('vault down')).mockResolvedValue('in_sync');
+      const svc = new HealthService(makeDeps({ ...mailboxDeps([mailbox('work', { isDefault: true })]), reconcileFlatMailboxKeys: reconcile }) as never);
+      const first = await svc.runCanaries();
+      expect(first.find((r) => r.name === 'principal_mailbox:work')?.status).toBe('ok');
+      await svc.runCanaries();
+      expect(reconcile).toHaveBeenCalledTimes(2);
     });
   });
 

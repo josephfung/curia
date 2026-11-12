@@ -17,7 +17,7 @@
 // before invoking the handler. The handler receives ctx.entityContext[] and
 // never needs to call entity-context itself.
 
-import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest, ActionRisk, EmailChannelStatus, ApprovalVia } from './types.js';
+import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest, ActionRisk, EmailChannelStatus, PrincipalMailboxReadiness, ApprovalVia } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated, isOutsiderOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
 import { resolvePrincipalIsSoleRecipientFromSkillInput, isSolelyInitiatingSender } from '../contacts/principal-recipient.js';
@@ -369,7 +369,7 @@ export class ExecutionLayer {
   private bus?: EventBus;
   private phoneAppReady?: () => Promise<boolean>;
   private emailChannelStatus?: () => Promise<EmailChannelStatus>;
-  private principalMailboxReady?: () => Promise<boolean>;
+  private principalMailboxReady?: () => Promise<PrincipalMailboxReadiness>;
   private curiaEmailAddresses?: () => Promise<string[]>;
   private agentRegistry?: AgentRegistry;
   private contactService?: ContactService;
@@ -495,7 +495,7 @@ export class ExecutionLayer {
     /** setup-status: whether the email channel is polling a mailbox (#2409). */
     emailChannelStatus?: () => Promise<EmailChannelStatus>;
     /** setup-status: a live principal mailbox passed its last canary (#2475). */
-    principalMailboxReady?: () => Promise<boolean>;
+    principalMailboxReady?: () => Promise<PrincipalMailboxReadiness>;
     /** ceo-inbox list/search: Curia's own addresses, read live (#2409). */
     curiaEmailAddresses?: () => Promise<string[]>;
     confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
