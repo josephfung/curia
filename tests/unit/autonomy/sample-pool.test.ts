@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { sanitizeObjectOutput } from '../../../src/skills/sanitize.js';
-import { formatEmailSummary, isSampledTool, sampleEmailFromResult, sampleWeight, selectSamples, TRIAGE_SKILLS } from '../../../src/autonomy/sample-pool.js';
+import { cleanSubject, formatEmailSummary, isSampledTool, sampleEmailFromResult, sampleWeight, selectSamples, TRIAGE_SKILLS } from '../../../src/autonomy/sample-pool.js';
 
 describe('isSampledTool', () => {
   it('leaves sends to the gateway, which records them itself', () => {
@@ -213,5 +213,21 @@ describe('entity-encoded markup in a sample summary', () => {
 
   it('keeps a plain ampersand readable', () => {
     expect(formatEmailSummary('Archive an email', 'Q&A with Sam')).toBe('Archive an email: "Q&A with Sam"');
+  });
+});
+
+describe('cleanSubject invisible and malformed characters', () => {
+  const BAD = /[\u0000-\u001f\u007f\u0085\u2028\u2029\u200b-\u200f\u202a-\u202e\u2066-\u2069]/;
+  it('strips entity-encoded bidi, zero-width and control characters, however deeply encoded', () => {
+    for (const raw of ['a&#x202E;b', 'a&#8238;b', 'a&amp;#x202E;b', 'a&amp;amp;#x200B;b', 'a&#x0;b', 'a&#x2066;b&#x2069;c', 'a&amp;#x0A;b']) {
+      expect(cleanSubject(raw), raw).not.toMatch(BAD);
+    }
+  });
+  it('removes a lone surrogate and keeps a valid pair', () => {
+    const out = cleanSubject('a\ud800b\udc00c 😀');
+    expect(out).toBe('abc 😀');
+  });
+  it('strips the isolate controls U+2066-U+2069', () => {
+    expect(cleanSubject('x\u2066y\u2069z')).toBe('xyz');
   });
 });
