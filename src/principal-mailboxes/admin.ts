@@ -93,6 +93,8 @@ export interface PrincipalMailboxAdminDeps {
   reconcileFlatKeys?: () => Promise<unknown>;
   lookupGrant: (grantId: string) => Promise<{ email: string; provider: string }>;
   onRemoved?: Array<(id: string) => Promise<void>>;
+  /** Drops the legacy `default` ceo_inbox/sending key; best-effort after a tombstone (R41). */
+  forgetLegacySendLevel?: () => Promise<void>;
   /** True while the deferred-migration fallback is served. An add then would end the
    *  fallback (any row hides it) and drop the flat mailbox from the list, so add refuses. */
   isFallbackActive?: () => Promise<boolean>;
@@ -398,6 +400,12 @@ export class PrincipalMailboxAdmin {
         if (!next) throw new UnknownMailboxError(newDefault);
         await this.mirrorDefaultFromVault(next);
       });
+    }
+    // The legacy `default` send level was set for the migrated mailbox; if its rename never
+    // landed it must not outlive that mailbox and be inherited by a new sole one (R41).
+    if (this.deps.forgetLegacySendLevel) {
+      const forget = this.deps.forgetLegacySendLevel;
+      await step('legacy_send_level', () => forget());
     }
     if (!input.stillOwned) {
       await step('identity', async () => {

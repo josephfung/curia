@@ -4315,7 +4315,7 @@ export class OutboundGateway {
       ids = this.principalMailboxIds ? await this.principalMailboxIds() : [this.defaultMailboxId ? await this.defaultMailboxId() : DEFAULT_MAILBOX];
     } catch (err) {
       // Fail closed: with no list of mailboxes nothing is sent.
-      this.log.error({ err, draftId }, 'outbound-gateway: principal mailboxes could not be listed — not sending');
+      this.log.error({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: principal mailboxes could not be listed — not sending');
       return { ok: false, refusal: 'mailbox_unavailable' };
     }
     const clientFor = async (mailboxId: string): Promise<NylasClient | null> => {
@@ -4323,7 +4323,7 @@ export class OutboundGateway {
         return this.principalMailbox ? await this.principalMailbox(mailboxId) : null;
       } catch (err) {
         // Fail closed: a mailbox that could not be resolved is not sent from.
-        this.log.error({ err, draftId, mailboxId }, 'outbound-gateway: principal mailbox could not be resolved — not sending');
+        this.log.error({ ...grantSafeErrorFields(err), draftId, mailboxId }, 'outbound-gateway: principal mailbox could not be resolved — not sending');
         return null;
       }
     };

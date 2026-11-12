@@ -71,6 +71,17 @@ function namesNoKnownMailbox(raw: string, live: readonly string[]): boolean {
   return keys.length > 0 && !keys.some((k) => k === DEFAULT_MAILBOX || live.includes(k));
 }
 
+/** A leftover `default` key beside no entry for some live mailbox: it applies to none of them. */
+function ignoresLegacyDefault(raw: string, live: readonly string[]): boolean {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
+    return DEFAULT_MAILBOX in parsed && live.some((id) => !(id in parsed));
+  } catch {
+    return false;
+  }
+}
+
 export type SendLevelReader = (mailbox: string) => Promise<SendLevel>;
 
 export function createSendLevelReader(deps: {
@@ -102,6 +113,10 @@ export function createSendLevelReader(deps: {
         // Once per process per value; never the stored value itself.
         warnedUnknown.add(raw);
         deps.logger.warn('ceo_inbox/sending has entries but none for a live mailbox or "default"; every mailbox uses on_request');
+      }
+      if (live !== undefined && live.length >= 2 && raw !== null && !warnedUnknown.has(`legacy:${raw}`) && ignoresLegacyDefault(raw, live)) {
+        warnedUnknown.add(`legacy:${raw}`);
+        deps.logger.warn('ceo_inbox/sending still has a legacy "default" entry, which is ignored now that more than one mailbox is live; set a level per mailbox');
       }
       const { level, malformed } = readSendLevelValue(raw, mailbox, legacyDefault);
       // Never the stored value: only that it could not be read as a level.

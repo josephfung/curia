@@ -4,6 +4,8 @@ import { MIRROR_PENDING_WARNING, PrincipalMailboxAdmin } from '../../../src/prin
 import type { PrincipalMailboxStore } from '../../../src/principal-mailboxes/store.js';
 import { RemovedMailboxError, type PrincipalMailboxRecord } from '../../../src/principal-mailboxes/types.js';
 import { principalMailboxGrantSecretName } from '../../../src/principal-mailboxes/secrets.js';
+import { dropLegacyDefaultKey } from '../../../src/principal-mailboxes/migrate-config-keys.js';
+import { createSendLevelReader } from '../../../src/skills/principal-send/send-level.js';
 import { ContactService } from '../../../src/contacts/contact-service.js';
 
 const logger = pino({ level: 'silent' });
@@ -22,6 +24,7 @@ function setup(opts: {
   otherContacts?: Record<string, string>;
   insertFails?: boolean;
   onRemoved?: Array<(id: string) => Promise<void>>;
+  forgetLegacySendLevel?: () => Promise<void>;
   isFallbackActive?: () => Promise<boolean>;
   logger?: pino.Logger;
   reconcileFlatKeys?: () => Promise<unknown>;
@@ -93,6 +96,7 @@ function setup(opts: {
       return found;
     }),
     onRemoved: opts.onRemoved,
+    forgetLegacySendLevel: opts.forgetLegacySendLevel,
     isFallbackActive: opts.isFallbackActive,
     reconcileFlatKeys: opts.reconcileFlatKeys,
     ...(opts.curiaGrants ? { curiaAccountGrantIds: async () => opts.curiaGrants! } : {}),
@@ -696,5 +700,36 @@ describe('PrincipalMailboxAdmin.remove "No, forget it" with a real contact servi
     const resolved = await contacts.resolveByChannelIdentity('email', 'pat@gmail.com');
     expect(resolved?.contactId).toBe(principal.id);
     expect(resolved?.verified).toBe(false);
+  });
+});
+
+describe('removing a mailbox drops the legacy send-level key (#2475 R41)', () => {
+  it('a new sole mailbox added after the migrated one is removed reads on_request', async () => {
+    let stored: string | null = '{"default":"routine"}';
+    const store = {
+      get: async () => stored,
+      set: async (_n: string, _k: string, v: string) => { stored = v; return {}; },
+    };
+    const s = setup({
+      records: [rec({ id: 'work', address: 'pat@work.example.com' })],
+      grants: { g2: google('pat@home.example.org') },
+      forgetLegacySendLevel: () => dropLegacyDefaultKey(store),
+    });
+    const read = createSendLevelReader({
+      get: async () => stored, logger,
+      liveMailboxIds: async () => (await s.store.listLive()).map((r) => r.id),
+    });
+    expect(await read('work')).toBe('routine');
+    await s.admin.remove({ id: 'work', stillOwned: true });
+    await s.admin.add({ id: 'home', label: 'Home', grantId: 'g2' });
+    expect(await read('home')).toBe('on_request');
+    expect(stored).toBe('{}');
+  });
+
+  it('a failure dropping the key is named in the outcome and does not stop the other cleanup', async () => {
+    const s = setup({ records: [rec({ id: 'work' })], forgetLegacySendLevel: async () => { throw new Error('kg down'); } });
+    const outcome = await s.admin.remove({ id: 'work', stillOwned: true });
+    expect(outcome.cleanupIncomplete).toEqual(['legacy_send_level']);
+    expect(s.secretStore.delete).toHaveBeenCalledWith(principalMailboxGrantSecretName('work'));
   });
 });

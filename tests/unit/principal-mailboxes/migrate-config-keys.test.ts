@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { migrateSendingKey, renameSendingKeyAfterMigration } from '../../../src/principal-mailboxes/migrate-config-keys.js';
+import { describe, it, expect, vi } from 'vitest';
+import { migrateSendingKey, renameSendingKeyAfterMigration, dropLegacyDefaultKey } from '../../../src/principal-mailboxes/migrate-config-keys.js';
 
 function store(initial: string | null) {
   let value = initial;
@@ -66,5 +66,34 @@ describe('renameSendingKeyAfterMigration (R41)', () => {
     const run = renameSendingKeyAfterMigration({ migrate: async () => 'migrated', liveIds: async () => ['a', 'b'], store: () => s, logger });
     await run();
     expect(s.writes).toHaveLength(0);
+  });
+});
+
+describe('renameSendingKeyAfterMigration retries a failed flush', () => {
+  it('keeps the pending id and renames on the next run', async () => {
+    const warn = vi.fn();
+    const logger = { info: () => {}, warn, error: () => {} } as never;
+    const s = store('{"default":"all"}');
+    let failing = true;
+    const failingStore = { get: s.get, set: async (n: string, k: string, v: string) => { if (failing) throw new Error('kg down'); return s.set(n, k, v); } };
+    let outcome: 'migrated' | 'already' = 'migrated';
+    const run = renameSendingKeyAfterMigration({ migrate: async () => outcome, liveIds: async () => ['gmail'], store: () => failingStore, logger });
+    await run();
+    expect(s.writes).toHaveLength(0);
+    expect(warn).toHaveBeenCalled();
+    failing = false;
+    outcome = 'already';
+    await run();
+    expect(JSON.parse(s.current()!)).toEqual({ gmail: 'all' });
+  });
+});
+
+describe('dropLegacyDefaultKey', () => {
+  it('removes only the default entry, and does nothing when there is none', async () => {
+    const s = store('{"default":"all","work":"off"}');
+    await dropLegacyDefaultKey(s);
+    expect(JSON.parse(s.current()!)).toEqual({ work: 'off' });
+    await dropLegacyDefaultKey(s);
+    expect(s.writes).toHaveLength(1);
   });
 });
