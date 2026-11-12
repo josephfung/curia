@@ -3,6 +3,7 @@ import pino from 'pino';
 import { PrincipalMailboxes } from '../../../src/principal-mailboxes/service.js';
 import type { PrincipalMailboxStore } from '../../../src/principal-mailboxes/store.js';
 import {
+  MissingNylasApiKeyError,
   RemovedMailboxError,
   UnknownMailboxError,
   type PrincipalMailboxRecord,
@@ -85,7 +86,7 @@ describe('PrincipalMailboxes', () => {
 
   it('credentials throws when the API key is missing', async () => {
     const { svc } = build([rec()], { 'principal.mailbox.work.nylas_grant_id': 'g1' }, null);
-    await expect(svc.credentials('work')).rejects.toThrow(/api key/i);
+    await expect(svc.credentials('work')).rejects.toBeInstanceOf(MissingNylasApiKeyError);
   });
 
   it('list returns the fallback when the table is empty and a fallback is set', async () => {

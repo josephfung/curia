@@ -34,3 +34,11 @@ export class RemovedMailboxError extends Error {
     this.name = 'RemovedMailboxError';
   }
 }
+
+/** The Nylas API key (channel.email.nylas_api_key) is not configured. */
+export class MissingNylasApiKeyError extends Error {
+  constructor() {
+    super('Nylas API key is not configured');
+    this.name = 'MissingNylasApiKeyError';
+  }
+}

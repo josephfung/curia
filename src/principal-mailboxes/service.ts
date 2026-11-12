@@ -11,6 +11,7 @@ import { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.
 import type { PrincipalMailboxStore } from './store.js';
 import { principalMailboxGrantSecretName } from './secrets.js';
 import {
+  MissingNylasApiKeyError,
   RemovedMailboxError,
   UnknownMailboxError,
   type PrincipalMailboxRecord,
@@ -105,7 +106,7 @@ export class PrincipalMailboxes {
     const rec = await this.deps.store.getAny(id);
     if (rec?.removedAt) throw new RemovedMailboxError(id, rec.label);
     const apiKey = this.deps.apiKey();
-    if (!apiKey) throw new Error('Nylas API key is not configured');
+    if (!apiKey) throw new MissingNylasApiKeyError();
 
     if (!rec) {
       const fb = await this.activeFallback();
