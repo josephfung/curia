@@ -10,6 +10,7 @@ import {
   extractLinks,
   editSectionBody,
   removeSection,
+  splitSections,
   okfByteSize,
   normalizeDocPath,
   type ExtractedLink,
@@ -198,6 +199,65 @@ function mapSummaryRow(row: Omit<DbWorkingDocRow, 'body' | 'section_versions'>):
   return summary;
 }
 
+/**
+ * Section headings match trimmed and case-insensitively everywhere the doc
+ * store resolves them (editSectionBody, removeSection), so section-version
+ * counters key on the same equivalence (#2398).
+ */
+function normalizeSectionKey(key: string): string {
+  return key.trim().toLowerCase();
+}
+
+/** The stored counter keys naming `section` under any spelling, with their values. */
+function sectionVersionVariants(
+  sectionVersions: Record<string, number>,
+  section: string,
+): Array<{ key: string; value: number }> {
+  const target = normalizeSectionKey(section);
+  return Object.entries(sectionVersions)
+    .filter(([key]) => normalizeSectionKey(key) === target)
+    .map(([key, value]) => ({ key, value }));
+}
+
+/**
+ * The section-version map after a whole-body replace (#2398). update() rewrites
+ * every section at once, so it must move the per-section counters the way
+ * editSection would have: a section whose content changed (or that is new)
+ * increments, a removed section's counter is dropped, and an untouched section
+ * keeps its counter. Without this, a caller holding expected_section_version
+ * for a section the replace rewrote reads a stale match and silently
+ * overwrites the newer section on its next editSection. A surviving section
+ * keeps the stored spelling that holds its (highest) counter, so duplicate
+ * keys left by the old case-sensitive keying merge instead of forking again.
+ */
+function sectionVersionsAfterReplace(
+  current: Record<string, number>,
+  oldBody: string,
+  newBody: string,
+): Record<string, number> {
+  const firstSections = (body: string) => {
+    const byKey = new Map<string, { heading: string; content: string }>();
+    for (const section of splitSections(body).sections) {
+      const key = normalizeSectionKey(section.heading);
+      if (!byKey.has(key)) byKey.set(key, section);
+    }
+    return byKey;
+  };
+  const oldSections = firstSections(oldBody);
+  const next: Record<string, number> = {};
+  for (const [key, section] of firstSections(newBody)) {
+    const variants = sectionVersionVariants(current, section.heading);
+    const changed = oldSections.get(key)?.content !== section.content;
+    if (variants.length > 0) {
+      const highest = variants.reduce((a, b) => (b.value > a.value ? b : a));
+      next[highest.key] = changed ? highest.value + 1 : highest.value;
+    } else if (changed) {
+      next[section.heading] = 1;
+    }
+  }
+  return next;
+}
+
 export class WorkingDocsRepo {
   constructor(
     private readonly pool: Pool,
@@ -298,6 +358,7 @@ export class WorkingDocsRepo {
       ? stripTypeFromFrontmatter(params.frontmatter)
       : current.frontmatter;
     const body = params.body ?? current.body;
+    const sectionVersions = sectionVersionsAfterReplace(current.sectionVersions, current.body, body);
     const byteSize = okfByteSize({ type, frontmatter, body });
     const links = extractLinks(normalized, body);
 
@@ -310,6 +371,7 @@ export class WorkingDocsRepo {
              frontmatter = $3::jsonb,
              body = $4,
              version = version + 1,
+             section_versions = $13::jsonb,
              byte_size = $5,
              task_id = CASE
                WHEN NOT ($6::boolean) THEN task_id
@@ -336,6 +398,7 @@ export class WorkingDocsRepo {
           params.agentId !== undefined,
           params.agentId ?? null,
           params.expectedVersion,
+          JSON.stringify(sectionVersions),
         ],
       );
       if (!rows[0]) {
@@ -394,7 +457,14 @@ export class WorkingDocsRepo {
       }
 
       const locked = mapRow(lockedRow);
-      const currentSectionVersion = locked.sectionVersions[sectionKey] ?? 0;
+      // Counters key case-insensitively, the way headings match: a second
+      // spelling of the same heading must read the same counter instead of
+      // forking a parallel key a stale writer can hide behind (#2398).
+      // Duplicate keys left by the old exact-case keying merge onto the
+      // spelling holding the highest counter, so the merged value is the one
+      // a stale expected_section_version is checked against.
+      const variants = sectionVersionVariants(locked.sectionVersions, sectionKey);
+      const currentSectionVersion = variants.reduce((max, v) => Math.max(max, v.value), 0);
       if (params.expectedSectionVersion !== undefined
         && params.expectedSectionVersion !== currentSectionVersion) {
         await client.query('ROLLBACK');
@@ -409,7 +479,14 @@ export class WorkingDocsRepo {
       });
       const links = extractLinks(normalized, newBody);
       const nextSectionVersion = currentSectionVersion + 1;
-      const sectionVersions = { ...locked.sectionVersions, [sectionKey]: nextSectionVersion };
+      const survivingKey = variants.find(v => v.value === currentSectionVersion)?.key ?? sectionKey;
+      const variantKeys = new Set(variants.map(v => v.key));
+      const sectionVersions = {
+        ...Object.fromEntries(
+          Object.entries(locked.sectionVersions).filter(([key]) => !variantKeys.has(key)),
+        ),
+        [survivingKey]: nextSectionVersion,
+      };
 
       const { rows } = await client.query<DbWorkingDocRow>(
         `UPDATE working_documents
@@ -431,7 +508,7 @@ export class WorkingDocsRepo {
           newBody,
           JSON.stringify(sectionVersions),
           byteSize,
-          sectionKey,
+          survivingKey,
           currentSectionVersion,
           params.taskId !== undefined && params.taskId !== null,
           params.taskId ?? null,
