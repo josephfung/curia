@@ -4143,6 +4143,23 @@ describe('OutboundGateway — principal mailbox and email signature', () => {
     expect(mocks.bus.publish).not.toHaveBeenCalled();
   });
 
+  it('Curia account bound to any mailbox address is refused', async () => {
+    const mocks = createMocks();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient], ['spare', mocks.nylasClient]]),
+      emailAccountAddresses: new Map([['curia', 'assistant@example.com'], ['spare', 'personal@example.com']]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('work@example.com')],
+      principalEmailAddresses: async () => ['work@example.com', 'personal@example.com'],
+      logger: mocks.logger,
+    });
+    expect(await gateway.send(email({ accountId: 'spare' }))).toEqual({ success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL });
+    expect(await gateway.sendEmailDraft('d1', 'spare', { recipientEmail: 'priya@example.com', body: 'x', subject: 's' })).toEqual({ success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL });
+    expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+
   it('send() still delivers a system notice to the principal alone from the principal\'s mailbox', async () => {
     const { gateway, mocks } = makeGateway({ persona: PERSONA });
     const result = await gateway.send(
@@ -5876,7 +5893,7 @@ describe('sendPrincipalDraft (#2474)', () => {
     actionLogRepo?: ActionLogRepo;
     ledger?: {
       recordSending: ReturnType<typeof vi.fn>; recordSent: ReturnType<typeof vi.fn>;
-      recordHeld?: ReturnType<typeof vi.fn>; recentForThread?: ReturnType<typeof vi.fn>;
+      recordHeld?: ReturnType<typeof vi.fn>; recentForThread?: ReturnType<typeof vi.fn>; recentForConversation?: ReturnType<typeof vi.fn>;
       recentAutonomousSends?: ReturnType<typeof vi.fn>; sentForDraft?: ReturnType<typeof vi.fn>;
     };
     /** What curiaWritesInTask returns (PR 2), or an error it throws. */
@@ -5893,6 +5910,10 @@ describe('sendPrincipalDraft (#2474)', () => {
     /** The live mailbox ids the gateway may probe; absent: just the default. */
     mailboxIds?: () => Promise<string[]>;
     defaultMailboxId?: () => Promise<string>;
+    /** Every principal address (#2475 Task 18), or an error the lookup throws; absent: not wired. */
+    principalAddrs?: string[] | Error;
+    /** Each mailbox's own address. */
+    mailboxAddresses?: Record<string, string>;
   } = {}) {
     const client = o.client === undefined ? mailboxClient() : o.client;
     const review = o.review ?? vi.fn().mockResolvedValue({ kind: 'send' });
@@ -5912,6 +5933,7 @@ describe('sendPrincipalDraft (#2474)', () => {
     const ledger = {
       recordHeld: vi.fn().mockResolvedValue(undefined),
       recentForThread: vi.fn().mockResolvedValue([]),
+      recentForConversation: vi.fn().mockResolvedValue([]),
       recentAutonomousSends: vi.fn().mockResolvedValue([]),
       sentForDraft: vi.fn().mockResolvedValue(false),
       ...(o.ledger ?? { recordSending: vi.fn().mockResolvedValue(undefined), recordSent: vi.fn().mockResolvedValue(undefined) }),
@@ -5940,8 +5962,12 @@ describe('sendPrincipalDraft (#2474)', () => {
       ...(o.mailboxIds ? { principalMailboxIds: o.mailboxIds } : {}),
       ...(o.defaultMailboxId ? { defaultMailboxId: o.defaultMailboxId } : {}),
       readSendLevel,
+      ...(o.principalAddrs ? {
+        principalEmailAddresses: async () => { if (o.principalAddrs instanceof Error) throw o.principalAddrs; return o.principalAddrs!; },
+        mailboxAddress: async (id: string) => o.mailboxAddresses?.[id],
+      } : {}),
       ...(o.withoutProvenance ? {} : { draftProvenance: { createdByCuria, editedByCuria, curiaWritesInTask } }),
-      ...(o.withoutLedger ? {} : { sendLedger: ledger as unknown as Pick<import('../../../src/skills/principal-send/send-ledger.js').PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentAutonomousSends' | 'sentForDraft'> }),
+      ...(o.withoutLedger ? {} : { sendLedger: ledger as unknown as Pick<import('../../../src/skills/principal-send/send-ledger.js').PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentForConversation' | 'recentAutonomousSends' | 'sentForDraft'> }),
     });
     return { gw, client, review, createdByCuria, editedByCuria, curiaWritesInTask, ledger, readSendLevel, actionLogRepo, resolveMailbox };
   }
@@ -6736,6 +6762,78 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(ledger.recordSending).not.toHaveBeenCalled();
     });
 
+    // ---- #2475 Task 18: limits across mailboxes ----
+    describe('across mailboxes (#2475 Task 18)', () => {
+      const addrs = { principalAddrs: [PRINCIPAL, 'personal@example.com'], mailboxAddresses: { default: PRINCIPAL } };
+      const withIds = (over: Partial<NylasMessage> = {}) => inbound({
+        headers: [...VERIFIED, { name: 'Message-ID', value: '<Root@Mail.Example>' }, { name: 'References', value: '<a@x> <Root@Mail.Example>' }], ...over,
+      });
+
+      it('refuses an autonomous send to another principal address', async () => {
+        const { gw, client, ledger } = makeAuto({ ...addrs, client: autoClient(autoDraft({ cc: [{ email: 'Personal@Example.com' }] }), [withIds()]) });
+        const r = await gw.sendPrincipalDraft('d1', auto);
+        expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'principal_address_recipient' });
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+        expect(ledger.recordHeld).toHaveBeenCalledOnce();
+        expect(ledger.recordHeld.mock.calls[0]![0]).toMatchObject({ mailbox: 'default', conversationIds: ['root@mail.example', 'a@x'] });
+        expect(reports()).toEqual([expect.objectContaining({ summary: expect.stringContaining(PRINCIPAL_SEND_DIGEST_REASONS.principal_address_recipient) })]);
+        expect(PRINCIPAL_SEND_DIGEST_REASONS.principal_address_recipient).toBe("Not sent on its own: it was addressed to your other email address. It's in your Drafts.");
+      });
+
+      it('refuses an autonomous reply to mail from a principal address', async () => {
+        const fromOther = withIds({ from: [{ email: 'personal@example.com' }] });
+        const { gw, client } = makeAuto({ ...addrs, client: autoClient(autoDraft(), [fromOther]) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'reply_to_principal_address' });
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+        expect(PRINCIPAL_SEND_DIGEST_REASONS.reply_to_principal_address).toBe("Not sent on its own: it replies to mail from your other email address. It's in your Drafts.");
+      });
+
+      it('cooldown spans the same conversation in two mailboxes', async () => {
+        const { gw, ledger, client } = makeAuto({ ...addrs, client: autoClient(autoDraft(), [withIds()]) });
+        ledger.recentForConversation.mockResolvedValue([{ draftId: 'x', threadId: 'other', mailbox: 'personal', conversationIds: ['root@mail.example'], recipients: [], mode: 'autonomous', at: new Date().toISOString(), outcome: 'sent' }]);
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'thread_cooldown' });
+        expect(ledger.recentForConversation).toHaveBeenCalledWith(['root@mail.example', 'a@x'], expect.any(Number));
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+        expect(ledger.recordHeld).not.toHaveBeenCalled();
+      });
+
+      it('a legacy ledger entry (no mailbox) still triggers the cooldown', async () => {
+        const { gw, ledger } = makeAuto({ ...addrs });
+        ledger.recentForThread.mockResolvedValue([{ draftId: 'x', threadId: 'th1', conversationIds: [], recipients: [], mode: 'autonomous', at: new Date().toISOString(), outcome: 'sent' }]);
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'thread_cooldown' });
+      });
+
+      it('a draft with no headers still gets the per-thread cooldown', async () => {
+        // Authenticated, but with no Message-ID or References.
+        const { gw, ledger } = makeAuto({ ...addrs, client: autoClient(autoDraft(), [inbound()]) });
+        ledger.recentForThread.mockResolvedValue([{ draftId: 'x', threadId: 'th1', mailbox: 'default', conversationIds: [], recipients: [], mode: 'autonomous', at: new Date().toISOString(), outcome: 'held' }]);
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'thread_cooldown' });
+        expect(ledger.recentForConversation).not.toHaveBeenCalled();
+      });
+
+      it('cap counts sends from every mailbox', async () => {
+        const { gw, ledger } = makeAuto({ ...addrs });
+        const at = new Date().toISOString();
+        ledger.recentAutonomousSends.mockResolvedValue(Array.from({ length: 10 }, (_, i) => ({
+          draftId: `x${i}`, threadId: `t${i}`, mailbox: i % 2 ? 'work' : 'personal', conversationIds: [], recipients: [], mode: 'autonomous', at, outcome: 'sent',
+        })));
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'daily_cap' });
+      });
+
+      it('the ledger entry carries the draft\'s mailbox and the conversation ids', async () => {
+        const { gw, ledger } = makeAuto({ ...addrs, client: autoClient(autoDraft(), [withIds()]) });
+        expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
+        expect(ledger.recordSending.mock.calls[0]![0]).toMatchObject({ mailbox: 'default', conversationIds: ['root@mail.example', 'a@x'] });
+      });
+
+      it('refuses and files a digest item when the principal addresses cannot be read (fail closed)', async () => {
+        const { gw, client } = makeAuto({ principalAddrs: new Error('db down') });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true, refusal: 'principal_addresses_unreadable' });
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+        expect(reports()).toHaveLength(1);
+      });
+    });
+
     it('7. refuses with thread_cooldown, with a digest item only, when the ledger read fails (fail closed)', async () => {
       const { gw, ledger, client } = makeAuto();
       ledger.recentForThread.mockRejectedValue(new Error('db down'));
@@ -6758,7 +6856,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       const { gw, client } = makeAuto({ ledger });
       const before = Date.now();
       expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
-      expect(ledger.recentForThread).toHaveBeenCalledWith('th1', expect.any(Number));
+      expect(ledger.recentForThread).toHaveBeenCalledWith('th1', expect.any(Number), 'default');
       const since = ledger.recentForThread.mock.calls[0]![1] as number;
       expect(since).toBeGreaterThanOrEqual(before - 24 * 3600_000);
       expect(since).toBeLessThanOrEqual(Date.now() - 24 * 3600_000);

@@ -16,6 +16,18 @@ export const PRINCIPAL_SEND_DOC_TYPE = 'principal-mailbox-send';
 export interface PrincipalSendEntry {
   draftId: string;
   threadId: string;
+  /**
+   * The mailbox the send went through (#2475). Absent on an entry written before the registry:
+   * the per-mailbox thread cooldown reads such an entry as matching any mailbox, which can only
+   * add cooldown (R40's reasoning).
+   */
+  mailbox?: string;
+  /**
+   * The conversation's RFC 5322 Message-IDs (the thread's Message-ID and References values,
+   * lowercased, brackets stripped, capped), so the same conversation in another mailbox shares
+   * them. Empty when the thread's headers were not read, or on an older entry.
+   */
+  conversationIds: string[];
   recipients: string[];
   mode: 'principal-directed' | 'autonomous';
   at: string;
@@ -47,15 +59,19 @@ export function parseLedgerDoc(doc: WorkingDocRow): PrincipalSendEntry | null {
   if (doc.type !== PRINCIPAL_SEND_DOC_TYPE) return null;
   const f = doc.frontmatter;
   // A held entry written before final fixes B2 carried a free-text `reason`; it is not read.
-  const { draft_id: draftId, thread_id: threadId, recipients, mode, at, message_id: messageId, outcome, reason_code: reasonCode } = f;
+  const { draft_id: draftId, thread_id: threadId, recipients, mode, at, message_id: messageId, outcome, reason_code: reasonCode, mailbox, conversation_ids: conversationIds } = f;
   if (typeof draftId !== 'string' || typeof threadId !== 'string' || typeof at !== 'string') return null;
   if (!isStringArray(recipients)) return null;
   if (typeof mode !== 'string' || !MODES.includes(mode)) return null;
   if (typeof outcome !== 'string' || !OUTCOMES.includes(outcome)) return null;
   if (messageId !== undefined && typeof messageId !== 'string') return null;
   if (reasonCode !== undefined && typeof reasonCode !== 'string') return null;
+  if (mailbox !== undefined && typeof mailbox !== 'string') return null;
+  if (conversationIds !== undefined && !isStringArray(conversationIds)) return null;
   return {
     draftId, threadId, recipients, at,
+    conversationIds: conversationIds ?? [],
+    ...(mailbox !== undefined ? { mailbox } : {}),
     mode: mode as PrincipalSendEntry['mode'],
     outcome: outcome as PrincipalSendEntry['outcome'],
     ...(messageId !== undefined ? { messageId } : {}),
@@ -70,13 +86,14 @@ export class PrincipalSendLedger {
   ) {}
 
   /** Writes the marker before the send. Create-only, at a timestamped path. Throws on a repo failure. */
-  async recordSending(e: Omit<PrincipalSendEntry, 'outcome' | 'messageId'>): Promise<void> {
+  async recordSending(e: Omit<PrincipalSendEntry, 'outcome' | 'messageId'> & { mailbox: string }): Promise<void> {
     const path = `${draftPrefix(e.draftId)}${Date.now()}.md`;
     await this.docs.create({
       path,
       type: PRINCIPAL_SEND_DOC_TYPE,
       frontmatter: {
-        draft_id: e.draftId, thread_id: e.threadId, recipients: e.recipients, mode: e.mode, at: e.at, outcome: 'sending',
+        draft_id: e.draftId, thread_id: e.threadId, mailbox: e.mailbox, conversation_ids: e.conversationIds,
+        recipients: e.recipients, mode: e.mode, at: e.at, outcome: 'sending',
       },
       body: '',
       // Unowned: the marker outlives the task that sent it, and /scratch's TTL retires it.
@@ -89,13 +106,14 @@ export class PrincipalSendLedger {
    * thread's cooldown (checkAutonomousLimits), so a resampled judge gets one try a day.
    * Create-only like recordSending. Throws on a repo failure.
    */
-  async recordHeld(e: Omit<PrincipalSendEntry, 'outcome' | 'messageId' | 'reasonCode'> & { reasonCode: string }): Promise<void> {
+  async recordHeld(e: Omit<PrincipalSendEntry, 'outcome' | 'messageId' | 'reasonCode'> & { reasonCode: string; mailbox: string }): Promise<void> {
     const path = `${draftPrefix(e.draftId)}${Date.now()}.md`;
     await this.docs.create({
       path,
       type: PRINCIPAL_SEND_DOC_TYPE,
       frontmatter: {
-        draft_id: e.draftId, thread_id: e.threadId, recipients: e.recipients, mode: e.mode, at: e.at,
+        draft_id: e.draftId, thread_id: e.threadId, mailbox: e.mailbox, conversation_ids: e.conversationIds,
+        recipients: e.recipients, mode: e.mode, at: e.at,
         outcome: 'held', reason_code: e.reasonCode,
       },
       body: '',
@@ -136,12 +154,27 @@ export class PrincipalSendLedger {
   /**
    * Autonomous entries on `threadId` whose `at` is at or after `sinceEpochMs`, for the thread
    * cooldown (#2474 PR 2). `sinceEpochMs` is a cutoff time in epoch milliseconds, not a duration:
-   * the gateway passes `now - AUTONOMOUS_THREAD_COOLDOWN_MS`. Principal-directed sends never start a cooldown. Fails closed:
+   * the gateway passes `now - AUTONOMOUS_THREAD_COOLDOWN_MS`. Only `mailbox`'s entries count, plus legacy ones with none. Principal-directed sends never start a cooldown. Fails closed:
    * an entry with an unreadable `at` counts as recent, since a broken or forged marker may only
    * block autonomous sends on its thread, never allow one. Throws on a repo failure.
    */
-  async recentForThread(threadId: string, sinceEpochMs: number): Promise<PrincipalSendEntry[]> {
-    return (await this.list()).filter((e) => e.mode === 'autonomous' && e.threadId === threadId && atOrAfter(e, sinceEpochMs));
+  async recentForThread(threadId: string, sinceEpochMs: number, mailbox: string): Promise<PrincipalSendEntry[]> {
+    // An entry with no mailbox (written before the registry) matches any: only more cooldown.
+    return (await this.list()).filter((e) => e.mode === 'autonomous' && e.threadId === threadId
+      && (e.mailbox === undefined || e.mailbox === mailbox) && atOrAfter(e, sinceEpochMs));
+  }
+
+  /**
+   * Autonomous entries in any mailbox that share a Message-ID with `conversationIds` and sit at or
+   * after `sinceEpochMs` (#2475): the same conversation copied into two inboxes has two thread ids
+   * but the same Message-IDs. Fail closed on an unreadable `at`, as recentForThread. Throws on a
+   * repo failure. No ids, no match.
+   */
+  async recentForConversation(conversationIds: readonly string[], sinceEpochMs: number): Promise<PrincipalSendEntry[]> {
+    if (conversationIds.length === 0) return [];
+    const wanted = new Set(conversationIds);
+    return (await this.list()).filter((e) => e.mode === 'autonomous'
+      && e.conversationIds.some((id) => wanted.has(id)) && atOrAfter(e, sinceEpochMs));
   }
 
   /**

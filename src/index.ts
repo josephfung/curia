@@ -2147,6 +2147,8 @@ async function main(): Promise<void> {
       principalMailbox: createPrincipalMailboxResolver({ mailboxes: principalMailboxes, logger }),
       // The mailboxes a principal draft may be found in (#2475, D6); the send level is that mailbox's own.
       principalMailboxIds: async () => (await principalMailboxes.list()).map((m) => m.id),
+      principalEmailAddresses: () => principalMailboxes.principalEmailAddresses(),
+      mailboxAddress: async (id) => (await principalMailboxes.list()).find((m) => m.id === id)?.address,
       ...(sendLevelStore
         ? { readSendLevel: createSendLevelReader({ get: (ns, k) => sendLevelStore.get(ns, k), logger, liveMailboxIds: async () => (await principalMailboxes.list()).map((m) => m.id) }) }
         : {}),

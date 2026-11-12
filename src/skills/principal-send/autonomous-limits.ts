@@ -22,7 +22,7 @@ export const AUTONOMOUS_DAILY_CAP_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const CURIA_WRITE_SKEW_SEC = 60;
 
 export type AutonomousLimitRefusal =
-  | 'not_curia_draft' | 'draft_changed_since_curia' | 'not_a_reply' | 'recipient_not_on_thread'
+  | 'not_curia_draft' | 'draft_changed_since_curia' | 'not_a_reply' | 'principal_address_recipient' | 'reply_to_principal_address' | 'recipient_not_on_thread'
   | 'too_many_recipients' | 'mailing_list' | 'has_attachments' | 'thread_cooldown' | 'daily_cap';
 
 type Party = { email: string };
@@ -104,9 +104,38 @@ function isListMail(msg: NylasMessage): boolean {
   });
 }
 
+/** The most conversation ids one ledger entry keeps. */
+export const MAX_CONVERSATION_IDS = 50;
+
+/** Message-IDs in a header value: `<a@x> <b@x>` or bare tokens; lowercased, brackets stripped. */
+function messageIdsIn(value: string): string[] {
+  const bracketed = [...value.matchAll(/<([^<>\s]+)>/g)].map((m) => m[1]!);
+  const ids = bracketed.length > 0 ? bracketed : value.split(/\s+/).map((t) => t.replace(/^<|>$/g, ''));
+  return ids.map((i) => i.trim().toLowerCase()).filter((i) => i.length > 0);
+}
+
+/**
+ * The conversation's Message-IDs (#2475): each thread message's Message-ID, then every References
+ * and In-Reply-To value, deduplicated and capped. The same conversation in another inbox shares
+ * them, though its thread id differs. Messages fetched without headers add nothing.
+ */
+export function conversationIdsOf(thread: readonly NylasMessage[]): string[] {
+  const own: string[] = [];
+  const referenced: string[] = [];
+  for (const msg of thread) {
+    for (const h of msg.headers ?? []) {
+      const name = h.name.trim().toLowerCase();
+      if (name === 'message-id') own.push(...messageIdsIn(h.value));
+      else if (name === 'references' || name === 'in-reply-to') referenced.push(...messageIdsIn(h.value));
+    }
+  }
+  return [...new Set([...own, ...referenced])].slice(0, MAX_CONVERSATION_IDS);
+}
+
 /**
  * The first limit the draft breaks, or null when it may go to band review. Order: not created by
- * Curia in this task → changed since → not a reply → mailing list → stranger recipient → too many
+ * Curia in this task → changed since → not a reply → mailing list → another principal address
+ * (a recipient, or the mail answered) → stranger recipient → too many
  * recipients → attachments → thread cooldown → daily cap. The last two write no held marker
  * (the gateway's recordAutonomousStop), so they come last: a draft that breaks another limit too
  * still starts its thread's cooldown.
@@ -119,10 +148,14 @@ export function checkAutonomousLimits(input: {
   curiaWrites: CuriaDraftWrites;
   /** The thread's autonomous ledger entries inside the cooldown window. */
   recentThreadEntries: readonly PrincipalSendEntry[];
+  /** Autonomous entries in any mailbox that share a Message-ID with this conversation, inside the window (#2475). */
+  recentConversationEntries: readonly PrincipalSendEntry[];
+  /** The principal's addresses other than the sending mailbox's own (#2475). Empty: one mailbox. */
+  otherPrincipalAddresses: readonly string[];
   /** Autonomous sends (`sending` or `sent`) on any thread inside the daily cap's window. */
   autonomousSendsInWindow: number;
 }): { refusal: AutonomousLimitRefusal; detail: string } | null {
-  const { draft, thread, principalAddresses, curiaWrites, recentThreadEntries, autonomousSendsInWindow } = input;
+  const { draft, thread, principalAddresses, curiaWrites, recentThreadEntries, recentConversationEntries, otherPrincipalAddresses, autonomousSendsInWindow } = input;
 
   if (!curiaWrites.created) {
     return { refusal: 'not_curia_draft', detail: 'Curia did not create this draft in this task' };
@@ -140,6 +173,24 @@ export function checkAutonomousLimits(input: {
   }
   if (thread.some(isListMail)) {
     return { refusal: 'mailing_list', detail: 'a thread message carries mailing-list headers' };
+  }
+
+  // Curia reaches the principal's other addresses only through the digest, never as a reply:
+  // not to them, and not to mail they sent (#2475, D6). Before the thread-member checks.
+  const isOther = principalMatcher(otherPrincipalAddresses);
+  const toOther = [...draft.to, ...draft.cc, ...draft.bcc].find((p: Party) => isOther(p.email));
+  if (toOther !== undefined) {
+    return { refusal: 'principal_address_recipient', detail: 'the draft is addressed to another of the principal\'s email addresses' };
+  }
+  // The latest message not from this mailbox's own address: when a principal address wrote it, the reply goes to it.
+  const isOwn = principalMatcher(principalAddresses.filter((a) => !isOther(a)));
+  let latestOutside: NylasMessage | null = null;
+  for (const m of thread) {
+    if (fromPrincipal(m, isOwn)) continue;
+    if (latestOutside === null || m.date >= latestOutside.date) latestOutside = m;
+  }
+  if (latestOutside !== null && fromPrincipal(latestOutside, isOther)) {
+    return { refusal: 'reply_to_principal_address', detail: 'the message answered is from another of the principal\'s email addresses' };
   }
 
   const isPrincipal = principalMatcher(principalAddresses);
@@ -164,7 +215,7 @@ export function checkAutonomousLimits(input: {
   // Every outcome starts the cooldown. `sending` too, failing closed: a send that crashed after
   // dispatch never became `sent` but may have gone out. The gateway checks limits before it
   // writes its own marker, so it never meets its own in-flight entry here.
-  const blocking = recentThreadEntries[0];
+  const blocking = recentThreadEntries[0] ?? recentConversationEntries[0];
   if (blocking !== undefined) {
     return { refusal: 'thread_cooldown', detail: `an autonomous send on this thread was ${blocking.outcome} at ${blocking.at}` };
   }
