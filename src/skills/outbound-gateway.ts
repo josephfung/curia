@@ -30,6 +30,7 @@ import { readAttachmentFiles, MAX_ATTACHMENT_BYTES, type OutboundAttachmentInput
 import type { EmailRecipientSource, EmailSendRequest } from '../channels/email/outbound-request.js';
 import type { WebOutboundRequest } from '../channels/web/outbound-request.js';
 import { orderFallbackChannels, type FallbackChannel } from '../agents/principal-reach.js';
+import { findPrimaryEmailIdentity } from '../agents/principal-contact-block.js';
 import type { SignalOutboundRequest } from '../channels/signal/outbound-request.js';
 import type { SlackOutboundRequest } from '../channels/slack/outbound-request.js';
 import type { SmsOutboundRequest } from '../channels/sms/outbound-request.js';
@@ -3059,17 +3060,20 @@ export class OutboundGateway {
   private async emailPrincipal(subject: string, body: string): Promise<void> {
     // The principal's designated primary email, as the `principal` recipient alias uses (#2475):
     // connecting a work mailbox adds a verified identity but must not move system notices to it.
-    // Without a primary (or when the lookup fails) fall back to the first verified identity.
+    // The primary counts only while it is a verified, active email identity (a defunct one is no
+    // longer the principal's); otherwise, or when the lookup fails, the first verified identity.
+    const usable = this.principalIdentities.filter((i) => i.channel === 'email' && i.verified && i.status === 'active');
     let to: string | undefined;
     const principalId = this.principalIdentities[0]?.contactId;
     if (principalId) {
       try {
-        to = (await this.contactService.getContact(principalId))?.primaryEmail ?? undefined;
+        const primary = (await this.contactService.getContact(principalId))?.primaryEmail;
+        to = findPrimaryEmailIdentity(usable, primary)?.channelIdentifier;
       } catch (err) {
         this.log.warn({ err }, 'outbound-gateway: principal primary email lookup failed — using the first verified identity');
       }
     }
-    to ??= this.principalIdentities.find((i) => i.channel === 'email' && i.verified && i.status === 'active')?.channelIdentifier;
+    to ??= usable[0]?.channelIdentifier;
     if (!to) {
       this.log.error({ subject }, 'outbound-gateway: no verified principal email to notify — the notice is only in this log');
       return;
