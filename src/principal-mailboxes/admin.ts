@@ -337,7 +337,9 @@ export class PrincipalMailboxAdmin {
     try {
       await this.deps.store.tombstone(id, newDefault);
     } catch (err) {
-      if (newPrimary !== null) {
+      // RemovedMailboxError: another removal of this mailbox completed meanwhile, and its
+      // primary-email change stands; restoring would undo it.
+      if (newPrimary !== null && !(err instanceof RemovedMailboxError)) {
         try {
           await this.deps.contacts.updateContactFields(this.deps.principalContactId, { primaryEmail: primary });
         } catch (restoreErr) {
