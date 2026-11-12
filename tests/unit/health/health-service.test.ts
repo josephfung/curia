@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { HealthService } from '../../../src/health/health-service.js';
 import { DEFAULT_HEALTH_CONFIG } from '../../../src/config.js';
+import { MissingNylasApiKeyError } from '../../../src/principal-mailboxes/types.js';
 
 function makeDeps(overrides: Record<string, unknown> = {}) {
   return {
@@ -253,6 +254,8 @@ describe('HealthService.getStatus()', () => {
       const failed = results.find((r) => r.name === 'principal_mailbox:personal');
       expect(failed?.status).toBe('fail');
       expect(failed?.detail).toMatch(/reconnect/i);
+      // Names the console control that does it (R29).
+      expect(failed?.detail).toContain('Replace grant');
       expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledWith('work', 'Work', true);
       expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledWith('personal', 'Personal', false);
     });
@@ -332,6 +335,51 @@ describe('HealthService.getStatus()', () => {
     it('principalMailboxReady is true once a live mailbox passes its canary', async () => {
       const svc = new HealthService(makeDeps(mailboxDeps([mailbox('work', { isDefault: true })])) as never);
       expect(await svc.principalMailboxReady()).toBe(true);
+    });
+
+    it('reports skipped, and does not notify, when no Nylas API key is configured', async () => {
+      const deps = mailboxDeps([mailbox('work', { isDefault: true })]);
+      deps.principalMailboxes.gatewayClient.mockRejectedValue(new MissingNylasApiKeyError());
+      const svc = new HealthService(makeDeps(deps) as never);
+      const r = (await svc.runCanaries()).find((x) => x.name === 'principal_mailbox:work');
+      expect(r?.status).toBe('skipped');
+      expect(deps.mailboxOutageNotifier.record).not.toHaveBeenCalled();
+    });
+
+    it('never logs the grant id when the migration retry throws a Nylas error (R20)', async () => {
+      const deps = mailboxDeps([mailbox('mailbox', { isDefault: true })]);
+      deps.principalMailboxes.isFallbackActive.mockResolvedValue(true);
+      const timeout = Object.assign(new Error('timed out'), {
+        name: 'NylasSdkTimeoutError', url: 'https://api.us.nylas.com/v3/grants/grant-secret-1',
+      });
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      const svc = new HealthService(makeDeps({
+        ...deps,
+        logger,
+        principalMailboxes: { ...deps.principalMailboxes, setFallback: vi.fn() },
+        retryMailboxMigration: vi.fn().mockRejectedValue(timeout),
+      }) as never);
+      await svc.runCanaries();
+      const warned = logger.warn.mock.calls.find((c) => typeof c[1] === 'string' && c[1].includes('Mailbox migration retry failed'));
+      expect(warned).toBeDefined();
+      expect(warned![0]).toEqual({ errName: 'NylasSdkTimeoutError' });
+      expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('grant-secret-1');
+    });
+
+    it('principalMailboxReady re-probes a mailbox whose last result was not ok', async () => {
+      const messages = vi.fn().mockRejectedValueOnce(new Error('x')).mockResolvedValue([]);
+      const svc = new HealthService(makeDeps(mailboxDeps([mailbox('work', { isDefault: true, messages })])) as never);
+      expect(await svc.principalMailboxReady()).toBe(false);
+      expect(await svc.principalMailboxReady()).toBe(true);
+      expect(messages).toHaveBeenCalledTimes(2);
+    });
+
+    it('principalMailboxReady does not re-probe a mailbox that passed', async () => {
+      const b = mailbox('work', { isDefault: true });
+      const svc = new HealthService(makeDeps(mailboxDeps([b])) as never);
+      await svc.principalMailboxReady();
+      await svc.principalMailboxReady();
+      expect(b.client.listMessages).toHaveBeenCalledTimes(1);
     });
 
     it('principalMailboxReady is false when the only mailbox fails', async () => {

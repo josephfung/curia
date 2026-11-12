@@ -39,7 +39,17 @@ describe('MailboxOutageNotifier', () => {
     expect(payload.ceoEmail).toBe('owner@example.com');
     expect(payload.body).toContain('Work');
     expect(payload.body.toLowerCase()).toContain('remove');
-    expect(payload.body).not.toMatch(/@|grant/i);
+    // No address; the only "grant" is the console control's name, never an id.
+    expect(payload.body).not.toMatch(/@/);
+    expect(payload.body.replace(/Replace grant/g, '')).not.toMatch(/grant/i);
+  });
+
+  it("names the console's Replace grant control, matching the console wording (R29)", async () => {
+    const { n, sendNotification } = make();
+    await n.record('work', 'Work', false);
+    const body = sendNotification.mock.calls[0]![0].body as string;
+    expect(body).toContain('Replace grant');
+    expect(body).toContain("Principal's mailboxes");
   });
 
   it('retries on the next failure when the alert could not be sent', async () => {

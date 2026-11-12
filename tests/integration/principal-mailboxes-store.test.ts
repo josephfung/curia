@@ -126,6 +126,21 @@ describeIf('PrincipalMailboxStore', () => {
     expect(live.map((r) => [r.id, r.isDefault])).toEqual([['personal', true], ['work', false]]);
   });
 
+  it('hasAnyRow is false for an empty table', async () => {
+    // This file is the only one that commits rows here, so after the scoped cleanup the table
+    // must be empty; fail loudly rather than assert against someone else's rows.
+    const { rows } = await pool.query<{ n: string }>('SELECT count(*) AS n FROM principal_mailboxes');
+    expect(Number(rows[0]!.n)).toBe(0);
+    expect(await store.hasAnyRow()).toBe(false);
+  });
+
+  it('hasAnyRow is true when the only rows are removed ones', async () => {
+    await store.insert(rec('work', { isDefault: true }));
+    await store.tombstone('work', null);
+    expect(await store.listLive()).toEqual([]);
+    expect(await store.hasAnyRow()).toBe(true);
+  });
+
   it('a failed default insert keeps the old default', async () => {
     await store.insert(rec('work', { isDefault: true }));
     await expect(store.insert(rec('work', { isDefault: true }))).rejects.toThrow();
