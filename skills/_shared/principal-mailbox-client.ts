@@ -15,7 +15,8 @@ export interface MailboxClient {
 export type LocateResult =
   | { kind: 'found'; at: MailboxClient }
   | { kind: 'not_found'; definitive: boolean; failed: Array<{ mailboxId: string; detail: string }> }
-  | { kind: 'ambiguous'; mailboxes: PrincipalMailboxView[] };
+  | { kind: 'ambiguous'; mailboxes: PrincipalMailboxView[] }
+  | { kind: 'no_mailboxes' };
 
 function service(ctx: ToolContext): PrincipalMailboxes {
   if (!ctx.principalMailboxes) {
@@ -67,9 +68,29 @@ export async function locate(
   objectId: string,
   explicitMailbox?: string,
 ): Promise<LocateResult> {
-  const candidates = explicitMailbox
-    ? [await mailboxClient(ctx, explicitMailbox)]
-    : await allMailboxClients(ctx);
+  const failed: Array<{ mailboxId: string; detail: string }> = [];
+  let candidates: MailboxClient[];
+  if (explicitMailbox !== undefined) {
+    // A blank id is an unknown id, thrown by the service like any other.
+    candidates = [await mailboxClient(ctx, explicitMailbox)];
+  } else {
+    const svc = service(ctx);
+    const mailboxes = await svc.list();
+    if (mailboxes.length === 0) return { kind: 'no_mailboxes' };
+    candidates = [];
+    await Promise.all(
+      mailboxes.map(async (m) => {
+        try {
+          candidates.push(await build(ctx, svc, m));
+        } catch (err) {
+          // Credentials or client construction failed for this mailbox only; keep probing the rest.
+          const name = err instanceof Error ? err.constructor.name : 'Error';
+          ctx.log.warn({ mailboxId: m.id, errorName: name }, 'locate: mailbox client unavailable');
+          failed.push({ mailboxId: m.id, detail: name });
+        }
+      }),
+    );
+  }
 
   const results = await Promise.all(
     candidates.map(async (at) => ({ at, result: await probe(at, kind, objectId) })),
@@ -79,7 +100,6 @@ export async function locate(
   if (hits.length === 1) return { kind: 'found', at: hits[0]!.at };
   if (hits.length > 1) return { kind: 'ambiguous', mailboxes: hits.map((h) => h.at.mailbox) };
 
-  const failed: Array<{ mailboxId: string; detail: string }> = [];
   for (const { at, result } of results) {
     if (!result.ok && !result.notFound) failed.push({ mailboxId: at.mailbox.id, detail: result.detail });
   }
@@ -91,6 +111,7 @@ export function mailboxFields(m: PrincipalMailboxView): { mailbox: string; mailb
 }
 
 export function locateError(r: Exclude<LocateResult, { kind: 'found' }>, noun: string): string {
+  if (r.kind === 'no_mailboxes') return 'No principal mailbox is connected.';
   if (r.kind === 'ambiguous') {
     const labels = r.mailboxes.map((m) => `${m.label} (${m.id})`).join(', ');
     return `That ${noun} exists in more than one mailbox: ${labels}. Say which one with the mailbox argument.`;

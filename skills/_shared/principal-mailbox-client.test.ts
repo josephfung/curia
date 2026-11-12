@@ -109,4 +109,67 @@ describe('principal-mailbox-client', () => {
     await expect(mailboxClient(ctx, 'work')).rejects.toThrow(/principalMailboxes/);
     await expect(allMailboxClients(ctx)).rejects.toThrow(/principalMailboxes/);
   });
+
+  it('blank explicit mailbox is an unknown-mailbox error, not the implicit path', async () => {
+    const fetchMock = stubFetch(['grant-work']);
+    await expect(locate(makeCtx(two), 'message', 'm1', '')).rejects.toThrow(/unknown/);
+    await expect(locate(makeCtx(two), 'message', 'm1', '  ')).rejects.toThrow(/unknown/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('implicit path survives one mailbox failing credentials', async () => {
+    stubFetch(['grant-personal']);
+    const ctx = makeCtx(two);
+    const orig = ctx.principalMailboxes!.credentials.bind(ctx.principalMailboxes!);
+    ctx.principalMailboxes!.credentials = async (id: string) => {
+      if (id === 'work') throw new Error('Mailbox "work" has no Nylas grant configured');
+      return orig(id);
+    };
+    const hit = await locate(ctx, 'message', 'm1');
+    expect(hit.kind).toBe('found');
+    stubFetch([]);
+    const miss = await locate(ctx, 'message', 'm1');
+    expect(miss).toEqual({ kind: 'not_found', definitive: false, failed: [{ mailboxId: 'work', detail: 'Error' }] });
+  });
+
+  it('explicit path still throws when credentials fail', async () => {
+    stubFetch([]);
+    const ctx = makeCtx(two);
+    ctx.principalMailboxes!.credentials = async () => {
+      throw new Error('no grant');
+    };
+    await expect(locate(ctx, 'message', 'm1', 'work')).rejects.toThrow('no grant');
+  });
+
+  it('zero mailboxes says none is connected', async () => {
+    const fetchMock = stubFetch([]);
+    const r = await locate(makeCtx([]), 'message', 'm1');
+    expect(r.kind).toBe('no_mailboxes');
+    expect(locateError(r as Exclude<typeof r, { kind: 'found' }>, 'message')).toMatch(/No principal mailbox is connected/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('non-404 on the explicit path is non-definitive', async () => {
+    stubFetch([], { 'grant-work': 403 });
+    const r = await locate(makeCtx(two), 'message', 'm1', 'work');
+    expect(r).toEqual({ kind: 'not_found', definitive: false, failed: [{ mailboxId: 'work', detail: 'HTTP 403' }] });
+    expect(locateError(r as Exclude<typeof r, { kind: 'found' }>, 'draft')).toMatch(/could not check mailbox work/);
+  });
+
+  it('deleteDraft tolerates a response with no envelope', async () => {
+    const client = new CeoNylasClient('key', 'g1', makeCtx([]).log as never);
+    const noBody = { ...res(200, null), json: async () => { throw new Error('no json'); } } as unknown as Response;
+    vi.stubGlobal('fetch', vi.fn(async () => noBody));
+    await expect(client.deleteDraft('d1')).resolves.toBeUndefined();
+    vi.stubGlobal('fetch', vi.fn(async () => res(200, null)));
+    await expect(client.deleteDraft('d1')).resolves.toBeUndefined();
+  });
+
+  it('deleteDraft rejects on DELETE 404 and 500', async () => {
+    const client = new CeoNylasClient('key', 'g1', makeCtx([]).log as never);
+    vi.stubGlobal('fetch', vi.fn(async () => res(404, { error: 'x' })));
+    await expect(client.deleteDraft('d1')).rejects.toMatchObject({ status: 404 });
+    vi.stubGlobal('fetch', vi.fn(async () => res(500, { error: 'x' })));
+    await expect(client.deleteDraft('d1')).rejects.toMatchObject({ status: 500 });
+  });
 });
