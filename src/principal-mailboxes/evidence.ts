@@ -7,6 +7,7 @@
 
 import type { PrincipalMailboxes, PrincipalMailboxView } from './service.js';
 import type { NylasClient, NylasMessage } from '../channels/email/nylas-client.js';
+import { cleanSubject } from '../autonomy/sample-pool.js';
 import { nylasStatus } from '../channels/email/nylas-message-id.js';
 
 export interface MailboxEvidence {
@@ -52,10 +53,10 @@ function domainMatches(mailboxAddress: string, recipients: string[]): boolean {
 
 const MAX_SUBJECT_CHARS = 80;
 
-/** A third party's subject, safe to show the model: one line, no control characters, capped. */
-export function cleanSubject(raw: string): string {
-  const flat = raw.replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim();
-  return flat.length > MAX_SUBJECT_CHARS ? `${flat.slice(0, MAX_SUBJECT_CHARS - 1)}…` : flat;
+/** A third party's subject, safe to show the model: the shared untrusted-text cleaner, then capped by code point. */
+function safeSubject(raw: string): string {
+  const points = Array.from(cleanSubject(raw));
+  return points.length > MAX_SUBJECT_CHARS ? `${points.slice(0, MAX_SUBJECT_CHARS - 1).join('').trimEnd()}…` : points.join('');
 }
 
 function errorLabel(err: unknown): string {
@@ -125,7 +126,7 @@ async function one(
         ...base,
         sent_count: sentTo.length,
         last_sent_at: newest ? new Date(newest.date * 1000).toISOString() : null,
-        recent_subjects: sentTo.slice(0, MAX_SUBJECTS).map((m) => cleanSubject(m.subject)),
+        recent_subjects: sentTo.slice(0, MAX_SUBJECTS).map((m) => safeSubject(m.subject)),
         received_count: receivedFrom.length,
       };
     };
@@ -154,6 +155,8 @@ function score(e: MailboxEvidence): number {
 /** How the evidence relates to the mailbox the compose is about to use. */
 export function classifyEvidence(e: MailboxEvidence[], chosen: string): EvidenceVerdict {
   // An account we could not read is not "no history": the verdict cannot be agrees or none.
+  // Never tell the model to lean away from an account we could not read.
+  if (e.find((x) => x.mailbox === chosen)?.error !== undefined) return 'split';
   const unreadable = e.some((x) => x.error !== undefined);
   const scores = e.map((x) => ({ id: x.mailbox, s: score(x) }));
   if (scores.every((x) => x.s <= 0)) return unreadable ? 'split' : 'none';

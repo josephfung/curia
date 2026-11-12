@@ -272,6 +272,25 @@ describe('CeoInboxDraftComposeHandler', () => {
       const data = (result as { data: Record<string, unknown> }).data;
       expect(data).toMatchObject({ draft_id: 'draft-compose-1', mailbox: 'work' });
       expect(data).not.toHaveProperty('evidence');
+      expect(data).toMatchObject({ evidence_unavailable: true });
+      expect((ctx.log.warn as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
+    });
+
+    it('needs_mailbox path: an evidence failure returns an error and creates nothing', async () => {
+      const ctx = twoCtx();
+      const svc = ctx.principalMailboxes as unknown as { list: () => Promise<unknown[]> };
+      const realList = svc.list;
+      let calls = 0;
+      svc.list = async () => {
+        calls += 1;
+        if (calls > 1) throw new Error('registry down');
+        return realList();
+      };
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      expect((result as { error: string }).error).toContain('mailbox');
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect((ctx.log.warn as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
     });
 
     it('rejects an unknown mailbox instead of falling back', async () => {
