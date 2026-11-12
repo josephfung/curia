@@ -135,3 +135,30 @@ jobs:
 
       - name: Build + boot curia-postgres (fresh-init regression)
         run: bash tests/docker/test-postgres-init.sh
+
+  browser-image:
+    # Builds the curia-browser image and starts it under docker-compose.yml's own
+    # `browser` service settings, then checks DevTools answers and chrome://sandbox shows
+    # the namespace sandbox in use (curia#2566). Under `cap_drop: [ALL]` alone, Chrome's
+    # zygote died at launch on Linux Docker, and nothing else exercises the container on PRs.
+    # Pinned to ubuntu-24.04, the host the failure was found on: Docker Desktop's kernel
+    # starts the sandbox either way, so it would not catch a regression.
+    runs-on: ubuntu-24.04
+    # Read by the login step's `if:`, which cannot read `secrets` directly.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The build pulls node and debian from Docker Hub; authenticate it (#2095), as in
+      # postgres-image above.
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build + start curia-browser under the compose hardening
+        run: bash tests/docker/test-browser-start.sh

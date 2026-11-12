@@ -97,7 +97,7 @@ describe('docker-publish Docker Hub login (#2095)', () => {
 // The PR checks pull from Docker Hub too, and failed on the same rate limit. They
 // authenticate where the secrets exist and pull anonymously where they do not
 // (fork PRs): container and service credentials go through CREDENTIALS above, and
-// the postgres-image login step is skipped by its `if:`.
+// the postgres-image and browser-image login steps are skipped by their `if:`.
 describe('PR-check Docker Hub pulls (#2095)', () => {
   const ci = load<CheckWorkflow>('ci.yml');
 
@@ -116,12 +116,15 @@ describe('PR-check Docker Hub pulls (#2095)', () => {
     expect(container.credentials).toBe(CREDENTIALS);
   });
 
-  it('ci postgres-image logs in before the build, only where the secret exists', () => {
-    const job = ci.jobs['postgres-image']!;
+  it.each([
+    ['postgres-image', 'test-postgres-init.sh'],
+    ['browser-image', 'test-browser-start.sh'],
+  ])('ci %s logs in before the build, only where the secret exists', (jobName, script) => {
+    const job = ci.jobs[jobName]!;
     const loginIndex = job.steps.findIndex(
       (step) => step.uses?.startsWith('docker/login-action@') && step.with?.registry === 'docker.io',
     );
-    const buildIndex = job.steps.findIndex((step) => step.run?.includes('test-postgres-init.sh'));
+    const buildIndex = job.steps.findIndex((step) => step.run?.includes(script));
     expect(loginIndex).toBeGreaterThan(-1);
     expect(loginIndex).toBeLessThan(buildIndex);
     const login = job.steps[loginIndex]!;
