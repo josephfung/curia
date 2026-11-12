@@ -5932,6 +5932,7 @@ describe('sendPrincipalDraft (#2474)', () => {
     });
     const ledger = {
       recordHeld: vi.fn().mockResolvedValue(undefined),
+      list: vi.fn().mockResolvedValue([]),
       recentForThread: vi.fn().mockResolvedValue([]),
       recentForConversation: vi.fn().mockResolvedValue([]),
       recentAutonomousSends: vi.fn().mockResolvedValue([]),
@@ -5967,7 +5968,7 @@ describe('sendPrincipalDraft (#2474)', () => {
         mailboxAddress: async (id: string) => o.mailboxAddresses?.[id],
       } : {}),
       ...(o.withoutProvenance ? {} : { draftProvenance: { createdByCuria, editedByCuria, curiaWritesInTask } }),
-      ...(o.withoutLedger ? {} : { sendLedger: ledger as unknown as Pick<import('../../../src/skills/principal-send/send-ledger.js').PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentForConversation' | 'recentAutonomousSends' | 'sentForDraft'> }),
+      ...(o.withoutLedger ? {} : { sendLedger: ledger as unknown as Pick<import('../../../src/skills/principal-send/send-ledger.js').PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentForConversation' | 'recentAutonomousSends' | 'sentForDraft' | 'list'> }),
     });
     return { gw, client, review, createdByCuria, editedByCuria, curiaWritesInTask, ledger, readSendLevel, actionLogRepo, resolveMailbox };
   }
@@ -6792,7 +6793,7 @@ describe('sendPrincipalDraft (#2474)', () => {
         const { gw, ledger, client } = makeAuto({ ...addrs, client: autoClient(autoDraft(), [withIds()]) });
         ledger.recentForConversation.mockResolvedValue([{ draftId: 'x', threadId: 'other', mailbox: 'personal', conversationIds: ['root@mail.example'], recipients: [], mode: 'autonomous', at: new Date().toISOString(), outcome: 'sent' }]);
         expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'thread_cooldown' });
-        expect(ledger.recentForConversation).toHaveBeenCalledWith(['root@mail.example', 'a@x'], expect.any(Number));
+        expect(ledger.recentForConversation).toHaveBeenCalledWith(['root@mail.example', 'a@x'], expect.any(Number), expect.any(Array));
         expect(client!.sendDraft).not.toHaveBeenCalled();
         expect(ledger.recordHeld).not.toHaveBeenCalled();
       });
@@ -6826,6 +6827,19 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(ledger.recordSending.mock.calls[0]![0]).toMatchObject({ mailbox: 'default', conversationIds: ['root@mail.example', 'a@x'] });
       });
 
+      it('R43: unknown own address and two principal addresses: a cc to either is refused', async () => {
+        const two = { principalAddrs: [PRINCIPAL, 'personal@example.com'], mailboxAddresses: { default: '' } };
+        const { gw, client } = makeAuto({ ...two, client: autoClient(autoDraft({ cc: [{ email: 'personal@example.com' }] }), [withIds()]) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'principal_address_recipient' });
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+      });
+
+      it('R43: unknown own address and one principal address: unchanged', async () => {
+        const one = { principalAddrs: [PRINCIPAL], mailboxAddresses: { default: '' } };
+        const { gw } = makeAuto({ ...one, client: autoClient(autoDraft({ cc: [{ email: PRINCIPAL }] }), [withIds()]) });
+        expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
+      });
+
       it('refuses and files a digest item when the principal addresses cannot be read (fail closed)', async () => {
         const { gw, client } = makeAuto({ principalAddrs: new Error('db down') });
         expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true, refusal: 'principal_addresses_unreadable' });
@@ -6856,7 +6870,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       const { gw, client } = makeAuto({ ledger });
       const before = Date.now();
       expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
-      expect(ledger.recentForThread).toHaveBeenCalledWith('th1', expect.any(Number), 'default');
+      expect(ledger.recentForThread).toHaveBeenCalledWith('th1', expect.any(Number), 'default', expect.any(Array));
       const since = ledger.recentForThread.mock.calls[0]![1] as number;
       expect(since).toBeGreaterThanOrEqual(before - 24 * 3600_000);
       expect(since).toBeLessThanOrEqual(Date.now() - 24 * 3600_000);
@@ -7429,7 +7443,9 @@ describe('sendPrincipalDraft (#2474)', () => {
           draftId: `x${i}`, threadId: `t${i}`, recipients: [], mode: 'autonomous', at, outcome: 'sent',
         })));
         expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true, refusal: 'daily_cap' });
-        expect(ledger.recentAutonomousSends).toHaveBeenCalledWith(expect.any(Number));
+        expect(ledger.recentAutonomousSends).toHaveBeenCalledWith(expect.any(Number), expect.any(Array));
+        // One ledger scan serves the cooldowns and the cap.
+        expect(ledger.list).toHaveBeenCalledOnce();
         const since = ledger.recentAutonomousSends.mock.calls[0]![0] as number;
         expect(Date.now() - since).toBeGreaterThanOrEqual(24 * 3600_000 - 1000);
         expect(review).not.toHaveBeenCalled();

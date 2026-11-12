@@ -443,7 +443,7 @@ export interface OutboundGatewayConfig {
    * and the daily cap (final fixes A4). Absent: no markers, and an autonomous send is refused
    * (no_send_ledger).
    */
-  sendLedger?: Pick<PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentForConversation' | 'recentAutonomousSends' | 'sentForDraft'>;
+  sendLedger?: Pick<PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentForConversation' | 'recentAutonomousSends' | 'sentForDraft' | 'list'>;
   /**
    * Every address that is the principal's: live mailbox addresses plus verified, active email
    * identities, lowercase (PrincipalMailboxes.principalEmailAddresses, #2475). Absent: the
@@ -3931,6 +3931,7 @@ export class OutboundGateway {
    * not only the identities isPrincipalMailbox() reads (#2475, ADR-062). Fails closed: a lookup
    * that throws counts as a match, so nothing is sent through an account that may be theirs.
    */
+  // A lookup failure refuses every Curia-account email send except principal-only notices: intended, fail closed.
   private async isAnyMailboxAccount(accountId?: string): Promise<boolean> {
     if (!this.principalEmailAddressLookup) return false;
     const name = accountId || this.nylasClients.keys().next().value;
@@ -4546,8 +4547,9 @@ export class OutboundGateway {
     if (autonomous) {
       let principalAddresses: string[];
       let otherPrincipalAddresses: string[];
+      let offLimitsRecipients: string[];
       try {
-        ({ all: principalAddresses, others: otherPrincipalAddresses } = await this.principalAddressesFor(mailboxId));
+        ({ all: principalAddresses, others: otherPrincipalAddresses, offLimits: offLimitsRecipients } = await this.principalAddressesFor(mailboxId));
       } catch (err) {
         // Fail closed: without the principal's addresses the cross-mailbox limits can't be applied.
         this.log.warn({ ...grantSafeErrorFields(err), draftId, mailboxId }, 'outbound-gateway: principal addresses unreadable — not sending on its own');
@@ -4584,25 +4586,28 @@ export class OutboundGateway {
       }
       let recentEntries: PrincipalSendEntry[] = [];
       let conversationEntries: PrincipalSendEntry[] = [];
+      // One scan of the ledger serves the cooldowns and the cap.
+      let ledgerEntries: PrincipalSendEntry[];
       try {
         // Fail closed on a failed read: the thread's cooldown may be running.
+        ledgerEntries = await this.sendLedger!.list();
         const cooldownSince = Date.now() - AUTONOMOUS_THREAD_COOLDOWN_MS;
-        if (draft.threadId) recentEntries = await this.sendLedger!.recentForThread(draft.threadId, cooldownSince, mailboxId);
+        if (draft.threadId) recentEntries = await this.sendLedger!.recentForThread(draft.threadId, cooldownSince, mailboxId, ledgerEntries);
         // The same conversation in another mailbox has another thread id but the same Message-IDs.
-        if (conversationIds.length > 0) conversationEntries = await this.sendLedger!.recentForConversation(conversationIds, cooldownSince);
+        if (conversationIds.length > 0) conversationEntries = await this.sendLedger!.recentForConversation(conversationIds, cooldownSince, ledgerEntries);
       } catch (err) {
         this.log.warn({ err, draftId }, 'outbound-gateway: send ledger unreadable — treating the thread as cooling down');
         return stop('thread_cooldown');
       }
       let sendsInWindow: number;
       try {
-        sendsInWindow = (await this.sendLedger!.recentAutonomousSends(Date.now() - AUTONOMOUS_DAILY_CAP_WINDOW_MS)).length;
+        sendsInWindow = (await this.sendLedger!.recentAutonomousSends(Date.now() - AUTONOMOUS_DAILY_CAP_WINDOW_MS, ledgerEntries)).length;
       } catch (err) {
         // Fail closed (#2474 final fixes A4): the daily cap can't be checked.
         this.log.warn({ err, draftId }, 'outbound-gateway: send ledger unreadable — the daily cap cannot be checked, not sending on its own');
         return stop('no_send_ledger');
       }
-      const limit = checkAutonomousLimits({ draft, thread, principalAddresses, curiaWrites, recentThreadEntries: recentEntries, recentConversationEntries: conversationEntries, otherPrincipalAddresses, autonomousSendsInWindow: sendsInWindow });
+      const limit = checkAutonomousLimits({ draft, thread, principalAddresses, curiaWrites, recentThreadEntries: recentEntries, recentConversationEntries: conversationEntries, otherPrincipalAddresses, offLimitsRecipients, autonomousSendsInWindow: sendsInWindow });
       if (limit) {
         return stop(limit.refusal, limit.refusal === 'recipient_not_on_thread' ? recipientNotOnThread(limit.detail) : PRINCIPAL_SEND_REFUSALS[limit.refusal]);
       }
@@ -4757,11 +4762,17 @@ export class OutboundGateway {
    * Without the lookup (no registry wired) it is the identities and no others. A mailbox whose
    * own address is unknown (the single-mailbox fallback) has no others. Throws on a failed lookup.
    */
-  private async principalAddressesFor(mailboxId: string): Promise<{ all: string[]; others: string[] }> {
-    if (!this.principalEmailAddressLookup) return { all: this.principalEmailAddresses(), others: [] };
+  private async principalAddressesFor(mailboxId: string): Promise<{ all: string[]; others: string[]; offLimits: string[] }> {
+    if (!this.principalEmailAddressLookup) return { all: this.principalEmailAddresses(), others: [], offLimits: [] };
     const all = [...new Set([...this.principalEmailAddresses(), ...(await this.principalEmailAddressLookup())].map((a) => a.trim().toLowerCase()).filter((a) => a !== ''))];
     const own = (await this.mailboxAddressLookup?.(mailboxId))?.trim().toLowerCase();
-    return { all, others: own ? all.filter((a) => a !== own) : [] };
+    if (own) {
+      const others = all.filter((a) => a !== own);
+      return { all, others, offLimits: others };
+    }
+    // R43: with the mailbox's own address unknown and several principal addresses, none can be
+    // told from "other", so none may be a recipient. The mail answered keeps the narrower rule.
+    return { all, others: [], offLimits: all.length >= 2 ? all : [] };
   }
 
   /** Every verified, active principal identifier, any channel (R33, #2475). */
