@@ -17,6 +17,9 @@ import {
   type PrincipalMailboxRecord,
 } from './types.js';
 
+/** The flat grant the deferred-migration fallback serves (#2409). */
+const FLAT_GRANT_KEY = 'ceo_nylas_grant_id';
+
 export interface PrincipalMailboxView {
   id: string;
   label: string;
@@ -54,7 +57,8 @@ export class PrincipalMailboxes {
     this.log = deps.logger.child({ component: 'principal-mailboxes' });
   }
 
-  /** Single-mailbox installs without a registry row: serve `fallback` while the table is empty. */
+  /** Single-mailbox installs without a registry row: serve `fallback` while the table is empty.
+   *  Its grant is re-read from `ceo_nylas_grant_id` on every call; `grantId` is the boot value. */
   setFallback(f: { id: string; grantId: string } | null): void {
     this.fallback = f;
   }
@@ -115,8 +119,15 @@ export class PrincipalMailboxes {
 
     if (!rec) {
       const fb = await this.activeFallback();
-      if (fb && fb.id === id) return { apiKey, grantId: fb.grantId };
-      throw new UnknownMailboxError(id);
+      if (!fb || fb.id !== id) throw new UnknownMailboxError(id);
+      // Read live, as for a registry mailbox: while the registry is empty the vault still
+      // accepts a new flat grant, and it must apply without a restart (R9).
+      const flatGrant = (await this.deps.secrets.get(FLAT_GRANT_KEY))?.trim();
+      if (!flatGrant) {
+        this.log.warn({ mailboxId: id }, 'The deferred mailbox has no ceo_nylas_grant_id in the vault');
+        throw new Error(`Mailbox "${id}" has no Nylas grant configured`);
+      }
+      return { apiKey, grantId: flatGrant };
     }
 
     const grantId = await this.deps.secrets.get(principalMailboxGrantSecretName(id));
