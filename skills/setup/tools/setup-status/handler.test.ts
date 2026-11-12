@@ -122,6 +122,7 @@ function makeCtx(overrides: Partial<{
   principalLookupError: Error;
   phoneAppReady: () => Promise<boolean>;
   emailChannelStatus: () => Promise<EmailChannelStatus>;
+  principalMailboxReady: () => Promise<boolean>;
   browserContext: object | null;
 }> = {}): ToolContext {
   const secrets = overrides.secrets ?? {};
@@ -170,6 +171,7 @@ function makeCtx(overrides: Partial<{
     } as unknown as ToolContext['schedulerService'],
     ...(overrides.phoneAppReady ? { phoneAppReady: overrides.phoneAppReady } : {}),
     ...(overrides.emailChannelStatus ? { emailChannelStatus: overrides.emailChannelStatus } : {}),
+    ...(overrides.principalMailboxReady ? { principalMailboxReady: overrides.principalMailboxReady } : {}),
     ...(overrides.browserContext !== undefined ? { browserService: { browserContext: overrides.browserContext } } : {}),
   } as unknown as ToolContext;
 }
@@ -184,7 +186,7 @@ describe('setup-status', () => {
     });
 
     it('declares the optional capabilities its checks read', () => {
-      expect(manifest.optional_capabilities).toEqual(expect.arrayContaining(['phoneAppReady', 'emailChannelStatus', 'browserService']));
+      expect(manifest.optional_capabilities).toEqual(expect.arrayContaining(['phoneAppReady', 'emailChannelStatus', 'principalMailboxReady', 'browserService']));
     });
 
     it('offers the Tavily key web-search reads as the upgrade', () => {
@@ -301,6 +303,21 @@ describe('setup-status', () => {
       expect(result.success).toBe(true);
       const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string }> } }).data;
       expect(data.tasks.find(t => t.id === 'web_browser')?.status).toBe(expected);
+    });
+
+    it.each([
+      ['principal_mailbox_ready is complete with one healthy mailbox', { principalMailboxReady: async (): Promise<boolean> => true }, 'done'],
+      ['the mailbox fails its canary', { principalMailboxReady: async (): Promise<boolean> => false }, 'pending'],
+      ['the check throws', { principalMailboxReady: async (): Promise<boolean> => { throw new Error('db down'); } }, 'pending'],
+      ['the check is absent', {}, 'pending'],
+    ] as const)('principal mailboxes: %s → %s', async (_name, overrides, expected) => {
+      const result = await handler.execute(makeCtx(overrides));
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string; docs_url: string | null; handoff_path?: string }> } }).data;
+      const task = data.tasks.find(t => t.id === 'principal_mailboxes');
+      expect(task?.status).toBe(expected);
+      expect(task?.docs_url).toBe('/get-started/principal-email-calendar');
+      expect(task?.handoff_path).toBe('/channels');
     });
 
     it('email: done only when an email adapter is running', async () => {

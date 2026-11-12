@@ -268,6 +268,7 @@ import { McpRegistryService } from './registry/mcp-registry-service.js';
 import { reconcileMcpRegistry } from './registry/mcp-reconcile.js';
 import { HealthService } from './health/health-service.js';
 import { CanarySchedule } from './health/canary-schedule.js';
+import { MailboxOutageNotifier } from './health/mailbox-outage-notifier.js';
 
 async function main(): Promise<void> {
   // Captured at the very start of main() so the wizard's post-setup polling
@@ -1191,15 +1192,21 @@ async function main(): Promise<void> {
     apiKey: () => config.nylasApiKey,
     logger,
   });
-  if (config.nylasApiKey) {
-    const nylasApiKey = config.nylasApiKey;
+  // The same migration is retried on the health-canary tick while the fallback is active (#2475).
+  const retryMailboxMigration = config.nylasApiKey
+    ? (() => {
+        const nylasApiKey = config.nylasApiKey;
+        return () => migrateFlatPrincipalMailbox({
+          store: principalMailboxStore,
+          secrets: secretsService,
+          lookupGrant: (grantId) => new NylasClient(nylasApiKey, grantId, logger).getGrant(),
+          logger,
+        });
+      })()
+    : undefined;
+  if (retryMailboxMigration) {
     try {
-      const outcome = await migrateFlatPrincipalMailbox({
-        store: principalMailboxStore,
-        secrets: secretsService,
-        lookupGrant: (grantId) => new NylasClient(nylasApiKey, grantId, logger).getGrant(),
-        logger,
-      });
+      const outcome = await retryMailboxMigration();
       if (outcome === 'deferred') {
         const flatGrant = (await secretsService.get('ceo_nylas_grant_id'))?.trim();
         if (flatGrant) principalMailboxes.setFallback({ id: 'mailbox', grantId: flatGrant });
@@ -2661,6 +2668,12 @@ async function main(): Promise<void> {
     emailAdapter: emailAdapters[0],
     nylasClient: primaryNylasClient,
     nylasCalendarClient,
+    // One canary per principal mailbox (#2475); an outage alerts the principal once per episode.
+    principalMailboxes,
+    mailboxOutageNotifier: outboundGateway
+      ? new MailboxOutageNotifier({ gateway: outboundGateway, principalEmail: () => principalEmail.current || undefined, logger })
+      : undefined,
+    retryMailboxMigration,
     signalRpcClient,
     browserService,
     // Pass channel health deps only when the adapter was constructed (enabled +
@@ -2813,7 +2826,7 @@ async function main(): Promise<void> {
   // the principal's yes, and settles denials and expiries. Shared by the execution layer's
   // cardUse capability and the deny / expiry paths below.
   const cardUseService = new CardUseService({ repo: cardUseRepo, secrets: secretsService, approvalTrigger, bus, logger });
-  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, principalMailboxes, cardUseRepo, cardUseService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
+  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, principalMailboxes, cardUseRepo, cardUseService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, principalMailboxReady: () => healthService.principalMailboxReady(), curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
     findInFlight: (targetAgent: string, originConversationId: string) =>
       findInFlightPendingDelegation(pool, { targetAgent, originConversationId }),
     acquireRunning: (params: Parameters<typeof acquireRunningDelegation>[1]) =>

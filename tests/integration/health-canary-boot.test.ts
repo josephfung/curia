@@ -23,7 +23,7 @@ import type { AgentYamlConfig } from '../../src/agents/loader.js';
 
 const ALL_CANARIES = [
   'embeddings', 'google_workspace', 'image_gen', 'llm_fast', 'llm_powerful',
-  'llm_standard', 'nylas', 'nylas_calendar', 'signal', 'tavily',
+  'llm_standard', 'nylas', 'signal', 'tavily',
 ];
 
 function recordingPool() {

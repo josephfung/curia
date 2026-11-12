@@ -27,6 +27,9 @@ import {
 } from './health-checks.js';
 import type { NylasClient } from '../channels/email/nylas-client.js';
 import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
+import type { PrincipalMailboxes, PrincipalMailboxView } from '../principal-mailboxes/service.js';
+import type { FlatMailboxMigrationOutcome } from '../principal-mailboxes/migrate-flat-mailbox.js';
+import type { MailboxOutageNotifier } from './mailbox-outage-notifier.js';
 
 export interface HealthServiceDeps {
   db: Pool;
@@ -92,6 +95,23 @@ export interface HealthServiceDeps {
    * tool handler does (workspace-mcp requires `user_google_email`).
    */
   mcpFixedInputs?: ReadonlyMap<string, Readonly<Record<string, string>>>;
+  /**
+   * The principal mailbox registry (#2475). The canary probes every live mailbox (the
+   * deferred-migration fallback included) under `principal_mailbox:<id>`. The default
+   * mailbox's result also drives the `nylas_calendar` heartbeat, so a deployment's existing
+   * monitor keeps pinging.
+   */
+  principalMailboxes?: Pick<
+    PrincipalMailboxes,
+    'list' | 'gatewayClient' | 'calendarClient' | 'isFallbackActive' | 'setFallback'
+  >;
+  /** Alerts the principal once per mailbox outage episode. */
+  mailboxOutageNotifier?: Pick<MailboxOutageNotifier, 'record'>;
+  /**
+   * Re-runs the boot migration of the flat mailbox. Called on the canary tick while the
+   * deferred-migration fallback is active; on 'migrated' the fallback is cleared.
+   */
+  retryMailboxMigration?: () => Promise<FlatMailboxMigrationOutcome>;
 }
 
 /** Tavily usage endpoint: validates the key without spending search credits. */
@@ -100,6 +120,10 @@ const TAVILY_USAGE_URL = 'https://api.tavily.com/usage';
 const GOOGLE_WORKSPACE_PROBE_TOOL = 'list_drive_items';
 /** A stdio MCP round trip plus a Drive API call; once a day, so generous. */
 const GOOGLE_WORKSPACE_PROBE_TIMEOUT_MS = 15_000;
+/** Per-mailbox canary: grant lookup, one message and the calendar list, together. */
+const MAILBOX_PROBE_TIMEOUT_MS = 5_000;
+/** The heartbeat a deployment already configured for the single principal calendar check. */
+const DEFAULT_MAILBOX_HEARTBEAT = 'nylas_calendar';
 
 export class HealthService {
   // Exposed as a private field so integration tests can reach it via
@@ -108,6 +132,10 @@ export class HealthService {
   private readonly startedAt = new Date();
   /** Reverse map: model string → tier, built from modelRoutingConfig in start(). */
   private modelToTier = new Map<string, TrackerKey>();
+  /** Last canary outcome per live mailbox id (#2475); feeds the setup catalog's readiness check. */
+  private readonly mailboxOk = new Map<string, boolean>();
+  /** Last logged outcome of the deferred-migration retry, so a repeat is not logged again. */
+  private lastMigrationOutcome: string | null = null;
 
   constructor(private readonly deps: HealthServiceDeps) {}
 
@@ -247,20 +275,21 @@ export class HealthService {
   async runCanaries(): Promise<CanaryResult[]> {
     const {
       logger, config, openaiApiKey, embeddingsEnabled, resolveTavilyApiKey,
-      nylasClient, nylasCalendarClient, signalRpcClient,
+      nylasClient, signalRpcClient,
       mcpSessions, mcpFixedInputs, modelRoutingConfig,
     } = this.deps;
     const results: CanaryResult[] = [];
 
     // Wrap each canary in consistent error handling and optional heartbeat ping.
-    const run = async (name: string, probe: () => Promise<CanaryResult>): Promise<void> => {
+    // `heartbeatKey` names the configured heartbeat when it differs from the canary's name.
+    const run = async (name: string, probe: () => Promise<CanaryResult>, heartbeatKey?: string): Promise<void> => {
       try {
         const result = await probe();
         results.push(result);
 
         // Ping the heartbeat URL on success if one is configured.
         if (result.status === 'ok') {
-          const url = config.heartbeats[name as keyof typeof config.heartbeats];
+          const url = config.heartbeats[(heartbeatKey ?? name) as keyof typeof config.heartbeats];
           if (url) await this.pingHeartbeat(url, name);
         }
 
@@ -307,23 +336,11 @@ export class HealthService {
       }
     });
 
-    // Principal calendar grant canary (`ceo_nylas_grant_id`) — distinct from email (#1561).
-    await run('nylas_calendar', async () => {
-      if (!nylasCalendarClient) return { name: 'nylas_calendar', status: 'skipped' };
-      const result = await checkNylasCalendar(nylasCalendarClient, logger);
-      if (result.status === 'ok') return { name: 'nylas_calendar', status: 'ok' };
-      if (result.status === 'skipped') return { name: 'nylas_calendar', status: 'skipped' };
-      // Reconnecting the grant only fixes auth failures (401/403). For timeouts,
-      // network errors, or 5xx, surface a neutral probe-failure detail so the
-      // dashboard doesn't prescribe a reconnect that won't help (#1561 review).
-      return {
-        name: 'nylas_calendar',
-        status: 'fail',
-        detail: result.authFailure
-          ? 'Principal calendar grant auth failed (401/403) — reconnect ceo_nylas_grant_id in Nylas'
-          : 'Principal calendar grant probe failed (listCalendars) — check Nylas connectivity',
-      };
-    });
+    // Principal mailbox canaries (#2475): one per live mailbox, replacing the single
+    // `nylas_calendar` check. First retry a deferred boot migration, so a mailbox that could
+    // not be registered at boot is picked up here without a restart.
+    await this.retryDeferredMigration();
+    await this.runMailboxCanaries(run, results);
 
     // Signal canary — reuse the same RPC ping as the liveness check.
     await run('signal', async () => {
@@ -364,6 +381,124 @@ export class HealthService {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * True once a live principal mailbox has passed its canary (the setup catalog's
+   * `principal_mailbox_ready` check). A mailbox not probed yet is probed now rather than
+   * reported pending until the next scheduled canary.
+   */
+  async principalMailboxReady(): Promise<boolean> {
+    const { principalMailboxes, logger } = this.deps;
+    if (!principalMailboxes) return false;
+    try {
+      const live = await principalMailboxes.list();
+      for (const view of live) {
+        if (!this.mailboxOk.has(view.id)) await this.probeMailbox(view);
+      }
+      return live.some((m) => this.mailboxOk.get(m.id) === true);
+    } catch (err) {
+      logger.warn({ err }, 'principalMailboxReady: could not evaluate mailbox health; reporting not ready');
+      return false;
+    }
+  }
+
+  private async retryDeferredMigration(): Promise<void> {
+    const { principalMailboxes, retryMailboxMigration, logger } = this.deps;
+    if (!principalMailboxes || !retryMailboxMigration) return;
+    let outcome: string;
+    try {
+      if (!(await principalMailboxes.isFallbackActive())) return;
+      const result = await retryMailboxMigration();
+      if (result === 'migrated') principalMailboxes.setFallback(null);
+      outcome = result;
+    } catch (err) {
+      outcome = 'error';
+      if (this.lastMigrationOutcome !== outcome) {
+        logger.warn({ err }, 'Mailbox migration retry failed; still serving the flat grant');
+      }
+      this.lastMigrationOutcome = outcome;
+      return;
+    }
+    if (this.lastMigrationOutcome !== outcome) {
+      logger.info({ outcome }, 'Mailbox migration retry outcome');
+    }
+    this.lastMigrationOutcome = outcome;
+  }
+
+  private async runMailboxCanaries(
+    run: (name: string, probe: () => Promise<CanaryResult>, heartbeatKey?: string) => Promise<void>,
+    results: CanaryResult[],
+  ): Promise<void> {
+    const { principalMailboxes, logger } = this.deps;
+    if (!principalMailboxes) return;
+    let live: PrincipalMailboxView[];
+    try {
+      live = await principalMailboxes.list();
+    } catch (err) {
+      logger.error({ err }, 'Principal mailbox canary could not list the registry');
+      results.push({ name: 'principal_mailboxes', status: 'fail', detail: 'Could not read the principal mailbox registry' });
+      return;
+    }
+    // Forget mailboxes that were removed since the last run.
+    for (const id of [...this.mailboxOk.keys()]) {
+      if (!live.some((m) => m.id === id)) this.mailboxOk.delete(id);
+    }
+    for (const view of live) {
+      await run(
+        `principal_mailbox:${view.id}`,
+        () => this.probeMailbox(view),
+        view.isDefault ? DEFAULT_MAILBOX_HEARTBEAT : undefined,
+      );
+    }
+  }
+
+  /**
+   * Grant lookup + one message + calendar list, together, under one deadline. The detail
+   * names the mailbox by label only and never carries the error text: a Nylas error can
+   * echo the grant id.
+   */
+  private async probeMailbox(view: PrincipalMailboxView): Promise<CanaryResult> {
+    const { principalMailboxes, mailboxOutageNotifier, logger } = this.deps;
+    const name = `principal_mailbox:${view.id}`;
+    let result: CanaryResult;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const [client, calendar] = await Promise.all([
+        principalMailboxes!.gatewayClient(view.id),
+        principalMailboxes!.calendarClient(view.id),
+      ]);
+      await Promise.race([
+        Promise.all([client.getGrant(), client.listMessages({ limit: 1 }), calendar.listCalendars()]),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('timeout')), MAILBOX_PROBE_TIMEOUT_MS);
+        }),
+      ]);
+      result = { name, status: 'ok' };
+    } catch (err) {
+      const code = typeof err === 'object' && err !== null ? (err as { statusCode?: unknown }).statusCode : undefined;
+      const errorName = err instanceof Error ? err.name : typeof err;
+      logger.warn({ mailboxId: view.id, errorName, statusCode: code }, 'Principal mailbox probe failed');
+      // Reconnecting only fixes auth failures (401/403); don't prescribe it for timeouts or 5xx.
+      result = {
+        name,
+        status: 'fail',
+        detail: code === 401 || code === 403
+          ? `Mailbox "${view.label}" grant auth failed (401/403) — reconnect it in the console`
+          : `Mailbox "${view.label}" probe failed (${errorName}) — check Nylas connectivity`,
+      };
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+    this.mailboxOk.set(view.id, result.status === 'ok');
+    if (mailboxOutageNotifier) {
+      try {
+        await mailboxOutageNotifier.record(view.id, view.label, result.status === 'ok');
+      } catch (err) {
+        logger.error({ err, mailboxId: view.id }, 'Mailbox outage notifier threw');
+      }
+    }
+    return result;
+  }
 
   /**
    * Aggregate all probe results into the three-state overall health status.

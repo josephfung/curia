@@ -16,6 +16,8 @@ type CompletionCheck =
   | { type: 'vault_secrets_all'; keys: string[] }
   | { type: 'paired_push_subscription' }
   | { type: 'email_channel_ready' }
+  // At least one live principal mailbox whose last health canary passed (#2475).
+  | { type: 'principal_mailbox_ready' }
   | { type: 'browser_ready' }
   // Done once ConfigStore holds a non-empty value for the key (#2474). Presence only: the
   // setting has a working default, so "set" means the principal has made a choice.
@@ -225,6 +227,16 @@ export class SetupStatusHandler implements ToolHandler {
         }
       }
 
+      // Done when a live principal mailbox passed its last health canary (#2475).
+      let principalMailboxReady = false;
+      if (ctx.principalMailboxReady) {
+        try {
+          principalMailboxReady = await ctx.principalMailboxReady();
+        } catch (err) {
+          ctx.log.warn({ err }, 'setup-status: principal mailbox check failed — reporting pending');
+        }
+      }
+
       // Done while a browser is attached: a container that is down reads as pending (#2541).
       const browserReady = ctx.browserService?.browserContext != null;
 
@@ -287,6 +299,9 @@ export class SetupStatusHandler implements ToolHandler {
             case 'email_channel_ready':
               done = emailStatus === 'running';
               restartRequired = emailStatus === 'restart_required';
+              break;
+            case 'principal_mailbox_ready':
+              done = principalMailboxReady;
               break;
             case 'browser_ready':
               done = browserReady;

@@ -369,6 +369,7 @@ export class ExecutionLayer {
   private bus?: EventBus;
   private phoneAppReady?: () => Promise<boolean>;
   private emailChannelStatus?: () => Promise<EmailChannelStatus>;
+  private principalMailboxReady?: () => Promise<boolean>;
   private curiaEmailAddresses?: () => Promise<string[]>;
   private agentRegistry?: AgentRegistry;
   private contactService?: ContactService;
@@ -493,6 +494,8 @@ export class ExecutionLayer {
     phoneAppReady?: () => Promise<boolean>;
     /** setup-status: whether the email channel is polling a mailbox (#2409). */
     emailChannelStatus?: () => Promise<EmailChannelStatus>;
+    /** setup-status: a live principal mailbox passed its last canary (#2475). */
+    principalMailboxReady?: () => Promise<boolean>;
     /** ceo-inbox list/search: Curia's own addresses, read live (#2409). */
     curiaEmailAddresses?: () => Promise<string[]>;
     confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
@@ -533,6 +536,7 @@ export class ExecutionLayer {
     this.bus = options?.bus;
     this.phoneAppReady = options?.phoneAppReady;
     this.emailChannelStatus = options?.emailChannelStatus;
+    this.principalMailboxReady = options?.principalMailboxReady;
     this.curiaEmailAddresses = options?.curiaEmailAddresses;
     this.agentRegistry = options?.agentRegistry;
     this.contactService = options?.contactService;
@@ -622,6 +626,7 @@ export class ExecutionLayer {
       voiceSessions: this.voiceSessions,
       phoneAppReady: this.phoneAppReady,
       emailChannelStatus: this.emailChannelStatus,
+      principalMailboxReady: this.principalMailboxReady,
       curiaEmailAddresses: this.curiaEmailAddresses,
       confidencePipeline: this.confidencePipeline,
       // tempFileStore is handled as a special case in the injection loop (writeTempFile closure).

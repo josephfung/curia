@@ -62,7 +62,7 @@ export interface ToolManifest {
    *  executiveProfileService, officeIdentityService, browserService, bullpenService, toolSearch,
    *  actionLogRepo, auditLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext,
    *  taskRepo, workingDocs, secretCapture, cardUse, secretResolver, userSecretIndex, taskOutreach, disclosureDecisions,
-   *  voiceSessions, phoneAppReady, emailChannelStatus, curiaEmailAddresses.
+   *  voiceSessions, phoneAppReady, emailChannelStatus, principalMailboxReady, curiaEmailAddresses.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */
@@ -191,6 +191,12 @@ export interface ToolContext {
    * declare optional capability `emailChannelStatus`. Absent means the setup task stays pending.
    */
   emailChannelStatus?: () => Promise<EmailChannelStatus>;
+  /**
+   * Whether a live principal mailbox passed its last health canary (#2475). Injected for
+   * skills that declare optional capability `principalMailboxReady`. Absent means the setup
+   * task stays pending.
+   */
+  principalMailboxReady?: () => Promise<boolean>;
   /**
    * Curia's own mailbox addresses, read from the email accounts table at call time
    * (#2409) — unlike `selfEmails`, which is fixed at boot. Injected for skills that
