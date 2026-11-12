@@ -29,10 +29,13 @@ function rec(id: string, over: Partial<Omit<PrincipalMailboxRecord, 'removedAt'>
 describeIf('PrincipalMailboxStore', () => {
   let pool: pg.Pool;
   let store: PrincipalMailboxStore;
+  // afterAll runs even when beforeAll throws: never DELETE in a database that failed the check.
+  let databaseValidated = false;
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DATABASE_URL });
     await requireCuriaTestDatabase(pool);
+    databaseValidated = true;
     store = new PrincipalMailboxStore(pool, logger);
   });
 
@@ -41,8 +44,13 @@ describeIf('PrincipalMailboxStore', () => {
   });
 
   afterAll(async () => {
-    await pool.query('DELETE FROM principal_mailboxes WHERE id = ANY($1)', [TEST_IDS]);
-    await pool.end();
+    try {
+      if (databaseValidated) {
+        await pool.query('DELETE FROM principal_mailboxes WHERE id = ANY($1)', [TEST_IDS]);
+      }
+    } finally {
+      await pool.end();
+    }
   });
 
   it('setDefault moves the default in one transaction', async () => {
