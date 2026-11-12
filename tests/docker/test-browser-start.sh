@@ -2,14 +2,15 @@
 # Regression test for curia#2566.
 #
 # The `browser` service must start Chrome, with its namespace sandbox on, under the
-# exact hardening docker-compose.yml gives it. Under `cap_drop: [ALL]` with nothing
-# added back, Chrome's zygote exited at launch ("Zygote process exited prematurely
-# (namespace sandbox)") on Linux Docker: the sandbox chroots into an empty directory
-# inside its user namespace, which needs CAP_SYS_CHROOT in the container's bounding set.
+# exact hardening docker-compose.yml gives it: `cap_drop: [ALL]`, `no-new-privileges`
+# and docker/seccomp-chrome.json. Chrome's sandbox chroots into an empty directory
+# inside its user namespace. A profile that keeps Docker's default `chroot` rule, which
+# requires CAP_SYS_CHROOT, makes that fail under `cap_drop: [ALL]`: the zygote exits at
+# launch ("Zygote process exited prematurely") and the container restarts in a loop.
+# curia-deploy hit this with a stale copy of the profile (#2566).
 #
-# The test starts the service from the real compose file, not a copy of its settings,
-# so a change to the file's capabilities, seccomp profile or other hardening is what
-# gets tested. It then checks that:
+# The test starts the service from the real compose file and profile, not a copy of
+# their settings, so a change to either is what gets tested. It then checks that:
 #   1. DevTools answers GET /json/version from the `browser` network, as Curia reaches it;
 #   2. chrome://sandbox reports the namespace sandbox in use, so Chrome did not start
 #      only because the sandbox was turned off.
@@ -122,6 +123,7 @@ echo "==> Reading chrome://sandbox..."
 sandbox_text="$(docker exec "$container" node -e '
   const base = "http://127.0.0.1:9223";
   const fail = (m) => { console.error(m); process.exit(1); };
+  setTimeout(() => fail("timed out reading chrome://sandbox"), 30000).unref();
   (async () => {
     const t = await (await fetch(`${base}/json/new?chrome://sandbox`, { method: "PUT" })).json();
     const ws = new WebSocket(t.webSocketDebuggerUrl);

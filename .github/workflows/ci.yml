@@ -139,11 +139,14 @@ jobs:
   browser-image:
     # Builds the curia-browser image and starts it under docker-compose.yml's own
     # `browser` service settings, then checks DevTools answers and chrome://sandbox shows
-    # the namespace sandbox in use (curia#2566). Under `cap_drop: [ALL]` alone, Chrome's
-    # zygote died at launch on Linux Docker, and nothing else exercises the container on PRs.
-    # Pinned to ubuntu-24.04, the host the failure was found on: Docker Desktop's kernel
-    # starts the sandbox either way, so it would not catch a regression.
+    # the namespace sandbox in use (curia#2566). A seccomp profile that gates `chroot` on
+    # CAP_SYS_CHROOT kills Chrome's zygote at launch under `cap_drop: [ALL]`, and nothing
+    # else exercises the container on PRs. Pinned to ubuntu-24.04, the host the failure
+    # was first seen on, so a runner-image change cannot quietly change what is tested.
     runs-on: ubuntu-24.04
+    # The image build (Chromium download, apt) dominates; a hung build should not hold
+    # the runner for GitHub's 6-hour default.
+    timeout-minutes: 30
     # Read by the login step's `if:`, which cannot read `secrets` directly.
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}

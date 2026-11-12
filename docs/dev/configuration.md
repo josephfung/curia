@@ -137,6 +137,8 @@ On Ubuntu 23.10 and later, the host also restricts unprivileged user namespaces 
 
 If Chrome cannot set up its sandbox, the browser fails to start with an error that names the profile, and the `web-browser` skill is unavailable until the host allows the sandbox. `chrome://sandbox` in the running browser lists both layers.
 
+If the browser container restarts in a loop and `docker compose logs browser` shows `Zygote process exited prematurely`, the container is running a seccomp profile other than this release's `docker/seccomp-chrome.json`, usually an older copy. Docker's default rule allows `chroot` only with `CAP_SYS_CHROOT`, which `cap_drop: [ALL]` removes, so the sandbox cannot start (#2566). Replace the file with the release's copy instead of adding capabilities. CI's `browser-image` job starts the `browser` service from `docker-compose.yml` on Ubuntu 24.04, and fails if Chrome does not come up with the namespace sandbox.
+
 `settleCapMs` bounds the adaptive settle (#2244): an ordinary page is read at once, and the wait runs only while a page is blank, still changing URL, or on a sign-in handoff. Air Canada's sign-in chain takes up to ~28s. It must be a positive integer of at most 90000, so one wait stays inside the skill's 120s timeout.
 
 Raise `sessionTtlMs` if skills that open browser sessions are timing out mid-task. Lower it to free resources faster on memory-constrained deployments. `sessionTtlMs` and `sweepIntervalMs` are validated at startup (a non-positive value is a hard failure); `profileDir`, `channel`, and `locale` must be strings, and `languages` a list of language tags.
