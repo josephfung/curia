@@ -336,4 +336,22 @@ describe('WorkingDocsRepo section versions across write paths (#2398)', () => {
     expect(updateQuery.params?.[4]).toBe('board MAIL');
     expect(updateQuery.params?.[5]).toBe(3);
   });
+
+  it('deleteSection reads the counter across case-variant keys, not just exact ones', async () => {
+    const captured: Array<{ sql: string; params?: unknown[] }> = [];
+    const { pool } = makePool(editClient(captured, { 'Board mail': 1, 'board MAIL': 3, Newsletters: 1 }));
+    const repo = new WorkingDocsRepo(pool, createSilentLogger());
+    // The counter the caller holds is the merged one (3, as editSection reports
+    // it), stored under a spelling that is neither the caller's nor the body
+    // heading's. An exact-key lookup would read the heading's key (1) and
+    // refuse the delete as stale.
+    const result = await repo.deleteSection('/projects/x/brief.md', {
+      section: 'BOARD MAIL',
+      expectedSectionVersion: 3,
+    });
+    expect(result.ok).toBe(true);
+    const updateQuery = captured.find(q => q.sql.startsWith('UPDATE working_documents'))!;
+    // Every spelling of the deleted heading's counter goes; other sections stay.
+    expect(JSON.parse(updateQuery.params?.[2] as string)).toEqual({ Newsletters: 1 });
+  });
 });

@@ -568,12 +568,15 @@ export class WorkingDocsRepo {
         await client.query('ROLLBACK');
         return { ok: false, missingSection: true, document: locked };
       }
-      // editSection keys versions by the heading as the caller wrote it, and headings
-      // match case-insensitively, so every spelling of this heading goes.
-      const matchesHeading = (key: string) => key.trim().toLowerCase() === sectionKey.toLowerCase();
-      const currentSectionVersion = locked.sectionVersions[sectionKey]
-        ?? locked.sectionVersions[removed.heading]
-        ?? 0;
+      // The expected-version check reads the counter the way editSection does:
+      // the highest value held under any spelling of the heading (#2398). An
+      // exact-key lookup misses counters the old case-sensitive keying stored
+      // under another spelling, refusing a caller who holds the current
+      // version or waving through a stale one.
+      const variants = sectionVersionVariants(locked.sectionVersions, sectionKey);
+      const currentSectionVersion = variants.reduce((max, v) => Math.max(max, v.value), 0);
+      // Headings match case-insensitively, so every spelling of this heading goes.
+      const matchesHeading = (key: string) => normalizeSectionKey(key) === normalizeSectionKey(sectionKey);
       if (params.expectedSectionVersion !== undefined
         && params.expectedSectionVersion !== currentSectionVersion) {
         await client.query('ROLLBACK');
