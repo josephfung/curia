@@ -442,6 +442,36 @@ describe('HealthService.getStatus()', () => {
       await svc.runCanaries();
       expect(reconcile).toHaveBeenCalledTimes(2);
     });
+
+    it('a stalled registry read or migration retry does not hold the later canaries', async () => {
+      vi.useFakeTimers();
+      try {
+        const deps = mailboxDeps([mailbox('mailbox', { isDefault: true })]);
+        deps.principalMailboxes.isFallbackActive.mockImplementation(() => new Promise(() => {}));
+        deps.principalMailboxes.list.mockImplementation(() => new Promise(() => {}));
+        const svc = new HealthService(makeDeps({
+          ...deps,
+          principalMailboxes: { ...deps.principalMailboxes, setFallback: vi.fn() },
+          retryMailboxMigration: vi.fn(),
+        }) as never);
+        const pending = svc.runCanaries();
+        await vi.advanceTimersByTimeAsync(20_000);
+        const results = await pending;
+        expect(results.find((r) => r.name === 'principal_mailboxes')?.status).toBe('fail');
+        expect(results.map((r) => r.name)).toContain('signal');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('a stalled flat-key repair never holds the canaries, and is not started twice', async () => {
+      const reconcile = vi.fn(() => new Promise<never>(() => {}));
+      const svc = new HealthService(makeDeps({ ...mailboxDeps([mailbox('work', { isDefault: true })]), reconcileFlatMailboxKeys: reconcile }) as never);
+      const first = await svc.runCanaries();
+      expect(first.find((r) => r.name === 'principal_mailbox:work')?.status).toBe('ok');
+      await svc.runCanaries();
+      expect(reconcile).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('returns degraded when a non-critical check fails', async () => {
