@@ -63,12 +63,21 @@ export class PrincipalMailboxes {
     return { id: this.fallback.id, label: 'Mailbox', address: '', isDefault: true, triageStartAt: null };
   }
 
-  /** Live mailboxes only; the fallback view when the table is empty and one is set. */
+  /**
+   * The fallback is served only when one is set AND the table has no rows at all, live or
+   * removed. Otherwise its id is unknown like any other, and a registry row always wins.
+   */
+  private async activeFallback(): Promise<{ id: string; grantId: string } | null> {
+    if (!this.fallback) return null;
+    return (await this.deps.store.hasAnyRow()) ? null : this.fallback;
+  }
+
+  /** Live mailboxes only; the fallback view when it is active. */
   async list(): Promise<PrincipalMailboxView[]> {
     const live = await this.deps.store.listLive();
     if (live.length > 0) return live.map(toView);
-    const fb = this.fallbackView();
-    return fb ? [fb] : [];
+    if (await this.activeFallback()) return [this.fallbackView()!];
+    return [];
   }
 
   async get(id: string): Promise<PrincipalMailboxView> {
@@ -77,7 +86,8 @@ export class PrincipalMailboxes {
       if (rec.removedAt) throw new RemovedMailboxError(id, rec.label);
       return toView(rec);
     }
-    if (this.fallback && this.fallback.id === id) return this.fallbackView()!;
+    const fb = await this.activeFallback();
+    if (fb && fb.id === id) return this.fallbackView()!;
     throw new UnknownMailboxError(id);
   }
 
@@ -98,9 +108,8 @@ export class PrincipalMailboxes {
     if (!apiKey) throw new Error('Nylas API key is not configured');
 
     if (!rec) {
-      if (this.fallback && this.fallback.id === id) {
-        return { apiKey, grantId: this.fallback.grantId };
-      }
+      const fb = await this.activeFallback();
+      if (fb && fb.id === id) return { apiKey, grantId: fb.grantId };
       throw new UnknownMailboxError(id);
     }
 
