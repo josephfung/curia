@@ -220,3 +220,120 @@ describe('WorkingDocsRepo (unit)', () => {
     expect(String(poolQuery.mock.calls[0]![0])).toContain('task_id = $1::uuid');
   });
 });
+
+describe('WorkingDocsRepo section versions across write paths (#2398)', () => {
+  const RULES_BODY = '## Board mail\n\n- Status: active\n\n## Newsletters\n\n- Status: paused\n';
+
+  function updateClient(captured: Array<{ sql: string; params?: unknown[] }>) {
+    return makeClient({
+      query: async (sql: string, params?: unknown[]) => {
+        captured.push({ sql, params });
+        if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') {
+          return { rows: [], rowCount: 0 } as unknown as QueryResult;
+        }
+        if (sql.includes('FROM working_documents') && sql.includes('SELECT')) {
+          return {
+            rows: [{ ...BASE_ROW, body: RULES_BODY, section_versions: { 'Board mail': 1, Newsletters: 3 } }],
+            rowCount: 1,
+          } as QueryResult;
+        }
+        if (sql.startsWith('UPDATE working_documents')) {
+          return {
+            rows: [{ ...BASE_ROW, body: params?.[3], version: 2, section_versions: JSON.parse(params?.[12] as string) }],
+            rowCount: 1,
+          } as QueryResult;
+        }
+        if (sql.startsWith('DELETE FROM working_document_links') || sql.startsWith('INSERT INTO working_document_links')) {
+          return { rows: [], rowCount: 0 } as unknown as QueryResult;
+        }
+        throw new Error(`unexpected sql: ${sql}`);
+      },
+    });
+  }
+
+  it('update bumps changed and new sections, drops removed ones, and keeps untouched counters', async () => {
+    const captured: Array<{ sql: string; params?: unknown[] }> = [];
+    const { pool } = makePool(updateClient(captured));
+    const repo = new WorkingDocsRepo(pool, createSilentLogger());
+    // Board mail changes, Newsletters is removed, Decisions is new.
+    const result = await repo.update('/projects/x/brief.md', {
+      body: '## Board mail\n\n- Status: paused\n\n## Decisions\n\n- Ship it\n',
+      expectedVersion: 1,
+    });
+    expect(result.ok).toBe(true);
+    const updateQuery = captured.find(q => q.sql.startsWith('UPDATE working_documents'))!;
+    expect(updateQuery.sql).toContain('section_versions = $13::jsonb');
+    expect(JSON.parse(updateQuery.params?.[12] as string)).toEqual({ 'Board mail': 2, Decisions: 1 });
+  });
+
+  it('update with an unchanged body leaves every counter alone', async () => {
+    const captured: Array<{ sql: string; params?: unknown[] }> = [];
+    const { pool } = makePool(updateClient(captured));
+    const repo = new WorkingDocsRepo(pool, createSilentLogger());
+    const result = await repo.update('/projects/x/brief.md', { body: RULES_BODY, expectedVersion: 1 });
+    expect(result.ok).toBe(true);
+    const updateQuery = captured.find(q => q.sql.startsWith('UPDATE working_documents'))!;
+    expect(JSON.parse(updateQuery.params?.[12] as string)).toEqual({ 'Board mail': 1, Newsletters: 3 });
+  });
+
+  function editClient(
+    captured: Array<{ sql: string; params?: unknown[] }>,
+    sectionVersions: Record<string, number>,
+  ) {
+    return makeClient({
+      query: async (sql: string, params?: unknown[]) => {
+        captured.push({ sql, params });
+        if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') {
+          return { rows: [], rowCount: 0 } as unknown as QueryResult;
+        }
+        if (sql.includes('FOR UPDATE')) {
+          return {
+            rows: [{ ...BASE_ROW, body: RULES_BODY, version: 5, section_versions: sectionVersions }],
+            rowCount: 1,
+          } as QueryResult;
+        }
+        if (sql.startsWith('UPDATE working_documents')) {
+          return {
+            rows: [{ ...BASE_ROW, version: 6, section_versions: JSON.parse(params?.[2] as string) }],
+            rowCount: 1,
+          } as QueryResult;
+        }
+        if (sql.startsWith('DELETE FROM working_document_links') || sql.startsWith('INSERT INTO working_document_links')) {
+          return { rows: [], rowCount: 0 } as unknown as QueryResult;
+        }
+        throw new Error(`unexpected sql: ${sql}`);
+      },
+    });
+  }
+
+  it('editSection conflicts on a stale expected version held under another spelling', async () => {
+    const captured: Array<{ sql: string; params?: unknown[] }> = [];
+    const { pool } = makePool(editClient(captured, { 'Board mail': 1 }));
+    const repo = new WorkingDocsRepo(pool, createSilentLogger());
+    const result = await repo.editSection('/projects/x/brief.md', {
+      section: 'board mail',
+      content: '- Status: paused',
+      expectedSectionVersion: 0,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.conflict).toBe(true);
+    expect(captured.some(q => q.sql.startsWith('UPDATE working_documents'))).toBe(false);
+  });
+
+  it('editSection merges case-variant keys onto the spelling holding the highest counter', async () => {
+    const captured: Array<{ sql: string; params?: unknown[] }> = [];
+    const { pool } = makePool(editClient(captured, { 'Board mail': 1, 'board MAIL': 3, Newsletters: 1 }));
+    const repo = new WorkingDocsRepo(pool, createSilentLogger());
+    const result = await repo.editSection('/projects/x/brief.md', {
+      section: 'BOARD MAIL',
+      content: '- Status: paused',
+      expectedSectionVersion: 3,
+    });
+    expect(result.ok).toBe(true);
+    const updateQuery = captured.find(q => q.sql.startsWith('UPDATE working_documents'))!;
+    expect(JSON.parse(updateQuery.params?.[2] as string)).toEqual({ 'board MAIL': 4, Newsletters: 1 });
+    // The SQL guard pins the surviving key and the merged counter value.
+    expect(updateQuery.params?.[4]).toBe('board MAIL');
+    expect(updateQuery.params?.[5]).toBe(3);
+  });
+});

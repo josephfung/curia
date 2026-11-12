@@ -42,14 +42,15 @@ describeIf('doc-write section-delete (#2339)', () => {
   it('removes the heading and body, drops the section version, and bumps the document version', async () => {
     const path = '/projects/rules-a/rules.md';
     await repo.create({ path, type: 'agent-settings', body: RULES });
-    // Two spellings of one heading, as section-edit keys them by the caller's text.
+    // Two spellings of one heading share one counter since #2398: the second
+    // edit reads the first edit's counter case-insensitively and increments it.
     expect((await repo.editSection(path, { section: 'Board mail', content: '- Status: active' })).ok).toBe(true);
     expect((await repo.editSection(path, { section: 'board MAIL', content: '- Status: paused' })).ok).toBe(true);
     expect((await repo.editSection(path, { section: 'Newsletters', content: '- Status: paused' })).ok).toBe(true);
     const before = (await repo.read(path))!;
-    expect(before.sectionVersions).toEqual({ 'Board mail': 1, 'board MAIL': 1, Newsletters: 1 });
+    expect(before.sectionVersions).toEqual({ 'Board mail': 2, Newsletters: 1 });
 
-    const result = await repo.deleteSection(path, { section: 'Board mail', expectedSectionVersion: 1 });
+    const result = await repo.deleteSection(path, { section: 'Board mail', expectedSectionVersion: 2 });
 
     expect(result.ok).toBe(true);
     const after = (await repo.read(path))!;

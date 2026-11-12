@@ -331,4 +331,85 @@ describeIf('WorkingDocsRepo (integration)', () => {
 
     await pool.query('DELETE FROM tasks WHERE id = ANY($1::uuid[])', [[parent.id, child.id]]);
   });
+
+  describe('section versions across write paths (#2398)', () => {
+    const RULES = '## Board mail\n\n- Status: active\n\n## Newsletters\n\n- Status: paused\n';
+
+    it('keeps section_versions honest across a whole-body replace', async () => {
+      const path = '/projects/sv-a/rules.md';
+      await repo.create({ path, type: 'agent-settings', body: RULES });
+      await repo.editSection(path, { section: 'Board mail', content: '- Status: active' });
+      await repo.editSection(path, { section: 'Newsletters', content: '- Status: paused' });
+      const before = (await repo.read(path))!;
+      expect(before.sectionVersions).toEqual({ 'Board mail': 1, Newsletters: 1 });
+
+      // Replace: Board mail changes, Newsletters is untouched, Decisions is new.
+      const replaced = await repo.update(path, {
+        body: '## Board mail\n\n- Status: paused\n\n## Newsletters\n\n- Status: paused\n\n## Decisions\n\n- Ship it\n',
+        expectedVersion: before.version,
+      });
+      expect(replaced.ok).toBe(true);
+      const after = (await repo.read(path))!;
+      expect(after.sectionVersions).toEqual({ 'Board mail': 2, Newsletters: 1, Decisions: 1 });
+
+      // A writer still holding Board mail's pre-replace counter now conflicts.
+      const stale = await repo.editSection(path, {
+        section: 'Board mail',
+        content: '- Status: active',
+        expectedSectionVersion: 1,
+      });
+      expect(stale.ok).toBe(false);
+      if (!stale.ok) expect(stale.conflict).toBe(true);
+      expect((await repo.read(path))!.body).toContain('- Status: paused');
+
+      // Removing a section in a replace drops its counter.
+      const removed = await repo.update(path, {
+        body: '## Board mail\n\n- Status: paused\n\n## Decisions\n\n- Ship it\n',
+        expectedVersion: after.version,
+      });
+      expect(removed.ok).toBe(true);
+      expect((await repo.read(path))!.sectionVersions).toEqual({ 'Board mail': 2, Decisions: 1 });
+    });
+
+    it('bumps the appended-to section so a stale section edit conflicts after append', async () => {
+      const path = '/projects/sv-b/notes.md';
+      await repo.create({ path, type: 'note', body: '## Notes\n\nFirst.\n' });
+      const created = (await repo.read(path))!;
+      const appended = await repo.append(path, { content: 'Second.', expectedVersion: created.version });
+      expect(appended.ok).toBe(true);
+      expect((await repo.read(path))!.sectionVersions).toEqual({ Notes: 1 });
+
+      const stale = await repo.editSection(path, {
+        section: 'Notes',
+        content: 'Replacement.',
+        expectedSectionVersion: 0,
+      });
+      expect(stale.ok).toBe(false);
+      if (!stale.ok) expect(stale.conflict).toBe(true);
+    });
+
+    it('keys editSection counters case-insensitively and merges duplicate keys', async () => {
+      const path = '/projects/sv-c/rules.md';
+      await repo.create({ path, type: 'agent-settings', body: RULES });
+      expect((await repo.editSection(path, { section: 'Board mail', content: '- Status: active' })).ok).toBe(true);
+
+      // A stale writer using another spelling of the same heading conflicts.
+      const stale = await repo.editSection(path, {
+        section: 'board mail',
+        content: '- Status: paused',
+        expectedSectionVersion: 0,
+      });
+      expect(stale.ok).toBe(false);
+      if (!stale.ok) expect(stale.conflict).toBe(true);
+
+      // The current counter works under any spelling and leaves a single key.
+      const edited = await repo.editSection(path, {
+        section: 'BOARD MAIL',
+        content: '- Status: paused',
+        expectedSectionVersion: 1,
+      });
+      expect(edited.ok).toBe(true);
+      expect((await repo.read(path))!.sectionVersions).toEqual({ 'Board mail': 2 });
+    });
+  });
 });
