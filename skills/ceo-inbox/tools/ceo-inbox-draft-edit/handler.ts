@@ -437,9 +437,10 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
     // A reply's thread lives in the source account, so the moved draft starts a new thread there.
     // LIVE-CHECK (#2475): the client's createDraft sends no In-Reply-To / References (only
     // createDraftReply's reply_to_message_id, which names a message in the source account and
-    // cannot be used here). Verify once on a live grant whether the recipient's client still
+    // cannot be used here); new_thread is true only for a draft with reply_to_message_id. Verify once on a live grant whether the recipient's client still
     // threads a moved reply, and whether Nylas accepts those headers on a draft, before relying on it.
-    const newThread = current.threadId !== '';
+    // Gmail gives every draft a thread id, so reply-ness comes from reply_to_message_id.
+    const newThread = (current.replyToMessageId ?? '') !== '';
 
     let created: Awaited<ReturnType<MailboxClient['client']['createDraft']>>;
     try {

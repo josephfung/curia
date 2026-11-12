@@ -252,3 +252,46 @@ describe('DraftProvenance by mailbox (#2475)', () => {
     expect((await p.curiaWritesInTask(d('d1', 'personal'), 't')).created).toBe(false);
   });
 });
+
+// R40: review strictness never lightens on a mailbox mismatch (#2475).
+describe('DraftProvenance review lookups across a default change (R40)', () => {
+  const live = async () => ['work', 'personal'];
+  const mk = (repo: ReturnType<typeof makeRepo>) => new DraftProvenance(repo, logger, () => NOW, async () => 'personal', live);
+
+  it('a legacy row with no mailbox still reads as Curia\'s after the default changed', async () => {
+    const repo = makeRepo([row('ceo-inbox-draft-reply', { success: true, data: { draft_id: 'd1' } })]);
+    expect(await mk(repo).createdByCuria([d('d1', 'work')])).toEqual(new Set(['work:d1']));
+  });
+
+  it('an edit row from the migration fallback mailbox id still reads as Curia\'s', async () => {
+    const repo = makeRepo([row('ceo-inbox-draft-edit', { success: true, data: { draft_id: 'd1', mailbox: 'mailbox' } })]);
+    expect(await mk(repo).editedByCuria([d('d1', 'work')])).toEqual(new Set(['work:d1']));
+  });
+
+  it('a row with a live but different mailbox does not match', async () => {
+    const repo = makeRepo([row('ceo-inbox-draft-reply', { success: true, data: { draft_id: 'd1', mailbox: 'personal' } })]);
+    expect(await mk(repo).createdByCuria([d('d1', 'work')])).toEqual(new Set());
+  });
+
+  it('curiaWritesInTask stays exact', async () => {
+    const repo = {
+      findToolResults: vi.fn(),
+      findToolResultsForTasks: vi.fn().mockResolvedValue([row('ceo-inbox-draft-reply', { success: true, data: { draft_id: 'd1' } })]),
+    };
+    const p = new DraftProvenance(repo, logger, () => NOW, async () => 'personal', live);
+    expect((await p.curiaWritesInTask(d('d1', 'work'), 't')).created).toBe(false);
+  });
+
+  it('any unreadable move source makes the moved draft Curia\'s', async () => {
+    const rows = [
+      row('ceo-inbox-draft-reply', { success: true, data: { draft_id: 'a', mailbox: 'work' } }),
+      row('ceo-inbox-draft-edit', { success: true, data: { draft_id: 'n', mailbox: 'personal', moved_from: { mailbox: 'work', draft_id: 'zz' } } }),
+      row('ceo-inbox-draft-edit', { success: true, data: { draft_id: 'n', mailbox: 'personal', moved_from: 'garbled' } }),
+    ];
+    const repo = {
+      findToolResults: vi.fn(async (o: { toolNames?: string[] }) => rows.filter((r) => o.toolNames?.includes(r.payload['toolName'] as string))),
+      findToolResultsForTasks: vi.fn(),
+    };
+    expect(await new DraftProvenance(repo, logger, () => NOW).createdByCuria([d('n', 'personal')])).toEqual(new Set(['personal:n']));
+  });
+});

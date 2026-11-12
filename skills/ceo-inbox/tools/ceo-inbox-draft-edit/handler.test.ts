@@ -402,7 +402,7 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
     let failDelete: boolean;
 
     const SOURCE = {
-      id: 'src-1', thread_id: 'thread-1', subject: 'Audit follow-up',
+      id: 'src-1', thread_id: 'thread-1', reply_to_message_id: 'm1', subject: 'Audit follow-up',
       to: [{ name: 'Alice Archer', email: 'alice@example.com' }], cc: [{ email: 'cc@example.com' }], bcc: [],
       body: '<p>Original body</p>', snippet: 'Original body', date: 1_700_000_000,
     };
@@ -539,8 +539,8 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
       expect(methods().filter((m) => m.startsWith('DELETE') || m.startsWith('POST'))).toEqual([]);
     });
 
-    it('a draft that is not a reply moves as a new thread of its own (new_thread false)', async () => {
-      store['grant-work']!['src-1'] = { ...SOURCE, thread_id: '' };
+    it('a draft that is not a reply is not a reply (new_thread false, though Gmail gives it a thread id)', async () => {
+      store['grant-work']!['src-1'] = { ...SOURCE, reply_to_message_id: '' };
       const result = await handler.execute(twoCtx({ draft_id: 'src-1', move_to_mailbox: 'personal' }));
 
       expect((result as { data: Record<string, unknown> }).data).toMatchObject({ new_thread: false });
