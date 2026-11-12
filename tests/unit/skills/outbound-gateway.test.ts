@@ -5916,6 +5916,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       sentForDraft: vi.fn().mockResolvedValue(false),
       ...(o.ledger ?? { recordSending: vi.fn().mockResolvedValue(undefined), recordSent: vi.fn().mockResolvedValue(undefined) }),
     };
+    const resolveMailbox = vi.fn(async (id: string) => (o.mailboxes ? (o.mailboxes[id] ?? null) : client) as unknown as NylasClient | null);
     const readSendLevel = vi.fn(async (id: string) => o.levels?.[id] ?? o.level ?? 'on_request');
     const actionLogRepo = o.actionLogRepo ?? makeActionLogRepo();
     (mocks.contactService as unknown as { createContact: ReturnType<typeof vi.fn> }).createContact = vi.fn().mockResolvedValue({ id: 'new' });
@@ -5935,14 +5936,14 @@ describe('sendPrincipalDraft (#2474)', () => {
       ...(o.withoutBandReview ? {} : { bandReview: { review: review as unknown as BandSendReview['review'] } }),
       ...(o.piiRedactor ? { piiRedactor: o.piiRedactor } : {}),
       ...(o.conversationEntities ? { conversationEntities: o.conversationEntities } : {}),
-      principalMailbox: async (id: string) => (o.mailboxes ? (o.mailboxes[id] ?? null) : client) as unknown as NylasClient | null,
+      principalMailbox: resolveMailbox,
       ...(o.mailboxIds ? { principalMailboxIds: o.mailboxIds } : {}),
       ...(o.defaultMailboxId ? { defaultMailboxId: o.defaultMailboxId } : {}),
       readSendLevel,
       ...(o.withoutProvenance ? {} : { draftProvenance: { createdByCuria, editedByCuria, curiaWritesInTask } }),
       ...(o.withoutLedger ? {} : { sendLedger: ledger as unknown as Pick<import('../../../src/skills/principal-send/send-ledger.js').PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentAutonomousSends' | 'sentForDraft'> }),
     });
-    return { gw, client, review, createdByCuria, editedByCuria, curiaWritesInTask, ledger, readSendLevel, actionLogRepo };
+    return { gw, client, review, createdByCuria, editedByCuria, curiaWritesInTask, ledger, readSendLevel, actionLogRepo, resolveMailbox };
   }
 
   function published(type: string): Array<{ type: string; payload: Record<string, unknown> }> {
@@ -6028,8 +6029,9 @@ describe('sendPrincipalDraft (#2474)', () => {
     it('keys provenance on the mailbox that held the draft, even if the default moves mid-send (one resolution)', async () => {
       const mailboxes = { ...both(), personal: mailboxClient(draft()) };
       let defaultId = 'work';
-      const { gw, createdByCuria, editedByCuria } = make({
-        mailboxes, mailboxIds: async () => ['work', 'personal'],
+      const listIds = vi.fn(async () => ['work', 'personal']);
+      const { gw, createdByCuria, editedByCuria, resolveMailbox } = make({
+        mailboxes, mailboxIds: listIds,
         defaultMailboxId: async () => defaultId,
       });
       // The default changes after the draft is located; the key must stay personal.
@@ -6038,6 +6040,9 @@ describe('sendPrincipalDraft (#2474)', () => {
       const refs = [...createdByCuria.mock.calls, ...editedByCuria.mock.calls].flatMap((c) => (c as unknown as Array<Array<{ mailbox: string; draftId: string }>>)[0]!);
       expect(refs.length).toBeGreaterThan(0);
       expect(refs.every((r) => r.mailbox === 'personal' && r.draftId === 'd1')).toBe(true);
+      // One resolution: the id list once, and each mailbox's client resolved once.
+      expect(listIds).toHaveBeenCalledTimes(1);
+      expect(resolveMailbox.mock.calls.map((c) => c[0]).sort()).toEqual(['personal', 'work']);
     });
   });
 
@@ -6617,6 +6622,38 @@ describe('sendPrincipalDraft (#2474)', () => {
         summary: "Not sent from your mailbox: a reply Curia drafted. It isn't in your Drafts any more (sent, deleted or replaced).",
       })]);
       expect(ledger.sentForDraft).toHaveBeenCalledWith('d1');
+    });
+
+    describe('a draft that could not be located across mailboxes (#2475 review)', () => {
+      const two = (work: ReturnType<typeof mailboxClient> | null, personal: ReturnType<typeof mailboxClient> | null) =>
+        ({ mailboxes: { work, personal }, mailboxIds: async () => ['work', 'personal'] });
+
+      it('files a digest item when one mailbox fails and none holds the draft; a live principal gets a plain refusal', async () => {
+        const { gw } = makeAuto(two(null, mailboxClient(null)));
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'lookup_failed' });
+        expect(reports()).toEqual([expect.objectContaining({
+          summary: "Not sent from your mailbox: a reply Curia drafted. Curia couldn't read the draft just now; check your Drafts.",
+          urgency: 'digest', source: 'principal_mailbox',
+        })]);
+        mocks = createMocks();
+        const live = makeAuto(two(null, mailboxClient(null)));
+        expect(await live.gw.sendPrincipalDraft('d1', opts)).toMatchObject({ refusal: 'lookup_failed' });
+        expect(reports()).toHaveLength(0);
+      });
+
+      it('files a digest item for an ambiguous draft id', async () => {
+        const { gw } = makeAuto(two(mailboxClient(draft()), mailboxClient(draft())));
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'ambiguous_mailbox' });
+        expect(reports()).toEqual([expect.objectContaining({ summary: expect.stringMatching(/^Not sent from your mailbox: a reply Curia drafted\. .*more than one/) })]);
+      });
+
+      it('files a digest item for a draft that is gone from every mailbox', async () => {
+        const { gw } = makeAuto(two(mailboxClient(null), mailboxClient(null)));
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_found' });
+        expect(reports()).toEqual([expect.objectContaining({
+          summary: "Not sent from your mailbox: a reply Curia drafted. It isn't in your Drafts any more (sent, deleted or replaced).",
+        })]);
+      });
     });
 
     // Final fixes A12 (final review M1): a second send call on a draft that already went out.

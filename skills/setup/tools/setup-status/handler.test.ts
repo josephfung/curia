@@ -1,4 +1,5 @@
 // skills/setup-status/handler.test.ts
+import { stubPrincipalMailboxes, mailboxView } from '../../../_shared/principal-mailboxes-test-helpers.js';
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -124,10 +125,14 @@ function makeCtx(overrides: Partial<{
   emailChannelStatus: () => Promise<EmailChannelStatus>;
   principalMailboxReady: () => Promise<PrincipalMailboxReadiness>;
   browserContext: object | null;
+  liveMailboxIds: string[];
 }> = {}): ToolContext {
   const secrets = overrides.secrets ?? {};
   return {
     input: {},
+    ...(overrides.liveMailboxIds
+      ? { principalMailboxes: stubPrincipalMailboxes({ mailboxes: overrides.liveMailboxIds.map((id, i) => mailboxView(id, id, `${id}@example.com`, i === 0)) }) }
+      : {}),
     entityMemory: makeEntityMemory(overrides.existingDeferrals, {
       ...(overrides.sendingValue !== undefined ? { sendingValue: overrides.sendingValue } : {}),
       ...(overrides.sendingReadError ? { readError: overrides.sendingReadError } : {}),
@@ -486,6 +491,17 @@ describe('setup-status', () => {
     it('is done when the default key is written with a JSON escape', async () => {
       const task = await inboxSending(makeCtx({ sendingValue: '{"\\u0064efault":"routine"}' }));
       expect(task?.status).toBe('done');
+    });
+
+    // #2475 R41: after the rename the level lives under the mailbox's id.
+    it('is done when a live mailbox id carries a valid level', async () => {
+      const task = await inboxSending(makeCtx({ sendingValue: '{"work":"routine"}', liveMailboxIds: ['work'] }));
+      expect(task?.status).toBe('done');
+    });
+
+    it('is not done for a key that names no live mailbox, or a bad level', async () => {
+      expect((await inboxSending(makeCtx({ sendingValue: '{"gone":"routine"}', liveMailboxIds: ['work'] })))?.status).toBe('pending');
+      expect((await inboxSending(makeCtx({ sendingValue: '{"work":"bogus"}', liveMailboxIds: ['work'] })))?.status).toBe('pending');
     });
 
     it('is not done, and logged, when the read throws', async () => {

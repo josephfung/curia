@@ -58,26 +58,52 @@ export function parseSendLevel(raw: string | null, mailbox: string = DEFAULT_MAI
   return readSendLevelValue(raw, mailbox).level;
 }
 
+/** A stored object with keys, none of them `default` or a live mailbox id (a mistyped key, say). */
+function namesNoKnownMailbox(raw: string, live: readonly string[]): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false; // unparseable is reported as malformed by the caller
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
+  const keys = Object.keys(parsed);
+  return keys.length > 0 && !keys.some((k) => k === DEFAULT_MAILBOX || live.includes(k));
+}
+
 export type SendLevelReader = (mailbox: string) => Promise<SendLevel>;
 
 export function createSendLevelReader(deps: {
   get(ns: string, key: string): Promise<string | null>;
   logger: Logger;
-  /** The default mailbox's id: the mailbox a legacy `default` key applies to. Absent: none does. */
-  defaultMailboxId?: () => Promise<string>;
+  /**
+   * The live mailbox ids. A legacy `default` key applies only while exactly one is live (R41):
+   * it was set for the install's one mailbox, so a second mailbox, or a changed default, never
+   * inherits it. Also lets the reader warn about a stored object that names none of them.
+   * Absent: no legacy fallback and no such warning.
+   */
+  liveMailboxIds?: () => Promise<readonly string[]>;
 }): SendLevelReader {
+  const warnedUnknown = new Set<string>();
   return async (mailbox) => {
     try {
-      // A failed default lookup reads as "not the default": the stricter, never-widening side.
-      let legacyDefault = false;
-      if (deps.defaultMailboxId) {
+      // A failed lookup reads as "not the only mailbox": the stricter, never-widening side.
+      let live: readonly string[] | undefined;
+      if (deps.liveMailboxIds) {
         try {
-          legacyDefault = (await deps.defaultMailboxId()) === mailbox;
+          live = await deps.liveMailboxIds();
         } catch (err) {
-          deps.logger.warn({ err, mailbox }, 'Could not resolve the default mailbox for the legacy send-level key; not applying it');
+          deps.logger.warn({ err, mailbox }, 'Could not list the live mailboxes for the send level; not applying the legacy key');
         }
       }
-      const { level, malformed } = readSendLevelValue(await deps.get(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY), mailbox, legacyDefault);
+      const legacyDefault = live !== undefined && live.length === 1 && live[0] === mailbox;
+      const raw = await deps.get(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY);
+      if (live !== undefined && raw !== null && !warnedUnknown.has(raw) && namesNoKnownMailbox(raw, live)) {
+        // Once per process per value; never the stored value itself.
+        warnedUnknown.add(raw);
+        deps.logger.warn('ceo_inbox/sending has entries but none for a live mailbox or "default"; every mailbox uses on_request');
+      }
+      const { level, malformed } = readSendLevelValue(raw, mailbox, legacyDefault);
       // Never the stored value: only that it could not be read as a level.
       if (malformed) deps.logger.warn({ mailbox }, 'ceo_inbox/sending is malformed or names an unknown level; using on_request');
       return level;

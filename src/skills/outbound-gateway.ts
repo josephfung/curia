@@ -86,6 +86,7 @@ import type { ConversationEntityState } from '../entity-context/conversation-ent
 import { blankExactPhrases, describeUnresolvedIdentity, emailLocalNameTokens } from '../agents/resolved-entities.js';
 import type { IdentityGateMode } from '../config.js';
 import type { ErrorType } from '../errors/types.js';
+import { grantSafeErrorFields } from '../principal-mailboxes/error-fields.js';
 import { judgeHolders } from '../principal-mailboxes/locate-holder.js';
 import type { PrincipalMailboxResolver } from '../channels/email/principal-mailbox-resolver.js';
 import { DEFAULT_MAILBOX, type SendLevel, type SendLevelReader } from './principal-send/send-level.js';
@@ -4345,7 +4346,7 @@ export class OutboundGateway {
         const draft = await client.getDraft(draftId);
         return { candidate: { mailboxId, client, draft }, outcome: draft ? ('hit' as const) : ('miss' as const) };
       } catch (err) {
-        this.log.warn({ err, draftId, mailboxId }, 'outbound-gateway: principal-mailbox draft read failed while locating it');
+        this.log.warn({ ...grantSafeErrorFields(err), draftId, mailboxId }, 'outbound-gateway: principal-mailbox draft read failed while locating it');
         return { candidate: { mailboxId, client, draft: null }, outcome: 'failed' as const };
       }
     }));
@@ -4390,7 +4391,13 @@ export class OutboundGateway {
     // and a default changing mid-send cannot split the client, level and provenance key). None
     // found, or none connected, fails closed.
     const located = await this.resolveDraftMailbox(draftId, options.mailbox);
-    if (!located.ok) return refuse(located.refusal);
+    if (!located.ok) {
+      // An autonomous send that cannot find its draft still reaches the principal (ADR-062).
+      if (options.authority.humanApproved !== true && !isPrincipalDirectedMailboxSend(options.authority)) {
+        await this.reportUnlocatedDraft(located.refusal, draftId, options);
+      }
+      return refuse(located.refusal);
+    }
     const mailbox = located.client;
     const mailboxId = located.mailboxId;
 
@@ -4794,6 +4801,33 @@ export class OutboundGateway {
       ? PRINCIPAL_SEND_DIGEST_REASONS[refusal]
       : principalFacing(reason));
     await this.publishMailboxDigest(`Left as a draft in your mailbox: ${what}. ${said}`, options);
+  }
+
+  /**
+   * The digest item for an autonomous send whose draft could not be found in any mailbox (#2475).
+   * No client or thread is known, so no held marker. Gone-from-everywhere stays quiet when the
+   * ledger shows the draft already went out, as recordAutonomousStop does.
+   */
+  private async reportUnlocatedDraft(
+    refusal: PrincipalSendRefusal,
+    draftId: string,
+    options: { taskEventId?: string; conversationId?: string },
+  ): Promise<void> {
+    if (refusal === 'not_found' && this.sendLedger) {
+      try {
+        if (await this.sendLedger.sentForDraft(draftId)) return;
+      } catch (err) {
+        this.log.warn({ err, draftId }, 'outbound-gateway: send ledger unreadable — reporting the gone draft');
+      }
+    }
+    const why: Partial<Record<PrincipalSendRefusal, string>> = {
+      not_found: "It isn't in your Drafts any more (sent, deleted or replaced).",
+      lookup_failed: "Curia couldn't read the draft just now; check your Drafts.",
+      ambiguous_mailbox: 'That draft ID is in more than one of your mailboxes, so Curia did not guess; check your Drafts.',
+      mailbox_unavailable: "A mailbox isn't connected, so Curia couldn't look; check your Drafts.",
+      unknown_mailbox: "That isn't one of your connected mailboxes; check your Drafts.",
+    };
+    await this.publishMailboxDigest(`Not sent from your mailbox: a reply Curia drafted. ${why[refusal] ?? 'Check your Drafts.'}`, options);
   }
 
   /** One digest item for an autonomous principal-mailbox send (#2474, design D9). A failure is logged; the outcome stands. */
