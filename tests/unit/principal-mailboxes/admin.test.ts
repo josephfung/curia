@@ -268,6 +268,17 @@ describe('PrincipalMailboxAdmin.remove', () => {
     expect(store.tombstone).toHaveBeenCalled();
   });
 
+  it('restores the primary email when the tombstone fails, so a failed removal changes nothing', async () => {
+    const { admin, contacts, store, contact, records } = setup({ records: two(), primaryEmail: 'pat@gmail.com', secrets: { [principalMailboxGrantSecretName('work')]: 'g-work' } });
+    vi.mocked(store.tombstone).mockRejectedValueOnce(new Error('db down'));
+    await expect(
+      admin.remove({ id: 'personal', stillOwned: true, newDefaultId: 'work', newPrimaryEmail: 'pat@work.example.com' }),
+    ).rejects.toThrow('db down');
+    expect(contacts.updateContactFields).toHaveBeenLastCalledWith(PRINCIPAL, { primaryEmail: 'pat@gmail.com' });
+    expect(contact.primaryEmail).toBe('pat@gmail.com');
+    expect(records.find((r) => r.id === 'personal')!.removedAt).toBeNull();
+  });
+
   it('stillOwned=false unlinks only the identity it added', async () => {
     const { admin, contacts } = setup({ records: two(), secrets: { [principalMailboxGrantSecretName('work')]: 'g' } });
     await admin.remove({ id: 'work', stillOwned: false });

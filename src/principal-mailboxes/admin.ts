@@ -331,9 +331,22 @@ export class PrincipalMailboxAdmin {
       await this.deps.contacts.updateContactFields(this.deps.principalContactId, { primaryEmail: newPrimary });
     }
 
-    // 3. Default / tombstone in one store transaction.
+    // 3. Default / tombstone in one store transaction. If it fails the mailbox stays live,
+    // so the primary email goes back to what it was: a failed removal changes nothing.
     const wasDefault = rec.isDefault;
-    await this.deps.store.tombstone(id, newDefault);
+    try {
+      await this.deps.store.tombstone(id, newDefault);
+    } catch (err) {
+      if (newPrimary !== null) {
+        try {
+          await this.deps.contacts.updateContactFields(this.deps.principalContactId, { primaryEmail: primary });
+        } catch (restoreErr) {
+          this.log.error({ err: restoreErr, mailboxId: id }, 'Could not restore the primary email after a failed mailbox removal');
+        }
+      }
+      this.log.error({ err, mailboxId: id }, 'Removing a principal mailbox failed; it is still live');
+      throw err;
+    }
 
     // 4-6. Past the tombstone: log and rethrow, never un-tombstone.
     try {
