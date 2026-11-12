@@ -2,7 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as yaml from 'js-yaml';
-import type { ToolHandler, ToolContext, ToolResult, EmailChannelStatus } from '../../../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult, EmailChannelStatus, PrincipalMailboxReadiness } from '../../../../src/skills/types.js';
 import { ConfigStore } from '../../../../src/memory/config-store.js';
 import { DEFAULT_MAILBOX, readSendLevelValue } from '../../../../src/skills/principal-send/send-level.js';
 
@@ -227,11 +227,13 @@ export class SetupStatusHandler implements ToolHandler {
         }
       }
 
-      // Done when a live principal mailbox passed its last health canary (#2475).
-      let principalMailboxReady = false;
+      // Done when a live principal mailbox passed its last health canary (#2475). One that
+      // passed but that calendar picks up only after a restart reads as pending with
+      // restart_required, as the email channel does.
+      let principalMailboxStatus: PrincipalMailboxReadiness = 'pending';
       if (ctx.principalMailboxReady) {
         try {
-          principalMailboxReady = await ctx.principalMailboxReady();
+          principalMailboxStatus = await ctx.principalMailboxReady();
         } catch (err) {
           ctx.log.warn({ err }, 'setup-status: principal mailbox check failed — reporting pending');
         }
@@ -301,7 +303,8 @@ export class SetupStatusHandler implements ToolHandler {
               restartRequired = emailStatus === 'restart_required';
               break;
             case 'principal_mailbox_ready':
-              done = principalMailboxReady;
+              done = principalMailboxStatus === 'ready';
+              restartRequired = principalMailboxStatus === 'restart_required';
               break;
             case 'browser_ready':
               done = browserReady;

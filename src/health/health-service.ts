@@ -31,6 +31,8 @@ import type { PrincipalMailboxes, PrincipalMailboxView } from '../principal-mail
 import { MissingNylasApiKeyError } from '../principal-mailboxes/types.js';
 import { grantSafeErrorFields } from '../principal-mailboxes/error-fields.js';
 import type { FlatMailboxMigrationOutcome } from '../principal-mailboxes/migrate-flat-mailbox.js';
+import type { FlatMirrorOutcome } from '../principal-mailboxes/flat-mirror.js';
+import type { PrincipalMailboxReadiness } from '../skills/types.js';
 import type { MailboxOutageNotifier } from './mailbox-outage-notifier.js';
 
 export interface HealthServiceDeps {
@@ -105,8 +107,14 @@ export interface HealthServiceDeps {
    */
   principalMailboxes?: Pick<
     PrincipalMailboxes,
-    'list' | 'gatewayClient' | 'calendarClient' | 'isFallbackActive' | 'setFallback'
+    'list' | 'credentials' | 'gatewayClient' | 'calendarClient' | 'isFallbackActive' | 'setFallback'
   >;
+  /**
+   * The grant calendar (and the acquaintance check) were bound to at boot, or null when none
+   * was. They pick up a different default grant only after a restart, which the setup catalog
+   * reports as `restart_required`. Absent: no restart check.
+   */
+  calendarBoundGrant?: () => string | null;
   /** Alerts the principal once per mailbox outage episode. */
   mailboxOutageNotifier?: Pick<MailboxOutageNotifier, 'record'>;
   /**
@@ -114,6 +122,9 @@ export interface HealthServiceDeps {
    * deferred-migration fallback is active; on 'migrated' the fallback is cleared.
    */
   retryMailboxMigration?: () => Promise<FlatMailboxMigrationOutcome>;
+  /** Re-derives the flat principal-mailbox keys from the registry's default (R28); run on
+   *  each canary tick so a copy that failed part-way is repaired. */
+  reconcileFlatMailboxKeys?: () => Promise<FlatMirrorOutcome>;
 }
 
 /** Tavily usage endpoint: validates the key without spending search credits. */
@@ -134,8 +145,9 @@ export class HealthService {
   private readonly startedAt = new Date();
   /** Reverse map: model string → tier, built from modelRoutingConfig in start(). */
   private modelToTier = new Map<string, TrackerKey>();
-  /** Last canary outcome per live mailbox id (#2475); feeds the setup catalog's readiness check. */
-  private readonly mailboxOk = new Map<string, boolean>();
+  /** Last canary outcome per live mailbox id and the grant it probed (#2475); feeds the setup
+   *  catalog's readiness check. Held in memory only, never logged. */
+  private readonly mailboxOk = new Map<string, { ok: boolean; grantId: string | null }>();
   /** Last logged outcome of the deferred-migration retry, so a repeat is not logged again. */
   private lastMigrationOutcome: string | null = null;
 
@@ -342,6 +354,7 @@ export class HealthService {
     // `nylas_calendar` check. First retry a deferred boot migration, so a mailbox that could
     // not be registered at boot is picked up here without a restart.
     await this.retryDeferredMigration();
+    await this.reconcileFlatMirror();
     await this.runMailboxCanaries(run, results);
 
     // Signal canary — reuse the same RPC ping as the liveness check.
@@ -385,22 +398,51 @@ export class HealthService {
   // ---------------------------------------------------------------------------
 
   /**
-   * True once a live principal mailbox has passed its canary (the setup catalog's
-   * `principal_mailbox_ready` check). A mailbox not probed yet, or whose last probe was not
-   * ok, is probed now rather than reported pending until the next scheduled canary.
+   * The setup catalog's `principal_mailbox_ready` check. A mailbox not probed yet, whose last
+   * probe was not ok, or whose grant changed since it passed (a replaced grant must pass on its
+   * own) is probed now rather than reported from a stale result. `restart_required` when the
+   * default mailbox passed but calendar is bound to another grant (or none) since boot.
    */
-  async principalMailboxReady(): Promise<boolean> {
-    const { principalMailboxes, logger } = this.deps;
-    if (!principalMailboxes) return false;
+  async principalMailboxReady(): Promise<PrincipalMailboxReadiness> {
+    const { principalMailboxes, calendarBoundGrant, logger } = this.deps;
+    if (!principalMailboxes) return 'pending';
     try {
       const live = await principalMailboxes.list();
       for (const view of live) {
-        if (this.mailboxOk.get(view.id) !== true) await this.probeMailbox(view);
+        const last = this.mailboxOk.get(view.id);
+        if (last?.ok !== true || last.grantId !== (await this.currentGrant(view.id))) await this.probeMailbox(view);
       }
-      return live.some((m) => this.mailboxOk.get(m.id) === true);
+      const passed = live.filter((m) => this.mailboxOk.get(m.id)?.ok === true);
+      if (passed.length === 0) return 'pending';
+      const def = passed.find((m) => m.isDefault);
+      if (def && calendarBoundGrant && calendarBoundGrant() !== this.mailboxOk.get(def.id)?.grantId) {
+        return 'restart_required';
+      }
+      return 'ready';
     } catch (err) {
       logger.warn({ err }, 'principalMailboxReady: could not evaluate mailbox health; reporting not ready');
-      return false;
+      return 'pending';
+    }
+  }
+
+  /** The mailbox's grant now, or null when it cannot be read (the probe then reports why). */
+  private async currentGrant(id: string): Promise<string | null> {
+    try {
+      return (await this.deps.principalMailboxes!.credentials(id)).grantId;
+    } catch (err) {
+      // Class and status only: a Nylas error can carry the grant id (R20).
+      this.deps.logger.debug({ mailboxId: id, ...grantSafeErrorFields(err) }, 'principalMailboxReady: could not read the mailbox grant; probing it');
+      return null;
+    }
+  }
+
+  private async reconcileFlatMirror(): Promise<void> {
+    const { reconcileFlatMailboxKeys, logger } = this.deps;
+    if (!reconcileFlatMailboxKeys) return;
+    try {
+      await reconcileFlatMailboxKeys();
+    } catch (err) {
+      logger.error({ err }, 'Could not reconcile the flat principal-mailbox keys with the registry');
     }
   }
 
@@ -465,42 +507,51 @@ export class HealthService {
     const name = `principal_mailbox:${view.id}`;
     let result: CanaryResult;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let grantId: string | null = null;
+    let authFailure = false;
     try {
-      const [client, calendar] = await Promise.all([
-        principalMailboxes!.gatewayClient(view.id),
-        principalMailboxes!.calendarClient(view.id),
-      ]);
+      // The deadline covers reading the credentials and building the clients too, so a slow
+      // registry or vault read cannot hold the canary (or setup-status) past it.
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('timeout')), MAILBOX_PROBE_TIMEOUT_MS);
+      });
       await Promise.race([
-        Promise.all([client.getGrant(), client.listMessages({ limit: 1 }), calendar.listCalendars()]),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('timeout')), MAILBOX_PROBE_TIMEOUT_MS);
-        }),
+        (async () => {
+          grantId = (await principalMailboxes!.credentials(view.id)).grantId;
+          const [client, calendar] = await Promise.all([
+            principalMailboxes!.gatewayClient(view.id),
+            principalMailboxes!.calendarClient(view.id),
+          ]);
+          await Promise.all([client.getGrant(), client.listMessages({ limit: 1 }), calendar.listCalendars()]);
+        })(),
+        deadline,
       ]);
       result = { name, status: 'ok' };
     } catch (err) {
       if (err instanceof MissingNylasApiKeyError) {
         // Nylas is not configured at all: nothing to be unhealthy about, and no outage to
         // alert on (as the old nylas_calendar canary reported it).
-        this.mailboxOk.set(view.id, false);
+        this.mailboxOk.set(view.id, { ok: false, grantId });
         return { name, status: 'skipped', detail: 'No Nylas API key configured' };
       }
       const { errName, statusCode: code } = grantSafeErrorFields(err);
+      authFailure = code === 401 || code === 403;
       logger.warn({ mailboxId: view.id, errorName: errName, statusCode: code }, 'Principal mailbox probe failed');
       // Reconnecting only fixes auth failures (401/403); don't prescribe it for timeouts or 5xx.
       result = {
         name,
         status: 'fail',
-        detail: code === 401 || code === 403
+        detail: authFailure
           ? `Mailbox "${view.label}" grant auth failed (401/403) — reconnect it in Nylas, then use Replace grant on it in the console (Channels → Email → Principal's mailboxes)`
           : `Mailbox "${view.label}" probe failed (${errName}) — check Nylas connectivity`,
       };
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
-    this.mailboxOk.set(view.id, result.status === 'ok');
+    this.mailboxOk.set(view.id, { ok: result.status === 'ok', grantId });
     if (mailboxOutageNotifier) {
       try {
-        await mailboxOutageNotifier.record(view.id, view.label, result.status === 'ok');
+        await mailboxOutageNotifier.record(view.id, view.label, result.status === 'ok', { authFailure });
       } catch (err) {
         logger.error({ err, mailboxId: view.id }, 'Mailbox outage notifier threw');
       }

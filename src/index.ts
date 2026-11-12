@@ -97,6 +97,7 @@ import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
 import { migrateFlatPrincipalMailbox } from './principal-mailboxes/migrate-flat-mailbox.js';
+import { reconcileFlatMailboxKeys } from './principal-mailboxes/flat-mirror.js';
 import { grantSafeErrorFields } from './principal-mailboxes/error-fields.js';
 import { FLAT_KEYS_MANAGED_MESSAGE, FLAT_PRINCIPAL_MAILBOX_KEYS } from './principal-mailboxes/secrets.js';
 import { PrincipalAcquaintanceCheck } from './contacts/principal-acquaintance.js';
@@ -141,7 +142,7 @@ import { RelayBudget } from './autonomy/relay-budget.js';
 import { checkBandGatingReady } from './autonomy/band-wiring.js';
 import { SendEvidenceCollector } from './autonomy/send-evidence.js';
 import { BandSendReview } from './dispatch/band-send-review.js';
-import { formatWhoYouServeBlock } from './agents/principal-contact-block.js';
+import { findPrimaryEmailIdentity, formatWhoYouServeBlock } from './agents/principal-contact-block.js';
 import { OutboundGateway } from './skills/outbound-gateway.js';
 import { OutboundQueueRepo } from './skills/outbound-queue-repo.js';
 import { ExportControlService, resolveExportControls } from './security/export-controls.js';
@@ -1234,6 +1235,17 @@ async function main(): Promise<void> {
         logger.error({ err: readErr }, 'Could not read ceo_nylas_grant_id for the mailbox fallback');
       }
     }
+  }
+
+  // Once the registry has rows the flat keys ceo-inbox reads are a copy of the default mailbox
+  // (R28). Re-derive them here and on each canary tick, so a copy that failed part-way, or a
+  // value seeded from .env, is repaired without the operator (#2475).
+  const reconcileFlatMirror = () =>
+    reconcileFlatMailboxKeys({ store: principalMailboxStore, secrets: secretsService, logger });
+  try {
+    await reconcileFlatMirror();
+  } catch (err) {
+    logger.error({ err }, 'Could not reconcile the flat principal-mailbox keys with the registry; retried on the next canary');
   }
 
   // Console management of the registry (#2475). Needs the principal contact (identity writes);
@@ -2684,9 +2696,21 @@ async function main(): Promise<void> {
     // One canary per principal mailbox (#2475); an outage alerts the principal once per episode.
     principalMailboxes,
     mailboxOutageNotifier: outboundGateway
-      ? new MailboxOutageNotifier({ gateway: outboundGateway, principalEmail: () => principalEmail.current || undefined, logger })
+      ? new MailboxOutageNotifier({
+          gateway: outboundGateway,
+          // The designated primary email when it is a verified, active identity, as the gateway's
+          // own notices use; otherwise the first verified email.
+          principalEmail: () =>
+            findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
+            ?? (principalEmail.current || undefined),
+          logger,
+        })
       : undefined,
     retryMailboxMigration,
+    reconcileFlatMailboxKeys: reconcileFlatMirror,
+    // Calendar and the acquaintance check are bound to this grant at boot; setup-status reports
+    // restart_required while the default mailbox's grant differs from it.
+    calendarBoundGrant: () => principalNylasGrantId ?? null,
     signalRpcClient,
     browserService,
     // Pass channel health deps only when the adapter was constructed (enabled +

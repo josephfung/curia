@@ -33,7 +33,7 @@ describe('MailboxOutageNotifier', () => {
 
   it('names the label and suggests removing the mailbox, never an address or grant', async () => {
     const { n, sendNotification } = make();
-    await n.record('work', 'Work', false);
+    await n.record('work', 'Work', false, { authFailure: true });
     const payload = sendNotification.mock.calls[0]![0];
     expect(payload.notificationType).toBe('principal_mailbox_outage');
     expect(payload.ceoEmail).toBe('owner@example.com');
@@ -46,10 +46,22 @@ describe('MailboxOutageNotifier', () => {
 
   it("names the console's Replace grant control, matching the console wording (R29)", async () => {
     const { n, sendNotification } = make();
-    await n.record('work', 'Work', false);
+    await n.record('work', 'Work', false, { authFailure: true });
     const body = sendNotification.mock.calls[0]![0].body as string;
     expect(body).toContain('Replace grant');
     expect(body).toContain("Principal's mailboxes");
+  });
+
+  it('gives connectivity guidance, not a reconnect, when the probe failed for another reason', async () => {
+    const { n, sendNotification } = make();
+    await n.record('work', 'Work', false, { authFailure: false });
+    const body = sendNotification.mock.calls[0]![0].body as string;
+    expect(body).toContain('Work');
+    expect(body).not.toContain('Replace grant');
+    expect(body).not.toMatch(/reconnect/i);
+    expect(body).toContain('Nylas status');
+    expect(body).not.toMatch(/@/);
+    expect(body).not.toMatch(/grant/i);
   });
 
   it('retries on the next failure when the alert could not be sent', async () => {

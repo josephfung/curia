@@ -26,7 +26,9 @@ export class MailboxOutageNotifier {
     this.log = deps.logger;
   }
 
-  async record(mailboxId: string, label: string, ok: boolean): Promise<void> {
+  /** `authFailure`: the probe got a 401/403, which reconnecting fixes. Anything else (a
+   *  timeout, a Nylas server error) gets connectivity guidance instead. */
+  async record(mailboxId: string, label: string, ok: boolean, opts: { authFailure?: boolean } = {}): Promise<void> {
     if (ok) {
       if (this.alerted.delete(mailboxId)) {
         this.log.info({ mailboxId }, 'Principal mailbox recovered');
@@ -49,8 +51,14 @@ export class MailboxOutageNotifier {
         `Curia's health check for your "${label}" mailbox failed.`,
         '',
         'Mail and calendar for that account are not being read or written until it is reachable again.',
-        "The usual cause is a revoked or expired connection: reconnect the account in Nylas, then use Replace grant on the mailbox in the console (Channels → Email → Principal's mailboxes).",
-        'If the account no longer exists, remove the mailbox there so Curia stops checking it.',
+        ...(opts.authFailure
+          ? [
+            "Nylas refused the connection, which usually means it was revoked or expired: reconnect the account in Nylas, then use Replace grant on the mailbox in the console (Channels → Email → Principal's mailboxes).",
+            'If the account no longer exists, remove the mailbox there so Curia stops checking it.',
+          ]
+          : [
+            'Nylas did not answer in time or reported an error of its own. This is often temporary: check the Nylas status page, and that the Nylas API key in the console is still valid.',
+          ]),
         '',
         'You will not get another alert for this mailbox until it has recovered and failed again.',
       ].join('\n'),

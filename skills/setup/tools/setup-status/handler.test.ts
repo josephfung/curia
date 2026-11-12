@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as yaml from 'js-yaml';
 import { SetupStatusHandler, parseCatalog } from './handler.js';
-import type { ToolContext, EmailChannelStatus } from '../../../../src/skills/types.js';
+import type { ToolContext, EmailChannelStatus, PrincipalMailboxReadiness } from '../../../../src/skills/types.js';
 import type { EntityMemory } from '../../../../src/memory/entity-memory.js';
 
 // ── EntityMemory mock helpers ────────────────────────────────────────────────
@@ -122,7 +122,7 @@ function makeCtx(overrides: Partial<{
   principalLookupError: Error;
   phoneAppReady: () => Promise<boolean>;
   emailChannelStatus: () => Promise<EmailChannelStatus>;
-  principalMailboxReady: () => Promise<boolean>;
+  principalMailboxReady: () => Promise<PrincipalMailboxReadiness>;
   browserContext: object | null;
 }> = {}): ToolContext {
   const secrets = overrides.secrets ?? {};
@@ -306,9 +306,10 @@ describe('setup-status', () => {
     });
 
     it.each([
-      ['principal_mailbox_ready is complete with one healthy mailbox', { principalMailboxReady: async (): Promise<boolean> => true }, 'done'],
-      ['the mailbox fails its canary', { principalMailboxReady: async (): Promise<boolean> => false }, 'pending'],
-      ['the check throws', { principalMailboxReady: async (): Promise<boolean> => { throw new Error('db down'); } }, 'pending'],
+      ['principal_mailbox_ready is complete with one healthy mailbox', { principalMailboxReady: async (): Promise<PrincipalMailboxReadiness> => 'ready' }, 'done'],
+      ['the mailbox fails its canary', { principalMailboxReady: async (): Promise<PrincipalMailboxReadiness> => 'pending' }, 'pending'],
+      ['calendar still needs a restart', { principalMailboxReady: async (): Promise<PrincipalMailboxReadiness> => 'restart_required' }, 'pending'],
+      ['the check throws', { principalMailboxReady: async (): Promise<PrincipalMailboxReadiness> => { throw new Error('db down'); } }, 'pending'],
       ['the check is absent', {}, 'pending'],
     ] as const)('principal mailboxes: %s → %s', async (_name, overrides, expected) => {
       const result = await handler.execute(makeCtx(overrides));
@@ -318,6 +319,17 @@ describe('setup-status', () => {
       expect(task?.status).toBe(expected);
       expect(task?.docs_url).toBe('/get-started/principal-email-calendar');
       expect(task?.handoff_path).toBe('/channels');
+    });
+
+    it('principal mailboxes: flags restart_required only while calendar needs a restart (#2475)', async () => {
+      const read = async (status: PrincipalMailboxReadiness) => {
+        const result = await handler.execute(makeCtx({ principalMailboxReady: async () => status }));
+        const data = (result as { success: true; data: { tasks: Array<{ id: string; restart_required?: true }> } }).data;
+        return data.tasks.find(t => t.id === 'principal_mailboxes')?.restart_required;
+      };
+      expect(await read('restart_required')).toBe(true);
+      expect(await read('ready')).toBeUndefined();
+      expect(await read('pending')).toBeUndefined();
     });
 
     it('principal mailboxes: the guidance fits a one-mailbox cap and mentions the restart (#2475)', async () => {

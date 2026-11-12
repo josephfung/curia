@@ -30,6 +30,10 @@ export type ActionRisk = 'none' | 'low' | 'medium' | 'high' | 'critical' | numbe
  */
 /** See ToolContext.emailChannelStatus. */
 export type EmailChannelStatus = 'running' | 'restart_required' | 'not_configured';
+/** Principal mailbox setup (#2475). `ready`: a live mailbox passed its canary. `restart_required`:
+ *  it passed, but calendar (and the sent-mail check) still run on the grant bound at boot, so the
+ *  default mailbox only reaches them after a restart. `pending`: no live mailbox passed. */
+export type PrincipalMailboxReadiness = 'ready' | 'restart_required' | 'pending';
 
 export interface ToolManifest {
   name: string;
@@ -192,11 +196,11 @@ export interface ToolContext {
    */
   emailChannelStatus?: () => Promise<EmailChannelStatus>;
   /**
-   * Whether a live principal mailbox passed its last health canary (#2475). Injected for
-   * skills that declare optional capability `principalMailboxReady`. Absent means the setup
-   * task stays pending.
+   * Whether a live principal mailbox passed its last health canary, and whether calendar still
+   * needs a restart to use it (#2475). Injected for skills that declare optional capability
+   * `principalMailboxReady`. Absent means the setup task stays pending.
    */
-  principalMailboxReady?: () => Promise<boolean>;
+  principalMailboxReady?: () => Promise<PrincipalMailboxReadiness>;
   /**
    * Curia's own mailbox addresses, read from the email accounts table at call time
    * (#2409) — unlike `selfEmails`, which is fixed at boot. Injected for skills that

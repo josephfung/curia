@@ -37,5 +37,6 @@ Alternatives considered:
 - Every handler that used the flat grant must go through the service. A call that cannot name an account fails loudly instead of acting on the wrong one; that is an accepted cost.
 - Removal cannot be undone by re-adding the same address: it gets a new id and a clean slate. Stale keyed state is left to age out.
 - The registry is capped at one live mailbox by a code constant until every handler is converted, so no intermediate release runs a second mailbox through half-converted code.
+- While the stack is converting them, calendar and the acquaintance check (who the principal has written to) keep the client built at boot, as before the registry: they pick up a new default mailbox or a replaced grant at the next restart. The console says so, and the setup catalog reports a restart as required until then.
 - The principal's memory is not partitioned by mailbox. Confidentiality is about the recipient and the data, not the source account.
 - The per-mailbox canary adds three Nylas calls per mailbox per day.
