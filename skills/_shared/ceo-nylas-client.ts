@@ -479,6 +479,12 @@ export class CeoNylasClient {
     return normalizeDraftFull(data);
   }
 
+  // Delete an unsent draft (DELETE /drafts/{id}).
+  async deleteDraft(draftId: string): Promise<void> {
+    const url = `${this.baseUrl}/drafts/${encodeURIComponent(draftId)}`;
+    await this.request<unknown>('DELETE', url, 'deleteDraft');
+  }
+
   // ── Message updates ──────────────────────────────────────────────────────
 
   async markAsRead(messageId: string): Promise<void> {
@@ -804,6 +810,12 @@ export class CeoNylasClient {
         }
         this.log.error({ status: res.status, operation, totalAttempts: attempt + 1 }, `nylas: ${operation} API error`);
         throw new NylasApiError(res.status, operation, `Nylas ${operation}: HTTP ${res.status} — ${text}`);
+      }
+
+      // A DELETE may answer with just a request id and no data envelope.
+      if (method.toUpperCase() === 'DELETE') {
+        await res.body?.cancel();
+        return { data: undefined as T };
       }
 
       const json = (await res.json()) as { data?: T; next_cursor?: string } | null;
