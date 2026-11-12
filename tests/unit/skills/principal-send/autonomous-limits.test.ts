@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   AUTONOMOUS_DAILY_CAP, AUTONOMOUS_MAX_RECIPIENTS, AUTONOMOUS_THREAD_COOLDOWN_MS, CURIA_WRITE_SKEW_SEC,
-  allowedThreadMembers, checkAutonomousLimits, receivedBy, repliedToLatest, replyTarget,
+  allowedThreadMembers, checkAutonomousLimits, conversationIdsOf, receivedBy, repliedToLatest, replyTarget,
 } from '../../../../src/skills/principal-send/autonomous-limits.js';
 import type { NylasMessage } from '../../../../src/channels/email/nylas-client.js';
 import type { PrincipalSendEntry } from '../../../../src/skills/principal-send/send-ledger.js';
@@ -26,13 +26,13 @@ const writes: CuriaDraftWrites = { created: true, lastWriteAt: WRITE_AT, replyTo
 
 function check(over: Partial<Parameters<typeof checkAutonomousLimits>[0]> = {}) {
   return checkAutonomousLimits({
-    draft, thread: [inboundVerified], principalAddresses: PRINCIPAL, curiaWrites: writes, recentThreadEntries: [],
+    draft, thread: [inboundVerified], principalAddresses: PRINCIPAL, curiaWrites: writes, recentThreadEntries: [], recentConversationEntries: [], otherPrincipalAddresses: [],
     autonomousSendsInWindow: 0, ...over,
   });
 }
 
 function entry(outcome: PrincipalSendEntry['outcome']): PrincipalSendEntry {
-  return { draftId: 'old', threadId: 't1', recipients: ['dana@example.org'], mode: 'autonomous', at: '2026-11-07T00:00:00.000Z', outcome };
+  return { draftId: 'old', threadId: 't1', conversationIds: [], recipients: ['dana@example.org'], mode: 'autonomous', at: '2026-11-07T00:00:00.000Z', outcome };
 }
 
 describe('constants', () => {
@@ -268,5 +268,50 @@ describe('receivedBy', () => {
     const multi = { ...inboundVerified, from: [{ email: 'dana@example.org' }, { email: 'x@example.org' }] };
     const spoofed = msg({ from: [{ email: 'ceo@corp.example' }], folders: ['INBOX'], to: [{ email: 'cfo@corp.example' }] });
     for (const m of [unverified, multi, spoofed]) expect(receivedBy(m, PRINCIPAL)).toEqual(new Set(['ceo@corp.example']));
+  });
+});
+
+describe('checkAutonomousLimits across mailboxes (#2475)', () => {
+  const OTHER = ['me@personal.example'];
+  const ALL = ['ceo@corp.example', 'me@personal.example'];
+
+  it('refuses an autonomous send to another principal address', () => {
+    const r = check({
+      principalAddresses: ALL, otherPrincipalAddresses: OTHER,
+      draft: { ...draft, to: [{ email: 'dana@example.org' }, { email: 'Me@Personal.example' }] },
+    });
+    expect(r?.refusal).toBe('principal_address_recipient');
+  });
+
+  it('refuses an autonomous reply to mail from a principal address', () => {
+    const fromOther = msg({ id: 'in1', from: [{ email: 'me@personal.example' }], to: [{ email: 'ceo@corp.example' }], headers: VERIFIED });
+    const r = check({ principalAddresses: ALL, otherPrincipalAddresses: OTHER, thread: [fromOther] });
+    expect(r?.refusal).toBe('reply_to_principal_address');
+  });
+
+  it('checks both before recipient_not_on_thread', () => {
+    const r = check({ principalAddresses: ALL, otherPrincipalAddresses: OTHER, draft: { ...draft, to: [{ email: 'stranger@evil.example' }, { email: 'me@personal.example' }] } });
+    expect(r?.refusal).toBe('principal_address_recipient');
+  });
+
+  it('cooldown spans the same conversation in two mailboxes', () => {
+    const other = { ...entry('sent'), mailbox: 'personal', threadId: 'other-thread', conversationIds: ['root@x'] };
+    expect(check({ recentConversationEntries: [other] })?.refusal).toBe('thread_cooldown');
+    expect(check()).toBeNull();
+  });
+});
+
+describe('conversationIdsOf (#2475)', () => {
+  const h = (name: string, value: string) => ({ name, value });
+  it('reads Message-ID, References and In-Reply-To: lowercased, unbracketed, deduplicated', () => {
+    const m = msg({ headers: [h('Message-Id', '<A@X>'), h('References', '<Root@X> <a@x>'), h('In-Reply-To', '<A@X>')] });
+    expect(conversationIdsOf([m])).toEqual(['a@x', 'root@x']);
+  });
+  it('is empty without headers', () => {
+    expect(conversationIdsOf([msg(), msg({ headers: [] })])).toEqual([]);
+  });
+  it('caps the list', () => {
+    const refs = Array.from({ length: 80 }, (_, i) => `<m${i}@x>`).join(' ');
+    expect(conversationIdsOf([msg({ headers: [h('References', refs)] })])).toHaveLength(50);
   });
 });

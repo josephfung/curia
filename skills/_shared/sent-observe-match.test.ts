@@ -272,7 +272,7 @@ describe('trimEvidenceDoc', () => {
 describe('isCuriaSend (#2474 PR 2)', () => {
   const at = '2024-07-03T09:48:20.000Z';
   const sentMsg = { id: 'msg-1', threadId: 'thread-1', to: [{ email: 'Alice@example.com' }], cc: [], date: Math.floor(Date.parse(at) / 1000) + 30 };
-  const base: PrincipalSendEntry = { draftId: 'd1', threadId: 'thread-1', recipients: ['alice@example.com'], mode: 'autonomous', at, outcome: 'sending' };
+  const base: PrincipalSendEntry = { draftId: 'd1', threadId: 'thread-1', conversationIds: [], recipients: ['alice@example.com'], mode: 'autonomous', at, outcome: 'sending' };
 
   it('matches a sending or sent entry by thread, recipient and time', () => {
     expect(isCuriaSend(sentMsg, [base])).toBe(true);

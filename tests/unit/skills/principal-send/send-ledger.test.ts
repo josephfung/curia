@@ -34,7 +34,10 @@ function makeDocs() {
   };
 }
 
-const entry = { draftId: 'd1', threadId: 't1', recipients: ['dana@example.org'], mode: 'principal-directed' as const, at: '2026-11-07T12:00:00.000Z' };
+const entry = {
+  draftId: 'd1', threadId: 't1', recipients: ['dana@example.org'], mode: 'principal-directed' as const, at: '2026-11-07T12:00:00.000Z',
+  mailbox: 'work', conversationIds: [] as string[],
+};
 
 describe('PrincipalSendLedger', () => {
   it('recordSending creates a principal-mailbox-send doc under the prefix', async () => {
@@ -116,7 +119,7 @@ describe('PrincipalSendLedger autonomous lookups (#2474 PR 2)', () => {
     await ledger.recordSending({ ...entry, draftId: 'd', mode: 'autonomous', threadId: 't2', at: '2026-11-07T10:00:00.000Z' });
     await ledger.recordSending({ ...entry, draftId: 'e', mode: 'autonomous', at: '2026-11-05T10:00:00.000Z' });
     await ledger.recordSending({ ...entry, draftId: 'f', mode: 'autonomous', at: 'not a date' });
-    const got = await ledger.recentForThread('t1', since);
+    const got = await ledger.recentForThread('t1', since, 'work');
     // An unreadable time counts as recent (fail closed).
     expect(got.map((e) => e.draftId).sort()).toEqual(['a', 'b', 'f']);
   });
@@ -162,5 +165,69 @@ describe('PrincipalSendLedger global lookups', () => {
     expect(await ledger.sentForDraft('d1')).toBe(true);
     // A draft whose id shares the prefix is another draft.
     expect(await ledger.sentForDraft('d')).toBe(false);
+  });
+});
+
+// #2475 Task 18: the ledger spans mailboxes.
+describe('PrincipalSendLedger across mailboxes (#2475)', () => {
+  const since = Date.parse('2026-11-06T12:00:00.000Z');
+  const recent = '2026-11-07T10:00:00.000Z';
+
+  it('records the mailbox and the conversation ids on the marker', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    await ledger.recordSending({ ...entry, mode: 'autonomous', conversationIds: ['a@x', 'b@x'] });
+    expect(docs.create.mock.calls[0]![0].frontmatter).toMatchObject({ mailbox: 'work', conversation_ids: ['a@x', 'b@x'] });
+    expect(await ledger.list()).toEqual([{ ...entry, mode: 'autonomous', outcome: 'sending', conversationIds: ['a@x', 'b@x'] }]);
+  });
+
+  it('reads a legacy entry with no mailbox and no conversation ids', async () => {
+    const docs = makeDocs();
+    await new PrincipalSendLedger(docs, logger).recordSending(entry);
+    const doc = [...docs.docs.values()][0]!;
+    const legacy = { ...doc.frontmatter };
+    delete legacy['mailbox'];
+    delete legacy['conversation_ids'];
+    const parsed = parseLedgerDoc({ ...doc, frontmatter: legacy });
+    expect(parsed).not.toHaveProperty('mailbox');
+    expect(parsed?.conversationIds).toEqual([]);
+  });
+
+  it('a legacy entry (no mailbox) still triggers the per-mailbox thread cooldown', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    await ledger.recordSending({ ...entry, draftId: 'a', mode: 'autonomous', at: recent });
+    const doc = [...docs.docs.values()][0]!;
+    const legacy = { ...doc.frontmatter };
+    delete legacy['mailbox'];
+    docs.docs.set(doc.path, { ...doc, frontmatter: legacy });
+    expect((await ledger.recentForThread('t1', since, 'personal')).map((e) => e.draftId)).toEqual(['a']);
+  });
+
+  it('recentForThread ignores the same thread id in another mailbox', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    await ledger.recordSending({ ...entry, draftId: 'a', mode: 'autonomous', at: recent });
+    expect(await ledger.recentForThread('t1', since, 'personal')).toEqual([]);
+  });
+
+  it('recentForConversation matches a shared Message-ID in any mailbox, autonomous and in the window only', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    await ledger.recordSending({ ...entry, draftId: 'a', mode: 'autonomous', at: recent, conversationIds: ['root@x', 'm2@x'] });
+    await ledger.recordSending({ ...entry, draftId: 'b', mode: 'autonomous', threadId: 't9', at: recent, conversationIds: ['other@x'] });
+    await ledger.recordSending({ ...entry, draftId: 'c', mode: 'principal-directed', at: recent, conversationIds: ['root@x'] });
+    await ledger.recordSending({ ...entry, draftId: 'd', mode: 'autonomous', at: '2026-11-05T10:00:00.000Z', conversationIds: ['root@x'] });
+    expect((await ledger.recentForConversation(['ROOT@x'.toLowerCase(), 'zzz@x'], since)).map((e) => e.draftId)).toEqual(['a']);
+    expect(await ledger.recentForConversation([], since)).toEqual([]);
+  });
+
+  it('cap counts sends from every mailbox', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    for (let i = 0; i < 10; i++) {
+      await ledger.recordSending({ ...entry, draftId: `s${i}`, threadId: `t${i}`, mailbox: i % 2 ? 'work' : 'personal', mode: 'autonomous', at: recent });
+    }
+    expect(await ledger.recentAutonomousSends(since)).toHaveLength(10);
   });
 });

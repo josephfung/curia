@@ -444,7 +444,7 @@ describe('an autonomous send through the recording gateway (#2474 PR 2)', () => 
 
   // Final fixes A13 (final review M6): the fake counts as production does.
   it('counts a ledger entry with an unreadable time as recent, as production does (fail closed)', async () => {
-    const broken: PrincipalSendEntry = { draftId: 'old', threadId: 'thr-30v-acme', recipients: [], mode: 'autonomous', at: 'not a date', outcome: 'held' };
+    const broken: PrincipalSendEntry = { draftId: 'old', threadId: 'thr-30v-acme', conversationIds: [], recipients: [], mode: 'autonomous', at: 'not a date', outcome: 'held' };
     const { gw } = setup({ ledger: [broken] });
     expect(await gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-1' })).toMatchObject({ refusal: 'thread_cooldown' });
   });
@@ -453,7 +453,7 @@ describe('an autonomous send through the recording gateway (#2474 PR 2)', () => 
   it('refuses past the daily cap of autonomous sends across threads', async () => {
     const at = new Date().toISOString();
     const sent: PrincipalSendEntry[] = Array.from({ length: 10 }, (_, i) => ({
-      draftId: `d${i}`, threadId: `other-${i}`, recipients: [], mode: 'autonomous' as const, at, outcome: 'sent' as const,
+      draftId: `d${i}`, threadId: `other-${i}`, conversationIds: [], recipients: [], mode: 'autonomous' as const, at, outcome: 'sent' as const,
     }));
     const { gw, recorder } = setup({ ledger: sent });
     expect(await gw.sendPrincipalDraft('draft-30v-acme', { authority: SCHEDULED, taskEventId: 'task-1' })).toMatchObject({ refusal: 'daily_cap' });

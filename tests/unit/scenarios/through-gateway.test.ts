@@ -660,7 +660,7 @@ describe('the run\'s principal mailbox (#2474)', () => {
     const { stack: fake } = fakeStack({});
     const scope = new SeedScope();
     scope.rootConversation = 'scenario-a';
-    scope.principalSends.push({ draftId: 'd1', threadId: 't1', recipients: ['jo@acme.example.test'], mode: 'autonomous', at: '2026-11-07T15:00:00.000Z', outcome: 'held', reasonCode: 'recipient_not_on_thread' });
+    scope.principalSends.push({ draftId: 'd1', threadId: 't1', conversationIds: [], recipients: ['jo@acme.example.test'], mode: 'autonomous', at: '2026-11-07T15:00:00.000Z', outcome: 'held', reasonCode: 'recipient_not_on_thread' });
     scope.mailboxDigests.push('Left as a draft in your mailbox: Re: Q to Jo. Not on the thread.');
     const outcome = await readGatewayOutcome(fake, scenario, seededRun(), scope);
     expect(outcome.principalSends).toEqual([expect.objectContaining({ draftId: 'd1', outcome: 'held', reasonCode: 'recipient_not_on_thread' })]);
@@ -673,7 +673,7 @@ describe('the run\'s principal mailbox (#2474)', () => {
     mirrorPrincipalDraft(scope, { id: 'draft-0002', subject: 'A', to: [], cc: [], body: 'C' }, false, true);
     scope.sendLevel = 'all';
     scope.principalThreads.set('t', []);
-    scope.principalSends.push({ draftId: 'd', threadId: 't', recipients: [], mode: 'autonomous', at: '', outcome: 'held' });
+    scope.principalSends.push({ draftId: 'd', threadId: 't', conversationIds: [], recipients: [], mode: 'autonomous', at: '', outcome: 'held' });
     scope.contactAddresses.set('c', 'a@b.test');
     scope.principalAddress = 'avery@example.test';
     scope.principalContactId = 'principal-1';
