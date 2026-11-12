@@ -46,6 +46,28 @@ export async function allMailboxClients(ctx: ToolContext): Promise<MailboxClient
   return Promise.all(mailboxes.map((m) => build(ctx, svc, m)));
 }
 
+/**
+ * Every live mailbox, each with a client or the reason it has none. One mailbox whose credentials
+ * cannot be read does not hide the others. The reason is an error class name, never a grant id.
+ */
+export async function settledMailboxClients(
+  ctx: ToolContext,
+): Promise<Array<{ mailbox: PrincipalMailboxView; at?: MailboxClient; failure?: string }>> {
+  const svc = service(ctx);
+  const mailboxes = await svc.list();
+  return Promise.all(
+    mailboxes.map(async (m) => {
+      try {
+        return { mailbox: m, at: await build(ctx, svc, m) };
+      } catch (err) {
+        const name = err instanceof Error ? err.constructor.name : 'Error';
+        ctx.log.warn({ mailboxId: m.id, errorName: name }, 'mailbox client unavailable');
+        return { mailbox: m, failure: name };
+      }
+    }),
+  );
+}
+
 type Probe = { ok: true } | { ok: false; notFound: boolean; detail: string };
 
 async function probe(at: MailboxClient, kind: 'message' | 'draft', objectId: string): Promise<Probe> {

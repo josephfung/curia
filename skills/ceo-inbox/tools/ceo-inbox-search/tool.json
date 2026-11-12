@@ -1,6 +1,6 @@
 {
   "name": "ceo-inbox-search",
-  "description": "Search the principal's personal email inbox using Gmail-native query syntax. Messages filed in Spam or Trash are omitted unless include_spam_and_trash is true, whatever the query says. Pass folder: 'DRAFTS' to instead search unsent drafts by subject/recipient. Intended for use by the ceo-inbox agent — accesses the principal's personal email, do not call from other agents.",
+  "description": "Search the principal's personal email inbox using Gmail-native query syntax. Messages filed in Spam or Trash are omitted unless include_spam_and_trash is true, whatever the query says. Pass folder: 'DRAFTS' to instead search unsent drafts by subject/recipient. Only for the ceo-inbox agent: it reads the principal's personal email.",
   "version": "0.3.3",
   "sensitivity": "normal",
   "action_risk": "none",
@@ -10,13 +10,16 @@
     "folder": "string? (omit to search messages; pass 'DRAFTS' to search unsent drafts instead)",
     "include_spam_and_trash": "boolean? (default false; set true to include messages filed in Spam or Trash. A query such as in:spam does not opt in by itself)",
     "limit": "number? (max results, 1–50, default 10)",
-    "modified_since": "string? (DRAFTS only: ISO 8601 date-time; keep drafts last changed at or after it. Resolve phrases like 'this morning' with date-resolve first)",
+    "modified_since": "string? (DRAFTS only: ISO 8601 date-time; keep drafts changed at or after it. Resolve 'this morning' with date-resolve)",
+    "page_token": "string? (from next_page_token)",
     "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {
     "messages": "array of { id, threadId, from, subject, date, snippet, unread, folders } (when searching messages)",
     "drafts": "array of { id, threadId, subject, to, cc, snippet, date, date_local, created_by_curia (null if unknown) } (returned instead of messages when folder is DRAFTS, alongside folder: 'DRAFTS')",
-    "count": "number of items returned"
+    "count": "number of items returned",
+    "next_page_token": "string? (pass as page_token for the next page)",
+    "mailbox_errors": "array? of { mailbox, mailbox_label, error } for failed mailboxes"
   },
   "permissions": [],
   "secrets": [],

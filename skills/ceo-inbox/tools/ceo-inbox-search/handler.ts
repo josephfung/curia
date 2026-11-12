@@ -1,5 +1,6 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { namedOrDefaultMailbox } from '../../../_shared/principal-mailbox-client.js';
+import { encodePageToken } from '../../../_shared/composite-page-token.js';
+import { allFailedMessage, collectAcross, listAcrossMailboxes, mergeNewestFirst, readPageToken, resolveTargets } from '../../../_shared/cross-mailbox-listing.js';
 import { curiaOwnAddresses } from '../../../_shared/curia-own-addresses.js';
 import { type NylasDraftSummary, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
 import { isSpamOrTrash } from '../../../_shared/mail-folders.js';
@@ -40,9 +41,9 @@ function draftMatchesQuery(draft: NylasDraftSummary, query: string): boolean {
 
 export class CeoInboxSearchHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const picked = await namedOrDefaultMailbox(ctx, ctx.input, 'ceo-inbox-search');
-    if (!picked.ok) return { success: false, error: picked.error };
-    const client = picked.at.client;
+    const resolved = await resolveTargets(ctx, ctx.input, 'ceo-inbox-search');
+    if (!resolved.ok) return { success: false, error: resolved.error };
+    const { targets } = resolved;
 
     // Curia's own addresses (its email accounts, read live) — filter out messages from
     // them so the agent can't operate on its own outbound emails even via search.
@@ -81,26 +82,37 @@ export class CeoInboxSearchHandler implements ToolHandler {
       if (!since.ok) return { success: false, error: since.error };
       try {
         // Paginate the full drafts collection (bounded by DRAFT_SCAN_LIMIT) so a
-        // match isn't missed on a mailbox with more than one page of drafts.
-        const { drafts: allDrafts, truncated } = await client.listAllDrafts({
-          maxScan: DRAFT_SCAN_LIMIT,
-          pageSize: DRAFT_PAGE_SIZE,
+        // match isn't missed on a mailbox with more than one page of drafts. Every
+        // mailbox is searched and the matches merged newest first (#2475).
+        const { ok, errors } = await collectAcross(targets, async (client) => {
+          const { drafts: allDrafts, truncated } = await client.listAllDrafts({
+            maxScan: DRAFT_SCAN_LIMIT,
+            pageSize: DRAFT_PAGE_SIZE,
+          });
+          // Only when there are genuinely more drafts than the ceiling do we warn —
+          // the result is then knowingly incomplete rather than silently so.
+          if (truncated) {
+            ctx.log.warn(
+              { scanned: allDrafts.length, cap: DRAFT_SCAN_LIMIT },
+              'ceo-inbox-search: draft scan hit the cap — some drafts beyond the limit were not searched',
+            );
+          }
+          // Date filter before the slice so the limit counts matching drafts (#2474).
+          return filterModifiedSince(allDrafts.filter((d) => draftMatchesQuery(d, query)), since.seconds);
         });
-        // Only when there are genuinely more drafts than the ceiling do we warn —
-        // the result is then knowingly incomplete rather than silently so.
-        if (truncated) {
-          ctx.log.warn(
-            { scanned: allDrafts.length, cap: DRAFT_SCAN_LIMIT },
-            'ceo-inbox-search: draft scan hit the cap — some drafts beyond the limit were not searched',
-          );
+        if (ok.length === 0) {
+          ctx.log.error({ errors }, 'ceo-inbox-search: draft search failed on every mailbox');
+          return { success: false, error: allFailedMessage('Failed to search principal inbox drafts', errors) };
         }
-        // Date filter before the slice so the limit counts matching drafts (#2474).
-        const matched = filterModifiedSince(allDrafts.filter((d) => draftMatchesQuery(d, query)), since.seconds)
-          .slice(0, limit);
-        const { drafts, displayTimezone } = await annotateDrafts(ctx, matched, 'ceo-inbox-search');
+        const merged = mergeNewestFirst(ok.map((o) => ({ mailbox: o.mailbox, items: o.value })), limit);
+        const annotated = await annotateDrafts(ctx, merged, 'ceo-inbox-search');
+        const drafts = annotated.drafts.map((d, i) => ({ ...d, mailbox: merged[i]!.mailbox, mailbox_label: merged[i]!.mailbox_label }));
         return {
           success: true,
-          data: { drafts, count: drafts.length, folder: 'DRAFTS', displayTimezone },
+          data: {
+            drafts, count: drafts.length, folder: 'DRAFTS', displayTimezone: annotated.displayTimezone,
+            ...(errors.length > 0 ? { mailbox_errors: errors } : {}),
+          },
         };
       } catch (err) {
         ctx.log.error({ err }, 'ceo-inbox-search: draft search failed');
@@ -113,55 +125,59 @@ export class CeoInboxSearchHandler implements ToolHandler {
       'ceo-inbox-search: searching messages',
     );
 
-    try {
-      // Page until `limit` visible messages are collected. Dropping Spam, Trash,
-      // or Curia-self mail from a full page must not look like an empty mailbox
-      // when a later page still has something to triage.
-      const collected: NylasMessageSummary[] = [];
-      let pageToken: string | undefined;
-      let omittedHidden = 0;
+    const token = readPageToken(input);
+    if (!token.ok) return { success: false, error: token.error };
 
-      for (let page = 0; page < SEARCH_PAGE_CAP && collected.length < limit; page++) {
-        const { messages: raw, nextCursor } = await client.listMessagesPage({
+    try {
+      // Every mailbox pages until `limit` visible messages are collected from it. Dropping Spam,
+      // Trash, or Curia-self mail from a full page must not look like an empty mailbox when a
+      // later page still has something to triage. A follow-up page stays token-only (the client
+      // does not re-send filters beside a search query).
+      let omittedHidden = 0;
+      const cross = await listAcrossMailboxes<NylasMessageSummary>(targets, token.cursors, {
+        limit,
+        need: limit,
+        pageCap: SEARCH_PAGE_CAP,
+        fetchPage: (client, cursor) => client.listMessagesPage({
           query,
           limit,
-          ...(pageToken ? { pageToken } : {}),
-        });
-
-        for (const msg of raw) {
-          if (msg.from.some((p) => curiaEmails.has(p.email.toLowerCase()))) {
-            continue;
-          }
+          ...(cursor ? { pageToken: cursor } : {}),
+        }),
+        keep: (msg) => {
+          if (msg.from.some((p) => curiaEmails.has(p.email.toLowerCase()))) return false;
           if (!includeSpamAndTrash && isSpamOrTrash(msg.folders)) {
             omittedHidden++;
-            continue;
+            return false;
           }
-          collected.push(msg);
-          if (collected.length >= limit) break;
-        }
+          return true;
+        },
+      });
 
-        if (collected.length >= limit || !nextCursor || raw.length === 0) break;
-        if (page === SEARCH_PAGE_CAP - 1) {
-          ctx.log.warn(
-            { pages: SEARCH_PAGE_CAP, kept: collected.length },
-            'ceo-inbox-search: paging cap reached before the result was filled',
-          );
-          break;
-        }
-        pageToken = nextCursor;
+      if (cross.capped) {
+        ctx.log.warn(
+          { pages: SEARCH_PAGE_CAP, kept: cross.items.length },
+          'ceo-inbox-search: paging cap reached before the result was filled',
+        );
       }
-
       if (omittedHidden > 0) {
         ctx.log.info(
           { omitted: omittedHidden },
           'ceo-inbox-search: omitted Spam and Trash',
         );
       }
+      if (cross.allFailed) {
+        ctx.log.error({ errors: cross.errors }, 'ceo-inbox-search: every mailbox failed');
+        return { success: false, error: allFailedMessage('Failed to search principal inbox', cross.errors) };
+      }
 
-      const messages = collected.slice(0, limit);
       return {
         success: true,
-        data: { messages, count: messages.length },
+        data: {
+          messages: cross.items,
+          count: cross.items.length,
+          ...(cross.anyOpen ? { next_page_token: encodePageToken(cross.positions) } : {}),
+          ...(cross.errors.length > 0 ? { mailbox_errors: cross.errors } : {}),
+        },
       };
     } catch (err) {
       ctx.log.error({ err }, 'ceo-inbox-search: search failed');
