@@ -114,7 +114,7 @@ export class CeoInboxListHandler implements ToolHandler {
 
     const unreadOnly = input.unread_only !== false; // default true
 
-    const token = readPageToken(input);
+    const token = readPageToken(input, limit);
     if (!token.ok) return { success: false, error: token.error };
 
     ctx.log.info({ limit, folder, unreadOnly }, 'ceo-inbox-list: listing messages');
@@ -201,7 +201,7 @@ export class CeoInboxListHandler implements ToolHandler {
           messages: cross.items,
           count: cross.items.length,
           has_more: cross.hasMore,
-          ...(cross.hasMore ? { next_page_token: encodePageToken(cross.positions) } : {}),
+          ...(cross.hasMore ? { next_page_token: encodePageToken(cross.positions, limit) } : {}),
           // count 0 + has_more true spins the agent: an empty page archives
           // nothing, so the next run repeats it. A capped scan with nothing kept
           // stops instead, and says so, so older mail is not silently abandoned.

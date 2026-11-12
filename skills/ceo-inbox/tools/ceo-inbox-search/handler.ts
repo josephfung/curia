@@ -125,7 +125,7 @@ export class CeoInboxSearchHandler implements ToolHandler {
       'ceo-inbox-search: searching messages',
     );
 
-    const token = readPageToken(input);
+    const token = readPageToken(input, limit);
     if (!token.ok) return { success: false, error: token.error };
 
     try {
@@ -175,7 +175,7 @@ export class CeoInboxSearchHandler implements ToolHandler {
         data: {
           messages: cross.items,
           count: cross.items.length,
-          ...(cross.anyOpen ? { next_page_token: encodePageToken(cross.positions) } : {}),
+          ...(cross.anyOpen ? { next_page_token: encodePageToken(cross.positions, limit) } : {}),
           ...(cross.errors.length > 0 ? { mailbox_errors: cross.errors } : {}),
         },
       };

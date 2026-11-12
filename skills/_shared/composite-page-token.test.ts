@@ -8,21 +8,22 @@ describe('composite page token', () => {
       personal: null,
       third: { cursor: null, skip: 0 },
     };
-    expect(decodePageToken(encodePageToken(positions))).toEqual(positions);
+    expect(decodePageToken(encodePageToken(positions, 7))).toEqual({ limit: 7, positions });
   });
 
   it('is URL-safe', () => {
-    expect(encodePageToken({ work: { cursor: 'a/b+c==', skip: 1 } })).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(encodePageToken({ work: { cursor: 'a/b+c==', skip: 1 } }, 5)).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 
   it.each([
     ['not base64 json', '%%%'],
     ['a raw provider cursor', 'dGhpcyBpcyBub3QganNvbg'],
     ['a json array', Buffer.from('[]').toString('base64url')],
-    ['a non-object position', Buffer.from('{"work":"x"}').toString('base64url')],
-    ['a negative skip', Buffer.from('{"work":{"cursor":null,"skip":-1}}').toString('base64url')],
-    ['a fractional skip', Buffer.from('{"work":{"cursor":null,"skip":1.5}}').toString('base64url')],
-    ['a non-string cursor', Buffer.from('{"work":{"cursor":5,"skip":0}}').toString('base64url')],
+    ['a token without a page size', Buffer.from('{"mailboxes":{}}').toString('base64url')],
+    ['a non-object position', Buffer.from('{"limit":5,"mailboxes":{"work":"x"}}').toString('base64url')],
+    ['a negative skip', Buffer.from('{"limit":5,"mailboxes":{"work":{"cursor":null,"skip":-1}}}').toString('base64url')],
+    ['a fractional skip', Buffer.from('{"limit":5,"mailboxes":{"work":{"cursor":null,"skip":1.5}}}').toString('base64url')],
+    ['a non-string cursor', Buffer.from('{"limit":5,"mailboxes":{"work":{"cursor":5,"skip":0}}}').toString('base64url')],
     ['an empty string', ''],
   ])('throws on %s', (_name, token) => {
     expect(() => decodePageToken(token)).toThrow();

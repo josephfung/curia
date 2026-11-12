@@ -14,13 +14,16 @@ export interface MailboxPosition {
 
 export type PageCursors = Record<string, MailboxPosition | null>;
 
-export function encodePageToken(positions: PageCursors): string {
-  return Buffer.from(JSON.stringify(positions), 'utf8').toString('base64url');
+/** `limit` is the page size that produced the token: a skip count only means something at that size. */
+export function encodePageToken(positions: PageCursors, limit: number): string {
+  return Buffer.from(JSON.stringify({ limit, mailboxes: positions }), 'utf8').toString('base64url');
 }
 
 /** Throws on anything that is not a token this module produced. */
-export function decodePageToken(token: string): PageCursors {
-  const parsed: unknown = JSON.parse(Buffer.from(token, 'base64url').toString('utf8'));
+export function decodePageToken(token: string): { limit: number; positions: PageCursors } {
+  const outer: unknown = JSON.parse(Buffer.from(token, 'base64url').toString('utf8'));
+  const { limit, mailboxes: parsed } = (outer ?? {}) as { limit?: unknown; mailboxes?: unknown };
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1) throw new Error('page token has no page size');
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('page token is not an object');
   }
@@ -38,5 +41,5 @@ export function decodePageToken(token: string): PageCursors {
     if (!ok) throw new Error(`page token position for ${id} is malformed`);
     out[id] = { cursor: pos.cursor as string | null, skip: pos.skip as number };
   }
-  return out;
+  return { limit, positions: out };
 }
