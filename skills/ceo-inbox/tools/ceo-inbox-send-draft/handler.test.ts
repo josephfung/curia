@@ -163,4 +163,14 @@ describe('CeoInboxSendDraftHandler — mailbox input (#2475)', () => {
     expect(result.success).toBe(false);
     expect(sendPrincipalDraft).not.toHaveBeenCalled();
   });
+
+  it('passes a valid mailbox to the gateway, and none when omitted', async () => {
+    const { gateway, sendPrincipalDraft } = gatewayReturning({ success: true, messageId: 'm-1', to: [], subject: 's' });
+    await new CeoInboxSendDraftHandler().execute(buildCtx({
+      outboundGateway: gateway,
+      input: { draft_id: 'draft-1', mailbox: 'work' },
+      principalMailboxes: stubPrincipalMailboxes({}),
+    }));
+    expect(sendPrincipalDraft.mock.calls[0]![1]).toMatchObject({ mailbox: 'work' });
+  });
 });

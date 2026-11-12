@@ -86,6 +86,7 @@ import type { ConversationEntityState } from '../entity-context/conversation-ent
 import { blankExactPhrases, describeUnresolvedIdentity, emailLocalNameTokens } from '../agents/resolved-entities.js';
 import type { IdentityGateMode } from '../config.js';
 import type { ErrorType } from '../errors/types.js';
+import { judgeHolders } from '../principal-mailboxes/locate-holder.js';
 import type { PrincipalMailboxResolver } from '../channels/email/principal-mailbox-resolver.js';
 import { DEFAULT_MAILBOX, type SendLevel, type SendLevelReader } from './principal-send/send-level.js';
 import { isPrincipalDirectedMailboxSend, type SendAuthorityInput } from './principal-send/authority.js';
@@ -420,8 +421,13 @@ export interface OutboundGatewayConfig {
    */
   principalMailbox?: PrincipalMailboxResolver;
   /**
-   * The default mailbox's id, which draft provenance is keyed on (#2475). Absent: `default`, the
-   * send-level key. Until Task 17 every principal-mailbox send is from the default mailbox.
+   * The live principal mailbox ids sendPrincipalDraft may look for a draft in (#2475, D6).
+   * Absent: just the default mailbox (below). An id outside this list is refused, never defaulted.
+   */
+  principalMailboxIds?: () => Promise<readonly string[]>;
+  /**
+   * The default mailbox's id (#2475): the only mailbox when `principalMailboxIds` is absent.
+   * Absent: `default`, the pre-registry send-level key.
    */
   defaultMailboxId?: () => Promise<string>;
   /** The ceo_inbox/sending level per mailbox (#2474). Absent: on_request, the default. */
@@ -445,7 +451,7 @@ export interface OutboundGatewayConfig {
  * send_unconfirmed's outcome is unknown (the send call failed after it was made).
  */
 export type PrincipalSendRefusal =
-  | 'mailbox_unavailable' | 'setting_off' | 'not_requested' | 'approval_replay'
+  | 'mailbox_unavailable' | 'unknown_mailbox' | 'ambiguous_mailbox' | 'setting_off' | 'not_requested' | 'approval_replay'
   | 'not_found' | 'lookup_failed' | 'no_recipients' | 'principal_only' | 'review_hold' | 'draft_changed'
   | 'send_unconfirmed'
   // An autonomous send (PR 2, design D4): Curia sending on its own under the routine / all levels.
@@ -460,6 +466,8 @@ const STILL_A_DRAFT = ' Nothing was sent; the draft is still in their Drafts fol
 /** What the agent relays for each refusal (#2474). review_hold's is the suffix after the review's reason. */
 export const PRINCIPAL_SEND_REFUSALS: Record<PrincipalSendRefusal, string> = {
   mailbox_unavailable: "The principal's mailbox isn't connected, so nothing was sent.",
+  unknown_mailbox: "That isn't one of the principal's connected mailboxes (it may have been removed), so nothing was sent.",
+  ambiguous_mailbox: 'That draft ID exists in more than one of the principal\'s mailboxes, so nothing was sent. Say which account it is in and try again.',
   setting_off: "Sending from the principal's mailbox is turned off (setting ceo_inbox/sending). Nothing was sent; the draft is still in their Drafts folder.",
   not_requested: "Curia sends from the principal's mailbox only when the principal asks on a live turn. Nothing was sent; the draft is still in their Drafts folder.",
   approval_replay: "Sends from the principal's mailbox are never approved from a queue. Nothing was sent; the principal can send the draft from their mail app or ask Curia to.",
@@ -494,7 +502,7 @@ const IN_YOUR_DRAFTS = "It's in your Drafts.";
 
 /** Refusals whose stop files a "Left as a draft" digest item (not_found and lookup_failed lead differently). */
 type DigestRefusal = Exclude<PrincipalSendRefusal,
-  'mailbox_unavailable' | 'setting_off' | 'not_requested' | 'approval_replay' | 'send_unconfirmed' | 'not_found' | 'lookup_failed'>;
+  'mailbox_unavailable' | 'unknown_mailbox' | 'ambiguous_mailbox' | 'setting_off' | 'not_requested' | 'approval_replay' | 'send_unconfirmed' | 'not_found' | 'lookup_failed'>;
 
 /**
  * What the principal's digest item says for each refusal (#2474 final fixes A12, final review
@@ -1001,6 +1009,7 @@ export class OutboundGateway {
   private readonly bandReview?: Pick<BandSendReview, 'review'>;
   private readonly relayBudget?: RelayBudget;
   private readonly principalMailbox?: PrincipalMailboxResolver;
+  private readonly principalMailboxIds?: () => Promise<readonly string[]>;
   private readonly defaultMailboxId?: () => Promise<string>;
   private readonly readSendLevel?: SendLevelReader;
   private readonly draftProvenance?: OutboundGatewayConfig['draftProvenance'];
@@ -1037,6 +1046,7 @@ export class OutboundGateway {
     this.bandReview = config.bandReview;
     this.relayBudget = config.relayBudget;
     this.principalMailbox = config.principalMailbox;
+    this.principalMailboxIds = config.principalMailboxIds;
     this.defaultMailboxId = config.defaultMailboxId;
     this.readSendLevel = config.readSendLevel;
     this.draftProvenance = config.draftProvenance;
@@ -4289,9 +4299,64 @@ export class OutboundGateway {
     return { success: true, messageId: sentMessage.id, ...(sentMessage.threadId ? { threadId: sentMessage.threadId } : {}) };
   }
 
-  /** The mailbox id draft provenance is looked up under. Throws when it cannot be resolved. */
-  private async provenanceMailboxId(): Promise<string> {
-    return this.defaultMailboxId ? this.defaultMailboxId() : DEFAULT_MAILBOX;
+  /**
+   * Find the principal mailbox that holds a draft, once per send (#2475, D6). Everything the send
+   * derives from the draft's mailbox (client, level, provenance key) comes from this one result,
+   * so a default changing mid-send cannot split them. An explicit mailbox is the only one asked;
+   * with a single live mailbox nothing is probed. An unknown or removed id is refused.
+   */
+  private async resolveDraftMailbox(draftId: string, explicit: string | undefined): Promise<
+    | { ok: true; mailboxId: string; client: NylasClient; draft?: NylasMessage }
+    | { ok: false; refusal: PrincipalSendRefusal }
+  > {
+    let ids: readonly string[];
+    try {
+      ids = this.principalMailboxIds ? await this.principalMailboxIds() : [this.defaultMailboxId ? await this.defaultMailboxId() : DEFAULT_MAILBOX];
+    } catch (err) {
+      // Fail closed: with no list of mailboxes nothing is sent.
+      this.log.error({ err, draftId }, 'outbound-gateway: principal mailboxes could not be listed — not sending');
+      return { ok: false, refusal: 'mailbox_unavailable' };
+    }
+    const clientFor = async (mailboxId: string): Promise<NylasClient | null> => {
+      try {
+        return this.principalMailbox ? await this.principalMailbox(mailboxId) : null;
+      } catch (err) {
+        // Fail closed: a mailbox that could not be resolved is not sent from.
+        this.log.error({ err, draftId, mailboxId }, 'outbound-gateway: principal mailbox could not be resolved — not sending');
+        return null;
+      }
+    };
+    if (explicit !== undefined) {
+      if (!ids.includes(explicit)) return { ok: false, refusal: 'unknown_mailbox' };
+    } else if (ids.length === 0) {
+      return { ok: false, refusal: 'mailbox_unavailable' };
+    }
+    const only = explicit ?? (ids.length === 1 ? ids[0]! : undefined);
+    if (only !== undefined) {
+      const client = await clientFor(only);
+      return client ? { ok: true, mailboxId: only, client } : { ok: false, refusal: 'mailbox_unavailable' };
+    }
+
+    // Several mailboxes and none named: ask each for the draft.
+    const asked = await Promise.all(ids.map(async (mailboxId) => {
+      const client = await clientFor(mailboxId);
+      if (!client) return { candidate: { mailboxId, client: null as NylasClient | null, draft: null as NylasMessage | null }, outcome: 'failed' as const };
+      try {
+        const draft = await client.getDraft(draftId);
+        return { candidate: { mailboxId, client, draft }, outcome: draft ? ('hit' as const) : ('miss' as const) };
+      } catch (err) {
+        this.log.warn({ err, draftId, mailboxId }, 'outbound-gateway: principal-mailbox draft read failed while locating it');
+        return { candidate: { mailboxId, client, draft: null }, outcome: 'failed' as const };
+      }
+    }));
+    const verdict = judgeHolders(asked);
+    if (verdict.kind === 'ambiguous') return { ok: false, refusal: 'ambiguous_mailbox' };
+    if (verdict.kind === 'not_found') {
+      // A mailbox we could not ask may hold it: not a definitive "gone".
+      return { ok: false, refusal: verdict.failed.length > 0 ? 'lookup_failed' : 'not_found' };
+    }
+    const { mailboxId, client, draft } = verdict.holder;
+    return { ok: true, mailboxId, client: client!, draft: draft! };
   }
 
   /**
@@ -4313,31 +4378,28 @@ export class OutboundGateway {
     authority: SendAuthorityInput;
     taskEventId?: string;
     conversationId?: string;
+    /** The mailbox to send from: the only one asked for the draft. Absent: the one holding it. */
+    mailbox?: string;
   }): Promise<PrincipalDraftSendResult> {
     const refuse = (refusal: PrincipalSendRefusal, blockedReason: string = PRINCIPAL_SEND_REFUSALS[refusal]): PrincipalDraftSendResult => {
       this.log.info({ draftId, refusal }, 'outbound-gateway: principal-mailbox draft not sent');
       return { success: false, leftAsDraft: true, refusal, blockedReason };
     };
 
-    // 1. The grant is resolved per call so a re-sign-in applies at once; none → fail closed.
-    let client: NylasClient | null = null;
-    try {
-      client = this.principalMailbox ? await this.principalMailbox() : null;
-    } catch (err) {
-      // Fail closed: a mailbox that could not be resolved is not sent from.
-      this.log.error({ err, draftId }, 'outbound-gateway: principal mailbox could not be resolved — not sending');
-    }
-    if (!client) return refuse('mailbox_unavailable');
-    const mailbox = client;
+    // 1. The mailbox holding the draft, resolved once per call (so a re-sign-in applies at once,
+    // and a default changing mid-send cannot split the client, level and provenance key). None
+    // found, or none connected, fails closed.
+    const located = await this.resolveDraftMailbox(draftId, options.mailbox);
+    if (!located.ok) return refuse(located.refusal);
+    const mailbox = located.client;
+    const mailboxId = located.mailboxId;
 
     // 2. The setting is read here, not by the caller, so no caller can skip it (design D3). An
     // absent reader is the default level; the reader itself turns unreadable into on_request.
     let level: SendLevel = 'on_request';
     try {
-      // Always the default mailbox's level: until #2475 there is one principal grant, and a
-      // caller-chosen key could read another mailbox's level than the grant used. #2475 binds
-      // the key to the mailbox the resolver returns.
-      if (this.readSendLevel) level = await this.readSendLevel(DEFAULT_MAILBOX);
+      // The level of the mailbox that holds this draft (#2475, D6), never another's.
+      if (this.readSendLevel) level = await this.readSendLevel(mailboxId);
     } catch (err) {
       // on_request, as the reader's own fallback: never widens autonomy, keeps principal-directed sends working.
       this.log.warn({ err, draftId }, 'outbound-gateway: send level unreadable — using on_request');
@@ -4385,7 +4447,8 @@ export class OutboundGateway {
 
     // 4. The draft, through the same client the re-read and the send use.
     try {
-      draft = await mailbox.getDraft(draftId);
+      // Already read when several mailboxes were asked: the same copy, not a second read.
+      draft = located.draft ?? await mailbox.getDraft(draftId);
     } catch (err) {
       this.log.warn({ err, draftId }, 'outbound-gateway: principal-mailbox draft read failed — not sending it');
       lookedUp = true;
@@ -4413,9 +4476,8 @@ export class OutboundGateway {
     let author: DraftAuthor = 'curia';
     if (!autonomous && this.draftProvenance) {
       try {
-        // Until #2475 Task 17 the gateway sends from the default mailbox only (R6). An unresolvable
-        // id throws into the catch below: the draft is reviewed as Curia's.
-        const ref = { mailbox: await this.provenanceMailboxId(), draftId };
+        // The mailbox the draft was found in (R6): one resolution, never a second default lookup.
+        const ref = { mailbox: mailboxId, draftId };
         const refKey = draftKey(ref.mailbox, ref.draftId);
         if (!(await this.draftProvenance.createdByCuria([ref])).has(refKey)) {
           const lookbackStartSec = (Date.now() - PROVENANCE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000) / 1000;
@@ -4456,7 +4518,7 @@ export class OutboundGateway {
       }
       let curiaWrites: CuriaDraftWrites;
       try {
-        curiaWrites = await this.draftProvenance!.curiaWritesInTask({ mailbox: await this.provenanceMailboxId(), draftId }, options.taskEventId!);
+        curiaWrites = await this.draftProvenance!.curiaWritesInTask({ mailbox: mailboxId, draftId }, options.taskEventId!);
       } catch (err) {
         // Fail closed: nothing shows Curia drafted it in this task.
         this.log.warn({ err, draftId }, 'outbound-gateway: task draft writes unreadable — not sending on its own');

@@ -97,6 +97,7 @@ import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
 import { migrateFlatPrincipalMailbox, migrationFailureReason } from './principal-mailboxes/migrate-flat-mailbox.js';
+import { migrateSendingKey } from './principal-mailboxes/migrate-config-keys.js';
 import { reconcileFlatMailboxKeys } from './principal-mailboxes/flat-mirror.js';
 import { emailAccountGrantSecretName } from './channels/email/email-account-secrets.js';
 import { grantSafeErrorFields, mayCarryGrantId } from './principal-mailboxes/error-fields.js';
@@ -2087,6 +2088,22 @@ async function main(): Promise<void> {
       if (!def) throw new Error('No default principal mailbox');
       return def.id;
     };
+    // Rename the pre-#2475 `default` send-level key to the migrated default id (#2475, D6). Only
+    // once a real registry default exists: while the deferred fallback is active its id ('mailbox')
+    // is a placeholder. Until this runs, the send-level reader applies a `default` key to the
+    // default mailbox, so a failure here costs nothing.
+    if (sendLevelStore) {
+      try {
+        const def = await principalMailboxes.defaultMailbox();
+        if (def && !(await principalMailboxes.isFallbackActive())) {
+          if ((await migrateSendingKey(sendLevelStore, def.id)) === 'renamed') {
+            logger.info({ mailboxId: def.id }, 'Renamed the default send-level key to the default mailbox id');
+          }
+        }
+      } catch (err) {
+        logger.warn({ err }, 'Could not migrate the ceo_inbox/sending key; the legacy default key still applies');
+      }
+    }
     outboundGateway = new OutboundGateway({
       nylasClients: registryGatedOutbound.nylasClients,
       // Each mailbox's own address, so the gateway can tell the principal's mailbox
@@ -2125,8 +2142,10 @@ async function main(): Promise<void> {
       // Sends from the principal's own mailbox (#2474). Its own entry, never in nylasClients;
       // the grant is read per call so a re-sign-in applies without a restart.
       principalMailbox: createPrincipalMailboxResolver({ mailboxes: principalMailboxes, logger }),
+      // The mailboxes a principal draft may be found in (#2475, D6); the send level is that mailbox's own.
+      principalMailboxIds: async () => (await principalMailboxes.list()).map((m) => m.id),
       ...(sendLevelStore
-        ? { readSendLevel: createSendLevelReader({ get: (ns, k) => sendLevelStore.get(ns, k), logger }) }
+        ? { readSendLevel: createSendLevelReader({ get: (ns, k) => sendLevelStore.get(ns, k), logger, defaultMailboxId }) }
         : {}),
       // Provenance rows from before #2475 carry no mailbox and belong to the default mailbox.
       defaultMailboxId,

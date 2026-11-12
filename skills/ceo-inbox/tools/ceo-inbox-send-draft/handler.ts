@@ -6,7 +6,7 @@
 // authority fields come from the agent.task event, never from the model's input.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { checkMailboxInput } from '../../../_shared/principal-mailbox-client.js';
+import { checkMailboxInput, readMailboxInput } from '../../../_shared/principal-mailbox-client.js';
 import { PRINCIPAL_SEND_REFUSALS, type PrincipalDraftSendResult } from '../../../../src/skills/outbound-gateway.js';
 
 // Time kept back from the skill's deadline, so this handler answers before the execution
@@ -30,9 +30,12 @@ export class CeoInboxSendDraftHandler implements ToolHandler {
     const draftId = typeof rawDraftId === 'string' ? rawDraftId.trim() : '';
     if (!draftId) return { success: false, error: 'Missing required input: draft_id (string)' };
 
-    // The mailbox is named by the draft itself until the gateway takes a mailbox; a given id must still be valid.
+    // The gateway locates the draft across every mailbox; a named one is the only one asked. A
+    // given id must still be a live mailbox (an unknown or removed id is an error, never the default).
     const mailboxError = await checkMailboxInput(ctx, ctx.input, 'ceo-inbox-send-draft');
     if (mailboxError) return { success: false, error: mailboxError };
+    const named = readMailboxInput(ctx.input);
+    const mailbox = named.ok ? named.mailbox : undefined;
 
     // An approval replay is refused here as well as in the gateway (design D5): the execution
     // layer never queues this tool, so a replay can only be a stale or forged row.
@@ -45,6 +48,7 @@ export class CeoInboxSendDraftHandler implements ToolHandler {
       authority: { liveTurn: ctx.liveTurn, taskMetadata: ctx.taskMetadata, humanApproved: ctx.humanApproved },
       taskEventId: ctx.taskEventId,
       conversationId: ctx.conversationId,
+      ...(mailbox !== undefined ? { mailbox } : {}),
     });
 
     // Any end the gateway did not write itself (a throw, or no answer by the deadline) has an

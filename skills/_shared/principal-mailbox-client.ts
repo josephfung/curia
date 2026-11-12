@@ -7,6 +7,7 @@ import type { PrincipalMailboxView, PrincipalMailboxes } from '../../src/princip
 import type { ErrorType } from '../../src/errors/types.js';
 import { messageNotFoundError, nylasStatus } from '../../src/channels/email/nylas-message-id.js';
 import { CeoNylasClient } from './ceo-nylas-client.js';
+import { judgeHolders } from '../../src/principal-mailboxes/locate-holder.js';
 import { MissingNylasApiKeyError, RemovedMailboxError, UnknownMailboxError } from '../../src/principal-mailboxes/types.js';
 
 export interface MailboxClient {
@@ -122,12 +123,16 @@ export async function locate(
     candidates.map(async (at) => ({ at, result: await probe(at, kind, objectId) })),
   );
 
-  const hits = results.filter((r) => r.result.ok);
-  if (hits.length === 1) return { kind: 'found', at: hits[0]!.at };
-  if (hits.length > 1) return { kind: 'ambiguous', mailboxes: hits.map((h) => h.at.mailbox) };
+  const verdict = judgeHolders(results.map((r) => ({
+    candidate: r.at,
+    outcome: r.result.ok ? ('hit' as const) : r.result.notFound ? ('miss' as const) : ('failed' as const),
+  })));
+  if (verdict.kind === 'found') return { kind: 'found', at: verdict.holder };
+  if (verdict.kind === 'ambiguous') return { kind: 'ambiguous', mailboxes: verdict.holders.map((h) => h.mailbox) };
 
-  for (const { at, result } of results) {
-    if (!result.ok && !result.notFound) failed.push({ mailboxId: at.mailbox.id, detail: result.detail });
+  for (const at of verdict.failed) {
+    const r = results.find((x) => x.at === at)!.result;
+    if (!r.ok) failed.push({ mailboxId: at.mailbox.id, detail: r.detail });
   }
   return { kind: 'not_found', definitive: failed.length === 0, failed };
 }

@@ -275,6 +275,14 @@ describe('the recording principal mailbox (#2474)', () => {
     await expect(mailbox.sendDraft('draft-30v-acme')).rejects.toMatchObject({ statusCode: 404 });
   });
 
+  it('answers for any mailbox id the gateway asks for, over the same run drafts (#2475)', async () => {
+    const drafts = new Map([['draft-30v-acme', principalDraft()]]);
+    const resolve = createRecordingPrincipalMailbox({ ...runRecorder(), principalDrafts: () => drafts }, () => 'avery@example.test');
+    for (const id of ['work', 'personal']) {
+      expect(await resolve(id)!.getDraft('draft-30v-acme'), id).toMatchObject({ subject: 'Venue for the offsite' });
+    }
+  });
+
   it('is no mailbox when the calling run has none (the gateway then refuses: mailbox_unavailable)', () => {
     expect(createRecordingPrincipalMailbox(runRecorder(), () => 'avery@example.test')()).toBeNull();
   });
