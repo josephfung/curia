@@ -12,6 +12,7 @@ export type HolderVerdict<T> =
   | { kind: 'ambiguous'; holders: T[] }
   | { kind: 'not_found'; failed: T[] };
 
+// A hit plus an unreachable mailbox still counts as found: Gmail draft ids are unique per grant.
 export function judgeHolders<T>(results: ReadonlyArray<{ candidate: T; outcome: HolderOutcome }>): HolderVerdict<T> {
   const hits = results.filter((r) => r.outcome === 'hit');
   if (hits.length === 1) return { kind: 'found', holder: hits[0]!.candidate };

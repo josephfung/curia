@@ -255,11 +255,19 @@ export class SetupStatusHandler implements ToolHandler {
           const value = await configStore.get(c.namespace, c.key);
           let set = typeof value === 'string' && value.trim() !== '';
           if (set && c.valid_as === 'send_level') {
-            // A level counts only when "default" names one: readSendLevelValue's fallback
-            // for {} or junk is on_request, which no one chose.
-            // !malformed already means `value` parses to an object, so the parse here succeeds.
-            set = !readSendLevelValue(value).malformed
-              && Object.prototype.hasOwnProperty.call(JSON.parse(value as string) as object, DEFAULT_MAILBOX);
+            // A level counts only when "default" (not yet renamed) or a live mailbox's id names a
+            // valid one (#2475): readSendLevelValue's fallback for {} or junk is on_request, which
+            // no one chose.
+            let live: string[] = [];
+            try {
+              live = (await ctx.principalMailboxes?.list() ?? []).map((m) => m.id);
+            } catch (err) {
+              ctx.log.warn({ err }, 'setup-status: could not list mailboxes for the send level — counting the default key only');
+            }
+            const parsed = JSON.parse(value as string) as unknown;
+            const keys = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? Object.keys(parsed) : [];
+            set = keys.some((k) => (k === DEFAULT_MAILBOX || live.includes(k))
+              && !readSendLevelValue(value, k).malformed);
           }
           configSet.set(id, set);
         } catch (err) {

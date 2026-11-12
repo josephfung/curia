@@ -97,7 +97,7 @@ import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
 import { migrateFlatPrincipalMailbox, migrationFailureReason } from './principal-mailboxes/migrate-flat-mailbox.js';
-import { migrateSendingKey } from './principal-mailboxes/migrate-config-keys.js';
+import { renameSendingKeyAfterMigration } from './principal-mailboxes/migrate-config-keys.js';
 import { reconcileFlatMailboxKeys } from './principal-mailboxes/flat-mirror.js';
 import { emailAccountGrantSecretName } from './channels/email/email-account-secrets.js';
 import { grantSafeErrorFields, mayCarryGrantId } from './principal-mailboxes/error-fields.js';
@@ -1239,9 +1239,23 @@ async function main(): Promise<void> {
         });
       })()
     : undefined;
+  // The send-level rename follows the migration wherever it returns 'migrated' (R41): here at boot
+  // (the config store exists later; flushed there) and in the health retry.
+  let sendingKeyStore: { get(ns: string, key: string): Promise<string | null>; set(ns: string, key: string, v: string): Promise<unknown> } | undefined;
+  const sendingKeyRename = {
+    setStore: (st: typeof sendingKeyStore) => { sendingKeyStore = st; },
+    run: retryMailboxMigration
+      ? renameSendingKeyAfterMigration({
+          migrate: retryMailboxMigration,
+          liveIds: async () => (await principalMailboxes.list()).map((m) => m.id),
+          store: () => sendingKeyStore,
+          logger,
+        })
+      : Object.assign(async () => 'nothing' as const, { flush: async () => {} }),
+  };
   if (retryMailboxMigration) {
     try {
-      const outcome = await retryMailboxMigration();
+      const outcome = await sendingKeyRename.run();
       if (outcome === 'deferred') {
         const flatGrant = (await secretsService.get('ceo_nylas_grant_id'))?.trim();
         if (flatGrant) principalMailboxes.setFallback({ id: 'mailbox', grantId: flatGrant });
@@ -2088,22 +2102,10 @@ async function main(): Promise<void> {
       if (!def) throw new Error('No default principal mailbox');
       return def.id;
     };
-    // Rename the pre-#2475 `default` send-level key to the migrated default id (#2475, D6). Only
-    // once a real registry default exists: while the deferred fallback is active its id ('mailbox')
-    // is a placeholder. Until this runs, the send-level reader applies a `default` key to the
-    // default mailbox, so a failure here costs nothing.
-    if (sendLevelStore) {
-      try {
-        const def = await principalMailboxes.defaultMailbox();
-        if (def && !(await principalMailboxes.isFallbackActive())) {
-          if ((await migrateSendingKey(sendLevelStore, def.id)) === 'renamed') {
-            logger.info({ mailboxId: def.id }, 'Renamed the default send-level key to the default mailbox id');
-          }
-        }
-      } catch (err) {
-        logger.warn({ err }, 'Could not migrate the ceo_inbox/sending key; the legacy default key still applies');
-      }
-    }
+    // The pre-#2475 `default` send-level key was renamed right after the flat-mailbox migration
+    // (renameSendingKeyAfterMigration, R41); at boot the rename waits for this store.
+    sendingKeyRename.setStore(sendLevelStore);
+    await sendingKeyRename.run.flush();
     outboundGateway = new OutboundGateway({
       nylasClients: registryGatedOutbound.nylasClients,
       // Each mailbox's own address, so the gateway can tell the principal's mailbox
@@ -2145,7 +2147,7 @@ async function main(): Promise<void> {
       // The mailboxes a principal draft may be found in (#2475, D6); the send level is that mailbox's own.
       principalMailboxIds: async () => (await principalMailboxes.list()).map((m) => m.id),
       ...(sendLevelStore
-        ? { readSendLevel: createSendLevelReader({ get: (ns, k) => sendLevelStore.get(ns, k), logger, defaultMailboxId }) }
+        ? { readSendLevel: createSendLevelReader({ get: (ns, k) => sendLevelStore.get(ns, k), logger, liveMailboxIds: async () => (await principalMailboxes.list()).map((m) => m.id) }) }
         : {}),
       // Provenance rows from before #2475 carry no mailbox and belong to the default mailbox.
       defaultMailboxId,
@@ -2771,7 +2773,9 @@ async function main(): Promise<void> {
           logger,
         })
       : undefined,
-    retryMailboxMigration,
+    // The health retry runs the send-level rename after a 'migrated' outcome too (R41); the
+    // health service keeps it single-flight.
+    retryMailboxMigration: retryMailboxMigration ? sendingKeyRename.run : undefined,
     reconcileFlatMailboxKeys: reconcileFlatMirror,
     // Calendar and the acquaintance check are bound to this grant at boot; setup-status reports
     // restart_required while the default mailbox's grant differs from it.
