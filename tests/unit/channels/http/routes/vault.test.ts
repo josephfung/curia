@@ -455,12 +455,22 @@ describe('vault routes', () => {
     expect((await del(app, 'ceo_nylas_grant_id')).statusCode).toBe(409);
   });
 
-  it('accepts a per-mailbox grant key and rejects a malformed one (#2475)', async () => {
+  it('refuses a direct PUT of a per-mailbox grant, which only the console validates (#2475)', async () => {
     const secrets = fakeSecrets();
     app = await build(secrets, fakeRegistry());
-    expect((await put(app, 'principal.mailbox.work.nylas_grant_id', { value: 'g' })).statusCode).toBe(200);
+    const res = await put(app, 'principal.mailbox.work.nylas_grant_id', { value: 'g' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toContain("Principal's mailboxes");
+    expect(secrets.sets).toEqual([]);
     expect((await put(app, 'principal.mailbox.Work.nylas_grant_id', { value: 'g' })).statusCode).toBe(400);
     expect((await put(app, 'principal.mailbox.work.other', { value: 'g' })).statusCode).toBe(400);
+  });
+
+  it('still lets the Secrets page clear a per-mailbox grant (#2475)', async () => {
+    const secrets = fakeSecrets(['principal.mailbox.work.nylas_grant_id']);
+    app = await build(secrets, fakeRegistry());
+    expect((await del(app, 'principal.mailbox.work.nylas_grant_id')).statusCode).toBe(200);
+    expect(secrets.deletes).toEqual(['principal.mailbox.work.nylas_grant_id']);
   });
 
   it('audits set and delete in two stages by key name with no value', async () => {

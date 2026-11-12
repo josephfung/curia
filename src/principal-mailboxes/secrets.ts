@@ -19,3 +19,8 @@ export const FLAT_PRINCIPAL_MAILBOX_KEYS: ReadonlySet<string> = new Set(['ceo_ny
 export const FLAT_KEYS_MANAGED_MESSAGE =
   "The principal's mailbox is managed in the console: Channels → Email → Principal's mailboxes. " +
   'Change, replace or remove the mailbox there.';
+
+// A per-mailbox grant is written only by the principal-mailboxes routes, which validate it.
+export const PER_MAILBOX_GRANT_MANAGED_MESSAGE =
+  "A principal mailbox's grant is set in the console: Channels → Email → Principal's mailboxes " +
+  '(Add, or Replace grant on the mailbox), which checks the grant belongs to that mailbox.';
