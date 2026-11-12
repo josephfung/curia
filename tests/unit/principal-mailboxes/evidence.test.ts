@@ -132,9 +132,22 @@ describe('mailboxEvidence', () => {
     });
     const out = await mailboxEvidence(svc, ['bob@acme.example.com']);
     const subject = out.find((e) => e.mailbox === 'work')!.recent_subjects[0]!;
-    expect(subject).not.toMatch(/[\u0000-\u001f\u202a-\u202e\u200b-\u200f<>]/);
+    expect(subject).not.toMatch(/[\u0000-\u001f\u202a-\u202e\u200b-\u200f\u2066-\u2069<>]/);
     expect(subject).not.toContain('&#');
     expect(Array.from(subject).length).toBeLessThanOrEqual(80);
     expect(subject).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/);
+  });
+
+  it('caps a long subject at exactly 80 characters with an ellipsis', async () => {
+    const svc = stubPrincipalMailboxes({
+      mailboxes,
+      gatewayClients: {
+        work: fakeClient([msg('1', 1000, { to: [{ email: 'bob@acme.example.com' }], subject: 'x'.repeat(200) })], []),
+        personal: fakeClient([], []),
+      },
+    });
+    const out = await mailboxEvidence(svc, ['bob@acme.example.com']);
+    const subject = out.find((e) => e.mailbox === 'work')!.recent_subjects[0]!;
+    expect(subject).toBe(`${'x'.repeat(79)}…`);
   });
 });

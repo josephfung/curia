@@ -165,11 +165,18 @@ function defuseEntities(s: string): string {
 // reorder text) are dropped.
 const CONTROL_CHARS = /[\u0000-\u001f\u007f\u0085\u2028\u2029]/g;
 const INVISIBLE_CHARS = /[\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g;
+// An unpaired surrogate half; a valid pair (an emoji) stays.
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+
+function stripUnsafeChars(s: string): string {
+  return s.replace(CONTROL_CHARS, ' ').replace(INVISIBLE_CHARS, '').replace(LONE_SURROGATE, '');
+}
 
 /** A subject made safe to show: tags stripped, secrets redacted, no link, tag or entity left. */
 export function cleanSubject(raw: string): string {
-  const plain = raw.replace(CONTROL_CHARS, ' ').replace(INVISIBLE_CHARS, '');
-  return oneLine(defuseEntities(neutralizeMarkup(fullyDecoded(plain))));
+  // Stripped before decoding and again after, so the result does not depend on what the decoder yields.
+  const decoded = fullyDecoded(stripUnsafeChars(raw));
+  return oneLine(stripUnsafeChars(defuseEntities(neutralizeMarkup(stripUnsafeChars(decoded)))));
 }
 
 /** A sender name through the display-name allowlist (which drops brackets, colons, slashes). */
