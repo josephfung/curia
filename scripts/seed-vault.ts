@@ -13,6 +13,7 @@ import pg from 'pg';
 import pino from 'pino';
 import { loadEncryptionKey } from '../src/secrets/crypto.js';
 import { SecretsService } from '../src/secrets/secrets-service.js';
+import { FLAT_PRINCIPAL_MAILBOX_KEYS } from '../src/principal-mailboxes/secrets.js';
 
 const logger = pino({ name: 'seed-vault' });
 
@@ -37,8 +38,8 @@ export const SEED_SECRET_NAMES = [
   // written via the console (or read from SIGNAL_PHONE_NUMBER env as back-compat), the same
   // as signal_socket_path which was never seeded (#1140).
   // skill-scoped (resolved at call time by ctx.secret)
-  // Flat principal-mailbox keys: boot migrates them into the registry (#2475). Still seeded
-  // from .env until Part 2 retires them.
+  // Flat principal-mailbox keys: boot migrates them into the registry (#2475). Seeded from
+  // .env only while the registry is empty (seedVault's flatKeysManaged), until Part 2 retires them.
   'ceo_nylas_grant_id',
   'ceo_self_email',
   'tavily_api_key',
@@ -114,10 +115,16 @@ export async function seedVault(
   secrets: SecretsService,
   env: NodeJS.ProcessEnv,
   log: pino.Logger,
-  options: { only?: ReadonlySet<string> } = {},
+  options: {
+    only?: ReadonlySet<string>;
+    /** True once the principal mailbox registry has rows (#2475): the console then mirrors
+     *  the default mailbox into the flat keys, and a .env value would split them from it. */
+    flatKeysManaged?: () => Promise<boolean>;
+  } = {},
 ): Promise<{ seeded: string[]; skipped: string[] }> {
   const seeded: string[] = [];
   const skipped: string[] = [];
+  let flatManaged: boolean | undefined;
   for (const name of SEED_SECRET_NAMES) {
     // `only` scopes a run to the named secrets. The CLI loads the whole .env, so without
     // it "add one key" would also re-upsert every other secret .env happens to hold,
@@ -136,11 +143,33 @@ export async function seedVault(
       skipped.push(name);
       continue;
     }
+    if (FLAT_PRINCIPAL_MAILBOX_KEYS.has(name) && options.flatKeysManaged) {
+      flatManaged ??= await options.flatKeysManaged();
+      if (flatManaged) {
+        log.warn({ name }, 'Not seeding a flat principal-mailbox key: the console manages it once a mailbox is registered');
+        skipped.push(name);
+        continue;
+      }
+    }
     await secrets.set(name, value);
     seeded.push(name);
   }
   log.info({ seeded, skipped }, 'Vault seeding complete');
   return { seeded, skipped };
+}
+
+/**
+ * True when the principal mailbox registry has any row (#2475). A database migrated to before
+ * the registry existed (no table yet) has none.
+ */
+export async function principalRegistryHasRows(pool: pg.Pool): Promise<boolean> {
+  try {
+    const { rows } = await pool.query<{ any: boolean }>('SELECT EXISTS (SELECT 1 FROM principal_mailboxes) AS any');
+    return rows[0]?.any === true;
+  } catch (err) {
+    if ((err as { code?: string }).code === '42P01') return false; // undefined_table
+    throw err;
+  }
 }
 
 /**
@@ -184,7 +213,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const secrets = new SecretsService(pool, key, logger);
-  seedVault(secrets, process.env, logger, { only })
+  seedVault(secrets, process.env, logger, { only, flatKeysManaged: () => principalRegistryHasRows(pool) })
     .then(async () => {
       // setup.sh sets SEED_VAULT_VERIFY=1 so a partial/failed seed (e.g. the resume path
       // where api_token was never persisted) fails the install loudly instead of booting
