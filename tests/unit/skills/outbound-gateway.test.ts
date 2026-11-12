@@ -5812,6 +5812,29 @@ describe('spot-check pool (#2159 Phase 3)', () => {
   });
 });
 
+describe('principal own-identity lists skip defunct identities (R33 hardening, #2475)', () => {
+  it('only active verified identities count as the principal\'s own', () => {
+    const mocks = createMocks();
+    const gw = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [
+        makePrincipalIdentity('avery@example.com'),
+        { ...makePrincipalIdentity('old@example.com'), id: 'pi-email-2', status: 'defunct' as never },
+        { ...makePrincipalIdentity('bounced@example.com'), id: 'pi-email-3', status: 'bounced' as never },
+        { ...makePrincipalIdentity('+14165550100', 'signal'), id: 'pi-signal-1' },
+        { ...makePrincipalIdentity('+14165550199', 'signal'), id: 'pi-signal-2', status: 'defunct' as never },
+      ],
+      logger: mocks.logger,
+    });
+    const priv = gw as unknown as { principalEmailAddresses(): string[]; principalOwnIdentifiers(): string[] };
+    expect(priv.principalEmailAddresses()).toEqual(['avery@example.com']);
+    expect(priv.principalOwnIdentifiers()).toEqual(['avery@example.com', '+14165550100']);
+  });
+});
+
 describe('sendPrincipalDraft (#2474)', () => {
   let mocks: ReturnType<typeof createMocks>;
   beforeEach(() => {

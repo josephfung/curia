@@ -4600,9 +4600,17 @@ export class OutboundGateway {
     return { success: true, messageId: sent.id, ...(threadId ? { threadId } : {}), to: outside, subject: draft.subject };
   }
 
-  /** The principal's verified email addresses: the mailbox's own, for an autonomous send (#2474). */
+  /** The principal's verified, active email addresses: the mailbox's own, for an autonomous
+   *  send (#2474). A defunct or bounced address is no longer the principal's (R33, #2475). */
   private principalEmailAddresses(): string[] {
-    return this.principalIdentities.filter((i) => i.channel === 'email' && i.verified).map((i) => i.channelIdentifier);
+    return this.principalIdentities
+      .filter((i) => i.channel === 'email' && i.verified && i.status === 'active')
+      .map((i) => i.channelIdentifier);
+  }
+
+  /** Every verified, active principal identifier, any channel (R33, #2475). */
+  private principalOwnIdentifiers(): string[] {
+    return this.principalIdentities.filter((i) => i.verified && i.status === 'active').map((i) => i.channelIdentifier);
   }
 
   /**
@@ -4885,7 +4893,7 @@ export class OutboundGateway {
         // A quoted item is exempt only when a thread message holds the quote and that item, and
         // had every recipient of this send on it (quoteItemsToReview).
         const ownIdentities = principalMailbox && options?.principalDirected === true
-          ? this.principalIdentities.filter((i) => i.verified).map((i) => i.channelIdentifier)
+          ? this.principalOwnIdentifiers()
           : autonomousMailbox ? this.principalEmailAddresses() : [];
         const split = principalMailbox ? splitReplyQuote(body) : { own: body, quote: '' };
         const ownLength = split.own.length;
