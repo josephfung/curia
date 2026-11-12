@@ -58,7 +58,7 @@ export interface ToolManifest {
    *  The manifest is frozen after loading — capabilities cannot be mutated at runtime.
    *
    *  Valid capabilities: bus, agentRegistry, outboundGateway,
-   *  schedulerService, entityMemory, nylasCalendarClient, autonomyService,
+   *  schedulerService, entityMemory, nylasCalendarClient, principalMailboxes, autonomyService,
    *  executiveProfileService, officeIdentityService, browserService, bullpenService, toolSearch,
    *  actionLogRepo, auditLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext,
    *  taskRepo, workingDocs, secretCapture, cardUse, secretResolver, userSecretIndex, taskOutreach, disclosureDecisions,
@@ -205,6 +205,8 @@ export interface ToolContext {
    *  All external communication (email, future Signal/Telegram) goes through the gateway,
    *  which enforces contact blocked checks and content filtering. */
   outboundGateway?: import('./outbound-gateway.js').OutboundGateway;
+  /** Principal mailbox registry and resolver — available to skills declaring 'principalMailboxes'. */
+  principalMailboxes?: import('../principal-mailboxes/service.js').PrincipalMailboxes;
   /** Scheduler service — available to skills declaring 'schedulerService' in capabilities */
   schedulerService?: import('../scheduler/scheduler-service.js').SchedulerService;
   /** Entity memory (knowledge graph) — available to skills declaring 'entityMemory' in capabilities.

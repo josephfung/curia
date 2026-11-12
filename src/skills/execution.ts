@@ -127,6 +127,7 @@ import type { SensitivityClassifier } from '../memory/sensitivity.js';
 import type { StoreFactOptions } from '../memory/types.js';
 import { createMemoryStore } from '../bus/events.js';
 import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
+import type { PrincipalMailboxes } from '../principal-mailboxes/service.js';
 import type { EntityContextAssembler } from '../entity-context/assembler.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { AutonomyConfig } from '../autonomy/autonomy-service.js';
@@ -376,6 +377,7 @@ export class ExecutionLayer {
   private entityMemory?: EntityMemory;
   private agentPersona?: AgentPersona;
   private nylasCalendarClient?: NylasCalendarClient;
+  private principalMailboxes?: PrincipalMailboxes;
   private entityContextAssembler?: EntityContextAssembler;
   private autonomyService?: AutonomyService;
   // secretsService is NOT in capabilityServices — it is infrastructure accessed
@@ -456,6 +458,7 @@ export class ExecutionLayer {
     entityMemory?: EntityMemory;
     agentPersona?: AgentPersona;
     nylasCalendarClient?: NylasCalendarClient;
+    principalMailboxes?: PrincipalMailboxes;
     entityContextAssembler?: EntityContextAssembler;
     autonomyService?: AutonomyService;
     secretsService?: import('../secrets/secrets-service.js').SecretsService;
@@ -538,6 +541,7 @@ export class ExecutionLayer {
     this.entityMemory = options?.entityMemory;
     this.agentPersona = options?.agentPersona;
     this.nylasCalendarClient = options?.nylasCalendarClient;
+    this.principalMailboxes = options?.principalMailboxes;
     this.entityContextAssembler = options?.entityContextAssembler;
     this.autonomyService = options?.autonomyService;
     this.secretsService = options?.secretsService;
@@ -603,6 +607,7 @@ export class ExecutionLayer {
       schedulerService: this.schedulerService,
       entityMemory: this.entityMemory,
       nylasCalendarClient: this.nylasCalendarClient,
+      principalMailboxes: this.principalMailboxes,
       autonomyService: this.autonomyService,
       browserService: this.browserService,
       bullpenService: this.bullpenService,

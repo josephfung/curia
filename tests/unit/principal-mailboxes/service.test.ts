@@ -1,0 +1,132 @@
+import { describe, it, expect, vi } from 'vitest';
+import pino from 'pino';
+import { PrincipalMailboxes } from '../../../src/principal-mailboxes/service.js';
+import type { PrincipalMailboxStore } from '../../../src/principal-mailboxes/store.js';
+import {
+  RemovedMailboxError,
+  UnknownMailboxError,
+  type PrincipalMailboxRecord,
+} from '../../../src/principal-mailboxes/types.js';
+import {
+  isPrincipalMailboxGrantKey,
+  principalMailboxGrantSecretName,
+} from '../../../src/principal-mailboxes/secrets.js';
+
+const logger = pino({ level: 'silent' });
+
+function rec(over: Partial<PrincipalMailboxRecord> = {}): PrincipalMailboxRecord {
+  return {
+    id: 'work',
+    label: 'Work',
+    address: 'pat@work.example.com',
+    provider: 'google',
+    isDefault: true,
+    triageStartAt: null,
+    removedAt: null,
+    addedIdentityId: null,
+    ...over,
+  };
+}
+
+function build(records: PrincipalMailboxRecord[], secrets: Record<string, string> = {}, apiKey: string | undefined = 'api-key') {
+  const store = {
+    listLive: vi.fn(async () => records.filter((r) => r.removedAt === null)),
+    getAny: vi.fn(async (id: string) => records.find((r) => r.id === id) ?? null),
+  } as unknown as PrincipalMailboxStore;
+  const get = vi.fn(async (n: string) => secrets[n] ?? null);
+  const svc = new PrincipalMailboxes({ store, secrets: { get }, apiKey: () => apiKey, logger });
+  return { svc, get, secrets };
+}
+
+describe('secrets helpers', () => {
+  it('names and recognises per-mailbox grant keys', () => {
+    expect(principalMailboxGrantSecretName('work')).toBe('principal.mailbox.work.nylas_grant_id');
+    expect(isPrincipalMailboxGrantKey('principal.mailbox.work.nylas_grant_id')).toBe(true);
+    expect(isPrincipalMailboxGrantKey('principal.mailbox.Work.nylas_grant_id')).toBe(false);
+    expect(isPrincipalMailboxGrantKey('channel.email.nylas_api_key')).toBe(false);
+  });
+});
+
+describe('PrincipalMailboxes', () => {
+  it('get throws UnknownMailboxError for an unknown id', async () => {
+    const { svc } = build([rec()]);
+    await expect(svc.get('nope')).rejects.toBeInstanceOf(UnknownMailboxError);
+  });
+
+  it('get throws RemovedMailboxError for a removed id', async () => {
+    const { svc } = build([rec({ id: 'old', isDefault: false, removedAt: new Date() }), rec()]);
+    await expect(svc.get('old')).rejects.toBeInstanceOf(RemovedMailboxError);
+  });
+
+  it('list returns live mailboxes as views and addresses() their addresses', async () => {
+    const { svc } = build([rec(), rec({ id: 'home', label: 'Home', address: 'pat@home.example.org', isDefault: false })]);
+    expect((await svc.list()).map((v) => v.id)).toEqual(['work', 'home']);
+    expect(await svc.addresses()).toEqual(['pat@work.example.com', 'pat@home.example.org']);
+    expect((await svc.defaultMailbox())?.id).toBe('work');
+  });
+
+  it('credentials reads principal.mailbox.<id>.nylas_grant_id on every call', async () => {
+    const { svc, get, secrets } = build([rec()], { 'principal.mailbox.work.nylas_grant_id': 'g1' });
+    expect(await svc.credentials('work')).toEqual({ apiKey: 'api-key', grantId: 'g1' });
+    secrets['principal.mailbox.work.nylas_grant_id'] = 'g2';
+    expect(await svc.credentials('work')).toEqual({ apiKey: 'api-key', grantId: 'g2' });
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(get).toHaveBeenCalledWith('principal.mailbox.work.nylas_grant_id');
+  });
+
+  it("credentials never falls back to the default mailbox's grant", async () => {
+    const { svc } = build(
+      [rec(), rec({ id: 'home', label: 'Home', isDefault: false })],
+      { 'principal.mailbox.work.nylas_grant_id': 'g1' },
+    );
+    await expect(svc.credentials('home')).rejects.toThrow(/home/);
+  });
+
+  it('credentials throws when the API key is missing', async () => {
+    const { svc } = build([rec()], { 'principal.mailbox.work.nylas_grant_id': 'g1' }, '');
+    await expect(svc.credentials('work')).rejects.toThrow(/api key/i);
+  });
+
+  it('list returns the fallback when the table is empty and a fallback is set', async () => {
+    const { svc } = build([]);
+    expect(await svc.list()).toEqual([]);
+    expect(await svc.defaultMailbox()).toBeNull();
+    svc.setFallback({ id: 'mailbox', grantId: 'fb-grant' });
+    expect(await svc.list()).toEqual([
+      { id: 'mailbox', label: 'Mailbox', address: '', isDefault: true, triageStartAt: null },
+    ]);
+    expect((await svc.defaultMailbox())?.id).toBe('mailbox');
+    expect(await svc.get('mailbox')).toMatchObject({ id: 'mailbox' });
+    expect(await svc.credentials('mailbox')).toEqual({ apiKey: 'api-key', grantId: 'fb-grant' });
+    expect(await svc.addresses()).toEqual([]);
+    svc.setFallback(null);
+    expect(await svc.list()).toEqual([]);
+  });
+
+  it('list ignores the fallback once the table has rows', async () => {
+    const { svc } = build([rec()], { 'principal.mailbox.work.nylas_grant_id': 'g1' });
+    svc.setFallback({ id: 'mailbox', grantId: 'fb-grant' });
+    expect((await svc.list()).map((v) => v.id)).toEqual(['work']);
+    await expect(svc.get('other')).rejects.toBeInstanceOf(UnknownMailboxError);
+  });
+
+  it('gatewayClient and calendarClient build per call from current credentials', async () => {
+    const store = { listLive: async () => [rec()], getAny: async () => rec() } as unknown as PrincipalMailboxStore;
+    const createNylasClient = vi.fn(() => ({ kind: 'mail' }) as never);
+    const createCalendarClient = vi.fn(() => ({ kind: 'cal' }) as never);
+    const svc = new PrincipalMailboxes({
+      store,
+      secrets: { get: async () => 'g1' },
+      apiKey: () => 'k',
+      logger,
+      createNylasClient,
+      createCalendarClient,
+    });
+    await svc.gatewayClient('work');
+    await svc.gatewayClient('work');
+    await svc.calendarClient('work');
+    expect(createNylasClient).toHaveBeenCalledTimes(2);
+    expect(createNylasClient).toHaveBeenCalledWith('k', 'g1');
+    expect(createCalendarClient).toHaveBeenCalledWith('k', 'g1');
+  });
+});

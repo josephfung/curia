@@ -42,7 +42,7 @@ export const REQUIRED_ONLY_CAPABILITIES: ReadonlySet<string> = new Set([
 
 export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
   'bus', 'agentRegistry', 'outboundGateway',
-  'schedulerService', 'entityMemory', 'nylasCalendarClient',
+  'schedulerService', 'entityMemory', 'nylasCalendarClient', 'principalMailboxes',
   'autonomyService', 'executiveProfileService', 'officeIdentityService', 'browserService', 'bullpenService', 'toolSearch',
   'skillRegistry',
   'actionLogRepo', 'approvalDelivery', 'auditLogRepo', 'executionLayer', 'confidencePipeline', 'tempFileStore',
