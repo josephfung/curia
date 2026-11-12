@@ -73,6 +73,11 @@ export class PrincipalMailboxes {
     return (await this.deps.store.hasAnyRow()) ? null : this.fallback;
   }
 
+  /** True while the deferred-migration fallback is being served (no registry rows at all). */
+  async isFallbackActive(): Promise<boolean> {
+    return (await this.activeFallback()) !== null;
+  }
+
   /** Live mailboxes only; the fallback view when it is active. */
   async list(): Promise<PrincipalMailboxView[]> {
     const live = await this.deps.store.listLive();

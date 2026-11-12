@@ -34,6 +34,9 @@ export interface RemovalPreview {
   /** True only for consumer domains, where the address plausibly stays the principal's. */
   stillOwnedDefault: boolean;
   otherLive: PrincipalMailboxView[];
+  /** Addresses that can become the new primary email: other live mailboxes plus verified
+   *  active principal email identities, minus the removed address; lowercased, deduped. */
+  primaryEmailCandidates: string[];
   /** Filled by the rules task via onRemoved hooks / later deps; [] in this part. */
   scopedRules: Array<{ title: string; onlyThisMailbox: boolean }>;
   /** Filled by the calendar task; [] in this part. */
@@ -118,7 +121,8 @@ export class PrincipalMailboxAdmin {
     try {
       grant = await this.deps.lookupGrant(grantId);
     } catch (err) {
-      this.log.warn({ err, mailboxId: id }, 'Could not read the Nylas grant for a new mailbox');
+      // Class name only: a lookup error's message could carry the grant id.
+      this.log.warn({ errName: err instanceof Error ? err.name : 'unknown', mailboxId: id }, 'Could not read the Nylas grant for a new mailbox');
       return refuse('grant_unreadable', 'The grant could not be read from Nylas');
     }
     if (grant.provider !== 'google') {
@@ -204,12 +208,20 @@ export class PrincipalMailboxAdmin {
     const principal = await this.deps.contacts.getContactWithIdentities(this.deps.principalContactId);
     const primary = principal?.contact.primaryEmail ?? null;
     const domain = lower(rec.address).split('@')[1] ?? '';
+    const candidates = new Set<string>([
+      ...others.map((m) => lower(m.address)),
+      ...(principal?.identities ?? [])
+        .filter((i) => i.channel === 'email' && i.verified && i.status === 'active')
+        .map((i) => lower(i.channelIdentifier)),
+    ]);
+    candidates.delete(lower(rec.address));
     return {
       mailbox: toView(rec),
       isDefault: rec.isDefault,
       isPrimaryEmail: primary !== null && lower(primary) === lower(rec.address),
       stillOwnedDefault: CONSUMER_DOMAINS.has(domain),
       otherLive: others.map(toView),
+      primaryEmailCandidates: [...candidates],
       scopedRules: [],
       calendars: [],
     };

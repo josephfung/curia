@@ -14,6 +14,7 @@ interface Mailbox {
   label: string;
   address: string;
   isDefault: boolean;
+  pending_migration?: boolean;
 }
 
 interface RemovalPreview {
@@ -22,6 +23,7 @@ interface RemovalPreview {
   isPrimaryEmail: boolean;
   stillOwnedDefault: boolean;
   otherLive: Mailbox[];
+  primaryEmailCandidates: string[];
   scopedRules: Array<{ title: string; onlyThisMailbox: boolean }>;
   calendars: Array<{ calendarId: string; label: string }>;
 }
@@ -63,7 +65,8 @@ function RemovePanel({ preview, onDone, onCancel }: {
 
   const needsDefault = preview.isDefault && preview.otherLive.length > 0;
   const needsPrimary = preview.isPrimaryEmail;
-  const ready = (!needsDefault || newDefaultId !== '') && (!needsPrimary || newPrimary !== '');
+  const noPrimaryChoice = needsPrimary && preview.primaryEmailCandidates.length === 0;
+  const ready = !noPrimaryChoice && (!needsDefault || newDefaultId !== '') && (!needsPrimary || newPrimary !== '');
 
   const confirm = useCallback(async () => {
     setBusy(true);
@@ -109,12 +112,18 @@ function RemovePanel({ preview, onDone, onCancel }: {
         </label>
       )}
 
-      {needsPrimary && (
+      {noPrimaryChoice && (
+        <p className="autonomy-error" style={{ margin: '0 0 8px' }}>
+          This is the principal's primary email. Add another email address for yourself (Contacts)
+          before removing this one.
+        </p>
+      )}
+      {needsPrimary && !noPrimaryChoice && (
         <label style={{ display: 'block', marginBottom: 6 }}>
           This is the principal's primary email. Use instead:{' '}
           <select aria-label="New primary email" value={newPrimary} onChange={e => setNewPrimary(e.target.value)}>
             <option value="">Choose…</option>
-            {preview.otherLive.map(m => <option key={m.id} value={m.address}>{m.address}</option>)}
+            {preview.primaryEmailCandidates.map(a => <option key={a} value={a}>{a}</option>)}
           </select>
         </label>
       )}
@@ -238,6 +247,11 @@ export function PrincipalMailboxesSection() {
               {' — '}{m.address || 'address not read yet'}
               {m.isDefault && <span className="badge-default" style={{ marginLeft: 6, fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>Default</span>}
             </span>
+            {m.pending_migration ? (
+              <span className="settings-page-sub">
+                Curia is still moving this mailbox into the list; it will finish on its own.
+              </span>
+            ) : (
             <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
               {renaming?.id === m.id ? (
                 <button type="button" className="btn btn-secondary btn-sm"
@@ -254,6 +268,7 @@ export function PrincipalMailboxesSection() {
               <button type="button" className="btn btn-danger btn-sm" disabled={busy}
                 onClick={() => void startRemove(m.id)}>Remove</button>
             </span>
+            )}
           </div>
         ))}
         {mailboxes.length === 0 && <span className="settings-page-sub">No mailboxes yet.</span>}

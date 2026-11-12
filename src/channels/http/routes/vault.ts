@@ -285,6 +285,9 @@ export interface VaultRouteOptions {
   channelRegistryService?: ChannelRegistryService;
   /** Optional: when present, a delete is refused while an enabled email account needs its grant. */
   emailAccounts?: Pick<EmailAccountsRepo, 'list'>;
+  /** True while the deferred flat-grant fallback is served (#2475): ceo_nylas_grant_id is then
+   *  still the live mailbox, so it is declared (and delete-guarded) as before. */
+  principalFallbackActive?: () => Promise<boolean>;
   /** Optional: last-read times for the Secrets page. When absent, lastUsedAt is null. */
   usage?: SecretUsagePort;
   /** Every set and delete is published here as a secret.changed audit event (#2453). */
@@ -634,6 +637,10 @@ export async function vaultRoutes(
           enabled: enabledChannels.has(descriptor.name) || !descriptor.isToggleable,
         });
       }
+    }
+
+    if (options.principalFallbackActive && await options.principalFallbackActive()) {
+      add('ceo_nylas_grant_id', { kind: 'principal-mailbox', name: 'Calendar and principal inbox', required: true, enabled: true });
     }
 
     // Each email account boots from its own grant (resolve-email-accounts.ts skips an enabled

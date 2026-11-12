@@ -30,6 +30,11 @@ describe('NylasClient.getGrant', () => {
     await expect(client.getGrant()).rejects.toThrow(/no email/i);
   });
 
+  it('keeps the grant id out of the thrown message', async () => {
+    mockGrants.find.mockResolvedValue({ data: { provider: 'google' } });
+    await expect(client.getGrant()).rejects.not.toThrow(/grant-1/);
+  });
+
   it('propagates a 404', async () => {
     const err = Object.assign(new Error('not found'), { statusCode: 404 });
     mockGrants.find.mockImplementation(async () => {

@@ -23,7 +23,7 @@ import type { PrincipalMailboxStore } from '../../../principal-mailboxes/store.j
 import { RemovedMailboxError, UnknownMailboxError } from '../../../principal-mailboxes/types.js';
 
 export interface PrincipalMailboxesRouteOptions {
-  mailboxes: Pick<PrincipalMailboxes, 'list'>;
+  mailboxes: Pick<PrincipalMailboxes, 'list' | 'isFallbackActive'>;
   store: Pick<PrincipalMailboxStore, 'relabel'>;
   admin: Pick<PrincipalMailboxAdmin, 'add' | 'setDefault' | 'removalPreview' | 'remove'>;
   /** Absent when no Nylas API key is configured: add and test then answer 503. */
@@ -56,14 +56,18 @@ export async function principalMailboxesRoutes(
     if (err instanceof MailboxRemovalError) {
       return reply.status(422).send({ refusal: 'removal_precondition', detail: err.message });
     }
-    request.log.error({ err }, `${what} failed`);
+    // Only the class name: an upstream error's message or stack can carry a grant id.
+    request.log.error({ errName: err instanceof Error ? err.name : 'unknown' }, `${what} failed`);
     return reply.status(500).send({ error: `${what} failed. Check server logs.` });
   }
 
   app.get(base, AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     try {
-      return reply.send({ mailboxes: await mailboxes.list() });
+      const list = await mailboxes.list();
+      // Deferred migration: the fallback is the only entry and has no registry row yet.
+      const pending = list.length > 0 && (await mailboxes.isFallbackActive());
+      return reply.send({ mailboxes: list.map((m) => (pending ? { ...m, pending_migration: true } : m)) });
     } catch (err) {
       return fail(request, reply, err, 'Listing principal mailboxes');
     }
@@ -79,7 +83,7 @@ export async function principalMailboxesRoutes(
       return reply.send({ email: grant.email, provider: grant.provider });
     } catch (err) {
       // The grant id is deliberately not logged.
-      request.log.warn({ err: err instanceof Error ? err.message : 'unknown' }, 'Principal mailbox grant test failed');
+      request.log.warn({ errName: err instanceof Error ? err.name : 'unknown' }, 'Principal mailbox grant test failed');
       return reply.status(422).send({ refusal: 'grant_unreadable', detail: 'The grant could not be read from Nylas' });
     }
   });
@@ -123,8 +127,9 @@ export async function principalMailboxesRoutes(
       return reply.status(400).send({ error: 'Provide label and/or make_default' });
     }
     try {
-      if (hasLabel) await store.relabel(id, label);
+      // Default first: it is the step that can refuse; the relabel is harmless to repeat.
       if (body.make_default === true) await admin.setDefault(id);
+      if (hasLabel) await store.relabel(id, label);
       return reply.send({ ok: true });
     } catch (err) {
       return fail(request, reply, err, 'Updating the principal mailbox');

@@ -162,7 +162,7 @@ function fakeRegistry(declared: string[] = [DECLARED_SECRET], tools: RegistryEnt
 async function build(
   secretsService: VaultSecretsPort,
   registryService: RegistryService,
-  extra: { usage?: SecretUsagePort; bus?: EventBus; mcp?: McpRegistryService; channels?: ChannelRegistryService; emailAccounts?: Array<{ name: string; enabled: boolean }> } = {},
+  extra: { usage?: SecretUsagePort; bus?: EventBus; mcp?: McpRegistryService; channels?: ChannelRegistryService; emailAccounts?: Array<{ name: string; enabled: boolean }>; principalFallbackActive?: () => Promise<boolean> } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify();
   await app.register(vaultRoutes, {
@@ -174,6 +174,7 @@ async function build(
     emailAccounts: extra.emailAccounts
       ? { list: async () => extra.emailAccounts!.map(a => ({ ...a, selfEmail: `${a.name}@example.com`, provider: 'nylas', createdAt: new Date(), createdBy: 'test', updatedAt: new Date() })) }
       : undefined,
+    principalFallbackActive: extra.principalFallbackActive,
     bus: extra.bus ?? fakeBus().bus,
     webAppBootstrapSecret: BOOTSTRAP,
     sessions: new Map(),
@@ -417,6 +418,14 @@ describe('vault routes', () => {
     app = await build(secrets, fakeRegistry());
     expect((await del(app, 'ceo_nylas_grant_id')).statusCode).toBe(200);
     expect((await del(app, 'ceo_self_email')).statusCode).toBe(200);
+  });
+
+  it('refuses to delete the flat grant while the deferred-migration fallback is active (#2475)', async () => {
+    const secrets = fakeSecrets(['ceo_nylas_grant_id']);
+    app = await build(secrets, fakeRegistry(), { principalFallbackActive: async () => true });
+    const refused = await del(app, 'ceo_nylas_grant_id');
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toContain('Calendar and principal inbox');
   });
 
   it('accepts a per-mailbox grant key and rejects a malformed one (#2475)', async () => {

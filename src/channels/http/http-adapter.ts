@@ -586,6 +586,9 @@ export class HttpAdapter implements Channel {
         mcpRegistryService: this.config.mcpRegistryService,
         channelRegistryService: this.config.channelRegistryService,
         emailAccounts: new EmailAccountsRepo(pool),
+        principalFallbackActive: this.config.principalMailboxConsole
+          ? () => this.config.principalMailboxConsole!.mailboxes.isFallbackActive()
+          : undefined,
         usage: new SecretUsageRepo(pool),
         bus,
         webAppBootstrapSecret,
