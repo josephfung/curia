@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { PrincipalMailboxAdmin } from '../../../src/principal-mailboxes/admin.js';
 import type { PrincipalMailboxStore } from '../../../src/principal-mailboxes/store.js';
-import type { PrincipalMailboxRecord } from '../../../src/principal-mailboxes/types.js';
+import { RemovedMailboxError, type PrincipalMailboxRecord } from '../../../src/principal-mailboxes/types.js';
 import { principalMailboxGrantSecretName } from '../../../src/principal-mailboxes/secrets.js';
 import { ContactService } from '../../../src/contacts/contact-service.js';
 
@@ -277,6 +277,16 @@ describe('PrincipalMailboxAdmin.remove', () => {
     expect(contacts.updateContactFields).toHaveBeenLastCalledWith(PRINCIPAL, { primaryEmail: 'pat@gmail.com' });
     expect(contact.primaryEmail).toBe('pat@gmail.com');
     expect(records.find((r) => r.id === 'personal')!.removedAt).toBeNull();
+  });
+
+  it('does not restore the primary email when another removal of the mailbox already completed', async () => {
+    const { admin, contacts, store } = setup({ records: two(), primaryEmail: 'pat@gmail.com', secrets: { [principalMailboxGrantSecretName('work')]: 'g-work' } });
+    vi.mocked(store.tombstone).mockRejectedValueOnce(new RemovedMailboxError('personal', 'Personal'));
+    await expect(
+      admin.remove({ id: 'personal', stillOwned: true, newDefaultId: 'work', newPrimaryEmail: 'pat@work.example.com' }),
+    ).rejects.toBeInstanceOf(RemovedMailboxError);
+    expect(contacts.updateContactFields).toHaveBeenCalledTimes(1);
+    expect(contacts.updateContactFields).toHaveBeenCalledWith(PRINCIPAL, { primaryEmail: 'pat@work.example.com' });
   });
 
   it('stillOwned=false unlinks only the identity it added', async () => {
