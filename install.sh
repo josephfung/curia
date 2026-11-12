@@ -565,6 +565,50 @@ note_livekit_signaling() {
   hint "See docs/dev/voice-setup.md."
 }
 
+# Service names under the top-level services: key of the compose file on stdin.
+# Indented names elsewhere (a `browser` network, a `browser_profile` volume) are
+# not services, so a plain grep for "  browser:" would be fooled.
+compose_file_services() {
+  awk '/^[^[:space:]#]/ { in_services = ($0 ~ /^services:/) }
+       in_services && /^  [A-Za-z0-9._-]+:/ { sub(/^  /, ""); sub(/:.*/, ""); print }'
+}
+
+# Service names in the install's effective compose config (COMPOSE_FILE overlays
+# included). Non-zero when Compose can't render it.
+compose_services() {
+  docker compose --project-directory "$INSTALL_DIR" config --services 2>/dev/null
+}
+
+# Both paths, after the stack starts. install.sh never replaces an existing
+# docker-compose.yml, so an install made before the browser container shipped
+# (#2541) keeps a file without the `browser` service, and the web-browser skill
+# stays unavailable. Say so, and how to add it, when the release being installed
+# has the service. Silent when the install already has it, when BROWSER_CDP_URL
+# points at a browser the operator runs some other way, when the release predates
+# the service (a pinned older CURIA_VERSION), and when either side can't be read:
+# this is advice, never a reason to stop the install.
+note_missing_browser() {
+  local env="$1" services ref ref_services
+  services="$(compose_services)" || return 0
+  grep -qx 'browser' <<< "$services" && return 0
+  [[ -z "$(compose_var "$env" BROWSER_CDP_URL)" ]] || return 0
+  ref="$(mktemp)" || return 0
+  if ! download_to "$(bundle_asset_url docker-compose.yml docker-compose.yml)" "$ref"; then
+    rm -f "$ref"
+    return 0
+  fi
+  ref_services="$(compose_file_services < "$ref")"
+  rm -f "$ref"
+  grep -qx 'browser' <<< "$ref_services" || return 0
+  echo "" >&2
+  warn "This install's docker-compose.yml has no browser service, so the web-browser skill is unavailable."
+  hint "install.sh never replaces an existing docker-compose.yml. To add the browser, follow"
+  hint "  https://docs.meetcuria.com/integrations/web-browser#upgrading-from-an-older-install"
+  hint "copying from this release's file:"
+  hint "  $(bundle_asset_url docker-compose.yml docker-compose.yml)"
+  hint "Then re-run install.sh: it fetches the seccomp profile the browser service needs."
+}
+
 # Upgrade path: HTTPS (Caddy overlay) installs from before #2408 have no
 # HTTP_BIND; add it so :3000 leaves the public interface (Caddy uses the
 # compose network). Keyed on the overlay in COMPOSE_FILE rather than DOMAIN,
@@ -836,6 +880,7 @@ fresh_install() {
   fi
   check_http_exposure "$env"
   check_livekit_exposure "$env"
+  note_missing_browser "$env"
 
   # Mark setup as complete. On subsequent re-runs, install_is_complete() sees
   # this marker and takes the upgrade path instead of rotating secrets.
@@ -902,6 +947,7 @@ existing_install() {
   check_http_exposure "$env"
   check_livekit_exposure "$env"
   note_livekit_signaling "$env"
+  note_missing_browser "$env"
 
   # Load the URL-shaping values from .env so print_summary shows the right
   # address for this existing install: DOMAIN (HTTPS topology) and a custom

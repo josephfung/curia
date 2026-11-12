@@ -150,7 +150,7 @@ tasks:
     handoff: in-chat
     completion_check:
       type: browser_ready
-    credential_how_to: "The shipped docker-compose.yml runs the browser as the `browser` service: start it with `docker compose up -d browser`, and check it with `docker compose logs browser`. Ordinary sites work; bot-protected sites may block it, especially from a datacenter IP."
+    credential_how_to: "The shipped docker-compose.yml runs the browser as the `browser` service: start it with `docker compose up -d browser`, and check it with `docker compose logs browser`. An install whose docker-compose.yml predates that service has none: add it by following \"Upgrading from an older install\" in the web browser docs. Ordinary sites work; bot-protected sites may block it, especially from a datacenter IP."
     docs_url: /integrations/web-browser
 
   - id: inbox_sending
