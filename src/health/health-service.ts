@@ -135,6 +135,10 @@ const GOOGLE_WORKSPACE_PROBE_TOOL = 'list_drive_items';
 const GOOGLE_WORKSPACE_PROBE_TIMEOUT_MS = 15_000;
 /** Per-mailbox canary: grant lookup, one message and the calendar list, together. */
 const MAILBOX_PROBE_TIMEOUT_MS = 5_000;
+/** Reading the mailbox registry before the per-mailbox canaries. */
+const MAILBOX_REGISTRY_TIMEOUT_MS = 5_000;
+/** The deferred-migration retry: a registry read, a Nylas grant lookup and two writes. */
+const MAILBOX_MIGRATION_RETRY_TIMEOUT_MS = 15_000;
 /** The heartbeat a deployment already configured for the single principal calendar check. */
 const DEFAULT_MAILBOX_HEARTBEAT = 'nylas_calendar';
 
@@ -150,6 +154,8 @@ export class HealthService {
   private readonly mailboxOk = new Map<string, { ok: boolean; grantId: string | null }>();
   /** Last logged outcome of the deferred-migration retry, so a repeat is not logged again. */
   private lastMigrationOutcome: string | null = null;
+  /** The flat-key repair started by the last canary run, while it is still running. */
+  private flatMirrorInFlight: Promise<void> | null = null;
 
   constructor(private readonly deps: HealthServiceDeps) {}
 
@@ -353,8 +359,16 @@ export class HealthService {
     // Principal mailbox canaries (#2475): one per live mailbox, replacing the single
     // `nylas_calendar` check. First retry a deferred boot migration, so a mailbox that could
     // not be registered at boot is picked up here without a restart.
-    await this.retryDeferredMigration();
-    await this.reconcileFlatMirror();
+    // Each mailbox step is bounded or runs beside the canaries, so a stalled registry or vault
+    // read cannot hold the Signal, Google Workspace and Tavily canaries after it. (A stalled
+    // query keeps its connection until Postgres ends it; only the canary stops waiting.)
+    try {
+      await withDeadline(this.retryDeferredMigration(), MAILBOX_MIGRATION_RETRY_TIMEOUT_MS);
+    } catch (err) {
+      logger.warn({ errName: err instanceof Error ? err.name : 'unknown' }, 'Mailbox migration retry did not finish in time; the canaries go on');
+    }
+    // Not awaited: a stalled repair must never hold the canaries (one run at a time).
+    this.startFlatMirrorReconcile();
     await this.runMailboxCanaries(run, results);
 
     // Signal canary — reuse the same RPC ping as the liveness check.
@@ -436,14 +450,22 @@ export class HealthService {
     }
   }
 
-  private async reconcileFlatMirror(): Promise<void> {
+  /**
+   * Starts the flat-key repair beside the canaries, never in their path: a stalled database
+   * call there cannot delay or skip a canary. A run still in flight is not started again.
+   */
+  private startFlatMirrorReconcile(): void {
     const { reconcileFlatMailboxKeys, logger } = this.deps;
-    if (!reconcileFlatMailboxKeys) return;
-    try {
-      await reconcileFlatMailboxKeys();
-    } catch (err) {
-      logger.error({ err }, 'Could not reconcile the flat principal-mailbox keys with the registry');
-    }
+    if (!reconcileFlatMailboxKeys || this.flatMirrorInFlight) return;
+    this.flatMirrorInFlight = (async () => {
+      try {
+        await reconcileFlatMailboxKeys();
+      } catch (err) {
+        logger.error({ err }, 'Could not reconcile the flat principal-mailbox keys with the registry');
+      } finally {
+        this.flatMirrorInFlight = null;
+      }
+    })();
   }
 
   private async retryDeferredMigration(): Promise<void> {
@@ -478,7 +500,7 @@ export class HealthService {
     if (!principalMailboxes) return;
     let live: PrincipalMailboxView[];
     try {
-      live = await principalMailboxes.list();
+      live = await withDeadline(principalMailboxes.list(), MAILBOX_REGISTRY_TIMEOUT_MS);
     } catch (err) {
       logger.error({ err }, 'Principal mailbox canary could not list the registry');
       results.push({ name: 'principal_mailboxes', status: 'fail', detail: 'Could not read the principal mailbox registry' });
@@ -690,5 +712,20 @@ export class HealthService {
     } catch (err) {
       this.deps.logger.warn({ err, canary: name, url }, 'Heartbeat ping failed (non-fatal)');
     }
+  }
+}
+
+/** `work`, or a rejection once `ms` have passed. Stops the wait only; the work itself runs on. */
+async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error(`timed out after ${ms}ms`), { name: 'TimeoutError' })), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
