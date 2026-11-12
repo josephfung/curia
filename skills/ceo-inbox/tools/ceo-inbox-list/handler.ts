@@ -1,5 +1,6 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { namedOrDefaultMailbox } from '../../../_shared/principal-mailbox-client.js';
+import { encodePageToken } from '../../../_shared/composite-page-token.js';
+import { allFailedMessage, collectAcross, listAcrossMailboxes, mergeNewestFirst, readPageToken, resolveTargets } from '../../../_shared/cross-mailbox-listing.js';
 import { curiaOwnAddresses } from '../../../_shared/curia-own-addresses.js';
 import { NYLAS_MAX_LIST_LIMIT, type NylasDraftSummary, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
 import { annotateDrafts, filterModifiedSince, parseModifiedSince } from '../../../_shared/draft-listing.js';
@@ -35,9 +36,9 @@ function isSystemFolder(folder: string): boolean {
 
 export class CeoInboxListHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const picked = await namedOrDefaultMailbox(ctx, ctx.input, 'ceo-inbox-list');
-    if (!picked.ok) return { success: false, error: picked.error };
-    const client = picked.at.client;
+    const resolved = await resolveTargets(ctx, ctx.input, 'ceo-inbox-list');
+    if (!resolved.ok) return { success: false, error: resolved.error };
+    const { targets } = resolved;
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
@@ -65,28 +66,39 @@ export class CeoInboxListHandler implements ToolHandler {
         // Nylas /drafts has no date parameter (#2474): with a cutoff, scan every page and
         // filter here, so the limit counts matching drafts and none past the first page is
         // missed (final review C1). A scan stopped at its cap says so (scan_incomplete).
-        let fetched: NylasDraftSummary[];
-        let scanIncomplete = false;
-        if (since.seconds === null) {
-          fetched = await client.listDrafts({ limit });
-        } else {
-          const all = await client.listAllDrafts({ maxScan: DRAFT_SCAN_LIMIT, pageSize: NYLAS_MAX_LIST_LIMIT });
-          fetched = all.drafts;
-          scanIncomplete = all.truncated;
-          if (scanIncomplete) {
-            ctx.log.warn({ scanned: fetched.length, cap: DRAFT_SCAN_LIMIT }, 'ceo-inbox-list: draft scan hit the cap — older drafts were not checked against modified_since');
+        // Every mailbox is read the same way and the drafts merged newest first (#2475).
+        const { ok, errors } = await collectAcross(targets, async (client) => {
+          let fetched: NylasDraftSummary[];
+          let truncated = false;
+          if (since.seconds === null) {
+            fetched = await client.listDrafts({ limit });
+          } else {
+            const all = await client.listAllDrafts({ maxScan: DRAFT_SCAN_LIMIT, pageSize: NYLAS_MAX_LIST_LIMIT });
+            fetched = all.drafts;
+            truncated = all.truncated;
           }
+          return { drafts: filterModifiedSince(fetched, since.seconds).slice(0, limit), truncated, scanned: fetched.length };
+        });
+        if (ok.length === 0) {
+          ctx.log.error({ errors }, 'ceo-inbox-list: failed to list drafts');
+          return { success: false, error: allFailedMessage('Failed to list principal inbox drafts', errors) };
         }
-        const kept = filterModifiedSince(fetched, since.seconds).slice(0, limit);
-        const { drafts, displayTimezone } = await annotateDrafts(ctx, kept, 'ceo-inbox-list');
+        const scanIncomplete = ok.some((o) => o.value.truncated);
+        if (scanIncomplete) {
+          ctx.log.warn({ cap: DRAFT_SCAN_LIMIT }, 'ceo-inbox-list: draft scan hit the cap — older drafts were not checked against modified_since');
+        }
+        const merged = mergeNewestFirst(ok.map((o) => ({ mailbox: o.mailbox, items: o.value.drafts })), limit);
+        const annotated = await annotateDrafts(ctx, merged, 'ceo-inbox-list');
+        const drafts = annotated.drafts.map((d, i) => ({ ...d, mailbox: merged[i]!.mailbox, mailbox_label: merged[i]!.mailbox_label }));
         return {
           success: true,
           // `drafts` (not `messages`) + an explicit `folder` make a genuine
           // empty result distinguishable from the old silent-zero failure where
           // the wrong endpoint was queried.
           data: {
-            drafts, count: drafts.length, folder: 'DRAFTS', displayTimezone,
+            drafts, count: drafts.length, folder: 'DRAFTS', displayTimezone: annotated.displayTimezone,
             ...(scanIncomplete ? { scan_incomplete: true } : {}),
+            ...(errors.length > 0 ? { mailbox_errors: errors } : {}),
           },
         };
       } catch (err) {
@@ -101,6 +113,9 @@ export class CeoInboxListHandler implements ToolHandler {
     const curiaEmails = await curiaOwnAddresses(ctx, 'ceo-inbox-list');
 
     const unreadOnly = input.unread_only !== false; // default true
+
+    const token = readPageToken(input);
+    if (!token.ok) return { success: false, error: token.error };
 
     ctx.log.info({ limit, folder, unreadOnly }, 'ceo-inbox-list: listing messages');
 
@@ -131,54 +146,38 @@ export class CeoInboxListHandler implements ToolHandler {
         (unreadOnly && !msg.unread) ||
         (checkFolder && !msg.folders.some((f) => f.toUpperCase() === wantFolder));
 
-      const collected: NylasMessageSummary[] = [];
       let droppedSelf = 0;
       let droppedStale = 0;
-      let pageToken: string | undefined;
-      let hasMore = false;
-      let scanIncomplete = false;
 
-      for (let page = 0; page < LIST_PAGE_CAP; page++) {
-        const { messages: raw, nextCursor } = await client.listMessagesPage({
-          // Follow-up pages use the full list cap. limit+1 (often 6) would
-          // leave real mail past ~150 messages under-reported on every run,
-          // because Curia-self mail is never marked read.
-          limit: pageToken ? NYLAS_MAX_LIST_LIMIT : limit + 1,
+      // Every mailbox is scanned from its own resume point in page_token (none: from the start),
+      // limit+1 kept items each so has_more is known without another round-trip. The filters are
+      // re-sent on every page (#2377).
+      const cross = await listAcrossMailboxes<NylasMessageSummary>(targets, token.cursors, {
+        limit,
+        need: limit + 1,
+        pageCap: LIST_PAGE_CAP,
+        // Follow-up pages use the full list cap. limit+1 (often 6) would
+        // leave real mail past ~150 messages under-reported on every run,
+        // because Curia-self mail is never marked read.
+        fetchPage: (client, cursor) => client.listMessagesPage({
+          limit: cursor ? NYLAS_MAX_LIST_LIMIT : limit + 1,
           folder,
           unread: unreadOnly || undefined,
-          ...(pageToken ? { pageToken } : {}),
-        });
+          ...(cursor ? { pageToken: cursor } : {}),
+        }),
+        keep: (msg) => {
+          if (isStale(msg)) { droppedStale++; return false; }
+          if (msg.from.some((p) => curiaEmails.has(p.email.toLowerCase()))) { droppedSelf++; return false; }
+          return true;
+        },
+      });
 
-        const fresh = raw.filter((msg) => !isStale(msg));
-        droppedStale += raw.length - fresh.length;
-        const pageFiltered = fresh.filter(
-          (msg) => !msg.from.some((p) => curiaEmails.has(p.email.toLowerCase())),
+      if (cross.capped) {
+        ctx.log.error(
+          { pages: LIST_PAGE_CAP, kept: cross.items.length },
+          'ceo-inbox-list: paging cap reached before the mailbox was exhausted',
         );
-        droppedSelf += fresh.length - pageFiltered.length;
-        collected.push(...pageFiltered);
-
-        if (collected.length > limit) {
-          hasMore = true;
-          break;
-        }
-        if (!nextCursor || raw.length === 0) {
-          break;
-        }
-        if (page === LIST_PAGE_CAP - 1) {
-          ctx.log.error(
-            { pages: LIST_PAGE_CAP, kept: collected.length },
-            'ceo-inbox-list: paging cap reached before the mailbox was exhausted',
-          );
-          // count 0 + has_more true spins the agent: an empty page archives
-          // nothing, so the next run repeats it. Stop instead, and say the
-          // scan stopped early so older mail is not silently abandoned.
-          hasMore = collected.length > 0;
-          scanIncomplete = true;
-          break;
-        }
-        pageToken = nextCursor;
       }
-
       if (droppedSelf > 0) {
         ctx.log.info(
           { filtered: droppedSelf },
@@ -191,16 +190,23 @@ export class CeoInboxListHandler implements ToolHandler {
           'ceo-inbox-list: dropped provider results that contradict the requested filter',
         );
       }
-
-      const messages = collected.slice(0, limit);
+      if (cross.allFailed) {
+        ctx.log.error({ errors: cross.errors }, 'ceo-inbox-list: every mailbox failed');
+        return { success: false, error: allFailedMessage('Failed to list principal inbox messages', cross.errors) };
+      }
 
       return {
         success: true,
         data: {
-          messages,
-          count: messages.length,
-          has_more: hasMore,
-          ...(scanIncomplete ? { scan_incomplete: true } : {}),
+          messages: cross.items,
+          count: cross.items.length,
+          has_more: cross.hasMore,
+          ...(cross.hasMore ? { next_page_token: encodePageToken(cross.positions) } : {}),
+          // count 0 + has_more true spins the agent: an empty page archives
+          // nothing, so the next run repeats it. A capped scan with nothing kept
+          // stops instead, and says so, so older mail is not silently abandoned.
+          ...(cross.capped ? { scan_incomplete: true } : {}),
+          ...(cross.errors.length > 0 ? { mailbox_errors: cross.errors } : {}),
         },
       };
     } catch (err) {

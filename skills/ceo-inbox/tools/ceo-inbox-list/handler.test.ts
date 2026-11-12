@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxListHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { Logger } from '../../../../src/logger.js';
-import { stubPrincipalMailboxes, twoMailboxFixture } from '../../../_shared/principal-mailboxes-test-helpers.js';
+import { pagedMessagesFetch, rawMessage, stubPrincipalMailboxes, twoMailboxes, twoMailboxFixture } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -581,5 +581,150 @@ describe('CeoInboxListHandler — mailbox input (#2475)', () => {
     expect(result.success).toBe(true);
     expect(f.calls.every((c) => c.grant === 'grant-personal')).toBe(true);
     expect(fetchMock).toHaveBeenCalled();
+  });
+});
+
+describe('CeoInboxListHandler — every mailbox (#2475)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const ctxFor = (input: Record<string, unknown>): ToolContext =>
+    ({ ...makeCtx(input), principalMailboxes: twoMailboxes() }) as ToolContext;
+  type Item = { id: string; mailbox: string; mailbox_label: string };
+  type Data = { messages: Item[]; count: number; has_more: boolean; next_page_token?: string; mailbox_errors?: Array<{ mailbox: string; mailbox_label: string; error: string }> };
+
+  function serve(byGrant: Record<string, Array<Record<string, unknown>>>, opts: Parameters<typeof pagedMessagesFetch>[1] = {}) {
+    const f = pagedMessagesFetch(byGrant, opts);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => f.fetchStub(url));
+    return f;
+  }
+  const run = (input: Record<string, unknown>) => new CeoInboxListHandler().execute(ctxFor(input));
+
+  it('merges two mailboxes by date and labels each', async () => {
+    serve({
+      'grant-work': [rawMessage('w1', 100), rawMessage('w2', 96)],
+      'grant-personal': [rawMessage('p1', 98), rawMessage('p2', 94)],
+    });
+    const result = await run({ limit: 10 });
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as Data;
+    expect(data.messages.map((m) => [m.id, m.mailbox, m.mailbox_label])).toEqual([
+      ['w1', 'work', 'Work'], ['p1', 'personal', 'Personal'], ['w2', 'work', 'Work'], ['p2', 'personal', 'Personal'],
+    ]);
+    expect(data.has_more).toBe(false);
+    expect(data.next_page_token).toBeUndefined();
+    expect(data.mailbox_errors).toBeUndefined();
+  });
+
+  it('breaks date ties by mailbox id then message id', async () => {
+    serve({
+      'grant-work': [rawMessage('b', 50), rawMessage('a', 50)],
+      'grant-personal': [rawMessage('z', 50)],
+    });
+    const result = await run({ limit: 10 });
+    if (!result.success) throw new Error(result.error);
+    expect((result.data as Data).messages.map((m) => m.id)).toEqual(['z', 'b', 'a']);
+  });
+
+  it('a failing mailbox is reported and does not hide the other', async () => {
+    serve({ 'grant-work': [rawMessage('w1', 100)], 'grant-personal': [rawMessage('p1', 98)] }, { failing: ['grant-personal'] });
+    const result = await run({ limit: 10 });
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as Data;
+    expect(data.messages.map((m) => m.id)).toEqual(['w1']);
+    expect(data.mailbox_errors).toEqual([{ mailbox: 'personal', mailbox_label: 'Personal', error: 'HTTP 500' }]);
+    expect(JSON.stringify(result)).not.toContain('grant-');
+  });
+
+  it('fails when every mailbox fails', async () => {
+    serve({}, { failing: ['grant-work', 'grant-personal'] });
+    const result = await run({ limit: 10 });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).not.toContain('grant-');
+  });
+
+  it('explicit mailbox reads only that mailbox', async () => {
+    const f = serve({ 'grant-work': [rawMessage('w1', 100)], 'grant-personal': [rawMessage('p1', 98)] });
+    const result = await run({ limit: 10, mailbox: 'personal' });
+    if (!result.success) throw new Error(result.error);
+    expect((result.data as Data).messages.map((m) => m.id)).toEqual(['p1']);
+    expect(f.requests.every((r) => r.grant === 'grant-personal')).toBe(true);
+  });
+
+  it('DRAFTS lists drafts from every mailbox, labelled', async () => {
+    const draft = (id: string, date: number) => ({ id, thread_id: `t${id}`, subject: id, to: [], cc: [], snippet: '', date });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const grant = /\/grants\/([^/]+)/.exec(new URL(String(url)).pathname)![1]!;
+      const data = grant === 'grant-work' ? [draft('dw', 10)] : [draft('dp', 20)];
+      return new Response(JSON.stringify({ data }), { status: 200 });
+    });
+    const result = await run({ folder: 'DRAFTS', limit: 10 });
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { drafts: Item[]; count: number };
+    expect(data.drafts.map((d) => [d.id, d.mailbox, d.mailbox_label])).toEqual([
+      ['dp', 'personal', 'Personal'], ['dw', 'work', 'Work'],
+    ]);
+  });
+
+  it('pages through two mailboxes to the end and returns every message exactly once', async () => {
+    const work = Array.from({ length: 9 }, (_, i) => rawMessage(`w${i}`, 200 - i * 7));
+    const personal = Array.from({ length: 8 }, (_, i) => rawMessage(`p${i}`, 203 - i * 5));
+    // A second page request for a mailbox whose items were cut must resume mid-page.
+    const f = serve({ 'grant-work': work, 'grant-personal': personal }, { pageSize: 4 });
+
+    const seen: string[] = [];
+    let token: string | undefined;
+    for (let call = 0; call < 20; call++) {
+      const result = await run({ limit: 3, ...(token ? { page_token: token } : {}) });
+      if (!result.success) throw new Error(result.error);
+      const data = result.data as Data;
+      expect(data.count).toBeLessThanOrEqual(3);
+      seen.push(...data.messages.map((m) => m.id));
+      token = data.next_page_token;
+      expect(data.has_more).toBe(token !== undefined);
+      if (!token) break;
+    }
+    expect(token).toBeUndefined();
+    expect([...seen].sort()).toEqual([...work, ...personal].map((m) => m.id as string).sort());
+    expect(new Set(seen).size).toBe(seen.length);
+    // Merged order is date descending across pages.
+    const dates = new Map([...work, ...personal].map((m) => [m.id as string, m.date as number]));
+    const ordered = seen.map((id) => dates.get(id)!);
+    expect(ordered).toEqual([...ordered].sort((a, b) => b - a));
+    // Every cursor request re-sends the filters (#2377).
+    const cursorRequests = f.requests.filter((r) => r.params.get('page_token'));
+    expect(cursorRequests.length).toBeGreaterThan(0);
+    for (const r of cursorRequests) {
+      expect(r.params.get('in')).toBe('INBOX');
+      expect(r.params.get('unread')).toBe('true');
+    }
+  });
+
+  it('an explicit mailbox still pages with a composite token holding one key', async () => {
+    serve({ 'grant-personal': Array.from({ length: 5 }, (_, i) => rawMessage(`p${i}`, 100 - i)) }, { pageSize: 3 });
+    const first = await run({ limit: 2, mailbox: 'personal' });
+    if (!first.success) throw new Error(first.error);
+    const token = (first.data as Data).next_page_token!;
+    expect(Object.keys(JSON.parse(Buffer.from(token, 'base64url').toString()))).toEqual(['personal']);
+    const second = await run({ limit: 2, mailbox: 'personal', page_token: token });
+    if (!second.success) throw new Error(second.error);
+    expect((second.data as Data).messages.map((m) => m.id)).toEqual(['p2', 'p3']);
+  });
+
+  it('a single-mailbox install labels items and issues a composite token', async () => {
+    const f = pagedMessagesFetch({ 'test-grant': Array.from({ length: 4 }, (_, i) => rawMessage(`m${i}`, 10 - i)) });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => f.fetchStub(url));
+    const result = await new CeoInboxListHandler().execute(makeCtx({ limit: 2 }));
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as Data;
+    expect(data.messages.map((m) => [m.id, m.mailbox])).toEqual([['m0', 'work'], ['m1', 'work']]);
+    expect(Object.keys(JSON.parse(Buffer.from(data.next_page_token!, 'base64url').toString()))).toEqual(['work']);
+  });
+
+  it('refuses a page_token it cannot decode and says to retry without it', async () => {
+    const f = serve({ 'grant-work': [rawMessage('w1', 1)] });
+    const result = await run({ page_token: 'a-raw-nylas-cursor' });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('without page_token');
+    expect(f.requests).toHaveLength(0);
   });
 });

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxSearchHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { Logger } from '../../../../src/logger.js';
-import { stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
+import { pagedMessagesFetch, rawMessage, stubPrincipalMailboxes, twoMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -410,5 +410,103 @@ describe('CeoInboxSearchHandler — drafts date filter and authorship (#2474)', 
     const data = result.data as { drafts: Array<{ created_by_curia: boolean | null }>; count: number };
     expect(data.count).toBe(3);
     expect(data.drafts.every((d) => d.created_by_curia === null)).toBe(true);
+  });
+});
+
+describe('CeoInboxSearchHandler — every mailbox (#2475)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const ctxFor = (input: Record<string, unknown>): ToolContext =>
+    ({ ...makeCtx(input), principalMailboxes: twoMailboxes() }) as ToolContext;
+  type Item = { id: string; mailbox: string; mailbox_label: string };
+  type Data = { messages: Item[]; count: number; next_page_token?: string; mailbox_errors?: Array<{ mailbox: string; mailbox_label: string; error: string }> };
+
+  function serve(byGrant: Record<string, Array<Record<string, unknown>>>, opts: Parameters<typeof pagedMessagesFetch>[1] = {}) {
+    const f = pagedMessagesFetch(byGrant, opts);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => f.fetchStub(url));
+    return f;
+  }
+  const run = (input: Record<string, unknown>) => new CeoInboxSearchHandler().execute(ctxFor({ query: 'invoice', ...input }));
+
+  it('merges two mailboxes by date and labels each', async () => {
+    serve({
+      'grant-work': [rawMessage('w1', 100), rawMessage('w2', 96)],
+      'grant-personal': [rawMessage('p1', 98), rawMessage('p2', 94)],
+    });
+    const result = await run({ limit: 10 });
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as Data;
+    expect(data.messages.map((m) => [m.id, m.mailbox, m.mailbox_label])).toEqual([
+      ['w1', 'work', 'Work'], ['p1', 'personal', 'Personal'], ['w2', 'work', 'Work'], ['p2', 'personal', 'Personal'],
+    ]);
+    expect(data.next_page_token).toBeUndefined();
+  });
+
+  it('a failing mailbox is reported and does not hide the other', async () => {
+    serve({ 'grant-work': [rawMessage('w1', 100)] }, { failing: ['grant-personal'] });
+    const result = await run({ limit: 10 });
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as Data;
+    expect(data.messages.map((m) => m.id)).toEqual(['w1']);
+    expect(data.mailbox_errors).toEqual([{ mailbox: 'personal', mailbox_label: 'Personal', error: 'HTTP 500' }]);
+    expect(JSON.stringify(result)).not.toContain('grant-');
+  });
+
+  it('fails when every mailbox fails', async () => {
+    serve({}, { failing: ['grant-work', 'grant-personal'] });
+    expect((await run({ limit: 10 })).success).toBe(false);
+  });
+
+  it('explicit mailbox reads only that mailbox', async () => {
+    const f = serve({ 'grant-work': [rawMessage('w1', 100)], 'grant-personal': [rawMessage('p1', 98)] });
+    const result = await run({ mailbox: 'work' });
+    if (!result.success) throw new Error(result.error);
+    expect((result.data as Data).messages.map((m) => m.id)).toEqual(['w1']);
+    expect(f.requests.every((r) => r.grant === 'grant-work')).toBe(true);
+  });
+
+  it('DRAFTS searches drafts in every mailbox, labelled', async () => {
+    const draft = (id: string, date: number) => ({ id, thread_id: `t${id}`, subject: 'invoice', to: [], cc: [], snippet: '', date });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const grant = /\/grants\/([^/]+)/.exec(new URL(String(url)).pathname)![1]!;
+      const data = grant === 'grant-work' ? [draft('dw', 10)] : [draft('dp', 20)];
+      return new Response(JSON.stringify({ data }), { status: 200 });
+    });
+    const result = await run({ folder: 'DRAFTS' });
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { drafts: Item[] };
+    expect(data.drafts.map((d) => [d.id, d.mailbox])).toEqual([['dp', 'personal'], ['dw', 'work']]);
+  });
+
+  it('pages through two mailboxes to the end and returns every message exactly once', async () => {
+    const work = Array.from({ length: 7 }, (_, i) => rawMessage(`w${i}`, 200 - i * 7));
+    const personal = Array.from({ length: 6 }, (_, i) => rawMessage(`p${i}`, 203 - i * 5));
+    const f = serve({ 'grant-work': work, 'grant-personal': personal }, { pageSize: 3 });
+
+    const seen: string[] = [];
+    let token: string | undefined;
+    for (let call = 0; call < 20; call++) {
+      const result = await run({ limit: 4, ...(token ? { page_token: token } : {}) });
+      if (!result.success) throw new Error(result.error);
+      const data = result.data as Data;
+      seen.push(...data.messages.map((m) => m.id));
+      token = data.next_page_token;
+      if (!token) break;
+    }
+    expect(token).toBeUndefined();
+    expect([...seen].sort()).toEqual([...work, ...personal].map((m) => m.id as string).sort());
+    expect(new Set(seen).size).toBe(seen.length);
+    // A search follow-up stays token-only: re-sending filters beside a search query is rejected.
+    for (const r of f.requests.filter((x) => x.params.get('page_token'))) {
+      expect(r.params.get('search_query_native')).toBeNull();
+    }
+  });
+
+  it('refuses a page_token it cannot decode and says to retry without it', async () => {
+    const f = serve({});
+    const result = await run({ page_token: 'raw-cursor' });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('without page_token');
+    expect(f.requests).toHaveLength(0);
   });
 });
