@@ -11,7 +11,7 @@ import {
 import { readFile, realpath } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
+import { mailboxView, stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
@@ -206,6 +206,70 @@ describe('CeoInboxDraftComposeHandler', () => {
     expect((result as { error: string }).error).toContain('No principal mailbox is connected');
     // No Nylas call should have been made
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  describe('mailbox choice (#2475)', () => {
+    const folders = [
+      { id: 'SENT', name: 'Sent', attributes: ['\\Sent'] },
+      { id: 'INBOX', name: 'Inbox', attributes: ['\\Inbox'] },
+    ];
+    const sentToAlice = {
+      id: 'm1', threadId: 't1', subject: 'Earlier note', from: [{ email: 'ceo@work.example.com' }],
+      to: [{ email: 'alice@example.com' }], cc: [], bcc: [], body: '', snippet: '', date: 1000, unread: false, folders: [], attachments: [],
+    };
+    const fake = (sent: unknown[]) => ({
+      listFolders: async () => folders,
+      listMessages: async (o: { folders: string[] }) => (o.folders[0] === 'SENT' ? sent : []),
+    });
+    function twoCtx(extra: Record<string, unknown> = {}): ToolContext {
+      const base = buildCtx();
+      return {
+        ...base,
+        input: { ...(base.input as Record<string, unknown>), ...extra },
+        principalMailboxes: stubPrincipalMailboxes({
+          mailboxes: [
+            mailboxView('work', 'Work', 'ceo@work.example.com', true),
+            mailboxView('personal', 'Personal', 'ceo@personal.example.com'),
+          ],
+          grantId: (id) => `grant-${id}`,
+          gatewayClients: { work: fake([sentToAlice]), personal: fake([]) },
+        }),
+      } as unknown as ToolContext;
+    }
+
+    it('returns needs_mailbox with evidence and creates nothing', async () => {
+      const result = await handler.execute(twoCtx());
+      expect(result.success).toBe(true);
+      const data = (result as { data: { needs_mailbox: boolean; evidence: Array<{ mailbox: string; sent_count: number }> } }).data;
+      expect(data.needs_mailbox).toBe(true);
+      expect(data.evidence.find((e) => e.mailbox === 'work')!.sent_count).toBe(1);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('creates in the stated mailbox and reports the verdict', async () => {
+      mockFetch.mockResolvedValue(new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 }));
+      const result = await handler.execute(twoCtx({ mailbox: 'work' }));
+      expect(result.success).toBe(true);
+      expect((result as { data: Record<string, unknown> }).data).toMatchObject({
+        draft_id: 'draft-compose-1', mailbox: 'work', mailbox_label: 'Work', evidence: 'agrees',
+      });
+      expect(String(mockFetch.mock.calls[0]![0])).toContain('grant-work');
+    });
+
+    it('rejects an unknown mailbox instead of falling back', async () => {
+      const result = await handler.execute(twoCtx({ mailbox: 'nope' }));
+      expect(result.success).toBe(false);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('single mailbox needs no mailbox input and returns no evidence', async () => {
+      mockFetch.mockResolvedValue(new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 }));
+      const result = await handler.execute(buildCtx());
+      expect(result.success).toBe(true);
+      const data = (result as { data: Record<string, unknown> }).data;
+      expect(data).not.toHaveProperty('evidence');
+      expect(data).not.toHaveProperty('needs_mailbox');
+    });
   });
 
   // Recipients by reference, raw addresses by provenance (#2053, ADR-047).

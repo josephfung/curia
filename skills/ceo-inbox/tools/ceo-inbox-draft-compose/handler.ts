@@ -1,5 +1,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { namedOrDefaultMailbox } from '../../../_shared/principal-mailbox-client.js';
+import { mailboxFields, namedOrDefaultMailbox, readMailboxInput } from '../../../_shared/principal-mailbox-client.js';
+import type { PrincipalMailboxView } from '../../../../src/principal-mailboxes/service.js';
+import { classifyEvidence, mailboxEvidence } from '../../../../src/principal-mailboxes/evidence.js';
 import { type DraftAttachment } from '../../../_shared/ceo-nylas-client.js';
 import { markdownToHtml } from '../../../../src/format/markdown-to-html.js';
 import { parseAttachmentInputs } from '../../../_shared/parse-attachments.js';
@@ -79,10 +81,27 @@ async function isPrincipalOnlyDraft(
 }
 
 export class CeoInboxDraftComposeHandler implements ToolHandler {
+  /** Which account the draft went in, and how the history with the recipients bears on that choice. */
+  private async mailboxResult(
+    ctx: ToolContext,
+    mailbox: PrincipalMailboxView,
+    recipients: string[],
+  ): Promise<Record<string, unknown>> {
+    const evidence = await mailboxEvidence(ctx.principalMailboxes!, recipients);
+    return { ...mailboxFields(mailbox), evidence: classifyEvidence(evidence, mailbox.id) };
+  }
+
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const picked = await namedOrDefaultMailbox(ctx, ctx.input, 'ceo-inbox-draft-compose');
-    if (!picked.ok) return { success: false, error: picked.error };
-    const client = picked.at.client;
+    // With more than one live mailbox a new message must say which account it leaves from:
+    // no `mailbox` returns the evidence for the model to choose with (D5), after the
+    // recipients are resolved. With one mailbox nothing changes: no evidence, no extra field.
+    const named = readMailboxInput(ctx.input);
+    if (!named.ok) return { success: false, error: named.error };
+    const live = ctx.principalMailboxes ? await ctx.principalMailboxes.list() : [];
+    const multi = live.length > 1;
+    const needsPick = multi && named.mailbox === undefined;
+    const picked = needsPick ? null : await namedOrDefaultMailbox(ctx, ctx.input, 'ceo-inbox-draft-compose');
+    if (picked && !picked.ok) return { success: false, error: picked.error };
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
@@ -149,6 +168,16 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
     const cc = uniqueParticipants(ccRefs.participants, ccRaw.participants)
       .filter((participant) => !toKeys.has(participantKey(participant)));
 
+    if (needsPick) {
+      const recipients = [...to, ...cc].map((participant) => participant.email);
+      const evidence = await mailboxEvidence(ctx.principalMailboxes!, recipients);
+      ctx.log.info({ recipientCount: recipients.length }, 'ceo-inbox-draft-compose: mailbox needed, returning evidence');
+      return { success: true, data: { needs_mailbox: true, evidence } };
+    }
+    if (!picked || !picked.ok) return { success: false, error: 'The principal mailbox is unavailable.' };
+    const at = picked.at;
+    const client = at.client;
+
     const attachmentInputsParsed = parseAttachmentInputs(input.attachments);
     if (typeof attachmentInputsParsed === 'string') {
       return { success: false, error: attachmentInputsParsed };
@@ -207,6 +236,7 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
           subject: draft.subject,
           to: draft.to,
           cc: draft.cc,
+          ...(multi ? await this.mailboxResult(ctx, at.mailbox, [...to, ...cc].map((p) => p.email)) : {}),
         },
       };
     } catch (err) {

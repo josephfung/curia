@@ -18,6 +18,8 @@ export interface StubOptions {
   removed?: string[];
   /** Extra principal addresses (verified identities) beyond the mailboxes' own. */
   identityAddresses?: string[];
+  /** Fake Nylas clients by mailbox id, served by gatewayClient (mailbox evidence). Absent id: throws. */
+  gatewayClients?: Record<string, unknown>;
 }
 
 export function stubPrincipalMailboxes(opts: StubOptions = {}): NonNullable<ToolContext['principalMailboxes']> {
@@ -36,6 +38,11 @@ export function stubPrincipalMailboxes(opts: StubOptions = {}): NonNullable<Tool
       ...new Set([...mailboxes.map((m) => m.address), ...(opts.identityAddresses ?? [])].map((a) => a.toLowerCase()).filter((a) => a !== '')),
     ],
     defaultMailbox: async () => mailboxes.find((m) => m.isDefault) ?? null,
+    gatewayClient: async (id: string) => {
+      const c = opts.gatewayClients?.[id];
+      if (!c) throw new Error(`no stub gateway client for ${id}`);
+      return c;
+    },
     credentials: async (id: string) => ({ apiKey: opts.apiKey ?? 'test-api-key', grantId: grantFor(id) }),
   };
   return stub as unknown as NonNullable<ToolContext['principalMailboxes']>;
