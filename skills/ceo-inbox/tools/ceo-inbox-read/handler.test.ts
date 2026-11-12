@@ -2,17 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxReadHandler } from './handler.js';
 import { clearFolderCache } from '../../../_shared/ceo-nylas-client.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
+import { stubPrincipalMailboxes, twoMailboxFixture } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 function buildCtx(input: Record<string, unknown>): ToolContext {
   return {
     input,
-    secret(key: string): string {
-      switch (key) {
-        case 'channel.email.nylas_api_key': return 'test-api-key';
-        case 'ceo_nylas_grant_id': return 'test-grant-id';
-        default: throw new Error(`unknown secret: ${key}`);
-      }
-    },
+    principalMailboxes: stubPrincipalMailboxes({}),
     log: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -42,7 +37,8 @@ describe('CeoInboxReadHandler', () => {
 
   describe('message path', () => {
     it('reads a message by message_id and returns plain + HTML body', async () => {
-      mockFetch.mockResolvedValue(jsonResponse({
+      // A fresh Response per call: the locate probe and the read each consume one.
+      mockFetch.mockImplementation(async () => jsonResponse({
         id: 'm1',
         thread_id: 't1',
         from: [{ email: 'alice@example.com', name: 'Alice' }],
@@ -65,12 +61,13 @@ describe('CeoInboxReadHandler', () => {
       // hit /messages, not /drafts
       const url = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(url.pathname.endsWith('/messages/m1')).toBe(true);
-      // System labels only — no /folders lookup.
-      expect(mockFetch).toHaveBeenCalledTimes(1);
+      // System labels only — no /folders lookup: the locate probe and the read, nothing else.
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
     it('maps a Label_N id to its folder display name (#2035)', async () => {
       mockFetch
+        .mockResolvedValueOnce(jsonResponse({ id: 'm1' })) // locate probe
         .mockResolvedValueOnce(jsonResponse({
           id: 'm1',
           thread_id: 't1',
@@ -95,7 +92,7 @@ describe('CeoInboxReadHandler', () => {
       expect(result.success).toBe(true);
       const data = (result as { data: { labels: string[] } }).data;
       expect(data.labels).toEqual(['UNREAD', '✍️ Drafted']);
-      const folderUrl = new URL(mockFetch.mock.calls[1]![0] as string);
+      const folderUrl = new URL(mockFetch.mock.calls[2]![0] as string);
       expect(folderUrl.pathname.endsWith('/folders')).toBe(true);
     });
 
@@ -121,6 +118,7 @@ describe('CeoInboxReadHandler', () => {
 
     it('returns raw label ids when the folder lookup fails', async () => {
       mockFetch
+        .mockResolvedValueOnce(jsonResponse({ id: 'm1' })) // locate probe
         .mockResolvedValueOnce(jsonResponse({
           id: 'm1',
           thread_id: 't1',
@@ -158,7 +156,7 @@ describe('CeoInboxReadHandler', () => {
     };
 
     it('reads a draft by draft_id via GET /drafts/{id}', async () => {
-      mockFetch.mockResolvedValue(jsonResponse(RAW_DRAFT));
+      mockFetch.mockImplementation(async () => jsonResponse(RAW_DRAFT));
 
       const result = await handler.execute(buildCtx({ draft_id: 'd1' }));
 
@@ -169,7 +167,7 @@ describe('CeoInboxReadHandler', () => {
     });
 
     it('returns the full draft content with recipients, bcc, and both body forms', async () => {
-      mockFetch.mockResolvedValue(jsonResponse(RAW_DRAFT));
+      mockFetch.mockImplementation(async () => jsonResponse(RAW_DRAFT));
 
       const result = await handler.execute(buildCtx({ draft_id: 'd1' }));
 
@@ -209,5 +207,61 @@ describe('CeoInboxReadHandler', () => {
       expect(result).toMatchObject({ success: false, error: expect.any(String) });
       expect(mockFetch).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('CeoInboxReadHandler mailbox selection (#2475)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function run(holders: Array<'work' | 'personal'>, extra: Record<string, unknown> = {}) {
+    const f = twoMailboxFixture(holders);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(f.fetchStub as typeof fetch);
+    const ctx = {
+      input: { message_id: 'x1', ...extra }, principalMailboxes: f.principalMailboxes,
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as ToolContext;
+    return { f, result: new CeoInboxReadHandler().execute(ctx) };
+  }
+
+  it('acts in the mailbox holding the message', async () => {
+    const { f, result } = run(['personal']);
+    expect((await result).success).toBe(true);
+    expect(f.calls.some((c) => c.grant === 'grant-personal')).toBe(true);
+    expect(f.calls.filter((c) => c.method !== 'GET').every((c) => c.grant === 'grant-personal')).toBe(true);
+  });
+
+  it('returns mailbox and mailbox_label', async () => {
+    const { result } = run(['personal']);
+    const r = await result;
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data).toMatchObject({ mailbox: 'personal', mailbox_label: 'Personal' });
+  });
+
+  it('missing mailbox never defaults: the default mailbox does not hold it, so the other one acts', async () => {
+    const { f, result } = run(['personal']);
+    await result;
+    expect(f.calls.filter((c) => c.method !== 'GET').every((c) => c.grant !== 'grant-work')).toBe(true);
+  });
+
+  it('an explicit mailbox that does not hold the message is a miss, not a fallback', async () => {
+    const { f, result } = run(['personal'], { mailbox: 'work' });
+    expect((await result).success).toBe(false);
+    expect(f.calls.every((c) => c.grant === 'grant-work')).toBe(true);
+  });
+
+  it('an unknown mailbox id is an error and nothing is fetched', async () => {
+    const { f, result } = run(['work'], { mailbox: 'nope' });
+    const r = await result;
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('nope');
+    expect(f.calls).toHaveLength(0);
+  });
+
+  it('refuses a message found in more than one mailbox', async () => {
+    const { f, result } = run(['work', 'personal']);
+    const r = await result;
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('more than one mailbox');
+    expect(f.calls.filter((c) => c.method !== 'GET')).toHaveLength(0);
   });
 });

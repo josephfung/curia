@@ -5,7 +5,8 @@
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
-    "message_id": "string (Nylas message ID to archive)"
+    "message_id": "string (Nylas message ID to archive)",
+    "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {
     "success": "boolean",
@@ -15,7 +16,7 @@
     "already_archived": "boolean (true when the message was not in the inbox, so nothing changed; omitted otherwise)"
   },
   "permissions": [],
-  "secrets": ["channel.email.nylas_api_key", "ceo_nylas_grant_id"],
+  "secrets": [],
   "timeout": 15000,
-  "capabilities": []
+  "capabilities": ["principalMailboxes"]
 }

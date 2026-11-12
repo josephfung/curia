@@ -11,6 +11,7 @@ import {
 import { readFile, realpath } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
@@ -31,13 +32,7 @@ function buildCtx(input?: Record<string, unknown>, sources: IdentifierSources = 
       body: 'Hi Alice, wanted to reach out.',
     },
     timezone: 'America/Toronto',
-    secret(key: string): string {
-      switch (key) {
-        case 'channel.email.nylas_api_key': return 'test-api-key';
-        case 'ceo_nylas_grant_id': return 'test-grant-id';
-        default: return '';
-      }
-    },
+    principalMailboxes: stubPrincipalMailboxes({}),
     log: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -199,18 +194,16 @@ describe('CeoInboxDraftComposeHandler', () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it('Case 13: Missing secret throws — returns { success: false } without calling Nylas', async () => {
+  it('Case 13: No principal mailbox connected — returns { success: false } without calling Nylas', async () => {
     const ctx: ToolContext = {
       ...buildCtx(),
-      secret(key: string): string {
-        throw new Error(`secret '${key}' is not configured`);
-      },
+      principalMailboxes: stubPrincipalMailboxes({ mailboxes: [] }),
     } as unknown as ToolContext;
 
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(false);
-    expect((result as { error: string }).error).toContain('configured');
+    expect((result as { error: string }).error).toContain('No principal mailbox is connected');
     // No Nylas call should have been made
     expect(mockFetch).not.toHaveBeenCalled();
   });

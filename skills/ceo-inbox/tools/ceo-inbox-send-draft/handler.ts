@@ -6,6 +6,7 @@
 // authority fields come from the agent.task event, never from the model's input.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { checkMailboxInput } from '../../../_shared/principal-mailbox-client.js';
 import { PRINCIPAL_SEND_REFUSALS, type PrincipalDraftSendResult } from '../../../../src/skills/outbound-gateway.js';
 
 // Time kept back from the skill's deadline, so this handler answers before the execution
@@ -28,6 +29,10 @@ export class CeoInboxSendDraftHandler implements ToolHandler {
     const rawDraftId = ctx.input?.['draft_id'];
     const draftId = typeof rawDraftId === 'string' ? rawDraftId.trim() : '';
     if (!draftId) return { success: false, error: 'Missing required input: draft_id (string)' };
+
+    // The mailbox is named by the draft itself until the gateway takes a mailbox; a given id must still be valid.
+    const mailboxError = await checkMailboxInput(ctx, ctx.input, 'ceo-inbox-send-draft');
+    if (mailboxError) return { success: false, error: mailboxError };
 
     // An approval replay is refused here as well as in the gateway (design D5): the execution
     // layer never queues this tool, so a replay can only be a stale or forged row.

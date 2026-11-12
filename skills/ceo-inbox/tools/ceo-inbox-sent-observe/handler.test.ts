@@ -19,6 +19,7 @@ import { SHADOW_DOC_TYPE, shadowDraftPath, SHADOW_SCRATCH_PREFIX } from '../../.
 import type { ActionLogInsert } from '../../../../src/autonomy/action-log-types.js';
 import type { InfraLlm } from '../../../../src/skills/infra-llm.js';
 import { COMPLETION_CANDIDATES_KEY, ASKED_TASK_IDS_KEY, MATCHED_DRAFT_IDS_KEY } from '../../../_shared/learning-state.js';
+import { stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 function makeEntityMemory(seed: Record<string, string> = {}): EntityMemory & {
   __values: Map<string, string>;
@@ -168,13 +169,7 @@ function buildCtx(overrides: {
     },
     agentId: 'ceo-inbox',
     taskEventId: 'task-evt-1',
-    secret(key: string): string {
-      if (key === 'channel.email.nylas_api_key') return 'key';
-      if (key === 'ceo_nylas_grant_id') return 'grant';
-      // Mirror the real ctx.secret(): an unrecognized key is a wiring bug, not an empty
-      // string. Throwing here surfaces any stray secret request instead of masking it.
-      throw new Error(`Unexpected secret: ${key}`);
-    },
+    principalMailboxes: stubPrincipalMailboxes({ grantId: 'grant', apiKey: 'key' }),
     entityMemory: mem as unknown as EntityMemory,
     workingDocs,
     taskRepo: {

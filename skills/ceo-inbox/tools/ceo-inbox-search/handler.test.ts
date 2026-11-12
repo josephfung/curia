@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxSearchHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { Logger } from '../../../../src/logger.js';
+import { stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -16,11 +17,9 @@ function makeCtx(
     // Curia's own addresses come from its email accounts, not a vault key (#2409).
     selfEmails: opts.selfEmail ? [opts.selfEmail] : [],
     ...(opts.liveSelfEmails ? { curiaEmailAddresses: async () => opts.liveSelfEmails! } : {}),
-    secret(name: string) {
-      if (name === 'channel.email.nylas_api_key') return 'test-key';
-      if (name === 'ceo_nylas_grant_id') return 'test-grant';
-      throw new Error(`unknown secret: ${name}`);
-    },
+    // The handlers read credentials from principalMailboxes, never from secrets.
+    secret: (key: string): string => { throw new Error(`unexpected secret read: ${key}`); },
+    principalMailboxes: stubPrincipalMailboxes({ grantId: 'test-grant', apiKey: 'test-key' }),
     // The mock only implements the logger methods these tests exercise; cast to
     // the real Logger type through unknown since the shape is intentionally partial.
     log: {

@@ -7,7 +7,8 @@
   "inputs": {
     "message_id": "string (Nylas message ID the attachment belongs to)",
     "filename": "string? (attachment filename from ceo-inbox-read; preferred, must be unique on the message)",
-    "attachment_id": "string? (exact attachment ID; only needed when filenames repeat)"
+    "attachment_id": "string? (exact attachment ID; only needed when filenames repeat)",
+    "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {
     "temp_file_url": "string | undefined (file:// URL of the downloaded bytes on disk — for binary-safe Drive uploads, pass this as create_drive_file's fileUrl param and use the `filename` field as the file_name param to preserve the original attachment name)",
@@ -18,7 +19,7 @@
     "resolved_by": "string ('id' | 'filename' | 'sole_attachment')"
   },
   "permissions": [],
-  "secrets": ["channel.email.nylas_api_key", "ceo_nylas_grant_id"],
+  "secrets": [],
   "timeout": 30000,
-  "capabilities": ["tempFileStore"]
+  "capabilities": ["tempFileStore", "principalMailboxes"]
 }

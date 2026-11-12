@@ -4,8 +4,10 @@
 
 import type { ToolContext } from '../../src/skills/types.js';
 import type { PrincipalMailboxView, PrincipalMailboxes } from '../../src/principal-mailboxes/service.js';
-import { nylasStatus } from '../../src/channels/email/nylas-message-id.js';
+import type { ErrorType } from '../../src/errors/types.js';
+import { messageNotFoundError, nylasStatus } from '../../src/channels/email/nylas-message-id.js';
 import { CeoNylasClient } from './ceo-nylas-client.js';
+import { MissingNylasApiKeyError, RemovedMailboxError, UnknownMailboxError } from '../../src/principal-mailboxes/types.js';
 
 export interface MailboxClient {
   mailbox: PrincipalMailboxView;
@@ -60,7 +62,9 @@ async function probe(at: MailboxClient, kind: 'message' | 'draft', objectId: str
 
 /**
  * Find the mailbox holding a message or draft. With an explicit mailbox, one GET there and
- * a 404 is a definitive miss. Otherwise every live mailbox is asked in parallel.
+ * a 404 is a definitive miss. Otherwise every live mailbox is asked in parallel; a mailbox whose
+ * client cannot be built or whose probe fails (not a 404) goes into `failed` and makes a miss
+ * non-definitive. No live mailbox at all returns `no_mailboxes`.
  */
 export async function locate(
   ctx: ToolContext,
@@ -119,4 +123,84 @@ export function locateError(r: Exclude<LocateResult, { kind: 'found' }>, noun: s
   if (r.definitive) return `No such ${noun} was found.`;
   const ids = r.failed.map((f) => f.mailboxId).join(', ');
   return `No such ${noun} was found, but I could not check mailbox ${ids}, so it may be there. Try again shortly.`;
+}
+
+export type MailboxPick = { ok: true; at: MailboxClient } | { ok: false; error: string; errorType?: ErrorType };
+
+/** The tool's optional `mailbox` input: undefined when omitted, an error for anything but a string. */
+export function readMailboxInput(input: unknown): { ok: true; mailbox: string | undefined } | { ok: false; error: string } {
+  const raw = input && typeof input === 'object' ? (input as Record<string, unknown>)['mailbox'] : undefined;
+  if (raw === undefined || raw === null) return { ok: true, mailbox: undefined };
+  if (typeof raw !== 'string') return { ok: false, error: 'mailbox must be a mailbox id (string)' };
+  return { ok: true, mailbox: raw };
+}
+
+/** A message safe to hand the model for a failed mailbox lookup. Never carries a grant id. */
+function mailboxFailureMessage(err: unknown): string {
+  if (err instanceof UnknownMailboxError || err instanceof RemovedMailboxError || err instanceof MissingNylasApiKeyError) {
+    return err.message;
+  }
+  return 'The principal mailbox is unavailable.';
+}
+
+function failMailbox(ctx: ToolContext, tool: string, err: unknown): { ok: false; error: string } {
+  ctx.log.error({ err, tool }, `${tool}: could not resolve the principal mailbox`);
+  return { ok: false, error: mailboxFailureMessage(err) };
+}
+
+/**
+ * The mailbox a tool acts in when it does not search for an object: the named one, validated
+ * (unknown or removed ids are errors, never the default), otherwise the default mailbox.
+ * Never throws.
+ */
+export async function namedOrDefaultMailbox(ctx: ToolContext, input: unknown, tool: string): Promise<MailboxPick> {
+  const parsed = readMailboxInput(input);
+  if (!parsed.ok) return parsed;
+  try {
+    if (parsed.mailbox !== undefined) return { ok: true, at: await mailboxClient(ctx, parsed.mailbox) };
+    const def = await service(ctx).defaultMailbox();
+    if (!def) return { ok: false, error: 'No principal mailbox is connected.' };
+    return { ok: true, at: await mailboxClient(ctx, def.id) };
+  } catch (err) {
+    return failMailbox(ctx, tool, err);
+  }
+}
+
+/** Find the mailbox holding a message or draft, honouring an explicit `mailbox` input. Never throws. */
+export async function locateInMailbox(
+  ctx: ToolContext,
+  input: unknown,
+  tool: string,
+  kind: 'message' | 'draft',
+  objectId: string,
+): Promise<MailboxPick> {
+  const parsed = readMailboxInput(input);
+  if (!parsed.ok) return parsed;
+  try {
+    const found = await locate(ctx, kind, objectId, parsed.mailbox);
+    if (found.kind === 'found') return { ok: true, at: found.at };
+    // A definite miss for a message keeps the "do not retry with this ID" wording the model acts on.
+    if (kind === 'message' && found.kind === 'not_found' && found.definitive) {
+      return { ok: false, error: messageNotFoundError(objectId), errorType: 'NOT_FOUND' };
+    }
+    return { ok: false, error: locateError(found, kind) };
+  } catch (err) {
+    return failMailbox(ctx, tool, err);
+  }
+}
+
+/**
+ * For tools that do not act in a mailbox yet: a given `mailbox` must still name a live one.
+ * Returns an error string, or null when the input is fine (or omitted). Never throws.
+ */
+export async function checkMailboxInput(ctx: ToolContext, input: unknown, tool: string): Promise<string | null> {
+  const parsed = readMailboxInput(input);
+  if (!parsed.ok) return parsed.error;
+  if (parsed.mailbox === undefined) return null;
+  try {
+    await service(ctx).get(parsed.mailbox);
+    return null;
+  } catch (err) {
+    return failMailbox(ctx, tool, err).error;
+  }
 }

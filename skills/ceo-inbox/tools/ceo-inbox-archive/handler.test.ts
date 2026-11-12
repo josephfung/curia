@@ -7,19 +7,14 @@ import { ExecutionLayer } from '../../../../src/skills/execution.js';
 import { ToolRegistry } from '../../../../src/skills/registry.js';
 import { sanitizeObjectOutput } from '../../../../src/skills/sanitize.js';
 import type { ToolContext, ToolManifest } from '../../../../src/skills/types.js';
+import { stubPrincipalMailboxes, twoMailboxFixture } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 const logger = pino({ level: 'silent' });
 
 function buildCtx(input: Record<string, unknown>, extra: Partial<ToolContext> = {}): ToolContext {
   return {
     input,
-    secret(key: string): string {
-      switch (key) {
-        case 'channel.email.nylas_api_key': return 'test-api-key';
-        case 'ceo_nylas_grant_id': return 'test-grant-id';
-        default: throw new Error(`unknown secret: ${key}`);
-      }
-    },
+    principalMailboxes: stubPrincipalMailboxes({}),
     log: logger,
     ...extra,
   } as unknown as ToolContext;
@@ -27,6 +22,11 @@ function buildCtx(input: Record<string, unknown>, extra: Partial<ToolContext> = 
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(status === 200 ? { data } : { error: data }), { status });
+}
+
+/** The locate probe: one GET of the message in the mailbox that holds it. */
+function probe(): Response {
+  return jsonResponse({ id: 'm1', folders: [] });
 }
 
 /** The fetch calls made, as "METHOD /path". */
@@ -51,26 +51,28 @@ describe('CeoInboxArchiveHandler', () => {
 
   it('archives by writing the folders back without INBOX', async () => {
     fetchSpy
+      .mockResolvedValueOnce(probe())
       .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['INBOX', 'Label_3'] }))
       .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['Label_3'] }));
 
     const result = await new CeoInboxArchiveHandler().execute(buildCtx({ message_id: '19a2b3c4d5e6f708' }));
 
     expect(result.success).toBe(true);
-    expect(calls(fetchSpy)).toEqual(['GET /messages/19a2b3c4d5e6f708', 'PUT /messages/19a2b3c4d5e6f708']);
-    const putBody = JSON.parse(String((fetchSpy.mock.calls[1]![1] as RequestInit).body));
+    expect(calls(fetchSpy)).toEqual(['GET /messages/19a2b3c4d5e6f708', 'GET /messages/19a2b3c4d5e6f708', 'PUT /messages/19a2b3c4d5e6f708']);
+    const putBody = JSON.parse(String((fetchSpy.mock.calls[2]![1] as RequestInit).body));
     expect(putBody).toEqual({ folders: ['Label_3'] });
   });
 
   it('does not send SENT back when archiving a message the principal sent (#2426)', async () => {
     fetchSpy
+      .mockResolvedValueOnce(probe())
       .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['INBOX', 'SENT', 'Label_3'] }))
       .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['SENT', 'Label_3'] }));
 
     const result = await new CeoInboxArchiveHandler().execute(buildCtx({ message_id: '19a2b3c4d5e6f708' }));
 
     expect(result.success).toBe(true);
-    const putBody = JSON.parse(String((fetchSpy.mock.calls[1]![1] as RequestInit).body));
+    const putBody = JSON.parse(String((fetchSpy.mock.calls[2]![1] as RequestInit).body));
     expect(putBody).toEqual({ folders: ['Label_3'] });
   });
 
@@ -78,6 +80,7 @@ describe('CeoInboxArchiveHandler', () => {
   // already fetched, so they cost no extra call.
   it('returns the subject and sender of the message it archived', async () => {
     fetchSpy
+      .mockResolvedValueOnce(probe())
       .mockResolvedValueOnce(jsonResponse({
         id: 'm1', folders: ['INBOX'], subject: 'Statement ready',
         from: [{ name: 'Billing', email: 'billing@example.com' }],
@@ -88,7 +91,7 @@ describe('CeoInboxArchiveHandler', () => {
 
     expect(result).toEqual({
       success: true,
-      data: { message_id: '19a2b3c4d5e6f708', subject: 'Statement ready', from: 'Billing (billing@example.com)' },
+      data: { message_id: '19a2b3c4d5e6f708', subject: 'Statement ready', from: 'Billing (billing@example.com)', mailbox: 'work', mailbox_label: 'Work' },
     });
   });
 
@@ -96,6 +99,7 @@ describe('CeoInboxArchiveHandler', () => {
   // sender is rendered "Name (email)" so the address survives to the agent and the digest.
   it('reports a sender whose address survives the output sanitizer', async () => {
     fetchSpy
+      .mockResolvedValueOnce(probe())
       .mockResolvedValueOnce(jsonResponse({
         id: 'm1', folders: ['INBOX'], subject: 'Statement ready',
         from: [{ name: 'Billing', email: 'billing@example.com' }],
@@ -113,7 +117,7 @@ describe('CeoInboxArchiveHandler', () => {
   // already_archived marks the no-op, so the spot-check pool does not ask the principal to
   // grade an action that changed nothing (#2159).
   it('returns the subject and sender, marked already_archived, when the message was already archived', async () => {
-    fetchSpy.mockResolvedValueOnce(jsonResponse({
+    fetchSpy.mockResolvedValueOnce(probe()).mockResolvedValueOnce(jsonResponse({
       id: 'm1', folders: ['Label_3'], subject: 'Statement ready',
       from: [{ email: 'billing@example.com' }],
     }));
@@ -122,19 +126,20 @@ describe('CeoInboxArchiveHandler', () => {
 
     expect(result).toEqual({
       success: true,
-      data: { message_id: '19a2b3c4d5e6f708', subject: 'Statement ready', from: 'billing@example.com', already_archived: true },
+      data: { message_id: '19a2b3c4d5e6f708', subject: 'Statement ready', from: 'billing@example.com', already_archived: true, mailbox: 'work', mailbox_label: 'Work' },
     });
-    expect(calls(fetchSpy)).toEqual(['GET /messages/19a2b3c4d5e6f708']);
+    expect(calls(fetchSpy)).toEqual(['GET /messages/19a2b3c4d5e6f708', 'GET /messages/19a2b3c4d5e6f708']);
   });
 
   it('omits a subject or sender the message does not have', async () => {
     fetchSpy
+      .mockResolvedValueOnce(probe())
       .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: ['INBOX'] }))
       .mockResolvedValueOnce(jsonResponse({ id: 'm1', folders: [] }));
 
     const result = await new CeoInboxArchiveHandler().execute(buildCtx({ message_id: '19a2b3c4d5e6f708' }));
 
-    expect(result).toEqual({ success: true, data: { message_id: '19a2b3c4d5e6f708' } });
+    expect(result).toEqual({ success: true, data: { message_id: '19a2b3c4d5e6f708', mailbox: 'work', mailbox_label: 'Work' } });
   });
 
   // The two malformed IDs from the prod audit_log behind #2083.
@@ -180,15 +185,12 @@ describe('CeoInboxArchiveHandler', () => {
   });
 
   it('sends no PUT after the execution layer times the call out', async () => {
-    // The execution layer's env fallback reads the declared name upper-cased.
-    vi.stubEnv('CHANNEL.EMAIL.NYLAS_API_KEY', 'test-api-key');
-    vi.stubEnv('CEO_NYLAS_GRANT_ID', 'test-grant-id');
-    const manifest = JSON.parse(
+        const manifest = JSON.parse(
       readFileSync(join(import.meta.dirname, 'tool.json'), 'utf8'),
     ) as ToolManifest;
     const registry = new ToolRegistry();
     registry.register({ ...manifest, timeout: 50 }, new CeoInboxArchiveHandler());
-    const execution = new ExecutionLayer(registry, logger);
+    const execution = new ExecutionLayer(registry, logger, { principalMailboxes: stubPrincipalMailboxes({}) });
 
     // A slow read, like the 10–15 s Nylas bursts in prod. It honours the abort
     // signal the way a real fetch does.
@@ -213,5 +215,61 @@ describe('CeoInboxArchiveHandler', () => {
     // Give the abandoned handler time to finish what it would have done.
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(calls(fetchSpy)).toEqual(['GET /messages/19a2b3c4d5e6f708']);
+  });
+});
+
+describe('CeoInboxArchiveHandler mailbox selection (#2475)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function run(holders: Array<'work' | 'personal'>, extra: Record<string, unknown> = {}) {
+    const f = twoMailboxFixture(holders);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(f.fetchStub as typeof fetch);
+    const ctx = {
+      input: { message_id: 'x1', ...extra }, principalMailboxes: f.principalMailboxes,
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as ToolContext;
+    return { f, result: new CeoInboxArchiveHandler().execute(ctx) };
+  }
+
+  it('acts in the mailbox holding the message', async () => {
+    const { f, result } = run(['personal']);
+    expect((await result).success).toBe(true);
+    expect(f.calls.some((c) => c.grant === 'grant-personal')).toBe(true);
+    expect(f.calls.filter((c) => c.method !== 'GET').every((c) => c.grant === 'grant-personal')).toBe(true);
+  });
+
+  it('returns mailbox and mailbox_label', async () => {
+    const { result } = run(['personal']);
+    const r = await result;
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data).toMatchObject({ mailbox: 'personal', mailbox_label: 'Personal' });
+  });
+
+  it('missing mailbox never defaults: the default mailbox does not hold it, so the other one acts', async () => {
+    const { f, result } = run(['personal']);
+    await result;
+    expect(f.calls.filter((c) => c.method !== 'GET').every((c) => c.grant !== 'grant-work')).toBe(true);
+  });
+
+  it('an explicit mailbox that does not hold the message is a miss, not a fallback', async () => {
+    const { f, result } = run(['personal'], { mailbox: 'work' });
+    expect((await result).success).toBe(false);
+    expect(f.calls.every((c) => c.grant === 'grant-work')).toBe(true);
+  });
+
+  it('an unknown mailbox id is an error and nothing is fetched', async () => {
+    const { f, result } = run(['work'], { mailbox: 'nope' });
+    const r = await result;
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('nope');
+    expect(f.calls).toHaveLength(0);
+  });
+
+  it('refuses a message found in more than one mailbox', async () => {
+    const { f, result } = run(['work', 'personal']);
+    const r = await result;
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('more than one mailbox');
+    expect(f.calls.filter((c) => c.method !== 'GET')).toHaveLength(0);
   });
 });

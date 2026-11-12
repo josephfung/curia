@@ -7,7 +7,8 @@
   "inputs": {
     "reply_to_message_id": "string (Nylas message ID of the message being replied to)",
     "body": "string (email body — write in plain text or markdown, never HTML; converted to HTML automatically)",
-    "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string}. file_url must be a file:// URL from ceo-inbox-download-attachment or similar. Max 10 attachments, 20 MB total.)"
+    "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string}. file_url must be a file:// URL from ceo-inbox-download-attachment or similar. Max 10 attachments, 20 MB total.)",
+    "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {
     "draft_id": "string (Nylas draft ID)",
@@ -19,7 +20,7 @@
     "date": "number? (unix timestamp, present when already_exists is true)"
   },
   "permissions": [],
-  "secrets": ["channel.email.nylas_api_key", "ceo_nylas_grant_id", "ceo_self_email"],
+  "secrets": [],
   "timeout": 30000,
-  "capabilities": ["workingDocs"]
+  "capabilities": ["workingDocs", "principalMailboxes"]
 }

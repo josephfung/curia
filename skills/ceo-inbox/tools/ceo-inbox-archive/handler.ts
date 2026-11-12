@@ -1,14 +1,10 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
-import { CeoNylasClient, describeMessage } from '../../../_shared/ceo-nylas-client.js';
+import { describeMessage } from '../../../_shared/ceo-nylas-client.js';
+import { locateInMailbox, mailboxFields } from '../../../_shared/principal-mailbox-client.js';
 import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 
 export class CeoInboxArchiveHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const apiKey = ceoNylasApiKey(ctx);
-    const grantId = ctx.secret('ceo_nylas_grant_id');
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
-
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
 
@@ -23,6 +19,11 @@ export class CeoInboxArchiveHandler implements ToolHandler {
     if (idError) {
       return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
     }
+
+    const located = await locateInMailbox(ctx, input, 'ceo-inbox-archive', 'message', messageId);
+    if (!located.ok) return { success: false, error: located.error, ...(located.errorType ? { errorType: located.errorType } : {}) };
+    const { client, mailbox } = located.at;
+    const mbx = mailboxFields(mailbox);
 
     ctx.log.info({ messageId }, 'ceo-inbox-archive: archiving message');
 
@@ -42,13 +43,13 @@ export class CeoInboxArchiveHandler implements ToolHandler {
         ctx.log.info({ messageId }, 'ceo-inbox-archive: already archived');
         // already_archived tells the execution layer nothing changed, so the call is not put
         // in the spot-check pool for the principal to grade (#2159).
-        return { success: true, data: { message_id: messageId, ...described, already_archived: true } };
+        return { success: true, data: { message_id: messageId, ...described, already_archived: true, ...mbx } };
       }
 
       await client.updateMessageFolders(messageId, withoutInbox);
 
       ctx.log.info({ messageId }, 'ceo-inbox-archive: archived successfully');
-      return { success: true, data: { message_id: messageId, ...described } };
+      return { success: true, data: { message_id: messageId, ...described, ...mbx } };
     } catch (err) {
       ctx.log.error({ err, messageId }, 'ceo-inbox-archive: failed to archive');
       return { success: false, ...nylasMessageFailure(err, messageId, 'Failed to archive principal inbox message') };

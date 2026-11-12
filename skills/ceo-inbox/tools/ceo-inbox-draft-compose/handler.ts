@@ -1,6 +1,6 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
-import { CeoNylasClient, type DraftAttachment } from '../../../_shared/ceo-nylas-client.js';
+import { namedOrDefaultMailbox } from '../../../_shared/principal-mailbox-client.js';
+import { type DraftAttachment } from '../../../_shared/ceo-nylas-client.js';
 import { markdownToHtml } from '../../../../src/format/markdown-to-html.js';
 import { parseAttachmentInputs } from '../../../_shared/parse-attachments.js';
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES } from '../../../../src/skills/_shared/read-attachments.js';
@@ -80,17 +80,9 @@ async function isPrincipalOnlyDraft(
 
 export class CeoInboxDraftComposeHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    let apiKey: string;
-    let grantId: string;
-    try {
-      apiKey = ceoNylasApiKey(ctx);
-      grantId = ctx.secret('ceo_nylas_grant_id');
-    } catch (err) {
-      ctx.log.error({ err }, 'ceo-inbox-draft-compose: required secret not available');
-      return { success: false, error: 'principal inbox is not configured (missing credentials)' };
-    }
-
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
+    const picked = await namedOrDefaultMailbox(ctx, ctx.input, 'ceo-inbox-draft-compose');
+    if (!picked.ok) return { success: false, error: picked.error };
+    const client = picked.at.client;
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};

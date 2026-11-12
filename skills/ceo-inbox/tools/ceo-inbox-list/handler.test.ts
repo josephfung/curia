@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxListHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { Logger } from '../../../../src/logger.js';
+import { stubPrincipalMailboxes, twoMailboxFixture } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -17,11 +18,7 @@ function makeCtx(
     // Curia's own addresses come from its email accounts, not a vault key (#2409).
     selfEmails: opts.selfEmail ? [opts.selfEmail] : [],
     ...(opts.liveSelfEmails ? { curiaEmailAddresses: async () => opts.liveSelfEmails! } : {}),
-    secret(name: string) {
-      if (name === 'channel.email.nylas_api_key') return 'test-key';
-      if (name === 'ceo_nylas_grant_id') return 'test-grant';
-      throw new Error(`unknown secret: ${name}`);
-    },
+    principalMailboxes: stubPrincipalMailboxes({ grantId: 'test-grant', apiKey: 'test-key' }),
     log: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -559,5 +556,30 @@ describe('CeoInboxListHandler — drafts date filter and authorship (#2474)', ()
     const data = result.data as { drafts: Array<{ created_by_curia: boolean | null }>; count: number };
     expect(data.count).toBe(3);
     expect(data.drafts.every((d) => d.created_by_curia === null)).toBe(true);
+  });
+});
+
+describe('CeoInboxListHandler — mailbox input (#2475)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('refuses an unknown mailbox id instead of using the default', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    const result = await new CeoInboxListHandler().execute(makeCtx({ mailbox: 'nope' }));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('nope');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('acts in the named mailbox when it is live', async () => {
+    const f = twoMailboxFixture(['personal']);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const r = await f.fetchStub(url, init);
+      return new Response(JSON.stringify({ data: [] }), { status: r.status });
+    });
+    const ctx = { ...makeCtx({ mailbox: 'personal' }), principalMailboxes: f.principalMailboxes } as ToolContext;
+    const result = await new CeoInboxListHandler().execute(ctx);
+    expect(result.success).toBe(true);
+    expect(f.calls.every((c) => c.grant === 'grant-personal')).toBe(true);
+    expect(fetchMock).toHaveBeenCalled();
   });
 });

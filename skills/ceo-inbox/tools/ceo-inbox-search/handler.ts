@@ -1,7 +1,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { ceoNylasApiKey } from '../../../_shared/ceo-nylas-api-key.js';
+import { namedOrDefaultMailbox } from '../../../_shared/principal-mailbox-client.js';
 import { curiaOwnAddresses } from '../../../_shared/curia-own-addresses.js';
-import { CeoNylasClient, type NylasDraftSummary, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
+import { type NylasDraftSummary, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
 import { isSpamOrTrash } from '../../../_shared/mail-folders.js';
 import { annotateDrafts, filterModifiedSince, parseModifiedSince } from '../../../_shared/draft-listing.js';
 
@@ -40,9 +40,9 @@ function draftMatchesQuery(draft: NylasDraftSummary, query: string): boolean {
 
 export class CeoInboxSearchHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const apiKey = ceoNylasApiKey(ctx);
-    const grantId = ctx.secret('ceo_nylas_grant_id');
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
+    const picked = await namedOrDefaultMailbox(ctx, ctx.input, 'ceo-inbox-search');
+    if (!picked.ok) return { success: false, error: picked.error };
+    const client = picked.at.client;
 
     // Curia's own addresses (its email accounts, read live) — filter out messages from
     // them so the agent can't operate on its own outbound emails even via search.

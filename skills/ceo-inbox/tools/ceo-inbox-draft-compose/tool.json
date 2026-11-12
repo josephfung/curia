@@ -11,7 +11,8 @@
     "cc": "string[]? (contact IDs for the CC line, same form as to)",
     "to_addresses": "string[]? (email addresses of people who are not contacts, copied exactly from the principal's mail or the principal's message. At least one of to or to_addresses is required)",
     "cc_addresses": "string[]? (CC addresses of people who are not contacts, same rule as to_addresses)",
-    "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string}. file_url must be a file:// URL from ceo-inbox-download-attachment or similar. Max 10 attachments, 20 MB total.)"
+    "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string}. file_url must be a file:// URL from ceo-inbox-download-attachment or similar. Max 10 attachments, 20 MB total.)",
+    "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {
     "draft_id": "string (Nylas draft ID)",
@@ -20,7 +21,7 @@
     "cc": "array of { name?, email }"
   },
   "permissions": [],
-  "secrets": ["channel.email.nylas_api_key", "ceo_nylas_grant_id"],
+  "secrets": [],
   "timeout": 30000,
-  "capabilities": ["workingDocs"]
+  "capabilities": ["workingDocs", "principalMailboxes"]
 }

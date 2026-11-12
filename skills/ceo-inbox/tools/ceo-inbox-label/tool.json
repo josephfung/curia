@@ -6,7 +6,8 @@
   "action_risk": "low",
   "inputs": {
     "message_id": "string (Nylas message ID to label)",
-    "labels": "string[] (label names to apply, e.g. ['🚨 Urgent', 'BOARD'])"
+    "labels": "string[] (label names to apply, e.g. ['🚨 Urgent', 'BOARD'])",
+    "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {
     "success": "boolean",
@@ -19,7 +20,7 @@
     "from": "string (sender as \"Name (email)\" or just the email; omitted when unknown)"
   },
   "permissions": [],
-  "secrets": ["channel.email.nylas_api_key", "ceo_nylas_grant_id"],
+  "secrets": [],
   "timeout": 30000,
-  "capabilities": []
+  "capabilities": ["principalMailboxes"]
 }

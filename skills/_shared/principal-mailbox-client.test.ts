@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { clearFolderCache, CeoNylasClient } from './ceo-nylas-client.js';
-import { allMailboxClients, locate, locateError, mailboxClient } from './principal-mailbox-client.js';
+import { allMailboxClients, checkMailboxInput, locate, locateError, mailboxClient, namedOrDefaultMailbox } from './principal-mailbox-client.js';
 import type { ToolContext } from '../../src/skills/types.js';
+import { stubPrincipalMailboxes, mailboxView } from './principal-mailboxes-test-helpers.js';
 import type { PrincipalMailboxView } from '../../src/principal-mailboxes/service.js';
 
 function view(id: string, label: string, isDefault = false): PrincipalMailboxView {
@@ -171,5 +172,55 @@ describe('principal-mailbox-client', () => {
     await expect(client.deleteDraft('d1')).rejects.toMatchObject({ status: 404 });
     vi.stubGlobal('fetch', vi.fn(async () => res(500, { error: 'x' })));
     await expect(client.deleteDraft('d1')).rejects.toMatchObject({ status: 500 });
+  });
+});
+
+describe('namedOrDefaultMailbox / checkMailboxInput (#2475)', () => {
+  const two = [mailboxView('work', 'Work', 'w@example.com', true), mailboxView('personal', 'Personal', 'p@example.com')];
+  const ctx = () => ({ principalMailboxes: stubPrincipalMailboxes({ mailboxes: two, grantId: (id) => `grant-${id}` }), log: { error: vi.fn(), warn: vi.fn() } }) as unknown as ToolContext;
+
+  it('uses the default mailbox when none is named', async () => {
+    const r = await namedOrDefaultMailbox(ctx(), {}, 't');
+    expect(r.ok && r.at.mailbox.id).toBe('work');
+  });
+
+  it('uses the named mailbox when it is live', async () => {
+    const r = await namedOrDefaultMailbox(ctx(), { mailbox: 'personal' }, 't');
+    expect(r.ok && r.at.mailbox.id).toBe('personal');
+  });
+
+  it('an unknown, blank or removed id is an error, never the default', async () => {
+    for (const id of ['nope', '', '  ']) {
+      const r = await namedOrDefaultMailbox(ctx(), { mailbox: id }, 't');
+      expect(r.ok).toBe(false);
+    }
+    const removedCtx = { principalMailboxes: stubPrincipalMailboxes({ mailboxes: two, removed: ['gone'] }), log: { error: vi.fn() } } as unknown as ToolContext;
+    const r = await namedOrDefaultMailbox(removedCtx, { mailbox: 'gone' }, 't');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('removed');
+  });
+
+  it('a non-string mailbox is refused', async () => {
+    const r = await namedOrDefaultMailbox(ctx(), { mailbox: 5 }, 't');
+    expect(r.ok).toBe(false);
+  });
+
+  it('no default mailbox is an error', async () => {
+    const c = { principalMailboxes: stubPrincipalMailboxes({ mailboxes: [] }), log: { error: vi.fn() } } as unknown as ToolContext;
+    const r = await namedOrDefaultMailbox(c, {}, 't');
+    expect(r).toEqual({ ok: false, error: 'No principal mailbox is connected.' });
+  });
+
+  it('never puts a grant id in an error', async () => {
+    const c = { principalMailboxes: { ...stubPrincipalMailboxes({ mailboxes: two }), credentials: async () => { throw new Error('grant-secret-123'); } }, log: { error: vi.fn() } } as unknown as ToolContext;
+    const r = await namedOrDefaultMailbox(c, {}, 't');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).not.toContain('grant-secret-123');
+  });
+
+  it('checkMailboxInput passes when omitted or live and fails otherwise', async () => {
+    expect(await checkMailboxInput(ctx(), {}, 't')).toBeNull();
+    expect(await checkMailboxInput(ctx(), { mailbox: 'personal' }, 't')).toBeNull();
+    expect(await checkMailboxInput(ctx(), { mailbox: 'nope' }, 't')).toContain('nope');
   });
 });

@@ -5,7 +5,8 @@
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
-    "force": "boolean? (when true, ignore the idle backoff gate — tests / manual runs)"
+    "force": "boolean? (when true, ignore the idle backoff gate — tests / manual runs)",
+    "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {
     "messages_scanned": "number",
@@ -23,7 +24,7 @@
     "skipped_backoff": "boolean"
   },
   "permissions": [],
-  "secrets": ["channel.email.nylas_api_key", "ceo_nylas_grant_id"],
+  "secrets": [],
   "timeout": 60000,
-  "capabilities": ["entityMemory", "workingDocs", "taskRepo", "actionLogRepo", "infraLlm"]
+  "capabilities": ["entityMemory", "workingDocs", "taskRepo", "actionLogRepo", "infraLlm", "principalMailboxes"]
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { CeoInboxShadowDraftHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
+import { stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
 import { shadowDraftPath } from '../../../_shared/shadow-draft.js';
 
 describe('CeoInboxShadowDraftHandler', () => {
@@ -38,5 +39,18 @@ describe('CeoInboxShadowDraftHandler', () => {
         body: 'Happy to chat Thursday.',
       }),
     );
+  });
+});
+
+describe('CeoInboxShadowDraftHandler — mailbox input (#2475)', () => {
+  it('refuses an unknown mailbox id and stores nothing', async () => {
+    const create = vi.fn().mockResolvedValue({});
+    const ctx = { input: { source_message_id: 'm9', subject: 's', body: 'Draft.', mailbox: 'nope' },
+      agentId: 'ceo-inbox', workingDocs: { read: vi.fn().mockResolvedValue(null), create },
+      principalMailboxes: stubPrincipalMailboxes({}),
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } } as unknown as ToolContext;
+    const result = await new CeoInboxShadowDraftHandler().execute(ctx);
+    expect(result.success).toBe(false);
+    expect(create).not.toHaveBeenCalled();
   });
 });

@@ -3,6 +3,7 @@ import pino from 'pino';
 import type { ToolContext } from '../../../src/skills/types.js';
 import { CeoInboxUpdateFoldersHandler } from '../../../skills/ceo-inbox/tools/ceo-inbox-update-folders/handler.js';
 import { clearFolderCache } from '../../../skills/_shared/ceo-nylas-client.js';
+import { stubPrincipalMailboxes } from '../../../skills/_shared/principal-mailboxes-test-helpers.js';
 
 // Folder lists are cached per grant; each test brings its own fixture.
 beforeEach(() => {
@@ -83,7 +84,7 @@ function mockNylas(opts: {
 function makeCtx(input: Record<string, unknown>): ToolContext {
   return {
     input,
-    secret: (key: string) => `fake-${key}`,
+    principalMailboxes: stubPrincipalMailboxes({}),
     log: logger,
   } as unknown as ToolContext;
 }

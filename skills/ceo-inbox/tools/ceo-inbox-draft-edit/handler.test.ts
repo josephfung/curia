@@ -8,6 +8,7 @@ import {
   sourcesWith,
   type DraftRecipientFixture,
 } from '../../../_shared/ceo-draft-recipients-test-helpers.js';
+import { stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 let fixture: DraftRecipientFixture;
 
@@ -17,13 +18,7 @@ function buildCtx(input: Record<string, unknown>, sources: IdentifierSources = s
     toolVersion: '0.3.0',
     input,
     timezone: 'America/Toronto',
-    secret(key: string): string {
-      switch (key) {
-        case 'channel.email.nylas_api_key': return 'test-api-key';
-        case 'ceo_nylas_grant_id': return 'test-grant-id';
-        default: throw new Error(`unknown secret: ${key}`);
-      }
-    },
+    principalMailboxes: stubPrincipalMailboxes({}),
     log: {
       info: vi.fn(),
       warn: vi.fn(),

@@ -7,6 +7,7 @@ import {
   DMARC_CORRUPTED_ATTACHMENT_ID,
   DMARC_FILENAME,
 } from '../../../_shared/__fixtures__/resolve-attachment.js';
+import { stubPrincipalMailboxes, twoMailboxFixture } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -24,13 +25,9 @@ function buildCtx(overrides: Partial<{
     toolName: 'ceo-inbox-download-attachment',
     toolVersion: '0.1.0',
     input,
-    secret(key: string): string {
-      switch (key) {
-        case 'channel.email.nylas_api_key': return 'test-api-key';
-        case 'ceo_nylas_grant_id': return 'test-grant-id';
-        default: throw new Error(`unknown secret: ${key}`);
-      }
-    },
+    // The handlers read credentials from principalMailboxes, never from secrets.
+    secret: (key: string): string => { throw new Error(`unexpected secret read: ${key}`); },
+    principalMailboxes: stubPrincipalMailboxes({}),
     // Partial logger mock; cast through unknown to the real Logger type.
     log: {
       info: vi.fn(),
@@ -381,5 +378,61 @@ describe('CeoInboxDownloadAttachmentHandler', () => {
       expect(Buffer.from(data.content_base64, 'base64').equals(fileBytes)).toBe(true);
     }
     expect(ctx.log.warn).toHaveBeenCalled();
+  });
+});
+
+describe('CeoInboxDownloadAttachmentHandler mailbox selection (#2475)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function run(holders: Array<'work' | 'personal'>, extra: Record<string, unknown> = {}) {
+    const f = twoMailboxFixture(holders);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(f.fetchStub as typeof fetch);
+    const ctx = {
+      input: { message_id: 'x1', filename: 'f.txt', ...extra }, principalMailboxes: f.principalMailboxes,
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as ToolContext;
+    return { f, result: new CeoInboxDownloadAttachmentHandler().execute(ctx) };
+  }
+
+  it('acts in the mailbox holding the message', async () => {
+    const { f, result } = run(['personal']);
+    expect((await result).success).toBe(true);
+    expect(f.calls.some((c) => c.grant === 'grant-personal')).toBe(true);
+    expect(f.calls.filter((c) => c.method !== 'GET').every((c) => c.grant === 'grant-personal')).toBe(true);
+  });
+
+  it('returns mailbox and mailbox_label', async () => {
+    const { result } = run(['personal']);
+    const r = await result;
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data).toMatchObject({ mailbox: 'personal', mailbox_label: 'Personal' });
+  });
+
+  it('missing mailbox never defaults: the default mailbox does not hold it, so the other one acts', async () => {
+    const { f, result } = run(['personal']);
+    await result;
+    expect(f.calls.filter((c) => c.method !== 'GET').every((c) => c.grant !== 'grant-work')).toBe(true);
+  });
+
+  it('an explicit mailbox that does not hold the message is a miss, not a fallback', async () => {
+    const { f, result } = run(['personal'], { mailbox: 'work' });
+    expect((await result).success).toBe(false);
+    expect(f.calls.every((c) => c.grant === 'grant-work')).toBe(true);
+  });
+
+  it('an unknown mailbox id is an error and nothing is fetched', async () => {
+    const { f, result } = run(['work'], { mailbox: 'nope' });
+    const r = await result;
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('nope');
+    expect(f.calls).toHaveLength(0);
+  });
+
+  it('refuses a message found in more than one mailbox', async () => {
+    const { f, result } = run(['work', 'personal']);
+    const r = await result;
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('more than one mailbox');
+    expect(f.calls.filter((c) => c.method !== 'GET')).toHaveLength(0);
   });
 });

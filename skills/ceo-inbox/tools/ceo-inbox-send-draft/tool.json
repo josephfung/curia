@@ -5,7 +5,8 @@
   "sensitivity": "normal",
   "action_risk": 80,
   "inputs": {
-    "draft_id": "string (draft ID from ceo-inbox-list/search with folder DRAFTS)"
+    "draft_id": "string (draft ID from ceo-inbox-list/search with folder DRAFTS)",
+    "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {
     "message_id": "string",
@@ -15,5 +16,5 @@
   "permissions": [],
   "secrets": [],
   "timeout": 30000,
-  "capabilities": ["outboundGateway"]
+  "capabilities": ["outboundGateway", "principalMailboxes"]
 }

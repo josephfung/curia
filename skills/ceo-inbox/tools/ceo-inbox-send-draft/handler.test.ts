@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { CeoInboxSendDraftHandler, SEND_DEADLINE_RESERVE_MS, SEND_OUTCOME_UNKNOWN } from './handler.js';
+import { stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import {
   PRINCIPAL_SEND_REFUSALS,
@@ -148,5 +149,18 @@ describe('CeoInboxSendDraftHandler', () => {
     const result = await new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway }));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/not sent/i);
+  });
+});
+
+describe('CeoInboxSendDraftHandler — mailbox input (#2475)', () => {
+  it('refuses an unknown mailbox id without calling the gateway', async () => {
+    const { gateway, sendPrincipalDraft } = gatewayReturning({ success: true });
+    const result = await new CeoInboxSendDraftHandler().execute(buildCtx({
+      outboundGateway: gateway,
+      input: { draft_id: 'draft-1', mailbox: 'nope' },
+      principalMailboxes: stubPrincipalMailboxes({}),
+    }));
+    expect(result.success).toBe(false);
+    expect(sendPrincipalDraft).not.toHaveBeenCalled();
   });
 });

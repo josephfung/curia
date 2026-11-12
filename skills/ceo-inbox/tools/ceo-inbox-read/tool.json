@@ -7,7 +7,8 @@
   "provenance_source": true,
   "inputs": {
     "message_id": "string? (Nylas message ID to fetch — provide exactly one of message_id or draft_id)",
-    "draft_id": "string? (Nylas draft ID to fetch the full draft body before editing — provide exactly one of message_id or draft_id)"
+    "draft_id": "string? (Nylas draft ID to fetch the full draft body before editing — provide exactly one of message_id or draft_id)",
+    "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {
     "id": "string",
@@ -25,7 +26,7 @@
     "is_draft": "boolean (true when a draft was read; absent for messages)"
   },
   "permissions": [],
-  "secrets": ["channel.email.nylas_api_key", "ceo_nylas_grant_id"],
+  "secrets": [],
   "timeout": 30000,
-  "capabilities": []
+  "capabilities": ["principalMailboxes"]
 }

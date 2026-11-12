@@ -5,14 +5,15 @@
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
-    "message_id": "string (Nylas message ID to mark as read)"
+    "message_id": "string (Nylas message ID to mark as read)",
+    "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {
     "success": "boolean",
     "message_id": "string"
   },
   "permissions": [],
-  "secrets": ["channel.email.nylas_api_key", "ceo_nylas_grant_id"],
+  "secrets": [],
   "timeout": 10000,
-  "capabilities": []
+  "capabilities": ["principalMailboxes"]
 }

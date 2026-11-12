@@ -12,7 +12,8 @@
     "add_cc_addresses": "string[]? (addresses to add to the CC line, same rule as add_to_addresses)",
     "remove": "string[]? (recipients to take off the To and CC lines: a contact ID, or an address exactly as it appears on the draft)",
     "subject": "string? (new subject line)",
-    "body": "string? (new email body; markdown supported, converted to HTML automatically)"
+    "body": "string? (new email body; markdown supported, converted to HTML automatically)",
+    "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {
     "draft_id": "string (Nylas draft ID)",
@@ -21,7 +22,7 @@
     "cc": "array of { name?, email }"
   },
   "permissions": [],
-  "secrets": ["channel.email.nylas_api_key", "ceo_nylas_grant_id"],
+  "secrets": [],
   "timeout": 20000,
-  "capabilities": ["workingDocs"]
+  "capabilities": ["workingDocs", "principalMailboxes"]
 }
