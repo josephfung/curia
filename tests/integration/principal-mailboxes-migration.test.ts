@@ -1,4 +1,4 @@
-// Integration test — constraints of the principal_mailboxes registry table (#2475, migration 123).
+// Integration test — constraints of the principal_mailboxes registry table (#2475, migrations 123-124).
 // Skips without DATABASE_URL.
 //
 // The constraints are exercised on a TEMP copy of the table (LIKE ... INCLUDING ALL copies the
@@ -52,6 +52,18 @@ describeIf('123_principal_mailboxes', () => {
     } finally {
       await pool.end();
     }
+  });
+
+  it('rejects an empty or over-long label and one with control characters (124)', async () => {
+    for (const label of ['', 'x'.repeat(81), 'Wo\nrk', 'Tab\there']) {
+      const code = await pgCode(client.query(
+        'INSERT INTO pg_temp.pm_test (id, label, address) VALUES ($1, $2, $3)',
+        ['labelcheck', label, 'label-check@example.com'],
+      ));
+      expect(code, JSON.stringify(label)).toBe('23514');
+    }
+    await client.query('INSERT INTO pg_temp.pm_test (id, label, address) VALUES ($1, $2, $3)', ['labelok', 'Work (Acme) — ok', 'label-ok@example.com']);
+    await client.query('DELETE FROM pg_temp.pm_test WHERE id IS NOT NULL');
   });
 
   it('allows one live default', async () => {
