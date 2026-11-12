@@ -320,6 +320,16 @@ describe('setup-status', () => {
       expect(task?.handoff_path).toBe('/channels');
     });
 
+    it('principal mailboxes: the guidance fits a one-mailbox cap and mentions the restart (#2475)', async () => {
+      const result = await handler.execute(makeCtx({}));
+      const data = (result as { success: true; data: { tasks: Array<{ id: string; label: string; value_prop: string; credential_how_to: string | null }> } }).data;
+      const task = data.tasks.find(t => t.id === 'principal_mailboxes')!;
+      const text = `${task.label} ${task.value_prop} ${task.credential_how_to ?? ''}`;
+      expect(text).toContain('Calendar changes take effect after a restart');
+      // Task 33 widens these once more than one mailbox can be connected.
+      expect(text).not.toMatch(/accounts|calendars|default|work and personal/i);
+    });
+
     it('email: done only when an email adapter is running', async () => {
       const result = await handler.execute(makeCtx({ emailChannelStatus: async () => 'running' }));
       expect(result.success).toBe(true);

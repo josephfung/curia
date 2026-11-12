@@ -139,11 +139,46 @@ describe('PrincipalMailboxesSection', () => {
     expect(confirm.disabled).toBe(true);
   });
 
-  it('shows a pending-migration mailbox read-only with a note', async () => {
+  it('shows a pending-migration mailbox read-only with a note, and hides the Add form', async () => {
     mocks.respond = () => json({ mailboxes: [{ ...work, id: 'mailbox', pending_migration: true }] });
     await mount();
-    expect(container.textContent).toContain('Curia is still moving this mailbox into the list; it will finish on its own.');
-    expect([...container.querySelectorAll('button')].some(b => b.textContent === 'Remove')).toBe(false);
+    expect(container.textContent).not.toContain('it will finish on its own');
+    expect(container.textContent).toContain('Curia retries at each restart and once a day');
+    expect(container.textContent).toContain('check the Nylas API key and the grant');
+    const buttons = [...container.querySelectorAll('button')].map(b => b.textContent);
+    expect(buttons).not.toContain('Remove');
+    expect(buttons).not.toContain('Replace grant');
+    expect(buttons).not.toContain('Add mailbox');
+    expect(byLabel('Grant ID')).toBeNull();
+  });
+
+  it('replaces a mailbox grant with PATCH { grant_id } and drops it from the page after', async () => {
+    await mount();
+    await click('Replace grant');
+    await type('New grant ID for Work', 'g-new');
+    await click('Save grant');
+    const p = mocks.calls.find(c => c.init?.method === 'PATCH')!;
+    expect(p.path).toBe('/api/registry/principal-mailboxes/work');
+    expect(JSON.parse(p.init!.body as string)).toEqual({ grant_id: 'g-new' });
+    expect(byLabel('New grant ID for Work')).toBeNull();
+    expect(container.innerHTML).not.toContain('g-new');
+  });
+
+  it('shows the refusal when a replacement grant is for another address', async () => {
+    const base = mocks.respond;
+    mocks.respond = (path, init) => init?.method === 'PATCH'
+      ? json({ refusal: 'address_mismatch', detail: 'That grant is for other@example.com, not boss@acme-example.com' }, 422)
+      : base(path, init);
+    await mount();
+    await click('Replace grant');
+    await type('New grant ID for Work', 'g-other');
+    await click('Save grant');
+    expect(container.textContent).toContain('That grant is for other@example.com');
+  });
+
+  it('says calendar changes take effect after a restart', async () => {
+    await mount();
+    expect(container.textContent).toContain('Calendar changes take effect after a restart');
   });
 
   it('still-yours defaults to no for a work domain', async () => {

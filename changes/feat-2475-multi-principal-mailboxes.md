@@ -7,3 +7,5 @@
 ### Changed
 
 - **`nylas_calendar` canary** — replaced by per-mailbox checks; the default mailbox still drives its heartbeat. (#2475)
+- **System notices** — now go to the principal's primary email, not the first verified address. (#2475)
+- **Console principal mailbox** — the single grant and address fields became a list of mailboxes. (#2475)

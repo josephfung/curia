@@ -7,7 +7,8 @@ import { apiFetch } from '../api.js';
 // The principal's OWN Gmail mailboxes, separate from Curia's email accounts above it.
 // A grant ID is typed once, tested (shows the address and provider the grant belongs to)
 // and then sent to the add route; it is never returned by the server and is dropped from
-// state after a successful add.
+// state after a successful add. "Replace grant" sends a new grant for the same account (after
+// a reconnect in Nylas) the same way, and drops it from state after a successful save.
 
 interface Mailbox {
   id: string;
@@ -162,6 +163,7 @@ export function PrincipalMailboxesSection() {
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState<RemovalPreview | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; label: string } | null>(null);
+  const [replacing, setReplacing] = useState<{ id: string; grantId: string } | null>(null);
 
   const [id, setId] = useState('');
   const [label, setLabel] = useState('');
@@ -213,6 +215,7 @@ export function PrincipalMailboxesSection() {
     const res = await apiFetch(`${BASE}/${encodeURIComponent(mid)}`, jsonInit('PATCH', body));
     if (!res.ok) throw new Error(await errorMessage(res));
     setRenaming(null);
+    setReplacing(null); // drop any replacement grant from state
     await load();
   }, 'Failed to update mailbox');
 
@@ -223,6 +226,9 @@ export function PrincipalMailboxesSection() {
   }, 'Failed to load the removal preview');
 
   const idOk = ID_RE.test(id.trim()) && id.trim() !== 'primary' && id.trim() !== 'default';
+  // The deferred-migration fallback counts as the one mailbox: adding is refused until it
+  // has moved into the list.
+  const migrating = mailboxes.some(m => m.pending_migration);
 
   return (
     <div className="form-field">
@@ -249,10 +255,26 @@ export function PrincipalMailboxesSection() {
             </span>
             {m.pending_migration ? (
               <span className="settings-page-sub">
-                Curia is still moving this mailbox into the list; it will finish on its own.
+                Curia is still moving this mailbox into the list. Curia retries at each restart and
+                once a day; if it doesn't finish, check the Nylas API key and the grant.
               </span>
             ) : (
             <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+              {replacing?.id === m.id ? (
+                <>
+                  <input type="password" autoComplete="off" placeholder="New Nylas grant ID"
+                    aria-label={`New grant ID for ${m.label}`} value={replacing.grantId}
+                    onChange={e => setReplacing({ id: m.id, grantId: e.target.value })} />
+                  <button type="button" className="btn btn-secondary btn-sm"
+                    disabled={busy || replacing.grantId.trim() === ''}
+                    onClick={() => void patch(m.id, { grant_id: replacing.grantId.trim() })}>Save grant</button>
+                  <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                    onClick={() => setReplacing(null)}>Cancel</button>
+                </>
+              ) : (
+                <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                  onClick={() => setReplacing({ id: m.id, grantId: '' })}>Replace grant</button>
+              )}
               {renaming?.id === m.id ? (
                 <button type="button" className="btn btn-secondary btn-sm"
                   disabled={busy || renaming.label.trim() === ''}
@@ -282,6 +304,12 @@ export function PrincipalMailboxesSection() {
         />
       )}
 
+      <p className="settings-page-sub" style={{ margin: '12px 0 0' }}>
+        Calendar changes take effect after a restart. Use Replace grant after reconnecting a
+        mailbox's account in Nylas.
+      </p>
+
+      {!migrating && (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
         <input type="text" placeholder="mailbox id (e.g. work)" value={id} aria-label="Mailbox id"
           onChange={e => setId(e.target.value)} />
@@ -304,6 +332,7 @@ export function PrincipalMailboxesSection() {
           disabled={busy || !tested || !label.trim() || !id.trim() || (!idOk)}
           onClick={() => void add()}>Add mailbox</button>
       </div>
+      )}
     </div>
   );
 }
