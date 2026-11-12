@@ -1105,8 +1105,9 @@ function toSemverRanges(advisory: AdvisoryRecord, pkg: string): string[] {
  * This does NOT reintroduce trap 1. The patched version is never used as a floor; it only
  * extends one range entry upward over published versions that sit strictly between that
  * entry's highest matching release and the patch. A range that matches no published
- * version below its patch has no anchor, so it is left alone. A patched field that is not
- * a single plain version fails the audit instead, and so does a gap that crosses a release
+ * version below its patch has no anchor, so it is left alone. A field listing several
+ * patches closes one gap per patch, each bounded below by the next-lower patch. A patched
+ * field that is not plain versions fails the audit instead, and so does a gap that crosses a release
  * line when the override admits a version inside it. A cross-line gap entirely outside
  * `admitted` cannot change the verdict, so the range is left as published.
  */
@@ -1119,39 +1120,53 @@ function closeRangeGaps(
   const gapClosedTo: string[] = [];
   const widened = ranges.map((range, i) => {
     const raw = advisory.patchedVersions?.[i] ?? null;
-    const patched = parsePatchedVersion(raw);
-    if (!patched) {
-      // Fail closed: a patch field we cannot read as one plain version could hide a gap,
-      // and the audit would then recommend a vulnerable release as the safe floor.
+    const patchedList = parsePatchedVersions(raw);
+    if (!patchedList) {
+      // Fail closed: a patch field we cannot read could hide a gap, and the audit would
+      // then recommend a vulnerable release as the safe floor.
       if (raw) {
         throw new Error(
           `advisory ${advisory.ghsaId} has a patched-version field this audit cannot ` +
-            `interpret (${JSON.stringify(raw)}); expected a single plain version.`,
+            `interpret (${JSON.stringify(raw)}); expected a plain version or a ` +
+            'comma-separated list of them.',
         );
       }
       return range;
     }
-    const below = published.filter((v) => semver.lt(v, patched) && semver.satisfies(v, range));
-    if (below.length === 0) return range;
-    const lastHit = below.sort(semver.compare)[below.length - 1]!;
-    const inGap = (v: string) => semver.gt(v, lastHit) && semver.lt(v, patched);
-    if (!published.some(inGap)) return range;
-    // A gap that crosses a release line is ambiguous: a range ending at 5.2.9 with its
-    // patch on 6.0.0 may mean every later 5.x is vulnerable, or that the 5.x line was
-    // fixed in a release the advisory does not name. Assuming either could report a
-    // false stale floor or hide a real one, so a human has to read the advisory. That
-    // only matters when the override admits a gap version; otherwise neither reading
-    // changes the verdict, and failing would hold the audit red over an old advisory.
-    if (releaseLine(lastHit) !== releaseLine(patched)) {
-      if (!admitted.some(inGap)) return range;
-      throw new Error(
-        `advisory ${advisory.ghsaId} range \`${range}\` ends at ${lastHit} but its patched ` +
-          `version ${patched} is on another release line, so this audit cannot tell ` +
-          'whether the releases between them are vulnerable.',
-      );
-    }
-    gapClosedTo.push(patched);
-    return `${range} || >${lastHit} <${patched}`;
+    // A list names one patch per release line, as brace-expansion's GHSA-6jwq-xf8q-xcwh
+    // does ("5.0.13, 3.0.10, 2.1.8, 1.1.22" against one compound range, #2553). Each
+    // patch closes the gap in its own segment only: the versions from the next-lower
+    // listed patch up to it. Without that bound, 3.0.10 would anchor on 2.1.7 and treat
+    // every 2.x release from 2.1.8 on as vulnerable, though the list says 2.1.8 fixed it.
+    // A single patch has no lower bound, which is the original behaviour.
+    let parts = range;
+    patchedList.forEach((patched, j) => {
+      const lowerBound = j > 0 ? patchedList[j - 1]! : null;
+      const inSegment = (v: string) =>
+        semver.lt(v, patched) && (lowerBound === null || semver.gte(v, lowerBound));
+      const below = published.filter((v) => inSegment(v) && semver.satisfies(v, range));
+      if (below.length === 0) return;
+      const lastHit = below.sort(semver.compare)[below.length - 1]!;
+      const inGap = (v: string) => semver.gt(v, lastHit) && semver.lt(v, patched);
+      if (!published.some(inGap)) return;
+      // A gap that crosses a release line is ambiguous: a range ending at 5.2.9 with its
+      // patch on 6.0.0 may mean every later 5.x is vulnerable, or that the 5.x line was
+      // fixed in a release the advisory does not name. Assuming either could report a
+      // false stale floor or hide a real one, so a human has to read the advisory. That
+      // only matters when the override admits a gap version; otherwise neither reading
+      // changes the verdict, and failing would hold the audit red over an old advisory.
+      if (releaseLine(lastHit) !== releaseLine(patched)) {
+        if (!admitted.some(inGap)) return;
+        throw new Error(
+          `advisory ${advisory.ghsaId} range \`${range}\` ends at ${lastHit} but its patched ` +
+            `version ${patched} is on another release line, so this audit cannot tell ` +
+            'whether the releases between them are vulnerable.',
+        );
+      }
+      gapClosedTo.push(patched);
+      parts = `${parts} || >${lastHit} <${patched}`;
+    });
+    return parts;
   });
   return { advisory, ranges: widened, ...(gapClosedTo.length > 0 ? { gapClosedTo } : {}) };
 }
@@ -1162,11 +1177,20 @@ function releaseLine(version: string): string {
   return major === 0 ? `0.${semver.minor(version)}` : `${major}`;
 }
 
-/** A patched-version field as a plain semver version, or null if it is anything else. */
-function parsePatchedVersion(raw: string | null): string | null {
+/**
+ * A patched-version field as plain semver versions, ascending and de-duplicated, or null
+ * if any comma-separated part is anything else. One unreadable part rejects the whole
+ * field: dropping it would lose the segment bound it sets for the patch above it.
+ */
+export function parsePatchedVersions(raw: string | null): string[] | null {
   if (!raw) return null;
-  const stripped = raw.trim().replace(/^>=\s*/, '');
-  return semver.valid(stripped);
+  const versions: string[] = [];
+  for (const part of raw.split(',')) {
+    const valid = semver.valid(part.trim().replace(/^>=\s*/, ''));
+    if (!valid) return null;
+    versions.push(valid);
+  }
+  return [...new Set(versions)].sort(semver.compare);
 }
 
 function matchesAny(version: string, ranges: string[]): boolean {

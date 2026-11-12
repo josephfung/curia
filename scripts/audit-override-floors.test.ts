@@ -26,6 +26,7 @@ import {
   parseFloorRange,
   overrideSubject,
   normalizeAdvisoryRange,
+  parsePatchedVersions,
   parseRepositoryUrl,
   toAdvisoryRecords,
   createLiveSource,
@@ -581,17 +582,125 @@ describe('upstream repo advisories', () => {
     expect(formatReport(report)).toContain('vulnerable up to 5.3.3, 6.2.6');
   });
 
-  it('fails the audit when a patched-version field cannot be interpreted', async () => {
+  it.each(['see the release notes', '6.2.6, 7.x', '6.2.6,'])(
+    'fails the audit when a patched-version field cannot be interpreted (%j)',
+    async (patched) => {
+      const report = await auditOverrideFloors({
+        workspaceYaml: yamlWith(`  foo: '>=6.2.4'`),
+        policy: NO_POLICY,
+        source: fakeSource({
+          versions: { foo: ['6.2.4', '6.2.5', '6.2.6'] },
+          global: {
+            foo: [
+              {
+                ...adv('GHSA-aaaa-bbbb-cccc', 'medium', ['< 6.2.5']),
+                patchedVersions: [patched],
+              },
+            ],
+          },
+        }),
+      });
+
+      expect(report.exitCode).not.toBe(0);
+      expect(report.errors.join('\n')).toContain('cannot interpret');
+    },
+  );
+
+  it('reads a per-line patched list against one compound range (#2553)', async () => {
+    // The real case: brace-expansion GHSA-6jwq-xf8q-xcwh is one vulnerabilities entry
+    // whose patched field lists one fix per major, unsorted.
+    const braceAdvisory: AdvisoryRecord = {
+      ...adv(
+        'GHSA-6jwq-xf8q-xcwh',
+        'medium',
+        ['< 1.1.22, >= 2.0.0 < 2.1.8, >= 3.0.0 < 3.0.10, >= 4.0.0 < 5.0.13'],
+        'upstream-repo',
+      ),
+      patchedVersions: ['5.0.13, 3.0.10, 2.1.8, 1.1.22'],
+    };
     const report = await auditOverrideFloors({
-      workspaceYaml: yamlWith(`  foo: '>=6.2.4'`),
+      workspaceYaml: yamlWith(`  brace-expansion: '>=5.0.12'`),
       policy: NO_POLICY,
       source: fakeSource({
-        versions: { foo: ['6.2.4', '6.2.5', '6.2.6'] },
+        versions: {
+          'brace-expansion': [
+            '1.1.21', '1.1.22', '2.1.7', '2.1.8', '3.0.9', '3.0.10', '5.0.12', '5.0.13',
+          ],
+        },
+        repos: { 'brace-expansion': 'juliangruber/brace-expansion' },
+        repoAdvisories: {
+          'juliangruber/brace-expansion': { 'brace-expansion': [braceAdvisory] },
+        },
+      }),
+    });
+
+    expect(report.errors).toEqual([]);
+    expect(report.stale).toHaveLength(1);
+    expect(report.stale[0]!.vulnerableVersions).toEqual(['5.0.12']);
+    expect(report.stale[0]!.safeFloor).toBe('>=5.0.13');
+    // Every listed patch matches its range segment exactly, so there is no gap to close.
+    expect(report.stale[0]!.advisories[0]!.gapClosedTo).toBeUndefined();
+  });
+
+  it('closes a gap per listed patch within its own segment', async () => {
+    // The 2.x range stops at 2.1.6 but its patch is 2.1.8, so 2.1.7 is a gap. The 3.x
+    // range ends cleanly at its patch, so it gains nothing.
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  foo: '>=2.1.6'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { foo: ['2.1.6', '2.1.7', '2.1.8', '2.2.0', '3.0.9', '3.0.10'] },
         global: {
           foo: [
             {
-              ...adv('GHSA-aaaa-bbbb-cccc', 'medium', ['< 6.2.5']),
-              patchedVersions: ['6.2.6, 7.0.1'],
+              ...adv('GHSA-aaaa-bbbb-cccc', 'medium', ['>= 2.0.0 < 2.1.7, >= 3.0.0 < 3.0.10']),
+              patchedVersions: ['3.0.10, 2.1.8'],
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(report.errors).toEqual([]);
+    expect(report.stale[0]!.vulnerableVersions).toEqual(['2.1.6', '2.1.7', '3.0.9']);
+    expect(report.stale[0]!.advisories[0]!.gapClosedTo).toEqual(['2.1.8']);
+  });
+
+  it('does not anchor a listed patch on a release below the next-lower patch', async () => {
+    // 3.0.0 is listed because the 3.x line never shipped the bug. Unbounded, it would
+    // anchor on 2.1.7 and report a cross-line gap over 2.1.8 and 2.2.0, though the list
+    // itself says 2.1.8 fixed the 2.x line.
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  foo: '>=2.1.8'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { foo: ['2.1.7', '2.1.8', '2.2.0', '3.0.0'] },
+        global: {
+          foo: [
+            { ...adv('GHSA-aaaa-bbbb-cccc', 'medium', ['< 2.1.8']), patchedVersions: ['2.1.8, 3.0.0'] },
+          ],
+        },
+      }),
+    });
+
+    expect(report.errors).toEqual([]);
+    expect(report.stale).toEqual([]);
+    expect(report.exitCode).toBe(0);
+  });
+
+  it('still fails a cross-line gap inside a per-line patched list', async () => {
+    // The 2.x range ends at 2.2.0 but the next listed patch is 3.0.0: listing other
+    // lines does not remove the ambiguity a single cross-line patch raises.
+    const report = await auditOverrideFloors({
+      workspaceYaml: yamlWith(`  foo: '>=2.0.0'`),
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { foo: ['1.1.0', '1.2.0', '2.0.0', '2.2.0', '2.3.0', '3.0.0'] },
+        global: {
+          foo: [
+            {
+              ...adv('GHSA-aaaa-bbbb-cccc', 'medium', ['< 1.2.0, >= 2.0.0 < 2.3.0']),
+              patchedVersions: ['1.2.0, 3.0.0'],
             },
           ],
         },
@@ -599,7 +708,7 @@ describe('upstream repo advisories', () => {
     });
 
     expect(report.exitCode).not.toBe(0);
-    expect(report.errors.join('\n')).toContain('cannot interpret');
+    expect(report.errors.join('\n')).toContain('another release line');
   });
 
   it.each([
@@ -645,7 +754,7 @@ describe('upstream repo advisories', () => {
 
   it.each([
     { name: 'a cross-line gap', patched: '6.0.0' },
-    { name: 'an uninterpretable patched field', patched: '6.0.0, 5.4.0' },
+    { name: 'an uninterpretable patched field', patched: 'see the release notes' },
   ])('lets the allowlist clear an advisory with $name', async (c) => {
     // Both cases fail closed when the advisory is not allowlisted; once a human has
     // recorded a decision, the audit must be able to accept it.
@@ -748,6 +857,24 @@ describe('upstream repo advisories', () => {
 // ---------------------------------------------------------------------------
 // 3b. Raw API payload -> AdvisoryRecord
 // ---------------------------------------------------------------------------
+
+describe('parsePatchedVersions', () => {
+  it.each([
+    { raw: '6.2.6', want: ['6.2.6'] },
+    { raw: '>= 6.2.6', want: ['6.2.6'] },
+    { raw: '5.0.13, 3.0.10, 2.1.8, 1.1.22', want: ['1.1.22', '2.1.8', '3.0.10', '5.0.13'] },
+    { raw: '2.1.8, >=2.1.8', want: ['2.1.8'] },
+  ])('reads $raw', ({ raw, want }) => {
+    expect(parsePatchedVersions(raw)).toEqual(want);
+  });
+
+  it.each([null, '', 'see the release notes', '6.2.6, 7.x', '6.2.6,'])(
+    'rejects %j',
+    (raw) => {
+      expect(parsePatchedVersions(raw)).toBeNull();
+    },
+  );
+});
 
 describe('toAdvisoryRecords', () => {
   it('keeps only vulnerabilities naming the requested package', () => {
