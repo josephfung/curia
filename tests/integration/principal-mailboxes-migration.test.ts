@@ -7,6 +7,7 @@
 // real table here could collide with it.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import pg from 'pg';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
@@ -39,6 +40,7 @@ describeIf('123_principal_mailboxes', () => {
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DATABASE_URL });
+    await requireCuriaTestDatabase(pool);
     client = await pool.connect();
     await client.query('CREATE TEMP TABLE pm_test (LIKE principal_mailboxes INCLUDING ALL)');
   });
@@ -49,13 +51,13 @@ describeIf('123_principal_mailboxes', () => {
   });
 
   it('allows one live default', async () => {
-    await client.query('TRUNCATE pg_temp.pm_test');
+    await client.query('DELETE FROM pg_temp.pm_test WHERE id IS NOT NULL');
     await insert(client, 'work', 'a@example.com', { isDefault: true });
     expect(await pgCode(insert(client, 'personal', 'b@example.com', { isDefault: true }))).toBe('23505');
   });
 
   it('allows a removed default alongside a live one', async () => {
-    await client.query('TRUNCATE pg_temp.pm_test');
+    await client.query('DELETE FROM pg_temp.pm_test WHERE id IS NOT NULL');
     await insert(client, 'work', 'a@example.com', { isDefault: true, removed: true });
     await insert(client, 'personal', 'b@example.com', { isDefault: true });
     const { rows } = await client.query('SELECT count(*)::int AS n FROM pg_temp.pm_test');
@@ -63,32 +65,32 @@ describeIf('123_principal_mailboxes', () => {
   });
 
   it('rejects a reused live address', async () => {
-    await client.query('TRUNCATE pg_temp.pm_test');
+    await client.query('DELETE FROM pg_temp.pm_test WHERE id IS NOT NULL');
     await insert(client, 'work', 'a@example.com');
     expect(await pgCode(insert(client, 'personal', 'a@example.com'))).toBe('23505');
   });
 
   it('allows a removed row address to be reused', async () => {
-    await client.query('TRUNCATE pg_temp.pm_test');
+    await client.query('DELETE FROM pg_temp.pm_test WHERE id IS NOT NULL');
     await insert(client, 'work', 'a@example.com', { removed: true });
     await insert(client, 'personal', 'a@example.com');
   });
 
   it('rejects id primary and default', async () => {
-    await client.query('TRUNCATE pg_temp.pm_test');
+    await client.query('DELETE FROM pg_temp.pm_test WHERE id IS NOT NULL');
     expect(await pgCode(insert(client, 'primary', 'a@example.com'))).toBe('23514');
     expect(await pgCode(insert(client, 'default', 'b@example.com'))).toBe('23514');
   });
 
   it('rejects malformed ids and non-lowercase addresses', async () => {
-    await client.query('TRUNCATE pg_temp.pm_test');
+    await client.query('DELETE FROM pg_temp.pm_test WHERE id IS NOT NULL');
     expect(await pgCode(insert(client, 'Work', 'a@example.com'))).toBe('23514');
     expect(await pgCode(insert(client, '1work', 'a@example.com'))).toBe('23514');
     expect(await pgCode(insert(client, 'work', 'A@example.com'))).toBe('23514');
   });
 
   it('keeps a removed row so its id cannot be inserted again', async () => {
-    await client.query('TRUNCATE pg_temp.pm_test');
+    await client.query('DELETE FROM pg_temp.pm_test WHERE id IS NOT NULL');
     await insert(client, 'work', 'a@example.com', { removed: true });
     expect(await pgCode(insert(client, 'work', 'b@example.com'))).toBe('23505');
   });

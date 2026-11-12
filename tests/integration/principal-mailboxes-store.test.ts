@@ -1,14 +1,17 @@
 // Integration test — PrincipalMailboxStore against real Postgres (#2475). Skips without DATABASE_URL.
-// This file is the only one that commits rows to principal_mailboxes, so it clears the table.
+// This file is the only one that commits rows to principal_mailboxes; it clears only the ids it uses.
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import pg from 'pg';
 import pino from 'pino';
 import { PrincipalMailboxStore } from '../../src/principal-mailboxes/store.js';
 import type { PrincipalMailboxRecord } from '../../src/principal-mailboxes/types.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
 const logger = pino({ level: 'silent' });
+// The ids this suite creates; cleanup is scoped to them, never the whole table.
+const TEST_IDS = ['work', 'personal'];
 
 function rec(id: string, over: Partial<Omit<PrincipalMailboxRecord, 'removedAt'>> = {}): Omit<PrincipalMailboxRecord, 'removedAt'> {
   return {
@@ -27,17 +30,18 @@ describeIf('PrincipalMailboxStore', () => {
   let pool: pg.Pool;
   let store: PrincipalMailboxStore;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DATABASE_URL });
+    await requireCuriaTestDatabase(pool);
     store = new PrincipalMailboxStore(pool, logger);
   });
 
   beforeEach(async () => {
-    await pool.query('DELETE FROM principal_mailboxes');
+    await pool.query('DELETE FROM principal_mailboxes WHERE id = ANY($1)', [TEST_IDS]);
   });
 
   afterAll(async () => {
-    await pool.query('DELETE FROM principal_mailboxes');
+    await pool.query('DELETE FROM principal_mailboxes WHERE id = ANY($1)', [TEST_IDS]);
     await pool.end();
   });
 
