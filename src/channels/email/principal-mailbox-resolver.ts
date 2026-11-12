@@ -1,5 +1,6 @@
 import type { Logger } from '../../logger.js';
 import { NylasClient } from './nylas-client.js';
+import { MissingNylasApiKeyError } from '../../principal-mailboxes/types.js';
 import type { PrincipalMailboxes } from '../../principal-mailboxes/service.js';
 
 /**
@@ -30,7 +31,7 @@ export function createPrincipalMailboxResolver(deps: {
       if (!mailbox) return null;
       creds = await mailboxes.credentials(mailbox.id);
     } catch (err) {
-      if (err instanceof Error && /API key is not configured/.test(err.message)) {
+      if (err instanceof MissingNylasApiKeyError) {
         logger.warn('Principal mailbox is registered but the Nylas API key (channel.email.nylas_api_key) is missing; treating mailbox as unavailable');
         return null;
       }
