@@ -97,7 +97,7 @@ import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
 import { migrateFlatPrincipalMailbox, migrationFailureReason } from './principal-mailboxes/migrate-flat-mailbox.js';
-import { renameSendingKeyAfterMigration } from './principal-mailboxes/migrate-config-keys.js';
+import { renameSendingKeyAfterMigration, dropLegacyDefaultKey } from './principal-mailboxes/migrate-config-keys.js';
 import { reconcileFlatMailboxKeys } from './principal-mailboxes/flat-mirror.js';
 import { emailAccountGrantSecretName } from './channels/email/email-account-secrets.js';
 import { grantSafeErrorFields, mayCarryGrantId } from './principal-mailboxes/error-fields.js';
@@ -1309,6 +1309,7 @@ async function main(): Promise<void> {
           return new NylasClient(principalMailboxApiKey, grantId, logger).getGrant();
         },
         isFallbackActive: () => principalMailboxes.isFallbackActive(),
+        forgetLegacySendLevel: async () => { if (sendingKeyStore) await dropLegacyDefaultKey(sendingKeyStore); },
         logger,
       })
     : undefined;

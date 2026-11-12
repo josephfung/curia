@@ -60,7 +60,22 @@ describe('createSendLevelReader', () => {
     // An own key wins over a leftover default.
     const own = createSendLevelReader({ get: async () => '{"default":"all","work":"off"}', logger: log, liveMailboxIds: async () => ['work'] });
     expect(await own('work')).toBe('off');
-    expect(warn).not.toHaveBeenCalled();
+    // Only the two-mailbox read of a leftover default warns (once per value).
+    expect(warn).toHaveBeenCalledOnce();
+  });
+  it('warns once per value when two mailboxes are live and a leftover default key is ignored', async () => {
+    const warn = vi.fn();
+    const log = { ...logger, warn } as unknown as typeof logger;
+    const read = createSendLevelReader({ get: async () => '{"default":"routine"}', logger: log, liveMailboxIds: async () => ['work', 'personal'] });
+    expect(await read('work')).toBe('on_request');
+    expect(await read('personal')).toBe('on_request');
+    expect(warn).toHaveBeenCalledOnce();
+    expect(String(warn.mock.calls[0]!.at(-1))).toMatch(/set a level per mailbox/);
+    // One live mailbox: the key applies, nothing to warn about.
+    const w2 = vi.fn();
+    const one = createSendLevelReader({ get: async () => '{"default":"routine"}', logger: { ...logger, warn: w2 } as unknown as typeof logger, liveMailboxIds: async () => ['work'] });
+    expect(await one('work')).toBe('routine');
+    expect(w2).not.toHaveBeenCalled();
   });
   it('warns once per process per value when no key is a live id or default', async () => {
     const warn = vi.fn();

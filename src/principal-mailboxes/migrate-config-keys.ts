@@ -39,6 +39,26 @@ export async function migrateSendingKey(store: SendingConfigStore, defaultId: st
   return 'renamed';
 }
 
+/**
+ * Drop the legacy `default` entry (no-op when absent). Called when a mailbox is removed: that
+ * entry was set for the install's one migrated mailbox, so it must not outlive it and be
+ * inherited by whichever mailbox is added next as the sole one (R41). Store errors propagate.
+ */
+export async function dropLegacyDefaultKey(store: SendingConfigStore): Promise<void> {
+  const raw = await store.get(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY);
+  if (raw === null) return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return; // not ours to repair; the reader flags it
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return;
+  const { [LEGACY_KEY]: legacy, ...rest } = parsed as Record<string, unknown>;
+  if (legacy === undefined) return;
+  await store.set(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY, JSON.stringify(rest));
+}
+
 type FlatOutcome = 'migrated' | 'already' | 'nothing' | 'deferred';
 
 /**
@@ -71,6 +91,8 @@ export function renameSendingKeyAfterMigration(deps: {
   };
   const run = async (): Promise<FlatOutcome> => {
     const outcome = await deps.migrate();
+    // A rename that failed earlier is retried on the next run, not dropped.
+    if (outcome !== 'migrated') await flush();
     if (outcome === 'migrated') {
       try {
         const ids = await deps.liveIds();
