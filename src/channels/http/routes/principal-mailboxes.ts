@@ -7,7 +7,8 @@
 //   GET    /                      — live mailboxes (never a grant id)
 //   POST   /                      — add { id, label, grant_id, make_default? }
 //   POST   /test                  — look a grant up { grant_id } -> { email, provider }; stores nothing
-//   PATCH  /:id                   — { label?, make_default? }
+//   PATCH  /:id                   — { label?, make_default?, grant_id? } (grant_id: replace the
+//                                    mailbox's grant with one for the same address, R29)
 //   GET    /:id/removal-preview   — what removing would affect
 //   DELETE /:id                   — { still_owned, new_default_id?, new_primary_email? }
 //
@@ -21,11 +22,12 @@ import { MailboxRemovalError } from '../../../principal-mailboxes/admin.js';
 import type { PrincipalMailboxes } from '../../../principal-mailboxes/service.js';
 import type { PrincipalMailboxStore } from '../../../principal-mailboxes/store.js';
 import { RemovedMailboxError, UnknownMailboxError } from '../../../principal-mailboxes/types.js';
+import { grantSafeErrorFields, mayCarryGrantId } from '../../../principal-mailboxes/error-fields.js';
 
 export interface PrincipalMailboxesRouteOptions {
   mailboxes: Pick<PrincipalMailboxes, 'list' | 'isFallbackActive'>;
   store: Pick<PrincipalMailboxStore, 'relabel'>;
-  admin: Pick<PrincipalMailboxAdmin, 'add' | 'setDefault' | 'removalPreview' | 'remove'>;
+  admin: Pick<PrincipalMailboxAdmin, 'add' | 'setDefault' | 'replaceGrant' | 'removalPreview' | 'remove'>;
   /** Absent when no Nylas API key is configured: add and test then answer 503. */
   lookupGrant?: (grantId: string) => Promise<{ email: string; provider: string }>;
   webAppBootstrapSecret: string;
@@ -56,8 +58,12 @@ export async function principalMailboxesRoutes(
     if (err instanceof MailboxRemovalError) {
       return reply.status(422).send({ refusal: 'removal_precondition', detail: err.message });
     }
-    // Only the class name: an upstream error's message or stack can carry a grant id.
-    request.log.error({ errName: err instanceof Error ? err.name : 'unknown' }, `${what} failed`);
+    // A Nylas error's message or own properties can carry a grant id: class and status only.
+    // Store, contacts and vault errors keep their message, which the logs need.
+    const fields = err instanceof Error && !mayCarryGrantId(err)
+      ? { ...grantSafeErrorFields(err), errMessage: err.message }
+      : grantSafeErrorFields(err);
+    request.log.error(fields, `${what} failed`);
     return reply.status(500).send({ error: `${what} failed. Check server logs.` });
   }
 
@@ -114,8 +120,13 @@ export async function principalMailboxesRoutes(
   app.patch(`${base}/:id`, AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     const { id } = request.params as { id: string };
-    const body = (request.body ?? {}) as { label?: unknown; make_default?: unknown };
+    const body = (request.body ?? {}) as { label?: unknown; make_default?: unknown; grant_id?: unknown };
     const hasLabel = body.label !== undefined;
+    const hasGrant = body.grant_id !== undefined;
+    const grantId = str(body.grant_id);
+    if (hasGrant && !grantId) {
+      return reply.status(400).send({ error: 'grant_id must be a non-empty string' });
+    }
     const label = str(body.label);
     if (hasLabel && (!label || label.length > MAX_LABEL)) {
       return reply.status(400).send({ error: `label must be 1-${MAX_LABEL} characters` });
@@ -123,11 +134,17 @@ export async function principalMailboxesRoutes(
     if (body.make_default !== undefined && body.make_default !== true) {
       return reply.status(400).send({ error: 'make_default can only be true; name another mailbox to change the default' });
     }
-    if (!hasLabel && body.make_default !== true) {
-      return reply.status(400).send({ error: 'Provide label and/or make_default' });
+    if (!hasLabel && body.make_default !== true && !hasGrant) {
+      return reply.status(400).send({ error: 'Provide label, make_default and/or grant_id' });
     }
+    if (hasGrant && !lookupGrant) return reply.status(503).send({ error: NO_NYLAS });
     try {
-      // Default first: it is the step that can refuse; the relabel is harmless to repeat.
+      // Grant first, then default: both can refuse; the relabel is harmless to repeat.
+      if (hasGrant) {
+        const replaced = await admin.replaceGrant(id, grantId);
+        if (!replaced.ok) return reply.status(422).send({ refusal: replaced.refusal, detail: replaced.detail });
+        request.log.info({ mailboxId: id }, 'principal mailbox grant replaced');
+      }
       if (body.make_default === true) await admin.setDefault(id);
       if (hasLabel) await store.relabel(id, label);
       return reply.send({ ok: true });

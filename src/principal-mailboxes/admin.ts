@@ -27,6 +27,8 @@ export type AddMailboxRefusal =
   | 'grant_unreadable'
   | 'address_is_another_contact';
 
+export type ReplaceGrantRefusal = 'grant_unreadable' | 'not_google' | 'address_mismatch' | 'grant_in_use';
+
 export interface RemovalPreview {
   mailbox: PrincipalMailboxView;
   isDefault: boolean;
@@ -72,10 +74,17 @@ export interface PrincipalMailboxAdminDeps {
   curiaAccountAddresses: () => Promise<string[]>;
   lookupGrant: (grantId: string) => Promise<{ email: string; provider: string }>;
   onRemoved?: Array<(id: string) => Promise<void>>;
+  /** True while the deferred-migration fallback is served. An add then would end the
+   *  fallback (any row hides it) and drop the flat mailbox from the list, so add refuses. */
+  isFallbackActive?: () => Promise<boolean>;
   logger: Logger;
   /** Test seam: the live-mailbox cap. Defaults to MAX_LIVE_MAILBOXES. */
   maxLiveMailboxes?: number;
 }
+
+// The flat keys ceo-inbox still reads (#2409).
+const FLAT_GRANT_KEY = 'ceo_nylas_grant_id';
+const FLAT_EMAIL_KEY = 'ceo_self_email';
 
 const CONSUMER_DOMAINS = new Set(['gmail.com', 'googlemail.com']);
 
@@ -111,6 +120,12 @@ export class PrincipalMailboxAdmin {
     }
     if (await this.deps.store.getAny(id)) {
       return refuse('id_taken', `The mailbox id "${id}" is taken (ids are never reused)`);
+    }
+    if (this.deps.isFallbackActive && (await this.deps.isFallbackActive())) {
+      return refuse(
+        'cap_reached',
+        'The existing mailbox is still being moved into the list; add another once it shows here',
+      );
     }
     const live = await this.deps.store.listLive();
     if (live.length >= this.cap) {
@@ -196,11 +211,54 @@ export class PrincipalMailboxAdmin {
 
     const rec = await this.deps.store.getAny(id);
     if (!rec) throw new Error(`Mailbox "${id}" vanished after insert`);
+    if (rec.isDefault) await this.mirrorFlatKeys(id, grantId, rec.address);
     return { ok: true, mailbox: toView(rec) };
   }
 
   async setDefault(id: string): Promise<void> {
     await this.deps.store.setDefault(id);
+    const rec = await this.deps.store.getAny(id);
+    if (!rec) throw new UnknownMailboxError(id);
+    await this.mirrorDefaultFromVault(rec);
+  }
+
+  /**
+   * Point a mailbox at a new Nylas grant for the same account (reconnect after a revoked or
+   * expired connection, R29). The grant must be Google's and belong to the mailbox's own
+   * address; a grant another live mailbox uses is refused. Unknown or removed ids throw.
+   */
+  async replaceGrant(
+    id: string,
+    grantId: string,
+  ): Promise<{ ok: true } | { ok: false; refusal: ReplaceGrantRefusal; detail: string }> {
+    const refuse = (refusal: ReplaceGrantRefusal, detail: string) => ({ ok: false as const, refusal, detail });
+    const { rec, others } = await this.liveTarget(id);
+
+    let grant: { email: string; provider: string };
+    try {
+      grant = await this.deps.lookupGrant(grantId);
+    } catch (err) {
+      // Class name only: a lookup error's message could carry the grant id.
+      this.log.warn({ errName: err instanceof Error ? err.name : 'unknown', mailboxId: id }, 'Could not read the replacement Nylas grant');
+      return refuse('grant_unreadable', 'The grant could not be read from Nylas');
+    }
+    if (grant.provider !== 'google') {
+      return refuse('not_google', `Only Google mailboxes are supported (got ${grant.provider})`);
+    }
+    if (lower(grant.email) !== lower(rec.address)) {
+      return refuse('address_mismatch', `That grant is for ${lower(grant.email)}, not ${rec.address}`);
+    }
+    for (const m of others) {
+      const stored = await this.deps.secrets.get(principalMailboxGrantSecretName(m.id));
+      if (stored === grantId) {
+        return refuse('grant_in_use', `That grant is already connected as "${m.label}"`);
+      }
+    }
+
+    await this.deps.secrets.set(principalMailboxGrantSecretName(id), grantId);
+    if (rec.isDefault) await this.mirrorFlatKeys(id, grantId, rec.address);
+    this.log.info({ mailboxId: id }, 'Principal mailbox grant replaced');
+    return { ok: true };
   }
 
   async removalPreview(id: string): Promise<RemovalPreview> {
@@ -274,14 +332,36 @@ export class PrincipalMailboxAdmin {
     }
 
     // 3. Default / tombstone in one store transaction.
+    const wasDefault = rec.isDefault;
     await this.deps.store.tombstone(id, newDefault);
 
     // 4-6. Past the tombstone: log and rethrow, never un-tombstone.
     try {
-      if (!input.stillOwned && rec.addedIdentityId) {
-        await this.deps.contacts.unlinkIdentity(rec.addedIdentityId);
+      if (!input.stillOwned) {
+        if (rec.addedIdentityId) await this.deps.contacts.unlinkIdentity(rec.addedIdentityId);
+        // R30: the address is no longer the principal's, whoever created its identity (a
+        // migrated mailbox or an R16 pre-existing one). Inactive, not deleted: reversible.
+        for (const i of principal.identities) {
+          if (
+            i.id !== rec.addedIdentityId &&
+            i.channel === 'email' &&
+            lower(i.channelIdentifier) === address &&
+            i.status === 'active'
+          ) {
+            await this.deps.contacts.setIdentityStatus(i.id, 'defunct');
+          }
+        }
       }
       await this.deps.secrets.delete(principalMailboxGrantSecretName(id));
+      if (wasDefault) {
+        if (newDefault !== null) {
+          const next = await this.deps.store.getAny(newDefault);
+          if (!next) throw new UnknownMailboxError(newDefault);
+          await this.mirrorDefaultFromVault(next);
+        } else {
+          await this.clearFlatKeys(id);
+        }
+      }
       for (const hook of this.deps.onRemoved ?? []) await hook(id);
     } catch (err) {
       this.log.error({ err, mailboxId: id }, 'Principal mailbox removed but cleanup failed part-way');
@@ -295,6 +375,39 @@ export class PrincipalMailboxAdmin {
     if (rec.removedAt) throw new RemovedMailboxError(id, rec.label);
     const others = (await this.deps.store.listLive()).filter((m) => m.id !== id);
     return { rec, others };
+  }
+
+  // Mirror for ceo-inbox until Task 20 retires the flat keys (#2475). The ceo-inbox handlers
+  // still read ceo_nylas_grant_id / ceo_self_email, so the default mailbox is copied there
+  // whenever it changes (R28). Failures are logged (never the grant id) and rethrown.
+  private async mirrorFlatKeys(id: string, grantId: string, address: string): Promise<void> {
+    try {
+      await this.deps.secrets.set(FLAT_GRANT_KEY, grantId);
+      await this.deps.secrets.set(FLAT_EMAIL_KEY, lower(address));
+    } catch (err) {
+      this.log.error({ err, mailboxId: id }, 'Could not mirror the default mailbox into the flat keys');
+      throw err;
+    }
+  }
+
+  private async mirrorDefaultFromVault(rec: PrincipalMailboxRecord): Promise<void> {
+    const grantId = await this.deps.secrets.get(principalMailboxGrantSecretName(rec.id));
+    if (!grantId) {
+      const err = new Error(`Mailbox "${rec.id}" has no Nylas grant in the vault`);
+      this.log.error({ mailboxId: rec.id }, 'Could not mirror the default mailbox: it has no grant in the vault');
+      throw err;
+    }
+    await this.mirrorFlatKeys(rec.id, grantId, rec.address);
+  }
+
+  private async clearFlatKeys(id: string): Promise<void> {
+    try {
+      await this.deps.secrets.delete(FLAT_GRANT_KEY);
+      await this.deps.secrets.delete(FLAT_EMAIL_KEY);
+    } catch (err) {
+      this.log.error({ err, mailboxId: id }, 'Could not delete the flat mailbox keys after removing the default');
+      throw err;
+    }
   }
 
   private async undoAdd(secretName: string, identityId: string | null): Promise<void> {
