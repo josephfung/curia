@@ -19,12 +19,12 @@ const view = (over: Partial<PrincipalMailboxView> = {}): PrincipalMailboxView =>
 
 const preview: RemovalPreview = {
   mailbox: view(), isDefault: true, isPrimaryEmail: false, stillOwnedDefault: false,
-  otherLive: [view({ id: 'personal', label: 'Personal', isDefault: false })], scopedRules: [], calendars: [],
+  otherLive: [view({ id: 'personal', label: 'Personal', isDefault: false })], primaryEmailCandidates: [], scopedRules: [], calendars: [],
 };
 
 function makeOptions(over: Partial<PrincipalMailboxesRouteOptions> = {}): PrincipalMailboxesRouteOptions {
   return {
-    mailboxes: { list: vi.fn(async () => [view()]) },
+    mailboxes: { list: vi.fn(async () => [view()]), isFallbackActive: vi.fn(async () => false) },
     store: { relabel: vi.fn(async () => {}) },
     admin: {
       add: vi.fn(async () => ({ ok: true as const, mailbox: view() })),
@@ -67,6 +67,46 @@ describe('principal-mailboxes routes', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().mailboxes).toHaveLength(1);
     expect(res.body).not.toMatch(/grant/i);
+  });
+
+  it('GET marks the fallback view pending_migration', async () => {
+    await build(makeOptions({
+      mailboxes: {
+        list: vi.fn(async () => [view({ id: 'mailbox', label: 'Mailbox', address: '' })]),
+        isFallbackActive: vi.fn(async () => true),
+      },
+    }));
+    const res = await req('GET', '/api/registry/principal-mailboxes');
+    expect(res.json().mailboxes).toEqual([expect.objectContaining({ id: 'mailbox', pending_migration: true })]);
+  });
+
+  it('never logs or returns a grant id when the lookup fails', async () => {
+    const lines: string[] = [];
+    const stream = { write: (s: string) => { lines.push(s); } };
+    app = Fastify({ logger: { level: 'debug', stream } });
+    const boom = () => { throw new Error('Nylas grant SECRET-GRANT-XYZ has no email address'); };
+    await app.register(principalMailboxesRoutes, makeOptions({
+      lookupGrant: vi.fn(async () => boom()),
+      admin: { ...makeOptions().admin, add: vi.fn(async () => boom()) },
+    }));
+    const a = await req('POST', '/api/registry/principal-mailboxes/test', { grant_id: 'SECRET-GRANT-XYZ' });
+    const b = await req('POST', '/api/registry/principal-mailboxes', { id: 'work', label: 'W', grant_id: 'SECRET-GRANT-XYZ' });
+    expect(a.statusCode).toBe(422);
+    expect(b.statusCode).toBe(500);
+    expect(a.body + b.body + lines.join('')).not.toContain('SECRET-GRANT-XYZ');
+  });
+
+  it('PATCH validates both fields before applying, and sets the default before relabelling', async () => {
+    const order: string[] = [];
+    const opts = makeOptions({
+      store: { relabel: vi.fn(async () => { order.push('relabel'); }) },
+      admin: { ...makeOptions().admin, setDefault: vi.fn(async () => { order.push('default'); }) },
+    });
+    await build(opts);
+    expect((await req('PATCH', '/api/registry/principal-mailboxes/work', { label: 'X', make_default: false })).statusCode).toBe(400);
+    expect(order).toEqual([]);
+    expect((await req('PATCH', '/api/registry/principal-mailboxes/work', { label: 'X', make_default: true })).statusCode).toBe(200);
+    expect(order).toEqual(['default', 'relabel']);
   });
 
   it('POST adds a mailbox and returns 201', async () => {

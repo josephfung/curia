@@ -30,7 +30,7 @@ const personal = { id: 'personal', label: 'Personal', address: 'boss@gmail.com',
 function preview(over: Record<string, unknown> = {}) {
   return {
     mailbox: work, isDefault: true, isPrimaryEmail: false, stillOwnedDefault: false,
-    otherLive: [personal], scopedRules: [{ title: 'Newsletter rule', onlyThisMailbox: true }],
+    otherLive: [personal], primaryEmailCandidates: ['boss@gmail.com', 'boss@home-example.org'], scopedRules: [{ title: 'Newsletter rule', onlyThisMailbox: true }],
     calendars: [{ calendarId: 'c1', label: 'Work calendar' }], ...over,
   };
 }
@@ -124,6 +124,26 @@ describe('PrincipalMailboxesSection', () => {
     await click('Remove');
     expect(byLabel('New default mailbox')).toBeNull();
     expect(byLabel('New primary email')).toBeTruthy();
+    expect([...byLabel('New primary email').querySelectorAll('option')].map(o => o.value))
+      .toContain('boss@home-example.org');
+  });
+
+  it('explains and blocks removal when there is no candidate primary email', async () => {
+    mocks.respond = (path) => path.endsWith('/removal-preview')
+      ? json(preview({ isDefault: false, isPrimaryEmail: true, primaryEmailCandidates: [] }))
+      : json({ mailboxes: [work] });
+    await mount();
+    await click('Remove');
+    expect(container.textContent).toContain('Add another email address for yourself (Contacts) before removing this one');
+    const confirm = [...container.querySelectorAll('button')].find(b => b.textContent === 'Remove mailbox')!;
+    expect(confirm.disabled).toBe(true);
+  });
+
+  it('shows a pending-migration mailbox read-only with a note', async () => {
+    mocks.respond = () => json({ mailboxes: [{ ...work, id: 'mailbox', pending_migration: true }] });
+    await mount();
+    expect(container.textContent).toContain('Curia is still moving this mailbox into the list; it will finish on its own.');
+    expect([...container.querySelectorAll('button')].some(b => b.textContent === 'Remove')).toBe(false);
   });
 
   it('still-yours defaults to no for a work domain', async () => {

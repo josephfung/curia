@@ -297,11 +297,15 @@ export class NylasClient {
     try {
       ({ data } = await this.nylas.grants.find({ grantId: this.grantId }));
     } catch (err) {
-      this.log.error({ err, grantId: this.grantId }, 'Nylas grants.find failed');
+      // The grant id is a credential: neither this log line nor the thrown message carries it.
+      this.log.error(
+        { errName: err instanceof Error ? err.name : 'unknown', statusCode: (err as { statusCode?: number }).statusCode },
+        'Nylas grants.find failed',
+      );
       throw err;
     }
     if (!data.email) {
-      throw new Error(`Nylas grant ${this.grantId} has no email address`);
+      throw new Error('The Nylas grant has no email address');
     }
     return { email: data.email.toLowerCase(), provider: data.provider ?? '' };
   }

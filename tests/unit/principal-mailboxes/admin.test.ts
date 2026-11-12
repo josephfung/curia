@@ -324,6 +324,29 @@ describe('PrincipalMailboxAdmin.removalPreview', () => {
   });
 });
 
+describe('PrincipalMailboxAdmin.removalPreview primaryEmailCandidates', () => {
+  it('unions other live mailboxes with verified active email identities, minus the removed address', async () => {
+    const { admin } = setup({
+      records: [rec(), rec({ id: 'work', label: 'Work', address: 'Pat@Work.example.com', isDefault: false })],
+      identities: [
+        { id: 'i1', channel: 'email', channelIdentifier: 'pat@gmail.com', verified: true, status: 'active' },
+        { id: 'i2', channel: 'email', channelIdentifier: 'pat@home.example.org', verified: true, status: 'active' },
+        { id: 'i3', channel: 'email', channelIdentifier: 'unverified@example.org', verified: false, status: 'active' },
+        { id: 'i4', channel: 'email', channelIdentifier: 'WORK@example.org', verified: true, status: 'inactive' },
+        { id: 'i5', channel: 'email', channelIdentifier: 'PAT@Work.example.com', verified: true, status: 'active' },
+      ],
+      primaryEmail: 'pat@gmail.com',
+    });
+    const p = await admin.removalPreview('personal');
+    expect([...p.primaryEmailCandidates].sort()).toEqual(['pat@home.example.org', 'pat@work.example.com']);
+  });
+
+  it('is empty when nothing else could be the primary', async () => {
+    const { admin } = setup({ records: [rec()], primaryEmail: 'pat@gmail.com' });
+    expect((await admin.removalPreview('personal')).primaryEmailCandidates).toEqual([]);
+  });
+});
+
 describe('PrincipalMailboxAdmin.setDefault', () => {
   it('delegates to the store', async () => {
     const { admin, store } = setup({ records: [rec()] });
