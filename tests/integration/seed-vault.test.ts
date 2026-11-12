@@ -49,6 +49,18 @@ describeIf('seedVault', () => {
     expect(await secrets.get(NYLAS_KEY)).toBe('nyk_test_123');
   });
 
+  it('skips the flat principal-mailbox keys once the console manages them (#2475)', async () => {
+    const env = { CEO_NYLAS_GRANT_ID: 'grant-from-env', CEO_SELF_EMAIL: 'boss@example.com', TAVILY_API_KEY: 'tvly_1' };
+    const managed = await seedVault(secrets, env, logger, { flatKeysManaged: async () => true });
+    expect(managed.seeded).toEqual(['tavily_api_key']);
+    expect(managed.skipped).toEqual(expect.arrayContaining(['ceo_nylas_grant_id', 'ceo_self_email']));
+    expect(await secrets.get('ceo_nylas_grant_id')).toBeNull();
+
+    const unmanaged = await seedVault(secrets, env, logger, { flatKeysManaged: async () => false });
+    expect(unmanaged.seeded).toEqual(expect.arrayContaining(['ceo_nylas_grant_id', 'ceo_self_email']));
+    expect(await secrets.get('ceo_nylas_grant_id')).toBe('grant-from-env');
+  });
+
   it('seeds present env values into the vault and skips absent ones', async () => {
     const env = { NYLAS_API_KEY: 'nyk_test_123', TAVILY_API_KEY: 'tvly_test_456' };
     const { seeded, skipped } = await seedVault(secrets, env, logger);
