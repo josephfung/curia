@@ -146,6 +146,8 @@ export interface HttpAdapterConfig {
   /** True once the principal mailbox registry has any row (#2475, R28): the vault routes then
    *  refuse direct writes to the flat keys the console mirrors the default mailbox into. */
   principalRegistryHasRows?: () => Promise<boolean>;
+  /** Ids of the live principal mailboxes: the vault refuses to delete their grants (#2475). */
+  livePrincipalMailboxIds?: () => Promise<string[]>;
   /** Backs the public /api/secret-capture/* routes (one-time tokenized secret capture, #971).
    *  Token-authed, so mounted independently of the bootstrap secret. */
   secretCaptureService?: import('../../secrets/secret-capture-service.js').SecretCaptureService;
@@ -593,6 +595,7 @@ export class HttpAdapter implements Channel {
           ? () => this.config.principalMailboxConsole!.mailboxes.isFallbackActive()
           : undefined,
         principalRegistryHasRows: this.config.principalRegistryHasRows,
+        livePrincipalMailboxIds: this.config.livePrincipalMailboxIds,
         usage: new SecretUsageRepo(pool),
         bus,
         webAppBootstrapSecret,

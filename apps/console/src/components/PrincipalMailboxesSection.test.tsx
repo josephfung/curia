@@ -214,6 +214,12 @@ describe('PrincipalMailboxesSection', () => {
     expect(byLabel('Grant ID')).toBeNull();
   });
 
+  it('shows why the migration is still pending when the server knows', async () => {
+    mocks.respond = () => json({ mailboxes: [{ ...work, id: 'mailbox', pending_migration: true, pending_migration_reason: 'The flat grant is not a Google account' }] });
+    await mount();
+    expect(container.textContent).toContain('it has not finished because: The flat grant is not a Google account.');
+  });
+
   it('replaces a mailbox grant with PATCH { grant_id } and drops it from the page after', async () => {
     await mount();
     await click('Replace grant');

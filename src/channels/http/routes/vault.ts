@@ -291,6 +291,9 @@ export interface VaultRouteOptions {
   /** True once the principal mailbox registry has any row (#2475, R28). The console then owns
    *  the flat keys (it mirrors the default mailbox into them), so PUT and DELETE refuse them. */
   principalRegistryHasRows?: () => Promise<boolean>;
+  /** Ids of the live principal mailboxes (#2475). A live mailbox's grant cannot be deleted
+   *  here (with or without force): the mailbox would stay listed with no grant. */
+  livePrincipalMailboxIds?: () => Promise<string[]>;
   /** Optional: last-read times for the Secrets page. When absent, lastUsedAt is null. */
   usage?: SecretUsagePort;
   /** Every set and delete is published here as a secret.changed audit event (#2453). */
@@ -835,6 +838,15 @@ export async function vaultRoutes(
 
     try {
       if (await refuseManagedFlatKey(request, reply, name)) return;
+      if (isPrincipalMailboxGrantKey(name) && options.livePrincipalMailboxIds) {
+        const mailboxId = name.split('.')[2]!;
+        if ((await options.livePrincipalMailboxIds()).includes(mailboxId)) {
+          request.log.info({ name }, 'vault delete rejected: the grant of a live principal mailbox');
+          return reply.status(409).send({
+            error: `'${name}' is the grant of the connected mailbox "${mailboxId}". Remove the mailbox, or use Replace grant on it, in the console: Channels → Email → Principal's mailboxes.`,
+          });
+        }
+      }
       if (!(await secretsService.list()).includes(name)) {
         if (!isAllowedVaultName(name, options)) {
           request.log.info({ name }, 'vault delete rejected: name not in the vault nor declared by any skill, MCP server, or channel');

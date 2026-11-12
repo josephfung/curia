@@ -41,7 +41,11 @@ export function createPrincipalMailboxResolver(deps: {
       return null;
     }
     const { apiKey: key, grantId } = creds;
-    if (!grantId.trim() || !key) return null;
+    if (!grantId.trim() || !key) {
+      // credentials() refuses a missing grant or key, so this is a blank value in the vault.
+      logger.warn({ hasGrant: grantId.trim() !== '', hasApiKey: !!key }, 'Principal mailbox grant or Nylas API key is blank; treating mailbox as unavailable');
+      return null;
+    }
 
     if (cached && cached.grantId === grantId && cached.key === key) return cached.client;
     const client = createClient(key, grantId);

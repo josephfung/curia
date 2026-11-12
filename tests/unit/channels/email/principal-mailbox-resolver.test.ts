@@ -89,6 +89,15 @@ describe('createPrincipalMailboxResolver', () => {
     expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('grant-1');
   });
 
+  it('returns null and warns, without the value, when the grant is blank (silent-failure 14)', async () => {
+    const warnSpy = vi.fn();
+    const log = { ...logger, warn: warnSpy } as unknown as typeof logger;
+    const mailboxes = { defaultMailbox: async () => ({ id: 'work', label: 'Work', address: '', isDefault: true, triageStartAt: null }), credentials: async () => ({ apiKey: 'key', grantId: '   ' }) };
+    const resolve = createPrincipalMailboxResolver({ mailboxes, logger: log, createClient: vi.fn() });
+    expect(await resolve()).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith({ hasGrant: false, hasApiKey: true }, expect.stringContaining('blank'));
+  });
+
   it('returns null and logs an error when the secret read throws', async () => {
     const errorSpy = vi.fn();
     const log = { ...logger, error: errorSpy } as unknown as typeof logger;
