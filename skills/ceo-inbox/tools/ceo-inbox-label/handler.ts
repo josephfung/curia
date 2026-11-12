@@ -1,5 +1,5 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { namedOrDefaultMailbox } from '../../../_shared/principal-mailbox-client.js';
+import { locateInMailbox, mailboxFields } from '../../../_shared/principal-mailbox-client.js';
 import { describeMessage } from '../../../_shared/ceo-nylas-client.js';
 import type { NylasFolder } from '../../../_shared/ceo-nylas-client.js';
 import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
@@ -7,10 +7,6 @@ import { isReadOnlySystemLabel } from '../../../../src/channels/email/system-lab
 
 export class CeoInboxLabelHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const picked = await namedOrDefaultMailbox(ctx, ctx.input, 'ceo-inbox-label');
-    if (!picked.ok) return { success: false, error: picked.error };
-    const client = picked.at.client;
-
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
 
@@ -49,6 +45,13 @@ export class CeoInboxLabelHandler implements ToolHandler {
         errorType: 'VALIDATION_ERROR',
       };
     }
+
+    // Find the message's mailbox before touching any label, so a stray label is never
+    // created in the wrong account.
+    const located = await locateInMailbox(ctx, input, 'ceo-inbox-label', 'message', messageId);
+    if (!located.ok) return { success: false, error: located.error, ...(located.errorType ? { errorType: located.errorType } : {}) };
+    const { client, mailbox } = located.at;
+    const mbx = mailboxFields(mailbox);
 
     ctx.log.info(
       { messageId, labels: writableLabels, readOnlySkipped },
@@ -116,6 +119,7 @@ export class CeoInboxLabelHandler implements ToolHandler {
         success: true,
         data: {
           message_id: messageId,
+          ...mbx,
           applied: writableLabels,
           read_only_skipped: readOnlySkipped,
           created,

@@ -1,15 +1,11 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { namedOrDefaultMailbox } from '../../../_shared/principal-mailbox-client.js';
+import { locateInMailbox, mailboxFields } from '../../../_shared/principal-mailbox-client.js';
 import type { NylasFolder } from '../../../_shared/ceo-nylas-client.js';
 import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 import { isReadOnlySystemLabel } from '../../../../src/channels/email/system-labels.js';
 
 export class CeoInboxUpdateFoldersHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const picked = await namedOrDefaultMailbox(ctx, ctx.input, 'ceo-inbox-update-folders');
-    if (!picked.ok) return { success: false, error: picked.error };
-    const client = picked.at.client;
-
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
 
@@ -39,6 +35,13 @@ export class CeoInboxUpdateFoldersHandler implements ToolHandler {
     if (addFolders.length === 0 && removeFolders.length === 0) {
       return { success: false, error: 'at least one of add_folders or remove_folders is required' };
     }
+
+    // Find the message's mailbox before touching any label, so a stray label is never
+    // created in the wrong account.
+    const located = await locateInMailbox(ctx, input, 'ceo-inbox-update-folders', 'message', messageId);
+    if (!located.ok) return { success: false, error: located.error, ...(located.errorType ? { errorType: located.errorType } : {}) };
+    const { client, mailbox } = located.at;
+    const mbx = mailboxFields(mailbox);
 
     ctx.log.info(
       { messageId, addCount: addFolders.length, removeCount: removeFolders.length },
@@ -158,6 +161,7 @@ export class CeoInboxUpdateFoldersHandler implements ToolHandler {
         success: true,
         data: {
           message_id: messageId,
+          ...mbx,
           folders: finalFolders,
           created,
           removed_unresolved: removeUnresolved,

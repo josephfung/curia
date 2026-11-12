@@ -3,7 +3,7 @@ import pino from 'pino';
 import type { ToolContext } from '../../../src/skills/types.js';
 import { CeoInboxUpdateFoldersHandler } from '../../../skills/ceo-inbox/tools/ceo-inbox-update-folders/handler.js';
 import { clearFolderCache } from '../../../skills/_shared/ceo-nylas-client.js';
-import { stubPrincipalMailboxes } from '../../../skills/_shared/principal-mailboxes-test-helpers.js';
+import { stubPrincipalMailboxes, twoMailboxFixture } from '../../../skills/_shared/principal-mailboxes-test-helpers.js';
 
 // Folder lists are cached per grant; each test brings its own fixture.
 beforeEach(() => {
@@ -312,14 +312,16 @@ describe('CeoInboxUpdateFoldersHandler', () => {
   // ── Error handling ────────────────────────────────────────────────────────
 
   it('returns failure when getMessage throws', async () => {
-    mockNylas({ folders: FOLDERS, messageFolders: [], getMessageThrows: true });
+    const { calls } = mockNylas({ folders: FOLDERS, messageFolders: [], getMessageThrows: true });
 
     const result = await handler.execute(
       makeCtx({ message_id: 'msg-missing', add_folders: ['INBOX'] }),
     );
 
+    // The mailbox lookup reads the message first, so a failing read ends it before any write.
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('Failed to update');
+    if (!result.success) expect(result.error).toContain('could not check');
+    expect(calls.putFolders).toBeNull();
   });
 
   it('surfaces the underlying error detail when the folder write fails', async () => {
@@ -341,5 +343,51 @@ describe('CeoInboxUpdateFoldersHandler', () => {
       expect(result.error).toContain('Failed to update principal inbox message folders');
       expect(result.error).toContain('400');
     }
+  });
+});
+
+describe('CeoInboxUpdateFoldersHandler mailbox selection (#2475)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function run(holders: Array<'work' | 'personal'>, extra: Record<string, unknown> = {}) {
+    const f = twoMailboxFixture(holders);
+    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: unknown, init?: RequestInit) => {
+      const u = new URL(String(url));
+      const method = (init?.method ?? 'GET').toUpperCase();
+      const grant = /grant-[a-z]+/.exec(u.pathname)![0];
+      if (u.pathname.endsWith('/folders')) {
+        f.calls.push({ grant, method, path: '/folders' });
+        if (method === 'POST') return jsonResponse({ id: 'Label_new', name: 'BOARD' });
+        return jsonResponse([]);
+      }
+      if (method === 'PUT' && holders.some((h) => `grant-${h}` === grant)) {
+        f.calls.push({ grant, method, path: u.pathname });
+        return jsonResponse({ id: 'x1', folders: ['INBOX', 'Label_new'] });
+      }
+      return f.fetchStub(url, init);
+    }) as typeof fetch);
+    clearFolderCache();
+    const ctx = {
+      input: { message_id: 'x1', add_folders: ['BOARD'], ...extra }, principalMailboxes: f.principalMailboxes,
+      log: logger,
+    } as unknown as ToolContext;
+    return { f, result: new CeoInboxUpdateFoldersHandler().execute(ctx) };
+  }
+
+  it('creates no label when the message is not in the mailbox', async () => {
+    const { f, result } = run(['personal'], { mailbox: 'work' });
+    expect((await result).success).toBe(false);
+    expect(f.calls.filter((c) => c.path === '/folders')).toHaveLength(0);
+    expect(f.calls.filter((c) => c.method !== 'GET')).toHaveLength(0);
+  });
+
+  it('updates folders in the mailbox holding the message', async () => {
+    const { f, result } = run(['personal']);
+    const r = await result;
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data).toMatchObject({ mailbox: 'personal', mailbox_label: 'Personal', created: ['BOARD'] });
+    const writes = f.calls.filter((c) => c.method !== 'GET');
+    expect(writes.length).toBeGreaterThan(0);
+    expect(writes.every((c) => c.grant === 'grant-personal')).toBe(true);
   });
 });
