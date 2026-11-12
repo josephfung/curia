@@ -150,7 +150,7 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // #2474 PR 2 ceo-inbox-send-draft describes triage sends (+236 bytes), approved by the maintainer: 46,527 over 46 local tools.
   // #2475 the optional `mailbox` input on all 15 ceo-inbox tools (+1,900 bytes, the description fixed by the
   // design): 48,427 over 46 local tools. Needs the maintainer's approval at review.
-  // #2475 D5 account-choice guidance on draft-compose
+  // #2475 D5 account-choice guidance on draft-compose (+521 bytes)
   // #2475 move_to_mailbox on draft-edit (+139 bytes), approved by the maintainer: 49,087 over 46 local tools.
   { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 49_087, allowMcpPins: false },
   // contacts: YAML 15,595 → 11,423 chars (~4,831 → ~3,788 tokens always-on with its SKILL.md bodies);

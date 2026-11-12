@@ -256,6 +256,24 @@ describe('CeoInboxDraftComposeHandler', () => {
       expect(String(mockFetch.mock.calls[0]![0])).toContain('grant-work');
     });
 
+    it('a created draft is still reported when evidence fails afterwards', async () => {
+      mockFetch.mockResolvedValue(new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 }));
+      const ctx = twoCtx({ mailbox: 'work' });
+      const svc = ctx.principalMailboxes as unknown as { list: () => Promise<unknown[]> };
+      const realList = svc.list;
+      let calls = 0;
+      svc.list = async () => {
+        calls += 1;
+        if (calls > 1) throw new Error('registry down');
+        return realList();
+      };
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      const data = (result as { data: Record<string, unknown> }).data;
+      expect(data).toMatchObject({ draft_id: 'draft-compose-1', mailbox: 'work' });
+      expect(data).not.toHaveProperty('evidence');
+    });
+
     it('rejects an unknown mailbox instead of falling back', async () => {
       const result = await handler.execute(twoCtx({ mailbox: 'nope' }));
       expect(result.success).toBe(false);
