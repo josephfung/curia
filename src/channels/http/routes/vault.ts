@@ -41,7 +41,7 @@ import type { EmailAccountsRepo } from '../../email/email-accounts-repo.js';
 import { actorFromRequest } from './sessions.js';
 import { isPlatformVaultKey, platformKeyLabel } from '../../../secrets/platform-keys.js';
 import { StaleCardEditError, type PersonalSecretWrite, type SecretMetadata, type UserSecretDetailsPatch } from '../../../secrets/secrets-service.js';
-import { FLAT_KEYS_MANAGED_MESSAGE, isPrincipalMailboxGrantKey } from '../../../principal-mailboxes/secrets.js';
+import { FLAT_KEYS_MANAGED_MESSAGE, PER_MAILBOX_GRANT_MANAGED_MESSAGE, isPrincipalMailboxGrantKey } from '../../../principal-mailboxes/secrets.js';
 import type { SecretUsagePort } from '../../../secrets/secret-usage-repo.js';
 import { consoleSecretNameInput, resolveUserSecretName, USER_SECRET_PREFIX } from '../../../secrets/user-secret-name.js';
 import { parseUserSecretDetails, type UserSecretDetails } from '../../../secrets/user-secret-details.js';
@@ -315,7 +315,7 @@ export function isAllowedVaultName(
     (deps.mcpRegistryService?.declaredSecretKeys().includes(name) ?? false) ||
     isPerAccountEmailGrantKey(name) ||
     // Per-mailbox grants (#2475). Written through the principal-mailboxes routes, which
-    // validate the grant; this only keeps the Secrets page able to clear one.
+    // validate the grant (PUT refuses them); this only keeps the Secrets page able to clear one.
     isPrincipalMailboxGrantKey(name) ||
     PRINCIPAL_MAILBOX_KEYS.has(name)
   );
@@ -790,6 +790,13 @@ export async function vaultRoutes(
     // drafts drop it from CC). A value that is not an address would filter nothing.
     if (name === 'ceo_self_email' && !PRINCIPAL_EMAIL_RE.test(value.trim())) {
       return reply.status(400).send({ error: 'ceo_self_email must be an email address.' });
+    }
+    // A per-mailbox grant is set only through the principal-mailboxes routes, which check the
+    // grant is Google's, is for that mailbox's address and is not another mailbox's, and mirror
+    // the default (#2475). Clearing one here (DELETE) stays allowed.
+    if (isPrincipalMailboxGrantKey(name)) {
+      request.log.info({ name }, 'vault set rejected: per-mailbox grants are set through the principal mailboxes console');
+      return reply.status(409).send({ error: PER_MAILBOX_GRANT_MANAGED_MESSAGE });
     }
     try {
       if (await refuseManagedFlatKey(request, reply, name)) return;
