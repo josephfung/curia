@@ -50,6 +50,21 @@ function isInboxDrainTurn(ctx: ToolContext): boolean {
   return Array.isArray(tags) && tags.includes('inbox-drain');
 }
 
+/**
+ * An unread INBOX listing with no mailbox, page token or sweep: what a drain's batch call looks
+ * like whatever flags the model added. Any explicit departure (another folder, read mail, a named
+ * mailbox, a page) keeps the ordinary listing.
+ */
+function isPlainUnreadInboxListing(input: Record<string, unknown>): boolean {
+  const folder = typeof input.folder === 'string' ? input.folder.trim() : '';
+  const mailbox = typeof input.mailbox === 'string' ? input.mailbox.trim() : '';
+  return (folder === '' || folder.toUpperCase() === 'INBOX')
+    && input.unread_only !== false
+    && mailbox === ''
+    && input.page_token === undefined
+    && input.sweep_since === undefined;
+}
+
 export class CeoInboxListHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const input =
@@ -70,12 +85,20 @@ export class CeoInboxListHandler implements ToolHandler {
       return { success: false, error: 'triage mode is only available to the scheduled inbox-drain task.' };
     }
 
+    // R66: on an inbox-drain turn, an unread INBOX listing that names no mailbox IS the drain's
+    // batch, so it runs in triage mode whether or not the model passed `triage: true`. Without
+    // this, a prompt slip bypasses the cadence, ceiling, start line and dedupe bookkeeping.
+    const triage = input.triage === true || (isInboxDrainTurn(ctx) && isPlainUnreadInboxListing(input));
+    if (triage && input.triage !== true) {
+      ctx.log.debug({ tool: 'ceo-inbox-list' }, 'ceo-inbox-list: unread listing on an inbox-drain turn runs in triage mode');
+    }
+
     // Triage reads every live mailbox that is due; a `mailbox` input is not honoured there.
-    const resolved = await resolveTargets(ctx, input.triage === true ? { ...input, mailbox: undefined } : ctx.input, 'ceo-inbox-list');
+    const resolved = await resolveTargets(ctx, triage ? { ...input, mailbox: undefined } : ctx.input, 'ceo-inbox-list');
     if (!resolved.ok) return { success: false, error: resolved.error };
     const { targets } = resolved;
 
-    if (input.triage === true) {
+    if (triage) {
       return triageList(ctx, targets, await curiaOwnAddresses(ctx, 'ceo-inbox-list'));
     }
 
