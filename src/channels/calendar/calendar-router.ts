@@ -22,6 +22,7 @@ import type { CalendarRouterMailboxes, PrincipalMailboxView } from '../../princi
 import { RemovedMailboxError, UnknownMailboxError } from '../../principal-mailboxes/types.js';
 import type { NylasCalendarClient } from './nylas-calendar-client.js';
 import type { CountsOnlyEvidence } from '../../principal-mailboxes/evidence.js';
+import { canonicalUuid } from '../../util/uuid.js';
 
 /** Nylas's alias for a grant's primary calendar. Never stored, never sent without a mailbox. */
 export const PRIMARY_CALENDAR_ALIAS = 'primary';
@@ -100,7 +101,8 @@ export class CalendarRouter {
 
   /** The principal's contact id: whose registered calendars are "the principal's calendars". */
   get principalContactId(): string {
-    return this.deps.principalContactId;
+    // Canonical (lowercase) form, so a comparison with an id spelled in another case holds.
+    return canonicalUuid(this.deps.principalContactId) ?? this.deps.principalContactId.trim();
   }
 
   /**
@@ -121,7 +123,7 @@ export class CalendarRouter {
     // `live`: a snapshot the caller already read, so a list of ids costs one registry read (R100).
     if (this.owner(calendarId, live ?? (await this.deps.mailboxes.list()))) return true;
     const row = await this.deps.contacts.resolveCalendar(calendarId);
-    return row?.contactId === this.deps.principalContactId;
+    return typeof row?.contactId === 'string' && (canonicalUuid(row.contactId) ?? row.contactId) === this.principalContactId;
   }
 
   /** A live mailbox by id; unknown and removed ids are CalendarRouteErrors. */
@@ -175,7 +177,7 @@ export class CalendarRouter {
     if (calendarId === PRIMARY_CALENDAR_ALIAS) {
       const mb = hinted ?? this.soleMailbox('primary_alias_needs_mailbox', calendarId, live);
       const client = await this.deps.mailboxes.calendarClient(mb.id);
-      return { mailboxId: mb.id, calendarId: await this.homeCalendarId(mb.id, client), client, placedBy: 'primary' };
+      return { mailboxId: mb.id, calendarId: await this.homeCalendarId(mb.id, client, live), client, placedBy: 'primary' };
     }
 
     // The owning grant wins over a registry row too: a row written before the rule (or by the
@@ -279,7 +281,7 @@ export class CalendarRouter {
     const out: HomeCalendar[] = [];
     for (const mb of live) {
       const client = await this.deps.mailboxes.calendarClient(mb.id);
-      out.push({ mailboxId: mb.id, calendarId: await this.homeCalendarId(mb.id, client), client, label: mb.label, removed: false });
+      out.push({ mailboxId: mb.id, calendarId: await this.homeCalendarId(mb.id, client, live), client, label: mb.label, removed: false });
     }
     const liveIds = new Set(live.map((m) => m.id));
     const rows = await this.deps.contacts.getCalendarsForContact(this.deps.principalContactId);
@@ -314,7 +316,7 @@ export class CalendarRouter {
     for (const mb of live) {
       try {
         const client = await this.deps.mailboxes.calendarClient(mb.id);
-        found.push({ mailboxId: mb.id, calendarId: await this.homeCalendarId(mb.id, client), client, label: mb.label });
+        found.push({ mailboxId: mb.id, calendarId: await this.homeCalendarId(mb.id, client, live), client, label: mb.label });
       } catch (err) {
         const code = err instanceof CalendarRouteError ? err.code : err instanceof Error ? err.name : 'Error';
         this.log.warn({ mailboxId: mb.id, code }, 'Home calendar lookup failed for one mailbox');
@@ -343,12 +345,20 @@ export class CalendarRouter {
   }
 
   /**
-   * A mailbox's home calendar ID: the principal's primary calendar registered for it, else the
-   * grant's own primary calendar as Nylas lists it (its real ID, never the alias).
+   * A mailbox's home calendar ID: the principal's primary calendar registered for it (unless
+   * another live mailbox owns that calendar), else the grant's own primary calendar as Nylas
+   * lists it (its real ID, never the alias).
    */
-  private async homeCalendarId(mailboxId: string, client: NylasCalendarClient): Promise<string> {
+  private async homeCalendarId(mailboxId: string, client: NylasCalendarClient, live: PrincipalMailboxView[]): Promise<string> {
     const registered = await this.deps.contacts.getPrimaryCalendar(this.deps.principalContactId, mailboxId);
-    if (registered) return registered.nylasCalendarId;
+    if (registered) {
+      // The owning grant wins here too, as on the address path: a row naming another live
+      // mailbox's own calendar is not this mailbox's home, and writing to it through this
+      // mailbox's client would reach the other account. The grant's own primary is used instead.
+      const owner = this.owner(registered.nylasCalendarId, live);
+      if (!owner || owner.id === mailboxId) return registered.nylasCalendarId;
+      this.log.warn({ mailboxId, ownerMailboxId: owner.id }, 'Registered home calendar belongs to another mailbox; using the grant\'s own primary');
+    }
     const primary = (await client.listCalendars()).find((c) => c.isPrimary);
     if (!primary) {
       this.log.warn({ mailboxId }, 'Mailbox grant lists no primary calendar');
