@@ -7,7 +7,7 @@ import { triageList } from '../../../_shared/triage-listing.js';
 import { isPrincipalDirectedMailboxSend } from '../../../../src/skills/principal-send/authority.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 import { DateTime } from 'luxon';
-import { isSystemOriginated } from '../../../../src/contacts/principal.js';
+import { hasSystemLineage } from '../../../../src/contacts/principal.js';
 import { annotateDrafts, filterModifiedSince, parseModifiedSince } from '../../../_shared/draft-listing.js';
 
 const MAX_LIMIT = 50;
@@ -42,9 +42,9 @@ function isSystemFolder(folder: string): boolean {
 // How far back a principal-directed sweep may move a start line ("about a year").
 const SWEEP_MAX_DAYS = 366;
 
-/** A turn of the heartbeat's inbox-drain task: system originator and a bound task tagged inbox-drain. */
+/** A turn of the heartbeat's inbox-drain task: system lineage (raw, or laddered down from system) and a bound task tagged inbox-drain. */
 function isInboxDrainTurn(ctx: ToolContext): boolean {
-  if (!isSystemOriginated(ctx.taskMetadata)) return false;
+  if (!hasSystemLineage(ctx.taskMetadata)) return false;
   const bound = ctx.taskMetadata?.['boundTask'];
   const tags = bound && typeof bound === 'object' ? (bound as { tags?: unknown }).tags : undefined;
   return Array.isArray(tags) && tags.includes('inbox-drain');

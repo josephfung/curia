@@ -136,7 +136,8 @@ export class InboxHeartbeat {
     const open = (await this.o.taskRepo.listTasks({
       statuses: ['open', 'in_progress'],
       tag: INBOX_DRAIN_TAG,
-      limit: 25,
+      // Wide, so foreign inbox-drain tasks cannot push the heartbeat's own out of the page.
+      limit: 200,
     })).filter((t) => t.agentId === INBOX_AGENT);
     const own = open.filter((t) => t.createdBy === HEARTBEAT_CREATED_BY);
     for (const t of open) {
@@ -159,6 +160,11 @@ export class InboxHeartbeat {
 
     const stalled = own[0];
     if (stalled) {
+      if (!stalled.originator) {
+        // Re-waking with null would erase its system lineage; skip loudly instead of stalling silently.
+        this.o.logger.warn({ taskId: stalled.id }, 'InboxHeartbeat: stalled inbox-drain task has no stored originator; not re-waking it');
+        return 'drain_running';
+      }
       if (stalled.wakeState === 'suspended') {
         this.o.logger.warn({ taskId: stalled.id, wakeState: 'suspended' }, 'InboxHeartbeat: re-waking an inbox-drain task whose wake was suspended');
       }
