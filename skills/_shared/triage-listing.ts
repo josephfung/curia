@@ -19,11 +19,14 @@ import type { CeoNylasClient, NylasMessageSummary } from './ceo-nylas-client.js'
 import { NYLAS_MAX_LIST_LIMIT } from './ceo-nylas-client.js';
 import { describeError, scanMailbox, type MailboxError, type Target } from './cross-mailbox-listing.js';
 import { mailboxFields } from './principal-mailbox-client.js';
+import { isTriageCandidate } from '../../src/principal-mailboxes/triage-candidate.js';
 
 const PAGE_CAP = 25;
 /** Messages queued per mailbox: a batch, a probe for has_more, and room for dropped duplicates. */
 const QUEUE_NEED = TRIAGE_BATCH_SIZE * 2 + 1;
 const TOOL = 'ceo-inbox-list';
+/** Messages read to count a backlog: room for some of Curia's own past the threshold. */
+const BACKLOG_COUNT_SCAN = BACKLOG_ALARM_THRESHOLD * 3;
 const NOTE = 'Its mail is not included; a later call retries it.';
 const lc = (s: string): string => s.toLowerCase();
 
@@ -154,6 +157,7 @@ export async function triageList(ctx: ToolContext, targets: Target[], curiaEmail
         return;
       }
       const startSec = mailbox.triageStartAt ? Math.floor(mailbox.triageStartAt.getTime() / 1000) : undefined;
+      let dropped = 0;
       const filters = { folder: 'INBOX', unread: true as const, ...(startSec !== undefined ? { receivedAfter: startSec } : {}) };
       try {
         const scan = await scanMailbox<NylasMessageSummary>({
@@ -163,21 +167,23 @@ export async function triageList(ctx: ToolContext, targets: Target[], curiaEmail
           fetchPage: (cursor) => client.listMessagesPage({
             ...filters, limit: cursor ? NYLAS_MAX_LIST_LIMIT : QUEUE_NEED, ...(cursor ? { pageToken: cursor } : {}),
           }),
-          // The start line is also enforced here: a provider that ignores received_after must not
-          // let older mail in. Dates are Unix seconds.
-          keep: (m) => m.unread
-            && m.folders.some((f) => f.toUpperCase() === 'INBOX')
-            && !m.from.some((p) => curiaEmails.has(lc(p.email)))
-            && (startSec === undefined || m.date >= startSec),
+          // The shared keep rule (BR-I3): the heartbeat probe uses it too, so they agree.
+          keep: (m) => {
+            const kept = isTriageCandidate(m, curiaEmails, startSec);
+            if (!kept) dropped += 1;
+            return kept;
+          },
         });
+        if (dropped > 0) log.info({ tool: TOOL, mailboxId: mailbox.id, dropped }, 'ceo-inbox-list: triage skipped read, non-INBOX, pre-start-line or Curia mail');
         const queue = scan.items.map((i) => i.item);
         scans.push({ target, queue, scannedAny: queue.length > 0, exhausted: scan.end === null, capped: scan.capped, more: false });
         // Untriaged count past the start line, bounded: only when the first scan shows more than a
         // queue's worth, and only until the alarm has fired this episode.
         if (scan.end !== null && queue.length >= QUEUE_NEED && !(await svc.state.backlogAlarmed(mailbox.id))) {
           try {
-            const counted = await client.listAllMessages({ ...filters, limit: NYLAS_MAX_LIST_LIMIT, maxScan: BACKLOG_ALARM_THRESHOLD + 1 });
-            if (counted.messages.length > BACKLOG_ALARM_THRESHOLD) backlog.push({ mailbox: mailbox.id, mailbox_label: mailbox.label, untriaged_over: BACKLOG_ALARM_THRESHOLD });
+            // Counted with the same keep rule, so Curia's own unread mail cannot raise it (BR-M10).
+            const counted = await client.listAllMessages({ ...filters, limit: NYLAS_MAX_LIST_LIMIT, maxScan: BACKLOG_COUNT_SCAN });
+            if (counted.messages.filter((m) => isTriageCandidate(m, curiaEmails, startSec)).length > BACKLOG_ALARM_THRESHOLD) backlog.push({ mailbox: mailbox.id, mailbox_label: mailbox.label, untriaged_over: BACKLOG_ALARM_THRESHOLD });
           } catch (err) {
             log.warn({ tool: TOOL, mailboxId: mailbox.id, ...grantSafeErrorFields(err) }, 'ceo-inbox-list: backlog count failed; no alarm this call');
           }

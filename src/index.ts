@@ -236,6 +236,7 @@ import { closeLegacyInboxDrains, InboxHeartbeat } from './scheduler/inbox-heartb
 import { readTriageCadences, TRIAGE_DAILY_CEILING } from './principal-mailboxes/triage-cadence.js';
 import { TriageState, TRIAGE_NAMESPACE } from './principal-mailboxes/triage-state.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
+import { unreadCandidateProbe } from './principal-mailboxes/triage-candidate.js';
 import type { TriageServices } from './principal-mailboxes/triage-services.js';
 import { taskHasPendingWake } from './agents/resumable-continuation.js';
 import { ResumableContinuationSubscriber } from './agents/resumable-continuation-subscriber.js';
@@ -3380,18 +3381,20 @@ async function main(): Promise<void> {
       // Read per tick so a console edit takes effect without a restart.
       cadences: async (ids) => readTriageCadences(await triageConfig.get(TRIAGE_NAMESPACE, 'triage'), ids, logger),
       state: new TriageState(triageConfig, triageTz),
-      // One cheap first-page list per due mailbox. The filters ride on this first request, so
-      // the Nylas cursor-drops-filters bug (#2377) cannot touch it.
-      hasUnreadSince: async (mailboxId, since) => {
-        const client = await principalMailboxes.gatewayClient(mailboxId);
-        const messages = await client.listMessages({
-          unread: true,
-          folders: ['INBOX'],
-          limit: 1,
-          ...(since ? { receivedAfter: Math.floor(since.getTime() / 1000) } : {}),
-        });
-        return messages.length > 0;
-      },
+      // One cheap first-page list per due mailbox, kept by the triage list's own rule (BR-I3):
+      // Curia's own unread mail is never triaged, so it must not wake a model run either.
+      hasUnreadSince: unreadCandidateProbe({
+        client: (mailboxId) => principalMailboxes.gatewayClient(mailboxId),
+        curiaEmails: async () => {
+          const boot = resolvedEmailAccounts.map((a) => a.selfEmail.toLowerCase());
+          try {
+            return new Set([...boot, ...(await curiaEmailAddresses()).map((e) => e.toLowerCase())]);
+          } catch (err) {
+            logger.warn({ err }, 'InboxHeartbeat: email accounts lookup failed; probing with the addresses from startup');
+            return new Set(boot);
+          }
+        },
+      }),
       taskRepo,
       scheduler: schedulerService,
       dailyCeiling: TRIAGE_DAILY_CEILING,

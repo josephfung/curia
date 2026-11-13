@@ -1017,6 +1017,15 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     expect(second.backlog).toBeUndefined();
   });
 
+  it('Curia\'s own unread mail does not count toward the backlog alarm (BR-M10)', async () => {
+    const curiaMail = Array.from({ length: 120 }, (_, i) => msg(`c${i}`, NOW_S - i, { from: [{ email: 'curia@example.com' }] }));
+    const real = Array.from({ length: 20 }, (_, i) => msg(`r${i}`, NOW_S - 200 - i));
+    const t = setup({ 'grant-work': [...curiaMail, ...real], 'grant-personal': [] }, { ctxExtra: { selfEmails: ['curia@example.com'] } });
+    const d = dataOf(await t.run());
+    expect(d.messages.every((m) => m.id.startsWith('r'))).toBe(true);
+    expect(d.backlog).toBeUndefined();
+  });
+
   it('the backlog alarm resets when the backlog is cleared', async () => {
     const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)], 'grant-personal': [] });
     await t.state.setBacklogAlarmed('work', true);
