@@ -28,7 +28,7 @@
 // be re-woken, a fresh system-originated drain is created in its place.
 const HEARTBEAT_CREATED_BY = 'heartbeat';
 import type { Logger } from '../logger.js';
-import type { TaskRepo } from '../db/task-repo.js';
+import type { TaskListRow, TaskRepo } from '../db/task-repo.js';
 import type { SchedulerService } from './scheduler-service.js';
 import type { PrincipalMailboxes } from '../principal-mailboxes/service.js';
 import type { Cadence } from '../principal-mailboxes/triage-cadence.js';
@@ -131,6 +131,16 @@ export class InboxHeartbeat {
     this.o.logger.info('InboxHeartbeat stopped');
   }
 
+  /** The heartbeat's own open drain tasks (R56: only those it created). */
+  private async ownOpenDrains(): Promise<TaskListRow[]> {
+    return (await this.o.taskRepo.listTasks({
+      statuses: ['open', 'in_progress'],
+      tag: INBOX_DRAIN_TAG,
+      createdBy: HEARTBEAT_CREATED_BY,
+      limit: 50,
+    })).filter((t) => t.agentId === INBOX_AGENT && t.createdBy === HEARTBEAT_CREATED_BY);
+  }
+
   async tick(now: Date = new Date()): Promise<InboxHeartbeatResult> {
     // The state's own ceiling (TRIAGE_DAILY_CEILING) gates; dailyCeiling is recorded for logs.
     if (await this.o.state.ceilingReached(now)) {
@@ -140,6 +150,19 @@ export class InboxHeartbeat {
 
     const mailboxes = await this.o.mailboxes.list();
     const ids = mailboxes.map((m) => m.id);
+    let ownMemo: Promise<TaskListRow[]> | undefined;
+    const ownOpenDrains = (): Promise<TaskListRow[]> => (ownMemo ??= this.ownOpenDrains());
+
+    // R68: a drain that listed a mailbox's last batch left its episode open. Once no drain task
+    // of the heartbeat's is open, that run finished (it completed the task), so close the
+    // episode at its start. While one is open, a failed run's retry still finds the mailbox due.
+    const settling: string[] = [];
+    for (const id of ids) if (await this.o.state.settlePending(id)) settling.push(id);
+    if (settling.length > 0 && (await ownOpenDrains()).length === 0) {
+      for (const id of settling) await this.o.state.closeEpisode(id, now);
+      this.o.logger.info({ mailboxes: settling }, 'InboxHeartbeat: the drain finished; closed its episode');
+    }
+
     const due = await dueMailboxes({
       mailboxIds: ids,
       cadences: await this.o.cadences(ids),
@@ -173,12 +196,7 @@ export class InboxHeartbeat {
 
     // Only the heartbeat's own tasks are fetched (R56), so foreign inbox-drain tasks cannot push
     // its own out of the page. The createdBy check below repeats the filter defensively.
-    const own = (await this.o.taskRepo.listTasks({
-      statuses: ['open', 'in_progress'],
-      tag: INBOX_DRAIN_TAG,
-      createdBy: HEARTBEAT_CREATED_BY,
-      limit: 50,
-    })).filter((t) => t.agentId === INBOX_AGENT && t.createdBy === HEARTBEAT_CREATED_BY);
+    const own = await ownOpenDrains();
 
     const staleBefore = now.getTime() - STALLED_AFTER_MINUTES * 60_000;
     const paused = own.find((t) => t.wakeState === 'paused');

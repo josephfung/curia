@@ -6,6 +6,7 @@
 //   triage.batches.<YYYY-MM-DD>   batches run that LOCAL day (principal's timezone), all mailboxes
 //   triage.<id>.drain_started_at  ISO-8601 start of the current drain episode (R52), '' when none
 //   triage.<id>.backlog_alarmed   'true' | 'false' — the backlog alarm fired this episode
+//   triage.<id>.settle_pending    'true' | 'false' — the last batch was listed, not yet known settled (R68)
 //
 // Corrupt stored values fail safe, preferring to stop over running past the budget:
 //   - a bad last_drained_at reads as null, which makes the mailbox due (one extra drain at worst);
@@ -87,6 +88,33 @@ export class TriageState {
     const next = (await this.batchesToday(now)) + 1;
     await this.write(this.batchesKey(now), String(next));
     return next;
+  }
+
+  /**
+   * The drain listed this mailbox's last messages and nothing remained (R68). The episode stays
+   * open (draining) until the run that triages them is known to have finished, so a failed run's
+   * retry still finds the mailbox due and gets the same messages back. The heartbeat closes it
+   * once no drain task of its own is open.
+   */
+  async settlePending(id: string): Promise<boolean> {
+    return (await this.read(`triage.${id}.settle_pending`)) === 'true';
+  }
+
+  async setSettlePending(id: string, v: boolean): Promise<void> {
+    await this.write(`triage.${id}.settle_pending`, v ? 'true' : 'false');
+  }
+
+  /**
+   * Close the drain episode: stamp last_drained_at with the episode's start (R52; `now` when none
+   * was recorded), and clear draining, the start, the settle marker and the backlog alarm.
+   */
+  async closeEpisode(id: string, now: Date): Promise<void> {
+    const startedAt = (await this.isDraining(id) ? await this.drainStartedAt(id) : null) ?? now;
+    await this.markDrained(id, startedAt);
+    await this.setDraining(id, false);
+    await this.setDrainStartedAt(id, null);
+    if (await this.settlePending(id)) await this.setSettlePending(id, false);
+    if (await this.backlogAlarmed(id)) await this.setBacklogAlarmed(id, false);
   }
 
   async backlogAlarmed(id: string): Promise<boolean> {

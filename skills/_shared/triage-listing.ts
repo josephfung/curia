@@ -236,16 +236,20 @@ export async function triageList(ctx: ToolContext, targets: Target[], curiaEmail
         log.error({ tool: TOOL, mailboxId: id, pages: PAGE_CAP }, 'ceo-inbox-list: paging cap reached with nothing to triage; mailbox left as it was');
         continue;
       }
-      if (s.more) {
+      // R68: a mailbox whose last messages are in THIS batch stays draining (settle pending) until
+      // the heartbeat sees the run finished, so a failed run's retry still finds it due and gets
+      // the same unread messages back. Only a call that finds nothing closes the episode here.
+      const listedHere = batch.some((m) => m['mailbox'] === id);
+      if (s.more || listedHere) {
         if (!(await svc.state.isDraining(id))) await svc.state.setDrainStartedAt(id, now);
         await svc.state.setDraining(id, true);
+        if (s.more) {
+          if (await svc.state.settlePending(id)) await svc.state.setSettlePending(id, false);
+        } else {
+          await svc.state.setSettlePending(id, true);
+        }
       } else {
-        const wasDraining = await svc.state.isDraining(id);
-        const startedAt = (wasDraining ? await svc.state.drainStartedAt(id) : null) ?? now;
-        await svc.state.markDrained(id, startedAt);
-        await svc.state.setDraining(id, false);
-        await svc.state.setDrainStartedAt(id, null);
-        if (await svc.state.backlogAlarmed(id)) await svc.state.setBacklogAlarmed(id, false);
+        await svc.state.closeEpisode(id, now);
       }
     }
     for (const b of backlog) await svc.state.setBacklogAlarmed(b.mailbox, true);
