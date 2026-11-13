@@ -1089,6 +1089,22 @@ describe('CeoInboxDraftReplyHandler', () => {
       expect(result).toMatchObject({ success: true, data: { draft_id: 'draft-fallback', already_exists: true, mailbox: 'personal' } });
     });
 
+    it('finds an earlier fallback draft in a mailbox the visible recipients do not name (Bcc, forward)', async () => {
+      const { ctx, posts, searches } = setup({ held: 'work', to: ['ceo@work.example.com'] });
+      const prev = mockFetch.getMockImplementation()!;
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const u = new URL(String(url));
+        if (u.pathname.endsWith('/drafts') && (init?.method ?? 'GET') === 'GET' && u.pathname.includes('grant-personal')) {
+          return new Response(JSON.stringify({ data: [{ id: 'draft-fallback', thread_id: 'thread-001', subject: 'Re: Test Subject', to: [], cc: [], snippet: 'Earlier', date: 1 }] }), { status: 200 });
+        }
+        return prev(url, init);
+      });
+      const result = await handler.execute(ctx);
+      expect(searches).toEqual([{ grant: 'grant-personal', q: `rfc822msgid:${MSG_ID}` }]);
+      expect(posts).toHaveLength(0);
+      expect(result).toMatchObject({ success: true, data: { draft_id: 'draft-fallback', already_exists: true, mailbox: 'personal' } });
+    });
+
     it('a search hit with another Message-ID or sender does not lend its thread\'s draft (R57)', async () => {
       for (const copy of [{ messageId: 'other-id@example.com' }, { from: 'mallory@evil.example.org' }]) {
         const { ctx, posts } = setup({ held: 'work', to: ['ceo@work.example.com'], cc: ['ceo@personal.example.com'], copy });
