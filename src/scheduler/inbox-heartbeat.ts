@@ -30,11 +30,13 @@
 // when no other own task can be re-woken, a fresh system-originated drain is created in its place.
 const HEARTBEAT_CREATED_BY = 'heartbeat';
 /**
- * Every status an unfinished drain can hold: the task-lifecycle ones, plus the scheduler's
- * `paused` (an operator or drift pause sets the task too) and `active` (what a resume sets it
- * to). Missing those, a paused or resumed drain would look absent and get a second drain beside it.
+ * Every status an unfinished drain can hold: the task-lifecycle ones (`waiting` and `blocked`
+ * included: a task-update may set them while the drain's wake stays scheduled), plus the
+ * scheduler's `paused` (an operator or drift pause sets the task too) and `active` (what a
+ * resume sets it to). Missing any, a drain in that status would look absent and get a second
+ * drain beside it. Only `done` and `cancelled` end a drain.
  */
-const OPEN_DRAIN_STATUSES = ['open', 'in_progress', 'active', 'paused'] as const;
+const OPEN_DRAIN_STATUSES = ['open', 'in_progress', 'waiting', 'blocked', 'active', 'paused'] as const;
 import type { Logger } from '../logger.js';
 import type { TaskListRow, TaskRepo } from '../db/task-repo.js';
 import type { SchedulerService } from './scheduler-service.js';
@@ -105,11 +107,16 @@ export const LEGACY_DRAIN_CLOSE_NOTE = 'superseded by the inbox heartbeat (#2475
  * cannot be closed is logged and the rest still close. Returns how many were closed.
  */
 export async function closeLegacyInboxDrains(
-  taskRepo: Pick<TaskRepo, 'listTasks' | 'completeTask'>,
+  taskRepo: Pick<TaskRepo, 'listAllTasks' | 'completeTask'>,
   logger: Logger,
 ): Promise<number> {
-  const open = (await taskRepo.listTasks({ statuses: [...OPEN_DRAIN_STATUSES], tag: INBOX_DRAIN_TAG, limit: 200 }))
-    .filter((t) => t.agentId === INBOX_AGENT && t.createdBy !== HEARTBEAT_CREATED_BY);
+  // Every page (keyset), not one capped page: unrelated inbox-drain rows must not hide a legacy
+  // drain whose pending wake would then run beside the heartbeat's.
+  const found = await taskRepo.listAllTasks({ statuses: [...OPEN_DRAIN_STATUSES], tag: INBOX_DRAIN_TAG });
+  if (found.truncated) {
+    logger.warn({ fetched: found.tasks.length }, 'InboxHeartbeat: too many inbox-drain tasks to check in one pass; the rest are checked at the next boot');
+  }
+  const open = found.tasks.filter((t) => t.agentId === INBOX_AGENT && t.createdBy !== HEARTBEAT_CREATED_BY);
   let closed = 0;
   for (const t of open) {
     try {
