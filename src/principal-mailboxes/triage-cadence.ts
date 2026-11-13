@@ -7,6 +7,7 @@
 // Grammar:  (every <N>m | every <N>h | hourly | daily HH:MM)( HH:MM-HH:MM)?( weekdays)?
 //   - minutes: a multiple of 15, at least 15 (the heartbeat's resolution).
 //   - hours: 1 to 24.
+//   - daily: HH:MM no later than 23:45 (the heartbeat's last check of a day).
 //   - window: inclusive of both ends, in local time. A window that crosses midnight
 //     (`22:00-02:00`) IS supported: it covers start..24:00 and 00:00..end. start == end is
 //     refused (it would be a one-minute window, almost certainly a typo).
@@ -31,6 +32,8 @@ export const TRIAGE_BATCH_SIZE = 5;
 export const BACKLOG_ALARM_THRESHOLD = 100;
 
 const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
+/** The latest `daily HH:MM` the 15-minute heartbeat serves on the same local day. */
+const LAST_DAILY_SLOT = '23:45';
 const WINDOW = /^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$/;
 
 export function parseCadence(s: string): Cadence | null {
@@ -57,6 +60,9 @@ export function parseCadence(s: string): Cadence | null {
   } else if (head === 'daily') {
     const t = tokens[1] ?? '';
     if (!HHMM.test(t)) return null;
+    // The heartbeat's last check of a local day is at 23:45, so a later daily time would first be
+    // seen on the next day, and a mailbox never drained would never reach it. Refused.
+    if (t > LAST_DAILY_SLOT) return null;
     every = { dailyAt: t };
     i = 2;
   } else {
@@ -172,8 +178,8 @@ export function inWindow(c: Cadence, now: Date, tz: string): boolean {
 /**
  * Whether a mailbox is due: inside its window (and on a weekday if required), and either
  * the interval has elapsed since `lastDrainedAt` (within TOLERANCE_MS, see above) or, for
- * `daily HH:MM`, `now` is at or after today's HH:MM (local) and the last drain was before that
- * moment. A null lastDrainedAt, or one later than `now` (corrupt; it must not starve the
+ * `daily HH:MM`, the last drain was before the most recent HH:MM (local): today's once `now` is at
+ * or after it, else yesterday's, so a slot after the day's last heartbeat is served after midnight. A null lastDrainedAt, or one later than `now` (corrupt; it must not starve the
  * mailbox), counts as never drained. Elapsed time is real time; the window, weekday and daily
  * time are local wall-clock (the daily slot is built from the local calendar date, so a repeated
  * fall-back hour fires once and a skipped spring-forward time fires once, shifted). An invalid
@@ -189,18 +195,16 @@ export function isDue(c: Cadence, lastDrainedAt: Date | null, now: Date, tz: str
   if (!inWindow(c, now, tz)) return false;
 
   if ('dailyAt' in c.every) {
-    const slot = DateTime.fromObject(
-      {
-        year: local.year,
-        month: local.month,
-        day: local.day,
-        hour: Number(c.every.dailyAt.slice(0, 2)),
-        minute: Number(c.every.dailyAt.slice(3, 5)),
-      },
-      { zone: tz },
-    );
-    if (now.getTime() < slot.toMillis()) return false;
-    return lastDrainedAt === null || lastDrainedAt.getTime() < slot.toMillis();
+    const hour = Number(c.every.dailyAt.slice(0, 2));
+    const minute = Number(c.every.dailyAt.slice(3, 5));
+    const slotOn = (d: DateTime): number =>
+      DateTime.fromObject({ year: d.year, month: d.month, day: d.day, hour, minute }, { zone: tz }).toMillis();
+    const today = slotOn(local);
+    if (now.getTime() >= today) return lastDrainedAt === null || lastDrainedAt.getTime() < today;
+    // Before today's slot, yesterday's may still be unserved: a slot after the day's last
+    // heartbeat tick (daily 23:50 against ticks every 15 minutes) is first seen after midnight.
+    // A mailbox never drained waits for today's slot.
+    return lastDrainedAt !== null && lastDrainedAt.getTime() < slotOn(local.minus({ days: 1 }));
   }
 
   if (lastDrainedAt === null) return true;
