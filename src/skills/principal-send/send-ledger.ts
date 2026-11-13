@@ -214,7 +214,8 @@ export class PrincipalSendLedger {
    * block autonomous sends on its thread, never allow one. Throws on a repo failure.
    */
   async recentForThread(threadId: string, sinceEpochMs: number, mailbox: string, entries?: readonly PrincipalSendEntry[]): Promise<PrincipalSendEntry[]> {
-    // An entry with no mailbox (written before the registry) or the deferred-fallback id (R61) matches any: only more cooldown.
+    // An entry with no mailbox (written before the registry) or the deferred-fallback id (R61)
+    // matches every mailbox, not only the migrated one: only more cooldown (fail-closed, accepted).
     return (entries ?? await this.list()).filter((e) => e.mode === 'autonomous' && e.outcome !== 'limited' && (e.threadId === threadId || e.threadId === '')
       && (e.mailbox === undefined || e.mailbox === FALLBACK_MAILBOX_ID || e.mailbox === mailbox) && atOrAfter(e, sinceEpochMs));
   }

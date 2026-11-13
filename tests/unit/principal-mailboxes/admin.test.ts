@@ -130,7 +130,7 @@ describe('PrincipalMailboxAdmin.add', () => {
 
   it('refuses bad and reserved ids', async () => {
     const { admin } = setup();
-    for (const id of ['Work', '1x', 'primary', 'default', '']) {
+    for (const id of ['Work', '1x', 'primary', 'default', 'mailbox', '']) {
       const r = await admin.add({ id, label: 'x', grantId: 'g' });
       expect(r).toMatchObject({ ok: false, refusal: 'bad_id' });
     }

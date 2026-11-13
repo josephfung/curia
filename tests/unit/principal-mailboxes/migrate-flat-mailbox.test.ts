@@ -4,9 +4,11 @@ import {
   migrateFlatPrincipalMailbox,
   mailboxIdFromAddress,
   migrationFailureReason,
+  warnIfFallbackIdIsLive,
 } from '../../../src/principal-mailboxes/migrate-flat-mailbox.js';
 import type { PrincipalMailboxStore } from '../../../src/principal-mailboxes/store.js';
 import { MAILBOX_ID_RE, RESERVED_MAILBOX_IDS, type PrincipalMailboxRecord } from '../../../src/principal-mailboxes/types.js';
+import { FALLBACK_MAILBOX_ID } from '../../../src/principal-mailboxes/state-keys.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -199,7 +201,9 @@ describe('mailboxIdFromAddress', () => {
       'a@primary.com': 'm-primary',
       'a@default.org': 'm-default',
       'a@-x.example': 'm--x',
-      'a@!!!.example': 'mailbox',
+      // The fallback sentinel is reserved (R63): an empty label, or a domain named mailbox.
+      'a@!!!.example': 'm-mailbox',
+      'a@mailbox.org': 'm-mailbox',
       ['a@' + 'x'.repeat(40) + '.example']: 'x'.repeat(32),
       ['a@9' + 'x'.repeat(40) + '.example']: 'm-9' + 'x'.repeat(29),
     };
@@ -209,5 +213,21 @@ describe('mailboxIdFromAddress', () => {
       expect(id).toMatch(MAILBOX_ID_RE);
       expect(RESERVED_MAILBOX_IDS.has(id)).toBe(false);
     }
+  });
+
+  it('reserves the deferred-fallback id (R63)', () => {
+    expect(RESERVED_MAILBOX_IDS.has(FALLBACK_MAILBOX_ID)).toBe(true);
+  });
+});
+
+describe('warnIfFallbackIdIsLive (R63)', () => {
+  it('warns when a live registry row already uses the fallback id, and says nothing otherwise', () => {
+    const log = { warn: vi.fn() };
+    expect(warnIfFallbackIdIsLive(['work', FALLBACK_MAILBOX_ID], log as never)).toBe(true);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(String(log.warn.mock.calls[0]![1])).toMatch(/reserved/);
+    log.warn.mockClear();
+    expect(warnIfFallbackIdIsLive(['work', 'personal'], log as never)).toBe(false);
+    expect(log.warn).not.toHaveBeenCalled();
   });
 });

@@ -175,6 +175,22 @@ function makeCtx(): ToolContext & {
 describe('TaskCompletionFromSentHandler', () => {
   const handler = new TaskCompletionFromSentHandler();
 
+  it('logs the message of a non-Nylas auto-complete failure, but only the class of a Nylas one (R63 minor)', async () => {
+    const ctx = makeCtx();
+    vi.mocked(ctx.taskRepo!.completeTask).mockRejectedValueOnce(new Error('deadlock detected'));
+    await handler.execute(ctx);
+    const failed = vi.mocked(ctx.log.error).mock.calls.find((c) => String(c[1]).includes('auto-complete failed'))!;
+    expect(failed[0]).toMatchObject({ errMessage: 'deadlock detected' });
+
+    const nylas = makeCtx();
+    vi.mocked(nylas.taskRepo!.completeTask).mockRejectedValueOnce(
+      Object.assign(new Error('grants/SECRET-GRANT-1 gone'), { name: 'NylasApiError', statusCode: 404 }),
+    );
+    await handler.execute(nylas);
+    const nylasFailed = vi.mocked(nylas.log.error).mock.calls.find((c) => String(c[1]).includes('auto-complete failed'))!;
+    expect(JSON.stringify(nylasFailed[0])).not.toContain('SECRET-GRANT-1');
+  });
+
   it('auto-completes low-risk high-confidence; confirms high-risk AGM; confirms fuzzy', async () => {
     const ctx = makeCtx();
     const result = await handler.execute(ctx);

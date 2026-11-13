@@ -11,6 +11,7 @@ import type { Logger } from '../logger.js';
 import type { PrincipalMailboxStore } from './store.js';
 import { principalMailboxGrantSecretName } from './secrets.js';
 import { RESERVED_MAILBOX_IDS } from './types.js';
+import { FALLBACK_MAILBOX_ID } from './state-keys.js';
 import { grantSafeErrorFields, mayCarryGrantId } from './error-fields.js';
 
 export type FlatMailboxMigrationOutcome = 'migrated' | 'already' | 'nothing' | 'deferred';
@@ -43,12 +44,27 @@ export function mailboxIdFromAddress(address: string): string {
   const domain = address.trim().toLowerCase().split('@').pop() ?? '';
   if (domain === 'gmail.com' || domain === 'googlemail.com') return 'gmail';
   const label = (domain.split('.')[0] ?? '').replace(/[^a-z0-9-]/g, '');
-  let id = label === '' ? 'mailbox' : label;
+  // An empty label falls back to a fixed id that is not the reserved fallback sentinel (R63).
+  let id = label === '' ? `m-${FALLBACK_MAILBOX_ID}` : label;
   if (/^[0-9-]/.test(id)) id = `m-${id}`;
   id = id.slice(0, 32);
   // The registry refuses reserved ids (CHECK constraint); prefix rather than fail every boot.
   if (RESERVED_MAILBOX_IDS.has(id)) id = `m-${id}`;
   return id;
+}
+
+/**
+ * R63: the deferred-fallback id is reserved, but a registry row may already use it (PR 1 shipped
+ * before the reservation). Such a mailbox would claim fallback-period records. Warn at boot so the
+ * operator can replace it (add a mailbox under another id, then remove this one). True if it warned.
+ */
+export function warnIfFallbackIdIsLive(liveIds: readonly string[], logger: Pick<Logger, 'warn'>): boolean {
+  if (!liveIds.includes(FALLBACK_MAILBOX_ID)) return false;
+  logger.warn(
+    { mailboxId: FALLBACK_MAILBOX_ID },
+    `A live principal mailbox uses the reserved id "${FALLBACK_MAILBOX_ID}": records from before the registry migration will be read as its own. Add the account under another id and remove this one.`,
+  );
+  return true;
 }
 
 function labelFromId(id: string): string {
