@@ -499,6 +499,19 @@ describe('TriageState corrupt batch counter (SF-M4)', () => {
   });
 });
 
+describe('InboxHeartbeat health: sent-observe (R67, SF-I7)', () => {
+  it('fails while a mailbox\'s sent-observe has failed three runs in a row', async () => {
+    const failing = vi.fn(async (_ids: string[]) => ['work']);
+    const t = make({ hasUnread: vi.fn(async () => false), extra: { sentObserveFailing: failing } });
+    await t.hb.tick(NOW);
+    expect(failing).toHaveBeenCalledWith(['work']);
+    expect(t.hb.health(NOW)).toMatchObject({ ok: false, detail: expect.stringContaining('sent-mail observation failing for work') });
+    failing.mockResolvedValue([]);
+    await t.hb.tick(NOW);
+    expect(t.hb.health(NOW).ok).toBe(true);
+  });
+});
+
 describe('InboxHeartbeat re-review fixes (M1-M3)', () => {
   it('a far wake that cannot be pulled in counts toward the drain_running warning (M1)', async () => {
     const t = make({ tasks: [taskRow({ wakeState: 'pending', nextWakeAt: '2099-01-01T00:00:00.000Z', updatedAt: NOW.toISOString() })] });

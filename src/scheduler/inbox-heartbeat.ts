@@ -84,6 +84,8 @@ export interface InboxHeartbeatOptions {
    * local day; false (not sent) is retried on the next tick. Absent: logged only.
    */
   notifyCeiling?: (batches: number) => Promise<boolean>;
+  /** Live mailbox ids whose sent-observe run has failed SENT_OBSERVE_FAILED_RUNS_LIMIT times in a row (R67). */
+  sentObserveFailing?: (mailboxIds: string[]) => Promise<string[]>;
   /** Deletes expired cross-mailbox dedupe rows; run once per local day (BR-M1, SEC-L6). */
   sweepDedupe?: () => Promise<number>;
   /** Delay of the one tick run shortly after start (default 60 s), so a restart does not wait a full interval. */
@@ -152,6 +154,8 @@ export class InboxHeartbeat {
   private readonly stuck = new Set<string>();
   // The no-progress count a mailbox was last backed off at, so it gets one try per slot.
   private readonly backedOffAt = new Map<string, number>();
+  // Mailboxes whose sent-observe keeps failing, as of the last tick that read them.
+  private sentObserveFailing: string[] = [];
   // The local day the dedupe sweep last ran.
   private sweptDay: string | null = null;
   // The local day an unsent ceiling notice was last logged as an error.
@@ -228,6 +232,7 @@ export class InboxHeartbeat {
     const probing = [...this.probeFailures].filter(([, n]) => n >= PROBE_FAILURE_TICKS).map(([id]) => id);
     if (probing.length > 0) problems.push(`unread check failing for ${probing.join(', ')}`);
     if (this.stuck.size > 0) problems.push(`triage making no progress for ${[...this.stuck].join(', ')}`);
+    if (this.sentObserveFailing.length > 0) problems.push(`sent-mail observation failing for ${this.sentObserveFailing.join(', ')}`);
     if (this.suspendedDrain) problems.push('the inbox drain was suspended after repeated failures; resume it in the console');
     return problems.length > 0 ? { ok: false, detail: problems.join('; ') } : { ok: true };
   }
@@ -343,6 +348,13 @@ export class InboxHeartbeat {
 
     // Health signals are refreshed on every tick, the ceiling included (re-review M2), so a resumed
     // drain or a recovered mailbox clears the check without waiting for due mail.
+    if (this.o.sentObserveFailing) {
+      try {
+        this.sentObserveFailing = await this.o.sentObserveFailing(ids);
+      } catch (err) {
+        this.o.logger.warn({ ...grantSafeErrorFields(err) }, 'InboxHeartbeat: could not read the sent-observe failure counts');
+      }
+    }
     // Forget counters of mailboxes that are no longer live.
     for (const id of [...this.probeFailures.keys()]) if (!ids.includes(id)) this.probeFailures.delete(id);
     this.stuck.clear();

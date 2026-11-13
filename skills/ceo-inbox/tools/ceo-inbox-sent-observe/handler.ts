@@ -25,6 +25,7 @@ import {
   type NylasMessageSummary,
 } from '../../../_shared/ceo-nylas-client.js';
 import { ConfigStore } from '../../../../src/memory/config-store.js';
+import { SENT_OBSERVE_FAILED_RUNS_LIMIT, sentObserveFailedRunsKey } from '../../../../src/principal-mailboxes/state-keys.js';
 import {
   VOICE_LEARNING_DOC_TYPE,
   VOICE_LEARNING_SCRATCH_PREFIX,
@@ -386,6 +387,33 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
         );
         errors.push({ mailbox: mailbox.id, error: safeMessage(err) });
       }
+    }
+
+    // R67 (SF-I7): a mailbox that keeps failing must not hide behind the others' success. Count
+    // its consecutive failed runs; at SENT_OBSERVE_FAILED_RUNS_LIMIT the job fails, so the
+    // scheduler's failure handling and the triage health check both see it.
+    const failedIds = new Set(errors.map((e) => e.mailbox));
+    const persistent: string[] = [];
+    if (ctx.entityMemory) {
+      const store = new ConfigStore(ctx.entityMemory, ctx.log);
+      for (const { mailbox } of targets) {
+        const key = sentObserveFailedRunsKey(mailbox.id);
+        try {
+          const prev = Number((await store.get(CONFIG_NAMESPACE, key)) ?? '0') || 0;
+          const next = failedIds.has(mailbox.id) ? prev + 1 : 0;
+          if (next !== prev) await store.set(CONFIG_NAMESPACE, key, String(next));
+          if (next >= SENT_OBSERVE_FAILED_RUNS_LIMIT) persistent.push(mailbox.id);
+        } catch (err) {
+          ctx.log.error({ mailboxId: mailbox.id, ...grantSafeErrorFields(err) }, 'ceo-inbox-sent-observe: could not record the failed-run count');
+        }
+      }
+    }
+    if (persistent.length > 0 && results.length > 0) {
+      ctx.log.error({ mailboxes: persistent }, 'ceo-inbox-sent-observe: a mailbox has failed several runs in a row; failing the run');
+      return {
+        success: false,
+        error: `sent-observe keeps failing for ${persistent.map((id) => `${id}: ${errors.find((e) => e.mailbox === id)?.error ?? 'failed'}`).join('; ')} (${SENT_OBSERVE_FAILED_RUNS_LIMIT} runs in a row); the other mailboxes were observed.`,
+      };
     }
 
     if (results.length === 0) {

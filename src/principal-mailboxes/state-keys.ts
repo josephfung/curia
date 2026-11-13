@@ -31,3 +31,11 @@ export function mailboxStateKey(mailboxId: string, name: MailboxStateName): stri
 
 /** Id of the in-memory mailbox served while the flat-grant migration is deferred (R61). */
 export const FALLBACK_MAILBOX_ID = 'mailbox';
+
+/** Consecutive sent-observe runs that failed for a mailbox (#2475, R67); reset by a clean run. */
+export function sentObserveFailedRunsKey(mailboxId: string): string {
+  return `${GLOBAL_STATE_PREFIX}${mailboxId}.failed_runs`;
+}
+
+/** Consecutive failed runs at which a mailbox fails the sent-observe job and the health check. */
+export const SENT_OBSERVE_FAILED_RUNS_LIMIT = 3;
