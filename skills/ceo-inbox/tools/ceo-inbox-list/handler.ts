@@ -68,7 +68,8 @@ function isPlainUnreadInboxListing(input: Record<string, unknown>): boolean {
   return (folder === '' || folder.toUpperCase() === 'INBOX')
     && input.unread_only !== false
     && mailbox === ''
-    && input.page_token === undefined
+    // Same as readPageToken: undefined, null and '' all mean no page token.
+    && (input.page_token === undefined || input.page_token === null || input.page_token === '')
     && input.sweep_since === undefined;
 }
 
@@ -317,6 +318,9 @@ export class CeoInboxListHandler implements ToolHandler {
       // already running keeps its start (R52): markDrained stamps the episode's first batch.
       if (!(await svc.state.isDraining(mailbox.id))) await svc.state.setDrainStartedAt(mailbox.id, new Date());
       await svc.state.setDraining(mailbox.id, true);
+      // The last batch's settle marker would let the heartbeat close this reopened episode as
+      // soon as the running drain finishes, leaving the swept range until the mailbox is next due.
+      await svc.state.setSettlePending(mailbox.id, false);
       await svc.state.setBacklogAlarmed(mailbox.id, false);
       ctx.log.info({ mailboxId: mailbox.id }, 'ceo-inbox-list: moved a triage start line back on the principal\'s request');
       return { ok: true, data: { mailbox: mailbox.id, mailbox_label: mailbox.label, triage_start_at: at.toISOString(), messages: [], count: 0 } };
