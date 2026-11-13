@@ -37,7 +37,8 @@ tool_stubs:
       return: { draft_id: draft-r4b81d6e, mailbox: personal, mailbox_label: Personal, evidence: agrees }
     - match: { mailbox: work }
       return: { draft_id: draft-r7f3a9c2, mailbox: work, mailbox_label: Work, evidence: leans_other }
-  # Looking Maya up in the mail finds the personal thread with her; every search and listing
+  # Looking Maya up in the mail finds an older personal thread with her (nothing about Saturday, so
+  # there is no thread to answer); every search and listing
   # is answered, never refused.
   ceo-inbox-search:
     - match: { folder: DRAFTS }
@@ -46,7 +47,7 @@ tool_stubs:
       return:
         count: 1
         messages:
-          - { id: msg-46b-1, threadId: thr-46b-sat, mailbox: personal, mailbox_label: Personal, from: [{ name: Maya Hart, email: maya.hart@family.example.test }], subject: "Re: Saturday", date: "{{at:now-62h}}", snippet: "Lunch Saturday works, see you then!", unread: false, folders: [INBOX] }
+          - { id: msg-46b-1, threadId: thr-46b-bday, mailbox: personal, mailbox_label: Personal, from: [{ name: Maya Hart, email: maya.hart@family.example.test }], subject: "Re: Birthday plans", date: "{{at:now-504h}}", snippet: "Mom loved the flowers, thanks for sorting that out!", unread: false, folders: [INBOX] }
   ceo-inbox-list:
     - match: { folder: DRAFTS }
       return: { folder: DRAFTS, count: 0, drafts: [] }
@@ -58,19 +59,19 @@ tool_stubs:
     - match: { message_id: msg-46b-1 }
       return:
         id: msg-46b-1
-        threadId: thr-46b-sat
+        threadId: thr-46b-bday
         mailbox: personal
         mailbox_label: Personal
         from: [{ name: Maya Hart, email: maya.hart@family.example.test }]
         to: [{ email: principal@personal.example.test }]
         cc: []
-        subject: "Re: Saturday"
-        body_plain: "Lunch Saturday works, see you then!"
+        subject: "Re: Birthday plans"
+        body_plain: "Mom loved the flowers, thanks for sorting that out!"
         labels: [INBOX]
         attachments: []
   ceo-inbox-draft-reply:
     - match: { reply_to_message_id: msg-46b-1 }
-      return: { draft_id: draft-r4b81d6e, mailbox: personal, mailbox_label: Personal, subject: "Re: Saturday", to: [{ name: Maya Hart, email: maya.hart@family.example.test }], cc: [], already_exists: false }
+      return: { draft_id: draft-r4b81d6e, mailbox: personal, mailbox_label: Personal, subject: "Re: Birthday plans", to: [{ name: Maya Hart, email: maya.hart@family.example.test }], cc: [], already_exists: false }
   ceo-inbox-draft-edit:
     - match: { draft_id: draft-r4b81d6e }
       return: { draft_id: draft-r4b81d6e, subject: Saturday lunch, to: [{ name: Maya Hart, email: maya.hart@family.example.test }], cc: [], mailbox: personal, mailbox_label: Personal }
