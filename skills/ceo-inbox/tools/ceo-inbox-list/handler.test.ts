@@ -1026,6 +1026,15 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     expect(d.backlog).toBeUndefined();
   });
 
+  it('spoofed "from Curia" mail uses up neither the batch nor the backlog count (R71)', async () => {
+    const spoofed = Array.from({ length: 300 }, (_, i) => msg(`s${i}`, NOW_S - i, { from: [{ email: 'curia@example.com' }] }));
+    const real = Array.from({ length: 110 }, (_, i) => msg(`r${i}`, NOW_S - 400 - i));
+    const t = setup({ 'grant-work': [...spoofed, ...real], 'grant-personal': [] }, { ctxExtra: { selfEmails: ['curia@example.com'] } });
+    const d = dataOf(await t.run());
+    expect(d.messages.map((m) => m.id)).toEqual(['r0', 'r1', 'r2', 'r3', 'r4']);
+    expect(d.backlog).toEqual([{ mailbox: 'work', mailbox_label: 'Work', untriaged_over: 100 }]);
+  });
+
   it('the backlog alarm resets when the backlog is cleared', async () => {
     // A call that finds the mailbox empty closes the episode, alarm included (R68).
     const t = setup({ 'grant-work': [], 'grant-personal': [] });

@@ -164,3 +164,23 @@ describe('NylasClient.getMessage — headers', () => {
     });
   });
 });
+
+describe('NylasClient.listUnreadInboxPage (#2475, R71)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('re-sends every filter with the page token and returns the next cursor', async () => {
+    mockMessages.list.mockResolvedValue({ data: [], requestId: 'r', nextCursor: 'c2' });
+    const client = new NylasClient('api-key', 'grant-id', logger);
+    const page = await client.listUnreadInboxPage({ limit: 10, receivedAfter: 99, pageToken: 'c1' });
+    expect(page).toEqual({ messages: [], nextCursor: 'c2' });
+    expect(mockMessages.list).toHaveBeenCalledWith(expect.objectContaining({
+      queryParams: { limit: 10, unread: true, in: ['INBOX'], receivedAfter: 99, pageToken: 'c1' },
+    }));
+  });
+
+  it('a last page has no cursor', async () => {
+    mockMessages.list.mockResolvedValue(emptyListResponse());
+    const client = new NylasClient('api-key', 'grant-id', logger);
+    expect(await client.listUnreadInboxPage({ limit: 10 })).toEqual({ messages: [] });
+  });
+});

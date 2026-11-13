@@ -25,8 +25,6 @@ const PAGE_CAP = 25;
 /** Messages queued per mailbox: a batch, a probe for has_more, and room for dropped duplicates. */
 const QUEUE_NEED = TRIAGE_BATCH_SIZE * 2 + 1;
 const TOOL = 'ceo-inbox-list';
-/** Messages read to count a backlog: room for some of Curia's own past the threshold. */
-const BACKLOG_COUNT_SCAN = BACKLOG_ALARM_THRESHOLD * 3;
 const NOTE = 'Its mail is not included; a later call retries it.';
 const lc = (s: string): string => s.toLowerCase();
 
@@ -181,9 +179,17 @@ export async function triageList(ctx: ToolContext, targets: Target[], curiaEmail
         // queue's worth, and only until the alarm has fired this episode.
         if (scan.end !== null && queue.length >= QUEUE_NEED && !(await svc.state.backlogAlarmed(mailbox.id))) {
           try {
-            // Counted with the same keep rule, so Curia's own unread mail cannot raise it (BR-M10).
-            const counted = await client.listAllMessages({ ...filters, limit: NYLAS_MAX_LIST_LIMIT, maxScan: BACKLOG_COUNT_SCAN });
-            if (counted.messages.filter((m) => isTriageCandidate(m, curiaEmails, startSec)).length > BACKLOG_ALARM_THRESHOLD) backlog.push({ mailbox: mailbox.id, mailbox_label: mailbox.label, untriaged_over: BACKLOG_ALARM_THRESHOLD });
+            // Counted with the same keep rule, so Curia's own unread mail cannot raise it (BR-M10),
+            // and scanned until enough real mail is seen, so filtered (possibly spoofed) mail
+            // cannot use up the count's window either (R71). Bounded by the page cap.
+            const counted = await scanMailbox<NylasMessageSummary>({
+              start: { cursor: null, skip: 0 },
+              need: BACKLOG_ALARM_THRESHOLD + 1,
+              pageCap: PAGE_CAP,
+              fetchPage: (cursor) => client.listMessagesPage({ ...filters, limit: NYLAS_MAX_LIST_LIMIT, ...(cursor ? { pageToken: cursor } : {}) }),
+              keep: (m) => isTriageCandidate(m, curiaEmails, startSec),
+            });
+            if (counted.items.length > BACKLOG_ALARM_THRESHOLD) backlog.push({ mailbox: mailbox.id, mailbox_label: mailbox.label, untriaged_over: BACKLOG_ALARM_THRESHOLD });
           } catch (err) {
             log.warn({ tool: TOOL, mailboxId: mailbox.id, ...grantSafeErrorFields(err) }, 'ceo-inbox-list: backlog count failed; no alarm this call');
           }

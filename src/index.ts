@@ -3394,6 +3394,7 @@ async function main(): Promise<void> {
             return new Set(boot);
           }
         },
+        logger,
       }),
       taskRepo,
       scheduler: schedulerService,
