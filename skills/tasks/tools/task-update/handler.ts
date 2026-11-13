@@ -67,8 +67,12 @@ async function routeNowPrincipal(
 }
 
 /** The inbox heartbeat's drain task: tagged inbox-drain, system-originated (#2475). */
+/**
+ * The heartbeat's system-originated drain. Its creator is part of the test, not only its tag: a
+ * tag-only update could otherwise drop `inbox-drain` and let a later wake or note through.
+ */
 function isSystemInboxDrain(t: TaskRow): boolean {
-  return t.tags.includes('inbox-drain') && t.originator?.systemRole === 'system';
+  return (t.tags.includes('inbox-drain') || t.createdBy === 'heartbeat') && t.originator?.systemRole === 'system';
 }
 
 export class TaskUpdateHandler implements ToolHandler {
@@ -186,8 +190,9 @@ export class TaskUpdateHandler implements ToolHandler {
       // SEC-L2 (#2475): a task-update writes the task's stored originator onto any new wake, so
       // a lower-lineage turn editing the heartbeat's system-originated inbox drain would hand
       // its notes to a system-standing successor turn. Only a system-lineage turn (the drain
-      // itself) may set its wake or add a note; only such an update pays the extra read.
-      const target = input.wake_at !== undefined || input.progress_note !== undefined
+      // itself) may set its wake, add a note or change its tags (removing `inbox-drain` would
+      // otherwise unguard a later wake); only such an update pays the extra read.
+      const target = input.wake_at !== undefined || input.progress_note !== undefined || input.tags !== undefined
         ? await ctx.taskRepo.getTask(input.task_id)
         : null;
       if (target && isSystemInboxDrain(target) && !hasSystemLineage(ctx.taskMetadata)) {

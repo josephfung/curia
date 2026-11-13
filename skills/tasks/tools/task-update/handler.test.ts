@@ -591,6 +591,20 @@ describe('TaskUpdateHandler — the system inbox drain (SEC-L2)', () => {
     expect((await run({ originator: { systemRole: 'agent', ladderedFrom: 'system' } }).result).success).toBe(true);
   });
 
+  it('refuses a tag-only update from a non-system turn, so the guard cannot be removed', async () => {
+    const { taskRepo, result } = run(undefined, { task_id: VALID_UUID, tags: ['other'] });
+    expect((await result).success).toBe(false);
+    expect(taskRepo.updateTask).not.toHaveBeenCalled();
+  });
+
+  it('still guards a heartbeat drain whose inbox-drain tag is already gone', async () => {
+    const untagged = makeTaskRow({ tags: [], createdBy: 'heartbeat', originator: { contactId: 'system', systemRole: 'system', channel: 'declarative', initiatedAt: '2026-11-12T09:00:00.000Z' } as never });
+    const taskRepo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(untagged), updateTask: vi.fn().mockResolvedValue(untagged) });
+    const r = await new TaskUpdateHandler().execute(makeCtx({ input: { task_id: VALID_UUID, progress_note: 'x' }, taskRepo } as Partial<ToolContext>));
+    expect(r.success).toBe(false);
+    expect(taskRepo.updateTask).not.toHaveBeenCalled();
+  });
+
   it('a plain status change needs no lookup', async () => {
     const { taskRepo, result } = run(undefined, { task_id: VALID_UUID, status: 'in_progress' });
     expect((await result).success).toBe(true);
