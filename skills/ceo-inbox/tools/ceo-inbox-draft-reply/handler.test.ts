@@ -863,7 +863,9 @@ describe('CeoInboxDraftReplyHandler', () => {
       mailboxInput?: string;
       from?: string;
       /** The other mailbox's copy. */
-      copy?: { from?: string; folders?: string[]; messageId?: string };
+      copy?: { from?: string; folders?: string[]; messageId?: string; fromList?: string[] };
+      /** Folders the search hit reports (default INBOX). */
+      hitFolders?: string[];
       /** Message-ID header on the triaged copy (default MSG_ID). */
       originalMessageId?: string;
       hits?: string[];
@@ -895,7 +897,7 @@ describe('CeoInboxDraftReplyHandler', () => {
           searches.push({ grant, q: u.searchParams.get('search_query_native') });
           if (opts.search === 'error') return new Response(JSON.stringify({ error: { message: 'boom' } }), { status: 400 });
           const ids = opts.search === 'empty' ? [] : (opts.hits ?? ['msg-other']);
-          const data = ids.map((id) => ({ id, thread_id: 'thread-other', subject: 'Test Subject', from: [{ email: 'alice@external.com' }], to: [], cc: [], folders: ['INBOX'] }));
+          const data = ids.map((id) => ({ id, thread_id: 'thread-other', subject: 'Test Subject', from: [{ email: 'alice@external.com' }], to: [], cc: [], folders: opts.hitFolders ?? ['INBOX'] }));
           return new Response(JSON.stringify({ data }), { status: 200 });
         }
         if (u.pathname.includes('/messages/')) {
@@ -903,7 +905,9 @@ describe('CeoInboxDraftReplyHandler', () => {
           if ((id === 'msg-001') !== (grant === heldGrant)) return new Response('{}', { status: 404 });
           const isOriginal = id === 'msg-001';
           const m = buildNylasMessage({
-            from: [{ email: isOriginal ? (opts.from ?? 'alice@external.com') : (opts.copy?.from ?? opts.from ?? 'alice@external.com') }],
+            from: !isOriginal && opts.copy?.fromList
+              ? opts.copy.fromList.map((email) => ({ email }))
+              : [{ email: isOriginal ? (opts.from ?? 'alice@external.com') : (opts.copy?.from ?? opts.from ?? 'alice@external.com') }],
             to: opts.to.map((email) => ({ email })),
             cc: (opts.cc ?? []).map((email) => ({ email })),
             ...(!isOriginal && opts.copy?.folders ? { folders: opts.copy.folders } : {}),
@@ -981,6 +985,30 @@ describe('CeoInboxDraftReplyHandler', () => {
       expect(posts[0]!.grant).toBe('grant-personal');
       expect(result).toMatchObject({ success: true, data: { reply_mailbox_fallback: true } });
     });
+    it('skips a search hit already in an excluded folder without fetching it (P10)', async () => {
+      const { ctx, posts, gatewayGets } = setup({ ...addressedBoth, hitFolders: ['SENT'] });
+      const result = await handler.execute(ctx);
+      expect(posts[0]!.grant).toBe('grant-personal');
+      expect(result).toMatchObject({ success: true, data: { reply_mailbox_fallback: true } });
+      // Only the triaged copy's own headers were read; the Sent hit was never opened.
+      expect(gatewayGets).toEqual(['personal']);
+    });
+    it('does not redirect to a copy with no From (P10)', async () => {
+      await expectFallback({ ...addressedBoth, copy: { fromList: [] } }, /not found/);
+    });
+    it('compares senders as a set: a repeated From still matches (P10)', async () => {
+      const { ctx, posts } = setup({ ...addressedBoth, copy: { fromList: ['alice@external.com', 'ALICE@external.com'] } });
+      await handler.execute(ctx);
+      expect(posts[0]!.grant).toBe('grant-work');
+    });
+    it.each(['a{b}@x.example', 'a|b@x.example', 'a*b@x.example', 'a?b@x.example', "a'b@x.example", 'a~b@x.example', 'a^b@x.example', 'a`b@x.example'])(
+      'does not search with a Message-ID holding a query-widening character: %s (P10)',
+      async (id) => {
+        const { ctx, searches } = setup({ ...addressedBoth, originalMessageId: id });
+        expect(await handler.execute(ctx)).toMatchObject({ success: true, data: { reply_mailbox_fallback: true } });
+        expect(searches).toHaveLength(0);
+      },
+    );
     it('distinguishes not found from search failed in the note', async () => {
       await expectFallback({ ...addressedBoth, search: 'empty' }, /not found/);
       mockFetch.mockReset();
