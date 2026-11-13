@@ -522,6 +522,29 @@ describe('CeoInboxSearchHandler — every mailbox (#2475)', () => {
     expect(f.requests).toHaveLength(before);
   });
 
+  it('refuses a page_token made for another query, without fetching', async () => {
+    const f = serve({ 'grant-work': Array.from({ length: 6 }, (_, i) => rawMessage(`w${i}`, 100 - i)) }, { pageSize: 3 });
+    const first = await run({ limit: 2 });
+    if (!first.success) throw new Error(first.error);
+    const token = (first.data as Data).next_page_token!;
+    const before = f.requests.length;
+    const second = await run({ limit: 2, query: 'receipt', page_token: token });
+    expect(second.success).toBe(false);
+    if (!second.success) expect(second.error).toContain('another query');
+    expect(f.requests).toHaveLength(before);
+  });
+
+  it('keeps a token open for a failed mailbox when the readable one is finished', async () => {
+    serve({ 'grant-work': [rawMessage('w1', 100)] }, { failing: ['grant-personal'] });
+    const result = await run({ limit: 10 });
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as Data;
+    expect(data.messages.map((m) => m.id)).toEqual(['w1']);
+    const decoded = JSON.parse(Buffer.from(data.next_page_token!, 'base64url').toString()) as { mailboxes: Record<string, unknown> };
+    expect(decoded.mailboxes['work']).toBeNull();
+    expect(decoded.mailboxes['personal']).toEqual({ cursor: null, skip: 0 });
+  });
+
   it('refuses an explicit mailbox that the page_token does not contain', async () => {
     const f = serve({ 'grant-work': Array.from({ length: 6 }, (_, i) => rawMessage(`w${i}`, 100 - i)) }, { pageSize: 3 });
     const first = await run({ limit: 2, mailbox: 'work' });

@@ -699,6 +699,29 @@ describe('CeoInboxListHandler — every mailbox (#2475)', () => {
     }
   });
 
+  it('does not skip mail when the previous page was triaged out of the unread list', async () => {
+    const work = Array.from({ length: 6 }, (_, i) => rawMessage(`w${i}`, 100 - i));
+    serve({ 'grant-work': work });
+    const first = await run({ limit: 2, mailbox: 'work' });
+    if (!first.success) throw new Error(first.error);
+    expect((first.data as Data).messages.map((m) => m.id)).toEqual(['w0', 'w1']);
+    // Triage archives or reads the first page: it leaves the unread-INBOX listing.
+    work.splice(0, 2);
+    const second = await run({ limit: 2, mailbox: 'work', page_token: (first.data as Data).next_page_token });
+    if (!second.success) throw new Error(second.error);
+    expect((second.data as Data).messages.map((m) => m.id)).toEqual(['w2', 'w3']);
+  });
+
+  it('refuses a page_token made for another folder or unread filter', async () => {
+    serve({ 'grant-work': Array.from({ length: 6 }, (_, i) => rawMessage(`w${i}`, 100 - i)) });
+    const first = await run({ limit: 2, mailbox: 'work' });
+    if (!first.success) throw new Error(first.error);
+    const token = (first.data as Data).next_page_token!;
+    const second = await run({ limit: 2, mailbox: 'work', unread_only: false, page_token: token });
+    expect(second.success).toBe(false);
+    if (!second.success) expect(second.error).toContain('other filters');
+  });
+
   it('an explicit mailbox still pages with a composite token holding one key', async () => {
     serve({ 'grant-personal': Array.from({ length: 5 }, (_, i) => rawMessage(`p${i}`, 100 - i)) }, { pageSize: 3 });
     const first = await run({ limit: 2, mailbox: 'personal' });
