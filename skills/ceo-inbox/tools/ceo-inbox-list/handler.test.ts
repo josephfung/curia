@@ -250,9 +250,11 @@ describe('CeoInboxListHandler — batch listing (no watermark)', () => {
       from: [{ email: self, name: 'Curia' }], to: [], cc: [], snippet: '',
       unread: true, folders: ['INBOX'], attachments: [],
     }));
+    // A fresh cursor every page (a repeated one ends the mailbox, see scanMailbox).
+    let page = 0;
     const fetchSpy = vi.fn().mockImplementation(async () => ({
       ok: true,
-      json: async () => ({ data: curiaPage, next_cursor: 'again' }),
+      json: async () => ({ data: curiaPage, next_cursor: `again-${++page}` }),
     }));
     vi.stubGlobal('fetch', fetchSpy);
 

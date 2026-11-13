@@ -167,7 +167,11 @@ export async function scanMailbox<T extends Anchored>(opts: {
   let end: MailboxPosition | null = opts.start;
   let capped = false;
   for (let page = 0; page < opts.pageCap; page++) {
-    const { messages: raw, nextCursor } = await opts.fetchPage(cursor ?? undefined);
+    const fetched = await opts.fetchPage(cursor ?? undefined);
+    const raw = fetched.messages;
+    // A next cursor equal to the one just read would page in place forever (each call bounded by
+    // the cap, the continuation never ending): treat the mailbox as finished at this page.
+    const nextCursor = fetched.nextCursor !== undefined && fetched.nextCursor === cursor ? undefined : fetched.nextCursor;
     let from = 0;
     if (first) {
       first = false;
