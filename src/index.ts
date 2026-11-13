@@ -2149,6 +2149,7 @@ async function main(): Promise<void> {
       principalMailboxIds: async () => (await principalMailboxes.list()).map((m) => m.id),
       principalEmailAddresses: () => principalMailboxes.principalEmailAddresses(),
       mailboxAddress: async (id) => (await principalMailboxes.list()).find((m) => m.id === id)?.address,
+      mailboxLabel: async (id) => (await principalMailboxes.list()).find((m) => m.id === id)?.label,
       ...(sendLevelStore
         ? { readSendLevel: createSendLevelReader({ get: (ns, k) => sendLevelStore.get(ns, k), logger, liveMailboxIds: async () => (await principalMailboxes.list()).map((m) => m.id) }) }
         : {}),

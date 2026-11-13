@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { OutboundGateway, UnknownEmailAccountError, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, PRINCIPAL_SEND_DIGEST_REASONS, PRINCIPAL_SEND_REFUSALS, askPreamble, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
+import { OutboundGateway, UnknownEmailAccountError, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, PRINCIPAL_SEND_DIGEST_REASONS, PRINCIPAL_SEND_REFUSALS, LIMIT_REFUSALS, refusalKindOf, askPreamble, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
 import { createLogger } from '../../../src/logger.js';
 import type { NylasClient, NylasMessage } from '../../../src/channels/email/nylas-client.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
@@ -5895,6 +5895,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       recordSending: ReturnType<typeof vi.fn>; recordSent: ReturnType<typeof vi.fn>;
       recordHeld?: ReturnType<typeof vi.fn>; recentForThread?: ReturnType<typeof vi.fn>; recentForConversation?: ReturnType<typeof vi.fn>;
       recentAutonomousSends?: ReturnType<typeof vi.fn>; sentForDraft?: ReturnType<typeof vi.fn>;
+      recordLimitStop?: ReturnType<typeof vi.fn>; limitStopsSince?: ReturnType<typeof vi.fn>;
     };
     /** What curiaWritesInTask returns (PR 2), or an error it throws. */
     curiaWrites?: { created: boolean; lastWriteAt: Date | null; replyToMessageId: string | null } | Error;
@@ -5914,6 +5915,8 @@ describe('sendPrincipalDraft (#2474)', () => {
     principalAddrs?: string[] | Error;
     /** Each mailbox's own address. */
     mailboxAddresses?: Record<string, string>;
+    /** Each mailbox's label (#2475 Task 19). */
+    mailboxLabels?: Record<string, string>;
   } = {}) {
     const client = o.client === undefined ? mailboxClient() : o.client;
     const review = o.review ?? vi.fn().mockResolvedValue({ kind: 'send' });
@@ -5937,6 +5940,8 @@ describe('sendPrincipalDraft (#2474)', () => {
       recentForConversation: vi.fn().mockResolvedValue([]),
       recentAutonomousSends: vi.fn().mockResolvedValue([]),
       sentForDraft: vi.fn().mockResolvedValue(false),
+      recordLimitStop: vi.fn().mockResolvedValue(undefined),
+      limitStopsSince: vi.fn().mockResolvedValue([]),
       ...(o.ledger ?? { recordSending: vi.fn().mockResolvedValue(undefined), recordSent: vi.fn().mockResolvedValue(undefined) }),
     };
     const resolveMailbox = vi.fn(async (id: string) => (o.mailboxes ? (o.mailboxes[id] ?? null) : client) as unknown as NylasClient | null);
@@ -5962,13 +5967,14 @@ describe('sendPrincipalDraft (#2474)', () => {
       principalMailbox: resolveMailbox,
       ...(o.mailboxIds ? { principalMailboxIds: o.mailboxIds } : {}),
       ...(o.defaultMailboxId ? { defaultMailboxId: o.defaultMailboxId } : {}),
+      ...(o.mailboxLabels ? { mailboxLabel: async (id: string) => o.mailboxLabels![id] } : {}),
       readSendLevel,
       ...(o.principalAddrs ? {
         principalEmailAddresses: async () => { if (o.principalAddrs instanceof Error) throw o.principalAddrs; return o.principalAddrs!; },
         mailboxAddress: async (id: string) => o.mailboxAddresses?.[id],
       } : {}),
       ...(o.withoutProvenance ? {} : { draftProvenance: { createdByCuria, editedByCuria, curiaWritesInTask } }),
-      ...(o.withoutLedger ? {} : { sendLedger: ledger as unknown as Pick<import('../../../src/skills/principal-send/send-ledger.js').PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentForConversation' | 'recentAutonomousSends' | 'sentForDraft' | 'list'> }),
+      ...(o.withoutLedger ? {} : { sendLedger: ledger as unknown as Pick<import('../../../src/skills/principal-send/send-ledger.js').PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentForConversation' | 'recentAutonomousSends' | 'sentForDraft' | 'list' | 'recordLimitStop' | 'limitStopsSince'> }),
     });
     return { gw, client, review, createdByCuria, editedByCuria, curiaWritesInTask, ledger, readSendLevel, actionLogRepo, resolveMailbox };
   }
@@ -6763,6 +6769,96 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(ledger.recordSending).not.toHaveBeenCalled();
     });
 
+    // ---- #2475 Task 19: replies held only by a limit are reported as the limit ----
+    describe('limit holds (#2475 Task 19)', () => {
+      const FIRST = 'Reached the daily limit of 10 replies Curia sends on its own. Replies it would have sent wait in your Drafts until you send them or the limit resets.';
+      const atCap = (ledger: { recentAutonomousSends: ReturnType<typeof vi.fn> }) => {
+        const at = new Date().toISOString();
+        ledger.recentAutonomousSends.mockResolvedValue(Array.from({ length: 10 }, (_, i) => ({
+          draftId: `x${i}`, threadId: `t${i}`, recipients: [], mode: 'autonomous', at, outcome: 'sent',
+        })));
+      };
+      const earlierStop = { draftId: 'x', threadId: '', recipients: [], conversationIds: [], mode: 'autonomous', at: new Date().toISOString(), outcome: 'limited', reasonCode: 'daily_cap' };
+
+      it('first cap stop files the limit notice', async () => {
+        const { gw, ledger, client } = makeAuto();
+        atCap(ledger);
+        const r = await gw.sendPrincipalDraft('d1', auto);
+        expect(r).toMatchObject({ success: false, refusal: 'daily_cap', refusalKind: 'limit' });
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+        expect(reports()).toEqual([expect.objectContaining({ summary: FIRST, urgency: 'digest' })]);
+        expect(ledger.limitStopsSince).toHaveBeenCalledWith(expect.any(Number), 'daily_cap');
+        expect(ledger.recordLimitStop).toHaveBeenCalledWith(expect.objectContaining({ draftId: 'd1', mailbox: 'default', reason: 'daily_cap' }));
+      });
+
+      it('later cap stops file waiting items, not Left as a draft', async () => {
+        const { gw, ledger } = makeAuto();
+        atCap(ledger);
+        ledger.limitStopsSince.mockResolvedValue([earlierStop]);
+        await gw.sendPrincipalDraft('d1', auto);
+        expect(reports()).toEqual([expect.objectContaining({ summary: 'Waiting only because of the daily limit: "Re: Friday" to Dana Example.' })]);
+        expect(reports()[0]!['summary']).not.toMatch(/Left as a draft/);
+      });
+
+      it('judgement holds still read Left as a draft', async () => {
+        const { gw } = makeAuto({ curiaWrites: { created: false, lastWriteAt: null, replyToMessageId: null } });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_curia_draft', refusalKind: 'judgement' });
+        expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('not_curia_draft') })]);
+      });
+
+      it('a limit stop never counts toward the cap or extends a cooldown', async () => {
+        const { gw, ledger } = makeAuto();
+        atCap(ledger);
+        await gw.sendPrincipalDraft('d1', auto);
+        expect(ledger.recordHeld).not.toHaveBeenCalled();
+        expect(ledger.recordSending).not.toHaveBeenCalled();
+      });
+
+      it('a ledger-read failure during a cap stop files the waiting item, never Left as a draft', async () => {
+        const { gw, ledger } = makeAuto();
+        atCap(ledger);
+        ledger.limitStopsSince.mockRejectedValue(new Error('db down'));
+        await gw.sendPrincipalDraft('d1', auto);
+        expect(reports()).toEqual([expect.objectContaining({ summary: 'Waiting only because of the daily limit: "Re: Friday" to Dana Example.' })]);
+      });
+
+      it('a thread cooldown files its own waiting text', async () => {
+        const { gw, ledger } = makeAuto();
+        ledger.recentForThread.mockResolvedValue([{ draftId: 'x', threadId: 'th1', mailbox: 'default', conversationIds: [], recipients: [], mode: 'autonomous', at: new Date().toISOString(), outcome: 'sent' }]);
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'thread_cooldown', refusalKind: 'limit' });
+        expect(reports()).toEqual([expect.objectContaining({ summary: 'Waiting only because Curia already replied on this thread today: "Re: Friday" to Dana Example.' })]);
+        expect(ledger.recordLimitStop).toHaveBeenCalledWith(expect.objectContaining({ reason: 'thread_cooldown' }));
+        expect(ledger.recordHeld).not.toHaveBeenCalled();
+      });
+
+      it('an unreadable ledger is an operational stop, not a limit', async () => {
+        const { gw, ledger } = makeAuto();
+        ledger.recentForThread.mockRejectedValue(new Error('db down'));
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'thread_cooldown', refusalKind: 'other' });
+        expect(ledger.recordLimitStop).not.toHaveBeenCalled();
+      });
+
+      it('appends the mailbox label only when there are two or more mailboxes', async () => {
+        const mailboxLabels = { default: 'Work', personal: 'Personal' };
+        const one = makeAuto({ mailboxLabels, mailboxIds: async () => ['default'] });
+        one.ledger.recentForThread.mockResolvedValue([{ draftId: 'x', threadId: 'th1', conversationIds: [], recipients: [], mode: 'autonomous', at: new Date().toISOString(), outcome: 'sent' }]);
+        await one.gw.sendPrincipalDraft('d1', auto);
+        expect(reports()[0]!['summary']).toBe('Waiting only because Curia already replied on this thread today: "Re: Friday" to Dana Example.');
+
+        mocks = createMocks();
+        const two = makeAuto({ mailboxLabels, mailboxIds: async () => ['default', 'personal'], mailboxes: { default: autoClient(), personal: mailboxClient(null) } });
+        two.ledger.recentForThread.mockResolvedValue([{ draftId: 'x', threadId: 'th1', conversationIds: [], recipients: [], mode: 'autonomous', at: new Date().toISOString(), outcome: 'sent' }]);
+        await two.gw.sendPrincipalDraft('d1', { ...auto, mailbox: 'default' });
+        expect(reports()[0]!['summary']).toBe('Waiting only because Curia already replied on this thread today: "Re: Friday" to Dana Example (Work).');
+      });
+
+      it('LIMIT_REFUSALS is exactly the cap and the thread cooldown', () => {
+        expect([...LIMIT_REFUSALS].sort()).toEqual(['daily_cap', 'thread_cooldown']);
+        expect(refusalKindOf('lookup_failed')).toBe('other');
+        expect(refusalKindOf('mailing_list')).toBe('judgement');
+      });
+    });
+
     // ---- #2475 Task 18: limits across mailboxes ----
     describe('across mailboxes (#2475 Task 18)', () => {
       const addrs = { principalAddrs: [PRINCIPAL, 'personal@example.com'], mailboxAddresses: { default: PRINCIPAL } };
@@ -7452,7 +7548,8 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(client!.sendDraft).not.toHaveBeenCalled();
         // A cap stop does not extend this thread's cooldown.
         expect(ledger.recordHeld).not.toHaveBeenCalled();
-        expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('daily_cap') })]);
+        // The first cap stop of the day files the limit notice (#2475 Task 19).
+        expect(reports()).toEqual([expect.objectContaining({ summary: expect.stringMatching(/^Reached the daily limit of 10 replies/) })]);
       });
 
       it('A4. sends at nine earlier sends', async () => {

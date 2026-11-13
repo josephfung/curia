@@ -7,7 +7,7 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { checkMailboxInput, readMailboxInput } from '../../../_shared/principal-mailbox-client.js';
-import { PRINCIPAL_SEND_REFUSALS, type PrincipalDraftSendResult } from '../../../../src/skills/outbound-gateway.js';
+import { PRINCIPAL_SEND_REFUSALS, refusalKindOf, type PrincipalDraftSendResult } from '../../../../src/skills/outbound-gateway.js';
 
 // Time kept back from the skill's deadline, so this handler answers before the execution
 // layer's timeout does. That timeout's text reads like a refusal, but the send keeps running.
@@ -83,7 +83,10 @@ export class CeoInboxSendDraftHandler implements ToolHandler {
       // does not retry either). Every refusal but send_unconfirmed leaves the draft in the
       // principal's Drafts folder; send_unconfirmed's text says to check Sent.
       ctx.log.info({ draftId, refusal: result.refusal, leftAsDraft: result.leftAsDraft }, 'ceo-inbox-send-draft: not sent');
-      return { success: false, error: result.blockedReason ?? 'The draft was not sent.' };
+      // refusal_kind: a limit (the daily cap or the thread cooldown) is not a judgement on the
+      // reply (#2475, D6). A check failure with no refusal code is Curia's judgement.
+      const refusalKind = result.refusalKind ?? (result.refusal ? refusalKindOf(result.refusal) : 'judgement');
+      return { success: false, error: result.blockedReason ?? 'The draft was not sent.', data: { refusal_kind: refusalKind } };
     }
 
     return {
