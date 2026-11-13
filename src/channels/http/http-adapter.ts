@@ -643,6 +643,7 @@ export class HttpAdapter implements Channel {
         ...this.config.principalMailboxConsole,
         webAppBootstrapSecret,
         sessions,
+        bus,
       });
     }
 

@@ -36,8 +36,18 @@ function makeOptions(over: Partial<PrincipalMailboxesRouteOptions> = {}): Princi
     lookupGrant: vi.fn(async () => ({ email: 'boss@example.com', provider: 'google' })),
     webAppBootstrapSecret: BOOTSTRAP,
     sessions: new Map(),
+    bus: { publish: vi.fn(async () => {}) },
     ...over,
   };
+}
+
+/** The principal_mailbox.changed payloads the routes published, in order. */
+function audited(opts: PrincipalMailboxesRouteOptions): Array<Record<string, unknown>> {
+  return vi.mocked(opts.bus.publish).mock.calls.map(([layer, event]) => {
+    expect(layer).toBe('system');
+    expect(event.type).toBe('principal_mailbox.changed');
+    return event.payload as unknown as Record<string, unknown>;
+  });
 }
 
 describe('principal-mailboxes routes', () => {
@@ -343,5 +353,81 @@ describe('principal-mailboxes routes', () => {
     expect(log).toContain('relation \\"principal_mailboxes\\" is locked');
     expect(log).toContain('NylasApiError');
     expect(log).not.toContain('SECRET-GRANT-ABC');
+  });
+
+  // P11: every mailbox admin action leaves a two-stage audit row, like the vault's secret.changed.
+  describe('audit (P11)', () => {
+    const URL = '/api/registry/principal-mailboxes';
+
+    it('add: requested before the change, completed after; never a grant id or address', async () => {
+      const opts = makeOptions();
+      await build(opts);
+      const order: string[] = [];
+      vi.mocked(opts.bus.publish).mockImplementation(async (_l, e) => { order.push(`audit:${(e.payload as { stage: string }).stage}`); });
+      vi.mocked(opts.admin.add).mockImplementation(async () => { order.push('add'); return { ok: true as const, mailbox: view() }; });
+      expect((await req('POST', URL, { id: 'work', label: 'Work', grant_id: 'grant-secret-123' })).statusCode).toBe(201);
+      expect(order).toEqual(['audit:requested', 'add', 'audit:completed']);
+      expect(audited(opts)).toEqual([
+        { mailboxId: 'work', action: 'add', stage: 'requested', initiatedBy: 'bootstrap_secret' },
+        { mailboxId: 'work', action: 'add', stage: 'completed', initiatedBy: 'bootstrap_secret' },
+      ]);
+      expect(JSON.stringify(vi.mocked(opts.bus.publish).mock.calls)).not.toMatch(/grant-secret-123|boss@example\.com/);
+    });
+
+    it('a refused add leaves only the requested row', async () => {
+      const opts = makeOptions({ admin: { ...makeOptions().admin, add: vi.fn(async () => ({ ok: false as const, refusal: 'address_is_another_contact' as const, detail: 'x' })) } });
+      await build(opts);
+      expect((await req('POST', URL, { id: 'work', label: 'Work', grant_id: 'grant-secret-123' })).statusCode).toBe(422);
+      expect(audited(opts).map((p) => p.stage)).toEqual(['requested']);
+    });
+
+    it('relabel, set_default and replace_grant are audited', async () => {
+      const opts = makeOptions({ admin: { ...makeOptions().admin, setDefault: vi.fn(async () => ({ warning: 'copy pending' })) } });
+      await build(opts);
+      await req('PATCH', `${URL}/work`, { label: 'Office' });
+      await req('PATCH', `${URL}/work`, { make_default: true });
+      await req('PATCH', `${URL}/work`, { grant_id: 'grant-new12345' });
+      expect(audited(opts).map((p) => `${String(p.action)}:${String(p.stage)}`)).toEqual([
+        'relabel:requested', 'relabel:completed',
+        'set_default:requested', 'set_default:completed',
+        'replace_grant:requested', 'replace_grant:completed',
+      ]);
+      expect(audited(opts)[3]).toMatchObject({ warning: true });
+      expect(JSON.stringify(vi.mocked(opts.bus.publish).mock.calls)).not.toContain('grant-new12345');
+    });
+
+    it('remove records the rules choice and the unfinished cleanup (the rules rewrite)', async () => {
+      const opts = makeOptions({ admin: { ...makeOptions().admin, remove: vi.fn(async () => ({ cleanupIncomplete: ['inbox_rules'], restartRequired: false })) } });
+      await build(opts);
+      await req('DELETE', `${URL}/work`, { still_owned: true, rules: { rescope_to: 'personal' } });
+      expect(audited(opts)).toEqual([
+        { mailboxId: 'work', action: 'remove', stage: 'requested', initiatedBy: 'bootstrap_secret', stillOwned: true, rules: 'rescope', rulesRescopeTo: 'personal' },
+        { mailboxId: 'work', action: 'remove', stage: 'completed', initiatedBy: 'bootstrap_secret', stillOwned: true, rules: 'rescope', rulesRescopeTo: 'personal', cleanupIncomplete: ['inbox_rules'] },
+      ]);
+    });
+
+    it('refuses the change when the requested row cannot be written', async () => {
+      const opts = makeOptions({ bus: { publish: vi.fn(async () => { throw new Error('audit down'); }) } });
+      await build(opts);
+      const res = await req('DELETE', `${URL}/work`, { still_owned: false });
+      expect(res.statusCode).toBe(500);
+      expect(res.json().error).toMatch(/could not be audited/);
+      expect(opts.admin.remove).not.toHaveBeenCalled();
+    });
+
+    it('a missed completed row is logged, not turned into a failure', async () => {
+      const publish = vi.fn(async (_l: string, e: { payload: { stage: string } }) => { if (e.payload.stage === 'completed') throw new Error('audit down'); });
+      const opts = makeOptions({ bus: { publish } as never });
+      await build(opts);
+      expect((await req('PATCH', `${URL}/work`, { make_default: true })).statusCode).toBe(200);
+      expect(opts.admin.setDefault).toHaveBeenCalled();
+    });
+
+    it('a failed change after the requested row gets no completed row', async () => {
+      const opts = makeOptions({ admin: { ...makeOptions().admin, replaceGrant: vi.fn(async () => { throw new Error('vault down'); }) } });
+      await build(opts);
+      expect((await req('PATCH', `${URL}/work`, { grant_id: 'grant-new12345' })).statusCode).toBe(500);
+      expect(audited(opts).map((p) => p.stage)).toEqual(['requested']);
+    });
   });
 });

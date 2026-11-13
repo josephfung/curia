@@ -1033,6 +1033,33 @@ interface SecretChangedPayload {
   affected?: { kind: string; name: string }[];
 }
 
+// PrincipalMailboxChangedPayload — the principal added, relabelled, re-granted, made default or
+// removed one of their Gmail mailboxes from the console (#2475). Audit-only: nothing subscribes
+// to act on it. Carries the mailbox id and what was asked — NEVER a grant id or an address.
+//
+// Two-stage, like secret.changed: `requested` is published BEFORE the change and the console
+// refuses the change if it cannot be recorded; `completed` follows success. A refusal or a
+// throw leaves `requested` alone: not done, or outcome unknown.
+interface PrincipalMailboxChangedPayload {
+  mailboxId: string;
+  action: 'add' | 'relabel' | 'set_default' | 'replace_grant' | 'remove';
+  stage: 'requested' | 'completed';
+  /** A console session, or the bootstrap-secret header with no cookie. */
+  initiatedBy: 'session' | 'bootstrap_secret';
+  /** sessions.id of the actor. Absent when initiatedBy is bootstrap_secret. */
+  actorSessionId?: string;
+  /** remove: whether the principal still owns the address. */
+  stillOwned?: boolean;
+  /** remove: what was asked of the mailbox's scoped inbox rules (the rules rewrite). */
+  rules?: 'delete' | 'rescope';
+  /** remove with rules 'rescope': the mailbox the rules move to. */
+  rulesRescopeTo?: string;
+  /** remove, completed: cleanup steps that did not finish (e.g. inbox_rules). */
+  cleanupIncomplete?: string[];
+  /** completed: the change committed but a follow-up copy is pending. */
+  warning?: boolean;
+}
+
 // SecretCapturedPayload — emitted when a user submits a value to a one-time capture link and
 // it is redeemed into the vault (#972). Carries the secret NAME/label and the routing context
 // needed to re-enter the originating agent — NEVER the value. The resume subscriber turns this
@@ -1985,6 +2012,12 @@ export interface SecretChangedEvent extends BaseEvent {
   payload: SecretChangedPayload;
 }
 
+export interface PrincipalMailboxChangedEvent extends BaseEvent {
+  type: 'principal_mailbox.changed';
+  sourceLayer: 'system';
+  payload: PrincipalMailboxChangedPayload;
+}
+
 // SecretCapturedEvent — published by the capture endpoint (trusted system infra) when a
 // one-time link is redeemed (#972). sourceLayer 'system' because the capture endpoint
 // self-authorizes via the token and writes to the vault, like the scheduler emitting its
@@ -2302,6 +2335,7 @@ export type BusEvent =
   | AuthorizationDecisionEvent // Spec 09 / #1379: authorization gate allow/deny/escalate audit
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
   | SecretChangedEvent       // #2453: console set/delete of a vault secret (name only, never value)
+  | PrincipalMailboxChangedEvent // #2475: console add/relabel/default/grant/remove of a principal mailbox
   | SecretCapturedEvent      // #972: one-time capture link redeemed (name/routing only, never value)
   | CardUseRequestedEvent    // #1358: saved-card use requested (brand/last4/site/amount, never the number)
   | CardUseDecidedEvent      // #1358: saved-card use approved, denied or expired
@@ -2962,6 +2996,16 @@ export function createSecretChanged(payload: SecretChangedPayload): SecretChange
     id: randomUUID(),
     timestamp: new Date(),
     type: 'secret.changed',
+    sourceLayer: 'system',
+    payload,
+  };
+}
+
+export function createPrincipalMailboxChanged(payload: PrincipalMailboxChangedPayload): PrincipalMailboxChangedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'principal_mailbox.changed',
     sourceLayer: 'system',
     payload,
   };

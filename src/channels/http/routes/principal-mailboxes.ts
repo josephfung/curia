@@ -13,10 +13,17 @@
 //   DELETE /:id                   — { still_owned, new_default_id?, new_primary_email? }
 //
 // A grant id is accepted in request bodies only; it is never returned or logged here.
+//
+// Every change is audited in two stages as principal_mailbox.changed (P11), like the vault's
+// secret.changed: `requested` before the change (refused when it cannot be written), then
+// `completed` after it succeeds. Mailbox id and choices only, never a grant id or address.
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { SessionStore } from '../session-auth.js';
 import { assertSecret } from '../session-auth.js';
+import { actorFromRequest } from './sessions.js';
+import type { EventBus } from '../../../bus/bus.js';
+import { createPrincipalMailboxChanged } from '../../../bus/events.js';
 import type { PrincipalMailboxAdmin } from '../../../principal-mailboxes/admin.js';
 import { MailboxRemovalError } from '../../../principal-mailboxes/admin.js';
 import type { PrincipalMailboxes } from '../../../principal-mailboxes/service.js';
@@ -32,7 +39,17 @@ export interface PrincipalMailboxesRouteOptions {
   lookupGrant?: (grantId: string) => Promise<{ email: string; provider: string }>;
   webAppBootstrapSecret: string;
   sessions: SessionStore;
+  /** Every change is published here as a principal_mailbox.changed audit event (P11). */
+  bus: Pick<EventBus, 'publish'>;
 }
+
+type MailboxChange = {
+  mailboxId: string;
+  action: 'add' | 'relabel' | 'set_default' | 'replace_grant' | 'remove';
+  stillOwned?: boolean;
+  rules?: 'delete' | 'rescope';
+  rulesRescopeTo?: string;
+};
 
 const MAX_LABEL = 80;
 const NO_NYLAS = 'No Nylas API key is configured. Set channel.email.nylas_api_key first.';
@@ -54,12 +71,50 @@ export async function principalMailboxesRoutes(
   app: FastifyInstance,
   options: PrincipalMailboxesRouteOptions,
 ): Promise<void> {
-  const { mailboxes, store, admin, lookupGrant, webAppBootstrapSecret, sessions } = options;
+  const { mailboxes, store, admin, lookupGrant, webAppBootstrapSecret, sessions, bus } = options;
   const AUTH_RATE = { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } };
   const base = '/api/registry/principal-mailboxes';
 
   const requireAuth = (request: FastifyRequest, reply: FastifyReply): boolean =>
     assertSecret(request, reply, webAppBootstrapSecret, sessions);
+
+  const changeEvent = (
+    request: FastifyRequest,
+    change: MailboxChange,
+    stage: 'requested' | 'completed',
+    outcome: { cleanupIncomplete?: string[]; warning?: boolean } = {},
+  ) => createPrincipalMailboxChanged({
+    ...change,
+    stage,
+    ...actorFromRequest(request, sessions),
+    ...(outcome.cleanupIncomplete && outcome.cleanupIncomplete.length > 0 ? { cleanupIncomplete: outcome.cleanupIncomplete } : {}),
+    ...(outcome.warning ? { warning: true } : {}),
+  });
+
+  // Before the change: an unrecordable change is refused (this sends the 500 and returns false).
+  async function auditRequested(request: FastifyRequest, reply: FastifyReply, change: MailboxChange): Promise<boolean> {
+    try {
+      await bus.publish('system', changeEvent(request, change, 'requested'));
+      return true;
+    } catch (err) {
+      request.log.error({ ...grantSafeErrorFields(err), mailboxId: change.mailboxId, action: change.action }, 'principal mailbox change audit write failed — change refused');
+      void reply.status(500).send({ error: 'Nothing was changed: the change could not be audited, so it was not made. Check the server logs.' });
+      return false;
+    }
+  }
+
+  // After the change: it happened, so a miss is logged rather than turned into an error.
+  async function auditCompleted(
+    request: FastifyRequest,
+    change: MailboxChange,
+    outcome: { cleanupIncomplete?: string[]; warning?: boolean } = {},
+  ): Promise<void> {
+    try {
+      await bus.publish('system', changeEvent(request, change, 'completed', outcome));
+    } catch (err) {
+      request.log.error({ ...grantSafeErrorFields(err), mailboxId: change.mailboxId, action: change.action }, 'principal mailbox change outcome audit write failed');
+    }
+  }
 
   // Unknown / removed ids are 404; anything else is a real failure (logged, generic 500).
   function fail(request: FastifyRequest, reply: FastifyReply, err: unknown, what: string) {
@@ -127,10 +182,13 @@ export async function principalMailboxesRoutes(
       return reply.status(400).send({ error: 'make_default must be a boolean' });
     }
     if (!lookupGrant) return reply.status(503).send({ error: NO_NYLAS });
+    const change: MailboxChange = { mailboxId: id, action: 'add' };
+    if (!(await auditRequested(request, reply, change))) return;
     try {
       const result = await admin.add({ id, label, grantId, makeDefault: body.make_default });
       if (!result.ok) return reply.status(422).send({ refusal: result.refusal, detail: result.detail });
       request.log.info({ mailboxId: id }, 'principal mailbox added');
+      await auditCompleted(request, change, { warning: !!result.warning });
       return reply.status(201).send({ mailbox: result.mailbox, ...(result.warning ? { warning: result.warning } : {}) });
     } catch (err) {
       return fail(request, reply, err, 'Adding the principal mailbox');
@@ -160,6 +218,11 @@ export async function principalMailboxesRoutes(
       return reply.status(400).send({ error: 'Provide exactly one of label, make_default or grant_id' });
     }
     if (hasGrant && !lookupGrant) return reply.status(503).send({ error: NO_NYLAS });
+    const change: MailboxChange = {
+      mailboxId: id,
+      action: hasGrant ? 'replace_grant' : body.make_default === true ? 'set_default' : 'relabel',
+    };
+    if (!(await auditRequested(request, reply, change))) return;
     try {
       let warning: string | undefined;
       if (hasGrant) {
@@ -172,6 +235,7 @@ export async function principalMailboxesRoutes(
       } else {
         await store.relabel(id, label);
       }
+      await auditCompleted(request, change, { warning: !!warning });
       // A warning means the change committed but a follow-up copy is pending: still a success.
       return reply.send({ ok: true, ...(warning ? { warning } : {}) });
     } catch (err) {
@@ -206,8 +270,16 @@ export async function principalMailboxesRoutes(
       else if (r !== null && typeof r === 'object' && str(r.rescope_to)) rules = { rescopeTo: str(r.rescope_to) };
       else return reply.status(400).send({ error: 'rules must be "delete" or { rescope_to: <mailbox id> }' });
     }
+    const change: MailboxChange = {
+      mailboxId: id,
+      action: 'remove',
+      stillOwned: body.still_owned,
+      ...(rules === 'delete' ? { rules: 'delete' as const } : rules ? { rules: 'rescope' as const, rulesRescopeTo: rules.rescopeTo } : {}),
+    };
+    if (!(await auditRequested(request, reply, change))) return;
     try {
       const outcome = await admin.remove({ id, stillOwned: body.still_owned, newDefaultId, newPrimaryEmail, ...(rules ? { rules } : {}) });
+      await auditCompleted(request, change, { cleanupIncomplete: outcome.cleanupIncomplete });
       // Past the tombstone the mailbox is removed: unfinished cleanup is reported, not a failure.
       if (outcome.cleanupIncomplete.length > 0) {
         request.log.warn({ mailboxId: id, cleanupIncomplete: outcome.cleanupIncomplete }, 'principal mailbox removed; some cleanup did not finish');
