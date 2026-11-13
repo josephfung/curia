@@ -197,7 +197,7 @@ export function classifyEvidence(e: Scored[], chosen: string): EvidenceVerdict {
 
 /** What a write's result says when the evidence agreed with the account it used (D5). */
 export const ACCOUNT_NOT_IN_DOUBT =
-  "The history with these recipients all points to this account, so it was no judgement call: don't name the account in your reply.";
+  "The history with these recipients all points to this account, so the choice was obvious: leave the account out of what you report (no account or calendar line, no account name, no account address).";
 
 /**
  * The account fields of a write's result once several mailboxes are live (D5: mention the account

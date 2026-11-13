@@ -46,8 +46,8 @@ tool_stubs:
       return: { count: 0, messages: [], has_more: false }
   # Polishing the draft it just created is fine; the edit is answered.
   ceo-inbox-draft-edit:
-    - match: { draft_id: draft-personal-new }
-      return: { draft_id: draft-personal-new, subject: Saturday lunch, to: [{ name: Maya Hart, email: maya.hart@family.example.test }], cc: [], mailbox: personal, mailbox_label: Personal }
+    - match: { draft_id: draft-r4b81d6e }
+      return: { draft_id: draft-r4b81d6e, subject: Saturday lunch, to: [{ name: Maya Hart, email: maya.hart@family.example.test }], cc: [], mailbox: personal, mailbox_label: Personal }
 expected_behaviors:
   - id: composes_in_personal
     weight: critical
