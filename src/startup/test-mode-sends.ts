@@ -41,7 +41,7 @@ import type { PrincipalEmailRef } from '../contacts/types.js';
 import type { AgentPersona, ToolManifest } from '../skills/types.js';
 import { REPLY_QUOTE_HTML_OPEN } from '../skills/_shared/reply-quote.js';
 import { DEFAULT_MAILBOX, DEFAULT_SEND_LEVEL, type SendLevel } from '../skills/principal-send/send-level.js';
-import { PrincipalMailboxes } from '../principal-mailboxes/service.js';
+import { PrincipalMailboxes, type MailboxDirectory } from '../principal-mailboxes/service.js';
 import type { PrincipalMailboxStore } from '../principal-mailboxes/store.js';
 import type { PrincipalMailboxRecord } from '../principal-mailboxes/types.js';
 import type { PrincipalSendEntry } from '../skills/principal-send/send-ledger.js';
@@ -387,6 +387,22 @@ export function createRecordingPrincipalMailbox(recorder: SendRecorder, principa
 export const TEST_MODE_PRINCIPAL_MAILBOX_ID = DEFAULT_MAILBOX;
 
 /**
+ * The test-mode PrincipalMailboxes: production's class, minus the list-only `mailboxDirectory`
+ * view (#2475 review I3). With a directory, config-store would check and store mailbox-keyed
+ * settings (ceo_inbox/sending, ceo_inbox/triage) through the real entity memory, and the
+ * database is shared with a real instance, whose default mailbox would then send at whatever
+ * level a test run wrote. Without it config-store refuses those writes, as it did before test
+ * mode had mailboxes. The ExecutionLayer counts an undefined service as not configured, so the
+ * optional capability is simply not injected.
+ */
+class TestModePrincipalMailboxes extends PrincipalMailboxes {
+  override forDirectory(): MailboxDirectory {
+    // Cast: undefined is how the ExecutionLayer's capability map reads "not configured".
+    return undefined as unknown as MailboxDirectory;
+  }
+}
+
+/**
  * The `principalMailboxes` capability for the test-mode ExecutionLayer (#2475). Production's
  * class over an in-memory registry of one mailbox, `default` (the id the recording gateway's
  * createRecordingPrincipalMailbox serves), at the principal's address. Without it every
@@ -394,13 +410,24 @@ export const TEST_MODE_PRINCIPAL_MAILBOX_ID = DEFAULT_MAILBOX;
  * capability check before the gateway sees the send. It has no Nylas API key and no grant, so
  * any client it is asked for fails (MissingNylasApiKeyError): the drafts and the send come from
  * the recording gateway, never from here. Nothing is read from or written to the database's
- * mailbox registry, which a real instance shares.
+ * mailbox registry, which a real instance shares, and it offers no mailbox directory
+ * (TestModePrincipalMailboxes). An empty principal address is logged once: the mailbox then
+ * matches no recipient's domain, which production's would.
  */
 export function createTestModePrincipalMailboxes(principalAddress: () => string, logger: Logger): PrincipalMailboxes {
+  let warnedEmpty = false;
+  const address = (): string => {
+    const value = principalAddress();
+    if (value === '' && !warnedEmpty) {
+      warnedEmpty = true;
+      logger.warn('test-mode principal mailbox: the principal has no primary email, so its address is empty (evidence never matches its domain)');
+    }
+    return value;
+  };
   const record = (): PrincipalMailboxRecord => ({
     id: TEST_MODE_PRINCIPAL_MAILBOX_ID,
     label: 'Mailbox',
-    address: principalAddress(),
+    address: address(),
     provider: 'google',
     isDefault: true,
     triageStartAt: null,
@@ -412,7 +439,7 @@ export function createTestModePrincipalMailboxes(principalAddress: () => string,
     hasAnyRow: async (): Promise<boolean> => true,
     getAny: async (id: string): Promise<PrincipalMailboxRecord | null> => (id === TEST_MODE_PRINCIPAL_MAILBOX_ID ? record() : null),
   };
-  return new PrincipalMailboxes({
+  return new TestModePrincipalMailboxes({
     // Cast: PrincipalMailboxes reads the store through these three methods only; the writes
     // (insert, relabel, tombstone...) belong to the admin routes, which test mode never builds.
     store: store as unknown as PrincipalMailboxStore,
@@ -426,15 +453,20 @@ export function createTestModePrincipalMailboxes(principalAddress: () => string,
 export const NO_MAIL_CLIENT = 'principalMailboxes (no mail client in test mode)';
 
 /**
- * True for a tool that reaches the principal's mail through a client from `principalMailboxes`,
- * which createTestModePrincipalMailboxes never hands out. A tool that also declares
- * `outboundGateway` (ceo-inbox-send-draft) reads only the registry from it and gets its mail
- * through the gateway, which a through_gateway run gives the recording mailbox; every other
- * declarer would fail on the missing key, an error production never shows.
+ * The tools that declare `principalMailboxes` but reach the principal's mail only through the
+ * gateway, which a through_gateway run gives the recording mailbox. An explicit list (review M5):
+ * a new declarer is counted as needing a client, so it is refused unstubbed rather than run
+ * against a client test mode never has.
  */
-export function needsMailClient(manifest: Pick<ToolManifest, 'capabilities'>): boolean {
-  const caps = manifest.capabilities ?? [];
-  return caps.includes('principalMailboxes') && !caps.includes('outboundGateway');
+export const GATEWAY_MEDIATED_MAIL_TOOLS: ReadonlySet<string> = new Set(['ceo-inbox-send-draft']);
+
+/**
+ * True for a tool that reaches the principal's mail through a client from `principalMailboxes`,
+ * which createTestModePrincipalMailboxes never hands out: run unstubbed it would fail on the
+ * missing key, an error production never shows. Only GATEWAY_MEDIATED_MAIL_TOOLS are exempt.
+ */
+export function needsMailClient(manifest: Pick<ToolManifest, 'name' | 'capabilities'>): boolean {
+  return (manifest.capabilities ?? []).includes('principalMailboxes') && !GATEWAY_MEDIATED_MAIL_TOOLS.has(manifest.name);
 }
 
 /** Production's review, as the recording gateway takes it (built in createTestModeStack). */

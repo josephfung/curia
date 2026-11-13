@@ -716,6 +716,7 @@ export const TEST_MODE_ABSENT_CAPABILITIES: Readonly<Record<string, string>> = {
   actionLogRepo: 'no pending approvals on the agent layer: only a recording stack\'s review layer has the action log',
   tempFileStore: 'no attachment downloads: they come from the principal\'s real mailbox',
   infraLlm: 'no infrastructure LLM: sent-observe\'s learning writes rows a real instance shares',
+  mailboxDirectory: 'no mailbox directory: config-store would store send levels and cadences a real instance reads',
 };
 
 /**
