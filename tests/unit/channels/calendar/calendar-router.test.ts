@@ -111,6 +111,17 @@ describe('CalendarRouter.route', () => {
     expect(homes.found.find((h) => h.mailboxId === 'work')!.calendarId).toBe('work-real-home');
   });
 
+  it("refuses a grant whose listed primary is another live mailbox's own calendar", async () => {
+    // work's grant marks personal's calendar (shared into it) as primary, and nothing is registered.
+    const router = routerFixture({
+      mailboxes: [work, personal],
+      clients: { work: client('work', [{ id: 'ceo@personal.example.com', isPrimary: true }]), personal: client('personal') },
+    });
+    expect((await routeError(router.route('primary', 'work'))).code).toBe('no_home_calendar');
+    const homes = await router.liveHomeCalendarsSettled();
+    expect(homes.failures.map((f) => f.mailboxId)).toContain('work');
+  });
+
   it("rewrites primary to the grant's own primary calendar when no home calendar is registered", async () => {
     const personalClient = client('personal', [{ id: 'other', isPrimary: false }, { id: 'real-home-id', isPrimary: true }]);
     const router = routerFixture({ mailboxes: [work, personal], clients: { work: client('work'), personal: personalClient } });

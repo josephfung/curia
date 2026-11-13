@@ -149,7 +149,8 @@ export async function calendarWritePregate(
  * calendars with no `mailbox`, made while one mailbox is live, gets that mailbox bound in. The
  * replay then goes through the account the principal approved: a mailbox removed since is an
  * error, never a reroute through whichever account is live by then. Anything else (another tool,
- * a stated mailbox, several mailboxes, a lookup failure) is stored as it was.
+ * a stated mailbox, several mailboxes) is stored as it was. A lookup failure throws
+ * ApprovalMailboxUnboundError: no approval is created rather than one that could replay elsewhere.
  */
 export async function bindApprovalMailbox(
   router: Pick<CalendarRouter, 'liveMailboxes' | 'isPrincipalCalendar'>,
@@ -167,7 +168,17 @@ export async function bindApprovalMailbox(
     if (live.length !== 1 || !(await router.isPrincipalCalendar(calendarId))) return input;
     return { ...input, mailbox: live[0]!.id };
   } catch (err) {
-    log.warn({ tool: toolName, ...grantSafeErrorFields(err) }, `${toolName}: could not bind the mailbox to the approval; stored as given`);
-    return input;
+    // Fail closed: an approval stored unbound could replay through whichever mailbox is live by
+    // then. The caller creates no approval row; the call stays blocked and can be asked again.
+    log.warn({ tool: toolName, ...grantSafeErrorFields(err) }, `${toolName}: could not bind the mailbox to the approval; no approval created`);
+    throw new ApprovalMailboxUnboundError(toolName);
+  }
+}
+
+/** The mailbox could not be bound to a calendar approval, so none is created (fail closed). */
+export class ApprovalMailboxUnboundError extends Error {
+  constructor(toolName: string) {
+    super(`${toolName}: the account for this calendar call could not be confirmed, so no approval was created`);
+    this.name = 'ApprovalMailboxUnboundError';
   }
 }
