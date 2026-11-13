@@ -28,3 +28,6 @@ export function mailboxStateKey(mailboxId: string, name: MailboxStateName): stri
   return `${GLOBAL_STATE_PREFIX}${mailboxId}.${name}`;
 }
 
+
+/** Id of the in-memory mailbox served while the flat-grant migration is deferred (R61). */
+export const FALLBACK_MAILBOX_ID = 'mailbox';

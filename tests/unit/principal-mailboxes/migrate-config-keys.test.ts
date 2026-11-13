@@ -231,6 +231,14 @@ describe('migrateLearningKeys (D8, R60)', () => {
     expect(s.value(NS, 'sent_observe.last_seen_at')).toBe('');
   });
 
+  it('does not count a clear that was soft-rejected', async () => {
+    const s = keyedStore(null, { [g('last_seen_at')]: '17' });
+    const warn = vi.fn();
+    const rejectClear = { get: s.get, set: async (n: string, k: string, v: string) => (v === '' ? { stored: false, action: 'conflict' } : s.set(n, k, v)) };
+    expect(await migrateLearningKeys(rejectClear, 'gmail', { info: () => {}, warn, error: () => {} } as never)).toBe(0);
+    expect(warn).toHaveBeenCalled();
+  });
+
   it('keeps the global key when the copy is soft-rejected', async () => {
     const s = keyedStore(null, { [g('last_seen_at')]: '17' });
     const warn = vi.fn();

@@ -204,6 +204,12 @@ describe('PrincipalSendLedger across mailboxes (#2475)', () => {
     expect((await ledger.recentForThread('t1', since, 'personal')).map((e) => e.draftId)).toEqual(['a']);
   });
 
+  it('an entry written under the deferred-fallback id still triggers the cooldown after migration (R61)', async () => {
+    const ledger = new PrincipalSendLedger(makeDocs(), logger);
+    await ledger.recordSending({ ...entry, draftId: 'a', mode: 'autonomous', at: recent, mailbox: 'mailbox' });
+    expect((await ledger.recentForThread('t1', since, 'gmail')).map((e) => e.draftId)).toEqual(['a']);
+  });
+
   it('recentForThread ignores the same thread id in another mailbox', async () => {
     const docs = makeDocs();
     const ledger = new PrincipalSendLedger(docs, logger);

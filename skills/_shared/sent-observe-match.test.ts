@@ -304,6 +304,12 @@ describe('isCuriaSend (#2474 PR 2)', () => {
       expect(isCuriaSend(sentMsg, [{ ...base, messageId: 'msg-1' }], personal)).toBe(false);
     });
 
+    it('treats a deferred-fallback entry (mailbox "mailbox") as the migrated mailbox\'s (R61)', () => {
+      const entry = { ...base, mailbox: 'mailbox' };
+      expect(isCuriaSend(sentMsg, [entry], { id: 'gmail', legacy: true })).toBe(true);
+      expect(isCuriaSend(sentMsg, [entry], personal)).toBe(false);
+    });
+
     it('counts every entry in the global scope and when no scope is given', () => {
       const entry = { ...base, mailbox: 'work' };
       expect(isCuriaSend(sentMsg, [entry], { id: null, legacy: false })).toBe(true);

@@ -24,6 +24,7 @@ import {
   type CompletionDigestMap,
   type CompletionDigestItem,
 } from '../../../_shared/learning-state.js';
+import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 import { resolveStateScopes } from '../../../_shared/mailbox-state.js';
 import { buildCompletionDigestNotification } from '../../../_shared/learning-digest.js';
 import { notifyLearningProposal } from '../../../_shared/learning-notify.js';
@@ -283,7 +284,7 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
           completedTaskIds.add(pending.taskId);
           autoCompleted += 1;
         } catch (err) {
-          ctx.log.error({ err, taskId: pending.taskId }, 'task-completion-from-sent: auto-complete failed');
+          ctx.log.error({ ...grantSafeErrorFields(err), taskId: pending.taskId }, 'task-completion-from-sent: auto-complete failed');
           // Leave the candidate queued — completeTask failure is presumed transient (DB
           // hiccup), so it stays in `remaining` and retries next run. The undo note is already
           // durable and will be overwritten identically on retry, so nothing is lost.

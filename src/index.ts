@@ -98,6 +98,7 @@ import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
 import { createRulesDoc } from './principal-mailboxes/rules-doc.js';
 import { migrateFlatPrincipalMailbox, migrationFailureReason } from './principal-mailboxes/migrate-flat-mailbox.js';
+import { FALLBACK_MAILBOX_ID } from './principal-mailboxes/state-keys.js';
 import { renameSendingKeyAfterMigration, dropLegacyDefaultKey, type SendingConfigStore } from './principal-mailboxes/migrate-config-keys.js';
 import { reconcileFlatMailboxKeys } from './principal-mailboxes/flat-mirror.js';
 import { emailAccountGrantSecretName } from './channels/email/email-account-secrets.js';
@@ -1266,7 +1267,7 @@ async function main(): Promise<void> {
       const outcome = await sendingKeyRename.run();
       if (outcome === 'deferred') {
         const flatGrant = (await secretsService.get('ceo_nylas_grant_id'))?.trim();
-        if (flatGrant) principalMailboxes.setFallback({ id: 'mailbox', grantId: flatGrant });
+        if (flatGrant) principalMailboxes.setFallback({ id: FALLBACK_MAILBOX_ID, grantId: flatGrant });
       } else {
         principalMailboxes.setFallback(null);
       }
@@ -1280,7 +1281,7 @@ async function main(): Promise<void> {
       principalMailboxes.setPendingMigrationReason(migrationFailureReason(err));
       try {
         const flatGrant = (await secretsService.get('ceo_nylas_grant_id'))?.trim();
-        if (flatGrant) principalMailboxes.setFallback({ id: 'mailbox', grantId: flatGrant });
+        if (flatGrant) principalMailboxes.setFallback({ id: FALLBACK_MAILBOX_ID, grantId: flatGrant });
       } catch (readErr) {
         logger.error({ err: readErr }, 'Could not read ceo_nylas_grant_id for the mailbox fallback');
       }
