@@ -3414,7 +3414,9 @@ async function main(): Promise<void> {
       notifyCeiling: async (batches) => {
         const ceoEmail = findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
           ?? (principalEmail.current || undefined);
-        if (!outboundGateway || !ceoEmail) return false;
+        // outbound.notification is delivered by an email adapter only (as the outage alerts):
+        // without one a publish reaches no one, so it is not reported as sent and is retried.
+        if (!outboundGateway || !ceoEmail || emailAdapters.length === 0) return false;
         return outboundGateway.sendNotification({
           notificationType: 'inbox_triage_paused',
           ceoEmail,

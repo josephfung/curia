@@ -190,11 +190,11 @@ describe('InboxHeartbeat.tick', () => {
     expect(t.log.warn.mock.calls.filter((c) => String(c[1]).includes('running for an hour'))).toHaveLength(1);
   });
 
-  it('looks for its drains in every unfinished status, the scheduler\'s paused and active included', async () => {
+  it('looks for its drains in every unfinished status: waiting, blocked and the scheduler\'s paused and active included', async () => {
     const t = make();
     await t.hb.tick(NOW);
     expect(t.listTasks).toHaveBeenCalledWith(expect.objectContaining({
-      tag: 'inbox-drain', createdBy: 'heartbeat', statuses: ['open', 'in_progress', 'active', 'paused'],
+      tag: 'inbox-drain', createdBy: 'heartbeat', statuses: ['open', 'in_progress', 'waiting', 'blocked', 'active', 'paused'],
     }));
   });
 
@@ -397,20 +397,30 @@ describe('closeLegacyInboxDrains (BR-C2)', () => {
       taskRow({ id: 'own', createdBy: 'heartbeat' }),
       taskRow({ id: 'other-agent', agentId: 'coordinator', createdBy: 'coordinator' }),
     ];
-    const listTasks = vi.fn(async () => tasks as never);
+    const listAllTasks = vi.fn(async () => ({ tasks, truncated: false }) as never);
     const completeTask = vi.fn(async () => null);
     const log = logger();
-    const closed = await closeLegacyInboxDrains({ listTasks, completeTask }, log as never);
+    const closed = await closeLegacyInboxDrains({ listAllTasks, completeTask }, log as never);
     expect(closed).toBe(2);
-    expect(listTasks).toHaveBeenCalledWith(expect.objectContaining({ tag: 'inbox-drain', statuses: ['open', 'in_progress', 'active', 'paused'] }));
+    expect(listAllTasks).toHaveBeenCalledWith(expect.objectContaining({ tag: 'inbox-drain', statuses: ['open', 'in_progress', 'waiting', 'blocked', 'active', 'paused'] }));
     expect(completeTask.mock.calls.map((c) => (c as unknown[])[0])).toEqual(['legacy-1', 'legacy-2']);
     expect(String((completeTask.mock.calls[0] as unknown[])[1])).toContain('superseded by the inbox heartbeat');
     expect(log.info).toHaveBeenCalledWith(expect.objectContaining({ closed: 2 }), expect.any(String));
   });
 
+  it('reads every page (listAllTasks, no single capped page) and warns when even that is truncated', async () => {
+    const tasks = [taskRow({ id: 'legacy-1', createdBy: 'ceo-inbox' })];
+    const listAllTasks = vi.fn(async () => ({ tasks, truncated: true }) as never);
+    const completeTask = vi.fn(async () => null);
+    const log = logger();
+    expect(await closeLegacyInboxDrains({ listAllTasks, completeTask }, log as never)).toBe(1);
+    expect((listAllTasks.mock.calls[0] as unknown[])[0]).not.toHaveProperty('limit');
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ fetched: 1 }), expect.stringContaining('next boot'));
+  });
+
   it('is idempotent: nothing left to close is a quiet no-op', async () => {
     const completeTask = vi.fn(async () => null);
-    const closed = await closeLegacyInboxDrains({ listTasks: vi.fn(async () => [] as never), completeTask }, logger() as never);
+    const closed = await closeLegacyInboxDrains({ listAllTasks: vi.fn(async () => ({ tasks: [], truncated: false }) as never), completeTask }, logger() as never);
     expect(closed).toBe(0);
     expect(completeTask).not.toHaveBeenCalled();
   });
@@ -419,7 +429,7 @@ describe('closeLegacyInboxDrains (BR-C2)', () => {
     const tasks = [taskRow({ id: 'a', createdBy: 'ceo-inbox' }), taskRow({ id: 'b', createdBy: 'ceo-inbox' })];
     const completeTask = vi.fn(async (id: string) => { if (id === 'a') throw new Error('terminal'); return null; });
     const log = logger();
-    expect(await closeLegacyInboxDrains({ listTasks: vi.fn(async () => tasks as never), completeTask }, log as never)).toBe(1);
+    expect(await closeLegacyInboxDrains({ listAllTasks: vi.fn(async () => ({ tasks, truncated: false }) as never), completeTask }, log as never)).toBe(1);
     expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'a' }), expect.any(String));
   });
 });
