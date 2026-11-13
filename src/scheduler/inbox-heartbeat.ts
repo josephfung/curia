@@ -133,6 +133,8 @@ export class InboxHeartbeat {
   private readonly backedOffAt = new Map<string, number>();
   // The local day the dedupe sweep last ran.
   private sweptDay: string | null = null;
+  // The local day an unsent ceiling notice was last logged as an error.
+  private noticeErrorDay: string | null = null;
   // A slow tick (Nylas probes) must not overlap the next interval fire.
   private tickInFlight = false;
   // Set-aside drain task ids already warned about, so the 15-minute tick does not repeat the line.
@@ -214,6 +216,15 @@ export class InboxHeartbeat {
     return this.suspendedDrain;
   }
 
+  /** A drain_running tick: counted, and warned about once an hour of them has passed (R64). */
+  private drainRunning(): InboxHeartbeatResult {
+    this.drainRunningTicks += 1;
+    if (this.drainRunningTicks === DRAIN_RUNNING_WARN_TICKS) {
+      this.o.logger.warn({ ticks: this.drainRunningTicks }, 'InboxHeartbeat: the inbox drain has been running for an hour of ticks');
+    }
+    return 'drain_running';
+  }
+
   /** The heartbeat's own open drain tasks (R56: only those it created). */
   private async ownOpenDrains(): Promise<TaskListRow[]> {
     return (await this.o.taskRepo.listTasks({
@@ -257,11 +268,22 @@ export class InboxHeartbeat {
     this.o.logger.warn({ batches, dailyCeiling: TRIAGE_DAILY_CEILING }, 'InboxHeartbeat: inbox triage paused for the rest of the day at the batch ceiling');
     if (!this.o.notifyCeiling) return;
     try {
-      if (await this.o.notifyCeiling(batches)) await this.o.state.setCeilingNotified(now);
-      else this.o.logger.error('InboxHeartbeat: the triage-paused notice could not be sent; retrying next tick');
+      if (await this.o.notifyCeiling(batches)) {
+        await this.o.state.setCeilingNotified(now);
+        return;
+      }
+      this.noticeFailedOnce(now, {}, 'InboxHeartbeat: the triage-paused notice could not be sent; retrying each tick');
     } catch (err) {
-      this.o.logger.error({ ...grantSafeErrorFields(err) }, 'InboxHeartbeat: the triage-paused notice failed; retrying next tick');
+      this.noticeFailedOnce(now, { ...grantSafeErrorFields(err) }, 'InboxHeartbeat: the triage-paused notice failed; retrying each tick');
     }
+  }
+
+  /** The unsent-notice error, at most once a local day (re-review M3); the send is still retried. */
+  private noticeFailedOnce(now: Date, fields: Record<string, unknown>, msg: string): void {
+    const day = this.o.state.localDay(now);
+    if (this.noticeErrorDay === day) return;
+    this.noticeErrorDay = day;
+    this.o.logger.error(fields, msg);
   }
 
   /** Expired dedupe rows are swept on the first tick of each local day; a failure retries next tick. */
@@ -281,11 +303,7 @@ export class InboxHeartbeat {
   private async tickOnce(now: Date): Promise<InboxHeartbeatResult> {
     // TriageState gates on TRIAGE_DAILY_CEILING, the one value the list tool also reads (BR-M2).
     await this.sweepOncePerDay(now);
-    if (await this.o.state.ceilingReached(now)) {
-      this.o.logger.info({ dailyCeiling: TRIAGE_DAILY_CEILING }, 'InboxHeartbeat: daily batch ceiling reached; not waking triage');
-      await this.noticeCeiling(now);
-      return 'ceiling';
-    }
+    const atCeiling = await this.o.state.ceilingReached(now);
 
     const mailboxes = await this.o.mailboxes.list();
     const ids = mailboxes.map((m) => m.id);
@@ -302,6 +320,20 @@ export class InboxHeartbeat {
       this.o.logger.info({ mailboxes: settling }, 'InboxHeartbeat: the drain finished; closed its episode');
     }
 
+    // Health signals are refreshed on every tick, the ceiling included (re-review M2), so a resumed
+    // drain or a recovered mailbox clears the check without waiting for due mail.
+    // Forget counters of mailboxes that are no longer live.
+    for (const id of [...this.probeFailures.keys()]) if (!ids.includes(id)) this.probeFailures.delete(id);
+    this.stuck.clear();
+    for (const id of ids) if ((await this.o.state.noProgress(id)) >= NO_PROGRESS_DRAINS) this.stuck.add(id);
+    this.suspendedDrain = (await ownOpenDrains()).find((t) => t.wakeState === 'suspended')?.id ?? null;
+
+    if (atCeiling) {
+      this.o.logger.info({ dailyCeiling: TRIAGE_DAILY_CEILING }, 'InboxHeartbeat: daily batch ceiling reached; not waking triage');
+      await this.noticeCeiling(now);
+      return 'ceiling';
+    }
+
     const due = await dueMailboxes({
       mailboxIds: ids,
       cadences: await this.o.cadences(ids),
@@ -309,10 +341,6 @@ export class InboxHeartbeat {
       now,
       tz: this.o.tz(),
     });
-    // Forget counters of mailboxes that are no longer live.
-    for (const id of [...this.probeFailures.keys()]) if (!ids.includes(id)) this.probeFailures.delete(id);
-    this.stuck.clear();
-    for (const id of ids) if ((await this.o.state.noProgress(id)) >= NO_PROGRESS_DRAINS) this.stuck.add(id);
 
     // R67: a mailbox whose triage made no progress NO_PROGRESS_DRAINS calls running is backed off
     // to its next cadence slot instead of being woken every tick; it gets one try per slot, and
@@ -371,7 +399,6 @@ export class InboxHeartbeat {
     // re-fail and re-notify every half hour. It stays in charge (no second drain) and the
     // principal_mailbox_triage health check fails until an operator resumes or closes it.
     const suspended = own.find((t) => t.wakeState === 'suspended');
-    this.suspendedDrain = suspended?.id ?? null;
     if (suspended) {
       if (!this.suspendedLogged.has(suspended.id)) {
         this.suspendedLogged.add(suspended.id);
@@ -381,20 +408,15 @@ export class InboxHeartbeat {
     }
 
     const classes = own.map((t) => ({ t, kind: this.liveness(t, now) }));
-    if (classes.some((c) => c.kind === 'live')) {
-      this.drainRunningTicks += 1;
-      if (this.drainRunningTicks === DRAIN_RUNNING_WARN_TICKS) {
-        this.o.logger.warn({ ticks: this.drainRunningTicks }, 'InboxHeartbeat: the inbox drain has been running for an hour of ticks');
-      }
-      return 'drain_running';
-    }
+    if (classes.some((c) => c.kind === 'live')) return this.drainRunning();
     // R64: a pending wake far in the future (an injected task-update can push it out) does not
     // count as live: pull it in to now rather than letting it park triage.
     const far = classes.find((c) => c.kind === 'far');
     if (far) {
       const moved = await this.o.scheduler.pullTaskWakeIn(far.t.id, now);
       this.o.logger.warn({ taskId: far.t.id, nextWakeAt: far.t.nextWakeAt, moved }, 'InboxHeartbeat: the inbox-drain wake was set far out; pulled it in to now');
-      return moved ? 'woke' : 'drain_running';
+      // A wake the pull cannot move still parks triage: it counts toward the warning (re-review M1).
+      return moved ? 'woke' : this.drainRunning();
     }
 
     // Re-waking with a null originator would erase its system lineage, and leaving it in charge
