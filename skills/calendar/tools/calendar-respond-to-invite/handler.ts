@@ -13,11 +13,39 @@ import {
 } from '../../../../src/channels/calendar/holds.js';
 import { formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { localizeEventTimes } from '../../../../src/channels/calendar/event-display.js';
-import type { RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
-import { gateCalendarWrite, holdReleaseTargets, readCalendarMailbox } from '../../../_shared/calendar-route.js';
+import { CalendarRouteError, PRIMARY_CALENDAR_ALIAS, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
+import {
+  calendarRouteErrorMessage,
+  evidenceRecipients,
+  gateCalendarWrite,
+  holdReleaseTargets,
+  needsMailboxResult,
+  readCalendarMailbox,
+  routeCalendar,
+} from '../../../_shared/calendar-route.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
+import type { PrincipalMailboxView } from '../../../../src/principal-mailboxes/service.js';
 
 const TOOL = 'calendar-respond-to-invite';
+
+/** How far around the invite the arrival calendar is searched for its copy. */
+const UID_LOOKUP_PADDING_MS = 24 * 60 * 60 * 1000;
+
+/** The slot an event holds: a recurring instance's original start, else its start. */
+function occurrenceOf(e: NylasCalendarEvent): string {
+  return String(e.originalStartTime ?? e.startTime ?? e.startDate ?? '');
+}
+
+/** The window to search the arrival calendar in: the invite's time, a day either side. */
+function lookupWindow(e: NylasCalendarEvent): { start: string; end: string } | null {
+  const startMs = e.startTime !== null ? e.startTime * 1000 : e.startDate ? Date.parse(`${e.startDate}T00:00:00Z`) : NaN;
+  const endMs = e.endTime !== null ? e.endTime * 1000 : e.endDate ? Date.parse(`${e.endDate}T00:00:00Z`) : startMs;
+  if (Number.isNaN(startMs) || Number.isNaN(endMs)) return null;
+  return {
+    start: new Date(startMs - UID_LOOKUP_PADDING_MS).toISOString(),
+    end: new Date(endMs + UID_LOOKUP_PADDING_MS).toISOString(),
+  };
+}
 
 type InviteResponse = 'accept' | 'decline' | 'tentative';
 
@@ -94,17 +122,15 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
 
     try {
       // RSVP is first-person: it answers as the grant it goes through, so it must be the
-      // mailbox the invite arrived in (#2475, D7): the stated `mailbox`, else the calendar's own
-      // mailbox (its registry row or owning address). A stated mailbox that does not own the
-      // calendar is refused, never answered from the other account. With several mailboxes,
-      // `primary` or an unregistered calendar without `mailbox` is refused (nothing to go on).
-      const gate = await gateCalendarWrite(ctx, TOOL, calendarId, mailbox.mailbox, {
-        requireMailbox: false,
-        mismatchAdvice: `Answer from the mailbox the invite arrived in: find the event on that mailbox's calendar (calendarId "primary" with mailbox "${mailbox.mailbox ?? ''}") and use its eventId.`,
-      });
-      if (gate.kind === 'error') return { success: false, error: gate.error };
-      if (gate.kind === 'needs_mailbox') return { success: false, error: 'needs_mailbox: pass the mailbox the invite arrived in.' };
-      const routed = gate.routed;
+      // mailbox the invite arrived in (#2475, D7, R83). With one mailbox: as before. With several,
+      // on the principal's calendars `mailbox` (the arrival mailbox) is required, and when the
+      // given calendar belongs to another account the invite is found in the arrival account by
+      // its iCal UID; if it is not there, nothing is sent. Never answered from the other account.
+      const target = await this.resolveTarget(ctx, calendarId, eventId, mailbox.mailbox);
+      if (target.kind === 'error') return { success: false, error: target.error };
+      if (target.kind === 'needs_mailbox') return target.result;
+      const { routed, multi, principal } = target;
+      const rsvpEventId = target.eventId;
 
       if (ctx.contactService) {
         const registry = await ctx.contactService.resolveCalendar(routed.calendarId);
@@ -114,19 +140,19 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
       }
 
       const participantStatus = RESPONSE_TO_NYLAS[normalizedResponse];
-      const rsvp = await routed.client.sendRsvp(routed.calendarId, eventId, participantStatus);
-      ctx.log.info({ eventId, response: normalizedResponse, mailboxId: routed.mailboxId }, 'Responded to calendar invite');
+      const rsvp = await routed.client.sendRsvp(routed.calendarId, rsvpEventId, participantStatus);
+      ctx.log.info({ eventId: rsvpEventId, response: normalizedResponse, mailboxId: routed.mailboxId, foundByIcalUid: target.foundByIcalUid }, 'Responded to calendar invite');
 
       let event: NylasCalendarEvent | null = null;
       try {
-        event = await routed.client.getEvent(routed.calendarId, eventId);
+        event = await routed.client.getEvent(routed.calendarId, rsvpEventId);
       } catch (err) {
-        ctx.log.warn({ ...grantSafeErrorFields(err), eventId }, 'calendar-respond-to-invite: RSVP succeeded but event fetch failed');
+        ctx.log.warn({ ...grantSafeErrorFields(err), eventId: rsvpEventId }, 'calendar-respond-to-invite: RSVP succeeded but event fetch failed');
         warnings.push('RSVP succeeded, but fetching the updated event failed');
       }
 
       const releaseResult = normalizedResponse === 'accept'
-        ? await this.releaseMatchingHolds(ctx, routed, gate.multi && gate.principal, input.holdMatchCriteria, event, input.holdSearchStart, input.holdSearchEnd)
+        ? await this.releaseMatchingHolds(ctx, routed, multi && principal, input.holdMatchCriteria, event, input.holdSearchStart, input.holdSearchEnd)
         : { releasedHolds: [] as string[], releaseWarnings: [] as string[] };
 
       const tz = ctx.timezone;
@@ -147,13 +173,131 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
           warnings,
           displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : null,
           // With several mailboxes, the account that answered (D7); single: as before.
-          ...(gate.multi ? { mailbox: routed.mailboxId } : {}),
+          ...(multi ? { mailbox: routed.mailboxId } : {}),
+          // The arrival account's own copy of the invite, found by iCal UID (R83).
+          ...(target.foundByIcalUid ? { calendarId: routed.calendarId, eventId: rsvpEventId, found_by_ical_uid: true } : {}),
         },
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ ...grantSafeErrorFields(err), eventId, response: normalizedResponse }, 'Failed to respond to calendar invite');
       return { success: false, error: `Failed to respond to calendar invite: ${message}` };
+    }
+  }
+
+  /**
+   * Which grant answers and which event id it answers on (R83).
+   * - One live mailbox, or a calendar that is not the principal's: the calendar's own mailbox,
+   *   and a stated `mailbox` must own it (calendar_mailbox_mismatch), exactly as before.
+   * - Several live mailboxes, a principal calendar, no `mailbox`: needs_mailbox, nothing sent.
+   * - Several, with `mailbox` (the arrival mailbox): when the calendar belongs to that mailbox,
+   *   answer there. Otherwise read the given event's iCal UID through the calendar's own grant
+   *   (a read), list the arrival mailbox's home calendar around the event, and match the UID and
+   *   occurrence in our own code. Not found → refused, nothing sent.
+   */
+  private async resolveTarget(
+    ctx: ToolContext,
+    calendarId: string,
+    eventId: string,
+    mailbox: string | undefined,
+  ): Promise<
+    | { kind: 'proceed'; routed: RoutedCalendar; eventId: string; multi: boolean; principal: boolean; foundByIcalUid: boolean }
+    | { kind: 'needs_mailbox'; result: ToolResult }
+    | { kind: 'error'; error: string }
+  > {
+    const router = ctx.calendarRouter!;
+    let live: PrincipalMailboxView[];
+    let principal = false;
+    try {
+      live = await router.liveMailboxes();
+      if (live.length > 1) principal = await router.isPrincipalCalendar(calendarId);
+    } catch (err) {
+      ctx.log.error({ ...grantSafeErrorFields(err) }, 'calendar-respond-to-invite: could not read the mailboxes');
+      return { kind: 'error', error: calendarRouteErrorMessage(err) };
+    }
+    const multi = live.length > 1;
+
+    if (!multi || !principal) {
+      const gate = await gateCalendarWrite(ctx, TOOL, calendarId, mailbox, {
+        requireMailbox: false,
+        mismatchAdvice: `Answer from the mailbox the invite arrived in, on that mailbox's own calendar.`,
+      });
+      // requireMailbox is false, so the gate's answer is proceed or error.
+      if (gate.kind !== 'proceed') return { kind: 'error', error: gate.kind === 'error' ? gate.error : 'needs_mailbox' };
+      return { kind: 'proceed', routed: gate.routed, eventId, multi, principal, foundByIcalUid: false };
+    }
+
+    if (mailbox === undefined) {
+      ctx.log.info({ code: 'needs_mailbox', liveCount: live.length }, 'calendar-respond-to-invite: an RSVP on the principal\'s calendar needs the arrival mailbox');
+      const recipients = await this.inviteParticipants(ctx, calendarId, eventId, live);
+      const result = await needsMailboxResult(
+        ctx,
+        TOOL,
+        live.map(({ id, label }) => ({ id, label })),
+        recipients,
+        { responded: false },
+        'Nothing was sent. Several accounts are connected: call again with mailbox set to the mailbox the invite arrived in (the consult\'s mailbox=).',
+      );
+      return { kind: 'needs_mailbox', result };
+    }
+
+    // The hint is validated; a registered or owned calendar routes to its own mailbox regardless.
+    const source = await routeCalendar(ctx, TOOL, calendarId, mailbox);
+    if (!source.ok) return { kind: 'error', error: source.error };
+    if (source.routed.mailboxId === mailbox) {
+      return { kind: 'proceed', routed: source.routed, eventId, multi, principal, foundByIcalUid: false };
+    }
+
+    // The given calendar is another account's: find the arrival account's own copy by iCal UID.
+    const arrival = live.find((m) => m.id === mailbox);
+    const where = `mailbox "${mailbox}"${arrival ? ` (${arrival.label})` : ''}`;
+    let invite: NylasCalendarEvent;
+    try {
+      invite = await source.routed.client.getEvent(source.routed.calendarId, eventId);
+    } catch (err) {
+      // R78: the upstream reason stays in the tool error; the log is grant-safe.
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: source.routed.mailboxId }, 'calendar-respond-to-invite: could not read the invite to find it in the arrival mailbox');
+      return { kind: 'error', error: `Could not read the invite to find it in ${where}: ${message}. Nothing was sent.` };
+    }
+    const uid = invite.icalUid?.trim();
+    const window = lookupWindow(invite);
+    if (!uid || !window) {
+      ctx.log.info({ mailboxId: mailbox, hasUid: Boolean(uid) }, 'calendar-respond-to-invite: invite has no iCal UID or time to match by');
+      return { kind: 'error', error: `The invite has no iCal UID or time, so it cannot be found in ${where}. Nothing was sent. Pass calendarId and eventId of the invite as it appears on that mailbox's calendar.` };
+    }
+    const home = await routeCalendar(ctx, TOOL, PRIMARY_CALENDAR_ALIAS, mailbox);
+    if (!home.ok) return { kind: 'error', error: home.error };
+    let candidates: NylasCalendarEvent[];
+    try {
+      candidates = await home.routed.client.listEvents(home.routed.calendarId, window.start, window.end);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: mailbox }, 'calendar-respond-to-invite: could not list the arrival mailbox\'s calendar');
+      return { kind: 'error', error: `Could not search ${where} for the invite: ${message}. Nothing was sent.` };
+    }
+    const occurrence = occurrenceOf(invite);
+    const match = candidates.find((c) => c.icalUid?.trim() === uid && occurrenceOf(c) === occurrence);
+    if (!match) {
+      ctx.log.info({ mailboxId: mailbox, candidateCount: candidates.length }, 'calendar-respond-to-invite: invite not found in the arrival mailbox');
+      return {
+        kind: 'error',
+        error: `This invite was not found on the calendar of ${where}, the mailbox it arrived in. Nothing was sent; it is not answered from another account.`,
+      };
+    }
+    return { kind: 'proceed', routed: home.routed, eventId: match.id, multi, principal, foundByIcalUid: true };
+  }
+
+  /** The invite's participants, for evidence when the mailbox is missing. Best-effort: [] when unreadable. */
+  private async inviteParticipants(ctx: ToolContext, calendarId: string, eventId: string, live: PrincipalMailboxView[]): Promise<string[]> {
+    try {
+      const routed = await ctx.calendarRouter!.route(calendarId);
+      const evt = await routed.client.getEvent(routed.calendarId, eventId);
+      return evidenceRecipients(evt.participants.map((p) => p.email), live);
+    } catch (err) {
+      // `primary` or an unregistered calendar cannot be routed without a mailbox: no evidence then.
+      ctx.log.debug(err instanceof CalendarRouteError ? { code: err.code } : grantSafeErrorFields(err), 'calendar-respond-to-invite: no participants for evidence');
+      return [];
     }
   }
 

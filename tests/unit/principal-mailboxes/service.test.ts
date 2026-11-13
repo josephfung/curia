@@ -217,4 +217,28 @@ describe('PrincipalMailboxes', () => {
     expect((await view.list()).map((m) => m.id)).toEqual(['work']);
     await expect(view.calendarClient('nope')).rejects.toBeInstanceOf(UnknownMailboxError);
   });
+
+  it('forCalendarRouter evidence carries counts and domain match only, no subjects or dates (R81)', async () => {
+    const message = {
+      id: 'm1', subject: 'Confidential: Q3 numbers', date: 1_790_000_000,
+      to: [{ email: 'cfo@acme.example.com' }], cc: [], bcc: [], from: [{ email: 'pat@work.example.com' }],
+    };
+    const client = {
+      listFolders: vi.fn(async () => [{ id: 'SENT', attributes: ['\\Sent'] }, { id: 'INBOX', attributes: ['\\Inbox'] }]),
+      listMessages: vi.fn(async ({ folders }: { folders: string[] }) => (folders[0] === 'SENT' ? [message] : [])),
+    };
+    const store = {
+      listLive: vi.fn(async () => [rec()]),
+      hasAnyRow: vi.fn(async () => true),
+      getAny: vi.fn(async () => rec()),
+    } as unknown as PrincipalMailboxStore;
+    const secrets: Record<string, string> = { [principalMailboxGrantSecretName('work')]: 'g1' };
+    const svc = new PrincipalMailboxes({
+      store, secrets: { get: async (n: string) => secrets[n] ?? null }, apiKey: () => 'api-key', logger,
+      createNylasClient: (() => client) as never,
+    });
+    const rows = await svc.forCalendarRouter().evidence(['cfo@acme.example.com']);
+    expect(rows).toEqual([{ mailbox: 'work', mailbox_label: 'Work', sent_count: 1, received_count: 0, domain_match: false }]);
+    expect(JSON.stringify(rows)).not.toContain('Confidential');
+  });
 });

@@ -216,16 +216,15 @@ export class CalendarListEventsHandler implements ToolHandler {
         return aTs - bTs;
       });
 
-      // The same meeting on two of the principal's accounts' calendars is one entry (D7).
-      const collapsed = await collapseAcrossMailboxes(ctx, sourced);
-      const calendarsOf = collapsed.calendarsOf;
-      let events = collapsed.events;
+      // Filters run on every copy before collapsing (R82), so a match on either account's copy
+      // of a meeting is never hidden behind the other copy's fields.
+      let filtered = sourced;
 
       // Client-side filtering: query matches title or description (case-insensitive)
       if (query && typeof query === 'string') {
         const lowerQuery = query.toLowerCase();
-        events = events.filter(
-          (evt) =>
+        filtered = filtered.filter(
+          ({ evt }) =>
             evt.title.toLowerCase().includes(lowerQuery) ||
             evt.description.toLowerCase().includes(lowerQuery),
         );
@@ -234,10 +233,15 @@ export class CalendarListEventsHandler implements ToolHandler {
       // Client-side filtering: attendee email
       if (attendeeEmail && typeof attendeeEmail === 'string') {
         const lowerEmail = attendeeEmail.toLowerCase();
-        events = events.filter(
-          (evt) => evt.participants.some((p) => p.email.toLowerCase() === lowerEmail),
+        filtered = filtered.filter(
+          ({ evt }) => evt.participants.some((p) => p.email.toLowerCase() === lowerEmail),
         );
       }
+
+      // The same meeting on two of the principal's accounts' calendars is one entry (D7).
+      const collapsed = await collapseAcrossMailboxes(ctx, filtered);
+      const calendarsOf = collapsed.calendarsOf;
+      let events = collapsed.events;
 
       // Truncate if maxResults is set
       if (typeof maxResults === 'number' && maxResults > 0) {
@@ -290,11 +294,15 @@ export interface EventCalendarRef {
 
 /**
  * The same meeting on calendars of two of the principal's accounts (an invite to both, or one
- * calendar shared into the other) is listed once (#2475, D7): events with the same non-empty
- * iCal UID and the same occurrence collapse into the first, which gains `calendars` naming each
- * calendar it is on. The occurrence is part of the key because a recurring series' instances
- * share one UID. Events without a UID are never merged. Only events read through more than one
- * mailbox collapse, so a single-mailbox listing is unchanged.
+ * calendar shared into the other) is listed once (#2475, D7). Copies collapse into the first,
+ * which gains `calendars` naming each calendar it is on, only when all of these agree:
+ *   - the iCal UID (non-empty; events without one are never merged);
+ *   - the occurrence (a recurring series' instances share one UID);
+ *   - start, end and title (R82: a UID is set by whoever sends the invite, so a spoofed UID must
+ *     not let one event hide another that differs in what the principal would see).
+ * Only copies read through different mailboxes merge (M1): a second copy from a mailbox already
+ * in the group stays its own entry, whatever else is in the listing. A single-mailbox listing is
+ * therefore unchanged.
  */
 async function collapseAcrossMailboxes(
   ctx: ToolContext,
@@ -320,25 +328,32 @@ async function collapseAcrossMailboxes(
   const firstByKey = new Map<string, { first: SourcedEvent; refs: EventCalendarRef[] }>();
   const events: NylasCalendarEvent[] = [];
   for (const s of sourced) {
-    const uid = s.evt.icalUid?.trim();
+    const e = s.evt;
+    const uid = e.icalUid?.trim();
     if (!uid) {
-      events.push(s.evt);
+      events.push(e);
       continue;
     }
-    const occurrence = s.evt.originalStartTime ?? s.evt.startTime ?? s.evt.startDate ?? '';
-    const key = `${uid}\u0000${occurrence}`;
+    const key = JSON.stringify([
+      uid,
+      e.originalStartTime ?? null,
+      e.startTime ?? e.startDate ?? null,
+      e.endTime ?? e.endDate ?? null,
+      e.title,
+    ]);
     const seen = firstByKey.get(key);
-    if (seen) {
-      // The same calendar twice (one calendar listed through two routes) is not a second calendar.
-      if (!seen.refs.some((r) => r.calendarId.toLowerCase() === s.calendarId.toLowerCase())) seen.refs.push(ref(s));
+    if (seen && !seen.refs.some((r) => r.mailbox === s.mailboxId)) {
+      seen.refs.push(ref(s));
       continue;
     }
-    firstByKey.set(key, { first: s, refs: [ref(s)] });
-    events.push(s.evt);
+    // A new meeting, or a second copy from a mailbox already in the group: its own entry.
+    if (!seen) firstByKey.set(key, { first: s, refs: [ref(s)] });
+    events.push(e);
   }
   let merged = 0;
   for (const { first, refs } of firstByKey.values()) {
     if (refs.length > 1) {
+      // refs only ever hold distinct mailboxes, so more than one means two accounts.
       calendarsOf.set(first.evt, refs);
       merged++;
     }

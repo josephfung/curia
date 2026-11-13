@@ -21,7 +21,7 @@ import type { ContactService } from '../../contacts/contact-service.js';
 import type { CalendarRouterMailboxes, PrincipalMailboxView } from '../../principal-mailboxes/service.js';
 import { RemovedMailboxError, UnknownMailboxError } from '../../principal-mailboxes/types.js';
 import type { NylasCalendarClient } from './nylas-calendar-client.js';
-import type { MailboxEvidence } from '../../principal-mailboxes/evidence.js';
+import type { CountsOnlyEvidence } from '../../principal-mailboxes/evidence.js';
 
 /** Nylas's alias for a grant's primary calendar. Never stored, never sent without a mailbox. */
 export const PRIMARY_CALENDAR_ALIAS = 'primary';
@@ -99,7 +99,7 @@ export class CalendarRouter {
    * Per-mailbox history with these attendees (D5). Computed by the mailbox service from each
    * mailbox's mail; one unreadable mailbox is marked, never dropped.
    */
-  async evidence(recipients: string[]): Promise<MailboxEvidence[]> {
+  async evidence(recipients: string[]): Promise<CountsOnlyEvidence[]> {
     return this.deps.mailboxes.evidence(recipients);
   }
 
@@ -253,6 +253,32 @@ export class CalendarRouter {
       }
     }
     return out;
+  }
+
+  /**
+   * Every live mailbox's home calendar, each looked up on its own: a mailbox whose home calendar
+   * cannot be found is a `failure` (its id, a code and a grant-safe reason), and the others are
+   * still `found`. For best-effort cleanup (hold release, the sweep), where one broken account
+   * must not hide the others' holds. Availability keeps the strict `homeCalendars()`.
+   */
+  async liveHomeCalendarsSettled(): Promise<{
+    found: Array<RoutedCalendar & { label: string }>;
+    failures: Array<{ mailboxId: string; label: string; code: string; error: unknown }>;
+  }> {
+    const live = await this.deps.mailboxes.list();
+    const found: Array<RoutedCalendar & { label: string }> = [];
+    const failures: Array<{ mailboxId: string; label: string; code: string; error: unknown }> = [];
+    for (const mb of live) {
+      try {
+        const client = await this.deps.mailboxes.calendarClient(mb.id);
+        found.push({ mailboxId: mb.id, calendarId: await this.homeCalendarId(mb.id, client), client, label: mb.label });
+      } catch (err) {
+        const code = err instanceof CalendarRouteError ? err.code : err instanceof Error ? err.name : 'Error';
+        this.log.warn({ mailboxId: mb.id, code }, 'Home calendar lookup failed for one mailbox');
+        failures.push({ mailboxId: mb.id, label: mb.label, code, error: err });
+      }
+    }
+    return { found, failures };
   }
 
   /** The live mailbox whose own address is this calendar ID (that account's calendar), if any. */

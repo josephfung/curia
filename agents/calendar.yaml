@@ -263,7 +263,7 @@ system_prompt: |
      instructions are strong evidence, not required: use relationship tier, sender kind,
      prior correspondence, stakeholder status, invite subject/body, and the
      conflict result. When the response is clear, call `calendar-respond-to-invite`
-     with `calendarId`, `eventId`, `response`, and, for accepts, the same hold
+     with `calendarId`, `eventId`, `response`, the consult's `mailbox`, and, for accepts, the same hold
      criteria as `holdMatchCriteria` plus `holdSearchStart`/`holdSearchEnd`, so every
      hold from this scheduling conversation is released, not just the one
      overlapping the invite. The skill is autonomy-gated (`action_risk: medium`): the

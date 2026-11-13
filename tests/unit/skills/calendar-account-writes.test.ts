@@ -264,18 +264,57 @@ describe('calendar-respond-to-invite answers as the arrival mailbox (D7)', () =>
     expect(data['mailbox']).toBe('personal');
   });
 
-  it('refuses to answer from another account than the one the invite arrived in', async () => {
+  it('RSVP finds the invite in the arrival mailbox by iCal UID', async () => {
     const { work, personal, router } = setup();
-    const err = errorOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'e1', response: 'accept', mailbox: 'personal' })));
-    expect(err).toContain('calendar_mailbox_mismatch');
-    expect(err).toContain('mailbox the invite arrived in');
+    // The agent passes work's copy (calendarId/eventId) but the invite arrived in personal.
+    work.getEvent.mockResolvedValue(event('w-77', 'cal-work', { icalUid: 'uid-board' }));
+    personal.listEvents.mockResolvedValue([
+      event('p-other', 'ceo@personal.example.com', { icalUid: 'uid-other' }),
+      event('p-77', 'ceo@personal.example.com', { icalUid: 'uid-board' }),
+    ]);
+    const data = dataOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'w-77', response: 'accept', mailbox: 'personal' })));
+    expect(personal.sendRsvp).toHaveBeenCalledWith('ceo@personal.example.com', 'p-77', 'yes');
+    expect(work.sendRsvp).not.toHaveBeenCalled();
+    // The arrival calendar is searched a day around the invite.
+    expect(personal.listEvents).toHaveBeenCalledWith('ceo@personal.example.com', '2026-11-19T15:00:00.000Z', '2026-11-21T16:00:00.000Z');
+    expect(data).toMatchObject({ mailbox: 'personal', found_by_ical_uid: true, eventId: 'p-77', calendarId: 'ceo@personal.example.com' });
+  });
+
+  it('not found in the arrival mailbox: refused, nothing sent from either account', async () => {
+    const { work, personal, router } = setup();
+    work.getEvent.mockResolvedValue(event('w-77', 'cal-work', { icalUid: 'uid-board' }));
+    // Same UID, another occurrence of a series: not this invite.
+    personal.listEvents.mockResolvedValue([event('p-next', 'ceo@personal.example.com', { icalUid: 'uid-board', originalStartTime: START_UNIX + 7 * 86_400 })]);
+    const err = errorOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'w-77', response: 'accept', mailbox: 'personal' })));
+    expect(err).toContain('not found');
+    expect(err).toContain('"personal" (Personal)');
     noWrites(work, personal);
   });
 
-  it('without mailbox, primary cannot tell which account the invite arrived in', async () => {
+  it('an invite with no iCal UID cannot be looked up in the other account: refused', async () => {
     const { work, personal, router } = setup();
-    const err = errorOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'primary', eventId: 'e1', response: 'accept' })));
-    expect(err).toContain('pass mailbox');
+    const err = errorOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'w-77', response: 'accept', mailbox: 'personal' })));
+    expect(err).toContain('no iCal UID');
+    noWrites(work, personal);
+  });
+
+  it("principal calendar without mailbox with two live: needs_mailbox with the participants' evidence, nothing sent", async () => {
+    const { work, personal, router, evidence } = setup();
+    work.getEvent.mockResolvedValue(event('w-77', 'cal-work', {
+      participants: [{ email: 'Chair@Board.example.org', name: 'Chair', status: 'yes' }, { email: 'ceo@work.example.com', name: 'Me', status: 'noreply' }],
+    }));
+    const data = dataOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'w-77', response: 'accept' })));
+    expect(data).toMatchObject({ needs_mailbox: true, responded: false, mailboxes: [{ id: 'work' }, { id: 'personal' }] });
+    expect(evidence).toHaveBeenCalledWith(['chair@board.example.org']);
+    expect(data['evidence']).toBeDefined();
+    noWrites(work, personal);
+  });
+
+  it('bare primary without mailbox with two live: needs_mailbox, no evidence, nothing sent', async () => {
+    const { work, personal, router } = setup();
+    const data = dataOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'primary', eventId: 'e1', response: 'accept' })));
+    expect(data).toMatchObject({ needs_mailbox: true, responded: false });
+    expect(data).not.toHaveProperty('evidence');
     noWrites(work, personal);
   });
 
@@ -360,10 +399,10 @@ describe('calendar-list-events lists a meeting on two accounts once (D7)', () =>
     const { work, personal, router } = setup();
     const week = 7 * 86_400;
     work.listEvents.mockResolvedValue([
-      event('w-a', 'cal-work', { icalUid: 'series', startTime: START_UNIX, originalStartTime: START_UNIX }),
-      event('w-b', 'cal-work', { icalUid: 'series', startTime: START_UNIX + week, endTime: END_UNIX + week, originalStartTime: START_UNIX + week }),
+      event('w-a', 'cal-work', { icalUid: 'series', title: 'Weekly', startTime: START_UNIX, originalStartTime: START_UNIX }),
+      event('w-b', 'cal-work', { icalUid: 'series', title: 'Weekly', startTime: START_UNIX + week, endTime: END_UNIX + week, originalStartTime: START_UNIX + week }),
     ]);
-    personal.listEvents.mockResolvedValue([event('p-a', 'cal-personal', { icalUid: 'series', startTime: START_UNIX, originalStartTime: START_UNIX })]);
+    personal.listEvents.mockResolvedValue([event('p-a', 'cal-personal', { icalUid: 'series', title: 'Weekly', startTime: START_UNIX, originalStartTime: START_UNIX })]);
     const data = dataOf(await run(new CalendarListEventsHandler(), ctx(router, listInput, system)));
     const events = data['events'] as Array<{ id: string; calendars?: Array<{ eventId: string }> }>;
     expect(events.map((e) => e.id)).toEqual(['w-a', 'w-b']);
@@ -376,5 +415,119 @@ describe('calendar-list-events lists a meeting on two accounts once (D7)', () =>
     client.listEvents.mockImplementation(async (cal: string) => [event(`${cal}-1`, cal, { icalUid: 'uid-1' })]);
     const data = dataOf(await run(new CalendarListEventsHandler(), ctx(singleMailboxRouter(client), listInput, system)));
     expect(data['count']).toBe(2);
+  });
+});
+
+describe('fix round 1: single-mailbox no-ops', () => {
+  it('respond-to-invite with one mailbox answers as before and adds no account fields', async () => {
+    const client = stubClient();
+    const data = dataOf(await run(new CalendarRespondToInviteHandler(), ctx(singleMailboxRouter(client), { calendarId: 'cal-x', eventId: 'e1', response: 'decline' })));
+    expect(client.sendRsvp).toHaveBeenCalledWith('cal-x', 'e1', 'no');
+    expect(Object.keys(data).sort()).toEqual(
+      ['displayTimezone', 'event', 'participantStatus', 'releaseWarnings', 'releasedHolds', 'responded', 'response', 'rsvp', 'warnings'],
+    );
+  });
+
+  it('a one-mailbox sweep is unchanged even when the mailbox list read fails', async () => {
+    const client = stubClient();
+    const router = singleMailboxRouter(client);
+    Object.assign(router, { liveMailboxes: async () => { throw new Error('registry down'); } });
+    const c = ctx(router, { contactId: PRINCIPAL, nowMs: Date.parse('2026-11-25T00:00:00Z') });
+    client.listEvents.mockResolvedValue([hold('old', 'cal-work')]);
+    const data = dataOf(await run(new CalendarHoldsSweepHandler(), c));
+    expect(data).toEqual({ scanned: 2, expired: 2, failed: 0, calendarErrors: 0, skippedWithAttendees: 0 });
+  });
+});
+
+describe('fix round 1: one broken mailbox costs only its own home calendar (R84)', () => {
+  // personal's grant lists no primary calendar and none is registered: its home lookup fails.
+  const broken = { principalCalendars: [{ nylasCalendarId: 'ceo@work.example.com', isPrimary: true, principalMailboxId: 'work' }] };
+
+  it("booking still releases a hold on the healthy mailbox's home calendar, and warns about the other", async () => {
+    const { work, personal, router } = setup(broken);
+    work.listEvents.mockImplementation(async (cal: string) => (cal === 'ceo@work.example.com' ? [hold('hold-w', cal)] : []));
+    const data = dataOf(await run(new CalendarCreateEventHandler(), ctx(router, { calendarId: 'cal-work', title: 'T', start: START, end: END, mailbox: 'work' })));
+    expect(work.deleteEvent).toHaveBeenCalledWith('ceo@work.example.com', 'hold-w');
+    expect(personal.deleteEvent).not.toHaveBeenCalled();
+    expect((data['warnings'] as string[]).join(' ')).toContain('"Personal" mailbox\'s home calendar were not checked');
+  });
+
+  it("the sweep reaches the healthy mailbox's home calendar and counts one error for the broken one", async () => {
+    const { work, router } = setup(broken);
+    const c = ctx(router, { contactId: PRINCIPAL, nowMs: Date.parse('2026-11-25T00:00:00Z') });
+    (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    work.listEvents.mockResolvedValue([hold('old-w', 'ceo@work.example.com')]);
+    const data = dataOf(await run(new CalendarHoldsSweepHandler(), c));
+    expect(work.deleteEvent).toHaveBeenCalledWith('ceo@work.example.com', 'old-w');
+    expect(data).toMatchObject({ expired: 1, calendarErrors: 1 });
+  });
+
+  it("a sweep of the healthy mailbox is not reported dirty for the broken one (M2)", async () => {
+    const { router } = setup(broken);
+    const c = ctx(router, { contactId: PRINCIPAL, mailbox: 'work' });
+    (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const data = dataOf(await run(new CalendarHoldsSweepHandler(), c));
+    expect(data['calendarErrors']).toBe(0);
+  });
+});
+
+describe('fix round 1: evidence is best-effort after a booking (R85)', () => {
+  it('a slow evidence call is left out and the booking is still a success', async () => {
+    vi.useFakeTimers();
+    try {
+      const { work, router } = setup({ evidence: () => new Promise(() => undefined) });
+      const pending = run(new CalendarCreateEventHandler(), ctx(router, {
+        calendarId: 'primary', title: 'T', start: START, end: END, mailbox: 'work', attendees: [{ email: 'x@y.example.org' }],
+      }));
+      await vi.advanceTimersByTimeAsync(6_000);
+      const data = dataOf(await pending);
+      expect(work.createEvent).toHaveBeenCalledTimes(1);
+      expect(data['evidence_unavailable']).toBe(true);
+      expect(data).not.toHaveProperty('evidence');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('fix round 1: collapse rules (R82, M1)', () => {
+  const listInput = { contactId: PRINCIPAL, timeMin: START, timeMax: END };
+  const system = { taskMetadata: { originator: { systemRole: 'system' } } } as Partial<ToolContext>;
+
+  it('a spoofed UID on an invite with another title or time stays a separate entry', async () => {
+    const { work, personal, router } = setup();
+    work.listEvents.mockResolvedValue([event('w-1', 'cal-work', { icalUid: 'uid-1', title: 'Board' })]);
+    personal.listEvents.mockResolvedValue([
+      event('p-1', 'cal-personal', { icalUid: 'uid-1', title: 'Totally different' }),
+      event('p-2', 'cal-personal', { icalUid: 'uid-1', title: 'Board', endTime: END_UNIX + 1800 }),
+    ]);
+    const data = dataOf(await run(new CalendarListEventsHandler(), ctx(router, listInput, system)));
+    const events = data['events'] as Array<{ id: string; calendars?: unknown }>;
+    expect(events.map((e) => e.id)).toEqual(['w-1', 'p-1', 'p-2']);
+    expect(events.every((e) => e.calendars === undefined)).toBe(true);
+  });
+
+  it('filters run before collapsing: a match on only one copy is listed', async () => {
+    const { work, personal, router } = setup();
+    work.listEvents.mockResolvedValue([event('w-1', 'cal-work', { icalUid: 'uid-1', title: 'Board' })]);
+    personal.listEvents.mockResolvedValue([event('p-1', 'cal-personal', {
+      icalUid: 'uid-1', title: 'Board', participants: [{ email: 'chair@board.example.org', name: 'Chair', status: 'yes' }],
+    })]);
+    const data = dataOf(await run(new CalendarListEventsHandler(), ctx(router, { ...listInput, attendeeEmail: 'chair@board.example.org' }, system)));
+    expect((data['events'] as Array<{ id: string }>).map((e) => e.id)).toEqual(['p-1']);
+  });
+
+  it("same-mailbox duplicates stay separate whatever else the listing holds", async () => {
+    const { work, personal, router } = setup();
+    work.listEvents.mockImplementation(async (cal: string) => [event(`${cal}-1`, cal, { icalUid: 'uid-1', title: 'Team' })]);
+    personal.listEvents.mockResolvedValue([event('p-unrelated', 'cal-personal', { icalUid: 'uid-9' })]);
+    const c = ctx(router, listInput, system);
+    (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { nylasCalendarId: 'cal-work' }, { nylasCalendarId: 'ceo@work.example.com' }, { nylasCalendarId: 'cal-personal' },
+    ]);
+    const data = dataOf(await run(new CalendarListEventsHandler(), c));
+    const events = data['events'] as Array<{ id: string; calendars?: unknown }>;
+    expect(events).toHaveLength(3);
+    expect(events.every((e) => e.calendars === undefined)).toBe(true);
   });
 });

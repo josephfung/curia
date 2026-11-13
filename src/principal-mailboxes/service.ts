@@ -12,7 +12,7 @@ import { CeoNylasClient } from '../channels/email/ceo-nylas-client.js';
 import type { CallBudget } from '../util/call-budget.js';
 import type { PrincipalMailboxStore } from './store.js';
 import { principalMailboxGrantSecretName } from './secrets.js';
-import { mailboxEvidence, type MailboxEvidence } from './evidence.js';
+import { countsOnly, mailboxEvidence, type CountsOnlyEvidence } from './evidence.js';
 import {
   MissingNylasApiKeyError,
   RemovedMailboxError,
@@ -77,7 +77,7 @@ export interface CalendarRouterMailboxes {
    * Which mailbox has a history with these attendees (D5), for the calendar write gate. Mail is
    * read here, in code; the calendar tools get the counts, never a mail client.
    */
-  evidence(recipients: string[]): Promise<MailboxEvidence[]>;
+  evidence(recipients: string[]): Promise<CountsOnlyEvidence[]>;
 }
 
 function toView(r: PrincipalMailboxRecord): PrincipalMailboxView {
@@ -255,8 +255,10 @@ export class PrincipalMailboxes {
       get: (id) => this.get(id),
       isFallbackActive: () => this.isFallbackActive(),
       calendarClient: (id) => this.calendarClient(id),
-      evidence: (recipients) =>
-        mailboxEvidence({ list: () => this.list(), gatewayClient: (id) => this.gatewayClient(id) }, recipients, { log: this.log }),
+      // Counts and domain match only (R81): no subjects or dates of the principal's mail.
+      evidence: async (recipients) =>
+        (await mailboxEvidence({ list: () => this.list(), gatewayClient: (id) => this.gatewayClient(id) }, recipients, { log: this.log }))
+          .map(countsOnly),
     };
   }
 

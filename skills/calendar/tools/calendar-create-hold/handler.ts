@@ -18,13 +18,14 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { ConfigStore } from '../../../../src/memory/config-store.js';
 import { buildHoldMetadata } from '../../../../src/channels/calendar/holds.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
-import { CalendarRouteError, PRIMARY_CALENDAR_ALIAS, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
+import { PRIMARY_CALENDAR_ALIAS, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 import {
-  calendarRouteErrorMessage,
   evidenceRecipients,
+  gateCalendarWrite,
   needsMailboxResult,
   readCalendarMailbox,
+  routeCalendar,
 } from '../../../_shared/calendar-route.js';
 
 const TOOL = 'calendar-create-hold';
@@ -153,42 +154,31 @@ export class CalendarCreateHoldHandler implements ToolHandler {
     // With several mailboxes a hold on the principal's calendar needs a stated mailbox (the
     // account the meeting will belong to), and goes on that mailbox's home calendar, where
     // booking, accept and the sweep look for holds (D5, D7). With one mailbox: as before.
-    let routed: RoutedCalendar;
-    let multiMailbox = false;
-    try {
-      const router = ctx.calendarRouter;
-      const live = await router.liveMailboxes();
-      multiMailbox = live.length > 1;
-      const principal = multiMailbox && (await router.isPrincipalCalendar(calendarId));
-      if (principal && mailbox.mailbox === undefined) {
-        ctx.log.info({ code: 'needs_mailbox', liveCount: live.length }, 'calendar-create-hold: a hold on the principal\'s calendar needs a mailbox');
-        const counterpart = typeof contactDomain === 'string' ? [contactDomain] : [];
-        const needs = await needsMailboxResult(ctx, TOOL, live.map(({ id, label }) => ({ id, label })), evidenceRecipients(counterpart, live));
-        if (!needs.success) return needs;
-        return { success: true, data: { held: false, holdEventId: null, display, displayTimezone: tzLabel, ...(needs.data as Record<string, unknown>) } };
-      }
-      routed = await router.route(calendarId, mailbox.mailbox);
-      if (mailbox.mailbox !== undefined && routed.mailboxId !== mailbox.mailbox) {
-        ctx.log.warn({ code: 'calendar_mailbox_mismatch', mailboxId: routed.mailboxId, requestedMailboxId: mailbox.mailbox }, 'calendar-create-hold: calendar belongs to another mailbox');
-        return {
-          success: false,
-          error:
-            `calendar_mailbox_mismatch: calendar "${calendarId}" belongs to mailbox "${routed.mailboxId}", not "${mailbox.mailbox}". ` +
-            `No hold was placed. Pass calendarId "primary" to hold on mailbox "${mailbox.mailbox}"'s home calendar, or pass mailbox "${routed.mailboxId}".`,
-        };
-      }
-      // The chosen mailbox's home calendar: release and the sweep search home calendars.
-      if (principal) routed = await router.route(PRIMARY_CALENDAR_ALIAS, routed.mailboxId);
-    } catch (err) {
-      if (err instanceof CalendarRouteError) {
-        ctx.log.warn({ code: err.code }, 'calendar-create-hold: calendar could not be routed');
-        return { success: false, error: err.message };
-      }
-      ctx.log.error({ ...grantSafeErrorFields(err), subject }, 'calendar-create-hold: calendar routing failed -- proceeding without hold');
-      return {
-        success: true,
-        data: { held: false, holdEventId: null, display, displayTimezone: tzLabel, reason: calendarRouteErrorMessage(err) },
-      };
+    // The same gate as calendar-create-event (M3); only the outage case differs: a hold failure
+    // is non-fatal, so an error the caller cannot fix becomes held:false.
+    const notHeld = (reason: string): ToolResult => ({
+      success: true,
+      data: { held: false, holdEventId: null, display, displayTimezone: tzLabel, reason },
+    });
+    const gate = await gateCalendarWrite(ctx, TOOL, calendarId, mailbox.mailbox, { requireMailbox: true });
+    if (gate.kind === 'error') {
+      if (gate.fixable) return { success: false, error: gate.error };
+      ctx.log.error({ subject }, 'calendar-create-hold: calendar routing failed -- proceeding without hold');
+      return notHeld(gate.error);
+    }
+    if (gate.kind === 'needs_mailbox') {
+      const counterpart = typeof contactDomain === 'string' ? [contactDomain] : [];
+      const needs = await needsMailboxResult(ctx, TOOL, gate.mailboxes, evidenceRecipients(counterpart, gate.live));
+      if (!needs.success) return needs;
+      return { success: true, data: { held: false, holdEventId: null, display, displayTimezone: tzLabel, ...(needs.data as Record<string, unknown>) } };
+    }
+    const multiMailbox = gate.multi;
+    let routed: RoutedCalendar = gate.routed;
+    // The chosen mailbox's home calendar: release and the sweep search home calendars.
+    if (gate.principal) {
+      const home = await routeCalendar(ctx, TOOL, PRIMARY_CALENDAR_ALIAS, routed.mailboxId);
+      if (!home.ok) return home.fixable ? { success: false, error: home.error } : notHeld(home.error);
+      routed = home.routed;
     }
 
     try {
