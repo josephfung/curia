@@ -138,6 +138,9 @@ function setup(specialist: Specialist = CONTACTS) {
   const bus = new EventBus(logger);
   const executionLayer = new ExecutionLayer(tools, logger, {
     bus, agentRegistry, approvalTrigger: { request } as never, outboundGateway: mailbox.gateway,
+    // ceo-inbox-send-draft declares principalMailboxes (#2475); the gateway stub locates the
+    // draft, so the view is only there to satisfy the capability.
+    principalMailboxes: { forSkills: () => ({}) } as never,
   });
 
   new AgentRuntime({
