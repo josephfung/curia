@@ -232,7 +232,7 @@ import {
   type AssembledAgent,
 } from './startup/agent-assembly.js';
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
-import { InboxHeartbeat } from './scheduler/inbox-heartbeat.js';
+import { closeLegacyInboxDrains, InboxHeartbeat } from './scheduler/inbox-heartbeat.js';
 import { readTriageCadences, TRIAGE_DAILY_CEILING } from './principal-mailboxes/triage-cadence.js';
 import { TriageState, TRIAGE_NAMESPACE } from './principal-mailboxes/triage-state.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
@@ -3362,6 +3362,15 @@ async function main(): Promise<void> {
   // call: every 15 minutes it wakes ceo-inbox only when a due mailbox has unread mail. Needs the
   // config store (cadences, triage state), so it does not run without entity memory, and not in
   // setup-required mode (no principal mailbox is connected yet).
+  // Drains the old cron flow created would run beside the heartbeat's own (BR-C2): close them
+  // once, before the first tick. Idempotent, so it runs every boot.
+  if (agentRegistry.has('ceo-inbox')) {
+    try {
+      await closeLegacyInboxDrains(taskRepo, logger);
+    } catch (err) {
+      logger.error({ err }, 'Could not close legacy inbox-drain tasks; one may run beside the heartbeat drain until the next boot');
+    }
+  }
   let inboxHeartbeat: InboxHeartbeat | undefined;
   if (entityMemory && !setupRequiredAtBoot && agentRegistry.has('ceo-inbox')) {
     const triageConfig = new ConfigStore(entityMemory, logger);

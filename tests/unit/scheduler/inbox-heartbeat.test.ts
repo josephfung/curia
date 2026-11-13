@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { InboxHeartbeat, INBOX_DRAIN_INTENT, type InboxHeartbeatOptions } from '../../../src/scheduler/inbox-heartbeat.js';
+import { closeLegacyInboxDrains, InboxHeartbeat, INBOX_DRAIN_INTENT, type InboxHeartbeatOptions } from '../../../src/scheduler/inbox-heartbeat.js';
 import { parseCadence, TRIAGE_DAILY_CEILING, type Cadence } from '../../../src/principal-mailboxes/triage-cadence.js';
 import { isAutonomousSendOrigin } from '../../../src/skills/outbound-gateway.js';
 import { TriageState } from '../../../src/principal-mailboxes/triage-state.js';
@@ -281,5 +281,40 @@ describe('InboxHeartbeat origin safety (R56)', () => {
     const t = make({ tasks: [taskRow({ nextWakeAt: '2026-11-12T15:05:00.000Z' }), taskRow({ id: 'x', createdBy: 'ceo-inbox' })] });
     expect(await t.hb.tick(NOW)).toBe('drain_running');
     expect(t.createTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('closeLegacyInboxDrains (BR-C2)', () => {
+  it('closes every open inbox-drain task the heartbeat did not create, and logs the count', async () => {
+    const tasks = [
+      taskRow({ id: 'legacy-1', createdBy: 'ceo-inbox' }),
+      taskRow({ id: 'legacy-2', createdBy: 'ceo-inbox', wakeState: 'pending', nextWakeAt: '2026-11-13T11:00:00.000Z' }),
+      taskRow({ id: 'own', createdBy: 'heartbeat' }),
+      taskRow({ id: 'other-agent', agentId: 'coordinator', createdBy: 'coordinator' }),
+    ];
+    const listTasks = vi.fn(async () => tasks as never);
+    const completeTask = vi.fn(async () => null);
+    const log = logger();
+    const closed = await closeLegacyInboxDrains({ listTasks, completeTask }, log as never);
+    expect(closed).toBe(2);
+    expect(listTasks).toHaveBeenCalledWith(expect.objectContaining({ tag: 'inbox-drain', statuses: ['open', 'in_progress'] }));
+    expect(completeTask.mock.calls.map((c) => (c as unknown[])[0])).toEqual(['legacy-1', 'legacy-2']);
+    expect(String((completeTask.mock.calls[0] as unknown[])[1])).toContain('superseded by the inbox heartbeat');
+    expect(log.info).toHaveBeenCalledWith(expect.objectContaining({ closed: 2 }), expect.any(String));
+  });
+
+  it('is idempotent: nothing left to close is a quiet no-op', async () => {
+    const completeTask = vi.fn(async () => null);
+    const closed = await closeLegacyInboxDrains({ listTasks: vi.fn(async () => [] as never), completeTask }, logger() as never);
+    expect(closed).toBe(0);
+    expect(completeTask).not.toHaveBeenCalled();
+  });
+
+  it('a task that cannot be closed is logged and the rest still close', async () => {
+    const tasks = [taskRow({ id: 'a', createdBy: 'ceo-inbox' }), taskRow({ id: 'b', createdBy: 'ceo-inbox' })];
+    const completeTask = vi.fn(async (id: string) => { if (id === 'a') throw new Error('terminal'); return null; });
+    const log = logger();
+    expect(await closeLegacyInboxDrains({ listTasks: vi.fn(async () => tasks as never), completeTask }, log as never)).toBe(1);
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'a' }), expect.any(String));
   });
 });

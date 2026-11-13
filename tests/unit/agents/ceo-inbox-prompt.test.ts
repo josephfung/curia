@@ -442,4 +442,11 @@ describe('ceo-inbox prompt — inbox heartbeat replaces the triage cron (#2475)'
     // count 0 with has_more true continues (duplicates set aside), as the tool text says.
     expect(step3).toMatch(/count is 0 and `has_more` is true/);
   });
+
+  it('Step 6 never creates a drain task; the heartbeat owns them (BR-C2)', () => {
+    const prompt = loadCeoInboxPrompt();
+    const step6 = prompt.slice(prompt.indexOf('## Step 6'), prompt.indexOf('## Available specialists'));
+    expect(step6).not.toContain('task-create');
+    expect(step6).toContain('Never create a drain');
+  });
 });
