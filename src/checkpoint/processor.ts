@@ -22,7 +22,8 @@ const CHECKPOINT_TOOLS: Array<{ name: string }> = [
 
 /** The slice of AuditLogRepo the processor needs for mailbox provenance (#2475). */
 export interface MailboxProvenanceLookup {
-  findMailboxesForConversation(conversationId: string): Promise<string[]>;
+  /** `since`: the checkpoint's watermark; undefined on a conversation's first checkpoint. */
+  findMailboxesForConversation(conversationId: string, since?: string): Promise<string[]>;
 }
 
 export class ConversationCheckpointProcessor {
@@ -99,10 +100,13 @@ export class ConversationCheckpointProcessor {
     // A sign-in code must not become a fact or relationship (#2017).
     const transcript = this.verification ? this.verification.tracker.scrubText(rawTranscript) : rawTranscript;
 
+    // The mailbox suffix makes the source vary with the mailboxes this batch touched. The memory
+    // write cap counts per source string (MemoryValidator), so batches touching different
+    // mailbox sets count against separate caps; each checkpoint batch is still capped.
     let source = `system:checkpoint/conversation:${conversationId}/agent:${agentId}/channel:${channelId}`;
     if (this.mailboxProvenance) {
       try {
-        const mailboxes = await this.mailboxProvenance.findMailboxesForConversation(conversationId);
+        const mailboxes = await this.mailboxProvenance.findMailboxesForConversation(conversationId, event.payload.since || undefined);
         if (mailboxes.length > 0) source += `/mailboxes:${mailboxes.join(',')}`;
       } catch (err) {
         // Provenance is a nicety: a failed lookup keeps the plain source, never the extraction.

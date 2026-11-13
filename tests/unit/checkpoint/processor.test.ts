@@ -334,8 +334,17 @@ describe('ConversationCheckpointProcessor', () => {
         stubs.bus, stubs.executionLayer, stubs.pool, stubs.logger, undefined, undefined, { findMailboxesForConversation: findMailboxes },
       ).register();
       await fireCheckpoint(stubs.subscribeHandlers, payload);
-      expect(findMailboxes).toHaveBeenCalledWith('conv-prov');
+      expect(findMailboxes).toHaveBeenCalledWith('conv-prov', '2026-01-01T00:00:00Z');
       expect(sources()).toEqual([`${plain}/mailboxes:personal,work`, `${plain}/mailboxes:personal,work`]);
+    });
+
+    it('scans the whole conversation on its first checkpoint (empty since) (P14)', async () => {
+      const findMailboxes = vi.fn().mockResolvedValue([]);
+      new ConversationCheckpointProcessor(
+        stubs.bus, stubs.executionLayer, stubs.pool, stubs.logger, undefined, undefined, { findMailboxesForConversation: findMailboxes },
+      ).register();
+      await fireCheckpoint(stubs.subscribeHandlers, { ...payload, since: '' });
+      expect(findMailboxes).toHaveBeenCalledWith('conv-prov', undefined);
     });
 
     it('keeps the plain source when no mailbox was touched', async () => {

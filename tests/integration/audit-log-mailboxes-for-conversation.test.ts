@@ -27,11 +27,11 @@ describeIf('audit-log findMailboxesForConversation (#2475)', () => {
     await pool.end();
   });
 
-  async function seedResult(conversationId: string, toolName: string, data: unknown, eventType = 'tool.result'): Promise<void> {
+  async function seedResult(conversationId: string, toolName: string, data: unknown, eventType = 'tool.result', at?: Date): Promise<void> {
     await pool.query(
       `INSERT INTO audit_log (timestamp, event_type, source_layer, source_id, payload, conversation_id)
-       VALUES (now(), $1, 'test-provenance', 'test-agent', $2::jsonb, $3)`,
-      [eventType, JSON.stringify({ conversationId, toolName, result: { success: true, data } }), conversationId],
+       VALUES (COALESCE($4::timestamptz, now()), $1, 'test-provenance', 'test-agent', $2::jsonb, $3)`,
+      [eventType, JSON.stringify({ conversationId, toolName, result: { success: true, data } }), conversationId, at ?? null],
     );
   }
 
@@ -49,6 +49,15 @@ describeIf('audit-log findMailboxesForConversation (#2475)', () => {
     await seedResult(other, 'ceo-inbox-read', { mailbox: 'ignored-conversation' });
 
     expect(await repo.findMailboxesForConversation(conv)).toEqual(['family', 'personal', 'work']);
+  });
+
+  it('with a since, reads only rows after it: touched since the last checkpoint (P14)', async () => {
+    const conv = `conv-${randomUUID()}`;
+    const since = new Date(Date.now() - 60 * 60_000);
+    await seedResult(conv, 'ceo-inbox-read', { mailbox: 'old' }, 'tool.result', new Date(since.getTime() - 60_000));
+    await seedResult(conv, 'ceo-inbox-read', { mailbox: 'new' });
+    expect(await repo.findMailboxesForConversation(conv, since.toISOString())).toEqual(['new']);
+    expect(await repo.findMailboxesForConversation(conv)).toEqual(['new', 'old']);
   });
 
   it('returns an empty list when the conversation touched no mailbox', async () => {
