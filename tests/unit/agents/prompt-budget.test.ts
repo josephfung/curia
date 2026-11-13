@@ -149,8 +149,8 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // #2474 ceo-inbox-list/search DRAFTS modified_since + created_by_curia/date_local (+370 bytes): 46,291 over 46 local tools.
   // #2474 PR 2 ceo-inbox-send-draft describes triage sends (+236 bytes), approved by the maintainer: 46,527 over 46 local tools.
   // #2475 the optional `mailbox` input on all 15 ceo-inbox tools (+1,900 bytes, the description fixed by the
-  // design): 48,427 over 46 local tools. Needs the maintainer's approval at review.
-  // #2475 D5 account-choice guidance on draft-compose (+521 bytes)
+  // design): 48,427 over 46 local tools. approved by the maintainer (2026-11-12).
+  // #2475 D5 account-choice guidance on draft-compose (+521 bytes), approved by the maintainer (2026-11-12).
   // #2475 move_to_mailbox on draft-edit (+139 bytes), approved by the maintainer: 49,087 over 46 local tools.
   // #2475 D6 which-draft guidance on send-draft (+329 bytes), approved by the maintainer: 49,416 over 46 local tools.
   { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 49_416, allowMcpPins: false },

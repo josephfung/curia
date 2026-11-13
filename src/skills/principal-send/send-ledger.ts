@@ -28,6 +28,11 @@ export interface PrincipalSendEntry {
    * them. Empty when the thread's headers were not read, or on an older entry.
    */
   conversationIds: string[];
+  /**
+   * Set when the stored `conversation_ids` could not be read (wrong type): the entry then matches
+   * every conversation lookup, as an unreadable thread id matches every thread (fail closed).
+   */
+  conversationIdsUnreadable?: true;
   recipients: string[];
   mode: 'principal-directed' | 'autonomous';
   at: string;
@@ -66,10 +71,11 @@ function isStringArray(v: unknown): v is string[] {
  * A ledger entry from its document, or null for a document of another type. A ledger document is
  * never dropped for a field it cannot read: a dropped autonomous send would lift the daily cap and
  * both cooldowns (fail-open, a forged or broken marker may only block, never allow). So each
- * unreadable field is read conservatively: `at` stays as given (recentness treats a non-date as
- * recent), `mode` reads as autonomous, `outcome` as `sending` (a send, for the cap and the
+ * unreadable field is read conservatively: `at` stays as given, so a non-string reads as the
+ * empty text (recentness treats a non-date as recent), `mode` reads as autonomous, `outcome` as `sending` (a send, for the cap and the
  * cooldowns), `recipients` as none, a draft id as '' and a thread id as '' (which recentForThread
- * matches against any thread).
+ * matches against any thread), `mailbox` as none (any mailbox) and `conversation_ids` as
+ * unreadable (which recentForConversation matches against any conversation).
  */
 export function parseLedgerDoc(doc: WorkingDocRow): PrincipalSendEntry | null {
   if (doc.type !== PRINCIPAL_SEND_DOC_TYPE) return null;
@@ -77,7 +83,8 @@ export function parseLedgerDoc(doc: WorkingDocRow): PrincipalSendEntry | null {
   // A held entry written before final fixes B2 carried a free-text `reason`; it is not read.
   const { draft_id: draftId, thread_id: threadId, recipients, mode, at, message_id: messageId, outcome, reason_code: reasonCode, mailbox, conversation_ids: conversationIds } = f;
   // A wrong-typed mailbox reads as none, which adds cooldown for every mailbox; wrong-typed
-  // conversation ids read as none, so they match no conversation (the thread cooldown still applies).
+  // conversation ids are flagged, so the entry matches every conversation lookup. An absent field
+  // (an older entry) is not wrong-typed: it reads as none and matches no conversation.
   return {
     draftId: typeof draftId === 'string' ? draftId : '',
     threadId: typeof threadId === 'string' ? threadId : '',
@@ -85,6 +92,7 @@ export function parseLedgerDoc(doc: WorkingDocRow): PrincipalSendEntry | null {
     // Not a string: the empty text is no date, so it counts as recent.
     at: typeof at === 'string' ? at : '',
     conversationIds: isStringArray(conversationIds) ? conversationIds : [],
+    ...(conversationIds !== undefined && !isStringArray(conversationIds) ? { conversationIdsUnreadable: true as const } : {}),
     ...(typeof mailbox === 'string' ? { mailbox } : {}),
     mode: typeof mode === 'string' && MODES.includes(mode) ? mode as PrincipalSendEntry['mode'] : 'autonomous',
     outcome: typeof outcome === 'string' && OUTCOMES.includes(outcome) ? outcome as PrincipalSendEntry['outcome'] : 'sending',
@@ -198,7 +206,9 @@ export class PrincipalSendLedger {
   /**
    * Autonomous entries on `threadId` whose `at` is at or after `sinceEpochMs`, for the thread
    * cooldown (#2474 PR 2). `sinceEpochMs` is a cutoff time in epoch milliseconds, not a duration:
-   * the gateway passes `now - AUTONOMOUS_THREAD_COOLDOWN_MS`. Only `mailbox`'s entries count, plus legacy ones with none. Principal-directed sends never start a cooldown. Fails closed:
+   * the gateway passes `now - AUTONOMOUS_THREAD_COOLDOWN_MS`. Only `mailbox`'s entries count, plus
+   * legacy ones with none. An entry whose thread id is '' (unreadable, or never known) matches any
+   * `threadId`, and an empty `threadId` asks for those entries only. Principal-directed sends never start a cooldown. Fails closed:
    * an entry with an unreadable `at` counts as recent, since a broken or forged marker may only
    * block autonomous sends on its thread, never allow one. Throws on a repo failure.
    */
@@ -218,7 +228,7 @@ export class PrincipalSendLedger {
     if (conversationIds.length === 0) return [];
     const wanted = new Set(conversationIds);
     return (entries ?? await this.list()).filter((e) => e.mode === 'autonomous' && e.outcome !== 'limited'
-      && e.conversationIds.some((id) => wanted.has(id)) && atOrAfter(e, sinceEpochMs));
+      && (e.conversationIdsUnreadable === true || e.conversationIds.some((id) => wanted.has(id))) && atOrAfter(e, sinceEpochMs));
   }
 
   /**

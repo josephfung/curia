@@ -1307,7 +1307,7 @@ async function main(): Promise<void> {
           return new NylasClient(principalMailboxApiKey, grantId, logger).getGrant();
         },
         isFallbackActive: () => principalMailboxes.isFallbackActive(),
-        forgetLegacySendLevel: async () => { if (sendingKeyStore) await dropLegacyDefaultKey(sendingKeyStore); },
+        forgetLegacySendLevel: async () => { if (sendingKeyStore) await dropLegacyDefaultKey(sendingKeyStore, logger); else logger.warn('Mailbox removal: the sending-level store is not ready yet, so the legacy default send-level key was not checked'); },
         logger,
       })
     : undefined;

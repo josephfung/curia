@@ -77,6 +77,17 @@ describe('createSendLevelReader', () => {
     expect(await one('work')).toBe('routine');
     expect(w2).not.toHaveBeenCalled();
   });
+  it('warns for a mailbox that lacks its own key even when another live mailbox has one', async () => {
+    const warn = vi.fn();
+    const log = { ...logger, warn } as unknown as typeof logger;
+    const read = createSendLevelReader({ get: async () => '{"default":"routine","work":"all"}', logger: log, liveMailboxIds: async () => ['work', 'personal'] });
+    // work has an entry: the leftover default is not what it reads, so nothing to say yet.
+    expect(await read('work')).toBe('all');
+    expect(warn).not.toHaveBeenCalled();
+    // personal has none: the leftover default applies to it in nobody's favour, so warn.
+    expect(await read('personal')).toBe('on_request');
+    expect(warn).toHaveBeenCalledOnce();
+  });
   it('warns once per process per value when no key is a live id or default', async () => {
     const warn = vi.fn();
     const log = { ...logger, warn } as unknown as typeof logger;
