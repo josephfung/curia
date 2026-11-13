@@ -247,8 +247,11 @@ export interface QueriedFreeBusy {
 /**
  * Free/busy across calendars that may belong to different mailboxes: one getFreeBusy per
  * mailbox, through that mailbox's client, with the routed IDs (so `primary` goes out as the
- * real home ID). `queriedId` is the input ID at the same position within its mailbox's batch,
- * or the answer's email when Nylas returns more entries than were asked for. A Nylas error
+ * real home ID). Each answer is matched to the calendar it is for by its email (SF-M3), never by
+ * position alone: an answer Nylas gave in another order must not lend one calendar's slots or
+ * ignored holds to another. An answer whose email matches no unanswered calendar takes the next
+ * unanswered one in order (an alias Nylas rewrote), else stands under its own email. A calendar
+ * with no answer at all is `unanswered`: the caller reports it unread, never free. A Nylas error
  * propagates (throws) as getFreeBusy's did; only routing is turned into a result.
  */
 export async function freeBusyAcross(
@@ -256,7 +259,7 @@ export async function freeBusyAcross(
   inputIds: string[],
   timeMin: string,
   timeMax: string,
-): Promise<QueriedFreeBusy[]> {
+): Promise<{ answers: QueriedFreeBusy[]; unanswered: string[] }> {
   const groups = new Map<string, { client: RoutedCalendar['client']; sendIds: string[]; inputIds: string[] }>();
   routed.forEach((r, i) => {
     const g = groups.get(r.mailboxId) ?? { client: r.client, sendIds: [], inputIds: [] };
@@ -264,11 +267,30 @@ export async function freeBusyAcross(
     g.inputIds.push(inputIds[i]!);
     groups.set(r.mailboxId, g);
   });
-  const answers = await Promise.all(
+  const perGroup = await Promise.all(
     [...groups.values()].map(async (g) => {
       const results = await g.client.getFreeBusy(g.sendIds, timeMin, timeMax);
-      return results.map((result, i) => ({ queriedId: g.inputIds[i] ?? result.email, result }));
+      const answered = new Array<boolean>(g.sendIds.length).fill(false);
+      const norm = (s: string): string => s.trim().toLowerCase();
+      const answers: QueriedFreeBusy[] = [];
+      const strays: NylasFreeBusyResult[] = [];
+      for (const result of results) {
+        const i = g.sendIds.findIndex((id, k) => !answered[k] && norm(id) === norm(result.email));
+        if (i < 0) {
+          strays.push(result);
+          continue;
+        }
+        answered[i] = true;
+        answers.push({ queriedId: g.inputIds[i]!, result });
+      }
+      for (const result of strays) {
+        const i = answered.indexOf(false);
+        if (i >= 0) answered[i] = true;
+        answers.push({ queriedId: i >= 0 ? g.inputIds[i]! : result.email, result });
+      }
+      const unanswered = g.inputIds.filter((_, k) => !answered[k]);
+      return { answers, unanswered };
     }),
   );
-  return answers.flat();
+  return { answers: perGroup.flatMap((p) => p.answers), unanswered: perGroup.flatMap((p) => p.unanswered) };
 }

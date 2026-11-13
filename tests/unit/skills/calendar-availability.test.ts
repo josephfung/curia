@@ -110,8 +110,8 @@ describe('availability across the principal\'s calendars', () => {
     );
     // Only the work calendar is named; the personal one is read anyway (D7).
     const d = data<FreeData>(await free(router, { calendarIds: [WORK_HOME] }));
-    expect(clients.work.listEvents).toHaveBeenCalledWith(WORK_HOME, T0, T1, { limit: LIST_EVENTS_MAX_TOTAL, expandRecurring: true });
-    expect(clients.personal.listEvents).toHaveBeenCalledWith(PERSONAL_HOME, T0, T1, { limit: LIST_EVENTS_MAX_TOTAL, expandRecurring: true });
+    expect(clients.work.listEvents).toHaveBeenCalledWith(WORK_HOME, T0, T1, expect.objectContaining({ limit: LIST_EVENTS_MAX_TOTAL, expandRecurring: true }));
+    expect(clients.personal.listEvents).toHaveBeenCalledWith(PERSONAL_HOME, T0, T1, expect.objectContaining({ limit: LIST_EVENTS_MAX_TOTAL, expandRecurring: true }));
     expect(d.blocking.map((b) => [b.eventId, b.title, b.calendar_label])).toEqual([
       ['w1', 'Board prep', 'Work'],
       ['p1', 'Dentist', 'Personal'],
@@ -145,20 +145,48 @@ describe('availability across the principal\'s calendars', () => {
     expect(c.partial?.map((p) => p.mailbox_label)).toEqual(['Personal']);
   });
 
-  it("a removed mailbox's calendar is listed as removed, not partial", async () => {
-    const { router } = twoAccounts([], [], {
-      removed: { old: 'Old job' },
-      principalCalendars: [
-        { nylasCalendarId: WORK_HOME, isPrimary: true, principalMailboxId: 'work' },
-        { nylasCalendarId: PERSONAL_HOME, isPrimary: true, principalMailboxId: 'personal' },
-        { nylasCalendarId: 'ceo@oldjob.example.com', isPrimary: true, principalMailboxId: 'old' },
-      ],
-      registry: { 'ceo@oldjob.example.com': { principalMailboxId: 'old', contactId: TEST_PRINCIPAL_CONTACT_ID } },
-    });
-    const c = data<ConflictData>(await conflicts(router, { calendarIds: [WORK_HOME, 'ceo@oldjob.example.com'] }));
+  const withOldJob = {
+    removed: { old: 'Old job' },
+    principalCalendars: [
+      { nylasCalendarId: WORK_HOME, isPrimary: true, principalMailboxId: 'work' },
+      { nylasCalendarId: PERSONAL_HOME, isPrimary: true, principalMailboxId: 'personal' },
+      { nylasCalendarId: 'ceo@oldjob.example.com', isPrimary: true, principalMailboxId: 'old' },
+    ],
+    registry: {
+      'ceo@oldjob.example.com': { principalMailboxId: 'old', contactId: TEST_PRINCIPAL_CONTACT_ID },
+      'family@group.calendar.google.com': { principalMailboxId: 'old', contactId: TEST_PRINCIPAL_CONTACT_ID },
+    },
+  };
+
+  it("a removed mailbox's home calendar nobody named is listed as removed, not partial, and still clear", async () => {
+    const { router } = twoAccounts([], [], withOldJob);
+    const c = data<ConflictData>(await conflicts(router));
     expect(c.removed).toEqual(['Old job']);
     expect(c.partial).toBeUndefined();
     expect(c.clear).toBe(true);
+  });
+
+  it('a named calendar of a removed mailbox is unread: never clear, never free (R101)', async () => {
+    for (const named of ['ceo@oldjob.example.com', 'family@group.calendar.google.com']) {
+      const { router } = twoAccounts([], [], withOldJob);
+      const c = data<ConflictData & { note?: string }>(await conflicts(router, { calendarIds: [WORK_HOME, named] }));
+      expect(c.removed, named).toEqual(['Old job']);
+      expect(c.clear, named).toBe(false);
+      expect(c.note, named).toContain('Old job');
+
+      const d = data<FreeData>(await free(router, { calendarIds: [WORK_HOME, named] }));
+      expect(d.note, named).toContain('do not call them free');
+      expect(d.note, named).toContain('Old job');
+    }
+  });
+
+  it(`refuses more than 20 calendars, before reading any (R100)`, async () => {
+    const { clients, router } = twoAccounts([], []);
+    const ids = Array.from({ length: 21 }, (_, i) => `p${i}@example.org`);
+    for (const r of [await conflicts(router, { calendarIds: ids }), await free(router, { calendarIds: ids })]) {
+      expect(r).toMatchObject({ success: false, error: expect.stringContaining('at most 20') });
+    }
+    expect(clients.work.getFreeBusy).not.toHaveBeenCalled();
   });
 
   it("treat_as_free lets the cleaner's visit not block", async () => {
@@ -331,7 +359,8 @@ describe("fix round 1: someone else's free/busy across several mailboxes (I3, M6
       await vi.advanceTimersByTimeAsync(3_100);
       const d = data<{ freebusy_via: Array<{ mailbox: string; chosen_by: string }> }>(await pending);
       expect(Date.now() - started).toBeLessThan(3_500);
-      expect(evidence).toHaveBeenCalledTimes(4);
+      // At most three lookups per call (R100); the fourth address goes to the default unsearched.
+      expect(evidence).toHaveBeenCalledTimes(3);
       expect(d.freebusy_via.map((v) => [v.mailbox, v.chosen_by])).toEqual(ids.map(() => ['work', 'default']));
       expect(clients.work.getFreeBusy).toHaveBeenCalledWith(ids, T0, T1);
     } finally {
@@ -426,5 +455,65 @@ describe("fix round 1: someone else's free/busy across several mailboxes (I3, M6
     const c = data<ConflictData>(await new CalendarCheckConflictsHandler().execute(ctx(router, { calendarIds: ['someone@example.org', PERSONAL_HOME], proposedStart: '2026-11-20T16:00:00Z', proposedEnd: '2026-11-20T17:00:00Z' })));
     expect(c.clear).toBe(false);
     expect(c.partial?.map((p) => p.mailbox_label)).toContain('Work');
+  });
+});
+
+describe('final fix round (Part 4 reviews)', () => {
+  it('SF-M2: a listing the client cut short does not let a treated event free its slot', async () => {
+    const cleaner = evt('p-clean', 'Cleaner', '2026-11-20T16:00:00Z', '2026-11-20T17:00:00Z');
+    const { clients, router } = twoAccounts([], [cleaner]);
+    // Few events, but paging stopped early (a repeated cursor): the listing may have missed some.
+    clients.personal.listEvents.mockImplementation(async (_c: string, _a: string, _b: string, opts?: { onIncomplete?: () => void }) => {
+      opts?.onIncomplete?.();
+      return [cleaner];
+    });
+    const d = data<FreeData>(await free(router, { duration: 60, treat_as_free: ['p-clean'] }));
+    expect(d.treated_as_free.map((b) => b.eventId)).toEqual(['p-clean']);
+    expect(d.blocking).toEqual([expect.objectContaining({ eventId: null, start: '2026-11-20T16:00:00.000Z' })]);
+  });
+
+  it("SF-M3: free/busy answers are matched to calendars by email, and a missing answer is unread, not free", async () => {
+    const busy = { startTime: at('2026-11-20T16:00:00Z'), endTime: at('2026-11-20T17:00:00Z'), status: 'busy' };
+    const c = client();
+    // Answered in the other order, and nothing at all for the third calendar.
+    c.getFreeBusy.mockResolvedValue([
+      { email: 'b@example.org', timeSlots: [busy] },
+      { email: 'a@example.org', timeSlots: [] },
+    ]);
+    const router = singleMailboxRouter(c);
+    const r = await new CalendarCheckConflictsHandler().execute(ctx(router, {
+      calendarIds: ['a@example.org', 'b@example.org', 'c@example.org'], proposedStart: '2026-11-20T16:00:00Z', proposedEnd: '2026-11-20T17:00:00Z',
+    }));
+    const d = data<ConflictData>(r);
+    expect(d.conflicts.map((x) => x.calendarId)).toEqual(['b@example.org']);
+    expect(d.partial).toEqual([{ mailbox_label: 'c@example.org', error: 'free/busy returned no answer for this calendar' }]);
+    expect(d.clear).toBe(false);
+  });
+
+  it("SF-M8: a hold inspection that failed is named, and the hold still counts", async () => {
+    const c = client();
+    c.getFreeBusy.mockResolvedValue([{ email: 'x@example.org', timeSlots: [{ startTime: at('2026-11-20T16:00:00Z'), endTime: at('2026-11-20T17:00:00Z'), status: 'busy' }] }]);
+    c.listEvents.mockRejectedValue(new Error('listing down'));
+    const d = data<ConflictData & { ignore_holds_unchecked?: string[] }>(await new CalendarCheckConflictsHandler().execute(ctx(singleMailboxRouter(c), {
+      calendarIds: ['x@example.org'], proposedStart: '2026-11-20T16:00:00Z', proposedEnd: '2026-11-20T17:00:00Z', ignoreHoldCriteria: { sourceRef: 'msg-1' },
+    })));
+    expect(d.conflicts).toHaveLength(1);
+    expect(d.ignore_holds_unchecked).toEqual(['x@example.org']);
+  });
+
+  it('R99: a spoofed copy with the same UID, time and title but another organizer, place or link is not treated as the same meeting', async () => {
+    const base = { icalUid: 'uid-1', organizerEmail: 'chair@board.example.org', location: 'Room 4', conferencing: { provider: 'Zoom', details: { url: 'https://zoom.example/real' } } };
+    for (const spoof of [
+      { organizerEmail: 'attacker@evil.example' },
+      { location: 'Somewhere else' },
+      { conferencing: { provider: 'Zoom', details: { url: 'https://zoom.example/evil' } } },
+    ]) {
+      const real = evt('w-real', 'Board', '2026-11-20T16:00:00Z', '2026-11-20T17:00:00Z', base);
+      const fake = evt('p-fake', 'Board', '2026-11-20T16:00:00Z', '2026-11-20T17:00:00Z', { ...base, ...spoof });
+      const { router } = twoAccounts([real], [fake]);
+      // Treating the spoofed copy as free must not free the real meeting.
+      const d = data<FreeData>(await free(router, { duration: 60, treat_as_free: ['p-fake'] }));
+      expect(d.blocking.map((b) => b.eventId), JSON.stringify(spoof)).toEqual(['w-real']);
+    }
   });
 });

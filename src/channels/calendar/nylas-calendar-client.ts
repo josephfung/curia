@@ -335,12 +335,16 @@ export class NylasCalendarClient {
    *
    * `opts.expandRecurring` asks Nylas for each occurrence of a recurring series in the range
    * instead of the series' master event only (availability needs every occurrence, #2475).
+   *
+   * `opts.onIncomplete` is called when paging stopped early (a repeated cursor or the page cap)
+   * with more events possibly left: availability then treats the listing as incomplete, so a
+   * missed busy time is never explained away (SF-M2).
    */
   async listEvents(
     calendarId: string,
     timeMin: string,
     timeMax: string,
-    opts?: { limit?: number; expandRecurring?: boolean },
+    opts?: { limit?: number; expandRecurring?: boolean; onIncomplete?: () => void },
   ): Promise<NylasCalendarEvent[]> {
     this.log.debug({ calendarId, timeMin, timeMax }, 'Listing events');
     const startUnix = this.toUnixSeconds(timeMin, 'timeMin');
@@ -394,6 +398,7 @@ export class NylasCalendarClient {
 
         if (pageToken && seenCursors.has(pageToken)) {
           this.log.warn({ calendarId, pageToken }, 'Nylas repeated a page cursor — stopping');
+          opts?.onIncomplete?.();
           break;
         }
         if (pageToken) seenCursors.add(pageToken);
@@ -403,6 +408,7 @@ export class NylasCalendarClient {
             { calendarId, pages, collected: raw.length },
             'listEvents hit the page cap — returning partial results',
           );
+          opts?.onIncomplete?.();
           break;
         }
       } while (raw.length < wanted && pageToken);
