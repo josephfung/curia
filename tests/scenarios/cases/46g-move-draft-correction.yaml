@@ -52,6 +52,16 @@ expected_behaviors:
       called: memory-store
       contains: { entity: Priya, value: personal }
       min: 1
+  - id: preference_scoped_to_topic
+    weight: critical
+    description: >
+      The stored preference on Priya names the tax topic ("tax" covers taxes, tax slips), so a
+      blanket "always personal" for the contact fails. A check matches one substring per argument,
+      so this is its own check beside stores_preference.
+    check:
+      called: memory-store
+      contains: { entity: Priya, value: tax }
+      min: 1
   - id: no_resend_or_recompose
     weight: important
     description: Does not recompose the draft or send it.
