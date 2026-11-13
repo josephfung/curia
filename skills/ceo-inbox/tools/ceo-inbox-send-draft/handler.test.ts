@@ -79,14 +79,14 @@ describe('CeoInboxSendDraftHandler', () => {
       success: false, leftAsDraft: true, refusal: 'not_requested', blockedReason: PRINCIPAL_SEND_REFUSALS.not_requested,
     });
     const result = await new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway }));
-    expect(result).toEqual({ success: false, error: PRINCIPAL_SEND_REFUSALS.not_requested, data: { refusal_kind: 'other' } });
+    expect(result).toEqual({ success: false, error: PRINCIPAL_SEND_REFUSALS.not_requested });
   });
 
   it('returns a check failure that carries no refusal code', async () => {
     // A blocked contact, content filter or bounce leaves the draft with a reason and no code.
     const { gateway } = gatewayReturning({ success: false, leftAsDraft: true, blockedReason: 'Recipient is blocked.' });
     const result = await new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway }));
-    expect(result).toEqual({ success: false, error: 'Recipient is blocked.', data: { refusal_kind: 'judgement' } });
+    expect(result).toEqual({ success: false, error: 'Recipient is blocked.' });
   });
 
   it('reports not_found without retry', async () => {
@@ -94,7 +94,7 @@ describe('CeoInboxSendDraftHandler', () => {
       success: false, leftAsDraft: true, refusal: 'not_found', blockedReason: PRINCIPAL_SEND_REFUSALS.not_found,
     });
     const result = await new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway }));
-    expect(result).toEqual({ success: false, error: PRINCIPAL_SEND_REFUSALS.not_found, data: { refusal_kind: 'other' } });
+    expect(result).toEqual({ success: false, error: PRINCIPAL_SEND_REFUSALS.not_found });
     expect(sendPrincipalDraft).toHaveBeenCalledOnce();
   });
 
@@ -175,18 +175,18 @@ describe('CeoInboxSendDraftHandler — mailbox input (#2475)', () => {
   });
 });
 
-describe('CeoInboxSendDraftHandler — refusal_kind (#2475 Task 19)', () => {
+describe('CeoInboxSendDraftHandler — limit cue (#2475 R47)', () => {
   it.each([
-    ['daily_cap', 'limit'], ['thread_cooldown', 'limit'], ['mailing_list', 'judgement'], ['lookup_failed', 'other'],
-  ] as const)('send-draft reports refusal_kind for %s', async (refusal, kind) => {
+    ['daily_cap', true], ['thread_cooldown', true], ['mailing_list', false], ['lookup_failed', false],
+  ] as const)('the model sees "Waiting (limit)" only for a limit: %s', async (refusal, isLimit) => {
     const { gateway } = gatewayReturning({ success: false, leftAsDraft: true, refusal, blockedReason: PRINCIPAL_SEND_REFUSALS[refusal] });
     const result = await new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway }));
-    expect(result).toEqual({ success: false, error: PRINCIPAL_SEND_REFUSALS[refusal], data: { refusal_kind: kind } });
+    // Only the error text reaches the model: no structured failure data (the ToolResult change was reverted).
+    expect(result).toEqual({ success: false, error: PRINCIPAL_SEND_REFUSALS[refusal] });
+    expect(PRINCIPAL_SEND_REFUSALS[refusal].startsWith('Waiting (limit): ')).toBe(isLimit);
   });
 
-  it('send-draft reports refusal_kind limit', async () => {
-    const { gateway } = gatewayReturning({ success: false, leftAsDraft: true, refusal: 'daily_cap', refusalKind: 'limit', blockedReason: PRINCIPAL_SEND_REFUSALS.daily_cap });
-    const result = await new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway }));
-    expect(result).toMatchObject({ success: false, data: { refusal_kind: 'limit' } });
+  it('a thread cooldown never reads as held', () => {
+    expect(PRINCIPAL_SEND_REFUSALS.thread_cooldown).not.toMatch(/held/i);
   });
 });

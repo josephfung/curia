@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { OutboundGateway, UnknownEmailAccountError, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, PRINCIPAL_SEND_DIGEST_REASONS, PRINCIPAL_SEND_REFUSALS, LIMIT_REFUSALS, refusalKindOf, askPreamble, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
+import { OutboundGateway, UnknownEmailAccountError, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL, PRINCIPAL_SEND_DIGEST_REASONS, PRINCIPAL_SEND_REFUSALS, LIMIT_REFUSALS, refusalKindOf, askPreamble, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
 import { createLogger } from '../../../src/logger.js';
 import type { NylasClient, NylasMessage } from '../../../src/channels/email/nylas-client.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
@@ -13,6 +13,8 @@ import { BLOCK_REASON, BandSendReview } from '../../../src/dispatch/band-send-re
 import { FailOpenLimiter } from '../../../src/autonomy/band-policy.js';
 import type { OutboundQueueRepo } from '../../../src/skills/outbound-queue-repo.js';
 import { readFile, realpath } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { buildReplyQuote, REPLY_QUOTE_HTML_OPEN } from '../../../src/skills/_shared/reply-quote.js';
 import type { ChannelIdentity } from '../../../src/contacts/types.js';
 
@@ -4160,6 +4162,26 @@ describe('OutboundGateway — principal mailbox and email signature', () => {
     expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
   });
 
+  it('a failed address lookup refuses with "couldn\'t verify", never "is the principal\'s mailbox" (SF1)', async () => {
+    const mocks = createMocks();
+    const errorLog = vi.spyOn(mocks.logger, 'error');
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      emailAccountAddresses: new Map([['curia', 'assistant@example.com']]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('work@example.com')],
+      principalEmailAddresses: async () => { throw new Error('db down'); },
+      logger: mocks.logger,
+    });
+    expect(await gateway.send(email({ accountId: 'curia' }))).toEqual({ success: false, blockedReason: MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL });
+    expect(await gateway.sendEmailDraft('d1', 'curia', { recipientEmail: 'priya@example.com', body: 'x', subject: 's' })).toEqual({ success: false, blockedReason: MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL });
+    expect(MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL).toBe("Couldn't verify the sending account just now; nothing was sent; retry shortly.");
+    expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+    expect(errorLog).toHaveBeenCalledWith(expect.objectContaining({ errName: 'Error' }), expect.stringMatching(/could not be verified/));
+  });
+
   it('send() still delivers a system notice to the principal alone from the principal\'s mailbox', async () => {
     const { gateway, mocks } = makeGateway({ persona: PERSONA });
     const result = await gateway.send(
@@ -6682,6 +6704,23 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(reports()).toEqual([expect.objectContaining({ summary: expect.stringMatching(/^Not sent from your mailbox: a reply Curia drafted\. .*more than one/) })]);
       });
 
+      it('files nothing when no mailbox level would have let it send on its own (SF9)', async () => {
+        const { gw } = makeAuto({ ...two(null, mailboxClient(null)), level: 'on_request' });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'lookup_failed' });
+        expect(reports()).toHaveLength(0);
+        // One mailbox at routine is enough to report it.
+        mocks = createMocks();
+        const one = makeAuto({ ...two(null, mailboxClient(null)), level: 'on_request', levels: { personal: 'routine' } });
+        await one.gw.sendPrincipalDraft('d1', auto);
+        expect(reports()).toHaveLength(1);
+      });
+
+      it('reports an unlocated draft when the mailbox list cannot be read (SF9, fail toward telling)', async () => {
+        const { gw } = makeAuto({ level: 'on_request', mailboxIds: async () => { throw new Error('db down'); } });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'mailbox_unavailable' });
+        expect(reports()).toHaveLength(1);
+      });
+
       it('files a digest item for a draft that is gone from every mailbox', async () => {
         const { gw } = makeAuto(two(mailboxClient(null), mailboxClient(null)));
         expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_found' });
@@ -6741,10 +6780,15 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(second.client!.sendDraft).not.toHaveBeenCalled();
     });
 
-    it('7. refuses with not_curia_draft when the task\'s draft writes cannot be read', async () => {
-      const { gw, curiaWritesInTask } = makeAuto({ curiaWrites: new Error('db down') });
-      expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_curia_draft' });
+    it('7. refuses with provenance_unreadable (operational, no held marker) when the task\'s draft writes cannot be read (SF3)', async () => {
+      const { gw, curiaWritesInTask, ledger } = makeAuto({ curiaWrites: new Error('db down') });
+      expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({
+        refusal: 'provenance_unreadable', refusalKind: 'other', blockedReason: "Couldn't check who wrote the draft, so Curia didn't send on its own." + SUFFIX,
+      });
       expect(curiaWritesInTask).toHaveBeenCalledWith({ mailbox: 'default', draftId: 'd1' }, 't1');
+      // A failure to check starts no cooldown and does not read as Curia's judgement.
+      expect(ledger.recordHeld).not.toHaveBeenCalled();
+      expect(reports()).toEqual([expect.objectContaining({ summary: `${NOT_SENT} Curia couldn't check who wrote the draft.${IN_DRAFTS}` })]);
     });
 
     it('7. refuses with not_curia_draft when Curia did not create the draft in this task', async () => {
@@ -6773,7 +6817,8 @@ describe('sendPrincipalDraft (#2474)', () => {
 
     // ---- #2475 Task 19: replies held only by a limit are reported as the limit ----
     describe('limit holds (#2475 Task 19)', () => {
-      const FIRST = 'Reached the daily limit of 10 replies Curia sends on its own. Replies it would have sent wait in your Drafts until you send them or the limit resets.';
+      // SF10: the notice names the reply that hit the limit.
+      const FIRST = 'Reached the daily limit of 10 replies Curia sends on its own. Waiting only because of the daily limit: "Re: Friday" to Dana Example. Later replies it would have sent wait in your Drafts too, until you send them or the limit resets.';
       const atCap = (ledger: { recentAutonomousSends: ReturnType<typeof vi.fn> }) => {
         const at = new Date().toISOString();
         ledger.recentAutonomousSends.mockResolvedValue(Array.from({ length: 10 }, (_, i) => ({
@@ -6864,7 +6909,7 @@ describe('sendPrincipalDraft (#2474)', () => {
         const kinds: Record<keyof typeof PRINCIPAL_SEND_REFUSALS, 'limit' | 'judgement' | 'other'> = {
           daily_cap: 'limit', thread_cooldown: 'limit',
           mailbox_unavailable: 'other', unknown_mailbox: 'other', ambiguous_mailbox: 'other', setting_off: 'other', not_requested: 'other',
-          approval_replay: 'other', not_found: 'other', lookup_failed: 'other', send_unconfirmed: 'other', no_send_ledger: 'other',
+          approval_replay: 'other', not_found: 'other', lookup_failed: 'other', send_unconfirmed: 'other', no_send_ledger: 'other', provenance_unreadable: 'other',
           thread_unreadable: 'other', principal_addresses_unreadable: 'other', no_band_review: 'other',
           no_recipients: 'judgement', principal_only: 'judgement', review_hold: 'judgement', draft_changed: 'judgement',
           outsider_originated: 'judgement', origin_unknown: 'judgement', not_curia_draft: 'judgement', draft_changed_since_curia: 'judgement',
@@ -6906,6 +6951,21 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect([...LIMIT_REFUSALS].sort()).toEqual(['daily_cap', 'thread_cooldown']);
         expect(refusalKindOf('lookup_failed')).toBe('other');
         expect(refusalKindOf('mailing_list')).toBe('judgement');
+      });
+
+      it('limit refusals, and only they, start with the fixed "Waiting (limit): " cue; a cooldown never says held (R47)', () => {
+        for (const code of Object.keys(PRINCIPAL_SEND_REFUSALS) as Array<keyof typeof PRINCIPAL_SEND_REFUSALS>) {
+          expect(PRINCIPAL_SEND_REFUSALS[code].startsWith('Waiting (limit): '), code).toBe(LIMIT_REFUSALS.has(code));
+        }
+        expect(PRINCIPAL_SEND_REFUSALS.thread_cooldown).not.toMatch(/held/i);
+      });
+
+      it('the first cap notice names the mailbox when there are several (SF10)', async () => {
+        const mailboxLabels = { default: 'Work', personal: 'Personal' };
+        const { gw, ledger } = makeAuto({ mailboxLabels, mailboxIds: async () => ['default', 'personal'], mailboxes: { default: autoClient(), personal: mailboxClient(null) } });
+        atCap(ledger);
+        await gw.sendPrincipalDraft('d1', { ...auto, mailbox: 'default' });
+        expect(reports()[0]!['summary']).toContain('Waiting only because of the daily limit: "Re: Friday" to Dana Example (Work).');
       });
     });
 
@@ -7855,5 +7915,18 @@ describe('OutboundGateway.emailPrincipal (#2475)', () => {
     const second = build(vi.fn().mockResolvedValue({ primaryEmail: 'old@example.net' }));
     await second.call();
     expect(second.send).toHaveBeenCalledWith(expect.objectContaining({ to: 'pat@work.example.com' }), expect.anything());
+  });
+});
+
+// S4 (#2475 security review): the send path handles principal-mailbox grants, and a Nylas error can
+// carry the grant id, so it logs errors through grantSafeErrorFields, never as a raw `{ err }`.
+describe('principal-mailbox send path logs no raw errors (S4)', () => {
+  it('sendPrincipalDraft through publishMailboxDigest has no `{ err` log fields', () => {
+    const src = readFileSync(resolve(import.meta.dirname, '../../../src/skills/outbound-gateway.ts'), 'utf8');
+    const start = src.indexOf('  async sendPrincipalDraft(');
+    const end = src.indexOf('  private async checkDraftSend(');
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    expect(src.slice(start, end)).not.toMatch(/\{\s*err\b/);
   });
 });

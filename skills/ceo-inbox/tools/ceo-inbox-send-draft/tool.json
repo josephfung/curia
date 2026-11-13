@@ -11,8 +11,7 @@
   "outputs": {
     "message_id": "string",
     "to": "string[]",
-    "subject": "string",
-    "refusal_kind": "string (on a refusal: limit, judgement or other)"
+    "subject": "string"
   },
   "permissions": [],
   "secrets": [],

@@ -474,8 +474,6 @@ export type ToolResult =
   | {
       success: false;
       error: string;
-      /** Structured facts about the failure for callers and the audit row, when a tool has them. */
-      data?: unknown;
       /** Structured classification when known (e.g. DATABASE_UNAVAILABLE). */
       errorType?: import('../errors/types.js').ErrorType;
       /**
