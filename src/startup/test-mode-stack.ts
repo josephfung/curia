@@ -87,7 +87,7 @@ import { OutboundLlmJudge, type JudgeConfig } from '../dispatch/outbound-judge.j
 import { PiiRedactor } from '../dispatch/pii-redactor.js';
 import { extractPromptExfiltrationMarkers } from '../dispatch/prompt-exfiltration-markers.js';
 import { parseExtraPiiPatterns } from '../pii/scrubber.js';
-import { createRecordingOutboundGateway, createRecordingPrincipalMailbox, PerRunFailOpenLimiter, subscribeRecordingRelays, type SendRecorder } from './test-mode-sends.js';
+import { createRecordingOutboundGateway, createRecordingPrincipalMailbox, createTestModePrincipalMailboxes, PerRunFailOpenLimiter, subscribeRecordingRelays, type SendRecorder } from './test-mode-sends.js';
 import { createVerificationRuntime, type VerificationRuntime } from '../verification/index.js';
 import { createLogger, type Logger } from '../logger.js';
 import { createPool, type DbPool } from '../db/connection.js';
@@ -693,6 +693,23 @@ export function createTestModeSecrets(): SecretsService {
   // only calls the two methods above (src/skills/execution.ts).
   return vault as unknown as SecretsService;
 }
+
+/**
+ * Capabilities the test-mode agent layer leaves out on purpose, with why (see the header). A
+ * ceo-inbox or calendar tool that declares one fails closed here, so every case stubs it; any
+ * other capability those tools declare is wired as production wires it. The integration test
+ * (tests/integration/test-mode-stack.test.ts) checks the built stack against this list, so a
+ * capability production passes and this stack forgets is a failing test, not a refused tool
+ * call mid-suite (#2475: principalMailboxes was missing, and every real send-draft failed).
+ */
+export const TEST_MODE_ABSENT_CAPABILITIES: Readonly<Record<string, string>> = {
+  calendarRouter: 'no calendar client: a calendar write would reach the principal\'s real calendar',
+  workingDocs: 'no working-docs repo: shadow drafts feed the real instance\'s learning signal',
+  taskRepo: 'no deferred work: a real instance would act on the task later',
+  actionLogRepo: 'no pending approvals on the agent layer: only a recording stack\'s review layer has the action log',
+  tempFileStore: 'no attachment downloads: they come from the principal\'s real mailbox',
+  infraLlm: 'no infrastructure LLM: sent-observe\'s learning writes rows a real instance shares',
+};
 
 /**
  * The only OutboundGateway test mode builds. It has no transport client of any kind,
@@ -1452,6 +1469,10 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       bypassLadder: resolveBypassLadder(yamlConfig.autonomy?.bypass_ladder),
       resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings,
       principalIdentities,
+      // The principal's mailbox registry, as src/index.ts passes it (#2475): one mailbox, no
+      // client (createTestModePrincipalMailboxes). Without it a through_gateway case's real
+      // ceo-inbox-send-draft failed its capability check and the gateway never saw the send.
+      principalMailboxes: createTestModePrincipalMailboxes(() => principalPrimaryEmail.current ?? '', logger),
       skillRegistry,
       verification,
       taskOutreach,

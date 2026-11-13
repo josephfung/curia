@@ -37,6 +37,7 @@
 - **Meeting debrief** — a partly read calendar listing no longer closes a real meeting as not held. (#2475)
 - **Removed mailbox calendars** — listed once as removed, not as daily fetch failures. (#2475)
 - **Calendar backfill** — one conflicting row no longer fails the whole boot backfill every boot. (#2475)
+- **Scenario sends** — test mode wires the principal's mailbox, so through-gateway `ceo-inbox-send-draft` reaches the gateway. (#2475)
 
 ### Security
 

@@ -18,7 +18,7 @@ import { AutonomyService } from '../../src/autonomy/autonomy-service.js';
 import { DATE_RESOLVE_GUARDRAIL } from '../../src/agents/prompts/date-resolve-guardrail.js';
 import { formatWhoYouServeBlock } from '../../src/agents/principal-contact-block.js';
 import { compileSecurityContextBlock, resolveSecurityThresholds } from '../../src/security/security-context.js';
-import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
+import { createTestModeStack, TEST_MODE_ABSENT_CAPABILITIES, type TestModeStack } from '../../src/startup/test-mode-stack.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -214,6 +214,23 @@ describeIf('test-mode stack', () => {
       const coordinator = stack.disabledTools['coordinator'] ?? [];
       expect(coordinator.find(d => d.tool === 'email-send')?.missing).toContain('outboundContext');
       expect(coordinator.find(d => d.tool === 'signal-send')?.missing).toContain('outboundContext');
+    });
+
+    // #2475: the layer lacked principalMailboxes, so every real ceo-inbox-send-draft (a
+    // through_gateway case) failed its capability check and the gateway never judged the send.
+    it('passes every capability the ceo-inbox and calendar tools declare, except the documented absences', () => {
+      const tools = stack.toolRegistry.list()
+        .map(t => t.manifest)
+        .filter(m => m.name.startsWith('ceo-inbox-') || m.name.startsWith('calendar-'));
+      expect(tools.length).toBeGreaterThan(20);
+      const undocumented = tools.flatMap(m => stack.executionLayer.unavailableCapabilities(m.name)
+        .filter(cap => !Object.hasOwn(TEST_MODE_ABSENT_CAPABILITIES, cap))
+        // Production wires entity memory only with an embedding key, and so does this stack:
+        // absent here when the test database's vault has none.
+        .filter(cap => cap !== 'entityMemory')
+        .map(cap => `${m.name}: ${cap}`));
+      expect(undocumented).toEqual([]);
+      expect(stack.executionLayer.unavailableCapabilities('ceo-inbox-send-draft')).toEqual([]);
     });
 
     it('withholds env credentials from a skill that calls Nylas directly', async () => {
