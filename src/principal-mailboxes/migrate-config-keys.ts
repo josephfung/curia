@@ -19,15 +19,16 @@ const LEGACY_KEY = 'default';
  * `defaultId` wins, and the stale `default` is dropped. Other mailboxes' entries are kept.
  * Store errors propagate to the caller.
  */
-export async function migrateSendingKey(store: SendingConfigStore, defaultId: string): Promise<'renamed' | 'nothing'> {
+export async function migrateSendingKey(store: SendingConfigStore, defaultId: string, logger: Logger): Promise<'renamed' | 'nothing'> {
   if (defaultId === LEGACY_KEY) return 'nothing';
   const raw = await store.get(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY);
   if (raw === null) return 'nothing';
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
+  } catch (err) {
     // Not ours to repair: the reader flags an unparseable value on every read.
+    logger.warn({ errName: err instanceof Error ? err.name : typeof err }, 'ceo_inbox/sending is not valid JSON; the default key is not renamed');
     return 'nothing';
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return 'nothing';
@@ -44,14 +45,16 @@ export async function migrateSendingKey(store: SendingConfigStore, defaultId: st
  * entry was set for the install's one migrated mailbox, so it must not outlive it and be
  * inherited by whichever mailbox is added next as the sole one (R41). Store errors propagate.
  */
-export async function dropLegacyDefaultKey(store: SendingConfigStore): Promise<void> {
+export async function dropLegacyDefaultKey(store: SendingConfigStore, logger: Logger): Promise<void> {
   const raw = await store.get(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY);
   if (raw === null) return;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
-    return; // not ours to repair; the reader flags it
+  } catch (err) {
+    // Not ours to repair; the reader flags it.
+    logger.warn({ errName: err instanceof Error ? err.name : typeof err }, 'ceo_inbox/sending is not valid JSON; the legacy default key is not dropped');
+    return;
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return;
   const { [LEGACY_KEY]: legacy, ...rest } = parsed as Record<string, unknown>;
@@ -80,7 +83,7 @@ export function renameSendingKeyAfterMigration(deps: {
     if (!pendingId || !store) return;
     const id = pendingId;
     try {
-      if ((await migrateSendingKey(store, id)) === 'renamed') {
+      if ((await migrateSendingKey(store, id, deps.logger)) === 'renamed') {
         deps.logger.info({ mailboxId: id }, 'Renamed the default send-level key to the migrated mailbox id');
       }
       pendingId = undefined;

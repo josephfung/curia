@@ -713,7 +713,7 @@ describe('removing a mailbox drops the legacy send-level key (#2475 R41)', () =>
     const s = setup({
       records: [rec({ id: 'work', address: 'pat@work.example.com' })],
       grants: { g2: google('pat@home.example.org') },
-      forgetLegacySendLevel: () => dropLegacyDefaultKey(store),
+      forgetLegacySendLevel: () => dropLegacyDefaultKey(store, logger),
     });
     const read = createSendLevelReader({
       get: async () => stored, logger,
@@ -726,10 +726,13 @@ describe('removing a mailbox drops the legacy send-level key (#2475 R41)', () =>
     expect(stored).toBe('{}');
   });
 
-  it('a failure dropping the key is named in the outcome and does not stop the other cleanup', async () => {
-    const s = setup({ records: [rec({ id: 'work' })], forgetLegacySendLevel: async () => { throw new Error('kg down'); } });
+  it('a failure dropping the key is logged, named in the outcome and does not stop the other cleanup', async () => {
+    const { logger: capture, lines } = capturingLogger();
+    const s = setup({ records: [rec({ id: 'work' })], logger: capture, forgetLegacySendLevel: async () => { throw new Error('kg down'); } });
     const outcome = await s.admin.remove({ id: 'work', stillOwned: true });
     expect(outcome.cleanupIncomplete).toEqual(['legacy_send_level']);
+    expect(lines.join('')).toContain('legacy_send_level');
+    expect(s.store.tombstone).toHaveBeenCalledWith('work', null);
     expect(s.secretStore.delete).toHaveBeenCalledWith(principalMailboxGrantSecretName('work'));
   });
 });

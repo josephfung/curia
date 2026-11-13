@@ -241,6 +241,18 @@ describe('PrincipalSendLedger across mailboxes (#2475)', () => {
     docs.docs.set(doc.path, { ...doc, frontmatter: { ...doc.frontmatter, conversation_ids: 'nope' } });
     expect(await ledger.recentAutonomousSends(since)).toHaveLength(1);
     expect(await ledger.recentForThread('t1', since, 'work')).toHaveLength(1);
+    // Unreadable ids match every conversation lookup (fail closed); an absent field does not.
+    expect(await ledger.recentForConversation(['zzz@x'], since)).toHaveLength(1);
+  });
+
+  it('a wrong-typed mailbox reads as none: no mailbox property, and it matches every mailbox', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    await ledger.recordSending({ ...entry, draftId: 'a', mode: 'autonomous', at: recent });
+    const doc = [...docs.docs.values()][0]!;
+    docs.docs.set(doc.path, { ...doc, frontmatter: { ...doc.frontmatter, mailbox: { id: 'work' } } });
+    expect(parseLedgerDoc([...docs.docs.values()][0]!)).not.toHaveProperty('mailbox');
+    expect(await ledger.recentForThread('t1', since, 'anything')).toHaveLength(1);
   });
 
   describe.each([

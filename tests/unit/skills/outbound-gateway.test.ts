@@ -6990,14 +6990,15 @@ describe('sendPrincipalDraft (#2474)', () => {
       it('R43: reply_to_principal_address keeps its rule (no "other" addresses to answer)', async () => {
         const two = { principalAddrs: [PRINCIPAL, 'personal@example.com'], mailboxAddresses: { default: '' } };
         const fromOther = withIds({ from: [{ email: 'personal@example.com' }] });
-        const { gw } = makeAuto({ ...two, client: autoClient(autoDraft(), [fromOther]) });
-        expect((await gw.sendPrincipalDraft('d1', auto)).refusal).not.toBe('reply_to_principal_address');
+        const { gw } = makeAuto({ ...two, client: autoClient(autoDraft(), [fromOther, withIds({ from: [{ email: 'dana@example.org' }] })]) });
+        // Exact: the rule has nothing to answer, so the send goes out.
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: true });
       });
 
       it('refuses (no_send_ledger, fail closed) when the ledger cannot be listed, even with no thread', async () => {
         const { gw, ledger, client } = makeAuto({ client: autoClient(autoDraft({ threadId: '' }), []) });
         ledger.list.mockRejectedValue(new Error('db down'));
-        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true, refusal: 'no_send_ledger' });
         const lister = makeAuto();
         lister.ledger.list.mockRejectedValue(new Error('db down'));
         expect(await lister.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'no_send_ledger' });

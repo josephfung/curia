@@ -59,25 +59,29 @@ export function parseSendLevel(raw: string | null, mailbox: string = DEFAULT_MAI
 }
 
 /** A stored object with keys, none of them `default` or a live mailbox id (a mistyped key, say). */
-function namesNoKnownMailbox(raw: string, live: readonly string[]): boolean {
+function namesNoKnownMailbox(raw: string, live: readonly string[], logger: Logger): boolean {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
-    return false; // unparseable is reported as malformed by the caller
+  } catch (err) {
+    // Unparseable is reported as malformed by the caller; noted here too, never the value.
+    logger.debug({ errName: err instanceof Error ? err.name : typeof err }, 'ceo_inbox/sending is not valid JSON; no unknown-mailbox check');
+    return false;
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
   const keys = Object.keys(parsed);
   return keys.length > 0 && !keys.some((k) => k === DEFAULT_MAILBOX || live.includes(k));
 }
 
-/** A leftover `default` key beside no entry for some live mailbox: it applies to none of them. */
-function ignoresLegacyDefault(raw: string, live: readonly string[]): boolean {
+/** A leftover `default` key while THIS mailbox has no entry of its own: it applies to none. */
+function ignoresLegacyDefault(raw: string, mailbox: string, logger: Logger): boolean {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
-    return DEFAULT_MAILBOX in parsed && live.some((id) => !(id in parsed));
-  } catch {
+    const has = (k: string) => Object.prototype.hasOwnProperty.call(parsed, k);
+    return has(DEFAULT_MAILBOX) && !has(mailbox);
+  } catch (err) {
+    logger.debug({ errName: err instanceof Error ? err.name : typeof err }, 'ceo_inbox/sending is not valid JSON; no legacy-default check');
     return false;
   }
 }
@@ -109,12 +113,12 @@ export function createSendLevelReader(deps: {
       }
       const legacyDefault = live !== undefined && live.length === 1 && live[0] === mailbox;
       const raw = await deps.get(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY);
-      if (live !== undefined && raw !== null && !warnedUnknown.has(raw) && namesNoKnownMailbox(raw, live)) {
+      if (live !== undefined && raw !== null && !warnedUnknown.has(raw) && namesNoKnownMailbox(raw, live, deps.logger)) {
         // Once per process per value; never the stored value itself.
         warnedUnknown.add(raw);
         deps.logger.warn('ceo_inbox/sending has entries but none for a live mailbox or "default"; every mailbox uses on_request');
       }
-      if (live !== undefined && live.length >= 2 && raw !== null && !warnedUnknown.has(`legacy:${raw}`) && ignoresLegacyDefault(raw, live)) {
+      if (live !== undefined && live.length >= 2 && raw !== null && !warnedUnknown.has(`legacy:${raw}`) && ignoresLegacyDefault(raw, mailbox, deps.logger)) {
         warnedUnknown.add(`legacy:${raw}`);
         deps.logger.warn('ceo_inbox/sending still has a legacy "default" entry, which is ignored now that more than one mailbox is live; set a level per mailbox');
       }

@@ -4803,10 +4803,10 @@ export class OutboundGateway {
   }
 
   /**
-   * Every principal email address, and those other than the sending mailbox's own (#2475, D6).
+   * Every principal email address (`all`), the ones other than the sending mailbox's own (`others`,
+   * which the reply-to rule reads), and `offLimits`, the addresses a recipient may not be (#2475, D6).
    * Without the lookup (no registry wired) it is the identities and no others. A mailbox whose
-   * own address is unknown (the single-mailbox fallback) has no `others`, the mailboxes the
-   * reply-to rule reads. `offLimits` is the set a recipient may not be: the `others`, or (R43)
+   * own address is unknown (the single-mailbox fallback) has no `others`. `offLimits` is the set a recipient may not be: the `others`, or (R43)
    * every address when the own address is unknown and the principal has two or more. Throws on a
    * failed lookup.
    */
