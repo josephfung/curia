@@ -28,14 +28,15 @@ describe('createSendLevelReader', () => {
     expect(await read('default')).toBe('off');
   });
   it('warns when a stored value is malformed or names an unknown level, and still uses on_request (final review M2)', async () => {
-    for (const raw of ['not json', '[1]', '"off"', '{"default":"of"}', '{"default":7}']) {
+    for (const raw of ['not json', '[1]', '"off"', '{"default":"of"}', '{"default":7}', '{"default":"o\\\\f"}']) {
       const warn = vi.fn();
       const log = { ...logger, warn } as unknown as typeof logger;
       const read = createSendLevelReader({ get: async () => raw, logger: log });
       expect(await read('default'), raw).toBe('on_request');
       expect(warn, raw).toHaveBeenCalledOnce();
-      // The stored value is not logged.
-      expect(JSON.stringify(warn.mock.calls), raw).not.toContain(raw.replace(/"/g, '\\"'));
+      // The stored value is not logged. JSON.stringify(raw) escapes it exactly as it would
+      // appear inside the serialized calls (quotes and backslashes alike).
+      expect(JSON.stringify(warn.mock.calls), raw).not.toContain(JSON.stringify(raw).slice(1, -1));
     }
   });
   it('new mailbox with no key reads on_request, without a warning', async () => {
