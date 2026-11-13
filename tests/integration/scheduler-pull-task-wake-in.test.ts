@@ -10,6 +10,7 @@ import { EventBus } from '../../src/bus/bus.js';
 import type { EventBus as EventBusType } from '../../src/bus/bus.js';
 import { SchedulerService } from '../../src/scheduler/scheduler-service.js';
 import { TaskRepo } from '../../src/db/task-repo.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -30,8 +31,9 @@ describeIf('SchedulerService.pullTaskWakeIn', () => {
   let repo: TaskRepo;
   let svc: SchedulerService;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
+    await requireCuriaTestDatabase(pool);
     repo = new TaskRepo(pool, noopBus, logger as never, 'UTC');
     svc = new SchedulerService(pool, new EventBus(logger as never), logger as never, 'UTC');
   });
