@@ -132,9 +132,10 @@ export async function gateCalendarWrite(
           `Use a calendar of mailbox "${mailbox}" (calendarId "primary" is its home calendar), or pass mailbox "${route.routed.mailboxId}".`),
     };
   }
-  // A calendar nothing places, written through a stated mailbox: refused when another account
-  // owns it, so an invitation never goes out as an account the calendar is only shared into (SEC-L1).
-  if (multi && !principal && mailbox !== undefined) {
+  // A calendar the `mailbox` hint placed (neither its owning address nor a registry row did),
+  // principal's or not: refused when another live account owns it, so a write never goes out as an
+  // account the calendar is only shared into (SEC-L1, R105).
+  if (route.routed.placedBy === 'hint') {
     let owner: PrincipalMailboxView | undefined;
     try {
       owner = await router.ownedElsewhere(calendarId, route.routed.mailboxId);

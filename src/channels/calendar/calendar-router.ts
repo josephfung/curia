@@ -31,6 +31,12 @@ export interface RoutedCalendar {
   /** The calendar ID to send: the input, or the home calendar's real ID for `primary`. */
   calendarId: string;
   client: NylasCalendarClient;
+  /**
+   * How route() placed the calendar: its owning address, its registry row, the `primary` alias,
+   * the caller's `mailbox` hint, or the sole live mailbox. Only `hint` lets the caller choose the
+   * account, so only it needs the ownership check (R105). Absent outside route().
+   */
+  placedBy?: 'owner' | 'registry' | 'primary' | 'hint' | 'sole';
 }
 
 /** A mailbox's home (primary) calendar. A removed mailbox's has no client: its grant is gone. */
@@ -167,13 +173,13 @@ export class CalendarRouter {
     if (calendarId === PRIMARY_CALENDAR_ALIAS) {
       const mb = hinted ?? this.soleMailbox('primary_alias_needs_mailbox', calendarId, live);
       const client = await this.deps.mailboxes.calendarClient(mb.id);
-      return { mailboxId: mb.id, calendarId: await this.homeCalendarId(mb.id, client), client };
+      return { mailboxId: mb.id, calendarId: await this.homeCalendarId(mb.id, client), client, placedBy: 'primary' };
     }
 
     // The owning grant wins over a registry row too: a row written before the rule (or by the
     // backfill) can name another mailbox the calendar is merely shared into.
     const owner = this.owner(calendarId, live);
-    if (owner) return { mailboxId: owner.id, calendarId, client: await this.deps.mailboxes.calendarClient(owner.id) };
+    if (owner) return { mailboxId: owner.id, calendarId, client: await this.deps.mailboxes.calendarClient(owner.id), placedBy: 'owner' };
 
     const row = await this.deps.contacts.resolveCalendar(calendarId);
     if (row?.principalMailboxId) {
@@ -181,12 +187,12 @@ export class CalendarRouter {
       if (hinted && hinted.id !== mb.id) {
         this.log.info({ mailboxId: mb.id, hintedMailboxId: hinted.id }, 'Registered calendar routed to its own mailbox, not the hint');
       }
-      return { mailboxId: mb.id, calendarId, client: await this.deps.mailboxes.calendarClient(mb.id) };
+      return { mailboxId: mb.id, calendarId, client: await this.deps.mailboxes.calendarClient(mb.id), placedBy: 'registry' };
     }
 
     // Not placed by the registry (unregistered, or a row the boot backfill has not assigned).
     const mb = hinted ?? this.soleMailbox('needs_mailbox', calendarId, live);
-    return { mailboxId: mb.id, calendarId, client: await this.deps.mailboxes.calendarClient(mb.id) };
+    return { mailboxId: mb.id, calendarId, client: await this.deps.mailboxes.calendarClient(mb.id), placedBy: hinted ? 'hint' : 'sole' };
   }
 
   /**

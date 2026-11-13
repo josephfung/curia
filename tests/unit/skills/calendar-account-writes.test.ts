@@ -174,6 +174,26 @@ describe('calendar-create-event: the account is a stated choice (D5)', () => {
     expect(personal.createEvent).toHaveBeenCalledWith(shared, expect.anything());
   });
 
+  it("a principal calendar placed only by the hint is refused through it when another account owns it (R105)", async () => {
+    // Registered to the principal but with no mailbox (registered during the deferred fallback):
+    // the `mailbox` hint places it, so ownership is checked even though it is the principal's.
+    const unplaced = 'c_board@group.calendar.google.com';
+    const { work, personal, router } = setup({
+      registry: {
+        'cal-work': { principalMailboxId: 'work', contactId: PRINCIPAL },
+        [unplaced]: { principalMailboxId: null, contactId: PRINCIPAL },
+      },
+    });
+    personal.listCalendars.mockResolvedValue([{ id: unplaced, name: 'Board', isPrimary: false, readOnly: false, isOwnedByUser: true }]);
+    const err = errorOf(await run(new CalendarCreateEventHandler(), ctx(router, { calendarId: unplaced, title: 'T', start: START, end: END, mailbox: 'work' })));
+    expect(err).toContain('is owned by mailbox "personal" (Personal)');
+    noWrites(work, personal);
+    // A registered calendar is placed by its row: no ownership listing.
+    personal.listCalendars.mockClear();
+    dataOf(await run(new CalendarCreateEventHandler(), ctx(router, { calendarId: 'cal-work', title: 'T', start: START, end: END, mailbox: 'work' })));
+    expect(personal.listCalendars).not.toHaveBeenCalled();
+  });
+
   it('the execution-layer pre-gate answers needs_mailbox before any approval, with the same text (BR-m5)', async () => {
     const { router, evidence } = setup();
     const input = { calendarId: 'cal-work', title: 'Q3 audit', start: START, end: END, attendees: [{ email: 'cfo@work.example.com' }] };
