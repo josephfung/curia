@@ -296,7 +296,9 @@ interface ContactServiceBackend {
   deleteCalendarLink(nylasCalendarId: string): Promise<boolean>;
   getCalendarsForContact(contactId: string): Promise<ContactCalendar[]>;
   resolveCalendar(nylasCalendarId: string): Promise<ResolvedCalendar | null>;
-  getPrimaryCalendar(contactId: string): Promise<ContactCalendar | null>;
+  getPrimaryCalendar(contactId: string, principalMailboxId?: string): Promise<ContactCalendar | null>;
+  getCalendarsForMailbox(principalMailboxId: string): Promise<ContactCalendar[]>;
+  setCalendarMailbox(nylasCalendarId: string, principalMailboxId: string): Promise<boolean>;
 
   /**
    * Re-point all channel identities from fromContactId → toContactId.
@@ -1882,9 +1884,26 @@ export class ContactService {
     return this.backend.resolveCalendar(nylasCalendarId);
   }
 
-  /** Get the primary calendar for a contact. Returns null if no primary is set. */
-  async getPrimaryCalendar(contactId: string): Promise<ContactCalendar | null> {
-    return this.backend.getPrimaryCalendar(contactId);
+  /**
+   * Get a contact's primary calendar. A contact can have one primary per mailbox (#2475):
+   * with `principalMailboxId`, that mailbox's; without, the default mailbox's when there is
+   * one, otherwise the oldest. Returns null if no primary is set.
+   */
+  async getPrimaryCalendar(contactId: string, principalMailboxId?: string): Promise<ContactCalendar | null> {
+    return this.backend.getPrimaryCalendar(contactId, principalMailboxId);
+  }
+
+  /** Every calendar registered through one principal mailbox, any contact (#2475). */
+  async getCalendarsForMailbox(principalMailboxId: string): Promise<ContactCalendar[]> {
+    return this.backend.getCalendarsForMailbox(principalMailboxId);
+  }
+
+  /**
+   * Move a registered calendar to another principal mailbox (the owning grant wins, #2475).
+   * Returns false when the calendar is not registered.
+   */
+  async setCalendarMailbox(nylasCalendarId: string, principalMailboxId: string): Promise<boolean> {
+    return this.backend.setCalendarMailbox(nylasCalendarId, principalMailboxId);
   }
 
   /**
@@ -2539,6 +2558,20 @@ const CONTACT_COLS =
  * Postgres-backed storage for contacts and channel identities.
  * Uses parameterized queries throughout — never interpolates user input into SQL.
  */
+/** A contact_calendars row as the Postgres backend selects it. */
+interface CalendarRow {
+  id: string;
+  nylas_calendar_id: string;
+  contact_id: string | null;
+  label: string;
+  is_primary: boolean;
+  read_only: boolean;
+  timezone: string | null;
+  principal_mailbox_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
 class PostgresContactBackend implements ContactServiceBackend {
   constructor(
     private pool: DbPool,
@@ -3204,26 +3237,41 @@ class PostgresContactBackend implements ContactServiceBackend {
     };
   }
 
-  async getPrimaryCalendar(contactId: string): Promise<ContactCalendar | null> {
-    const result = await this.pool.query<{
-      id: string;
-      nylas_calendar_id: string;
-      contact_id: string | null;
-      label: string;
-      is_primary: boolean;
-      read_only: boolean;
-      timezone: string | null;
-      principal_mailbox_id: string | null;
-      created_at: Date;
-      updated_at: Date;
-    }>(
-      `SELECT id, nylas_calendar_id, contact_id, label, is_primary, read_only, timezone, principal_mailbox_id, created_at, updated_at
-       FROM contact_calendars WHERE contact_id = $1 AND is_primary = true`,
-      [contactId],
+  async getPrimaryCalendar(contactId: string, principalMailboxId?: string): Promise<ContactCalendar | null> {
+    // One primary per (contact, mailbox) since migration 126. Without a mailbox, the default
+    // mailbox's row comes first, then the oldest; the ORDER BY keeps the pick deterministic.
+    const result = await this.pool.query<CalendarRow>(
+      `SELECT c.id, c.nylas_calendar_id, c.contact_id, c.label, c.is_primary, c.read_only, c.timezone,
+              c.principal_mailbox_id, c.created_at, c.updated_at
+       FROM contact_calendars c
+       LEFT JOIN principal_mailboxes pm ON pm.id = c.principal_mailbox_id
+       WHERE c.contact_id = $1 AND c.is_primary = true
+         AND ($2::text IS NULL OR c.principal_mailbox_id = $2)
+       ORDER BY (pm.is_default IS TRUE AND pm.removed_at IS NULL) DESC, c.created_at ASC, c.id ASC
+       LIMIT 1`,
+      [contactId, principalMailboxId ?? null],
     );
     const row = result.rows[0];
     if (!row) return null;
     return this.rowToCalendar(row);
+  }
+
+  async getCalendarsForMailbox(principalMailboxId: string): Promise<ContactCalendar[]> {
+    const result = await this.pool.query<CalendarRow>(
+      `SELECT id, nylas_calendar_id, contact_id, label, is_primary, read_only, timezone, principal_mailbox_id, created_at, updated_at
+       FROM contact_calendars WHERE principal_mailbox_id = $1 ORDER BY created_at ASC, id ASC`,
+      [principalMailboxId],
+    );
+    return result.rows.map((row) => this.rowToCalendar(row));
+  }
+
+  async setCalendarMailbox(nylasCalendarId: string, principalMailboxId: string): Promise<boolean> {
+    this.logger.debug({ mailboxId: principalMailboxId }, 'contacts: moving a calendar to another mailbox');
+    const result = await this.pool.query(
+      'UPDATE contact_calendars SET principal_mailbox_id = $2, updated_at = now() WHERE nylas_calendar_id = $1',
+      [nylasCalendarId, principalMailboxId],
+    );
+    return (result.rowCount ?? 0) > 0;
   }
 
   async reattachIdentities(fromContactId: string, toContactId: string, client?: DbPoolClient): Promise<void> {
@@ -3597,18 +3645,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     };
   }
 
-  private rowToCalendar(row: {
-    id: string;
-    nylas_calendar_id: string;
-    contact_id: string | null;
-    label: string;
-    is_primary: boolean;
-    read_only: boolean;
-    timezone: string | null;
-    principal_mailbox_id: string | null;
-    created_at: Date;
-    updated_at: Date;
-  }): ContactCalendar {
+  private rowToCalendar(row: CalendarRow): ContactCalendar {
     return {
       id: row.id,
       nylasCalendarId: row.nylas_calendar_id,
@@ -3993,13 +4030,41 @@ class InMemoryContactBackend implements ContactServiceBackend {
     return null;
   }
 
-  async getPrimaryCalendar(contactId: string): Promise<ContactCalendar | null> {
-    for (const cal of this.calendars.values()) {
-      if (cal.contactId === contactId && cal.isPrimary) {
-        return cal;
+  async getPrimaryCalendar(contactId: string, principalMailboxId?: string): Promise<ContactCalendar | null> {
+    // No mailbox registry in memory, so no default to prefer: the oldest primary wins
+    // (then id), which keeps the pick deterministic like the Postgres ORDER BY.
+    const primaries = [...this.calendars.values()]
+      .filter((cal) => cal.contactId === contactId && cal.isPrimary)
+      .filter((cal) => principalMailboxId === undefined || cal.principalMailboxId === principalMailboxId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
+    return primaries[0] ?? null;
+  }
+
+  async getCalendarsForMailbox(principalMailboxId: string): Promise<ContactCalendar[]> {
+    return [...this.calendars.values()]
+      .filter((cal) => cal.principalMailboxId === principalMailboxId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
+  }
+
+  async setCalendarMailbox(nylasCalendarId: string, principalMailboxId: string): Promise<boolean> {
+    for (const [id, cal] of this.calendars) {
+      if (cal.nylasCalendarId !== nylasCalendarId) continue;
+      // Mirror idx_contact_calendars_primary_per_mailbox: a primary cannot join a mailbox
+      // where its contact already has one.
+      if (cal.isPrimary && cal.contactId !== null) {
+        for (const other of this.calendars.values()) {
+          if (other.id !== id && other.contactId === cal.contactId && other.isPrimary && other.principalMailboxId === principalMailboxId) {
+            throw Object.assign(new Error(`Contact ${cal.contactId} already has a primary calendar`), {
+              code: '23505',
+              constraint: 'idx_contact_calendars_primary_per_mailbox',
+            });
+          }
+        }
       }
+      this.calendars.set(id, { ...cal, principalMailboxId, updatedAt: new Date() });
+      return true;
     }
-    return null;
+    return false;
   }
 
   async reattachIdentities(fromContactId: string, toContactId: string, _client?: DbPoolClient): Promise<void> {
