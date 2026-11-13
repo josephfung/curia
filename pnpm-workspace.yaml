@@ -293,15 +293,14 @@ overrides:
   # prod tree (@anthropic-ai/sdk, @modelcontextprotocol/sdk) resolved 4.6.5 and
   # eslint-plugin-react-hooks (dev) 4.5.4. 4.6.6 is the first patched release.
   zod: '>=4.6.6'
-  # MED advisory from Trivy, 2026-11-10 (code-scanning #368, #369; curia-deploy#403):
-  # GHSA-3g3m-2fjr-6pw4 / CVE-2026-118773 (MED, >=9.0.0 <=14.0.1): the walker keeps
-  # traversing after its AbortSignal fires. The advisory names 14.0.2 as the fix, but
-  # 13.0.7 (2026-11-06) backports it: its dist/esm/walker.js abort branches match
-  # 14.0.2's line for line. The advisory doesn't list 13.0.7, so DEFAULT_POLICY.allowlist
-  # in scripts/audit-override-floors.ts accepts it with that evidence. Unpinned,
-  # node-pg-migrate (prod) and promptfoo (dev) resolved 13.0.6. Capped below 14 so
-  # neither crosses a major; glob@7 (rimraf@3, dev) is outside the advisory range.
-  'glob@13': '>=13.0.7 <14'
+  # Every glob 13.x consumer resolves glob 14 (node-pg-migrate and @fastify/static, prod;
+  # promptfoo, dev). Two advisories force it: GHSA-3g3m-2fjr-6pw4 / CVE-2026-118773 (MED,
+  # >=9.0.0 <=14.0.1, walker keeps traversing after its AbortSignal fires; fixed in 14.0.2,
+  # backported to 13.0.7) and GHSA-qxr8-q827-836c (LOW, >=13.0.5 <=14.0.5, `ignore`
+  # patterns skip braceExpandMax; fixed only in 14.0.6, no 13.x backport, #2568). 14.0.6 is
+  # the first release clear of both. Their declared ranges (~13.0.0, ^13.0.0) exclude it, so
+  # this override is what moves them. glob@7 (rimraf@3, dev) is outside both advisory ranges.
+  'glob@13': '>=14.0.6 <15'
   #
   # No advisory is currently left without a clearing override. The extract-zip pair that
   # used to sit here (GHSA-7pqw-9j4j-h8q3, GHSA-jmr9-qjv8-65gv; no fixed release) left the

@@ -108,20 +108,7 @@ export const DEFAULT_POLICY: AuditPolicy = {
   //
   // If GitHub ever un-withdraws it, this check will fail on `uuid` — which is correct,
   // and the paragraph above is the reasoning to paste back in.
-  allowlist: [
-    {
-      package: 'glob',
-      ghsa: 'GHSA-3g3m-2fjr-6pw4',
-      reason:
-        'The advisory range is >=9.0.0 <=14.0.1 with 14.0.2 as the fix, but 13.0.7 ' +
-        '(2026-11-06, after 14.0.4) backports it: its dist/esm/walker.js abort branches ' +
-        'return cb() exactly as 14.0.2 does, where 13.0.6 falls through. The `glob@13` ' +
-        "override's >=13.0.7 <14 floor admits only backported releases (curia-deploy#403).",
-      // Any other glob override (glob@10, glob@11, a widened floor) admits versions the
-      // backport does not cover, so the advisory fires for it again.
-      range: '>=13.0.7 <14',
-    },
-  ],
+  allowlist: [],
   // Empty: all 23 pinned packages currently resolve a GitHub repo whose advisory list
   // reads cleanly. An entry here is only for a package GitHub cannot serve advisories for.
   globalDbOnly: [],
