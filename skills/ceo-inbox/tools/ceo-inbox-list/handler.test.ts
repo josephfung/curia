@@ -985,6 +985,15 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     expect(await t.state.drainStartedAt('personal')).toEqual(NOW);
   });
 
+  it('sweep_since clears the last batch\'s settle marker so the reopened episode is not closed early', async () => {
+    const start = new Date('2026-11-10T00:00:00Z');
+    const t = setup({ 'grant-personal': [] }, { start: { personal: start } });
+    await t.state.setSettlePending('personal', true);
+    expect((await t.run({ sweep_since: '2026-11-01', mailbox: 'personal' }, principalTurn)).success).toBe(true);
+    expect(await t.state.settlePending('personal')).toBe(false);
+    expect(await t.state.isDraining('personal')).toBe(true);
+  });
+
   it('sweep_since keeps the start of a drain already running (P6, R52)', async () => {
     const start = new Date('2026-11-10T00:00:00Z');
     const t = setup({ 'grant-personal': [] }, { start: { personal: start } });
@@ -1255,6 +1264,14 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     expect(d.mailboxes_due).toEqual(['work', 'personal']);
     expect(d.messages.map((m) => m.id)).toEqual(['w1']);
     expect(t.data.get('triage.batches.2026-11-12')).toBe('1');
+  });
+
+  it('an empty or null page_token on a drain turn is no page token: still triage mode', async () => {
+    for (const page_token of ['', null]) {
+      const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)], 'grant-personal': [] });
+      const d = dataOf(await t.run({ unread_only: true, limit: 5, page_token }));
+      expect(d.mailboxes_due, String(page_token)).toEqual(['work', 'personal']);
+    }
   });
 
   it('keeps the ordinary listing for an explicit departure on a drain turn, and off drain turns (R66)', async () => {
