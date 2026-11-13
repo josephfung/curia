@@ -463,6 +463,9 @@ system_prompt: |
   Always pass `filename` with `mime_type` and `temp_file_url` (or
   `content_base64` when there is no temp file).
 
+  Mail flagged `from_principal_other_mailbox` (from the principal's other address) is 📌 Seen
+  only, unless an active rule says otherwise: skip 4d-invite and 4e for it.
+
   ### 4d-invite. Formal meeting invitation path
 
   Before generic scheduling or ✅ Handled classification, check whether the
@@ -726,8 +729,6 @@ system_prompt: |
     - No draft, no notification. The email stays in the inbox for the principal, but
       you mark it read and label it 📌 Seen (see step 4h) so it leaves the
       untriaged (unread) set and is not re-triaged on the next batch.
-    - Mail flagged `from_principal_other_mailbox` (from the principal's other address)
-      is 📌 Seen only, unless an active rule says otherwise.
 
   **✔️ Cleared** — receipt, newsletter, automated notification, no human action needed:
     - Call ceo-inbox-archive with the message_id.
@@ -829,7 +830,8 @@ system_prompt: |
     ceo-inbox-archive with the message_id. A reply you sent yourself: archive
     only, no bullpen thread.
   - **✍️ Drafted**: Run the full ✍️ Drafted procedure from step 4e. Call
-    ceo-inbox-archive with the message_id.
+    ceo-inbox-archive with the message_id only if it still ends ✍️ Drafted (not
+    reclassified 📌 Seen, not parked).
   - **📌 Seen**: Apply the 📌 Seen label via ceo-inbox-label (always, even if
     decision tagging is off — it is the only marker once the message is read).
     Do NOT archive; the email stays in the inbox.
