@@ -375,8 +375,6 @@ export interface CalendarRouterProbeResult {
   status: CheckResult;
   /** True only for a Nylas auth failure (401/403) — the sole case a grant reconnect resolves. */
   authFailure: boolean;
-  /** The mailbox ids whose calendars could not be listed (empty when none failed). */
-  failedMailboxes: string[];
 }
 
 /** True for a Nylas auth failure: the SDK surfaces the HTTP status on `statusCode`. */
@@ -398,27 +396,23 @@ export async function checkCalendarRouter(
   probe: CalendarRouterProbe | undefined,
   logger: Logger,
 ): Promise<CalendarRouterProbeResult> {
-  if (!probe) return { status: 'skipped', authFailure: false, failedMailboxes: [] };
+  if (!probe) return { status: 'skipped', authFailure: false };
   let ids: string[];
   try {
     ids = await withTimeout(probe.liveMailboxIds(), 5_000);
   } catch (err) {
     logger.warn(grantSafeErrorFields(err), 'checkCalendarRouter: could not list the principal mailboxes');
-    return { status: 'fail', authFailure: false, failedMailboxes: [] };
+    return { status: 'fail', authFailure: false };
   }
-  if (ids.length === 0) return { status: 'skipped', authFailure: false, failedMailboxes: [] };
+  if (ids.length === 0) return { status: 'skipped', authFailure: false };
   const settled = await Promise.allSettled(ids.map((id) => withTimeout(probe.listCalendars(id), 5_000)));
   const failures = settled.flatMap((r, i) => (r.status === 'rejected' ? [{ mailboxId: ids[i]!, err: r.reason as unknown }] : []));
-  if (failures.length === 0) return { status: 'ok', authFailure: false, failedMailboxes: [] };
+  if (failures.length === 0) return { status: 'ok', authFailure: false };
   for (const f of failures) {
     // Mailbox id plus class and status only: a Nylas error can carry the grant id (R20).
     logger.warn({ mailboxId: f.mailboxId, ...grantSafeErrorFields(f.err) }, 'checkCalendarRouter: calendar probe through the router failed for a mailbox');
   }
-  return {
-    status: 'fail',
-    authFailure: failures.some((f) => isAuthFailure(f.err)),
-    failedMailboxes: failures.map((f) => f.mailboxId),
-  };
+  return { status: 'fail', authFailure: failures.some((f) => isAuthFailure(f.err)) };
 }
 
 /**

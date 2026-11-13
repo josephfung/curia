@@ -340,8 +340,8 @@ export class CalendarListEventsHandler implements ToolHandler {
 }
 
 /**
- * The home calendars of the live accounts `targets` does not reach (R103): the principal's
- * listing reads every account. A home calendar that cannot be found, or a mailbox list that
+ * The home calendars of the live accounts that `targets` does not already read (R103, N4): the
+ * principal's listing reads every account's home calendar. A home calendar that cannot be found, or a mailbox list that
  * cannot be read, is a warning naming the account, never a silent gap. Never throws.
  */
 async function coverEveryAccount(
@@ -356,17 +356,21 @@ async function coverEveryAccount(
     ctx.log.warn({ ...grantSafeErrorFields(err) }, 'calendar-list-events: could not list the mailboxes; accounts without a registered calendar may be missing');
     return { added: [], uncovered: [`The mailboxes could not be listed, so an account with no registered calendar may be missing: ${calendarRouteErrorMessage(err)}`] };
   }
-  const covered = new Set(targets.map((t) => t.routed.mailboxId));
+  // Per home calendar, not per mailbox (N4): a secondary or shared calendar of an account does not
+  // stand for its home calendar, whose meetings would otherwise be left out unseen.
+  const read = (mailboxId: string, calendarId: string): boolean =>
+    targets.some((t) => t.routed.mailboxId === mailboxId && t.routed.calendarId.trim().toLowerCase() === calendarId.trim().toLowerCase());
   const added: Array<{ id: string; routed: RoutedCalendar }> = [];
   const uncovered: string[] = [];
-  for (const m of live.filter((x) => !covered.has(x.id))) {
+  for (const m of live) {
     const home = await routeCalendar(ctx, 'calendar-list-events', PRIMARY_CALENDAR_ALIAS, m.id);
-    if (home.ok) {
-      ctx.log.info({ mailboxId: m.id }, 'calendar-list-events: read the home calendar of an account with no registered calendar');
-      added.push({ id: home.routed.calendarId, routed: home.routed });
-    } else {
+    if (!home.ok) {
       uncovered.push(`The "${m.label}" account's calendar could not be read: ${home.error}`);
+      continue;
     }
+    if (read(m.id, home.routed.calendarId)) continue;
+    ctx.log.info({ mailboxId: m.id }, "calendar-list-events: read an account's home calendar its registered calendars did not include");
+    added.push({ id: home.routed.calendarId, routed: home.routed });
   }
   return { added, uncovered };
 }
