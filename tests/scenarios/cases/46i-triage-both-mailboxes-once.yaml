@@ -1,0 +1,125 @@
+# Case 46i (#2475, D4/D7; the design's "45i"): one message delivered to both of the principal's
+# mailboxes reaches triage once. Code keeps the first copy (the Message-ID + From claim, R54), so
+# the batch carries only the work copy and says both mailboxes are due. ceo-inbox handles that one
+# message once: one reply draft, answering the work copy.
+# Stub-based like 46a-46h (the loader seeds one principal mailbox).
+name: triage handles a message delivered to both mailboxes once
+description: >
+  The inbox triage fires with two mailboxes due (work and personal). Ines Moreau wrote to both
+  addresses; the batch carries one copy, in work (code dropped the duplicate). The message asks
+  the principal a question that needs a drafted reply. ceo-inbox reads and answers that one
+  message with a single draft, and does not go looking for the second copy to answer it too.
+tags: [specialist-ceo-inbox, ceo-inbox, triage, multi-mailbox, dedupe]
+agent: ceo-inbox
+timeout_seconds: 420
+stub_sets: [ceo-inbox-office]
+seed:
+  contacts:
+    - key: sam
+      display_name: Sam Rivera
+      channel: email
+      identifier: sam@example.test
+    - key: ines
+      display_name: Ines Moreau
+      channel: email
+      identifier: ines.moreau@calder.example.test
+inbound:
+  from: task-wake
+  task:
+    id: 7a1b2c3d-46a0-4b1c-8d2e-461a0b1c2d3e
+    title: Inbox drain
+    tags: [inbox-drain]
+    intent: Triage the due mailboxes' unread mail, one batch at a time, until none is left.
+    notes:
+      - at: "{{time:today-1 09:00}}"
+        note: Heartbeat created this drain task; the mailboxes below are due. Next - triage one batch.
+tool_stubs:
+  ceo-inbox-list:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, count: 0, drafts: [] }
+    # A second look at the personal mailbox finds nothing new: the duplicate was claimed by work.
+    - match: { mailbox: personal }
+      return: { count: 0, has_more: false, messages: [], mailboxes_due: [personal] }
+    - match: {}
+      return:
+        count: 1
+        has_more: false
+        mailboxes_due: [work, personal]
+        messages:
+          - id: msg-46i-work
+            threadId: thr-46i
+            mailbox: work
+            mailbox_label: Work
+            subject: Pilot kickoff date
+            from: [{ name: Ines Moreau, email: ines.moreau@calder.example.test }]
+            to: [{ email: principal@work.example.test }, { email: principal@personal.example.test }]
+            cc: []
+            unread: true
+            folders: [INBOX, UNREAD]
+            attachments: []
+            snippet: Could you confirm whether the pilot kickoff can move to the 14th?
+  ceo-inbox-read:
+    - match: { message_id: msg-46i-work }
+      return:
+        id: msg-46i-work
+        threadId: thr-46i
+        mailbox: work
+        mailbox_label: Work
+        from: [{ name: Ines Moreau, email: ines.moreau@calder.example.test }]
+        to: [{ email: principal@work.example.test }, { email: principal@personal.example.test }]
+        cc: []
+        subject: Pilot kickoff date
+        body_plain: "Hi,\n\nCould you confirm whether the pilot kickoff can move to the 14th?\n\nThanks,\nInes"
+        labels: [INBOX, UNREAD]
+        attachments: []
+    - match: {}
+      error: "Failed to read principal inbox message: not found"
+  ceo-inbox-draft-reply:
+    - match: { reply_to_message_id: msg-46i-work }
+      return:
+        draft_id: draft-46i-reply
+        mailbox: work
+        mailbox_label: Work
+        subject: "Re: Pilot kickoff date"
+        to: [{ name: Ines Moreau, email: ines.moreau@calder.example.test }]
+        cc: []
+        snippet: "Hi Ines, ..."
+    - match: {}
+      error: "Failed to read principal inbox message: not found"
+  contact-register:
+    - match: {}
+      return: { contact_id: "{{contact:ines}}", display_name: Ines Moreau, contact_confidence: 0.9, created: false, verified: true }
+  memory-query:
+    - match: {}
+      return: { count: 0, results: [] }
+expected_behaviors:
+  - id: handled_the_message
+    weight: critical
+    description: Reads or drafts a reply to the one message in the batch (the work copy).
+    check:
+      any_of:
+        - { called: ceo-inbox-read, with: { message_id: msg-46i-work } }
+        - { called: ceo-inbox-draft-reply, with: { reply_to_message_id: msg-46i-work } }
+  - id: at_most_one_reply_draft
+    weight: critical
+    description: Drafts at most one reply across all mailboxes; the duplicate copy gets no second one.
+    check:
+      called: ceo-inbox-draft-reply
+      max: 1
+  - id: no_reply_to_other_copy
+    weight: critical
+    description: Never drafts against a message id other than the work copy it was given.
+    check:
+      not_called: [ceo-inbox-draft-reply]
+      with: { reply_to_message_id: msg-46i-personal }
+  - id: nothing_sent
+    weight: critical
+    description: Sends no draft on its own; sending is off in this setup.
+    check:
+      not_called: [ceo-inbox-send-draft]
+  - id: not_reported_twice
+    weight: important
+    description: Does not tell the principal the same message arrived or was handled twice.
+failure_modes:
+  - Drafts a second reply to Ines for the personal copy
+  - Treats the same message as two and reports it twice

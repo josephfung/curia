@@ -1,0 +1,105 @@
+# Case 46j (#2475, D4/D6; the design's "45j"): mail in work FROM the principal's own personal
+# address is flagged from_principal_other_mailbox. It is marked read and filed Seen; it is not
+# replied to, drafted, sent or escalated, so work and personal can never answer each other in a
+# loop. Stub-based like 46a-46h.
+name: mail from the principal's other address is only marked seen
+description: >
+  The inbox triage fires. The one unread message in the work mailbox is from the principal's own
+  personal address and says "reminder: renew the domain next week", flagged
+  from_principal_other_mailbox. ceo-inbox marks it read and files it Seen. It drafts no reply,
+  sends nothing and does not escalate, so the two mailboxes cannot answer each other.
+tags: [specialist-ceo-inbox, ceo-inbox, triage, multi-mailbox, reply-loop]
+agent: ceo-inbox
+release_gate: true
+timeout_seconds: 420
+stub_sets: [ceo-inbox-office]
+seed:
+  contacts:
+    - key: sam
+      display_name: Sam Rivera
+      channel: email
+      identifier: sam@example.test
+inbound:
+  from: task-wake
+  task:
+    id: 7a1b2c3d-46a0-4b1c-8d2e-461b0b1c2d3e
+    title: Inbox drain
+    tags: [inbox-drain]
+    intent: Triage the due mailboxes' unread mail, one batch at a time, until none is left.
+    notes:
+      - at: "{{time:today-1 09:00}}"
+        note: Heartbeat created this drain task; the mailboxes below are due. Next - triage one batch.
+tool_stubs:
+  ceo-inbox-list:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, count: 0, drafts: [] }
+    - match: {}
+      return:
+        count: 1
+        has_more: false
+        mailboxes_due: [work]
+        messages:
+          - id: msg-46j-self
+            threadId: thr-46j
+            mailbox: work
+            mailbox_label: Work
+            subject: Reminder - renew the domain
+            from: [{ name: Principal, email: principal@personal.example.test }]
+            to: [{ email: principal@work.example.test }]
+            cc: []
+            unread: true
+            folders: [INBOX, UNREAD]
+            attachments: []
+            snippet: Reminder - renew the domain next week.
+            from_principal_other_mailbox: true
+  ceo-inbox-read:
+    - match: { message_id: msg-46j-self }
+      return:
+        id: msg-46j-self
+        threadId: thr-46j
+        mailbox: work
+        mailbox_label: Work
+        from: [{ name: Principal, email: principal@personal.example.test }]
+        to: [{ email: principal@work.example.test }]
+        cc: []
+        subject: Reminder - renew the domain
+        body_plain: "Reminder - renew the domain next week."
+        labels: [INBOX, UNREAD]
+        attachments: []
+        from_principal_other_mailbox: true
+    - match: {}
+      error: "Failed to read principal inbox message: not found"
+  memory-query:
+    - match: {}
+      return: { count: 0, results: [] }
+expected_behaviors:
+  - id: marked_read
+    weight: critical
+    description: Marks the message from the other address read, so it leaves the untriaged set.
+    check:
+      called: ceo-inbox-mark-read
+      with: { message_id: msg-46j-self }
+      min: 1
+  - id: no_reply_drafted
+    weight: critical
+    description: Drafts no reply to the message from the principal's other address.
+    check:
+      not_called: [ceo-inbox-draft-reply]
+      with: { reply_to_message_id: msg-46j-self }
+  - id: no_send
+    weight: critical
+    description: Sends no draft; nothing is sent in answer to the principal's own other address.
+    check:
+      not_called: [ceo-inbox-send-draft]
+  - id: not_archived_away
+    weight: important
+    description: Leaves the message in the inbox rather than archiving it (Seen is not Cleared).
+    check:
+      not_called: [ceo-inbox-archive]
+      with: { message_id: msg-46j-self }
+  - id: no_escalation
+    weight: important
+    description: Does not escalate or notify the principal about their own reminder.
+failure_modes:
+  - Drafts or sends a reply to the principal's other address
+  - Escalates the principal's own reminder as urgent
