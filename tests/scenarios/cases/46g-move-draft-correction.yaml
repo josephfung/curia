@@ -1,0 +1,62 @@
+# Case 46g (#2475, D5 "Correction" and "Learning from corrections"): the principal says a draft is
+# in the wrong account. ceo-inbox moves it with ceo-inbox-draft-edit move_to_mailbox, then stores
+# the preference on the contact with memory-store (the move result's note prompts it).
+name: move draft correction moves it and stores the preference
+description: >
+  A draft to the accountant was created in the work account; the principal says it should have
+  gone from the personal account because it is about personal taxes. ceo-inbox should move the
+  draft to the personal mailbox and store the account preference for this contact and topic.
+tags: [ceo-inbox, delegated-mode, specialist, specialist-ceo-inbox, mailbox-choice, multi-mailbox, memory]
+agent: ceo-inbox
+stub_sets: [ceo-inbox-office]
+seed:
+  contacts:
+    - key: sam
+      display_name: Sam Rivera
+      channel: email
+      identifier: sam@example.test
+    - key: accountant
+      display_name: Priya Nair
+      channel: email
+      identifier: priya.nair@ledger.example.test
+inbound:
+  from: delegate
+  content: "The principal said: that draft to Priya about my tax slips (draft-priya-1) should have gone from my personal account, not work. Please fix it."
+tool_stubs:
+  ceo-inbox-draft-edit:
+    - match: { move_to_mailbox: personal }
+      return:
+        draft_id: draft-priya-2
+        mailbox: personal
+        mailbox_label: Personal
+        moved_from: { mailbox: work, draft_id: draft-priya-1 }
+        new_thread: true
+        subject: Tax slips
+        to: [{ name: Priya Nair, email: priya.nair@ledger.example.test }]
+        cc: []
+        note: "The draft now lives in the Personal mailbox; store the principal's account preference for this contact and topic with memory-store so the next draft goes to the right account."
+expected_behaviors:
+  - id: moves_to_personal
+    weight: critical
+    description: Moves the draft with ceo-inbox-draft-edit and move_to_mailbox personal.
+    check:
+      called: ceo-inbox-draft-edit
+      with: { move_to_mailbox: personal }
+      min: 1
+  - id: stores_preference
+    weight: critical
+    description: >
+      Stores the preference with memory-store, naming the contact and the topic (personal taxes go
+      from the personal account), so entity-context returns it next time.
+    check:
+      called: memory-store
+      min: 1
+  - id: no_resend_or_recompose
+    weight: important
+    description: Does not recompose the draft or send it.
+    check:
+      not_called: [ceo-inbox-draft-compose, ceo-inbox-send-draft]
+failure_modes:
+  - Recomposes a new draft instead of moving the existing one
+  - Moves the draft but stores no preference
+  - Stores the preference as "always personal" for the contact without the topic

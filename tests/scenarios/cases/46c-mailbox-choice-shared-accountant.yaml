@@ -1,0 +1,54 @@
+# Case 46c (#2475, D5; principal's example): the same accountant is written to from both accounts
+# (corporate audit at work, taxes at home), and the request does not say which. The evidence is
+# split and the topic does not settle it, so ceo-inbox asks, naming both, and creates no draft.
+name: mailbox choice shared accountant asks which account
+description: >
+  The coordinator asks ceo-inbox to draft a note to the accountant "about the paperwork". The
+  no-mailbox compose returns needs_mailbox with evidence that the accountant has been written to
+  from both accounts about different things. Nothing in the request picks one. ceo-inbox should ask
+  which account, naming both, rather than guess, and create no draft.
+tags: [ceo-inbox, delegated-mode, specialist, specialist-ceo-inbox, mailbox-choice, multi-mailbox]
+agent: ceo-inbox
+stub_sets: [ceo-inbox-office]
+seed:
+  contacts:
+    - key: sam
+      display_name: Sam Rivera
+      channel: email
+      identifier: sam@example.test
+    - key: accountant
+      display_name: Priya Nair
+      channel: email
+      identifier: priya.nair@ledger.example.test
+inbound:
+  from: delegate
+  content: "The principal asked: draft a quick email to Priya Nair, my accountant, asking her to send over the paperwork we discussed. Draft only."
+tool_stubs:
+  ceo-inbox-draft-compose:
+    - match: { mailbox: null }
+      return:
+        needs_mailbox: true
+        evidence:
+          - { mailbox: work, mailbox_label: Work, sent_count: 6, last_sent_at: "2026-10-30T14:00:00Z", recent_subjects: [Corporate audit schedule, Audit PBC list], received_count: 9, domain_match: false }
+          - { mailbox: personal, mailbox_label: Personal, sent_count: 5, last_sent_at: "2026-11-03T01:10:00Z", recent_subjects: [Personal tax filing, RRSP slips], received_count: 7, domain_match: false }
+expected_behaviors:
+  - id: asks_which_account
+    weight: critical
+    description: >
+      The reply asks the principal which account to draft from, naming both the work and the
+      personal options, and says why it is asking (the accountant has mail in both).
+  - id: no_draft_created
+    weight: critical
+    description: Creates no draft until the account is chosen (no compose with a mailbox).
+    check:
+      not_called: [ceo-inbox-draft-compose]
+      with: { mailbox: work }
+  - id: no_draft_in_personal
+    weight: critical
+    description: Creates no draft in the personal mailbox either.
+    check:
+      not_called: [ceo-inbox-draft-compose]
+      with: { mailbox: personal }
+failure_modes:
+  - Picks one account and composes without asking
+  - Asks without naming the options

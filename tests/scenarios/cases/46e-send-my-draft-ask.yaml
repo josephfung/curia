@@ -1,0 +1,46 @@
+# Case 46e (#2475, D6): one draft in each account and nothing picks one: ask, naming both. Nothing
+# is sent until the principal answers.
+name: send my draft one in each account asks naming both
+description: >
+  The principal asks Curia to send "my draft". There is a draft in the work account (to Jane, Q3
+  audit) and one in the personal account (to Tim, beers), and nothing in the request or
+  conversation picks one. ceo-inbox should ask which, naming both drafts, and send nothing.
+tags: [ceo-inbox, delegated-mode, specialist, specialist-ceo-inbox, send, multi-mailbox]
+agent: ceo-inbox
+stub_sets: [ceo-inbox-office]
+seed:
+  contacts:
+    - key: sam
+      display_name: Sam Rivera
+      channel: email
+      identifier: sam@example.test
+inbound:
+  from: delegate
+  content: "The principal said: send my draft."
+tool_stubs:
+  ceo-inbox-list:
+    - match: { folder: DRAFTS }
+      return:
+        count: 2
+        folder: DRAFTS
+        drafts:
+          - { id: draft-jane-1, mailbox: work, mailbox_label: Work, subject: Q3 audit, to: [{ name: Jane Cole, email: jane.cole@work.example.test }], snippet: "Attached are the schedules" }
+          - { id: draft-tim-2, mailbox: personal, mailbox_label: Personal, subject: Beers, to: [{ name: Tim Okafor, email: tim.okafor@family.example.test }], snippet: "Thursday after work?" }
+  ceo-inbox-send-draft:
+    - match: {}
+      return: { message_id: msg-sent-x, to: [], subject: sent }
+expected_behaviors:
+  - id: asks_naming_both
+    weight: critical
+    description: >
+      The reply asks which draft to send, naming both: the work one to Jane about the Q3 audit
+      and the personal one to Tim about beers.
+  - id: sends_nothing
+    weight: critical
+    description: Sends neither draft before the principal answers.
+    check:
+      not_called: [ceo-inbox-send-draft]
+failure_modes:
+  - Sends one of the two without asking
+  - Sends both
+  - Asks without saying which account each draft is in

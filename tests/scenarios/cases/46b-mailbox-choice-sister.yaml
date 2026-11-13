@@ -1,0 +1,51 @@
+# Case 46b (#2475, D5; principal's example): the sister is a personal contact, written to only from
+# the personal account, on a consumer domain. Evidence all points to personal; no mention.
+name: mailbox choice sister composes in personal without saying so
+description: >
+  The coordinator asks ceo-inbox to draft a note to the principal's sister about weekend plans.
+  The no-mailbox compose returns needs_mailbox with evidence that every message to her went from
+  the personal account. ceo-inbox should compose again in personal and not mention the account.
+tags: [ceo-inbox, delegated-mode, specialist, specialist-ceo-inbox, mailbox-choice, multi-mailbox]
+agent: ceo-inbox
+stub_sets: [ceo-inbox-office]
+seed:
+  contacts:
+    - key: sam
+      display_name: Sam Rivera
+      channel: email
+      identifier: sam@example.test
+    - key: sister
+      display_name: Maya Hart
+      channel: email
+      identifier: maya.hart@family.example.test
+inbound:
+  from: delegate
+  content: "The principal asked: draft a short email to my sister Maya Hart asking if Saturday lunch still works. Draft only."
+tool_stubs:
+  ceo-inbox-draft-compose:
+    - match: { mailbox: null }
+      return:
+        needs_mailbox: true
+        evidence:
+          - { mailbox: work, mailbox_label: Work, sent_count: 0, last_sent_at: null, recent_subjects: [], received_count: 0, domain_match: false }
+          - { mailbox: personal, mailbox_label: Personal, sent_count: 31, last_sent_at: "2026-11-10T22:40:00Z", recent_subjects: [Saturday, Birthday plans, Photos], received_count: 40, domain_match: false }
+expected_behaviors:
+  - id: composes_in_personal
+    weight: critical
+    description: Creates the draft in the personal mailbox.
+    check:
+      called: ceo-inbox-draft-compose
+      with: { mailbox: personal }
+      min: 1
+  - id: no_work_draft
+    weight: critical
+    description: Creates no draft in the work mailbox.
+    check:
+      not_called: [ceo-inbox-draft-compose]
+      with: { mailbox: work }
+  - id: account_not_mentioned
+    weight: important
+    description: The reply does not announce or ask about the account (the evidence was one-sided).
+failure_modes:
+  - Composes in the work mailbox
+  - Asks which account to use although the evidence was one-sided

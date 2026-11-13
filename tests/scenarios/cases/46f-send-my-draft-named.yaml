@@ -1,0 +1,51 @@
+# Case 46f (#2475, D6): the instruction names the account, so that draft is sent without asking,
+# even though the other account also has a draft. The account is not repeated afterwards.
+name: send my draft named account sends that one
+description: >
+  The principal says "there's a draft in my work email, please send it". Drafts exist in both
+  accounts (work: to Jane, Q3 audit; personal: to Tim, beers). ceo-inbox should send the work
+  draft without asking and leave the personal one alone.
+tags: [ceo-inbox, delegated-mode, specialist, specialist-ceo-inbox, send, multi-mailbox]
+agent: ceo-inbox
+stub_sets: [ceo-inbox-office]
+seed:
+  contacts:
+    - key: sam
+      display_name: Sam Rivera
+      channel: email
+      identifier: sam@example.test
+inbound:
+  from: delegate
+  content: "The principal said: there's a draft in my work email, please send it."
+tool_stubs:
+  ceo-inbox-list:
+    - match: { folder: DRAFTS }
+      return:
+        count: 2
+        folder: DRAFTS
+        drafts:
+          - { id: draft-jane-1, mailbox: work, mailbox_label: Work, subject: Q3 audit, to: [{ name: Jane Cole, email: jane.cole@work.example.test }], snippet: "Attached are the schedules" }
+          - { id: draft-tim-2, mailbox: personal, mailbox_label: Personal, subject: Beers, to: [{ name: Tim Okafor, email: tim.okafor@family.example.test }], snippet: "Thursday after work?" }
+  ceo-inbox-send-draft:
+    - match: {}
+      return: { message_id: msg-sent-jane-1, to: [jane.cole@work.example.test], subject: Q3 audit }
+expected_behaviors:
+  - id: sends_work_draft
+    weight: critical
+    description: Sends draft-jane-1, the work draft.
+    check:
+      called: ceo-inbox-send-draft
+      with: { draft_id: draft-jane-1 }
+      max: 1
+  - id: personal_untouched
+    weight: critical
+    description: Does not send draft-tim-2.
+    check:
+      not_called: [ceo-inbox-send-draft]
+      with: { draft_id: draft-tim-2 }
+  - id: does_not_ask
+    weight: important
+    description: Does not ask which draft or which account; the instruction named the account.
+failure_modes:
+  - Asks which account although the principal named it
+  - Sends the personal draft

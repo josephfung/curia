@@ -31,12 +31,15 @@ Alternatives considered:
 
 **Health.** Each live mailbox has its own canary (`principal_mailbox:<id>`: grant lookup, one message, calendar list). The default mailbox's result also drives the existing `nylas_calendar` heartbeat, so a deployment's monitor keeps pinging. An outage alerts the principal once per episode, naming the mailbox by label only (never its address or grant), and suggests removing the mailbox if the account is gone.
 
+**Sending follows the draft.** The gateway sends a draft from the mailbox that holds it, at that mailbox's own level (`ceo_inbox/sending` is one level per mailbox id; no key reads `on_request`; amends [ADR-062](062-curia-sends-from-the-principals-mailbox.md)). The autonomous daily cap stays 10 in total across mailboxes, and the thread cooldown also keys on the conversation, so one conversation in two inboxes shares a cooldown. A reply is never sent on its own to, or in answer to, another of the principal's addresses. Holds caused only by a limit (daily cap, cooldown) are reported apart from holds on judgement.
+
 ## Consequences
 
 - Adding, relabelling, defaulting and removing a mailbox is a console list, not a settings edit, and the setup catalog reports the capability done once one mailbox passes its canary.
 - Every handler that used the flat grant must go through the service. A call that cannot name an account fails loudly instead of acting on the wrong one; that is an accepted cost.
 - Removal cannot be undone by re-adding the same address: it gets a new id and a clean slate. Stale keyed state is left to age out.
 - The registry is capped at one live mailbox by a code constant until every handler is converted, so no intermediate release runs a second mailbox through half-converted code.
-- While the stack is converting them, calendar and the acquaintance check (who the principal has written to) keep the client built at boot, as before the registry: they pick up a new default mailbox or a replaced grant at the next restart. The console says so, and the setup catalog reports a restart as required until then.
+- While the stack is converting it, calendar keeps the client built at boot, as before the registry: it picks up a new default mailbox or a replaced grant at the next restart. The console says so, and the setup catalog reports a restart as required until then. The acquaintance check (who the principal has written to) reads every live mailbox per call.
+- Until the calendar tools are converted, the flat settings remain mirrored from the default mailbox; retiring them waits for that work.
 - The principal's memory is not partitioned by mailbox. Confidentiality is about the recipient and the data, not the source account.
 - The per-mailbox canary adds three Nylas calls per mailbox per day.
