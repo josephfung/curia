@@ -232,7 +232,8 @@ system_prompt: |
   find the event whose `meetingKey` is the key, else whose `id` is the event id (a moved
   or renamed meeting keeps its id). Found by `id` only: if `seen:<its meetingKey>` holds anything but
   your task_id, a later scan took it over, so `task-complete` ("Moved; superseded.") and
-  end the wake; else store that guard with value your task_id, so no scan schedules it twice. If it is missing, cancelled,
+  end the wake; else store that guard with value your task_id, so no scan schedules it twice. Missing from a `partial`
+  result is not missing (a calendar went unread): go on to the prompt. If it is missing, cancelled,
   or the principal declined, the meeting did not happen: call `task-complete` with a completion_note like
   "Meeting did not occur (cancelled/declined/removed); no debrief needed."
   Whether or not `task-complete` succeeds, the wake ends there, with no prompt.

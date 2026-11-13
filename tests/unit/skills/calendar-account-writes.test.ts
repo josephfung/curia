@@ -599,6 +599,58 @@ describe('calendar-list-events lists a meeting on two accounts once (D7)', () =>
     expect(events[1]).not.toHaveProperty('calendars');
   });
 
+  it("the principal's listing reads the home calendar of an account with no registered calendar (R103)", async () => {
+    const { work, personal, router } = setup();
+    const c = ctx(router, listInput, system);
+    // Only a work calendar is registered: the personal account's home calendar is read anyway.
+    (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([{ nylasCalendarId: 'cal-work' }]);
+    personal.listEvents.mockResolvedValue([event('p-1', 'ceo@personal.example.com', { icalUid: 'uid-p' })]);
+    const data = dataOf(await run(new CalendarListEventsHandler(), c));
+    expect(personal.listEvents).toHaveBeenCalledWith('ceo@personal.example.com', START, END, undefined);
+    expect((data['events'] as Array<{ id: string }>).map((e) => e.id)).toContain('p-1');
+    expect(data).not.toHaveProperty('partial');
+    expect(work.listEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("an account whose home calendar cannot be found is named and the listing is partial, never silently missing (R103)", async () => {
+    const { router } = setup({ principalCalendars: [{ nylasCalendarId: 'ceo@work.example.com', isPrimary: true, principalMailboxId: 'work' }] });
+    const c = ctx(router, listInput, system);
+    (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([{ nylasCalendarId: 'cal-work' }]);
+    const data = dataOf(await run(new CalendarListEventsHandler(), c));
+    expect(data['partial']).toBe(true);
+    expect((data['warnings'] as string[]).join(' ')).toContain('"Personal" account\'s calendar could not be read');
+    expect(data['note']).toContain('Do not say it is not there');
+  });
+
+  it('a failed calendar makes the listing partial (SF-I3)', async () => {
+    const { personal, router } = setup();
+    personal.listEvents.mockRejectedValue(new Error('grant expired'));
+    const data = dataOf(await run(new CalendarListEventsHandler(), ctx(router, listInput, system)));
+    expect(data['partial']).toBe(true);
+    expect((data['warnings'] as string[])[0]).toContain('grant expired');
+  });
+
+  it("a removed mailbox's calendar is listed once as removed, not as a failure (R104)", async () => {
+    const { router } = setup({
+      removed: { old: 'Old job' },
+      registry: {
+        'cal-work': { principalMailboxId: 'work', contactId: PRINCIPAL },
+        'cal-personal': { principalMailboxId: 'personal', contactId: PRINCIPAL },
+        'cal-old': { principalMailboxId: 'old', contactId: PRINCIPAL },
+        'cal-old-2': { principalMailboxId: 'old', contactId: PRINCIPAL },
+      },
+    });
+    const c = ctx(router, listInput, system);
+    (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { nylasCalendarId: 'cal-work' }, { nylasCalendarId: 'cal-personal' }, { nylasCalendarId: 'cal-old' }, { nylasCalendarId: 'cal-old-2' },
+    ]);
+    const data = dataOf(await run(new CalendarListEventsHandler(), c));
+    expect(data['removed']).toEqual(['Old job']);
+    expect(data['removed_note']).toContain('calendar-register');
+    expect(data).not.toHaveProperty('warnings');
+    expect(data).not.toHaveProperty('partial');
+  });
+
   it('a single-mailbox listing is never collapsed', async () => {
     const client = stubClient();
     client.listEvents.mockImplementation(async (cal: string) => [event(`${cal}-1`, cal, { icalUid: 'uid-1' })]);

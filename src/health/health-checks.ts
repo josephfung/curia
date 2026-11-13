@@ -85,10 +85,12 @@ export function mcpHealthKey(serverName: string): string {
   return serverName.replace(/-/g, '_');
 }
 
-/** The calendar router's liveness probe (#2475): lists the default mailbox's calendars, or
- *  says no mailbox is connected (nothing to probe). */
+/** The calendar router's liveness probe (#2475): every live mailbox, each listed on its own. */
 export interface CalendarRouterProbe {
-  listDefaultCalendars(): Promise<'listed' | 'no_mailbox'>;
+  /** The live mailbox ids; empty while no mailbox is connected (nothing to probe). */
+  liveMailboxIds(): Promise<string[]>;
+  /** List one mailbox's calendars through its grant; throws when it cannot. */
+  listCalendars(mailboxId: string): Promise<void>;
 }
 
 /** Slack Socket Mode surface for /api/health (#1567). */
@@ -373,34 +375,50 @@ export interface CalendarRouterProbeResult {
   status: CheckResult;
   /** True only for a Nylas auth failure (401/403) — the sole case a grant reconnect resolves. */
   authFailure: boolean;
+  /** The mailbox ids whose calendars could not be listed (empty when none failed). */
+  failedMailboxes: string[];
+}
+
+/** True for a Nylas auth failure: the SDK surfaces the HTTP status on `statusCode`. */
+function isAuthFailure(err: unknown): boolean {
+  const code = typeof err === 'object' && err !== null ? (err as { statusCode?: unknown }).statusCode : undefined;
+  return code === 401 || code === 403;
 }
 
 /**
- * Probe calendar through the router: list the default principal mailbox's calendars (#1561,
- * #2475). Distinct from the email/messaging `nylas` canary. Skipped without a router or while
- * no principal mailbox is connected.
- * Hard 5-second timeout. Classifies auth failures (401/403) so callers can offer
- * grant-reconnect guidance only when it would actually help — a timeout or 5xx is not
- * a grant problem.
+ * Probe calendar through the router (#1561, #2475): list every live principal mailbox's
+ * calendars, in parallel, each under its own 5-second deadline. One broken mailbox fails the
+ * check, and the log names its mailbox id (SF-I4): a non-default account's revoked grant must not
+ * read green. Distinct from the email/messaging `nylas` canary. Skipped without a router or while
+ * no principal mailbox is connected. Classifies auth failures (401/403) so callers can offer
+ * grant-reconnect guidance only when it would actually help — a timeout or 5xx is not a grant
+ * problem.
  */
 export async function checkCalendarRouter(
   probe: CalendarRouterProbe | undefined,
   logger: Logger,
 ): Promise<CalendarRouterProbeResult> {
-  if (!probe) return { status: 'skipped', authFailure: false };
+  if (!probe) return { status: 'skipped', authFailure: false, failedMailboxes: [] };
+  let ids: string[];
   try {
-    const outcome = await withTimeout(probe.listDefaultCalendars(), 5_000);
-    return { status: outcome === 'listed' ? 'ok' : 'skipped', authFailure: false };
+    ids = await withTimeout(probe.liveMailboxIds(), 5_000);
   } catch (err) {
-    // Class and status only: a Nylas error can carry the grant id (R20).
-    logger.warn(grantSafeErrorFields(err), 'checkCalendarRouter: calendar probe through the router failed');
-    // Nylas SDK surfaces HTTP status on `statusCode` (see isNylasAuthFailure in the
-    // calendar-list-events handler); 401/403 mean the grant itself is bad.
-    const code = typeof err === 'object' && err !== null
-      ? (err as { statusCode?: unknown }).statusCode
-      : undefined;
-    return { status: 'fail', authFailure: code === 401 || code === 403 };
+    logger.warn(grantSafeErrorFields(err), 'checkCalendarRouter: could not list the principal mailboxes');
+    return { status: 'fail', authFailure: false, failedMailboxes: [] };
   }
+  if (ids.length === 0) return { status: 'skipped', authFailure: false, failedMailboxes: [] };
+  const settled = await Promise.allSettled(ids.map((id) => withTimeout(probe.listCalendars(id), 5_000)));
+  const failures = settled.flatMap((r, i) => (r.status === 'rejected' ? [{ mailboxId: ids[i]!, err: r.reason as unknown }] : []));
+  if (failures.length === 0) return { status: 'ok', authFailure: false, failedMailboxes: [] };
+  for (const f of failures) {
+    // Mailbox id plus class and status only: a Nylas error can carry the grant id (R20).
+    logger.warn({ mailboxId: f.mailboxId, ...grantSafeErrorFields(f.err) }, 'checkCalendarRouter: calendar probe through the router failed for a mailbox');
+  }
+  return {
+    status: 'fail',
+    authFailure: failures.some((f) => isAuthFailure(f.err)),
+    failedMailboxes: failures.map((f) => f.mailboxId),
+  };
 }
 
 /**

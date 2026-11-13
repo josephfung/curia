@@ -1,9 +1,10 @@
 -- 126_contact_calendars_mailbox.sql
 --
--- A registered calendar belongs to one of the principal's mailboxes (#2475, Part 4). The column is
--- nullable: org-wide calendars and calendars of other contacts have no mailbox, and existing rows
--- are assigned the default mailbox by the idempotent boot backfill (backfillCalendarMailboxes),
--- not here, because the default mailbox may not exist yet when this migration runs.
+-- A registered calendar belongs to one of the principal's mailboxes (#2475, Part 4): the one it is
+-- read and written through. The column is nullable because existing rows are assigned by the
+-- idempotent boot backfill (backfillCalendarMailboxes), not here: the default mailbox may not exist
+-- yet when this migration runs. The backfill assigns the default mailbox to every row with none,
+-- other contacts' calendars included (R72): each was read through the single grant before.
 -- The one-primary-per-contact rule becomes one primary per contact per mailbox.
 -- nylas_calendar_id stays globally unique (its own constraint, untouched).
 

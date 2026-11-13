@@ -98,13 +98,14 @@ import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
 import { createRulesDoc } from './principal-mailboxes/rules-doc.js';
 import { backfillCalendarMailboxes } from './principal-mailboxes/backfill-calendar-mailboxes.js';
+import { registerMissingHomeCalendars } from './principal-mailboxes/register-home-calendars.js';
 import { createMailboxCalendarHooks } from './principal-mailboxes/calendar-hooks.js';
 import { migrateFlatPrincipalMailbox, migrationFailureReason, retireFlatMailboxKeys, warnIfFallbackIdIsLive } from './principal-mailboxes/migrate-flat-mailbox.js';
 import { FALLBACK_MAILBOX_ID, SENT_OBSERVE_FAILED_RUNS_LIMIT, sentObserveFailedRunsKey } from './principal-mailboxes/state-keys.js';
 import { renameSendingKeyAfterMigration, dropLegacyDefaultKey, type SendingConfigStore } from './principal-mailboxes/migrate-config-keys.js';
 import { emailAccountGrantSecretName } from './channels/email/email-account-secrets.js';
 import { grantSafeErrorFields, mayCarryGrantId } from './principal-mailboxes/error-fields.js';
-import { retiredFlatKeyRefusal } from './principal-mailboxes/secrets.js';
+import { capturedFlatKeyRefusal } from './principal-mailboxes/secrets.js';
 import { PrincipalAcquaintanceCheck } from './contacts/principal-acquaintance.js';
 import { MultiPrincipalMailbox } from './contacts/multi-principal-mailbox.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
@@ -1185,9 +1186,11 @@ async function main(): Promise<void> {
   // `omittedAttendeesSpecified` (#1217). The router reads the grant per call, so a replaced
   // grant or a new default applies without a restart.
   //
-  // Fail closed: with no principal mailbox configured at boot the calendar tools are held back
-  // (and calendar skills return a clean "not configured" result if called). We deliberately do
-  // NOT fall back to the email account grant — that is the delegate-identity bug #1217 removed.
+  // Fail closed: without a Nylas key or a principal contact at boot there is no router and the
+  // calendar tools are held back (a calendar skill called anyway returns a clean "not configured"
+  // result). With them, the tools are enrolled even before a mailbox is added, and each call
+  // answers no_mailbox until one is (R95). We deliberately do NOT fall back to the email account
+  // grant — that is the delegate-identity bug #1217 removed.
   // Every disabled path logs exactly once — none is silent.
   let calendarRouter: CalendarRouter | undefined;
 
@@ -1287,21 +1290,6 @@ async function main(): Promise<void> {
     await retireFlatMailboxKeys({ store: principalMailboxStore, secrets: secretsService, logger });
   }
 
-  // Calendars registered before they belonged to a mailbox are the default mailbox's (R3).
-  // Idempotent, so it runs on every boot after the flat migration. A failure is logged at error
-  // by the backfill and again here; calendars keep a null mailbox until the next boot.
-  // While the deferred-migration fallback is served there is no registry row to reference (the
-  // column is a foreign key), so the backfill waits for the migration; the router sends
-  // unassigned calendars through the sole live mailbox meanwhile.
-  try {
-    const backfillTo = (await principalMailboxes.isFallbackActive()) ? null : ((await principalMailboxes.defaultMailbox())?.id ?? null);
-    await backfillCalendarMailboxes(pool, backfillTo, logger);
-  } catch (err) {
-    // Deliberately non-fatal: unassigned calendars still route through the sole live mailbox,
-    // and the idempotent backfill retries on the next boot.
-    logger.error({ err }, 'Calendar mailbox backfill failed; calendars stay unassigned until the next boot');
-  }
-
   // R63: a live row under the reserved fallback id predates the reservation; say so once at boot.
   try {
     warnIfFallbackIdIsLive((await principalMailboxStore.listLive()).map((m) => m.id), logger);
@@ -1321,6 +1309,37 @@ async function main(): Promise<void> {
         logger,
       })
     : undefined;
+  // The calendar side of a mailbox that came in other than through the console (#2475). Runs at
+  // boot after the flat migration, and again after a deferred migration succeeds at runtime
+  // (BR-m6). Never throws: each step logs its own failure and retries on the next run.
+  //  1. Calendars registered before they belonged to a mailbox are the default mailbox's (R3).
+  //     While the deferred-migration fallback is served there is no registry row to reference
+  //     (the column is a foreign key), so the backfill waits for the migration; the router sends
+  //     unassigned calendars through the sole live mailbox meanwhile.
+  //  2. Every live mailbox has a registered home calendar (R103), the migrated one included, so
+  //     the principal's agenda never silently leaves an account out.
+  const calendarCatchUp = async (): Promise<void> => {
+    let fallbackActive = true;
+    try {
+      fallbackActive = await principalMailboxes.isFallbackActive();
+      const backfillTo = fallbackActive ? null : ((await principalMailboxes.defaultMailbox())?.id ?? null);
+      await backfillCalendarMailboxes(pool, backfillTo, logger);
+    } catch (err) {
+      // Deliberately non-fatal: unassigned calendars still route through the sole live mailbox,
+      // and the idempotent backfill retries on the next run.
+      logger.error({ err }, 'Calendar mailbox backfill failed; calendars stay unassigned until the next boot');
+    }
+    if (!mailboxCalendarHooks || !principalContact || fallbackActive) return;
+    const principalId = principalContact.id;
+    await registerMissingHomeCalendars({
+      liveMailboxes: () => principalMailboxStore.listLive(),
+      hasHome: async (mailboxId) => (await contactService.getPrimaryCalendar(principalId, mailboxId)) !== null,
+      registerHome: (mailboxId, label) => mailboxCalendarHooks.registerHome(mailboxId, label),
+      logger,
+    });
+  };
+  await calendarCatchUp();
+
   const principalMailboxAdmin = principalContact
     ? new PrincipalMailboxAdmin({
         store: principalMailboxStore,
@@ -2810,17 +2829,15 @@ async function main(): Promise<void> {
     scheduler,
     emailAdapter: emailAdapters[0],
     nylasClient: primaryNylasClient,
-    // The liveness probe lists the default mailbox's calendars through the router (#2475).
+    // The liveness probe lists every live mailbox's calendars through the router (#2475, SF-I4).
     // Skipped without a router, and while no mailbox is connected.
     calendarRouterProbe: calendarRouter
       ? (() => {
           const router = calendarRouter;
           return {
-            listDefaultCalendars: async () => {
-              const def = await principalMailboxes.defaultMailbox();
-              if (!def) return 'no_mailbox' as const;
-              await (await router.clientFor(def.id)).listCalendars();
-              return 'listed' as const;
+            liveMailboxIds: async () => (await router.liveMailboxes()).map((m) => m.id),
+            listCalendars: async (mailboxId: string) => {
+              await (await router.clientFor(mailboxId)).listCalendars();
             },
           };
         })()
@@ -2843,7 +2860,14 @@ async function main(): Promise<void> {
       : undefined,
     // The health retry runs the send-level rename after a 'migrated' outcome too (R41); the
     // health service keeps it single-flight.
-    retryMailboxMigration: retryMailboxMigration ? sendingKeyRename.run : undefined,
+    // A migration that succeeds here gets the calendar catch-up boot would have run (BR-m6).
+    retryMailboxMigration: retryMailboxMigration
+      ? async () => {
+          const outcome = await sendingKeyRename.run();
+          if (outcome === 'migrated') await calendarCatchUp();
+          return outcome;
+        }
+      : undefined,
     inboxTriageHealth: () => inboxTriageHealthRef.current?.() ?? null,
     signalRpcClient,
     browserService,
@@ -3159,9 +3183,10 @@ async function main(): Promise<void> {
   const secretCaptureService = new SecretCaptureService(pool, secretsService, {
     getAllowedSystemNames: () =>
       new Set([...registryService.declaredSecretNames(), ...channelCredentialKeys(), ...principalMailboxKeys()]),
-    // The flat keys are retired (#2475): refused, as in the vault routes, except while the
-    // deferred-migration fallback still serves them (an operator may need to set the address).
-    refuseSystemName: (name) => retiredFlatKeyRefusal(name, () => principalMailboxes.isFallbackActive()),
+    // The flat keys are retired (#2475): refused, as in the vault routes, except the address while
+    // the deferred-migration fallback still serves it. The flat grant never (SEC-L3): only the
+    // operator's vault PUT writes it.
+    refuseSystemName: (name) => capturedFlatKeyRefusal(name, () => principalMailboxes.isFallbackActive()),
     logger,
   });
   // Injected after construction because the ExecutionLayer is created before registryService

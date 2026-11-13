@@ -16,7 +16,10 @@
   },
   "outputs": {
     "events": "array (a meeting on calendars of two accounts is listed once, with calendars: [{ calendarId, mailbox, mailbox_label, eventId }]; meetingKey is the same for a meeting on every calendar)",
-    "count": "number"
+    "count": "number",
+    "warnings": "string[]? (calendars or accounts that could not be read)",
+    "partial": "boolean? (true: not every calendar was read; a missing meeting may be on an unread one)",
+    "removed": "string[]? (removed mailboxes whose calendars were not read, with removed_note on re-registering)"
   },
   "permissions": [],
   "secrets": [],

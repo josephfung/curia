@@ -10,6 +10,12 @@ import pg from 'pg';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { backfillCalendarMailboxes } from '../../src/principal-mailboxes/backfill-calendar-mailboxes.js';
 import { ContactService } from '../../src/contacts/contact-service.js';
+import { createMailboxCalendarHooks } from '../../src/principal-mailboxes/calendar-hooks.js';
+import { registerMissingHomeCalendars } from '../../src/principal-mailboxes/register-home-calendars.js';
+import { PrincipalMailboxStore } from '../../src/principal-mailboxes/store.js';
+import { RemovedMailboxError, UnknownMailboxError } from '../../src/principal-mailboxes/types.js';
+import { CalendarRouter } from '../../src/channels/calendar/calendar-router.js';
+import { EntityContextAssembler } from '../../src/entity-context/assembler.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 
@@ -152,6 +158,88 @@ describeIf('contact_calendars mailbox column', () => {
   });
 
   it('backfill with no default mailbox skips', async () => {
-    expect(await backfillCalendarMailboxes(pool, null, createSilentLogger())).toBe(0);
+    expect(await backfillCalendarMailboxes(pool, null, createSilentLogger())).toEqual({ updated: 0, skipped: 0 });
+  });
+
+  it('backfill skips a primary that would collide with the default\'s, and still assigns the rest (SF-M6)', async () => {
+    const who = await newContact('Backfill Collide');
+    await insert(calIds('c-def'), mbA, true, who); // the contact's primary under the default
+    await insert(calIds('c-null'), null, true, who); // a mailbox-less primary: would collide
+    await insert(calIds('c-other'), null, false, who);
+    const r = await backfillCalendarMailboxes(pool, mbA, createSilentLogger());
+    expect(r.skipped).toBeGreaterThanOrEqual(1);
+    const rows = await ownRows([who]);
+    expect(rows[calIds('c-null')]?.principal_mailbox_id).toBeNull();
+    expect(rows[calIds('c-other')]?.principal_mailbox_id).toBe(mbA);
+  });
+
+  it('the boot catch-up registers a missing home calendar, and the router finds homes over real SQL, removed ones as removed (R103, m9)', async () => {
+    const principal = await newContact('Catch-up Principal');
+    const mbC = `cal-c-${suffix}`;
+    const mbGone = `cal-g-${suffix}`;
+    await pool.query(
+      `INSERT INTO principal_mailboxes (id, label, address, provider, is_default, removed_at) VALUES
+         ($1, 'C', $2, 'google', false, NULL), ($3, 'Gone', $4, 'google', false, now())`,
+      [mbC, `c-${suffix}@example.com`, mbGone, `g-${suffix}@example.com`],
+    );
+    try {
+      // The removed mailbox's home row stays (R75); mbB already has a home; mbC has none.
+      await insert(calIds('h-gone'), mbGone, true, principal);
+      await insert(calIds('h-b'), mbB, true, principal);
+      const homeC = calIds('h-c');
+      const hooks = createMailboxCalendarHooks({
+        contacts,
+        principalContactId: principal,
+        calendarClient: async (id) => ({
+          listCalendars: async () => [{ id: id === mbC ? homeC : `${id}-primary`, name: 'P', description: '', timezone: 'UTC', isPrimary: true, readOnly: false, isOwnedByUser: true }],
+        }),
+        logger: createSilentLogger(),
+      });
+      const live = [{ id: mbB, label: 'B' }, { id: mbC, label: 'C' }];
+      const deps = {
+        liveMailboxes: async () => live,
+        hasHome: async (id: string) => (await contacts.getPrimaryCalendar(principal, id)) !== null,
+        registerHome: hooks.registerHome,
+        logger: createSilentLogger(),
+      };
+      expect(await registerMissingHomeCalendars(deps)).toEqual({ registered: 1, failed: 0 });
+      expect((await contacts.getPrimaryCalendar(principal, mbC))?.nylasCalendarId).toBe(homeC);
+      // Idempotent: a second run registers nothing.
+      expect(await registerMissingHomeCalendars(deps)).toEqual({ registered: 0, failed: 0 });
+
+      const store = new PrincipalMailboxStore(pool, createSilentLogger());
+      const router = new CalendarRouter({
+        mailboxes: {
+          list: async () => live.map((m) => ({ ...m, address: '', isDefault: m.id === mbB, triageStartAt: null })),
+          get: async (id) => {
+            const row = await store.getAny(id);
+            if (!row) throw new UnknownMailboxError(id);
+            if (row.removedAt) throw new RemovedMailboxError(id, row.label);
+            return { id, label: row.label, address: '', isDefault: false, triageStartAt: null };
+          },
+          isFallbackActive: async () => false,
+          calendarClient: async () => ({ listCalendars: async () => [] }) as never,
+          evidence: async () => [],
+        },
+        contacts,
+        principalContactId: principal,
+        logger: createSilentLogger(),
+      });
+      const homes = await router.homeCalendars();
+      expect(homes.found.map((h) => [h.mailboxId, h.calendarId])).toEqual([[mbB, calIds('h-b')], [mbC, homeC]]);
+      expect(homes.failures).toEqual([]);
+      expect(homes.removed).toEqual([{ mailboxId: mbGone, calendarId: calIds('h-gone'), label: 'Gone' }]);
+
+      // entity-context marks a removed mailbox's calendar, so it is not used as a live one (R104).
+      const assembler = new EntityContextAssembler(pool, createSilentLogger());
+      const accounts = await (assembler as unknown as { getConnectedAccounts(id: string): Promise<Array<{ serviceId: string; metadata: Record<string, unknown> }>> })
+        .getConnectedAccounts(principal);
+      const meta = Object.fromEntries(accounts.map((a) => [a.serviceId, a.metadata]));
+      expect(meta[calIds('h-gone')]).toMatchObject({ mailboxId: mbGone, mailboxRemoved: true });
+      expect(meta[calIds('h-b')]).toEqual({ mailboxId: mbB });
+    } finally {
+      await pool.query('DELETE FROM contact_calendars WHERE contact_id = $1', [principal]);
+      await pool.query('DELETE FROM principal_mailboxes WHERE id = ANY($1)', [[mbC, mbGone]]);
+    }
   });
 });
