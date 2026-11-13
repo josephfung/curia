@@ -93,4 +93,23 @@ describe('rules parser edge cases (SEC-L8)', () => {
     expect(out).toContain('```\n## Not a rule\n- Mailbox: work\n```\n- Mailbox: home\n');
     expect(out).toContain('  - Mailbox: personal');
   });
+
+  it('a shorter run or a run with text after it does not close a fence (CommonMark)', () => {
+    const fenced = (open: string, inner: string, close: string) => [
+      '## Real one', '- Mailbox: work', '', open, '## Example', '- Mailbox: work', inner, '## Still example', close,
+      '## Real two', '- Mailbox: work', '',
+    ].join('\n');
+    // Four-backtick block holding a three-backtick line: the real close is the four-backtick one.
+    const four = parseRuleScopes(fenced('````', '```', '````'));
+    expect(four.map((r) => r.title)).toEqual(['Real one', 'Real two']);
+    // A closing run followed by text is content, not a close.
+    const trailing = parseRuleScopes(fenced('```', '``` not a close', '```'));
+    expect(trailing.map((r) => r.title)).toEqual(['Real one', 'Real two']);
+    // Tildes never close a backtick fence.
+    expect(parseRuleScopes(fenced('```', '~~~', '```')).map((r) => r.title)).toEqual(['Real one', 'Real two']);
+    // A rescope rewrites both real rules and leaves the example inside the block as written.
+    const out = applyRemoval(fenced('````', '```', '````'), 'work', { rescopeTo: 'home' });
+    expect(out).toContain('````\n## Example\n- Mailbox: work\n```\n## Still example\n````');
+    expect(out).toContain('## Real two\n- Mailbox: home');
+  });
 });

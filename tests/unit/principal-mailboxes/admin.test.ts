@@ -822,6 +822,20 @@ describe('removing a mailbox with scoped inbox rules (#2475 task 27)', () => {
     expect(state.text).toBe('## Both\n- Mailbox: personal\n');
   });
 
+  it('a sole rule added after the check, with no choice given, is kept and inbox_rules reported', async () => {
+    // The first read finds only a shared rule; by the cleanup reread a rule scoped only here exists.
+    const reads = ['## Both\n- Mailbox: work, personal\n', RULES];
+    const rulesDoc = {
+      read: vi.fn(async () => reads.shift() ?? RULES),
+      write: vi.fn(async () => {}),
+    };
+    const { admin, store } = setup({ records: two(), rulesDoc });
+    const out = await admin.remove({ id: 'work', stillOwned: true });
+    expect(store.tombstone).toHaveBeenCalled();
+    expect(out.cleanupIncomplete).toContain('inbox_rules');
+    expect(rulesDoc.write).not.toHaveBeenCalled();
+  });
+
   it('lists a failed inbox_rules step in cleanup_incomplete and the removal stands', async () => {
     const { rulesDoc } = docOf(RULES);
     rulesDoc.write.mockRejectedValueOnce(new Error('docs down'));

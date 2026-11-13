@@ -457,8 +457,10 @@ export class PrincipalMailboxAdmin {
         if (text === null) return;
         const now = parseRuleScopes(text).filter((r) => r.mailboxes?.includes(id));
         const onlyHere = now.filter((r) => r.mailboxes!.length === 1);
-        // The check could not read the document and no choice was given: do not guess.
-        if (rulesUnknown && input.rules === undefined && onlyHere.length > 0) {
+        // Rules scoped only here need the principal's choice. None was given (the first check
+        // could not read the document, or found none and one was added since): do not guess. The
+        // document is left as it is and inbox_rules is reported incomplete.
+        if (input.rules === undefined && onlyHere.length > 0) {
           throw new MailboxRemovalError('Inbox rules apply only to this mailbox and no choice was given');
         }
         const next = applyRemoval(text, id, ruleAction);

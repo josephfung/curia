@@ -19,18 +19,26 @@ const HEADING_RE = /^##[ \t]+(.+?)[ \t]*\r?$/gm;
 // A top-level `- Mailbox:` bullet (no indent: a nested bullet inside a multi-line Do: is text, SEC-L8).
 // The list is everything after the colon up to the line end (a trailing \r is kept apart).
 const MAILBOX_LINE_RE = /^([-*][ \t]*Mailbox[ \t]*:[ \t]*)([^\r\n]*?)([ \t]*)(\r?)$/gim;
-const FENCE_RE = /^[ \t]{0,3}(```|~~~)/;
+// A fence line (CommonMark): up to 3 spaces, then a run of 3+ backticks or 3+ tildes.
+const FENCE_RE = /^[ \t]{0,3}(`{3,}|~{3,})(.*)$/;
 
-/** [start, end) offsets of fenced code blocks; an unclosed fence runs to the end (SEC-L8). */
+/**
+ * [start, end) offsets of fenced code blocks; an unclosed fence runs to the end (SEC-L8). As in
+ * CommonMark, a block closes only on a run of the same character at least as long as its opening
+ * one, followed by nothing but whitespace: a shorter run, or one with text after it, is content.
+ */
 function fencedRanges(doc: string): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
-  let open: { at: number; marker: string } | null = null;
+  let open: { at: number; char: string; length: number } | null = null;
   let offset = 0;
   for (const line of doc.split('\n')) {
-    const m = FENCE_RE.exec(line);
+    const m = FENCE_RE.exec(line.replace(/\r$/, ''));
     if (m) {
-      if (!open) open = { at: offset, marker: m[1]! };
-      else if (m[1] === open.marker) {
+      const run = m[1]!;
+      if (!open) {
+        // A backtick opener's info string may not contain a backtick.
+        if (!(run[0] === '`' && m[2]!.includes('`'))) open = { at: offset, char: run[0]!, length: run.length };
+      } else if (run[0] === open.char && run.length >= open.length && m[2]!.trim() === '') {
         ranges.push([open.at, offset + line.length]);
         open = null;
       }
