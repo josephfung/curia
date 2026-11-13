@@ -1065,11 +1065,77 @@ describe('CeoInboxDraftReplyHandler', () => {
       expect(result).toMatchObject({ success: true, data: { mailbox: 'personal' } });
     });
 
-    it('makes no extra calls when the message is already in the addressed mailbox', async () => {
-      const { ctx, searches, gatewayGets } = setup({ held: 'work', to: ['ceo@work.example.com'], cc: ['ceo@personal.example.com'] });
+    it('in the addressed mailbox, only checks the other copy for an earlier fallback draft, then drafts here', async () => {
+      const { ctx, searches, posts } = setup({ held: 'work', to: ['ceo@work.example.com'], cc: ['ceo@personal.example.com'] });
       await handler.execute(ctx);
-      expect(searches).toHaveLength(0);
-      expect(gatewayGets).toHaveLength(0);
+      expect(searches).toEqual([{ grant: 'grant-personal', q: `rfc822msgid:${MSG_ID}` }]);
+      expect(posts).toHaveLength(1);
+      expect(posts[0]!.grant).toBe('grant-work');
+    });
+
+    it('an earlier fallback draft on the other copy answers a call from the addressed mailbox; no second draft', async () => {
+      const { ctx, posts } = setup({ held: 'work', to: ['ceo@work.example.com'], cc: ['ceo@personal.example.com'] });
+      const prev = mockFetch.getMockImplementation()!;
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const u = new URL(String(url));
+        if (u.pathname.endsWith('/drafts') && (init?.method ?? 'GET') === 'GET' && u.pathname.includes('grant-personal')) {
+          return new Response(JSON.stringify({ data: [{ id: 'draft-fallback', thread_id: 'thread-other', subject: 'Re: Test Subject', to: [], cc: [], snippet: 'Earlier', date: 1 }] }), { status: 200 });
+        }
+        return prev(url, init);
+      });
+      const result = await handler.execute(ctx);
+      expect(posts).toHaveLength(0);
+      expect(result).toMatchObject({ success: true, data: { draft_id: 'draft-fallback', already_exists: true, mailbox: 'personal' } });
+    });
+
+    it('refuses to redirect when the given mailbox\'s draft scan is incomplete', async () => {
+      const { ctx, posts } = setup(addressedBoth);
+      const prev = mockFetch.getMockImplementation()!;
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const u = new URL(String(url));
+        if (u.pathname.endsWith('/drafts') && (init?.method ?? 'GET') === 'GET' && u.pathname.includes('grant-personal')) {
+          // A full page of unrelated drafts with more behind it: the scan never ends within its cap.
+          const data = Array.from({ length: 100 }, (_, i) => ({ id: `d${i}-${u.searchParams.get('page_token') ?? '0'}`, thread_id: `other-${i}`, subject: 's', to: [], cc: [], snippet: '', date: 1 }));
+          return new Response(JSON.stringify({ data, next_cursor: `c${Math.random()}` }), { status: 200 });
+        }
+        return prev(url, init);
+      });
+      const result = await handler.execute(ctx);
+      expect(posts).toHaveLength(0);
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('draft scan incomplete') });
+    });
+
+    it('refuses a Spam copy even when the addressed mailbox holds a clean one', async () => {
+      const { ctx, posts } = setup(addressedBoth);
+      const prev = mockFetch.getMockImplementation()!;
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const u = new URL(String(url));
+        if (u.pathname.endsWith('/messages/msg-001') && u.pathname.includes('grant-personal')) {
+          const m = buildNylasMessage({ from: [{ email: 'alice@external.com' }], to: [{ email: 'ceo@work.example.com' }], cc: [{ email: 'ceo@personal.example.com' }], folders: ['SPAM'] });
+          m.data.id = 'msg-001';
+          return new Response(JSON.stringify(m), { status: 200 });
+        }
+        return prev(url, init);
+      });
+      const result = await handler.execute(ctx);
+      expect(posts).toHaveLength(0);
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('Spam or Trash') });
+    });
+
+    it('a search with another page behind its five hits is ambiguous: falls back', async () => {
+      const { ctx, posts } = setup(addressedBoth);
+      const prev = mockFetch.getMockImplementation()!;
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const u = new URL(String(url));
+        if (u.pathname.endsWith('/messages') && u.searchParams.has('search_query_native')) {
+          const data = [{ id: 'msg-other', thread_id: 'thread-other', subject: 'Test Subject', from: [{ email: 'alice@external.com' }], to: [], cc: [], folders: ['INBOX'] }];
+          return new Response(JSON.stringify({ data, next_cursor: 'more' }), { status: 200 });
+        }
+        return prev(url, init);
+      });
+      const result = await handler.execute(ctx);
+      expect(posts[0]!.grant).toBe('grant-personal');
+      expect(result).toMatchObject({ success: true, data: { reply_mailbox_fallback: true, reply_mailbox_note: expect.stringContaining('more than one') } });
     });
 
     it('makes no extra calls on a single-mailbox install', async () => {
