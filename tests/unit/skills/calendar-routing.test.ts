@@ -14,6 +14,13 @@ import { CalendarListCalendarsHandler } from '../../../skills/calendar/tools/cal
 import { CalendarListEventsHandler } from '../../../skills/calendar/tools/calendar-list-events/handler.js';
 import { CalendarRespondToInviteHandler } from '../../../skills/calendar/tools/calendar-respond-to-invite/handler.js';
 import { CalendarUpdateEventHandler } from '../../../skills/calendar/tools/calendar-update-event/handler.js';
+import { CalendarRegisterHandler } from '../../../skills/calendar/tools/calendar-register/handler.js';
+import { ContactService } from '../../../src/contacts/contact-service.js';
+import { KnowledgeGraphStore } from '../../../src/memory/knowledge-graph.js';
+import { EmbeddingService } from '../../../src/memory/embedding.js';
+import { EntityMemory } from '../../../src/memory/entity-memory.js';
+import { MemoryValidator } from '../../../src/memory/validation.js';
+import { createSilentLogger } from '../../../src/logger.js';
 
 const logger = pino({ level: 'silent' });
 const PRINCIPAL = '00000000-0000-4000-8000-0000000000aa';
@@ -220,6 +227,22 @@ describe('calendar tools route each calendar through its mailbox', () => {
     }
   });
 
+  it('list-calendars says which mailbox a calendar is registered to, apart from where it was seen', async () => {
+    const { work, personal, router } = setup({ registry: { 'shared': { principalMailboxId: 'personal' } } });
+    const cal = { id: 'shared', name: 'S', description: '', timezone: 'UTC', isPrimary: false, readOnly: false, isOwnedByUser: false };
+    work.listCalendars.mockResolvedValue([cal]);
+    personal.listCalendars.mockResolvedValue([cal]);
+    const c = ctx(router, {});
+    (c.contactService!.resolveCalendar as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) =>
+      id === 'shared' ? { contactId: null, label: 'S', isPrimary: false, readOnly: false, principalMailboxId: 'personal' } : null);
+    const r = await run(new CalendarListCalendarsHandler(), c);
+    expect(r.success).toBe(true);
+    if (r.success) {
+      const cals = (r.data as { calendars: Array<{ mailbox: string; registered_mailbox: string | null }> }).calendars;
+      expect(cals.map((x) => [x.mailbox, x.registered_mailbox])).toEqual([['work', 'personal'], ['personal', 'personal']]);
+    }
+  });
+
   it('list-calendars with mailbox lists that mailbox only; one failing mailbox is a warning', async () => {
     const { work, personal, router } = setup();
     personal.listCalendars.mockRejectedValue(Object.assign(new Error('grant gr-secret revoked'), { statusCode: 401 }));
@@ -256,16 +279,126 @@ describe('calendar tools route each calendar through its mailbox', () => {
     if (r.success) expect((r.data as { calendarErrors: number }).calendarErrors).toBe(1);
   });
 
-  it('every tool refuses an unknown mailbox instead of using the default', async () => {
-    const { work, router } = setup();
-    const err = errorOf(await run(new CalendarDeleteEventHandler(), ctx(router, { calendarId: 'someone@example.org', eventId: 'e1', mailbox: 'nope' })));
+  // Minimal valid input per tool; each gets mailbox: 'nope'.
+  const everyTool: Array<[string, ToolHandler, Record<string, unknown>]> = [
+    ['check-conflicts', new CalendarCheckConflictsHandler(), { calendarIds: ['cal-work'], proposedStart: START, proposedEnd: END }],
+    ['create-event', new CalendarCreateEventHandler(), { calendarId: 'cal-work', title: 'T', start: START, end: END }],
+    ['create-hold', new CalendarCreateHoldHandler(), { calendarId: 'cal-work', start: START, end: END }],
+    ['delete-event', new CalendarDeleteEventHandler(), { calendarId: 'cal-work', eventId: 'e1' }],
+    ['find-free-time', new CalendarFindFreeTimeHandler(), { calendarIds: ['cal-work'], timeMin: START, timeMax: END }],
+    ['holds-sweep', new CalendarHoldsSweepHandler(), { contactId: PRINCIPAL }],
+    ['list-calendars', new CalendarListCalendarsHandler(), {}],
+    ['list-events', new CalendarListEventsHandler(), { calendarId: 'cal-work', timeMin: START, timeMax: END }],
+    ['register', new CalendarRegisterHandler(), { nylas_calendar_id: 'cal-new', label: 'New', contact_id: PRINCIPAL }],
+    ['respond-to-invite', new CalendarRespondToInviteHandler(), { calendarId: 'cal-work', eventId: 'e1', response: 'accept' }],
+    ['update-event', new CalendarUpdateEventHandler(), { calendarId: 'cal-work', eventId: 'e1', title: 'New' }],
+  ];
+
+  it.each(everyTool)('%s refuses an unknown mailbox instead of using the default', async (_name, handler, input) => {
+    const { work, personal, router } = setup();
+    const c = ctx(router, { ...input, mailbox: 'nope' });
+    (c.contactService as unknown as Record<string, unknown>)['linkCalendar'] = vi.fn();
+    const err = errorOf(await run(handler, c));
     expect(err).toContain('Unknown mailbox "nope"');
-    expect(work.deleteEvent).not.toHaveBeenCalled();
+    for (const client of [work, personal]) {
+      for (const fn of Object.values(client)) expect(fn).not.toHaveBeenCalled();
+    }
+  });
+
+  it('every tool in the table is covered', () => {
+    expect(everyTool).toHaveLength(11);
+  });
+
+  it('holds-sweep with an unknown mailbox is a failure, not a success with every calendar an error', async () => {
+    const { work, personal, router } = setup();
+    const err = errorOf(await run(new CalendarHoldsSweepHandler(), ctx(router, { contactId: PRINCIPAL, mailbox: 'nope' })));
+    expect(err).toContain('Unknown mailbox "nope"');
+    expect(work.listEvents).not.toHaveBeenCalled();
+    expect(personal.listEvents).not.toHaveBeenCalled();
   });
 
   it('a non-string mailbox is an input error', async () => {
     const { router } = setup();
     const err = errorOf(await run(new CalendarDeleteEventHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'e1', mailbox: 7 })));
     expect(err).toContain('mailbox must be a mailbox id');
+  });
+});
+
+// The account swap (R77): remove mailbox A, add B. A's calendars must have a way back.
+describe('a removed mailbox\'s calendars can be re-registered through a live one', () => {
+  async function registry() {
+    const embeddings = EmbeddingService.createForTesting();
+    const store = KnowledgeGraphStore.createInMemory(embeddings);
+    const memory = new EntityMemory(store, new MemoryValidator(store, embeddings), embeddings, createSilentLogger());
+    const contacts = ContactService.createInMemory(memory);
+    const principal = await contacts.createContact({ displayName: 'Pat Example', role: 'ceo', source: 'test' });
+    return { contacts, principalId: principal.id };
+  }
+
+  function swapCtx(contacts: ContactService, router: ToolContext['calendarRouter'], input: Record<string, unknown>): ToolContext {
+    return {
+      toolName: 'calendar-test', toolVersion: '0.0.0', input, log: logger,
+      secret: () => { throw new Error('no secrets'); },
+      calendarRouter: router, contactService: contacts,
+    };
+  }
+
+  it('remove A, add B, re-register a calendar of A through B: it then routes to B', async () => {
+    const { contacts, principalId } = await registry();
+    await contacts.linkCalendar({ nylasCalendarId: 'team@group.calendar.google.com', contactId: principalId, label: 'Team', principalMailboxId: 'a' });
+    const b = stubClient();
+    const router = routerFixture({
+      mailboxes: [calendarMailbox('b', 'B', 'pat@b.example.com', true)],
+      removed: { a: 'A' },
+      clients: { b },
+      contacts,
+      principalContactId: principalId,
+    });
+
+    const refused = await router.route('team@group.calendar.google.com').then(() => null, (e: unknown) => e as Error);
+    expect(refused?.message).toContain('re-register it with calendar-register');
+
+    const r = await run(new CalendarRegisterHandler(), swapCtx(contacts, router, {
+      nylas_calendar_id: 'team@group.calendar.google.com', label: 'Team', contact_id: principalId, mailbox: 'b',
+    }));
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data).toMatchObject({ mailbox: 'b', moved_from_mailbox: 'a', updated: ['mailbox'] });
+    expect((await contacts.resolveCalendar('team@group.calendar.google.com'))?.principalMailboxId).toBe('b');
+    const routed = await router.route('team@group.calendar.google.com');
+    expect(routed.mailboxId).toBe('b');
+    expect(routed.client).toBe(b);
+  });
+
+  it('a move reports the requested fields it did not apply', async () => {
+    const { contacts, principalId } = await registry();
+    await contacts.linkCalendar({ nylasCalendarId: 'cal-x', contactId: principalId, label: 'Old label', principalMailboxId: null });
+    const router = routerFixture({ mailboxes: [calendarMailbox('b', 'B', 'pat@b.example.com', true)], clients: { b: stubClient() }, contacts, principalContactId: principalId });
+    const r = await run(new CalendarRegisterHandler(), swapCtx(contacts, router, {
+      nylas_calendar_id: 'cal-x', label: 'New label', contact_id: principalId, is_primary: true,
+    }));
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data).toMatchObject({ mailbox: 'b', moved_from_mailbox: null, label: 'Old label', is_primary: false, not_applied: ['label', 'is_primary'] });
+      expect((r.data as { calendar_id: string | null }).calendar_id).toEqual(expect.any(String));
+    }
+  });
+
+  it("a calendar of a live mailbox can't be stolen by naming another mailbox", async () => {
+    const { contacts, principalId } = await registry();
+    await contacts.linkCalendar({ nylasCalendarId: 'team@group.calendar.google.com', contactId: principalId, label: 'Team', principalMailboxId: 'a' });
+    const a = stubClient();
+    const router = routerFixture({
+      mailboxes: [calendarMailbox('a', 'A', 'pat@a.example.com', true), calendarMailbox('b', 'B', 'pat@b.example.com')],
+      clients: { a, b: stubClient() },
+      contacts,
+      principalContactId: principalId,
+    });
+    const r = await run(new CalendarRegisterHandler(), swapCtx(contacts, router, {
+      nylas_calendar_id: 'team@group.calendar.google.com', label: 'Team', contact_id: principalId, mailbox: 'b',
+    }));
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('already registered through the "a" mailbox');
+    expect((await contacts.resolveCalendar('team@group.calendar.google.com'))?.principalMailboxId).toBe('a');
+    expect((await router.route('team@group.calendar.google.com', 'b')).client).toBe(a);
   });
 });

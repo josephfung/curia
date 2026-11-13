@@ -73,6 +73,10 @@ function choices(live: PrincipalMailboxView[]): string {
   return live.map((m) => `${m.id} (${m.label})`).join(', ');
 }
 
+function options(live: PrincipalMailboxView[]): Array<{ id: string; label: string }> {
+  return live.map(({ id, label }) => ({ id, label }));
+}
+
 export class CalendarRouter {
   private readonly log: Logger;
 
@@ -91,16 +95,28 @@ export class CalendarRouter {
       return await this.deps.mailboxes.get(id);
     } catch (err) {
       if (err instanceof RemovedMailboxError) {
-        throw new CalendarRouteError('mailbox_removed', `Mailbox "${id}" (${err.label}) has been removed; its calendars can no longer be read or written.`);
+        const live = await this.deps.mailboxes.list();
+        throw new CalendarRouteError('mailbox_removed', `Mailbox "${id}" (${err.label}) has been removed.`, options(live));
       }
       if (err instanceof UnknownMailboxError) {
         const live = await this.deps.mailboxes.list();
         throw new CalendarRouteError(
           'unknown_mailbox',
           live.length > 0 ? `Unknown mailbox "${id}"; pass one of: ${choices(live)}.` : `Unknown mailbox "${id}"; no principal mailbox is connected.`,
-          live.map(({ id: mid, label }) => ({ id: mid, label })),
+          options(live),
         );
       }
+      throw err;
+    }
+  }
+
+  /** True when the id names a live mailbox; false when it was removed (or never existed). */
+  async isLive(id: string): Promise<boolean> {
+    try {
+      await this.deps.mailboxes.get(id);
+      return true;
+    } catch (err) {
+      if (err instanceof RemovedMailboxError || err instanceof UnknownMailboxError) return false;
       throw err;
     }
   }
@@ -118,21 +134,23 @@ export class CalendarRouter {
    */
   async route(calendarId: string, mailboxHint?: string): Promise<RoutedCalendar> {
     const hinted = mailboxHint !== undefined ? await this.mailbox(mailboxHint) : undefined;
+    // One registry read per call: the owner check and the sole-mailbox fallback share it.
+    const live = await this.deps.mailboxes.list();
 
     if (calendarId === PRIMARY_CALENDAR_ALIAS) {
-      const mb = hinted ?? (await this.soleMailbox('primary_alias_needs_mailbox', calendarId));
+      const mb = hinted ?? this.soleMailbox('primary_alias_needs_mailbox', calendarId, live);
       const client = await this.deps.mailboxes.calendarClient(mb.id);
       return { mailboxId: mb.id, calendarId: await this.homeCalendarId(mb.id, client), client };
     }
 
     // The owning grant wins over a registry row too: a row written before the rule (or by the
     // backfill) can name another mailbox the calendar is merely shared into.
-    const owner = await this.owner(calendarId);
+    const owner = this.owner(calendarId, live);
     if (owner) return { mailboxId: owner.id, calendarId, client: await this.deps.mailboxes.calendarClient(owner.id) };
 
     const row = await this.deps.contacts.resolveCalendar(calendarId);
     if (row?.principalMailboxId) {
-      const mb = await this.mailbox(row.principalMailboxId);
+      const mb = live.find((m) => m.id === row.principalMailboxId) ?? (await this.registeredMailbox(calendarId, row.principalMailboxId, live));
       if (hinted && hinted.id !== mb.id) {
         this.log.debug({ mailboxId: mb.id, hintedMailboxId: hinted.id }, 'Registered calendar routed to its own mailbox, not the hint');
       }
@@ -140,8 +158,30 @@ export class CalendarRouter {
     }
 
     // Not placed by the registry (unregistered, or a row the boot backfill has not assigned).
-    const mb = hinted ?? (await this.soleMailbox('needs_mailbox', calendarId));
+    const mb = hinted ?? this.soleMailbox('needs_mailbox', calendarId, live);
     return { mailboxId: mb.id, calendarId, client: await this.deps.mailboxes.calendarClient(mb.id) };
+  }
+
+  /**
+   * The mailbox a registry row names when it is not among the live ones. A removed mailbox is
+   * refused, never replaced by another (R75); the message names the recovery: re-register the
+   * calendar through a live mailbox (calendar-register moves such a row, R77).
+   */
+  private async registeredMailbox(calendarId: string, mailboxId: string, live: PrincipalMailboxView[]): Promise<PrincipalMailboxView> {
+    try {
+      return await this.mailbox(mailboxId);
+    } catch (err) {
+      if (err instanceof CalendarRouteError && err.code === 'mailbox_removed') {
+        const next = live.length > 0 ? `mailbox as one of: ${choices(live)}` : 'a mailbox once one is connected';
+        throw new CalendarRouteError(
+          'mailbox_removed',
+          `Calendar "${calendarId}" was registered through mailbox "${mailboxId}", which has been removed. ` +
+            `To use it again, re-register it with calendar-register, passing ${next}.`,
+          options(live),
+        );
+      }
+      throw err;
+    }
   }
 
   /**
@@ -153,9 +193,10 @@ export class CalendarRouter {
   async registrationMailbox(calendarId: string, mailboxHint?: string): Promise<{ mailboxId: string | null; owner: boolean }> {
     const hinted = mailboxHint !== undefined ? await this.mailbox(mailboxHint) : undefined;
     if (await this.deps.mailboxes.isFallbackActive()) return { mailboxId: null, owner: false };
-    const owner = await this.owner(calendarId);
+    const live = await this.deps.mailboxes.list();
+    const owner = this.owner(calendarId, live);
     if (owner) return { mailboxId: owner.id, owner: true };
-    const mb = hinted ?? (await this.soleMailbox('needs_mailbox', calendarId));
+    const mb = hinted ?? this.soleMailbox('needs_mailbox', calendarId, live);
     return { mailboxId: mb.id, owner: false };
   }
 
@@ -189,23 +230,21 @@ export class CalendarRouter {
   }
 
   /** The live mailbox whose own address is this calendar ID (that account's calendar), if any. */
-  private async owner(calendarId: string): Promise<PrincipalMailboxView | undefined> {
+  private owner(calendarId: string, live: PrincipalMailboxView[]): PrincipalMailboxView | undefined {
     const id = lower(calendarId);
     if (!id.includes('@')) return undefined;
-    return (await this.deps.mailboxes.list()).find((m) => m.address !== '' && lower(m.address) === id);
+    return live.find((m) => m.address !== '' && lower(m.address) === id);
   }
 
   /** The one live mailbox, or the error naming the choices when there are several (or none). */
-  private async soleMailbox(code: 'needs_mailbox' | 'primary_alias_needs_mailbox', calendarId: string): Promise<PrincipalMailboxView> {
-    const live = await this.deps.mailboxes.list();
+  private soleMailbox(code: 'needs_mailbox' | 'primary_alias_needs_mailbox', calendarId: string, live: PrincipalMailboxView[]): PrincipalMailboxView {
     if (live.length === 1) return live[0]!;
     if (live.length === 0) throw new CalendarRouteError('no_mailbox', 'No principal mailbox is connected, so there is no calendar to use.');
     this.log.info({ code, liveCount: live.length }, 'Calendar call needs a mailbox');
-    const options = live.map(({ id, label }) => ({ id, label }));
     if (code === 'primary_alias_needs_mailbox') {
-      throw new CalendarRouteError(code, `"primary" is ambiguous with ${live.length} mailboxes connected; pass mailbox as one of: ${choices(live)}.`, options);
+      throw new CalendarRouteError(code, `"primary" is ambiguous with ${live.length} mailboxes connected; pass mailbox as one of: ${choices(live)}.`, options(live));
     }
-    throw new CalendarRouteError(code, `Calendar "${calendarId}" is not registered to a mailbox; pass mailbox as one of: ${choices(live)}.`, options);
+    throw new CalendarRouteError(code, `Calendar "${calendarId}" is not registered to a mailbox; pass mailbox as one of: ${choices(live)}.`, options(live));
   }
 
   /**

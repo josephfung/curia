@@ -3981,14 +3981,21 @@ class InMemoryContactBackend implements ContactServiceBackend {
     // Enforce UNIQUE(nylas_calendar_id)
     for (const existing of this.calendars.values()) {
       if (existing.nylasCalendarId === calendar.nylasCalendarId) {
-        throw new Error(`Calendar already registered: ${calendar.nylasCalendarId}`);
+        // Coded like Postgres's unique_violation so callers handle both backends alike.
+        throw Object.assign(new Error(`Calendar already registered: ${calendar.nylasCalendarId}`), {
+          code: '23505',
+          constraint: 'contact_calendars_nylas_calendar_id_key',
+        });
       }
     }
     // Enforce at-most-one-primary per contact per mailbox
     if (calendar.isPrimary && calendar.contactId !== null) {
       for (const existing of this.calendars.values()) {
         if (existing.contactId === calendar.contactId && existing.isPrimary && existing.principalMailboxId === calendar.principalMailboxId) {
-          throw new Error(`Contact ${calendar.contactId} already has a primary calendar`);
+          throw Object.assign(new Error(`Contact ${calendar.contactId} already has a primary calendar`), {
+            code: '23505',
+            constraint: 'idx_contact_calendars_primary_per_mailbox',
+          });
         }
       }
     }

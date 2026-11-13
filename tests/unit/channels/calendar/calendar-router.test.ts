@@ -115,7 +115,10 @@ describe('CalendarRouter.route', () => {
     const router = routerFixture({ clients: { work: client('work') }, removed: { old: 'Old' }, registry: { 'cal-old': { principalMailboxId: 'old' } } });
     const err = await routeError(router.route('cal-old'));
     expect(err.code).toBe('mailbox_removed');
-    expect(err.message).toContain('Old');
+    // The way back (R77): re-register through a live mailbox, named.
+    expect(err.message).toContain('re-register it with calendar-register');
+    expect(err.message).toContain('work (Work)');
+    expect(err.mailboxes).toEqual([{ id: 'work', label: 'Work' }]);
   });
 
   it('refuses an unknown or removed mailbox hint', async () => {

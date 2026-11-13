@@ -15,7 +15,8 @@
 // (#2475, D7). The owning grant wins: a calendar ID equal to a live mailbox's address is that
 // account's own calendar and is registered to that mailbox, and an existing row naming another
 // mailbox is rewritten to it. Otherwise `mailbox` decides, and it is required once more than one
-// mailbox is live.
+// mailbox is live. An existing row with no mailbox, or one whose mailbox was removed, is moved to
+// the requested mailbox (R77); a row under another live mailbox is refused.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { ContactCalendar } from '../../../../src/contacts/calendar-types.js';
@@ -112,7 +113,7 @@ export class CalendarRegisterHandler implements ToolHandler {
             error: `Contact ${resolvedContactId ?? '(none)'} already has a primary calendar for this mailbox. Set is_primary to false, or unregister the existing primary calendar first.`,
           };
         }
-        return this.alreadyRegistered(ctx, nylas_calendar_id, placement);
+        return this.alreadyRegistered(ctx, nylas_calendar_id, placement, { contactId: resolvedContactId, label, isPrimary: is_primary ?? false });
       }
 
       const message = err instanceof Error ? err.message : String(err);
@@ -122,35 +123,59 @@ export class CalendarRegisterHandler implements ToolHandler {
   }
 
   /**
-   * The calendar is registered already. When the owning grant decided this registration and the
-   * row names another mailbox, the row is moved to the owner (D7); otherwise it stays, and the
-   * error says which mailbox it is registered through.
+   * The calendar is registered already. The row moves to the placement's mailbox when
+   * - the owning grant decided the placement (D7, R74: the owner wins even over a live mailbox), or
+   * - the row has no mailbox, or names a removed one (R77: the way back after an account swap).
+   * A row under another live mailbox stays where it is, and the error names that mailbox.
+   * A move changes only the mailbox: contact, label and primary flag stay as registered, and
+   * the result says so (`updated: ['mailbox']`, plus the requested fields it did not apply).
    */
   private async alreadyRegistered(
     ctx: ToolContext,
     nylasCalendarId: string,
     placement: { mailboxId: string | null; owner: boolean },
+    requested: { contactId: string; label: string; isPrimary: boolean },
   ): Promise<ToolResult> {
     const contacts = ctx.contactService!;
+    const router = ctx.calendarRouter!;
     try {
       const existing = await contacts.resolveCalendar(nylasCalendarId);
-      if (placement.owner && placement.mailboxId !== null && existing && existing.principalMailboxId !== placement.mailboxId) {
-        await contacts.setCalendarMailbox(nylasCalendarId, placement.mailboxId);
-        ctx.log.info(
-          { fromMailboxId: existing.principalMailboxId, mailboxId: placement.mailboxId },
-          'calendar-register: moved a calendar to the mailbox that owns it',
-        );
-        return {
-          success: true,
-          data: {
-            nylas_calendar_id: nylasCalendarId,
-            contact_id: existing.contactId,
-            label: existing.label,
-            is_primary: existing.isPrimary,
-            mailbox: placement.mailboxId,
-            moved_from_mailbox: existing.principalMailboxId,
-          },
-        };
+      const target = placement.mailboxId;
+      if (existing && target !== null && existing.principalMailboxId !== target) {
+        const from = existing.principalMailboxId;
+        const movable = placement.owner || from === null || !(await router.isLive(from));
+        if (movable) {
+          await contacts.setCalendarMailbox(nylasCalendarId, target);
+          ctx.log.info(
+            { fromMailboxId: from, mailboxId: target, owner: placement.owner },
+            'calendar-register: moved an existing calendar registration to another mailbox',
+          );
+          const row = (await contacts.getCalendarsForMailbox(target)).find((c) => c.nylasCalendarId === nylasCalendarId);
+          const notApplied = [
+            ...(existing.contactId !== requested.contactId ? ['contact_id'] : []),
+            ...(existing.label !== requested.label ? ['label'] : []),
+            ...(existing.isPrimary !== requested.isPrimary ? ['is_primary'] : []),
+          ];
+          return {
+            success: true,
+            data: {
+              calendar_id: row?.id ?? null,
+              nylas_calendar_id: nylasCalendarId,
+              contact_id: existing.contactId,
+              label: existing.label,
+              is_primary: existing.isPrimary,
+              mailbox: target,
+              moved_from_mailbox: from,
+              updated: ['mailbox'],
+              ...(notApplied.length > 0
+                ? {
+                    not_applied: notApplied,
+                    note: `It was already registered, so only its mailbox changed; ${notApplied.join(', ')} kept the registered values. Unregister and register it again to change them.`,
+                  }
+                : {}),
+            },
+          };
+        }
       }
       ctx.log.warn({ mailboxId: existing?.principalMailboxId ?? null }, 'calendar-register: calendar already registered');
       const through = existing?.principalMailboxId ? ` through the "${existing.principalMailboxId}" mailbox` : '';
@@ -162,10 +187,10 @@ export class CalendarRegisterHandler implements ToolHandler {
       const pgCode = (err as { code?: string }).code;
       if (pgCode === '23505') {
         // Moving a primary calendar into a mailbox where its contact already has one.
-        ctx.log.warn({ mailboxId: placement.mailboxId }, 'calendar-register: the owning mailbox already has a primary for this contact');
+        ctx.log.warn({ mailboxId: placement.mailboxId }, 'calendar-register: the target mailbox already has a primary for this contact');
         return {
           success: false,
-          error: `Calendar ${nylasCalendarId} belongs to the "${placement.mailboxId}" mailbox, which already has a primary calendar for that contact; unregister one first.`,
+          error: `Calendar ${nylasCalendarId} cannot move to the "${placement.mailboxId}" mailbox, which already has a primary calendar for that contact; unregister one first.`,
         };
       }
       const message = err instanceof Error ? err.message : String(err);

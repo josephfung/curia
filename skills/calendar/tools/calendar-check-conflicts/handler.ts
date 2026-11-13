@@ -8,6 +8,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds, repairQueriedUnixRange } from '../../../../src/time/timestamp.js';
 import { eventsOverlap, findMatchingHolds, type HoldMatchCriteria } from '../../../../src/channels/calendar/holds.js';
 import { freeBusyAcross, readCalendarMailbox, routeCalendars } from '../../../_shared/calendar-route.js';
+import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 
 export class CalendarCheckConflictsHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -66,7 +67,7 @@ export class CalendarCheckConflictsHandler implements ToolHandler {
               );
             }
           } catch (err) {
-            ctx.log.warn({ err, calendarId }, 'calendar-check-conflicts: failed to inspect holds for ignore criteria');
+            ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: routed.mailboxId }, 'calendar-check-conflicts: failed to inspect holds for ignore criteria');
           }
         }
       }
@@ -143,7 +144,7 @@ export class CalendarCheckConflictsHandler implements ToolHandler {
       return { success: true, data: { conflicts, clear, displayTimezone: tz && !clear ? formatDisplayTimezone(tz, labelDate) : null } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err }, 'Failed to check conflicts');
+      ctx.log.error({ ...grantSafeErrorFields(err) }, 'Failed to check conflicts');
       return { success: false, error: `Failed to check conflicts: ${message}` };
     }
   }

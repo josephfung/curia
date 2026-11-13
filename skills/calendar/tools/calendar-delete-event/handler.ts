@@ -6,6 +6,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { isNylasBadRequest } from '../../../../src/channels/calendar/nylas-calendar-client.js';
 import { readCalendarMailbox, routeCalendar } from '../../../_shared/calendar-route.js';
+import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 
 export class CalendarDeleteEventHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -42,11 +43,11 @@ export class CalendarDeleteEventHandler implements ToolHandler {
       }
 
       await client.deleteEvent(target, eventId, notifyAttendees);
-      ctx.log.info({ calendarId, eventId, mailboxId }, 'Deleted calendar event');
+      ctx.log.info({ eventId, mailboxId }, 'Deleted calendar event');
       return { success: true, data: { deleted: true } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, calendarId, eventId }, 'Failed to delete event');
+      ctx.log.error({ ...grantSafeErrorFields(err), eventId }, 'Failed to delete event');
       // Microsoft rejects notify_participants=false with a 400. Say so, rather than
       // let the agent retry silently or drop the flag and email attendees unasked.
       // Only a 400 proves nothing changed; a timeout or 5xx leaves the outcome unknown.

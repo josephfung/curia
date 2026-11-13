@@ -30,7 +30,7 @@ import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from '../../../..
 import { isUuid } from '../../../../src/util/uuid.js';
 import { CalendarRouteError, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
-import { readCalendarMailbox } from '../../../_shared/calendar-route.js';
+import { calendarRouteErrorMessage, readCalendarMailbox } from '../../../_shared/calendar-route.js';
 
 // Default maximum hold age in days.
 const DEFAULT_MAX_AGE_DAYS = 7;
@@ -76,6 +76,16 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
     }
     const mailbox = readCalendarMailbox(ctx.input);
     if (!mailbox.ok) return { success: false, error: mailbox.error };
+    // A bad mailbox is the caller's input error, checked once: per calendar it would fail every
+    // calendar and still report success (a typo'd scheduled sweep would sweep nothing forever).
+    if (mailbox.mailbox !== undefined) {
+      try {
+        await router.mailbox(mailbox.mailbox);
+      } catch (err) {
+        ctx.log.warn(err instanceof CalendarRouteError ? { code: err.code } : grantSafeErrorFields(err), 'calendar-holds-sweep: the mailbox input is not a live mailbox');
+        return { success: false, error: calendarRouteErrorMessage(err) };
+      }
+    }
 
     // nowMs: UNDOCUMENTED test-only seam — not part of the skill's public contract and
     // NOT listed in tool.json. Tests inject it via ctx.input.nowMs for deterministic
@@ -154,7 +164,7 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
         events = await routed.client.listEvents(routed.calendarId, windowStartIso, windowEndIso);
       } catch (err) {
         // One calendar failed — log it, increment the counter, and move on to the next.
-        ctx.log.error({ err, calId }, 'calendar-holds-sweep: failed to list events for calendar, skipping');
+        ctx.log.error({ ...grantSafeErrorFields(err), mailboxId: routed.mailboxId }, 'calendar-holds-sweep: failed to list events for calendar, skipping');
         calendarErrors++;
         continue;
       }
@@ -179,7 +189,7 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
         // delete; leave it for a person to handle.
         if (holdHasAttendees(event)) {
           skippedWithAttendees++;
-          ctx.log.warn({ calId, eventId: event.id }, 'calendar-holds-sweep: stale hold has attendees, leaving it in place');
+          ctx.log.warn({ mailboxId: routed.mailboxId, eventId: event.id }, 'calendar-holds-sweep: stale hold has attendees, leaving it in place');
           continue;
         }
 
@@ -190,13 +200,13 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
         try {
           await routed.client.deleteEvent(routed.calendarId, event.id);
           expired++;
-          ctx.log.info({ calId, eventId: event.id }, 'calendar-holds-sweep: deleted stale hold');
+          ctx.log.info({ mailboxId: routed.mailboxId, eventId: event.id }, 'calendar-holds-sweep: deleted stale hold');
         } catch (err) {
           // Log and continue — the hold stays on calendar but the sweep succeeds overall.
           // Increment failed so callers can distinguish "nothing stale" from "deletes failed".
           failed++;
           ctx.log.error(
-            { err, calId, eventId: event.id },
+            { ...grantSafeErrorFields(err), mailboxId: routed.mailboxId, eventId: event.id },
             'calendar-holds-sweep: failed to delete stale hold, continuing sweep',
           );
         }

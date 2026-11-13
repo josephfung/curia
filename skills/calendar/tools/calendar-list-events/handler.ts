@@ -21,6 +21,7 @@ import { guardNylasExplicitCalendarIdentity } from '../../../../src/skills/_shar
 import { isUuid } from '../../../../src/util/uuid.js';
 import { CalendarRouteError, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
 import { readCalendarMailbox, routeCalendar } from '../../../_shared/calendar-route.js';
+import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 
 export class CalendarListEventsHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -172,7 +173,7 @@ export class CalendarListEventsHandler implements ToolHandler {
           if (result.reason instanceof CalendarRouteError) {
             ctx.log.warn({ code: result.reason.code }, 'calendar-list-events: a calendar could not be routed to its mailbox');
           } else {
-            ctx.log.error({ err: result.reason, calendarId }, 'Failed to fetch events for calendar');
+            ctx.log.error({ ...grantSafeErrorFields(result.reason) }, 'Failed to fetch events for calendar');
           }
         }
       }
@@ -244,7 +245,7 @@ export class CalendarListEventsHandler implements ToolHandler {
       const tz = ctx.timezone;
       const formattedEvents = events.map((evt) => localizeEventTimes(evt, tz));
 
-      ctx.log.info({ calendarIds, count: formattedEvents.length, failedCalendarIds }, 'Listed events');
+      ctx.log.info({ calendarCount: calendarIds.length, count: formattedEvents.length, failedCount: failedCalendarIds.length }, 'Listed events');
       const data: Record<string, unknown> = {
         events: formattedEvents,
         count: formattedEvents.length,
@@ -257,7 +258,7 @@ export class CalendarListEventsHandler implements ToolHandler {
       return { success: true, data };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, calendarId, contactId }, 'Failed to list events');
+      ctx.log.error({ ...grantSafeErrorFields(err), contactId }, 'Failed to list events');
       return { success: false, error: `Failed to list events: ${message}` };
     }
   }

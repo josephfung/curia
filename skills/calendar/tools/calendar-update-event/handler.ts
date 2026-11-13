@@ -21,6 +21,7 @@ import { parseRecurrence } from '../../../../src/channels/calendar/recurrence-in
 import { parseConferencing } from '../../../../src/channels/calendar/conferencing-input.js';
 import { undeclaredInputError } from '../../../../src/skills/_shared/undeclared-input-guard.js';
 import { readCalendarMailbox, routeCalendar } from '../../../_shared/calendar-route.js';
+import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 
 // Mirrors tool.json `inputs`. Anything else is refused rather than silently dropped (#2385).
 const DECLARED_INPUTS = [
@@ -168,7 +169,7 @@ export class CalendarUpdateEventHandler implements ToolHandler {
         warnings.push(...guestListMismatchWarnings(missing, extra));
         if (missing.length > 0 || extra.length > 0) {
           ctx.log.warn(
-            { calendarId, eventId, missingCount: missing.length, extraCount: extra.length },
+            { eventId, missingCount: missing.length, extraCount: extra.length },
             'calendar-update-event: provider guest list did not match the request',
           );
         }
@@ -179,7 +180,7 @@ export class CalendarUpdateEventHandler implements ToolHandler {
         );
       }
 
-      ctx.log.info({ calendarId, eventId }, 'Updated calendar event');
+      ctx.log.info({ eventId }, 'Updated calendar event');
       // Format timestamps in the user's local timezone so the confirmation matches
       // what calendar-list-events returns. toLocalIso handles null/invalid values internally.
       const tz = ctx.timezone;
@@ -193,7 +194,7 @@ export class CalendarUpdateEventHandler implements ToolHandler {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, calendarId, eventId }, 'Failed to update event');
+      ctx.log.error({ ...grantSafeErrorFields(err), eventId }, 'Failed to update event');
       // Microsoft rejects notify_participants=false with a 400. Say so, rather than
       // let the agent retry silently or drop the flag and email attendees unasked.
       // Only a 400 proves nothing changed; a timeout or 5xx leaves the outcome unknown.

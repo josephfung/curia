@@ -296,6 +296,7 @@ describe('CalendarRegisterHandler', () => {
         linkCalendar: vi.fn().mockRejectedValue(dup),
         resolveCalendar: vi.fn().mockResolvedValue({ contactId: 'contact-abc', label: 'Personal', isPrimary: true, readOnly: false, principalMailboxId: 'work' }),
         setCalendarMailbox: vi.fn().mockResolvedValue(true),
+        getCalendarsForMailbox: vi.fn().mockResolvedValue([{ id: 'row-1', nylasCalendarId: 'ceo@personal.example.com' }]),
       };
       const result = await handler.execute(makeCtx(
         { nylas_calendar_id: 'ceo@personal.example.com', label: 'Personal', contact_id: 'contact-abc' },
@@ -303,7 +304,7 @@ describe('CalendarRegisterHandler', () => {
       ));
       expect(result.success).toBe(true);
       expect(contactService.setCalendarMailbox).toHaveBeenCalledWith('ceo@personal.example.com', 'personal');
-      if (result.success) expect(result.data).toMatchObject({ mailbox: 'personal', moved_from_mailbox: 'work' });
+      if (result.success) expect(result.data).toMatchObject({ calendar_id: 'row-1', mailbox: 'personal', moved_from_mailbox: 'work', updated: ['mailbox'] });
     });
 
     it('refuses an unknown mailbox, never falling back to the default', async () => {
