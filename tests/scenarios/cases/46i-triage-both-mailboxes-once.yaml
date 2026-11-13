@@ -30,10 +30,7 @@ inbound:
     title: Inbox drain
     tags: [inbox-drain]
     originator: system
-    intent: Triage the due mailboxes' unread mail, one batch at a time, until none is left.
-    notes:
-      - at: "{{time:today-1 09:00}}"
-        note: Heartbeat created this drain task; the mailboxes below are due. Next - triage one batch.
+    intent: "Triage the principal's due mailboxes: call ceo-inbox-list with triage: true, one batch at a time (Steps 1-6)."
 tool_stubs:
   # The drain task this wake runs: progress notes and completion are the wake's own writes.
   task-update:
@@ -45,10 +42,7 @@ tool_stubs:
   ceo-inbox-list:
     - match: { folder: DRAFTS }
       return: { folder: DRAFTS, count: 0, drafts: [] }
-    # A second look at the personal mailbox finds nothing new: the duplicate was claimed by work.
-    - match: { mailbox: personal }
-      return: { count: 0, has_more: false, messages: [], mailboxes_due: [personal] }
-    - match: {}
+    - match: { triage: true }
       return:
         count: 1
         has_more: false
@@ -66,6 +60,9 @@ tool_stubs:
             folders: [INBOX, UNREAD]
             attachments: []
             snippet: Could you confirm whether the pilot kickoff can move to the 14th?
+    # The drain's batch call is triage mode (Step 3, R66); any other plain listing is refused here.
+    - match: {}
+      error: "Call ceo-inbox-list with triage: true for the drain batch (Step 3)."
   ceo-inbox-read:
     - match: { message_id: msg-46i-work }
       return:
@@ -101,6 +98,18 @@ tool_stubs:
     - match: {}
       return: { count: 0, results: [] }
 expected_behaviors:
+  - id: lists_in_triage_mode
+    weight: critical
+    description: Lists the drain's batch with ceo-inbox-list in triage mode (Step 3).
+    check:
+      called: ceo-inbox-list
+      with: { triage: true }
+  - id: no_second_look_for_the_copy
+    weight: important
+    description: Does not list the personal mailbox again to find the duplicate; code already set it aside.
+    check:
+      not_called: [ceo-inbox-list]
+      with: { mailbox: personal }
   - id: handled_the_message
     weight: critical
     description: Reads or drafts a reply to the one message in the batch (the work copy).
@@ -126,11 +135,18 @@ expected_behaviors:
       max: 1
   - id: settled_once
     weight: critical
-    description: Settles the one message exactly once (archived as Drafted, or marked read), never twice.
+    description: Settles the drafted message once, by archiving it (✍️ Drafted), never twice.
     check:
-      any_of:
-        - { called: ceo-inbox-archive, with: { message_id: msg-46i-work }, min: 1, max: 1 }
-        - { called: ceo-inbox-mark-read, with: { message_id: msg-46i-work }, min: 1, max: 1 }
+      called: ceo-inbox-archive
+      with: { message_id: msg-46i-work }
+      min: 1
+      max: 1
+  - id: not_also_marked_read
+    weight: critical
+    description: Does not also mark the archived message read, which would settle it a second time.
+    check:
+      not_called: [ceo-inbox-mark-read]
+      with: { message_id: msg-46i-work }
   - id: nothing_sent
     weight: critical
     description: Sends no draft on its own; sending is off in this setup.
