@@ -126,12 +126,6 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
       return { success: false, error: `Failed to resolve calendars: ${msg}` };
     }
 
-    // Nothing to do if the contact has no registered calendars.
-    if (calendars.length === 0) {
-      ctx.log.info({ contactId }, 'calendar-holds-sweep: no calendars registered, skipping');
-      return { success: true, data: { scanned: 0, expired: 0, failed: 0, calendarErrors: 0, skippedWithAttendees: 0 } };
-    }
-
     // Sweep counters.
     let scanned = 0;          // curia-hold events examined
     let expired = 0;          // holds successfully deleted
@@ -139,25 +133,51 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
     let calendarErrors = 0;   // calendars whose listEvents threw / were skipped
     let skippedWithAttendees = 0; // stale holds left in place because someone added attendees
 
-    // Process each calendar independently.
-    // A failure on one calendar (revoked grant, temporary Nylas error) does not
-    // prevent sweeping the others — we log and continue.
+    // Each calendar goes through its own mailbox (#2475); one that cannot be routed (its
+    // mailbox removed, say) is skipped and counted like a calendar whose listing failed.
+    const targets: RoutedCalendar[] = [];
     for (const cal of calendars) {
-      const calId = cal.nylasCalendarId;
-
-      // Each calendar goes through its own mailbox (#2475); one that cannot be routed (its
-      // mailbox removed, say) is skipped and counted like a calendar whose listing failed.
-      let routed: RoutedCalendar;
       try {
-        routed = await router.route(calId, mailbox.mailbox);
+        targets.push(await router.route(cal.nylasCalendarId, mailbox.mailbox));
       } catch (err) {
         ctx.log.error(
           err instanceof CalendarRouteError ? { code: err.code } : grantSafeErrorFields(err),
           'calendar-holds-sweep: could not route a calendar to its mailbox, skipping',
         );
         calendarErrors++;
-        continue;
       }
+    }
+
+    // With several mailboxes, holds sit on each mailbox's home calendar (D7), which need not be
+    // registered (a grant's own primary is used until it is): the principal's sweep adds every
+    // live home calendar it does not already cover. With one mailbox: the registered calendars only, as before.
+    try {
+      if (contactId === router.principalContactId && (await router.liveMailboxes()).length > 1) {
+        for (const home of await router.homeCalendars()) {
+          if (home.removed) continue;
+          const covered = targets.some((t) => t.mailboxId === home.mailboxId && t.calendarId.toLowerCase() === home.calendarId.toLowerCase());
+          if (!covered) targets.push({ mailboxId: home.mailboxId, calendarId: home.calendarId, client: home.client });
+        }
+      }
+    } catch (err) {
+      // The registered calendars are still swept; the miss is counted, never silent.
+      ctx.log.error(err instanceof CalendarRouteError ? { code: err.code } : grantSafeErrorFields(err), 'calendar-holds-sweep: could not read the mailboxes\' home calendars');
+      calendarErrors++;
+    }
+
+    // A stated mailbox sweeps that mailbox's calendars only.
+    const sweep = mailbox.mailbox === undefined ? targets : targets.filter((t) => t.mailboxId === mailbox.mailbox);
+
+    // Nothing to do if the contact has no calendars.
+    if (sweep.length === 0 && calendarErrors === 0) {
+      ctx.log.info({ contactId }, 'calendar-holds-sweep: no calendars registered, skipping');
+      return { success: true, data: { scanned: 0, expired: 0, failed: 0, calendarErrors: 0, skippedWithAttendees: 0 } };
+    }
+
+    // Process each calendar independently.
+    // A failure on one calendar (revoked grant, temporary Nylas error) does not
+    // prevent sweeping the others — we log and continue.
+    for (const routed of sweep) {
 
       let events: Array<{ id: string; startTime: number | null; endTime: number | null; metadata: Record<string, string> | null; participants: readonly unknown[] }>;
       try {

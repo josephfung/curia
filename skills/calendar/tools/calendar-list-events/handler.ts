@@ -147,7 +147,8 @@ export class CalendarListEventsHandler implements ToolHandler {
       const settled = await Promise.allSettled(
         calendarIds.map(async (cid) => {
           const routed = preRouted.get(cid) ?? (await router.route(cid, mailbox.mailbox));
-          return routed.client.listEvents(routed.calendarId, timeMin, timeMax, fetchLimit);
+          const listed = await routed.client.listEvents(routed.calendarId, timeMin, timeMax, fetchLimit);
+          return listed.map((evt) => ({ evt, mailboxId: routed.mailboxId, calendarId: routed.calendarId }));
         }),
       );
 
@@ -156,7 +157,7 @@ export class CalendarListEventsHandler implements ToolHandler {
       // "<calendarId>: <upstream message>" per failure, so the agent can see *why*
       // a calendar failed and correct its own inputs instead of retrying blind (#1798).
       const failureDetails: string[] = [];
-      const successfulEvents: NylasCalendarEvent[][] = [];
+      const successfulEvents: SourcedEvent[][] = [];
       for (let i = 0; i < settled.length; i++) {
         // settled is mapped 1:1 from calendarIds and i is bounded by settled.length, so
         // both indexed accesses are guaranteed present (noUncheckedIndexedAccess types
@@ -203,17 +204,22 @@ export class CalendarListEventsHandler implements ToolHandler {
         };
       }
 
-      let events = successfulEvents.flat();
+      const sourced = successfulEvents.flat();
 
       // Sort merged events by start time so the agenda reads chronologically.
       // Timed events use startTime (Unix seconds). All-day events have startTime=null and
       // startDate='YYYY-MM-DD'; parse startDate to a comparable Unix seconds value so they
       // interleave correctly with timed events. Events with no date at all sort last.
-      events.sort((a, b) => {
+      sourced.sort(({ evt: a }, { evt: b }) => {
         const aTs = a.startTime ?? (a.startDate ? Date.parse(`${a.startDate}T00:00:00Z`) / 1000 : Number.POSITIVE_INFINITY);
         const bTs = b.startTime ?? (b.startDate ? Date.parse(`${b.startDate}T00:00:00Z`) / 1000 : Number.POSITIVE_INFINITY);
         return aTs - bTs;
       });
+
+      // The same meeting on two of the principal's accounts' calendars is one entry (D7).
+      const collapsed = await collapseAcrossMailboxes(ctx, sourced);
+      const calendarsOf = collapsed.calendarsOf;
+      let events = collapsed.events;
 
       // Client-side filtering: query matches title or description (case-insensitive)
       if (query && typeof query === 'string') {
@@ -243,7 +249,10 @@ export class CalendarListEventsHandler implements ToolHandler {
       // correct wall-clock times. Falls back to UTC when timezone is not configured,
       // and returns null for null/invalid timestamp values.
       const tz = ctx.timezone;
-      const formattedEvents = events.map((evt) => localizeEventTimes(evt, tz));
+      const formattedEvents = events.map((evt) => {
+        const calendars = calendarsOf.get(evt);
+        return calendars ? { ...localizeEventTimes(evt, tz), calendars } : localizeEventTimes(evt, tz);
+      });
 
       ctx.log.info({ calendarCount: calendarIds.length, count: formattedEvents.length, failedCount: failedCalendarIds.length }, 'Listed events');
       const data: Record<string, unknown> = {
@@ -262,6 +271,80 @@ export class CalendarListEventsHandler implements ToolHandler {
       return { success: false, error: `Failed to list events: ${message}` };
     }
   }
+}
+
+/** An event with the mailbox and (routed) calendar it was read through. */
+interface SourcedEvent {
+  evt: NylasCalendarEvent;
+  mailboxId: string;
+  calendarId: string;
+}
+
+/** One calendar a collapsed meeting is on. `eventId` is that calendar's own id for it (ids are grant-scoped). */
+export interface EventCalendarRef {
+  calendarId: string;
+  mailbox: string;
+  mailbox_label: string | null;
+  eventId: string;
+}
+
+/**
+ * The same meeting on calendars of two of the principal's accounts (an invite to both, or one
+ * calendar shared into the other) is listed once (#2475, D7): events with the same non-empty
+ * iCal UID and the same occurrence collapse into the first, which gains `calendars` naming each
+ * calendar it is on. The occurrence is part of the key because a recurring series' instances
+ * share one UID. Events without a UID are never merged. Only events read through more than one
+ * mailbox collapse, so a single-mailbox listing is unchanged.
+ */
+async function collapseAcrossMailboxes(
+  ctx: ToolContext,
+  sourced: SourcedEvent[],
+): Promise<{ events: NylasCalendarEvent[]; calendarsOf: Map<NylasCalendarEvent, EventCalendarRef[]> }> {
+  const calendarsOf = new Map<NylasCalendarEvent, EventCalendarRef[]>();
+  if (new Set(sourced.map((s) => s.mailboxId)).size < 2) return { events: sourced.map((s) => s.evt), calendarsOf };
+
+  let labels = new Map<string, string>();
+  try {
+    labels = new Map((await ctx.calendarRouter!.liveMailboxes()).map((m) => [m.id, m.label]));
+  } catch (err) {
+    // Labels are a courtesy; the ids are still listed.
+    ctx.log.warn({ ...grantSafeErrorFields(err) }, 'calendar-list-events: could not read mailbox labels for collapsed events');
+  }
+  const ref = (s: SourcedEvent): EventCalendarRef => ({
+    calendarId: s.calendarId,
+    mailbox: s.mailboxId,
+    mailbox_label: labels.get(s.mailboxId) ?? null,
+    eventId: s.evt.id,
+  });
+
+  const firstByKey = new Map<string, { first: SourcedEvent; refs: EventCalendarRef[] }>();
+  const events: NylasCalendarEvent[] = [];
+  for (const s of sourced) {
+    const uid = s.evt.icalUid?.trim();
+    if (!uid) {
+      events.push(s.evt);
+      continue;
+    }
+    const occurrence = s.evt.originalStartTime ?? s.evt.startTime ?? s.evt.startDate ?? '';
+    const key = `${uid}\u0000${occurrence}`;
+    const seen = firstByKey.get(key);
+    if (seen) {
+      // The same calendar twice (one calendar listed through two routes) is not a second calendar.
+      if (!seen.refs.some((r) => r.calendarId.toLowerCase() === s.calendarId.toLowerCase())) seen.refs.push(ref(s));
+      continue;
+    }
+    firstByKey.set(key, { first: s, refs: [ref(s)] });
+    events.push(s.evt);
+  }
+  let merged = 0;
+  for (const { first, refs } of firstByKey.values()) {
+    if (refs.length > 1) {
+      calendarsOf.set(first.evt, refs);
+      merged++;
+    }
+  }
+  if (merged > 0) ctx.log.debug({ merged }, 'calendar-list-events: collapsed meetings listed on more than one calendar');
+  return { events, calendarsOf };
 }
 
 /**

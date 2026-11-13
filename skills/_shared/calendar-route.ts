@@ -3,11 +3,13 @@
 // be routed becomes a tool error that says what to pass (e.g. which mailbox ids exist).
 // Logs carry mailbox ids and error classes only, never grant ids, addresses or calendar IDs.
 
-import type { ToolContext } from '../../src/skills/types.js';
+import type { ToolContext, ToolResult } from '../../src/skills/types.js';
+import { classifyEvidence, type EvidenceVerdict, type MailboxEvidence } from '../../src/principal-mailboxes/evidence.js';
 import { CalendarRouteError, type RoutedCalendar } from '../../src/channels/calendar/calendar-router.js';
 import type { NylasFreeBusyResult } from '../../src/channels/calendar/nylas-calendar-client.js';
 import { MissingNylasApiKeyError } from '../../src/principal-mailboxes/types.js';
 import { grantSafeErrorFields, mayCarryGrantId } from '../../src/principal-mailboxes/error-fields.js';
+import type { PrincipalMailboxView } from '../../src/principal-mailboxes/service.js';
 import { readMailboxInput } from './principal-mailbox-client.js';
 
 export type RouteOutcome = { ok: true; routed: RoutedCalendar } | { ok: false; error: string };
@@ -66,6 +68,152 @@ export async function routeCalendars(
     routed.push(r.routed);
   }
   return { ok: true, routed };
+}
+
+/** The live mailboxes as `{id, label}` choices. */
+export type MailboxChoice = { id: string; label: string };
+
+export type WriteGate =
+  /** Go ahead through `routed`. `multi`: more than one mailbox is live; `principal`: one of the principal's calendars (only known when multi). */
+  | { kind: 'proceed'; routed: RoutedCalendar; multi: boolean; principal: boolean; live: PrincipalMailboxView[] }
+  /** Several mailboxes are live and nothing says which one this write belongs to. */
+  | { kind: 'needs_mailbox'; mailboxes: MailboxChoice[]; live: PrincipalMailboxView[] }
+  | { kind: 'error'; error: string };
+
+/**
+ * The code gate for writes on the principal's calendars (#2475, D5). With one live mailbox it
+ * routes exactly as before. With several:
+ *   - `requireMailbox` and no `mailbox` on one of the principal's calendars → needs_mailbox
+ *     (event and hold creation: the account a meeting goes out from is a choice, never a default);
+ *   - a stated `mailbox` must be the mailbox the calendar belongs to (calendar_mailbox_mismatch):
+ *     a registered or owned calendar never silently writes through another account.
+ * Never throws.
+ */
+export async function gateCalendarWrite(
+  ctx: ToolContext,
+  tool: string,
+  calendarId: string,
+  mailbox: string | undefined,
+  opts: { requireMailbox: boolean; /** Replaces the default advice in the mismatch error. */ mismatchAdvice?: string },
+): Promise<WriteGate> {
+  const router = ctx.calendarRouter;
+  if (!router) return { kind: 'error', error: 'Calendar not configured — Nylas credentials missing' };
+  let live: PrincipalMailboxView[];
+  let principal = false;
+  try {
+    live = await router.liveMailboxes();
+    // The principal check costs a registry read, so a single-mailbox install never makes it.
+    if (live.length > 1) principal = await router.isPrincipalCalendar(calendarId);
+  } catch (err) {
+    logRouteFailure(ctx, tool, err);
+    return { kind: 'error', error: calendarRouteErrorMessage(err) };
+  }
+  const multi = live.length > 1;
+  if (multi && principal && opts.requireMailbox && mailbox === undefined) {
+    ctx.log.info({ tool, code: 'needs_mailbox', liveCount: live.length }, `${tool}: a write on the principal's calendar needs a mailbox`);
+    return { kind: 'needs_mailbox', mailboxes: live.map(({ id, label }) => ({ id, label })), live };
+  }
+  const route = await routeCalendar(ctx, tool, calendarId, mailbox);
+  if (!route.ok) return { kind: 'error', error: route.error };
+  if (mailbox !== undefined && route.routed.mailboxId !== mailbox) {
+    const owner = live.find((m) => m.id === route.routed.mailboxId);
+    const named = live.find((m) => m.id === mailbox);
+    ctx.log.warn({ tool, code: 'calendar_mailbox_mismatch', mailboxId: route.routed.mailboxId, requestedMailboxId: mailbox }, `${tool}: calendar belongs to another mailbox`);
+    return {
+      kind: 'error',
+      error:
+        `calendar_mailbox_mismatch: calendar "${calendarId}" belongs to mailbox "${route.routed.mailboxId}"${owner ? ` (${owner.label})` : ''}, ` +
+        `not "${mailbox}"${named ? ` (${named.label})` : ''}. Nothing was changed. ` +
+        (opts.mismatchAdvice ??
+          `Use a calendar of mailbox "${mailbox}" (calendarId "primary" is its home calendar), or pass mailbox "${route.routed.mailboxId}".`),
+    };
+  }
+  return { kind: 'proceed', routed: route.routed, multi, principal, live };
+}
+
+/** Attendee addresses for mailbox evidence: lower-cased, de-duplicated, the principal's own mailboxes left out. */
+export function evidenceRecipients(addresses: string[], live: PrincipalMailboxView[]): string[] {
+  const own = new Set(live.map((m) => m.address.trim().toLowerCase()).filter((a) => a !== ''));
+  return [...new Set(addresses.map((a) => a.trim().toLowerCase()))].filter((a) => a.includes('@') && !own.has(a));
+}
+
+/**
+ * Per-mailbox evidence for these attendees (D5), or null when it could not be computed. Never
+ * throws: evidence informs the choice of account, it never blocks or fails a write.
+ */
+export async function attendeeEvidence(ctx: ToolContext, tool: string, recipients: string[]): Promise<MailboxEvidence[] | null> {
+  const router = ctx.calendarRouter;
+  if (!router) return null;
+  try {
+    return await router.evidence(recipients);
+  } catch (err) {
+    ctx.log.warn({ tool, ...grantSafeErrorFields(err) }, `${tool}: mailbox evidence failed`);
+    return null;
+  }
+}
+
+/**
+ * The needs_mailbox result for a write that created nothing: the choices and, when there are
+ * attendees, the evidence for each account (D5). A successful result, as draft-compose's is,
+ * so the evidence reaches the model; `created: false` says nothing was written.
+ */
+export async function needsMailboxResult(
+  ctx: ToolContext,
+  tool: string,
+  mailboxes: MailboxChoice[],
+  recipients: string[],
+): Promise<ToolResult> {
+  const data: Record<string, unknown> = {
+    needs_mailbox: true,
+    created: false,
+    mailboxes,
+    note: 'Nothing was created. Several accounts are connected: call again with mailbox set to the account this belongs to.',
+  };
+  if (recipients.length > 0) {
+    const evidence = await attendeeEvidence(ctx, tool, recipients);
+    if (evidence) data['evidence'] = evidence;
+    else data['evidence_unavailable'] = true;
+  }
+  return { success: true, data };
+}
+
+/** How the evidence bears on the chosen mailbox, for a write's result (D5). Only with several mailboxes and attendees. */
+export async function evidenceVerdict(
+  ctx: ToolContext,
+  tool: string,
+  chosen: string,
+  recipients: string[],
+): Promise<{ evidence: EvidenceVerdict } | { evidence_unavailable: true }> {
+  const evidence = await attendeeEvidence(ctx, tool, recipients);
+  return evidence ? { evidence: classifyEvidence(evidence, chosen) } : { evidence_unavailable: true };
+}
+
+/**
+ * The home calendars to search for holds to release, besides the one a write went to: every
+ * live mailbox's, once several are live (D7: release searches all the principal's calendars).
+ * With one mailbox it is just `routed`, as before. A home calendar that cannot be resolved is a
+ * warning, never a failed write.
+ */
+export async function holdReleaseTargets(
+  ctx: ToolContext,
+  tool: string,
+  routed: RoutedCalendar,
+  searchHomes: boolean,
+): Promise<{ targets: RoutedCalendar[]; warnings: string[] }> {
+  const targets: RoutedCalendar[] = [routed];
+  const router = ctx.calendarRouter;
+  if (!searchHomes || !router) return { targets, warnings: [] };
+  try {
+    for (const home of await router.homeCalendars()) {
+      if (home.removed) continue;
+      const seen = targets.some((t) => t.mailboxId === home.mailboxId && t.calendarId.toLowerCase() === home.calendarId.toLowerCase());
+      if (!seen) targets.push({ mailboxId: home.mailboxId, calendarId: home.calendarId, client: home.client });
+    }
+    return { targets, warnings: [] };
+  } catch (err) {
+    logRouteFailure(ctx, tool, err);
+    return { targets, warnings: [`Holds were looked for only on this calendar: the other mailboxes' home calendars could not be read (${calendarRouteErrorMessage(err)}).`] };
+  }
 }
 
 /** One free/busy answer with the calendar ID the caller asked about. */

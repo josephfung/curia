@@ -138,7 +138,10 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // #2475 the optional `mailbox` input on all 11 calendar tools (net +1,355 bytes after shortening
   // respond-to-invite's account note), covered by the maintainer's mailbox-input approval (2026-11-12):
   // 28,447 over 23 local tools.
-  { agent: 'calendar', alwaysOnPromptTokens: 5_700, localToolDefinitionBytes: 28_450, allowMcpPins: false },
+  // #2475 Task 32: the `mailbox` inputs of create-event, create-hold, respond-to-invite and
+  // holds-sweep say when an account is required and how to choose it (D5), and respond-to-invite
+  // drops `account` (net +271 bytes, same approval): 28,718 over 23 local tools.
+  { agent: 'calendar', alwaysOnPromptTokens: 5_700, localToolDefinitionBytes: 28_720, allowMcpPins: false },
   // ceo-inbox: YAML 60,090 → 49,037 chars (~16,416 → ~13,653 tokens always-on with its SKILL.md bodies),
   // its task-wake steps now riding on the wake; 43,469 bytes over 41 local tools.
   // archive-extract plus the longer file-parse description (#2208) is +1,831 bytes, the same

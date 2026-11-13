@@ -21,6 +21,7 @@ import type { ContactService } from '../../contacts/contact-service.js';
 import type { CalendarRouterMailboxes, PrincipalMailboxView } from '../../principal-mailboxes/service.js';
 import { RemovedMailboxError, UnknownMailboxError } from '../../principal-mailboxes/types.js';
 import type { NylasCalendarClient } from './nylas-calendar-client.js';
+import type { MailboxEvidence } from '../../principal-mailboxes/evidence.js';
 
 /** Nylas's alias for a grant's primary calendar. Never stored, never sent without a mailbox. */
 export const PRIMARY_CALENDAR_ALIAS = 'primary';
@@ -87,6 +88,31 @@ export class CalendarRouter {
   /** The live principal mailboxes (the deferred-migration fallback included). */
   async liveMailboxes(): Promise<PrincipalMailboxView[]> {
     return this.deps.mailboxes.list();
+  }
+
+  /** The principal's contact id: whose registered calendars are "the principal's calendars". */
+  get principalContactId(): string {
+    return this.deps.principalContactId;
+  }
+
+  /**
+   * Per-mailbox history with these attendees (D5). Computed by the mailbox service from each
+   * mailbox's mail; one unreadable mailbox is marked, never dropped.
+   */
+  async evidence(recipients: string[]): Promise<MailboxEvidence[]> {
+    return this.deps.mailboxes.evidence(recipients);
+  }
+
+  /**
+   * True for one of the principal's calendars: the `primary` alias, a live mailbox's own
+   * calendar (its address), or a calendar registered to the principal's contact. Writes on these
+   * need a stated mailbox once several are live (D5).
+   */
+  async isPrincipalCalendar(calendarId: string): Promise<boolean> {
+    if (calendarId === PRIMARY_CALENDAR_ALIAS) return true;
+    if (this.owner(calendarId, await this.deps.mailboxes.list())) return true;
+    const row = await this.deps.contacts.resolveCalendar(calendarId);
+    return row?.contactId === this.deps.principalContactId;
   }
 
   /** A live mailbox by id; unknown and removed ids are CalendarRouteErrors. */

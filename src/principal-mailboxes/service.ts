@@ -12,6 +12,7 @@ import { CeoNylasClient } from '../channels/email/ceo-nylas-client.js';
 import type { CallBudget } from '../util/call-budget.js';
 import type { PrincipalMailboxStore } from './store.js';
 import { principalMailboxGrantSecretName } from './secrets.js';
+import { mailboxEvidence, type MailboxEvidence } from './evidence.js';
 import {
   MissingNylasApiKeyError,
   RemovedMailboxError,
@@ -72,6 +73,11 @@ export interface CalendarRouterMailboxes {
   get(id: string): Promise<PrincipalMailboxView>;
   isFallbackActive(): Promise<boolean>;
   calendarClient(id: string): Promise<NylasCalendarClient>;
+  /**
+   * Which mailbox has a history with these attendees (D5), for the calendar write gate. Mail is
+   * read here, in code; the calendar tools get the counts, never a mail client.
+   */
+  evidence(recipients: string[]): Promise<MailboxEvidence[]>;
 }
 
 function toView(r: PrincipalMailboxRecord): PrincipalMailboxView {
@@ -249,6 +255,8 @@ export class PrincipalMailboxes {
       get: (id) => this.get(id),
       isFallbackActive: () => this.isFallbackActive(),
       calendarClient: (id) => this.calendarClient(id),
+      evidence: (recipients) =>
+        mailboxEvidence({ list: () => this.list(), gatewayClient: (id) => this.gatewayClient(id) }, recipients, { log: this.log }),
     };
   }
 

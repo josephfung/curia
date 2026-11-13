@@ -18,9 +18,16 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { ConfigStore } from '../../../../src/memory/config-store.js';
 import { buildHoldMetadata } from '../../../../src/channels/calendar/holds.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
-import { CalendarRouteError, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
+import { CalendarRouteError, PRIMARY_CALENDAR_ALIAS, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
-import { calendarRouteErrorMessage, readCalendarMailbox } from '../../../_shared/calendar-route.js';
+import {
+  calendarRouteErrorMessage,
+  evidenceRecipients,
+  needsMailboxResult,
+  readCalendarMailbox,
+} from '../../../_shared/calendar-route.js';
+
+const TOOL = 'calendar-create-hold';
 
 // The namespace / key where the holds toggle lives in the config store.
 const HOLDS_NAMESPACE = 'calendar_holds';
@@ -143,9 +150,35 @@ export class CalendarCreateHoldHandler implements ToolHandler {
     // -- Route to the calendar's mailbox (#2475) --
     // A route the caller can fix (needs_mailbox, an unknown mailbox) is a tool error naming what
     // to pass. Anything else (credentials unreadable) is a hold failure: non-fatal, as below.
+    // With several mailboxes a hold on the principal's calendar needs a stated mailbox (the
+    // account the meeting will belong to), and goes on that mailbox's home calendar, where
+    // booking, accept and the sweep look for holds (D5, D7). With one mailbox: as before.
     let routed: RoutedCalendar;
+    let multiMailbox = false;
     try {
-      routed = await ctx.calendarRouter.route(calendarId, mailbox.mailbox);
+      const router = ctx.calendarRouter;
+      const live = await router.liveMailboxes();
+      multiMailbox = live.length > 1;
+      const principal = multiMailbox && (await router.isPrincipalCalendar(calendarId));
+      if (principal && mailbox.mailbox === undefined) {
+        ctx.log.info({ code: 'needs_mailbox', liveCount: live.length }, 'calendar-create-hold: a hold on the principal\'s calendar needs a mailbox');
+        const counterpart = typeof contactDomain === 'string' ? [contactDomain] : [];
+        const needs = await needsMailboxResult(ctx, TOOL, live.map(({ id, label }) => ({ id, label })), evidenceRecipients(counterpart, live));
+        if (!needs.success) return needs;
+        return { success: true, data: { held: false, holdEventId: null, display, displayTimezone: tzLabel, ...(needs.data as Record<string, unknown>) } };
+      }
+      routed = await router.route(calendarId, mailbox.mailbox);
+      if (mailbox.mailbox !== undefined && routed.mailboxId !== mailbox.mailbox) {
+        ctx.log.warn({ code: 'calendar_mailbox_mismatch', mailboxId: routed.mailboxId, requestedMailboxId: mailbox.mailbox }, 'calendar-create-hold: calendar belongs to another mailbox');
+        return {
+          success: false,
+          error:
+            `calendar_mailbox_mismatch: calendar "${calendarId}" belongs to mailbox "${routed.mailboxId}", not "${mailbox.mailbox}". ` +
+            `No hold was placed. Pass calendarId "primary" to hold on mailbox "${mailbox.mailbox}"'s home calendar, or pass mailbox "${routed.mailboxId}".`,
+        };
+      }
+      // The chosen mailbox's home calendar: release and the sweep search home calendars.
+      if (principal) routed = await router.route(PRIMARY_CALENDAR_ALIAS, routed.mailboxId);
     } catch (err) {
       if (err instanceof CalendarRouteError) {
         ctx.log.warn({ code: err.code }, 'calendar-create-hold: calendar could not be routed');
@@ -179,6 +212,8 @@ export class CalendarCreateHoldHandler implements ToolHandler {
           holdEventId: event.id,
           display,
           displayTimezone: tzLabel,
+          // With several mailboxes, say which account's calendar holds it (D5); single: as before.
+          ...(multiMailbox ? { mailbox: routed.mailboxId, calendarId: routed.calendarId } : {}),
         },
       };
     } catch (err) {

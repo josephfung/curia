@@ -128,10 +128,10 @@ describe('calendar tools route each calendar through its mailbox', () => {
     expect(personal.createEvent).toHaveBeenCalledWith('ceo@personal.example.com', expect.anything());
   });
 
-  it('create-event refuses bare primary with two mailboxes and creates nothing', async () => {
+  it('create-event with bare primary and two mailboxes returns needs_mailbox and creates nothing', async () => {
     const { work, personal, router } = setup();
-    const err = errorOf(await run(new CalendarCreateEventHandler(), ctx(router, { calendarId: 'primary', title: 'T', start: START, end: END })));
-    expect(err).toContain('pass mailbox');
+    const r = await run(new CalendarCreateEventHandler(), ctx(router, { calendarId: 'primary', title: 'T', start: START, end: END }));
+    expect(r).toMatchObject({ success: true, data: { needs_mailbox: true, created: false } });
     expect(work.createEvent).not.toHaveBeenCalled();
     expect(personal.createEvent).not.toHaveBeenCalled();
   });
@@ -267,6 +267,11 @@ describe('calendar tools route each calendar through its mailbox', () => {
         'cal-personal': { principalMailboxId: 'personal' },
         'cal-old': { principalMailboxId: 'old' },
       },
+      // Each live mailbox's home calendar is registered, so the sweep's home pass finds both.
+      principalCalendars: [
+        { nylasCalendarId: 'cal-work', isPrimary: true, principalMailboxId: 'work' },
+        { nylasCalendarId: 'cal-personal', isPrimary: true, principalMailboxId: 'personal' },
+      ],
     });
     const c = ctx(router, { contactId: PRINCIPAL });
     (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([

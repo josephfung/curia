@@ -14,8 +14,10 @@ import {
 import { formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { localizeEventTimes } from '../../../../src/channels/calendar/event-display.js';
 import type { RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
-import { readCalendarMailbox, routeCalendar } from '../../../_shared/calendar-route.js';
+import { gateCalendarWrite, holdReleaseTargets, readCalendarMailbox } from '../../../_shared/calendar-route.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
+
+const TOOL = 'calendar-respond-to-invite';
 
 type InviteResponse = 'accept' | 'decline' | 'tentative';
 
@@ -76,20 +78,33 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
     const mailbox = readCalendarMailbox(ctx.input);
     if (!mailbox.ok) return { success: false, error: mailbox.error };
 
-    const warnings: string[] = [];
-    if (input.account) {
-      warnings.push("account is informational; RSVP runs as the mailbox the calendar belongs to");
+    // `account` became `mailbox` (#2475) and is enforced; an old-style call is told so rather
+    // than answered from whichever account the calendar happens to route to.
+    if (input.account !== undefined) {
+      return {
+        success: false,
+        error: 'account is no longer accepted: pass the id of the mailbox the invite arrived in as mailbox (the consult\'s mailbox=). Nothing was sent.',
+      };
     }
+
+    const warnings: string[] = [];
     if (input.comment) {
       warnings.push('comment was not sent because the installed Nylas sendRsvp SDK accepts RSVP status only');
     }
 
     try {
       // RSVP is first-person: it answers as the grant it goes through, so it must be the
-      // mailbox the calendar belongs to (#2475). `primary` becomes that mailbox's home calendar.
-      const route = await routeCalendar(ctx, 'calendar-respond-to-invite', calendarId, mailbox.mailbox);
-      if (!route.ok) return { success: false, error: route.error };
-      const routed = route.routed;
+      // mailbox the invite arrived in (#2475, D7): the stated `mailbox`, else the calendar's own
+      // mailbox (its registry row or owning address). A stated mailbox that does not own the
+      // calendar is refused, never answered from the other account. With several mailboxes,
+      // `primary` or an unregistered calendar without `mailbox` is refused (nothing to go on).
+      const gate = await gateCalendarWrite(ctx, TOOL, calendarId, mailbox.mailbox, {
+        requireMailbox: false,
+        mismatchAdvice: `Answer from the mailbox the invite arrived in: find the event on that mailbox's calendar (calendarId "primary" with mailbox "${mailbox.mailbox ?? ''}") and use its eventId.`,
+      });
+      if (gate.kind === 'error') return { success: false, error: gate.error };
+      if (gate.kind === 'needs_mailbox') return { success: false, error: 'needs_mailbox: pass the mailbox the invite arrived in.' };
+      const routed = gate.routed;
 
       if (ctx.contactService) {
         const registry = await ctx.contactService.resolveCalendar(routed.calendarId);
@@ -111,7 +126,7 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
       }
 
       const releaseResult = normalizedResponse === 'accept'
-        ? await this.releaseMatchingHolds(ctx, routed, input.holdMatchCriteria, event, input.holdSearchStart, input.holdSearchEnd)
+        ? await this.releaseMatchingHolds(ctx, routed, gate.multi && gate.principal, input.holdMatchCriteria, event, input.holdSearchStart, input.holdSearchEnd)
         : { releasedHolds: [] as string[], releaseWarnings: [] as string[] };
 
       const tz = ctx.timezone;
@@ -131,6 +146,8 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
           releaseWarnings: releaseResult.releaseWarnings,
           warnings,
           displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : null,
+          // With several mailboxes, the account that answered (D7); single: as before.
+          ...(gate.multi ? { mailbox: routed.mailboxId } : {}),
         },
       };
     } catch (err) {
@@ -143,12 +160,12 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
   private async releaseMatchingHolds(
     ctx: ToolContext,
     routed: RoutedCalendar,
+    searchHomes: boolean,
     criteria: HoldMatchCriteria | undefined,
     event: NylasCalendarEvent | null,
     holdSearchStart?: string,
     holdSearchEnd?: string,
   ): Promise<{ releasedHolds: string[]; releaseWarnings: string[] }> {
-    const { client, calendarId } = routed;
     if (!criteria || !hasHoldMatchSignal(criteria)) {
       return { releasedHolds: [], releaseWarnings: [] };
     }
@@ -161,47 +178,54 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
       };
     }
 
-    let events: NylasCalendarEvent[];
-    try {
-      events = await client.listEvents(calendarId, window.start, window.end);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: routed.mailboxId }, 'calendar-respond-to-invite: failed to list holds for cleanup');
-      return {
-        releasedHolds: [],
-        releaseWarnings: [`Failed to list holds for cleanup: ${message}`],
-      };
-    }
-
-    const matches = findHoldsForConversationRelease(events, enrichCriteriaWithEventWindow(criteria, event));
-    if (matches.length === 0) {
-      ctx.log.info(
-        { mailboxId: routed.mailboxId, criteria, eventWindow: window },
-        'calendar-respond-to-invite: no holds matched conversation ref for release; orphans left to sweep',
-      );
-    }
+    // With several mailboxes the conversation's holds may be on another account's home
+    // calendar (D7): every live home calendar is searched. With one mailbox: this calendar only.
+    const { targets, warnings: releaseWarnings } = await holdReleaseTargets(ctx, TOOL, routed, searchHomes);
+    const matchCriteria = enrichCriteriaWithEventWindow(criteria, event);
     const releasedHolds: string[] = [];
-    const releaseWarnings: string[] = [];
-    for (const hold of matches) {
-      if (holdHasAttendees(hold)) {
-        // Deleting would email its attendees a cancellation; leave it for a person.
-        releaseWarnings.push(`Hold ${hold.id} has attendees, so it was left in place to avoid emailing them a cancellation.`);
-        ctx.log.warn({ mailboxId: routed.mailboxId, holdId: hold.id }, 'calendar-respond-to-invite: matching hold has attendees, not releasing');
+    let matched = 0;
+    for (const target of targets) {
+      const { client, calendarId } = target;
+      let events: NylasCalendarEvent[];
+      try {
+        events = await client.listEvents(calendarId, window.start, window.end);
+      } catch (err) {
+        // The upstream reason stays in the warning (R78); the log is grant-safe.
+        const message = err instanceof Error ? err.message : String(err);
+        ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: target.mailboxId }, 'calendar-respond-to-invite: failed to list holds for cleanup');
+        releaseWarnings.push(`Failed to list holds for cleanup: ${message}`);
         continue;
       }
-      try {
-        // No notify flag: no attendees to email, and Microsoft rejects false.
-        await client.deleteEvent(calendarId, hold.id);
-        releasedHolds.push(hold.id);
-        ctx.log.info(
-          { mailboxId: routed.mailboxId, holdId: hold.id },
-          'calendar-respond-to-invite: released conversation hold',
-        );
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        releaseWarnings.push(`Failed to release hold ${hold.id}: ${message}`);
-        ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: routed.mailboxId, holdId: hold.id }, 'calendar-respond-to-invite: failed to release matching hold');
+
+      const matches = findHoldsForConversationRelease(events, matchCriteria);
+      matched += matches.length;
+      for (const hold of matches) {
+        if (holdHasAttendees(hold)) {
+          // Deleting would email its attendees a cancellation; leave it for a person.
+          releaseWarnings.push(`Hold ${hold.id} has attendees, so it was left in place to avoid emailing them a cancellation.`);
+          ctx.log.warn({ mailboxId: target.mailboxId, holdId: hold.id }, 'calendar-respond-to-invite: matching hold has attendees, not releasing');
+          continue;
+        }
+        try {
+          // No notify flag: no attendees to email, and Microsoft rejects false.
+          await client.deleteEvent(calendarId, hold.id);
+          releasedHolds.push(hold.id);
+          ctx.log.info(
+            { mailboxId: target.mailboxId, holdId: hold.id },
+            'calendar-respond-to-invite: released conversation hold',
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          releaseWarnings.push(`Failed to release hold ${hold.id}: ${message}`);
+          ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: target.mailboxId, holdId: hold.id }, 'calendar-respond-to-invite: failed to release matching hold');
+        }
       }
+    }
+    if (matched === 0) {
+      ctx.log.info(
+        { mailboxId: routed.mailboxId, calendarCount: targets.length, criteria, eventWindow: window },
+        'calendar-respond-to-invite: no holds matched conversation ref for release; orphans left to sweep',
+      );
     }
 
     return { releasedHolds, releaseWarnings };
