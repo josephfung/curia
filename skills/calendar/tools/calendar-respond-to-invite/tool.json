@@ -12,7 +12,7 @@
     "holdMatchCriteria": "object? ({ subject?, contactDomain?, contactId?, sourceRef?, threadRef? } used only when response is accept to release matching Curia holds)",
     "holdSearchStart": "timestamp? (start of hold cleanup search window; defaults around the invite time)",
     "holdSearchEnd": "timestamp? (end of hold cleanup search window; defaults around the invite time)",
-    "mailbox": "string? (the mailbox the invite arrived in, the consult's mailbox; the RSVP answers as it and calendarId must be its calendar. Required for \"primary\" or an unregistered calendar when several are connected)"
+    "mailbox": "string? (the mailbox the invite arrived in, the consult's mailbox. Required on the principal's calendars when several are connected; the RSVP answers as it, finding its own copy of the invite by iCal UID, and is never sent from another account)"
   },
   "outputs": {
     "responded": "boolean",
@@ -23,7 +23,9 @@
     "releasedHolds": "array (hold event IDs released after accepting)",
     "releaseWarnings": "array (non-fatal hold cleanup failures)",
     "warnings": "array (non-fatal RSVP/fetch/comment warnings)",
-    "mailbox": "string? (the account that answered, when several are connected)"
+    "mailbox": "string? (the account that answered, when several are connected)",
+    "needs_mailbox": "boolean? (true: nothing was sent; call again with the arrival mailbox)",
+    "found_by_ical_uid": "boolean? (true: answered on the arrival mailbox's own copy, whose calendarId and eventId are returned)"
   },
   "permissions": [],
   "secrets": [],

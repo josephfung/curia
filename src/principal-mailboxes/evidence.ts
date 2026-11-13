@@ -161,12 +161,26 @@ export async function mailboxEvidence(
   return Promise.all(mailboxes.map((m) => one(svc, m, normalized, limit, opts.log)));
 }
 
-function score(e: MailboxEvidence): number {
+/**
+ * What the calendar path gets (#2475, R81): counts and the domain match only. Subjects and dates
+ * of the principal's mail stay out of calendar tool results, which other agents can read.
+ */
+export type CountsOnlyEvidence = Omit<MailboxEvidence, 'recent_subjects' | 'last_sent_at'>;
+
+/** Strip an evidence row to counts and the domain match. */
+export function countsOnly(e: MailboxEvidence): CountsOnlyEvidence {
+  const { mailbox, mailbox_label, sent_count, received_count, domain_match, error } = e;
+  return { mailbox, mailbox_label, sent_count, received_count, domain_match, ...(error !== undefined ? { error } : {}) };
+}
+
+type Scored = Pick<MailboxEvidence, 'mailbox' | 'sent_count' | 'received_count' | 'domain_match' | 'error'>;
+
+function score(e: Scored): number {
   return e.sent_count * 2 + e.received_count + (e.domain_match ? 5 : 0);
 }
 
 /** How the evidence relates to the mailbox the compose is about to use. */
-export function classifyEvidence(e: MailboxEvidence[], chosen: string): EvidenceVerdict {
+export function classifyEvidence(e: Scored[], chosen: string): EvidenceVerdict {
   // An account we could not read is not "no history": the verdict cannot be agrees or none.
   // Never tell the model to lean away from an account we could not read.
   if (e.find((x) => x.mailbox === chosen)?.error !== undefined) return 'split';

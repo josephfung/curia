@@ -30,7 +30,7 @@ import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from '../../../..
 import { isUuid } from '../../../../src/util/uuid.js';
 import { CalendarRouteError, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
-import { calendarRouteErrorMessage, readCalendarMailbox } from '../../../_shared/calendar-route.js';
+import { calendarRouteErrorMessage, readCalendarMailbox, settledHomeCalendars } from '../../../_shared/calendar-route.js';
 
 // Default maximum hold age in days.
 const DEFAULT_MAX_AGE_DAYS = 7;
@@ -117,7 +117,7 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
       return { success: false, error: 'contactService not available — cannot look up calendars' };
     }
 
-    let calendars: Array<{ nylasCalendarId: string }>;
+    let calendars: Array<{ nylasCalendarId: string; principalMailboxId?: string | null }>;
     try {
       calendars = await ctx.contactService.getCalendarsForContact(contactId);
     } catch (err) {
@@ -135,6 +135,11 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
 
     // Each calendar goes through its own mailbox (#2475); one that cannot be routed (its
     // mailbox removed, say) is skipped and counted like a calendar whose listing failed.
+    // With a stated mailbox only failures of that mailbox's calendars count (M2): a sweep of one
+    // account is not reported dirty because of another. A row with no mailbox could be any.
+    const inScope = (mailboxId: string | null | undefined): boolean =>
+      mailbox.mailbox === undefined || mailboxId === null || mailboxId === undefined || mailboxId === mailbox.mailbox;
+
     const targets: RoutedCalendar[] = [];
     for (const cal of calendars) {
       try {
@@ -144,25 +149,34 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
           err instanceof CalendarRouteError ? { code: err.code } : grantSafeErrorFields(err),
           'calendar-holds-sweep: could not route a calendar to its mailbox, skipping',
         );
-        calendarErrors++;
+        if (inScope(cal.principalMailboxId)) calendarErrors++;
       }
     }
 
     // With several mailboxes, holds sit on each mailbox's home calendar (D7), which need not be
     // registered (a grant's own primary is used until it is): the principal's sweep adds every
-    // live home calendar it does not already cover. With one mailbox: the registered calendars only, as before.
-    try {
-      if (contactId === router.principalContactId && (await router.liveMailboxes()).length > 1) {
-        for (const home of await router.homeCalendars()) {
-          if (home.removed) continue;
-          const covered = targets.some((t) => t.mailboxId === home.mailboxId && t.calendarId.toLowerCase() === home.calendarId.toLowerCase());
-          if (!covered) targets.push({ mailboxId: home.mailboxId, calendarId: home.calendarId, client: home.client });
-        }
+    // live home calendar it does not already cover. With one mailbox: the registered calendars
+    // only, as before; a failed mailbox-list read there changes nothing (M2).
+    let multi = false;
+    if (contactId === router.principalContactId) {
+      try {
+        multi = (await router.liveMailboxes()).length > 1;
+      } catch (err) {
+        // Not counted: with one mailbox this read did not exist, and the routes above already
+        // count every registered calendar that a registry outage stopped.
+        ctx.log.error(grantSafeErrorFields(err), 'calendar-holds-sweep: could not list the mailboxes; home pass skipped');
       }
-    } catch (err) {
-      // The registered calendars are still swept; the miss is counted, never silent.
-      ctx.log.error(err instanceof CalendarRouteError ? { code: err.code } : grantSafeErrorFields(err), 'calendar-holds-sweep: could not read the mailboxes\' home calendars');
-      calendarErrors++;
+    }
+    if (multi) {
+      // One mailbox's home calendar failing costs only that one (R84); each failure is counted.
+      const homes = await settledHomeCalendars(ctx, 'calendar-holds-sweep');
+      for (const home of homes.found) {
+        const covered = targets.some((t) => t.mailboxId === home.mailboxId && t.calendarId.toLowerCase() === home.calendarId.toLowerCase());
+        if (!covered) targets.push(home);
+      }
+      for (const f of homes.failures) {
+        if (inScope(f.mailboxId)) calendarErrors++;
+      }
     }
 
     // A stated mailbox sweeps that mailbox's calendars only.

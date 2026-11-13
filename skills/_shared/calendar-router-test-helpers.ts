@@ -6,7 +6,7 @@ import { CalendarRouter } from '../../src/channels/calendar/calendar-router.js';
 import type { NylasCalendarClient } from '../../src/channels/calendar/nylas-calendar-client.js';
 import type { ContactCalendar, ResolvedCalendar } from '../../src/contacts/calendar-types.js';
 import type { PrincipalMailboxView } from '../../src/principal-mailboxes/service.js';
-import type { MailboxEvidence } from '../../src/principal-mailboxes/evidence.js';
+import type { CountsOnlyEvidence } from '../../src/principal-mailboxes/evidence.js';
 import { RemovedMailboxError, UnknownMailboxError } from '../../src/principal-mailboxes/types.js';
 import { createSilentLogger } from '../../src/logger.js';
 
@@ -34,12 +34,12 @@ export interface RouterFixture {
   contacts?: ConstructorParameters<typeof CalendarRouter>[0]['contacts'];
   principalContactId?: string;
   /** Mailbox evidence for attendees. Default: every live mailbox with no history. */
-  evidence?: (recipients: string[]) => Promise<MailboxEvidence[]>;
+  evidence?: (recipients: string[]) => Promise<CountsOnlyEvidence[]>;
 }
 
 /** An evidence row with no history, for fixtures. */
-export function noEvidence(m: PrincipalMailboxView, extra: Partial<MailboxEvidence> = {}): MailboxEvidence {
-  return { mailbox: m.id, mailbox_label: m.label, sent_count: 0, last_sent_at: null, recent_subjects: [], received_count: 0, domain_match: false, ...extra };
+export function noEvidence(m: PrincipalMailboxView, extra: Partial<CountsOnlyEvidence> = {}): CountsOnlyEvidence {
+  return { mailbox: m.id, mailbox_label: m.label, sent_count: 0, received_count: 0, domain_match: false, ...extra };
 }
 
 /** A real CalendarRouter over the fixture. */

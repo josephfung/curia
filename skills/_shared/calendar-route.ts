@@ -4,7 +4,7 @@
 // Logs carry mailbox ids and error classes only, never grant ids, addresses or calendar IDs.
 
 import type { ToolContext, ToolResult } from '../../src/skills/types.js';
-import { classifyEvidence, type EvidenceVerdict, type MailboxEvidence } from '../../src/principal-mailboxes/evidence.js';
+import { classifyEvidence, type CountsOnlyEvidence, type EvidenceVerdict } from '../../src/principal-mailboxes/evidence.js';
 import { CalendarRouteError, type RoutedCalendar } from '../../src/channels/calendar/calendar-router.js';
 import type { NylasFreeBusyResult } from '../../src/channels/calendar/nylas-calendar-client.js';
 import { MissingNylasApiKeyError } from '../../src/principal-mailboxes/types.js';
@@ -12,7 +12,8 @@ import { grantSafeErrorFields, mayCarryGrantId } from '../../src/principal-mailb
 import type { PrincipalMailboxView } from '../../src/principal-mailboxes/service.js';
 import { readMailboxInput } from './principal-mailbox-client.js';
 
-export type RouteOutcome = { ok: true; routed: RoutedCalendar } | { ok: false; error: string };
+/** `fixable`: a CalendarRouteError (the caller can fix it by passing something else), not an outage. */
+export type RouteOutcome = { ok: true; routed: RoutedCalendar } | { ok: false; error: string; fixable: boolean };
 
 /** The tool's optional `mailbox` input: undefined when omitted, an error for a non-string. */
 export function readCalendarMailbox(input: unknown): { ok: true; mailbox: string | undefined } | { ok: false; error: string } {
@@ -45,12 +46,12 @@ function logRouteFailure(ctx: ToolContext, tool: string, err: unknown): void {
 /** Route one calendar through ctx.calendarRouter. Never throws. */
 export async function routeCalendar(ctx: ToolContext, tool: string, calendarId: string, mailbox?: string): Promise<RouteOutcome> {
   const router = ctx.calendarRouter;
-  if (!router) return { ok: false, error: 'Calendar not configured — Nylas credentials missing' };
+  if (!router) return { ok: false, error: 'Calendar not configured — Nylas credentials missing', fixable: false };
   try {
     return { ok: true, routed: await router.route(calendarId, mailbox) };
   } catch (err) {
     logRouteFailure(ctx, tool, err);
-    return { ok: false, error: calendarRouteErrorMessage(err) };
+    return { ok: false, error: calendarRouteErrorMessage(err), fixable: err instanceof CalendarRouteError };
   }
 }
 
@@ -78,7 +79,8 @@ export type WriteGate =
   | { kind: 'proceed'; routed: RoutedCalendar; multi: boolean; principal: boolean; live: PrincipalMailboxView[] }
   /** Several mailboxes are live and nothing says which one this write belongs to. */
   | { kind: 'needs_mailbox'; mailboxes: MailboxChoice[]; live: PrincipalMailboxView[] }
-  | { kind: 'error'; error: string };
+  /** `fixable`: the caller can fix it (a route error, a mismatch); otherwise an outage. */
+  | { kind: 'error'; error: string; fixable: boolean };
 
 /**
  * The code gate for writes on the principal's calendars (#2475, D5). With one live mailbox it
@@ -97,7 +99,7 @@ export async function gateCalendarWrite(
   opts: { requireMailbox: boolean; /** Replaces the default advice in the mismatch error. */ mismatchAdvice?: string },
 ): Promise<WriteGate> {
   const router = ctx.calendarRouter;
-  if (!router) return { kind: 'error', error: 'Calendar not configured — Nylas credentials missing' };
+  if (!router) return { kind: 'error', error: 'Calendar not configured — Nylas credentials missing', fixable: false };
   let live: PrincipalMailboxView[];
   let principal = false;
   try {
@@ -106,7 +108,7 @@ export async function gateCalendarWrite(
     if (live.length > 1) principal = await router.isPrincipalCalendar(calendarId);
   } catch (err) {
     logRouteFailure(ctx, tool, err);
-    return { kind: 'error', error: calendarRouteErrorMessage(err) };
+    return { kind: 'error', error: calendarRouteErrorMessage(err), fixable: err instanceof CalendarRouteError };
   }
   const multi = live.length > 1;
   if (multi && principal && opts.requireMailbox && mailbox === undefined) {
@@ -114,13 +116,14 @@ export async function gateCalendarWrite(
     return { kind: 'needs_mailbox', mailboxes: live.map(({ id, label }) => ({ id, label })), live };
   }
   const route = await routeCalendar(ctx, tool, calendarId, mailbox);
-  if (!route.ok) return { kind: 'error', error: route.error };
+  if (!route.ok) return { kind: 'error', error: route.error, fixable: route.fixable };
   if (mailbox !== undefined && route.routed.mailboxId !== mailbox) {
     const owner = live.find((m) => m.id === route.routed.mailboxId);
     const named = live.find((m) => m.id === mailbox);
     ctx.log.warn({ tool, code: 'calendar_mailbox_mismatch', mailboxId: route.routed.mailboxId, requestedMailboxId: mailbox }, `${tool}: calendar belongs to another mailbox`);
     return {
       kind: 'error',
+      fixable: true,
       error:
         `calendar_mailbox_mismatch: calendar "${calendarId}" belongs to mailbox "${route.routed.mailboxId}"${owner ? ` (${owner.label})` : ''}, ` +
         `not "${mailbox}"${named ? ` (${named.label})` : ''}. Nothing was changed. ` +
@@ -137,18 +140,38 @@ export function evidenceRecipients(addresses: string[], live: PrincipalMailboxVi
   return [...new Set(addresses.map((a) => a.trim().toLowerCase()))].filter((a) => a.includes('@') && !own.has(a));
 }
 
+/** How long a calendar write waits for attendee evidence before leaving it out (R85). */
+export const EVIDENCE_TIMEOUT_MS = 5_000;
+
 /**
  * Per-mailbox evidence for these attendees (D5), or null when it could not be computed. Never
  * throws: evidence informs the choice of account, it never blocks or fails a write.
  */
-export async function attendeeEvidence(ctx: ToolContext, tool: string, recipients: string[]): Promise<MailboxEvidence[] | null> {
+export async function attendeeEvidence(
+  ctx: ToolContext,
+  tool: string,
+  recipients: string[],
+  timeoutMs = EVIDENCE_TIMEOUT_MS,
+): Promise<CountsOnlyEvidence[] | null> {
   const router = ctx.calendarRouter;
   if (!router) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await router.evidence(recipients);
+    // A short deadline (R85): evidence runs live mail searches, and a booking that already
+    // succeeded must never be reported as a failed (and retried) tool call because of it.
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const err = new Error(`mailbox evidence timed out after ${timeoutMs}ms`);
+        err.name = 'TimeoutError';
+        reject(err);
+      }, timeoutMs);
+    });
+    return await Promise.race([router.evidence(recipients), deadline]);
   } catch (err) {
-    ctx.log.warn({ tool, ...grantSafeErrorFields(err) }, `${tool}: mailbox evidence failed`);
+    ctx.log.warn({ tool, ...grantSafeErrorFields(err) }, `${tool}: mailbox evidence failed or timed out; left out`);
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -162,13 +185,10 @@ export async function needsMailboxResult(
   tool: string,
   mailboxes: MailboxChoice[],
   recipients: string[],
+  extra: Record<string, unknown> = { created: false },
+  note = 'Nothing was created. Several accounts are connected: call again with mailbox set to the account this belongs to.',
 ): Promise<ToolResult> {
-  const data: Record<string, unknown> = {
-    needs_mailbox: true,
-    created: false,
-    mailboxes,
-    note: 'Nothing was created. Several accounts are connected: call again with mailbox set to the account this belongs to.',
-  };
+  const data: Record<string, unknown> = { needs_mailbox: true, ...extra, mailboxes, note };
   if (recipients.length > 0) {
     const evidence = await attendeeEvidence(ctx, tool, recipients);
     if (evidence) data['evidence'] = evidence;
@@ -203,16 +223,40 @@ export async function holdReleaseTargets(
   const targets: RoutedCalendar[] = [routed];
   const router = ctx.calendarRouter;
   if (!searchHomes || !router) return { targets, warnings: [] };
+  const homes = await settledHomeCalendars(ctx, tool);
+  for (const home of homes.found) {
+    const seen = targets.some((t) => t.mailboxId === home.mailboxId && t.calendarId.toLowerCase() === home.calendarId.toLowerCase());
+    if (!seen) targets.push(home);
+  }
+  // One broken account costs only its own home calendar (R84), and says so.
+  const warnings = homes.failures.map((f) =>
+    f.mailboxId === null
+      ? `Holds were looked for only on this calendar: the mailboxes could not be listed (${f.message}).`
+      : `Holds on the "${f.label}" mailbox's home calendar were not checked: ${f.message}`,
+  );
+  return { targets, warnings };
+}
+
+/**
+ * Every live mailbox's home calendar for best-effort cleanup, one mailbox at a time (R84): a
+ * mailbox whose home calendar cannot be found is a failure (grant-safe message), the others are
+ * found. `mailboxId: null` means the mailbox list itself could not be read. Never throws.
+ */
+export async function settledHomeCalendars(
+  ctx: ToolContext,
+  tool: string,
+): Promise<{ found: RoutedCalendar[]; failures: Array<{ mailboxId: string | null; label: string; message: string }> }> {
+  const router = ctx.calendarRouter;
+  if (!router) return { found: [], failures: [] };
   try {
-    for (const home of await router.homeCalendars()) {
-      if (home.removed) continue;
-      const seen = targets.some((t) => t.mailboxId === home.mailboxId && t.calendarId.toLowerCase() === home.calendarId.toLowerCase());
-      if (!seen) targets.push({ mailboxId: home.mailboxId, calendarId: home.calendarId, client: home.client });
-    }
-    return { targets, warnings: [] };
+    const settled = await router.liveHomeCalendarsSettled();
+    return {
+      found: settled.found.map(({ mailboxId, calendarId, client }) => ({ mailboxId, calendarId, client })),
+      failures: settled.failures.map((f) => ({ mailboxId: f.mailboxId, label: f.label, message: calendarRouteErrorMessage(f.error) })),
+    };
   } catch (err) {
     logRouteFailure(ctx, tool, err);
-    return { targets, warnings: [`Holds were looked for only on this calendar: the other mailboxes' home calendars could not be read (${calendarRouteErrorMessage(err)}).`] };
+    return { found: [], failures: [{ mailboxId: null, label: '', message: calendarRouteErrorMessage(err) }] };
   }
 }
 
