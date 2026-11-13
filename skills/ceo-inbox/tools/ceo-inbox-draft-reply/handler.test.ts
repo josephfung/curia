@@ -861,6 +861,12 @@ describe('CeoInboxDraftReplyHandler', () => {
       cc?: string[];
       search?: 'hit' | 'empty' | 'error';
       mailboxInput?: string;
+      from?: string;
+      /** The other mailbox's copy. */
+      copy?: { from?: string; folders?: string[]; messageId?: string };
+      /** Message-ID header on the triaged copy (default MSG_ID). */
+      originalMessageId?: string;
+      hits?: string[];
     }) {
       const posts: Array<{ grant: string; body: { reply_to_message_id?: string } }> = [];
       const searches: Array<{ grant: string; q: string | null }> = [];
@@ -876,8 +882,8 @@ describe('CeoInboxDraftReplyHandler', () => {
         mailboxes,
         grantId: (id) => `grant-${id}`,
         gatewayClients: {
-          work: { getMessage: async () => { gatewayGets.push('work'); return { headers: [{ name: 'Message-ID', value: `<${MSG_ID}>` }] }; } },
-          personal: { getMessage: async () => { gatewayGets.push('personal'); return { headers: [{ name: 'Message-ID', value: `<${MSG_ID}>` }] }; } },
+          work: { getMessage: async () => { gatewayGets.push('work'); return { headers: [{ name: 'Message-ID', value: `<${opts.held === 'work' ? (opts.originalMessageId ?? MSG_ID) : (opts.copy?.messageId ?? MSG_ID)}>` }] }; } },
+          personal: { getMessage: async () => { gatewayGets.push('personal'); return { headers: [{ name: 'Message-ID', value: `<${opts.held === 'personal' ? (opts.originalMessageId ?? MSG_ID) : (opts.copy?.messageId ?? MSG_ID)}>` }] }; } },
         },
       });
       mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -888,16 +894,19 @@ describe('CeoInboxDraftReplyHandler', () => {
         if (u.pathname.endsWith('/messages') && u.searchParams.has('search_query_native')) {
           searches.push({ grant, q: u.searchParams.get('search_query_native') });
           if (opts.search === 'error') return new Response(JSON.stringify({ error: { message: 'boom' } }), { status: 400 });
-          const data = opts.search === 'empty' ? [] : [{ id: 'msg-other', thread_id: 'thread-other', subject: 'Test Subject', from: [{ email: 'alice@external.com' }], to: [], cc: [], folders: ['INBOX'] }];
+          const ids = opts.search === 'empty' ? [] : (opts.hits ?? ['msg-other']);
+          const data = ids.map((id) => ({ id, thread_id: 'thread-other', subject: 'Test Subject', from: [{ email: 'alice@external.com' }], to: [], cc: [], folders: ['INBOX'] }));
           return new Response(JSON.stringify({ data }), { status: 200 });
         }
         if (u.pathname.includes('/messages/')) {
           const id = u.pathname.split('/').pop();
           if ((id === 'msg-001') !== (grant === heldGrant)) return new Response('{}', { status: 404 });
+          const isOriginal = id === 'msg-001';
           const m = buildNylasMessage({
-            from: [{ email: 'alice@external.com' }],
+            from: [{ email: isOriginal ? (opts.from ?? 'alice@external.com') : (opts.copy?.from ?? opts.from ?? 'alice@external.com') }],
             to: opts.to.map((email) => ({ email })),
             cc: (opts.cc ?? []).map((email) => ({ email })),
+            ...(!isOriginal && opts.copy?.folders ? { folders: opts.copy.folders } : {}),
           });
           m.data.id = id!;
           return new Response(JSON.stringify(m), { status: 200 });
@@ -938,6 +947,58 @@ describe('CeoInboxDraftReplyHandler', () => {
         expect(typeof (result as { data: Record<string, unknown> }).data.reply_mailbox_note).toBe('string');
         mockFetch.mockReset();
       }
+    });
+
+    const addressedBoth = { held: 'personal' as const, to: ['ceo@work.example.com'], cc: ['ceo@personal.example.com'] };
+    async function expectFallback(opts: Parameters<typeof setup>[0], note?: RegExp) {
+      const { ctx, posts } = setup(opts);
+      const result = await handler.execute(ctx);
+      expect(posts).toHaveLength(1);
+      expect(posts[0]!.grant).toBe(`grant-${opts.held}`);
+      expect(result).toMatchObject({ success: true, data: { mailbox: opts.held, reply_mailbox_fallback: true } });
+      if (note) expect((result as { data: { reply_mailbox_note: string } }).data.reply_mailbox_note).toMatch(note);
+    }
+
+    it('does not redirect to a copy from a different sender (forged)', async () => {
+      await expectFallback({ ...addressedBoth, copy: { from: 'mallory@evil.example.org' } });
+    });
+    it('does not redirect to a Sent-folder hit', async () => {
+      await expectFallback({ ...addressedBoth, copy: { folders: ['SENT'] } });
+    });
+    it('does not redirect to a Draft hit', async () => {
+      await expectFallback({ ...addressedBoth, copy: { folders: ['DRAFT'] } });
+    });
+    it('does not redirect when the copy carries a different Message-ID', async () => {
+      await expectFallback({ ...addressedBoth, copy: { messageId: 'other@mail.example.net' } });
+    });
+    it('does not redirect when two candidates match', async () => {
+      await expectFallback({ ...addressedBoth, hits: ['msg-other', 'msg-other2'] });
+    });
+    it('does not search with an invalid Message-ID', async () => {
+      const { ctx, searches, posts } = setup({ ...addressedBoth, originalMessageId: 'a"b:in:anywhere' });
+      const result = await handler.execute(ctx);
+      expect(searches).toHaveLength(0);
+      expect(posts[0]!.grant).toBe('grant-personal');
+      expect(result).toMatchObject({ success: true, data: { reply_mailbox_fallback: true } });
+    });
+    it('distinguishes not found from search failed in the note', async () => {
+      await expectFallback({ ...addressedBoth, search: 'empty' }, /not found/);
+      mockFetch.mockReset();
+      await expectFallback({ ...addressedBoth, search: 'error' }, /search failed|unsupported/);
+    });
+    it('never redirects mail the principal sent from the other account', async () => {
+      const { ctx, searches, posts, gatewayGets } = setup({ ...addressedBoth, from: 'CEO@work.example.com' });
+      const result = await handler.execute(ctx);
+      expect(searches).toHaveLength(0);
+      expect(gatewayGets).toHaveLength(0);
+      expect(posts[0]!.grant).toBe('grant-personal');
+      expect((result as { data: Record<string, unknown> }).data.reply_mailbox_fallback).toBeUndefined();
+    });
+    it('the redirected draft cc excludes both mailbox addresses', async () => {
+      const { ctx, posts } = setup({ ...addressedBoth, to: ['ceo@work.example.com', 'ceo@personal.example.com'], cc: ['dana@example.org'] });
+      const result = await handler.execute(ctx);
+      expect(result).toMatchObject({ success: true, data: { mailbox: 'work' } });
+      expect((posts[0]!.body as { cc: Array<{ email: string }> }).cc.map((p) => p.email)).toEqual(['dana@example.org']);
     });
 
     it('keeps an explicit mailbox without searching', async () => {

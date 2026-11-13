@@ -8,6 +8,7 @@ import { parseAttachmentInputs } from '../../../_shared/parse-attachments.js';
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES } from '../../../../src/skills/_shared/read-attachments.js';
 import { captureDraftSnapshot } from '../../../_shared/voice-learning-capture.js';
 import { isSpamOrTrash } from '../../../_shared/mail-folders.js';
+import type { NylasMessage } from '../../../../src/channels/email/nylas-client.js';
 import { messageIdsIn } from '../../../../src/skills/principal-send/autonomous-limits.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 
@@ -18,6 +19,10 @@ const DRAFT_SCAN_LIMIT = 500;
 
 // A redirect lookup that takes longer than this counts as unreachable; the tool's own timeout is 30 s.
 const REDIRECT_TIMEOUT_MS = 8_000;
+
+const EXCLUDED_COPY_FOLDERS = new Set(['SENT', 'DRAFT', 'DRAFTS', 'SPAM', 'TRASH']);
+// RFC 5322 atext plus '.', '@': no space, quote or angle bracket reaches the Gmail query.
+const SAFE_MESSAGE_ID = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.@-]+$/;
 
 type Redirect =
   | { kind: 'same' }
@@ -40,6 +45,9 @@ function withTimeout<T>(work: Promise<T>): Promise<T> {
 async function addressedCopy(ctx: ToolContext, at: MailboxClient, original: NylasMessageFull, messageId: string): Promise<Redirect> {
   const live = await ctx.principalMailboxes!.list();
   if (live.length < 2) return { kind: 'same' };
+  // Mail the principal sent from one account must never be redirected to the other (R58).
+  const principal = new Set([...live.map((m) => m.address.toLowerCase()), ...(await ctx.principalMailboxes!.principalEmailAddresses())]);
+  if (original.from.some((p) => principal.has(p.email.toLowerCase()))) return { kind: 'same' };
   const byAddress = new Map(live.map((m) => [m.address.toLowerCase(), m]));
   const firstIn = (list: NylasParticipant[]) => list.map((p) => byAddress.get(p.email.toLowerCase())).find((m) => m !== undefined);
   const target = firstIn(original.to) ?? firstIn(original.cc);
@@ -52,18 +60,41 @@ async function addressedCopy(ctx: ToolContext, at: MailboxClient, original: Nyla
     );
     return { kind: 'fallback', reason: `${reason}; drafted in the ${at.mailbox.label} mailbox instead of ${target.label}` };
   };
+  const ownId = async (clientAt: string, id: string): Promise<{ id?: string; msg: NylasMessage }> => {
+    const gateway = await ctx.principalMailboxes!.gatewayClient(clientAt);
+    const msg = await gateway.getMessage(id, { includeHeaders: true, budget: ctx });
+    const header = (msg.headers ?? []).find((h) => h.name.trim().toLowerCase() === 'message-id');
+    return { ...(header ? { id: messageIdsIn(header.value)[0] } : {}), msg };
+  };
+  const senders = (m: { from: NylasParticipant[] }) => m.from.map((p) => p.email.toLowerCase()).sort().join(',');
   try {
-    const gateway = await ctx.principalMailboxes!.gatewayClient(at.mailbox.id);
-    const full = await gateway.getMessage(messageId, { includeHeaders: true, budget: ctx });
-    const header = (full.headers ?? []).find((h) => h.name.trim().toLowerCase() === 'message-id');
-    const rfcId = header ? messageIdsIn(header.value)[0] : undefined;
+    const rfcId = (await ownId(at.mailbox.id, messageId)).id;
     if (!rfcId) return fallback('the message has no Message-ID to search by');
+    // Nothing that could widen the search goes into the query.
+    if (!SAFE_MESSAGE_ID.test(rfcId)) return fallback('the message has an unusual Message-ID that is not safe to search by');
     const other = await withTimeout(mailboxClient(ctx, target.id));
-    const { messages } = await withTimeout(other.client.listMessagesPage({ query: `rfc822msgid:${rfcId}`, limit: 5 }));
-    const hit = messages.find((m) => !isSpamOrTrash(m.folders));
-    if (!hit) return fallback(`the ${target.label} copy was not found`);
-    const copy = await withTimeout(other.client.getMessage(hit.id));
-    return { kind: 'moved', at: other, original: copy };
+    let hits: Array<{ id: string; folders: string[] }>;
+    try {
+      hits = (await withTimeout(other.client.listMessagesPage({ query: `rfc822msgid:${rfcId}`, limit: 5 }))).messages;
+    } catch (err) {
+      return fallback(`the ${target.label} search failed or is unsupported`, err);
+    }
+    if (hits.length === 0) return fallback(`the ${target.label} copy was not found`);
+    // A search hit is a lead, not proof (R57): only a copy with the same Message-ID and sender, outside
+    // Sent, Drafts, Spam and Trash, counts, and it must be the only one.
+    const verified: NylasMessageFull[] = [];
+    for (const hit of hits) {
+      if (hit.folders.some((f) => EXCLUDED_COPY_FOLDERS.has(f.toUpperCase()))) continue;
+      const own = await withTimeout(ownId(target.id, hit.id));
+      if (own.id !== rfcId) continue;
+      const copy = await withTimeout(other.client.getMessage(hit.id));
+      if (copy.from.length === 0 || senders(copy) !== senders(original)) continue;
+      if (copy.folders.some((f) => EXCLUDED_COPY_FOLDERS.has(f.toUpperCase()))) continue;
+      verified.push(copy);
+    }
+    if (verified.length === 0) return fallback(`the ${target.label} copy was not found`);
+    if (verified.length > 1) return fallback(`more than one matching copy in ${target.label}`);
+    return { kind: 'moved', at: other, original: verified[0]! };
   } catch (err) {
     return fallback(`the ${target.label} mailbox could not be reached`, err);
   }
@@ -259,7 +290,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
         }
       } catch (err) {
         ctx.log.warn(
-          { err, replyToMessageId },
+          { ...grantSafeErrorFields(err), replyToMessageId },
           'ceo-inbox-draft-reply: failed to build reply quote — proceeding without quote',
         );
       }
@@ -290,7 +321,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
         cc: draft.cc,
         body,
       }).catch((err) =>
-        ctx.log.error({ err }, 'ceo-inbox-draft-reply: voice snapshot capture rejected'),
+        ctx.log.error(grantSafeErrorFields(err), 'ceo-inbox-draft-reply: voice snapshot capture rejected'),
       );
 
       return {
@@ -309,7 +340,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
       };
     } catch (err) {
       ctx.log.error(
-        { err, replyToMessageId },
+        { ...grantSafeErrorFields(err), replyToMessageId },
         'ceo-inbox-draft-reply: failed to create draft',
       );
       return { success: false, ...nylasMessageFailure(err, replyToMessageId, 'Failed to create draft reply in principal inbox') };
