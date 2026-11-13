@@ -741,6 +741,23 @@ describe('TaskCompletionFromSentHandler — candidates queue per mailbox (#2475,
     expect(result).toMatchObject({ success: false, error: expect.stringContaining('work') });
   });
 
+  it('a queue write the store soft-rejects is reported as a cleanup failure too', async () => {
+    const ctx = makeCtx();
+    ctx.__mem.__values.clear();
+    ctx.__mem.__values.set('sent_observe.work.completion_candidates', JSON.stringify({ [T1]: CANDIDATE_MAP[T1]! }));
+    (ctx as { principalMailboxes?: unknown }).principalMailboxes = stubPrincipalMailboxes({ mailboxes: TWO });
+    const store = ctx.__mem.storeFact as unknown as ReturnType<typeof vi.fn>;
+    const real = store.getMockImplementation()! as (p: { label: string }) => Promise<unknown>;
+    store.mockImplementation(async (p: { label: string }) => {
+      if (p.label === 'sent_observe.work.completion_candidates') return { stored: false, action: 'rate_limited' };
+      return real(p);
+    });
+    const result = await handler.execute(ctx);
+    expect(ctx.__completed).toEqual([T1]);
+    expect(ctx.__sendNotification).toHaveBeenCalled();
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('work') });
+  });
+
   it('reads the pre-migration global queue for the migrated mailbox, not for the others', async () => {
     const ctx = makeCtx();
     (ctx as { principalMailboxes?: unknown }).principalMailboxes = stubPrincipalMailboxes({ mailboxes: TWO });

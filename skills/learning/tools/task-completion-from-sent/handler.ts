@@ -306,7 +306,12 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
         const kept = Object.fromEntries(Object.entries(map).filter(([taskId]) => taskId in remaining));
         if (Object.keys(kept).length === Object.keys(map).length) continue;
         try {
-          await writeCompletionCandidates(store, kept, scope);
+          // A soft rejection resolves false without throwing: the consumed candidates are still
+          // queued, so it is a cleanup failure like a thrown one.
+          if (!(await writeCompletionCandidates(store, kept, scope))) {
+            cleanupFailed.push(scope.id ?? 'global');
+            ctx.log.error({ mailboxId: scope.id }, 'task-completion-from-sent: clearing consumed candidates was rejected by the store');
+          }
         } catch (err) {
           cleanupFailed.push(scope.id ?? 'global');
           ctx.log.error({ ...grantSafeErrorFields(err), mailboxId: scope.id }, 'task-completion-from-sent: could not clear consumed candidates from a mailbox queue');
