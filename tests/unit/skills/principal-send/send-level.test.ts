@@ -68,6 +68,18 @@ describe('createSendLevelReader', () => {
     expect(warn).toHaveBeenCalledOnce();
   });
 
+  it('with the mailbox list unreadable, a legacy default applies only where it is stricter', async () => {
+    const failing = async () => { throw new Error('registry down'); };
+    const off = createSendLevelReader({ get: async () => '{"default":"off"}', logger, liveMailboxes: failing });
+    expect(await off('work')).toBe('off');
+    // A permissive legacy level is not applied without knowing whose it is.
+    const all = createSendLevelReader({ get: async () => '{"default":"all"}', logger, liveMailboxes: failing });
+    expect(await all('work')).toBe('on_request');
+    // An own key still wins.
+    const own = createSendLevelReader({ get: async () => '{"default":"off","work":"routine"}', logger, liveMailboxes: failing });
+    expect(await own('work')).toBe('routine');
+  });
+
   it('a sole mailbox added after the migrated one was removed never inherits the legacy key (S-I1)', async () => {
     const read = createSendLevelReader({ get: async () => '{"default":"all"}', logger, liveMailboxes: async () => [added('home')] });
     expect(await read('home')).toBe('on_request');

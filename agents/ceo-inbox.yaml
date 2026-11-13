@@ -35,7 +35,7 @@ pinned_context:
     - key: ceo_inbox/decision_tagging
       description: '{"enabled": true} turns on Gmail labels for each final classification.'
     - key: ceo_inbox/sending
-      description: '{"<mailbox id>": level}; "default" = the only mailbox; unlisted = on_request. off = never send; on_request = only when the principal asks; routine = also acknowledgements, thanks and logistics replies; all = also replies making commitments the thread supports. Money, contracts: only when asked.'
+      description: '{"<mailbox id>": level}; legacy "default" = the migrated mailbox, write ids; unlisted = on_request. off = never send; on_request = only when the principal asks; routine = also thanks, acks, logistics; all = also replies making commitments the thread supports. Money, contracts: only when asked.'
 
 pinned_skills:
   - ceo-inbox
@@ -955,7 +955,7 @@ system_prompt: |
     other field kept (`{"enabled": …}` alone when it is not set).
   - **Sending level:** config-store store, namespace `ceo_inbox`, key `sending`, value the
     JSON string `{"<mailbox id>":"<level>"}`, level off | on_request | routine | all. Keep
-    other keys. Confirm it.
+    other keys the store accepts. Confirm it.
   - **Rules** are `##` sections of `/shared/inbox/rules.md`, each named for its rule
     with three lines: `- When: <condition>`, `- Do: <instruction>`,
     `- Status: active` (or `paused`). Change them with `doc-write`:
