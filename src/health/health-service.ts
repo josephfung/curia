@@ -157,6 +157,10 @@ export class HealthService {
   private lastMigrationOutcome: string | null = null;
   /** The flat-key repair started by the last canary run, while it is still running. */
   private flatMirrorInFlight: Promise<void> | null = null;
+  /** The deferred-migration retry still running, if one outlived its canary deadline. */
+  private migrationRetryInFlight: Promise<void> | null = null;
+  /** Mailboxes whose outage notice is still being sent: not sent again meanwhile. */
+  private readonly notifying = new Set<string>();
   /** What the last finished flat-key repair found, reported as a canary on the next run. */
   private lastFlatMirror: { outcome: FlatMirrorOutcome } | { error: string } | null = null;
 
@@ -508,7 +512,15 @@ export class HealthService {
     });
   }
 
-  private async retryDeferredMigration(): Promise<void> {
+  /** One retry at a time: a run that outlived its deadline is joined, never run beside. */
+  private retryDeferredMigration(): Promise<void> {
+    this.migrationRetryInFlight ??= this.runMigrationRetry().finally(() => {
+      this.migrationRetryInFlight = null;
+    });
+    return this.migrationRetryInFlight;
+  }
+
+  private async runMigrationRetry(): Promise<void> {
     const { principalMailboxes, retryMailboxMigration, logger } = this.deps;
     if (!principalMailboxes || !retryMailboxMigration) return;
     let outcome: string;
@@ -626,12 +638,19 @@ export class HealthService {
         detail: `Mailbox "${view.label}" answers, but calendar still uses the grant from boot — restart Curia`,
       };
     }
-    if (mailboxOutageNotifier && opts.notify !== false) {
-      try {
-        await mailboxOutageNotifier.record(view.id, view.label, result.status === 'ok', { authFailure });
-      } catch (err) {
-        logger.error({ err, mailboxId: view.id }, 'Mailbox outage notifier threw');
-      }
+    // Not awaited: a stalled notice delivery must not hold the canary run. One per mailbox at a
+    // time; the notifier keeps its own retry state for the next failing probe.
+    if (mailboxOutageNotifier && opts.notify !== false && !this.notifying.has(view.id)) {
+      this.notifying.add(view.id);
+      void (async () => {
+        try {
+          await mailboxOutageNotifier.record(view.id, view.label, result.status === 'ok', { authFailure });
+        } catch (err) {
+          logger.error({ err, mailboxId: view.id }, 'Mailbox outage notifier threw');
+        } finally {
+          this.notifying.delete(view.id);
+        }
+      })();
     }
     return result;
   }

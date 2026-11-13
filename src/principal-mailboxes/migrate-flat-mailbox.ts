@@ -11,7 +11,7 @@ import type { Logger } from '../logger.js';
 import type { PrincipalMailboxStore } from './store.js';
 import { principalMailboxGrantSecretName } from './secrets.js';
 import { RESERVED_MAILBOX_IDS } from './types.js';
-import { grantSafeErrorFields } from './error-fields.js';
+import { grantSafeErrorFields, mayCarryGrantId } from './error-fields.js';
 
 export type FlatMailboxMigrationOutcome = 'migrated' | 'already' | 'nothing' | 'deferred';
 
@@ -149,5 +149,9 @@ async function warnIfUnverified(deps: FlatMailboxMigrationDeps, id: string, addr
 /** Operator-facing reason after a migration attempt threw: class and status only (R20). */
 export function migrationFailureReason(err: unknown): string {
   const { errName, statusCode } = grantSafeErrorFields(err);
-  return `The last attempt failed (${errName}${statusCode !== undefined ? `, HTTP ${statusCode}` : ''}); check the Nylas API key and the grant`;
+  const what = `${errName}${statusCode !== undefined ? `, HTTP ${statusCode}` : ''}`;
+  // Only a Nylas failure points at the Nylas settings; a database or vault failure does not.
+  return mayCarryGrantId(err)
+    ? `The last attempt failed (${what}); check the Nylas API key and the grant`
+    : `The last attempt failed (${what}); see the server log for the cause`;
 }
