@@ -859,6 +859,30 @@ describe('removing a mailbox with scoped inbox rules (#2475 task 27)', () => {
     expect(out.cleanupIncomplete).toEqual(['inbox_rules']);
   });
 
+  it('logs "Inbox rules rewritten" only after the write succeeds (P12)', async () => {
+    const ok = docOf(RULES);
+    const a = capturingLogger();
+    await setup({ records: two(), rulesDoc: ok.rulesDoc, logger: a.logger }).admin.remove({ id: 'work', stillOwned: true, rules: 'delete' });
+    const rewritten = a.lines.filter((l) => l.includes('Inbox rules rewritten'));
+    expect(rewritten).toHaveLength(1);
+    expect(JSON.parse(rewritten[0]!)).toMatchObject({ level: 30, mailboxId: 'work' });
+
+    const failing = docOf(RULES);
+    failing.rulesDoc.write.mockRejectedValueOnce(new Error('docs down'));
+    const b = capturingLogger();
+    await setup({ records: two(), rulesDoc: failing.rulesDoc, logger: b.logger }).admin.remove({ id: 'work', stillOwned: true, rules: 'delete' });
+    expect(b.lines.some((l) => l.includes('Inbox rules rewritten'))).toBe(false);
+  });
+
+  it('an unreadable rules doc is reported once per removal, not again by the cleanup step (P12)', async () => {
+    const { rulesDoc } = docOf(RULES);
+    rulesDoc.read.mockRejectedValue(new Error('docs down'));
+    const c = capturingLogger();
+    const out = await setup({ records: two(), rulesDoc, logger: c.logger }).admin.remove({ id: 'work', stillOwned: true });
+    expect(out.cleanupIncomplete).toEqual(['inbox_rules']);
+    expect(c.lines.filter((l) => l.includes('docs down') || l.includes('inbox rules'))).toHaveLength(1);
+  });
+
   it('R59: a doc that becomes readable mid-removal is not rewritten without a choice', async () => {
     const { rulesDoc } = docOf(RULES);
     rulesDoc.read.mockRejectedValueOnce(new Error('blip'));

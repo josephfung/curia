@@ -230,12 +230,11 @@ system_prompt: |
   By:   slots within <date window / stated constraints>
   Proposed:
     - <sender-proposed slot display>; start=<resolved timestamp>; end=<resolved timestamp>; source="<original phrase>"
-  Context: source_message_id=<id>; contact_timezone=<IANA timezone|unknown>; contact_id=<contact ID if known>; mailbox=<id>
+  Context: source_message_id=<id>; contact_timezone=<IANA timezone|unknown>; contact_id=<contact ID if known>; mailbox=<email's mailbox>
   ```
 
   The `Proposed:` block is optional (sender named specific times).
   A consult without `Proposed:` uses the existing free-time search flow unchanged.
-  `mailbox`: the email's mailbox.
 
   A formal invite consult is shaped like this instead:
 
@@ -244,7 +243,7 @@ system_prompt: |
   Need: RSVP for formal calendar invite
   Invite: method=REQUEST; calendar_id=<calendarId if known>; event_id=<eventId if known>; ics_uid=<UID if parsed>; start=<timestamp>; end=<timestamp>; subject="<event subject>"; organizer_domain=<domain>
   Standing: <matched per-sender standing instruction, or none>; relationship=<known stakeholder|colleague|unknown|automated|other>; sender_kind=<person|organization|automated|unknown>
-  Context: source_message_id=<id>; thread_ref=<thread id>; contact_timezone=<IANA timezone|unknown>; contact_id=<contact ID if known>; contact_domain=<domain>; hold_search_start=<timestamp>; hold_search_end=<timestamp>; mailbox=<id>
+  Context: source_message_id=<id>; thread_ref=<thread id>; contact_timezone=<IANA timezone|unknown>; contact_id=<contact ID if known>; contact_domain=<domain>; hold_search_start=<timestamp>; hold_search_end=<timestamp>; mailbox=<email's mailbox>
   ```
 
   For formal invite consults, follow this path and then exit:
