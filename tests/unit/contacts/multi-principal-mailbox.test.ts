@@ -10,14 +10,14 @@ function view(id: string): PrincipalMailboxView {
   return { id, label: id, address: `${id}@example.com`, isDefault: id === 'work', triageStartAt: null };
 }
 
-function client(opts: { to?: string[]; fail?: boolean; noSent?: boolean; hang?: boolean }) {
+function client(opts: { to?: string[]; bcc?: string[]; fail?: boolean; noSent?: boolean; hang?: boolean }) {
   return {
     listFolders: vi.fn(async () => {
       if (opts.fail) throw new Error('boom grant-secret-123');
       if (opts.hang) return new Promise<never>(() => {});
       return opts.noSent ? [{ id: 'INBOX', attributes: ['\\Inbox'] }] : [{ id: 'SENT', attributes: ['\\Sent'] }];
     }),
-    listMessages: vi.fn(async () => [{ id: 'm1', to: (opts.to ?? []).map((email) => ({ email })), cc: [] }]),
+    listMessages: vi.fn(async () => [{ id: 'm1', to: (opts.to ?? []).map((email) => ({ email })), cc: [], bcc: (opts.bcc ?? []).map((email) => ({ email })) }]),
   };
 }
 
@@ -42,6 +42,11 @@ function make(byId: Record<string, ReturnType<typeof client>>, timeoutMs = 5_000
 describe('MultiPrincipalMailbox', () => {
   it('hasSentTo is true when any mailbox has sent', async () => {
     const { mailbox } = make({ work: client({ to: [] }), personal: client({ to: ['Dana@Example.org'] }) });
+    await expect(mailbox.hasSentTo('dana@example.org')).resolves.toBe(true);
+  });
+
+  it('counts a recipient the principal sent to only in bcc', async () => {
+    const { mailbox } = make({ work: client({ bcc: ['dana@example.org'] }) });
     await expect(mailbox.hasSentTo('dana@example.org')).resolves.toBe(true);
   });
 
