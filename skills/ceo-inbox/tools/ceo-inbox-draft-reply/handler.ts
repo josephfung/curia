@@ -122,15 +122,16 @@ async function addressedCopy(ctx: ToolContext, at: MailboxClient, original: Nyla
 /**
  * SF-M3 the other way round: the given mailbox is the one the sender addressed, but an earlier call
  * on another mailbox's copy may have fallen back and drafted there. One draft per message across
- * mailboxes, so that draft answers this call. Best-effort under the redirect deadline: null when no
- * other principal mailbox got a copy, none has a draft on its copy's thread, or the check fails.
+ * mailboxes, so that draft answers this call. Under the redirect deadline: null when no other
+ * principal mailbox got a copy, none has a draft on its copy's thread, or the check fails (logged;
+ * best-effort). 'incomplete' when a search or draft scan stopped short, so a draft may exist.
  */
 async function earlierDraftOnOtherCopy(
   ctx: ToolContext,
   at: MailboxClient,
   original: NylasMessageFull,
   messageId: string,
-): Promise<{ draft: NylasDraftSummary; mailbox: MailboxClient['mailbox'] } | null> {
+): Promise<{ draft: NylasDraftSummary; mailbox: MailboxClient['mailbox'] } | 'incomplete' | null> {
   const deadline = Date.now() + REDIRECT_TIMEOUT_MS;
   try {
     const live = await withTimeout(ctx.principalMailboxes!.list(), deadline);
@@ -152,6 +153,8 @@ async function earlierDraftOnOtherCopy(
     for (const m of others) {
       const other = await withTimeout(mailboxClient(ctx, m.id), deadline);
       const page = await withTimeout(other.client.listMessagesPage({ query: `rfc822msgid:${rfcId}`, limit: 5 }), deadline);
+      // More hits than one page: the copy's thread may be among the unread ones.
+      if (page.nextCursor) return 'incomplete';
       const threads = new Set(page.messages
         .filter((h) => !h.folders.some((f) => EXCLUDED_COPY_FOLDERS.has(f.toUpperCase())))
         .map((h) => h.threadId)
@@ -160,6 +163,8 @@ async function earlierDraftOnOtherCopy(
       const found = await withTimeout(other.client.listAllDrafts({ maxScan: DRAFT_SCAN_LIMIT, stopWhen: (d) => threads.has(d.threadId) }), deadline);
       const draft = found.drafts.find((d) => threads.has(d.threadId));
       if (draft) return { draft, mailbox: other.mailbox };
+      // The scan stopped at its cap without a match: a draft may lie beyond it.
+      if (found.truncated) return 'incomplete';
     }
   } catch (err) {
     // Best-effort: without the check this call drafts in the addressed mailbox as before.
@@ -259,6 +264,11 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
         const redirect = await addressedCopy(ctx, picked.at, original, replyToMessageId);
         if (redirect.kind === 'same') {
           const elsewhere = await earlierDraftOnOtherCopy(ctx, picked.at, original, replyToMessageId);
+          if (elsewhere === 'incomplete') {
+            // Same rule as the drafted mailbox's own scan: unable to rule out a draft, so none is made.
+            ctx.log.warn({ mailboxId: picked.at.mailbox.id }, 'ceo-inbox-draft-reply: other-mailbox draft check incomplete — refusing to create a draft');
+            return { success: false, error: 'Unable to determine whether this message already has a draft in another mailbox; scan incomplete' };
+          }
           if (elsewhere) {
             ctx.log.info({ draftId: elsewhere.draft.id, mailboxId: elsewhere.mailbox.id }, 'ceo-inbox-draft-reply: another mailbox already has a draft for this message');
             const d = elsewhere.draft;

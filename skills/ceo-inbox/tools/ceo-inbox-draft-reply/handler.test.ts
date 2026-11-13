@@ -1088,6 +1088,29 @@ describe('CeoInboxDraftReplyHandler', () => {
       expect(result).toMatchObject({ success: true, data: { draft_id: 'draft-fallback', already_exists: true, mailbox: 'personal' } });
     });
 
+    it('from the addressed mailbox, an incomplete check of the other copy (search page or draft scan) refuses to draft', async () => {
+      for (const which of ['search', 'drafts'] as const) {
+        const { ctx, posts } = setup({ held: 'work', to: ['ceo@work.example.com'], cc: ['ceo@personal.example.com'] });
+        const prev = mockFetch.getMockImplementation()!;
+        mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+          const u = new URL(String(url));
+          if (which === 'search' && u.pathname.endsWith('/messages') && u.searchParams.has('search_query_native')) {
+            const data = [{ id: 'msg-other', thread_id: 'thread-other', subject: 'Test Subject', from: [{ email: 'alice@external.com' }], to: [], cc: [], folders: ['INBOX'] }];
+            return new Response(JSON.stringify({ data, next_cursor: 'more' }), { status: 200 });
+          }
+          if (which === 'drafts' && u.pathname.endsWith('/drafts') && (init?.method ?? 'GET') === 'GET' && u.pathname.includes('grant-personal')) {
+            const data = Array.from({ length: 100 }, (_, i) => ({ id: `d${i}-${u.searchParams.get('page_token') ?? '0'}`, thread_id: `other-${i}`, subject: 's', to: [], cc: [], snippet: '', date: 1 }));
+            return new Response(JSON.stringify({ data, next_cursor: `c${Math.random()}` }), { status: 200 });
+          }
+          return prev(url, init);
+        });
+        const result = await handler.execute(ctx);
+        expect(posts, which).toHaveLength(0);
+        expect(result, which).toMatchObject({ success: false, error: expect.stringContaining('scan incomplete') });
+        mockFetch.mockReset();
+      }
+    });
+
     it('refuses to redirect when the given mailbox\'s draft scan is incomplete', async () => {
       const { ctx, posts } = setup(addressedBoth);
       const prev = mockFetch.getMockImplementation()!;
