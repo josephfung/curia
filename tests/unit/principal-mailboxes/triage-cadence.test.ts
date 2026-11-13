@@ -194,6 +194,22 @@ describe('fix round 1', () => {
   it('daily 02:30 fires exactly once on the spring-forward day (02:30 does not exist)', () => {
     expect(replay('daily 02:30', '2026-03-08')).toBe(1);
   });
+  it('refuses a daily time after the heartbeat\'s last check of the day (23:45)', () => {
+    expect(parseCadence('daily 23:45')).not.toBeNull();
+    expect(parseCadence('daily 23:46')).toBeNull();
+    expect(parseCadence('daily 23:50')).toBeNull();
+  });
+  it('a daily slot missed before midnight (heartbeat down) is served after it, once', () => {
+    const c = parseCadence('daily 23:00')!;
+    // Last drained two days ago; the heartbeat was down at 23:00 yesterday.
+    const last = at('2026-06-09T03:05:00Z'); // 23:05 EDT on 06-08
+    expect(isDue(c, last, at('2026-06-10T04:00:00Z'), TZ)).toBe(true); // 00:00 EDT 06-10, before today's slot
+    const drained = at('2026-06-10T04:00:00Z');
+    expect(isDue(c, drained, at('2026-06-10T04:15:00Z'), TZ)).toBe(false);
+    expect(isDue(c, drained, at('2026-06-11T03:00:00Z'), TZ)).toBe(true); // 23:00 EDT 06-10
+    // Never drained: waits for today's slot.
+    expect(isDue(c, null, at('2026-06-10T04:00:00Z'), TZ)).toBe(false);
+  });
   it('daily 18:00 fires once on an ordinary day', () => {
     expect(replay('daily 18:00', '2026-06-10')).toBe(1);
   });
