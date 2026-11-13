@@ -223,6 +223,14 @@ describe('cleanSubject invisible and malformed characters', () => {
       expect(cleanSubject(raw), raw).not.toMatch(BAD);
     }
   });
+  it('redacts a secret split by encoded zero-width characters', () => {
+    const hex = 'a'.repeat(64);
+    for (const raw of [hex.split('').join('&#x200b;'), hex.split('').join('&amp;#x200b;'), hex.split('').join('&#x2060;')]) {
+      const out = cleanSubject(`key ${raw}`);
+      expect(out, raw).not.toContain(hex);
+      expect(out, raw).toContain('(REDACTED)');
+    }
+  });
   it('removes a lone surrogate and keeps a valid pair', () => {
     const out = cleanSubject('a\ud800b\udc00c 😀');
     expect(out).toBe('abc 😀');
