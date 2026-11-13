@@ -5,7 +5,7 @@
 - **`calendar-find-free-time` (public API)** — new `treat_as_free` input; outputs `blocking`, `treated_as_free`, `treat_as_free_unmatched`, `note`. (#2475)
 - **Availability outputs (public API)** — both availability tools add `partial`, `removed` and `freebusy_via` (with `fell_back_from`). (#2475)
 - **`calendar-check-conflicts` (public API)** — conflicts add `eventId`, `title`, `calendar_label`; adds `note` and `ignore_holds_unchecked`. (#2475)
-- **`calendar-list-events` (public API)** — adds `partial`, `warnings` and `removed`; the principal's listing covers every account. (#2475)
+- **`calendar-list-events` (public API)** — adds `meetingKey`, `partial`, `warnings` and `removed`; the principal's listing covers every account. (#2475)
 - **Home calendar at boot** — every live mailbox, the migrated one included, gets its home calendar registered. (#2475)
 - **Email & Calendar settings page** — Settings → Personality page for the principal's mailboxes; alerts when the Nylas key is missing. (#2475)
 - **Scenario cases 46k–46m** — meeting on the work calendar, cleaner not a conflict, availability across calendars. (#2475)
