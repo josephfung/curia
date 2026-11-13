@@ -23,6 +23,7 @@ inbound:
     title: Drain principal inbox backlog
     intent: Continue batch-triaging the principal inbox until empty.
     tags: [inbox-drain]
+    originator: system
     notes:
       - at: "{{at:now-2m}}"
         note: batch done, more queued

@@ -513,6 +513,11 @@ export interface ScenarioWakeTask {
   notes: { at: string; note: string }[];
   /** The task's tags, as Scheduler.fireJob puts them on the bound task (e.g. `debrief-pending`). */
   tags?: string[];
+  /**
+   * The task's stored originator, which the wake job carries into fireJob's metadata. `system`
+   * is what the inbox heartbeat stamps on its drain task (#2475). Omitted: no originator.
+   */
+  originator?: 'system';
 }
 
 /**

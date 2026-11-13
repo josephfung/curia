@@ -2,7 +2,6 @@
 // Runs in CI with no database or model: the live suite is `pnpm scenarios`.
 import { readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
-import * as yaml from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import { BullpenReplyHandler } from '../../../skills/bullpen/tools/bullpen-reply/handler.js';
 import { PAUSED_NEXT_STEP, delegateFailureNextStep } from '../../../src/agents/prompts/delegate-result-guidance.js';
@@ -372,9 +371,8 @@ describe('coordinator scenario cases', () => {
     };
 
     it('fire the triage through the gateway at the level and score the table gives', () => {
-      // The triage's own cron text, so the case fires what production fires.
-      const ceoInbox = yaml.load(readFileSync(path.resolve(SCENARIOS_DIR, '../../agents/ceo-inbox.yaml'), 'utf-8')) as { schedule: Array<{ task: string }> };
-      const hourly = ceoInbox.schedule[0]!.task.trim();
+      // The triage fires as production fires it since #2475: the inbox heartbeat's drain wake, a
+      // task tagged inbox-drain with the system originator (the old hourly cron is gone).
       for (const [prefix, want] of Object.entries(TABLE)) {
         const c = byPrefix(prefix);
         expect(c.agent, prefix).toBe('ceo-inbox');
@@ -383,8 +381,9 @@ describe('coordinator scenario cases', () => {
         expect(c.autonomy, prefix).toEqual({ score: want.score, gating: 'band' });
         // The loader holds the agent's pinned ceo_inbox/sending to this same level.
         expect(c.seed.principalMailbox?.sendLevel, prefix).toBe(want.level);
-        expect(c.inbound.from, prefix).toBe('scheduler');
-        expect(c.inbound.content.trim(), prefix).toBe(hourly);
+        expect(c.inbound.from, prefix).toBe('task-wake');
+        expect(c.inbound.task?.tags, prefix).toContain('inbox-drain');
+        expect(c.inbound.task?.originator, prefix).toBe('system');
       }
     });
 

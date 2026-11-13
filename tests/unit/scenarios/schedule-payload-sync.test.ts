@@ -1,7 +1,12 @@
 // A `from: scheduler` scenario fires the agent with a copy of one of its `schedule:`
 // payloads. Nothing ties the copy to the YAML, so a payload edit used to leave the cases
-// testing the old text (#2378: the hourly ceo-inbox payload is copied into eight cases).
+// testing the old text (#2378: the hourly ceo-inbox payload was copied into eight cases).
 // Each such case must match one of its agent's declared payloads, whitespace aside.
+//
+// #2475 removed that hourly triage cron: the inbox heartbeat now creates a system-originated
+// `inbox-drain` task and wakes ceo-inbox on it. Triage cases fire as that wake (`from:
+// task-wake`), so they carry no payload copy; the checks below keep them on the heartbeat's
+// shape instead.
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -26,8 +31,19 @@ function schedulePayloads(agent: string): string[] {
 describe('scheduler scenario payloads match the agent YAML', () => {
   const scheduled = cases.filter((c) => c.inbound.from === 'scheduler');
 
-  it('finds the copied ceo-inbox payloads', () => {
+  it('finds the copied ceo-inbox payloads (sent-observe; triage has no cron since #2475)', () => {
     expect(scheduled.filter((c) => c.agent === 'ceo-inbox').length).toBeGreaterThan(0);
+  });
+
+  it('fires no ceo-inbox case with the retired hourly triage payload (#2475)', () => {
+    const triageCron = scheduled.filter((c) => c.agent === 'ceo-inbox' && /tag 'inbox-drain'/.test(c.inbound.content));
+    expect(triageCron.map((c) => c.name)).toEqual([]);
+  });
+
+  it('fires every inbox-drain wake as the heartbeat does: system-originated (#2475)', () => {
+    const drains = cases.filter((c) => c.agent === 'ceo-inbox' && c.inbound.from === 'task-wake' && c.inbound.task?.tags?.includes('inbox-drain'));
+    expect(drains.length).toBeGreaterThanOrEqual(13);
+    expect(drains.filter((c) => c.inbound.task?.originator !== 'system').map((c) => c.name)).toEqual([]);
   });
 
   it.each(scheduled.map((c) => [c.name, c] as const))('%s', (_name, scenario) => {

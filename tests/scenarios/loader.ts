@@ -122,7 +122,7 @@ const AUTONOMY_KEYS = ['score', 'gating'] as const;
 const AUTONOMY_GATINGS = ['band', 'tier'] as const;
 /** Envelope tokens that are not a seeded contact key or a literal address (types.ts: inbound.email.to). */
 const ENVELOPE_TOKENS = ['curia', 'principal'];
-const WAKE_TASK_KEYS = ['id', 'title', 'intent', 'notes', 'tags'] as const;
+const WAKE_TASK_KEYS = ['id', 'title', 'intent', 'notes', 'tags', 'originator'] as const;
 const WAKE_NOTE_KEYS = ['at', 'note'] as const;
 /**
  * A third party's fixture address or domain: under any `.test` name (RFC 6761 reserves the
@@ -901,12 +901,19 @@ function parseWakeTask(raw: unknown, file: string): ScenarioWakeTask {
   });
   if (notes.length === 0) throw new CaseError(file, `inbound.task: 'notes' must list the progress the wake resumes from`);
   const tags = strList(raw, 'tags', file, 'inbound.task');
+  // Only the system lineage the inbox heartbeat stamps is modelled (#2475); other lineages come
+  // from a live turn, which a wake does not have.
+  const originator = optStr(raw, 'originator', file, 'inbound.task');
+  if (originator !== undefined && originator !== 'system') {
+    throw new CaseError(file, `inbound.task: 'originator' must be 'system' (got '${originator}')`);
+  }
   return {
     id,
     title: str(raw, 'title', file, 'inbound.task'),
     intent: str(raw, 'intent', file, 'inbound.task'),
     notes,
     ...(tags.length > 0 ? { tags } : {}),
+    ...(originator === 'system' ? { originator: 'system' as const } : {}),
   };
 }
 
