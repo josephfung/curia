@@ -11,7 +11,7 @@
     "unread_only": "boolean? (if true, only return unread messages, default true; ignored for DRAFTS)",
     "modified_since": "string? (DRAFTS only: ISO 8601 date-time; keep drafts changed at or after it. Resolve 'this morning' with date-resolve)",
     "page_token": "string? (from next_page_token)",
-    "triage": "boolean? (heartbeat inbox-drain only: code picks the due mailboxes and the batch of 5; other filters are ignored)",
+    "triage": "boolean? (inbox-drain task only: code picks the due mailboxes and a batch of 5; other filters and mailbox are ignored)",
     "sweep_since": "string? (ISO date, needs mailbox; principal's own request only: move that mailbox's start line back)",
     "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
@@ -20,13 +20,13 @@
     "drafts": "array of { id, threadId, subject, to, cc, snippet, date, date_local, created_by_curia (null if unknown) } (returned instead of messages when folder is DRAFTS, alongside folder: 'DRAFTS')",
     "count": "number of items returned",
     "mailboxes_due": "string[]? (triage: mailbox ids in this drain)",
-    "backlog": "array? of { mailbox, mailbox_label, untriaged }: over 100 untriaged, say so once",
+    "backlog": "array? of { mailbox, mailbox_label, untriaged_over }: over 100 untriaged (say \"over 100\"), once",
     "budget_exhausted": "boolean? (triage: daily ceiling hit; tell the principal once, do not continue)",
     "next_page_token": "string? (pass as page_token for the next page)",
     "mailbox_errors": "array? of { mailbox, mailbox_label, error }: mailboxes not checked; say so",
     "skipped_mailboxes": "array? of { mailbox, mailbox_label }: not read on this page; say so",
     "has_more": "boolean — true when more unread messages remain beyond this batch (lets the caller drain the inbox in batches); absent for DRAFTS",
-    "scan_incomplete": "boolean? — true when paging stopped at the cap while more messages (or, for DRAFTS with modified_since, more drafts) may remain. Absent when the scan finished. An empty batch still has has_more false, so the drain loop does not spin"
+    "scan_incomplete": "boolean? — true when paging stopped at the cap while more messages (or, for DRAFTS with modified_since, more drafts) may remain. Absent when the scan finished. Outside triage an empty batch has has_more false, so the drain loop does not spin"
   },
   "permissions": [],
   "secrets": [],

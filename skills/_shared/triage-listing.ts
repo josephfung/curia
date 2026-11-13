@@ -34,12 +34,27 @@ interface Scanned {
   more: boolean;
   scannedAny: boolean;
   exhausted: boolean;
+  /** The page cap stopped the scan. With nothing kept, nothing is known about the mailbox. */
+  capped: boolean;
 }
 
+/** Label folder id by mailbox and label, looked up (or created) once per call. */
+type FolderLookups = Map<string, Promise<{ id: string }>>;
+
 /** Add `label` to the message in this mailbox, creating the label here if it is new. */
-async function labelMessage(client: CeoNylasClient, messageId: string, label: string): Promise<void> {
-  const folders = await client.listFolders();
-  const folder = folders.find((f) => f.name.toUpperCase() === label.toUpperCase()) ?? (await client.createFolder(label));
+async function labelMessage(client: CeoNylasClient, mailboxId: string, messageId: string, label: string, lookups: FolderLookups): Promise<void> {
+  const key = `${mailboxId}\u0000${label.toUpperCase()}`;
+  let pending = lookups.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const folders = await client.listFolders();
+      return folders.find((f) => f.name.toUpperCase() === label.toUpperCase()) ?? (await client.createFolder(label));
+    })();
+    lookups.set(key, pending);
+    // A failed lookup must be retried by a later message, not cached.
+    pending.catch(() => lookups.delete(key));
+  }
+  const folder = await pending;
   const current = await client.getMessage(messageId);
   await client.updateMessageFolders(messageId, [...new Set([...(current.folders ?? []), folder.id])]);
 }
@@ -54,6 +69,7 @@ async function lostClaim(
   target: Target,
   msg: NylasMessageSummary,
   allMailboxes: PrincipalMailboxView[],
+  lookups: FolderLookups,
 ): Promise<boolean> {
   const { mailbox, client } = target;
   const fail = (err: unknown, what: string): false => {
@@ -71,21 +87,30 @@ async function lostClaim(
       ctx.log.warn({ tool: TOOL, mailboxId: mailbox.id }, 'ceo-inbox-list: a cross-mailbox message has no Message-ID; not deduped');
       return false;
     }
-    claim = await svc.dedupe.claim(messageId, mailbox.id, msg.id);
+    // Keyed on Message-ID AND From (R54): a reused Message-ID from another sender is no duplicate.
+    const from = msg.from[0]?.email;
+    if (!from) return false;
+    claim = await svc.dedupe.claim(messageId, from, mailbox.id, msg.id);
   } catch (err) {
     return fail(err, 'dedupe check failed');
   }
   // First seen wins; the winner being this very mailbox is a re-sight, not a duplicate.
   if (claim.first || claim.mailboxId === mailbox.id) return false;
   const winner = allMailboxes.find((m) => m.id === claim.mailboxId)?.label ?? claim.mailboxId;
-  if (!client) return true;
+  if (!client) return false;
+  // A copy that cannot be marked read would be dropped on every call and never leave the unread
+  // set, starving older mail. Keep it: triaging it twice is the safe failure (fix round 1).
   try {
     await client.markAsRead(msg.id);
-    await labelMessage(client, msg.id, `↔ In ${winner}`);
   } catch (err) {
-    fail(err, 'could not mark the second copy read or label it');
+    return fail(err, 'could not mark the second copy read');
   }
-  // Dropped either way: it is read or retried next call, where the lost claim repeats.
+  try {
+    await labelMessage(client, mailbox.id, msg.id, `↔ In ${winner}`, lookups);
+  } catch (err) {
+    // Read already, so it leaves the unread set: dropped, just without its label.
+    ctx.log.warn({ tool: TOOL, mailboxId: mailbox.id, ...grantSafeErrorFields(err) }, 'ceo-inbox-list: the second copy is read but could not be labelled; it is dropped from the batch');
+  }
   return true;
 }
 
@@ -104,14 +129,15 @@ export async function triageList(ctx: ToolContext, targets: Target[], curiaEmail
 
     const ids = targets.map((t) => t.mailbox.id);
     const due = await dueMailboxes({
-      mailboxIds: ids, cadences: await svc.cadences(ids), state: svc.state, now, tz: ctx.timezone ?? 'UTC',
+      mailboxIds: ids, cadences: await svc.cadences(ids), state: svc.state, now, tz: svc.tz(),
     });
     const dueTargets = targets.filter((t) => due.includes(t.mailbox.id));
     const allMailboxes: PrincipalMailboxView[] = ctx.principalMailboxes ? await ctx.principalMailboxes.list() : targets.map((t) => t.mailbox);
     const addressOf = new Map(allMailboxes.map((m) => [m.id, lc(m.address)]));
 
+    const lookups: FolderLookups = new Map();
     const errors: MailboxError[] = [];
-    const backlog: Array<{ mailbox: string; mailbox_label: string; untriaged: number }> = [];
+    const backlog: Array<{ mailbox: string; mailbox_label: string; untriaged_over: number }> = [];
     const scans: Scanned[] = [];
     await Promise.all(dueTargets.map(async (target) => {
       const { mailbox, client } = target;
@@ -137,13 +163,13 @@ export async function triageList(ctx: ToolContext, targets: Target[], curiaEmail
             && (startSec === undefined || m.date >= startSec),
         });
         const queue = scan.items.map((i) => i.item);
-        scans.push({ target, queue, scannedAny: queue.length > 0, exhausted: scan.end === null, more: false });
+        scans.push({ target, queue, scannedAny: queue.length > 0, exhausted: scan.end === null, capped: scan.capped, more: false });
         // Untriaged count past the start line, bounded: only when the first scan shows more than a
         // queue's worth, and only until the alarm has fired this episode.
         if (scan.end !== null && queue.length >= QUEUE_NEED && !(await svc.state.backlogAlarmed(mailbox.id))) {
           try {
             const counted = await client.listAllMessages({ ...filters, limit: NYLAS_MAX_LIST_LIMIT, maxScan: BACKLOG_ALARM_THRESHOLD + 1 });
-            if (counted.messages.length > BACKLOG_ALARM_THRESHOLD) backlog.push({ mailbox: mailbox.id, mailbox_label: mailbox.label, untriaged: BACKLOG_ALARM_THRESHOLD + 1 });
+            if (counted.messages.length > BACKLOG_ALARM_THRESHOLD) backlog.push({ mailbox: mailbox.id, mailbox_label: mailbox.label, untriaged_over: BACKLOG_ALARM_THRESHOLD });
           } catch (err) {
             log.warn({ tool: TOOL, mailboxId: mailbox.id, ...grantSafeErrorFields(err) }, 'ceo-inbox-list: backlog count failed; no alarm this call');
           }
@@ -156,7 +182,7 @@ export async function triageList(ctx: ToolContext, targets: Target[], curiaEmail
     scans.sort((a, b) => ids.indexOf(a.target.mailbox.id) - ids.indexOf(b.target.mailbox.id));
 
     if (dueTargets.length > 0 && scans.length === 0) {
-      return { success: false, error: `Failed to list principal inbox messages for triage${errors.length > 1 ? ` (${errors.map((e) => `${e.mailbox_label}: ${e.error}`).join('; ')})` : ''}` };
+      return { success: false, error: `Failed to list principal inbox messages for triage (${errors.map((e) => `${e.mailbox_label}: ${e.error}`).join('; ')})` };
     }
 
     // One message at a time across the due mailboxes, so a busy inbox cannot starve the other.
@@ -175,7 +201,7 @@ export async function triageList(ctx: ToolContext, targets: Target[], curiaEmail
         const fromOther = msg.from.some((p) => otherAddrs.has(lc(p.email)));
         const namesOther = fromOther || [...msg.to, ...msg.cc].some((p) => otherAddrs.has(lc(p.email)));
         if (namesOther) {
-          const lost = await lostClaim(ctx, svc, s.target, msg, allMailboxes);
+          const lost = await lostClaim(ctx, svc, s.target, msg, allMailboxes, lookups);
           if (lost) continue;
         }
         batch.push({ ...msg, ...mailboxFields(mailbox), ...(fromOther ? { from_principal_other_mailbox: true } : {}) });
@@ -187,8 +213,15 @@ export async function triageList(ctx: ToolContext, targets: Target[], curiaEmail
     }
 
     // Drain bookkeeping (R52).
+    let scanIncomplete = false;
     for (const s of scans) {
       const id = s.target.mailbox.id;
+      // The cap stopped a scan that kept nothing: say nothing is known, and leave the drain state.
+      if (s.capped && !s.scannedAny) {
+        scanIncomplete = true;
+        log.error({ tool: TOOL, mailboxId: id, pages: PAGE_CAP }, 'ceo-inbox-list: paging cap reached with nothing to triage; mailbox left as it was');
+        continue;
+      }
       if (s.more) {
         if (!(await svc.state.isDraining(id))) await svc.state.setDrainStartedAt(id, now);
         await svc.state.setDraining(id, true);
@@ -214,6 +247,7 @@ export async function triageList(ctx: ToolContext, targets: Target[], curiaEmail
         has_more: hasMore,
         mailboxes_due: due,
         ...(backlog.length > 0 ? { backlog } : {}),
+        ...(scanIncomplete ? { scan_incomplete: true } : {}),
         ...(errors.length > 0 ? { mailbox_errors: errors } : {}),
       },
     };

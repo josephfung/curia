@@ -9,7 +9,10 @@ export interface TriageServices {
   /** Cadences for the given live mailbox ids, read fresh (a console edit applies at once). */
   cadences(mailboxIds: string[]): Promise<Record<string, Cadence>>;
   state: TriageState;
-  dedupe: TriageDedupe;
+  /** Only the claim, bound: skills never hold the store or its pool. */
+  dedupe: Pick<TriageDedupe, 'claim'>;
+  /** The principal's timezone: the one source the heartbeat and TriageState also use. */
+  tz(): string;
   /** Move a live mailbox's start line (principal-directed sweep). Unknown or removed ids throw. */
   setTriageStart(id: string, at: Date | null): Promise<void>;
 }
