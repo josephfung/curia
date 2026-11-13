@@ -554,7 +554,7 @@ export const PRINCIPAL_SEND_DIGEST_REASONS: Record<DigestRefusal, string> = {
   recipient_not_on_thread: `The reply goes to someone who isn't genuinely on the thread. ${IN_YOUR_DRAFTS}`,
   too_many_recipients: `The reply goes to more than five people, so Curia left it for you. ${IN_YOUR_DRAFTS}`,
   has_attachments: `The reply has attachments, so Curia left it for you. ${IN_YOUR_DRAFTS}`,
-  thread_cooldown: `Curia already dealt with a reply on this thread in the last day. ${IN_YOUR_DRAFTS}`,
+  thread_cooldown: `Curia already replied or held a reply on this thread in the last day. ${IN_YOUR_DRAFTS}`,
   daily_cap: `Curia already sent ${AUTONOMOUS_DAILY_CAP} replies on its own in the last day, its daily limit. ${IN_YOUR_DRAFTS}`,
   not_latest_message: `The reply doesn't answer the latest message on its thread, so Curia didn't send it on its own. ${IN_YOUR_DRAFTS}`,
   financial_details: `It contains bank or card details, which Curia never sends on its own. ${IN_YOUR_DRAFTS}`,
