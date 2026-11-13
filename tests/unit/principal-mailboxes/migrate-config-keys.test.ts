@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { migrateSendingKey, renameSendingKeyAfterMigration, dropLegacyDefaultKey, reconcileLegacySendingKey } from '../../../src/principal-mailboxes/migrate-config-keys.js';
+import { migrateSendingKey, renameSendingKeyAfterMigration, dropLegacyDefaultKey, reconcileLegacySendingKey, SendingKeyNotStoredError } from '../../../src/principal-mailboxes/migrate-config-keys.js';
 
 const quiet = { info: () => {}, warn: () => {}, error: () => {} } as never;
 
@@ -23,6 +23,32 @@ describe('unparseable sending value', () => {
     await dropLegacyDefaultKey(s, logger);
     expect(warn).toHaveBeenCalledTimes(2);
     expect(s.writes).toHaveLength(0);
+  });
+});
+
+describe('a write the store declines', () => {
+  const declining = (initial: string) => ({
+    get: async () => initial,
+    set: async () => ({ stored: false, action: 'rate_limited' }),
+  });
+  it('is not reported as renamed or dropped', async () => {
+    await expect(migrateSendingKey(declining('{"default":"routine"}'), 'work', quiet)).rejects.toBeInstanceOf(SendingKeyNotStoredError);
+    await expect(dropLegacyDefaultKey(declining('{"default":"routine"}'), quiet)).rejects.toBeInstanceOf(SendingKeyNotStoredError);
+  });
+  it('goes to the reconcile retry path, which logs instead of reporting a rename', async () => {
+    const info = vi.fn();
+    const warn = vi.fn();
+    const logger = { info, warn, error: () => {} } as never;
+    const run = renameSendingKeyAfterMigration({
+      migrate: async () => 'already',
+      mailboxes: async () => [{ id: 'work', triageStartAt: null }],
+      isFallbackActive: async () => false,
+      store: () => declining('{"default":"routine"}'),
+      logger,
+    });
+    await run();
+    expect(info).not.toHaveBeenCalledWith('Renamed the default send-level key to the migrated mailbox id');
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ errName: 'SendingKeyNotStoredError' }), expect.stringContaining('retried'));
   });
 });
 

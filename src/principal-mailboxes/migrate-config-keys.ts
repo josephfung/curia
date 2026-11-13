@@ -11,7 +11,21 @@ import { SEND_SETTING_KEY, SEND_SETTING_NAMESPACE, type SendLevelMailbox } from 
 
 export interface SendingConfigStore {
   get(namespace: string, key: string): Promise<string | null>;
-  set(namespace: string, key: string, value: string): Promise<unknown>;
+  /** ConfigStore.set: a soft rejection resolves `{ stored: false, action }` without throwing. */
+  set(namespace: string, key: string, value: string): Promise<{ stored: boolean; action?: string }>;
+}
+
+/** Thrown when the store declined a write, so the caller's error and retry path handles it. */
+export class SendingKeyNotStoredError extends Error {
+  constructor(action: string | undefined) {
+    super(`ceo_inbox/sending write was not stored (${action ?? 'no action'})`);
+    this.name = 'SendingKeyNotStoredError';
+  }
+}
+
+async function writeOrThrow(store: SendingConfigStore, value: string): Promise<void> {
+  const result = await store.set(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY, value);
+  if (!result.stored) throw new SendingKeyNotStoredError(result.action);
 }
 
 const LEGACY_KEY = 'default';
@@ -20,7 +34,7 @@ const LEGACY_KEY = 'default';
  * 'renamed' when a `default` entry was moved to `defaultId`; 'nothing' otherwise (unset,
  * unparseable, no `default` key, or already renamed). Idempotent. An entry already stored under
  * `defaultId` wins, and the stale `default` is dropped. Other mailboxes' entries are kept.
- * Store errors propagate to the caller.
+ * Store errors, and a write the store declined, propagate to the caller.
  */
 export async function migrateSendingKey(store: SendingConfigStore, defaultId: string, logger: Logger): Promise<'renamed' | 'nothing'> {
   if (defaultId === LEGACY_KEY) return 'nothing';
@@ -39,14 +53,14 @@ export async function migrateSendingKey(store: SendingConfigStore, defaultId: st
   if (!Object.prototype.hasOwnProperty.call(levels, LEGACY_KEY)) return 'nothing';
   const { [LEGACY_KEY]: legacy, ...rest } = levels;
   const next = Object.prototype.hasOwnProperty.call(rest, defaultId) ? rest : { ...rest, [defaultId]: legacy };
-  await store.set(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY, JSON.stringify(next));
+  await writeOrThrow(store, JSON.stringify(next));
   return 'renamed';
 }
 
 /**
  * Drop the legacy `default` entry (no-op when absent). Called when the migrated mailbox is removed:
  * that entry was set for it, so it must not outlive it and be inherited by whichever mailbox is
- * added next as the sole one (R41, SF8). True when an entry was dropped. Store errors propagate.
+ * added next as the sole one (R41, SF8). True when an entry was dropped. Store errors, and a declined write, propagate.
  */
 export async function dropLegacyDefaultKey(store: SendingConfigStore, logger: Logger): Promise<boolean> {
   const raw = await store.get(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY);
@@ -63,7 +77,7 @@ export async function dropLegacyDefaultKey(store: SendingConfigStore, logger: Lo
   if (!Object.prototype.hasOwnProperty.call(parsed, LEGACY_KEY)) return false;
   const rest: Record<string, unknown> = { ...(parsed as Record<string, unknown>) };
   delete rest[LEGACY_KEY];
-  await store.set(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY, JSON.stringify(rest));
+  await writeOrThrow(store, JSON.stringify(rest));
   logger.info('Dropped the legacy default send-level key: the mailbox it was set for is gone');
   return true;
 }

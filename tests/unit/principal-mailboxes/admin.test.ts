@@ -708,7 +708,7 @@ describe('removing a mailbox drops the legacy send-level key (#2475 R41)', () =>
     let stored: string | null = '{"default":"routine"}';
     const store = {
       get: async () => stored,
-      set: async (_n: string, _k: string, v: string) => { stored = v; return {}; },
+      set: async (_n: string, _k: string, v: string) => { stored = v; return { stored: true }; },
     };
     const s = setup({
       records: [rec({ id: 'work', address: 'pat@work.example.com' })],
