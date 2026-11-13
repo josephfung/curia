@@ -374,6 +374,20 @@ describe('principal-mailboxes routes', () => {
       expect(JSON.stringify(vi.mocked(opts.bus.publish).mock.calls)).not.toMatch(/grant-secret-123|boss@example\.com/);
     });
 
+    it('a malformed id or rescope target is refused before anything is audited (SEC-L5)', async () => {
+      const opts = makeOptions();
+      await build(opts);
+      const long = 'x'.repeat(500);
+      expect((await req('POST', URL, { id: `Bad Id ${long}`, label: 'Work', grant_id: 'grant-secret-123' })).statusCode).toBe(400);
+      expect((await req('PATCH', `${URL}/${'x'.repeat(40)}`, { label: 'New' })).statusCode).toBe(400);
+      expect((await req('DELETE', `${URL}/NOT_AN_ID`, { still_owned: true })).statusCode).toBe(400);
+      expect((await req('DELETE', `${URL}/work`, { still_owned: true, rules: { rescope_to: 'Bad Target!' } })).statusCode).toBe(400);
+      const badDefault = await req('DELETE', `${URL}/work`, { still_owned: true, new_default_id: '../x' });
+      expect(badDefault.statusCode).toBe(400);
+      expect(badDefault.json().error).toMatch(/^new_default_id must be a mailbox id/);
+      expect(opts.bus.publish).not.toHaveBeenCalled();
+    });
+
     it('a refused add leaves only the requested row', async () => {
       const opts = makeOptions({ admin: { ...makeOptions().admin, add: vi.fn(async () => ({ ok: false as const, refusal: 'address_is_another_contact' as const, detail: 'x' })) } });
       await build(opts);

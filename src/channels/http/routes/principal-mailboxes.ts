@@ -28,7 +28,7 @@ import type { PrincipalMailboxAdmin } from '../../../principal-mailboxes/admin.j
 import { MailboxRemovalError } from '../../../principal-mailboxes/admin.js';
 import type { PrincipalMailboxes } from '../../../principal-mailboxes/service.js';
 import type { PrincipalMailboxStore } from '../../../principal-mailboxes/store.js';
-import { RemovedMailboxError, UnknownMailboxError } from '../../../principal-mailboxes/types.js';
+import { MAILBOX_ID_RE, RemovedMailboxError, UnknownMailboxError } from '../../../principal-mailboxes/types.js';
 import { grantLookupFailureDetail, grantSafeErrorFields, mayCarryGrantId } from '../../../principal-mailboxes/error-fields.js';
 
 export interface PrincipalMailboxesRouteOptions {
@@ -55,6 +55,9 @@ const MAX_LABEL = 80;
 const NO_NYLAS = 'No Nylas API key is configured. Set channel.email.nylas_api_key first.';
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+// Ids are checked before anything is audited (SEC-L5): the audit row carries them, so an
+// arbitrary string must never reach it. A well-formed id that names no mailbox is still a 404.
+const ID_ERROR = (field: string): string => `${field} must be a mailbox id (a lowercase letter, then up to 31 lowercase letters, digits or -)`;
 
 // Nylas v3 grant ids are UUIDs; this also admits other URL-safe ids of a sane length, and
 // keeps anything else (spaces, slashes, a pasted URL) out of the vault and of Nylas requests.
@@ -174,6 +177,7 @@ export async function principalMailboxesRoutes(
     const label = str(body.label);
     const grantId = str(body.grant_id);
     if (!id) return reply.status(400).send({ error: 'id is required' });
+    if (!MAILBOX_ID_RE.test(id)) return reply.status(400).send({ error: ID_ERROR('id') });
     const badLabel = labelError(label);
     if (badLabel) return reply.status(400).send({ error: badLabel });
     if (!grantId) return reply.status(400).send({ error: 'grant_id is required' });
@@ -199,6 +203,7 @@ export async function principalMailboxesRoutes(
     if (!requireAuth(request, reply)) return;
     const { id } = request.params as { id: string };
     const body = (request.body ?? {}) as { label?: unknown; make_default?: unknown; grant_id?: unknown };
+    if (!MAILBOX_ID_RE.test(id)) return reply.status(400).send({ error: ID_ERROR('id') });
     const hasLabel = body.label !== undefined;
     const hasGrant = body.grant_id !== undefined;
     const grantId = str(body.grant_id);
@@ -257,6 +262,7 @@ export async function principalMailboxesRoutes(
     if (!requireAuth(request, reply)) return;
     const { id } = request.params as { id: string };
     const body = (request.body ?? {}) as { still_owned?: unknown; new_default_id?: unknown; new_primary_email?: unknown; rules?: unknown };
+    if (!MAILBOX_ID_RE.test(id)) return reply.status(400).send({ error: ID_ERROR('id') });
     if (typeof body.still_owned !== 'boolean') {
       return reply.status(400).send({ error: 'still_owned (boolean) is required' });
     }
@@ -270,6 +276,8 @@ export async function principalMailboxesRoutes(
       else if (r !== null && typeof r === 'object' && str(r.rescope_to)) rules = { rescopeTo: str(r.rescope_to) };
       else return reply.status(400).send({ error: 'rules must be "delete" or { rescope_to: <mailbox id> }' });
     }
+    if (rules && rules !== 'delete' && !MAILBOX_ID_RE.test(rules.rescopeTo)) return reply.status(400).send({ error: ID_ERROR('rules.rescope_to') });
+    if (newDefaultId !== undefined && !MAILBOX_ID_RE.test(newDefaultId)) return reply.status(400).send({ error: ID_ERROR('new_default_id') });
     const change: MailboxChange = {
       mailboxId: id,
       action: 'remove',
