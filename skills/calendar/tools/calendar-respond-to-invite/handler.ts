@@ -194,7 +194,7 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
         await client.deleteEvent(calendarId, hold.id);
         releasedHolds.push(hold.id);
         ctx.log.info(
-          { calendarId, holdId: hold.id },
+          { mailboxId: routed.mailboxId, holdId: hold.id },
           'calendar-respond-to-invite: released conversation hold',
         );
       } catch (err) {
