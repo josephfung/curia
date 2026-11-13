@@ -46,6 +46,12 @@ expected_behaviors:
   - id: account_not_mentioned
     weight: important
     description: The reply does not announce or ask about the account (the evidence was one-sided).
+  - id: account_not_announced
+    weight: important
+    description: The reply has no phrase that announces the account, such as "from your work account" (a code check beside the judged one).
+    check:
+      reply_excludes:
+        - '\b(from|in|using|via) (your |the )?(work|personal)( account| mailbox| email)?\b'
 failure_modes:
   - Composes in the work mailbox
   - Asks which account to use although the evidence was one-sided
