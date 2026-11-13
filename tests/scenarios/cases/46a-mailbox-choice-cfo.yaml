@@ -50,6 +50,12 @@ expected_behaviors:
     description: >
       The reply does not announce or ask about the account: the evidence all pointed to work, so
       this was no judgement call. Saying the draft is saved is fine.
+  - id: account_not_announced
+    weight: important
+    description: The reply has no phrase that announces the account, such as "from your work account" (a code check beside the judged one).
+    check:
+      reply_excludes:
+        - '\b(from|in|using|via) (your |the )?(work|personal)( account| mailbox| email)?\b'
 failure_modes:
   - Composes in the personal mailbox
   - Asks the principal which account to use although the evidence was one-sided

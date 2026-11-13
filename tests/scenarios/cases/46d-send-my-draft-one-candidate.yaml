@@ -39,12 +39,25 @@ expected_behaviors:
   - id: does_not_ask
     weight: important
     description: Does not ask which account or for confirmation; there was one candidate and one send.
-  - id: lists_without_one_mailbox
+  - id: lists_drafts
     weight: important
-    description: Looks for the draft across every mailbox (no single mailbox passed to the listing).
+    description: Lists the drafts to find the one meant.
+    check:
+      called: ceo-inbox-list
+      with: { folder: DRAFTS }
+      min: 1
+  - id: lists_without_work_mailbox
+    weight: important
+    description: Looks for the draft across every mailbox, not only the work one.
     check:
       not_called: [ceo-inbox-list]
       with: { mailbox: work }
+  - id: lists_without_personal_mailbox
+    weight: important
+    description: Looks for the draft across every mailbox, not only the personal one.
+    check:
+      not_called: [ceo-inbox-list]
+      with: { mailbox: personal }
 failure_modes:
   - Asks which account the draft is in
   - Sends nothing and only describes the draft

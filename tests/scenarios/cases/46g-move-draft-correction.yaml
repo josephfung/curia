@@ -46,10 +46,11 @@ expected_behaviors:
   - id: stores_preference
     weight: critical
     description: >
-      Stores the preference with memory-store, naming the contact and the topic (personal taxes go
-      from the personal account), so entity-context returns it next time.
+      Stores the preference with memory-store on Priya (the entity names her) with "personal" in
+      the stored value, so entity-context returns it next time.
     check:
       called: memory-store
+      contains: { entity: Priya, value: personal }
       min: 1
   - id: no_resend_or_recompose
     weight: important
