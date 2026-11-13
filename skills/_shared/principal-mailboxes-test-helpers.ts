@@ -21,6 +21,8 @@ export interface StubOptions {
   identityAddresses?: string[];
   /** Fake Nylas clients by mailbox id, served by gatewayClient (mailbox evidence). Absent id: throws. */
   gatewayClients?: Record<string, unknown>;
+  /** Serve the deferred-migration fallback (per-mailbox state keeps the global keys). */
+  fallbackActive?: boolean;
 }
 
 export function stubPrincipalMailboxes(opts: StubOptions = {}): NonNullable<ToolContext['principalMailboxes']> {
@@ -39,6 +41,7 @@ export function stubPrincipalMailboxes(opts: StubOptions = {}): NonNullable<Tool
       ...new Set([...mailboxes.map((m) => m.address), ...(opts.identityAddresses ?? [])].map((a) => a.toLowerCase()).filter((a) => a !== '')),
     ],
     defaultMailbox: async () => mailboxes.find((m) => m.isDefault) ?? null,
+    isFallbackActive: async () => opts.fallbackActive ?? false,
     gatewayClient: async (id: string) => {
       const c = opts.gatewayClients?.[id];
       if (!c) throw new Error(`no stub gateway client for ${id}`);

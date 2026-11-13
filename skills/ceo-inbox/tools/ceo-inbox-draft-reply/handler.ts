@@ -320,6 +320,8 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
         to: draft.to,
         cc: draft.cc,
         body,
+        // The mailbox the draft was created in: after a redirect that is the addressed copy's.
+        ...(typeof mbx.mailbox === 'string' ? { mailbox: mbx.mailbox } : {}),
       }).catch((err) =>
         ctx.log.error(grantSafeErrorFields(err), 'ceo-inbox-draft-reply: voice snapshot capture rejected'),
       );

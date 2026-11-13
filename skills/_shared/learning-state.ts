@@ -9,10 +9,17 @@
 import type { ConfigStore } from '../../src/memory/config-store.js';
 import type { Logger } from '../../src/logger.js';
 import type { MatchConfidence } from './sent-observe-match.js';
+import { readScoped, writeScoped, scopedKey, type MailboxStateScope } from './mailbox-state.js';
 
 /** Same namespace as the watermark/idle-backoff/checkpoint/dismiss-cooldown keys. */
 export const LEARNING_STATE_NAMESPACE = 'ceo_inbox';
 
+// Per-mailbox keys (#2475, D8): the constants below name the PRE-#2475 global key. Pass a
+// MailboxStateScope to a reader/writer to reach `sent_observe.<mailbox>.<name>` instead (the
+// migrated mailbox falls back to the global key until migrateLearningKeys has moved it).
+// Per mailbox (they hold message, draft or task ids tied to one grant): COMPLETION_CANDIDATES_KEY,
+// MATCHED_DRAFT_IDS_KEY, ASKED_TASK_IDS_KEY. Global (not grant-scoped): COMPLETION_DIGEST_KEY,
+// COMPLETION_DIGEST_HIGH_WATER_KEY (task ids and a counter) and VOICE_PROPOSAL_KEY (`voice_learn.*`).
 export const COMPLETION_CANDIDATES_KEY = 'sent_observe.completion_candidates';
 export const COMPLETION_DIGEST_KEY = 'sent_observe.completion_digest';
 /** Highest digest item number handed out since the digest was last empty (#2159 Phase 3). */
@@ -249,18 +256,27 @@ function corruptionLogger(key: string, raw: string, log?: Logger): () => void {
     );
 }
 
-export async function readCompletionCandidates(store: ConfigStore, log?: Logger): Promise<CompletionCandidateMap> {
-  const raw = await store.get(LEARNING_STATE_NAMESPACE, COMPLETION_CANDIDATES_KEY);
-  const parsed = parseJson<unknown>(raw, raw ? corruptionLogger(COMPLETION_CANDIDATES_KEY, raw, log) : undefined);
+export async function readCompletionCandidates(
+  store: ConfigStore,
+  log?: Logger,
+  scope?: MailboxStateScope,
+): Promise<CompletionCandidateMap> {
+  const key = scopedKey(scope, COMPLETION_CANDIDATES_KEY);
+  const raw = await readScoped(store, scope, COMPLETION_CANDIDATES_KEY);
+  const parsed = parseJson<unknown>(raw, raw ? corruptionLogger(key, raw, log) : undefined);
   if (parsed === null) return {};
   if (!isPlainObject(parsed)) {
-    corruptionLogger(COMPLETION_CANDIDATES_KEY, raw!, log)();
+    corruptionLogger(key, raw!, log)();
     return {};
   }
-  return filterValidEntries(parsed, COMPLETION_CANDIDATES_KEY, isCompletionCandidate, log);
+  return filterValidEntries(parsed, key, isCompletionCandidate, log);
 }
-export async function writeCompletionCandidates(store: ConfigStore, map: CompletionCandidateMap): Promise<boolean> {
-  return (await store.set(LEARNING_STATE_NAMESPACE, COMPLETION_CANDIDATES_KEY, JSON.stringify(map))).stored;
+export async function writeCompletionCandidates(
+  store: ConfigStore,
+  map: CompletionCandidateMap,
+  scope?: MailboxStateScope,
+): Promise<boolean> {
+  return (await writeScoped(store, scope, COMPLETION_CANDIDATES_KEY, JSON.stringify(map))).stored;
 }
 
 export async function readCompletionDigest(store: ConfigStore, log?: Logger): Promise<CompletionDigestMap> {
@@ -358,13 +374,14 @@ export async function writeVoiceProposal(store: ConfigStore, proposal: VoiceGuid
   return (await store.set(LEARNING_STATE_NAMESPACE, VOICE_PROPOSAL_KEY, JSON.stringify(proposal))).stored;
 }
 
-export async function readIdSet(store: ConfigStore, key: string, log?: Logger): Promise<Set<string>> {
-  const raw = await store.get(LEARNING_STATE_NAMESPACE, key);
-  const parsed = parseJson<unknown>(raw, raw ? corruptionLogger(key, raw, log) : undefined);
+export async function readIdSet(store: ConfigStore, key: string, log?: Logger, scope?: MailboxStateScope): Promise<Set<string>> {
+  const raw = await readScoped(store, scope, key);
+  const stateKey = scopedKey(scope, key);
+  const parsed = parseJson<unknown>(raw, raw ? corruptionLogger(stateKey, raw, log) : undefined);
   if (parsed !== null && !Array.isArray(parsed)) {
     // Parsed fine but the wrong top-level shape (e.g. a map object stored under an id-set key) —
     // route through the same corruption logger so this isn't a silent empty-set degrade.
-    corruptionLogger(key, raw!, log)();
+    corruptionLogger(stateKey, raw!, log)();
     return new Set();
   }
   if (!Array.isArray(parsed)) return new Set(); // null/unset — absence, not corruption
@@ -375,14 +392,14 @@ export async function readIdSet(store: ConfigStore, key: string, log?: Logger): 
   const valid = parsed.filter((v): v is string => typeof v === 'string');
   if (valid.length !== parsed.length) {
     log?.warn(
-      { key, dropped: parsed.length - valid.length },
+      { key: stateKey, dropped: parsed.length - valid.length },
       'learning-state: dropped non-string entries from a stored id set — treating them as absent',
     );
   }
   return new Set(valid);
 }
-export async function writeIdSet(store: ConfigStore, key: string, ids: Set<string>): Promise<boolean> {
-  return (await store.set(LEARNING_STATE_NAMESPACE, key, JSON.stringify([...ids]))).stored;
+export async function writeIdSet(store: ConfigStore, key: string, ids: Set<string>, scope?: MailboxStateScope): Promise<boolean> {
+  return (await writeScoped(store, scope, key, JSON.stringify([...ids]))).stored;
 }
 
 /**

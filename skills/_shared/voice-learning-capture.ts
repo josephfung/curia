@@ -17,6 +17,8 @@ export interface DraftSnapshotInput {
   cc: NylasParticipant[];
   /** Plain markdown/text body Curia authored — not the HTML sent to Nylas. */
   body: string;
+  /** The mailbox the draft lives in (#2475); sent-observe matches a snapshot within its mailbox. */
+  mailbox?: string;
 }
 
 export function draftSnapshotPath(draftId: string): string {
@@ -51,6 +53,7 @@ export async function captureDraftSnapshot(
     recipients,
     subject: input.subject,
     created_at: new Date().toISOString(),
+    ...(input.mailbox ? { mailbox: input.mailbox } : {}),
   };
 
   try {

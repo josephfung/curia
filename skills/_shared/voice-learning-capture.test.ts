@@ -153,3 +153,14 @@ describe('captureDraftSnapshot', () => {
     expect(ctx.log.warn).toHaveBeenCalled();
   });
 });
+
+describe('captureDraftSnapshot mailbox (#2475)', () => {
+  it('records the mailbox in the frontmatter, and omits it when none is given', async () => {
+    const create = vi.fn().mockResolvedValue({});
+    const ctx = buildCtx({ read: vi.fn().mockResolvedValue(null), create, update: vi.fn() });
+    await captureDraftSnapshot(ctx, { ...SNAPSHOT, mailbox: 'personal' });
+    await captureDraftSnapshot(ctx, SNAPSHOT);
+    expect(create.mock.calls[0]![0].frontmatter.mailbox).toBe('personal');
+    expect(create.mock.calls[1]![0].frontmatter).not.toHaveProperty('mailbox');
+  });
+});

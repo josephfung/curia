@@ -16,6 +16,8 @@ export interface ShadowSnapshot {
   recipients: string[];
   body: string;
   createdAt: string;
+  /** The mailbox the punted message sits in (#2475). Absent on a shadow written before the registry. */
+  mailbox?: string;
 }
 
 export function parseShadowDoc(doc: {
@@ -38,6 +40,7 @@ export function parseShadowDoc(doc: {
       : [],
     body: doc.body,
     createdAt: typeof fm.created_at === 'string' ? fm.created_at : '',
+    ...(typeof fm.mailbox === 'string' && fm.mailbox !== '' ? { mailbox: fm.mailbox } : {}),
   };
 }
 

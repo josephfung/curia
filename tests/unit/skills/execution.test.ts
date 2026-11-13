@@ -252,7 +252,7 @@ describe('ExecutionLayer', () => {
       const result = await withService.invoke('test-skill', { query: 'x' });
       expect(result.success).toBe(true);
       expect(seen).not.toBe(service);
-      expect(Object.keys(seen!).sort()).toEqual(['ceoClient', 'defaultMailbox', 'gatewayClient', 'get', 'list', 'principalEmailAddresses']);
+      expect(Object.keys(seen!).sort()).toEqual(['ceoClient', 'defaultMailbox', 'gatewayClient', 'get', 'isFallbackActive', 'list', 'principalEmailAddresses']);
       expect(seen).not.toHaveProperty('credentials');
       expect(seen).not.toHaveProperty('calendarClient');
       // Still works, through the service.

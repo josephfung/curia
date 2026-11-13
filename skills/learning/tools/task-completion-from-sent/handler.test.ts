@@ -11,6 +11,7 @@ import {
   usableCompletionDigestCreatedAt,
   type CompletionCandidateMap,
 } from '../../../_shared/learning-state.js';
+import { stubPrincipalMailboxes, mailboxView } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 const CANDIDATE_MAP: CompletionCandidateMap = {
   '11111111-1111-4111-8111-111111111111': {
@@ -677,5 +678,40 @@ describe('TaskCompletionFromSentHandler', () => {
     // completeTask must not have been called again — exactly one call total across both runs.
     expect(ctx.__completed).toEqual(['11111111-1111-4111-8111-111111111111']);
     expect((ctx.taskRepo!.completeTask as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+  });
+});
+
+describe('TaskCompletionFromSentHandler — candidates queue per mailbox (#2475, D8)', () => {
+  const handler = new TaskCompletionFromSentHandler();
+  const T1 = '11111111-1111-4111-8111-111111111111';
+  const T2 = '22222222-2222-4222-8222-222222222222';
+  const TWO = [
+    mailboxView('work', 'Work', 'ceo@work.example.com', true),
+    { ...mailboxView('personal', 'Personal', 'ceo@personal.example.com'), triageStartAt: new Date('2026-11-01T00:00:00Z') },
+  ];
+
+  it('consumes the candidates of every mailbox and clears each queue', async () => {
+    const ctx = makeCtx();
+    ctx.__mem.__values.clear();
+    ctx.__mem.__values.set('sent_observe.work.completion_candidates', JSON.stringify({ [T1]: CANDIDATE_MAP[T1]! }));
+    ctx.__mem.__values.set('sent_observe.personal.completion_candidates', JSON.stringify({ [T2]: CANDIDATE_MAP[T2]! }));
+    (ctx as { principalMailboxes?: unknown }).principalMailboxes = stubPrincipalMailboxes({ mailboxes: TWO });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect(ctx.__completed).toEqual([T1]);
+    expect(JSON.parse(ctx.__mem.__values.get('sent_observe.work.completion_candidates')!)).toEqual({});
+    expect(JSON.parse(ctx.__mem.__values.get('sent_observe.personal.completion_candidates')!)).toEqual({});
+    // The digest stays one global map holding both mailboxes' items.
+    expect(Object.keys(JSON.parse(ctx.__mem.__values.get(COMPLETION_DIGEST_KEY)!)).sort()).toEqual([T1, T2]);
+  });
+
+  it('reads the pre-migration global queue for the migrated mailbox, not for the others', async () => {
+    const ctx = makeCtx();
+    (ctx as { principalMailboxes?: unknown }).principalMailboxes = stubPrincipalMailboxes({ mailboxes: TWO });
+    await handler.execute(ctx);
+    expect(ctx.__completed).toEqual([T1]);
+    // Consumed: written back to the migrated mailbox's own key; the global key waits for the migration.
+    expect(JSON.parse(ctx.__mem.__values.get('sent_observe.work.completion_candidates')!)).toEqual({});
+    expect(ctx.__mem.__values.has('sent_observe.personal.completion_candidates')).toBe(false);
   });
 });

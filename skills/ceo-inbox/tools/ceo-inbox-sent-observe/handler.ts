@@ -2,9 +2,24 @@
 //
 // Watermarked like the inbound email poll. Self-throttles via last_run_found_nothing_at
 // (t2125 pattern). Capture/match failures on individual messages log and continue.
+//
+// One job, one loop over the live mailboxes (#2475, D8). Each mailbox has its own watermark, idle
+// backoff, backfill and held-since keys and its own matched-draft / asked-task / completion-candidate
+// state (`sent_observe.<mailbox>.<name>`; the constants below name the pre-#2475 global keys, which
+// mailbox-state.ts maps per scope). A mailbox whose run fails is logged grant-safely, leaves its own
+// state untouched and does not stop the others. Draft snapshots, shadows and send-ledger entries are
+// matched within their mailbox only; one with no mailbox belongs to the migrated mailbox.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { namedOrDefaultMailbox } from '../../../_shared/principal-mailbox-client.js';
+import { mailboxClient, readMailboxInput, type MailboxClient } from '../../../_shared/principal-mailbox-client.js';
+import { grantSafeErrorFields, mayCarryGrantId } from '../../../../src/principal-mailboxes/error-fields.js';
+import {
+  liveMailboxScopes,
+  readScoped,
+  writeScoped,
+  recordBelongsTo,
+  type MailboxStateScope,
+} from '../../../_shared/mailbox-state.js';
 import {
   htmlToPlainText,
   type NylasMessageSummary,
@@ -133,6 +148,7 @@ function parseSnapshot(doc: {
     recipients: { to, cc },
     body: doc.body,
     createdAt: typeof fm.created_at === 'string' ? fm.created_at : new Date(0).toISOString(),
+    ...(typeof fm.mailbox === 'string' && fm.mailbox !== '' ? { mailbox: fm.mailbox } : {}),
   };
 }
 
@@ -289,6 +305,33 @@ async function appendAndTrimDoc(
   return false;
 }
 
+/** Counters summed across mailboxes in the tool result. */
+const SUMMED_FIELDS = [
+  'messages_scanned', 'draft_matches', 'task_candidates', 'shadow_reconciled', 'shadow_judge_failed',
+  'shadow_deferred', 'shadow_fetch_failed', 'shadow_record_failed', 'shadow_superseded', 'shadow_supersede_failed',
+] as const;
+/** Flags that are true when any mailbox set them. */
+const ANY_FIELDS = ['watermark_held', 'backfill_active', 'tasks_truncated'] as const;
+
+type MailboxData = Record<string, unknown>;
+
+/** A message safe to put in a result or log: a Nylas error can carry the grant id in its text. */
+function safeMessage(err: unknown): string {
+  if (!(err instanceof Error)) return 'unknown error';
+  return mayCarryGrantId(err) ? err.name : err.message;
+}
+
+/** Merge per-mailbox results into one flat result: today's shape for one mailbox. */
+function aggregate(results: Array<{ mailbox: string; data: MailboxData }>): MailboxData {
+  const out: MailboxData = {};
+  for (const f of SUMMED_FIELDS) out[f] = results.reduce((n, r) => n + (typeof r.data[f] === 'number' ? (r.data[f] as number) : 0), 0);
+  const advanced = results.map((r) => r.data.watermark_advanced_to).filter((v): v is number => typeof v === 'number');
+  out.watermark_advanced_to = advanced.length > 0 ? Math.max(...advanced) : null;
+  for (const f of ANY_FIELDS) out[f] = results.some((r) => r.data[f] === true);
+  out.skipped_backoff = results.length > 0 && results.every((r) => r.data.skipped_backoff === true);
+  return out;
+}
+
 export class CeoInboxSentObserveHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     // Skill contract: never throw. Any Nylas / config / document / task / bus rejection
@@ -296,18 +339,74 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     try {
       return await this.runObserve(ctx);
     } catch (err) {
-      ctx.log.error({ err }, 'ceo-inbox-sent-observe: unexpected failure');
+      ctx.log.error({ ...grantSafeErrorFields(err) }, 'ceo-inbox-sent-observe: unexpected failure');
       return {
         success: false,
-        error: `sent-observe failed: ${err instanceof Error ? err.message : String(err)}`,
+        error: `sent-observe failed: ${safeMessage(err)}`,
       };
     }
   }
 
+  /** Observe every live mailbox (or the one named). One mailbox failing does not move the others. */
   private async runObserve(ctx: ToolContext): Promise<ToolResult> {
-    const picked = await namedOrDefaultMailbox(ctx, ctx.input, 'ceo-inbox-sent-observe');
-    if (!picked.ok) return { success: false, error: picked.error };
-    const client = picked.at.client;
+    const named = readMailboxInput(ctx.input);
+    if (!named.ok) return { success: false, error: named.error };
+    if (!ctx.principalMailboxes) {
+      return { success: false, error: 'ceo-inbox-sent-observe needs the principalMailboxes capability, which is not available' };
+    }
+    const all = await liveMailboxScopes(ctx);
+    if (all.length === 0) return { success: false, error: 'No principal mailbox is connected.' };
+    let targets = all;
+    if (named.mailbox !== undefined) {
+      // An unknown or removed id is an error, never the default (the service throws for it).
+      try {
+        await ctx.principalMailboxes.get(named.mailbox);
+      } catch (err) {
+        ctx.log.warn({ ...grantSafeErrorFields(err) }, 'ceo-inbox-sent-observe: named mailbox is not live');
+        return { success: false, error: err instanceof Error ? err.message : 'The principal mailbox is unavailable.' };
+      }
+      targets = all.filter((t) => t.mailbox.id === named.mailbox);
+      if (targets.length === 0) return { success: false, error: `Mailbox "${named.mailbox}" is not live.` };
+    }
+
+    const results: Array<{ mailbox: string; data: MailboxData }> = [];
+    const errors: Array<{ mailbox: string; error: string }> = [];
+    for (const { mailbox, scope } of targets) {
+      try {
+        const at = await mailboxClient(ctx, mailbox.id);
+        const res = await this.observeMailbox(ctx, at, scope);
+        if (res.success) results.push({ mailbox: mailbox.id, data: res.data as MailboxData });
+        else errors.push({ mailbox: mailbox.id, error: res.error });
+      } catch (err) {
+        // Grant-safe: a Nylas error can carry the grant id. This mailbox's state keys are left as
+        // they were (every write is gated on the run completing) and the others still run.
+        ctx.log.error(
+          { mailboxId: mailbox.id, ...grantSafeErrorFields(err) },
+          'ceo-inbox-sent-observe: mailbox run failed — its state is unchanged, continuing with the others',
+        );
+        errors.push({ mailbox: mailbox.id, error: safeMessage(err) });
+      }
+    }
+
+    if (results.length === 0) {
+      const multi = targets.length > 1;
+      return {
+        success: false,
+        error: `sent-observe failed: ${errors.map((e) => (multi ? `${e.mailbox}: ${e.error}` : e.error)).join('; ')}`,
+      };
+    }
+    return {
+      success: true,
+      data: {
+        ...aggregate(results),
+        ...(results.length > 1 ? { mailboxes: results.map((r) => ({ mailbox: r.mailbox, ...r.data })) } : {}),
+        ...(errors.length > 0 ? { mailbox_errors: errors } : {}),
+      },
+    };
+  }
+
+  private async observeMailbox(ctx: ToolContext, at: MailboxClient, scope: MailboxStateScope): Promise<ToolResult> {
+    const client = at.client;
 
     if (!ctx.entityMemory || !ctx.workingDocs || !ctx.taskRepo) {
       return {
@@ -328,7 +427,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
 
     // Self-throttle: if the last idle run was recent, skip (unless force).
     if (!force) {
-      const idleAt = await store.get(CONFIG_NAMESPACE, IDLE_BACKOFF_KEY);
+      const idleAt = await readScoped(store, scope, IDLE_BACKOFF_KEY);
       if (idleAt && idleAt !== EPOCH) {
         const idleMs = Number(idleAt);
         if (Number.isFinite(idleMs) && nowMs - idleMs < IDLE_BACKOFF_MS) {
@@ -354,7 +453,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
       }
     }
 
-    const watermarkRaw = await store.get(CONFIG_NAMESPACE, WATERMARK_KEY);
+    const watermarkRaw = await readScoped(store, scope, WATERMARK_KEY);
     const watermark = watermarkRaw && Number.isFinite(Number(watermarkRaw))
       ? Number(watermarkRaw)
       : 0;
@@ -366,11 +465,11 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     // scans [watermark, backfillBefore], walking the ceiling down until the window fits — then the
     // watermark jumps to backfillTarget + 1. EPOCH ('0') means the key is unset (a real ceiling /
     // target is always a Unix-second value > 0).
-    const backfillBeforeRaw = await store.get(CONFIG_NAMESPACE, BACKFILL_BEFORE_KEY);
+    const backfillBeforeRaw = await readScoped(store, scope, BACKFILL_BEFORE_KEY);
     const backfillBefore = backfillBeforeRaw && Number.isFinite(Number(backfillBeforeRaw))
       ? Number(backfillBeforeRaw)
       : 0;
-    const backfillTargetRaw = await store.get(CONFIG_NAMESPACE, BACKFILL_TARGET_KEY);
+    const backfillTargetRaw = await readScoped(store, scope, BACKFILL_TARGET_KEY);
     const backfillTarget = backfillTargetRaw && Number.isFinite(Number(backfillTargetRaw))
       ? Number(backfillTargetRaw)
       : 0;
@@ -391,7 +490,9 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     const scratchDocs = await ctx.workingDocs.listByPrefix(`${VOICE_LEARNING_SCRATCH_PREFIX}/`);
     const snapshots = scratchDocs
       .map(parseSnapshot)
-      .filter((s): s is DraftSnapshotLike => s !== null);
+      .filter((s): s is DraftSnapshotLike => s !== null)
+      // Draft ↔ sent matching stays within the mailbox; a snapshot with none is the migrated mailbox's.
+      .filter((s) => recordBelongsTo(scope, s.mailbox));
 
     // Ensure the doc exists ahead of the append below (appendAndTrimDoc re-reads it itself); its
     // body is no longer scanned for guard ids (#1438 — the matched-draft guard now lives in
@@ -402,10 +503,10 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     // alreadyMatchedDraftIds (the mutable in-run guard matchDraftToSent adds to below) so the
     // final write can be built from the seed + only-this-run's successfully diffed drafts,
     // deliberately excluding any draft matched-but-failed-to-fetch this run (see the write below).
-    const seedMatchedDraftIds = await readIdSet(store, MATCHED_DRAFT_IDS_KEY, ctx.log);
+    const seedMatchedDraftIds = await readIdSet(store, MATCHED_DRAFT_IDS_KEY, ctx.log, scope);
     const alreadyMatchedDraftIds = new Set(seedMatchedDraftIds);
     // Seed the asked-guard from config (replaces the doc-derived extractAskedTaskIds scan).
-    const alreadyAskedTaskIds = await readIdSet(store, ASKED_TASK_IDS_KEY, ctx.log);
+    const alreadyAskedTaskIds = await readIdSet(store, ASKED_TASK_IDS_KEY, ctx.log, scope);
 
     // Consider every open/in-progress principal task for completion matching. listAllTasks walks
     // keyset pages so we no longer silently truncate at the old 100-task cap (#1433). If its
@@ -457,7 +558,8 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     const shadowDocs = await ctx.workingDocs.listByPrefix(`${SHADOW_SCRATCH_PREFIX}/`);
     const shadows = shadowDocs
       .map((d) => parseShadowDoc(d))
-      .filter((s): s is NonNullable<typeof s> => s !== null);
+      .filter((s): s is NonNullable<typeof s> => s !== null)
+      .filter((s) => recordBelongsTo(scope, s.mailbox));
     // (shadow, sent) pairs collected during the message loop below, judged in chunked LLM
     // calls after the loop instead of one call per pair.
     // Idempotency across runs is the shadow doc's reconciled_at marker (parseShadowDoc returns
@@ -477,13 +579,13 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
         .filter((e): e is PrincipalSendEntry => e !== null);
     } catch (err) {
       ctx.log.warn(
-        { err },
+        { ...grantSafeErrorFields(err) },
         'ceo-inbox-sent-observe: could not read the principal send ledger — observing without skipping Curia sends',
       );
     }
     const curiaSendIds = new Set<string>();
     const principalMessages = messages.filter((m) => {
-      if (!isCuriaSend(m, ledgerEntries)) return true;
+      if (!isCuriaSend(m, ledgerEntries, scope)) return true;
       curiaSendIds.add(m.id);
       return false;
     });
@@ -515,13 +617,13 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
           // Only persist the diff and count the match once the full body is in hand — a diff
           // built from the truncated snippet would poison the voice proposal and, once written +
           // watermark-advanced, never be repaired.
-          diffChunks.push(formatDiffBlock(draftMatch, sentBody));
+          diffChunks.push(formatDiffBlock(draftMatch, sentBody, scope.id ?? undefined));
           draftMatches += 1;
           newlyDiffedDraftIds.add(draftMatch.draftId);
         } catch (err) {
           draftEvidenceComplete = false;
           ctx.log.warn(
-            { err, messageId: msg.id },
+            { ...grantSafeErrorFields(err), messageId: msg.id },
             'ceo-inbox-sent-observe: getMessage failed — holding watermark for draft evidence retry',
           );
         }
@@ -592,7 +694,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
             sentBody = htmlToPlainText(full.body) || full.snippet || '';
           } catch (err) {
             ctx.log.warn(
-              { err, messageId: send.id, sourceMessageId: shadow.sourceMessageId },
+              { ...grantSafeErrorFields(err), messageId: send.id, sourceMessageId: shadow.sourceMessageId },
               'ceo-inbox-sent-observe: getMessage failed for shadow reconcile — not scoring, holding watermark',
             );
             shadowFetchFailed += 1;
@@ -706,7 +808,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
               shadowRecordFailed += 1;
               shadowReconcileOk = false;
               ctx.log.error(
-                { err, sourceMessageId: j.sourceMessageId },
+                { ...grantSafeErrorFields(err), sourceMessageId: j.sourceMessageId },
                 'sent-observe: shadow competence insert failed — holding watermark',
               );
               continue;
@@ -777,7 +879,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
       const nextMatched = new Set([...seedMatchedDraftIds].filter((id) => snapshotIds.has(id)));
       for (const id of newlyDiffedDraftIds) nextMatched.add(id);
       try {
-        matchedGuardPersisted = await writeIdSet(store, MATCHED_DRAFT_IDS_KEY, nextMatched);
+        matchedGuardPersisted = await writeIdSet(store, MATCHED_DRAFT_IDS_KEY, nextMatched, scope);
         if (!matchedGuardPersisted) {
           ctx.log.warn(
             { path: MATCHED_DRAFT_IDS_KEY },
@@ -787,7 +889,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
       } catch (err) {
         matchedGuardPersisted = false;
         ctx.log.warn(
-          { err },
+          { ...grantSafeErrorFields(err) },
           'ceo-inbox-sent-observe: matched-guard write failed — holding watermark for retry',
         );
       }
@@ -801,8 +903,8 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     let completionsPersisted = true;
     if (Object.keys(newCandidates).length > 0) {
       try {
-        const existing = await readCompletionCandidates(store, ctx.log);
-        completionsPersisted = await writeCompletionCandidates(store, { ...existing, ...newCandidates });
+        const existing = await readCompletionCandidates(store, ctx.log, scope);
+        completionsPersisted = await writeCompletionCandidates(store, { ...existing, ...newCandidates }, scope);
         if (!completionsPersisted) {
           ctx.log.warn(
             { path: COMPLETION_CANDIDATES_KEY },
@@ -811,7 +913,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
         }
       } catch (err) {
         completionsPersisted = false;
-        ctx.log.warn({ err }, 'ceo-inbox-sent-observe: completion-candidate write failed — holding watermark');
+        ctx.log.warn({ ...grantSafeErrorFields(err) }, 'ceo-inbox-sent-observe: completion-candidate write failed — holding watermark');
       }
     }
 
@@ -832,7 +934,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
       const openIds = new Set(openTasks.map((t) => t.id));
       const prunedAsked = new Set([...alreadyAskedTaskIds].filter((id) => openIds.has(id)));
       try {
-        askedGuardPersisted = await writeIdSet(store, ASKED_TASK_IDS_KEY, prunedAsked);
+        askedGuardPersisted = await writeIdSet(store, ASKED_TASK_IDS_KEY, prunedAsked, scope);
         if (!askedGuardPersisted) {
           ctx.log.warn(
             { path: ASKED_TASK_IDS_KEY },
@@ -842,7 +944,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
       } catch (err) {
         askedGuardPersisted = false;
         ctx.log.warn(
-          { err },
+          { ...grantSafeErrorFields(err) },
           'ceo-inbox-sent-observe: asked-guard write failed — holding watermark for retry',
         );
       }
@@ -879,11 +981,11 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     let watermarkAdvancedTo: number | null = null;
     // True after this run if a drain is still underway (fed to the caller/logs).
     let backfillStillActive = backfillActive;
-    const heldSinceRaw = await store.get(CONFIG_NAMESPACE, HELD_SINCE_KEY);
+    const heldSinceRaw = await readScoped(store, scope, HELD_SINCE_KEY);
     const heldSinceMs = heldSinceRaw && heldSinceRaw !== EPOCH ? Number(heldSinceRaw) : Number.NaN;
     if (advanceOk && Number.isFinite(heldSinceMs)) {
       // A clean run ends the hold. A soft-rejected clear only risks one early escalation later.
-      await store.set(CONFIG_NAMESPACE, HELD_SINCE_KEY, EPOCH);
+      await writeScoped(store, scope, HELD_SINCE_KEY, EPOCH);
     }
     if (advanceOk) {
       if (backfillActive) {
@@ -897,7 +999,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
           // ConfigStore.set can SOFT-REJECT (stored:false) without throwing (#1438); a lost descend
           // just re-scans the same window next run (idempotent), but we log it so a stalled drain
           // (ceiling never moving) is visible rather than silent.
-          const res = await store.set(CONFIG_NAMESPACE, BACKFILL_BEFORE_KEY, String(minDate));
+          const res = await writeScoped(store, scope, BACKFILL_BEFORE_KEY, String(minDate));
           if (!res.stored) {
             ctx.log.warn(
               { floor: watermark, ceiling: backfillBefore, nextCeiling: minDate },
@@ -927,9 +1029,9 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
           // BACKFILL_BEFORE key actually clears, so a lost clear re-completes next run (empty window,
           // monotonically increasing watermark) instead of silently stranding an active-but-stale drain.
           watermarkAdvancedTo = Math.max(watermark, backfillTarget) + 1;
-          const wRes = await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(watermarkAdvancedTo));
-          const bRes = await store.set(CONFIG_NAMESPACE, BACKFILL_BEFORE_KEY, EPOCH);
-          const tRes = await store.set(CONFIG_NAMESPACE, BACKFILL_TARGET_KEY, EPOCH);
+          const wRes = await writeScoped(store, scope, WATERMARK_KEY, String(watermarkAdvancedTo));
+          const bRes = await writeScoped(store, scope, BACKFILL_BEFORE_KEY, EPOCH);
+          const tRes = await writeScoped(store, scope, BACKFILL_TARGET_KEY, EPOCH);
           backfillStillActive = !bRes.stored; // still "active" next run if the ceiling didn't clear
           if (!wRes.stored || !bRes.stored || !tRes.stored) {
             ctx.log.warn(
@@ -951,9 +1053,9 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
           // a missing target (the (before>0, target=0) state that would later reset the watermark to
           // epoch on completion). If TARGET doesn't land, we hold: the watermark is already pinned, so
           // next run re-scans the same truncated window and retries entry.
-          const tRes = await store.set(CONFIG_NAMESPACE, BACKFILL_TARGET_KEY, String(maxDate));
+          const tRes = await writeScoped(store, scope, BACKFILL_TARGET_KEY, String(maxDate));
           const bRes = tRes.stored
-            ? await store.set(CONFIG_NAMESPACE, BACKFILL_BEFORE_KEY, String(minDate))
+            ? await writeScoped(store, scope, BACKFILL_BEFORE_KEY, String(minDate))
             : { stored: false };
           backfillStillActive = bRes.stored;
           if (!tRes.stored || !bRes.stored) {
@@ -968,7 +1070,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
           // first-ever run (watermark 0): forward-only observation — historical mail is
           // intentionally NOT backfilled (a forward-looking observer; confirmed product decision).
           watermarkAdvancedTo = maxDate + 1;
-          await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(watermarkAdvancedTo));
+          await writeScoped(store, scope, WATERMARK_KEY, String(watermarkAdvancedTo));
         }
       }
     } else if (messages.length > 0) {
@@ -983,7 +1085,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
       // observer. #2191 sat at warn for a month, so escalate once the hold outlives a few runs.
       // Measured from the first held run, not from the watermark (see HELD_SINCE_KEY).
       if (!Number.isFinite(heldSinceMs)) {
-        await store.set(CONFIG_NAMESPACE, HELD_SINCE_KEY, String(nowMs));
+        await writeScoped(store, scope, HELD_SINCE_KEY, String(nowMs));
       }
       const heldDays = Number.isFinite(heldSinceMs) ? (nowMs - heldSinceMs) / 86_400_000 : 0;
       const holdFields = {
@@ -1039,13 +1141,14 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     // A mid-drain empty window is not "idle" — it completes the drain (handled above), so only a
     // genuinely empty forward poll registers the idle backoff.
     if (messages.length === 0 && !backfillActive) {
-      await store.set(CONFIG_NAMESPACE, IDLE_BACKOFF_KEY, String(nowMs));
+      await writeScoped(store, scope, IDLE_BACKOFF_KEY, String(nowMs));
     } else {
-      await store.set(CONFIG_NAMESPACE, IDLE_BACKOFF_KEY, EPOCH);
+      await writeScoped(store, scope, IDLE_BACKOFF_KEY, EPOCH);
     }
 
     ctx.log.info(
       {
+        mailboxId: scope.id,
         messagesScanned: messages.length,
         draftMatches,
         taskCandidates,

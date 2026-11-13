@@ -1,5 +1,6 @@
 // migrate-config-keys.ts — rename the pre-#2475 `default` key of ceo_inbox/sending to the
-// migrated mailbox's id (#2475, D6), or drop it once that mailbox is gone (S-I1).
+// migrated mailbox's id (#2475, D6), or drop it once that mailbox is gone (S-I1). Also moves the
+// pre-#2475 global sent-observe and learning-state keys to that mailbox's keys (D8, R60).
 //
 // The migrated mailbox is the registry row the flat migration created: the only one with no
 // triage start (the console's add always sets it). That holds across boots, so an install migrated
@@ -7,6 +8,8 @@
 // rename lands, send-level.ts applies a stored `default` key to that mailbox while it is the one
 // live mailbox (legacyDefaultMailbox), so no boot step leaves an install on on_request.
 import type { Logger } from '../logger.js';
+import { PER_MAILBOX_STATE_NAMES, STATE_NAMESPACE, globalStateKey, mailboxStateKey } from './state-keys.js';
+import { grantSafeErrorFields } from './error-fields.js';
 import { SEND_SETTING_KEY, SEND_SETTING_NAMESPACE, type SendLevelMailbox } from '../skills/principal-send/send-level.js';
 
 export interface SendingConfigStore {
@@ -115,6 +118,57 @@ export async function reconcileLegacySendingKey(deps: {
   return (await dropLegacyDefaultKey(store, logger)) ? 'dropped' : 'nothing';
 }
 
+/**
+ * Move each pre-#2475 global per-mailbox key (`sent_observe.<name>`: the watermark, idle backoff,
+ * backfill and held-since state, and the matched-draft / asked-task / completion-candidate state)
+ * to `sent_observe.<migratedId>.<name>` (D8, R60). `completion_digest`, its high-water mark and
+ * `voice_learn.*` are not grant-scoped and stay where they are.
+ *
+ * Copy then clear: the global key is overwritten with '' (the config store has no delete; every
+ * reader treats '' as unset) only after the copy landed. Idempotent: a global key that is unset or
+ * already cleared is skipped, and a value already stored for the mailbox wins over the global one,
+ * which is then cleared. Returns how many global keys were cleared. Store errors propagate.
+ */
+export async function migrateLearningKeys(store: SendingConfigStore, migratedId: string, logger: Logger): Promise<number> {
+  let cleared = 0;
+  for (const name of PER_MAILBOX_STATE_NAMES) {
+    const globalKey = globalStateKey(name);
+    const globalValue = await store.get(STATE_NAMESPACE, globalKey);
+    if (globalValue === null || globalValue === '') continue;
+    const ownKey = mailboxStateKey(migratedId, name);
+    const own = await store.get(STATE_NAMESPACE, ownKey);
+    if (own === null || own === '') {
+      const res = await store.set(STATE_NAMESPACE, ownKey, globalValue);
+      if (typeof res === 'object' && res !== null && (res as { stored?: unknown }).stored === false) {
+        // Soft-rejected: keep the global key (readers still honour it for this mailbox); retried next boot.
+        logger.warn({ name }, 'Could not copy a sent-observe state key to the migrated mailbox; the global key is kept and retried at the next boot');
+        continue;
+      }
+    }
+    await store.set(STATE_NAMESPACE, globalKey, '');
+    cleared += 1;
+  }
+  return cleared;
+}
+
+/**
+ * Run `migrateLearningKeys` for the migrated mailbox: the live row with no triage start, found the
+ * way the send-level rename finds it. Does nothing while the fallback is served or when no migrated
+ * mailbox is live ('no_target': the global keys stay where they are; the caller logs it once).
+ */
+export async function reconcileLearningKeys(deps: {
+  store: SendingConfigStore;
+  mailboxes: readonly SendLevelMailbox[];
+  fallbackActive: boolean;
+  logger: Logger;
+}): Promise<'moved' | 'nothing' | 'no_target'> {
+  if (deps.fallbackActive || deps.mailboxes.length === 0) return 'nothing';
+  const migrated = deps.mailboxes.find((m) => m.triageStartAt === null);
+  if (!migrated) return 'no_target';
+  const cleared = await migrateLearningKeys(deps.store, migrated.id, deps.logger);
+  return cleared > 0 ? 'moved' : 'nothing';
+}
+
 type FlatOutcome = 'migrated' | 'already' | 'nothing' | 'deferred';
 
 /**
@@ -132,6 +186,7 @@ export function renameSendingKeyAfterMigration(deps: {
   logger: Logger;
 }): (() => Promise<FlatOutcome>) & { flush: () => Promise<void> } {
   let toldNoStore = false;
+  let toldNoTarget = false;
   const flush = async (): Promise<void> => {
     const store = deps.store();
     if (!store) {
@@ -148,6 +203,20 @@ export function renameSendingKeyAfterMigration(deps: {
     } catch (err) {
       // Retried on the next run or boot; until then the legacy key applies only to the migrated sole mailbox.
       deps.logger.warn({ errName: err instanceof Error ? err.name : typeof err }, 'Could not reconcile the ceo_inbox/sending default key; it is retried at the next boot');
+    }
+    // Same wiring, separate failure: the sent-observe and learning-state keys follow the same mailbox
+    // (R60). Until they move, the readers honour the global keys for that mailbox.
+    try {
+      const outcome = await reconcileLearningKeys({
+        store, mailboxes: await deps.mailboxes(), fallbackActive: await deps.isFallbackActive(), logger: deps.logger,
+      });
+      if (outcome === 'moved') deps.logger.info('Moved the sent-observe and learning-state keys to the migrated mailbox');
+      if (outcome === 'no_target' && !toldNoTarget) {
+        toldNoTarget = true;
+        deps.logger.info('No migrated mailbox is live; the global sent-observe keys are left in place');
+      }
+    } catch (err) {
+      deps.logger.warn(grantSafeErrorFields(err), 'Could not move the sent-observe keys to the migrated mailbox; retried at the next boot');
     }
   };
   const run = async (): Promise<FlatOutcome> => {

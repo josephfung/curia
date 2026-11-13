@@ -286,4 +286,28 @@ describe('isCuriaSend (#2474 PR 2)', () => {
   it('still counts an exact message id match whatever the outcome', () => {
     expect(isCuriaSend(sentMsg, [{ ...base, outcome: 'held', messageId: 'msg-1' }])).toBe(true);
   });
+
+  describe('per mailbox (#2475)', () => {
+    const work = { id: 'work', legacy: true };
+    const personal = { id: 'personal', legacy: false };
+
+    it('matches within the mailbox only', () => {
+      const entry = { ...base, mailbox: 'work' };
+      expect(isCuriaSend(sentMsg, [entry], work)).toBe(true);
+      expect(isCuriaSend(sentMsg, [entry], personal)).toBe(false);
+      expect(isCuriaSend({ ...sentMsg, id: 'msg-9' }, [{ ...entry, messageId: 'msg-9' }], personal)).toBe(false);
+    });
+
+    it('matches a legacy entry with no mailbox for the migrated mailbox only', () => {
+      expect(isCuriaSend(sentMsg, [base], work)).toBe(true);
+      expect(isCuriaSend(sentMsg, [base], personal)).toBe(false);
+      expect(isCuriaSend(sentMsg, [{ ...base, messageId: 'msg-1' }], personal)).toBe(false);
+    });
+
+    it('counts every entry in the global scope and when no scope is given', () => {
+      const entry = { ...base, mailbox: 'work' };
+      expect(isCuriaSend(sentMsg, [entry], { id: null, legacy: false })).toBe(true);
+      expect(isCuriaSend(sentMsg, [entry])).toBe(true);
+    });
+  });
 });

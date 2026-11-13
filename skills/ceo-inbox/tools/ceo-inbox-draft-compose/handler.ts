@@ -245,6 +245,7 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
         to: draft.to,
         cc: draft.cc,
         body,
+        mailbox: at.mailbox.id,
       }).catch((err) =>
         ctx.log.error({ err }, 'ceo-inbox-draft-compose: voice snapshot capture rejected'),
       );
