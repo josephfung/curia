@@ -201,9 +201,8 @@ export function isDue(c: Cadence, lastDrainedAt: Date | null, now: Date, tz: str
       DateTime.fromObject({ year: d.year, month: d.month, day: d.day, hour, minute }, { zone: tz }).toMillis();
     const today = slotOn(local);
     if (now.getTime() >= today) return lastDrainedAt === null || lastDrainedAt.getTime() < today;
-    // Before today's slot, yesterday's may still be unserved: a slot after the day's last
-    // heartbeat tick (daily 23:50 against ticks every 15 minutes) is first seen after midnight.
-    // A mailbox never drained waits for today's slot.
+    // Before today's slot, yesterday's may still be unserved (Curia was down at the slot), so it
+    // is served once after midnight. A mailbox never drained waits for today's slot.
     return lastDrainedAt !== null && lastDrainedAt.getTime() < slotOn(local.minus({ days: 1 }));
   }
 
