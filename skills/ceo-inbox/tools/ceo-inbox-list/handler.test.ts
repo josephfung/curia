@@ -1169,6 +1169,25 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     expect((await t.run({ triage: true }, agentTurn('system'))).success).toBe(true);
   });
 
+  it('runs an inbox-drain turn\'s plain unread listing in triage mode (R66)', async () => {
+    const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)], 'grant-personal': [] });
+    const d = dataOf(await t.run({ unread_only: true, limit: 5 }));
+    expect(d.mailboxes_due).toEqual(['work', 'personal']);
+    expect(d.messages.map((m) => m.id)).toEqual(['w1']);
+    expect(t.data.get('triage.batches.2026-11-12')).toBe('1');
+  });
+
+  it('keeps the ordinary listing for an explicit departure on a drain turn, and off drain turns (R66)', async () => {
+    const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)], 'grant-personal': [] });
+    for (const input of [{ folder: 'SENT' }, { unread_only: false }, { mailbox: 'work' }]) {
+      const r = await t.run(input);
+      expect(r.success && (r.data as Record<string, unknown>)['mailboxes_due']).toBeFalsy();
+    }
+    const offDrain = await t.run({ unread_only: true, limit: 5 }, { taskMetadata: { originator: { systemRole: 'system' } } });
+    expect(offDrain.success && (offDrain.data as Record<string, unknown>)['mailboxes_due']).toBeFalsy();
+    expect(t.data.get('triage.batches.2026-11-12')).toBeUndefined();
+  });
+
   it('ignores a mailbox input in triage mode', async () => {
     const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)], 'grant-personal': [msg('p1', NOW_S - 2)] });
     const d = dataOf(await t.run({ triage: true, mailbox: 'work' }));
