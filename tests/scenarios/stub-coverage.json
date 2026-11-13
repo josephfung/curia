@@ -1060,6 +1060,38 @@
     "band stakes autonomous purchase order confirmation never sends at 100": {
       "unstubbed": null,
       "reason": "New in #2474 PR 2; not yet run (paid suite). The first run records coverage."
+    },
+    "mailbox choice cfo composes in work without saying so": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "mailbox choice sister composes in personal without saying so": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "mailbox choice shared accountant asks which account": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "send my draft one candidate across mailboxes sends it": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "send my draft one in each account asks naming both": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "send my draft named account sends that one": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "move draft correction moves it and stores the preference": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "standing preference covers the mailbox choice without a mention": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
     }
   }
 }

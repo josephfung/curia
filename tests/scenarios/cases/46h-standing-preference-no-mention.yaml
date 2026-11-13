@@ -1,0 +1,58 @@
+# Case 46h (#2475, D5; decided by the principal, item 10): a standing preference covers the
+# choice, so ceo-inbox uses the account without mentioning it, even though the evidence for the
+# recipient is thin. Runs under the mailbox-prefs identity (behavioralPreferences).
+name: standing preference covers the mailbox choice without a mention
+description: >
+  The principal's standing preference says mail about the company's operations goes from the work
+  account. The coordinator asks ceo-inbox to draft a note to a new colleague with no mail history
+  about the warehouse schedule. The no-mailbox compose returns needs_mailbox with no evidence for
+  either account. ceo-inbox should apply the preference, compose in work, and not mention the
+  account or ask.
+tags: [ceo-inbox, delegated-mode, specialist, specialist-ceo-inbox, mailbox-choice, multi-mailbox]
+agent: ceo-inbox
+release_gate: false
+identity: mailbox-prefs
+stub_sets: [ceo-inbox-office]
+seed:
+  contacts:
+    - key: sam
+      display_name: Sam Rivera
+      channel: email
+      identifier: sam@example.test
+    - key: colleague
+      display_name: Leo Marsh
+      channel: email
+      identifier: leo.marsh@colleague.example.test
+inbound:
+  from: delegate
+  content: "The principal asked: draft a short email to Leo Marsh asking him to confirm the new warehouse shift schedule. Draft only."
+tool_stubs:
+  ceo-inbox-draft-compose:
+    - match: { mailbox: null }
+      return:
+        needs_mailbox: true
+        evidence:
+          - { mailbox: work, mailbox_label: Work, sent_count: 0, last_sent_at: null, recent_subjects: [], received_count: 0, domain_match: false }
+          - { mailbox: personal, mailbox_label: Personal, sent_count: 0, last_sent_at: null, recent_subjects: [], received_count: 0, domain_match: false }
+expected_behaviors:
+  - id: composes_in_work
+    weight: critical
+    description: Applies the standing preference and creates the draft in the work mailbox.
+    check:
+      called: ceo-inbox-draft-compose
+      with: { mailbox: work }
+      min: 1
+  - id: no_personal_draft
+    weight: critical
+    description: Creates no draft in the personal mailbox.
+    check:
+      not_called: [ceo-inbox-draft-compose]
+      with: { mailbox: personal }
+  - id: account_not_mentioned_or_asked
+    weight: important
+    description: >
+      Neither mentions the account nor asks which to use: the preference covered the choice.
+failure_modes:
+  - Asks which account although a standing preference covers it
+  - Announces "drafted from your work account" on a choice the preference settled
+  - Composes in the personal mailbox

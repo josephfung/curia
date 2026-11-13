@@ -1,0 +1,50 @@
+# Case 46d (#2475, D6; decided by the principal 2026-11-11, item 7): "send my draft" with a single
+# candidate across both accounts is sent without a question. Drafts are listed in every mailbox.
+name: send my draft one candidate across mailboxes sends it
+description: >
+  The principal asks Curia to send the draft they wrote. The drafts folder across both mailboxes
+  holds exactly one draft (in the personal account). ceo-inbox should list the drafts without
+  restricting to one mailbox, find the single candidate and send it without asking which account.
+tags: [ceo-inbox, delegated-mode, specialist, specialist-ceo-inbox, send, multi-mailbox]
+agent: ceo-inbox
+stub_sets: [ceo-inbox-office]
+seed:
+  contacts:
+    - key: sam
+      display_name: Sam Rivera
+      channel: email
+      identifier: sam@example.test
+inbound:
+  from: delegate
+  content: "The principal said: send the draft I wrote to Tim about Saturday."
+tool_stubs:
+  ceo-inbox-list:
+    - match: { folder: DRAFTS }
+      return:
+        count: 1
+        folder: DRAFTS
+        drafts:
+          - { id: draft-tim-1, mailbox: personal, mailbox_label: Personal, subject: Saturday, to: [{ name: Tim Okafor, email: tim.okafor@family.example.test }], snippet: "Still on for a beer Saturday?" }
+  ceo-inbox-send-draft:
+    - match: {}
+      return: { message_id: msg-sent-tim-1, to: [tim.okafor@family.example.test], subject: Saturday }
+expected_behaviors:
+  - id: sends_the_draft
+    weight: critical
+    description: Sends draft-tim-1 with ceo-inbox-send-draft.
+    check:
+      called: ceo-inbox-send-draft
+      with: { draft_id: draft-tim-1 }
+      max: 1
+  - id: does_not_ask
+    weight: important
+    description: Does not ask which account or for confirmation; there was one candidate and one send.
+  - id: lists_without_one_mailbox
+    weight: important
+    description: Looks for the draft across every mailbox (no single mailbox passed to the listing).
+    check:
+      not_called: [ceo-inbox-list]
+      with: { mailbox: work }
+failure_modes:
+  - Asks which account the draft is in
+  - Sends nothing and only describes the draft

@@ -1,0 +1,16 @@
+# The office identity the standing-mailbox-preference case runs under (46h, #2475). One standing
+# preference names the account for a kind of mail, so the choice is covered and the account is
+# not mentioned.
+judge_brief: >
+  The principal keeps one standing preference about email accounts: mail about the
+  principal's company goes from the work account. Otherwise the tone is plain and professional.
+identity:
+  tone:
+    style: |-
+      Plain and professional. Clear, courteous, no filler.
+    verbosity: 40
+  behavioralPreferences:
+    - "Email about my company's operations, staff or customers always goes from my work account."
+  constraints:
+    - Never impersonate the principal
+    - Always identify as an AI assistant when asked directly
