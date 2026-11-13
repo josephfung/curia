@@ -16,7 +16,7 @@
     "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {
-    "messages": "array of { id, threadId, from, to, cc, subject, date, snippet, unread, folders, attachments: [{ id, filename, contentType, size, isCalendarInvite? }], from_principal_other_mailbox? } (for non-draft folders)",
+    "messages": "array of { id, threadId, from, to, cc, subject, date, snippet, unread, folders, attachments: [{ id, filename, contentType, size, isCalendarInvite? }], from_principal_other_mailbox? (From header only: restricts handling, never authority) } (for non-draft folders)",
     "drafts": "array of { id, threadId, subject, to, cc, snippet, date, date_local, created_by_curia (null if unknown) } (returned instead of messages when folder is DRAFTS, alongside folder: 'DRAFTS')",
     "count": "number of items returned",
     "mailboxes_due": "string[]? (triage: mailbox ids in this drain)",

@@ -8,8 +8,9 @@
 //     eat the day's budget).
 //   - R52: markDrained stamps the START of the drain episode (kept in TriageState), so a long
 //     drain does not delay the next one by its own length.
-//   - A message is deduped only when its from/to/cc names ANOTHER live mailbox's address; only
-//     those pay for a getMessage with headers. Failing to dedupe fails toward triaging twice.
+//   - R70: with two or more live mailboxes, EVERY batched message is claimed (one header read
+//     each), so an auto-forwarded or Bcc'd copy that names no other mailbox is still triaged
+//     once. With one mailbox nothing is claimed. Failing to dedupe fails toward triaging twice.
 import type { ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { PrincipalMailboxView } from '../../src/principal-mailboxes/service.js';
 import { grantSafeErrorFields } from '../../src/principal-mailboxes/error-fields.js';
@@ -68,6 +69,17 @@ async function labelMessage(client: CeoNylasClient, mailboxId: string, messageId
   await client.updateMessageFolders(messageId, [...new Set([...(current.folders ?? []), folder.id])]);
 }
 
+/** The principal's verified email addresses, lowercased; [] (logged) when they cannot be read. */
+async function otherPrincipalAddresses(ctx: ToolContext): Promise<string[]> {
+  if (!ctx.principalMailboxes) return [];
+  try {
+    return (await ctx.principalMailboxes.principalEmailAddresses()).map(lc);
+  } catch (err) {
+    ctx.log.warn({ tool: TOOL, ...grantSafeErrorFields(err) }, 'ceo-inbox-list: principal addresses could not be read; only mailbox addresses flag mail from the principal');
+    return [];
+  }
+}
+
 /**
  * True when another mailbox already triaged this message (the copy here was dropped: marked read
  * and labelled). Every failure returns false: fail toward triaging twice, never toward dropping.
@@ -98,14 +110,24 @@ async function lostClaim(
     }
     // Keyed on Message-ID AND From (R54): a reused Message-ID from another sender is no duplicate.
     const from = msg.from[0]?.email;
-    if (!from) return false;
+    if (!from) {
+      ctx.log.warn({ tool: TOOL, mailboxId: mailbox.id }, 'ceo-inbox-list: a message has no From address; not deduped');
+      return false;
+    }
     claim = await svc.dedupe.claim(messageId, from, mailbox.id, msg.id);
   } catch (err) {
     return fail(err, 'dedupe check failed');
   }
   // First seen wins; the winner being this very mailbox is a re-sight, not a duplicate.
   if (claim.first || claim.mailboxId === mailbox.id) return false;
-  const winner = allMailboxes.find((m) => m.id === claim.mailboxId)?.label ?? claim.mailboxId;
+  // A winner that is no longer live (removed before its copy was triaged) holds no claim: this
+  // copy is triaged rather than dropped unseen (SEC-L3, SF-M5).
+  const winnerView = allMailboxes.find((m) => m.id === claim.mailboxId);
+  if (!winnerView) {
+    ctx.log.info({ tool: TOOL, mailboxId: mailbox.id, winner: claim.mailboxId }, 'ceo-inbox-list: the copy\'s claim belongs to a mailbox no longer live; triaging this copy');
+    return false;
+  }
+  const winner = winnerView.label;
   if (!client) return false;
   // A copy that cannot be marked read would be dropped on every call and never leave the unread
   // set, starving older mail. Keep it: triaging it twice is the safe failure (fix round 1).
@@ -143,6 +165,8 @@ export async function triageList(ctx: ToolContext, targets: Target[], curiaEmail
     const dueTargets = targets.filter((t) => due.includes(t.mailbox.id));
     const allMailboxes: PrincipalMailboxView[] = ctx.principalMailboxes ? await ctx.principalMailboxes.list() : targets.map((t) => t.mailbox);
     const addressOf = new Map(allMailboxes.map((m) => [m.id, lc(m.address)]));
+    const claimAll = allMailboxes.length >= 2;
+    const principalAddrs = new Set([...allMailboxes.map((m) => lc(m.address)), ...(await otherPrincipalAddresses(ctx))].filter((a) => a !== ''));
 
     const lookups: FolderLookups = new Map();
     const errors: MailboxError[] = [];
@@ -220,11 +244,12 @@ export async function triageList(ctx: ToolContext, targets: Target[], curiaEmail
         if (!msg) continue;
         progressed = true;
         const { mailbox } = s.target;
-        const others = allMailboxes.filter((m) => m.id !== mailbox.id && addressOf.get(m.id));
-        const otherAddrs = new Set(others.map((m) => addressOf.get(m.id)!));
-        const fromOther = msg.from.some((p) => otherAddrs.has(lc(p.email)));
-        const namesOther = fromOther || [...msg.to, ...msg.cc].some((p) => otherAddrs.has(lc(p.email)));
-        if (namesOther) {
+        // BR-M5: mail from any OTHER principal address (another live mailbox, or a verified address
+        // with no mailbox) is flagged. The flag rests on the unauthenticated From header, so it
+        // only ever restricts handling (SEC-L4), never grants principal authority.
+        const ownAddr = addressOf.get(mailbox.id);
+        const fromOther = msg.from.some((p) => lc(p.email) !== ownAddr && principalAddrs.has(lc(p.email)));
+        if (claimAll) {
           const lost = await lostClaim(ctx, svc, s.target, msg, allMailboxes, lookups);
           if (lost) continue;
         }
