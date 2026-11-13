@@ -140,7 +140,6 @@ describe('InboxHeartbeat.tick', () => {
     expect(created.createTask).toHaveBeenCalledWith(expect.objectContaining({
       originator: expect.objectContaining({ systemRole: 'system', contactId: 'system' }),
     }));
-
   });
 
   it('the stamped originator satisfies the outbound gateway autonomous-send check', async () => {
@@ -227,6 +226,20 @@ describe('InboxHeartbeat origin safety (R56)', () => {
     expect(t.createTask).toHaveBeenCalledWith(expect.objectContaining({
       originator: expect.objectContaining({ systemRole: 'system' }),
     }));
+  });
+
+  it('warns and skips a stalled own task whose stored originator is null', async () => {
+    const t = make({ tasks: [taskRow({ originator: null })] });
+    expect(await t.hb.tick(NOW)).toBe('drain_running');
+    expect(t.enqueueTaskWake).not.toHaveBeenCalled();
+    expect(t.createTask).not.toHaveBeenCalled();
+    expect(t.log.warn.mock.calls.some((c) => String(c[1]).includes('no stored originator'))).toBe(true);
+  });
+
+  it('lists enough tasks that foreign ones cannot push its own out', async () => {
+    const t = make({ tasks: [] });
+    await t.hb.tick(NOW);
+    expect((t.listTasks.mock.calls as unknown as Array<[{ limit: number }]>)[0]![0].limit).toBeGreaterThanOrEqual(200);
   });
 
   it('logs a foreign drain task once per id', async () => {

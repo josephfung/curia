@@ -1111,6 +1111,14 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     expect((await t.run({ triage: true })).success).toBe(true);
   });
 
+  it('accepts a laddered system lineage and refuses other laddered agents', async () => {
+    const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)] });
+    const agentTurn = (ladderedFrom: string | null) => ({ taskMetadata: { originator: { systemRole: 'agent', ladderedFrom }, boundTask: { tags: ['inbox-drain'] } } });
+    expect((await t.run({ triage: true }, agentTurn('principal'))).success).toBe(false);
+    expect((await t.run({ triage: true }, agentTurn(null))).success).toBe(false);
+    expect((await t.run({ triage: true }, agentTurn('system'))).success).toBe(true);
+  });
+
   it('ignores a mailbox input in triage mode', async () => {
     const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)], 'grant-personal': [msg('p1', NOW_S - 2)] });
     const d = dataOf(await t.run({ triage: true, mailbox: 'work' }));

@@ -97,6 +97,17 @@ export function isAgentOriginated(
 }
 
 /**
+ * True when the effective metadata's lineage is the system's: a raw `system` originator, or an
+ * `agent` one laddered down from `system` (the autonomy ladder lowers a heartbeat wake's standing
+ * when the live score is low). The rule isAutonomousSendOrigin uses; isSystemOriginated stays raw.
+ */
+export function hasSystemLineage(metadata: Record<string, unknown> | undefined): boolean {
+  const originator = metadata?.['originator'] as unknown as TaskOriginator | undefined;
+  if (originator?.systemRole === 'system') return true;
+  return originator?.systemRole === 'agent' && originator.ladderedFrom === 'system';
+}
+
+/**
  * Check whether a task was originated by the system (operator-configured,
  * platform-executed — e.g. declarative YAML jobs loaded at startup).
  *

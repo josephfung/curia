@@ -98,7 +98,7 @@ import {
   AUTONOMOUS_DAILY_CAP, AUTONOMOUS_DAILY_CAP_WINDOW_MS, AUTONOMOUS_THREAD_COOLDOWN_MS, checkAutonomousLimits, conversationIdsOf, repliedToLatest,
   type AutonomousLimitRefusal,
 } from './principal-send/autonomous-limits.js';
-import { isOutsiderOriginated } from '../contacts/principal.js';
+import { hasSystemLineage, isOutsiderOriginated } from '../contacts/principal.js';
 import {
   mailboxDraftLabel, quoteItemsToReview, quoteMatchesThread, replyOrigin, threadMessageProof, threadTextSeenByAll,
   type ThreadMessageProof,
@@ -637,10 +637,7 @@ function checkStopDigest(result: OutboundSendResult): string {
  * live one is principal-directed and never reaches this check).
  */
 export function isAutonomousSendOrigin(taskMetadata: Record<string, unknown> | undefined): boolean {
-  // Only systemRole and ladderedFrom are read, and compared to literals; cast through unknown per repo policy.
-  const originator = taskMetadata?.['originator'] as unknown as TaskOriginator | undefined;
-  if (originator?.systemRole === 'system') return true;
-  return originator?.systemRole === 'agent' && originator.ladderedFrom === 'system';
+  return hasSystemLineage(taskMetadata);
 }
 
 /** recipient_not_on_thread's text, naming who (the limit's detail). */
