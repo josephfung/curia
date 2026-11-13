@@ -1,4 +1,4 @@
-// Cases 46a–46h (#2475): their stubbed ceo-inbox results must have the shape the real tools
+// Cases 46a–46j (#2475): their stubbed ceo-inbox results must have the shape the real tools
 // return, or a case can pass against a result production never gives (Task 20b review, item 7).
 // The reference shapes come from the real code where it is cheap to run (mailbox evidence,
 // mailboxFields) and from the tool manifests otherwise.
@@ -38,9 +38,9 @@ async function realEvidenceKeys(): Promise<string[]> {
   return Object.keys(entry!).sort();
 }
 
-describe('cases 46a–46h: stubbed results match the real tools (#2475 item 7)', () => {
+describe('cases 46a–46j: stubbed results match the real tools (#2475 item 7)', () => {
   it('finds the cases', () => {
-    expect(cases.length).toBeGreaterThanOrEqual(8);
+    expect(cases.length).toBeGreaterThanOrEqual(10);
   });
 
   it('draft-compose: needs_mailbox carries only needs_mailbox and evidence, with real evidence entries', async () => {
