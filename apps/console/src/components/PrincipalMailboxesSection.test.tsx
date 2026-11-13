@@ -42,11 +42,11 @@ async function settle(ms = 20) {
   await act(async () => { await new Promise(r => setTimeout(r, ms)); });
 }
 
-async function mount() {
+async function mount(props: { readOnly?: boolean } = {}) {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
-  await act(async () => { root!.render(<PrincipalMailboxesSection />); });
+  await act(async () => { root!.render(<PrincipalMailboxesSection {...props} />); });
   await settle();
 }
 
@@ -339,5 +339,15 @@ describe('PrincipalMailboxesSection', () => {
     await click('Test');
     await click('Add mailbox');
     expect(container.textContent).toContain('pat@work.example.com is already a connected mailbox');
+  });
+
+  it('read-only lists the mailboxes and turns every change control off (R79)', async () => {
+    await mount({ readOnly: true });
+    expect(container.textContent).toContain('boss@acme-example.com');
+    for (const label of ['Mailbox id', 'Label', 'Grant ID']) expect(byLabel(label).disabled).toBe(true);
+    for (const text of ['Test', 'Add mailbox', 'Replace grant', 'Rename', 'Make default', 'Remove']) {
+      const btn = [...container.querySelectorAll('button')].find(b => b.textContent === text)!;
+      expect(btn.disabled).toBe(true);
+    }
   });
 });

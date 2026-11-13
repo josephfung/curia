@@ -440,7 +440,7 @@ describe('vault routes', () => {
       const setRes = await put(app, name, { value });
       expect(setRes.statusCode, name).toBe(409);
       expect(setRes.json().error).toContain('retired');
-      expect(setRes.json().error).toContain("Principal's mailboxes");
+      expect(setRes.json().error).toContain('Settings → Personality → Email & Calendar');
     }
     expect(secrets.sets).toEqual([]);
   });
@@ -467,7 +467,7 @@ describe('vault routes', () => {
     app = await build(secrets, fakeRegistry());
     const res = await put(app, 'principal.mailbox.work.nylas_grant_id', { value: 'g' });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error).toContain("Principal's mailboxes");
+    expect(res.json().error).toContain('Settings → Personality → Email & Calendar');
     expect(secrets.sets).toEqual([]);
     expect((await put(app, 'principal.mailbox.Work.nylas_grant_id', { value: 'g' })).statusCode).toBe(400);
     expect((await put(app, 'principal.mailbox.work.other', { value: 'g' })).statusCode).toBe(400);

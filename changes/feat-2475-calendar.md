@@ -9,6 +9,7 @@
 - **Event identity (public API)** — calendar events now carry `icalUid` and `organizerEmail`. (#2475)
 - **`calendar-list-events` (public API)** — a meeting on two accounts lists once, with `calendars`; events add `meetingKey`. (#2475)
 - **Account choice for meetings** — `calendar-create-event` and `calendar-create-hold` return `needs_mailbox` with evidence when unsure. (#2475)
+- **Email & Calendar settings page** — Settings → Personality page for the principal's mailboxes; alerts when the Nylas key is missing. (#2475)
 - **Scenario cases 46k–46m** — meeting on the work calendar, cleaner not a conflict, availability across calendars. (#2475)
 
 ### Changed
@@ -24,6 +25,7 @@
 - **Holds** — placed on the chosen account's calendar; release and the nightly sweep cover every account. (#2475)
 - **Meeting debrief (spec 17)** — guards key on the meeting, so one meeting on two calendars debriefs once. (#2475)
 - **Calendar agent** — works across the principal's calendars; conflicts are judged against calendaring preferences. (#2475)
+- **Principal's mailboxes moved** — out of the Channels → Email drawer, which now links to Email & Calendar. (#2475)
 - **Mailbox add refusal (public API)** — `cap_reached` is now `migration_pending`, returned only while the upgrade finishes. (#2475)
 
 ### Removed

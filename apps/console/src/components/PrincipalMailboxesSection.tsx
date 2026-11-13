@@ -3,8 +3,9 @@ import { apiFetch } from '../api.js';
 
 // ── Principal mailboxes section ──────────────────────────────────────────────
 //
-// Rendered inside the email channel's detail drawer in ChannelSettings.tsx (#2475).
-// The principal's OWN Gmail mailboxes, separate from Curia's email accounts above it.
+// Rendered on Settings → Personality → Email & Calendar (EmailCalendarSettingsPage.tsx, #2475).
+// The principal's OWN Gmail mailboxes, separate from Curia's email accounts (Channels → Email).
+// readOnly (no Nylas API key yet) lists the mailboxes and turns every change control off.
 // A grant ID is typed once, tested (shows the address and provider the grant belongs to)
 // and then sent to the add route; it is never returned by the server and is dropped from
 // state after a successful add. "Replace grant" sends a new grant for the same account (after
@@ -215,7 +216,7 @@ function RemovePanel({ preview, onDone, onCancel }: {
   );
 }
 
-export function PrincipalMailboxesSection() {
+export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boolean } = {}) {
   const [mailboxes, setMailboxes] = useState<Mailbox[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -299,13 +300,14 @@ export function PrincipalMailboxesSection() {
   // While the deferred-migration fallback is served, adding is refused until that mailbox has
   // moved into the list (an added row would hide it).
   const migrating = mailboxes.some(m => m.pending_migration);
+  // Every control that changes a mailbox is off while busy or read-only.
+  const locked = busy || readOnly;
 
   return (
     <div className="form-field">
-      <label>Principal's mailboxes</label>
+      <label>Mailboxes</label>
       <p className="settings-page-sub" style={{ margin: '0 0 4px' }}>
-        The principal's own Gmail mailboxes, which calendar and the inbox tools work in. They are
-        not Curia's email accounts above.
+        Each Gmail account of yours that Curia reads, with its calendars.
       </p>
       {err && <p className="autonomy-error" style={{ margin: '0 0 8px' }}>{err}</p>}
       {notice && <p className="settings-page-sub" role="status" style={{ margin: '0 0 8px' }}>{notice}</p>}
@@ -339,28 +341,28 @@ export function PrincipalMailboxesSection() {
                     aria-label={`New grant ID for ${m.label}`} value={replacing.grantId}
                     onChange={e => setReplacing({ id: m.id, grantId: e.target.value })} />
                   <button type="button" className="btn btn-secondary btn-sm"
-                    disabled={busy || replacing.grantId.trim() === ''}
+                    disabled={locked || replacing.grantId.trim() === ''}
                     onClick={() => void patch(m.id, { grant_id: replacing.grantId.trim() })}>Save grant</button>
                   <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
                     onClick={() => setReplacing(null)}>Cancel</button>
                 </>
               ) : (
-                <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                <button type="button" className="btn btn-secondary btn-sm" disabled={locked}
                   onClick={() => setReplacing({ id: m.id, grantId: '' })}>Replace grant</button>
               )}
               {renaming?.id === m.id ? (
                 <button type="button" className="btn btn-secondary btn-sm"
-                  disabled={busy || renaming.label.trim() === ''}
+                  disabled={locked || renaming.label.trim() === ''}
                   onClick={() => void patch(m.id, { label: renaming.label.trim() })}>Save label</button>
               ) : (
-                <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                <button type="button" className="btn btn-secondary btn-sm" disabled={locked}
                   onClick={() => setRenaming({ id: m.id, label: m.label })}>Rename</button>
               )}
               {!m.isDefault && (
-                <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                <button type="button" className="btn btn-secondary btn-sm" disabled={locked}
                   onClick={() => void patch(m.id, { make_default: true })}>Make default</button>
               )}
-              <button type="button" className="btn btn-danger btn-sm" disabled={busy}
+              <button type="button" className="btn btn-danger btn-sm" disabled={locked}
                 onClick={() => void startRemove(m.id)}>Remove</button>
             </span>
             )}
@@ -386,25 +388,25 @@ export function PrincipalMailboxesSection() {
 
       {!migrating && (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
-        <input type="text" placeholder="mailbox id (e.g. work)" value={id} aria-label="Mailbox id"
+        <input type="text" placeholder="mailbox id (e.g. work)" value={id} aria-label="Mailbox id" disabled={readOnly}
           onChange={e => setId(e.target.value)} />
-        <input type="text" placeholder="label (e.g. Work)" value={label} aria-label="Label"
+        <input type="text" placeholder="label (e.g. Work)" value={label} aria-label="Label" disabled={readOnly}
           onChange={e => setLabel(e.target.value)} />
         <input type="password" autoComplete="off" placeholder="Nylas grant ID (from the Nylas dashboard)"
-          value={grantId} aria-label="Grant ID"
+          value={grantId} aria-label="Grant ID" disabled={readOnly}
           onChange={e => { grantInput.current = e.target.value; setGrantId(e.target.value); setTested(null); }} />
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy || !grantId.trim()}
+          <button type="button" className="btn btn-secondary btn-sm" disabled={locked || !grantId.trim()}
             onClick={() => void test()}>Test</button>
           {testedCurrent && <span>Grant belongs to <strong>{tested.email}</strong> ({tested.provider})</span>}
         </div>
         {mailboxes.length > 0 && (
           <label style={{ fontSize: 12 }}>
-            <input type="checkbox" checked={makeDefault} onChange={e => setMakeDefault(e.target.checked)} /> Make this the default
+            <input type="checkbox" checked={makeDefault} disabled={readOnly} onChange={e => setMakeDefault(e.target.checked)} /> Make this the default
           </label>
         )}
         <button type="button" className="btn btn-primary btn-sm"
-          disabled={busy || !testedCurrent || !label.trim() || !id.trim() || (!idOk)}
+          disabled={locked || !testedCurrent || !label.trim() || !id.trim() || (!idOk)}
           onClick={() => void add()}>Add mailbox</button>
       </div>
       )}

@@ -22,6 +22,7 @@ const AutonomyPage = lazy(() =>
 const PersonalityPage = lazy(() => import('./pages/PersonalitySettingsPage'));
 const GhostwritingPage = lazy(() => import('./pages/GhostwritingSettingsPage'));
 const PosturePage = lazy(() => import('./pages/PostureSettingsPage'));
+const EmailCalendarPage = lazy(() => import('./pages/EmailCalendarSettingsPage'));
 const RetentionPage = lazy(() => import('./pages/RetentionSettingsPage'));
 const DevicesPage = lazy(() => import('./pages/DevicesSettingsPage'));
 const AboutPage = lazy(() => import('./pages/AboutSettingsPage'));
@@ -140,6 +141,12 @@ const postureRoute = createRoute({
   getParentRoute: () => settingsRoute,
   path: '/posture',
   component: PosturePage,
+});
+
+const emailCalendarRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/email-calendar',
+  component: EmailCalendarPage,
 });
 
 const autonomyRoute = createRoute({
@@ -289,6 +296,10 @@ const agentsRoute = createRoute({
 const channelsRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: '/channels',
+  // channel opens that channel's drawer, e.g. Email & Calendar's link to Channels → Email.
+  validateSearch: (search: Record<string, unknown>): { channel?: string } => ({
+    channel: typeof search['channel'] === 'string' ? search['channel'] : undefined,
+  }),
   component: ChannelsPage,
 });
 
@@ -346,6 +357,7 @@ const routeTree = rootRoute.addChildren([
       personalityRoute,
       ghostwritingRoute,
       postureRoute,
+      emailCalendarRoute,
       autonomyRoute,
       assistantRedirect,
       workspaceRedirect,

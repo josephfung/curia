@@ -49,7 +49,7 @@ describe('MailboxOutageNotifier', () => {
     await n.record('work', 'Work', false, { authFailure: true });
     const body = sendNotification.mock.calls[0]![0].body as string;
     expect(body).toContain('Replace grant');
-    expect(body).toContain("Principal's mailboxes");
+    expect(body).toContain('Settings → Personality → Email & Calendar');
   });
 
   it('gives connectivity guidance, not a reconnect, when the probe failed for another reason', async () => {

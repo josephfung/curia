@@ -841,7 +841,7 @@ export async function vaultRoutes(
         if ((await options.livePrincipalMailboxIds()).includes(mailboxId)) {
           request.log.info({ name }, 'vault delete rejected: the grant of a live principal mailbox');
           return reply.status(409).send({
-            error: `'${name}' is the grant of the connected mailbox "${mailboxId}". Remove the mailbox, or use Replace grant on it, in the console: Channels → Email → Principal's mailboxes.`,
+            error: `'${name}' is the grant of the connected mailbox "${mailboxId}". Remove the mailbox, or use Replace grant on it, in the console: Settings → Personality → Email & Calendar.`,
           });
         }
       }
