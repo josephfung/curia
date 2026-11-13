@@ -13,5 +13,6 @@
   "permissions": [],
   "secrets": [],
   "timeout": 30000,
-  "capabilities": ["taskRepo", "sensitivityClassifier", "entityMemory", "outboundGateway"]
+  "capabilities": ["taskRepo", "sensitivityClassifier", "entityMemory", "outboundGateway"],
+  "optional_capabilities": ["principalMailboxes"]
 }

@@ -721,6 +721,26 @@ describe('TaskCompletionFromSentHandler — candidates queue per mailbox (#2475,
     expect(Object.keys(JSON.parse(ctx.__mem.__values.get(COMPLETION_DIGEST_KEY)!)).sort()).toEqual([T1, T2]);
   });
 
+  it('a failing queue write in one mailbox still clears the others and still notifies, then reports the failure', async () => {
+    const ctx = makeCtx();
+    ctx.__mem.__values.clear();
+    ctx.__mem.__values.set('sent_observe.work.completion_candidates', JSON.stringify({ [T1]: CANDIDATE_MAP[T1]! }));
+    ctx.__mem.__values.set('sent_observe.personal.completion_candidates', JSON.stringify({ [T2]: CANDIDATE_MAP[T2]! }));
+    (ctx as { principalMailboxes?: unknown }).principalMailboxes = stubPrincipalMailboxes({ mailboxes: TWO });
+    const store = ctx.__mem.storeFact as unknown as ReturnType<typeof vi.fn>;
+    const real = store.getMockImplementation()! as (p: { label: string }) => Promise<unknown>;
+    store.mockImplementation(async (p: { label: string }) => {
+      if (p.label === 'sent_observe.work.completion_candidates') throw new Error('kg down');
+      return real(p);
+    });
+    const result = await handler.execute(ctx);
+    expect(ctx.__completed).toEqual([T1]);
+    // The other mailbox's queue was still cleared, and the principal was still told.
+    expect(JSON.parse(ctx.__mem.__values.get('sent_observe.personal.completion_candidates')!)).toEqual({});
+    expect(ctx.__sendNotification).toHaveBeenCalled();
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('work') });
+  });
+
   it('reads the pre-migration global queue for the migrated mailbox, not for the others', async () => {
     const ctx = makeCtx();
     (ctx as { principalMailboxes?: unknown }).principalMailboxes = stubPrincipalMailboxes({ mailboxes: TWO });
@@ -729,5 +749,14 @@ describe('TaskCompletionFromSentHandler — candidates queue per mailbox (#2475,
     // Consumed: written back to the migrated mailbox's own key; the global key waits for the migration.
     expect(JSON.parse(ctx.__mem.__values.get('sent_observe.work.completion_candidates')!)).toEqual({});
     expect(ctx.__mem.__values.has('sent_observe.personal.completion_candidates')).toBe(false);
+  });
+});
+
+describe('task-completion-from-sent manifest (#2475)', () => {
+  it('declares principalMailboxes as optional, so per-mailbox candidates are read where the registry exists', async () => {
+    const { readFileSync } = await import('node:fs');
+    const manifest = JSON.parse(readFileSync(new URL('./tool.json', import.meta.url), 'utf8')) as { capabilities?: string[]; optional_capabilities?: string[] };
+    expect(manifest.optional_capabilities).toContain('principalMailboxes');
+    expect(manifest.capabilities ?? []).not.toContain('principalMailboxes');
   });
 });
