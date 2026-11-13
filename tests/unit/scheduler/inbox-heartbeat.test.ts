@@ -23,6 +23,8 @@ function memoryConfig(seed: Record<string, string> = {}) {
 function taskRow(over: Record<string, unknown> = {}) {
   return {
     id: 'task-1', agentId: 'ceo-inbox', tags: ['inbox-drain'], status: 'open',
+    createdBy: 'heartbeat',
+    originator: { contactId: 'system', systemRole: 'system', channel: 'declarative', initiatedAt: '2026-11-12T09:00:00.000Z', tier: null },
     updatedAt: new Date(NOW.getTime() - 3 * 3600_000).toISOString(),
     nextWakeAt: null, wakeState: null, ...over,
   };
@@ -42,7 +44,7 @@ function make(over: {
   const hasUnreadSince = over.hasUnread ?? vi.fn(async () => true);
   const listTasks = vi.fn(async () => (over.tasks ?? []) as never);
   const createTask = vi.fn(async (_p: unknown) => ({ id: 'new-task' }) as never);
-  const enqueueTaskWake = vi.fn(async () => ({ jobId: 'j' }));
+  const enqueueTaskWake = vi.fn(async (_p: unknown) => ({ jobId: 'j' }));
   const log = logger();
   const hb = new InboxHeartbeat({
     mailboxes: { list: async () => mbs.map((m) => ({ id: m.id, label: m.id, address: '', isDefault: false, triageStartAt: m.triageStartAt ?? null })) },
@@ -132,17 +134,13 @@ describe('InboxHeartbeat.tick', () => {
     expect(t.hasUnreadSince).toHaveBeenCalledWith('work', null);
   });
 
-  it('stamps the system originator on a created drain task and on a re-wake', async () => {
+  it('stamps the system originator on a created drain task', async () => {
     const created = make();
     await created.hb.tick(NOW);
     expect(created.createTask).toHaveBeenCalledWith(expect.objectContaining({
       originator: expect.objectContaining({ systemRole: 'system', contactId: 'system' }),
     }));
-    const rewoken = make({ tasks: [taskRow()] });
-    await rewoken.hb.tick(NOW);
-    expect(rewoken.enqueueTaskWake).toHaveBeenCalledWith(expect.objectContaining({
-      originator: expect.objectContaining({ systemRole: 'system' }),
-    }));
+
   });
 
   it('the stamped originator satisfies the outbound gateway autonomous-send check', async () => {
@@ -208,5 +206,40 @@ describe('InboxHeartbeat.start', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('InboxHeartbeat origin safety (R56)', () => {
+  const outsider = { contactId: 'c-1', systemRole: null, channel: 'email', initiatedAt: '2026-11-12T09:00:00.000Z', tier: 'outsider' };
+
+  it('re-wakes its own stalled task with the stored originator', async () => {
+    const t = make({ tasks: [taskRow()] });
+    await t.hb.tick(NOW);
+    const arg = t.enqueueTaskWake.mock.calls[0]![0] as { originator: unknown };
+    expect(arg.originator).toEqual(taskRow().originator);
+  });
+
+  it('never re-wakes or upgrades an agent-created drain task with an outsider originator', async () => {
+    const t = make({ tasks: [taskRow({ createdBy: 'ceo-inbox', originator: outsider })] });
+    await t.hb.tick(NOW);
+    expect(t.enqueueTaskWake).not.toHaveBeenCalled();
+    // It does not block: the heartbeat creates its own system-origin drain instead.
+    expect(t.createTask).toHaveBeenCalledWith(expect.objectContaining({
+      originator: expect.objectContaining({ systemRole: 'system' }),
+    }));
+  });
+
+  it('logs a foreign drain task once per id', async () => {
+    const t = make({ tasks: [taskRow({ createdBy: 'ceo-inbox', originator: outsider })] });
+    await t.hb.tick(NOW);
+    await t.hb.tick(NOW);
+    const calls = t.log.info.mock.calls.filter((c) => String(c[1]).includes('ignoring an inbox-drain'));
+    expect(calls).toHaveLength(1);
+  });
+
+  it('still creates no second task while its own is open', async () => {
+    const t = make({ tasks: [taskRow({ nextWakeAt: '2026-11-12T15:05:00.000Z' }), taskRow({ id: 'x', createdBy: 'ceo-inbox' })] });
+    expect(await t.hb.tick(NOW)).toBe('drain_running');
+    expect(t.createTask).not.toHaveBeenCalled();
   });
 });
