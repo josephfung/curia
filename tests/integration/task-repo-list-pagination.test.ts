@@ -8,6 +8,7 @@ import pg from 'pg';
 import pino from 'pino';
 import { TaskRepo } from '../../src/db/task-repo.js';
 import type { EventBus } from '../../src/bus/bus.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -28,9 +29,12 @@ describeIf('TaskRepo keyset pagination (#1433)', () => {
   let pool: pg.Pool;
   let repo: TaskRepo;
   const TOTAL = 250;
+  let dbValidated = false;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
+    await requireCuriaTestDatabase(pool);
+    dbValidated = true;
     repo = new TaskRepo(pool, noopBus, logger as never, 'UTC');
     await cleanup(pool);
     // Seed a dataset with heavy ties in the sort key so the id tiebreaker is genuinely exercised:
@@ -50,7 +54,13 @@ describeIf('TaskRepo keyset pagination (#1433)', () => {
       });
     }
   });
-  afterAll(async () => { await cleanup(pool); await pool.end(); });
+  afterAll(async () => {
+    try {
+      if (dbValidated) await cleanup(pool);
+    } finally {
+      await pool.end();
+    }
+  });
 
   it('listAllTasks returns every matching row with no skips or duplicates', async () => {
     const { tasks, truncated } = await repo.listAllTasks(
@@ -156,9 +166,12 @@ describeIf('TaskRepo.listTasks createdBy filter (#2475)', () => {
   const CB_TAG = 'taskrepo-createdby-test';
   let pool: pg.Pool;
   let repo: TaskRepo;
+  let dbValidated = false;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
+    await requireCuriaTestDatabase(pool);
+    dbValidated = true;
     repo = new TaskRepo(pool, noopBus, logger as never, 'UTC');
     await pool.query(`DELETE FROM tasks WHERE title LIKE $1`, [`${CB_PREFIX}%`]);
     for (let i = 0; i < 3; i++) {
@@ -167,8 +180,11 @@ describeIf('TaskRepo.listTasks createdBy filter (#2475)', () => {
     await repo.createTask({ agentId: 'ceo-inbox', title: `${CB_PREFIX} own`, tags: [CB_TAG], createdBy: 'heartbeat' });
   });
   afterAll(async () => {
-    await pool.query(`DELETE FROM tasks WHERE title LIKE $1`, [`${CB_PREFIX}%`]);
-    await pool.end();
+    try {
+      if (dbValidated) await pool.query(`DELETE FROM tasks WHERE title LIKE $1`, [`${CB_PREFIX}%`]);
+    } finally {
+      await pool.end();
+    }
   });
 
   it('returns only rows with the given created_by, even under a page limit foreign rows would fill', async () => {
