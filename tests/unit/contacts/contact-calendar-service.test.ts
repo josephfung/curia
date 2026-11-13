@@ -26,6 +26,26 @@ describe('ContactService — calendar methods', () => {
     });
   });
 
+  describe('principalMailboxId', () => {
+    it('allows one primary per contact per mailbox and resolves the mailbox', async () => {
+      const a = await service.linkCalendar({ nylasCalendarId: 'c-a', contactId: ceoContact.id, label: 'A', isPrimary: true, principalMailboxId: 'gmail' });
+      await service.linkCalendar({ nylasCalendarId: 'c-b', contactId: ceoContact.id, label: 'B', isPrimary: true, principalMailboxId: 'work' });
+      expect(a.principalMailboxId).toBe('gmail');
+      await expect(
+        service.linkCalendar({ nylasCalendarId: 'c-c', contactId: ceoContact.id, label: 'C', isPrimary: true, principalMailboxId: 'gmail' }),
+      ).rejects.toThrow(/already has a primary/);
+      expect((await service.resolveCalendar('c-b'))?.principalMailboxId).toBe('work');
+    });
+
+    it('defaults to no mailbox, and nylas_calendar_id stays globally unique across mailboxes', async () => {
+      const cal = await service.linkCalendar({ nylasCalendarId: 'c-x', contactId: ceoContact.id, label: 'X' });
+      expect(cal.principalMailboxId).toBeNull();
+      await expect(
+        service.linkCalendar({ nylasCalendarId: 'c-x', contactId: ceoContact.id, label: 'Y', principalMailboxId: 'work' }),
+      ).rejects.toThrow(/already registered/);
+    });
+  });
+
   describe('linkCalendar', () => {
     it('links a calendar to a contact', async () => {
       const cal = await service.linkCalendar({

@@ -12,6 +12,8 @@ export interface ContactCalendar {
   isPrimary: boolean;
   readOnly: boolean;
   timezone: string | null;
+  /** The principal mailbox this calendar belongs to; null for org-wide and other contacts' calendars. */
+  principalMailboxId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -24,6 +26,8 @@ export interface CreateCalendarLinkOptions {
   isPrimary?: boolean;
   readOnly?: boolean;
   timezone?: string;
+  /** The principal mailbox the calendar belongs to. Omitted/null: none. */
+  principalMailboxId?: string | null;
 }
 
 /** Resolved registry entry for a Nylas calendar ID. Returned by resolveCalendar(). */
@@ -32,4 +36,5 @@ export interface ResolvedCalendar {
   label: string;
   isPrimary: boolean;
   readOnly: boolean;
+  principalMailboxId: string | null;
 }

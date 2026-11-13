@@ -1858,6 +1858,7 @@ export class ContactService {
       isPrimary: options.isPrimary ?? false,
       readOnly: options.readOnly ?? false,
       timezone: options.timezone ?? null,
+      principalMailboxId: options.principalMailboxId ?? null,
       createdAt: now,
       updatedAt: now,
     };
@@ -3145,9 +3146,9 @@ class PostgresContactBackend implements ContactServiceBackend {
   async createCalendarLink(calendar: ContactCalendar): Promise<void> {
     this.logger.debug({ calendarId: calendar.id, nylasCalendarId: calendar.nylasCalendarId }, 'contacts: linking calendar');
     await this.pool.query(
-      `INSERT INTO contact_calendars (id, nylas_calendar_id, contact_id, label, is_primary, read_only, timezone, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [calendar.id, calendar.nylasCalendarId, calendar.contactId, calendar.label, calendar.isPrimary, calendar.readOnly, calendar.timezone, calendar.createdAt, calendar.updatedAt],
+      `INSERT INTO contact_calendars (id, nylas_calendar_id, contact_id, label, is_primary, read_only, timezone, principal_mailbox_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [calendar.id, calendar.nylasCalendarId, calendar.contactId, calendar.label, calendar.isPrimary, calendar.readOnly, calendar.timezone, calendar.principalMailboxId, calendar.createdAt, calendar.updatedAt],
     );
   }
 
@@ -3169,10 +3170,11 @@ class PostgresContactBackend implements ContactServiceBackend {
       is_primary: boolean;
       read_only: boolean;
       timezone: string | null;
+      principal_mailbox_id: string | null;
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, nylas_calendar_id, contact_id, label, is_primary, read_only, timezone, created_at, updated_at
+      `SELECT id, nylas_calendar_id, contact_id, label, is_primary, read_only, timezone, principal_mailbox_id, created_at, updated_at
        FROM contact_calendars WHERE contact_id = $1 ORDER BY created_at ASC`,
       [contactId],
     );
@@ -3185,8 +3187,9 @@ class PostgresContactBackend implements ContactServiceBackend {
       label: string;
       is_primary: boolean;
       read_only: boolean;
+      principal_mailbox_id: string | null;
     }>(
-      `SELECT contact_id, label, is_primary, read_only
+      `SELECT contact_id, label, is_primary, read_only, principal_mailbox_id
        FROM contact_calendars WHERE nylas_calendar_id = $1`,
       [nylasCalendarId],
     );
@@ -3197,6 +3200,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       label: row.label,
       isPrimary: row.is_primary,
       readOnly: row.read_only,
+      principalMailboxId: row.principal_mailbox_id,
     };
   }
 
@@ -3209,10 +3213,11 @@ class PostgresContactBackend implements ContactServiceBackend {
       is_primary: boolean;
       read_only: boolean;
       timezone: string | null;
+      principal_mailbox_id: string | null;
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, nylas_calendar_id, contact_id, label, is_primary, read_only, timezone, created_at, updated_at
+      `SELECT id, nylas_calendar_id, contact_id, label, is_primary, read_only, timezone, principal_mailbox_id, created_at, updated_at
        FROM contact_calendars WHERE contact_id = $1 AND is_primary = true`,
       [contactId],
     );
@@ -3351,12 +3356,14 @@ class PostgresContactBackend implements ContactServiceBackend {
     const params = [fromContactId, toContactId];
     const run = async (sql: string): Promise<number> => (await q.query(sql, params)).rowCount ?? 0;
 
-    // contact_calendars — idx_contact_calendars_primary allows one primary per contact.
-    // When the survivor already has one, the moved calendars stop being primary first.
+    // contact_calendars — idx_contact_calendars_primary_per_mailbox allows one primary per contact
+    // per mailbox. When the survivor already has one for the same mailbox, the moved calendar
+    // stops being primary first.
     counts.contact_calendars_demoted = await run(
-      `UPDATE contact_calendars SET is_primary = false, updated_at = now()
-       WHERE contact_id = $1 AND is_primary
-         AND EXISTS (SELECT 1 FROM contact_calendars WHERE contact_id = $2 AND is_primary)`,
+      `UPDATE contact_calendars c SET is_primary = false, updated_at = now()
+       WHERE c.contact_id = $1 AND c.is_primary
+         AND EXISTS (SELECT 1 FROM contact_calendars s WHERE s.contact_id = $2 AND s.is_primary
+                       AND COALESCE(s.principal_mailbox_id, '') = COALESCE(c.principal_mailbox_id, ''))`,
     );
     counts.contact_calendars = await run(
       `UPDATE contact_calendars SET contact_id = $2, updated_at = now() WHERE contact_id = $1`,
@@ -3598,6 +3605,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     is_primary: boolean;
     read_only: boolean;
     timezone: string | null;
+    principal_mailbox_id: string | null;
     created_at: Date;
     updated_at: Date;
   }): ContactCalendar {
@@ -3609,6 +3617,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       isPrimary: row.is_primary,
       readOnly: row.read_only,
       timezone: row.timezone,
+      principalMailboxId: row.principal_mailbox_id,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -3938,10 +3947,10 @@ class InMemoryContactBackend implements ContactServiceBackend {
         throw new Error(`Calendar already registered: ${calendar.nylasCalendarId}`);
       }
     }
-    // Enforce at-most-one-primary per contact
+    // Enforce at-most-one-primary per contact per mailbox
     if (calendar.isPrimary && calendar.contactId !== null) {
       for (const existing of this.calendars.values()) {
-        if (existing.contactId === calendar.contactId && existing.isPrimary) {
+        if (existing.contactId === calendar.contactId && existing.isPrimary && existing.principalMailboxId === calendar.principalMailboxId) {
           throw new Error(`Contact ${calendar.contactId} already has a primary calendar`);
         }
       }
@@ -3977,6 +3986,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
           label: cal.label,
           isPrimary: cal.isPrimary,
           readOnly: cal.readOnly,
+          principalMailboxId: cal.principalMailboxId,
         };
       }
     }
@@ -4096,11 +4106,13 @@ class InMemoryContactBackend implements ContactServiceBackend {
     // tables are Postgres-only, so their counts stay 0 here.
     const counts = emptyContactReferenceCounts();
 
-    const survivorHasPrimary = [...this.calendars.values()].some(c => c.contactId === toContactId && c.isPrimary);
+    const survivorPrimaryMailboxes = new Set(
+      [...this.calendars.values()].filter(c => c.contactId === toContactId && c.isPrimary).map(c => c.principalMailboxId),
+    );
     for (const [id, cal] of this.calendars) {
       if (cal.contactId !== fromContactId) continue;
       let moved: ContactCalendar = { ...cal, contactId: toContactId, updatedAt: new Date() };
-      if (cal.isPrimary && survivorHasPrimary) {
+      if (cal.isPrimary && survivorPrimaryMailboxes.has(cal.principalMailboxId)) {
         moved = { ...moved, isPrimary: false };
         counts.contact_calendars_demoted++;
       }
