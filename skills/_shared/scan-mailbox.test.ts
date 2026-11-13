@@ -38,4 +38,28 @@ describe('scanMailbox continuation under a small page cap', () => {
     });
     expect(r.end).toEqual({ cursor: 'c1', skip: 0 });
   });
+
+  it('ends a mailbox whose next cursor repeats the one just read', async () => {
+    const r = await scanMailbox<Msg>({
+      start: { cursor: 'c1', skip: 0 },
+      need: 5,
+      pageCap: 10,
+      fetchPage: pages({ c1: { messages: [], next: 'c1' } }),
+      keep: () => true,
+    });
+    expect(r.end).toBeNull();
+    expect(r.capped).toBe(false);
+  });
+
+  it('keeps items from a non-empty page whose next cursor repeats, then ends', async () => {
+    const r = await scanMailbox<Msg>({
+      start: { cursor: 'c1', skip: 0 },
+      need: 5,
+      pageCap: 10,
+      fetchPage: pages({ c1: { messages: [{ id: 'a', date: 5 }], next: 'c1' } }),
+      keep: () => true,
+    });
+    expect(r.items.map((i) => i.item.id)).toEqual(['a']);
+    expect(r.end).toBeNull();
+  });
 });
