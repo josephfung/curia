@@ -136,6 +136,11 @@ describe('meeting-debrief keys its guards on the meeting, not one calendar copy 
     expect(prompt).toMatch(/whose `meetingKey` is the key, else whose `id` is the event id/);
   });
 
+  it('a moved meeting gets one prompt: the old wake defers to a newer task, else claims the new key (re-review N1)', () => {
+    expect(prompt).toMatch(/Found by `id` only: if `seen:<its meetingKey>` exists, a\s+later scan took it over, so `task-complete`/);
+    expect(prompt).toMatch(/else store that guard, so no scan schedules it twice/);
+  });
+
   it('a legacy seen:<id> guard still skips the event for one release (review M3)', () => {
     expect(prompt).toMatch(/`seen:<meetingKey>` guard exists, or a `seen:<id>`/);
   });

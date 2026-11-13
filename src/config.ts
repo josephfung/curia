@@ -490,7 +490,7 @@ export interface HealthHeartbeats {
   embeddings: string | null;
   image_gen: string | null;
   nylas: string | null;
-  /** Principal calendar grant (`ceo_nylas_grant_id`), distinct from email `nylas`. */
+  /** The default principal mailbox's canary (calendar and mail), distinct from email `nylas`. */
   nylas_calendar: string | null;
   signal: string | null;
   google_workspace: string | null;

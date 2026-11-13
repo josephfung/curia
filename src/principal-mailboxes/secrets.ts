@@ -11,14 +11,16 @@ export function isPrincipalMailboxGrantKey(name: string): boolean {
   return PRINCIPAL_MAILBOX_GRANT_KEY_RE.test(name);
 }
 
-// The flat keys (#2409) ceo-inbox still reads. Once the registry has rows the console
-// mirrors the default mailbox into them (R28), so the vault routes and secret capture refuse
-// direct writes with this message (R33).
-export const FLAT_PRINCIPAL_MAILBOX_KEYS: ReadonlySet<string> = new Set(['ceo_nylas_grant_id', 'ceo_self_email']);
+// The retired flat keys (#2409). The boot migration deletes them once the registry serves the
+// mailbox; the vault routes and secret capture refuse writes to them (except while the deferred
+// migration fallback still serves them) with this message.
+export const FLAT_GRANT_KEY = 'ceo_nylas_grant_id';
+export const FLAT_EMAIL_KEY = 'ceo_self_email';
+export const FLAT_PRINCIPAL_MAILBOX_KEYS: ReadonlySet<string> = new Set([FLAT_GRANT_KEY, FLAT_EMAIL_KEY]);
 
 export const FLAT_KEYS_MANAGED_MESSAGE =
-  "The principal's mailbox is managed in the console: Channels → Email → Principal's mailboxes. " +
-  'Change, replace or remove the mailbox there.';
+  "This setting is retired: the principal's mailboxes are managed in the console, Channels → Email → Principal's mailboxes. " +
+  'Add, replace or remove a mailbox there.';
 
 // A per-mailbox grant is written only by the principal-mailboxes routes, which validate it.
 export const PER_MAILBOX_GRANT_MANAGED_MESSAGE =

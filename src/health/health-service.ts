@@ -20,18 +20,16 @@ import type { CheckResult, HealthResponse, HealthStatus, TrackerKey, CanaryResul
 import { LlmOutcomeTracker } from './llm-outcome-tracker.js';
 import {
   checkDb, checkBus, checkEmail, checkSignal, checkBrowser,
-  checkMcpServers, checkNylasCalendar, checkSlack, checkSms, checkVoice,
+  checkMcpServers, checkCalendarRouter, checkSlack, checkSms, checkVoice,
   checkSignalVoice, checkScheduler,
   type EmailAdapterHealth, type SignalRpcClientHealth, type BrowserServiceHealth,
-  type SlackClientHealth, type SmsChannelHealth, type VoiceLiveKitHealth,
+  type SlackClientHealth, type SmsChannelHealth, type VoiceLiveKitHealth, type CalendarRouterProbe,
 } from './health-checks.js';
 import type { NylasClient } from '../channels/email/nylas-client.js';
-import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
 import type { PrincipalMailboxes, PrincipalMailboxView } from '../principal-mailboxes/service.js';
 import { MissingNylasApiKeyError } from '../principal-mailboxes/types.js';
 import { grantSafeErrorFields, mayCarryGrantId } from '../principal-mailboxes/error-fields.js';
 import { migrationFailureReason, type FlatMailboxMigrationOutcome } from '../principal-mailboxes/migrate-flat-mailbox.js';
-import type { FlatMirrorOutcome } from '../principal-mailboxes/flat-mirror.js';
 import type { PrincipalMailboxReadiness } from '../skills/types.js';
 import type { MailboxOutageNotifier } from './mailbox-outage-notifier.js';
 
@@ -46,10 +44,11 @@ export interface HealthServiceDeps {
   nylasClient?: NylasClient;
   /**
    * Optional calendar liveness probe (#1561): lists the default principal mailbox's calendars
-   * through the calendar router (#2475). Absent when calendar is not enrolled this boot.
+   * through the calendar router (#2475). Absent when no router was built (no Nylas key or no
+   * principal yet); `no_mailbox` while none is connected. Both read as `skipped`.
    * Distinct from `nylasClient` (email/messaging grant).
    */
-  nylasCalendarClient?: Pick<NylasCalendarClient, 'listCalendars'>;
+  calendarRouterProbe?: CalendarRouterProbe;
   signalRpcClient?: SignalRpcClientHealth;
   /**
    * Path to the PulseAudio socket shared from the signal-cli container (#1760).
@@ -111,14 +110,6 @@ export interface HealthServiceDeps {
     'list' | 'credentials' | 'gatewayClient' | 'calendarClient' | 'isFallbackActive' | 'setFallback'
     | 'pendingMigrationReason' | 'setPendingMigrationReason'
   >;
-  /**
-   * The grant calendar was bound to at boot, or null when none was. It picks up a different
-   * default grant only after a restart, which the setup catalog reports as `restart_required`.
-   * Absent: no restart check. Since the calendar router (#2475) reads grants per call, boot
-   * passes `() => null` only when no mailbox existed at boot (the calendar tools are unenrolled
-   * until a restart), and omits it otherwise.
-   */
-  calendarBoundGrant?: () => string | null;
   /** Alerts the principal once per mailbox outage episode. */
   mailboxOutageNotifier?: Pick<MailboxOutageNotifier, 'record'>;
   /**
@@ -126,9 +117,6 @@ export interface HealthServiceDeps {
    * deferred-migration fallback is active; on 'migrated' the fallback is cleared.
    */
   retryMailboxMigration?: () => Promise<FlatMailboxMigrationOutcome>;
-  /** Re-derives the flat principal-mailbox keys from the registry's default (R28); run on
-   *  each canary tick so a copy that failed part-way is repaired. */
-  reconcileFlatMailboxKeys?: () => Promise<FlatMirrorOutcome>;
   /** The inbox triage heartbeat's health (R67), read on every request. Absent, or null (the
    *  heartbeat is not running): skipped. */
   inboxTriageHealth?: () => { ok: boolean; detail?: string } | null;
@@ -161,14 +149,10 @@ export class HealthService {
   private readonly mailboxOk = new Map<string, { ok: boolean; grantId: string | null }>();
   /** Last logged outcome of the deferred-migration retry, so a repeat is not logged again. */
   private lastMigrationOutcome: string | null = null;
-  /** The flat-key repair started by the last canary run, while it is still running. */
-  private flatMirrorInFlight: Promise<void> | null = null;
   /** The deferred-migration retry still running, if one outlived its canary deadline. */
   private migrationRetryInFlight: Promise<void> | null = null;
   /** Mailboxes whose outage notice is still being sent: not sent again meanwhile. */
   private readonly notifying = new Set<string>();
-  /** What the last finished flat-key repair found, reported as a canary on the next run. */
-  private lastFlatMirror: { outcome: FlatMirrorOutcome } | { error: string } | null = null;
 
   constructor(private readonly deps: HealthServiceDeps) {}
 
@@ -249,7 +233,7 @@ export class HealthService {
   async getStatus(): Promise<HealthResponse> {
     const {
       db, bus, emailAdapter, signalRpcClient, browserService,
-      mcpSessions, scheduler, config, nylasCalendarClient,
+      mcpSessions, scheduler, config, calendarRouterProbe,
       slackClient, smsHealth, voiceLiveKit, signalPulseSocketPath,
     } = this.deps;
     const { liveness } = config;
@@ -267,7 +251,7 @@ export class HealthService {
       checkDb(db, this.deps.logger),
       checkSignal(signalRpcClient, this.deps.logger),
       checkMcpServers(mcpServerStatuses, mcpSessions, this.deps.logger),
-      checkNylasCalendar(nylasCalendarClient, this.deps.logger),
+      checkCalendarRouter(calendarRouterProbe, this.deps.logger),
       checkVoice(voiceLiveKit, this.deps.logger),
       checkSignalVoice(signalPulseSocketPath, this.deps.logger),
       checkBrowser(browserService, this.deps.logger),
@@ -382,10 +366,6 @@ export class HealthService {
       logger.warn({ errName: err instanceof Error ? err.name : 'unknown' }, 'Mailbox migration retry did not finish in time; the canaries go on');
     }
     await this.reportPendingMigration(results);
-    // Not awaited: a stalled repair must never hold the canaries (one run at a time). The last
-    // finished run's problem, if any, is reported here.
-    this.startFlatMirrorReconcile();
-    this.reportFlatMirror(results);
     await this.runMailboxCanaries(run, results);
 
     // Signal canary — reuse the same RPC ping as the liveness check.
@@ -431,11 +411,11 @@ export class HealthService {
   /**
    * The setup catalog's `principal_mailbox_ready` check. A mailbox not probed yet, whose last
    * probe was not ok, or whose grant changed since it passed (a replaced grant must pass on its
-   * own) is probed now rather than reported from a stale result. `restart_required` when the
-   * default mailbox passed but calendar is bound to another grant (or none) since boot.
+   * own) is probed now rather than reported from a stale result. No restart is ever needed:
+   * calendar reads each mailbox's grant per call (#2475).
    */
   async principalMailboxReady(): Promise<PrincipalMailboxReadiness> {
-    const { principalMailboxes, calendarBoundGrant, logger } = this.deps;
+    const { principalMailboxes, logger } = this.deps;
     if (!principalMailboxes) return 'pending';
     try {
       const live = await withDeadline(principalMailboxes.list(), MAILBOX_REGISTRY_TIMEOUT_MS);
@@ -444,15 +424,8 @@ export class HealthService {
         // On demand, for setup-status: no outage email from here, only the scheduled canary sends one.
         if (last?.ok !== true || last.grantId !== (await this.currentGrant(view.id))) await this.probeMailbox(view, { notify: false });
       }
-      // Every mailbox was removed after boot: calendar still holds the removed default's grant.
-      if (live.length === 0) return calendarBoundGrant?.() ? 'restart_required' : 'pending';
       const passed = live.filter((m) => this.mailboxOk.get(m.id)?.ok === true);
-      if (passed.length === 0) return 'pending';
-      const def = passed.find((m) => m.isDefault);
-      if (def && calendarBoundGrant && calendarBoundGrant() !== this.mailboxOk.get(def.id)?.grantId) {
-        return 'restart_required';
-      }
-      return 'ready';
+      return passed.length === 0 ? 'pending' : 'ready';
     } catch (err) {
       logger.warn({ err }, 'principalMailboxReady: could not evaluate mailbox health; reporting not ready');
       return 'pending';
@@ -467,37 +440,6 @@ export class HealthService {
       // Class and status only: a Nylas error can carry the grant id (R20).
       this.deps.logger.debug({ mailboxId: id, ...grantSafeErrorFields(err) }, 'principalMailboxReady: could not read the mailbox grant; probing it');
       return null;
-    }
-  }
-
-  /**
-   * Starts the flat-key repair beside the canaries, never in their path: a stalled database
-   * call there cannot delay or skip a canary. A run still in flight is not started again.
-   */
-  private startFlatMirrorReconcile(): void {
-    const { reconcileFlatMailboxKeys, logger } = this.deps;
-    if (!reconcileFlatMailboxKeys || this.flatMirrorInFlight) return;
-    this.flatMirrorInFlight = (async () => {
-      try {
-        this.lastFlatMirror = { outcome: await reconcileFlatMailboxKeys() };
-      } catch (err) {
-        const { errName } = grantSafeErrorFields(err);
-        this.lastFlatMirror = { error: errName };
-        logger.error(safeErrLogFields(err), 'Could not reconcile the flat principal-mailbox keys with the registry');
-      } finally {
-        this.flatMirrorInFlight = null;
-      }
-    })();
-  }
-
-  /** A failed or `no_grant` flat-key repair is a failing check, not only a log line. */
-  private reportFlatMirror(results: CanaryResult[]): void {
-    const last = this.lastFlatMirror;
-    if (!last) return;
-    if ('error' in last) {
-      results.push({ name: 'principal_mailbox_flat_mirror', status: 'fail', detail: `Could not reconcile the flat mailbox settings with the registry (${last.error})` });
-    } else if (last.outcome === 'no_grant') {
-      results.push({ name: 'principal_mailbox_flat_mirror', status: 'fail', detail: 'The default principal mailbox has no grant in the vault; use Replace grant on it in the console' });
     }
   }
 
@@ -584,7 +526,7 @@ export class HealthService {
    * echo the grant id.
    */
   private async probeMailbox(view: PrincipalMailboxView, opts: { notify?: boolean } = {}): Promise<CanaryResult> {
-    const { principalMailboxes, mailboxOutageNotifier, calendarBoundGrant, logger } = this.deps;
+    const { principalMailboxes, mailboxOutageNotifier, logger } = this.deps;
     const name = `principal_mailbox:${view.id}`;
     let result: CanaryResult;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -635,16 +577,6 @@ export class HealthService {
       if (timer !== undefined) clearTimeout(timer);
     }
     this.mailboxOk.set(view.id, { ok: result.status === 'ok', grantId });
-    // The mailbox answers, but calendar is still bound to another
-    // grant, or none, since boot: not healthy for them until a restart. No heartbeat ping (the
-    // result is not ok) and no outage episode either way: the mailbox itself is fine.
-    if (result.status === 'ok' && view.isDefault && calendarBoundGrant && calendarBoundGrant() !== grantId) {
-      return {
-        name,
-        status: 'fail',
-        detail: `Mailbox "${view.label}" answers, but calendar has not picked it up since boot — restart Curia`,
-      };
-    }
     // Not awaited: a stalled notice delivery must not hold the canary run. One per mailbox at a
     // time; the notifier keeps its own retry state for the next failing probe.
     if (mailboxOutageNotifier && opts.notify !== false && !this.notifying.has(view.id)) {

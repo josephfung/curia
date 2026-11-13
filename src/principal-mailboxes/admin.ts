@@ -55,18 +55,11 @@ export interface RemovalPreview {
 export interface RemovalOutcome {
   /** Cleanup steps after the tombstone that did not finish (names only). Empty when all did. */
   cleanupIncomplete: string[];
-  /** Always false since the calendar router (#2475, Part 4) reads each mailbox's grant per call;
-   *  nothing holds a removed mailbox's grant until a restart any more. Kept for the console. */
-  restartRequired: boolean;
 }
 
 /** Shown when a mailbox was added but its home calendar could not be registered. */
 export const HOME_CALENDAR_PENDING_WARNING =
   "Saved. Registering the mailbox's calendar failed; register it from the calendar agent (calendar-register) or remove and add the mailbox again.";
-
-/** Shown when the registry change committed but copying the default into the flat keys failed. */
-export const MIRROR_PENDING_WARNING =
-  'Saved. Copying the default mailbox to the settings the inbox tools read failed; Curia retries at the next restart and health check.';
 
 /** A removal request that breaks a precondition; nothing was changed. */
 export class MailboxRemovalError extends Error {
@@ -97,9 +90,6 @@ export interface PrincipalMailboxAdminDeps {
   curiaAccountAddresses: () => Promise<string[]>;
   /** Grant ids of Curia's own email accounts (F6): a mailbox may never reuse one. */
   curiaAccountGrantIds?: () => Promise<string[]>;
-  /** Re-derives the flat keys from the registry (flat-mirror.ts). Run when a mirror write
-   *  after a committed change fails, and after every removal, so they never keep a stale grant. */
-  reconcileFlatKeys?: () => Promise<unknown>;
   lookupGrant: (grantId: string) => Promise<{ email: string; provider: string }>;
   onRemoved?: Array<(id: string) => Promise<void>>;
   /** The standing inbox rules document (/shared/inbox/rules.md), for scoped rules on removal. */
@@ -113,10 +103,6 @@ export interface PrincipalMailboxAdminDeps {
   /** Calendar side of add and remove (#2475, D7). Absent: calendars are left alone. */
   calendars?: Pick<MailboxCalendarHooks, 'registerHome' | 'listForMailbox'>;
 }
-
-// The flat keys ceo-inbox still reads (#2409).
-const FLAT_GRANT_KEY = 'ceo_nylas_grant_id';
-const FLAT_EMAIL_KEY = 'ceo_self_email';
 
 const CONSUMER_DOMAINS = new Set(['gmail.com', 'googlemail.com']);
 
@@ -242,11 +228,7 @@ export class PrincipalMailboxAdmin {
 
     const rec = await this.deps.store.getAny(id);
     if (!rec) throw new Error(`Mailbox "${id}" vanished after insert`);
-    const mirrorWarning = rec.isDefault
-      ? await this.mirrorAfterCommit(id, () => this.mirrorFlatKeys(id, grantId, rec.address))
-      : undefined;
-    const calendarWarning = await this.registerHomeCalendar(id, rec.label);
-    const warning = [mirrorWarning, calendarWarning].filter((w) => w !== undefined).join(' ');
+    const warning = await this.registerHomeCalendar(id, rec.label);
     return { ok: true, mailbox: toView(rec), ...(warning ? { warning } : {}) };
   }
 
@@ -269,13 +251,12 @@ export class PrincipalMailboxAdmin {
     }
   }
 
-  /** The new default is committed first; a failed flat-key copy after it is a warning, not a failure. */
+  /** Unknown ids throw. Readers take the default from the registry on each call, so nothing else changes. */
   async setDefault(id: string): Promise<{ warning?: string }> {
     await this.deps.store.setDefault(id);
     const rec = await this.deps.store.getAny(id);
     if (!rec) throw new UnknownMailboxError(id);
-    const warning = await this.mirrorAfterCommit(id, () => this.mirrorDefaultFromVault(rec));
-    return warning ? { warning } : {};
+    return {};
   }
 
   /**
@@ -313,10 +294,7 @@ export class PrincipalMailboxAdmin {
 
     await this.deps.secrets.set(principalMailboxGrantSecretName(id), grantId);
     this.log.info({ mailboxId: id }, 'Principal mailbox grant replaced');
-    const warning = rec.isDefault
-      ? await this.mirrorAfterCommit(id, () => this.mirrorFlatKeys(id, grantId, rec.address))
-      : undefined;
-    return warning ? { ok: true, warning } : { ok: true };
+    return { ok: true };
   }
 
   async removalPreview(id: string): Promise<RemovalPreview> {
@@ -435,7 +413,6 @@ export class PrincipalMailboxAdmin {
 
     // 3. Default / tombstone in one store transaction. If it fails the mailbox stays live,
     // so the primary email goes back to what it was: a failed removal changes nothing.
-    const wasDefault = rec.isDefault;
     try {
       await this.deps.store.tombstone(id, newDefault);
     } catch (err) {
@@ -453,8 +430,8 @@ export class PrincipalMailboxAdmin {
     }
 
     // 4-7. Past the tombstone the removal stands: each cleanup step runs on its own, a failure
-    // is logged and named in the outcome, and the rest still run. The grant and the flat keys
-    // go first, so a later failure cannot leave the inbox tools acting on the removed mailbox.
+    // is logged and named in the outcome, and the rest still run. The grant goes first, so a
+    // later failure cannot leave the inbox tools acting on the removed mailbox.
     const cleanupIncomplete: string[] = [];
     // `reported`: the failure's cause was already logged earlier in this removal, so it is only
     // listed (it still reaches cleanup_incomplete and the route's warn), not logged twice.
@@ -468,20 +445,12 @@ export class PrincipalMailboxAdmin {
       }
     };
     await step('grant_secret', () => this.deps.secrets.delete(principalMailboxGrantSecretName(id)));
-    if (wasDefault) {
-      await step('flat_keys', async () => {
-        if (newDefault === null) return this.clearFlatKeys(id);
-        const next = await this.deps.store.getAny(newDefault);
-        if (!next) throw new UnknownMailboxError(newDefault);
-        await this.mirrorDefaultFromVault(next);
-      });
-    }
     // The legacy `default` send level was set for the migrated mailbox (the only row with no
     // triage start); if its rename never landed it must not outlive that mailbox and be inherited
     // by a new sole one (R41, SF8). Removing any other mailbox leaves it alone. Its own step: a
     // failure is logged and named, the rest still run, and boot reconciles the key again.
     // Rules named for this mailbox: scoped only to it they are deleted or moved; shared ones
-    // just lose the id. Runs after the grant and flat keys, so a failure here is only a rule
+    // just lose the id. Runs after the grant, so a failure here is only a rule
     // naming a mailbox that no longer exists (it matches nothing).
     const rulesDoc = this.deps.rulesDoc;
     if (rulesDoc) {
@@ -539,19 +508,7 @@ export class PrincipalMailboxAdmin {
       });
     }
     for (const [n, hook] of (this.deps.onRemoved ?? []).entries()) await step(`on_removed_${n + 1}`, () => hook(id));
-    // Always re-derive the flat keys from the registry: it repairs a failed copy above too.
-    if (this.deps.reconcileFlatKeys) {
-      try {
-        await this.deps.reconcileFlatKeys();
-        const at = cleanupIncomplete.indexOf('flat_keys');
-        if (at >= 0) cleanupIncomplete.splice(at, 1);
-      } catch (err) {
-        if (!cleanupIncomplete.includes('flat_keys')) cleanupIncomplete.push('flat_keys');
-        this.log.error({ ...this.safeErrFields(err), mailboxId: id }, 'Could not reconcile the flat keys after removing a principal mailbox');
-      }
-    }
-    // No restart: the calendar router reads grants per call, so nothing kept the removed one.
-    return { cleanupIncomplete, restartRequired: false };
+    return { cleanupIncomplete };
   }
 
   /** Rules that name the mailbox (scoped only to it, or to it and others); null = unreadable. */
@@ -575,39 +532,6 @@ export class PrincipalMailboxAdmin {
     return { rec, others };
   }
 
-  // Mirror for ceo-inbox until Task 20 retires the flat keys (#2475). The ceo-inbox handlers
-  // still read ceo_nylas_grant_id / ceo_self_email, so the default mailbox is copied there
-  // whenever it changes (R28). Failures are logged (never the grant id) and rethrown.
-  private async mirrorFlatKeys(id: string, grantId: string, address: string): Promise<void> {
-    try {
-      await this.deps.secrets.set(FLAT_GRANT_KEY, grantId);
-      await this.deps.secrets.set(FLAT_EMAIL_KEY, lower(address));
-    } catch (err) {
-      this.log.error({ err, mailboxId: id }, 'Could not mirror the default mailbox into the flat keys');
-      throw err;
-    }
-  }
-
-  private async mirrorDefaultFromVault(rec: PrincipalMailboxRecord): Promise<void> {
-    const grantId = await this.deps.secrets.get(principalMailboxGrantSecretName(rec.id));
-    if (!grantId) {
-      const err = new Error(`Mailbox "${rec.id}" has no Nylas grant in the vault`);
-      this.log.error({ mailboxId: rec.id }, 'Could not mirror the default mailbox: it has no grant in the vault');
-      throw err;
-    }
-    await this.mirrorFlatKeys(rec.id, grantId, rec.address);
-  }
-
-  private async clearFlatKeys(id: string): Promise<void> {
-    try {
-      await this.deps.secrets.delete(FLAT_GRANT_KEY);
-      await this.deps.secrets.delete(FLAT_EMAIL_KEY);
-    } catch (err) {
-      this.log.error({ err, mailboxId: id }, 'Could not delete the flat mailbox keys after removing the default');
-      throw err;
-    }
-  }
-
   /** Undo steps run on their own, so a failed unlink still deletes the secret and vice versa. */
   private async undoAdd(secretName: string, identityId: string | null): Promise<void> {
     if (identityId) {
@@ -621,29 +545,6 @@ export class PrincipalMailboxAdmin {
       await this.deps.secrets.delete(secretName);
     } catch (err) {
       this.log.error({ err, secretName }, 'Could not delete the grant of a failed mailbox add; clear it on the Secrets page');
-    }
-  }
-
-  /**
-   * A flat-key copy after a committed registry change. On failure the change still stands: the
-   * flat keys are re-derived at once, and only if that fails too is a warning returned (the next
-   * restart or canary repairs them). Never throws.
-   */
-  private async mirrorAfterCommit(id: string, mirror: () => Promise<void>): Promise<string | undefined> {
-    try {
-      await mirror();
-      return undefined;
-    } catch (err) {
-      this.log.warn({ ...this.safeErrFields(err), mailboxId: id }, 'Copying the default mailbox into the flat keys failed after the change committed; reconciling');
-      if (!this.deps.reconcileFlatKeys) return MIRROR_PENDING_WARNING;
-      try {
-        await this.deps.reconcileFlatKeys();
-        this.log.info({ mailboxId: id }, 'Flat keys repaired by reconcile after a failed copy');
-        return undefined;
-      } catch (err) {
-        this.log.error({ ...this.safeErrFields(err), mailboxId: id }, 'Flat-key reconcile after a failed copy failed too');
-        return MIRROR_PENDING_WARNING;
-      }
     }
   }
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
-import { HOME_CALENDAR_PENDING_WARNING, MIRROR_PENDING_WARNING, PrincipalMailboxAdmin } from '../../../src/principal-mailboxes/admin.js';
+import { HOME_CALENDAR_PENDING_WARNING, PrincipalMailboxAdmin } from '../../../src/principal-mailboxes/admin.js';
 import { createMailboxCalendarHooks } from '../../../src/principal-mailboxes/calendar-hooks.js';
 import type { PrincipalMailboxStore } from '../../../src/principal-mailboxes/store.js';
 import { RemovedMailboxError, type PrincipalMailboxRecord } from '../../../src/principal-mailboxes/types.js';
@@ -27,7 +27,6 @@ function setup(opts: {
   forgetLegacySendLevel?: () => Promise<void>;
   isFallbackActive?: () => Promise<boolean>;
   logger?: pino.Logger;
-  reconcileFlatKeys?: () => Promise<unknown>;
   curiaGrants?: string[];
   rulesDoc?: { read(): Promise<string | null>; write(s: string): Promise<void> };
   calendars?: ConstructorParameters<typeof PrincipalMailboxAdmin>[0]['calendars'];
@@ -100,7 +99,6 @@ function setup(opts: {
     onRemoved: opts.onRemoved,
     forgetLegacySendLevel: opts.forgetLegacySendLevel,
     isFallbackActive: opts.isFallbackActive,
-    reconcileFlatKeys: opts.reconcileFlatKeys,
     ...(opts.rulesDoc ? { rulesDoc: opts.rulesDoc } : {}),
     ...(opts.curiaGrants ? { curiaAccountGrantIds: async () => opts.curiaGrants! } : {}),
     ...(opts.calendars ? { calendars: opts.calendars } : {}),
@@ -353,35 +351,10 @@ describe('PrincipalMailboxAdmin.remove', () => {
     const s = setup({ records: two(), onRemoved: [hook] });
     s.secretStore.delete.mockRejectedValueOnce(new Error('vault down'));
     const out = await s.admin.remove({ id: 'work', stillOwned: false });
-    expect(out).toEqual({ cleanupIncomplete: ['grant_secret'], restartRequired: false });
+    expect(out).toEqual({ cleanupIncomplete: ['grant_secret'] });
     expect(s.store.tombstone).toHaveBeenCalled();
     expect(s.contacts.unlinkIdentity).toHaveBeenCalledWith('ident-w');
     expect(hook).toHaveBeenCalledWith('work');
-  });
-
-  it('clears the flat keys before the identity work, and reconciles them after every removal (F3)', async () => {
-    const order: string[] = [];
-    const reconcile = vi.fn(async () => { order.push('reconcile'); });
-    const s = setup({ records: [rec({ addedIdentityId: 'ident-p' })], secrets: { ceo_nylas_grant_id: 'g', ceo_self_email: 'pat@gmail.com' }, reconcileFlatKeys: reconcile });
-    const realDelete = s.secretStore.delete.getMockImplementation()!;
-    s.secretStore.delete.mockImplementation(async (n: string) => { order.push(`delete:${n}`); await realDelete(n); });
-    s.contacts.unlinkIdentity.mockImplementation(async () => { order.push('unlink'); return true; });
-    const out = await s.admin.remove({ id: 'personal', stillOwned: false });
-    expect(order).toEqual([
-      `delete:${principalMailboxGrantSecretName('personal')}`, 'delete:ceo_nylas_grant_id', 'delete:ceo_self_email', 'unlink', 'reconcile',
-    ]);
-    // The calendar router reads grants per call (#2475, Part 4): no restart after removing the default.
-    expect(out).toEqual({ cleanupIncomplete: [], restartRequired: false });
-  });
-
-  it('a failed flat-key step that the reconcile repairs is not reported', async () => {
-    const s = setup({ records: [rec()], secrets: { ceo_nylas_grant_id: 'g' }, reconcileFlatKeys: vi.fn(async () => 'cleared') });
-    const realDelete = s.secretStore.delete.getMockImplementation()!;
-    s.secretStore.delete.mockImplementation(async (n: string) => {
-      if (n === 'ceo_nylas_grant_id') throw new Error('vault blip');
-      await realDelete(n);
-    });
-    expect(await s.admin.remove({ id: 'personal', stillOwned: true })).toEqual({ cleanupIncomplete: [], restartRequired: false });
   });
 
   it('refuses unknown and removed ids', async () => {
@@ -443,110 +416,21 @@ function capturingLogger(): { logger: pino.Logger; lines: string[] } {
   return { logger, lines };
 }
 
-const FLAT_GRANT = 'ceo_nylas_grant_id';
-const FLAT_EMAIL = 'ceo_self_email';
-
-describe('PrincipalMailboxAdmin flat-key mirror (R28)', () => {
-  it('mirrors a new default mailbox into the flat keys', async () => {
-    const { admin, secrets } = setup({ grants: { g: google('Pat@Work.example.com') } });
-    await admin.add({ id: 'work', label: 'Work', grantId: 'g' });
-    expect(secrets[FLAT_GRANT]).toBe('g');
-    expect(secrets[FLAT_EMAIL]).toBe('pat@work.example.com');
-  });
-
-  it('does not touch the flat keys for a non-default add', async () => {
-    const { admin, secrets } = setup({
-      records: [rec()],
-      secrets: { [FLAT_GRANT]: 'g-personal', [FLAT_EMAIL]: 'pat@gmail.com' },
-      grants: { g: google('pat@work.example.com') },
-    });
-    await admin.add({ id: 'work', label: 'Work', grantId: 'g' });
-    expect(secrets[FLAT_GRANT]).toBe('g-personal');
-    expect(secrets[FLAT_EMAIL]).toBe('pat@gmail.com');
-  });
-
-  it('setDefault mirrors the new default', async () => {
-    const { admin, secrets } = setup({
-      records: [rec(), rec({ id: 'work', label: 'Work', address: 'pat@work.example.com', isDefault: false })],
-      secrets: {
-        [FLAT_GRANT]: 'g-personal', [FLAT_EMAIL]: 'pat@gmail.com',
-        [principalMailboxGrantSecretName('work')]: 'g-work',
-      },
-    });
-    await admin.setDefault('work');
-    expect(secrets[FLAT_GRANT]).toBe('g-work');
-    expect(secrets[FLAT_EMAIL]).toBe('pat@work.example.com');
-  });
-
-  it('removing the default deletes both flat keys, after the per-mailbox secret and before hooks', async () => {
-    const order: string[] = [];
-    const hook = vi.fn(async () => { order.push('hook'); });
-    const s = setup({
-      records: [rec()],
-      secrets: { [FLAT_GRANT]: 'g', [FLAT_EMAIL]: 'pat@gmail.com', [principalMailboxGrantSecretName('personal')]: 'g' },
-      onRemoved: [hook],
-    });
-    const realDelete = s.secretStore.delete.getMockImplementation()!;
-    s.secretStore.delete.mockImplementation(async (n: string) => { order.push(n); await realDelete(n); });
-    await s.admin.remove({ id: 'personal', stillOwned: true });
-    expect(s.secrets[FLAT_GRANT]).toBeUndefined();
-    expect(s.secrets[FLAT_EMAIL]).toBeUndefined();
-    expect(order).toEqual([principalMailboxGrantSecretName('personal'), FLAT_GRANT, FLAT_EMAIL, 'hook']);
-  });
-
-  it('removing the default with a new default mirrors the new default instead', async () => {
-    const s = setup({
-      records: [rec(), rec({ id: 'work', label: 'Work', address: 'pat@work.example.com', isDefault: false })],
-      secrets: {
-        [FLAT_GRANT]: 'g-personal', [FLAT_EMAIL]: 'pat@gmail.com',
-        [principalMailboxGrantSecretName('personal')]: 'g-personal',
-        [principalMailboxGrantSecretName('work')]: 'g-work',
-      },
-    });
-    await s.admin.remove({ id: 'personal', stillOwned: true, newDefaultId: 'work' });
-    expect(s.secrets[FLAT_GRANT]).toBe('g-work');
-    expect(s.secrets[FLAT_EMAIL]).toBe('pat@work.example.com');
-  });
-
-  it('removing a non-default mailbox leaves the flat keys', async () => {
-    const s = setup({
-      records: [rec(), rec({ id: 'work', label: 'Work', address: 'pat@work.example.com', isDefault: false })],
-      secrets: { [FLAT_GRANT]: 'g-personal', [FLAT_EMAIL]: 'pat@gmail.com' },
-    });
-    await s.admin.remove({ id: 'work', stillOwned: true });
-    expect(s.secrets[FLAT_GRANT]).toBe('g-personal');
-    expect(s.secrets[FLAT_EMAIL]).toBe('pat@gmail.com');
-  });
-
-  it('a mirror failure after the add committed is a success with a warning, logged without the grant id', async () => {
-    const { logger: log, lines } = capturingLogger();
-    const s = setup({ grants: { 'grant-secret-9': google('pat@work.example.com') }, logger: log });
-    const realSet = s.secretStore.set.getMockImplementation()!;
-    s.secretStore.set.mockImplementation(async (n: string, v: string) => {
-      if (n === FLAT_GRANT) throw new Error('vault down');
-      await realSet(n, v);
-    });
-    const r = await s.admin.add({ id: 'work', label: 'Work', grantId: 'grant-secret-9' });
-    expect(r).toMatchObject({ ok: true, warning: MIRROR_PENDING_WARNING });
-    expect(s.records).toHaveLength(1);
-    expect(lines.join('')).toContain('vault down');
-    expect(lines.join('')).not.toContain('grant-secret-9');
-  });
-
-  it('a mirror failure that the reconcile repairs at once needs no warning (setDefault, replaceGrant)', async () => {
-    const reconcile = vi.fn(async () => 'mirrored');
+// The flat keys (ceo_nylas_grant_id, ceo_self_email) are retired (#2475): the boot migration
+// deletes them, and no console change writes them again.
+describe('PrincipalMailboxAdmin never writes the retired flat keys', () => {
+  it('add, setDefault, replaceGrant and remove touch only per-mailbox secrets', async () => {
     const s = setup({
       records: [rec(), rec({ id: 'work', label: 'Work', address: 'pat@work.example.com', isDefault: false })],
       secrets: { [principalMailboxGrantSecretName('personal')]: 'g-p', [principalMailboxGrantSecretName('work')]: 'g-w' },
-      grants: { 'g-p2': google('pat@gmail.com') },
-      reconcileFlatKeys: reconcile,
+      grants: { 'g-new': google('pat@other.example.com'), 'g-w2': google('pat@work.example.com') },
     });
-    s.secretStore.set.mockImplementation(async (n: string) => { if (n === FLAT_GRANT) throw new Error('vault down'); });
+    expect(await s.admin.add({ id: 'other', label: 'Other', grantId: 'g-new', makeDefault: true })).toMatchObject({ ok: true });
     expect(await s.admin.setDefault('work')).toEqual({});
-    expect(await s.admin.replaceGrant('work', 'g-p2')).toMatchObject({ ok: false }); // address mismatch
-    reconcile.mockRejectedValueOnce(new Error('still down'));
-    expect(await s.admin.setDefault('personal')).toEqual({ warning: MIRROR_PENDING_WARNING });
-    expect(reconcile).toHaveBeenCalledTimes(2);
+    expect(await s.admin.replaceGrant('work', 'g-w2')).toEqual({ ok: true });
+    await s.admin.remove({ id: 'work', stillOwned: true, newDefaultId: 'personal' });
+    const touched = [...s.secretStore.set.mock.calls, ...s.secretStore.delete.mock.calls].map((c) => c[0]);
+    expect(touched.every((n) => n.startsWith('principal.mailbox.'))).toBe(true);
   });
 });
 
@@ -590,27 +474,15 @@ describe('PrincipalMailboxAdmin.replaceGrant (R29)', () => {
     expect(await admin.replaceGrant('personal', 'g')).toMatchObject({ ok: false, refusal: 'grant_in_use' });
   });
 
-  it('writes the new grant and mirrors it when the mailbox is the default', async () => {
-    const { admin, secrets } = setup({
+  it('writes the new grant and nothing else', async () => {
+    const { admin, secrets, secretStore } = setup({
       records: [rec()],
-      secrets: { [principalMailboxGrantSecretName('personal')]: 'g-old', [FLAT_GRANT]: 'g-old', [FLAT_EMAIL]: 'pat@gmail.com' },
+      secrets: { [principalMailboxGrantSecretName('personal')]: 'g-old' },
       grants: { 'g-new': google('PAT@gmail.com') },
     });
     expect(await admin.replaceGrant('personal', 'g-new')).toEqual({ ok: true });
     expect(secrets[principalMailboxGrantSecretName('personal')]).toBe('g-new');
-    expect(secrets[FLAT_GRANT]).toBe('g-new');
-    expect(secrets[FLAT_EMAIL]).toBe('pat@gmail.com');
-  });
-
-  it('does not touch the flat keys for a non-default mailbox', async () => {
-    const { admin, secrets } = setup({
-      records: two(),
-      secrets: { [principalMailboxGrantSecretName('work')]: 'g-old', [FLAT_GRANT]: 'g-personal' },
-      grants: { 'g-new': google('pat@work.example.com') },
-    });
-    expect(await admin.replaceGrant('work', 'g-new')).toEqual({ ok: true });
-    expect(secrets[principalMailboxGrantSecretName('work')]).toBe('g-new');
-    expect(secrets[FLAT_GRANT]).toBe('g-personal');
+    expect(secretStore.set.mock.calls.map((c) => c[0])).toEqual([principalMailboxGrantSecretName('personal')]);
   });
 });
 
@@ -802,10 +674,10 @@ describe('removing a mailbox with scoped inbox rules (#2475 task 27)', () => {
     expect(rulesDoc.write).not.toHaveBeenCalled();
   });
 
-  it('deletes or rescopes the rules after the grant and flat-key steps', async () => {
+  it('deletes or rescopes the rules after the grant step', async () => {
     const del = docOf(RULES);
     const a = setup({ records: two(), rulesDoc: del.rulesDoc });
-    expect(await a.admin.remove({ id: 'work', stillOwned: true, rules: 'delete' })).toEqual({ cleanupIncomplete: [], restartRequired: false });
+    expect(await a.admin.remove({ id: 'work', stillOwned: true, rules: 'delete' })).toEqual({ cleanupIncomplete: [] });
     expect(del.state.text).not.toContain('Work only');
     expect(del.state.text).toContain('- Mailbox: personal');
 
@@ -1033,7 +905,7 @@ describe('PrincipalMailboxAdmin calendars (#2475, D7)', () => {
     const contacts = calendarContacts([{ nylasCalendarId: 'pat@gmail.com', principalMailboxId: 'personal' }]);
     const { hooks: h } = hooks(contacts, []);
     const { admin } = setup({ records: [rec()], calendars: h, onRemoved: [h.onRemoved] });
-    expect(await admin.remove({ id: 'personal', stillOwned: true })).toEqual({ cleanupIncomplete: [], restartRequired: false });
+    expect(await admin.remove({ id: 'personal', stillOwned: true })).toEqual({ cleanupIncomplete: [] });
     expect(contacts.getCalendarsForMailbox).toHaveBeenCalledWith('personal');
     // Not moved to another mailbox, not deleted: the router reads it as removed.
     expect(contacts.calendars[0]!.principalMailboxId).toBe('personal');

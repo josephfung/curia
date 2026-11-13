@@ -119,9 +119,7 @@ import { resolveBypassLadder } from '../autonomy/effective-standing.js';
 import { applyChannelVaultSecrets } from '../channels/apply-channel-vault-secrets.js';
 import { EmailAccountsRepo } from '../channels/email/email-accounts-repo.js';
 import { resolveEmailAccounts } from '../channels/email/resolve-email-accounts.js';
-import { PrincipalMailboxStore } from '../principal-mailboxes/store.js';
-import { PrincipalMailboxes } from '../principal-mailboxes/service.js';
-import { resolvePrincipalCalendarGrant } from '../channels/calendar/resolve-calendar-grant.js';
+import { calendarRouterEnabled } from '../channels/calendar/calendar-router.js';
 import { ContactService } from '../contacts/contact-service.js';
 import { ContactResolver } from '../contacts/contact-resolver.js';
 import { ConfidencePipeline } from '../contacts/confidence-pipeline.js';
@@ -1143,9 +1141,10 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     // loadEncryptionKey() throws for it in every mode.
     let vault: SecretsService | undefined;
     let encryptionKey: Buffer | undefined;
-    // Whether production would enroll its calendar tools (Nylas key + principal grant).
-    // Decides if reconcile holds back the calendar tools (#1974); no client is built here.
-    let calendarConfigured = false;
+    // Whether production would build the calendar router and so enroll its calendar tools
+    // (Nylas key + principal contact, calendarRouterEnabled). Decides if reconcile holds back
+    // the calendar tools (#1974); no client is built here. Set once the principal is read.
+    let hasNylasApiKey = false;
     if (process.env.SECRET_ENCRYPTION_KEY) {
       encryptionKey = loadEncryptionKey();
     } else if (llmMode === 'live') {
@@ -1175,26 +1174,8 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       signalPhoneNumber = resolved.signalPhoneNumber;
       smsFromNumber = resolved.smsFromNumber;
       reachClients = reachClientsFrom(resolved);
-      if (resolved.nylasApiKey) {
-        try {
-          // The registry's default mailbox, as production reads it. A database production has
-          // not booted against yet has no row; its boot migration would create one from the
-          // flat grant, so that grant counts as configured too.
-          const mailboxes = new PrincipalMailboxes({
-            store: new PrincipalMailboxStore(pool, logger),
-            secrets: vault,
-            apiKey: () => resolved.nylasApiKey,
-            logger,
-          });
-          calendarConfigured =
-            (await mailboxes.defaultMailbox()) !== null ||
-            (await resolvePrincipalCalendarGrant(vault)) !== undefined;
-        } catch (err) {
-          // Production logs this and boots without calendar; mirror that rather than fail.
-          logger.error({ err }, 'test-mode: failed to read ceo_nylas_grant_id; treating calendar as unconfigured');
-          warnings.push('Could not read ceo_nylas_grant_id from the vault — calendar tools not yet enrolled stay off.');
-        }
-      }
+      // Only whether a key exists; the key itself is dropped with the rest of `resolved`.
+      hasNylasApiKey = Boolean(resolved.nylasApiKey);
     }
 
     // Gating as production resolves it, so a deployment overlay's `gating: band` reaches the
@@ -1286,6 +1267,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     const agentContactId = agentIdentity.contactId;
 
     const principalContact = await contactService.findContactBySystemRole('principal');
+    const calendarConfigured = calendarRouterEnabled({ hasNylasApiKey, hasPrincipalContact: principalContact !== null });
     if (principalContact) {
       principalContactId = principalContact.id;
       const snapshot = await readPrincipalIdentitySnapshot(contactService, principalContact.id);

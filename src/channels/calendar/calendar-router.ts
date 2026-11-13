@@ -52,6 +52,16 @@ export type CalendarRouteErrorCode =
   /** Another mailbox's calendars could not be listed, so a hint-placed calendar's owner is unknown (R106). */
   | 'owner_unconfirmed';
 
+/**
+ * Whether boot builds the calendar router, and so enrolls the calendar tools (#2475): a Nylas
+ * API key and a principal contact (who owns the home calendars). No mailbox is needed: the
+ * router reads the registry per call, so one added later works without a restart, and until
+ * then each call fails with `no_mailbox`. Shared by production boot and the test-mode stack.
+ */
+export function calendarRouterEnabled(opts: { hasNylasApiKey: boolean; hasPrincipalContact: boolean }): boolean {
+  return opts.hasNylasApiKey && opts.hasPrincipalContact;
+}
+
 /** A calendar call that cannot be routed. The message says what to pass; it never names a grant. */
 export class CalendarRouteError extends Error {
   constructor(

@@ -15,7 +15,8 @@ export interface HealthResponse {
     browser: CheckResult;
     /** Per enabled MCP server (hyphens → underscores). Empty when none enabled. */
     mcp: Record<string, CheckResult>;
-    /** Principal calendar grant (`ceo_nylas_grant_id`); skipped when calendar client absent. */
+    /** Calendar through the router (the default principal mailbox's calendars); skipped
+     *  without a router or while no principal mailbox is connected. */
     nylas_calendar: CheckResult;
     /** Slack Socket Mode; skipped when Slack adapter not constructed (#1567). */
     slack: CheckResult;

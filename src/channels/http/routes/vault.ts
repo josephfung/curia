@@ -41,7 +41,10 @@ import type { EmailAccountsRepo } from '../../email/email-accounts-repo.js';
 import { actorFromRequest } from './sessions.js';
 import { isPlatformVaultKey, platformKeyLabel } from '../../../secrets/platform-keys.js';
 import { StaleCardEditError, type PersonalSecretWrite, type SecretMetadata, type UserSecretDetailsPatch } from '../../../secrets/secrets-service.js';
-import { FLAT_KEYS_MANAGED_MESSAGE, PER_MAILBOX_GRANT_MANAGED_MESSAGE, isPrincipalMailboxGrantKey } from '../../../principal-mailboxes/secrets.js';
+import {
+  FLAT_EMAIL_KEY, FLAT_GRANT_KEY, FLAT_KEYS_MANAGED_MESSAGE, FLAT_PRINCIPAL_MAILBOX_KEYS,
+  PER_MAILBOX_GRANT_MANAGED_MESSAGE, isPrincipalMailboxGrantKey,
+} from '../../../principal-mailboxes/secrets.js';
 import type { SecretUsagePort } from '../../../secrets/secret-usage-repo.js';
 import { consoleSecretNameInput, resolveUserSecretName, USER_SECRET_PREFIX } from '../../../secrets/user-secret-name.js';
 import { parseUserSecretDetails, type UserSecretDetails } from '../../../secrets/user-secret-details.js';
@@ -81,14 +84,12 @@ export function channelCredentialKeys(): ReadonlySet<string> {
   return new Set(CHANNEL_CREDENTIAL_KEYS);
 }
 
-// The flat principal-mailbox keys (#2409), superseded by the per-mailbox registry (#2475).
-// Still allowed so an install whose migration is deferred can edit them; Part 2 removes them.
-// They are no longer declared on the Secrets page: the Channels page manages mailboxes now.
-// The principal's own mailbox (#2409): the Nylas grant that calendar and the ceo-inbox tools
-// act through, and the principal's address. Not a channel credential and not declared by
-// any skill's install.requires_secrets, so without this an image install had no supported
-// way to set them. #2361 replaces the grant with a sign-in link.
-const PRINCIPAL_MAILBOX_KEYS: ReadonlySet<string> = new Set(['ceo_nylas_grant_id', 'ceo_self_email']);
+// The flat principal-mailbox keys (#2409), retired by the per-mailbox registry (#2475): the
+// boot migration deletes them once the registry serves the mailbox, and PUT refuses them.
+// The one exception is the deferred-migration fallback, which still serves the flat grant
+// while the registry is empty; an operator may then need to set them (e.g. the address the
+// migration could not read from Nylas). DELETE keeps its usual rules, so a stray copy can go.
+const PRINCIPAL_MAILBOX_KEYS: ReadonlySet<string> = FLAT_PRINCIPAL_MAILBOX_KEYS;
 
 // Shape check only (same pattern as the setup wizard's profile email): one @, no spaces,
 // a dot in the domain.
@@ -285,12 +286,10 @@ export interface VaultRouteOptions {
   channelRegistryService?: ChannelRegistryService;
   /** Optional: when present, a delete is refused while an enabled email account needs its grant. */
   emailAccounts?: Pick<EmailAccountsRepo, 'list'>;
-  /** True while the deferred flat-grant fallback is served (#2475): ceo_nylas_grant_id is then
-   *  still the live mailbox, so it is declared (and delete-guarded) as before. */
+  /** True while the deferred flat-grant fallback is served (#2475): the flat grant is then
+   *  still the live mailbox, so it is declared (and delete-guarded), and PUT accepts the flat
+   *  keys. Absent or false: PUT refuses them (they are retired). */
   principalFallbackActive?: () => Promise<boolean>;
-  /** True once the principal mailbox registry has any row (#2475, R28). The console then owns
-   *  the flat keys (it mirrors the default mailbox into them), so PUT and DELETE refuse them. */
-  principalRegistryHasRows?: () => Promise<boolean>;
   /** Ids of the live principal mailboxes (#2475). A live mailbox's grant cannot be deleted
    *  here (with or without force): the mailbox would stay listed with no grant. */
   livePrincipalMailboxIds?: () => Promise<string[]>;
@@ -384,13 +383,13 @@ export async function vaultRoutes(
     }
   }
 
-  // Once the registry has rows the console mirrors the default mailbox into the flat keys
-  // (R28); a direct write would split ceo-inbox from calendar. Sends the 409 and returns true.
-  // During the deferred fallback the registry is empty, so today's behaviour holds.
-  async function refuseManagedFlatKey(request: FastifyRequest, reply: FastifyReply, name: string): Promise<boolean> {
-    if (!PRINCIPAL_MAILBOX_KEYS.has(name) || !options.principalRegistryHasRows) return false;
-    if (!(await options.principalRegistryHasRows())) return false;
-    request.log.info({ name }, 'vault change rejected: flat principal key is managed by the mailbox registry');
+  // The flat keys are retired (#2475): nothing reads them once the registry serves the mailbox,
+  // so a write would do nothing. Allowed only while the deferred fallback still serves them.
+  // Sends the 409 and returns true when it refused.
+  async function refuseRetiredFlatKey(request: FastifyRequest, reply: FastifyReply, name: string): Promise<boolean> {
+    if (!PRINCIPAL_MAILBOX_KEYS.has(name)) return false;
+    if (options.principalFallbackActive && (await options.principalFallbackActive())) return false;
+    request.log.info({ name }, 'vault set rejected: the flat principal mailbox keys are retired');
     void reply.status(409).send({ error: FLAT_KEYS_MANAGED_MESSAGE });
     return true;
   }
@@ -657,7 +656,7 @@ export async function vaultRoutes(
     }
 
     if (options.principalFallbackActive && await options.principalFallbackActive()) {
-      add('ceo_nylas_grant_id', { kind: 'principal-mailbox', name: 'Calendar and principal inbox', required: true, enabled: true });
+      add(FLAT_GRANT_KEY, { kind: 'principal-mailbox', name: 'Calendar and principal inbox', required: true, enabled: true });
     }
 
     // Each email account boots from its own grant (resolve-email-accounts.ts skips an enabled
@@ -789,10 +788,16 @@ export async function vaultRoutes(
       });
     }
 
-    // ceo_self_email is the self-address filter for the principal's mailbox (reply-all
-    // drafts drop it from CC). A value that is not an address would filter nothing.
-    if (name === 'ceo_self_email' && !PRINCIPAL_EMAIL_RE.test(value.trim())) {
-      return reply.status(400).send({ error: 'ceo_self_email must be an email address.' });
+    try {
+      if (await refuseRetiredFlatKey(request, reply, name)) return;
+    } catch (err) {
+      request.log.error({ err, name }, 'vault set failed: could not read the principal mailbox registry');
+      return reply.status(500).send({ error: 'Failed to save secret. Check server logs.' });
+    }
+    // The flat address is what the deferred migration registers when Nylas cannot give it.
+    // A value that is not an address would register nothing.
+    if (name === FLAT_EMAIL_KEY && !PRINCIPAL_EMAIL_RE.test(value.trim())) {
+      return reply.status(400).send({ error: `${FLAT_EMAIL_KEY} must be an email address.` });
     }
     // A per-mailbox grant is set only through the principal-mailboxes routes, which check the
     // grant is Google's, is for that mailbox's address and is not another mailbox's, and mirror
@@ -800,12 +805,6 @@ export async function vaultRoutes(
     if (isPrincipalMailboxGrantKey(name)) {
       request.log.info({ name }, 'vault set rejected: per-mailbox grants are set through the principal mailboxes console');
       return reply.status(409).send({ error: PER_MAILBOX_GRANT_MANAGED_MESSAGE });
-    }
-    try {
-      if (await refuseManagedFlatKey(request, reply, name)) return;
-    } catch (err) {
-      request.log.error({ err, name }, 'vault set failed: could not read the principal mailbox registry');
-      return reply.status(500).send({ error: 'Failed to save secret. Check server logs.' });
     }
 
     // Write-ahead audit: a change never lands without its audit row. Key name only.
@@ -837,7 +836,6 @@ export async function vaultRoutes(
     const force = (request.query as { force?: string } | undefined)?.force === 'true';
 
     try {
-      if (await refuseManagedFlatKey(request, reply, name)) return;
       if (isPrincipalMailboxGrantKey(name) && options.livePrincipalMailboxIds) {
         const mailboxId = name.split('.')[2]!;
         if ((await options.livePrincipalMailboxIds()).includes(mailboxId)) {

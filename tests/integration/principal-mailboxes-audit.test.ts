@@ -41,7 +41,7 @@ describeIf('principal mailbox console audit (P11)', () => {
         setDefault: vi.fn(async () => ({})),
         replaceGrant: vi.fn(async () => ({ ok: true as const })),
         removalPreview: vi.fn(async () => { throw new Error('unused'); }),
-        remove: vi.fn(async () => ({ cleanupIncomplete: ['inbox_rules'], restartRequired: false })),
+        remove: vi.fn(async () => ({ cleanupIncomplete: ['inbox_rules'] })),
       },
       lookupGrant: vi.fn(async () => ({ email: 'audit@example.com', provider: 'google' })),
       webAppBootstrapSecret: SECRET,

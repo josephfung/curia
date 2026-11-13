@@ -4,6 +4,7 @@ import {
   migrateFlatPrincipalMailbox,
   mailboxIdFromAddress,
   migrationFailureReason,
+  retireFlatMailboxKeys,
   warnIfFallbackIdIsLive,
 } from '../../../src/principal-mailboxes/migrate-flat-mailbox.js';
 import type { PrincipalMailboxStore } from '../../../src/principal-mailboxes/store.js';
@@ -20,6 +21,7 @@ function setup(
   const rows: Array<Omit<PrincipalMailboxRecord, 'removedAt'>> = [];
   const store = {
     hasAnyRow: vi.fn(async () => rows.length > 0),
+    listLive: vi.fn(async () => rows.map((r) => ({ ...r, removedAt: null }))),
     insert: vi.fn(async (r: Omit<PrincipalMailboxRecord, 'removedAt'>) => {
       if (opts.insertError) throw opts.insertError;
       if (opts.insertFails) throw new Error('insert failed');
@@ -49,7 +51,8 @@ describe('migrateFlatPrincipalMailbox', () => {
       isDefault: true, triageStartAt: null, addedIdentityId: null,
     });
     expect(t.vault['principal.mailbox.ops.nylas_grant_id']).toBe('g1');
-    expect(t.vault['ceo_nylas_grant_id']).toBe('g1');
+    // Copy, then delete: the flat keys are retired once the registry serves the mailbox.
+    expect(t.vault['ceo_nylas_grant_id']).toBeUndefined();
   });
 
   it('uses ceo_self_email when the grant lookup fails', async () => {
@@ -185,6 +188,71 @@ describe('migrateFlatPrincipalMailbox hardening (#2475 Part-1 fixes)', () => {
     const t = setup({ ceo_nylas_grant_id: 'g1' }, async () => ({ email: 'pat@ops.example.org', provider: 'google' }), { log, isVerifiedPrincipalEmail: async () => true });
     await migrateFlatPrincipalMailbox(t.deps);
     expect(lines.join('')).not.toContain('not a verified principal email');
+  });
+});
+
+describe('retiring the flat keys (#2475, Task 33b)', () => {
+  const ops = async () => ({ email: 'pat@ops.example.org', provider: 'google' });
+  const migratedRow: Omit<PrincipalMailboxRecord, 'removedAt'> = {
+    id: 'ops', label: 'Ops', address: 'pat@ops.example.org', provider: 'google',
+    isDefault: true, triageStartAt: null, addedIdentityId: null,
+  };
+
+  it('flat keys are deleted only after the registry row and its grant exist', async () => {
+    // An install migrated by Parts 1-3: the row and its grant exist, the flat keys are still mirrored.
+    const t = setup({ ceo_nylas_grant_id: 'g1', ceo_self_email: 'pat@ops.example.org', 'principal.mailbox.ops.nylas_grant_id': 'g1' }, ops);
+    t.rows.push(migratedRow);
+    expect(await migrateFlatPrincipalMailbox(t.deps)).toBe('already');
+    expect(t.vault['ceo_nylas_grant_id']).toBeUndefined();
+    expect(t.vault['ceo_self_email']).toBeUndefined();
+    expect(t.vault['principal.mailbox.ops.nylas_grant_id']).toBe('g1');
+    expect(t.lookupGrant).not.toHaveBeenCalled();
+  });
+
+  it('keeps the flat keys when the default row has no grant secret', async () => {
+    const t = setup({ ceo_nylas_grant_id: 'g1', ceo_self_email: 'pat@ops.example.org' }, ops);
+    t.rows.push(migratedRow);
+    expect(await retireFlatMailboxKeys(t.deps)).toBe('kept');
+    expect(t.vault['ceo_nylas_grant_id']).toBe('g1');
+    expect(t.vault['ceo_self_email']).toBe('pat@ops.example.org');
+    expect(t.secrets.delete).not.toHaveBeenCalled();
+  });
+
+  it('keeps the flat keys when no live default row exists', async () => {
+    const t = setup({ ceo_nylas_grant_id: 'g1' }, ops);
+    expect(await retireFlatMailboxKeys(t.deps)).toBe('kept');
+    expect(t.vault['ceo_nylas_grant_id']).toBe('g1');
+  });
+
+  it('flat keys are kept while the deferred fallback is active', async () => {
+    // A deferred migration inserts no row, so the fallback still reads ceo_nylas_grant_id.
+    const t = setup({ ceo_nylas_grant_id: 'g1' }, async () => { throw new Error('nylas down'); });
+    expect(await migrateFlatPrincipalMailbox(t.deps)).toBe('deferred');
+    expect(t.vault['ceo_nylas_grant_id']).toBe('g1');
+    expect(t.secrets.delete).not.toHaveBeenCalled();
+  });
+
+  it('deletion is idempotent', async () => {
+    const t = setup({ ceo_nylas_grant_id: 'g1', ceo_self_email: 'pat@ops.example.org' }, ops);
+    expect(await migrateFlatPrincipalMailbox(t.deps)).toBe('migrated');
+    const deletes = t.secrets.delete.mock.calls.length;
+    expect(await migrateFlatPrincipalMailbox(t.deps)).toBe('already');
+    expect(await retireFlatMailboxKeys(t.deps)).toBe('none');
+    expect(t.secrets.delete.mock.calls.length).toBe(deletes);
+    expect(t.vault['principal.mailbox.ops.nylas_grant_id']).toBe('g1');
+  });
+
+  it('a failed delete is logged without any value and retried at the next run', async () => {
+    const { log, lines } = capture();
+    const t = setup({ ceo_nylas_grant_id: 'grant-secret-7', 'principal.mailbox.ops.nylas_grant_id': 'grant-secret-7' }, ops, { log });
+    t.rows.push(migratedRow);
+    t.secrets.delete.mockRejectedValueOnce(new Error('vault down'));
+    expect(await retireFlatMailboxKeys(t.deps)).toBe('kept');
+    expect(t.vault['ceo_nylas_grant_id']).toBe('grant-secret-7');
+    expect(lines.join('')).toContain('vault down');
+    expect(lines.join('')).not.toContain('grant-secret-7');
+    expect(await retireFlatMailboxKeys(t.deps)).toBe('deleted');
+    expect(t.vault['ceo_nylas_grant_id']).toBeUndefined();
   });
 });
 

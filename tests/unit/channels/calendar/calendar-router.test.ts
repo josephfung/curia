@@ -1,6 +1,6 @@
 // CalendarRouter (#2475, D7): each calendar call goes through the mailbox it belongs to.
 import { describe, it, expect, vi } from 'vitest';
-import { CalendarRouteError } from '../../../../src/channels/calendar/calendar-router.js';
+import { CalendarRouteError, calendarRouterEnabled } from '../../../../src/channels/calendar/calendar-router.js';
 import {
   calendarMailbox,
   routerFixture,
@@ -219,5 +219,20 @@ describe('CalendarRouter.registrationMailbox', () => {
   it('null while the deferred-migration fallback is served (no registry row to reference)', async () => {
     const router = routerFixture({ clients: { work: client('work') }, fallbackActive: true });
     expect(await router.registrationMailbox('cal-x')).toEqual({ mailboxId: null, owner: false });
+  });
+});
+
+// Boot (src/index.ts) and the test-mode stack share this condition (#2475, Task 33b): the
+// calendar tools are enrolled whenever the router exists, with or without a mailbox.
+describe('calendarRouterEnabled (test-mode-stack reports calendar configured from the router condition)', () => {
+  it('needs a Nylas API key and a principal contact, and no mailbox', () => {
+    expect(calendarRouterEnabled({ hasNylasApiKey: true, hasPrincipalContact: true })).toBe(true);
+    expect(calendarRouterEnabled({ hasNylasApiKey: false, hasPrincipalContact: true })).toBe(false);
+    expect(calendarRouterEnabled({ hasNylasApiKey: true, hasPrincipalContact: false })).toBe(false);
+  });
+
+  it('a router with no mailbox yet answers no_mailbox, so a later add needs no restart', async () => {
+    const router = routerFixture({ mailboxes: [], clients: {} });
+    await expect(router.route('primary')).rejects.toMatchObject({ code: 'no_mailbox' });
   });
 });

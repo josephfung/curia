@@ -3,15 +3,13 @@
 // Grants are read on every call and clients are built per call (no cache), so a grant
 // change applies without a restart. An unknown or removed id is an error, never a
 // fallback to the default mailbox.
-//
-// Deliberately does not import channels/calendar/resolve-calendar-grant.ts (R9).
 import type { Logger } from '../logger.js';
 import { NylasClient } from '../channels/email/nylas-client.js';
 import { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
 import { CeoNylasClient } from '../channels/email/ceo-nylas-client.js';
 import type { CallBudget } from '../util/call-budget.js';
 import type { PrincipalMailboxStore } from './store.js';
-import { principalMailboxGrantSecretName } from './secrets.js';
+import { FLAT_GRANT_KEY, principalMailboxGrantSecretName } from './secrets.js';
 import { countsOnly, mailboxEvidence, type CountsOnlyEvidence } from './evidence.js';
 import {
   MissingNylasApiKeyError,
@@ -20,8 +18,6 @@ import {
   type PrincipalMailboxRecord,
 } from './types.js';
 
-/** The flat grant the deferred-migration fallback serves (#2409). */
-const FLAT_GRANT_KEY = 'ceo_nylas_grant_id';
 
 export interface PrincipalMailboxView {
   id: string;
@@ -101,10 +97,28 @@ export class PrincipalMailboxes {
   }
 
   /** Single-mailbox installs without a registry row: serve `fallback` while the table is empty.
-   *  Its grant is re-read from `ceo_nylas_grant_id` on every call; `grantId` is the boot value. */
+   *  Its grant is re-read from the flat key on every call (readFlatGrant); `grantId` is the boot value. */
   setFallback(f: { id: string; grantId: string } | null): void {
     this.fallback = f;
     if (f === null) this.migrationReason = null;
+  }
+
+  /**
+   * After a deferred or failed migration: serve the flat grant as mailbox `id` while it is set.
+   * True when it is served. A read failure throws (the caller logs it).
+   */
+  async serveFlatFallback(id: string): Promise<boolean> {
+    const grantId = await this.readFlatGrant();
+    if (grantId) this.setFallback({ id, grantId });
+    return grantId !== undefined;
+  }
+
+  /** The flat grant the deferred-migration fallback serves (#2409, R9): the one read of
+   *  `ceo_nylas_grant_id` outside the migration. The keys are otherwise retired (#2475); the
+   *  boot migration deletes them only once a registry row serves the mailbox, which also ends
+   *  the fallback. */
+  private async readFlatGrant(): Promise<string | undefined> {
+    return (await this.deps.secrets.get(FLAT_GRANT_KEY))?.trim() || undefined;
   }
 
   /** Records why the last migration attempt left the flat mailbox out of the registry. */
@@ -189,9 +203,9 @@ export class PrincipalMailboxes {
       if (!fb || fb.id !== id) throw new UnknownMailboxError(id);
       // Read live, as for a registry mailbox: while the registry is empty the vault still
       // accepts a new flat grant, and it must apply without a restart (R9).
-      const flatGrant = (await this.deps.secrets.get(FLAT_GRANT_KEY))?.trim();
+      const flatGrant = await this.readFlatGrant();
       if (!flatGrant) {
-        this.log.warn({ mailboxId: id }, 'The deferred mailbox has no ceo_nylas_grant_id in the vault');
+        this.log.warn({ mailboxId: id }, 'The deferred mailbox has no flat grant in the vault');
         throw new Error(`Mailbox "${id}" has no Nylas grant configured`);
       }
       return { apiKey, grantId: flatGrant };

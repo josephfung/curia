@@ -15,7 +15,9 @@
 
 - **`calendarRouter` (public API)** — ToolContext capability `calendarRouter` replaces `nylasCalendarClient`; calls route through each calendar's mailbox. (#2475)
 - **Calendar `mailbox` input (public API)** — every calendar tool takes `mailbox`; bare `primary` needs one with several accounts. (#2475)
-- **`calendar-register`** — available only once a principal mailbox is connected; registers through that mailbox. (#2475)
+- **`calendar-register`** — needs a connected principal mailbox; registers through that mailbox. (#2475)
+- **Calendar without restart** — calendar tools work as soon as a principal mailbox is added; no restart. (#2475)
+- **Setup wizard** — the principal mailboxes task covers several accounts and points to Email & Calendar. (#2475)
 - **`calendar-respond-to-invite` (public API)** — `account` is replaced by `mailbox`, required with several accounts. (#2475)
 - **RSVP account** — invites are answered from the arrival mailbox, matched by iCal UID and details. (#2475)
 - **Calendar writes** — a stated mailbox that does not own the calendar is refused; nothing changes. (#2475)
@@ -23,6 +25,12 @@
 - **Meeting debrief (spec 17)** — guards key on the meeting, so one meeting on two calendars debriefs once. (#2475)
 - **Calendar agent** — works across the principal's calendars; conflicts are judged against calendaring preferences. (#2475)
 - **Mailbox add refusal (public API)** — `cap_reached` is now `migration_pending`, returned only while the upgrade finishes. (#2475)
+
+### Removed
+
+- **Flat mailbox vault keys** — `ceo_nylas_grant_id` and `ceo_self_email` are deleted at boot; the registry replaces them. (#2475)
+- **Secrets page flat keys** — the Secrets page no longer accepts the two retired mailbox keys. (#2475)
+- **Mailbox removal `restart_required`** — the remove route and console drop it; no change needs a restart. (#2475)
 
 ### Fixed
 

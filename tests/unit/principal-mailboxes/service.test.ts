@@ -137,6 +137,16 @@ describe('PrincipalMailboxes', () => {
     await expect(svc.credentials('mailbox')).rejects.toThrow('no Nylas grant configured');
   });
 
+  it('serveFlatFallback serves the flat grant only while it is set (the deferred fallback read)', async () => {
+    const { svc, secrets } = build([], {});
+    expect(await svc.serveFlatFallback('mailbox')).toBe(false);
+    expect(await svc.list()).toEqual([]);
+    secrets['ceo_nylas_grant_id'] = ' fb-grant ';
+    expect(await svc.serveFlatFallback('mailbox')).toBe(true);
+    expect(await svc.isFallbackActive()).toBe(true);
+    expect(await svc.credentials('mailbox')).toEqual({ apiKey: 'api-key', grantId: 'fb-grant' });
+  });
+
   it('list ignores the fallback once the table has rows', async () => {
     const { svc } = build([rec()], { 'principal.mailbox.work.nylas_grant_id': 'g1' });
     svc.setFallback({ id: 'mailbox', grantId: 'fb-grant' });

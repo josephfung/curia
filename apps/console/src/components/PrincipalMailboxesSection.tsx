@@ -57,14 +57,13 @@ async function errorMessage(res: Response): Promise<string> {
 async function successNotice(res: Response): Promise<string | null> {
   try {
     const d = await res.json() as {
-      warning?: string; cleanup_incomplete?: string[]; restart_required?: boolean;
+      warning?: string; cleanup_incomplete?: string[];
     };
     const parts: string[] = [];
     if (d.warning) parts.push(d.warning);
     if (d.cleanup_incomplete && d.cleanup_incomplete.length > 0) {
       parts.push(`Removed, but some cleanup did not finish (${d.cleanup_incomplete.join(', ')}); check the server logs.`);
     }
-    if (d.restart_required) parts.push("Restart Curia so calendar stops using the removed mailbox's account.");
     return parts.length > 0 ? parts.join(' ') : null;
   } catch (err) {
     console.error('[PrincipalMailboxesSection successNotice] failed to parse the response body:', err);
@@ -381,8 +380,7 @@ export function PrincipalMailboxesSection() {
       )}
 
       <p className="settings-page-sub" style={{ margin: '12px 0 0' }}>
-        Calendar changes take effect after a restart, as does a replaced grant for calendar.
-        Use Replace grant after reconnecting a
+        Changes apply at once, no restart needed. Use Replace grant after reconnecting a
         mailbox's account in Nylas.
       </p>
 
