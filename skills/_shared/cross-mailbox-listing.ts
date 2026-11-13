@@ -13,6 +13,7 @@ import { nylasStatus } from '../../src/channels/email/nylas-message-id.js';
 import type { CeoNylasClient } from './ceo-nylas-client.js';
 import { decodePageToken, type MailboxPosition, type PageCursors } from './composite-page-token.js';
 import { mailboxFields, namedOrDefaultMailbox, readMailboxInput, settledMailboxClients } from './principal-mailbox-client.js';
+import { NO_PRINCIPAL_MAILBOX_MESSAGE } from '../../src/principal-mailboxes/types.js';
 
 export interface Target {
   mailbox: PrincipalMailboxView;
@@ -78,7 +79,7 @@ export async function resolveTargets(
   }
   try {
     const settled = await settledMailboxClients(ctx);
-    if (settled.length === 0) return { ok: false, error: 'No principal mailbox is connected.' };
+    if (settled.length === 0) return { ok: false, error: NO_PRINCIPAL_MAILBOX_MESSAGE };
     return {
       ok: true,
       targets: settled.map((s) => ({

@@ -67,7 +67,7 @@ function EmailCalendarSection() {
           <div className="dash-alert-title">Finish setting up the email channel first</div>
           <div className="dash-alert-body">
             Curia reaches your mailboxes through the email channel&apos;s Nylas API key, which
-            isn&apos;t saved yet. Save it under Channels → Email, then come back to add a mailbox.
+            isn&apos;t saved yet. Save it under Channels → Email, restart Curia, then come back to add a mailbox.
           </div>
           <Link {...EMAIL_CHANNEL_LINK} className="btn btn-secondary btn-sm">Go to Channels → Email</Link>
         </div>

@@ -659,13 +659,15 @@ Nylas API key, Tavily) lives only in the vault.
 
 **Viewing, changing and removing secrets (console):** **Memory → Secrets** lists every
 declared secret — each tool's `requires_secrets` and `optional_secrets`, channel
-credentials, MCP server keys, per-account email grants and the principal-mailbox keys — with
+credentials, MCP server keys and per-account email grants — with
 whether it is set, whether it is required, and what declares it. Values are never shown. From
 there you can **Set**, **Replace** or **Remove** a secret; an optional tool secret also has a
 **Remove** button in the tool's drawer under **Settings → Tools**. Removing a secret an enabled
 tool, MCP server, channel or email account requires asks for confirmation first and names what will stop
-working: tool secrets on their next call, channel credentials, MCP keys, email account grants and the principal
-calendar grant after the next restart (they are read at boot). Removal deletes the vault row only; an
+working: tool secrets on their next call, and channel credentials, MCP keys and email account grants after the
+next restart (they are read at boot). The principal's own mailboxes are not on this page: their grants are
+managed under **Settings → Personality → Email & Calendar** (the retired flat keys show here only while a
+deferred migration still serves them, and a grant served that way is read on its next call). Removal deletes the vault row only; an
 environment fallback (`TAVILY_API_KEY`, a channel's `envFallback`) keeps supplying the value,
 and the page marks such a row **from environment**. The same operations are `PUT` and
 `DELETE /api/vault/secrets/:name`. `PUT` accepts only declared names; `DELETE` also removes

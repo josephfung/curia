@@ -16,6 +16,7 @@
 //     01:00 (Friday night) and excludes Monday 01:00 (Sunday night).
 import { DateTime } from 'luxon';
 import type { Logger } from '../logger.js';
+import { ADD_PRINCIPAL_MAILBOX_HINT } from './types.js';
 
 export interface Cadence {
   every: { minutes: number } | { dailyAt: string };
@@ -229,7 +230,7 @@ export function checkTriageCadenceWrite(
   live: ReadonlyArray<{ id: string; label: string }>,
 ): { ok: true } | { ok: false; error: string } {
   if (live.length === 0) {
-    return { ok: false, error: 'No principal mailbox is connected yet, so there is no triage cadence to set. Nothing was stored.' };
+    return { ok: false, error: `No principal mailbox is connected yet, so there is no triage cadence to set. Nothing was stored. ${ADD_PRINCIPAL_MAILBOX_HINT}` };
   }
   const shape = `Store a JSON object {"<mailbox id>":"<cadence>"}, cadence like "hourly 06:00-23:00", "every 30m 08:00-18:00 weekdays" or "daily 08:00". Mailboxes: ${live.map((m) => `${m.id} (${m.label})`).join(', ')}. Nothing was stored.`;
   let parsed: unknown;

@@ -19,7 +19,7 @@
 import type { Logger } from '../../logger.js';
 import type { ContactService } from '../../contacts/contact-service.js';
 import type { CalendarRouterMailboxes, PrincipalMailboxView } from '../../principal-mailboxes/service.js';
-import { RemovedMailboxError, UnknownMailboxError } from '../../principal-mailboxes/types.js';
+import { ADD_PRINCIPAL_MAILBOX_HINT, RemovedMailboxError, UnknownMailboxError } from '../../principal-mailboxes/types.js';
 import type { NylasCalendarClient } from './nylas-calendar-client.js';
 import type { CountsOnlyEvidence } from '../../principal-mailboxes/evidence.js';
 import { canonicalUuid } from '../../util/uuid.js';
@@ -63,7 +63,7 @@ export function calendarRouterEnabled(opts: { hasNylasApiKey: boolean; hasPrinci
 }
 
 /** The `no_mailbox` answer: what a calendar tool says while no principal mailbox is connected. */
-export const NO_MAILBOX_MESSAGE = 'No principal mailbox is connected, so there is no calendar to use. Add one in the console under Settings → Personality → Email & Calendar first.';
+export const NO_MAILBOX_MESSAGE = `No principal mailbox is connected, so there is no calendar to use. ${ADD_PRINCIPAL_MAILBOX_HINT}`;
 
 /** A calendar call that cannot be routed. The message says what to pass; it never names a grant. */
 export class CalendarRouteError extends Error {
@@ -149,7 +149,7 @@ export class CalendarRouter {
         const live = await this.deps.mailboxes.list();
         throw new CalendarRouteError(
           'unknown_mailbox',
-          live.length > 0 ? `Unknown mailbox "${id}"; pass one of: ${choices(live)}.` : `Unknown mailbox "${id}"; no principal mailbox is connected.`,
+          live.length > 0 ? `Unknown mailbox "${id}"; pass one of: ${choices(live)}.` : `Unknown mailbox "${id}"; no principal mailbox is connected. ${ADD_PRINCIPAL_MAILBOX_HINT}`,
           options(live),
         );
       }

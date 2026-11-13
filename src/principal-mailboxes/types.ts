@@ -2,6 +2,12 @@
 
 import { FALLBACK_MAILBOX_ID } from './state-keys.js';
 
+/** Where the principal adds a mailbox (#2475, R79): every "no mailbox" answer names it (BR-m1). */
+export const ADD_PRINCIPAL_MAILBOX_HINT = 'Add one in the console under Settings → Personality → Email & Calendar.';
+
+/** The answer of a tool that needs a principal mailbox while none is connected. */
+export const NO_PRINCIPAL_MAILBOX_MESSAGE = `No principal mailbox is connected. ${ADD_PRINCIPAL_MAILBOX_HINT}`;
+
 export interface PrincipalMailboxRecord {
   id: string;
   label: string;

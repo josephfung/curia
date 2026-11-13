@@ -17,7 +17,7 @@
 #   - install.requires_secrets (vault keys): no shipped tool uses it today. (web-search
 #     searches keyless without its Tavily key, so it is not gated — #2445.)
 #   - an integration capability boot didn't build: the calendar-* tools declare
-#     calendarRouter, which is enrolled only with a Nylas key + a principal mailbox.
+#     calendarRouter, which is enrolled only with a Nylas key + a principal contact.
 # MCP-projected skills (google-workspace, etc.) are NOT listed — they appear in
 # SkillRegistry at runtime from loadMcpServers (ADR-032).
 skills:
