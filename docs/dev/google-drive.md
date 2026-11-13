@@ -195,16 +195,20 @@ missing, the image predates #2010 or was built from a different Dockerfile; rebu
 Under `pnpm dev`, the launcher needs `uvx` on the PATH (install `uv`, see Step 5),
 and the first start downloads the pinned version.
 
-**`INFO MCP server tools registered {"registered":0}`**
+**`ERROR MCP server advertises no tools`**
 
-The server connected but advertised no tools. This usually means the OAuth flow has
-not been completed — the token cache at `/root/.google_workspace_mcp/credentials/` is
-empty or missing. Repeat Step 5.
+The server connected but advertised no tools. The loader logs
+`MCP server advertises no tools — tools from this server will be unavailable until
+restart` and stops there — the `INFO MCP server tools registered` success line is
+never logged for that server. This usually means the OAuth flow has
+not been completed — the token cache at `/home/curia/.google_workspace_mcp/credentials/`
+(production image; `/tmp/.google_workspace_mcp/credentials/` in the vanilla image)
+is empty or missing. Repeat Step 5.
 
 **Tools disappear after container restart**
 
 The `google_workspace_tokens` Docker volume is not being persisted. Confirm the volume
-is declared in `docker-compose.yml` and mounted at `/root/.google_workspace_mcp`.
+is declared in `docker-compose.yml` and mounted at `/tmp/.google_workspace_mcp`.
 (Note: the production compose uses `google-workspace-tokens` with a hyphen — the name
 differs between dev and production compose files.)
 
@@ -261,7 +265,7 @@ Also add the token volume to `compose.production.yaml` under the `curia` service
 services:
   curia:
     volumes:
-      - google-workspace-tokens:/root/.google_workspace_mcp
+      - google-workspace-tokens:/home/curia/.google_workspace_mcp
       # ... existing volumes ...
 
 volumes:
