@@ -27,7 +27,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { holdHasAttendees, isHoldEvent, isHoldStale } from '../../../../src/channels/calendar/holds.js';
 import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from '../../../../src/skills/_shared/placeholder-guard.js';
-import { isUuid } from '../../../../src/util/uuid.js';
+import { canonicalUuid, isUuid } from '../../../../src/util/uuid.js';
 import { CalendarRouteError, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 import { calendarRouteErrorMessage, readCalendarMailbox, settledHomeCalendars } from '../../../_shared/calendar-route.js';
@@ -158,7 +158,8 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
     // live home calendar it does not already cover. With one mailbox: the registered calendars
     // only, as before; a failed mailbox-list read there changes nothing (M2).
     let multi = false;
-    if (contactId === router.principalContactId) {
+    // Canonical forms: an upper-case spelling of the principal's id is the principal (validated above).
+    if ((canonicalUuid(contactId) ?? contactId) === router.principalContactId) {
       try {
         multi = (await router.liveMailboxes()).length > 1;
       } catch (err) {

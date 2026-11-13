@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { CalendarRegisterHandler } from '../../../skills/calendar/tools/calendar-register/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
-import { calendarMailbox, routerFixture, singleMailboxRouter } from '../../../skills/_shared/calendar-router-test-helpers.js';
+import { calendarMailbox, routerFixture, singleMailboxRouter, TEST_PRINCIPAL_CONTACT_ID } from '../../../skills/_shared/calendar-router-test-helpers.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -305,6 +305,38 @@ describe('CalendarRegisterHandler', () => {
       expect(result.success).toBe(true);
       expect(contactService.setCalendarMailbox).toHaveBeenCalledWith('ceo@personal.example.com', 'personal');
       if (result.success) expect(result.data).toMatchObject({ calendar_id: 'row-1', mailbox: 'personal', moved_from_mailbox: 'work', updated: ['mailbox'] });
+    });
+
+    it('a principal calendar must be listed exactly as given: a case variant is refused', async () => {
+      const contactService = { linkCalendar: vi.fn() };
+      const router = routerFixture({ clients: { work: { listCalendars: async () => [{ id: 'AbC-cal', isPrimary: false }] } } });
+      const result = await handler.execute(makeCtx(
+        { nylas_calendar_id: 'abc-cal', label: 'Team', contact_id: TEST_PRINCIPAL_CONTACT_ID },
+        { contactService: contactService as never, calendarRouter: router },
+      ));
+      expect(result.success).toBe(false);
+      expect(contactService.linkCalendar).not.toHaveBeenCalled();
+    });
+
+    it('moving the principal\'s existing row checks the target account can see it, whoever the request named', async () => {
+      const dup = Object.assign(new Error('duplicate key'), { code: '23505', constraint: 'contact_calendars_nylas_calendar_id_key' });
+      const contactService = {
+        linkCalendar: vi.fn().mockRejectedValue(dup),
+        resolveCalendar: vi.fn().mockResolvedValue({ contactId: TEST_PRINCIPAL_CONTACT_ID, label: 'Team', isPrimary: false, readOnly: false, principalMailboxId: null }),
+        setCalendarMailbox: vi.fn().mockResolvedValue(true),
+        getCalendarsForMailbox: vi.fn().mockResolvedValue([]),
+      };
+      const router = routerFixture({
+        mailboxes: [calendarMailbox('work', 'Work', 'ceo@work.example.com', true), calendarMailbox('personal', 'Personal', 'ceo@personal.example.com')],
+        clients: { work: {}, personal: { listCalendars: async () => [] } },
+      });
+      const result = await handler.execute(makeCtx(
+        { nylas_calendar_id: 'team@group.calendar.google.com', label: 'Team', contact_id: 'contact-other', mailbox: 'personal' },
+        { contactService: contactService as never, calendarRouter: router },
+      ));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('not one the "personal" mailbox\'s account can see');
+      expect(contactService.setCalendarMailbox).not.toHaveBeenCalled();
     });
 
     it('refuses an unknown mailbox, never falling back to the default', async () => {

@@ -127,7 +127,7 @@ import type { SensitivityClassifier } from '../memory/sensitivity.js';
 import type { StoreFactOptions } from '../memory/types.js';
 import { createMemoryStore } from '../bus/events.js';
 import type { CalendarRouter } from '../channels/calendar/calendar-router.js';
-import { calendarWritePregate } from '../channels/calendar/needs-mailbox.js';
+import { bindApprovalMailbox, calendarWritePregate } from '../channels/calendar/needs-mailbox.js';
 import type { PrincipalMailboxes } from '../principal-mailboxes/service.js';
 import type { EntityContextAssembler } from '../entity-context/assembler.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
@@ -972,7 +972,7 @@ export class ExecutionLayer {
           conversationId: options.conversationId,
           toolName,
           actionRisk: String(actionRisk),
-          input,
+          input: await this.approvalInput(toolName, input, skillLogger),
           displayInput: await this.approvalDisplayInput(toolName, input, skillLogger),
           currentScore,
           requiredScore,
@@ -1031,7 +1031,7 @@ export class ExecutionLayer {
           conversationId: options.conversationId,
           toolName,
           actionRisk: String(actionRisk),
-          input,
+          input: await this.approvalInput(toolName, input, skillLogger),
           displayInput: await this.approvalDisplayInput(toolName, input, skillLogger),
           currentScore,
           requiredScore: currentScore,
@@ -1090,7 +1090,7 @@ export class ExecutionLayer {
         conversationId: options.conversationId,
         toolName,
         actionRisk: String(actionRisk),
-        input,
+        input: await this.approvalInput(toolName, input, skillLogger),
         displayInput: await this.approvalDisplayInput(toolName, input, skillLogger),
         currentScore,
         requiredScore: currentScore,
@@ -1205,7 +1205,7 @@ export class ExecutionLayer {
           conversationId: options.conversationId,
           toolName,
           actionRisk: String(actionRisk),
-          input: { ...input, export_items: exportItems },
+          input: { ...(await this.approvalInput(toolName, input, skillLogger)), export_items: exportItems },
           displayInput: {
             ...(await this.approvalDisplayInput(toolName, input, skillLogger)),
             export_items: exportItems,
@@ -1303,6 +1303,11 @@ export class ExecutionLayer {
    * reference as written and never blocks the approval. Raw-address inputs are
    * retired and refused before any gate (#2041), so none reaches an approval.
    */
+  /** What an approval stores as the call's input: a calendar call is bound to its sole mailbox (#2475). */
+  private async approvalInput(toolName: string, input: Record<string, unknown>, skillLogger: Logger): Promise<Record<string, unknown>> {
+    return this.calendarRouter ? bindApprovalMailbox(this.calendarRouter, skillLogger, toolName, input) : input;
+  }
+
   private async approvalDisplayInput(
     toolName: string,
     input: Record<string, unknown>,

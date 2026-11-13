@@ -143,3 +143,31 @@ export async function calendarWritePregate(
     return null;
   }
 }
+
+/**
+ * The input an approval stores for a calendar call (#2475): a call on one of the principal's
+ * calendars with no `mailbox`, made while one mailbox is live, gets that mailbox bound in. The
+ * replay then goes through the account the principal approved: a mailbox removed since is an
+ * error, never a reroute through whichever account is live by then. Anything else (another tool,
+ * a stated mailbox, several mailboxes, a lookup failure) is stored as it was.
+ */
+export async function bindApprovalMailbox(
+  router: Pick<CalendarRouter, 'liveMailboxes' | 'isPrincipalCalendar'>,
+  log: Pick<Logger, 'warn'>,
+  toolName: string,
+  input: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (!toolName.startsWith('calendar-')) return input;
+  const stated = input['mailbox'];
+  if (stated !== undefined && stated !== null && stated !== '') return input;
+  const calendarId = input['calendarId'];
+  if (typeof calendarId !== 'string' || calendarId === '') return input;
+  try {
+    const live = await router.liveMailboxes();
+    if (live.length !== 1 || !(await router.isPrincipalCalendar(calendarId))) return input;
+    return { ...input, mailbox: live[0]!.id };
+  } catch (err) {
+    log.warn({ tool: toolName, ...grantSafeErrorFields(err) }, `${toolName}: could not bind the mailbox to the approval; stored as given`);
+    return input;
+  }
+}

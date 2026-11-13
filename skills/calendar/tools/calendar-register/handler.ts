@@ -67,8 +67,8 @@ export class CalendarRegisterHandler implements ToolHandler {
     // Canonical when it is a UUID (R107): Postgres stores `ABC…` and `{abc…}` as the same contact,
     // so the principal check below and the stored row must see one spelling.
     const resolvedContactId = canonicalUuid(contact_id) ?? contact_id.trim();
-    const principalId = ctx.calendarRouter.principalContactId;
-    const forPrincipal = resolvedContactId === (canonicalUuid(principalId) ?? principalId.trim());
+    // The router's principal id is canonical already.
+    const forPrincipal = resolvedContactId === ctx.calendarRouter.principalContactId;
 
     let placement: { mailboxId: string | null; owner: boolean };
     try {
@@ -165,8 +165,9 @@ export class CalendarRegisterHandler implements ToolHandler {
   private async visibleToMailbox(ctx: ToolContext, calendarId: string, mailboxId: string): Promise<true | string> {
     try {
       const client = await ctx.calendarRouter!.clientFor(mailboxId);
-      const id = calendarId.trim().toLowerCase();
-      if ((await client.listCalendars()).some((c) => c.id.trim().toLowerCase() === id)) return true;
+      // Exactly as it will be stored: the registry compares ids exactly, so a case variant of a
+      // listed id is refused (the message points at the listed id) rather than stored apart.
+      if ((await client.listCalendars()).some((c) => c.id === calendarId)) return true;
       ctx.log.warn({ mailboxId }, 'calendar-register: the calendar is not visible to the mailbox\'s account; refused');
       return (
         `Calendar ${calendarId} is not one the "${mailboxId}" mailbox's account can see, so it was not registered as the principal's calendar. ` +
@@ -200,6 +201,14 @@ export class CalendarRegisterHandler implements ToolHandler {
       if (existing && target !== null && existing.principalMailboxId !== target) {
         const from = existing.principalMailboxId;
         const movable = placement.owner || from === null || !(await router.isLive(from));
+        // The row keeps its contact: a principal's calendar moved to another mailbox must be one
+        // that mailbox's account can see, whoever the request named (SEC-L5), or reads and writes
+        // through it would fail at the provider.
+        const rowIsPrincipal = typeof existing.contactId === 'string' && (canonicalUuid(existing.contactId) ?? existing.contactId) === router.principalContactId;
+        if (movable && rowIsPrincipal && !placement.owner) {
+          const visible = await this.visibleToMailbox(ctx, nylasCalendarId, target);
+          if (visible !== true) return { success: false, error: visible };
+        }
         if (movable) {
           await contacts.setCalendarMailbox(nylasCalendarId, target);
           ctx.log.info(

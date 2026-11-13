@@ -10,7 +10,7 @@ import { CalendarCreateEventHandler } from '../../../skills/calendar/tools/calen
 import { CalendarCreateHoldHandler } from '../../../skills/calendar/tools/calendar-create-hold/handler.js';
 import { CalendarDeleteEventHandler } from '../../../skills/calendar/tools/calendar-delete-event/handler.js';
 import { CalendarUpdateEventHandler } from '../../../skills/calendar/tools/calendar-update-event/handler.js';
-import { calendarWritePregate } from '../../../src/channels/calendar/needs-mailbox.js';
+import { bindApprovalMailbox, calendarWritePregate } from '../../../src/channels/calendar/needs-mailbox.js';
 import { CalendarHoldsSweepHandler } from '../../../skills/calendar/tools/calendar-holds-sweep/handler.js';
 import { CalendarListEventsHandler } from '../../../skills/calendar/tools/calendar-list-events/handler.js';
 import { CalendarRespondToInviteHandler } from '../../../skills/calendar/tools/calendar-respond-to-invite/handler.js';
@@ -224,6 +224,19 @@ describe('calendar-create-event: the account is a stated choice (D5)', () => {
     // A failed check is not a refusal: the handler checks again.
     Object.assign(router, { liveMailboxes: async () => { throw new Error('registry down'); } });
     expect(await calendarWritePregate(router, logger, 'calendar-create-event', input)).toBeNull();
+  });
+
+  it('an approval of a sole-mailbox calendar write stores that mailbox, so a later account cannot replay it', async () => {
+    const single = routerFixture({ clients: { work: {} } });
+    const input = { calendarId: 'primary', title: 'Q3 audit', start: START, end: END };
+    expect(await bindApprovalMailbox(single, logger, 'calendar-create-event', input)).toEqual({ ...input, mailbox: 'work' });
+    // A stated mailbox, another tool, or several mailboxes: stored as given.
+    expect(await bindApprovalMailbox(single, logger, 'calendar-create-event', { ...input, mailbox: 'work' })).toEqual({ ...input, mailbox: 'work' });
+    expect(await bindApprovalMailbox(single, logger, 'email-send', input)).toBe(input);
+    const { router } = setup();
+    expect(await bindApprovalMailbox(router, logger, 'calendar-create-event', input)).toBe(input);
+    // A lookup failure stores the input as given (the replay's handler checks again).
+    expect(await bindApprovalMailbox({ ...single, liveMailboxes: async () => { throw new Error('down'); } } as never, logger, 'calendar-create-event', input)).toBe(input);
   });
 
   it("an account's own calendar (its address) cannot be written through the other account", async () => {
@@ -495,6 +508,15 @@ describe('calendar-holds-sweep covers every account', () => {
     expect(work.deleteEvent).toHaveBeenCalledWith('ceo@work.example.com', 'old-w');
     expect(personal.deleteEvent).toHaveBeenCalledWith('ceo@personal.example.com', 'old-p');
     expect(data).toMatchObject({ scanned: 2, expired: 2, calendarErrors: 0 });
+  });
+
+  it('an upper-case spelling of the principal\'s id still sweeps the home calendars', async () => {
+    const { work, personal, router } = setup();
+    const c = ctx(router, { contactId: PRINCIPAL.toUpperCase(), nowMs: Date.parse('2026-11-25T00:00:00Z') });
+    (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    work.listEvents.mockResolvedValue([hold('old-w', 'ceo@work.example.com')]);
+    personal.listEvents.mockResolvedValue([hold('old-p', 'ceo@personal.example.com')]);
+    expect(dataOf(await run(new CalendarHoldsSweepHandler(), c))).toMatchObject({ scanned: 2, expired: 2 });
   });
 
   it('a home calendar that is also registered is swept once', async () => {
