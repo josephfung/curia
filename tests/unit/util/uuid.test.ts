@@ -4,7 +4,7 @@
 // than inferred from whichever regex a future reader happens to copy.
 
 import { describe, it, expect } from 'vitest';
-import { isUuid, UUID_PATTERN } from '../../../src/util/uuid.js';
+import { canonicalUuid, isUuid, UUID_PATTERN } from '../../../src/util/uuid.js';
 
 describe('isUuid', () => {
   it('accepts a v4 UUID (what gen_random_uuid() emits)', () => {
@@ -71,5 +71,21 @@ describe('UUID_PATTERN', () => {
       ),
     ).toBe(true);
     expect(pairKey.test('9f8c6d2e-4b1a-4c3f-9a7e-2d5b8c1f0a34')).toBe(false);
+  });
+});
+
+describe('canonicalUuid (R107)', () => {
+  const id = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11';
+
+  it('maps every spelling Postgres reads as the same uuid to one lowercase form', () => {
+    for (const v of [id, id.toUpperCase(), `{${id}}`, ` ${id} `, id.replace(/-/g, ''), 'A0EE-BC99-9C0B-4EF8-BB6D-6BB9-BD38-0A11']) {
+      expect(canonicalUuid(v), v).toBe(id);
+    }
+  });
+
+  it('is null for anything that is not a uuid', () => {
+    for (const v of ['', 'principal', `${id}0`, id.slice(1), `{${id}`, `${id.slice(0, -1)}g`, '-' + id.replace(/-/g, '')]) {
+      expect(canonicalUuid(v), v).toBeNull();
+    }
   });
 });

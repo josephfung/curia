@@ -434,4 +434,39 @@ describe('a removed mailbox\'s calendars can be re-registered through a live one
     b.listCalendars.mockRejectedValue(new Error('nylas down'));
     expect(errorOf(await register('other@group.calendar.google.com'))).toContain('nothing was registered');
   });
+
+  it('the principal check is not bypassed by another spelling of the principal id (R107)', async () => {
+    const { contacts, principalId } = await registry();
+    const b = seeing('family@group.calendar.google.com');
+    const router = routerFixture({ mailboxes: [calendarMailbox('b', 'B', 'pat@b.example.com', true)], clients: { b }, contacts, principalContactId: principalId });
+    const register = (id: string, contactId: string) =>
+      run(new CalendarRegisterHandler(), swapCtx(contacts, router, { nylas_calendar_id: id, label: 'X', contact_id: contactId }));
+
+    for (const variant of [principalId.toUpperCase(), `{${principalId}}`, principalId.replace(/-/g, '')]) {
+      expect(errorOf(await register('attacker-public@evil.example', variant)), variant).toContain('is not one the "b" mailbox\'s account can see');
+    }
+    expect(await contacts.resolveCalendar('attacker-public@evil.example')).toBeNull();
+
+    // A visible calendar registers, stored under the canonical id.
+    expect((await register('family@group.calendar.google.com', principalId.toUpperCase())).success).toBe(true);
+    expect((await contacts.resolveCalendar('family@group.calendar.google.com'))?.contactId).toBe(principalId);
+  });
+
+  it('checks visibility through the sole live mailbox while the deferred-migration fallback is served (R107)', async () => {
+    const { contacts, principalId } = await registry();
+    const b = seeing('family@group.calendar.google.com');
+    const router = routerFixture({ mailboxes: [calendarMailbox('b', 'B', 'pat@b.example.com', true)], clients: { b }, contacts, principalContactId: principalId, fallbackActive: true });
+    const register = (id: string) =>
+      run(new CalendarRegisterHandler(), swapCtx(contacts, router, { nylas_calendar_id: id, label: 'X', contact_id: principalId }));
+
+    expect(errorOf(await register('attacker-public@evil.example'))).toContain('is not one the "b" mailbox\'s account can see');
+    expect(await contacts.resolveCalendar('attacker-public@evil.example')).toBeNull();
+
+    const ok = await register('family@group.calendar.google.com');
+    expect(ok.success).toBe(true);
+    if (ok.success) expect(ok.data).toMatchObject({ mailbox: null });
+
+    b.listCalendars.mockRejectedValue(new Error('nylas down'));
+    expect(errorOf(await register('other@group.calendar.google.com'))).toContain('nothing was registered');
+  });
 });
