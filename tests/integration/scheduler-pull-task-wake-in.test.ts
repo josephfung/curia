@@ -30,14 +30,23 @@ describeIf('SchedulerService.pullTaskWakeIn', () => {
   let pool: pg.Pool;
   let repo: TaskRepo;
   let svc: SchedulerService;
+  // Teardown deletes only after the database was confirmed to be curia_test.
+  let dbValidated = false;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
     await requireCuriaTestDatabase(pool);
+    dbValidated = true;
     repo = new TaskRepo(pool, noopBus, logger as never, 'UTC');
     svc = new SchedulerService(pool, new EventBus(logger as never), logger as never, 'UTC');
   });
-  afterAll(async () => { await cleanup(pool); await pool.end(); });
+  afterAll(async () => {
+    try {
+      if (dbValidated) await cleanup(pool);
+    } finally {
+      await pool.end();
+    }
+  });
   beforeEach(async () => { await cleanup(pool); });
 
   const runAtOf = async (taskId: string): Promise<{ run_at: Date; status: string }> =>

@@ -74,7 +74,6 @@ const UNGUARDED_ALLOWLIST = new Set([
   'tests/integration/seed-vault.test.ts',
   'tests/integration/setup-routes.test.ts',
   'tests/integration/task-plan-progress.test.ts',
-  'tests/integration/task-repo-list-pagination.test.ts',
   'tests/integration/task-repo-originator.test.ts',
   'tests/integration/task-resumable-progress.test.ts',
   'tests/integration/task-update-running-wake.test.ts',
