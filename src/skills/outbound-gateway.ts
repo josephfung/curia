@@ -534,7 +534,7 @@ export const PRINCIPAL_SEND_DIGEST_REASONS: Record<DigestRefusal, string> = {
   outsider_originated: `This work started from someone outside, so Curia didn't send it on its own. ${IN_YOUR_DRAFTS}`,
   origin_unknown: `Curia couldn't confirm this work came from its own inbox check, so it didn't send it on its own. ${IN_YOUR_DRAFTS}`,
   no_band_review: `The send review isn't running, so Curia didn't send it on its own. ${IN_YOUR_DRAFTS}`,
-  no_send_ledger: `The send record isn't available, so Curia didn't send it on its own. ${IN_YOUR_DRAFTS}`,
+  no_send_ledger: `Curia couldn't check its send log. ${IN_YOUR_DRAFTS}`,
   thread_unreadable: `Curia couldn't read the thread to check who's on it, so it didn't send on its own. ${IN_YOUR_DRAFTS}`,
   not_curia_draft: `Curia sends on its own only a reply it drafted in this same pass. ${IN_YOUR_DRAFTS}`,
   draft_changed_since_curia: `The draft changed after Curia wrote it, so Curia left it for you. ${IN_YOUR_DRAFTS}`,
@@ -542,7 +542,7 @@ export const PRINCIPAL_SEND_DIGEST_REASONS: Record<DigestRefusal, string> = {
   mailing_list: `The thread is a mailing list, so Curia didn't reply on its own. ${IN_YOUR_DRAFTS}`,
   principal_address_recipient: `Not sent on its own: it was addressed to your other email address. ${IN_YOUR_DRAFTS}`,
   reply_to_principal_address: `Not sent on its own: it replies to mail from your other email address. ${IN_YOUR_DRAFTS}`,
-  principal_addresses_unreadable: `Not sent on its own: Curia couldn't check your email addresses. ${IN_YOUR_DRAFTS}`,
+  principal_addresses_unreadable: `Curia couldn't check your email addresses. ${IN_YOUR_DRAFTS}`,
   recipient_not_on_thread: `The reply goes to someone who isn't genuinely on the thread. ${IN_YOUR_DRAFTS}`,
   too_many_recipients: `The reply goes to more than five people, so Curia left it for you. ${IN_YOUR_DRAFTS}`,
   has_attachments: `The reply has attachments, so Curia left it for you. ${IN_YOUR_DRAFTS}`,
@@ -655,7 +655,7 @@ export const LIMIT_REFUSALS: ReadonlySet<PrincipalSendRefusal> = new Set<Princip
 
 const OTHER_REFUSALS: ReadonlySet<PrincipalSendRefusal> = new Set<PrincipalSendRefusal>([
   'mailbox_unavailable', 'unknown_mailbox', 'ambiguous_mailbox', 'setting_off', 'not_requested', 'approval_replay',
-  'not_found', 'lookup_failed', 'send_unconfirmed', 'no_send_ledger', 'thread_unreadable', 'principal_addresses_unreadable',
+  'not_found', 'lookup_failed', 'send_unconfirmed', 'no_send_ledger', 'thread_unreadable', 'principal_addresses_unreadable', 'no_band_review',
 ]);
 
 /** limit, other, or judgement (the default for a refusal about the reply itself). */
@@ -4501,17 +4501,19 @@ export class OutboundGateway {
     let lookedUp = false;
     // The thread's Message-IDs, once the thread has been read (#2475): they go on every ledger entry.
     let conversationIds: string[] = [];
+    // Set when every ledger entry holding the cooldown is a judgement hold, not a send (R44).
+    let cooldownHeld = false;
     const stop = async (
       refusal: PrincipalSendRefusal,
       blockedReason: string = PRINCIPAL_SEND_REFUSALS[refusal],
       reasonCode: string = refusal,
       digest?: string,
+      kind: RefusalKind = refusalKindOf(refusal),
     ): Promise<PrincipalDraftSendResult> => {
       if (autonomous) {
-        await this.recordAutonomousStop({ mailbox, mailboxId, conversationIds, draftId, draft, lookedUp, refusal, reason: blockedReason, reasonCode, ...(digest !== undefined ? { digest } : {}), options });
+        await this.recordAutonomousStop({ mailbox, mailboxId, conversationIds, draftId, draft, lookedUp, refusal, kind, cooldownHeld, reason: blockedReason, reasonCode, ...(digest !== undefined ? { digest } : {}), options });
       }
-      // A thread_cooldown stop that is really an unreadable ledger is a failure, not a limit.
-      return refuse(refusal, blockedReason, refusal === 'thread_cooldown' && reasonCode !== refusal ? 'other' : refusalKindOf(refusal));
+      return refuse(refusal, blockedReason, kind);
     };
 
     let autonomy: AutonomyRead | undefined;
@@ -4629,7 +4631,7 @@ export class OutboundGateway {
       try {
         // Fail closed on a failed read: the thread's cooldown may be running. Any ledger read
         // failure lands here, even for a draft with no thread (which would refuse anyway as
-        // not_a_reply): it refuses as thread_cooldown, the accepted reason.
+        // not_a_reply). It is a failure to check, not a limit: no_send_ledger (kind other).
         ledgerEntries = await this.sendLedger!.list();
         const cooldownSince = Date.now() - AUTONOMOUS_THREAD_COOLDOWN_MS;
         if (draft.threadId) recentEntries = await this.sendLedger!.recentForThread(draft.threadId, cooldownSince, mailboxId, ledgerEntries);
@@ -4637,7 +4639,7 @@ export class OutboundGateway {
         if (conversationIds.length > 0) conversationEntries = await this.sendLedger!.recentForConversation(conversationIds, cooldownSince, ledgerEntries);
       } catch (err) {
         this.log.warn({ err, draftId }, 'outbound-gateway: send ledger unreadable — treating the thread as cooling down');
-        return stop('thread_cooldown', PRINCIPAL_SEND_REFUSALS.thread_cooldown, 'ledger_unreadable');
+        return stop('no_send_ledger');
       }
       let sendsInWindow: number;
       try {
@@ -4651,6 +4653,8 @@ export class OutboundGateway {
       }
       const limit = checkAutonomousLimits({ draft, thread, principalAddresses, curiaWrites, recentThreadEntries: recentEntries, recentConversationEntries: conversationEntries, otherPrincipalAddresses, offLimitsRecipients, autonomousSendsInWindow: sendsInWindow });
       if (limit) {
+        const blockers = [...recentEntries, ...conversationEntries];
+        cooldownHeld = limit.refusal === 'thread_cooldown' && blockers.length > 0 && blockers.every((e) => e.outcome === 'held');
         return stop(limit.refusal, limit.refusal === 'recipient_not_on_thread' ? recipientNotOnThread(limit.detail) : PRINCIPAL_SEND_REFUSALS[limit.refusal]);
       }
       // The message being answered, bound to the one the draft-reply that created the draft
@@ -4703,7 +4707,7 @@ export class OutboundGateway {
         const bounced = checked.bounced === true;
         const reason = bounced ? AUTONOMOUS_BOUNCE_REASON : `${/[.!?]$/.test(why) ? why : `${why}.`}${STILL_A_DRAFT}`;
         const digest = bounced ? bounceDigest(ruleList) : checkStopDigest(checked.result);
-        await this.recordAutonomousStop({ mailbox, mailboxId, conversationIds, draftId, draft, lookedUp, reason, reasonCode: rules ?? 'check_stop', digest, options });
+        await this.recordAutonomousStop({ mailbox, mailboxId, conversationIds, draftId, draft, lookedUp, kind: 'judgement', reason, reasonCode: rules ?? 'check_stop', digest, options });
         this.log.info({ draftId, rules: checked.result.blockedRules }, 'outbound-gateway: autonomous principal-mailbox draft not sent');
         return { ...checked.result, blockedReason: reason, leftAsDraft: true };
       }
@@ -4860,6 +4864,10 @@ export class OutboundGateway {
     lookedUp: boolean;
     /** Absent for a check's stop (a blocked contact, the content filter, …), which has no refusal code. */
     refusal?: PrincipalSendRefusal;
+    /** Why it stopped, as the principal reads it; sets the digest's wording (R44). */
+    kind: RefusalKind;
+    /** A thread cooldown held only by earlier judgement holds, no send (R44). */
+    cooldownHeld?: boolean;
     /** What the agent was told; the digest item says it in the principal's voice. */
     reason: string;
     /** What the held marker keeps (final fixes B2): the refusal code or the band rule ids, never the text. */
@@ -4916,10 +4924,9 @@ export class OutboundGateway {
       }
     }
     const what = draft ? mailboxDraftLabel(draft, isPrincipal) : 'a reply Curia drafted';
-    // Held only by a limit (#2475, D6): reported as the limit, not as a judgement. A thread_cooldown
-    // whose reasonCode differs is an unreadable ledger, which stays a "Left as a draft" item.
-    if (refusal !== undefined && LIMIT_REFUSALS.has(refusal) && reasonCode === refusal) {
-      await this.reportLimitStop(refusal as LimitStopReason, what, args.mailboxId, draftId, options);
+    // Held only by a limit (#2475, D6): reported as the limit, not as a judgement.
+    if (args.kind === 'limit' && refusal !== undefined && LIMIT_REFUSALS.has(refusal)) {
+      await this.reportLimitStop(refusal as LimitStopReason, what, args.mailboxId, draftId, options, args.cooldownHeld === true);
       return;
     }
     if (refusal === 'not_found' || refusal === 'lookup_failed') {
@@ -4934,7 +4941,9 @@ export class OutboundGateway {
     const said = args.digest ?? (refusal !== undefined && isDigestRefusal(refusal) && reason === PRINCIPAL_SEND_REFUSALS[refusal]
       ? PRINCIPAL_SEND_DIGEST_REASONS[refusal]
       : principalFacing(reason));
-    await this.publishMailboxDigest(`Left as a draft in your mailbox: ${what}. ${said}`, options);
+    // An operational stop (a failure to check) was not a decision about the reply (R44).
+    const heading = args.kind === 'other' ? 'Not sent from your mailbox' : 'Left as a draft in your mailbox';
+    await this.publishMailboxDigest(`${heading}: ${what}. ${said}`, options);
   }
 
   /**
@@ -4950,6 +4959,7 @@ export class OutboundGateway {
     mailboxId: string,
     draftId: string,
     options: { taskEventId?: string; conversationId?: string },
+    cooldownHeld = false,
   ): Promise<void> {
     let first = false;
     if (reason === 'daily_cap' && this.sendLedger) {
@@ -4959,19 +4969,24 @@ export class OutboundGateway {
         this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: limit stops unreadable — filing the short waiting item');
       }
     }
-    try {
-      await this.sendLedger?.recordLimitStop({ draftId, mailbox: mailboxId, reason, at: new Date().toISOString() });
-    } catch (err) {
-      this.log.error({ ...grantSafeErrorFields(err), draftId, reason }, 'outbound-gateway: limit stop not recorded — the next one may file the notice again');
-    }
+    const record = async (): Promise<void> => {
+      try {
+        await this.sendLedger?.recordLimitStop({ draftId, mailbox: mailboxId, reason, at: new Date().toISOString() });
+      } catch (err) {
+        this.log.error({ ...grantSafeErrorFields(err), draftId, reason }, 'outbound-gateway: limit stop not recorded — the next one may file the notice again');
+      }
+    };
     if (reason === 'daily_cap' && first) {
-      await this.publishMailboxDigest(DAILY_LIMIT_NOTICE, options);
+      // The marker follows the notice: a notice that failed to publish is retried by the next stop.
+      if (await this.publishMailboxDigest(DAILY_LIMIT_NOTICE, options)) await record();
       return;
     }
+    await record();
     const where = await this.mailboxSuffix(mailboxId, draftId);
-    const text = reason === 'daily_cap'
-      ? `Waiting only because of the daily limit: ${what}${where}.`
-      : `Waiting only because Curia already replied on this thread today: ${what}${where}.`;
+    let text: string;
+    if (reason === 'daily_cap') text = `Waiting only because of the daily limit: ${what}${where}.`;
+    else if (cooldownHeld) text = `Waiting because Curia held an earlier reply on this thread today: ${what}${where}.`;
+    else text = `Waiting only because Curia already replied on this thread today: ${what}${where}.`;
     await this.publishMailboxDigest(text, options);
   }
 
@@ -5015,8 +5030,8 @@ export class OutboundGateway {
     await this.publishMailboxDigest(`Not sent from your mailbox: a reply Curia drafted. ${why[refusal] ?? 'Check your Drafts.'}`, options);
   }
 
-  /** One digest item for an autonomous principal-mailbox send (#2474, design D9). A failure is logged; the outcome stands. */
-  private async publishMailboxDigest(summary: string, options: { taskEventId?: string; conversationId?: string }): Promise<void> {
+  /** One digest item for an autonomous principal-mailbox send (#2474, design D9). A failure is logged and returns false; the outcome stands. */
+  private async publishMailboxDigest(summary: string, options: { taskEventId?: string; conversationId?: string }): Promise<boolean> {
     try {
       await this.bus.publish('dispatch', createPrincipalReport({
         summary,
@@ -5026,8 +5041,10 @@ export class OutboundGateway {
         parentEventId: options.taskEventId ?? 'system',
         sourceLayer: 'dispatch',
       }));
+      return true;
     } catch (err) {
       this.log.error({ err }, 'outbound-gateway: principal-mailbox digest item not recorded');
+      return false;
     }
   }
 

@@ -6567,7 +6567,9 @@ describe('sendPrincipalDraft (#2474)', () => {
     const SUFFIX = ' Nothing was sent; the draft is still in their Drafts folder.';
     const LEAD = 'Left as a draft in your mailbox: "Re: Friday" to Dana Example.';
     /** The principal's digest item for a coded stop (final fixes A12): second person, ending "It's in your Drafts." */
-    const DIGEST = (code: keyof typeof PRINCIPAL_SEND_DIGEST_REASONS) => `${LEAD} ${PRINCIPAL_SEND_DIGEST_REASONS[code]}`;
+    // An operational stop (kind other) leads "Not sent from your mailbox" (R44); a judgement one "Left as a draft".
+    const NOT_SENT = 'Not sent from your mailbox: "Re: Friday" to Dana Example.';
+    const DIGEST = (code: keyof typeof PRINCIPAL_SEND_DIGEST_REASONS) => `${refusalKindOf(code) === 'other' ? NOT_SENT : LEAD} ${PRINCIPAL_SEND_DIGEST_REASONS[code]}`;
     const IN_DRAFTS = " It's in your Drafts.";
     const nowSec = () => Math.floor(Date.now() / 1000);
 
@@ -6831,11 +6833,59 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(ledger.recordHeld).not.toHaveBeenCalled();
       });
 
-      it('an unreadable ledger is an operational stop, not a limit', async () => {
+      it('a cooldown caused by a judgement hold reads Waiting because Curia held an earlier reply; one caused by a send keeps already replied', async () => {
+        const entry = (outcome: string) => [{ draftId: 'x', threadId: 'th1', mailbox: 'default', conversationIds: [], recipients: [], mode: 'autonomous', at: new Date().toISOString(), outcome }];
+        const held = makeAuto();
+        held.ledger.recentForThread.mockResolvedValue(entry('held'));
+        expect(await held.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'thread_cooldown', refusalKind: 'limit' });
+        expect(reports()).toEqual([expect.objectContaining({ summary: 'Waiting because Curia held an earlier reply on this thread today: "Re: Friday" to Dana Example.' })]);
+
+        mocks = createMocks();
+        const sent = makeAuto();
+        sent.ledger.recentForThread.mockResolvedValue(entry('sent'));
+        await sent.gw.sendPrincipalDraft('d1', auto);
+        expect(reports()[0]!['summary']).toMatch(/^Waiting only because Curia already replied on this thread today/);
+      });
+
+      it('the notice marker is written only after the notice publishes; a failed publish retries it next time', async () => {
         const { gw, ledger } = makeAuto();
-        ledger.recentForThread.mockRejectedValue(new Error('db down'));
-        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'thread_cooldown', refusalKind: 'other' });
+        atCap(ledger);
+        vi.mocked(mocks.bus.publish).mockRejectedValueOnce(new Error('bus down'));
+        await gw.sendPrincipalDraft('d1', auto);
         expect(ledger.recordLimitStop).not.toHaveBeenCalled();
+        // Next stop: still the first, so the notice is filed again, then the marker is written.
+        await gw.sendPrincipalDraft('d1', auto);
+        // Both attempts (the failed one and the retry) carried the notice.
+        expect(reports().map((r) => r['summary'])).toEqual([FIRST, FIRST]);
+        expect(ledger.recordLimitStop).toHaveBeenCalledOnce();
+      });
+
+      it('every refusal code has its kind and digest heading', async () => {
+        const kinds: Record<keyof typeof PRINCIPAL_SEND_REFUSALS, 'limit' | 'judgement' | 'other'> = {
+          daily_cap: 'limit', thread_cooldown: 'limit',
+          mailbox_unavailable: 'other', unknown_mailbox: 'other', ambiguous_mailbox: 'other', setting_off: 'other', not_requested: 'other',
+          approval_replay: 'other', not_found: 'other', lookup_failed: 'other', send_unconfirmed: 'other', no_send_ledger: 'other',
+          thread_unreadable: 'other', principal_addresses_unreadable: 'other', no_band_review: 'other',
+          no_recipients: 'judgement', principal_only: 'judgement', review_hold: 'judgement', draft_changed: 'judgement',
+          outsider_originated: 'judgement', origin_unknown: 'judgement', not_curia_draft: 'judgement', draft_changed_since_curia: 'judgement',
+          not_a_reply: 'judgement', mailing_list: 'judgement', principal_address_recipient: 'judgement', reply_to_principal_address: 'judgement',
+          recipient_not_on_thread: 'judgement', too_many_recipients: 'judgement', has_attachments: 'judgement', not_latest_message: 'judgement',
+          financial_details: 'judgement',
+        };
+        const codes = Object.keys(PRINCIPAL_SEND_REFUSALS) as Array<keyof typeof PRINCIPAL_SEND_REFUSALS>;
+        expect(Object.keys(kinds).sort()).toEqual([...codes].sort());
+        for (const code of codes) {
+          expect(refusalKindOf(code), code).toBe(kinds[code]);
+          if (kinds[code] === 'limit' || !(code in PRINCIPAL_SEND_DIGEST_REASONS)) continue;
+          mocks = createMocks();
+          const { gw, client } = makeAuto();
+          await (gw as unknown as { recordAutonomousStop(a: Record<string, unknown>): Promise<void> }).recordAutonomousStop({
+            mailbox: client, mailboxId: 'default', conversationIds: [], draftId: 'd1', draft: autoDraft(), lookedUp: true,
+            refusal: code, reason: PRINCIPAL_SEND_REFUSALS[code], reasonCode: code, kind: kinds[code], options: {},
+          });
+          const heading = kinds[code] === 'other' ? 'Not sent from your mailbox: ' : 'Left as a draft in your mailbox: ';
+          expect(String(reports()[0]!['summary']), code).toMatch(new RegExp(`^${heading}`));
+        }
       });
 
       it('appends the mailbox label only when there are two or more mailboxes', async () => {
@@ -6944,13 +6994,13 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect((await gw.sendPrincipalDraft('d1', auto)).refusal).not.toBe('reply_to_principal_address');
       });
 
-      it('refuses (thread_cooldown, fail closed) when the ledger cannot be listed, even with no thread', async () => {
+      it('refuses (no_send_ledger, fail closed) when the ledger cannot be listed, even with no thread', async () => {
         const { gw, ledger, client } = makeAuto({ client: autoClient(autoDraft({ threadId: '' }), []) });
         ledger.list.mockRejectedValue(new Error('db down'));
         expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true });
         const lister = makeAuto();
         lister.ledger.list.mockRejectedValue(new Error('db down'));
-        expect(await lister.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'thread_cooldown' });
+        expect(await lister.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'no_send_ledger' });
         expect(lister.client!.sendDraft).not.toHaveBeenCalled();
         expect(client!.sendDraft).not.toHaveBeenCalled();
       });
@@ -6969,15 +7019,15 @@ describe('sendPrincipalDraft (#2474)', () => {
       });
     });
 
-    it('7. refuses with thread_cooldown, with a digest item only, when the ledger read fails (fail closed)', async () => {
+    it('7. refuses with no_send_ledger, kind other, when the ledger read fails (fail closed)', async () => {
       const { gw, ledger, client } = makeAuto();
       ledger.recentForThread.mockRejectedValue(new Error('db down'));
-      const text = 'Curia already replied or held a reply on this thread in the last day.' + SUFFIX;
-      expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'thread_cooldown', blockedReason: text });
+      const r = await gw.sendPrincipalDraft('d1', auto);
+      expect(r).toMatchObject({ refusal: 'no_send_ledger', refusalKind: 'other', blockedReason: PRINCIPAL_SEND_REFUSALS.no_send_ledger });
       expect(client!.sendDraft).not.toHaveBeenCalled();
-      // Not extended: no held marker for a cooldown refusal.
-      expect(ledger.recordHeld).not.toHaveBeenCalled();
-      expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('thread_cooldown') })]);
+      expect(ledger.recordLimitStop).not.toHaveBeenCalled();
+      // Never says Curia already replied.
+      expect(reports()).toEqual([expect.objectContaining({ summary: 'Not sent from your mailbox: "Re: Friday" to Dana Example. Curia couldn\'t check its send log. It\'s in your Drafts.' })]);
     });
 
     it('refuses a second autonomous send on the thread within 24h', async () => {
