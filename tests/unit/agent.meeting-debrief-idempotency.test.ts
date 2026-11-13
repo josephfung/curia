@@ -138,4 +138,11 @@ describe('meeting-debrief keys its guards on the meeting, not one calendar copy 
     expect(meetingKey(evt('plain', { icalUid: undefined }))).toBe('plain');
     expect(meetingKey(evt('long', { icalUid: 'x'.repeat(2000) })).length).toBeLessThanOrEqual(40);
   });
+
+  it('a spoofed invite reusing a meeting\'s UID and occurrence gets its own key when its title or end differs (R91)', () => {
+    const real = evt('real', { originalStartTime: 1_795_100_000 });
+    expect(meetingKey(evt('copy', { originalStartTime: 1_795_100_000 }))).toBe(meetingKey(real));
+    expect(meetingKey(evt('spoof-title', { originalStartTime: 1_795_100_000, title: 'Something else' }))).not.toBe(meetingKey(real));
+    expect(meetingKey(evt('spoof-end', { originalStartTime: 1_795_100_000, endTime: 1_795_107_200 }))).not.toBe(meetingKey(real));
+  });
 });

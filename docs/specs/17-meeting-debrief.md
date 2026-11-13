@@ -124,9 +124,11 @@ than stored as data:
 With several principal mailboxes, one meeting can sit on two of the principal's
 calendars (an invite to both accounts, or one calendar shared into the other), each
 copy with its own grant-scoped event id. `calendar-list-events` lists such a meeting
-once and gives every event a `meetingKey`: `ical-` plus a hash of the event's iCal UID
-and its occurrence (the original start of a recurring instance, else its start), or
-the event id when it has no UID. Every copy of a meeting has the same key, and the
+once and gives every event a `meetingKey`: `ical-` plus a hash of the event's iCal UID,
+its occurrence (the original start of a recurring instance), start, end and title, or
+the event id when it has no UID. The UID is set by whoever sends the invite, so a
+spoofed invite reusing a real meeting's UID and time but with another title or end gets
+its own key and cannot suppress the real meeting's debrief. Every copy of a meeting has the same key, and the
 instances of a recurring series have different ones, so a weekly meeting is still
 debriefed every week. The guards key on it, so a meeting is judged and debriefed
 once, whichever copy a scan sees. The prompt wake re-validates by finding the event
