@@ -400,6 +400,7 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
     let store: Record<string, Record<string, Record<string, unknown>>>;
     let failCreate: boolean;
     let failDelete: boolean;
+    let deleteStatus: number;
 
     const SOURCE = {
       id: 'src-1', thread_id: 'thread-1', reply_to_message_id: 'm1', subject: 'Audit follow-up',
@@ -426,7 +427,7 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
           return json(created);
         }
         if (method === 'DELETE') {
-          if (failDelete) return new Response('boom', { status: 500 });
+          if (failDelete) return new Response('boom', { status: deleteStatus });
           delete drafts[id];
           return json({});
         }
@@ -448,6 +449,7 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
       calls = [];
       failCreate = false;
       failDelete = false;
+      deleteStatus = 500;
       store = { 'grant-work': { 'src-1': { ...SOURCE } }, 'grant-personal': {} };
       serveNylas();
     });
@@ -499,6 +501,26 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
       expect(data).toMatchObject({ draft_id: 'new-1', mailbox: 'personal', moved_from: { mailbox: 'work', draft_id: 'src-1' } });
       expect(String(data.warning)).toContain('original');
       expect(String(data.warning)).toContain('Work');
+      expect(store['grant-work']).toHaveProperty('src-1');
+    });
+
+    it('a 404 deleting the original reads as deleted: no warning (SF11)', async () => {
+      failDelete = true;
+      deleteStatus = 404;
+      const result = await handler.execute(twoCtx({ draft_id: 'src-1', move_to_mailbox: 'personal' }));
+      expect(result.success).toBe(true);
+      expect((result as { data: Record<string, unknown> }).data).not.toHaveProperty('warning');
+    });
+
+    it('refuses before creating anything when the call is nearly out of time or cancelled (SF11, S3)', async () => {
+      const short = { ...twoCtx({ draft_id: 'src-1', move_to_mailbox: 'personal' }), deadline: Date.now() + 1_000 } as ToolContext;
+      const result = await handler.execute(short);
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining("isn't enough time") });
+      expect(methods().filter((m) => m.startsWith('POST') || m.startsWith('DELETE'))).toEqual([]);
+      const aborted = new AbortController();
+      aborted.abort();
+      const cancelled = { ...twoCtx({ draft_id: 'src-1', move_to_mailbox: 'personal' }), signal: aborted.signal } as ToolContext;
+      expect((await handler.execute(cancelled)).success).toBe(false);
       expect(store['grant-work']).toHaveProperty('src-1');
     });
 

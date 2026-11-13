@@ -6,6 +6,8 @@
 // so paging never skips or repeats a message.
 
 import type { ToolContext } from '../../src/skills/types.js';
+import type { Logger } from '../../src/logger.js';
+import { grantSafeErrorFields } from '../../src/principal-mailboxes/error-fields.js';
 import type { PrincipalMailboxView } from '../../src/principal-mailboxes/service.js';
 import { nylasStatus } from '../../src/channels/email/nylas-message-id.js';
 import type { CeoNylasClient } from './ceo-nylas-client.js';
@@ -26,7 +28,26 @@ export interface MailboxError {
   note: string;
 }
 
+/** A live mailbox this call did not read because its page token marks it finished (S2). */
+export interface SkippedMailbox {
+  mailbox: string;
+  mailbox_label: string;
+  note: string;
+}
+
+/** Where a per-mailbox failure is logged (SF4): the tool's logger and name. */
+export interface FailureLog {
+  log: Pick<Logger, 'warn'>;
+  tool: string;
+}
+
 const NOT_INCLUDED = 'Its mail is not included; a later call retries it.';
+const READ_TO_END = 'Not read on this page: the page_token marks it read to its end. Retry without page_token to read it again.';
+
+/** A mailbox that failed, logged by class and HTTP status only (SF4). Never the error body. */
+function logMailboxFailure(where: FailureLog | undefined, mailboxId: string, err: unknown): void {
+  where?.log.warn({ tool: where.tool, mailboxId, ...grantSafeErrorFields(err), ...(nylasStatus(err) !== undefined ? { status: nylasStatus(err) } : {}) }, `${where.tool}: a mailbox could not be read; its mail is left out`);
+}
 
 const FRESH: MailboxPosition = { cursor: null, skip: 0 };
 
@@ -62,7 +83,7 @@ export async function resolveTargets(
       })),
     };
   } catch (err) {
-    ctx.log.error({ err, tool }, `${tool}: could not list the principal mailboxes`);
+    ctx.log.error({ ...grantSafeErrorFields(err), tool }, `${tool}: could not list the principal mailboxes`);
     return { ok: false, error: 'The principal mailboxes are unavailable.' };
   }
 }
@@ -73,7 +94,7 @@ export async function resolveTargets(
  * (`scope`: it would continue the earlier listing), or one that lacks the explicitly named
  * mailbox is an error that says how to recover.
  */
-export function readPageToken(input: unknown, limit: number, scope: string): { ok: true; cursors: PageCursors | undefined } | { ok: false; error: string } {
+export function readPageToken(input: unknown, limit: number, scope: string, where?: FailureLog): { ok: true; cursors: PageCursors | undefined } | { ok: false; error: string } {
   const rec = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
   const raw = rec['page_token'];
   if (raw === undefined || raw === null || raw === '') return { ok: true, cursors: undefined };
@@ -81,7 +102,9 @@ export function readPageToken(input: unknown, limit: number, scope: string): { o
   let decoded: ReturnType<typeof decodePageToken>;
   try {
     decoded = decodePageToken(raw);
-  } catch {
+  } catch (err) {
+    // Model-supplied text: the error class and length only, never the token (SF15).
+    where?.log.warn({ tool: where.tool, errName: err instanceof Error ? err.name : typeof err, tokenLength: raw.length }, `${where.tool}: page_token could not be decoded`);
     return { ok: false, error: 'That page_token is not valid (it may predate an upgrade). Retry without page_token.' };
   }
   if (decoded.limit !== limit) {
@@ -91,7 +114,7 @@ export function readPageToken(input: unknown, limit: number, scope: string): { o
     return { ok: false, error: 'That page_token belongs to another query or other filters. Retry without page_token.' };
   }
   const named = rec['mailbox'];
-  if (typeof named === 'string' && !(named in decoded.positions)) {
+  if (typeof named === 'string' && !Object.hasOwn(decoded.positions, named)) {
     return { ok: false, error: 'That page_token does not cover this mailbox. Retry without page_token.' };
   }
   return { ok: true, cursors: decoded.positions };
@@ -223,6 +246,8 @@ export interface CrossResult<T> {
   anyOpen: boolean;
   capped: boolean;
   errors: MailboxError[];
+  /** Live mailboxes the token marks finished, so this call read nothing from them (S2). */
+  skipped: SkippedMailbox[];
   allFailed: boolean;
   /** Resume point per mailbox (null: exhausted); a failed mailbox keeps the point it started from. */
   positions: PageCursors;
@@ -237,6 +262,7 @@ export async function listAcrossMailboxes<T extends { id: string; date: number }
     pageCap: number;
     fetchPage: (client: CeoNylasClient, cursor: string | undefined) => Promise<{ messages: T[]; nextCursor?: string }>;
     keep: (item: T) => boolean;
+    failures?: FailureLog;
   },
 ): Promise<CrossResult<T>> {
   type Outcome =
@@ -245,7 +271,8 @@ export async function listAcrossMailboxes<T extends { id: string; date: number }
 
   const outcomes: Outcome[] = await Promise.all(
     targets.map(async (target): Promise<Outcome> => {
-      const known = cursors?.[target.mailbox.id];
+      // Own entries only (S2): `constructor` is a valid mailbox id.
+      const known = cursors && Object.hasOwn(cursors, target.mailbox.id) ? cursors[target.mailbox.id] : undefined;
       // Absent from the token (a mailbox added since): read it from the start.
       const start = known === undefined ? FRESH : known;
       if (start === null) return { target, start, result: { items: [], end: null, capped: false } };
@@ -258,13 +285,14 @@ export async function listAcrossMailboxes<T extends { id: string; date: number }
         });
         return { target, start, result };
       } catch (err) {
+        logMailboxFailure(opts.failures, target.mailbox.id, err);
         return { target, start, error: describeError(err) };
       }
     }),
   );
 
   const errors: MailboxError[] = [];
-  const positions: PageCursors = {};
+  const positions: PageCursors = Object.create(null) as PageCursors;
   const ok: Array<{ target: Target; start: MailboxPosition | null; result: ScanResult<T> }> = [];
   for (const o of outcomes) {
     if ('error' in o) {
@@ -316,12 +344,17 @@ export async function listAcrossMailboxes<T extends { id: string; date: number }
   // A failed mailbox keeps its start point, so it counts as open: the token retries it (its
   // note says a later call does) even when every readable mailbox is finished.
   const anyOpen = Object.values(positions).some((p) => p !== null);
+  // A token can mark a live mailbox finished; a forged one could hide it that way, so it is named.
+  const skipped: SkippedMailbox[] = ok
+    .filter((o) => o.start === null)
+    .map((o) => ({ mailbox: o.target.mailbox.id, mailbox_label: o.target.mailbox.label, note: READ_TO_END }));
   return {
     items,
     hasMore: leftover || cappedWithItems,
     anyOpen,
     capped,
     errors,
+    skipped,
     allFailed: ok.length === 0 && errors.length > 0,
     positions,
   };
@@ -331,6 +364,7 @@ export async function listAcrossMailboxes<T extends { id: string; date: number }
 export async function collectAcross<R>(
   targets: Target[],
   fn: (client: CeoNylasClient, mailbox: PrincipalMailboxView) => Promise<R>,
+  failures?: FailureLog,
 ): Promise<{ ok: Array<{ mailbox: PrincipalMailboxView; value: R }>; errors: MailboxError[] }> {
   const ok: Array<{ mailbox: PrincipalMailboxView; value: R }> = [];
   const errors: MailboxError[] = [];
@@ -340,6 +374,7 @@ export async function collectAcross<R>(
         if (!t.client) throw new Error(t.failure ?? 'unavailable');
         ok.push({ mailbox: t.mailbox, value: await fn(t.client, t.mailbox) });
       } catch (err) {
+        if (t.client) logMailboxFailure(failures, t.mailbox.id, err);
         errors.push({
           mailbox: t.mailbox.id,
           mailbox_label: t.mailbox.label,

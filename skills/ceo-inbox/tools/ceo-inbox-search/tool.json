@@ -1,6 +1,6 @@
 {
   "name": "ceo-inbox-search",
-  "description": "Search the principal's personal email inbox using Gmail-native query syntax. Messages filed in Spam or Trash are omitted unless include_spam_and_trash is true, whatever the query says. Pass folder: 'DRAFTS' to instead search unsent drafts by subject/recipient. Only for the ceo-inbox agent: it reads the principal's personal email.",
+  "description": "Search the principal's email using Gmail-native query syntax. Messages filed in Spam or Trash are omitted unless include_spam_and_trash is true, whatever the query says. Pass folder: 'DRAFTS' to instead search unsent drafts by subject/recipient. Only for the ceo-inbox agent: it reads the principal's email.",
   "version": "0.3.3",
   "sensitivity": "normal",
   "action_risk": "none",
@@ -19,7 +19,8 @@
     "drafts": "array of { id, threadId, subject, to, cc, snippet, date, date_local, created_by_curia (null if unknown) } (returned instead of messages when folder is DRAFTS, alongside folder: 'DRAFTS')",
     "count": "number of items returned",
     "next_page_token": "string? (pass as page_token for the next page)",
-    "mailbox_errors": "array? of { mailbox, mailbox_label, error } for failed mailboxes"
+    "mailbox_errors": "array? of { mailbox, mailbox_label, error }: mailboxes not checked; say so",
+    "skipped_mailboxes": "array? of { mailbox, mailbox_label }: not read on this page; say so"
   },
   "permissions": [],
   "secrets": [],

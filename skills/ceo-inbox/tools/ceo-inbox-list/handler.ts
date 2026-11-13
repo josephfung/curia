@@ -78,7 +78,7 @@ export class CeoInboxListHandler implements ToolHandler {
             truncated = all.truncated;
           }
           return { drafts: filterModifiedSince(fetched, since.seconds).slice(0, limit), truncated, scanned: fetched.length };
-        });
+        }, { log: ctx.log, tool: 'ceo-inbox-list' });
         if (ok.length === 0) {
           ctx.log.error({ errors }, 'ceo-inbox-list: failed to list drafts');
           return { success: false, error: allFailedMessage('Failed to list principal inbox drafts', errors) };
@@ -117,7 +117,7 @@ export class CeoInboxListHandler implements ToolHandler {
     // A token continues only the listing that made it: same folder, unread filter and mailbox
     // selection (one named mailbox, or every one).
     const scope = pageScope({ tool: 'ceo-inbox-list', folder, unreadOnly, mailbox: typeof input.mailbox === 'string' ? input.mailbox : null });
-    const token = readPageToken(input, limit, scope);
+    const token = readPageToken(input, limit, scope, { log: ctx.log, tool: 'ceo-inbox-list' });
     if (!token.ok) return { success: false, error: token.error };
 
     ctx.log.info({ limit, folder, unreadOnly }, 'ceo-inbox-list: listing messages');
@@ -156,6 +156,7 @@ export class CeoInboxListHandler implements ToolHandler {
       // limit+1 kept items each so has_more is known without another round-trip. The filters are
       // re-sent on every page (#2377).
       const cross = await listAcrossMailboxes<NylasMessageSummary>(targets, token.cursors, {
+        failures: { log: ctx.log, tool: 'ceo-inbox-list' },
         limit,
         need: limit + 1,
         pageCap: LIST_PAGE_CAP,
@@ -210,6 +211,8 @@ export class CeoInboxListHandler implements ToolHandler {
           // stops instead, and says so, so older mail is not silently abandoned.
           ...(cross.capped ? { scan_incomplete: true } : {}),
           ...(cross.errors.length > 0 ? { mailbox_errors: cross.errors } : {}),
+          // A live mailbox the token marks finished is named, not silently left out (S2).
+          ...(cross.skipped.length > 0 ? { skipped_mailboxes: cross.skipped } : {}),
         },
       };
     } catch (err) {

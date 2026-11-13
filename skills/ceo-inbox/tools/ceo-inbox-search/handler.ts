@@ -99,7 +99,7 @@ export class CeoInboxSearchHandler implements ToolHandler {
           }
           // Date filter before the slice so the limit counts matching drafts (#2474).
           return filterModifiedSince(allDrafts.filter((d) => draftMatchesQuery(d, query)), since.seconds);
-        });
+        }, { log: ctx.log, tool: 'ceo-inbox-search' });
         if (ok.length === 0) {
           ctx.log.error({ errors }, 'ceo-inbox-search: draft search failed on every mailbox');
           return { success: false, error: allFailedMessage('Failed to search principal inbox drafts', errors) };
@@ -129,7 +129,7 @@ export class CeoInboxSearchHandler implements ToolHandler {
     // is bound to its query, Spam/Trash choice and mailbox selection (one named mailbox, or every
     // one), so a changed request is refused, not ignored.
     const scope = pageScope({ tool: 'ceo-inbox-search', query, includeSpamAndTrash, mailbox: typeof input.mailbox === 'string' ? input.mailbox : null });
-    const token = readPageToken(input, limit, scope);
+    const token = readPageToken(input, limit, scope, { log: ctx.log, tool: 'ceo-inbox-search' });
     if (!token.ok) return { success: false, error: token.error };
 
     try {
@@ -139,6 +139,7 @@ export class CeoInboxSearchHandler implements ToolHandler {
       // does not re-send filters beside a search query).
       let omittedHidden = 0;
       const cross = await listAcrossMailboxes<NylasMessageSummary>(targets, token.cursors, {
+        failures: { log: ctx.log, tool: 'ceo-inbox-search' },
         limit,
         need: limit,
         pageCap: SEARCH_PAGE_CAP,
@@ -181,6 +182,8 @@ export class CeoInboxSearchHandler implements ToolHandler {
           count: cross.items.length,
           ...(cross.anyOpen ? { next_page_token: encodePageToken(cross.positions, limit, scope) } : {}),
           ...(cross.errors.length > 0 ? { mailbox_errors: cross.errors } : {}),
+          // A live mailbox the token marks finished is named, not silently left out (S2).
+          ...(cross.skipped.length > 0 ? { skipped_mailboxes: cross.skipped } : {}),
         },
       };
     } catch (err) {

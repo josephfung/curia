@@ -306,6 +306,17 @@ describe('CeoInboxDraftComposeHandler', () => {
       const data = (result as { data: Record<string, unknown> }).data;
       expect(data).not.toHaveProperty('evidence');
       expect(data).not.toHaveProperty('needs_mailbox');
+      // The account is still named, as reply and edit do (B9).
+      expect(data).toMatchObject({ mailbox: 'work', mailbox_label: 'Work' });
+    });
+
+    it('a mailbox list that throws is a plain failure, never a thrown skill (SF7)', async () => {
+      const ctx = twoCtx({ mailbox: 'work' });
+      (ctx.principalMailboxes as unknown as { list: () => Promise<unknown[]> }).list = async () => { throw new Error('registry down'); };
+      const result = await handler.execute(ctx);
+      expect(result).toEqual({ success: false, error: 'The principal mailboxes are unavailable. No draft was saved.' });
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect((ctx.log.error as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(expect.objectContaining({ errName: 'Error' }), expect.any(String));
     });
   });
 

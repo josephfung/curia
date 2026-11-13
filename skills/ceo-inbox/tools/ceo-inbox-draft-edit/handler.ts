@@ -6,6 +6,9 @@ import {
   type MailboxClient,
 } from '../../../_shared/principal-mailbox-client.js';
 import { MissingNylasApiKeyError, RemovedMailboxError, UnknownMailboxError } from '../../../../src/principal-mailboxes/types.js';
+import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
+import { nylasStatus } from '../../../../src/channels/email/nylas-message-id.js';
+import { budgetExpired, remainingMs } from '../../../../src/util/call-budget.js';
 import {
   htmlToPlainText,
   type NylasDraftFull,
@@ -27,6 +30,12 @@ import {
 
 const MAX_BODY_LENGTH = 50_000;
 const NOT_CHANGED = 'The draft was not changed.';
+
+/**
+ * The least time a move needs left before it creates the new draft (SF11, S3): a create and a
+ * delete, each one request. With less, the move is refused before anything is written.
+ */
+const MOVE_MIN_REMAINING_MS = 5_000;
 
 const TO: RecipientFieldPair = { reference: 'add_to', raw: 'add_to_addresses' };
 const CC: RecipientFieldPair = { reference: 'add_cc', raw: 'add_cc_addresses' };
@@ -401,7 +410,7 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
     try {
       target = await mailboxClient(ctx, args.targetId);
     } catch (err) {
-      log.error({ err, draftId }, 'ceo-inbox-draft-edit: move target mailbox unavailable');
+      log.error({ ...grantSafeErrorFields(err), draftId }, 'ceo-inbox-draft-edit: move target mailbox unavailable');
       const known = err instanceof UnknownMailboxError || err instanceof RemovedMailboxError || err instanceof MissingNylasApiKeyError;
       return { success: false, error: `${known ? err.message : 'The target mailbox is unavailable.'} ${NOT_CHANGED}` };
     }
@@ -410,7 +419,7 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
     try {
       current = await source.client.getDraft(draftId);
     } catch (err) {
-      log.error({ err, draftId }, 'ceo-inbox-draft-edit: could not read the draft to move it');
+      log.error({ ...grantSafeErrorFields(err), draftId }, 'ceo-inbox-draft-edit: could not read the draft to move it');
       return { success: false, error: `Failed to read the draft in the ${source.mailbox.label} mailbox. ${NOT_CHANGED}` };
     }
     // The Nylas client reads a draft's attachments as a count only and cannot copy their bytes to
@@ -442,6 +451,15 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
     // Gmail gives every draft a thread id, so reply-ness comes from reply_to_message_id.
     const newThread = (current.replyToMessageId ?? '') !== '';
 
+    // Refuse before writing anything when the call is cancelled or nearly out of time (SF11, S3).
+    // Residual (same class as the compose and reply timeouts, #2474; see R39/R40): a create that
+    // starts with enough time can still finish after the deadline, leaving the new draft beside
+    // the original. The agent then sees a timeout, and ceo-inbox-list shows both drafts.
+    if (budgetExpired(ctx) || remainingMs(ctx) < MOVE_MIN_REMAINING_MS) {
+      log.warn({ draftId, remainingMs: remainingMs(ctx) }, 'ceo-inbox-draft-edit: too little time left to move the draft — refused before creating it');
+      return { success: false, error: `There isn't enough time left in this call to move the draft safely. ${NOT_CHANGED} Try the move again.` };
+    }
+
     let created: Awaited<ReturnType<MailboxClient['client']['createDraft']>>;
     try {
       created = await target.client.createDraft({
@@ -453,7 +471,7 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
       });
     } catch (err) {
       // Nothing was created, and the original is untouched.
-      log.error({ err, draftId, targetMailbox: target.mailbox.id }, 'ceo-inbox-draft-edit: creating the draft in the target mailbox failed');
+      log.error({ ...grantSafeErrorFields(err), draftId, targetMailbox: target.mailbox.id }, 'ceo-inbox-draft-edit: creating the draft in the target mailbox failed');
       return { success: false, error: `Failed to create the draft in the ${target.mailbox.label} mailbox. The original draft is unchanged in ${source.mailbox.label}.` };
     }
 
@@ -465,15 +483,20 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
       to: created.to,
       cc: created.cc,
       body: args.markdownBody ?? htmlToPlainText(body),
-    }).catch((err) => log.error({ err }, 'ceo-inbox-draft-edit: voice snapshot capture rejected'));
+    }).catch((err) => log.error({ ...grantSafeErrorFields(err) }, 'ceo-inbox-draft-edit: voice snapshot capture rejected'));
 
     let warning: string | undefined;
     try {
       await source.client.deleteDraft(draftId);
     } catch (err) {
-      // The new draft exists: this is a success, never a failure, or the agent would retry the move.
-      log.error({ err, draftId, newDraftId: created.id }, 'ceo-inbox-draft-edit: deleting the original after the move failed');
-      warning = `The draft was created in ${target.mailbox.label}, but the original could not be deleted and still exists in ${source.mailbox.label} (draft ${draftId}).`;
+      if (nylasStatus(err) === 404) {
+        // Already gone (the principal deleted or sent it meanwhile): the move's goal holds (SF11).
+        log.info({ draftId, newDraftId: created.id }, 'ceo-inbox-draft-edit: the original was already gone when the move deleted it');
+      } else {
+        // The new draft exists: this is a success, never a failure, or the agent would retry the move.
+        log.error({ ...grantSafeErrorFields(err), draftId, newDraftId: created.id }, 'ceo-inbox-draft-edit: deleting the original after the move failed');
+        warning = `The draft was created in ${target.mailbox.label}, but the original could not be deleted and still exists in ${source.mailbox.label} (draft ${draftId}).`;
+      }
     }
 
     log.info(

@@ -1,6 +1,6 @@
 {
   "name": "ceo-inbox-draft-compose",
-  "description": "Compose a brand-new draft email in the principal's personal inbox for cold outreach (no existing thread). Use when the principal wants to initiate a new email to someone, not reply to an existing message. Address a contact by contact ID in to/cc; the address is looked up and saved with their name. Someone who is not a contact goes in to_addresses/cc_addresses, copied exactly from the principal's mail (ceo-inbox-search or ceo-inbox-read headers) or from the principal's own message; any other address is refused and nothing is saved. Intended for use by the ceo-inbox agent — accesses the principal's personal email via dedicated secrets, do not call from other agents. With several accounts and no mailbox, it returns needs_mailbox plus per-account evidence. Use the account without mentioning it when the principal named it, a standing preference, rule or per-contact preference covers it, or evidence and topic agree; use the likelier one and say which in a few words when evidence leans but the other is reasonable; ask the principal, naming the options, when evidence is split and topic does not settle it. A remembered preference naming a mailbox not in the list is history, not a rule.",
+  "description": "Compose a brand-new draft email in the principal's email for cold outreach (no existing thread). Use when the principal wants to initiate a new email to someone, not reply to an existing message. Address a contact by contact ID in to/cc; the address is looked up and saved with their name. Someone who is not a contact goes in to_addresses/cc_addresses, copied exactly from the principal's mail (ceo-inbox-search or ceo-inbox-read headers) or from the principal's own message; any other address is refused and nothing is saved. Intended for use by the ceo-inbox agent — accesses the principal's email, do not call from other agents. With several accounts and no mailbox, it returns needs_mailbox plus per-account evidence. Use the account without mentioning it when the principal named it, a standing preference, rule or per-contact preference covers it, or evidence and topic agree; use the likelier one and say which in a few words when evidence leans but the other is reasonable; ask the principal, naming the options, when evidence is split and topic does not settle it. A remembered preference naming a mailbox not in the list is history, not a rule.",
   "version": "0.4.4",
   "sensitivity": "normal",
   "action_risk": "low",
@@ -12,7 +12,7 @@
     "to_addresses": "string[]? (email addresses of people who are not contacts, copied exactly from the principal's mail or the principal's message. At least one of to or to_addresses is required)",
     "cc_addresses": "string[]? (CC addresses of people who are not contacts, same rule as to_addresses)",
     "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string}. file_url must be a file:// URL from ceo-inbox-download-attachment or similar. Max 10 attachments, 20 MB total.)",
-    "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
+    "mailbox": "string? (Mailbox id. Required once there are several accounts; choose per the description.)"
   },
   "outputs": {
     "draft_id": "string (Nylas draft ID)",
