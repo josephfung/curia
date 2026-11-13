@@ -108,6 +108,7 @@ import { htmlToText } from '../channels/email/html-to-text.js';
 import type { SendStakes } from '../autonomy/judge-brief.js';
 import type { CallBudget } from '../util/call-budget.js';
 import { nylasMessageFailure } from '../channels/email/nylas-message-id.js';
+import { normalizeForComparison } from '../channels/email/message-converter.js';
 import {
   PRINCIPAL_RECIPIENT_ALIAS,
   parseRecipientReference,
@@ -608,12 +609,16 @@ function reviewHoldDigest(rules: readonly string[], held: string): string {
   return principalFacing(held);
 }
 
+/** The content filter's finding when the filter itself threw (fail-closed). */
+const FILTER_ERROR_RULE = 'filter-error';
+
 /** The digest reason for a stop before the review: the contact check, identity gate, redactor or content filter. */
 function checkStopDigest(result: OutboundSendResult): string {
   const rules = result.blockedRules ?? [];
   const said = result.blockedReason === 'Recipient is blocked' ? 'One of the recipients is blocked.'
     : rules.includes('unresolved-identity') ? "It names someone Curia couldn't identify."
       : result.blockedReason?.startsWith('pii_redactor_error') ? "Curia couldn't check it for personal details."
+        : rules.includes(FILTER_ERROR_RULE) ? "Curia's content check failed to run."
         : rules.length > 0 ? "Curia's content check stopped it."
           : "Curia's checks stopped it.";
   return `${said} ${IN_YOUR_DRAFTS}`;
@@ -675,10 +680,12 @@ export function refusalKindOf(refusal: PrincipalSendRefusal): RefusalKind {
 
 /**
  * The first daily-cap stop in a rolling 24h files this notice (digest items are immutable). It
- * names the reply that hit the limit (SF10), with the mailbox when there are several.
+ * names the reply that hit the limit (SF10), with the mailbox when there are several. The limits are
+ * checked before the reply itself is (latest message, financial details, band review), so no limit
+ * text says the reply was otherwise ready to send.
  */
 function dailyLimitNotice(what: string, where: string): string {
-  return `Reached the daily limit of ${AUTONOMOUS_DAILY_CAP} replies Curia sends on its own. Waiting only because of the daily limit: ${what}${where}. Later replies it would have sent wait in your Drafts too, until you send them or the limit resets.`;
+  return `Reached the daily limit of ${AUTONOMOUS_DAILY_CAP} replies Curia sends on its own. Waiting because of the daily limit: ${what}${where}. Later replies it would have sent wait in your Drafts too, until you send them or the limit resets.`;
 }
 
 /** sendPrincipalDraft's result (#2474). */
@@ -1845,7 +1852,7 @@ export class OutboundGateway {
         'outbound-gateway: content filter threw — treating as blocked (fail-closed)',
       );
       filterPassed = false;
-      filterFindings = [{ rule: 'filter-error', detail: 'Content filter threw an unexpected error' }];
+      filterFindings = [{ rule: FILTER_ERROR_RULE, detail: 'Content filter threw an unexpected error' }];
     }
 
     if (!filterPassed) {
@@ -4744,7 +4751,10 @@ export class OutboundGateway {
         const bounced = checked.bounced === true;
         const reason = bounced ? AUTONOMOUS_BOUNCE_REASON : `${/[.!?]$/.test(why) ? why : `${why}.`}${STILL_A_DRAFT}`;
         const digest = bounced ? bounceDigest(ruleList) : checkStopDigest(checked.result);
-        await this.recordAutonomousStop({ mailbox, mailboxId, conversationIds, draftId, draft, lookedUp, kind: 'judgement', reason, reasonCode: rules ?? 'check_stop', digest, options });
+        // A content filter that threw is a failure, not a call on the reply: it must not write a
+        // held marker that keeps the thread in cooldown after the filter recovers.
+        const filterFailed = ruleList.includes(FILTER_ERROR_RULE);
+        await this.recordAutonomousStop({ mailbox, mailboxId, conversationIds, draftId, draft, lookedUp, kind: filterFailed ? 'other' : 'judgement', reason, reasonCode: rules ?? 'check_stop', digest, options });
         this.log.info({ draftId, rules: checked.result.blockedRules }, 'outbound-gateway: autonomous principal-mailbox draft not sent');
         return { ...checked.result, blockedReason: reason, leftAsDraft: true };
       }
@@ -4853,12 +4863,17 @@ export class OutboundGateway {
     const all = [...new Set([...this.principalEmailAddresses(), ...(await this.principalEmailAddressLookup())].map((a) => a.trim().toLowerCase()).filter((a) => a !== ''))];
     const own = (await this.mailboxAddressLookup?.(mailboxId))?.trim().toLowerCase();
     if (own) {
-      const others = all.filter((a) => a !== own);
+      // Compared the way the limit checks compare (principalMatcher): case and plus-tags ignored,
+      // so a verified alias of the sending address (pat+tag@) is that address, not "another".
+      const ownKey = normalizeForComparison(own);
+      const others = all.filter((a) => normalizeForComparison(a) !== ownKey);
       return { all, others, offLimits: others };
     }
     // R43: with the mailbox's own address unknown and several principal addresses, none can be
     // told from "other", so none may be a recipient. The mail answered keeps the narrower rule.
-    return { all, others: [], offLimits: all.length >= 2 ? all : [] };
+    // Aliases of one address count once.
+    const distinct = new Set(all.map(normalizeForComparison)).size;
+    return { all, others: [], offLimits: distinct >= 2 ? all : [] };
   }
 
   /** Every verified, active principal identifier, any channel (R33, #2475). */
@@ -5024,9 +5039,9 @@ export class OutboundGateway {
     }
     await record();
     let text: string;
-    if (reason === 'daily_cap') text = `Waiting only because of the daily limit: ${what}${where}.`;
+    if (reason === 'daily_cap') text = `Waiting because of the daily limit: ${what}${where}.`;
     else if (cooldownHeld) text = `Waiting because Curia held an earlier reply on this thread today: ${what}${where}.`;
-    else text = `Waiting only because Curia already replied on this thread today: ${what}${where}.`;
+    else text = `Waiting because Curia already replied on this thread today: ${what}${where}.`;
     await this.publishMailboxDigest(text, options);
   }
 
@@ -5357,7 +5372,7 @@ export class OutboundGateway {
         'outbound-gateway: content filter threw — treating as blocked (fail-closed)',
       );
       filterPassed = false;
-      filterFindings = [{ rule: 'filter-error', detail: 'Content filter threw an unexpected error' }];
+      filterFindings = [{ rule: FILTER_ERROR_RULE, detail: 'Content filter threw an unexpected error' }];
     }
 
     if (!filterPassed) {

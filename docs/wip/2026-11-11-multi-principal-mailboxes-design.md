@@ -460,7 +460,7 @@ maintainer then. Not built up front.
   - The first capped reply of a day files one notice: "Reached today's limit of 10
     replies sent on its own at 2:14 pm. Replies Curia would have sent are waiting in
     your Drafts." Digest items can't be edited once filed, so each later capped reply
-    files a short item under its own heading ("Waiting only because of the daily limit:
+    files a short item under its own heading ("Waiting because of the daily limit:
     Jane re Q3 audit (work)"), never "Left as a draft". Names the mailbox when more than
     one exists.
   - Holds for judgement ("Left as a draft …: held because …") stay separate items.
