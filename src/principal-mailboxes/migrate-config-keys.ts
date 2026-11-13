@@ -145,7 +145,11 @@ export async function migrateLearningKeys(store: SendingConfigStore, migratedId:
         continue;
       }
     }
-    await store.set(STATE_NAMESPACE, globalKey, '');
+    const clear = await store.set(STATE_NAMESPACE, globalKey, '');
+    if (typeof clear === 'object' && clear !== null && (clear as { stored?: unknown }).stored === false) {
+      logger.warn({ name }, 'Could not clear a migrated sent-observe global key; retried at the next boot');
+      continue;
+    }
     cleared += 1;
   }
   return cleared;

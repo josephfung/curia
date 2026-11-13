@@ -15,6 +15,7 @@ import {
   globalStateKey,
   mailboxStateKey,
   GLOBAL_STATE_PREFIX as GLOBAL_PREFIX,
+  FALLBACK_MAILBOX_ID,
   type MailboxStateName,
 } from '../../src/principal-mailboxes/state-keys.js';
 import type { ConfigStore } from '../../src/memory/config-store.js';
@@ -92,8 +93,9 @@ export async function resolveStateScopes(ctx: ToolContext): Promise<MailboxState
   return (await liveMailboxScopes(ctx)).map((x) => x.scope);
 }
 
-/** True when a record's `mailbox` belongs to the scope. A record with none belongs to the migrated mailbox. */
+/** True when a record's `mailbox` belongs to the scope. A record with none, or with the deferred-fallback id (R61), belongs to the migrated mailbox. */
 export function recordBelongsTo(scope: MailboxStateScope, recordMailbox: string | undefined): boolean {
   if (scope.id === null) return true;
-  return recordMailbox === undefined ? scope.legacy : recordMailbox === scope.id;
+  if (recordMailbox === undefined || recordMailbox === FALLBACK_MAILBOX_ID) return scope.legacy || recordMailbox === scope.id;
+  return recordMailbox === scope.id;
 }
