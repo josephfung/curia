@@ -1,5 +1,5 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { encodePageToken } from '../../../_shared/composite-page-token.js';
+import { encodePageToken, pageScope } from '../../../_shared/composite-page-token.js';
 import { allFailedMessage, collectAcross, listAcrossMailboxes, mergeNewestFirst, readPageToken, resolveTargets } from '../../../_shared/cross-mailbox-listing.js';
 import { curiaOwnAddresses } from '../../../_shared/curia-own-addresses.js';
 import { type NylasDraftSummary, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
@@ -125,7 +125,10 @@ export class CeoInboxSearchHandler implements ToolHandler {
       'ceo-inbox-search: searching messages',
     );
 
-    const token = readPageToken(input, limit);
+    // A follow-up page sends only the Nylas cursor, which continues the original search: a token
+    // is bound to its query and Spam/Trash choice so a changed query is refused, not ignored.
+    const scope = pageScope({ tool: 'ceo-inbox-search', query, includeSpamAndTrash });
+    const token = readPageToken(input, limit, scope);
     if (!token.ok) return { success: false, error: token.error };
 
     try {
@@ -175,7 +178,7 @@ export class CeoInboxSearchHandler implements ToolHandler {
         data: {
           messages: cross.items,
           count: cross.items.length,
-          ...(cross.anyOpen ? { next_page_token: encodePageToken(cross.positions, limit) } : {}),
+          ...(cross.anyOpen ? { next_page_token: encodePageToken(cross.positions, limit, scope) } : {}),
           ...(cross.errors.length > 0 ? { mailbox_errors: cross.errors } : {}),
         },
       };

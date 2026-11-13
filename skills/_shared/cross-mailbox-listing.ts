@@ -69,10 +69,11 @@ export async function resolveTargets(
 
 /**
  * The optional `page_token` input, decoded. An undecodable token, one made at another page size
- * (its skip counts would point at the wrong items), or one that lacks the explicitly named
+ * (its skip counts would point at the wrong items), one made for another query or other filters
+ * (`scope`: it would continue the earlier listing), or one that lacks the explicitly named
  * mailbox is an error that says how to recover.
  */
-export function readPageToken(input: unknown, limit: number): { ok: true; cursors: PageCursors | undefined } | { ok: false; error: string } {
+export function readPageToken(input: unknown, limit: number, scope: string): { ok: true; cursors: PageCursors | undefined } | { ok: false; error: string } {
   const rec = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
   const raw = rec['page_token'];
   if (raw === undefined || raw === null || raw === '') return { ok: true, cursors: undefined };
@@ -85,6 +86,9 @@ export function readPageToken(input: unknown, limit: number): { ok: true; cursor
   }
   if (decoded.limit !== limit) {
     return { ok: false, error: 'Retry without page_token (the page size changed).' };
+  }
+  if (decoded.scope !== scope) {
+    return { ok: false, error: 'That page_token belongs to another query or other filters. Retry without page_token.' };
   }
   const named = rec['mailbox'];
   if (typeof named === 'string' && !(named in decoded.positions)) {
@@ -109,16 +113,37 @@ export interface ScanResult<T> {
   capped: boolean;
 }
 
-function positionAfter(cursor: string | null, consumed: number, rawLength: number, next: string | undefined): MailboxPosition | null {
-  if (consumed < rawLength) return { cursor, skip: consumed };
-  return next && rawLength > 0 ? { cursor: next, skip: 0 } : null;
+type Anchored = { id: string; date: number };
+
+function positionAfter(cursor: string | null, raw: Anchored[], consumed: number, next: string | undefined): MailboxPosition | null {
+  if (consumed < raw.length) {
+    const last = raw[consumed - 1]!;
+    return { cursor, skip: consumed, after: { id: last.id, date: last.date } };
+  }
+  return next && raw.length > 0 ? { cursor: next, skip: 0 } : null;
+}
+
+/**
+ * Where to start in a re-fetched page. Its contents may have changed since the token was made
+ * (triage archives or reads mail, so it leaves an unread listing), which makes a raw offset skip
+ * messages. Resume just after the anchor item when it is still there; when it is gone, at the
+ * first item not newer than it (pages are newest first). An item with the anchor's exact date
+ * may then come back a second time, but none is skipped.
+ */
+function resumeIndex(raw: Anchored[], start: MailboxPosition): number {
+  if (!start.after) return start.skip;
+  const { id, date } = start.after;
+  const at = raw.findIndex((m) => m.id === id);
+  if (at >= 0) return at + 1;
+  const older = raw.findIndex((m) => m.date <= date);
+  return older < 0 ? raw.length : older;
 }
 
 /**
  * Scan one mailbox from `start` until `need` kept items are collected, the mailbox ends, or the
  * page cap is hit. `keep` filters a raw item; skipped items still advance the position.
  */
-export async function scanMailbox<T>(opts: {
+export async function scanMailbox<T extends Anchored>(opts: {
   start: MailboxPosition;
   need: number;
   pageCap: number;
@@ -127,17 +152,19 @@ export async function scanMailbox<T>(opts: {
 }): Promise<ScanResult<T>> {
   const items: Array<ScanItem<T>> = [];
   let cursor = opts.start.cursor;
-  let skip = opts.start.skip;
+  let skip: number | undefined;
   let end: MailboxPosition | null = opts.start;
   let capped = false;
   for (let page = 0; page < opts.pageCap; page++) {
     const { messages: raw, nextCursor } = await opts.fetchPage(cursor ?? undefined);
-    for (let i = skip; i < raw.length; i++) {
+    // Only the first page is a resumed one; later pages start at their beginning.
+    const from = skip ?? resumeIndex(raw, opts.start);
+    for (let i = from; i < raw.length; i++) {
       const item = raw[i]!;
-      if (opts.keep(item)) items.push({ item, after: positionAfter(cursor, i + 1, raw.length, nextCursor) });
+      if (opts.keep(item)) items.push({ item, after: positionAfter(cursor, raw, i + 1, nextCursor) });
     }
     skip = 0;
-    end = positionAfter(cursor, raw.length, raw.length, nextCursor);
+    end = positionAfter(cursor, raw, raw.length, nextCursor);
     if (items.length >= opts.need || end === null) break;
     if (page === opts.pageCap - 1) {
       capped = true;
@@ -251,7 +278,9 @@ export async function listAcrossMailboxes<T extends { id: string; date: number }
     }
   });
 
-  const anyOpen = ok.some((o) => positions[o.target.mailbox.id] !== null);
+  // A failed mailbox keeps its start point, so it counts as open: the token retries it (its
+  // note says a later call does) even when every readable mailbox is finished.
+  const anyOpen = Object.values(positions).some((p) => p !== null);
   return {
     items,
     hasMore: leftover || cappedWithItems,
