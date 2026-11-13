@@ -29,6 +29,12 @@
 // erasing its lineage, so it is closed (RR-M1; set aside, warned once, if closing fails) and,
 // when no other own task can be re-woken, a fresh system-originated drain is created in its place.
 const HEARTBEAT_CREATED_BY = 'heartbeat';
+/**
+ * Every status an unfinished drain can hold: the task-lifecycle ones, plus the scheduler's
+ * `paused` (an operator or drift pause sets the task too) and `active` (what a resume sets it
+ * to). Missing those, a paused or resumed drain would look absent and get a second drain beside it.
+ */
+const OPEN_DRAIN_STATUSES = ['open', 'in_progress', 'active', 'paused'] as const;
 import type { Logger } from '../logger.js';
 import type { TaskListRow, TaskRepo } from '../db/task-repo.js';
 import type { SchedulerService } from './scheduler-service.js';
@@ -102,7 +108,7 @@ export async function closeLegacyInboxDrains(
   taskRepo: Pick<TaskRepo, 'listTasks' | 'completeTask'>,
   logger: Logger,
 ): Promise<number> {
-  const open = (await taskRepo.listTasks({ statuses: ['open', 'in_progress'], tag: INBOX_DRAIN_TAG, limit: 200 }))
+  const open = (await taskRepo.listTasks({ statuses: [...OPEN_DRAIN_STATUSES], tag: INBOX_DRAIN_TAG, limit: 200 }))
     .filter((t) => t.agentId === INBOX_AGENT && t.createdBy !== HEARTBEAT_CREATED_BY);
   let closed = 0;
   for (const t of open) {
@@ -228,7 +234,7 @@ export class InboxHeartbeat {
   /** The heartbeat's own open drain tasks (R56: only those it created). */
   private async ownOpenDrains(): Promise<TaskListRow[]> {
     return (await this.o.taskRepo.listTasks({
-      statuses: ['open', 'in_progress'],
+      statuses: [...OPEN_DRAIN_STATUSES],
       tag: INBOX_DRAIN_TAG,
       createdBy: HEARTBEAT_CREATED_BY,
       limit: 50,

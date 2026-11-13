@@ -190,6 +190,14 @@ describe('InboxHeartbeat.tick', () => {
     expect(t.log.warn.mock.calls.filter((c) => String(c[1]).includes('running for an hour'))).toHaveLength(1);
   });
 
+  it('looks for its drains in every unfinished status, the scheduler\'s paused and active included', async () => {
+    const t = make();
+    await t.hb.tick(NOW);
+    expect(t.listTasks).toHaveBeenCalledWith(expect.objectContaining({
+      tag: 'inbox-drain', createdBy: 'heartbeat', statuses: ['open', 'in_progress', 'active', 'paused'],
+    }));
+  });
+
   it('a paused drain is an operator hold: warns, does not wake or create', async () => {
     const t = make({ tasks: [taskRow({ wakeState: 'paused', nextWakeAt: '2026-11-12T16:00:00.000Z' })] });
     expect(await t.hb.tick(NOW)).toBe('drain_running');
@@ -394,7 +402,7 @@ describe('closeLegacyInboxDrains (BR-C2)', () => {
     const log = logger();
     const closed = await closeLegacyInboxDrains({ listTasks, completeTask }, log as never);
     expect(closed).toBe(2);
-    expect(listTasks).toHaveBeenCalledWith(expect.objectContaining({ tag: 'inbox-drain', statuses: ['open', 'in_progress'] }));
+    expect(listTasks).toHaveBeenCalledWith(expect.objectContaining({ tag: 'inbox-drain', statuses: ['open', 'in_progress', 'active', 'paused'] }));
     expect(completeTask.mock.calls.map((c) => (c as unknown[])[0])).toEqual(['legacy-1', 'legacy-2']);
     expect(String((completeTask.mock.calls[0] as unknown[])[1])).toContain('superseded by the inbox heartbeat');
     expect(log.info).toHaveBeenCalledWith(expect.objectContaining({ closed: 2 }), expect.any(String));
