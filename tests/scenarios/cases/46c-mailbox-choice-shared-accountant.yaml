@@ -81,6 +81,9 @@ tool_stubs:
         body_plain: "The PBC list is attached."
         labels: [INBOX]
         attachments: []
+    # The moved copy, read back to check the move.
+    - match: { draft_id: draft-r7f3a9c3 }
+      return: { id: draft-r7f3a9c3, threadId: thr-46c-new, to: [{ name: Priya Nair, email: priya.nair@ledger.example.test }], cc: [], bcc: [], subject: Paperwork, body_plain: "Hi Priya, could you send over the paperwork we discussed?", body_html: "<p>Hi Priya, could you send over the paperwork we discussed?</p>", is_draft: true }
   ceo-inbox-draft-edit:
     - match: { move_to_mailbox: work }
       return: { draft_id: draft-r7f3a9c3, mailbox: work, mailbox_label: Work, moved_from: { mailbox: personal, draft_id: draft-r4b81d6e }, new_thread: false, subject: Paperwork, to: [{ name: Priya Nair, email: priya.nair@ledger.example.test }], cc: [] }
