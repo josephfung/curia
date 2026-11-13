@@ -712,6 +712,47 @@ describe('CeoInboxListHandler — every mailbox (#2475)', () => {
     expect((second.data as Data).messages.map((m) => m.id)).toEqual(['w2', 'w3']);
   });
 
+  it('does not skip mail when triage removes more than a provider page between calls', async () => {
+    const work = Array.from({ length: 10 }, (_, i) => rawMessage(`w${i}`, 100 - i));
+    // Offset cursors with 2-item pages: removing four messages shifts every later page by two.
+    serve({ 'grant-work': work }, { pageSize: 2 });
+    const first = await run({ limit: 4, mailbox: 'work' });
+    if (!first.success) throw new Error(first.error);
+    expect((first.data as Data).messages.map((m) => m.id)).toEqual(['w0', 'w1', 'w2', 'w3']);
+    work.splice(0, 4);
+    const second = await run({ limit: 4, mailbox: 'work', page_token: (first.data as Data).next_page_token });
+    if (!second.success) throw new Error(second.error);
+    expect((second.data as Data).messages.map((m) => m.id)).toEqual(['w4', 'w5', 'w6', 'w7']);
+  });
+
+  it('pages without repeats when nothing leaves the listing between calls', async () => {
+    const work = Array.from({ length: 9 }, (_, i) => rawMessage(`w${i}`, 100 - i));
+    const f = serve({ 'grant-work': work }, { pageSize: 2 });
+    const seen: string[] = [];
+    let token: string | undefined;
+    for (let call = 0; call < 10; call++) {
+      const result = await run({ limit: 2, mailbox: 'work', ...(token ? { page_token: token } : {}) });
+      if (!result.success) throw new Error(result.error);
+      seen.push(...(result.data as Data).messages.map((m) => m.id));
+      token = (result.data as Data).next_page_token;
+      if (!token) break;
+    }
+    expect(seen).toEqual(work.map((m) => m.id));
+    expect(f.requests.length).toBeLessThan(40);
+  });
+
+  it('a failed mailbox does not keep has_more set once the readable one is finished', async () => {
+    // The unread drain re-lists from the top after every batch, which retries the failed mailbox;
+    // has_more here would wake the drain again for a mailbox that is still failing (#2035).
+    serve({ 'grant-work': [rawMessage('w1', 100)] }, { failing: ['grant-personal'] });
+    const result = await run({ limit: 10 });
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as Data;
+    expect(data.has_more).toBe(false);
+    expect(data.next_page_token).toBeUndefined();
+    expect(data.mailbox_errors?.[0]).toMatchObject({ mailbox: 'personal', note: expect.stringContaining('later call retries') });
+  });
+
   it('refuses a page_token made for another folder or unread filter', async () => {
     serve({ 'grant-work': Array.from({ length: 6 }, (_, i) => rawMessage(`w${i}`, 100 - i)) });
     const first = await run({ limit: 2, mailbox: 'work' });

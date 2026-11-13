@@ -115,33 +115,30 @@ export interface ScanResult<T> {
 
 type Anchored = { id: string; date: number };
 
-function positionAfter(cursor: string | null, raw: Anchored[], consumed: number, next: string | undefined): MailboxPosition | null {
-  if (consumed < raw.length) {
-    const last = raw[consumed - 1]!;
-    return { cursor, skip: consumed, after: { id: last.id, date: last.date } };
-  }
-  return next && raw.length > 0 ? { cursor: next, skip: 0 } : null;
-}
-
 /**
- * Where to start in a re-fetched page. Its contents may have changed since the token was made
- * (triage archives or reads mail, so it leaves an unread listing), which makes a raw offset skip
- * messages. Resume just after the anchor item when it is still there; when it is gone, at the
- * first item not newer than it (pages are newest first). An item with the anchor's exact date
- * may then come back a second time, but none is skipped.
+ * Where to resume after the first `consumed` items of a page read at `cursor`. Always the page
+ * that held the last consumed item, anchored on it, even when that page was read to its end:
+ * a provider cursor for the next page may be an offset, and mail leaving the listing between
+ * calls would shift that page past unread messages. Re-reading the anchored page finds them.
+ * Null when the mailbox has nothing after this page.
  */
-function resumeIndex(raw: Anchored[], start: MailboxPosition): number {
-  if (!start.after) return start.skip;
-  const { id, date } = start.after;
-  const at = raw.findIndex((m) => m.id === id);
-  if (at >= 0) return at + 1;
-  const older = raw.findIndex((m) => m.date <= date);
-  return older < 0 ? raw.length : older;
+function positionAfter(cursor: string | null, raw: Anchored[], consumed: number, next: string | undefined): MailboxPosition | null {
+  if (raw.length === 0 || (consumed >= raw.length && !next)) return null;
+  const last = raw[consumed - 1]!;
+  return { cursor, skip: consumed, after: { id: last.id, date: last.date } };
 }
 
 /**
  * Scan one mailbox from `start` until `need` kept items are collected, the mailbox ends, or the
  * page cap is hit. `keep` filters a raw item; skipped items still advance the position.
+ *
+ * A resumed page may have changed since the token was made: triage archives or reads mail, so it
+ * leaves an unread listing, and a raw offset would then skip messages. With an anchor (the last
+ * item consumed) the scan resumes just after it when it is still on the page. When it is gone,
+ * items newer than it are passed over (pages are newest first) until the scan reaches its date;
+ * and when the page starts older than the anchor, the provider cursor has moved past unread mail,
+ * so the scan restarts from the top of the listing. An item with the anchor's exact date may come
+ * back a second time, but none is skipped.
  */
 export async function scanMailbox<T extends Anchored>(opts: {
   start: MailboxPosition;
@@ -151,26 +148,49 @@ export async function scanMailbox<T extends Anchored>(opts: {
   keep: (item: T) => boolean;
 }): Promise<ScanResult<T>> {
   const items: Array<ScanItem<T>> = [];
+  const anchor = opts.start.after;
   let cursor = opts.start.cursor;
-  let skip: number | undefined;
+  let first = true;
+  // Still above the anchor: items newer than it were returned already (or arrived since).
+  let above = anchor !== undefined;
   let end: MailboxPosition | null = opts.start;
   let capped = false;
   for (let page = 0; page < opts.pageCap; page++) {
     const { messages: raw, nextCursor } = await opts.fetchPage(cursor ?? undefined);
-    // Only the first page is a resumed one; later pages start at their beginning.
-    const from = skip ?? resumeIndex(raw, opts.start);
+    let from = 0;
+    if (first) {
+      first = false;
+      if (!anchor) {
+        from = opts.start.skip;
+      } else {
+        const at = raw.findIndex((m) => m.id === anchor.id);
+        if (at >= 0) {
+          from = at + 1;
+          above = false;
+        } else if (cursor !== null && (raw.length === 0 || raw[0]!.date < anchor.date)) {
+          if (page === opts.pageCap - 1) { capped = true; break; }
+          cursor = null; // restart from the top; `end` stays at the start until something is read
+          continue;
+        }
+      }
+    }
     for (let i = from; i < raw.length; i++) {
       const item = raw[i]!;
+      if (above) {
+        if (item.id === anchor!.id || item.date > anchor!.date) continue;
+        above = false;
+      }
       if (opts.keep(item)) items.push({ item, after: positionAfter(cursor, raw, i + 1, nextCursor) });
     }
-    skip = 0;
     end = positionAfter(cursor, raw, raw.length, nextCursor);
     if (items.length >= opts.need || end === null) break;
     if (page === opts.pageCap - 1) {
       capped = true;
       break;
     }
-    cursor = end.cursor;
+    // `end` re-reads this page on a later call; this call moves straight on to the next one.
+    cursor = nextCursor ?? null;
+    if (cursor === null) break;
   }
   return { items, end, capped };
 }
