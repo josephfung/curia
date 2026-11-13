@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { DateTime } from 'luxon';
 import {
   parseCadence,
   readTriageCadences,
@@ -147,7 +148,7 @@ describe('isDue', () => {
       expect(isDue(hourly, at('2026-03-08T06:30:00Z'), at('2026-03-08T07:30:00Z'), TZ)).toBe(false); // outside window (03:30)
       const all = parseCadence('hourly')!;
       expect(isDue(all, at('2026-03-08T06:30:00Z'), at('2026-03-08T07:30:00Z'), TZ)).toBe(true);
-      expect(isDue(all, at('2026-03-08T06:30:00Z'), at('2026-03-08T07:29:00Z'), TZ)).toBe(false);
+      expect(isDue(all, at('2026-03-08T06:30:00Z'), at('2026-03-08T07:20:00Z'), TZ)).toBe(false); // 50m real time
     });
 
     it('window start is 06:00 local on both sides of the change', () => {
@@ -166,5 +167,69 @@ describe('isDue', () => {
       expect(isDue(daily, null, at('2026-11-01T22:59:00Z'), TZ)).toBe(false);
       expect(isDue(daily, null, at('2026-11-01T23:00:00Z'), TZ)).toBe(true);
     });
+  });
+});
+
+describe('fix round 1', () => {
+  // Replay 15-minute real-time ticks across a whole local day, marking a drain on each fire.
+  function replay(cadence: string, localDate: string): number {
+    const c = parseCadence(cadence)!;
+    const start = DateTime.fromISO(localDate, { zone: TZ }).startOf('day').toMillis();
+    const end = DateTime.fromISO(localDate, { zone: TZ }).plus({ days: 1 }).startOf('day').toMillis();
+    let last: Date | null = null;
+    let fires = 0;
+    for (let t = start; t < end; t += 15 * 60_000) {
+      const now = new Date(t);
+      if (isDue(c, last, now, TZ)) {
+        fires += 1;
+        last = now;
+      }
+    }
+    return fires;
+  }
+
+  it('daily 01:30 fires exactly once on the fall-back day (01:30 happens twice)', () => {
+    expect(replay('daily 01:30', '2026-11-01')).toBe(1);
+  });
+  it('daily 02:30 fires exactly once on the spring-forward day (02:30 does not exist)', () => {
+    expect(replay('daily 02:30', '2026-03-08')).toBe(1);
+  });
+  it('daily 18:00 fires once on an ordinary day', () => {
+    expect(replay('daily 18:00', '2026-06-10')).toBe(1);
+  });
+
+  it('R50: an hourly drain marked seconds after a tick is due at the next hourly tick', () => {
+    const c = parseCadence('hourly')!;
+    expect(isDue(c, at('2026-06-10T10:00:05Z'), at('2026-06-10T11:00:00Z'), TZ)).toBe(true);
+    expect(isDue(c, at('2026-06-10T10:00:05Z'), at('2026-06-10T10:52:00Z'), TZ)).toBe(false);
+  });
+  it('R50: every 15m is not due 8 minutes after a drain, but is at 15', () => {
+    const c = parseCadence('every 15m')!;
+    expect(isDue(c, at('2026-06-10T10:00:00Z'), at('2026-06-10T10:08:00Z'), TZ)).toBe(false);
+    expect(isDue(c, at('2026-06-10T10:00:00Z'), at('2026-06-10T10:07:30Z'), TZ)).toBe(false);
+    expect(isDue(c, at('2026-06-10T10:00:05Z'), at('2026-06-10T10:15:00Z'), TZ)).toBe(true);
+  });
+
+  it('R51: weekdays with a midnight-crossing window follows the window-start day', () => {
+    const c = parseCadence('hourly 22:00-02:00 weekdays')!;
+    expect(isDue(c, null, at('2026-06-13T05:00:00Z'), TZ)).toBe(true); // Sat 01:00 EDT (Friday night)
+    expect(isDue(c, null, at('2026-06-15T05:00:00Z'), TZ)).toBe(false); // Mon 01:00 EDT (Sunday night)
+    expect(isDue(c, null, at('2026-06-13T02:30:00Z'), TZ)).toBe(true); // Fri 22:30 EDT
+    expect(isDue(c, null, at('2026-06-14T02:30:00Z'), TZ)).toBe(false); // Sat 22:30 EDT
+  });
+
+  it('a last drain in the future is treated as never drained', () => {
+    const hourly = parseCadence('hourly')!;
+    const daily = parseCadence('daily 18:00')!;
+    expect(isDue(hourly, at('2099-01-01T00:00:00Z'), at('2026-06-10T14:00:00Z'), TZ)).toBe(true);
+    expect(isDue(daily, at('2099-01-01T00:00:00Z'), at('2026-06-10T22:00:00Z'), TZ)).toBe(true);
+  });
+
+  it('warnOnce does not remember a key when there is no logger', () => {
+    const raw = JSON.stringify({ nolog: 'every 10m' });
+    readTriageCadences(raw, ['nolog']);
+    const logger = { warn: vi.fn() };
+    readTriageCadences(raw, ['nolog'], logger as never);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 });

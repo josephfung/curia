@@ -10,7 +10,9 @@
 //   - window: inclusive of both ends, in local time. A window that crosses midnight
 //     (`22:00-02:00`) IS supported: it covers start..24:00 and 00:00..end. start == end is
 //     refused (it would be a one-minute window, almost certainly a typo).
-//   - weekdays: Monday to Friday by the LOCAL date.
+//   - weekdays: Monday to Friday by the LOCAL date. With a midnight-crossing window, the part
+//     after midnight belongs to the window-START day: `22:00-02:00 weekdays` includes Saturday
+//     01:00 (Friday night) and excludes Monday 01:00 (Sunday night).
 import { DateTime } from 'luxon';
 import type { Logger } from '../logger.js';
 
@@ -90,9 +92,10 @@ export function readTriageCadences(
 ): Record<string, Cadence> {
   const fallback = parseCadence(DEFAULT_CADENCE)!;
   const warnOnce = (key: string, obj: Record<string, unknown>, msg: string): void => {
-    if (warned.has(key)) return;
+    // Remember the key only once a logger has actually emitted it.
+    if (!logger || warned.has(key)) return;
     warned.add(key);
-    logger?.warn(obj, msg);
+    logger.warn(obj, msg);
   };
 
   let stored: Record<string, unknown> = {};
@@ -129,39 +132,64 @@ function minutesOfDay(hhmm: string): number {
   return Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
 }
 
+/** Heartbeat period; a drain is stamped up to this far from the tick that follows it. */
+const HEARTBEAT_MS = 15 * 60_000;
+/**
+ * R50: tolerance for "interval elapsed". A drain is marked a few seconds after the tick that
+ * started it, so a strict `>= every` would slip a whole tick (hourly drained 06:00:05 is not due
+ * at 07:00:00). We accept `every - 7m30s`, but never below MIN_INTERVAL_MS (10 minutes, above
+ * half a heartbeat), so `every 15m` is not due 8 minutes after a drain yet is due at the next tick.
+ */
+const TOLERANCE_MS = HEARTBEAT_MS / 2;
+const MIN_INTERVAL_MS = 10 * 60_000;
+
 /**
  * Whether a mailbox is due: inside its window (and on a weekday if required), and either
- * `now - lastDrainedAt >= every` or, for `daily HH:MM`, `now` is at or after today's HH:MM
- * (local) and the last drain was before that moment. A null lastDrainedAt is due. Elapsed time
- * is real time; the window, weekday and daily time are local wall-clock, so DST is handled by
- * luxon. An invalid timezone throws.
+ * the interval has elapsed since `lastDrainedAt` (within TOLERANCE_MS, see above) or, for
+ * `daily HH:MM`, `now` is at or after today's HH:MM (local) and the last drain was before that
+ * moment. A null lastDrainedAt, or one later than `now` (corrupt; it must not starve the
+ * mailbox), counts as never drained. Elapsed time is real time; the window, weekday and daily
+ * time are local wall-clock (the daily slot is built from the local calendar date, so a repeated
+ * fall-back hour fires once and a skipped spring-forward time fires once, shifted). An invalid
+ * timezone throws.
  */
 export function isDue(c: Cadence, lastDrainedAt: Date | null, now: Date, tz: string): boolean {
   const local = DateTime.fromJSDate(now, { zone: tz });
   if (!local.isValid) {
     throw new Error(`isDue: invalid timezone "${tz}" (${local.invalidReason ?? 'unknown reason'})`);
   }
-  if (c.weekdaysOnly && local.weekday > 5) return false;
+  if (lastDrainedAt !== null && lastDrainedAt.getTime() > now.getTime()) lastDrainedAt = null;
 
+  // The local day the cadence "belongs to" for the weekday check (R51).
+  let dayForWeekday = local;
   if (c.window) {
     const t = local.hour * 60 + local.minute;
     const start = minutesOfDay(c.window.start);
     const end = minutesOfDay(c.window.end);
-    const inside = start < end ? t >= start && t <= end : t >= start || t <= end;
+    const crosses = start > end;
+    const inside = crosses ? t >= start || t <= end : t >= start && t <= end;
     if (!inside) return false;
+    if (crosses && t <= end) dayForWeekday = local.minus({ days: 1 });
   }
+  if (c.weekdaysOnly && dayForWeekday.weekday > 5) return false;
 
   if ('dailyAt' in c.every) {
-    const slot = local.set({
-      hour: Number(c.every.dailyAt.slice(0, 2)),
-      minute: Number(c.every.dailyAt.slice(3, 5)),
-      second: 0,
-      millisecond: 0,
-    });
-    if (local < slot) return false;
+    const slot = DateTime.fromObject(
+      {
+        year: local.year,
+        month: local.month,
+        day: local.day,
+        hour: Number(c.every.dailyAt.slice(0, 2)),
+        minute: Number(c.every.dailyAt.slice(3, 5)),
+      },
+      { zone: tz },
+    );
+    if (now.getTime() < slot.toMillis()) return false;
     return lastDrainedAt === null || lastDrainedAt.getTime() < slot.toMillis();
   }
 
   if (lastDrainedAt === null) return true;
-  return now.getTime() - lastDrainedAt.getTime() >= c.every.minutes * 60_000;
+  const everyMs = c.every.minutes * 60_000;
+  const threshold = Math.max(everyMs - TOLERANCE_MS, MIN_INTERVAL_MS);
+  return now.getTime() - lastDrainedAt.getTime() >= threshold;
 }

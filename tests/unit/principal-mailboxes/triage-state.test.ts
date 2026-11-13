@@ -17,7 +17,7 @@ const make = () => { const cfg = fakeCfg(); return { cfg, st: new TriageState(cf
 describe('TriageState', () => {
   it('batch counter resets on a new local day', async () => {
     const { st, cfg } = make();
-    // 2026-06-10 23:30 EDT and 00:30 EDT the next day: UTC dates 06-11 and 06-11 straddle local midnight
+    // 23:30 EDT on 06-10 and 00:30 EDT on 06-11 are both 06-11 in UTC, but different local days
     const lateEvening = new Date('2026-06-11T03:30:00Z');
     const afterMidnight = new Date('2026-06-11T04:30:00Z');
     expect(await st.batchesToday(lateEvening)).toBe(0);
@@ -55,6 +55,18 @@ describe('TriageState', () => {
     const { st, cfg } = make();
     cfg.m.set('ceo_inbox/triage.work.last_drained_at', 'yesterday-ish');
     expect(await st.lastDrainedAt('work')).toBeNull();
+  });
+
+  it('ceilingReached is false below the ceiling, true at it, and true for a corrupt count', async () => {
+    const { st, cfg } = make();
+    const now = new Date('2026-06-10T14:00:00Z');
+    expect(await st.ceilingReached(now)).toBe(false);
+    cfg.m.set('ceo_inbox/triage.batches.2026-06-10', String(TRIAGE_DAILY_CEILING - 1));
+    expect(await st.ceilingReached(now)).toBe(false);
+    cfg.m.set('ceo_inbox/triage.batches.2026-06-10', String(TRIAGE_DAILY_CEILING));
+    expect(await st.ceilingReached(now)).toBe(true);
+    cfg.m.set('ceo_inbox/triage.batches.2026-06-10', 'garbage');
+    expect(await st.ceilingReached(now)).toBe(true);
   });
 
   it('a corrupt batch count reads as the ceiling (triage stops)', async () => {
