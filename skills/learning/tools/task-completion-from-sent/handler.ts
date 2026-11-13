@@ -24,7 +24,7 @@ import {
   type CompletionDigestMap,
   type CompletionDigestItem,
 } from '../../../_shared/learning-state.js';
-import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
+import { grantSafeErrorFields, mayCarryGrantId } from '../../../../src/principal-mailboxes/error-fields.js';
 import { resolveStateScopes } from '../../../_shared/mailbox-state.js';
 import { buildCompletionDigestNotification } from '../../../_shared/learning-digest.js';
 import { notifyLearningProposal } from '../../../_shared/learning-notify.js';
@@ -284,7 +284,12 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
           completedTaskIds.add(pending.taskId);
           autoCompleted += 1;
         } catch (err) {
-          ctx.log.error({ ...grantSafeErrorFields(err), taskId: pending.taskId }, 'task-completion-from-sent: auto-complete failed');
+          // Class and status only for a Nylas error (it can carry a grant id); a database error's
+          // message is what the operator needs, as src/index.ts logs the migration failure.
+          const errFields = err instanceof Error && !mayCarryGrantId(err)
+            ? { ...grantSafeErrorFields(err), errMessage: err.message }
+            : grantSafeErrorFields(err);
+          ctx.log.error({ ...errFields, taskId: pending.taskId }, 'task-completion-from-sent: auto-complete failed');
           // Leave the candidate queued — completeTask failure is presumed transient (DB
           // hiccup), so it stays in `remaining` and retries next run. The undo note is already
           // durable and will be overwritten identically on retry, so nothing is lost.

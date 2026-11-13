@@ -97,7 +97,7 @@ import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
 import { createRulesDoc } from './principal-mailboxes/rules-doc.js';
-import { migrateFlatPrincipalMailbox, migrationFailureReason } from './principal-mailboxes/migrate-flat-mailbox.js';
+import { migrateFlatPrincipalMailbox, migrationFailureReason, warnIfFallbackIdIsLive } from './principal-mailboxes/migrate-flat-mailbox.js';
 import { FALLBACK_MAILBOX_ID } from './principal-mailboxes/state-keys.js';
 import { renameSendingKeyAfterMigration, dropLegacyDefaultKey, type SendingConfigStore } from './principal-mailboxes/migrate-config-keys.js';
 import { reconcileFlatMailboxKeys } from './principal-mailboxes/flat-mirror.js';
@@ -1286,6 +1286,13 @@ async function main(): Promise<void> {
         logger.error({ err: readErr }, 'Could not read ceo_nylas_grant_id for the mailbox fallback');
       }
     }
+  }
+
+  // R63: a live row under the reserved fallback id predates the reservation; say so once at boot.
+  try {
+    warnIfFallbackIdIsLive((await principalMailboxStore.listLive()).map((m) => m.id), logger);
+  } catch (err) {
+    logger.warn({ err }, 'Could not check the principal mailbox registry for the reserved fallback id');
   }
 
   // Once the registry has rows the flat keys ceo-inbox reads are a copy of the default mailbox

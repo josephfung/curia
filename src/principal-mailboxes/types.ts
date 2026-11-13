@@ -1,5 +1,7 @@
 // Types and constants for the principal mailbox registry (#2475).
 
+import { FALLBACK_MAILBOX_ID } from './state-keys.js';
+
 export interface PrincipalMailboxRecord {
   id: string;
   label: string;
@@ -13,7 +15,12 @@ export interface PrincipalMailboxRecord {
 
 /** Mailbox ids are short immutable slugs; mirrors the CHECK constraint in migration 123. */
 export const MAILBOX_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
-export const RESERVED_MAILBOX_IDS = new Set(['primary', 'default']);
+/**
+ * Ids no mailbox may take. `primary` and `default` are also refused by migration 123's CHECK.
+ * The deferred-fallback id is reserved in code only (R63): records written under it belong to
+ * the migrated mailbox (R61), so a real mailbox with that id would claim them.
+ */
+export const RESERVED_MAILBOX_IDS = new Set(['primary', 'default', FALLBACK_MAILBOX_ID]);
 export const MAX_LIVE_MAILBOXES = 1; // lifted in Task 33
 
 /** The id names no mailbox, live or removed. Never a reason to fall back to the default. */

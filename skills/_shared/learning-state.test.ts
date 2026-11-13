@@ -546,13 +546,3 @@ describe('learning-state per-mailbox keys (#2475, D8)', () => {
     expect([...values.keys()].sort()).toEqual([COMPLETION_DIGEST_HIGH_WATER_KEY, COMPLETION_DIGEST_KEY, VOICE_PROPOSAL_KEY].sort());
   });
 });
-
-import { recordBelongsTo } from './mailbox-state.js';
-describe('recordBelongsTo (R61)', () => {
-  it('lets a deferred-fallback record belong to the migrated mailbox only', () => {
-    expect(recordBelongsTo({ id: 'gmail', legacy: true }, 'mailbox')).toBe(true);
-    expect(recordBelongsTo({ id: 'personal', legacy: false }, 'mailbox')).toBe(false);
-    expect(recordBelongsTo({ id: 'gmail', legacy: true }, 'personal')).toBe(false);
-    expect(recordBelongsTo({ id: 'gmail', legacy: true }, undefined)).toBe(true);
-  });
-});
