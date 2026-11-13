@@ -318,3 +318,25 @@ describe('closeLegacyInboxDrains (BR-C2)', () => {
     expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'a' }), expect.any(String));
   });
 });
+
+describe('InboxHeartbeat settles a finished drain (R68)', () => {
+  const began = new Date(NOW.getTime() - 20 * 60_000);
+  const seed = { 'triage.work.draining': 'true', 'triage.work.drain_started_at': began.toISOString(), 'triage.work.settle_pending': 'true' };
+
+  it('closes the episode at its start once no drain task of its own is open', async () => {
+    const t = make({ seed, hasUnread: vi.fn(async () => false) });
+    expect(await t.hb.tick(NOW)).toBe('quiet');
+    expect(await t.state.isDraining('work')).toBe(false);
+    expect(await t.state.settlePending('work')).toBe(false);
+    expect(await t.state.lastDrainedAt('work')).toEqual(began);
+    // Closed at its start, an hourly mailbox is not due again 20 minutes in.
+    expect(t.hasUnreadSince).not.toHaveBeenCalled();
+  });
+
+  it('leaves the episode open while its drain task is still open (a failed run retries)', async () => {
+    const t = make({ seed, tasks: [taskRow({ wakeState: 'retrying' })] });
+    expect(await t.hb.tick(NOW)).toBe('drain_running');
+    expect(await t.state.isDraining('work')).toBe(true);
+    expect(await t.state.settlePending('work')).toBe(true);
+  });
+});

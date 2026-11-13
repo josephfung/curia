@@ -1027,7 +1027,8 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
   });
 
   it('the backlog alarm resets when the backlog is cleared', async () => {
-    const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)], 'grant-personal': [] });
+    // A call that finds the mailbox empty closes the episode, alarm included (R68).
+    const t = setup({ 'grant-work': [], 'grant-personal': [] });
     await t.state.setBacklogAlarmed('work', true);
     dataOf(await t.run());
     expect(await t.state.backlogAlarmed('work')).toBe(false);
@@ -1229,6 +1230,33 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     expect(busy.data.get('triage.batches.2026-11-12')).toBe('1');
   });
 
+  it('a failed run\'s retry gets its last batch back: the mailbox stays draining (R68)', async () => {
+    const t = setup({ 'grant-work': [msg('w1', NOW_S - 1), msg('w2', NOW_S - 2)], 'grant-personal': [] }, { cadence: 'hourly' });
+    const first = dataOf(await t.run());
+    expect(first.messages.map((m) => m.id)).toEqual(['w1', 'w2']);
+    expect(first.has_more).toBe(false);
+    expect(await t.state.isDraining('work')).toBe(true);
+    expect(await t.state.settlePending('work')).toBe(true);
+    expect(await t.state.lastDrainedAt('work')).toBeNull();
+    // The run fails before settling anything; the scheduler's retry lists again a minute later.
+    vi.setSystemTime(new Date(NOW.getTime() + 60_000));
+    const retry = dataOf(await t.run());
+    expect(retry.mailboxes_due).toContain('work');
+    expect(retry.messages.map((m) => m.id)).toEqual(['w1', 'w2']);
+  });
+
+  it('a call that finds the mailbox empty closes the episode at its start (R52, R68)', async () => {
+    const t = setup({ 'grant-work': [], 'grant-personal': [] });
+    const began = new Date(NOW.getTime() - 10 * 60_000);
+    await t.state.setDraining('work', true);
+    await t.state.setDrainStartedAt('work', began);
+    await t.state.setSettlePending('work', true);
+    dataOf(await t.run());
+    expect(await t.state.isDraining('work')).toBe(false);
+    expect(await t.state.settlePending('work')).toBe(false);
+    expect(await t.state.lastDrainedAt('work')).toEqual(began);
+  });
+
   it('stamps a drain with its start so every 15m is due at the next tick (R52)', async () => {
     const work = Array.from({ length: 16 }, (_, i) => msg(`w${i}`, NOW_S - i));
     const t = setup({ 'grant-work': work, 'grant-personal': [] });
@@ -1240,6 +1268,9 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
       for (const m of d.messages) work.splice(work.findIndex((w) => w['id'] === m.id), 1);
     }
     expect(work).toHaveLength(0);
+    // The last batch leaves the episode open until the heartbeat sees the run finished (R68).
+    expect(await t.state.settlePending('work')).toBe(true);
+    await t.state.closeEpisode('work', at(21));
     expect(await t.state.isDraining('work')).toBe(false);
     expect(await t.state.lastDrainedAt('work')).toEqual(NOW); // the start, not minute 20
     expect(await t.state.drainStartedAt('work')).toBeNull();
