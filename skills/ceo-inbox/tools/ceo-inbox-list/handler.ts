@@ -6,7 +6,7 @@ import { NYLAS_MAX_LIST_LIMIT, type NylasDraftSummary, type NylasMessageSummary 
 import { triageList } from '../../../_shared/triage-listing.js';
 import { isPrincipalDirectedMailboxSend } from '../../../../src/skills/principal-send/authority.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
-import { RemovedMailboxError, UnknownMailboxError } from '../../../../src/principal-mailboxes/types.js';
+import { NO_PRINCIPAL_MAILBOX_MESSAGE, RemovedMailboxError, UnknownMailboxError } from '../../../../src/principal-mailboxes/types.js';
 import { DateTime } from 'luxon';
 import { hasSystemLineage } from '../../../../src/contacts/principal.js';
 import { annotateDrafts, filterModifiedSince, parseModifiedSince } from '../../../_shared/draft-listing.js';
@@ -308,7 +308,7 @@ export class CeoInboxListHandler implements ToolHandler {
     if (now - at.getTime() > SWEEP_MAX_DAYS * 86_400_000) return { ok: false, error: 'sweep_since can reach back at most a year.' };
     const svc = ctx.triageServices;
     if (!svc) return { ok: false, error: 'Triage is unavailable: triage services are not configured.' };
-    if (!ctx.principalMailboxes) return { ok: false, error: 'No principal mailbox is connected.' };
+    if (!ctx.principalMailboxes) return { ok: false, error: NO_PRINCIPAL_MAILBOX_MESSAGE };
     try {
       const mailbox = await ctx.principalMailboxes.get(mailboxId);
       if (mailbox.triageStartAt === null) return { ok: false, error: `${mailbox.label} has no start line: all of its unread mail is already triaged.` };

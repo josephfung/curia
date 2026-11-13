@@ -1,4 +1,5 @@
 import type { Logger } from '../../logger.js';
+import { ADD_PRINCIPAL_MAILBOX_HINT } from '../../principal-mailboxes/types.js';
 
 /**
  * How freely Curia may send from the principal's mailbox (#2474).
@@ -117,7 +118,7 @@ export function checkSendLevelWrite(
 ): { ok: true } | { ok: false; error: string } {
   // Nothing to key a level by (M3): say so rather than describe a shape no key can fill.
   if (live.length === 0) {
-    return { ok: false, error: 'No principal mailbox is connected yet, so there is nothing to set a sending level for. Nothing was stored.' };
+    return { ok: false, error: `No principal mailbox is connected yet, so there is nothing to set a sending level for. Nothing was stored. ${ADD_PRINCIPAL_MAILBOX_HINT}` };
   }
   const mailboxes = live.map((m) => `${m.id} (${m.label})`).join(', ');
   const shape = `Store a JSON object {"<mailbox id>":"<level>"}, level ${LEVELS.join(' | ')}. Mailboxes: ${mailboxes}. Nothing was stored.`;

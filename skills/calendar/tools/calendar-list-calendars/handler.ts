@@ -14,6 +14,7 @@ import type { NylasCalendar } from '../../../../src/channels/calendar/nylas-cale
 import type { PrincipalMailboxView } from '../../../../src/principal-mailboxes/service.js';
 import { grantSafeErrorFields, mayCarryGrantId } from '../../../../src/principal-mailboxes/error-fields.js';
 import { calendarRouteErrorMessage, readCalendarMailbox } from '../../../_shared/calendar-route.js';
+import { ADD_PRINCIPAL_MAILBOX_HINT } from '../../../../src/principal-mailboxes/types.js';
 
 export class CalendarListCalendarsHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -38,7 +39,7 @@ export class CalendarListCalendarsHandler implements ToolHandler {
       return { success: false, error: calendarRouteErrorMessage(err) };
     }
     if (mailboxes.length === 0) {
-      return { success: false, error: 'No principal mailbox is connected, so there are no calendars to list.' };
+      return { success: false, error: `No principal mailbox is connected, so there are no calendars to list. ${ADD_PRINCIPAL_MAILBOX_HINT}` };
     }
 
     // Hoisted so the catch block can reference the partial result for log context.

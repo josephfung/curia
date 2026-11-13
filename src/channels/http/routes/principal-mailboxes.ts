@@ -52,7 +52,9 @@ type MailboxChange = {
 };
 
 const MAX_LABEL = 80;
-const NO_NYLAS = 'No Nylas API key is configured. Set channel.email.nylas_api_key first.';
+// The key is read once at boot (the router, the calendar hooks and this route all take it then),
+// so a key saved since needs a restart (BR-m4).
+const NO_NYLAS = 'No Nylas API key was configured when Curia started. Save it under Channels → Email, then restart Curia.';
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 // Ids are checked before anything is audited (SEC-L5): the audit row carries them, so an

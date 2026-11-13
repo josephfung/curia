@@ -183,7 +183,8 @@ export async function retireFlatMailboxKeys(
     const def = (await store.listLive()).find((m) => m.isDefault);
     const grant = def ? (await secrets.get(principalMailboxGrantSecretName(def.id)))?.trim() : undefined;
     if (!def || !grant) {
-      logger.warn(
+      // At error (SF-M5): this repeats every boot until an operator acts.
+      logger.error(
         { keys: present, ...(def ? { mailboxId: def.id } : {}) },
         def
           ? 'Kept the flat mailbox keys: the default mailbox has no grant in the vault yet (use Replace grant on it in the console)'
@@ -197,7 +198,8 @@ export async function retireFlatMailboxKeys(
     return 'deleted';
   } catch (err) {
     // A vault or database error names no grant, so its message is kept; a Nylas-shaped one is not (R20).
-    logger.warn(
+    // At error (SF-M5): a key may be left behind, and nothing else reports it.
+    logger.error(
       err instanceof Error && !mayCarryGrantId(err) ? { ...grantSafeErrorFields(err), errMessage: err.message } : grantSafeErrorFields(err),
       'Could not retire the flat mailbox keys; retrying at the next boot',
     );

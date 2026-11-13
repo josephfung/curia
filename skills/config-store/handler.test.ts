@@ -703,7 +703,7 @@ describe('ConfigStoreHandler — ceo_inbox/sending', () => {
 
   it('with no mailbox connected says there is nothing to set (M3)', async () => {
     const r = await store('{"work":"routine"}', directory([]));
-    expect(r).toEqual({ success: false, error: 'No principal mailbox is connected yet, so there is nothing to set a sending level for. Nothing was stored.' });
+    expect(r).toEqual({ success: false, error: 'No principal mailbox is connected yet, so there is nothing to set a sending level for. Nothing was stored. Add one in the console under Settings → Personality → Email & Calendar.' });
   });
 
   it('refuses the mailbox-keyed settings when the mailbox directory is absent, storing nothing', async () => {

@@ -63,6 +63,7 @@ import {
   type CompletionCandidateMap,
   type CompletionCandidate,
 } from '../../../_shared/learning-state.js';
+import { NO_PRINCIPAL_MAILBOX_MESSAGE } from '../../../../src/principal-mailboxes/types.js';
 
 export const CONFIG_NAMESPACE = 'ceo_inbox';
 export const WATERMARK_KEY = 'sent_observe.last_seen_at';
@@ -356,7 +357,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
       return { success: false, error: 'ceo-inbox-sent-observe needs the principalMailboxes capability, which is not available' };
     }
     const all = await liveMailboxScopes(ctx);
-    if (all.length === 0) return { success: false, error: 'No principal mailbox is connected.' };
+    if (all.length === 0) return { success: false, error: NO_PRINCIPAL_MAILBOX_MESSAGE };
     let targets = all;
     if (named.mailbox !== undefined) {
       // An unknown or removed id is an error, never the default (the service throws for it).

@@ -8,7 +8,7 @@ import type { ErrorType } from '../../src/errors/types.js';
 import { messageNotFoundError, nylasStatus } from '../../src/channels/email/nylas-message-id.js';
 import { CeoNylasClient } from './ceo-nylas-client.js';
 import { judgeHolders } from '../../src/principal-mailboxes/locate-holder.js';
-import { MissingNylasApiKeyError, RemovedMailboxError, UnknownMailboxError } from '../../src/principal-mailboxes/types.js';
+import { MissingNylasApiKeyError, NO_PRINCIPAL_MAILBOX_MESSAGE, RemovedMailboxError, UnknownMailboxError } from '../../src/principal-mailboxes/types.js';
 import { grantSafeErrorFields } from '../../src/principal-mailboxes/error-fields.js';
 
 export interface MailboxClient {
@@ -156,7 +156,7 @@ export function mailboxFields(m: PrincipalMailboxView): { mailbox: string; mailb
 }
 
 export function locateError(r: Exclude<LocateResult, { kind: 'found' }>, noun: string): string {
-  if (r.kind === 'no_mailboxes') return 'No principal mailbox is connected.';
+  if (r.kind === 'no_mailboxes') return NO_PRINCIPAL_MAILBOX_MESSAGE;
   if (r.kind === 'ambiguous') {
     const labels = r.mailboxes.map((m) => `${m.label} (${m.id})`).join(', ');
     return `That ${noun} exists in more than one mailbox: ${labels}. Say which one with the mailbox argument.`;
@@ -223,7 +223,7 @@ export async function namedOrDefaultMailbox(ctx: ToolContext, input: unknown, to
   try {
     if (parsed.mailbox !== undefined) return { ok: true, at: await mailboxClient(ctx, parsed.mailbox) };
     const def = await service(ctx).defaultMailbox();
-    if (!def) return { ok: false, error: 'No principal mailbox is connected.' };
+    if (!def) return { ok: false, error: NO_PRINCIPAL_MAILBOX_MESSAGE };
     return { ok: true, at: await mailboxClient(ctx, def.id) };
   } catch (err) {
     return failMailbox(ctx, tool, err);

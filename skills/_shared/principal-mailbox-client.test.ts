@@ -229,7 +229,7 @@ describe('namedOrDefaultMailbox / checkMailboxInput (#2475)', () => {
   it('no default mailbox is an error', async () => {
     const c = { principalMailboxes: stubPrincipalMailboxes({ mailboxes: [] }), log: { error: vi.fn() } } as unknown as ToolContext;
     const r = await namedOrDefaultMailbox(c, {}, 't');
-    expect(r).toEqual({ ok: false, error: 'No principal mailbox is connected.' });
+    expect(r).toEqual({ ok: false, error: 'No principal mailbox is connected. Add one in the console under Settings → Personality → Email & Calendar.' });
   });
 
   it('never puts a grant id in an error', async () => {
