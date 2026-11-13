@@ -9,15 +9,25 @@ import { messageNotFoundError, nylasStatus } from '../../src/channels/email/nyla
 import { CeoNylasClient } from './ceo-nylas-client.js';
 import { judgeHolders } from '../../src/principal-mailboxes/locate-holder.js';
 import { MissingNylasApiKeyError, RemovedMailboxError, UnknownMailboxError } from '../../src/principal-mailboxes/types.js';
+import { grantSafeErrorFields } from '../../src/principal-mailboxes/error-fields.js';
 
 export interface MailboxClient {
   mailbox: PrincipalMailboxView;
   client: CeoNylasClient;
 }
 
+/** A mailbox that could not be asked: its label (what the model relays), and the HTTP status when there was one. */
+export interface LocateFailure {
+  mailboxId: string;
+  label: string;
+  detail: string;
+  status?: number;
+}
+
 export type LocateResult =
   | { kind: 'found'; at: MailboxClient }
-  | { kind: 'not_found'; definitive: boolean; failed: Array<{ mailboxId: string; detail: string }> }
+  /** `missed`: mailboxes that answered 404. `failed`: mailboxes that could not be asked. */
+  | { kind: 'not_found'; definitive: boolean; missed: number; failed: LocateFailure[] }
   | { kind: 'ambiguous'; mailboxes: PrincipalMailboxView[] }
   | { kind: 'no_mailboxes' };
 
@@ -69,17 +79,19 @@ export async function settledMailboxClients(
   );
 }
 
-type Probe = { ok: true } | { ok: false; notFound: boolean; detail: string };
+type Probe = { ok: true } | { ok: false; notFound: boolean; detail: string; status?: number };
 
-async function probe(at: MailboxClient, kind: 'message' | 'draft', objectId: string): Promise<Probe> {
+async function probe(ctx: ToolContext, tool: string, at: MailboxClient, kind: 'message' | 'draft', objectId: string): Promise<Probe> {
   try {
     if (kind === 'message') await at.client.getMessage(objectId);
     else await at.client.getDraft(objectId);
     return { ok: true };
   } catch (err) {
-    if (nylasStatus(err) === 404) return { ok: false, notFound: true, detail: 'not found' };
     const status = nylasStatus(err);
-    return { ok: false, notFound: false, detail: status !== undefined ? `HTTP ${status}` : 'request failed' };
+    if (status === 404) return { ok: false, notFound: true, detail: 'not found' };
+    // Not a miss: this mailbox could not be asked (SF4). Class and status only, never the body.
+    ctx.log.warn({ tool, mailboxId: at.mailbox.id, ...grantSafeErrorFields(err), ...(status !== undefined ? { status } : {}) }, `${tool}: mailbox could not be asked for the ${kind}`);
+    return { ok: false, notFound: false, detail: status !== undefined ? `HTTP ${status}` : 'request failed', ...(status !== undefined ? { status } : {}) };
   }
 }
 
@@ -94,8 +106,9 @@ export async function locate(
   kind: 'message' | 'draft',
   objectId: string,
   explicitMailbox?: string,
+  tool = 'locate',
 ): Promise<LocateResult> {
-  const failed: Array<{ mailboxId: string; detail: string }> = [];
+  const failed: LocateFailure[] = [];
   let candidates: MailboxClient[];
   if (explicitMailbox !== undefined) {
     // A blank id is an unknown id, thrown by the service like any other.
@@ -112,15 +125,15 @@ export async function locate(
         } catch (err) {
           // Credentials or client construction failed for this mailbox only; keep probing the rest.
           const name = err instanceof Error ? err.constructor.name : 'Error';
-          ctx.log.warn({ mailboxId: m.id, errorName: name }, 'locate: mailbox client unavailable');
-          failed.push({ mailboxId: m.id, detail: name });
+          ctx.log.warn({ tool, mailboxId: m.id, errorName: name }, 'locate: mailbox client unavailable');
+          failed.push({ mailboxId: m.id, label: m.label, detail: name });
         }
       }),
     );
   }
 
   const results = await Promise.all(
-    candidates.map(async (at) => ({ at, result: await probe(at, kind, objectId) })),
+    candidates.map(async (at) => ({ at, result: await probe(ctx, tool, at, kind, objectId) })),
   );
 
   const verdict = judgeHolders(results.map((r) => ({
@@ -132,9 +145,10 @@ export async function locate(
 
   for (const at of verdict.failed) {
     const r = results.find((x) => x.at === at)!.result;
-    if (!r.ok) failed.push({ mailboxId: at.mailbox.id, detail: r.detail });
+    if (!r.ok) failed.push({ mailboxId: at.mailbox.id, label: at.mailbox.label, detail: r.detail, ...(r.status !== undefined ? { status: r.status } : {}) });
   }
-  return { kind: 'not_found', definitive: failed.length === 0, failed };
+  const missed = results.filter((x) => !x.result.ok && x.result.notFound).length;
+  return { kind: 'not_found', definitive: failed.length === 0, missed, failed };
 }
 
 export function mailboxFields(m: PrincipalMailboxView): { mailbox: string; mailbox_label: string } {
@@ -148,8 +162,20 @@ export function locateError(r: Exclude<LocateResult, { kind: 'found' }>, noun: s
     return `That ${noun} exists in more than one mailbox: ${labels}. Say which one with the mailbox argument.`;
   }
   if (r.definitive) return `No such ${noun} was found.`;
-  const ids = r.failed.map((f) => f.mailboxId).join(', ');
-  return `No such ${noun} was found, but I could not check mailbox ${ids}, so it may be there. Try again shortly.`;
+  const which = r.failed.map((f) => `${f.label} (${f.detail})`).join(', ');
+  if (r.missed === 0) {
+    // Nothing answered "not there": an access failure, not a miss (SF2). Labels, never ids.
+    const auth = r.failed.some((f) => f.status === 401 || f.status === 403);
+    const plural = r.failed.length > 1 ? 'mailboxes' : 'mailbox';
+    return `Couldn't reach the ${which} ${plural}; ${auth ? 'it may need reconnecting' : 'try again shortly'}.`;
+  }
+  return `No such ${noun} was found, but I could not check the ${which} mailbox, so it may be there. Try again shortly.`;
+}
+
+/** RATE_LIMIT when every mailbox that could not be asked answered 429 (SF2). */
+function locateErrorType(r: Exclude<LocateResult, { kind: 'found' }>): ErrorType | undefined {
+  if (r.kind !== 'not_found' || r.failed.length === 0) return undefined;
+  return r.failed.every((f) => f.status === 429) ? 'RATE_LIMIT' : undefined;
 }
 
 export type MailboxPick = { ok: true; at: MailboxClient } | { ok: false; error: string; errorType?: ErrorType };
@@ -162,6 +188,16 @@ export function readMailboxInput(input: unknown): { ok: true; mailbox: string | 
   return { ok: true, mailbox: raw };
 }
 
+/** A live mailbox's label for a message, or its id when the label can't be read. Never throws. */
+async function mailboxLabel(ctx: ToolContext, mailboxId: string): Promise<string> {
+  try {
+    return (await service(ctx).get(mailboxId)).label;
+  } catch (err) {
+    ctx.log.debug({ mailboxId, ...grantSafeErrorFields(err) }, 'mailbox label unreadable; naming the id');
+    return mailboxId;
+  }
+}
+
 /** A message safe to hand the model for a failed mailbox lookup. Never carries a grant id. */
 function mailboxFailureMessage(err: unknown): string {
   if (err instanceof UnknownMailboxError || err instanceof RemovedMailboxError || err instanceof MissingNylasApiKeyError) {
@@ -171,7 +207,8 @@ function mailboxFailureMessage(err: unknown): string {
 }
 
 function failMailbox(ctx: ToolContext, tool: string, err: unknown): { ok: false; error: string } {
-  ctx.log.error({ err, tool }, `${tool}: could not resolve the principal mailbox`);
+  // Class and status only (B8, S4): a Nylas or vault error can carry the grant id.
+  ctx.log.error({ ...grantSafeErrorFields(err), tool }, `${tool}: could not resolve the principal mailbox`);
   return { ok: false, error: mailboxFailureMessage(err) };
 }
 
@@ -204,13 +241,19 @@ export async function locateInMailbox(
   const parsed = readMailboxInput(input);
   if (!parsed.ok) return parsed;
   try {
-    const found = await locate(ctx, kind, objectId, parsed.mailbox);
+    const found = await locate(ctx, kind, objectId, parsed.mailbox, tool);
     if (found.kind === 'found') return { ok: true, at: found.at };
-    // A definite miss for a message keeps the "do not retry with this ID" wording the model acts on.
+    if (found.kind === 'not_found' && found.definitive && parsed.mailbox !== undefined) {
+      // A miss in the one named mailbox is not "gone" (SF16): it may be in another account.
+      const label = await mailboxLabel(ctx, parsed.mailbox);
+      return { ok: false, error: `That ${kind} isn't in the ${label} mailbox; omit mailbox to search every account.`, errorType: 'NOT_FOUND' };
+    }
+    // A definite miss for a message everywhere keeps the "do not retry with this ID" wording the model acts on.
     if (kind === 'message' && found.kind === 'not_found' && found.definitive) {
       return { ok: false, error: messageNotFoundError(objectId), errorType: 'NOT_FOUND' };
     }
-    return { ok: false, error: locateError(found, kind) };
+    const errorType = locateErrorType(found);
+    return { ok: false, error: locateError(found, kind), ...(errorType ? { errorType } : {}) };
   } catch (err) {
     return failMailbox(ctx, tool, err);
   }

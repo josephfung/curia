@@ -2,6 +2,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { mailboxFields, namedOrDefaultMailbox, readMailboxInput } from '../../../_shared/principal-mailbox-client.js';
 import type { PrincipalMailboxView } from '../../../../src/principal-mailboxes/service.js';
 import { classifyEvidence, mailboxEvidence } from '../../../../src/principal-mailboxes/evidence.js';
+import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 import { type DraftAttachment } from '../../../_shared/ceo-nylas-client.js';
 import { markdownToHtml } from '../../../../src/format/markdown-to-html.js';
 import { parseAttachmentInputs } from '../../../_shared/parse-attachments.js';
@@ -89,10 +90,11 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
   ): Promise<Record<string, unknown>> {
     // The draft already exists: evidence trouble must not turn that into a failure.
     try {
-      const evidence = await mailboxEvidence(ctx.principalMailboxes!, recipients);
+      const evidence = await mailboxEvidence(ctx.principalMailboxes!, recipients, { log: ctx.log });
       return { ...mailboxFields(mailbox), evidence: classifyEvidence(evidence, mailbox.id) };
     } catch (err) {
-      ctx.log.warn({ err }, 'ceo-inbox-draft-compose: mailbox evidence failed after the draft was created');
+      // Class and status only (B8): evidence reads every mailbox, and a Nylas error can carry a grant id.
+      ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: mailbox.id }, 'ceo-inbox-draft-compose: mailbox evidence failed after the draft was created');
       return { ...mailboxFields(mailbox), evidence_unavailable: true };
     }
   }
@@ -100,10 +102,17 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     // With more than one live mailbox a new message must say which account it leaves from:
     // no `mailbox` returns the evidence for the model to choose with (D5), after the
-    // recipients are resolved. With one mailbox nothing changes: no evidence, no extra field.
+    // recipients are resolved. With one mailbox: no evidence, and the result names the account.
     const named = readMailboxInput(ctx.input);
     if (!named.ok) return { success: false, error: named.error };
-    const live = ctx.principalMailboxes ? await ctx.principalMailboxes.list() : [];
+    let live: PrincipalMailboxView[] = [];
+    try {
+      live = ctx.principalMailboxes ? await ctx.principalMailboxes.list() : [];
+    } catch (err) {
+      // Never throws (SF7): without the list neither the account nor the evidence is known.
+      ctx.log.error({ ...grantSafeErrorFields(err) }, 'ceo-inbox-draft-compose: could not list the principal mailboxes');
+      return { success: false, error: `The principal mailboxes are unavailable. ${NOT_SAVED}` };
+    }
     const multi = live.length > 1;
     const needsPick = multi && named.mailbox === undefined;
     const picked = needsPick ? null : await namedOrDefaultMailbox(ctx, ctx.input, 'ceo-inbox-draft-compose');
@@ -177,11 +186,11 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
     if (needsPick) {
       const recipients = [...to, ...cc].map((participant) => participant.email);
       try {
-        const evidence = await mailboxEvidence(ctx.principalMailboxes!, recipients);
+        const evidence = await mailboxEvidence(ctx.principalMailboxes!, recipients, { log: ctx.log });
         ctx.log.info({ recipientCount: recipients.length }, 'ceo-inbox-draft-compose: mailbox needed, returning evidence');
         return { success: true, data: { needs_mailbox: true, evidence } };
       } catch (err) {
-        ctx.log.warn({ err }, 'ceo-inbox-draft-compose: mailbox evidence failed before any draft');
+        ctx.log.warn({ ...grantSafeErrorFields(err) }, 'ceo-inbox-draft-compose: mailbox evidence failed before any draft');
         return { success: false, error: `Could not check which account fits, so no draft was saved. Pass mailbox to choose one. ${NOT_SAVED}` };
       }
     }
@@ -247,12 +256,14 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
           subject: draft.subject,
           to: draft.to,
           cc: draft.cc,
-          ...(multi ? await this.mailboxResult(ctx, at.mailbox, [...to, ...cc].map((p) => p.email)) : {}),
+          // The account the draft is in, always (B9, as reply and edit report it); the evidence
+          // only when there was a choice to make.
+          ...(multi ? await this.mailboxResult(ctx, at.mailbox, [...to, ...cc].map((p) => p.email)) : mailboxFields(at.mailbox)),
         },
       };
     } catch (err) {
       ctx.log.error(
-        { err, subject },
+        { ...grantSafeErrorFields(err), mailboxId: at.mailbox.id },
         'ceo-inbox-draft-compose: Nylas API call failed',
       );
       return { success: false, error: 'Failed to create draft in principal inbox' };

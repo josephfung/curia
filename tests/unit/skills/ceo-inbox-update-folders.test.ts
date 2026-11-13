@@ -320,7 +320,7 @@ describe('CeoInboxUpdateFoldersHandler', () => {
 
     // The mailbox lookup reads the message first, so a failing read ends it before any write.
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('could not check');
+    if (!result.success) expect(result.error).toMatch(/Couldn't reach the Work .*mailbox/);
     expect(calls.putFolders).toBeNull();
   });
 

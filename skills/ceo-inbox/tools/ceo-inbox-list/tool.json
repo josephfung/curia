@@ -1,6 +1,6 @@
 {
   "name": "ceo-inbox-list",
-  "description": "List recent messages from the principal's personal email inbox. Only for the ceo-inbox agent: it reads the principal's personal email.",
+  "description": "List recent messages from the principal's email. Only for the ceo-inbox agent: it reads the principal's email.",
   "version": "0.6.4",
   "sensitivity": "normal",
   "action_risk": "none",
@@ -18,7 +18,8 @@
     "drafts": "array of { id, threadId, subject, to, cc, snippet, date, date_local, created_by_curia (null if unknown) } (returned instead of messages when folder is DRAFTS, alongside folder: 'DRAFTS')",
     "count": "number of items returned",
     "next_page_token": "string? (pass as page_token for the next page)",
-    "mailbox_errors": "array? of { mailbox, mailbox_label, error } for failed mailboxes",
+    "mailbox_errors": "array? of { mailbox, mailbox_label, error }: mailboxes not checked; say so",
+    "skipped_mailboxes": "array? of { mailbox, mailbox_label }: not read on this page; say so",
     "has_more": "boolean — true when more unread messages remain beyond this batch (lets the caller drain the inbox in batches); absent for DRAFTS",
     "scan_incomplete": "boolean? — true when paging stopped at the cap while more messages (or, for DRAFTS with modified_since, more drafts) may remain. Absent when the scan finished. An empty batch still has has_more false, so the drain loop does not spin"
   },

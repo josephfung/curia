@@ -1,6 +1,6 @@
 {
   "name": "ceo-inbox-download-attachment",
-  "description": "Download an email attachment from the principal's personal inbox. Pass filename from ceo-inbox-read (preferred) or the exact attachment_id. Returns temp_file_url when temporary-file storage succeeds, otherwise content_base64; pass either to file-parse. Enforces a 10 MB size limit.",
+  "description": "Download an email attachment from the principal's email. Pass filename from ceo-inbox-read (preferred) or the exact attachment_id. Returns temp_file_url when temporary-file storage succeeds, otherwise content_base64; pass either to file-parse. Enforces a 10 MB size limit.",
   "version": "0.2.2",
   "sensitivity": "normal",
   "action_risk": "low",

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { clearFolderCache, CeoNylasClient } from './ceo-nylas-client.js';
-import { allMailboxClients, checkMailboxInput, locate, locateError, mailboxClient, namedOrDefaultMailbox } from './principal-mailbox-client.js';
+import { allMailboxClients, checkMailboxInput, locate, locateError, locateInMailbox, mailboxClient, namedOrDefaultMailbox } from './principal-mailbox-client.js';
 import type { ToolContext } from '../../src/skills/types.js';
 import { stubPrincipalMailboxes, mailboxView } from './principal-mailboxes-test-helpers.js';
 import type { PrincipalMailboxView } from '../../src/principal-mailboxes/service.js';
@@ -72,7 +72,7 @@ describe('principal-mailbox-client', () => {
   it('explicit wrong mailbox is not_found without probing others', async () => {
     const fetchMock = stubFetch(['grant-personal']);
     const r = await locate(makeCtx(two), 'message', 'm1', 'work');
-    expect(r).toEqual({ kind: 'not_found', definitive: true, failed: [] });
+    expect(r).toEqual({ kind: 'not_found', definitive: true, missed: 1, failed: [] });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -130,7 +130,7 @@ describe('principal-mailbox-client', () => {
     expect(hit.kind).toBe('found');
     stubFetch([]);
     const miss = await locate(ctx, 'message', 'm1');
-    expect(miss).toEqual({ kind: 'not_found', definitive: false, failed: [{ mailboxId: 'work', detail: 'Error' }] });
+    expect(miss).toEqual({ kind: 'not_found', definitive: false, missed: 1, failed: [{ mailboxId: 'work', label: 'Work', detail: 'Error' }] });
   });
 
   it('explicit path still throws when credentials fail', async () => {
@@ -153,8 +153,29 @@ describe('principal-mailbox-client', () => {
   it('non-404 on the explicit path is non-definitive', async () => {
     stubFetch([], { 'grant-work': 403 });
     const r = await locate(makeCtx(two), 'message', 'm1', 'work');
-    expect(r).toEqual({ kind: 'not_found', definitive: false, failed: [{ mailboxId: 'work', detail: 'HTTP 403' }] });
-    expect(locateError(r as Exclude<typeof r, { kind: 'found' }>, 'draft')).toMatch(/could not check mailbox work/);
+    expect(r).toEqual({ kind: 'not_found', definitive: false, missed: 0, failed: [{ mailboxId: 'work', label: 'Work', detail: 'HTTP 403', status: 403 }] });
+    // Nothing answered "not there": an access failure, named by label (SF2).
+    expect(locateError(r as Exclude<typeof r, { kind: 'found' }>, 'draft')).toBe("Couldn't reach the Work (HTTP 403) mailbox; it may need reconnecting.");
+  });
+
+  it('a miss in one mailbox and a failure in the other says it may be in the failed one, by label', async () => {
+    stubFetch([], { 'grant-personal': 503 });
+    const r = await locate(makeCtx(two), 'message', 'm1');
+    expect(locateError(r as Exclude<typeof r, { kind: 'found' }>, 'message')).toBe('No such message was found, but I could not check the Personal (HTTP 503) mailbox, so it may be there. Try again shortly.');
+  });
+
+  it('every mailbox rate-limited is RATE_LIMIT; a failure is logged with class and status only (SF2, SF4)', async () => {
+    stubFetch([], { 'grant-work': 429, 'grant-personal': 429 });
+    const ctx = makeCtx(two);
+    const r = await locateInMailbox(ctx, {}, 'ceo-inbox-read', 'message', 'm1');
+    expect(r).toEqual({ ok: false, error: "Couldn't reach the Work (HTTP 429), Personal (HTTP 429) mailboxes; try again shortly.", errorType: 'RATE_LIMIT' });
+    expect(ctx.log.warn).toHaveBeenCalledWith(expect.objectContaining({ tool: 'ceo-inbox-read', mailboxId: 'work', status: 429 }), expect.any(String));
+  });
+
+  it('a miss in a named mailbox says to omit it, not that the id is dead (SF16)', async () => {
+    stubFetch(['grant-personal']);
+    const r = await locateInMailbox(makeCtx(two), { mailbox: 'work' }, 'ceo-inbox-read', 'message', 'm1');
+    expect(r).toEqual({ ok: false, error: "That message isn't in the Work mailbox; omit mailbox to search every account.", errorType: 'NOT_FOUND' });
   });
 
   it('deleteDraft tolerates a response with no envelope', async () => {

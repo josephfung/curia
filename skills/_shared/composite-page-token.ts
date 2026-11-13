@@ -48,7 +48,9 @@ export function decodePageToken(token: string): { limit: number; scope: string |
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('page token is not an object');
   }
-  const out: PageCursors = {};
+  // No prototype (S2): a mailbox id may be `constructor` or `toString` (they match the id pattern),
+  // so lookups must see only the token's own entries. Readers use Object.hasOwn too.
+  const out: PageCursors = Object.create(null) as PageCursors;
   for (const [id, value] of Object.entries(parsed)) {
     if (value === null) {
       out[id] = null;
