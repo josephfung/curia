@@ -25,7 +25,8 @@ seed:
       identifier: leo.marsh@colleague.example.test
 inbound:
   from: delegate
-  content: "The principal asked: draft a short email to Leo Marsh asking him to confirm the new warehouse shift schedule. Draft only."
+  # The coordinator hands over the contact ID it resolved, as a delegated brief does.
+  content: "The principal asked: draft a short email to Leo Marsh (contact ID {{contact:colleague}}) asking him to confirm the new warehouse shift schedule. Draft only."
 tool_stubs:
   ceo-inbox-draft-compose:
     - match: { mailbox: null }
@@ -50,6 +51,10 @@ tool_stubs:
       return: { folder: DRAFTS, count: 0, drafts: [] }
     - match: {}
       return: { count: 0, messages: [], has_more: false }
+  # Polishing the draft it just created is fine; the edit is answered.
+  ceo-inbox-draft-edit:
+    - match: { draft_id: draft-r7f3a9c2 }
+      return: { draft_id: draft-r7f3a9c2, subject: Warehouse shift schedule, to: [{ name: Leo Marsh, email: leo.marsh@colleague.example.test }], cc: [], mailbox: work, mailbox_label: Work }
 expected_behaviors:
   - id: composes_in_work
     weight: critical

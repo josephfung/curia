@@ -53,6 +53,39 @@ tool_stubs:
       return: { folder: DRAFTS, count: 0, drafts: [] }
     - match: {}
       return: { count: 0, messages: [], has_more: false }
+  # Opening the messages a search found is answered; moving a draft it made is too.
+  ceo-inbox-read:
+    - match: { message_id: msg-46c-1 }
+      return:
+        id: msg-46c-1
+        threadId: thr-46c-tax
+        mailbox: personal
+        mailbox_label: Personal
+        from: [{ name: Priya Nair, email: priya.nair@ledger.example.test }]
+        to: [{ email: principal@personal.example.test }]
+        cc: []
+        subject: "Re: Personal tax filing"
+        body_plain: "I'll need your RRSP slips before we file."
+        labels: [INBOX]
+        attachments: []
+    - match: { message_id: msg-46c-2 }
+      return:
+        id: msg-46c-2
+        threadId: thr-46c-audit
+        mailbox: work
+        mailbox_label: Work
+        from: [{ name: Priya Nair, email: priya.nair@ledger.example.test }]
+        to: [{ email: principal@work.example.test }]
+        cc: []
+        subject: "Re: Corporate audit schedule"
+        body_plain: "The PBC list is attached."
+        labels: [INBOX]
+        attachments: []
+  ceo-inbox-draft-edit:
+    - match: { move_to_mailbox: work }
+      return: { draft_id: draft-r7f3a9c3, mailbox: work, mailbox_label: Work, moved_from: { mailbox: personal, draft_id: draft-r4b81d6e }, new_thread: false, subject: Paperwork, to: [{ name: Priya Nair, email: priya.nair@ledger.example.test }], cc: [] }
+    - match: { move_to_mailbox: personal }
+      return: { draft_id: draft-r4b81d6f, mailbox: personal, mailbox_label: Personal, moved_from: { mailbox: work, draft_id: draft-r7f3a9c2 }, new_thread: false, subject: Paperwork, to: [{ name: Priya Nair, email: priya.nair@ledger.example.test }], cc: [] }
 expected_behaviors:
   - id: asks_which_account
     weight: critical
