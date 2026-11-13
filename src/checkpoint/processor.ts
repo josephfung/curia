@@ -23,7 +23,7 @@ const CHECKPOINT_TOOLS: Array<{ name: string }> = [
 /** The slice of AuditLogRepo the processor needs for mailbox provenance (#2475). */
 export interface MailboxProvenanceLookup {
   /** `since`: the checkpoint's watermark; undefined on a conversation's first checkpoint. */
-  findMailboxesForConversation(conversationId: string, since?: string): Promise<string[]>;
+  findMailboxesForConversation(conversationId: string, since?: string, through?: string): Promise<string[]>;
 }
 
 export class ConversationCheckpointProcessor {
@@ -106,7 +106,8 @@ export class ConversationCheckpointProcessor {
     let source = `system:checkpoint/conversation:${conversationId}/agent:${agentId}/channel:${channelId}`;
     if (this.mailboxProvenance) {
       try {
-        const mailboxes = await this.mailboxProvenance.findMailboxesForConversation(conversationId, event.payload.since || undefined);
+        // Bounded by the batch: (since, through], so a result after the batch was read is not counted.
+        const mailboxes = await this.mailboxProvenance.findMailboxesForConversation(conversationId, event.payload.since || undefined, event.payload.through || undefined);
         if (mailboxes.length > 0) source += `/mailboxes:${mailboxes.join(',')}`;
       } catch (err) {
         // Provenance is a nicety: a failed lookup keeps the plain source, never the extraction.

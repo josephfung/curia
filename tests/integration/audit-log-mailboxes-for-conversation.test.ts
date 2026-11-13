@@ -60,6 +60,15 @@ describeIf('audit-log findMailboxesForConversation (#2475)', () => {
     expect(await repo.findMailboxesForConversation(conv)).toEqual(['new', 'old']);
   });
 
+  it('with a through, leaves out results after the checkpoint batch (inclusive bound)', async () => {
+    const conv = `conv-${randomUUID()}`;
+    const through = new Date(Date.now() - 10 * 60_000);
+    await seedResult(conv, 'ceo-inbox-read', { mailbox: 'in-batch' }, 'tool.result', new Date(through.getTime() - 60_000));
+    await seedResult(conv, 'ceo-inbox-read', { mailbox: 'at-through' }, 'tool.result', through);
+    await seedResult(conv, 'ceo-inbox-read', { mailbox: 'after' }, 'tool.result', new Date(through.getTime() + 60_000));
+    expect(await repo.findMailboxesForConversation(conv, undefined, through.toISOString())).toEqual(['at-through', 'in-batch']);
+  });
+
   it('returns an empty list when the conversation touched no mailbox', async () => {
     expect(await repo.findMailboxesForConversation(`conv-${randomUUID()}`)).toEqual([]);
   });
