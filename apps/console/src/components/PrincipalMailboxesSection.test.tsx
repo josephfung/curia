@@ -141,10 +141,10 @@ describe('PrincipalMailboxesSection', () => {
     expect((byLabel('Still mine: no') as HTMLInputElement).checked).toBe(true);
   });
 
-  it('a removal whose cleanup did not finish still reloads, and says so with the restart', async () => {
+  it('a removal whose cleanup did not finish still reloads, and says so', async () => {
     const base = mocks.respond;
     mocks.respond = (path, init) => init?.method === 'DELETE'
-      ? json({ ok: true, removed: true, cleanup_incomplete: ['identity'], restart_required: true })
+      ? json({ ok: true, removed: true, cleanup_incomplete: ['identity'] })
       : base(path, init);
     await mount();
     await click('Remove');
@@ -154,7 +154,7 @@ describe('PrincipalMailboxesSection', () => {
     expect(byLabel('New default mailbox')).toBeNull();
     expect(mocks.calls.filter(c => c.path === '/api/registry/principal-mailboxes' && !c.init).length).toBe(loadsBefore + 1);
     expect(container.textContent).toContain('some cleanup did not finish (identity)');
-    expect(container.textContent).toContain('Restart Curia');
+    expect(container.textContent).not.toContain('Restart Curia');
   });
 
   it('shows the warning of a change that committed with a pending copy', async () => {
@@ -305,9 +305,10 @@ describe('PrincipalMailboxesSection', () => {
     expect(container.textContent).toContain('That grant is for other@example.com');
   });
 
-  it('says calendar changes take effect after a restart', async () => {
+  it('says changes need no restart', async () => {
     await mount();
-    expect(container.textContent).toContain('Calendar changes take effect after a restart');
+    expect(container.textContent).toContain('no restart needed');
+    expect(container.textContent).not.toContain('take effect after a restart');
   });
 
   it('still-yours defaults to no for a work domain', async () => {

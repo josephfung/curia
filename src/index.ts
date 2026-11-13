@@ -92,17 +92,16 @@ import { closeDedupTasksForMergedContact } from './contacts/dedup-tasks.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
 import { createContactDuplicateDetected, createContactElevated, createContactMerged } from './bus/events.js';
 import { NylasClient } from './channels/email/nylas-client.js';
-import { CalendarRouter } from './channels/calendar/calendar-router.js';
+import { CalendarRouter, calendarRouterEnabled } from './channels/calendar/calendar-router.js';
 import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
 import { createRulesDoc } from './principal-mailboxes/rules-doc.js';
 import { backfillCalendarMailboxes } from './principal-mailboxes/backfill-calendar-mailboxes.js';
 import { createMailboxCalendarHooks } from './principal-mailboxes/calendar-hooks.js';
-import { migrateFlatPrincipalMailbox, migrationFailureReason, warnIfFallbackIdIsLive } from './principal-mailboxes/migrate-flat-mailbox.js';
+import { migrateFlatPrincipalMailbox, migrationFailureReason, retireFlatMailboxKeys, warnIfFallbackIdIsLive } from './principal-mailboxes/migrate-flat-mailbox.js';
 import { FALLBACK_MAILBOX_ID, SENT_OBSERVE_FAILED_RUNS_LIMIT, sentObserveFailedRunsKey } from './principal-mailboxes/state-keys.js';
 import { renameSendingKeyAfterMigration, dropLegacyDefaultKey, type SendingConfigStore } from './principal-mailboxes/migrate-config-keys.js';
-import { reconcileFlatMailboxKeys } from './principal-mailboxes/flat-mirror.js';
 import { emailAccountGrantSecretName } from './channels/email/email-account-secrets.js';
 import { grantSafeErrorFields, mayCarryGrantId } from './principal-mailboxes/error-fields.js';
 import { FLAT_KEYS_MANAGED_MESSAGE, FLAT_PRINCIPAL_MAILBOX_KEYS } from './principal-mailboxes/secrets.js';
@@ -1191,11 +1190,10 @@ async function main(): Promise<void> {
   // NOT fall back to the email account grant — that is the delegate-identity bug #1217 removed.
   // Every disabled path logs exactly once — none is silent.
   let calendarRouter: CalendarRouter | undefined;
-  // Whether a principal mailbox existed at boot, i.e. the calendar tools are enrolled this boot.
-  let calendarConfigured = false;
 
-  // Principal mailbox registry (#2475). The flat ceo_nylas_grant_id moves into it BEFORE the
-  // resolver, calendar client and acquaintance mailbox are built, so they all read the registry.
+  // Principal mailbox registry (#2475). The flat mailbox grant moves into it BEFORE the
+  // resolver, calendar router and acquaintance mailbox are built, so they all read the registry;
+  // the migration then deletes the retired flat keys once the registry serves the mailbox.
   // Non-fatal: a failed or deferred migration serves the flat grant as a fallback while the
   // registry is empty (setFallback is ignored once any row exists); a later retry clears it.
   const principalMailboxStore = new PrincipalMailboxStore(pool, logger);
@@ -1265,8 +1263,7 @@ async function main(): Promise<void> {
     try {
       const outcome = await sendingKeyRename.run();
       if (outcome === 'deferred') {
-        const flatGrant = (await secretsService.get('ceo_nylas_grant_id'))?.trim();
-        if (flatGrant) principalMailboxes.setFallback({ id: FALLBACK_MAILBOX_ID, grantId: flatGrant });
+        await principalMailboxes.serveFlatFallback(FALLBACK_MAILBOX_ID);
       } else {
         principalMailboxes.setFallback(null);
       }
@@ -1279,12 +1276,15 @@ async function main(): Promise<void> {
       );
       principalMailboxes.setPendingMigrationReason(migrationFailureReason(err));
       try {
-        const flatGrant = (await secretsService.get('ceo_nylas_grant_id'))?.trim();
-        if (flatGrant) principalMailboxes.setFallback({ id: FALLBACK_MAILBOX_ID, grantId: flatGrant });
+        await principalMailboxes.serveFlatFallback(FALLBACK_MAILBOX_ID);
       } catch (readErr) {
-        logger.error({ err: readErr }, 'Could not read ceo_nylas_grant_id for the mailbox fallback');
+        logger.error({ err: readErr }, 'Could not read the flat grant for the mailbox fallback');
       }
     }
+  } else {
+    // No Nylas key, so no migration runs; the retired flat keys still go once the registry
+    // serves the mailbox (never throws, logs its own failure).
+    await retireFlatMailboxKeys({ store: principalMailboxStore, secrets: secretsService, logger });
   }
 
   // Calendars registered before they belonged to a mailbox are the default mailbox's (R3).
@@ -1309,17 +1309,6 @@ async function main(): Promise<void> {
     logger.warn({ err }, 'Could not check the principal mailbox registry for the reserved fallback id');
   }
 
-  // Once the registry has rows the flat keys ceo-inbox reads are a copy of the default mailbox
-  // (R28). Re-derive them here and on each canary tick, so a copy that failed part-way, or a
-  // value seeded from .env, is repaired without the operator (#2475).
-  const reconcileFlatMirror = () =>
-    reconcileFlatMailboxKeys({ store: principalMailboxStore, secrets: secretsService, logger });
-  try {
-    await reconcileFlatMirror();
-  } catch (err) {
-    logger.error({ err }, 'Could not reconcile the flat principal-mailbox keys with the registry; retried on the next canary');
-  }
-
   // Console management of the registry (#2475). Needs the principal contact (identity writes);
   // without one the process is in setup-required mode and the routes are not mounted.
   // Without a Nylas API key the routes still list and remove, but add and test answer 503.
@@ -1341,7 +1330,6 @@ async function main(): Promise<void> {
         curiaAccountAddresses: async () => (await emailAccountsRepo.list()).map(a => a.selfEmail),
         // F6: a principal mailbox may never reuse one of Curia's own account grants.
         curiaAccountGrantIds,
-        reconcileFlatKeys: reconcileFlatMirror,
         lookupGrant: (grantId) => {
           if (!principalMailboxApiKey) return Promise.reject(new Error('No Nylas API key configured'));
           return new NylasClient(principalMailboxApiKey, grantId, logger).getGrant();
@@ -1363,14 +1351,16 @@ async function main(): Promise<void> {
       })
     : undefined;
 
-  if (!config.nylasApiKey) {
-    // Calendar shares the Nylas API key with email; its absence is already reported as a
-    // warning by the email-channel bootstrap above. Logged at debug here to keep this path
-    // non-silent without duplicating that warning for the common "no Nylas at all" case.
-    logger.debug('Calendar disabled — no Nylas API key configured');
-  } else if (!principalContact) {
-    // Setup-required mode: no principal to own the home calendars yet.
-    logger.warn('Calendar disabled — no principal contact yet; finish setup, then restart, to enable calendar');
+  if (!principalContact || !calendarRouterEnabled({ hasNylasApiKey: Boolean(config.nylasApiKey), hasPrincipalContact: true })) {
+    if (!config.nylasApiKey) {
+      // Calendar shares the Nylas API key with email; its absence is already reported as a
+      // warning by the email-channel bootstrap above. Logged at debug here to keep this path
+      // non-silent without duplicating that warning for the common "no Nylas at all" case.
+      logger.debug('Calendar disabled — no Nylas API key configured');
+    } else {
+      // Setup-required mode: no principal to own the home calendars yet.
+      logger.warn('Calendar disabled — no principal contact yet; finish setup, then restart, to enable calendar');
+    }
   } else {
     calendarRouter = new CalendarRouter({
       mailboxes: principalMailboxes.forCalendarRouter(),
@@ -1378,29 +1368,25 @@ async function main(): Promise<void> {
       principalContactId: principalContact.id,
       logger,
     });
-    // Read the default mailbox's grant once, as before, to decide whether the calendar tools
-    // are enrolled this boot. A DB or decrypt failure THROWS; catch it so one secret read can't
-    // crash boot, but log at `error` with the real cause — a wrong SECRET_ENCRYPTION_KEY breaks
-    // every secret, and must not be mistaken for "the grant isn't set".
-    let grantReadFailed = false;
+    // The router reads the registry and each mailbox's grant per call, so the calendar tools
+    // are enrolled whenever it exists: a mailbox added later works without a restart, and
+    // until then each tool answers that no principal mailbox is connected (no_mailbox).
+    logger.info("Calendar router initialized (each calendar goes through the principal's mailbox it belongs to)");
+    // Diagnostics only. A DB or decrypt failure THROWS; log it at `error` with the real cause —
+    // a wrong SECRET_ENCRYPTION_KEY breaks every secret, and must not read as "no mailbox".
     try {
       const defaultMailbox = await principalMailboxes.defaultMailbox();
-      if (defaultMailbox) {
-        calendarConfigured = Boolean((await principalMailboxes.credentials(defaultMailbox.id)).grantId);
+      if (!defaultMailbox) {
+        logger.warn(
+          "No principal mailbox is connected yet, so calendar tools have no calendar to use. Add one in the console (no restart needed); RSVP/holds/events run as the principal.",
+        );
+      } else {
+        await principalMailboxes.credentials(defaultMailbox.id);
       }
     } catch (err) {
-      grantReadFailed = true;
       logger.error(
         { err },
-        'Failed to read the principal mailbox grant — calendar disabled this boot. Check the database and SECRET_ENCRYPTION_KEY (a wrong key breaks all secrets, not just calendar).',
-      );
-    }
-    if (calendarConfigured) {
-      logger.info("Calendar router initialized (each calendar goes through the principal's mailbox it belongs to)");
-    } else if (!grantReadFailed) {
-      // Genuine absence (the read-failure path logged its own error above).
-      logger.warn(
-        "Calendar disabled — no principal mailbox is configured. Add one in the console under Channels → Email → Principal's mailboxes, then restart, to enable calendar (RSVP/holds/events run as the principal).",
+        'Failed to read the default principal mailbox grant; calendar calls through it fail until it is fixed. Check the database and SECRET_ENCRYPTION_KEY (a wrong key breaks all secrets, not just calendar).',
       );
     }
   }
@@ -1505,7 +1491,7 @@ async function main(): Promise<void> {
       // because the key resolves from three sources (channel key, env, legacy key).
       // entityMemory is deliberately not listed: the memory-* and setup-* tools are enabled
       // without an embedding source and fail closed when entity memory is off.
-      unavailableCapabilities: new Set(calendarRouter && calendarConfigured ? [] : ['calendarRouter']),
+      unavailableCapabilities: new Set(calendarRouter ? [] : ['calendarRouter']),
       defaults: registryDefaults,
       logger,
     });
@@ -2820,16 +2806,17 @@ async function main(): Promise<void> {
     scheduler,
     emailAdapter: emailAdapters[0],
     nylasClient: primaryNylasClient,
-    // The liveness probe lists the default mailbox's calendars through the router (#2475). Only
-    // when calendar is enrolled this boot, so an install without calendar stays `skipped`.
-    nylasCalendarClient: calendarRouter && calendarConfigured
+    // The liveness probe lists the default mailbox's calendars through the router (#2475).
+    // Skipped without a router, and while no mailbox is connected.
+    calendarRouterProbe: calendarRouter
       ? (() => {
           const router = calendarRouter;
           return {
-            listCalendars: async () => {
+            listDefaultCalendars: async () => {
               const def = await principalMailboxes.defaultMailbox();
-              if (!def) throw new Error('No principal mailbox is connected');
-              return (await router.clientFor(def.id)).listCalendars();
+              if (!def) return 'no_mailbox' as const;
+              await (await router.clientFor(def.id)).listCalendars();
+              return 'listed' as const;
             },
           };
         })()
@@ -2853,12 +2840,7 @@ async function main(): Promise<void> {
     // The health retry runs the send-level rename after a 'migrated' outcome too (R41); the
     // health service keeps it single-flight.
     retryMailboxMigration: retryMailboxMigration ? sendingKeyRename.run : undefined,
-    reconcileFlatMailboxKeys: reconcileFlatMirror,
     inboxTriageHealth: () => inboxTriageHealthRef.current?.() ?? null,
-    // Calendar reads each mailbox's grant per call (#2475), so a grant change needs no restart.
-    // Only when no mailbox existed at boot are the calendar tools still unenrolled: a mailbox
-    // added since then needs one restart, which setup-status reports as restart_required.
-    ...(calendarConfigured ? {} : { calendarBoundGrant: () => null }),
     signalRpcClient,
     browserService,
     // Pass channel health deps only when the adapter was constructed (enabled +
@@ -3173,9 +3155,10 @@ async function main(): Promise<void> {
   const secretCaptureService = new SecretCaptureService(pool, secretsService, {
     getAllowedSystemNames: () =>
       new Set([...registryService.declaredSecretNames(), ...channelCredentialKeys(), ...principalMailboxKeys()]),
-    // Once the registry has rows the console owns the flat keys (R28/R33), as in the vault routes.
+    // The flat keys are retired (#2475): refused, as in the vault routes, except while the
+    // deferred-migration fallback still serves them (an operator may need to set the address).
     refuseSystemName: async (name) =>
-      FLAT_PRINCIPAL_MAILBOX_KEYS.has(name) && (await principalMailboxStore.hasAnyRow()) ? FLAT_KEYS_MANAGED_MESSAGE : null,
+      FLAT_PRINCIPAL_MAILBOX_KEYS.has(name) && !(await principalMailboxes.isFallbackActive()) ? FLAT_KEYS_MANAGED_MESSAGE : null,
     logger,
   });
   // Injected after construction because the ExecutionLayer is created before registryService
@@ -3962,7 +3945,7 @@ async function main(): Promise<void> {
             : undefined,
         }
       : undefined,
-    principalRegistryHasRows: () => principalMailboxStore.hasAnyRow(),
+    principalFallbackActive: () => principalMailboxes.isFallbackActive(),
     livePrincipalMailboxIds: async () => (await principalMailboxStore.listLive()).map((m) => m.id),
     setupRequiredAtBoot,
     bootStartedAt,

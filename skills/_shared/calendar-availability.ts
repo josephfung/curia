@@ -537,11 +537,17 @@ async function chooseFreeBusyMailbox(
   if (address.includes('@') && !address.endsWith('calendar.google.com')) {
     const byDomain = live.filter((m) => domainMatches(m.address, [address]));
     if (byDomain.length === 1) return { mailbox: byDomain[0]!, by: 'domain' };
-    // What is left of the call's shared deadline; past it, the evidence call gives up at once.
-    const evidence = await attendeeEvidence(ctx, tool, [address], Math.max(0, deadline - Date.now()));
-    const lead = evidence ? leadingMailbox(evidence) : null;
-    const m = lead !== null ? live.find((x) => x.id === lead) : undefined;
-    if (m) return { mailbox: m, by: 'history' };
+    // What is left of the call's shared deadline. Once it is spent no mail search is started
+    // (N3): its answer could not be used, and the searches would run on unawaited.
+    const left = deadline - Date.now();
+    if (left > 0) {
+      const evidence = await attendeeEvidence(ctx, tool, [address], left);
+      const lead = evidence ? leadingMailbox(evidence) : null;
+      const m = lead !== null ? live.find((x) => x.id === lead) : undefined;
+      if (m) return { mailbox: m, by: 'history' };
+    } else {
+      ctx.log.info({ tool }, `${tool}: the evidence deadline is spent; free/busy goes through the default mailbox`);
+    }
   }
   return { mailbox: defaultMailbox(live), by: 'default' };
 }

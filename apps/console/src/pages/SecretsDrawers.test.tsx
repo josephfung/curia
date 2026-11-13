@@ -139,19 +139,19 @@ describe('SecretEditDrawer — personal', () => {
 
 describe('SecretEditDrawer — system', () => {
   const system = row({
-    name: 'ceo_self_email', kind: 'system', valueFormat: 'string',
-    declaredBy: [{ kind: 'principal-mailbox', name: 'Principal inbox', required: false, enabled: true }],
+    name: 'channel.email.curia.nylas_grant_id', kind: 'system', valueFormat: 'string',
+    declaredBy: [{ kind: 'email-account', name: 'curia', required: true, enabled: true }],
   });
 
   it('PUTs a single New value and keeps the server validation message', async () => {
-    mocks.respond = () => json({ error: 'ceo_self_email must be an email address.' }, 400);
+    mocks.respond = () => json({ error: 'The grant ID must not contain spaces.' }, 400);
     await render(<SecretEditDrawer row={system} onClose={() => {}} onSaved={() => {}} />);
     await type(field('New value'), 'fixture-value-2');
     await click(button('Save'));
     const put = mocks.calls.find(c => c.init?.method === 'PUT');
-    expect(put?.path).toBe('/api/vault/secrets/ceo_self_email');
+    expect(put?.path).toBe('/api/vault/secrets/channel.email.curia.nylas_grant_id');
     expect(bodyOf(put)).toEqual({ value: 'fixture-value-2' });
-    expect(document.body.textContent).toContain('ceo_self_email must be an email address.');
+    expect(document.body.textContent).toContain('The grant ID must not contain spaces.');
   });
 });
 
@@ -198,12 +198,12 @@ describe('SecretViewDrawer', () => {
       ? json({ uses: [{ at: new Date().toISOString(), agentId: 'ceo-inbox', toolName: '', source: 'vault', byReference: false }] })
       : json({});
     const grant = row({
-      name: 'ceo_nylas_grant_id', kind: 'system', readAtStartup: true, lastUsedAt: new Date().toISOString(),
-      declaredBy: [{ kind: 'principal-mailbox', name: 'Calendar and principal inbox', required: true, enabled: true }],
+      name: 'channel.email.curia.nylas_grant_id', kind: 'system', readAtStartup: true, lastUsedAt: new Date().toISOString(),
+      declaredBy: [{ kind: 'email-account', name: 'curia', required: true, enabled: true }],
     });
     await render(<SecretViewDrawer row={grant} onClose={() => {}} onEdit={() => {}} onRemoved={() => {}} />);
     await settle();
-    expect(mocks.calls[0]?.path).toBe('/api/vault/secrets/ceo_nylas_grant_id/uses?limit=5');
+    expect(mocks.calls[0]?.path).toBe('/api/vault/secrets/channel.email.curia.nylas_grant_id/uses?limit=5');
     // An empty toolName falls back to the source.
     expect(document.body.textContent).toContain('ceo-inbox · vault');
     expect(document.body.textContent).not.toContain('Read when Curia starts');

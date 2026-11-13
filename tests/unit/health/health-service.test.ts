@@ -203,15 +203,27 @@ describe('HealthService.getStatus()', () => {
     expect(result.checks.mcp).toEqual({});
   });
 
-  it('returns degraded when the principal calendar grant probe fails (#1561)', async () => {
+  it('returns degraded when the calendar probe through the router fails (#1561)', async () => {
     const svc = new HealthService(makeDeps({
-      nylasCalendarClient: {
-        listCalendars: vi.fn().mockRejectedValue(Object.assign(new Error('Unauthorized'), { statusCode: 401 })),
+      calendarRouterProbe: {
+        listDefaultCalendars: vi.fn().mockRejectedValue(Object.assign(new Error('Unauthorized'), { statusCode: 401 })),
       },
     }) as never);
     const result = await svc.getStatus();
     expect(result.status).toBe('degraded');
     expect(result.checks.nylas_calendar).toBe('fail');
+  });
+
+  it('health calendar probe goes through the router (#2475, Task 33b)', async () => {
+    const listDefaultCalendars = vi.fn().mockResolvedValue('listed');
+    const svc = new HealthService(makeDeps({ calendarRouterProbe: { listDefaultCalendars } }) as never);
+    expect((await svc.getStatus()).checks.nylas_calendar).toBe('ok');
+    expect(listDefaultCalendars).toHaveBeenCalledTimes(1);
+    // No mailbox connected yet: nothing to probe, not a failure.
+    listDefaultCalendars.mockResolvedValue('no_mailbox');
+    expect((await svc.getStatus()).checks.nylas_calendar).toBe('skipped');
+    // No router (no Nylas key or no principal): skipped.
+    expect((await new HealthService(makeDeps({}) as never).getStatus()).checks.nylas_calendar).toBe('skipped');
   });
 
   describe('principal mailbox canaries (#2475)', () => {
@@ -415,15 +427,6 @@ describe('HealthService.getStatus()', () => {
       expect(listMessages).toHaveBeenCalledTimes(2);
     });
 
-    it('principalMailboxReady is restart_required while calendar runs on another grant than the default', async () => {
-      const deps = mailboxDeps([mailbox('work', { isDefault: true })]);
-      let bound: string | null = null;
-      const svc = new HealthService(makeDeps({ ...deps, calendarBoundGrant: () => bound }) as never);
-      expect(await svc.principalMailboxReady()).toBe('restart_required');
-      bound = 'g-work';
-      expect(await svc.principalMailboxReady()).toBe('ready');
-    });
-
     it('the probe deadline covers reading the credentials', async () => {
       vi.useFakeTimers();
       try {
@@ -446,15 +449,6 @@ describe('HealthService.getStatus()', () => {
       await svc.runCanaries();
       expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledWith('work', 'Work', false, { authFailure: true });
       expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledWith('personal', 'Personal', false, { authFailure: false });
-    });
-
-    it('reconciles the flat principal-mailbox keys on each canary tick, and survives its failure', async () => {
-      const reconcile = vi.fn().mockRejectedValueOnce(new Error('vault down')).mockResolvedValue('in_sync');
-      const svc = new HealthService(makeDeps({ ...mailboxDeps([mailbox('work', { isDefault: true })]), reconcileFlatMailboxKeys: reconcile }) as never);
-      const first = await svc.runCanaries();
-      expect(first.find((r) => r.name === 'principal_mailbox:work')?.status).toBe('ok');
-      await svc.runCanaries();
-      expect(reconcile).toHaveBeenCalledTimes(2);
     });
 
     it('a stalled registry read or migration retry does not hold the later canaries', async () => {
@@ -494,28 +488,16 @@ describe('HealthService.getStatus()', () => {
       expect(setPendingMigrationReason).toHaveBeenCalledWith(expect.stringContaining('NylasApiError, HTTP 401'));
     });
 
-    it('reports a failed or no_grant flat-key repair as a failing check on the next run (silent-failure 6)', async () => {
-      const reconcile = vi.fn().mockResolvedValueOnce('no_grant').mockRejectedValueOnce(new Error('relation locked')).mockResolvedValue('in_sync');
-      const svc = new HealthService(makeDeps({ ...mailboxDeps([mailbox('work', { isDefault: true })]), reconcileFlatMailboxKeys: reconcile }) as never);
-      expect((await svc.runCanaries()).find((r) => r.name === 'principal_mailbox_flat_mirror')).toBeUndefined();
-      const second = (await svc.runCanaries()).find((r) => r.name === 'principal_mailbox_flat_mirror');
-      expect(second?.detail).toContain('no grant');
-      const third = (await svc.runCanaries()).find((r) => r.name === 'principal_mailbox_flat_mirror');
-      expect(third?.detail).toContain('Error');
-      expect((await svc.runCanaries()).find((r) => r.name === 'principal_mailbox_flat_mirror')).toBeUndefined();
-    });
-
-    it('a default mailbox that answers while calendar runs on the boot grant fails, without heartbeat or recovery (silent-failure 3)', async () => {
+    it('a default mailbox that answers is ok and pings the heartbeat: calendar never waits for a restart (#2475)', async () => {
       const fetchMock = vi.fn().mockResolvedValue({ ok: true });
       vi.stubGlobal('fetch', fetchMock);
       const config = { ...DEFAULT_HEALTH_CONFIG, heartbeats: { ...DEFAULT_HEALTH_CONFIG.heartbeats, nylas_calendar: 'https://hb.example.com/cal' } };
       const deps = mailboxDeps([mailbox('work', { isDefault: true })]);
-      const svc = new HealthService(makeDeps({ ...deps, config, calendarBoundGrant: () => 'g-boot' }) as never);
+      const svc = new HealthService(makeDeps({ ...deps, config }) as never);
       const r = (await svc.runCanaries()).find((x) => x.name === 'principal_mailbox:work');
-      expect(r?.status).toBe('fail');
-      expect(r?.detail).toContain('restart Curia');
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(deps.mailboxOutageNotifier.record).not.toHaveBeenCalled();
+      expect(r?.status).toBe('ok');
+      expect(fetchMock).toHaveBeenCalledWith('https://hb.example.com/cal');
+      expect(await svc.principalMailboxReady()).toBe('ready');
     });
 
     it('setup-status probes never send an outage email (silent-failure 13)', async () => {
@@ -525,11 +507,9 @@ describe('HealthService.getStatus()', () => {
       expect(deps.mailboxOutageNotifier.record).not.toHaveBeenCalled();
     });
 
-    it('principalMailboxReady is restart_required once every mailbox was removed after boot (F2)', async () => {
-      const svc = new HealthService(makeDeps({ ...mailboxDeps([]), calendarBoundGrant: () => 'g-removed' }) as never);
-      expect(await svc.principalMailboxReady()).toBe('restart_required');
-      const fresh = new HealthService(makeDeps({ ...mailboxDeps([]), calendarBoundGrant: () => null }) as never);
-      expect(await fresh.principalMailboxReady()).toBe('pending');
+    it('principalMailboxReady is pending once every mailbox was removed (F2)', async () => {
+      const svc = new HealthService(makeDeps(mailboxDeps([])) as never);
+      expect(await svc.principalMailboxReady()).toBe('pending');
     });
 
     it('names a probe timeout as such (silent-failure 8)', async () => {
@@ -577,15 +557,6 @@ describe('HealthService.getStatus()', () => {
       expect(first.map((r) => r.name)).toContain('signal');
       await svc.runCanaries();
       expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledTimes(1);
-    });
-
-    it('a stalled flat-key repair never holds the canaries, and is not started twice', async () => {
-      const reconcile = vi.fn(() => new Promise<never>(() => {}));
-      const svc = new HealthService(makeDeps({ ...mailboxDeps([mailbox('work', { isDefault: true })]), reconcileFlatMailboxKeys: reconcile }) as never);
-      const first = await svc.runCanaries();
-      expect(first.find((r) => r.name === 'principal_mailbox:work')?.status).toBe('ok');
-      await svc.runCanaries();
-      expect(reconcile).toHaveBeenCalledTimes(1);
     });
   });
 

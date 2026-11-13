@@ -143,9 +143,9 @@ export interface HttpAdapterConfig {
     import('./routes/principal-mailboxes.js').PrincipalMailboxesRouteOptions,
     'mailboxes' | 'store' | 'admin' | 'lookupGrant'
   >;
-  /** True once the principal mailbox registry has any row (#2475, R28): the vault routes then
-   *  refuse direct writes to the flat keys the console mirrors the default mailbox into. */
-  principalRegistryHasRows?: () => Promise<boolean>;
+  /** True while the deferred-migration fallback serves the flat mailbox grant (#2475): the
+   *  vault routes then still accept the retired flat keys, and declare the grant. */
+  principalFallbackActive?: () => Promise<boolean>;
   /** Ids of the live principal mailboxes: the vault refuses to delete their grants (#2475). */
   livePrincipalMailboxIds?: () => Promise<string[]>;
   /** Backs the public /api/secret-capture/* routes (one-time tokenized secret capture, #971).
@@ -591,10 +591,7 @@ export class HttpAdapter implements Channel {
         mcpRegistryService: this.config.mcpRegistryService,
         channelRegistryService: this.config.channelRegistryService,
         emailAccounts: new EmailAccountsRepo(pool),
-        principalFallbackActive: this.config.principalMailboxConsole
-          ? () => this.config.principalMailboxConsole!.mailboxes.isFallbackActive()
-          : undefined,
-        principalRegistryHasRows: this.config.principalRegistryHasRows,
+        principalFallbackActive: this.config.principalFallbackActive,
         livePrincipalMailboxIds: this.config.livePrincipalMailboxIds,
         usage: new SecretUsageRepo(pool),
         bus,

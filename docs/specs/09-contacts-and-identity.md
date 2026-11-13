@@ -346,12 +346,13 @@ There is no raw-address path (#2041). Someone with no contact record is added fi
 ### Operating on the principal's calendar (#1217)
 
 Calendar actions are performed **as the CEO**, not as a shared office identity. The calendar
-client binds to the principal's Nylas grant (`ceo_nylas_grant_id`) rather than a generic
-coordinator grant, so RSVPs and event writes originate from the principal's own account (this
-fixes the Nylas `omittedAttendeesSpecified` RSVP failure that arose when acting under the wrong
-grant). The binding **fails closed**: when `ceo_nylas_grant_id` is unset, calendar operations
-error rather than silently falling back to a non-principal grant. The grant ID is a bootstrap
-identity handle, resolved once — not re-discovered per task.
+router sends each call through one of the principal's own mailboxes (their Nylas grants, the
+registry of #2475) rather than a generic coordinator grant, so RSVPs and event writes originate
+from the principal's own account (this fixes the Nylas `omittedAttendeesSpecified` RSVP failure
+that arose when acting under the wrong grant). The binding **fails closed**: with no principal
+mailbox connected, calendar operations error (`no_mailbox`) rather than silently falling back to
+a non-principal grant. Grants are read per call, so a mailbox added or a grant replaced applies
+without a restart.
 
 ---
 

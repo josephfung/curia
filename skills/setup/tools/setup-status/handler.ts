@@ -227,9 +227,8 @@ export class SetupStatusHandler implements ToolHandler {
         }
       }
 
-      // Done when a live principal mailbox passed its last health canary (#2475). One that
-      // passed but that calendar picks up only after a restart reads as pending with
-      // restart_required, as the email channel does.
+      // Done when a live principal mailbox in the registry passed its last health canary
+      // (#2475). Calendar reads each mailbox's grant per call, so no restart is ever needed.
       let principalMailboxStatus: PrincipalMailboxReadiness = 'pending';
       if (ctx.principalMailboxReady) {
         try {
@@ -319,7 +318,6 @@ export class SetupStatusHandler implements ToolHandler {
               break;
             case 'principal_mailbox_ready':
               done = principalMailboxStatus === 'ready';
-              restartRequired = principalMailboxStatus === 'restart_required';
               break;
             case 'browser_ready':
               done = browserReady;

@@ -14,6 +14,7 @@ import type { CheckResult } from './types.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import type { Logger } from '../logger.js';
 import { EMAIL_INBOUND_TURN_STALL_MS } from '../channels/email/inbound-stall.js';
+import { grantSafeErrorFields } from '../principal-mailboxes/error-fields.js';
 
 // -- Structural health interfaces --
 // Using structural typing avoids hard import dependencies on concrete service
@@ -84,8 +85,10 @@ export function mcpHealthKey(serverName: string): string {
   return serverName.replace(/-/g, '_');
 }
 
-export interface NylasCalendarClientHealth {
-  listCalendars(): Promise<unknown[]>;
+/** The calendar router's liveness probe (#2475): lists the default mailbox's calendars, or
+ *  says no mailbox is connected (nothing to probe). */
+export interface CalendarRouterProbe {
+  listDefaultCalendars(): Promise<'listed' | 'no_mailbox'>;
 }
 
 /** Slack Socket Mode surface for /api/health (#1567). */
@@ -365,30 +368,32 @@ export async function checkMcpServers(
   return Object.fromEntries(entries);
 }
 
-/** Outcome of the principal calendar grant probe, distinguishing auth failures. */
-export interface NylasCalendarProbe {
+/** Outcome of the calendar router probe, distinguishing auth failures. */
+export interface CalendarRouterProbeResult {
   status: CheckResult;
   /** True only for a Nylas auth failure (401/403) — the sole case a grant reconnect resolves. */
   authFailure: boolean;
 }
 
 /**
- * Probe the principal calendar grant (`ceo_nylas_grant_id`) via listCalendars (#1561).
- * Distinct from the email/messaging `nylas` canary. Skipped when no calendar client.
+ * Probe calendar through the router: list the default principal mailbox's calendars (#1561,
+ * #2475). Distinct from the email/messaging `nylas` canary. Skipped without a router or while
+ * no principal mailbox is connected.
  * Hard 5-second timeout. Classifies auth failures (401/403) so callers can offer
  * grant-reconnect guidance only when it would actually help — a timeout or 5xx is not
  * a grant problem.
  */
-export async function checkNylasCalendar(
-  calendarClient: NylasCalendarClientHealth | undefined,
+export async function checkCalendarRouter(
+  probe: CalendarRouterProbe | undefined,
   logger: Logger,
-): Promise<NylasCalendarProbe> {
-  if (!calendarClient) return { status: 'skipped', authFailure: false };
+): Promise<CalendarRouterProbeResult> {
+  if (!probe) return { status: 'skipped', authFailure: false };
   try {
-    await withTimeout(calendarClient.listCalendars(), 5_000);
-    return { status: 'ok', authFailure: false };
+    const outcome = await withTimeout(probe.listDefaultCalendars(), 5_000);
+    return { status: outcome === 'listed' ? 'ok' : 'skipped', authFailure: false };
   } catch (err) {
-    logger.warn({ err }, 'checkNylasCalendar: calendar grant probe failed');
+    // Class and status only: a Nylas error can carry the grant id (R20).
+    logger.warn(grantSafeErrorFields(err), 'checkCalendarRouter: calendar probe through the router failed');
     // Nylas SDK surfaces HTTP status on `statusCode` (see isNylasAuthFailure in the
     // calendar-list-events handler); 401/403 mean the grant itself is bad.
     const code = typeof err === 'object' && err !== null

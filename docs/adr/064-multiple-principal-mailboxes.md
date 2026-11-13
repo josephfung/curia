@@ -27,7 +27,7 @@ Alternatives considered:
 
 **Evidence-based choice for new objects.** For a new draft or event, code computes per-mailbox evidence from the recipients (history of sent and received mail, whether the domain matches the mailbox) and the tool refuses to act without a stated `mailbox` once there is more than one. The agent decides from the principal's words, preferences and that evidence; it says which account only when the choice was a real judgement call, and asks when the evidence is split. A correction is cheap (a draft can be moved).
 
-**Upgrade.** A single-mailbox install is migrated at boot from the flat grant into one default row. If neither the grant lookup nor `ceo_self_email` yields an address, the flat grant is served as an in-memory mailbox until the migration succeeds, and the migration is retried on each health-canary tick.
+**Upgrade.** A single-mailbox install is migrated at boot from the flat grant into one default row. If neither the grant lookup nor `ceo_self_email` yields an address, the flat grant is served as an in-memory mailbox until the migration succeeds, and the migration is retried on each health-canary tick. Once a registry row and its grant serve the mailbox, boot deletes the two flat settings; the vault then refuses writes to them, except while the fallback is served.
 
 **Health.** Each live mailbox has its own canary (`principal_mailbox:<id>`: grant lookup, one message, calendar list). The default mailbox's result also drives the existing `nylas_calendar` heartbeat, so a deployment's monitor keeps pinging. An outage alerts the principal once per episode, naming the mailbox by label only (never its address or grant), and suggests removing the mailbox if the account is gone.
 

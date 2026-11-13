@@ -1,15 +1,17 @@
 // migrate-flat-mailbox.ts — move the single flat principal mailbox (ceo_nylas_grant_id) into
 // the principal_mailboxes registry at boot (#2475, D1).
 //
-// Runs only while the registry has no live mailbox and the flat grant is set. It copies the
+// Migrates only while the registry has no row and the flat grant is set. It copies the
 // grant to principal.mailbox.<id>.nylas_grant_id and inserts the default row. It never
-// touches identities and never deletes the flat keys (Part 2 retires them).
+// touches identities.
 //
-// Deliberately does not import channels/calendar/resolve-calendar-grant.ts (R9): it reads the
-// flat keys directly.
+// Then, on every boot, it retires the flat keys (ceo_nylas_grant_id, ceo_self_email): copy, then
+// delete. They are deleted only once the registry serves them, i.e. a live default row exists
+// and its grant secret is stored. While the migration is deferred there is no row, so the
+// deferred fallback (service.ts) keeps reading ceo_nylas_grant_id.
 import type { Logger } from '../logger.js';
 import type { PrincipalMailboxStore } from './store.js';
-import { principalMailboxGrantSecretName } from './secrets.js';
+import { FLAT_EMAIL_KEY, FLAT_GRANT_KEY, principalMailboxGrantSecretName } from './secrets.js';
 import { RESERVED_MAILBOX_IDS } from './types.js';
 import { FALLBACK_MAILBOX_ID } from './state-keys.js';
 import { grantSafeErrorFields, mayCarryGrantId } from './error-fields.js';
@@ -36,8 +38,6 @@ export interface FlatMailboxMigrationDeps {
   logger: Logger;
 }
 
-const FLAT_GRANT_KEY = 'ceo_nylas_grant_id';
-const FLAT_EMAIL_KEY = 'ceo_self_email';
 
 /** `gmail` for gmail.com / googlemail.com, else the domain's first label ([a-z0-9-], `m-` before a digit). */
 export function mailboxIdFromAddress(address: string): string {
@@ -77,8 +77,11 @@ export async function migrateFlatPrincipalMailbox(
   const { store, secrets, lookupGrant, logger } = deps;
 
   // Any row, removed ones included: a principal who removed their only mailbox must not have
-  // it revived from the still-present flat keys on the next boot.
-  if (await store.hasAnyRow()) return 'already';
+  // it revived from flat keys that are still present on the next boot.
+  if (await store.hasAnyRow()) {
+    await retireFlatMailboxKeys(deps);
+    return 'already';
+  }
 
   const grantId = (await secrets.get(FLAT_GRANT_KEY))?.trim();
   if (!grantId) return 'nothing';
@@ -146,7 +149,54 @@ export async function migrateFlatPrincipalMailbox(
   }
   logger.info({ mailboxId: id }, 'Migrated the principal mailbox into the registry');
   await warnIfUnverified(deps, id, address);
+  await retireFlatMailboxKeys(deps);
   return 'migrated';
+}
+
+export type FlatKeyRetirement = 'none' | 'deleted' | 'kept';
+
+/**
+ * Deletes the retired flat keys once the registry serves the mailbox they held: a live default
+ * row exists and its grant secret is stored (#2475). Idempotent, and run on every boot, so an
+ * install migrated before the keys were retired loses them on its first boot after the upgrade.
+ * Kept (with a warning) when the default row or its grant is missing: the flat grant may then be
+ * the only copy. Never throws: a failed read or delete is logged, and the next boot retries.
+ * Logs name keys and mailbox ids only, never a value (R20).
+ */
+export async function retireFlatMailboxKeys(
+  deps: Pick<FlatMailboxMigrationDeps, 'store' | 'secrets' | 'logger'>,
+): Promise<FlatKeyRetirement> {
+  const { store, secrets, logger } = deps;
+  try {
+    const present: string[] = [];
+    for (const key of [FLAT_GRANT_KEY, FLAT_EMAIL_KEY]) {
+      if ((await secrets.get(key)) !== null) present.push(key);
+    }
+    if (present.length === 0) return 'none';
+
+    const def = (await store.listLive()).find((m) => m.isDefault);
+    const grant = def ? (await secrets.get(principalMailboxGrantSecretName(def.id)))?.trim() : undefined;
+    if (!def || !grant) {
+      logger.warn(
+        { keys: present, ...(def ? { mailboxId: def.id } : {}) },
+        def
+          ? 'Kept the flat mailbox keys: the default mailbox has no grant in the vault yet (use Replace grant on it in the console)'
+          : 'Kept the flat mailbox keys: the registry has no live default mailbox',
+      );
+      return 'kept';
+    }
+    // The grant is copied already (the migration stored it under the mailbox), so delete.
+    for (const key of present) await secrets.delete(key);
+    logger.info({ keys: present, mailboxId: def.id }, 'Deleted the retired flat mailbox keys; the registry serves the mailbox');
+    return 'deleted';
+  } catch (err) {
+    // A vault or database error names no grant, so its message is kept; a Nylas-shaped one is not (R20).
+    logger.warn(
+      err instanceof Error && !mayCarryGrantId(err) ? { ...grantSafeErrorFields(err), errMessage: err.message } : grantSafeErrorFields(err),
+      'Could not retire the flat mailbox keys; retrying at the next boot',
+    );
+    return 'kept';
+  }
 }
 
 // D1: the migration leaves identities alone, so an address that is not a verified principal

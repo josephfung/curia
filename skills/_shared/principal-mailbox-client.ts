@@ -1,6 +1,6 @@
 // Per-mailbox Nylas clients for the ceo-inbox tools (#2475).
 // Clients always come from ctx.principalMailboxes (which holds no credentials); there is deliberately no
-// fallback to the flat ceo_nylas_grant_id secret. Grant ids never appear in errors or logs.
+// fallback to a grant read straight from the vault. Grant ids never appear in errors or logs.
 
 import type { ToolContext } from '../../src/skills/types.js';
 import type { PrincipalMailboxView, SkillPrincipalMailboxes } from '../../src/principal-mailboxes/service.js';

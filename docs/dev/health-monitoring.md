@@ -120,7 +120,7 @@ The heartbeat key identifies the capability tier, not the vendor. If you remap `
 | `embeddings` | Last recorded embedding call outcome, from OpenAI or the server at `EMBEDDING_BASE_URL` | Entity memory is off (no embedding endpoint, no profile for the model, or the boot schema check turned it off) |
 | `image_gen` | Last `image-generate` skill outcome | No `OPENAI_API_KEY` |
 | `nylas` | `listMessages(limit=1)` via the injected Nylas client | Email not configured (no `NylasClient` provided) |
-| `nylas_calendar` | `listCalendars()` via the principal calendar client (`ceo_nylas_grant_id`) | Calendar not configured (no `NylasCalendarClient`) |
+| `nylas_calendar` | `listCalendars()` of the default principal mailbox, through the calendar router | No calendar router (no Nylas key or no principal contact), or no principal mailbox connected yet |
 | `signal` | Signal-cli socket ping | Signal not configured |
 | `google_workspace` | `list_drive_items` (one item) through the MCP session, which exercises the OAuth grant. Also fails on a `zero_tools` or `unavailable` boot | `google-workspace` MCP server not enabled |
 | `tavily` | `GET https://api.tavily.com/usage` with the key (no search credits spent) | No `tavily_api_key` in the vault and no `TAVILY_API_KEY` env var. web-search then runs keyless, and the result's detail says "keyless mode" (#2445). A keyless probe would spend a free search, so none is made |

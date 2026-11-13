@@ -351,7 +351,62 @@ describe("fix round 1: someone else's free/busy across several mailboxes (I3, M6
     expect(d.partial).toBeUndefined();
   });
 
-  it('M6: when the default fails too, it is partial and never clear', async () => {
+  it('N3: once the shared deadline is spent, no further evidence search starts', async () => {
+    vi.useFakeTimers();
+    try {
+      const clients = { work: fbClient(), personal: fbClient() };
+      const evidence = vi.fn(() => new Promise<never>(() => undefined));
+      const LATE = 'd@four.example.org';
+      let lateLookups = 0;
+      // The last address takes longer to route than the whole evidence deadline. Its first
+      // lookup is the principal check; the second is route(), after the deadline is set.
+      const contacts = {
+        resolveCalendar: async (calId: string) => {
+          if (calId === LATE && ++lateLookups === 2) await new Promise((r) => setTimeout(r, 3_500));
+          return null;
+        },
+        getCalendarsForContact: async () => [],
+        getPrimaryCalendar: async () => null,
+      };
+      const router = routerFixture({ mailboxes: [work, personal], clients, evidence, contacts: contacts as never });
+      const ids = ['a@one.example.org', 'b@two.example.org', 'c@three.example.org', LATE];
+      const pending = new CalendarFindFreeTimeHandler().execute(ctx(router, { calendarIds: ids, timeMin: T0, timeMax: T1 }));
+      await vi.advanceTimersByTimeAsync(3_600);
+      const d = data<{ freebusy_via: Array<{ calendarId: string; mailbox: string; chosen_by: string }> }>(await pending);
+      expect(evidence).toHaveBeenCalledTimes(3);
+      expect(evidence).not.toHaveBeenCalledWith([LATE]);
+      expect(d.freebusy_via.find((v) => v.calendarId === LATE)).toMatchObject({ mailbox: 'work', chosen_by: 'default' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('M6 (N2): when a non-default chosen mailbox fails and the default retry fails too, it is partial', async () => {
+    const clients = { work: fbClient(), personal: fbClient() };
+    // Only the other person's free/busy fails, on either account; the principal's own calendar reads.
+    const failForSister = async (ids: string[]) => {
+      if (ids.includes('sister@gmail.com')) throw new Error('grant expired');
+      return ids.map((email) => ({ email, timeSlots: [] }));
+    };
+    clients.personal.getFreeBusy.mockImplementation(failForSister);
+    clients.work.getFreeBusy.mockImplementation(failForSister);
+    const router = routerFixture({
+      mailboxes: [work, personal],
+      clients,
+      principalCalendars: [{ nylasCalendarId: WORK_HOME, isPrimary: true, principalMailboxId: 'work' }],
+      evidence: async () => [
+        { mailbox: 'work', mailbox_label: 'Work', sent_count: 0, received_count: 0, domain_match: false },
+        { mailbox: 'personal', mailbox_label: 'Personal', sent_count: 4, received_count: 2, domain_match: false },
+      ],
+    });
+    const d = data<FreeData & { freebusy_via?: unknown }>(await free(router, { calendarIds: ['sister@gmail.com', WORK_HOME] }));
+    expect(clients.personal.getFreeBusy).toHaveBeenCalledWith(['sister@gmail.com'], T0, T1);
+    expect(clients.work.getFreeBusy).toHaveBeenCalledWith(['sister@gmail.com'], T0, T1);
+    expect(d.partial?.map((p) => p.mailbox_label)).toEqual(['Personal']);
+    expect(d.note).toBeDefined();
+  });
+
+  it('M6: when the default is the chosen mailbox and fails, it is partial and never clear', async () => {
     const clients = { work: fbClient(), personal: fbClient() };
     // The default (work) is the chosen mailbox and fails; nothing else to fall back to. The
     // principal's personal calendar is still read, so the answer is partial, not an error.

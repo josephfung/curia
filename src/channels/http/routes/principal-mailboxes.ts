@@ -310,7 +310,6 @@ export async function principalMailboxesRoutes(
         ok: true,
         removed: true,
         cleanup_incomplete: outcome.cleanupIncomplete,
-        restart_required: outcome.restartRequired,
       });
     } catch (err) {
       return fail(request, reply, err, 'Removing the principal mailbox');

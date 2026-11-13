@@ -32,7 +32,7 @@ function makeOptions(over: Partial<PrincipalMailboxesRouteOptions> = {}): Princi
       setDefault: vi.fn(async () => ({})),
       replaceGrant: vi.fn(async () => ({ ok: true as const })),
       removalPreview: vi.fn(async () => preview),
-      remove: vi.fn(async () => ({ cleanupIncomplete: [], restartRequired: false })),
+      remove: vi.fn(async () => ({ cleanupIncomplete: [] })),
     },
     lookupGrant: vi.fn(async () => ({ email: 'boss@example.com', provider: 'google' })),
     webAppBootstrapSecret: BOOTSTRAP,
@@ -268,7 +268,7 @@ describe('principal-mailboxes routes', () => {
     const res = await req('DELETE', '/api/registry/principal-mailboxes/work', { still_owned: false, new_default_id: 'personal', new_primary_email: 'a@example.com' });
     expect(res.statusCode).toBe(200);
     expect(opts.admin.remove).toHaveBeenCalledWith({ id: 'work', stillOwned: false, newDefaultId: 'personal', newPrimaryEmail: 'a@example.com' });
-    expect(res.json()).toEqual({ ok: true, removed: true, cleanup_incomplete: [], restart_required: false });
+    expect(res.json()).toEqual({ ok: true, removed: true, cleanup_incomplete: [] });
   });
 
   it('DELETE passes the rules choice and rejects a malformed one', async () => {
@@ -285,12 +285,12 @@ describe('principal-mailboxes routes', () => {
     expect(opts.admin.remove).not.toHaveBeenCalled();
   });
 
-  it('DELETE reports unfinished cleanup and a needed restart as a 200, never a failure', async () => {
-    const opts = makeOptions({ admin: { ...makeOptions().admin, remove: vi.fn(async () => ({ cleanupIncomplete: ['identity'], restartRequired: true })) } });
+  it('DELETE reports unfinished cleanup as a 200, never a failure', async () => {
+    const opts = makeOptions({ admin: { ...makeOptions().admin, remove: vi.fn(async () => ({ cleanupIncomplete: ['identity'] })) } });
     await build(opts);
     const res = await req('DELETE', '/api/registry/principal-mailboxes/work', { still_owned: false });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, removed: true, cleanup_incomplete: ['identity'], restart_required: true });
+    expect(res.json()).toEqual({ ok: true, removed: true, cleanup_incomplete: ['identity'] });
   });
 
   it('DELETE maps a removal precondition error to 422 and unknown to 404', async () => {
@@ -426,7 +426,7 @@ describe('principal-mailboxes routes', () => {
     });
 
     it('remove records the rules choice and the unfinished cleanup (the rules rewrite)', async () => {
-      const opts = makeOptions({ admin: { ...makeOptions().admin, remove: vi.fn(async () => ({ cleanupIncomplete: ['inbox_rules'], restartRequired: false })) } });
+      const opts = makeOptions({ admin: { ...makeOptions().admin, remove: vi.fn(async () => ({ cleanupIncomplete: ['inbox_rules'] })) } });
       await build(opts);
       await req('DELETE', `${URL}/work`, { still_owned: true, rules: { rescope_to: 'personal' } });
       expect(audited(opts)).toEqual([

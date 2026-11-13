@@ -218,7 +218,7 @@ Two things to know before relying on a removal:
   **from environment** and names the variable; unset it in the deploy environment to finish
   the removal.
 - **When it takes effect.** Tool secrets are re-read on every call, so a removal bites on the
-  tool's next call. Channel credentials, MCP server keys and `ceo_nylas_grant_id` are read at
+  tool's next call. Channel credentials and MCP server keys are read at
   boot, so the old value keeps working until the next restart. Removing a leaked channel
   token does not revoke it; revoke it at the provider as well.
 
@@ -267,7 +267,7 @@ Restart Curia (`pnpm local`). The email channel boots one adapter per enabled ac
 
 **5. Connect the principal's own mailbox (optional)**
 
-Calendar and the `ceo-inbox` tools work in the principal's own mailbox, through a second Nylas grant. Connect that mailbox in Nylas the same way, then in **Settings -> Channels -> Email -> Principal's mailbox** save its grant ID and the principal's address (vault keys `ceo_nylas_grant_id` and `ceo_self_email`). Restart Curia. Without the grant, calendar and the inbox tools stay off.
+Calendar and the `ceo-inbox` tools work in the principal's own mailbox, through a second Nylas grant. Connect that mailbox in Nylas the same way, then in **Settings -> Channels -> Email -> Principal's mailboxes** add it (a short id, a label and its grant ID). Add each of the principal's Gmail accounts the same way. No restart is needed. Until a mailbox is connected, calendar and the inbox tools answer that none is.
 
 ### Embeddings
 
