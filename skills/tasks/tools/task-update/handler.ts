@@ -6,6 +6,8 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { UpdateTaskParams } from '../../../../src/db/task-repo.js';
+import type { TaskRow } from '../../../../src/db/queries/tasks.js';
+import { hasSystemLineage } from '../../../../src/contacts/principal.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { isUuid } from '../../../../src/util/uuid.js';
 import { dedupReviewRoute, dedupRouteTag, routeFromTags } from '../../../../src/contacts/dedup-routing.js';
@@ -62,6 +64,11 @@ async function routeNowPrincipal(
     ctx.log.warn({ err, idA, idB }, 'task-update: could not re-read dedup pair contacts — keeping the stored route');
     return false;
   }
+}
+
+/** The inbox heartbeat's drain task: tagged inbox-drain, system-originated (#2475). */
+function isSystemInboxDrain(t: TaskRow): boolean {
+  return t.tags.includes('inbox-drain') && t.originator?.systemRole === 'system';
 }
 
 export class TaskUpdateHandler implements ToolHandler {
@@ -176,6 +183,18 @@ export class TaskUpdateHandler implements ToolHandler {
     ctx.log.info({ taskId: input.task_id, status: input.status }, 'Updating task');
 
     try {
+      // SEC-L2 (#2475): a task-update writes the task's stored originator onto any new wake, so
+      // a lower-lineage turn editing the heartbeat's system-originated inbox drain would hand
+      // its notes to a system-standing successor turn. Only a system-lineage turn (the drain
+      // itself) may set its wake or add a note; only such an update pays the extra read.
+      const target = input.wake_at !== undefined || input.progress_note !== undefined
+        ? await ctx.taskRepo.getTask(input.task_id)
+        : null;
+      if (target && isSystemInboxDrain(target) && !hasSystemLineage(ctx.taskMetadata)) {
+        ctx.log.warn({ taskId: input.task_id }, 'task-update: refused an update to the system inbox drain from a non-system turn');
+        return { success: false, error: 'This inbox-drain task belongs to the scheduled inbox triage; only its own drain run can update it.' };
+      }
+
       if (blockerUpdate.present && blockerUpdate.id !== null) {
         if (blockerUpdate.id.toLowerCase() === input.task_id.toLowerCase()) {
           return { success: false, error: SELF_BLOCK_ERROR };

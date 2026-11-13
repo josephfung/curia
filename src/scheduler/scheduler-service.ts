@@ -61,6 +61,8 @@ export interface JobRow {
   taskTags: string[] | null;
   /** Human-readable task title — included in the content bundle so receiving agents have context. */
   taskTitle: string | null;
+  /** Who created the linked task (`heartbeat` for the inbox heartbeat's drains); stamped on boundTask (#2475, SEC-L1). */
+  taskCreatedBy?: string | null;
   runStartedAt: string | null;
   expectedDurationSeconds: number | null;
   lastRunOutcome: 'completed' | 'failed' | 'timed_out' | null;
@@ -103,6 +105,7 @@ interface DbJobRow {
   task_error_budget: Record<string, unknown> | null;
   task_tags: string[] | null;
   task_title: string | null;
+  task_created_by?: string | null;
   run_started_at: string | null;          // set when job enters 'running'; cleared on completion
   expected_duration_seconds: number | null; // per-job timeout hint; NULL → system default (600s)
   last_run_outcome: 'completed' | 'failed' | 'timed_out' | null;
@@ -347,7 +350,8 @@ export class SchedulerService {
              t.progress,
              t.error_budget AS task_error_budget,
              t.tags AS task_tags,
-             t.title AS task_title
+             t.title AS task_title,
+             t.created_by AS task_created_by
         FROM scheduled_jobs sj
         LEFT JOIN tasks t ON sj.task_id = t.id
        WHERE sj.id = $1
@@ -399,7 +403,8 @@ export class SchedulerService {
              t.progress,
              t.error_budget AS task_error_budget,
              t.tags AS task_tags,
-             t.title AS task_title
+             t.title AS task_title,
+             t.created_by AS task_created_by
         FROM scheduled_jobs sj
         LEFT JOIN tasks t ON sj.task_id = t.id
        ${whereClause}
@@ -1463,6 +1468,7 @@ function mapJobRow(row: DbJobRow): JobRow {
     taskErrorBudget: row.task_error_budget ?? null,
     taskTags: row.task_tags ?? null,
     taskTitle: row.task_title ?? null,
+    taskCreatedBy: row.task_created_by ?? null,
     runStartedAt: row.run_started_at,
     expectedDurationSeconds: row.expected_duration_seconds,
     lastRunOutcome: row.last_run_outcome,

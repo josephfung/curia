@@ -565,3 +565,35 @@ describe('TaskUpdateHandler', () => {
   });
 });
 
+
+// SEC-L2 (#2475): the heartbeat's system-originated inbox drain cannot be re-armed or annotated
+// by a lower-lineage turn, which would hand its notes to a system-standing successor.
+describe('TaskUpdateHandler — the system inbox drain (SEC-L2)', () => {
+  const drain = makeTaskRow({ tags: ['inbox-drain'], createdBy: 'heartbeat', originator: { contactId: 'system', systemRole: 'system', channel: 'declarative', initiatedAt: '2026-11-12T09:00:00.000Z' } as never });
+  const run = (taskMetadata: Record<string, unknown> | undefined, input: Record<string, unknown> = { task_id: VALID_UUID, wake_at: '2026-11-12T10:00:00Z', progress_note: 'more' }) => {
+    const taskRepo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(drain), updateTask: vi.fn().mockResolvedValue(drain) });
+    return { taskRepo, result: new TaskUpdateHandler().execute(makeCtx({ input, taskRepo, taskMetadata } as Partial<ToolContext>)) };
+  };
+
+  it.each([
+    ['an outsider-originated turn', { originator: { contactId: 'c-1', systemRole: null, tier: 'outsider' } }],
+    ['an agent turn', { originator: { systemRole: 'agent', ladderedFrom: null } }],
+    ['a turn with no lineage', undefined],
+  ])('refuses %s and writes nothing', async (_who, meta) => {
+    const { taskRepo, result } = run(meta);
+    const r = await result;
+    expect(r.success).toBe(false);
+    expect(taskRepo.updateTask).not.toHaveBeenCalled();
+  });
+
+  it('lets the drain run itself (system lineage, raw or laddered) re-arm it', async () => {
+    expect((await run({ originator: { systemRole: 'system' } }).result).success).toBe(true);
+    expect((await run({ originator: { systemRole: 'agent', ladderedFrom: 'system' } }).result).success).toBe(true);
+  });
+
+  it('a plain status change needs no lookup', async () => {
+    const { taskRepo, result } = run(undefined, { task_id: VALID_UUID, status: 'in_progress' });
+    expect((await result).success).toBe(true);
+    expect(taskRepo.getTask).not.toHaveBeenCalled();
+  });
+});

@@ -29,7 +29,7 @@ describe('taskWakeEvent', () => {
   it('stamps the system originator when the wake task names it', () => {
     const event = taskWakeEvent('ceo-inbox', 'conv-1', 'wake body', { ...task, originator: 'system' });
     expect(isSystemOriginated(event.payload.metadata)).toBe(true);
-    expect(event.payload.metadata?.['boundTask']).toMatchObject({ taskId: task.id, tags: ['inbox-drain'] });
+    expect(event.payload.metadata?.['boundTask']).toMatchObject({ taskId: task.id, tags: ['inbox-drain'], createdBy: 'heartbeat' });
   });
 
   it('carries no originator when the wake task names none (a plain wake_at job)', () => {

@@ -1550,7 +1550,11 @@ export function taskWakeEvent(agentId: string, conversationId: string, content: 
     intentAnchor: task.intent,
     metadata: {
       ...(task.originator === 'system' ? { originator: makeSystemOriginator() } : {}),
-      boundTask: { taskId: task.id, errorBudget: {}, tags: task.tags ?? [], progress: wakeProgress(task) },
+      // An inbox-drain task is one the inbox heartbeat created; fireJob stamps that (SEC-L1).
+      boundTask: {
+        taskId: task.id, errorBudget: {}, tags: task.tags ?? [], progress: wakeProgress(task),
+        createdBy: task.tags?.includes('inbox-drain') ? 'heartbeat' : null,
+      },
     },
     parentEventId: randomUUID(),
   });
