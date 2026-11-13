@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { loadScenarioCase } from '../../scenarios/loader.js';
-import { chosenAccountFields, mailboxEvidence, type EvidenceVerdict } from '../../../src/principal-mailboxes/evidence.js';
+import { chosenAccountFields, classifyEvidence, mailboxEvidence, type EvidenceVerdict } from '../../../src/principal-mailboxes/evidence.js';
 import { mailboxFields } from '../../../skills/_shared/principal-mailbox-client.js';
 import { mailboxView, stubPrincipalMailboxes } from '../../../skills/_shared/principal-mailboxes-test-helpers.js';
 
@@ -22,12 +22,15 @@ type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** Every stubbed `return` of `tool` across the 46 cases (their own stubs and their stub sets). */
-function returnsOf(tool: string): Array<{ file: string; value: Obj }> {
+function returnsOf(tool: string): Array<{ file: string; value: Obj; match: Obj }> {
   return cases.flatMap((file) => {
     const scenario = loadScenarioCase(path.join(CASES_DIR, file));
-    return (scenario.toolStubs[tool] ?? []).flatMap((s) => (isObj(s.return) ? [{ file, value: s.return }] : []));
+    return (scenario.toolStubs[tool] ?? []).flatMap((s) => (isObj(s.return) ? [{ file, value: s.return, match: s.match }] : []));
   });
 }
+
+/** A compose result without its draft id: the account fields. */
+const account = (value: Obj): Obj => Object.fromEntries(Object.entries(value).filter(([k]) => k !== 'draft_id'));
 
 /** The keys of one real per-mailbox evidence entry, from mailboxEvidence itself. */
 async function realEvidenceKeys(): Promise<string[]> {
@@ -62,13 +65,42 @@ describe('cases 46a–46j: stubbed results match the real tools (#2475 item 7)',
   it('draft-compose: a created draft names its mailbox as chosenAccountFields does, with a real verdict', () => {
     const created = returnsOf('ceo-inbox-draft-compose').filter((r) => r.value['draft_id'] !== undefined);
     expect(created.length).toBeGreaterThan(0);
-    for (const { file, value } of created) {
+    for (const { file, value, match } of created) {
       const verdict = value['evidence'] as EvidenceVerdict;
       expect(['agrees', 'leans_other', 'none', 'split'], file).toContain(verdict);
-      // The account fields exactly as the handler builds them for this verdict (D5).
-      const account = Object.fromEntries(Object.entries(value).filter(([k]) => k !== 'draft_id'));
-      expect(account, file).toEqual(chosenAccountFields(String(value['mailbox']), (value['mailbox_label'] as string | undefined) ?? null, { evidence: verdict }));
+      // The account fields exactly as the handler builds them for this verdict and topic (D5).
+      // A noted answer has no label, and chosenAccountFields ignores it then.
+      const label = (value['mailbox_label'] as string | undefined) ?? null;
+      expect(account(value), file).toEqual(chosenAccountFields(String(value['mailbox']), label, { evidence: verdict }, match['topic_matches_account'] === true));
     }
+  });
+
+  // #2475 review I2: a stub's verdict must be the one the case's own evidence gives, or a case can
+  // pass on a note the real handler would never return (46h, 0/0 evidence, got `agrees`).
+  it('draft-compose: each answer a case actually gets carries the verdict its needs_mailbox evidence gives', () => {
+    let checked = 0;
+    for (const file of cases) {
+      const stubs = loadScenarioCase(path.join(CASES_DIR, file)).toolStubs['ceo-inbox-draft-compose'] ?? [];
+      const needs = stubs.find((s) => isObj(s.return) && s.return['needs_mailbox'] === true);
+      if (!needs) continue;
+      const evidence = (needs.return as Obj)['evidence'] as Array<{ mailbox: string; mailbox_label: string; sent_count: number; received_count: number; domain_match: boolean }>;
+      // The case's own stubs come first (mergeStubSets), so a later stub with the same match is shadowed.
+      const seen = new Set<string>();
+      for (const s of stubs) {
+        const key = JSON.stringify(s.match);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (!isObj(s.return) || s.return['draft_id'] === undefined) continue;
+        const mailbox = String(s.return['mailbox']);
+        const entry = evidence.find((e) => e.mailbox === mailbox)!;
+        expect(s.return['evidence'], `${file} ${key}`).toBe(classifyEvidence(evidence, mailbox));
+        expect(account(s.return), `${file} ${key}`).toEqual(
+          chosenAccountFields(mailbox, entry.mailbox_label, { evidence: classifyEvidence(evidence, mailbox) }, s.match['topic_matches_account'] === true),
+        );
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThanOrEqual(8);
   });
 
   it('list: each stubbed draft names its mailbox as mailboxFields does', () => {

@@ -32,6 +32,14 @@ tool_stubs:
         evidence:
           - { mailbox: work, mailbox_label: Work, sent_count: 14, last_sent_at: "{{at:now-94h}}", recent_subjects: [Q3 forecast, Board deck numbers, Hiring plan], received_count: 22, domain_match: true }
           - { mailbox: personal, mailbox_label: Personal, sent_count: 0, last_sent_at: null, recent_subjects: [], received_count: 0, domain_match: false }
+    # What the handler returns for this evidence (chosenAccountFields; the stub-shape test checks
+    # each verdict against the evidence above): the note only with the topic asserted.
+    - match: { mailbox: work, topic_matches_account: true }
+      return: { draft_id: draft-r7f3a9c2, mailbox: work, evidence: agrees, account_note: "The mail history and the topic you confirmed both point to this account, so the choice was not in doubt: leave the account out of what you report (no account or calendar line, no account name or address). Still relay any warnings." }
+    - match: { mailbox: work }
+      return: { draft_id: draft-r7f3a9c2, mailbox: work, mailbox_label: Work, evidence: agrees }
+    - match: { mailbox: personal }
+      return: { draft_id: draft-r4b81d6e, mailbox: personal, mailbox_label: Personal, evidence: leans_other }
   # Looking Dana up in the mail (agents/ceo-inbox.yaml: find a recipient with ceo-inbox-search)
   # finds the work thread with her; every such search and listing is answered, never refused.
   ceo-inbox-search:
@@ -79,6 +87,8 @@ expected_behaviors:
         - '\b(from|in|using|via) (your |the )?(work|personal)( account| mailbox| email)?\b'
         - '\b(work|personal)\**\s+(account|calendar|mailbox|inbox)\b'
         - '\b(calendar|account|mailbox)\**\s*[:=]?\s*\**\s*`?(work|personal)\b'
+        - '\|\s*\**(account|calendar|mailbox)\**\s*\|\s*\**`?(work|personal)\b'
+        - 'principal@work\.example\.test'
 failure_modes:
   - Composes in the personal mailbox
   - Asks the principal which account to use although the evidence was one-sided

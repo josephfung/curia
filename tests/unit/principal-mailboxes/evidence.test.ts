@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ACCOUNT_NOT_IN_DOUBT, chosenAccountFields, mailboxEvidence, classifyEvidence, type MailboxEvidence } from '../../../src/principal-mailboxes/evidence.js';
+import { ACCOUNT_NOT_IN_DOUBT, chosenAccountFields, readTopicMatches, mailboxEvidence, classifyEvidence, type MailboxEvidence } from '../../../src/principal-mailboxes/evidence.js';
 import { mailboxView, stubPrincipalMailboxes } from '../../../skills/_shared/principal-mailboxes-test-helpers.js';
 
 function ev(id: string, over: Partial<MailboxEvidence> = {}): MailboxEvidence {
@@ -174,15 +174,27 @@ describe('mailboxEvidence', () => {
 });
 
 describe('chosenAccountFields (D5: mention the account only on a judgement call)', () => {
-  it('drops the label and says not to name the account when the evidence agrees', () => {
-    expect(chosenAccountFields('work', 'Work', { evidence: 'agrees' })).toEqual({ mailbox: 'work', evidence: 'agrees', account_note: ACCOUNT_NOT_IN_DOUBT });
+  it('drops the label and adds the note only when the evidence agrees and the topic was asserted', () => {
+    expect(chosenAccountFields('work', 'Work', { evidence: 'agrees' }, true)).toEqual({ mailbox: 'work', evidence: 'agrees', account_note: ACCOUNT_NOT_IN_DOUBT });
   });
 
-  it.each(['leans_other', 'none', 'split'] as const)('keeps the label when the evidence is %s', (verdict) => {
-    expect(chosenAccountFields('personal', 'Personal', { evidence: verdict })).toEqual({ mailbox: 'personal', mailbox_label: 'Personal', evidence: verdict });
+  it('keeps the label when the evidence agrees but the topic was not asserted (fail toward mentioning)', () => {
+    expect(chosenAccountFields('personal', 'Personal', { evidence: 'agrees' }, false)).toEqual({ mailbox: 'personal', mailbox_label: 'Personal', evidence: 'agrees' });
+  });
+
+  it.each(['leans_other', 'none', 'split'] as const)('keeps the label when the evidence is %s, whatever the topic', (verdict) => {
+    expect(chosenAccountFields('personal', 'Personal', { evidence: verdict }, true)).toEqual({ mailbox: 'personal', mailbox_label: 'Personal', evidence: verdict });
   });
 
   it('keeps the label when the evidence could not be read', () => {
-    expect(chosenAccountFields('work', 'Work', { evidence_unavailable: true })).toEqual({ mailbox: 'work', mailbox_label: 'Work', evidence_unavailable: true });
+    expect(chosenAccountFields('work', 'Work', { evidence_unavailable: true }, true)).toEqual({ mailbox: 'work', mailbox_label: 'Work', evidence_unavailable: true });
+  });
+});
+
+describe('readTopicMatches', () => {
+  it('is true only for exactly true', () => {
+    expect(readTopicMatches({ topic_matches_account: true })).toBe(true);
+    for (const v of [false, 'true', 1, null, undefined]) expect(readTopicMatches({ topic_matches_account: v })).toBe(false);
+    expect(readTopicMatches(undefined)).toBe(false);
   });
 });

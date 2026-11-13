@@ -31,6 +31,12 @@ tool_stubs:
         evidence:
           - { mailbox: work, mailbox_label: Work, sent_count: 6, last_sent_at: "{{at:now-336h}}", recent_subjects: [Corporate audit schedule, Audit PBC list], received_count: 9, domain_match: false }
           - { mailbox: personal, mailbox_label: Personal, sent_count: 5, last_sent_at: "{{at:now-250h}}", recent_subjects: [Personal tax filing, RRSP slips], received_count: 7, domain_match: false }
+    # What the handler returns for this evidence (chosenAccountFields; the stub-shape test checks
+    # each verdict against the evidence above): the note only with the topic asserted.
+    - match: { mailbox: work }
+      return: { draft_id: draft-r7f3a9c2, mailbox: work, mailbox_label: Work, evidence: split }
+    - match: { mailbox: personal }
+      return: { draft_id: draft-r4b81d6e, mailbox: personal, mailbox_label: Personal, evidence: leans_other }
   # Looking Priya up in the mail finds her in both accounts, as the evidence says; every search
   # and listing is answered, never refused.
   ceo-inbox-search:

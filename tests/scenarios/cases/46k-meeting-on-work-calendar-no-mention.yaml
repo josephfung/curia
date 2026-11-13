@@ -30,14 +30,22 @@ tool_stubs:
         needs_mailbox: nothing was created. Several accounts are connected; call again with mailbox
         set to the account this belongs to, one of: work (Work), personal (Personal). Evidence for
         the attendees: Work: sent 14, received 22, same domain; Personal: sent 0, received 0.
+    # The handler's result for this evidence (chosenAccountFields): the note only when the topic
+    # was asserted too, else the label stays.
     - agent: calendar
-      match: { mailbox: work }
-      # The handler's result when the evidence agrees (chosenAccountFields): no label, and the note.
+      match: { mailbox: work, topic_matches_account: true }
       return:
         event: { id: evt-q3-budget, calendarId: ceo@work.example.test, status: confirmed, title: Q3 budget }
         mailbox: work
         evidence: agrees
-        account_note: "The history with these recipients all points to this account, so the choice was obvious: leave the account out of what you report (no account or calendar line, no account name, no account address)."
+        account_note: "The mail history and the topic you confirmed both point to this account, so the choice was not in doubt: leave the account out of what you report (no account or calendar line, no account name or address). Still relay any warnings."
+    - agent: calendar
+      match: { mailbox: work }
+      return:
+        event: { id: evt-q3-budget, calendarId: ceo@work.example.test, status: confirmed, title: Q3 budget }
+        mailbox: work
+        mailbox_label: Work
+        evidence: agrees
     # Forbidden below (nothing_on_personal), so the wrong path must be open; the evidence leans to
     # work, as the handler would say.
     - agent: calendar
@@ -85,6 +93,7 @@ expected_behaviors:
         - '\b(on|in|to|from|using|via) (your |the )?(work|personal)( account| calendar| mailbox)?\b'
         - '\b(work|personal)\**\s+(account|calendar|mailbox|inbox)\b'
         - '\b(calendar|account|mailbox)\**\s*[:=]?\s*\**\s*`?(work|personal)\b'
+        - '\|\s*\**(account|calendar|mailbox)\**\s*\|\s*\**`?(work|personal)\b'
         - 'ceo@work\.example\.test'
 failure_modes:
   - Books the meeting on the personal calendar

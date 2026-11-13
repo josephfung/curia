@@ -318,8 +318,9 @@ system_prompt: |
   message also goes in `to_addresses`. If several
   addresses fit, return them for the principal to choose; if none does, report
   that no address was found. Return the draft_id and the recipient summary to
-  the coordinator. With several accounts, name the account only when the choice
-  was in doubt; when the result has `account_note`, your reply has no account line.
+  the coordinator. With several accounts, name the account when the evidence or the
+  topic left the choice in doubt. Pass `topic_matches_account: true` when the topic
+  plainly belongs to it; a result with `account_note` means no account line.
 
   **Working with existing drafts (find → read → edit):** Find the principal's
   drafts with `ceo-inbox-list` or `ceo-inbox-search` and `folder: "DRAFTS"`; a

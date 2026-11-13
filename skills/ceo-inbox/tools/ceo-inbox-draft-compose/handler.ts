@@ -1,7 +1,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { mailboxFields, namedOrDefaultMailbox, readMailboxInput } from '../../../_shared/principal-mailbox-client.js';
 import type { PrincipalMailboxView } from '../../../../src/principal-mailboxes/service.js';
-import { chosenAccountFields, classifyEvidence, mailboxEvidence } from '../../../../src/principal-mailboxes/evidence.js';
+import { chosenAccountFields, classifyEvidence, mailboxEvidence, readTopicMatches } from '../../../../src/principal-mailboxes/evidence.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 import { type DraftAttachment } from '../../../_shared/ceo-nylas-client.js';
 import { markdownToHtml } from '../../../../src/format/markdown-to-html.js';
@@ -87,16 +87,17 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
     ctx: ToolContext,
     mailbox: PrincipalMailboxView,
     recipients: string[],
+    topicMatches: boolean,
   ): Promise<Record<string, unknown>> {
     // The draft already exists: evidence trouble must not turn that into a failure.
     try {
       const evidence = await mailboxEvidence(ctx.principalMailboxes!, recipients, { log: ctx.log });
-      // Evidence that agrees drops the label and says not to name the account (D5).
-      return chosenAccountFields(mailbox.id, mailbox.label, { evidence: classifyEvidence(evidence, mailbox.id) });
+      // Evidence and topic that both agree drop the label and say not to name the account (D5).
+      return chosenAccountFields(mailbox.id, mailbox.label, { evidence: classifyEvidence(evidence, mailbox.id) }, topicMatches);
     } catch (err) {
       // Class and status only (B8): evidence reads every mailbox, and a Nylas error can carry a grant id.
       ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: mailbox.id }, 'ceo-inbox-draft-compose: mailbox evidence failed after the draft was created');
-      return chosenAccountFields(mailbox.id, mailbox.label, { evidence_unavailable: true });
+      return chosenAccountFields(mailbox.id, mailbox.label, { evidence_unavailable: true }, topicMatches);
     }
   }
 
@@ -258,9 +259,12 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
           subject: draft.subject,
           to: draft.to,
           cc: draft.cc,
-          // The account the draft is in, always (B9, as reply and edit report it); the evidence
-          // only when there was a choice to make.
-          ...(multi ? await this.mailboxResult(ctx, at.mailbox, [...to, ...cc].map((p) => p.email)) : mailboxFields(at.mailbox)),
+          // The account the draft is in (B9, as reply and edit report it): the id always, the label
+          // unless the evidence and topic both agreed (chosenAccountFields); the evidence only when
+          // there was a choice to make.
+          ...(multi
+            ? await this.mailboxResult(ctx, at.mailbox, [...to, ...cc].map((p) => p.email), readTopicMatches(ctx.input))
+            : mailboxFields(at.mailbox)),
         },
       };
     } catch (err) {

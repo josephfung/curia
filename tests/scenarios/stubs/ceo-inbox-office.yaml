@@ -40,14 +40,14 @@ contact-register:
     match: {}
     return: { contact_id: "{{contact:sam}}", display_name: Sam Rivera, contact_confidence: 0.9, created: false, verified: true }
 # Two principal mailboxes (#2475): `work` (Work, a company domain) and `personal` (Personal, a
-# consumer account). A compose with a stated mailbox succeeds in that mailbox; the case stubs
-# the no-mailbox call (needs_mailbox plus the evidence), which differs per case. Evidence that
-# agrees gets the handler's result for it (chosenAccountFields in
-# src/principal-mailboxes/evidence.ts; keep the two in step): no label, and the note.
+# consumer account). A compose with a stated mailbox succeeds in that mailbox. These answers are
+# for cases with no mail history to weigh (`none`, label kept, as chosenAccountFields gives); a
+# case that seeds needs_mailbox evidence stubs its own per-mailbox answers for that evidence
+# (the stub-shape test checks them).
 ceo-inbox-draft-compose:
   - agent: ceo-inbox
     match: { mailbox: work }
-    return: { draft_id: draft-r7f3a9c2, mailbox: work, evidence: agrees, account_note: "The history with these recipients all points to this account, so the choice was obvious: leave the account out of what you report (no account or calendar line, no account name, no account address)." }
+    return: { draft_id: draft-r7f3a9c2, mailbox: work, mailbox_label: Work, evidence: none }
   - agent: ceo-inbox
     match: { mailbox: personal }
-    return: { draft_id: draft-r4b81d6e, mailbox: personal, evidence: agrees, account_note: "The history with these recipients all points to this account, so the choice was obvious: leave the account out of what you report (no account or calendar line, no account name, no account address)." }
+    return: { draft_id: draft-r4b81d6e, mailbox: personal, mailbox_label: Personal, evidence: none }
