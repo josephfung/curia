@@ -62,28 +62,34 @@ function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === 'string');
 }
 
-/** A ledger entry from its document, or null for any other or malformed document. */
+/**
+ * A ledger entry from its document, or null for a document of another type. A ledger document is
+ * never dropped for a field it cannot read: a dropped autonomous send would lift the daily cap and
+ * both cooldowns (fail-open, a forged or broken marker may only block, never allow). So each
+ * unreadable field is read conservatively: `at` stays as given (recentness treats a non-date as
+ * recent), `mode` reads as autonomous, `outcome` as `sending` (a send, for the cap and the
+ * cooldowns), `recipients` as none, a draft id as '' and a thread id as '' (which recentForThread
+ * matches against any thread).
+ */
 export function parseLedgerDoc(doc: WorkingDocRow): PrincipalSendEntry | null {
   if (doc.type !== PRINCIPAL_SEND_DOC_TYPE) return null;
   const f = doc.frontmatter;
   // A held entry written before final fixes B2 carried a free-text `reason`; it is not read.
   const { draft_id: draftId, thread_id: threadId, recipients, mode, at, message_id: messageId, outcome, reason_code: reasonCode, mailbox, conversation_ids: conversationIds } = f;
-  if (typeof draftId !== 'string' || typeof threadId !== 'string' || typeof at !== 'string') return null;
-  if (!isStringArray(recipients)) return null;
-  if (typeof mode !== 'string' || !MODES.includes(mode)) return null;
-  if (typeof outcome !== 'string' || !OUTCOMES.includes(outcome)) return null;
-  if (messageId !== undefined && typeof messageId !== 'string') return null;
-  if (reasonCode !== undefined && typeof reasonCode !== 'string') return null;
-  // A wrong-typed mailbox or conversation_ids keeps the entry (dropping it would lift the cap and
-  // both cooldowns, fail-open): no mailbox matches any mailbox, no ids match no conversation.
+  // A wrong-typed mailbox reads as none, which adds cooldown for every mailbox; wrong-typed
+  // conversation ids read as none, so they match no conversation (the thread cooldown still applies).
   return {
-    draftId, threadId, recipients, at,
+    draftId: typeof draftId === 'string' ? draftId : '',
+    threadId: typeof threadId === 'string' ? threadId : '',
+    recipients: isStringArray(recipients) ? recipients : [],
+    // Not a string: the empty text is no date, so it counts as recent.
+    at: typeof at === 'string' ? at : '',
     conversationIds: isStringArray(conversationIds) ? conversationIds : [],
     ...(typeof mailbox === 'string' ? { mailbox } : {}),
-    mode: mode as PrincipalSendEntry['mode'],
-    outcome: outcome as PrincipalSendEntry['outcome'],
-    ...(messageId !== undefined ? { messageId } : {}),
-    ...(reasonCode !== undefined ? { reasonCode } : {}),
+    mode: typeof mode === 'string' && MODES.includes(mode) ? mode as PrincipalSendEntry['mode'] : 'autonomous',
+    outcome: typeof outcome === 'string' && OUTCOMES.includes(outcome) ? outcome as PrincipalSendEntry['outcome'] : 'sending',
+    ...(typeof messageId === 'string' ? { messageId } : {}),
+    ...(typeof reasonCode === 'string' ? { reasonCode } : {}),
   };
 }
 
@@ -198,7 +204,7 @@ export class PrincipalSendLedger {
    */
   async recentForThread(threadId: string, sinceEpochMs: number, mailbox: string, entries?: readonly PrincipalSendEntry[]): Promise<PrincipalSendEntry[]> {
     // An entry with no mailbox (written before the registry) matches any: only more cooldown.
-    return (entries ?? await this.list()).filter((e) => e.mode === 'autonomous' && e.outcome !== 'limited' && e.threadId === threadId
+    return (entries ?? await this.list()).filter((e) => e.mode === 'autonomous' && e.outcome !== 'limited' && (e.threadId === threadId || e.threadId === '')
       && (e.mailbox === undefined || e.mailbox === mailbox) && atOrAfter(e, sinceEpochMs));
   }
 

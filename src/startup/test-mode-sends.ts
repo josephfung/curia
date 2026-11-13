@@ -502,9 +502,9 @@ function inMemorySendLedger(runStore: () => PrincipalSendEntry[] | undefined): N
     recordLimitStop: async (e) => { entries().push({ draftId: e.draftId, threadId: '', mailbox: e.mailbox, conversationIds: [], recipients: [], mode: 'autonomous', at: e.at, outcome: 'limited', reasonCode: e.reason }); },
     // A `limited` entry is a report record: the cap and both cooldowns skip it, as in production (#2475 Task 19).
     limitStopsSince: async (sinceEpochMs, reason) => entries().filter(e => e.outcome === 'limited' && e.reasonCode === reason && Date.parse(e.at) >= sinceEpochMs),
-    recentForThread: async (threadId, sinceEpochMs, mailbox) => entries().filter(e => e.mode === 'autonomous' && e.outcome !== 'limited' && e.threadId === threadId && (e.mailbox === undefined || e.mailbox === mailbox) && recent(e, sinceEpochMs)),
-    recentForConversation: async (ids, sinceEpochMs) => entries().filter(e => e.mode === 'autonomous' && e.outcome !== 'limited' && e.conversationIds.some(id => ids.includes(id)) && recent(e, sinceEpochMs)),
-    recentAutonomousSends: async (sinceEpochMs) => entries().filter(e => e.mode === 'autonomous' && e.outcome !== 'held' && e.outcome !== 'limited' && recent(e, sinceEpochMs)),
+    recentForThread: async (threadId, sinceEpochMs, mailbox, scan) => (scan ?? entries()).filter(e => e.mode === 'autonomous' && e.outcome !== 'limited' && e.threadId === threadId && (e.mailbox === undefined || e.mailbox === mailbox) && recent(e, sinceEpochMs)),
+    recentForConversation: async (ids, sinceEpochMs, scan) => (scan ?? entries()).filter(e => e.mode === 'autonomous' && e.outcome !== 'limited' && e.conversationIds.some(id => ids.includes(id)) && recent(e, sinceEpochMs)),
+    recentAutonomousSends: async (sinceEpochMs, scan) => (scan ?? entries()).filter(e => e.mode === 'autonomous' && e.outcome !== 'held' && e.outcome !== 'limited' && recent(e, sinceEpochMs)),
     sentForDraft: async (draftId) => entries().some(e => e.draftId === draftId && e.outcome === 'sent'),
   };
 }
