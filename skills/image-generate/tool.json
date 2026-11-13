@@ -1,14 +1,13 @@
 {
   "name": "image-generate",
-  "description": "Generate an image from a text prompt using DALL-E 3. Returns a temporary URL to the generated image (valid ~1 hour — download and store immediately if persistence is needed).",
-  "version": "1.0.0",
+  "description": "Generate an image from a text prompt using OpenAI GPT Image (gpt-image-2). Returns a file:// URL to the generated image in the temp file store (persist it promptly — the temp store is not durable). Describe the desired style in the prompt; there is no style parameter.",
+  "version": "2.0.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
     "prompt": "string",
-    "size": "string? (e.g. 1792x1024, 1024x1024, 1024x1792; default: 1792x1024)",
-    "quality": "string? (e.g. standard, hd; default: hd)",
-    "style": "string? (e.g. vivid, natural; default: vivid)"
+    "size": "string? (e.g. 1536x1024, 1024x1024, 1024x1536, auto; default: 1536x1024)",
+    "quality": "string? (low, medium, high, auto; default: high)"
   },
   "outputs": {
     "url": "string",
@@ -16,5 +15,6 @@
   },
   "permissions": ["network:https"],
   "secrets": ["openai_api_key"],
-  "timeout": 60000
+  "timeout": 60000,
+  "capabilities": ["tempFileStore"]
 }
