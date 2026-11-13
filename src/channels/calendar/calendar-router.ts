@@ -364,6 +364,13 @@ export class CalendarRouter {
       this.log.warn({ mailboxId }, 'Mailbox grant lists no primary calendar');
       throw new CalendarRouteError('no_home_calendar', `Mailbox "${mailboxId}" has no primary calendar; pass a calendar ID instead of "primary".`);
     }
+    // The grant's listed primary must be this account's own too: one that another live mailbox
+    // owns (a shared calendar the provider marks primary) is not written through this client.
+    const owner = this.owner(primary.id, live);
+    if (owner && owner.id !== mailboxId) {
+      this.log.warn({ mailboxId, ownerMailboxId: owner.id }, "Mailbox grant's primary calendar belongs to another mailbox; refused");
+      throw new CalendarRouteError('no_home_calendar', `Mailbox "${mailboxId}" lists another mailbox's calendar as its primary; pass a calendar ID instead of "primary".`);
+    }
     return primary.id;
   }
 }

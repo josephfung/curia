@@ -10,7 +10,7 @@ import { CalendarCreateEventHandler } from '../../../skills/calendar/tools/calen
 import { CalendarCreateHoldHandler } from '../../../skills/calendar/tools/calendar-create-hold/handler.js';
 import { CalendarDeleteEventHandler } from '../../../skills/calendar/tools/calendar-delete-event/handler.js';
 import { CalendarUpdateEventHandler } from '../../../skills/calendar/tools/calendar-update-event/handler.js';
-import { bindApprovalMailbox, calendarWritePregate } from '../../../src/channels/calendar/needs-mailbox.js';
+import { ApprovalMailboxUnboundError, bindApprovalMailbox, calendarWritePregate } from '../../../src/channels/calendar/needs-mailbox.js';
 import { CalendarHoldsSweepHandler } from '../../../skills/calendar/tools/calendar-holds-sweep/handler.js';
 import { CalendarListEventsHandler } from '../../../skills/calendar/tools/calendar-list-events/handler.js';
 import { CalendarRespondToInviteHandler } from '../../../skills/calendar/tools/calendar-respond-to-invite/handler.js';
@@ -235,8 +235,9 @@ describe('calendar-create-event: the account is a stated choice (D5)', () => {
     expect(await bindApprovalMailbox(single, logger, 'email-send', input)).toBe(input);
     const { router } = setup();
     expect(await bindApprovalMailbox(router, logger, 'calendar-create-event', input)).toBe(input);
-    // A lookup failure stores the input as given (the replay's handler checks again).
-    expect(await bindApprovalMailbox({ ...single, liveMailboxes: async () => { throw new Error('down'); } } as never, logger, 'calendar-create-event', input)).toBe(input);
+    // A lookup failure fails closed: no approval is stored that could replay through another account.
+    await expect(bindApprovalMailbox({ liveMailboxes: async () => { throw new Error('down'); }, isPrincipalCalendar: async () => true } as never, logger, 'calendar-create-event', input))
+      .rejects.toBeInstanceOf(ApprovalMailboxUnboundError);
   });
 
   it("an account's own calendar (its address) cannot be written through the other account", async () => {

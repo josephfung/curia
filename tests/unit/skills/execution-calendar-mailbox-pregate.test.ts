@@ -84,10 +84,38 @@ describe('calendar mailbox pre-gate (BR-m5)', () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it('with one mailbox, nothing changes: the gate asks for approval', async () => {
+  it('with one mailbox the gate asks for approval, and the approval stores that mailbox', async () => {
     const { layer, request } = setup([calendarMailbox('work', 'Work', 'ceo@work.example.com', true)]);
     await layer.invoke('calendar-create-event', { calendarId: 'cal-work', title: 'Q3' }, undefined, { taskEventId: 'task-1' });
     expect(request).toHaveBeenCalledOnce();
+    expect((request.mock.calls[0]![0] as { input: Record<string, unknown> }).input).toMatchObject({ calendarId: 'cal-work', mailbox: 'work' });
+  });
+
+  it('approve then replay after the mailbox was swapped: the replay goes to the approved mailbox, which is gone', async () => {
+    // Queued with one mailbox (work): the stored input names work.
+    const first = setup([calendarMailbox('work', 'Work', 'ceo@work.example.com', true)]);
+    await first.layer.invoke('calendar-create-event', { calendarId: 'primary', title: 'Q3' }, undefined, { taskEventId: 'task-1' });
+    const stored = (first.request.mock.calls[0]![0] as { input: Record<string, unknown> }).input;
+    expect(stored).toMatchObject({ mailbox: 'work' });
+    // By the replay, work was removed and personal is the only live mailbox: the replay carries
+    // mailbox=work, so the handler (not the live set) decides, and an unknown mailbox is an error.
+    const later = setup([calendarMailbox('personal', 'Personal', 'ceo@personal.example.com', true)]);
+    await later.layer.invoke('calendar-create-event', stored, undefined, { taskEventId: 'task-1', humanApproved: true });
+    expect(later.execute).toHaveBeenCalledOnce();
+    expect((later.execute.mock.calls[0]![0] as { input: Record<string, unknown> }).input).toMatchObject({ mailbox: 'work' });
+  });
+
+  it('when the mailbox cannot be bound, no approval is created (fail closed)', async () => {
+    const { layer, request, execute } = setup([calendarMailbox('work', 'Work', 'ceo@work.example.com', true)]);
+    const router = (layer as unknown as { calendarRouter: { liveMailboxes: () => Promise<unknown> } }).calendarRouter;
+    let calls = 0;
+    // The pre-gate's read succeeds; the approval's binding read fails.
+    const real = router.liveMailboxes.bind(router);
+    router.liveMailboxes = async () => { calls += 1; if (calls > 1) throw new Error('registry down'); return real(); };
+    const r = await layer.invoke('calendar-create-event', { calendarId: 'cal-work', title: 'Q3' }, undefined, { taskEventId: 'task-1' });
+    expect(r.success).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it('an approved replay skips the pre-gate and reaches the handler', async () => {
