@@ -8,6 +8,7 @@
 //   triage.<id>.backlog_alarmed   'true' | 'false' — the backlog alarm fired this episode
 //   triage.<id>.settle_pending    'true' | 'false' — the last batch was listed, not yet known settled (R68)
 //   triage.<id>.no_progress       consecutive triage calls with no progress for this mailbox (R67)
+//   triage.ceiling_notified.<YYYY-MM-DD>  'true' once that local day's ceiling notice was sent (R67)
 //
 // Corrupt stored values fail safe, preferring to stop over running past the budget:
 //   - a bad last_drained_at reads as null, which makes the mailbox due (one extra drain at worst);
@@ -22,9 +23,13 @@ import { TRIAGE_DAILY_CEILING } from './triage-cadence.js';
 export const TRIAGE_NAMESPACE = 'ceo_inbox';
 
 export class TriageState {
+  private readonly corruptWarned = new Set<string>();
+
   constructor(
     private readonly cfg: Pick<ConfigStore, 'get' | 'set'>,
     private readonly tz: () => string,
+    /** Warns once per key about a corrupt batch counter (SF-M4). */
+    private readonly warn?: (fields: Record<string, unknown>, msg: string) => void,
   ) {}
 
   private async read(key: string): Promise<string | null> {
@@ -74,9 +79,30 @@ export class TriageState {
   }
 
   async batchesToday(now: Date): Promise<number> {
-    const raw = await this.read(this.batchesKey(now));
+    const key = this.batchesKey(now);
+    const raw = await this.read(key);
     if (raw === null) return 0;
-    return /^\d+$/.test(raw) ? Number(raw) : TRIAGE_DAILY_CEILING;
+    if (/^\d+$/.test(raw)) return Number(raw);
+    // Fail safe (stop for the day), but say so once per key: a silent stop looks like a quiet inbox.
+    if (this.warn && !this.corruptWarned.has(key)) {
+      this.corruptWarned.add(key);
+      this.warn({ key, valueLength: raw.length }, 'TriageState: the day\'s triage batch counter is not a number; treating the ceiling as reached');
+    }
+    return TRIAGE_DAILY_CEILING;
+  }
+
+  /** The local day's ceiling notice was sent (R67). */
+  async ceilingNotified(now: Date): Promise<boolean> {
+    return (await this.read(`triage.ceiling_notified.${this.localDay(now)}`)) === 'true';
+  }
+
+  async setCeilingNotified(now: Date): Promise<void> {
+    await this.write(`triage.ceiling_notified.${this.localDay(now)}`, 'true');
+  }
+
+  /** The principal's local date of `now`, yyyy-MM-dd. */
+  localDay(now: Date): string {
+    return this.batchesKey(now).slice('triage.batches.'.length);
   }
 
   /** True once today's batches reach the ceiling; a corrupt count counts as reached. */
