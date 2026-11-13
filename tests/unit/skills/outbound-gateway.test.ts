@@ -6623,6 +6623,24 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(ledger.recordHeld).not.toHaveBeenCalled();
     });
 
+    it('a content filter that throws is an operational stop: no held marker, and it says the check failed', async () => {
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('filter down'));
+      const { gw, client, ledger } = makeAuto();
+      const r = await gw.sendPrincipalDraft('d1', auto);
+      expect(r).toMatchObject({ success: false, leftAsDraft: true, blockedRules: ['filter-error'] });
+      expect(client!.sendDraft).not.toHaveBeenCalled();
+      expect(ledger.recordHeld).not.toHaveBeenCalled();
+      expect(String(reports()[0]!['summary'])).toContain("Curia's content check failed to run.");
+    });
+
+    it('a content filter that blocks the reply is still a judgement hold with a held marker', async () => {
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({ passed: false, findings: [{ rule: 'tone', detail: 'too blunt' }] });
+      const { gw, ledger } = makeAuto();
+      const r = await gw.sendPrincipalDraft('d1', auto);
+      expect(r).toMatchObject({ success: false, leftAsDraft: true });
+      expect(ledger.recordHeld).toHaveBeenCalledOnce();
+    });
+
     it('2. refuses outsider-originated work with outsider_originated, a held marker and a digest item', async () => {
       const outsider = { originator: { contactId: 'c-dana', systemRole: null, channel: 'email', initiatedAt: '2026-11-07T10:00:00.000Z' } };
       const { gw, client, ledger, review } = makeAuto();
@@ -6818,7 +6836,7 @@ describe('sendPrincipalDraft (#2474)', () => {
     // ---- #2475 Task 19: replies held only by a limit are reported as the limit ----
     describe('limit holds (#2475 Task 19)', () => {
       // SF10: the notice names the reply that hit the limit.
-      const FIRST = 'Reached the daily limit of 10 replies Curia sends on its own. Waiting only because of the daily limit: "Re: Friday" to Dana Example. Later replies it would have sent wait in your Drafts too, until you send them or the limit resets.';
+      const FIRST = 'Reached the daily limit of 10 replies Curia sends on its own. Waiting because of the daily limit: "Re: Friday" to Dana Example. Later replies it would have sent wait in your Drafts too, until you send them or the limit resets.';
       const atCap = (ledger: { recentAutonomousSends: ReturnType<typeof vi.fn> }) => {
         const at = new Date().toISOString();
         ledger.recentAutonomousSends.mockResolvedValue(Array.from({ length: 10 }, (_, i) => ({
@@ -6843,7 +6861,7 @@ describe('sendPrincipalDraft (#2474)', () => {
         atCap(ledger);
         ledger.limitStopsSince.mockResolvedValue([earlierStop]);
         await gw.sendPrincipalDraft('d1', auto);
-        expect(reports()).toEqual([expect.objectContaining({ summary: 'Waiting only because of the daily limit: "Re: Friday" to Dana Example.' })]);
+        expect(reports()).toEqual([expect.objectContaining({ summary: 'Waiting because of the daily limit: "Re: Friday" to Dana Example.' })]);
         expect(reports()[0]!['summary']).not.toMatch(/Left as a draft/);
       });
 
@@ -6866,14 +6884,14 @@ describe('sendPrincipalDraft (#2474)', () => {
         atCap(ledger);
         ledger.limitStopsSince.mockRejectedValue(new Error('db down'));
         await gw.sendPrincipalDraft('d1', auto);
-        expect(reports()).toEqual([expect.objectContaining({ summary: 'Waiting only because of the daily limit: "Re: Friday" to Dana Example.' })]);
+        expect(reports()).toEqual([expect.objectContaining({ summary: 'Waiting because of the daily limit: "Re: Friday" to Dana Example.' })]);
       });
 
       it('a thread cooldown files its own waiting text', async () => {
         const { gw, ledger } = makeAuto();
         ledger.recentForThread.mockResolvedValue([{ draftId: 'x', threadId: 'th1', mailbox: 'default', conversationIds: [], recipients: [], mode: 'autonomous', at: new Date().toISOString(), outcome: 'sent' }]);
         expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'thread_cooldown', refusalKind: 'limit' });
-        expect(reports()).toEqual([expect.objectContaining({ summary: 'Waiting only because Curia already replied on this thread today: "Re: Friday" to Dana Example.' })]);
+        expect(reports()).toEqual([expect.objectContaining({ summary: 'Waiting because Curia already replied on this thread today: "Re: Friday" to Dana Example.' })]);
         expect(ledger.recordLimitStop).toHaveBeenCalledWith(expect.objectContaining({ reason: 'thread_cooldown' }));
         expect(ledger.recordHeld).not.toHaveBeenCalled();
       });
@@ -6889,7 +6907,7 @@ describe('sendPrincipalDraft (#2474)', () => {
         const sent = makeAuto();
         sent.ledger.recentForThread.mockResolvedValue(entry('sent'));
         await sent.gw.sendPrincipalDraft('d1', auto);
-        expect(reports()[0]!['summary']).toMatch(/^Waiting only because Curia already replied on this thread today/);
+        expect(reports()[0]!['summary']).toMatch(/^Waiting because Curia already replied on this thread today/);
       });
 
       it('the notice marker is written only after the notice publishes; a failed publish retries it next time', async () => {
@@ -6938,13 +6956,13 @@ describe('sendPrincipalDraft (#2474)', () => {
         const one = makeAuto({ mailboxLabels, mailboxIds: async () => ['default'] });
         one.ledger.recentForThread.mockResolvedValue([{ draftId: 'x', threadId: 'th1', conversationIds: [], recipients: [], mode: 'autonomous', at: new Date().toISOString(), outcome: 'sent' }]);
         await one.gw.sendPrincipalDraft('d1', auto);
-        expect(reports()[0]!['summary']).toBe('Waiting only because Curia already replied on this thread today: "Re: Friday" to Dana Example.');
+        expect(reports()[0]!['summary']).toBe('Waiting because Curia already replied on this thread today: "Re: Friday" to Dana Example.');
 
         mocks = createMocks();
         const two = makeAuto({ mailboxLabels, mailboxIds: async () => ['default', 'personal'], mailboxes: { default: autoClient(), personal: mailboxClient(null) } });
         two.ledger.recentForThread.mockResolvedValue([{ draftId: 'x', threadId: 'th1', conversationIds: [], recipients: [], mode: 'autonomous', at: new Date().toISOString(), outcome: 'sent' }]);
         await two.gw.sendPrincipalDraft('d1', { ...auto, mailbox: 'default' });
-        expect(reports()[0]!['summary']).toBe('Waiting only because Curia already replied on this thread today: "Re: Friday" to Dana Example (Work).');
+        expect(reports()[0]!['summary']).toBe('Waiting because Curia already replied on this thread today: "Re: Friday" to Dana Example (Work).');
       });
 
       it('LIMIT_REFUSALS is exactly the cap and the thread cooldown', () => {
@@ -6965,7 +6983,7 @@ describe('sendPrincipalDraft (#2474)', () => {
         const { gw, ledger } = makeAuto({ mailboxLabels, mailboxIds: async () => ['default', 'personal'], mailboxes: { default: autoClient(), personal: mailboxClient(null) } });
         atCap(ledger);
         await gw.sendPrincipalDraft('d1', { ...auto, mailbox: 'default' });
-        expect(reports()[0]!['summary']).toContain('Waiting only because of the daily limit: "Re: Friday" to Dana Example (Work).');
+        expect(reports()[0]!['summary']).toContain('Waiting because of the daily limit: "Re: Friday" to Dana Example (Work).');
       });
     });
 
@@ -7031,6 +7049,20 @@ describe('sendPrincipalDraft (#2474)', () => {
         const { gw, ledger } = makeAuto({ ...addrs, client: autoClient(autoDraft(), [withIds()]) });
         expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
         expect(ledger.recordSending.mock.calls[0]![0]).toMatchObject({ mailbox: 'default', conversationIds: ['root@mail.example', 'a@x'] });
+      });
+
+      it('an alias of the sending address (plus-tag, case) is not "another" principal address', async () => {
+        const alias = PRINCIPAL.replace('@', '+news@').toUpperCase();
+        const withAlias = { principalAddrs: [PRINCIPAL, alias], mailboxAddresses: { default: PRINCIPAL } };
+        const { gw } = makeAuto({ ...withAlias, client: autoClient(autoDraft({ cc: [{ email: alias }] }), [withIds()]) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).not.toMatchObject({ refusal: 'principal_address_recipient' });
+      });
+
+      it('R43: aliases of one address count as one, so no address is off limits', async () => {
+        const alias = PRINCIPAL.replace('@', '+news@');
+        const one = { principalAddrs: [PRINCIPAL, alias], mailboxAddresses: { default: '' } };
+        const { gw } = makeAuto({ ...one, client: autoClient(autoDraft({ cc: [{ email: alias }] }), [withIds()]) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).not.toMatchObject({ refusal: 'principal_address_recipient' });
       });
 
       it('R43: unknown own address and two principal addresses: a cc to either is refused', async () => {

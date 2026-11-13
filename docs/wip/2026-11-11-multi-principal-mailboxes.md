@@ -400,8 +400,8 @@ No behaviour change. ceo-inbox tools still read the flat secrets in this part.
 **Interfaces:**
 - `LIMIT_REFUSALS = new Set(['daily_cap', 'thread_cooldown'])`. Digest items are immutable, so:
   - first `daily_cap` stop in the rolling 24h → one item: `Reached the daily limit of 10 replies Curia sends on its own. Replies it would have sent wait in your Drafts until you send them or the limit resets.`
-  - each later `daily_cap` stop → `Waiting only because of the daily limit: <draft label>.` (append ` (<mailbox label>)` when more than one mailbox exists)
-  - `thread_cooldown` → `Waiting only because Curia already replied on this thread today: <draft label>.`
+  - each later `daily_cap` stop → `Waiting because of the daily limit: <draft label>.` (append ` (<mailbox label>)` when more than one mailbox exists)
+  - `thread_cooldown` → `Waiting because Curia already replied on this thread today: <draft label>.`
   - judgement stops keep `Left as a draft in your mailbox: …`.
 
 - [ ] **Step 1: Failing tests**: `first cap stop files the limit notice`; `later cap stops file waiting items, not Left as a draft`; `judgement holds still read Left as a draft`; `send-draft reports refusal_kind limit`.
