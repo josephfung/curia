@@ -1,12 +1,12 @@
 # Case 46k (#2475, D5/D7; decided by the principal 2026-11-11, items 3 and 10): a meeting with
 # the CFO belongs on the work calendar. calendar-create-event without a mailbox returns
-# needs_mailbox with evidence that all points to work, so calendar books it there and does not
+# a needs_mailbox error with evidence that all points to work, so calendar books it there and does not
 # mention the account: it was no judgement call.
 name: meeting with the cfo goes on the work calendar without saying so
 description: >
   The coordinator asks calendar to book a 45-minute meeting with Dana Whitfield, the CFO, on
   Thursday next week at 2 PM about the Q3 budget. The principal has a work and a personal
-  account. The first create call (no mailbox) returns needs_mailbox with evidence: every mail
+  account. The first create call (no mailbox) fails with needs_mailbox and evidence: every mail
   with Dana went through work and she is on the work domain. calendar should book it on the
   work calendar and say nothing about which account it used.
 tags: [specialist-calendar, calendar, mailbox-choice, multi-mailbox]
@@ -25,14 +25,11 @@ tool_stubs:
   calendar-create-event:
     - agent: calendar
       match: { mailbox: null }
-      return:
-        needs_mailbox: true
-        created: false
-        mailboxes: [{ id: work, label: Work }, { id: personal, label: Personal }]
-        note: "Nothing was created. Several accounts are connected: call again with mailbox set to the account this belongs to."
-        evidence:
-          - { mailbox: work, mailbox_label: Work, sent_count: 14, received_count: 22, domain_match: true }
-          - { mailbox: personal, mailbox_label: Personal, sent_count: 0, received_count: 0, domain_match: false }
+      # The handler's needs_mailbox failure (R102), word for word.
+      error: >-
+        needs_mailbox: nothing was created. Several accounts are connected; call again with mailbox
+        set to the account this belongs to, one of: work (Work), personal (Personal). Evidence for
+        the attendees: Work: sent 14, received 22, same domain; Personal: sent 0, received 0.
     - agent: calendar
       match: {}
       return:

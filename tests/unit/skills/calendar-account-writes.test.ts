@@ -696,7 +696,7 @@ describe('fix round 1: collapse rules (R82, M1)', () => {
     expect(events.every((e) => e.calendars === undefined)).toBe(true);
   });
 
-  it('R99: a spoofed copy matching UID, time and title but not organizer, place or link stays its own entry', async () => {
+  it('R99: a spoofed copy matching UID, time and title but not organizer, place or link stays its own entry, with its own meetingKey', async () => {
     const base = { icalUid: 'uid-1', title: 'Board', organizerEmail: 'chair@board.example.org', location: 'Room 4', conferencing: { provider: 'Zoom', details: { url: 'https://zoom.example/real' } } };
     for (const spoof of [
       { organizerEmail: 'attacker@evil.example' },
@@ -707,9 +707,10 @@ describe('fix round 1: collapse rules (R82, M1)', () => {
       work.listEvents.mockResolvedValue([event('w-1', 'cal-work', { ...base, ...spoof })]);
       personal.listEvents.mockResolvedValue([event('p-1', 'cal-personal', base)]);
       const data = dataOf(await run(new CalendarListEventsHandler(), ctx(router, listInput, system)));
-      const events = data['events'] as Array<{ id: string; calendars?: unknown }>;
+      const events = data['events'] as Array<{ id: string; calendars?: unknown; meetingKey: string }>;
       expect(events.map((e) => e.id), JSON.stringify(spoof)).toEqual(['w-1', 'p-1']);
       expect(events.every((e) => e.calendars === undefined)).toBe(true);
+      expect(events[0]!.meetingKey).not.toBe(events[1]!.meetingKey);
     }
     // The real copies (same organizer, place and link, the organizer's case aside) still collapse.
     const { work, personal, router } = setup();
