@@ -123,9 +123,19 @@ type Anchored = { id: string; date: number };
  * Null when the mailbox has nothing after this page.
  */
 function positionAfter(cursor: string | null, raw: Anchored[], consumed: number, next: string | undefined): MailboxPosition | null {
-  if (raw.length === 0 || (consumed >= raw.length && !next)) return null;
+  if (consumed >= raw.length && !next) return null;
+  if (consumed === 0) return { cursor, skip: 0 }; // nothing read from this page yet
   const last = raw[consumed - 1]!;
   return { cursor, skip: consumed, after: { id: last.id, date: last.date } };
+}
+
+/**
+ * Past an empty page that still has a next cursor: the provider says more pages follow, so the
+ * mailbox is not exhausted. Resume at that cursor, keeping the last anchor read before it, so a
+ * shifted page is still caught (scanMailbox restarts from the top if it must).
+ */
+function positionPastEmpty(next: string, lastRead: Anchored | undefined): MailboxPosition {
+  return { cursor: next, skip: 0, ...(lastRead ? { after: { id: lastRead.id, date: lastRead.date } } : {}) };
 }
 
 /**
@@ -155,6 +165,8 @@ export async function scanMailbox<T extends Anchored>(opts: {
   let above = anchor !== undefined;
   let end: MailboxPosition | null = opts.start;
   let capped = false;
+  // The last item read so far, for a resume point past an empty page.
+  let lastRead: Anchored | undefined = anchor;
   for (let page = 0; page < opts.pageCap; page++) {
     const { messages: raw, nextCursor } = await opts.fetchPage(cursor ?? undefined);
     let from = 0;
@@ -182,7 +194,8 @@ export async function scanMailbox<T extends Anchored>(opts: {
       }
       if (opts.keep(item)) items.push({ item, after: positionAfter(cursor, raw, i + 1, nextCursor) });
     }
-    end = positionAfter(cursor, raw, raw.length, nextCursor);
+    if (raw.length > 0) lastRead = raw[raw.length - 1];
+    end = raw.length === 0 && nextCursor ? positionPastEmpty(nextCursor, lastRead) : positionAfter(cursor, raw, raw.length, nextCursor);
     if (items.length >= opts.need || end === null) break;
     if (page === opts.pageCap - 1) {
       capped = true;

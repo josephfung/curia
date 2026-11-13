@@ -126,8 +126,9 @@ export class CeoInboxSearchHandler implements ToolHandler {
     );
 
     // A follow-up page sends only the Nylas cursor, which continues the original search: a token
-    // is bound to its query and Spam/Trash choice so a changed query is refused, not ignored.
-    const scope = pageScope({ tool: 'ceo-inbox-search', query, includeSpamAndTrash });
+    // is bound to its query, Spam/Trash choice and mailbox selection (one named mailbox, or every
+    // one), so a changed request is refused, not ignored.
+    const scope = pageScope({ tool: 'ceo-inbox-search', query, includeSpamAndTrash, mailbox: typeof input.mailbox === 'string' ? input.mailbox : null });
     const token = readPageToken(input, limit, scope);
     if (!token.ok) return { success: false, error: token.error };
 
