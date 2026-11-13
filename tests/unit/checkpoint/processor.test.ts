@@ -315,4 +315,46 @@ describe('ConversationCheckpointProcessor', () => {
     expect(stubs.executionLayer.invoke).toHaveBeenCalled();
     expect(stubs.bus.publish).not.toHaveBeenCalled();
   });
+
+  // #2475 D8 — cheap provenance: the mailboxes the conversation's ceo-inbox calls touched.
+  describe('mailbox provenance on the extraction source (#2475)', () => {
+    const turns = [{ role: 'user' as const, content: 'hello' }];
+    const payload = { conversationId: 'conv-prov', agentId: 'ceo-inbox', channelId: 'email', since: '2026-01-01T00:00:00Z', turns };
+    const plain = 'system:checkpoint/conversation:conv-prov/agent:ceo-inbox/channel:email';
+
+    function sources(): string[] {
+      return (stubs.executionLayer.invoke as ReturnType<typeof vi.fn>).mock.calls.map(
+        (c) => (c[1] as { source: string }).source,
+      );
+    }
+
+    it('appends mailboxes to the extraction source', async () => {
+      const findMailboxes = vi.fn().mockResolvedValue(['personal', 'work']);
+      new ConversationCheckpointProcessor(
+        stubs.bus, stubs.executionLayer, stubs.pool, stubs.logger, undefined, undefined, { findMailboxesForConversation: findMailboxes },
+      ).register();
+      await fireCheckpoint(stubs.subscribeHandlers, payload);
+      expect(findMailboxes).toHaveBeenCalledWith('conv-prov');
+      expect(sources()).toEqual([`${plain}/mailboxes:personal,work`, `${plain}/mailboxes:personal,work`]);
+    });
+
+    it('keeps the plain source when no mailbox was touched', async () => {
+      new ConversationCheckpointProcessor(
+        stubs.bus, stubs.executionLayer, stubs.pool, stubs.logger, undefined, undefined,
+        { findMailboxesForConversation: vi.fn().mockResolvedValue([]) },
+      ).register();
+      await fireCheckpoint(stubs.subscribeHandlers, payload);
+      expect(sources()).toEqual([plain, plain]);
+    });
+
+    it('keeps the plain source when the lookup fails', async () => {
+      new ConversationCheckpointProcessor(
+        stubs.bus, stubs.executionLayer, stubs.pool, stubs.logger, undefined, undefined,
+        { findMailboxesForConversation: vi.fn().mockRejectedValue(new Error('db down')) },
+      ).register();
+      await fireCheckpoint(stubs.subscribeHandlers, payload);
+      expect(sources()).toEqual([plain, plain]);
+      expect(stubs.logger.warn).toHaveBeenCalled();
+    });
+  });
 });
