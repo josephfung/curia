@@ -2415,6 +2415,23 @@ describe('CeoInboxSentObserveHandler — independent state per mailbox (#2475, D
     for (const call of errorCalls) expect(call[0]).not.toHaveProperty('err');
   });
 
+  it('a mailbox failing three runs in a row fails the run; a clean run resets its count (R67, SF-I7)', async () => {
+    serve({ 'grant-work': 403, 'grant-personal': [sent('p1', 1_730_000_500)] });
+    const ctx = buildCtx({ mailboxes: TWO, force: true, nowMs: 1_740_000_000_000, seed: { 'sent_observe.work.failed_runs': '1' } });
+    const second = await handler.execute(ctx);
+    expect(second.success).toBe(true);
+    expect(ctx.__mem.__values.get('sent_observe.work.failed_runs')).toBe('2');
+    const third = await handler.execute(ctx);
+    expect(third.success).toBe(false);
+    expect((third as { error: string }).error).toContain('work');
+    expect(ctx.__mem.__values.get('sent_observe.work.failed_runs')).toBe('3');
+    // The other mailbox still ran and its count stays clear.
+    expect(ctx.__mem.__values.get('sent_observe.personal.failed_runs') ?? '0').toBe('0');
+    serve({ 'grant-work': [], 'grant-personal': [] });
+    expect((await handler.execute(ctx)).success).toBe(true);
+    expect(ctx.__mem.__values.get('sent_observe.work.failed_runs')).toBe('0');
+  });
+
   it('every mailbox failing is a failure result naming each mailbox', async () => {
     serve({ 'grant-work': 403, 'grant-personal': 403 });
     const result = await handler.execute(buildCtx({ mailboxes: TWO, force: true }));

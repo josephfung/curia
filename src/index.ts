@@ -98,7 +98,7 @@ import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
 import { createRulesDoc } from './principal-mailboxes/rules-doc.js';
 import { migrateFlatPrincipalMailbox, migrationFailureReason, warnIfFallbackIdIsLive } from './principal-mailboxes/migrate-flat-mailbox.js';
-import { FALLBACK_MAILBOX_ID } from './principal-mailboxes/state-keys.js';
+import { FALLBACK_MAILBOX_ID, SENT_OBSERVE_FAILED_RUNS_LIMIT, sentObserveFailedRunsKey } from './principal-mailboxes/state-keys.js';
 import { renameSendingKeyAfterMigration, dropLegacyDefaultKey, type SendingConfigStore } from './principal-mailboxes/migrate-config-keys.js';
 import { reconcileFlatMailboxKeys } from './principal-mailboxes/flat-mirror.js';
 import { emailAccountGrantSecretName } from './channels/email/email-account-secrets.js';
@@ -3430,6 +3430,14 @@ async function main(): Promise<void> {
       tz: triageTz,
       logger,
       sweepDedupe: () => triageDedupe.sweep(),
+      sentObserveFailing: async (ids) => {
+        const failing: string[] = [];
+        for (const id of ids) {
+          const n = Number((await triageConfig.get(TRIAGE_NAMESPACE, sentObserveFailedRunsKey(id))) ?? '0') || 0;
+          if (n >= SENT_OBSERVE_FAILED_RUNS_LIMIT) failing.push(id);
+        }
+        return failing;
+      },
       // One email a day when triage pauses at the ceiling (R67); the same path as the outage alert.
       notifyCeiling: async (batches) => {
         const ceoEmail = findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
