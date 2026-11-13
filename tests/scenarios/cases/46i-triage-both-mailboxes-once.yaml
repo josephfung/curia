@@ -35,6 +35,13 @@ inbound:
       - at: "{{time:today-1 09:00}}"
         note: Heartbeat created this drain task; the mailboxes below are due. Next - triage one batch.
 tool_stubs:
+  # The drain task this wake runs: progress notes and completion are the wake's own writes.
+  task-update:
+    - match: { task_id: 7a1b2c3d-46a0-4b1c-8d2e-461a0b1c2d3e }
+      return: { task_id: 7a1b2c3d-46a0-4b1c-8d2e-461a0b1c2d3e, title: Inbox drain, status: in_progress, owner: curia, priority: 3, tags: [inbox-drain], updated_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+  task-complete:
+    - match: { task_id: 7a1b2c3d-46a0-4b1c-8d2e-461a0b1c2d3e }
+      return: { task_id: 7a1b2c3d-46a0-4b1c-8d2e-461a0b1c2d3e, title: Inbox drain, status: done, completed_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
   ceo-inbox-list:
     - match: { folder: DRAFTS }
       return: { folder: DRAFTS, count: 0, drafts: [] }
@@ -107,12 +114,23 @@ expected_behaviors:
     check:
       called: ceo-inbox-draft-reply
       max: 1
-  - id: no_reply_to_other_copy
+  # The case intends one drafted reply, so the message's end state is ✍️ Drafted: archived
+  # (agents/ceo-inbox.yaml step 4h / Step 5), not marked read. Each is bound to the one message.
+  - id: drafted_the_work_copy_once
     weight: critical
-    description: Never drafts against a message id other than the work copy it was given.
+    description: Drafts exactly one reply, to the work copy it was given.
     check:
-      not_called: [ceo-inbox-draft-reply]
-      with: { reply_to_message_id: msg-46i-personal }
+      called: ceo-inbox-draft-reply
+      with: { reply_to_message_id: msg-46i-work }
+      min: 1
+      max: 1
+  - id: settled_once
+    weight: critical
+    description: Settles the one message exactly once (archived as Drafted, or marked read), never twice.
+    check:
+      any_of:
+        - { called: ceo-inbox-archive, with: { message_id: msg-46i-work }, min: 1, max: 1 }
+        - { called: ceo-inbox-mark-read, with: { message_id: msg-46i-work }, min: 1, max: 1 }
   - id: nothing_sent
     weight: critical
     description: Sends no draft on its own; sending is off in this setup.
