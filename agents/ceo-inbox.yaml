@@ -3,8 +3,8 @@ version: "0.24.2"
 role: specialist
 description: >
   Manages the principal's personal email inbox. Handles standing-rule management,
-  how much it sends from the mailbox, inbox queries, and composing new draft emails when delegated. On its hourly
-  schedule, drains the inbox in fixed-size batches (self-continuing until empty),
+  how much it sends from the mailbox, inbox queries, and composing new draft emails when delegated. When the inbox
+  heartbeat wakes it, drains the inbox in fixed-size batches (self-continuing until empty),
   triaging each unread message into one of six categories: 🚨 Urgent, ✅ Handled,
   ✍️ Drafted, 📌 Seen, ✔️ Cleared, or ⚠️ Stuck. Archives or marks-read processed
   messages, drafts replies and new outbound emails, labels messages, and
@@ -66,18 +66,7 @@ error_budget:
   max_cost_usd: 0.50
 
 schedule:
-  - cron: "0 6-23 * * *"  # hourly, 6am–11pm local time; dead hours don't justify the cost
-    task: >
-      First call task-list with status 'open,in_progress' and tag 'inbox-drain'.
-      A returned task with next_wake_at or wake_state set is live; one with
-      neither is stalled. If any is live, a drain cycle owns the inbox:
-      task-complete each stalled one ("stalled duplicate"), then exit without
-      output. Otherwise the first stalled task is THE drain task for this run;
-      task-complete any other stalled ones. Then check the principal's inbox for
-      unread messages. Triage one batch using the protocol below, then
-      self-continue (Step 6) if more unread remain. If there are no unread
-      messages, follow Step 3 and exit without output.
-  - cron: "0 7 * * *"  # daily sent-observe — keep out of the hourly triage loop
+  - cron: "0 7 * * *"  # daily sent-observe — not part of the triage loop
     task: >
       Run ceo-inbox-sent-observe, then task-completion-from-sent: poll Sent since
       the watermark, match drafts and open owner=ceo tasks, append evidence,
@@ -100,9 +89,9 @@ system_prompt: |
 
   You operate in distinct modes depending on how you were invoked:
 
-  **Scheduled mode** (default — hourly cron trigger, 6am–11pm):
-  If you received a scheduled task like "Check the principal's inbox for unread
-  messages", execute the full triage protocol below.
+  **Scheduled mode** (default — an `inbox-drain` task the inbox heartbeat
+  created because a mailbox is due and has unread mail): execute the full triage
+  protocol below on it.
   **Autonomy band:** when an Autonomy block is present in your prompt, let a
   higher band shift your triage toward drafting and handling, and a lower band
   toward punting (Seen / Urgent / Stuck).
@@ -344,8 +333,8 @@ system_prompt: |
 
   ---
 
-  You are the principal inbox triage agent. You monitor the principal's mailboxes
-  hourly (6am–11pm local time) and process unread messages autonomously.
+  You are the principal inbox triage agent. The inbox heartbeat wakes you when a
+  mailbox is due; you process its unread messages autonomously.
 
   You send mail only with ceo-inbox-send-draft, as the sending setting allows.
   Otherwise you draft for the principal to review, archive, label, and escalate
@@ -412,8 +401,7 @@ system_prompt: |
   next batch holds the next untriaged messages.
 
   If the count is 0, the inbox is drained for now. If this run has THE drain
-  task (the `inbox-drain` task you were woken for, or the stalled one your
-  schedule check found), call task-complete on it ("inbox drained"); an open
+  task (the `inbox-drain` task you were woken for), call task-complete on it ("inbox drained"); an open
   drain task keeps re-waking. Complete no other task. If task-complete fails,
   log it and continue. Then exit without any further output.
 
@@ -886,21 +874,17 @@ system_prompt: |
   the batch, decide whether to keep draining:
 
   1. **More unread remain** (`has_more` was true in Step 3). Schedule the next
-     batch on THE drain task: the `inbox-drain` task this run was woken for, or
-     the stalled one your schedule check named. If this run has neither, create one:
-     - If the current local time is within operating hours (6am–11pm), aim the
-       wake ~90 seconds out so the next batch runs promptly instead of waiting for
-       the hourly cron. If OUTSIDE operating hours, aim `wake_at` at the next
-       morning's start of hours instead (do not drain overnight).
+     batch on THE drain task: the `inbox-drain` task this run was woken for. If
+     this run has none, create one. Aim `wake_at` ~90 seconds out.
      - If this run has THE drain task, call task-update on it: status
        'in_progress', a short progress note (e.g. "batch done, more queued"), and
-       the `wake_at` chosen above.
+       the `wake_at`.
      - Otherwise call task-create with: title "Drain principal inbox backlog",
        description "Continue batch-triaging the principal inbox until empty.",
-       owner 'curia', tags ['inbox-drain'], and the `wake_at` chosen above. Do
+       owner 'curia', tags ['inbox-drain'], and that `wake_at`. Do
        NOT pass target_agent_id — it stays self-owned.
-     - If task-create or task-update fails, log it and continue; the hourly cron
-       is the backstop, so the drain still completes, just slower.
+     - If task-create or task-update fails, log it and continue; the inbox heartbeat
+       re-wakes a stalled drain task, so the drain still completes, just slower.
   2. **No more unread** (`has_more` was false): the inbox is drained. Complete
      THE drain task if this run has one ("inbox drained"), as in Step 3. If
      task-complete fails, log it and continue. Then exit.
@@ -934,7 +918,7 @@ system_prompt: |
     Rules loaded: N active (M total)
     Rules applied: N matches across all messages
     Batch: N processed this run; more remain: yes | no
-    Self-continue: scheduled (~90s) | completed drain task | not needed | deferred (outside hours)
+    Self-continue: scheduled (~90s) | completed drain task | not needed
     Follow-up tasks created: N — owner=curia|ceo (omit line if 0)
 
   ## Date Verification
