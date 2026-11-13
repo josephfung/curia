@@ -6,6 +6,7 @@ import { NYLAS_MAX_LIST_LIMIT, type NylasDraftSummary, type NylasMessageSummary 
 import { triageList } from '../../../_shared/triage-listing.js';
 import { isPrincipalDirectedMailboxSend } from '../../../../src/skills/principal-send/authority.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
+import { RemovedMailboxError, UnknownMailboxError } from '../../../../src/principal-mailboxes/types.js';
 import { DateTime } from 'luxon';
 import { hasSystemLineage } from '../../../../src/contacts/principal.js';
 import { annotateDrafts, filterModifiedSince, parseModifiedSince } from '../../../_shared/draft-listing.js';
@@ -161,7 +162,7 @@ export class CeoInboxListHandler implements ToolHandler {
           },
         };
       } catch (err) {
-        ctx.log.error({ err }, 'ceo-inbox-list: failed to list drafts');
+        ctx.log.error({ ...grantSafeErrorFields(err) }, 'ceo-inbox-list: failed to list drafts');
         return { success: false, error: 'Failed to list principal inbox drafts' };
       }
     }
@@ -275,7 +276,7 @@ export class CeoInboxListHandler implements ToolHandler {
         },
       };
     } catch (err) {
-      ctx.log.error({ err }, 'ceo-inbox-list: failed to list messages');
+      ctx.log.error({ ...grantSafeErrorFields(err) }, 'ceo-inbox-list: failed to list messages');
       return { success: false, error: 'Failed to list principal inbox messages' };
     }
   }
@@ -315,7 +316,7 @@ export class CeoInboxListHandler implements ToolHandler {
       return { ok: true, data: { mailbox: mailbox.id, mailbox_label: mailbox.label, triage_start_at: at.toISOString(), messages: [], count: 0 } };
     } catch (err) {
       ctx.log.warn({ tool: 'ceo-inbox-list', ...grantSafeErrorFields(err) }, 'ceo-inbox-list: sweep_since failed');
-      return { ok: false, error: err instanceof Error && /unknown|removed|no longer/i.test(err.message) ? err.message : 'Could not move the start line.' };
+      return { ok: false, error: err instanceof UnknownMailboxError || err instanceof RemovedMailboxError ? err.message : 'Could not move the start line.' };
     }
   }
 }
