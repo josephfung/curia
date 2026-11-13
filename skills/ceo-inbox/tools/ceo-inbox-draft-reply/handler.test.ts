@@ -869,6 +869,8 @@ describe('CeoInboxDraftReplyHandler', () => {
       /** Message-ID header on the triaged copy (default MSG_ID). */
       originalMessageId?: string;
       hits?: string[];
+      /** The triaged mailbox already holds a draft on the message's thread (SF-M3). */
+      givenDraft?: boolean;
     }) {
       const posts: Array<{ grant: string; body: { reply_to_message_id?: string } }> = [];
       const searches: Array<{ grant: string; q: string | null }> = [];
@@ -915,7 +917,10 @@ describe('CeoInboxDraftReplyHandler', () => {
           m.data.id = id!;
           return new Response(JSON.stringify(m), { status: 200 });
         }
-        if (u.pathname.endsWith('/drafts') && method === 'GET') return new Response(JSON.stringify({ data: [] }), { status: 200 });
+        if (u.pathname.endsWith('/drafts') && method === 'GET') {
+          const data = opts.givenDraft && grant === heldGrant ? [{ id: 'draft-earlier', thread_id: 'thread-001', subject: 'Re: Test Subject', to: [], cc: [], snippet: 'Earlier', date: 1 }] : [];
+          return new Response(JSON.stringify({ data }), { status: 200 });
+        }
         if (u.pathname.endsWith('/drafts') && method === 'POST') {
           posts.push({ grant, body: JSON.parse(init!.body as string) });
           return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
@@ -962,6 +967,28 @@ describe('CeoInboxDraftReplyHandler', () => {
       expect(result).toMatchObject({ success: true, data: { mailbox: opts.held, reply_mailbox_fallback: true } });
       if (note) expect((result as { data: { reply_mailbox_note: string } }).data.reply_mailbox_note).toMatch(note);
     }
+
+    it('a draft already in the triaged mailbox answers a redirected retry; no second draft (SF-M3)', async () => {
+      const { ctx, posts } = setup({ ...addressedBoth, givenDraft: true });
+      const result = await handler.execute(ctx);
+      expect(posts).toHaveLength(0);
+      expect(result).toMatchObject({ success: true, data: { draft_id: 'draft-earlier', already_exists: true } });
+    });
+
+    it('falls back, never throws, when the mailbox registry cannot be read (SF-M2)', async () => {
+      const { ctx, posts } = setup(addressedBoth);
+      const pm = (ctx as unknown as { principalMailboxes: { principalEmailAddresses: () => Promise<string[]> } }).principalMailboxes;
+      let calls = 0;
+      pm.principalEmailAddresses = async () => { calls += 1; if (calls === 1) throw new Error('db down'); return []; };
+      const result = await handler.execute(ctx);
+      expect(posts).toHaveLength(1);
+      expect(posts[0]!.grant).toBe('grant-personal');
+      expect(result).toMatchObject({ success: true, data: { reply_mailbox_fallback: true, reply_mailbox_note: expect.stringContaining('registry') } });
+    });
+
+    it('does not redirect on a Message-ID with no bracketed id, as triage does not dedupe it (BR-M9)', async () => {
+      await expectFallback({ ...addressedBoth, originalMessageId: 'not-an-id>junk<' }, /no Message-ID/);
+    });
 
     it('does not redirect to a copy from a different sender (forged)', async () => {
       await expectFallback({ ...addressedBoth, copy: { from: 'mallory@evil.example.org' } });
