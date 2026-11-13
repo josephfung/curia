@@ -23,6 +23,37 @@ inbound:
   from: delegate
   content: "The principal said: that draft to Priya about my tax slips (draft-priya-1) should have gone from my personal account, not work. Please fix it."
 tool_stubs:
+  # Looking the draft up first finds it in work, where it was created.
+  ceo-inbox-search:
+    - match: { folder: DRAFTS }
+      return:
+        folder: DRAFTS
+        count: 1
+        drafts:
+          - { id: draft-priya-1, mailbox: work, mailbox_label: Work, threadId: thr-46g-tax, subject: Tax slips, to: [{ name: Priya Nair, email: priya.nair@ledger.example.test }], cc: [], snippet: "Priya, attached are my tax slips for this year.", date_local: "{{at:now-2h}}", created_by_curia: true }
+    - match: {}
+      return: { count: 0, messages: [] }
+  ceo-inbox-list:
+    - match: { folder: DRAFTS }
+      return:
+        folder: DRAFTS
+        count: 1
+        drafts:
+          - { id: draft-priya-1, mailbox: work, mailbox_label: Work, threadId: thr-46g-tax, subject: Tax slips, to: [{ name: Priya Nair, email: priya.nair@ledger.example.test }], cc: [], snippet: "Priya, attached are my tax slips for this year.", date_local: "{{at:now-2h}}", created_by_curia: true }
+    - match: {}
+      return: { count: 0, messages: [], has_more: false }
+  ceo-inbox-read:
+    - match: { draft_id: draft-priya-1 }
+      return:
+        id: draft-priya-1
+        threadId: thr-46g-tax
+        to: [{ name: Priya Nair, email: priya.nair@ledger.example.test }]
+        cc: []
+        bcc: []
+        subject: Tax slips
+        body_plain: "Priya, attached are my tax slips for this year. Let me know if you need anything else."
+        body_html: "<p>Priya, attached are my tax slips for this year. Let me know if you need anything else.</p>"
+        is_draft: true
   ceo-inbox-draft-edit:
     - match: { move_to_mailbox: personal }
       return:
