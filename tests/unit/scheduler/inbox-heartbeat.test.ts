@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { closeLegacyInboxDrains, InboxHeartbeat, INBOX_DRAIN_INTENT, type InboxHeartbeatOptions } from '../../../src/scheduler/inbox-heartbeat.js';
+import { closeLegacyInboxDrains, DRAIN_RUNNING_WARN_TICKS, InboxHeartbeat, INBOX_DRAIN_INTENT, type InboxHeartbeatOptions } from '../../../src/scheduler/inbox-heartbeat.js';
 import { parseCadence, type Cadence } from '../../../src/principal-mailboxes/triage-cadence.js';
 import { isAutonomousSendOrigin } from '../../../src/skills/outbound-gateway.js';
 import { TriageState } from '../../../src/principal-mailboxes/triage-state.js';
@@ -469,5 +469,41 @@ describe('TriageState corrupt batch counter (SF-M4)', () => {
     expect(await state.ceilingReached(NOW)).toBe(true);
     expect(await state.ceilingReached(NOW)).toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('InboxHeartbeat re-review fixes (M1-M3)', () => {
+  it('a far wake that cannot be pulled in counts toward the drain_running warning (M1)', async () => {
+    const t = make({ tasks: [taskRow({ wakeState: 'pending', nextWakeAt: '2099-01-01T00:00:00.000Z', updatedAt: NOW.toISOString() })] });
+    t.pullTaskWakeIn.mockResolvedValue(false);
+    for (let i = 0; i < DRAIN_RUNNING_WARN_TICKS; i++) expect(await t.hb.tick(NOW)).toBe('drain_running');
+    expect(t.log.warn.mock.calls.filter((c) => String(c[1]).includes('running for an hour'))).toHaveLength(1);
+  });
+
+  it('at the ceiling the health signals still refresh: a resumed drain clears the suspended failure (M2)', async () => {
+    const tasks: unknown[] = [taskRow({ wakeState: 'suspended' })];
+    const t = make({ tasks });
+    expect(await t.hb.tick(NOW)).toBe('drain_suspended');
+    expect(t.hb.health(NOW).ok).toBe(false);
+    // The operator resumes it; the day's ceiling is reached meanwhile.
+    tasks.splice(0, 1, taskRow({ wakeState: 'running' }));
+    await t.state.addBatch(NOW);
+    vi.spyOn(t.state, 'ceilingReached').mockResolvedValue(true);
+    expect(await t.hb.tick(NOW)).toBe('ceiling');
+    expect(t.hb.health(NOW).ok).toBe(true);
+  });
+
+  it('at the ceiling a stuck mailbox still shows in the health check (M2)', async () => {
+    const t = make({ seed: { 'triage.batches.2026-11-12': '120', 'triage.work.no_progress': '4' } });
+    expect(await t.hb.tick(NOW)).toBe('ceiling');
+    expect(t.hb.health(NOW)).toMatchObject({ ok: false, detail: expect.stringContaining('no progress') });
+  });
+
+  it('an unsendable ceiling notice logs its error once a day, not every tick (M3)', async () => {
+    const notify = vi.fn(async (_n: number) => false);
+    const t = make({ seed: { 'triage.batches.2026-11-12': '120' }, extra: { notifyCeiling: notify } });
+    for (let i = 0; i < 4; i++) await t.hb.tick(new Date(NOW.getTime() + i * 15 * 60_000));
+    expect(notify).toHaveBeenCalledTimes(4);
+    expect(t.log.error.mock.calls.filter((c) => String(c[0]).includes('triage-paused notice') || String(c[1]).includes('triage-paused notice'))).toHaveLength(1);
   });
 });
