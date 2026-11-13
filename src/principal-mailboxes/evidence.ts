@@ -9,6 +9,8 @@ import type { SkillPrincipalMailboxes, PrincipalMailboxView } from './service.js
 import type { NylasClient, NylasMessage } from '../channels/email/nylas-client.js';
 import { cleanSubject } from '../autonomy/sample-pool.js';
 import { nylasStatus } from '../channels/email/nylas-message-id.js';
+import type { Logger } from '../logger.js';
+import { grantSafeErrorFields } from './error-fields.js';
 
 export interface MailboxEvidence {
   mailbox: string;
@@ -59,16 +61,24 @@ function safeSubject(raw: string): string {
   return points.length > MAX_SUBJECT_CHARS ? `${points.slice(0, MAX_SUBJECT_CHARS - 1).join('').trimEnd()}…` : points.join('');
 }
 
+/** An error whose name is its label (SF12): TimeoutError, NoSentFolder. */
+function namedError(name: string, message: string): Error {
+  const err = new Error(message);
+  err.name = name;
+  return err;
+}
+
+/** The HTTP status, else the error's name (TimeoutError, not "Error"). Never a message. */
 function errorLabel(err: unknown): string {
   const status = nylasStatus(err);
   if (status !== undefined) return `HTTP ${status}`;
-  return err instanceof Error ? err.constructor.name : 'Error';
+  return err instanceof Error ? err.name : 'Error';
 }
 
 async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error('TimeoutError')), ms);
+    timer = setTimeout(() => reject(namedError('TimeoutError', `mailbox evidence timed out after ${ms}ms`)), ms);
   });
   try {
     return await Promise.race([work, timeout]);
@@ -90,6 +100,7 @@ async function one(
   mailbox: PrincipalMailboxView,
   recipients: string[],
   limit: number,
+  log: Pick<Logger, 'warn'> | undefined,
 ): Promise<MailboxEvidence> {
   const base: MailboxEvidence = {
     mailbox: mailbox.id,
@@ -107,7 +118,7 @@ async function one(
       const folders = await client.listFolders();
       const sent = folders.find((f) => f.attributes?.includes(SENT_ATTRIBUTE));
       // A mailbox whose Sent folder cannot be found is one we cannot read, not one with no history.
-      if (!sent) throw new Error('NoSentFolder');
+      if (!sent) throw namedError('NoSentFolder', 'the mailbox has no Sent folder');
       const inbox = folders.find((f) => f.attributes?.includes(INBOX_ATTRIBUTE))?.id ?? 'INBOX';
       const [sentAll, inboxAll] = await Promise.all([
         foldersMessages(client, sent.id, recipients, limit),
@@ -132,6 +143,8 @@ async function one(
     };
     return await withDeadline(compute(), LOOKUP_TIMEOUT_MS);
   } catch (err) {
+    // This mailbox is reported unreadable, not as "no history" (SF4). Class and status only.
+    log?.warn({ mailboxId: mailbox.id, ...grantSafeErrorFields(err), label: errorLabel(err) }, 'mailbox evidence: a mailbox could not be read');
     return { ...base, error: errorLabel(err) };
   }
 }
@@ -140,12 +153,12 @@ async function one(
 export async function mailboxEvidence(
   svc: Pick<SkillPrincipalMailboxes, 'list' | 'gatewayClient'>,
   recipients: string[],
-  opts: { limit?: number } = {},
+  opts: { limit?: number; log?: Pick<Logger, 'warn'> } = {},
 ): Promise<MailboxEvidence[]> {
   const normalized = [...new Set(recipients.map((r) => r.trim().toLowerCase()).filter((r) => r !== ''))].slice(0, MAX_RECIPIENTS);
   const limit = Math.min(opts.limit ?? DEFAULT_LIMIT, DEFAULT_LIMIT);
   const mailboxes = await svc.list();
-  return Promise.all(mailboxes.map((m) => one(svc, m, normalized, limit)));
+  return Promise.all(mailboxes.map((m) => one(svc, m, normalized, limit, opts.log)));
 }
 
 function score(e: MailboxEvidence): number {

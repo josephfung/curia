@@ -1,6 +1,7 @@
 import type { Logger } from '../../logger.js';
 import { NylasClient } from './nylas-client.js';
-import { MissingNylasApiKeyError } from '../../principal-mailboxes/types.js';
+import { MissingNylasApiKeyError, RemovedMailboxError, UnknownMailboxError } from '../../principal-mailboxes/types.js';
+import { grantSafeErrorFields } from '../../principal-mailboxes/error-fields.js';
 import type { PrincipalMailboxes } from '../../principal-mailboxes/service.js';
 
 /**
@@ -33,15 +34,20 @@ export function createPrincipalMailboxResolver(deps: {
         logger.warn('Principal mailbox is registered but the Nylas API key (channel.email.nylas_api_key) is missing; treating mailbox as unavailable');
         return null;
       }
-      // Fail closed: a registry/vault failure, a missing grant or a missing API key yields no
-      // client, so no send is attempted from a mailbox we could not positively identify.
-      logger.error({ err }, 'Principal mailbox credentials could not be read; treating mailbox as unavailable');
+      // An unknown or removed id is the caller's mistake, not an outage (SF14): said apart.
+      if (err instanceof UnknownMailboxError || err instanceof RemovedMailboxError) {
+        logger.warn({ mailboxId, errName: err.name }, 'Principal mailbox is not live (unknown or removed); no client');
+        return null;
+      }
+      // Fail closed: a registry/vault failure or a missing grant yields no client, so no send is
+      // attempted from a mailbox we could not positively identify. Class and status only (R20).
+      logger.error({ ...grantSafeErrorFields(err), mailboxId }, 'Principal mailbox credentials could not be read; treating mailbox as unavailable');
       return null;
     }
     const { apiKey: key, grantId } = creds;
     if (!grantId.trim() || !key) {
       // credentials() refuses a missing grant or key, so this is a blank value in the vault.
-      logger.warn({ hasGrant: grantId.trim() !== '', hasApiKey: !!key }, 'Principal mailbox grant or Nylas API key is blank; treating mailbox as unavailable');
+      logger.warn({ mailboxId, emptyGrant: !grantId.trim(), emptyKey: !key }, 'Principal mailbox credentials are blank; treating mailbox as unavailable');
       return null;
     }
 

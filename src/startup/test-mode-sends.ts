@@ -487,7 +487,7 @@ export function createRecordingOutboundGateway(deps: {
  * The principal-mailbox send ledger for one recording gateway (#2474): markers in memory only, in
  * the calling run's store (`runStore`), else one for the stack.
  */
-function inMemorySendLedger(runStore: () => PrincipalSendEntry[] | undefined): NonNullable<ConstructorParameters<typeof OutboundGateway>[0]['sendLedger']> {
+export function inMemorySendLedger(runStore: () => PrincipalSendEntry[] | undefined): NonNullable<ConstructorParameters<typeof OutboundGateway>[0]['sendLedger']> {
   const shared: PrincipalSendEntry[] = [];
   const entries = (): PrincipalSendEntry[] => runStore() ?? shared;
   return {
@@ -503,7 +503,9 @@ function inMemorySendLedger(runStore: () => PrincipalSendEntry[] | undefined): N
     // A `limited` entry is a report record: the cap and both cooldowns skip it, as in production (#2475 Task 19).
     limitStopsSince: async (sinceEpochMs, reason) => entries().filter(e => e.outcome === 'limited' && e.reasonCode === reason && Date.parse(e.at) >= sinceEpochMs),
     recentForThread: async (threadId, sinceEpochMs, mailbox, scan) => (scan ?? entries()).filter(e => e.mode === 'autonomous' && e.outcome !== 'limited' && (e.threadId === threadId || e.threadId === '') && (e.mailbox === undefined || e.mailbox === mailbox) && recent(e, sinceEpochMs)),
-    recentForConversation: async (ids, sinceEpochMs, scan) => (scan ?? entries()).filter(e => e.mode === 'autonomous' && e.outcome !== 'limited' && e.conversationIds.some(id => ids.includes(id)) && recent(e, sinceEpochMs)),
+    // As production (item 12): no ids match nothing; an entry whose ids were unreadable matches any.
+    recentForConversation: async (ids, sinceEpochMs, scan) => (ids.length === 0 ? [] : (scan ?? entries()).filter(e => e.mode === 'autonomous' && e.outcome !== 'limited'
+      && (e.conversationIdsUnreadable === true || e.conversationIds.some(id => ids.includes(id))) && recent(e, sinceEpochMs))),
     recentAutonomousSends: async (sinceEpochMs, scan) => (scan ?? entries()).filter(e => e.mode === 'autonomous' && e.outcome !== 'held' && e.outcome !== 'limited' && recent(e, sinceEpochMs)),
     sentForDraft: async (draftId) => entries().some(e => e.draftId === draftId && e.outcome === 'sent'),
   };

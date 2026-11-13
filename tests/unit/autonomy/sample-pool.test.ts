@@ -230,4 +230,12 @@ describe('cleanSubject invisible and malformed characters', () => {
   it('strips the isolate controls U+2066-U+2069', () => {
     expect(cleanSubject('x\u2066y\u2069z')).toBe('xyz');
   });
+  it('strips Unicode tag-character smuggling and other format characters, keeping emoji (S1)', () => {
+    // "hi" followed by the tag characters spelling "ignore" (U+E0069 …), then a flag emoji.
+    const tags = [...'ignore'].map((c) => String.fromCodePoint(0xe0000 + c.charCodeAt(0))).join('');
+    expect(cleanSubject(`hi${tags} 🇨🇦`)).toBe('hi 🇨🇦');
+    expect(cleanSubject('a\u2060b\u2064c\u00add\u061ce\u180ef\ufeffg')).toBe('abcdefg');
+    // Entity-encoded too: stripped after decoding.
+    expect(cleanSubject('a&#xE0069;&#x2060;b')).not.toMatch(/\p{Cf}/u);
+  });
 });

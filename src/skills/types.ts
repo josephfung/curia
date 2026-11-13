@@ -216,7 +216,9 @@ export interface ToolContext {
    *  which enforces contact blocked checks and content filtering. */
   outboundGateway?: import('./outbound-gateway.js').OutboundGateway;
   /** Principal mailbox registry and per-mailbox clients — available to skills declaring 'principalMailboxes'.
-   *  Narrowed: no credentials, API key or grant id are reachable from it (F7). */
+   *  Narrowed (F7): no member returns credentials, an API key or a grant id. The clients it hands
+   *  out still hold them internally (the ceo-inbox client in # fields; the SDK client in its own
+   *  config), so skills never receive credentials from the capability, but it is not a sandbox. */
   principalMailboxes?: import('../principal-mailboxes/service.js').SkillPrincipalMailboxes;
   /** Scheduler service — available to skills declaring 'schedulerService' in capabilities */
   schedulerService?: import('../scheduler/scheduler-service.js').SchedulerService;
