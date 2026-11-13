@@ -266,7 +266,7 @@ export class SetupStatusHandler implements ToolHandler {
               // Unknown (no registry wired, or the list failed): the default key is counted.
               let live: SendLevelMailbox[] | undefined;
               try {
-                if (ctx.principalMailboxes) live = await ctx.principalMailboxes.list();
+                if (ctx.mailboxDirectory) live = await ctx.mailboxDirectory.list();
               } catch (err) {
                 ctx.log.warn({ errName: err instanceof Error ? err.name : typeof err }, 'setup-status: could not list mailboxes for the send level — counting the default key only');
               }

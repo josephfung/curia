@@ -220,6 +220,9 @@ export interface ToolContext {
    *  out still hold them internally (the ceo-inbox client in # fields; the SDK client in its own
    *  config), so skills never receive credentials from the capability, but it is not a sandbox. */
   principalMailboxes?: import('../principal-mailboxes/service.js').SkillPrincipalMailboxes;
+  /** The live mailboxes' ids, labels and triage starts only (#2475) — for skills declaring
+   *  'mailboxDirectory' that name mailboxes but never read mail. */
+  mailboxDirectory?: import('../principal-mailboxes/service.js').MailboxDirectory;
   /** Scheduler service — available to skills declaring 'schedulerService' in capabilities */
   schedulerService?: import('../scheduler/scheduler-service.js').SchedulerService;
   /** Entity memory (knowledge graph) — available to skills declaring 'entityMemory' in capabilities.

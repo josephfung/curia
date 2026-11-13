@@ -117,6 +117,14 @@ describe('createSendLevelReader', () => {
       expect(checkSendLevelWrite('{"default":"routine"}', live).ok).toBe(false);
       expect(checkSendLevelWrite('{"default":"routine"}', [{ ...migrated('work'), label: 'Work' }]).ok).toBe(true);
     });
+    it('names a legacy default apart, and says there is nothing to set with no mailbox (M2, M3)', () => {
+      const r = checkSendLevelWrite('{"default":"routine","wrk":"off"}', live);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error).toMatch(/^"default" no longer applies; set a level per mailbox id\. Not a connected mailbox: wrk\./);
+      }
+      expect(checkSendLevelWrite('{"work":"routine"}', [])).toEqual({ ok: false, error: expect.stringMatching(/^No principal mailbox is connected yet/) });
+    });
     it('refuses a bare level, non-JSON and a bad level', () => {
       expect(checkSendLevelWrite('"routine"', live).ok).toBe(false);
       expect(checkSendLevelWrite('routine', live).ok).toBe(false);

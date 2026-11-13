@@ -14,7 +14,9 @@ import { KnowledgeGraphStore } from '../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../src/memory/embedding.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
 import { createSilentLogger } from '../../src/logger.js';
-import { mailboxView, stubPrincipalMailboxes } from '../_shared/principal-mailboxes-test-helpers.js';
+import { mailboxView } from '../_shared/principal-mailboxes-test-helpers.js';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 function makeEntityMemory(overrides: Record<string, unknown> = {}) {
   return {
@@ -659,9 +661,12 @@ describe('ConfigStoreHandler exact-key semantics (real validator)', () => {
 
 // #2475 SF5/B1: ceo_inbox/sending is keyed by live mailbox id; the tool names the live ones.
 describe('ConfigStoreHandler — ceo_inbox/sending', () => {
-  const two = stubPrincipalMailboxes({ mailboxes: [mailboxView('work', 'Work', 'w@example.com', true), mailboxView('personal', 'Personal', 'p@example.com')] });
-  const store = (value: string, principalMailboxes: ToolContext['principalMailboxes'] = two, em = makeEntityMemory()) =>
-    new ConfigStoreHandler().execute(makeCtx(em, { action: 'store', namespace: 'ceo_inbox', key: 'sending', value }, { principalMailboxes }));
+  // The list-only directory (M0): ids, labels, triage starts. No clients.
+  const directory = (views: ReturnType<typeof mailboxView>[]): NonNullable<ToolContext['mailboxDirectory']> =>
+    ({ list: async () => views.map(({ id, label, triageStartAt }) => ({ id, label, triageStartAt })) });
+  const two = directory([mailboxView('work', 'Work', 'w@example.com', true), mailboxView('personal', 'Personal', 'p@example.com')]);
+  const store = (value: string, mailboxDirectory: ToolContext['mailboxDirectory'] = two, em = makeEntityMemory()) =>
+    new ConfigStoreHandler().execute(makeCtx(em, { action: 'store', namespace: 'ceo_inbox', key: 'sending', value }, { mailboxDirectory }));
 
   it('refuses a key that is not a live mailbox, naming the live ids and labels, and stores nothing', async () => {
     const em = makeEntityMemory();
@@ -674,8 +679,24 @@ describe('ConfigStoreHandler — ceo_inbox/sending', () => {
     expect(em.storeFact).not.toHaveBeenCalled();
   });
 
-  it('refuses a legacy default key once there are two mailboxes', async () => {
-    expect((await store('{"default":"routine"}')).success).toBe(false);
+  it('refuses a legacy default key once there are two mailboxes, saying it no longer applies (M2)', async () => {
+    const r = await store('{"default":"routine"}');
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error).toContain('"default" no longer applies; set a level per mailbox id');
+      expect(r.error).not.toContain('Not a connected mailbox');
+    }
+  });
+
+  it('with no mailbox connected says there is nothing to set (M3)', async () => {
+    const r = await store('{"work":"routine"}', directory([]));
+    expect(r).toEqual({ success: false, error: 'No principal mailbox is connected yet, so there is nothing to set a sending level for. Nothing was stored.' });
+  });
+
+  it('declares only the list-only directory, never the mailbox clients (M0)', () => {
+    const manifest = JSON.parse(readFileSync(resolve(import.meta.dirname, 'tool.json'), 'utf8')) as { capabilities?: string[]; optional_capabilities?: string[] };
+    expect(manifest.optional_capabilities).toEqual(['mailboxDirectory']);
+    expect([...(manifest.capabilities ?? []), ...(manifest.optional_capabilities ?? [])]).not.toContain('principalMailboxes');
   });
 
   it('stores a valid per-mailbox value and returns the live mailboxes', async () => {
@@ -684,7 +705,7 @@ describe('ConfigStoreHandler — ceo_inbox/sending', () => {
   });
 
   it('refuses the write when the mailbox list cannot be read (nothing stored)', async () => {
-    const broken = { ...two, list: async () => { throw new Error('db down'); } } as unknown as ToolContext['principalMailboxes'];
+    const broken: ToolContext['mailboxDirectory'] = { list: async () => { throw new Error('db down'); } };
     const em = makeEntityMemory();
     const r = await store('{"work":"routine"}', broken, em);
     expect(r.success).toBe(false);
@@ -692,12 +713,12 @@ describe('ConfigStoreHandler — ceo_inbox/sending', () => {
   });
 
   it('a read of the key names the live mailboxes', async () => {
-    const r = await new ConfigStoreHandler().execute(makeCtx(undefined, { action: 'retrieve', namespace: 'ceo_inbox', key: 'sending' }, { principalMailboxes: two }));
+    const r = await new ConfigStoreHandler().execute(makeCtx(undefined, { action: 'retrieve', namespace: 'ceo_inbox', key: 'sending' }, { mailboxDirectory: two }));
     expect(r).toMatchObject({ success: true, data: { found: false, mailboxes: [{ id: 'work', label: 'Work' }, { id: 'personal', label: 'Personal' }] } });
   });
 
   it('other keys are untouched by the check', async () => {
-    const r = await new ConfigStoreHandler().execute(makeCtx(undefined, { action: 'store', namespace: 'ceo_inbox', key: 'decision_tagging', value: '{"enabled":true}' }, { principalMailboxes: two }));
+    const r = await new ConfigStoreHandler().execute(makeCtx(undefined, { action: 'store', namespace: 'ceo_inbox', key: 'decision_tagging', value: '{"enabled":true}' }, { mailboxDirectory: two }));
     expect(r.success).toBe(true);
     if (r.success) expect(r.data).not.toHaveProperty('mailboxes');
   });

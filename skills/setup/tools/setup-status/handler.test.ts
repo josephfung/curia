@@ -1,5 +1,4 @@
 // skills/setup-status/handler.test.ts
-import { stubPrincipalMailboxes, mailboxView } from '../../../_shared/principal-mailboxes-test-helpers.js';
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -131,7 +130,7 @@ function makeCtx(overrides: Partial<{
   return {
     input: {},
     ...(overrides.liveMailboxIds
-      ? { principalMailboxes: stubPrincipalMailboxes({ mailboxes: overrides.liveMailboxIds.map((id, i) => mailboxView(id, id, `${id}@example.com`, i === 0)) }) }
+      ? { mailboxDirectory: { list: async () => overrides.liveMailboxIds!.map((id) => ({ id, label: id, triageStartAt: null })) } }
       : {}),
     entityMemory: makeEntityMemory(overrides.existingDeferrals, {
       ...(overrides.sendingValue !== undefined ? { sendingValue: overrides.sendingValue } : {}),
@@ -509,7 +508,7 @@ describe('setup-status', () => {
       expect((await inboxSending(makeCtx({ sendingValue: '{"default":"routine"}', liveMailboxIds: ['work'] })))?.status).toBe('done');
       expect((await inboxSending(makeCtx({ sendingValue: '{"default":"routine"}', liveMailboxIds: ['work', 'personal'] })))?.status).toBe('pending');
       const added = makeCtx({ sendingValue: '{"default":"routine"}' });
-      (added as { principalMailboxes?: unknown }).principalMailboxes = stubPrincipalMailboxes({ mailboxes: [{ ...mailboxView('home', 'Home', 'home@example.com', true), triageStartAt: new Date() }] });
+      (added as { mailboxDirectory?: unknown }).mailboxDirectory = { list: async () => [{ id: 'home', label: 'Home', triageStartAt: new Date() }] };
       expect((await inboxSending(added))?.status).toBe('pending');
     });
 

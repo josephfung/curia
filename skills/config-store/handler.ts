@@ -74,7 +74,7 @@ export class ConfigStoreHandler implements ToolHandler {
     // be ignored by the reader, so the agent would confirm a level with no effect. Refused here,
     // with the live ids and labels, which the success result carries too.
     let mailboxes: Array<{ id: string; label: string }> | undefined;
-    if (isSendLevelKey(namespace, key) && ctx.principalMailboxes) {
+    if (isSendLevelKey(namespace, key) && ctx.mailboxDirectory) {
       const live = await liveMailboxes(ctx);
       if (!live.ok) return { success: false, error: live.error };
       const check = checkSendLevelWrite(value, live.mailboxes);
@@ -154,7 +154,7 @@ export class ConfigStoreHandler implements ToolHandler {
         const value = await configStore.get(namespace, key);
         // The send level is keyed by mailbox id: the read names the live ones (#2475 B1).
         let mailboxes: Array<{ id: string; label: string }> | undefined;
-        if (isSendLevelKey(namespace, key) && ctx.principalMailboxes) {
+        if (isSendLevelKey(namespace, key) && ctx.mailboxDirectory) {
           const live = await liveMailboxes(ctx);
           if (live.ok) mailboxes = live.mailboxes.map(({ id, label }) => ({ id, label }));
         }
@@ -281,7 +281,7 @@ async function liveMailboxes(ctx: ToolContext): Promise<
   | { ok: false; error: string }
 > {
   try {
-    const list = await ctx.principalMailboxes!.list();
+    const list = await ctx.mailboxDirectory!.list();
     return { ok: true, mailboxes: list.map((m) => ({ id: m.id, label: m.label, triageStartAt: m.triageStartAt })) };
   } catch (err) {
     ctx.log.error({ errName: err instanceof Error ? err.name : typeof err }, 'config-store: could not list the principal mailboxes for ceo_inbox/sending');
