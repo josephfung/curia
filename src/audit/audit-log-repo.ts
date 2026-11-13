@@ -593,6 +593,37 @@ export class AuditLogRepo {
   }
 
   /**
+   * The distinct mailbox ids a conversation's ceo-inbox tool calls touched (#2475, D8), sorted.
+   * Reads `tool.result` rows of `ceo-inbox-*` tools for the conversation: the result's own
+   * `mailbox`, and the `mailbox` each listed message carries. Rides the conversation_id index (the planner picks idx_audit_log_conversation_timestamp), so
+   * the cost is the conversation's own rows. Cheap provenance for checkpoint extraction only.
+   */
+  async findMailboxesForConversation(conversationId: string): Promise<string[]> {
+    const result = await this.pool.query<{ mailbox: string }>(
+      `SELECT DISTINCT m.mailbox
+       FROM audit_log a
+       CROSS JOIN LATERAL (
+         SELECT a.payload->'result'->'data'->>'mailbox' AS mailbox
+         UNION ALL
+         SELECT msg->>'mailbox'
+         FROM jsonb_array_elements(
+           CASE WHEN jsonb_typeof(a.payload->'result'->'data'->'messages') = 'array'
+                THEN a.payload->'result'->'data'->'messages' ELSE '[]'::jsonb END
+         ) AS msg
+         WHERE jsonb_typeof(msg) = 'object'
+       ) m
+       WHERE a.conversation_id = $1
+         AND a.event_type = 'tool.result'
+         AND a.payload->>'toolName' LIKE 'ceo-inbox-%'
+         AND m.mailbox IS NOT NULL
+         AND m.mailbox <> ''
+       ORDER BY m.mailbox`,
+      [conversationId],
+    );
+    return result.rows.map((r) => r.mailbox);
+  }
+
+  /**
    * One sender's latest inbound messages on a conversation before `before`, newest first
    * (#2499). `senderId` is the channel's sender id as the inbound carried it (the dispatcher
    * copies the same value onto the coordinator's agent.task), compared without case: an email

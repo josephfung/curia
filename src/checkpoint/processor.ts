@@ -20,6 +20,11 @@ const CHECKPOINT_TOOLS: Array<{ name: string }> = [
   { name: 'extract-facts' },
 ];
 
+/** The slice of AuditLogRepo the processor needs for mailbox provenance (#2475). */
+export interface MailboxProvenanceLookup {
+  findMailboxesForConversation(conversationId: string): Promise<string[]>;
+}
+
 export class ConversationCheckpointProcessor {
   constructor(
     private bus: EventBus,
@@ -30,6 +35,8 @@ export class ConversationCheckpointProcessor {
     // Delegated sign-in verification (#2017): tracked codes are scrubbed from the
     // transcript before extraction. Unset (tests) leaves the transcript as is.
     private verification?: VerificationRuntime,
+    // Cheap provenance (#2475, D8): the mailboxes the conversation touched go on the source.
+    private mailboxProvenance?: MailboxProvenanceLookup,
   ) {}
 
   register(): void {
@@ -92,7 +99,16 @@ export class ConversationCheckpointProcessor {
     // A sign-in code must not become a fact or relationship (#2017).
     const transcript = this.verification ? this.verification.tracker.scrubText(rawTranscript) : rawTranscript;
 
-    const source = `system:checkpoint/conversation:${conversationId}/agent:${agentId}/channel:${channelId}`;
+    let source = `system:checkpoint/conversation:${conversationId}/agent:${agentId}/channel:${channelId}`;
+    if (this.mailboxProvenance) {
+      try {
+        const mailboxes = await this.mailboxProvenance.findMailboxesForConversation(conversationId);
+        if (mailboxes.length > 0) source += `/mailboxes:${mailboxes.join(',')}`;
+      } catch (err) {
+        // Provenance is a nicety: a failed lookup keeps the plain source, never the extraction.
+        this.logger.warn({ err, conversationId }, 'Checkpoint mailbox provenance lookup failed — extracting with the plain source (#2475)');
+      }
+    }
 
     // CallerContext for system-layer invocations — no human contact involved.
     // Use 'system' as a sentinel contactId; channel carries the originating channel.

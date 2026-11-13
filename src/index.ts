@@ -3792,7 +3792,7 @@ async function main(): Promise<void> {
   // Conversation checkpoint processor — System Layer subscriber that runs background
   // memory skills (extract-relationships, etc.) at end of each conversation.
   const checkpointProcessor = new ConversationCheckpointProcessor(
-    bus, executionLayer, pool, logger, authConfig?.channelPolicies, verificationRuntime,
+    bus, executionLayer, pool, logger, authConfig?.channelPolicies, verificationRuntime, auditLogRepo,
   );
   checkpointProcessor.register();
 
