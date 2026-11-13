@@ -76,10 +76,9 @@ export const CEO_INBOX_CONSULT_TIMEOUT_LINES: readonly string[] = [
 
 /** An `inbox-drain` wake. */
 export const CEO_INBOX_INBOX_DRAIN_LINES: readonly string[] = [
-  "**`inbox-drain` task:** woken because a mailbox is due with unread mail,",
-  "or you scheduled it in Step 6 because the",
-  "inbox still had unread mail. Do NOT run the reification",
-  "follow-up steps. Instead run the normal triage protocol (Steps 1-6) on",
+  "**`inbox-drain` task:** woken because a mailbox is due with unread mail, or",
+  "you scheduled it in Step 6 because the inbox still had unread mail. Do NOT",
+  "run the reification follow-up steps. Instead run the normal triage protocol (Steps 1-6) on",
   "the next batch: it will list the next unread messages, triage them, and either",
   "re-arm the drain wake (if more remain) or complete this drain task (if the",
   "inbox is now empty). See Step 6 for the full continuation contract.",
