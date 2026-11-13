@@ -97,7 +97,7 @@ import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
 import { migrateFlatPrincipalMailbox, migrationFailureReason } from './principal-mailboxes/migrate-flat-mailbox.js';
-import { renameSendingKeyAfterMigration, dropLegacyDefaultKey } from './principal-mailboxes/migrate-config-keys.js';
+import { renameSendingKeyAfterMigration, dropLegacyDefaultKey, type SendingConfigStore } from './principal-mailboxes/migrate-config-keys.js';
 import { reconcileFlatMailboxKeys } from './principal-mailboxes/flat-mirror.js';
 import { emailAccountGrantSecretName } from './channels/email/email-account-secrets.js';
 import { grantSafeErrorFields, mayCarryGrantId } from './principal-mailboxes/error-fields.js';
@@ -1242,7 +1242,7 @@ async function main(): Promise<void> {
     : undefined;
   // The legacy send-level key is reconciled after every migration run (B1, S-I1): here at boot
   // (the config store exists later; flushed there) and in the health retry.
-  let sendingKeyStore: { get(ns: string, key: string): Promise<string | null>; set(ns: string, key: string, v: string): Promise<unknown> } | undefined;
+  let sendingKeyStore: SendingConfigStore | undefined;
   const sendingKeyRename = {
     setStore: (st: typeof sendingKeyStore) => { sendingKeyStore = st; },
     // Without an API key there is no migration to run, but the key is still reconciled at flush.
