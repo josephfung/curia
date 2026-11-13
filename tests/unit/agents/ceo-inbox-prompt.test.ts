@@ -402,7 +402,7 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
     // A floor, not an exact match: PRs do not bump agent versions (the release PR runs
     // `pnpm bump:versions`), so an exact pin here would force every ceo-inbox PR to edit
-    // this test too. 0.24.2 = the hourly cron leaves a running drain cycle alone (#2378).
+    // this test too. 0.24.2 = a running drain cycle is left alone (#2378); the inbox heartbeat now does the same.
     expect(semver.valid(config.version)).not.toBeNull();
     expect(semver.gte(config.version as string, '0.24.2')).toBe(true);
   });

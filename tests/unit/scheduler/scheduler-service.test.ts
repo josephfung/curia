@@ -1333,9 +1333,9 @@ describe('SchedulerService', () => {
 
       expect(count).toBe(2);
       const [sql] = pool.query.mock.calls[0] as [string, unknown[]];
-      // Must only target pending/failed system jobs
+      // Must only target pending/failed/running system jobs
       expect(sql).toContain("created_by = 'system'");
-      expect(sql).toContain("status IN ('pending', 'failed')");
+      expect(sql).toContain("status IN ('pending', 'failed', 'running')");
       expect(sql).toContain("'cancelled'");
     });
 
@@ -1351,7 +1351,7 @@ describe('SchedulerService', () => {
       expect(pool.query).toHaveBeenCalledTimes(1);
     });
 
-    it('does not touch running or suspended jobs', async () => {
+    it('cancels a stale running row but never touches suspended jobs (#2475)', async () => {
       pool.query.mockResolvedValueOnce({ rows: [] });
 
       await svc.cancelStaleDeclarativeJobs([
@@ -1359,9 +1359,10 @@ describe('SchedulerService', () => {
       ]);
 
       const [sql] = pool.query.mock.calls[0] as [string];
-      // The WHERE clause must restrict to pending/failed only
-      expect(sql).toContain("status IN ('pending', 'failed')");
-      expect(sql).not.toContain("'running'");
+      // A stale running row must not survive: the watchdog would reset it to pending and the
+      // removed cron would fire again. The live tuple exclusion keeps a declared running row.
+      expect(sql).toContain("status IN ('pending', 'failed', 'running')");
+      expect(sql).toContain('NOT IN (VALUES');
       expect(sql).not.toContain("'suspended'");
     });
 

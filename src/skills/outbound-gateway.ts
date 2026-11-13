@@ -636,7 +636,7 @@ function checkStopDigest(result: OutboundSendResult): string {
  * also refuses (fail closed), as does principal lineage on a task that is not a live turn (a
  * live one is principal-directed and never reaches this check).
  */
-function isAutonomousSendOrigin(taskMetadata: Record<string, unknown> | undefined): boolean {
+export function isAutonomousSendOrigin(taskMetadata: Record<string, unknown> | undefined): boolean {
   // Only systemRole and ladderedFrom are read, and compared to literals; cast through unknown per repo policy.
   const originator = taskMetadata?.['originator'] as unknown as TaskOriginator | undefined;
   if (originator?.systemRole === 'system') return true;
