@@ -239,7 +239,7 @@ describe('HealthService.getStatus()', () => {
       liveMailboxIds: async () => ['work', 'personal'],
       listCalendars: async (id) => { if (id === 'personal') throw Object.assign(new Error('Unauthorized'), { statusCode: 401 }); },
     }, log);
-    expect(r).toEqual({ status: 'fail', authFailure: true, failedMailboxes: ['personal'] });
+    expect(r).toEqual({ status: 'fail', authFailure: true });
     expect(warn).toHaveBeenCalledWith(expect.objectContaining({ mailboxId: 'personal' }), expect.any(String));
   });
 

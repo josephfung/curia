@@ -94,6 +94,18 @@ function ctx(router: ToolContext['calendarRouter'], input: Record<string, unknow
   };
 }
 
+/**
+ * A list-events context whose principal has their home calendars registered, as the add and the
+ * boot catch-up leave it (R103): the listing then reads exactly those, one per account (N4).
+ */
+function listCtx(router: ToolContext['calendarRouter'], input: Record<string, unknown>, extra: Partial<ToolContext> = {}): ToolContext {
+  const c = ctx(router, input, extra);
+  (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([
+    { nylasCalendarId: 'ceo@work.example.com' }, { nylasCalendarId: 'ceo@personal.example.com' },
+  ]);
+  return c;
+}
+
 function dataOf(r: ToolResult): Record<string, unknown> {
   expect(r, JSON.stringify(r)).toMatchObject({ success: true });
   return r.success ? (r.data as Record<string, unknown>) : {};
@@ -565,13 +577,13 @@ describe('calendar-list-events lists a meeting on two accounts once (D7)', () =>
     const { work, personal, router } = setup();
     work.listEvents.mockResolvedValue([event('w-1', 'cal-work', { icalUid: 'uid-1', title: 'Board' })]);
     personal.listEvents.mockResolvedValue([event('p-1', 'cal-personal', { icalUid: 'uid-1', title: 'Board' }), event('p-2', 'cal-personal', { icalUid: 'uid-2' })]);
-    const data = dataOf(await run(new CalendarListEventsHandler(), ctx(router, listInput, system)));
+    const data = dataOf(await run(new CalendarListEventsHandler(), listCtx(router, listInput, system)));
     const events = data['events'] as Array<{ id: string; calendars?: unknown }>;
     expect(data['count']).toBe(2);
     expect(events.map((e) => e.id)).toEqual(['w-1', 'p-2']);
     expect(events[0]!.calendars).toEqual([
-      { calendarId: 'cal-work', mailbox: 'work', mailbox_label: 'Work', eventId: 'w-1' },
-      { calendarId: 'cal-personal', mailbox: 'personal', mailbox_label: 'Personal', eventId: 'p-1' },
+      { calendarId: 'ceo@work.example.com', mailbox: 'work', mailbox_label: 'Work', eventId: 'w-1' },
+      { calendarId: 'ceo@personal.example.com', mailbox: 'personal', mailbox_label: 'Personal', eventId: 'p-1' },
     ]);
     expect(events[1]).not.toHaveProperty('calendars');
   });
@@ -580,7 +592,7 @@ describe('calendar-list-events lists a meeting on two accounts once (D7)', () =>
     const { work, personal, router } = setup();
     work.listEvents.mockResolvedValue([event('w-1', 'cal-work')]);
     personal.listEvents.mockResolvedValue([event('p-1', 'cal-personal', { icalUid: '' })]);
-    const data = dataOf(await run(new CalendarListEventsHandler(), ctx(router, listInput, system)));
+    const data = dataOf(await run(new CalendarListEventsHandler(), listCtx(router, listInput, system)));
     expect(data['count']).toBe(2);
   });
 
@@ -592,7 +604,7 @@ describe('calendar-list-events lists a meeting on two accounts once (D7)', () =>
       event('w-b', 'cal-work', { icalUid: 'series', title: 'Weekly', startTime: START_UNIX + week, endTime: END_UNIX + week, originalStartTime: START_UNIX + week }),
     ]);
     personal.listEvents.mockResolvedValue([event('p-a', 'cal-personal', { icalUid: 'series', title: 'Weekly', startTime: START_UNIX, originalStartTime: START_UNIX })]);
-    const data = dataOf(await run(new CalendarListEventsHandler(), ctx(router, listInput, system)));
+    const data = dataOf(await run(new CalendarListEventsHandler(), listCtx(router, listInput, system)));
     const events = data['events'] as Array<{ id: string; calendars?: Array<{ eventId: string }> }>;
     expect(events.map((e) => e.id)).toEqual(['w-a', 'w-b']);
     expect(events[0]!.calendars?.map((c) => c.eventId)).toEqual(['w-a', 'p-a']);
@@ -602,13 +614,27 @@ describe('calendar-list-events lists a meeting on two accounts once (D7)', () =>
   it("the principal's listing reads the home calendar of an account with no registered calendar (R103)", async () => {
     const { work, personal, router } = setup();
     const c = ctx(router, listInput, system);
-    // Only a work calendar is registered: the personal account's home calendar is read anyway.
-    (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([{ nylasCalendarId: 'cal-work' }]);
+    // Only the work home calendar is registered: the personal account's home calendar is read anyway.
+    (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([{ nylasCalendarId: 'ceo@work.example.com' }]);
     personal.listEvents.mockResolvedValue([event('p-1', 'ceo@personal.example.com', { icalUid: 'uid-p' })]);
     const data = dataOf(await run(new CalendarListEventsHandler(), c));
     expect(personal.listEvents).toHaveBeenCalledWith('ceo@personal.example.com', START, END, undefined);
     expect((data['events'] as Array<{ id: string }>).map((e) => e.id)).toContain('p-1');
     expect(data).not.toHaveProperty('partial');
+    expect(work.listEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("an account read only through a secondary calendar still gets its home calendar read (N4)", async () => {
+    const { work, personal, router } = setup();
+    const c = ctx(router, listInput, system);
+    // cal-personal is a registered secondary of the personal account; its home is not registered.
+    (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { nylasCalendarId: 'ceo@work.example.com' }, { nylasCalendarId: 'cal-personal' },
+    ]);
+    personal.listEvents.mockImplementation(async (cal: string) => (cal === 'ceo@personal.example.com' ? [event('p-home', cal)] : []));
+    const data = dataOf(await run(new CalendarListEventsHandler(), c));
+    expect(personal.listEvents).toHaveBeenCalledWith('ceo@personal.example.com', START, END, undefined);
+    expect((data['events'] as Array<{ id: string }>).map((e) => e.id)).toContain('p-home');
     expect(work.listEvents).toHaveBeenCalledTimes(1);
   });
 
@@ -625,7 +651,7 @@ describe('calendar-list-events lists a meeting on two accounts once (D7)', () =>
   it('a failed calendar makes the listing partial (SF-I3)', async () => {
     const { personal, router } = setup();
     personal.listEvents.mockRejectedValue(new Error('grant expired'));
-    const data = dataOf(await run(new CalendarListEventsHandler(), ctx(router, listInput, system)));
+    const data = dataOf(await run(new CalendarListEventsHandler(), listCtx(router, listInput, system)));
     expect(data['partial']).toBe(true);
     expect((data['warnings'] as string[])[0]).toContain('grant expired');
   });
@@ -742,7 +768,7 @@ describe('fix round 1: collapse rules (R82, M1)', () => {
       event('p-1', 'cal-personal', { icalUid: 'uid-1', title: 'Totally different' }),
       event('p-2', 'cal-personal', { icalUid: 'uid-1', title: 'Board', endTime: END_UNIX + 1800 }),
     ]);
-    const data = dataOf(await run(new CalendarListEventsHandler(), ctx(router, listInput, system)));
+    const data = dataOf(await run(new CalendarListEventsHandler(), listCtx(router, listInput, system)));
     const events = data['events'] as Array<{ id: string; calendars?: unknown }>;
     expect(events.map((e) => e.id)).toEqual(['w-1', 'p-1', 'p-2']);
     expect(events.every((e) => e.calendars === undefined)).toBe(true);
@@ -758,7 +784,7 @@ describe('fix round 1: collapse rules (R82, M1)', () => {
       const { work, personal, router } = setup();
       work.listEvents.mockResolvedValue([event('w-1', 'cal-work', { ...base, ...spoof })]);
       personal.listEvents.mockResolvedValue([event('p-1', 'cal-personal', base)]);
-      const data = dataOf(await run(new CalendarListEventsHandler(), ctx(router, listInput, system)));
+      const data = dataOf(await run(new CalendarListEventsHandler(), listCtx(router, listInput, system)));
       const events = data['events'] as Array<{ id: string; calendars?: unknown; meetingKey: string }>;
       expect(events.map((e) => e.id), JSON.stringify(spoof)).toEqual(['w-1', 'p-1']);
       expect(events.every((e) => e.calendars === undefined)).toBe(true);
@@ -768,7 +794,7 @@ describe('fix round 1: collapse rules (R82, M1)', () => {
     const { work, personal, router } = setup();
     work.listEvents.mockResolvedValue([event('w-1', 'cal-work', { ...base, organizerEmail: 'Chair@Board.example.org' })]);
     personal.listEvents.mockResolvedValue([event('p-1', 'cal-personal', base)]);
-    const data = dataOf(await run(new CalendarListEventsHandler(), ctx(router, listInput, system)));
+    const data = dataOf(await run(new CalendarListEventsHandler(), listCtx(router, listInput, system)));
     expect((data['events'] as unknown[])).toHaveLength(1);
   });
 
@@ -778,7 +804,7 @@ describe('fix round 1: collapse rules (R82, M1)', () => {
     personal.listEvents.mockResolvedValue([event('p-1', 'cal-personal', {
       icalUid: 'uid-1', title: 'Board', participants: [{ email: 'chair@board.example.org', name: 'Chair', status: 'yes' }],
     })]);
-    const data = dataOf(await run(new CalendarListEventsHandler(), ctx(router, { ...listInput, attendeeEmail: 'chair@board.example.org' }, system)));
+    const data = dataOf(await run(new CalendarListEventsHandler(), listCtx(router, { ...listInput, attendeeEmail: 'chair@board.example.org' }, system)));
     expect((data['events'] as Array<{ id: string }>).map((e) => e.id)).toEqual(['p-1']);
   });
 
@@ -788,7 +814,7 @@ describe('fix round 1: collapse rules (R82, M1)', () => {
     personal.listEvents.mockResolvedValue([event('p-unrelated', 'cal-personal', { icalUid: 'uid-9' })]);
     const c = ctx(router, listInput, system);
     (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { nylasCalendarId: 'cal-work' }, { nylasCalendarId: 'ceo@work.example.com' }, { nylasCalendarId: 'cal-personal' },
+      { nylasCalendarId: 'cal-work' }, { nylasCalendarId: 'ceo@work.example.com' }, { nylasCalendarId: 'ceo@personal.example.com' },
     ]);
     const data = dataOf(await run(new CalendarListEventsHandler(), c));
     const events = data['events'] as Array<{ id: string; calendars?: unknown }>;
