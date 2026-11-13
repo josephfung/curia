@@ -64,3 +64,33 @@ describe('applyRemoval', () => {
     expect(applyRemoval(crlf, 'personal', 'delete')).toContain('- Mailbox: work\r\n- Status: paused');
   });
 });
+
+describe('rules parser edge cases (SEC-L8)', () => {
+  const doc = [
+    '## Board mail',
+    '- When: from the board',
+    '- Do: label it, for example:',
+    '  - Mailbox: personal',
+    '```',
+    '## Not a rule',
+    '- Mailbox: work',
+    '```',
+    '- Mailbox: work',
+    '',
+    '## Newsletters',
+    '- Do: archive',
+    '',
+  ].join('\n');
+
+  it('skips headings and Mailbox lines inside fenced code, and nested Mailbox bullets', () => {
+    const rules = parseRuleScopes(doc);
+    expect(rules.map((r) => r.title)).toEqual(['Board mail', 'Newsletters']);
+    expect(rules[0]!.mailboxes).toEqual(['work']);
+  });
+
+  it('rewrites only the top-level line outside the fence', () => {
+    const out = applyRemoval(doc, 'work', { rescopeTo: 'home' });
+    expect(out).toContain('```\n## Not a rule\n- Mailbox: work\n```\n- Mailbox: home\n');
+    expect(out).toContain('  - Mailbox: personal');
+  });
+});

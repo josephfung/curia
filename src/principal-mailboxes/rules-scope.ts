@@ -16,16 +16,50 @@ export interface RuleScope {
 export type RuleRemovalAction = 'delete' | { rescopeTo: string };
 
 const HEADING_RE = /^##[ \t]+(.+?)[ \t]*\r?$/gm;
+// A top-level `- Mailbox:` bullet (no indent: a nested bullet inside a multi-line Do: is text, SEC-L8).
 // The list is everything after the colon up to the line end (a trailing \r is kept apart).
-const MAILBOX_LINE_RE = /^([ \t]*[-*][ \t]*Mailbox[ \t]*:[ \t]*)([^\r\n]*?)([ \t]*)(\r?)$/im;
+const MAILBOX_LINE_RE = /^([-*][ \t]*Mailbox[ \t]*:[ \t]*)([^\r\n]*?)([ \t]*)(\r?)$/gim;
+const FENCE_RE = /^[ \t]{0,3}(```|~~~)/;
+
+/** [start, end) offsets of fenced code blocks; an unclosed fence runs to the end (SEC-L8). */
+function fencedRanges(doc: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  let open: { at: number; marker: string } | null = null;
+  let offset = 0;
+  for (const line of doc.split('\n')) {
+    const m = FENCE_RE.exec(line);
+    if (m) {
+      if (!open) open = { at: offset, marker: m[1]! };
+      else if (m[1] === open.marker) {
+        ranges.push([open.at, offset + line.length]);
+        open = null;
+      }
+    }
+    offset += line.length + 1;
+  }
+  if (open) ranges.push([open.at, doc.length]);
+  return ranges;
+}
+
+const inside = (ranges: Array<[number, number]>, at: number): boolean => ranges.some(([s, e]) => at >= s && at < e);
 
 function sectionsOf(doc: string): Array<{ title: string; start: number; end: number }> {
-  const heads = [...doc.matchAll(new RegExp(HEADING_RE.source, 'gm'))];
+  const fences = fencedRanges(doc);
+  const heads = [...doc.matchAll(new RegExp(HEADING_RE.source, 'gm'))].filter((m) => !inside(fences, m.index!));
   return heads.map((m, i) => ({
     title: m[1]!,
     start: m.index!,
     end: i + 1 < heads.length ? heads[i + 1]!.index! : doc.length,
   }));
+}
+
+/** The section's first top-level Mailbox line outside fenced code, with its offset in the section. */
+function mailboxLine(section: string): RegExpExecArray | null {
+  const fences = fencedRanges(section);
+  for (const m of section.matchAll(new RegExp(MAILBOX_LINE_RE.source, 'gim'))) {
+    if (!inside(fences, m.index!)) return m as RegExpExecArray;
+  }
+  return null;
 }
 
 function parseIds(list: string): string[] {
@@ -37,7 +71,7 @@ function parseIds(list: string): string[] {
 
 export function parseRuleScopes(doc: string): RuleScope[] {
   return sectionsOf(doc).map((s) => {
-    const m = MAILBOX_LINE_RE.exec(doc.slice(s.start, s.end));
+    const m = mailboxLine(doc.slice(s.start, s.end));
     const ids = m ? parseIds(m[2]!) : [];
     return { ...s, mailboxes: ids.length > 0 ? [...new Set(ids)] : null };
   });
@@ -60,10 +94,9 @@ export function applyRemoval(doc: string, removedId: string, action: RuleRemoval
     }
     const next = remaining.length === 0 ? [(action as { rescopeTo: string }).rescopeTo] : remaining;
     const section = out.slice(rule.start, rule.end);
-    const edited = section.replace(
-      MAILBOX_LINE_RE,
-      (_all, lead: string, _list: string, _trail: string, cr: string) => `${lead}${next.join(', ')}${cr}`,
-    );
+    const m = mailboxLine(section)!;
+    const [all, lead, , , cr] = m as unknown as [string, string, string, string, string];
+    const edited = section.slice(0, m.index) + `${lead}${next.join(', ')}${cr}` + section.slice(m.index + all.length);
     out = out.slice(0, rule.start) + edited + out.slice(rule.end);
   }
   return out;
