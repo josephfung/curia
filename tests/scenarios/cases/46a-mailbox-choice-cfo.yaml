@@ -22,15 +22,32 @@ seed:
       identifier: dana.whitfield@work.example.test
 inbound:
   from: delegate
-  content: "The principal asked: draft a short email to Dana Whitfield, our CFO, asking for the Q3 budget numbers by Friday. Draft only."
+  # The coordinator hands over the contact ID it resolved, as a delegated brief does.
+  content: "The principal asked: draft a short email to Dana Whitfield (contact ID {{contact:cfo}}), our CFO, asking for the Q3 budget numbers by Friday. Draft only."
 tool_stubs:
   ceo-inbox-draft-compose:
     - match: { mailbox: null }
       return:
         needs_mailbox: true
         evidence:
-          - { mailbox: work, mailbox_label: Work, sent_count: 14, last_sent_at: "2026-11-09T15:02:00Z", recent_subjects: [Q3 forecast, Board deck numbers, Hiring plan], received_count: 22, domain_match: true }
+          - { mailbox: work, mailbox_label: Work, sent_count: 14, last_sent_at: "{{at:now-94h}}", recent_subjects: [Q3 forecast, Board deck numbers, Hiring plan], received_count: 22, domain_match: true }
           - { mailbox: personal, mailbox_label: Personal, sent_count: 0, last_sent_at: null, recent_subjects: [], received_count: 0, domain_match: false }
+  # Looking Dana up in the mail (agents/ceo-inbox.yaml: find a recipient with ceo-inbox-search)
+  # finds the work thread with her; every such search and listing is answered, never refused.
+  ceo-inbox-search:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, count: 0, drafts: [] }
+    - match: {}
+      return:
+        count: 2
+        messages:
+          - { id: msg-46a-1, threadId: thr-46a-q3, mailbox: work, mailbox_label: Work, from: [{ name: Dana Whitfield, email: dana.whitfield@work.example.test }], subject: "Re: Q3 forecast", date: "{{at:now-96h}}", snippet: "Updated forecast attached.", unread: false, folders: [INBOX] }
+          - { id: msg-46a-2, threadId: thr-46a-q3, mailbox: work, mailbox_label: Work, from: [{ email: principal@work.example.test }], subject: Q3 forecast, date: "{{at:now-94h}}", snippet: "Dana, can you send the updated forecast?", unread: false, folders: [SENT] }
+  ceo-inbox-list:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, count: 0, drafts: [] }
+    - match: {}
+      return: { count: 0, messages: [], has_more: false }
 expected_behaviors:
   - id: composes_in_work
     weight: critical
@@ -48,14 +65,20 @@ expected_behaviors:
   - id: account_not_mentioned
     weight: important
     description: >
-      The reply does not announce or ask about the account: the evidence all pointed to work, so
-      this was no judgement call. Saying the draft is saved is fine.
+      The reply does not name or ask about the account: the evidence all pointed to work, so this
+      was no judgement call. Any naming of the principal's account is a miss, in a sentence or in
+      a field: "in the Work mailbox", "from your work account", "(Work account)", "Mailbox: work".
+      Saying the draft is saved, and giving Dana's own address, is fine.
   - id: account_not_announced
     weight: important
-    description: The reply has no phrase that announces the account, such as "from your work account" (a code check beside the judged one).
+    description: >
+      The reply has no phrase or field that names the account, such as "from your work account"
+      or "Mailbox: Work" (a code check beside the judged one).
     check:
       reply_excludes:
         - '\b(from|in|using|via) (your |the )?(work|personal)( account| mailbox| email)?\b'
+        - '\b(work|personal)\**\s+(account|calendar|mailbox|inbox)\b'
+        - '\b(calendar|account|mailbox)\**\s*[:=]?\s*\**\s*`?(work|personal)\b'
 failure_modes:
   - Composes in the personal mailbox
   - Asks the principal which account to use although the evidence was one-sided

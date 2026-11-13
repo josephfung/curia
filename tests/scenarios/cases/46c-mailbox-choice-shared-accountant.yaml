@@ -29,8 +29,24 @@ tool_stubs:
       return:
         needs_mailbox: true
         evidence:
-          - { mailbox: work, mailbox_label: Work, sent_count: 6, last_sent_at: "2026-10-30T14:00:00Z", recent_subjects: [Corporate audit schedule, Audit PBC list], received_count: 9, domain_match: false }
-          - { mailbox: personal, mailbox_label: Personal, sent_count: 5, last_sent_at: "2026-11-03T01:10:00Z", recent_subjects: [Personal tax filing, RRSP slips], received_count: 7, domain_match: false }
+          - { mailbox: work, mailbox_label: Work, sent_count: 6, last_sent_at: "{{at:now-336h}}", recent_subjects: [Corporate audit schedule, Audit PBC list], received_count: 9, domain_match: false }
+          - { mailbox: personal, mailbox_label: Personal, sent_count: 5, last_sent_at: "{{at:now-250h}}", recent_subjects: [Personal tax filing, RRSP slips], received_count: 7, domain_match: false }
+  # Looking Priya up in the mail finds her in both accounts, as the evidence says; every search
+  # and listing is answered, never refused.
+  ceo-inbox-search:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, count: 0, drafts: [] }
+    - match: {}
+      return:
+        count: 2
+        messages:
+          - { id: msg-46c-1, threadId: thr-46c-tax, mailbox: personal, mailbox_label: Personal, from: [{ name: Priya Nair, email: priya.nair@ledger.example.test }], subject: "Re: Personal tax filing", date: "{{at:now-250h}}", snippet: "I'll need your RRSP slips before we file.", unread: false, folders: [INBOX] }
+          - { id: msg-46c-2, threadId: thr-46c-audit, mailbox: work, mailbox_label: Work, from: [{ name: Priya Nair, email: priya.nair@ledger.example.test }], subject: "Re: Corporate audit schedule", date: "{{at:now-336h}}", snippet: "The PBC list is attached.", unread: false, folders: [INBOX] }
+  ceo-inbox-list:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, count: 0, drafts: [] }
+    - match: {}
+      return: { count: 0, messages: [], has_more: false }
 expected_behaviors:
   - id: asks_which_account
     weight: critical

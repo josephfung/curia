@@ -25,6 +25,28 @@ tool_stubs:
         folder: DRAFTS
         drafts:
           - { id: draft-tim-1, mailbox: personal, mailbox_label: Personal, subject: Saturday, to: [{ name: Tim Okafor, email: tim.okafor@family.example.test }], snippet: "Still on for a beer Saturday?" }
+  # Searching the drafts finds the same one; reading it by id returns it (#2475 scenario run).
+  ceo-inbox-search:
+    - match: { folder: DRAFTS }
+      return:
+        count: 1
+        folder: DRAFTS
+        drafts:
+          - { id: draft-tim-1, mailbox: personal, mailbox_label: Personal, subject: Saturday, to: [{ name: Tim Okafor, email: tim.okafor@family.example.test }], snippet: "Still on for a beer Saturday?" }
+    - match: {}
+      return: { count: 0, messages: [] }
+  ceo-inbox-read:
+    - match: { draft_id: draft-tim-1 }
+      return:
+        id: draft-tim-1
+        threadId: thr-46d-sat
+        to: [{ name: Tim Okafor, email: tim.okafor@family.example.test }]
+        cc: []
+        bcc: []
+        subject: Saturday
+        body_plain: "Still on for a beer Saturday?"
+        body_html: "<p>Still on for a beer Saturday?</p>"
+        is_draft: true
   ceo-inbox-send-draft:
     - match: {}
       return: { message_id: msg-sent-tim-1, to: [tim.okafor@family.example.test], subject: Saturday }

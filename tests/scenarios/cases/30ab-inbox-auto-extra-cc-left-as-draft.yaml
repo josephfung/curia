@@ -83,6 +83,16 @@ tool_stubs:
     # The drain's batch call is triage mode (Step 3, R66); any other plain listing is refused here.
     - match: {}
       error: "Call ceo-inbox-list with triage: true for the drain batch (Step 3)."
+  # Looking up the sender or subject (prior correspondence) finds this batch's message and
+  # nothing older; every search is answered, never refused (#2475 scenario run).
+  ceo-inbox-search:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, count: 0, drafts: [] }
+    - match: {}
+      return:
+        count: 1
+        messages:
+          - { id: msg-30ab-intro, threadId: thr-30ab-intro, from: [{"name":"Tomas Reyes","email":"tomas.reyes@quarry.example.test"}], subject: "Thanks for the intro call", date: "{{at:now-90m}}", snippet: "Thanks for the time on the intro call today. I'll bring the printed proposal to Thursday's meeting.", unread: true, folders: [INBOX, UNREAD] }
   ceo-inbox-read:
     - match: { message_id: msg-30ab-intro }
       return:
