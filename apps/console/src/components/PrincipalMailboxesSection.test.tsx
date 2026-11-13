@@ -329,7 +329,7 @@ describe('PrincipalMailboxesSection', () => {
   it('shows the refusal detail when the add is refused', async () => {
     const base = mocks.respond;
     mocks.respond = (path, init) => init?.method === 'POST' && !path.endsWith('/test')
-      ? json({ refusal: 'cap_reached', detail: 'At most 1 mailbox(es) can be connected' }, 422)
+      ? json({ refusal: 'address_in_use', detail: 'pat@work.example.com is already a connected mailbox' }, 422)
       : base(path, init);
     await mount();
     await type('Mailbox id', 'third');
@@ -337,6 +337,6 @@ describe('PrincipalMailboxesSection', () => {
     await type('Grant ID', 'g');
     await click('Test');
     await click('Add mailbox');
-    expect(container.textContent).toContain('At most 1 mailbox(es) can be connected');
+    expect(container.textContent).toContain('pat@work.example.com is already a connected mailbox');
   });
 });

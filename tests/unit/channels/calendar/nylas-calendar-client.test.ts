@@ -387,3 +387,22 @@ describe('NylasCalendarClient — free/busy plumbing', () => {
     expect((caught as Error).message).not.toContain('joseph@example.test');
   });
 });
+
+describe('NylasCalendarClient.listEvents — expandRecurring (#2475)', () => {
+  function sdkWithList() {
+    const list = vi.fn().mockResolvedValue({ data: [] });
+    return { list, client: makeClientWith({ events: { list } as unknown as NylasCalendarLike['events'] }) };
+  }
+
+  it('asks Nylas for every occurrence when expandRecurring is set', async () => {
+    const { list, client } = sdkWithList();
+    await client.listEvents('cal_1', '2026-11-20T00:00:00Z', '2026-11-21T00:00:00Z', { expandRecurring: true });
+    expect((list.mock.calls[0]![0] as { queryParams: Record<string, unknown> }).queryParams).toMatchObject({ expandRecurring: true });
+  });
+
+  it('leaves the query unchanged without it', async () => {
+    const { list, client } = sdkWithList();
+    await client.listEvents('cal_1', '2026-11-20T00:00:00Z', '2026-11-21T00:00:00Z');
+    expect(list.mock.calls[0]![0] as { queryParams: Record<string, unknown> }).not.toHaveProperty('queryParams.expandRecurring');
+  });
+});

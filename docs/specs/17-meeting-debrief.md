@@ -43,7 +43,7 @@ Two-stage pipeline on each detection run (3x/day at `0 7,12,16`):
 ### Stage 1: Calendar scan (deterministic)
 
 1. Call `calendar-list-events` for events scheduled between now and end-of-day (forward scan, not backward)
-2. Skip events already seen: check `config-store` for a `seen:<eventId>` key (set by previous detection runs for both YES and NO judgments)
+2. Skip events already seen: check `config-store` for a `seen:<meetingKey>` key (set by previous detection runs for both YES and NO judgments; the meeting key is below)
 3. Extract attendee context (names, roles, org affiliations via entity context enrichment) and recurrence pattern
 4. Pass candidates to Stage 2 with: title, description, duration, attendee list, recurrence pattern, and enriched entity context for known attendees
 
@@ -58,8 +58,8 @@ Context available:
 - General CEO preferences stored as KG facts on the CEO's entity
 
 Judgment outputs:
-- **YES** → schedule a debrief task (see §3) and write `seen:<eventId>` to `config-store`
-- **NO** → write `seen:<eventId>` to `config-store` only; no task created. On a genuine fence, the judgment leans YES.
+- **YES** → schedule a debrief task (see §3) and write `seen:<meetingKey>` to `config-store`
+- **NO** → write `seen:<meetingKey>` to `config-store` only; no task created. On a genuine fence, the judgment leans YES.
 
 There is no DEFER outcome. The LLM prompt will include guidance on what typically warrants follow-up (strategic discussions, partner meetings, board-adjacent, crisis comms) and what typically doesn't (personal appointments, routine recurring socials). But these are guidelines, not rules — the LLM makes the final call.
 
@@ -83,7 +83,8 @@ Each meeting that warrants a debrief is one task:
   prompt wake (the CEO then owes takeaways). This drives the digest's three-way
   grouping: a scheduled-but-unprompted debrief shows under "What I'm working on";
   once prompted it moves to "For you to do".
-- `intent_anchor` carries the calendar `eventId` and the meeting's scheduled end.
+- `intent_anchor` carries the meeting key and the meeting's scheduled end (an anchor
+  written before #2475 carries the calendar `eventId`, which is used as the key).
   It is delivered to the agent on each wake-up (system-prompt injection) but is
   not returned by `task-list`, so it stays out of the CEO's digest.
 - The lifecycle is a chain of `wake_at` re-schedules on the one task row:
@@ -112,15 +113,28 @@ event at the prompt wake.
 Three keys, all CEO-invisible; the lifecycle phase is derived from them rather
 than stored as data:
 
-- `seen:<eventId>` — detection dedup; set for every judged event (YES and NO).
-- `prompted:<eventId>` — set when the prompt is sent (also the layer-2 duplicate
+- `seen:<meetingKey>` — detection dedup; set for every judged event (YES and NO).
+- `prompted:<meetingKey>` — set when the prompt is sent (also the layer-2 duplicate
   guard, below). Absent at a wake ⇒ scheduled phase; present ⇒ prompted.
-- `reminded:<eventId>` — set when the one reminder is sent. With `prompted:`
+- `reminded:<meetingKey>` — set when the one reminder is sent. With `prompted:`
   present: absent ⇒ reminder phase; present ⇒ expiry phase.
+
+#### The meeting key (#2475)
+
+With several principal mailboxes, one meeting can sit on two of the principal's
+calendars (an invite to both accounts, or one calendar shared into the other), each
+copy with its own grant-scoped event id. `calendar-list-events` lists such a meeting
+once and gives every event a `meetingKey`: `ical-` plus a hash of the event's iCal UID
+and its occurrence (the original start of a recurring instance, else its start), or
+the event id when it has no UID. Every copy of a meeting has the same key, and the
+instances of a recurring series have different ones, so a weekly meeting is still
+debriefed every week. The guards key on it, so a meeting is judged and debriefed
+once, whichever copy a scan sees. The prompt wake re-validates by finding the event
+whose `meetingKey` (or, for an older anchor, `id`) matches.
 
 #### Cross-tick idempotency via `config-store`
 
-The `prompted:<eventId>` key is the agent's layer-2 "have I prompted for this
+The `prompted:<meetingKey>` key is the agent's layer-2 "have I prompted for this
 meeting?" guard, independent of the task representation: before posting a Bullpen
 debrief prompt the agent checks it, and after a successful post it writes the key
 (with the thread ID). Even if a future regression resends a wake or re-creates a
@@ -196,7 +210,7 @@ gets in writes-as mode ([spec 13](13-office-identity.md)). The agent prompt name
 and quotes no sample message, because the model copies a sample word for word.
 
 After sending, the agent:
-1. Writes the `prompted:<eventId>` guard to `config-store` (namespace `"debrief"`) with the Bullpen thread_id and timestamp
+1. Writes the `prompted:<meetingKey>` guard to `config-store` (namespace `"debrief"`) with the Bullpen thread_id and timestamp
 2. Flips the debrief task to `owner: "ceo"` and schedules the reminder via `wake_at` (task-update)
 
 > **Note (tasks migration, #839):** The earlier design used `claim-conversation` + scheduler-report task progress here. These are superseded — see the Historical appendix.
@@ -287,7 +301,7 @@ These are out of scope for this feature but identified during design:
 ## 10. Verification Plan
 
 ### Unit tests
-- Detection pipeline: mock calendar responses, verify dedup via `seen:<eventId>` config-store key, verify YES schedules a task and NO creates only the seen guard
+- Detection pipeline: mock calendar responses, verify dedup via `seen:<meetingKey>` config-store key, verify YES schedules a task and NO creates only the seen guard
 - Conversation claim registry: claim lifecycle (create, check, expire, release), fallback routing, survives simulated restart
 - State management: task lifecycle (create, owner flip, child tasks, cancel on reply), config-store phase guard reads/writes
 - `debrief-status` skill: reads progress correctly, reports pending and completed

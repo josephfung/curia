@@ -12,7 +12,6 @@ import { grantLookupFailureDetail, grantSafeErrorFields, mayCarryGrantId } from 
 import type { MailboxCalendarHooks } from './calendar-hooks.js';
 import {
   MAILBOX_ID_RE,
-  MAX_LIVE_MAILBOXES,
   RESERVED_MAILBOX_IDS,
   RemovedMailboxError,
   UnknownMailboxError,
@@ -22,7 +21,7 @@ import {
 export type AddMailboxRefusal =
   | 'bad_id'
   | 'id_taken'
-  | 'cap_reached'
+  | 'migration_pending'
   | 'not_google'
   | 'grant_in_use'
   | 'address_in_use'
@@ -113,8 +112,6 @@ export interface PrincipalMailboxAdminDeps {
   logger: Logger;
   /** Calendar side of add and remove (#2475, D7). Absent: calendars are left alone. */
   calendars?: Pick<MailboxCalendarHooks, 'registerHome' | 'listForMailbox'>;
-  /** Test seam: the live-mailbox cap. Defaults to MAX_LIVE_MAILBOXES. */
-  maxLiveMailboxes?: number;
 }
 
 // The flat keys ceo-inbox still reads (#2409).
@@ -131,11 +128,9 @@ function toView(r: PrincipalMailboxRecord): PrincipalMailboxView {
 
 export class PrincipalMailboxAdmin {
   private readonly log: Logger;
-  private readonly cap: number;
 
   constructor(private readonly deps: PrincipalMailboxAdminDeps) {
     this.log = deps.logger.child({ component: 'principal-mailbox-admin' });
-    this.cap = deps.maxLiveMailboxes ?? MAX_LIVE_MAILBOXES;
   }
 
   async add(input: {
@@ -158,14 +153,12 @@ export class PrincipalMailboxAdmin {
     }
     if (this.deps.isFallbackActive && (await this.deps.isFallbackActive())) {
       return refuse(
-        'cap_reached',
+        'migration_pending',
         'The existing mailbox is still being moved into the list; add another once it shows here',
       );
     }
+    // No cap on live mailboxes (#2475, Part 4): every tool works across several.
     const live = await this.deps.store.listLive();
-    if (live.length >= this.cap) {
-      return refuse('cap_reached', `At most ${this.cap} mailbox(es) can be connected`);
-    }
 
     let grant: { email: string; provider: string };
     try {

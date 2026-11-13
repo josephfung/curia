@@ -332,12 +332,15 @@ export class NylasCalendarClient {
    * Nylas v3 rejects any page larger than 200 (`limit must be lower than or
    * equal to 200`), so a bigger total is satisfied by paging with `pageToken`
    * rather than by asking for a bigger page (#1798).
+   *
+   * `opts.expandRecurring` asks Nylas for each occurrence of a recurring series in the range
+   * instead of the series' master event only (availability needs every occurrence, #2475).
    */
   async listEvents(
     calendarId: string,
     timeMin: string,
     timeMax: string,
-    opts?: { limit?: number },
+    opts?: { limit?: number; expandRecurring?: boolean },
   ): Promise<NylasCalendarEvent[]> {
     this.log.debug({ calendarId, timeMin, timeMax }, 'Listing events');
     const startUnix = this.toUnixSeconds(timeMin, 'timeMin');
@@ -376,6 +379,8 @@ export class NylasCalendarClient {
           start: String(startUnix),
           end: String(endUnix),
           limit: Math.min(wanted - raw.length, NYLAS_MAX_PAGE_SIZE),
+          // Sent only when asked, so existing listings are byte-for-byte unchanged.
+          ...(opts?.expandRecurring ? { expandRecurring: true } : {}),
           // Omitted on the first request — Nylas treats an empty page_token as invalid.
           ...(pageToken ? { pageToken } : {}),
         };

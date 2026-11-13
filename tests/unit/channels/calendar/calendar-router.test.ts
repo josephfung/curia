@@ -182,13 +182,29 @@ describe('CalendarRouter.homeCalendars', () => {
       ],
     });
     const homes = await router.homeCalendars();
-    expect(homes.map(({ mailboxId, calendarId, label, removed }) => ({ mailboxId, calendarId, label, removed }))).toEqual([
-      { mailboxId: 'work', calendarId: 'grant-home-work', label: 'Work', removed: false },
-      { mailboxId: 'personal', calendarId: 'ceo@personal.example.com', label: 'Personal', removed: false },
-      { mailboxId: 'old', calendarId: 'old-home', label: 'Old', removed: true },
+    expect(homes.found.map(({ mailboxId, calendarId, label }) => ({ mailboxId, calendarId, label }))).toEqual([
+      { mailboxId: 'work', calendarId: 'grant-home-work', label: 'Work' },
+      { mailboxId: 'personal', calendarId: 'ceo@personal.example.com', label: 'Personal' },
     ]);
-    expect(homes[0]!.client).toBe(workClient);
-    expect(homes[2]!.client).toBeNull();
+    expect(homes.found[0]!.client).toBe(workClient);
+    expect(homes.removed).toEqual([{ mailboxId: 'old', calendarId: 'old-home', label: 'Old' }]);
+    expect(homes.failures).toEqual([]);
+  });
+
+  it('a live mailbox whose home calendar cannot be found is a failure; the others are still found', async () => {
+    const router = routerFixture({
+      mailboxes: [work, personal],
+      clients: { work: client('work', [{ id: 'home-work', isPrimary: true }]), personal: client('personal') },
+    });
+    const homes = await router.homeCalendars();
+    expect(homes.found.map((h) => h.mailboxId)).toEqual(['work']);
+    expect(homes.failures.map(({ mailboxId, code }) => ({ mailboxId, code }))).toEqual([{ mailboxId: 'personal', code: 'no_home_calendar' }]);
+  });
+
+  it('a calendar routed to a removed mailbox names that mailbox on the error', async () => {
+    const router = routerFixture({ clients: { work: client('work') }, removed: { old: 'Old' }, registry: { 'cal-old': { principalMailboxId: 'old' } } });
+    const err = await routeError(router.route('cal-old'));
+    expect(err.removedMailbox).toEqual({ id: 'old', label: 'Old' });
   });
 });
 

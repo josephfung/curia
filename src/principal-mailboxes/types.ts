@@ -21,7 +21,6 @@ export const MAILBOX_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  * the migrated mailbox (R61), so a real mailbox with that id would claim them.
  */
 export const RESERVED_MAILBOX_IDS = new Set(['primary', 'default', FALLBACK_MAILBOX_ID]);
-export const MAX_LIVE_MAILBOXES = 1; // lifted in Task 33
 
 /** The id names no mailbox, live or removed. Never a reason to fall back to the default. */
 export class UnknownMailboxError extends Error {

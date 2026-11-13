@@ -141,6 +141,9 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
       mailbox.mailbox === undefined || mailboxId === null || mailboxId === undefined || mailboxId === mailbox.mailbox;
 
     const targets: RoutedCalendar[] = [];
+    // Mailboxes a registered row names that have been removed: they are no evidence of a second
+    // live mailbox below (L2), and their rows' own route failures are already counted here.
+    const removedMailboxIds = new Set<string>();
     for (const cal of calendars) {
       try {
         targets.push(await router.route(cal.nylasCalendarId, mailbox.mailbox));
@@ -149,6 +152,9 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
           err instanceof CalendarRouteError ? { code: err.code } : grantSafeErrorFields(err),
           'calendar-holds-sweep: could not route a calendar to its mailbox, skipping',
         );
+        if (err instanceof CalendarRouteError && err.code === 'mailbox_removed' && cal.principalMailboxId) {
+          removedMailboxIds.add(cal.principalMailboxId);
+        }
         if (inScope(cal.principalMailboxId)) calendarErrors++;
       }
     }
@@ -168,9 +174,11 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
         // failure there changes nothing (M2).
         const seen = new Set<string>([
           ...targets.map((t) => t.mailboxId),
-          ...calendars.flatMap((c) => (c.principalMailboxId ? [c.principalMailboxId] : [])),
+          ...calendars.flatMap((c) => (c.principalMailboxId && !removedMailboxIds.has(c.principalMailboxId) ? [c.principalMailboxId] : [])),
         ]);
-        const counted = seen.size > 1;
+        // A sweep scoped to one mailbox counts the skipped home pass only when that mailbox is one
+        // the pass would have covered (L1): another account's failure is not this sweep's.
+        const counted = seen.size > 1 && (mailbox.mailbox === undefined || seen.has(mailbox.mailbox));
         if (counted) calendarErrors++;
         ctx.log.error({ ...grantSafeErrorFields(err), counted }, 'calendar-holds-sweep: could not list the mailboxes; home pass skipped');
       }

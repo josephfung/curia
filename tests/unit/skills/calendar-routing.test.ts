@@ -178,11 +178,54 @@ describe('calendar tools route each calendar through its mailbox', () => {
     }
   });
 
-  it('find-free-time needs a mailbox for an unregistered calendar when two exist', async () => {
-    const { work, router } = setup();
-    const err = errorOf(await run(new CalendarFindFreeTimeHandler(), ctx(router, { calendarIds: ['someone@example.org'], timeMin: START, timeMax: END })));
-    expect(err).toContain('pass mailbox');
-    expect(work.getFreeBusy).not.toHaveBeenCalled();
+  it("find-free-time reads an unregistered person's free/busy through the default mailbox when nothing points elsewhere, and says so", async () => {
+    const { work, personal, router } = setup();
+    const r = await run(new CalendarFindFreeTimeHandler(), ctx(router, { calendarIds: ['someone@example.org'], timeMin: START, timeMax: END }));
+    expect(r, JSON.stringify(r)).toMatchObject({ success: true });
+    expect(work.getFreeBusy).toHaveBeenCalledWith(['someone@example.org'], START, END);
+    expect(personal.getFreeBusy).not.toHaveBeenCalled();
+    if (r.success) {
+      expect((r.data as { freebusy_via: unknown }).freebusy_via).toEqual([
+        { calendarId: 'someone@example.org', mailbox: 'work', mailbox_label: 'Work', chosen_by: 'default' },
+      ]);
+    }
+  });
+
+  it("find-free-time reads a colleague's free/busy through the mailbox on the same domain", async () => {
+    const { work, personal, router } = setup({
+      mailboxes: [
+        calendarMailbox('personal', 'Personal', 'ceo@gmail.com', true),
+        calendarMailbox('work', 'Work', 'ceo@work.example.com'),
+      ],
+    });
+    const r = await run(new CalendarCheckConflictsHandler(), ctx(router, { calendarIds: ['cfo@work.example.com'], proposedStart: START, proposedEnd: END }));
+    expect(r, JSON.stringify(r)).toMatchObject({ success: true, data: { clear: true } });
+    expect(work.getFreeBusy).toHaveBeenCalledWith(['cfo@work.example.com'], START, END);
+    expect(personal.getFreeBusy).not.toHaveBeenCalled();
+    if (r.success) expect((r.data as { freebusy_via: Array<{ chosen_by: string }> }).freebusy_via[0]!.chosen_by).toBe('domain');
+  });
+
+  it("find-free-time reads someone's free/busy through the mailbox with a history with them", async () => {
+    const work = calendarMailbox('work', 'Work', 'ceo@work.example.com', true);
+    const personal = calendarMailbox('personal', 'Personal', 'ceo@gmail.com');
+    const s = setup({
+      mailboxes: [work, personal],
+      evidence: async () => [
+        { mailbox: 'work', mailbox_label: 'Work', sent_count: 0, received_count: 0, domain_match: false },
+        { mailbox: 'personal', mailbox_label: 'Personal', sent_count: 3, received_count: 1, domain_match: false },
+      ],
+    });
+    const r = await run(new CalendarFindFreeTimeHandler(), ctx(s.router, { calendarIds: ['sister@gmail.com'], timeMin: START, timeMax: END }));
+    expect(r, JSON.stringify(r)).toMatchObject({ success: true });
+    expect(s.personal.getFreeBusy).toHaveBeenCalledWith(['sister@gmail.com'], START, END);
+    expect(s.work.getFreeBusy).not.toHaveBeenCalled();
+    if (r.success) expect((r.data as { freebusy_via: Array<{ chosen_by: string }> }).freebusy_via[0]!.chosen_by).toBe('history');
+  });
+
+  it('find-free-time still refuses an unknown mailbox', async () => {
+    const { router } = setup();
+    const err = errorOf(await run(new CalendarFindFreeTimeHandler(), ctx(router, { calendarIds: ['someone@example.org'], timeMin: START, timeMax: END, mailbox: 'nope' })));
+    expect(err).toContain('Unknown mailbox');
   });
 
   it('find-free-time asks each mailbox for its own calendars', async () => {
