@@ -778,7 +778,7 @@ export async function createScenarioHarness(
       unavailable,
       activated: activatedTools,
       discovered: discoverableTools(stack.toolRegistry, stack.skillRegistry, name),
-      missingCapabilities: tool => stack.executionLayer.unavailableCapabilities(tool),
+      missingCapabilities: tool => stack.unservableCapabilities(tool),
     });
     reachableByAgent.set(name, reach.reachable);
     for (const tool of reach.unavailable) unservable.add(tool);

@@ -19,6 +19,7 @@ import { DATE_RESOLVE_GUARDRAIL } from '../../src/agents/prompts/date-resolve-gu
 import { formatWhoYouServeBlock } from '../../src/agents/principal-contact-block.js';
 import { compileSecurityContextBlock, resolveSecurityThresholds } from '../../src/security/security-context.js';
 import { createTestModeStack, TEST_MODE_ABSENT_CAPABILITIES, type TestModeStack } from '../../src/startup/test-mode-stack.js';
+import { NO_MAIL_CLIENT } from '../../src/startup/test-mode-sends.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -231,6 +232,15 @@ describeIf('test-mode stack', () => {
         .map(cap => `${m.name}: ${cap}`));
       expect(undocumented).toEqual([]);
       expect(stack.executionLayer.unavailableCapabilities('ceo-inbox-send-draft')).toEqual([]);
+    });
+
+    it('still reports the mail-reading ceo-inbox tools as unservable, so an unstubbed call is refused', () => {
+      const inbox = stack.disabledTools['ceo-inbox'] ?? [];
+      expect(inbox.find(d => d.tool === 'ceo-inbox-read')?.missing).toContain(NO_MAIL_CLIENT);
+      expect(inbox.find(d => d.tool === 'ceo-inbox-search')?.missing).toContain(NO_MAIL_CLIENT);
+      // send-draft gets its mail through the gateway (the recording mailbox in a through_gateway run).
+      expect(inbox.find(d => d.tool === 'ceo-inbox-send-draft')).toBeUndefined();
+      expect(stack.unservableCapabilities('ceo-inbox-list')).toContain(NO_MAIL_CLIENT);
     });
 
     it('withholds env credentials from a skill that calls Nylas directly', async () => {
