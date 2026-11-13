@@ -390,8 +390,9 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     }
 
     // R67 (SF-I7): a mailbox that keeps failing must not hide behind the others' success. Count
-    // its consecutive failed runs; at SENT_OBSERVE_FAILED_RUNS_LIMIT the job fails, so the
-    // scheduler's failure handling and the triage health check both see it.
+    // its consecutive failed runs; at SENT_OBSERVE_FAILED_RUNS_LIMIT this tool result is a failure and
+    // the principal_mailbox_triage health check reads the count. The scheduler job itself does not
+    // fail: its outcome comes from the agent turn, not from this result.
     const failedIds = new Set(errors.map((e) => e.mailbox));
     const persistent: string[] = [];
     if (ctx.entityMemory) {
