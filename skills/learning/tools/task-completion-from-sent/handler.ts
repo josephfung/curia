@@ -42,7 +42,7 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
     try {
       return await this.runCompletion(ctx);
     } catch (err) {
-      ctx.log.error({ err }, 'task-completion-from-sent: unexpected failure');
+      ctx.log.error({ ...grantSafeErrorFields(err) }, 'task-completion-from-sent: unexpected failure');
       return {
         success: false,
         error: `task-completion-from-sent failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -131,7 +131,7 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
           hasSubtasks = children.length > 0;
         } catch (err) {
           ctx.log.warn(
-            { err, taskId: task.id },
+            { ...grantSafeErrorFields(err), taskId: task.id },
             'task-completion-from-sent: subtask lookup failed — treating as high risk',
           );
           hasSubtasks = true;
