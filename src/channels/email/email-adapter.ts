@@ -396,6 +396,15 @@ export class EmailAdapter implements Channel {
   }
 
   /**
+   * True once this adapter delivers outbound.notification events: it is the primary account
+   * ('curia', the only one that handles them) and its outbound side has subscribed. Before that
+   * a published notification reaches no one.
+   */
+  deliversNotifications(): boolean {
+    return this.outboundSubscribed && this.config.accountId === 'curia';
+  }
+
+  /**
    * Subscribe this account's outbound side: replies the dispatcher relays (outbound.message)
    * and system notifications (outbound.notification). start() calls it before polling. The
    * test-mode recording stack (#2312) calls it alone, against recording clients, so a
