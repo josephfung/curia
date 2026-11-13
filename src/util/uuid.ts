@@ -112,3 +112,19 @@ const UUID_RE = new RegExp(`^${UUID_PATTERN}$`);
 export function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_RE.test(value);
 }
+
+/**
+ * The canonical spelling (lowercase 8-4-4-4-12) of a UUID written in any form Postgres's `uuid`
+ * type reads as the same value: either case, optional surrounding braces, and a hyphen after any
+ * group of four hex digits or none at all. Null when the value is no UUID in any of those forms.
+ *
+ * Compare ids by this, never by the raw string: `…ABC…` and `{…abc…}` are stored as the same
+ * row, so a raw `===` lets a spelling variant pass for a different contact (R107).
+ */
+export function canonicalUuid(value: string): string | null {
+  let s = value.trim();
+  if (s.startsWith('{') && s.endsWith('}')) s = s.slice(1, -1);
+  if (!/^[0-9a-fA-F]{4}(?:-?[0-9a-fA-F]{4}){7}$/.test(s)) return null;
+  const hex = s.replace(/-/g, '').toLowerCase();
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}

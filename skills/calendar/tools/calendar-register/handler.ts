@@ -23,6 +23,7 @@ import type { ContactCalendar } from '../../../../src/contacts/calendar-types.js
 import { grantSafeErrorFields, mayCarryGrantId } from '../../../../src/principal-mailboxes/error-fields.js';
 import { CalendarRouteError, PRIMARY_CALENDAR_ALIAS } from '../../../../src/channels/calendar/calendar-router.js';
 import { calendarRouteErrorMessage, readCalendarMailbox } from '../../../_shared/calendar-route.js';
+import { canonicalUuid } from '../../../../src/util/uuid.js';
 
 export class CalendarRegisterHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -63,7 +64,11 @@ export class CalendarRegisterHandler implements ToolHandler {
     const mailboxInput = readCalendarMailbox(ctx.input);
     if (!mailboxInput.ok) return { success: false, error: mailboxInput.error };
 
-    const resolvedContactId = contact_id.trim();
+    // Canonical when it is a UUID (R107): Postgres stores `ABC…` and `{abc…}` as the same contact,
+    // so the principal check below and the stored row must see one spelling.
+    const resolvedContactId = canonicalUuid(contact_id) ?? contact_id.trim();
+    const principalId = ctx.calendarRouter.principalContactId;
+    const forPrincipal = resolvedContactId === (canonicalUuid(principalId) ?? principalId.trim());
 
     let placement: { mailboxId: string | null; owner: boolean };
     try {
@@ -80,8 +85,12 @@ export class CalendarRegisterHandler implements ToolHandler {
     // One of the principal's calendars decides routing and is read as their events, so it must be
     // one the mailbox's account can see (SEC-L5): an arbitrary id (someone's public calendar) is
     // refused. Other contacts' calendars are read as free/busy, which needs no visibility.
-    if (resolvedContactId === ctx.calendarRouter.principalContactId && placement.mailboxId !== null && !placement.owner) {
-      const visible = await this.visibleToMailbox(ctx, nylas_calendar_id, placement.mailboxId);
+    // While the deferred-migration fallback is served the row gets no mailbox (null), but the
+    // calendar is still read through the sole live mailbox, so it is checked there (R107).
+    if (forPrincipal && !placement.owner) {
+      const through = placement.mailboxId ?? (await this.soleLiveMailbox(ctx, mailboxInput.mailbox));
+      if (typeof through !== 'string') return { success: false, error: through.error };
+      const visible = await this.visibleToMailbox(ctx, nylas_calendar_id, through);
       if (visible !== true) return { success: false, error: visible };
     }
 
@@ -130,6 +139,23 @@ export class CalendarRegisterHandler implements ToolHandler {
       ctx.log.error({ ...safeErrFields(err), contactId: resolvedContactId }, 'Failed to register calendar');
       return { success: false, error: `Failed to register calendar: ${message}` };
     }
+  }
+
+  /**
+   * The mailbox a placement with no registry mailbox (the deferred-migration fallback) is read
+   * through: the stated one, else the sole live one. Anything else refuses (nothing registered):
+   * the visibility check must not be skipped for want of an account to check against.
+   */
+  private async soleLiveMailbox(ctx: ToolContext, hint: string | undefined): Promise<string | { error: string }> {
+    try {
+      const live = await ctx.calendarRouter!.liveMailboxes();
+      const chosen = hint !== undefined ? live.find((m) => m.id === hint) : live.length === 1 ? live[0] : undefined;
+      if (chosen) return chosen.id;
+      ctx.log.warn({ liveCount: live.length }, 'calendar-register: no single mailbox to check the calendar against; refused');
+    } catch (err) {
+      ctx.log.warn({ ...safeErrFields(err) }, 'calendar-register: could not list the live mailboxes; refused');
+    }
+    return { error: 'Could not tell which account to check the calendar against, so nothing was registered. Try again shortly.' };
   }
 
   /**
