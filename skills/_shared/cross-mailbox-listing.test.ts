@@ -21,7 +21,7 @@ const fetchPage = (client: CeoNylasClient) => (client as unknown as { listMessag
 
 describe('listAcrossMailboxes — page tokens (S2)', () => {
   it('names a live mailbox the token marks finished instead of silently leaving it out', async () => {
-    const token = readPageToken({ page_token: encodePageToken({ work: { cursor: null, skip: 0 }, personal: null }, 5) }, 5);
+    const token = readPageToken({ page_token: encodePageToken({ work: { cursor: null, skip: 0 }, personal: null }, 5, 's') }, 5, 's');
     expect(token.ok).toBe(true);
     if (!token.ok) return;
     const r = await listAcrossMailboxes([target('work', [{ id: 'w1', date: 2 }]), target('personal', [{ id: 'p1', date: 3 }])], token.cursors, {
@@ -34,10 +34,10 @@ describe('listAcrossMailboxes — page tokens (S2)', () => {
   });
 
   it('a mailbox id like `constructor` reads only the token\'s own entries', async () => {
-    const token = readPageToken({ page_token: encodePageToken({ work: { cursor: null, skip: 0 } }, 5), mailbox: 'constructor' }, 5);
+    const token = readPageToken({ page_token: encodePageToken({ work: { cursor: null, skip: 0 } }, 5, 's'), mailbox: 'constructor' }, 5, 's');
     // The named mailbox is not in the token: refused, not matched through the prototype.
     expect(token.ok).toBe(false);
-    const fresh = readPageToken({ page_token: encodePageToken({ work: { cursor: null, skip: 0 } }, 5) }, 5);
+    const fresh = readPageToken({ page_token: encodePageToken({ work: { cursor: null, skip: 0 } }, 5, 's') }, 5, 's');
     if (!fresh.ok) throw new Error('expected a token');
     const r = await listAcrossMailboxes([target('constructor', [{ id: 'c1', date: 1 }])], fresh.cursors, {
       limit: 5, need: 6, pageCap: 1, fetchPage, keep: () => true,
@@ -64,7 +64,7 @@ describe('per-mailbox failures are logged (SF4, SF15)', () => {
 
   it('an undecodable page token is logged by error name and length, never its text', () => {
     const warn = vi.fn();
-    const r = readPageToken({ page_token: 'not-a-token-xyz' }, 5, { log: { warn } as never, tool: 'ceo-inbox-list' });
+    const r = readPageToken({ page_token: 'not-a-token-xyz' }, 5, 's', { log: { warn } as never, tool: 'ceo-inbox-list' });
     expect(r.ok).toBe(false);
     expect(warn).toHaveBeenCalledWith(expect.objectContaining({ tool: 'ceo-inbox-list', tokenLength: 15 }), expect.stringMatching(/could not be decoded/));
     expect(JSON.stringify(warn.mock.calls)).not.toContain('not-a-token-xyz');
