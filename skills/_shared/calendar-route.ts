@@ -11,6 +11,7 @@ import { MissingNylasApiKeyError } from '../../src/principal-mailboxes/types.js'
 import { grantSafeErrorFields, mayCarryGrantId } from '../../src/principal-mailboxes/error-fields.js';
 import type { PrincipalMailboxView } from '../../src/principal-mailboxes/service.js';
 import { readMailboxInput } from './principal-mailbox-client.js';
+import { EVIDENCE_TIMEOUT_MS, evidenceWithin, needsMailboxFailure } from '../../src/channels/calendar/needs-mailbox.js';
 
 /** `fixable`: a CalendarRouteError (the caller can fix it by passing something else), not an outage. */
 export type RouteOutcome = { ok: true; routed: RoutedCalendar } | { ok: false; error: string; fixable: boolean };
@@ -105,7 +106,7 @@ export async function gateCalendarWrite(
   try {
     live = await router.liveMailboxes();
     // The principal check costs a registry read, so a single-mailbox install never makes it.
-    if (live.length > 1) principal = await router.isPrincipalCalendar(calendarId);
+    if (live.length > 1) principal = await router.isPrincipalCalendar(calendarId, live);
   } catch (err) {
     logRouteFailure(ctx, tool, err);
     return { kind: 'error', error: calendarRouteErrorMessage(err), fixable: err instanceof CalendarRouteError };
@@ -131,17 +132,31 @@ export async function gateCalendarWrite(
           `Use a calendar of mailbox "${mailbox}" (calendarId "primary" is its home calendar), or pass mailbox "${route.routed.mailboxId}".`),
     };
   }
+  // A calendar nothing places, written through a stated mailbox: refused when another account
+  // owns it, so an invitation never goes out as an account the calendar is only shared into (SEC-L1).
+  if (multi && !principal && mailbox !== undefined) {
+    let owner: PrincipalMailboxView | undefined;
+    try {
+      owner = await router.ownedElsewhere(calendarId, route.routed.mailboxId);
+    } catch (err) {
+      logRouteFailure(ctx, tool, err);
+      return { kind: 'error', error: calendarRouteErrorMessage(err), fixable: err instanceof CalendarRouteError };
+    }
+    if (owner) {
+      ctx.log.warn({ tool, code: 'calendar_mailbox_mismatch', mailboxId: owner.id, requestedMailboxId: mailbox }, `${tool}: calendar is owned by another mailbox`);
+      return {
+        kind: 'error',
+        fixable: true,
+        error:
+          `calendar_mailbox_mismatch: calendar "${calendarId}" is owned by mailbox "${owner.id}" (${owner.label}), not "${mailbox}". ` +
+          `Nothing was changed. Pass mailbox "${owner.id}".`,
+      };
+    }
+  }
   return { kind: 'proceed', routed: route.routed, multi, principal, live };
 }
 
-/** Attendee addresses for mailbox evidence: lower-cased, de-duplicated, the principal's own mailboxes left out. */
-export function evidenceRecipients(addresses: string[], live: PrincipalMailboxView[]): string[] {
-  const own = new Set(live.map((m) => m.address.trim().toLowerCase()).filter((a) => a !== ''));
-  return [...new Set(addresses.map((a) => a.trim().toLowerCase()))].filter((a) => a.includes('@') && !own.has(a));
-}
-
-/** How long a calendar write waits for attendee evidence before leaving it out (R85). */
-export const EVIDENCE_TIMEOUT_MS = 5_000;
+export { evidenceRecipients, EVIDENCE_TIMEOUT_MS, summarizeEvidence } from '../../src/channels/calendar/needs-mailbox.js';
 
 /**
  * Per-mailbox evidence for these attendees (D5), or null when it could not be computed. Never
@@ -155,46 +170,24 @@ export async function attendeeEvidence(
 ): Promise<CountsOnlyEvidence[] | null> {
   const router = ctx.calendarRouter;
   if (!router) return null;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    // A short deadline (R85): evidence runs live mail searches, and a booking that already
-    // succeeded must never be reported as a failed (and retried) tool call because of it.
-    const deadline = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        const err = new Error(`mailbox evidence timed out after ${timeoutMs}ms`);
-        err.name = 'TimeoutError';
-        reject(err);
-      }, timeoutMs);
-    });
-    return await Promise.race([router.evidence(recipients), deadline]);
-  } catch (err) {
-    ctx.log.warn({ tool, ...grantSafeErrorFields(err) }, `${tool}: mailbox evidence failed or timed out; left out`);
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  return evidenceWithin(router, ctx.log, tool, recipients, timeoutMs);
 }
 
 /**
- * The needs_mailbox result for a write that created nothing: the choices and, when there are
- * attendees, the evidence for each account (D5). A successful result, as draft-compose's is,
- * so the evidence reaches the model; `created: false` says nothing was written.
+ * The needs_mailbox result for a write that created nothing: a failure (R102) naming the choices
+ * and, when there are attendees, the evidence for each account (D5). A success would be recorded
+ * as a sent invite and a booking.
  */
 export async function needsMailboxResult(
   ctx: ToolContext,
   tool: string,
   mailboxes: MailboxChoice[],
   recipients: string[],
-  extra: Record<string, unknown> = { created: false },
-  note = 'Nothing was created. Several accounts are connected: call again with mailbox set to the account this belongs to.',
+  what: 'created' | 'placed' = 'created',
 ): Promise<ToolResult> {
-  const data: Record<string, unknown> = { needs_mailbox: true, ...extra, mailboxes, note };
-  if (recipients.length > 0) {
-    const evidence = await attendeeEvidence(ctx, tool, recipients);
-    if (evidence) data['evidence'] = evidence;
-    else data['evidence_unavailable'] = true;
-  }
-  return { success: true, data };
+  const router = ctx.calendarRouter;
+  if (!router) return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
+  return needsMailboxFailure(router, ctx.log, tool, mailboxes, recipients, what);
 }
 
 /** How the evidence bears on the chosen mailbox, for a write's result (D5). Only with several mailboxes and attendees. */

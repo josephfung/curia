@@ -8,6 +8,9 @@ import type { ToolContext, ToolHandler, ToolResult } from '../../../src/skills/t
 import { calendarMailbox, noEvidence, routerFixture, singleMailboxRouter, type RouterFixture } from '../../../skills/_shared/calendar-router-test-helpers.js';
 import { CalendarCreateEventHandler } from '../../../skills/calendar/tools/calendar-create-event/handler.js';
 import { CalendarCreateHoldHandler } from '../../../skills/calendar/tools/calendar-create-hold/handler.js';
+import { CalendarDeleteEventHandler } from '../../../skills/calendar/tools/calendar-delete-event/handler.js';
+import { CalendarUpdateEventHandler } from '../../../skills/calendar/tools/calendar-update-event/handler.js';
+import { calendarWritePregate } from '../../../src/channels/calendar/needs-mailbox.js';
 import { CalendarHoldsSweepHandler } from '../../../skills/calendar/tools/calendar-holds-sweep/handler.js';
 import { CalendarListEventsHandler } from '../../../skills/calendar/tools/calendar-list-events/handler.js';
 import { CalendarRespondToInviteHandler } from '../../../skills/calendar/tools/calendar-respond-to-invite/handler.js';
@@ -112,26 +115,29 @@ function noWrites(...clients: Array<ReturnType<typeof stubClient>>) {
 const run = (h: ToolHandler, c: ToolContext) => h.execute(c);
 
 describe('calendar-create-event: the account is a stated choice (D5)', () => {
-  it('create-event without mailbox returns needs_mailbox and creates nothing', async () => {
+  it('create-event without mailbox fails with needs_mailbox and creates nothing (R102)', async () => {
     const { work, personal, router, evidence } = setup();
     const r = await run(new CalendarCreateEventHandler(), ctx(router, {
       calendarId: 'cal-work', title: 'Q3 audit', start: START, end: END,
       attendees: [{ email: 'CFO@Work.example.com' }, { email: 'ceo@personal.example.com' }],
     }));
-    const data = dataOf(r);
-    expect(data).toMatchObject({ needs_mailbox: true, created: false, mailboxes: [{ id: 'work', label: 'Work' }, { id: 'personal', label: 'Personal' }] });
-    expect((data['evidence'] as Array<{ mailbox: string }>).map((e) => e.mailbox)).toEqual(['work', 'personal']);
+    // A failure, so the runtime never records it as a sent invite nor the feed as a booking.
+    const err = errorOf(r);
+    expect(err).toContain('needs_mailbox: nothing was created');
+    expect(err).toContain('one of: work (Work), personal (Personal)');
+    expect(err).toContain('Evidence for the attendees: Work: sent 4, received 0, same domain; Personal: sent 0, received 0');
     // Attendees are normalized and the principal's own addresses are left out.
     expect(evidence).toHaveBeenCalledWith(['cfo@work.example.com']);
     noWrites(work, personal);
   });
 
   it('bare primary with two mailboxes is needs_mailbox too, and creates nothing', async () => {
-    const { work, personal, router } = setup();
-    const data = dataOf(await run(new CalendarCreateEventHandler(), ctx(router, { calendarId: 'primary', title: 'Focus', start: START, end: END })));
-    expect(data['needs_mailbox']).toBe(true);
+    const { work, personal, router, evidence } = setup();
+    const err = errorOf(await run(new CalendarCreateEventHandler(), ctx(router, { calendarId: 'primary', title: 'Focus', start: START, end: END })));
+    expect(err).toContain('needs_mailbox: nothing was created');
     // No attendees: no evidence is computed.
-    expect(data).not.toHaveProperty('evidence');
+    expect(err).not.toContain('Evidence');
+    expect(evidence).not.toHaveBeenCalled();
     noWrites(work, personal);
   });
 
@@ -141,6 +147,49 @@ describe('calendar-create-event: the account is a stated choice (D5)', () => {
     expect(err).toContain('calendar_mailbox_mismatch');
     expect(err).toContain('"work" (Work)');
     noWrites(work, personal);
+  });
+
+  it('update and delete refuse a stated mailbox that does not own the calendar, rather than quietly overriding it (SF-M1)', async () => {
+    const { work, personal, router } = setup();
+    const del = errorOf(await run(new CalendarDeleteEventHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'e1', mailbox: 'personal' })));
+    expect(del).toContain('calendar_mailbox_mismatch');
+    const upd = errorOf(await run(new CalendarUpdateEventHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'e1', title: 'New', mailbox: 'personal' })));
+    expect(upd).toContain('calendar_mailbox_mismatch');
+    noWrites(work, personal);
+    expect(work.updateEvent).not.toHaveBeenCalled();
+    // Without a mailbox, a registered calendar still goes through its own.
+    await run(new CalendarDeleteEventHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'e1' }));
+    expect(work.deleteEvent).toHaveBeenCalledWith('cal-work', 'e1', undefined);
+  });
+
+  it("an unregistered calendar another account owns is refused through the account it is only shared into (SEC-L1)", async () => {
+    const { work, personal, router } = setup();
+    const shared = 'c_family@group.calendar.google.com';
+    personal.listCalendars.mockResolvedValue([{ id: shared, name: 'Family', isPrimary: false, readOnly: false, isOwnedByUser: true }]);
+    const err = errorOf(await run(new CalendarCreateEventHandler(), ctx(router, { calendarId: shared, title: 'T', start: START, end: END, mailbox: 'work' })));
+    expect(err).toContain('is owned by mailbox "personal" (Personal)');
+    noWrites(work, personal);
+    // Through the owner it goes ahead.
+    dataOf(await run(new CalendarCreateEventHandler(), ctx(router, { calendarId: shared, title: 'T', start: START, end: END, mailbox: 'personal' })));
+    expect(personal.createEvent).toHaveBeenCalledWith(shared, expect.anything());
+  });
+
+  it('the execution-layer pre-gate answers needs_mailbox before any approval, with the same text (BR-m5)', async () => {
+    const { router, evidence } = setup();
+    const input = { calendarId: 'cal-work', title: 'Q3 audit', start: START, end: END, attendees: [{ email: 'cfo@work.example.com' }] };
+    const pre = await calendarWritePregate(router, logger, 'calendar-create-event', input);
+    const handler = await run(new CalendarCreateEventHandler(), ctx(router, input));
+    expect(pre).toEqual(handler);
+    expect(pre).toMatchObject({ success: false, error: expect.stringContaining('needs_mailbox: nothing was created') });
+    expect(evidence).toHaveBeenCalledWith(['cfo@work.example.com']);
+    // Holds too; nothing for a stated mailbox, a non-principal calendar or another tool.
+    expect(await calendarWritePregate(router, logger, 'calendar-create-hold', { calendarId: 'primary' })).toMatchObject({ error: expect.stringContaining('nothing was placed') });
+    expect(await calendarWritePregate(router, logger, 'calendar-create-event', { ...input, mailbox: 'work' })).toBeNull();
+    expect(await calendarWritePregate(router, logger, 'calendar-create-event', { ...input, calendarId: 'curia-own' })).toBeNull();
+    expect(await calendarWritePregate(router, logger, 'calendar-update-event', input)).toBeNull();
+    // A failed check is not a refusal: the handler checks again.
+    Object.assign(router, { liveMailboxes: async () => { throw new Error('registry down'); } });
+    expect(await calendarWritePregate(router, logger, 'calendar-create-event', input)).toBeNull();
   });
 
   it("an account's own calendar (its address) cannot be written through the other account", async () => {
@@ -201,8 +250,13 @@ describe('calendar-create-event: the account is a stated choice (D5)', () => {
     const { work, personal, router } = setup();
     work.listEvents.mockRejectedValue(new Error('boom'));
     personal.listEvents.mockResolvedValue([hold('hold-p', 'ceo@personal.example.com')]);
-    dataOf(await run(new CalendarCreateEventHandler(), ctx(router, { calendarId: 'cal-work', title: 'T', start: START, end: END, mailbox: 'work' })));
+    personal.deleteEvent.mockRejectedValueOnce(new Error('delete failed'));
+    const data = dataOf(await run(new CalendarCreateEventHandler(), ctx(router, { calendarId: 'cal-work', title: 'T', start: START, end: END, mailbox: 'work' })));
     expect(personal.deleteEvent).toHaveBeenCalledWith('ceo@personal.example.com', 'hold-p');
+    // Neither the failed listing nor the failed delete is silent (SF-M4).
+    const warnings = (data['warnings'] as string[]).join(' ');
+    expect(warnings).toContain('Holds on the "Work" mailbox\'s calendar were not checked');
+    expect(warnings).toContain('Hold hold-p overlaps this booking but could not be removed');
   });
 });
 
@@ -230,10 +284,10 @@ describe('single-mailbox installs are unchanged', () => {
 });
 
 describe('calendar-create-hold on the right account', () => {
-  it('without mailbox on the principal\'s calendar: needs_mailbox, no hold', async () => {
+  it('without mailbox on the principal\'s calendar: a needs_mailbox failure, no hold (R102)', async () => {
     const { work, personal, router, evidence } = setup();
-    const data = dataOf(await run(new CalendarCreateHoldHandler(), ctx(router, { calendarId: 'primary', start: START, end: END, contactDomain: 'cfo@work.example.com' })));
-    expect(data).toMatchObject({ needs_mailbox: true, held: false, holdEventId: null });
+    const err = errorOf(await run(new CalendarCreateHoldHandler(), ctx(router, { calendarId: 'primary', start: START, end: END, contactDomain: 'cfo@work.example.com' })));
+    expect(err).toContain('needs_mailbox: nothing was placed');
     expect(evidence).toHaveBeenCalledWith(['cfo@work.example.com']);
     noWrites(work, personal);
   });
@@ -562,6 +616,29 @@ describe('fix round 1: collapse rules (R82, M1)', () => {
     const events = data['events'] as Array<{ id: string; calendars?: unknown }>;
     expect(events.map((e) => e.id)).toEqual(['w-1', 'p-1', 'p-2']);
     expect(events.every((e) => e.calendars === undefined)).toBe(true);
+  });
+
+  it('R99: a spoofed copy matching UID, time and title but not organizer, place or link stays its own entry', async () => {
+    const base = { icalUid: 'uid-1', title: 'Board', organizerEmail: 'chair@board.example.org', location: 'Room 4', conferencing: { provider: 'Zoom', details: { url: 'https://zoom.example/real' } } };
+    for (const spoof of [
+      { organizerEmail: 'attacker@evil.example' },
+      { location: 'Somewhere else' },
+      { conferencing: { provider: 'Zoom', details: { url: 'https://zoom.example/evil' } } },
+    ]) {
+      const { work, personal, router } = setup();
+      work.listEvents.mockResolvedValue([event('w-1', 'cal-work', { ...base, ...spoof })]);
+      personal.listEvents.mockResolvedValue([event('p-1', 'cal-personal', base)]);
+      const data = dataOf(await run(new CalendarListEventsHandler(), ctx(router, listInput, system)));
+      const events = data['events'] as Array<{ id: string; calendars?: unknown }>;
+      expect(events.map((e) => e.id), JSON.stringify(spoof)).toEqual(['w-1', 'p-1']);
+      expect(events.every((e) => e.calendars === undefined)).toBe(true);
+    }
+    // The real copies (same organizer, place and link, the organizer's case aside) still collapse.
+    const { work, personal, router } = setup();
+    work.listEvents.mockResolvedValue([event('w-1', 'cal-work', { ...base, organizerEmail: 'Chair@Board.example.org' })]);
+    personal.listEvents.mockResolvedValue([event('p-1', 'cal-personal', base)]);
+    const data = dataOf(await run(new CalendarListEventsHandler(), ctx(router, listInput, system)));
+    expect((data['events'] as unknown[])).toHaveLength(1);
   });
 
   it('filters run before collapsing: a match on only one copy is listed', async () => {

@@ -19,7 +19,9 @@
     "is_primary": "boolean",
     "mailbox": "string|null",
     "updated": "string[]? (present when an existing registration was moved: only its mailbox changed)",
-    "not_applied": "string[]? (requested fields kept at their registered values on a move)"
+    "moved_from_mailbox": "string|null? (on a move: the mailbox it was registered through)",
+    "not_applied": "string[]? (requested fields kept at their registered values on a move)",
+    "note": "string? (with not_applied: what was kept and why)"
   },
   "permissions": [],
   "secrets": [],

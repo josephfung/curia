@@ -22,25 +22,19 @@ import {
   holdReleaseTargets,
   readCalendarMailbox,
   routeCalendar,
+  summarizeEvidence,
 } from '../../../_shared/calendar-route.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 import type { PrincipalMailboxView } from '../../../../src/principal-mailboxes/service.js';
-import type { CountsOnlyEvidence } from '../../../../src/principal-mailboxes/evidence.js';
 import { sameMeetingKey, sameOrganizer } from '../../../../src/channels/calendar/event-identity.js';
 
 const TOOL = 'calendar-respond-to-invite';
 
+/** The longest hold-cleanup window a caller may pass (SEC-L2). */
+const MAX_HOLD_SEARCH_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
 /** How far around the invite the arrival calendar is searched for its copy. */
 const UID_LOOKUP_PADDING_MS = 24 * 60 * 60 * 1000;
-
-/** One line of evidence per account, for an error text: counts and domain match only (R81). */
-function summarizeEvidence(evidence: CountsOnlyEvidence[]): string {
-  return evidence
-    .map((e) => e.error !== undefined
-      ? `${e.mailbox_label}: unreadable (${e.error})`
-      : `${e.mailbox_label}: sent ${e.sent_count}, received ${e.received_count}${e.domain_match ? ', same domain' : ''}`)
-    .join('; ');
-}
 
 /** The window to search the arrival calendar in: the invite's time, a day either side. */
 function lookupWindow(e: NylasCalendarEvent): { start: string; end: string } | null {
@@ -107,6 +101,10 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
     }
     if (input.holdSearchStart && input.holdSearchEnd && new Date(input.holdSearchEnd) <= new Date(input.holdSearchStart)) {
       return { success: false, error: 'Invalid input: holdSearchEnd must be after holdSearchStart' };
+    }
+    // An accept lists and deletes matching holds on every home calendar: the window is bounded (SEC-L2).
+    if (input.holdSearchStart && input.holdSearchEnd && new Date(input.holdSearchEnd).getTime() - new Date(input.holdSearchStart).getTime() > MAX_HOLD_SEARCH_WINDOW_MS) {
+      return { success: false, error: 'Invalid input: the hold search window is longer than 30 days; nothing was sent. Narrow it to around the meeting.' };
     }
 
     const mailbox = readCalendarMailbox(ctx.input);
@@ -292,8 +290,8 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
       return { kind: 'error', error: `Could not search ${where} for the invite: ${message}. Nothing was sent.` };
     }
     // The UID is set by whoever sent the invite, so it is never enough on its own (R87): the
-    // arrival copy must agree on UID, occurrence, start, end and title (the list-events rule)
-    // and have the same organizer. Exactly one such copy is answered; none or several, nothing.
+    // arrival copy must agree on UID, occurrence, start, end, title, organizer, location and
+    // link (the list-events rule, R99), and both copies must name an organizer. Exactly one such copy is answered; none or several, nothing.
     const matches = candidates.filter((c) => sameMeetingKey(c) === key && sameOrganizer(c, invite));
     if (matches.length !== 1) {
       const ambiguous = matches.length > 1;

@@ -127,6 +127,7 @@ import type { SensitivityClassifier } from '../memory/sensitivity.js';
 import type { StoreFactOptions } from '../memory/types.js';
 import { createMemoryStore } from '../bus/events.js';
 import type { CalendarRouter } from '../channels/calendar/calendar-router.js';
+import { calendarWritePregate } from '../channels/calendar/needs-mailbox.js';
 import type { PrincipalMailboxes } from '../principal-mailboxes/service.js';
 import type { EntityContextAssembler } from '../entity-context/assembler.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
@@ -2385,6 +2386,13 @@ export class ExecutionLayer {
     // gateProceeded: band Gate C let this through where the tier policy would have asked. The
     // spot-check pool row records it after the handler succeeds (#2159 Phase 3).
     let gateProceeded = false;
+    // A new event or hold that is going to answer needs_mailbox (several principal mailboxes, no
+    // `mailbox`) answers it here, before any gate could queue an approval for a call that creates
+    // nothing; the retry with `mailbox` would otherwise raise a second approval (#2475, BR-m5).
+    if (this.calendarRouter && !options?.humanApproved) {
+      const needsMailbox = await calendarWritePregate(this.calendarRouter, skillLogger, toolName, input);
+      if (needsMailbox) return needsMailbox;
+    }
     if (manifest.sensitivity !== 'elevated' && !options?.humanApproved) {
       if (this.autonomyService && autonomyConfig !== null) {
         const currentScore = autonomyConfig.score;

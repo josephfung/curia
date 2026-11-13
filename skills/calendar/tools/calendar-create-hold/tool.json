@@ -13,7 +13,7 @@
     "threadRef": "string? (scheduling thread id or conversation id, stored in metadata for fuzzy release)",
     "contactId": "string? (contact id for the scheduling counterpart, stored in metadata for matching)",
     "contactDomain": "string? (email/domain for the scheduling counterpart's organization, stored normalized for matching assistant/tool-sent invites)",
-    "mailbox": "string? (account the meeting belongs to, e.g. the consult's mailbox. With several connected it is required on the principal's calendars; the hold goes on that account's home calendar)"
+    "mailbox": "string? (account the meeting belongs to, e.g. the consult's mailbox. With several connected it is required on the principal's calendars (else a needs_mailbox error, nothing placed); the hold goes on that account's home calendar)"
   },
   "outputs": {
     "holdEventId": "string|null (Nylas event id of the placed hold, or null when not held)",
@@ -21,7 +21,6 @@
     "display": "string (ISO local start/end range with timezone label, e.g. \"2026-06-25T10:30:00-04:00 -- 2026-06-25T11:30:00-04:00 (EDT (UTC-04:00))\")",
     "displayTimezone": "string (timezone label for the hold slot, e.g. \"EDT (UTC-04:00)\")",
     "reason": "string? (why no hold was placed: \"holds disabled\" or an error summary)",
-    "needs_mailbox": "boolean? (true: no hold was placed; call again with mailbox)",
     "mailbox": "string? (the account whose home calendar holds it, when several are connected)",
     "calendarId": "string? (the calendar the hold is on, when several are connected)"
   },

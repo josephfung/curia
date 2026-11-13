@@ -364,7 +364,8 @@ describeIf('calendar-holds — hold place → self-release (real Postgres)', () 
       entityMemory,
       calendarRouter: router,
     } as unknown as ToolContext);
-    expect(unplaced).toMatchObject({ success: true, data: { needs_mailbox: true, held: false } });
+    // A failure (R102): nothing was placed, and the caller must choose.
+    expect(unplaced).toMatchObject({ success: false, error: expect.stringContaining('needs_mailbox: nothing was placed') });
     expect(personal.createEvent).not.toHaveBeenCalled();
 
     const placed = await new CalendarCreateHoldHandler().execute({

@@ -128,10 +128,10 @@ describe('calendar tools route each calendar through its mailbox', () => {
     expect(personal.createEvent).toHaveBeenCalledWith('ceo@personal.example.com', expect.anything());
   });
 
-  it('create-event with bare primary and two mailboxes returns needs_mailbox and creates nothing', async () => {
+  it('create-event with bare primary and two mailboxes fails with needs_mailbox and creates nothing (R102)', async () => {
     const { work, personal, router } = setup();
     const r = await run(new CalendarCreateEventHandler(), ctx(router, { calendarId: 'primary', title: 'T', start: START, end: END }));
-    expect(r).toMatchObject({ success: true, data: { needs_mailbox: true, created: false } });
+    expect(r).toMatchObject({ success: false, error: expect.stringContaining('needs_mailbox: nothing was created') });
     expect(work.createEvent).not.toHaveBeenCalled();
     expect(personal.createEvent).not.toHaveBeenCalled();
   });
@@ -340,6 +340,13 @@ describe('a removed mailbox\'s calendars can be re-registered through a live one
     return { contacts, principalId: principal.id };
   }
 
+  /** A client whose account can see these calendars (calendar-register checks it, SEC-L5). */
+  function seeing(...ids: string[]) {
+    const c = stubClient();
+    c.listCalendars.mockResolvedValue(ids.map((id) => ({ id, name: id, isPrimary: false, readOnly: false })));
+    return c;
+  }
+
   function swapCtx(contacts: ContactService, router: ToolContext['calendarRouter'], input: Record<string, unknown>): ToolContext {
     return {
       toolName: 'calendar-test', toolVersion: '0.0.0', input, log: logger,
@@ -351,7 +358,7 @@ describe('a removed mailbox\'s calendars can be re-registered through a live one
   it('remove A, add B, re-register a calendar of A through B: it then routes to B', async () => {
     const { contacts, principalId } = await registry();
     await contacts.linkCalendar({ nylasCalendarId: 'team@group.calendar.google.com', contactId: principalId, label: 'Team', principalMailboxId: 'a' });
-    const b = stubClient();
+    const b = seeing('team@group.calendar.google.com');
     const router = routerFixture({
       mailboxes: [calendarMailbox('b', 'B', 'pat@b.example.com', true)],
       removed: { a: 'A' },
@@ -377,7 +384,7 @@ describe('a removed mailbox\'s calendars can be re-registered through a live one
   it('a move reports the requested fields it did not apply', async () => {
     const { contacts, principalId } = await registry();
     await contacts.linkCalendar({ nylasCalendarId: 'cal-x', contactId: principalId, label: 'Old label', principalMailboxId: null });
-    const router = routerFixture({ mailboxes: [calendarMailbox('b', 'B', 'pat@b.example.com', true)], clients: { b: stubClient() }, contacts, principalContactId: principalId });
+    const router = routerFixture({ mailboxes: [calendarMailbox('b', 'B', 'pat@b.example.com', true)], clients: { b: seeing('cal-x') }, contacts, principalContactId: principalId });
     const r = await run(new CalendarRegisterHandler(), swapCtx(contacts, router, {
       nylas_calendar_id: 'cal-x', label: 'New label', contact_id: principalId, is_primary: true,
     }));
@@ -394,7 +401,7 @@ describe('a removed mailbox\'s calendars can be re-registered through a live one
     const a = stubClient();
     const router = routerFixture({
       mailboxes: [calendarMailbox('a', 'A', 'pat@a.example.com', true), calendarMailbox('b', 'B', 'pat@b.example.com')],
-      clients: { a, b: stubClient() },
+      clients: { a, b: seeing('team@group.calendar.google.com') },
       contacts,
       principalContactId: principalId,
     });
@@ -405,5 +412,26 @@ describe('a removed mailbox\'s calendars can be re-registered through a live one
     if (!r.success) expect(r.error).toContain('already registered through the "a" mailbox');
     expect((await contacts.resolveCalendar('team@group.calendar.google.com'))?.principalMailboxId).toBe('a');
     expect((await router.route('team@group.calendar.google.com', 'b')).client).toBe(a);
+  });
+
+  it("refuses a principal calendar the mailbox's account cannot see, and fails closed when it cannot check (SEC-L5)", async () => {
+    const { contacts, principalId } = await registry();
+    const b = seeing('family@group.calendar.google.com');
+    const router = routerFixture({ mailboxes: [calendarMailbox('b', 'B', 'pat@b.example.com', true)], clients: { b }, contacts, principalContactId: principalId });
+    const register = (id: string, contactId = principalId) =>
+      run(new CalendarRegisterHandler(), swapCtx(contacts, router, { nylas_calendar_id: id, label: 'X', contact_id: contactId }));
+
+    const refused = errorOf(await register('attacker-public@evil.example'));
+    expect(refused).toContain('is not one the "b" mailbox\'s account can see');
+    expect(await contacts.resolveCalendar('attacker-public@evil.example')).toBeNull();
+
+    expect((await register('family@group.calendar.google.com')).success).toBe(true);
+
+    // Another contact's calendar is read as free/busy only: no visibility needed.
+    const dana = await contacts.createContact({ displayName: 'Dana', source: 'test' });
+    expect((await register('dana@partner.example', dana.id)).success).toBe(true);
+
+    b.listCalendars.mockRejectedValue(new Error('nylas down'));
+    expect(errorOf(await register('other@group.calendar.google.com'))).toContain('nothing was registered');
   });
 });

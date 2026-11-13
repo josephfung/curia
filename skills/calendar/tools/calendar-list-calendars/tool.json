@@ -8,7 +8,8 @@
     "mailbox": "string? (mailbox id; omit to list every mailbox's calendars)"
   },
   "outputs": {
-    "calendars": "array"
+    "calendars": "array (each with mailbox, mailbox_label: the account listing it; registered_mailbox when registered)",
+    "warnings": "string[]? (accounts whose calendars could not be listed)"
   },
   "permissions": [],
   "secrets": [],
