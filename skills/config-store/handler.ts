@@ -15,6 +15,11 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { ConfigStore } from '../../src/memory/config-store.js';
+import {
+  SEND_SETTING_KEY,
+  SEND_SETTING_NAMESPACE,
+  checkSendLevelWrite,
+} from '../../src/skills/principal-send/send-level.js';
 
 const INDEX_LABEL = 'config-store-index';
 
@@ -63,6 +68,21 @@ export class ConfigStoreHandler implements ToolHandler {
     }
     if (value.length > 2000) {
       return { success: false, error: 'value must be 2000 characters or fewer' };
+    }
+
+    // ceo_inbox/sending is keyed by mailbox id (#2475 SF5, B1): a key naming no live mailbox would
+    // be ignored by the reader, so the agent would confirm a level with no effect. Refused here,
+    // with the live ids and labels, which the success result carries too.
+    let mailboxes: Array<{ id: string; label: string }> | undefined;
+    if (isSendLevelKey(namespace, key) && ctx.principalMailboxes) {
+      const live = await liveMailboxes(ctx);
+      if (!live.ok) return { success: false, error: live.error };
+      const check = checkSendLevelWrite(value, live.mailboxes);
+      if (!check.ok) {
+        ctx.log.info({ namespace, key }, 'config-store: ceo_inbox/sending write refused — not keyed by live mailbox ids with valid levels');
+        return { success: false, error: check.error };
+      }
+      mailboxes = live.mailboxes.map(({ id, label }) => ({ id, label }));
     }
 
     // Use the context-aware source key so the rate limit counter matches what
@@ -117,7 +137,7 @@ export class ConfigStoreHandler implements ToolHandler {
       );
     }
 
-    return { success: true, data: { stored: storeResult.stored, action: storeResult.action, namespace, key } };
+    return { success: true, data: { stored: storeResult.stored, action: storeResult.action, namespace, key, ...(mailboxes ? { mailboxes } : {}) } };
   }
 
   private async retrieve(ctx: ToolContext): Promise<ToolResult> {
@@ -132,11 +152,18 @@ export class ConfigStoreHandler implements ToolHandler {
 
       if (key) {
         const value = await configStore.get(namespace, key);
+        // The send level is keyed by mailbox id: the read names the live ones (#2475 B1).
+        let mailboxes: Array<{ id: string; label: string }> | undefined;
+        if (isSendLevelKey(namespace, key) && ctx.principalMailboxes) {
+          const live = await liveMailboxes(ctx);
+          if (live.ok) mailboxes = live.mailboxes.map(({ id, label }) => ({ id, label }));
+        }
+        const extra = mailboxes ? { mailboxes } : {};
         if (value === null) {
-          return { success: true, data: { found: false, key } };
+          return { success: true, data: { found: false, key, ...extra } };
         }
         ctx.log.info({ namespace, key }, 'Retrieved config value');
-        return { success: true, data: { found: true, key, value } };
+        return { success: true, data: { found: true, key, value, ...extra } };
       }
 
       const entries = await configStore.list(namespace);
@@ -241,5 +268,23 @@ export class ConfigStoreHandler implements ToolHandler {
       source: writeSource,
       exactKey: true,
     });
+  }
+}
+
+function isSendLevelKey(namespace: string, key: string | undefined): boolean {
+  return namespace === SEND_SETTING_NAMESPACE && key === SEND_SETTING_KEY;
+}
+
+/** The principal's live mailboxes for the send-level key. A failed list is logged and reported. */
+async function liveMailboxes(ctx: ToolContext): Promise<
+  | { ok: true; mailboxes: Array<{ id: string; label: string; triageStartAt: Date | null }> }
+  | { ok: false; error: string }
+> {
+  try {
+    const list = await ctx.principalMailboxes!.list();
+    return { ok: true, mailboxes: list.map((m) => ({ id: m.id, label: m.label, triageStartAt: m.triageStartAt })) };
+  } catch (err) {
+    ctx.log.error({ errName: err instanceof Error ? err.name : typeof err }, 'config-store: could not list the principal mailboxes for ceo_inbox/sending');
+    return { ok: false, error: "Couldn't read the principal's connected mailboxes just now, so the sending level was not stored. Try again shortly." };
   }
 }

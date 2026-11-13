@@ -713,17 +713,29 @@ describe('removing a mailbox drops the legacy send-level key (#2475 R41)', () =>
     const s = setup({
       records: [rec({ id: 'work', address: 'pat@work.example.com' })],
       grants: { g2: google('pat@home.example.org') },
-      forgetLegacySendLevel: () => dropLegacyDefaultKey(store, logger),
+      forgetLegacySendLevel: async () => { await dropLegacyDefaultKey(store, logger); },
     });
     const read = createSendLevelReader({
       get: async () => stored, logger,
-      liveMailboxIds: async () => (await s.store.listLive()).map((r) => r.id),
+      liveMailboxes: async () => await s.store.listLive(),
     });
     expect(await read('work')).toBe('routine');
     await s.admin.remove({ id: 'work', stillOwned: true });
     await s.admin.add({ id: 'home', label: 'Home', grantId: 'g2' });
     expect(await read('home')).toBe('on_request');
     expect(stored).toBe('{}');
+  });
+
+  it('removing a mailbox other than the migrated one leaves the key (SF8)', async () => {
+    const forget = vi.fn(async () => {});
+    const s = setup({
+      records: [rec({ id: 'work' }), rec({ id: 'home', address: 'pat@home.example.org', isDefault: false, triageStartAt: new Date() })],
+      forgetLegacySendLevel: forget,
+    });
+    await s.admin.remove({ id: 'home', stillOwned: true });
+    expect(forget).not.toHaveBeenCalled();
+    await s.admin.remove({ id: 'work', stillOwned: true });
+    expect(forget).toHaveBeenCalledOnce();
   });
 
   it('a failure dropping the key is logged, named in the outcome and does not stop the other cleanup', async () => {

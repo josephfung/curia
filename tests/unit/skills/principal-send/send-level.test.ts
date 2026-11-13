@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
-import { parseSendLevel, readSendLevelValue, createSendLevelReader } from '../../../../src/skills/principal-send/send-level.js';
+import { parseSendLevel, readSendLevelValue, createSendLevelReader, checkSendLevelWrite } from '../../../../src/skills/principal-send/send-level.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -47,61 +47,83 @@ describe('createSendLevelReader', () => {
     }
     expect(readSendLevelValue('{"work":"all"}', 'personal')).toEqual({ level: 'on_request', malformed: false });
   });
-  it('a legacy default key applies only while exactly one mailbox is live (R41)', async () => {
+  // Live mailboxes as the reader sees them: `migrated` has no triage start (the flat migration's row).
+  const migrated = (id: string) => ({ id, triageStartAt: null });
+  const added = (id: string) => ({ id, triageStartAt: new Date('2026-11-01T00:00:00Z') });
+
+  it('a legacy default key applies only to the migrated mailbox while it is the one live mailbox (R41, S-I1)', async () => {
     const warn = vi.fn();
     const log = { ...logger, warn } as unknown as typeof logger;
     const raw = '{"default":"routine"}';
-    const one = createSendLevelReader({ get: async () => raw, logger: log, liveMailboxIds: async () => ['work'] });
+    const one = createSendLevelReader({ get: async () => raw, logger: log, liveMailboxes: async () => [migrated('work')] });
     expect(await one('work')).toBe('routine');
     // A second mailbox was added (and perhaps made the default): nobody inherits the level.
-    const two = createSendLevelReader({ get: async () => raw, logger: log, liveMailboxIds: async () => ['work', 'personal'] });
+    const two = createSendLevelReader({ get: async () => raw, logger: log, liveMailboxes: async () => [migrated('work'), added('personal')] });
     expect(await two('work')).toBe('on_request');
     expect(await two('personal')).toBe('on_request');
     // An own key wins over a leftover default.
-    const own = createSendLevelReader({ get: async () => '{"default":"all","work":"off"}', logger: log, liveMailboxIds: async () => ['work'] });
+    const own = createSendLevelReader({ get: async () => '{"default":"all","work":"off"}', logger: log, liveMailboxes: async () => [migrated('work')] });
     expect(await own('work')).toBe('off');
-    // Only the two-mailbox read of a leftover default warns (once per value).
+    // Only the two-mailbox read of a leftover default warns (once per key).
     expect(warn).toHaveBeenCalledOnce();
   });
-  it('warns once per value when two mailboxes are live and a leftover default key is ignored', async () => {
-    const warn = vi.fn();
-    const log = { ...logger, warn } as unknown as typeof logger;
-    const read = createSendLevelReader({ get: async () => '{"default":"routine"}', logger: log, liveMailboxIds: async () => ['work', 'personal'] });
-    expect(await read('work')).toBe('on_request');
-    expect(await read('personal')).toBe('on_request');
-    expect(warn).toHaveBeenCalledOnce();
-    expect(String(warn.mock.calls[0]!.at(-1))).toMatch(/set a level per mailbox/);
-    // One live mailbox: the key applies, nothing to warn about.
-    const w2 = vi.fn();
-    const one = createSendLevelReader({ get: async () => '{"default":"routine"}', logger: { ...logger, warn: w2 } as unknown as typeof logger, liveMailboxIds: async () => ['work'] });
-    expect(await one('work')).toBe('routine');
-    expect(w2).not.toHaveBeenCalled();
+
+  it('a sole mailbox added after the migrated one was removed never inherits the legacy key (S-I1)', async () => {
+    const read = createSendLevelReader({ get: async () => '{"default":"all"}', logger, liveMailboxes: async () => [added('home')] });
+    expect(await read('home')).toBe('on_request');
+    // The fallback (no registry row yet) is the install's one mailbox: the key applies.
+    const fallback = createSendLevelReader({ get: async () => '{"default":"all"}', logger, liveMailboxes: async () => [migrated('mailbox')] });
+    expect(await fallback('mailbox')).toBe('all');
   });
-  it('warns for a mailbox that lacks its own key even when another live mailbox has one', async () => {
+
+  it('warns once per process per key that sets no live mailbox, naming the key, never the level (SF5)', async () => {
     const warn = vi.fn();
     const log = { ...logger, warn } as unknown as typeof logger;
-    const read = createSendLevelReader({ get: async () => '{"default":"routine","work":"all"}', logger: log, liveMailboxIds: async () => ['work', 'personal'] });
-    // work has an entry: the leftover default is not what it reads, so nothing to say yet.
+    const read = createSendLevelReader({ get: async () => '{"Default":"off","work":"all","gone":"routine"}', logger: log, liveMailboxes: async () => [added('work'), added('personal')] });
     expect(await read('work')).toBe('all');
-    expect(warn).not.toHaveBeenCalled();
-    // personal has none: the leftover default applies to it in nobody's favour, so warn.
     expect(await read('personal')).toBe('on_request');
-    expect(warn).toHaveBeenCalledOnce();
-  });
-  it('warns once per process per value when no key is a live id or default', async () => {
-    const warn = vi.fn();
-    const log = { ...logger, warn } as unknown as typeof logger;
-    const read = createSendLevelReader({ get: async () => '{"Default":"off"}', logger: log, liveMailboxIds: async () => ['work', 'personal'] });
-    expect(await read('work')).toBe('on_request');
-    expect(await read('personal')).toBe('on_request');
-    expect(warn).toHaveBeenCalledOnce();
-    expect(JSON.stringify(warn.mock.calls)).not.toContain('Default');
-    // A live id or default among the keys: nothing to warn about.
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls.map((c) => (c[0] as { key: string }).key).sort()).toEqual(['Default', 'gone']);
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/routine|"off"/);
+    // Only live ids among the keys: nothing to warn about.
     const ok = vi.fn();
-    const quiet = createSendLevelReader({ get: async () => '{"work":"all"}', logger: { ...logger, warn: ok } as unknown as typeof logger, liveMailboxIds: async () => ['work', 'personal'] });
+    const quiet = createSendLevelReader({ get: async () => '{"work":"all"}', logger: { ...logger, warn: ok } as unknown as typeof logger, liveMailboxes: async () => [added('work'), added('personal')] });
     await quiet('personal');
     expect(ok).not.toHaveBeenCalled();
   });
+
+  it('warns once about a leftover default with two live mailboxes', async () => {
+    const warn = vi.fn();
+    const log = { ...logger, warn } as unknown as typeof logger;
+    const read = createSendLevelReader({ get: async () => '{"default":"routine","work":"all"}', logger: log, liveMailboxes: async () => [migrated('work'), added('personal')] });
+    expect(await read('work')).toBe('all');
+    expect(await read('personal')).toBe('on_request');
+    expect(warn).toHaveBeenCalledOnce();
+    expect(String(warn.mock.calls[0]!.at(-1))).toMatch(/set a level per mailbox/);
+  });
+
+  describe('checkSendLevelWrite (SF5)', () => {
+    const live = [{ ...added('work'), label: 'Work' }, { ...added('personal'), label: 'Personal' }];
+    it('accepts an object keyed by live ids with valid levels', () => {
+      expect(checkSendLevelWrite('{"work":"routine","personal":"off"}', live)).toEqual({ ok: true });
+      expect(checkSendLevelWrite('{}', live)).toEqual({ ok: true });
+    });
+    it('refuses an unknown key, naming the live mailboxes', () => {
+      const r = checkSendLevelWrite('{"wrk":"routine"}', live);
+      expect(r).toEqual({ ok: false, error: expect.stringContaining('Not a connected mailbox: wrk') });
+      if (!r.ok) expect(r.error).toContain('work (Work), personal (Personal)');
+    });
+    it('refuses default unless it applies to the migrated sole mailbox', () => {
+      expect(checkSendLevelWrite('{"default":"routine"}', live).ok).toBe(false);
+      expect(checkSendLevelWrite('{"default":"routine"}', [{ ...migrated('work'), label: 'Work' }]).ok).toBe(true);
+    });
+    it('refuses a bare level, non-JSON and a bad level', () => {
+      expect(checkSendLevelWrite('"routine"', live).ok).toBe(false);
+      expect(checkSendLevelWrite('routine', live).ok).toBe(false);
+      expect(checkSendLevelWrite('{"work":"everything"}', live)).toEqual({ ok: false, error: expect.stringContaining('Not a level for work') });
+    });
+  });
+
   it('does not warn for an unset value, an empty object, or another mailbox when default is set', async () => {
     for (const [raw, mailbox] of [[null, 'default'], ['{}', 'default'], ['{"default":"off"}', 'work']] as const) {
       const warn = vi.fn();

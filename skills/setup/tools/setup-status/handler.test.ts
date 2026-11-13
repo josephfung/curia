@@ -504,6 +504,22 @@ describe('setup-status', () => {
       expect((await inboxSending(makeCtx({ sendingValue: '{"work":"bogus"}', liveMailboxIds: ['work'] })))?.status).toBe('pending');
     });
 
+    // B5/SF6/S-I1: a leftover default counts only while it applies (the migrated sole mailbox).
+    it('counts a default key only while it applies to the migrated sole mailbox', async () => {
+      expect((await inboxSending(makeCtx({ sendingValue: '{"default":"routine"}', liveMailboxIds: ['work'] })))?.status).toBe('done');
+      expect((await inboxSending(makeCtx({ sendingValue: '{"default":"routine"}', liveMailboxIds: ['work', 'personal'] })))?.status).toBe('pending');
+      const added = makeCtx({ sendingValue: '{"default":"routine"}' });
+      (added as { principalMailboxes?: unknown }).principalMailboxes = stubPrincipalMailboxes({ mailboxes: [{ ...mailboxView('home', 'Home', 'home@example.com', true), triageStartAt: new Date() }] });
+      expect((await inboxSending(added))?.status).toBe('pending');
+    });
+
+    it('guards the parse and logs a malformed value without echoing it (SF13)', async () => {
+      const ctx = makeCtx({ sendingValue: '[1,2]', liveMailboxIds: ['work'] });
+      expect((await inboxSending(ctx))?.status).toBe('pending');
+      expect(ctx.log.warn).toHaveBeenCalledWith(expect.anything(), expect.stringMatching(/malformed/));
+      expect(JSON.stringify(vi.mocked(ctx.log.warn).mock.calls)).not.toContain('[1,2]');
+    });
+
     it('is not done, and logged, when the read throws', async () => {
       const ctx = makeCtx({ sendingReadError: new Error('kg down') });
       const task = await inboxSending(ctx);

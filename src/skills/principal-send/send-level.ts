@@ -58,32 +58,80 @@ export function parseSendLevel(raw: string | null, mailbox: string = DEFAULT_MAI
   return readSendLevelValue(raw, mailbox).level;
 }
 
-/** A stored object with keys, none of them `default` or a live mailbox id (a mistyped key, say). */
-function namesNoKnownMailbox(raw: string, live: readonly string[], logger: Logger): boolean {
+/**
+ * A live mailbox as the send level reads it. `triageStartAt` is null only on the row the flat
+ * migration created (the console's add sets it) and on the deferred fallback: that is how the
+ * install's one pre-#2475 mailbox is told apart from any added later (S-I1).
+ */
+export interface SendLevelMailbox {
+  id: string;
+  triageStartAt: Date | null;
+}
+
+/**
+ * The mailbox the legacy `default` key applies to, or null (R41, S-I1): the migrated mailbox (or the
+ * fallback), and only while it is the one live mailbox. The key was set for that mailbox, so a
+ * mailbox added later, or a second live one, never inherits it.
+ */
+export function legacyDefaultMailbox(live: readonly SendLevelMailbox[]): string | null {
+  return live.length === 1 && live[0]!.triageStartAt === null ? live[0]!.id : null;
+}
+
+/** The stored object's keys, or null when the value is not a JSON object. */
+function storedKeys(raw: string, logger: Logger): string[] | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
     // Unparseable is reported as malformed by the caller; noted here too, never the value.
-    logger.debug({ errName: err instanceof Error ? err.name : typeof err }, 'ceo_inbox/sending is not valid JSON; no unknown-mailbox check');
-    return false;
+    logger.debug({ errName: err instanceof Error ? err.name : typeof err }, 'ceo_inbox/sending is not valid JSON; no mailbox-key check');
+    return null;
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
-  const keys = Object.keys(parsed);
-  return keys.length > 0 && !keys.some((k) => k === DEFAULT_MAILBOX || live.includes(k));
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  return Object.keys(parsed);
 }
 
-/** A leftover `default` key while THIS mailbox has no entry of its own: it applies to none. */
-function ignoresLegacyDefault(raw: string, mailbox: string, logger: Logger): boolean {
+/**
+ * Keys that set no mailbox's level: not a live id, or a `default` that applies to none (SF5).
+ * Mailbox ids are not secret; the levels are never logged.
+ */
+function ignoredKeys(keys: readonly string[], live: readonly SendLevelMailbox[]): string[] {
+  const legacy = legacyDefaultMailbox(live);
+  return keys.filter((k) => (k === DEFAULT_MAILBOX ? legacy === null : !live.some((m) => m.id === k)));
+}
+
+/**
+ * Check a `ceo_inbox/sending` write before it is stored (SF5): a JSON object whose every key is a
+ * live mailbox id (or `default` while it still applies) and every value a level. A key that names
+ * no live mailbox would be silently ignored, so the agent would confirm a level with no effect.
+ * The error names the live mailboxes so the agent can retry.
+ */
+export function checkSendLevelWrite(
+  raw: string,
+  live: ReadonlyArray<SendLevelMailbox & { label: string }>,
+): { ok: true } | { ok: false; error: string } {
+  const mailboxes = live.length > 0 ? live.map((m) => `${m.id} (${m.label})`).join(', ') : 'none connected';
+  const shape = `Store a JSON object {"<mailbox id>":"<level>"}, level ${LEVELS.join(' | ')}. Mailboxes: ${mailboxes}. Nothing was stored.`;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
-    const has = (k: string) => Object.prototype.hasOwnProperty.call(parsed, k);
-    return has(DEFAULT_MAILBOX) && !has(mailbox);
-  } catch (err) {
-    logger.debug({ errName: err instanceof Error ? err.name : typeof err }, 'ceo_inbox/sending is not valid JSON; no legacy-default check');
-    return false;
+    parsed = JSON.parse(raw);
+  } catch {
+    // Not JSON at all: the agent is told the shape (no value is logged or echoed).
+    return { ok: false, error: `ceo_inbox/sending must be JSON. ${shape}` };
   }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { ok: false, error: `ceo_inbox/sending must be an object keyed by mailbox id. ${shape}` };
+  }
+  const entries = Object.entries(parsed as Record<string, unknown>);
+  const unknown = ignoredKeys(entries.map(([k]) => k), live);
+  if (unknown.length > 0) {
+    return { ok: false, error: `Not a connected mailbox: ${unknown.join(', ')}. ${shape}` };
+  }
+  const badLevel = entries.filter(([, v]) => !isSendLevel(v)).map(([k]) => k);
+  if (badLevel.length > 0) {
+    return { ok: false, error: `Not a level for ${badLevel.join(', ')}. ${shape}` };
+  }
+  return { ok: true };
 }
 
 export type SendLevelReader = (mailbox: string) => Promise<SendLevel>;
@@ -92,35 +140,39 @@ export function createSendLevelReader(deps: {
   get(ns: string, key: string): Promise<string | null>;
   logger: Logger;
   /**
-   * The live mailbox ids. A legacy `default` key applies only while exactly one is live (R41):
-   * it was set for the install's one mailbox, so a second mailbox, or a changed default, never
-   * inherits it. Also lets the reader warn about a stored object that names none of them.
-   * Absent: no legacy fallback and no such warning.
+   * The live mailboxes. A legacy `default` key applies only to the migrated mailbox while it is the
+   * one live mailbox (legacyDefaultMailbox: R41, S-I1). Also lets the reader warn, once per key,
+   * about a stored key that sets no mailbox's level (SF5). Absent: no legacy fallback, no warning.
    */
-  liveMailboxIds?: () => Promise<readonly string[]>;
+  liveMailboxes?: () => Promise<readonly SendLevelMailbox[]>;
 }): SendLevelReader {
-  const warnedUnknown = new Set<string>();
+  const warned = new Set<string>();
   return async (mailbox) => {
     try {
       // A failed lookup reads as "not the only mailbox": the stricter, never-widening side.
-      let live: readonly string[] | undefined;
-      if (deps.liveMailboxIds) {
+      let live: readonly SendLevelMailbox[] | undefined;
+      if (deps.liveMailboxes) {
         try {
-          live = await deps.liveMailboxIds();
+          live = await deps.liveMailboxes();
         } catch (err) {
-          deps.logger.warn({ err, mailbox }, 'Could not list the live mailboxes for the send level; not applying the legacy key');
+          deps.logger.warn({ errName: err instanceof Error ? err.name : typeof err, mailbox }, 'Could not list the live mailboxes for the send level; not applying the legacy key');
         }
       }
-      const legacyDefault = live !== undefined && live.length === 1 && live[0] === mailbox;
+      const legacyDefault = live !== undefined && legacyDefaultMailbox(live) === mailbox;
       const raw = await deps.get(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY);
-      if (live !== undefined && raw !== null && !warnedUnknown.has(raw) && namesNoKnownMailbox(raw, live, deps.logger)) {
-        // Once per process per value; never the stored value itself.
-        warnedUnknown.add(raw);
-        deps.logger.warn('ceo_inbox/sending has entries but none for a live mailbox or "default"; every mailbox uses on_request');
-      }
-      if (live !== undefined && live.length >= 2 && raw !== null && !warnedUnknown.has(`legacy:${raw}`) && ignoresLegacyDefault(raw, mailbox, deps.logger)) {
-        warnedUnknown.add(`legacy:${raw}`);
-        deps.logger.warn('ceo_inbox/sending still has a legacy "default" entry, which is ignored now that more than one mailbox is live; set a level per mailbox');
+      if (live !== undefined && raw !== null) {
+        const keys = storedKeys(raw, deps.logger);
+        // Once per process per key; the key (a mailbox id) only, never the stored level.
+        for (const key of keys === null ? [] : ignoredKeys(keys, live)) {
+          if (warned.has(key)) continue;
+          warned.add(key);
+          deps.logger.warn(
+            { key, liveMailboxIds: live.map((m) => m.id) },
+            key === DEFAULT_MAILBOX
+              ? 'ceo_inbox/sending has a legacy "default" entry that applies to no live mailbox; it is ignored, set a level per mailbox'
+              : 'ceo_inbox/sending has an entry for a mailbox that is not live; it is ignored',
+          );
+        }
       }
       const { level, malformed } = readSendLevelValue(raw, mailbox, legacyDefault);
       // Never the stored value: only that it could not be read as a level.
@@ -128,7 +180,7 @@ export function createSendLevelReader(deps: {
       return level;
     } catch (err) {
       // Fall back to on_request: never widens autonomy, keeps principal-directed sends working.
-      deps.logger.warn({ err, mailbox }, 'Could not read ceo_inbox sending level; using on_request');
+      deps.logger.warn({ errName: err instanceof Error ? err.name : typeof err, mailbox }, 'Could not read ceo_inbox sending level; using on_request');
       return DEFAULT_SEND_LEVEL;
     }
   };

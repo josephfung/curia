@@ -1,10 +1,13 @@
 // migrate-config-keys.ts — rename the pre-#2475 `default` key of ceo_inbox/sending to the
-// migrated default mailbox's id (#2475, D6). Run at boot once a real default id exists.
+// migrated mailbox's id (#2475, D6), or drop it once that mailbox is gone (S-I1).
 //
-// Until it runs, send-level.ts still applies a stored `default` key to the default mailbox
-// (createSendLevelReader's defaultMailboxId), so no boot step leaves an install on on_request.
+// The migrated mailbox is the registry row the flat migration created: the only one with no
+// triage start (the console's add always sets it). That holds across boots, so an install migrated
+// by an earlier release (whose migration now returns 'already') is renamed too (B1). Until the
+// rename lands, send-level.ts applies a stored `default` key to that mailbox while it is the one
+// live mailbox (legacyDefaultMailbox), so no boot step leaves an install on on_request.
 import type { Logger } from '../logger.js';
-import { SEND_SETTING_KEY, SEND_SETTING_NAMESPACE } from '../skills/principal-send/send-level.js';
+import { SEND_SETTING_KEY, SEND_SETTING_NAMESPACE, type SendLevelMailbox } from '../skills/principal-send/send-level.js';
 
 export interface SendingConfigStore {
   get(namespace: string, key: string): Promise<string | null>;
@@ -41,70 +44,101 @@ export async function migrateSendingKey(store: SendingConfigStore, defaultId: st
 }
 
 /**
- * Drop the legacy `default` entry (no-op when absent). Called when a mailbox is removed: that
- * entry was set for the install's one migrated mailbox, so it must not outlive it and be
- * inherited by whichever mailbox is added next as the sole one (R41). Store errors propagate.
+ * Drop the legacy `default` entry (no-op when absent). Called when the migrated mailbox is removed:
+ * that entry was set for it, so it must not outlive it and be inherited by whichever mailbox is
+ * added next as the sole one (R41, SF8). True when an entry was dropped. Store errors propagate.
  */
-export async function dropLegacyDefaultKey(store: SendingConfigStore, logger: Logger): Promise<void> {
+export async function dropLegacyDefaultKey(store: SendingConfigStore, logger: Logger): Promise<boolean> {
   const raw = await store.get(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY);
-  if (raw === null) return;
+  if (raw === null) return false;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
     // Not ours to repair; the reader flags it.
     logger.warn({ errName: err instanceof Error ? err.name : typeof err }, 'ceo_inbox/sending is not valid JSON; the legacy default key is not dropped');
-    return;
+    return false;
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return;
-  const { [LEGACY_KEY]: legacy, ...rest } = parsed as Record<string, unknown>;
-  if (legacy === undefined) return;
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
+  if (!Object.prototype.hasOwnProperty.call(parsed, LEGACY_KEY)) return false;
+  const rest: Record<string, unknown> = { ...(parsed as Record<string, unknown>) };
+  delete rest[LEGACY_KEY];
   await store.set(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY, JSON.stringify(rest));
+  logger.info('Dropped the legacy default send-level key: the mailbox it was set for is gone');
+  return true;
+}
+
+/** True when the stored value is an object that still has a `default` key. Never throws. */
+function hasLegacyKey(raw: string | null): boolean {
+  if (raw === null) return false;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      && Object.prototype.hasOwnProperty.call(parsed, LEGACY_KEY);
+  } catch {
+    // Unparseable: migrateSendingKey and dropLegacyDefaultKey warn about it; nothing to do here.
+    return false;
+  }
+}
+
+/**
+ * Bring a leftover `default` key in line with the registry (B1, S-I1): rename it to the migrated
+ * mailbox while that mailbox is live; drop it once that mailbox is gone and another is live; leave
+ * it while the deferred fallback is served (it is that mailbox's level) or no mailbox is live.
+ * Store and registry errors propagate.
+ */
+export async function reconcileLegacySendingKey(deps: {
+  store: SendingConfigStore;
+  mailboxes: readonly SendLevelMailbox[];
+  fallbackActive: boolean;
+  logger: Logger;
+}): Promise<'renamed' | 'dropped' | 'nothing'> {
+  const { store, mailboxes, logger } = deps;
+  if (deps.fallbackActive || mailboxes.length === 0) return 'nothing';
+  if (!hasLegacyKey(await store.get(SEND_SETTING_NAMESPACE, SEND_SETTING_KEY))) return 'nothing';
+  const migrated = mailboxes.find((m) => m.triageStartAt === null);
+  if (migrated) return migrateSendingKey(store, migrated.id, logger);
+  return (await dropLegacyDefaultKey(store, logger)) ? 'dropped' : 'nothing';
 }
 
 type FlatOutcome = 'migrated' | 'already' | 'nothing' | 'deferred';
 
 /**
- * Wraps the flat-mailbox migration so the send-level rename follows it wherever it returns
- * 'migrated' (boot and the health retry), onto the id that migration created (R41): the level was
- * set for that one mailbox, so it is never bound to "the current default". The id is read right
- * after the migration, when it is the only live mailbox; with any other count nothing is guessed.
- * At boot the config store does not exist yet: the id waits for `flush()`, called once it does.
+ * Wraps the flat-mailbox migration so the legacy send-level key is reconciled after every run, at
+ * boot and in the health retry, whatever the migration returned (B1: an install migrated by an
+ * earlier release returns 'already' on every boot). The rename targets the migrated mailbox (R41,
+ * S-I1), never "the current default" or "any single live mailbox". At boot the config store does not
+ * exist yet: `flush()` reconciles once it does, and a failure is retried by the next run or boot.
  */
 export function renameSendingKeyAfterMigration(deps: {
   migrate: () => Promise<FlatOutcome>;
-  liveIds: () => Promise<readonly string[]>;
+  mailboxes: () => Promise<readonly SendLevelMailbox[]>;
+  isFallbackActive: () => Promise<boolean>;
   store: () => SendingConfigStore | undefined;
   logger: Logger;
 }): (() => Promise<FlatOutcome>) & { flush: () => Promise<void> } {
-  let pendingId: string | undefined;
+  let toldNoStore = false;
   const flush = async (): Promise<void> => {
     const store = deps.store();
-    if (!pendingId || !store) return;
-    const id = pendingId;
+    if (!store) {
+      // Expected at boot (the store comes later and flushes then); said once, not per run (SF17).
+      if (!toldNoStore) deps.logger.info('Send-level key check waits for the config store');
+      toldNoStore = true;
+      return;
+    }
     try {
-      if ((await migrateSendingKey(store, id, deps.logger)) === 'renamed') {
-        deps.logger.info({ mailboxId: id }, 'Renamed the default send-level key to the migrated mailbox id');
-      }
-      pendingId = undefined;
+      const outcome = await reconcileLegacySendingKey({
+        store, mailboxes: await deps.mailboxes(), fallbackActive: await deps.isFallbackActive(), logger: deps.logger,
+      });
+      if (outcome === 'renamed') deps.logger.info('Renamed the default send-level key to the migrated mailbox id');
     } catch (err) {
-      // Kept pending for the next flush; until then the legacy key applies while this is the only mailbox.
-      deps.logger.warn({ err }, 'Could not rename the ceo_inbox/sending default key; the legacy key still applies');
+      // Retried on the next run or boot; until then the legacy key applies only to the migrated sole mailbox.
+      deps.logger.warn({ errName: err instanceof Error ? err.name : typeof err }, 'Could not reconcile the ceo_inbox/sending default key; it is retried at the next boot');
     }
   };
   const run = async (): Promise<FlatOutcome> => {
     const outcome = await deps.migrate();
-    // A rename that failed earlier is retried on the next run, not dropped.
-    if (outcome !== 'migrated') await flush();
-    if (outcome === 'migrated') {
-      try {
-        const ids = await deps.liveIds();
-        if (ids.length === 1) pendingId = ids[0];
-      } catch (err) {
-        deps.logger.warn({ err }, 'Could not read the migrated mailbox id; the send-level key is not renamed');
-      }
-      await flush();
-    }
+    await flush();
     return outcome;
   };
   return Object.assign(run, { flush });
