@@ -25,6 +25,8 @@ export interface Cadence {
 export const DEFAULT_CADENCE = 'hourly 06:00-23:00';
 /** Triage batches per local day across all mailboxes (about 600 messages at batch size 5). */
 export const TRIAGE_DAILY_CEILING = 120;
+/** Messages per triage batch. */
+export const TRIAGE_BATCH_SIZE = 5;
 /** A due mailbox with more untriaged mail than this raises the backlog alarm. */
 export const BACKLOG_ALARM_THRESHOLD = 100;
 

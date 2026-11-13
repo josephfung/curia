@@ -3,6 +3,10 @@ import { encodePageToken, pageScope } from '../../../_shared/composite-page-toke
 import { allFailedMessage, collectAcross, listAcrossMailboxes, mergeNewestFirst, readPageToken, resolveTargets } from '../../../_shared/cross-mailbox-listing.js';
 import { curiaOwnAddresses } from '../../../_shared/curia-own-addresses.js';
 import { NYLAS_MAX_LIST_LIMIT, type NylasDraftSummary, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
+import { triageList } from '../../../_shared/triage-listing.js';
+import { isPrincipalDirectedMailboxSend } from '../../../../src/skills/principal-send/authority.js';
+import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
+import { DateTime } from 'luxon';
 import { annotateDrafts, filterModifiedSince, parseModifiedSince } from '../../../_shared/draft-listing.js';
 
 const MAX_LIMIT = 50;
@@ -34,14 +38,29 @@ function isSystemFolder(folder: string): boolean {
   return SYSTEM_FOLDER_IDS.has(upper) || upper.startsWith('CATEGORY_');
 }
 
+// How far back a principal-directed sweep may move a start line ("about a year").
+const SWEEP_MAX_DAYS = 366;
+
 export class CeoInboxListHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
+    const input =
+      ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
+
+    // A principal-directed sweep moves a start line back (D4). Done before targets are read, so a
+    // triage call in the same turn sees the new line.
+    if (input.sweep_since !== undefined) {
+      const swept = await this.sweep(ctx, input);
+      if (!swept.ok) return { success: false, error: swept.error };
+      if (input.triage !== true) return { success: true, data: swept.data };
+    }
+
     const resolved = await resolveTargets(ctx, ctx.input, 'ceo-inbox-list');
     if (!resolved.ok) return { success: false, error: resolved.error };
     const { targets } = resolved;
 
-    const input =
-      ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
+    if (input.triage === true) {
+      return triageList(ctx, targets, await curiaOwnAddresses(ctx, 'ceo-inbox-list'));
+    }
 
     // Normalize inputs — LLMs may emit floats, strings, or missing values
     const rawLimit =
@@ -218,6 +237,43 @@ export class CeoInboxListHandler implements ToolHandler {
     } catch (err) {
       ctx.log.error({ err }, 'ceo-inbox-list: failed to list messages');
       return { success: false, error: 'Failed to list principal inbox messages' };
+    }
+  }
+
+  /** sweep_since: move one mailbox's start line back. The principal's own live turn only. */
+  private async sweep(
+    ctx: ToolContext,
+    input: Record<string, unknown>,
+  ): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string }> {
+    if (!isPrincipalDirectedMailboxSend({ liveTurn: ctx.liveTurn, taskMetadata: ctx.taskMetadata })) {
+      ctx.log.warn({ tool: 'ceo-inbox-list' }, 'ceo-inbox-list: sweep_since refused: not a live principal turn');
+      return { ok: false, error: 'sweep_since is only available when the principal asks for it in a live conversation.' };
+    }
+    const mailboxId = typeof input.mailbox === 'string' ? input.mailbox.trim() : '';
+    if (!mailboxId) return { ok: false, error: 'sweep_since needs the mailbox id to sweep.' };
+    const raw = typeof input.sweep_since === 'string' ? input.sweep_since.trim() : '';
+    const parsed = DateTime.fromISO(raw, { zone: ctx.timezone ?? 'UTC' });
+    if (!raw || !parsed.isValid) return { ok: false, error: 'sweep_since must be an ISO 8601 date, for example 2026-11-01.' };
+    const at = parsed.toJSDate();
+    const now = Date.now();
+    if (at.getTime() > now) return { ok: false, error: 'sweep_since must be in the past.' };
+    if (now - at.getTime() > SWEEP_MAX_DAYS * 86_400_000) return { ok: false, error: 'sweep_since can reach back at most a year.' };
+    const svc = ctx.triageServices;
+    if (!svc) return { ok: false, error: 'Triage is unavailable: triage services are not configured.' };
+    if (!ctx.principalMailboxes) return { ok: false, error: 'No principal mailbox is connected.' };
+    try {
+      const mailbox = await ctx.principalMailboxes.get(mailboxId);
+      if (mailbox.triageStartAt === null) return { ok: false, error: `${mailbox.label} has no start line: all of its unread mail is already triaged.` };
+      if (at.getTime() >= mailbox.triageStartAt.getTime()) return { ok: false, error: `${mailbox.label}'s start line is already earlier than that.` };
+      await svc.setTriageStart(mailbox.id, at);
+      // Make the mailbox due now and let a new backlog alarm fire for the larger range.
+      await svc.state.setDraining(mailbox.id, true);
+      await svc.state.setBacklogAlarmed(mailbox.id, false);
+      ctx.log.info({ mailboxId: mailbox.id }, 'ceo-inbox-list: moved a triage start line back on the principal\'s request');
+      return { ok: true, data: { mailbox: mailbox.id, mailbox_label: mailbox.label, triage_start_at: at.toISOString(), messages: [], count: 0 } };
+    } catch (err) {
+      ctx.log.warn({ tool: 'ceo-inbox-list', ...grantSafeErrorFields(err) }, 'ceo-inbox-list: sweep_since failed');
+      return { ok: false, error: err instanceof Error && /unknown|removed|no longer/i.test(err.message) ? err.message : 'Could not move the start line.' };
     }
   }
 }

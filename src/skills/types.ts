@@ -223,6 +223,9 @@ export interface ToolContext {
   /** The live mailboxes' ids, labels and triage starts only (#2475) — for skills declaring
    *  'mailboxDirectory' that name mailboxes but never read mail. */
   mailboxDirectory?: import('../principal-mailboxes/service.js').MailboxDirectory;
+  /** Triage cadences, state, dedupe store and start-line setter (#2475, D4) — for skills declaring
+   *  'triageServices'. No credentials, clients or grant ids. */
+  triageServices?: import('../principal-mailboxes/triage-services.js').TriageServices;
   /** Scheduler service — available to skills declaring 'schedulerService' in capabilities */
   schedulerService?: import('../scheduler/scheduler-service.js').SchedulerService;
   /** Entity memory (knowledge graph) — available to skills declaring 'entityMemory' in capabilities.

@@ -4,6 +4,7 @@
 //   triage.<id>.last_drained_at   ISO-8601 instant of the last completed drain
 //   triage.<id>.draining          'true' | 'false' — a drain returned has_more last batch
 //   triage.batches.<YYYY-MM-DD>   batches run that LOCAL day (principal's timezone), all mailboxes
+//   triage.<id>.drain_started_at  ISO-8601 start of the current drain episode (R52), '' when none
 //   triage.<id>.backlog_alarmed   'true' | 'false' — the backlog alarm fired this episode
 //
 // Corrupt stored values fail safe, preferring to stop over running past the budget:
@@ -41,6 +42,19 @@ export class TriageState {
 
   async markDrained(id: string, at: Date): Promise<void> {
     await this.write(`triage.${id}.last_drained_at`, at.toISOString());
+  }
+
+  /** When the current drain episode began (R52); null when none is recorded or the value is bad. */
+  async drainStartedAt(id: string): Promise<Date | null> {
+    const raw = await this.read(`triage.${id}.drain_started_at`);
+    if (raw === null || raw === '') return null;
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  /** Record the start of a drain episode, or clear it with null. */
+  async setDrainStartedAt(id: string, at: Date | null): Promise<void> {
+    await this.write(`triage.${id}.drain_started_at`, at ? at.toISOString() : '');
   }
 
   async isDraining(id: string): Promise<boolean> {

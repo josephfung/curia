@@ -101,6 +101,16 @@ export class PrincipalMailboxStore {
     if (res.rowCount === 0) await this.throwNotLive(id);
   }
 
+  /** Move (or clear) a live mailbox's triage start line. Unknown or removed ids throw. */
+  async setTriageStart(id: string, at: Date | null): Promise<void> {
+    const res = await this.pool.query(
+      `UPDATE principal_mailboxes SET triage_start_at = $2, updated_at = now()
+        WHERE id = $1 AND removed_at IS NULL`,
+      [id, at],
+    );
+    if (res.rowCount === 0) await this.throwNotLive(id);
+  }
+
   /** Make `id` the one live default. Clearing the old default and setting the new one is atomic. */
   async setDefault(id: string): Promise<void> {
     await this.inTransaction(async (client) => {

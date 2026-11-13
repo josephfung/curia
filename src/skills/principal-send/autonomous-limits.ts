@@ -108,7 +108,7 @@ function isListMail(msg: NylasMessage): boolean {
 export const MAX_CONVERSATION_IDS = 50;
 
 /** Message-IDs in a header value: `<a@x> <b@x>` or bare tokens; lowercased, brackets stripped. */
-function messageIdsIn(value: string): string[] {
+export function messageIdsIn(value: string): string[] {
   const bracketed = [...value.matchAll(/<([^<>\s]+)>/g)].map((m) => m[1]!);
   const ids = bracketed.length > 0 ? bracketed : value.split(/\s+/).map((t) => t.replace(/^<|>$/g, ''));
   return ids.map((i) => i.trim().toLowerCase()).filter((i) => i.length > 0);
