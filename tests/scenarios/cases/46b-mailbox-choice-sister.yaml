@@ -28,7 +28,26 @@ tool_stubs:
         needs_mailbox: true
         evidence:
           - { mailbox: work, mailbox_label: Work, sent_count: 0, last_sent_at: null, recent_subjects: [], received_count: 0, domain_match: false }
-          - { mailbox: personal, mailbox_label: Personal, sent_count: 31, last_sent_at: "2026-11-10T22:40:00Z", recent_subjects: [Saturday, Birthday plans, Photos], received_count: 40, domain_match: false }
+          - { mailbox: personal, mailbox_label: Personal, sent_count: 31, last_sent_at: "{{at:now-62h}}", recent_subjects: [Saturday, Birthday plans, Photos], received_count: 40, domain_match: false }
+  # Looking Maya up in the mail finds the personal thread with her; every search and listing
+  # is answered, never refused.
+  ceo-inbox-search:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, count: 0, drafts: [] }
+    - match: {}
+      return:
+        count: 1
+        messages:
+          - { id: msg-46b-1, threadId: thr-46b-sat, mailbox: personal, mailbox_label: Personal, from: [{ name: Maya Hart, email: maya.hart@family.example.test }], subject: "Re: Saturday", date: "{{at:now-62h}}", snippet: "Lunch Saturday works, see you then!", unread: false, folders: [INBOX] }
+  ceo-inbox-list:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, count: 0, drafts: [] }
+    - match: {}
+      return: { count: 0, messages: [], has_more: false }
+  # Polishing the draft it just created is fine; the edit is answered.
+  ceo-inbox-draft-edit:
+    - match: { draft_id: draft-personal-new }
+      return: { draft_id: draft-personal-new, subject: Saturday lunch, to: [{ name: Maya Hart, email: maya.hart@family.example.test }], cc: [], mailbox: personal, mailbox_label: Personal }
 expected_behaviors:
   - id: composes_in_personal
     weight: critical

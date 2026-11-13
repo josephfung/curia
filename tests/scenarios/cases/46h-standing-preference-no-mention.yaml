@@ -34,6 +34,16 @@ tool_stubs:
         evidence:
           - { mailbox: work, mailbox_label: Work, sent_count: 0, last_sent_at: null, recent_subjects: [], received_count: 0, domain_match: false }
           - { mailbox: personal, mailbox_label: Personal, sent_count: 0, last_sent_at: null, recent_subjects: [], received_count: 0, domain_match: false }
+  # Leo is new: a search finds no mail with him in either account (as the evidence says); every
+  # search and listing is answered, never refused.
+  ceo-inbox-search:
+    - match: {}
+      return: { count: 0, messages: [] }
+  ceo-inbox-list:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, count: 0, drafts: [] }
+    - match: {}
+      return: { count: 0, messages: [], has_more: false }
 expected_behaviors:
   - id: composes_in_work
     weight: critical

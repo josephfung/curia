@@ -80,6 +80,31 @@ tool_stubs:
   memory-query:
     - match: {}
       return: { count: 0, results: [] }
+  # The wrong paths the checks below forbid must be open (a forbidden tool needs a succeeding
+  # stub): a reply draft on this message, a send, a shadow draft and a bullpen escalation all
+  # succeed, so a loop the model starts is caught by the checks, not refused by the harness.
+  ceo-inbox-draft-reply:
+    - match: { reply_to_message_id: msg-46j-self }
+      return:
+        draft_id: draft-46j-reply
+        mailbox: work
+        mailbox_label: Work
+        subject: "Re: Reminder - renew the domain"
+        to: [{ name: Principal, email: principal@personal.example.test }]
+        cc: []
+        already_exists: false
+  ceo-inbox-send-draft:
+    - match: {}
+      return: { message_id: msg-sent-46j, to: [principal@personal.example.test], subject: "Re: Reminder - renew the domain" }
+  ceo-inbox-shadow-draft:
+    - match: {}
+      return: { captured: true, path: /shadow-drafts/scenario.md }
+  bullpen-post:
+    - match: {}
+      return: { thread_id: 7a1b2c3d-46j0-4e5f-8a9b-000000000001, message_id: 7a1b2c3d-46j0-4e5f-8a9b-000000000002, deduplicated: false }
+  bullpen-reply:
+    - match: {}
+      return: { thread_id: 7a1b2c3d-46j0-4e5f-8a9b-000000000001, message_id: 7a1b2c3d-46j0-4e5f-8a9b-000000000003, deduplicated: false }
 expected_behaviors:
   - id: lists_in_triage_mode
     weight: critical

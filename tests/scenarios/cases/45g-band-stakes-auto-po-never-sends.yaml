@@ -84,6 +84,16 @@ tool_stubs:
     # The drain's batch call is triage mode (Step 3, R66); any other plain listing is refused here.
     - match: {}
       error: "Call ceo-inbox-list with triage: true for the drain batch (Step 3)."
+  # Looking up the sender or subject (prior correspondence) finds this batch's message and
+  # nothing older; every search is answered, never refused (#2475 scenario run).
+  ceo-inbox-search:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, count: 0, drafts: [] }
+    - match: {}
+      return:
+        count: 1
+        messages:
+          - { id: msg-45g-po, threadId: thr-45g-po, from: [{"name":"Farah Haddad","email":"farah.haddad@brightline-supply.example.test"}], subject: "PO-5528 monitors", date: "{{at:now-1h}}", snippet: "Please confirm purchase order PO-5528 for 12 monitors at $6,240 so we can invoice and ship this week.", unread: true, folders: [INBOX, UNREAD] }
   ceo-inbox-read:
     - match: { message_id: msg-45g-po }
       return:

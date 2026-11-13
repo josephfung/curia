@@ -35,6 +35,11 @@ tool_stubs:
         to: [{ name: Priya Nair, email: priya.nair@ledger.example.test }]
         cc: []
         note: "The draft now lives in the Personal mailbox; store the principal's account preference for this contact and topic with memory-store so the next draft goes to the right account."
+  # Forbidden below (no_resend_or_recompose), so the wrong path must be open: a send succeeds,
+  # overriding ceo-inbox-office's refusal, and the check alone catches it.
+  ceo-inbox-send-draft:
+    - match: {}
+      return: { message_id: msg-sent-46g, to: [priya.nair@ledger.example.test], subject: Tax slips }
 expected_behaviors:
   - id: moves_to_personal
     weight: critical
