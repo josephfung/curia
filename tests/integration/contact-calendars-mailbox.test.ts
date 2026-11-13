@@ -5,7 +5,7 @@
 // files share one database. So assertions read only this file's own contacts' rows, and the
 // cleanup releases exactly the rows this file's backfill assigned: the ones now on this file's
 // own mailbox id, which nothing else uses.
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import pg from 'pg';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { backfillCalendarMailboxes } from '../../src/principal-mailboxes/backfill-calendar-mailboxes.js';
@@ -51,9 +51,13 @@ describeIf('contact_calendars mailbox column', () => {
     return Object.fromEntries(rows.map((r) => [r.nylas_calendar_id, r]));
   };
 
+  // Teardown deletes only after the database was confirmed to be curia_test.
+  let dbValidated = false;
+
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
     await requireCuriaTestDatabase(pool);
+    dbValidated = true;
     contacts = ContactService.createWithPostgres(pool, undefined, createSilentLogger());
     await pool.query(`INSERT INTO contacts (id, display_name) VALUES ($1, 'Cal Test')`, [contactId]);
     for (const [id, addr] of [[mbA, `a-${suffix}@example.com`], [mbB, `b-${suffix}@example.com`]] as const) {
@@ -65,21 +69,32 @@ describeIf('contact_calendars mailbox column', () => {
   });
 
   afterAll(async () => {
-    const mine = [contactId, ...extraContacts];
-    await pool.query('DELETE FROM contact_calendars WHERE contact_id = ANY($1::uuid[])', [mine]);
-    // Rows of other files that this file's backfill assigned (only it uses mbA): release them.
-    await pool.query('UPDATE contact_calendars SET principal_mailbox_id = NULL WHERE principal_mailbox_id = $1', [mbA]);
-    await pool.query('DELETE FROM principal_mailboxes WHERE id = ANY($1)', [[mbA, mbB]]);
-    await pool.query('DELETE FROM contacts WHERE id = ANY($1::uuid[])', [mine]);
-    await pool.end();
+    try {
+      if (dbValidated) {
+        const mine = [contactId, ...extraContacts];
+        await pool.query('DELETE FROM contact_calendars WHERE contact_id = ANY($1::uuid[])', [mine]);
+        // Rows of other files that this file's backfill assigned (only it uses mbA): release them.
+        await pool.query('UPDATE contact_calendars SET principal_mailbox_id = NULL WHERE principal_mailbox_id = $1', [mbA]);
+        await pool.query('DELETE FROM principal_mailboxes WHERE id = ANY($1)', [[mbA, mbB]]);
+        await pool.query('DELETE FROM contacts WHERE id = ANY($1::uuid[])', [mine]);
+      }
+    } finally {
+      await pool.end();
+    }
+  });
+
+  // Each test starts from the same rows of this file's contact: primaries p1 (mbA), p2 (mbB) and
+  // p4 (no mailbox), so any one test runs on its own.
+  beforeEach(async () => {
+    await pool.query('DELETE FROM contact_calendars WHERE contact_id = $1', [contactId]);
+    await insert(calIds('p1'), mbA, true);
+    await insert(calIds('p2'), mbB, true);
+    await insert(calIds('p4'), null, true);
   });
 
   it('one primary per contact per mailbox', async () => {
-    await insert(calIds('p1'), mbA, true);
-    await insert(calIds('p2'), mbB, true);
     await expect(insert(calIds('p3'), mbA, true)).rejects.toMatchObject({ code: '23505' });
     // A mailbox-less primary is its own slot.
-    await insert(calIds('p4'), null, true);
     await expect(insert(calIds('p5'), null, true)).rejects.toMatchObject({ code: '23505' });
   });
 
@@ -88,7 +103,7 @@ describeIf('contact_calendars mailbox column', () => {
   });
 
   it('getPrimaryCalendar picks the named mailbox, and otherwise a deterministic one', async () => {
-    // From the first test: p1 (mbA), p2 (mbB) and p4 (no mailbox) are all primary.
+    // From beforeEach: p1 (mbA), p2 (mbB) and p4 (no mailbox) are all primary.
     expect((await contacts.getPrimaryCalendar(contactId, mbB))?.nylasCalendarId).toBe(calIds('p2'));
     expect((await contacts.getPrimaryCalendar(contactId, mbA))?.nylasCalendarId).toBe(calIds('p1'));
     // Neither test mailbox is the default, so the oldest primary wins, every time.
