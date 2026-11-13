@@ -891,11 +891,14 @@ export class SchedulerService {
    *
    * After all upsertDeclarativeJob() calls complete, the caller passes the full set of
    * (agent_id, cron_expr, task_payload::text) tuples that were successfully upserted.
-   * Any system-created rows in 'pending' or 'failed' status whose triple is NOT in that
-   * set are stale — their cron changed, or the entry was removed from YAML entirely.
+   * Any system-created rows in 'pending', 'failed' or 'running' status whose triple is NOT in
+   * that set are stale — their cron changed, or the entry was removed from YAML entirely.
    *
-   * Running and suspended jobs are left alone: running jobs are handled by the watchdog,
-   * and suspended jobs may have been paused intentionally by an operator.
+   * A stale 'running' row is cancelled too: if a boot lands mid-run, the watchdog would later
+   * reset the row to pending and the removed schedule would fire again (#2475, the old triage
+   * cron). The in-flight run finishes harmlessly: completion writes are fenced on
+   * status NOT IN ('paused','cancelled'). A live (declared) running row is excluded by its
+   * tuple. Suspended jobs are left alone: they may have been held intentionally by an operator.
    *
    * Returns the number of rows cancelled.
    */
@@ -925,7 +928,7 @@ export class SchedulerService {
     }
 
     // When liveTuples is non-empty, exclude the live set. When empty, no exclusion
-    // is needed — the UPDATE targets all system rows with pending/failed status.
+    // is needed — the UPDATE targets all system rows with pending/failed/running status.
     const exclusionClause = valuePlaceholders.length > 0
       ? `AND (source_agent_id, agent_id, cron_expr, task_payload::text) NOT IN (VALUES ${valuePlaceholders.join(', ')})`
       : '';
@@ -934,7 +937,7 @@ export class SchedulerService {
       UPDATE scheduled_jobs
          SET status = 'cancelled'
        WHERE created_by = 'system'
-         AND status IN ('pending', 'failed')
+         AND status IN ('pending', 'failed', 'running')
          ${exclusionClause}
       RETURNING id, agent_id, cron_expr, task_payload
     `;

@@ -146,6 +146,30 @@ const TOLERANCE_MS = HEARTBEAT_MS / 2;
 const MIN_INTERVAL_MS = 10 * 60_000;
 
 /**
+ * Whether `now` is inside the cadence's window and weekday restriction (local time, R51). A
+ * cadence with neither is always inside. A draining mailbox bypasses the interval but not this
+ * (R53). An invalid timezone throws.
+ */
+export function inWindow(c: Cadence, now: Date, tz: string): boolean {
+  const local = DateTime.fromJSDate(now, { zone: tz });
+  if (!local.isValid) {
+    throw new Error(`inWindow: invalid timezone "${tz}" (${local.invalidReason ?? 'unknown reason'})`);
+  }
+  // The local day the cadence "belongs to" for the weekday check (R51).
+  let dayForWeekday = local;
+  if (c.window) {
+    const t = local.hour * 60 + local.minute;
+    const start = minutesOfDay(c.window.start);
+    const end = minutesOfDay(c.window.end);
+    const crosses = start > end;
+    const inside = crosses ? t >= start || t <= end : t >= start && t <= end;
+    if (!inside) return false;
+    if (crosses && t <= end) dayForWeekday = local.minus({ days: 1 });
+  }
+  return !(c.weekdaysOnly && dayForWeekday.weekday > 5);
+}
+
+/**
  * Whether a mailbox is due: inside its window (and on a weekday if required), and either
  * the interval has elapsed since `lastDrainedAt` (within TOLERANCE_MS, see above) or, for
  * `daily HH:MM`, `now` is at or after today's HH:MM (local) and the last drain was before that
@@ -162,18 +186,7 @@ export function isDue(c: Cadence, lastDrainedAt: Date | null, now: Date, tz: str
   }
   if (lastDrainedAt !== null && lastDrainedAt.getTime() > now.getTime()) lastDrainedAt = null;
 
-  // The local day the cadence "belongs to" for the weekday check (R51).
-  let dayForWeekday = local;
-  if (c.window) {
-    const t = local.hour * 60 + local.minute;
-    const start = minutesOfDay(c.window.start);
-    const end = minutesOfDay(c.window.end);
-    const crosses = start > end;
-    const inside = crosses ? t >= start || t <= end : t >= start && t <= end;
-    if (!inside) return false;
-    if (crosses && t <= end) dayForWeekday = local.minus({ days: 1 });
-  }
-  if (c.weekdaysOnly && dayForWeekday.weekday > 5) return false;
+  if (!inWindow(c, now, tz)) return false;
 
   if ('dailyAt' in c.every) {
     const slot = DateTime.fromObject(

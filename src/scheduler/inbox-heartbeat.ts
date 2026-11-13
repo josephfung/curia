@@ -8,11 +8,17 @@
 // `0 6-23 * * *` triage cron.
 //
 // Live vs stalled `inbox-drain` task (open or in_progress, tag `inbox-drain`, agent ceo-inbox):
-//   live    = the scheduler still owns a wake for it (nextWakeAt or wakeState set, so a running
-//             wake counts), OR it was updated within STALLED_AFTER_MINUTES (a run is about to
+//   live    = the scheduler will run a wake for it (nextWakeAt set, or wakeState pending, running
+//             or retrying), OR it was updated within STALLED_AFTER_MINUTES (a run is about to
 //             re-arm it). A live drain owns the inbox: do nothing ('drain_running').
-//   stalled = no wake owned and no update for STALLED_AFTER_MINUTES. Re-wake it in place
-//             (enqueueTaskWake); never create a second drain task while one is open.
+//   stalled = no such wake and no update for STALLED_AFTER_MINUTES. A `suspended` wake counts as
+//             no wake (the scheduler will not run it): re-wake the task in place with
+//             enqueueTaskWake, which revives it, and warn. Never create a second drain task
+//             while one is open.
+//   held    = a `paused` wake is an operator's deliberate hold. It is left alone (warn), and
+//             counts as the drain being in charge: no wake, no second task.
+// Every drain is stamped with the system originator, as the old declarative cron was, so its
+// autonomous sends pass the outbound gateway's origin check (isAutonomousSendOrigin).
 import type { Logger } from '../logger.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import type { SchedulerService } from './scheduler-service.js';
@@ -20,6 +26,7 @@ import type { PrincipalMailboxes } from '../principal-mailboxes/service.js';
 import type { Cadence } from '../principal-mailboxes/triage-cadence.js';
 import type { TriageState } from '../principal-mailboxes/triage-state.js';
 import { dueMailboxes } from '../principal-mailboxes/triage-due.js';
+import { makeSystemOriginator } from '../contacts/principal.js';
 import { grantSafeErrorFields } from '../principal-mailboxes/error-fields.js';
 
 export const INBOX_DRAIN_TAG = 'inbox-drain';
@@ -126,13 +133,22 @@ export class InboxHeartbeat {
     })).filter((t) => t.agentId === INBOX_AGENT);
 
     const staleBefore = now.getTime() - STALLED_AFTER_MINUTES * 60_000;
+    const paused = open.find((t) => t.wakeState === 'paused');
+    if (paused) {
+      this.o.logger.warn({ taskId: paused.id, wakeState: 'paused' }, 'InboxHeartbeat: inbox-drain wake is paused by an operator; leaving it, no triage until it is resumed');
+      return 'drain_running';
+    }
     const isLive = (t: (typeof open)[number]): boolean =>
-      t.nextWakeAt !== null || t.wakeState !== null || new Date(t.updatedAt).getTime() > staleBefore;
+      (t.wakeState !== 'suspended' && (t.nextWakeAt !== null || t.wakeState !== null)) ||
+      new Date(t.updatedAt).getTime() > staleBefore;
     if (open.some(isLive)) return 'drain_running';
 
     const stalled = open[0];
     if (stalled) {
-      await this.o.scheduler.enqueueTaskWake({ taskId: stalled.id, agentId: INBOX_AGENT, runAt: now });
+      if (stalled.wakeState === 'suspended') {
+        this.o.logger.warn({ taskId: stalled.id, wakeState: 'suspended' }, 'InboxHeartbeat: re-waking an inbox-drain task whose wake was suspended');
+      }
+      await this.o.scheduler.enqueueTaskWake({ taskId: stalled.id, agentId: INBOX_AGENT, runAt: now, originator: makeSystemOriginator() });
       this.o.logger.info({ taskId: stalled.id }, 'InboxHeartbeat: re-woke a stalled inbox-drain task');
       return 'woke';
     }
@@ -143,6 +159,7 @@ export class InboxHeartbeat {
       tags: [INBOX_DRAIN_TAG],
       wakeAt: now,
       createdBy: 'heartbeat',
+      originator: makeSystemOriginator(),
     });
     this.o.logger.info({ taskId: task.id, due }, 'InboxHeartbeat: created an inbox-drain task');
     return 'woke';

@@ -92,13 +92,29 @@ describe('dueMailboxes', () => {
     expect(due).toEqual(['work']);
   });
 
-  it('a draining mailbox is due even outside its window or interval', async () => {
+  it('a draining mailbox is due inside its window even before its interval elapses (R53)', async () => {
     const { st } = make();
     await st.markDrained('home', new Date('2026-06-10T13:59:00Z'));
     await st.setDraining('home', true);
-    const night = new Date('2026-06-10T07:00:00Z'); // 03:00 EDT
-    expect(await dueMailboxes({ mailboxIds: ['home'], cadences: { home: hourly }, state: st, now: night, tz })).toEqual(['home']);
     expect(await dueMailboxes({ mailboxIds: ['home'], cadences: { home: hourly }, state: st, now, tz })).toEqual(['home']);
+  });
+
+  it('a draining mailbox is NOT due outside its window, and resumes when the window reopens (R53)', async () => {
+    const { st } = make();
+    await st.markDrained('home', new Date('2026-06-10T07:00:00Z'));
+    await st.setDraining('home', true);
+    const night = new Date('2026-06-10T07:00:00Z'); // 03:00 EDT, window is 06:00-23:00
+    expect(await dueMailboxes({ mailboxIds: ['home'], cadences: { home: hourly }, state: st, now: night, tz })).toEqual([]);
+    const morning = new Date('2026-06-10T10:30:00Z'); // 06:30 EDT
+    expect(await dueMailboxes({ mailboxIds: ['home'], cadences: { home: hourly }, state: st, now: morning, tz })).toEqual(['home']);
+  });
+
+  it('a draining mailbox on a weekdays cadence is not due on a Saturday (R53)', async () => {
+    const { st } = make();
+    await st.setDraining('home', true);
+    const weekdays = parseCadence('hourly weekdays')!;
+    const saturday = new Date('2026-06-13T14:00:00Z');
+    expect(await dueMailboxes({ mailboxIds: ['home'], cadences: { home: weekdays }, state: st, now: saturday, tz })).toEqual([]);
   });
 
   it('a mailbox with no cadence entry uses the default, and order follows mailboxIds', async () => {

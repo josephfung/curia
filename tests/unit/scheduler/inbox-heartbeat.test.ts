@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { InboxHeartbeat, type InboxHeartbeatOptions } from '../../../src/scheduler/inbox-heartbeat.js';
 import { parseCadence, TRIAGE_DAILY_CEILING, type Cadence } from '../../../src/principal-mailboxes/triage-cadence.js';
+import { isAutonomousSendOrigin } from '../../../src/skills/outbound-gateway.js';
 import { TriageState } from '../../../src/principal-mailboxes/triage-state.js';
 
 const TZ = 'America/Toronto';
@@ -40,7 +41,7 @@ function make(over: {
   const mbs = over.mailboxes ?? [{ id: 'work', triageStartAt: null }];
   const hasUnreadSince = over.hasUnread ?? vi.fn(async () => true);
   const listTasks = vi.fn(async () => (over.tasks ?? []) as never);
-  const createTask = vi.fn(async () => ({ id: 'new-task' }) as never);
+  const createTask = vi.fn(async (_p: unknown) => ({ id: 'new-task' }) as never);
   const enqueueTaskWake = vi.fn(async () => ({ jobId: 'j' }));
   const log = logger();
   const hb = new InboxHeartbeat({
@@ -119,10 +120,52 @@ describe('InboxHeartbeat.tick', () => {
     expect(t.hasUnreadSince).not.toHaveBeenCalled();
   });
 
-  it('a mailbox that is draining is probed even outside its window', async () => {
+  it('a draining mailbox outside its window is not probed (R53)', async () => {
     const t = make({ cadences: { work: parseCadence('hourly 06:00-08:00')! }, seed: { 'triage.work.draining': 'true' } });
+    expect(await t.hb.tick(NOW)).toBe('quiet');
+    expect(t.hasUnreadSince).not.toHaveBeenCalled();
+  });
+
+  it('a draining mailbox inside its window is probed', async () => {
+    const t = make({ seed: { 'triage.work.draining': 'true', 'triage.work.last_drained_at': NOW.toISOString() } });
     expect(await t.hb.tick(NOW)).toBe('woke');
     expect(t.hasUnreadSince).toHaveBeenCalledWith('work', null);
+  });
+
+  it('stamps the system originator on a created drain task and on a re-wake', async () => {
+    const created = make();
+    await created.hb.tick(NOW);
+    expect(created.createTask).toHaveBeenCalledWith(expect.objectContaining({
+      originator: expect.objectContaining({ systemRole: 'system', contactId: 'system' }),
+    }));
+    const rewoken = make({ tasks: [taskRow()] });
+    await rewoken.hb.tick(NOW);
+    expect(rewoken.enqueueTaskWake).toHaveBeenCalledWith(expect.objectContaining({
+      originator: expect.objectContaining({ systemRole: 'system' }),
+    }));
+  });
+
+  it('the stamped originator satisfies the outbound gateway autonomous-send check', async () => {
+    const t = make();
+    await t.hb.tick(NOW);
+    const arg = t.createTask.mock.calls[0]![0] as { originator: unknown };
+    // The wake job carries the task's originator and fireJob threads it onto metadata.originator.
+    expect(isAutonomousSendOrigin({ originator: arg.originator as Record<string, unknown> })).toBe(true);
+  });
+
+  it('re-wakes a suspended drain (and warns) instead of counting it live', async () => {
+    const t = make({ tasks: [taskRow({ wakeState: 'suspended', nextWakeAt: '2026-11-12T16:00:00.000Z' })] });
+    expect(await t.hb.tick(NOW)).toBe('woke');
+    expect(t.enqueueTaskWake).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-1' }));
+    expect(t.log.warn).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-1', wakeState: 'suspended' }), expect.any(String));
+  });
+
+  it('a paused drain is an operator hold: warns, does not wake or create', async () => {
+    const t = make({ tasks: [taskRow({ wakeState: 'paused', nextWakeAt: '2026-11-12T16:00:00.000Z' })] });
+    expect(await t.hb.tick(NOW)).toBe('drain_running');
+    expect(t.enqueueTaskWake).not.toHaveBeenCalled();
+    expect(t.createTask).not.toHaveBeenCalled();
+    expect(t.log.warn).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-1', wakeState: 'paused' }), expect.any(String));
   });
 
   it('probes a due mailbox with its triage start', async () => {
