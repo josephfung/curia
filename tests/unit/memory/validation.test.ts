@@ -830,6 +830,20 @@ describe('MemoryValidator', () => {
       expect(result.action).toBe('rate_limited');
     });
 
+    it('a checkpoint source\'s mailbox provenance does not open a fresh write budget (#2475)', async () => {
+      const entity = await store.createNode({
+        type: 'concept', label: 'person', properties: {}, source: 'test',
+      });
+      const base = 'system:checkpoint/conversation:c2/agent:ceo-inbox/channel:email';
+      for (let i = 0; i < 25; i++) validator.recordWrite(`${base}/mailboxes:work`);
+      for (let i = 0; i < 25; i++) validator.recordWrite(`${base}/mailboxes:personal,work`);
+      // 50 writes across two mailbox sets: the conversation's one cap is spent.
+      for (const source of [`${base}/mailboxes:personal`, base]) {
+        const result = await validator.validate({ entityNodeId: entity.id, label: 'one more fact', source });
+        expect(result.action, source).toBe('rate_limited');
+      }
+    });
+
     it('adopts a legacy label-only fact on exactKey write (no twin)', async () => {
       const entity = await store.createNode({
         type: 'concept', label: 'config:ns', properties: {}, source: 'test',
