@@ -73,7 +73,7 @@ function EmailCalendarSection() {
         </div>
       )}
       {keyState.kind === 'error' && (
-        <p className="autonomy-error">
+        <p className="autonomy-error" role="alert">
           Couldn&apos;t check whether the email channel is set up: {keyState.message}
         </p>
       )}

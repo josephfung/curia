@@ -381,10 +381,13 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
         />
       )}
 
-      <p className="settings-page-sub" style={{ margin: '12px 0 0' }}>
-        Changes apply at once, no restart needed. Use Replace grant after reconnecting a
-        mailbox's account in Nylas.
-      </p>
+      {/* Read-only (no API key yet): the page says why; nothing here can change. */}
+      {!readOnly && (
+        <p className="settings-page-sub" style={{ margin: '12px 0 0' }}>
+          Changes apply at once, no restart needed. Use Replace grant after reconnecting a
+          mailbox's account in Nylas.
+        </p>
+      )}
 
       {!migrating && (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>

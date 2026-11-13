@@ -34,11 +34,11 @@ const json = (body: unknown, status = 200): Response =>
 
 const work = { id: 'work', label: 'Work', address: 'boss@acme-example.com', isDefault: true };
 
-function channels(keyConfigured: boolean) {
+function channels(keyConfigured: boolean, source: 'vault' | 'env' = 'vault') {
   return {
     channels: [
       { name: 'cli', credentialFields: [] },
-      { name: 'email', credentialFields: [{ key: 'nylas_api_key', label: 'Nylas API key', secret: true, configured: keyConfigured, source: keyConfigured ? 'vault' : 'missing' }] },
+      { name: 'email', credentialFields: [{ key: 'nylas_api_key', label: 'Nylas API key', secret: true, configured: keyConfigured, source: keyConfigured ? source : 'missing' }] },
     ],
   };
 }
@@ -93,6 +93,32 @@ describe('EmailCalendarPage', () => {
     expect(container.querySelector('[role="alert"]')).toBeNull();
     expect((container.querySelector('[aria-label="Grant ID"]') as HTMLInputElement).disabled).toBe(false);
     expect(button('Rename')!.disabled).toBe(false);
+    expect(container.textContent).toContain('Changes apply at once');
+  });
+
+  it('a key from the environment counts as set', async () => {
+    mocks.respond = (path) => path === '/api/registry/channels'
+      ? json(channels(true, 'env'))
+      : json({ mailboxes: [work] });
+    await mount();
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect((container.querySelector('[aria-label="Grant ID"]') as HTMLInputElement).disabled).toBe(false);
+  });
+
+  it('stays read-only, with no alert, until the key check answers', async () => {
+    let answer!: (r: Response) => void;
+    mocks.respond = (path) => path === '/api/registry/channels'
+      ? new Promise<Response>((resolve) => { answer = resolve; })
+      : json({ mailboxes: [work] });
+    await mount();
+    expect(container.textContent).toContain('boss@acme-example.com');
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect((container.querySelector('[aria-label="Grant ID"]') as HTMLInputElement).disabled).toBe(true);
+    expect(button('Rename')!.disabled).toBe(true);
+    await act(async () => { answer(json(channels(true))); });
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect((container.querySelector('[aria-label="Grant ID"]') as HTMLInputElement).disabled).toBe(false);
+    expect(button('Rename')!.disabled).toBe(false);
   });
 
   it('without the key: alerts, links to the email channel, lists mailboxes read-only', async () => {
@@ -112,6 +138,8 @@ describe('EmailCalendarPage', () => {
     for (const text of ['Test', 'Add mailbox', 'Replace grant', 'Rename', 'Remove']) {
       expect(button(text)!.disabled).toBe(true);
     }
+    // No "changes apply at once" beside a form that is off.
+    expect(container.textContent).not.toContain('Changes apply at once');
   });
 
   it('treats a missing email channel entry as no key', async () => {
@@ -128,8 +156,10 @@ describe('EmailCalendarPage', () => {
       ? json({ error: 'boom' }, 500)
       : json({ mailboxes: [work] });
     await mount();
-    expect(container.textContent).toContain("Couldn't check whether the email channel is set up: boom");
-    expect(container.querySelector('[role="alert"]')).toBeNull();
+    const alerts = [...container.querySelectorAll('[role="alert"]')];
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]!.textContent).toBe("Couldn't check whether the email channel is set up: boom");
+    expect(container.textContent).not.toContain('Finish setting up the email channel first');
     expect((container.querySelector('[aria-label="Grant ID"]') as HTMLInputElement).disabled).toBe(false);
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();

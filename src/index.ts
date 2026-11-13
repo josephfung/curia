@@ -1382,7 +1382,7 @@ async function main(): Promise<void> {
       const defaultMailbox = await principalMailboxes.defaultMailbox();
       if (!defaultMailbox) {
         logger.warn(
-          "No principal mailbox is connected yet, so calendar tools have no calendar to use. Add one in the console (no restart needed); RSVP/holds/events run as the principal.",
+          "No principal mailbox is connected yet, so calendar tools have no calendar to use. Add one in the console under Settings → Personality → Email & Calendar (no restart needed); RSVP/holds/events run as the principal.",
         );
       } else {
         await principalMailboxes.credentials(defaultMailbox.id);

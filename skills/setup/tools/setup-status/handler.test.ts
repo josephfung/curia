@@ -321,7 +321,7 @@ describe('setup-status', () => {
       const task = data.tasks.find(t => t.id === 'principal_mailboxes');
       expect(task?.status).toBe(expected);
       expect(task?.docs_url).toBe('/get-started/principal-email-calendar');
-      expect(task?.handoff_path).toBe('/settings/personality');
+      expect(task?.handoff_path).toBe('/settings/email-calendar');
     });
 
     it('principal mailboxes: never flags restart_required (#2475)', async () => {

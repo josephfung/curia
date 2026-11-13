@@ -396,6 +396,8 @@ describe('CalendarListEventsHandler', () => {
     ));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toBe(NO_MAILBOX_MESSAGE);
+    // Tells the principal where to connect one (#2475, R79).
+    expect(NO_MAILBOX_MESSAGE).toContain('Settings → Personality → Email & Calendar');
   });
 
   it('returns failure when no calendarId and no contactService', async () => {

@@ -58,7 +58,7 @@ tasks:
     value_prop: "Connect your own Gmail accounts (work and personal, say) so Curia can triage your inboxes, draft and send mail, and book on your calendars."
     tier: heavy
     handoff: console
-    handoff_path: /settings/personality
+    handoff_path: /settings/email-calendar
     completion_check:
       type: principal_mailbox_ready
     credential_how_to: "In Nylas, connect each Gmail account and copy its grant ID. In the console under Settings → Personality → Email & Calendar, add each mailbox (a short id, a label, the grant ID), use Test to confirm the address, and pick the default. Changes apply without a restart."

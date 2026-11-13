@@ -63,7 +63,7 @@ export function calendarRouterEnabled(opts: { hasNylasApiKey: boolean; hasPrinci
 }
 
 /** The `no_mailbox` answer: what a calendar tool says while no principal mailbox is connected. */
-export const NO_MAILBOX_MESSAGE = 'No principal mailbox is connected, so there is no calendar to use. Add one in the console first.';
+export const NO_MAILBOX_MESSAGE = 'No principal mailbox is connected, so there is no calendar to use. Add one in the console under Settings → Personality → Email & Calendar first.';
 
 /** A calendar call that cannot be routed. The message says what to pass; it never names a grant. */
 export class CalendarRouteError extends Error {
