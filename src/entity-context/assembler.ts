@@ -654,10 +654,14 @@ export class EntityContextAssembler {
    * Today: contact_calendars only. Future: union with contact_email_accounts, etc.
    */
   private async getConnectedAccounts(contactId: string): Promise<ConnectedAccount[]> {
+    // A calendar whose mailbox was removed keeps its row (R75) but cannot be read until it is
+    // re-registered through a live mailbox (R77): marked, so it is not used as a live calendar (R104).
     const calendarResult = await this.pool.query<CalendarRow>(
-      `SELECT nylas_calendar_id, label, is_primary, read_only, timezone, principal_mailbox_id
-       FROM contact_calendars
-       WHERE contact_id = $1`,
+      `SELECT cc.nylas_calendar_id, cc.label, cc.is_primary, cc.read_only, cc.timezone, cc.principal_mailbox_id,
+              (pm.removed_at IS NOT NULL) AS mailbox_removed
+       FROM contact_calendars cc
+       LEFT JOIN principal_mailboxes pm ON pm.id = cc.principal_mailbox_id
+       WHERE cc.contact_id = $1`,
       [contactId],
     );
 
@@ -670,6 +674,7 @@ export class EntityContextAssembler {
       metadata: {
         ...(row.timezone ? { timezone: row.timezone } : {}),
         ...(row.principal_mailbox_id ? { mailboxId: row.principal_mailbox_id } : {}),
+        ...(row.mailbox_removed ? { mailboxRemoved: true } : {}),
       },
     }));
   }
@@ -767,6 +772,8 @@ interface CalendarRow {
   read_only: boolean;
   timezone: string | null;
   principal_mailbox_id: string | null;
+  /** True when principal_mailbox_id names a removed mailbox. */
+  mailbox_removed: boolean;
 }
 
 interface RelationshipRow {

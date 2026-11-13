@@ -59,7 +59,11 @@ export interface RemovalOutcome {
 
 /** Shown when a mailbox was added but its home calendar could not be registered. */
 export const HOME_CALENDAR_PENDING_WARNING =
-  "Saved. Registering the mailbox's calendar failed; register it from the calendar agent (calendar-register) or remove and add the mailbox again.";
+  "Saved. Registering the mailbox's calendar failed; Curia retries at its next restart, or register it from the calendar agent (calendar-register).";
+
+/** Shown when a mailbox was added but its account lists no primary calendar to register (SF-I2). */
+export const NO_HOME_CALENDAR_WARNING =
+  "Saved. This account lists no primary calendar, so none was registered; Curia retries at its next restart. Its calendar is read from the account meanwhile.";
 
 /** A removal request that breaks a precondition; nothing was changed. */
 export class MailboxRemovalError extends Error {
@@ -241,10 +245,7 @@ export class PrincipalMailboxAdmin {
     if (!this.deps.calendars) return undefined;
     try {
       const outcome = await this.deps.calendars.registerHome(id, label);
-      // No primary calendar listed: nothing was registered, so the principal gets the same
-      // recovery instructions as for a failure (the mailbox itself stays saved).
-      if (outcome === 'no_primary_calendar') return HOME_CALENDAR_PENDING_WARNING;
-      return undefined;
+      return outcome === 'no_primary_calendar' ? NO_HOME_CALENDAR_WARNING : undefined;
     } catch (err) {
       this.log.error({ ...this.safeErrFields(err), mailboxId: id }, "Could not register the new mailbox's home calendar");
       return HOME_CALENDAR_PENDING_WARNING;

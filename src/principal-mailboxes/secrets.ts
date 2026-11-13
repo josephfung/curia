@@ -36,6 +36,20 @@ export async function retiredFlatKeyRefusal(
   return FLAT_KEYS_MANAGED_MESSAGE;
 }
 
+/**
+ * Secret capture's rule (SEC-L3): an agent-minted capture link never writes the flat grant, even
+ * while the fallback serves it, since the fallback reads it live and none of the console's grant
+ * checks apply. The flat address follows retiredFlatKeyRefusal. Only the operator's vault PUT
+ * writes the flat grant.
+ */
+export async function capturedFlatKeyRefusal(
+  name: string,
+  isFallbackActive: (() => Promise<boolean>) | undefined,
+): Promise<string | null> {
+  if (name === FLAT_GRANT_KEY) return FLAT_KEYS_MANAGED_MESSAGE;
+  return retiredFlatKeyRefusal(name, isFallbackActive);
+}
+
 // A per-mailbox grant is written only by the principal-mailboxes routes, which validate it.
 export const PER_MAILBOX_GRANT_MANAGED_MESSAGE =
   "A principal mailbox's grant is set in the console: Settings → Personality → Email & Calendar " +

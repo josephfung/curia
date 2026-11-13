@@ -20,8 +20,8 @@ import { isSystemOriginated, isPrincipalOriginated } from '../../../../src/conta
 import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from '../../../../src/skills/_shared/placeholder-guard.js';
 import { guardNylasExplicitCalendarIdentity } from '../../../../src/skills/_shared/calendar-identity-guard.js';
 import { isUuid } from '../../../../src/util/uuid.js';
-import { CalendarRouteError, NO_MAILBOX_MESSAGE, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
-import { readCalendarMailbox, routeCalendar } from '../../../_shared/calendar-route.js';
+import { CalendarRouteError, NO_MAILBOX_MESSAGE, PRIMARY_CALENDAR_ALIAS, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
+import { calendarRouteErrorMessage, readCalendarMailbox, routeCalendar } from '../../../_shared/calendar-route.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 
 /**
@@ -70,6 +70,9 @@ export class CalendarListEventsHandler implements ToolHandler {
       // Priority: explicit calendarId > explicit contactId lookup > caller auto-lookup.
       let calendarIds: string[];
       const preRouted = new Map<string, RoutedCalendar>();
+      // The principal's own listing (their agenda, the debrief scans) covers every live account,
+      // registered calendar or not (R103): an account is never silently missing.
+      let principalListing = false;
 
       if (calendarId && typeof calendarId === 'string') {
         // Principal-scoped task + calendar registered to a non-principal contact → fail closed (#1854).
@@ -119,7 +122,8 @@ export class CalendarListEventsHandler implements ToolHandler {
           return { success: false, error: 'contactService not available — cannot look up calendars by contactId' };
         }
         const calendars = await ctx.contactService.getCalendarsForContact(contactId);
-        if (calendars.length === 0) {
+        principalListing = contactId === router.principalContactId;
+        if (calendars.length === 0 && !principalListing) {
           return { success: false, error: await noCalendarsError(ctx, `No calendars registered for contact ${contactId} — register a calendar first`) };
         }
         calendarIds = calendars.map((c) => c.nylasCalendarId);
@@ -142,7 +146,8 @@ export class CalendarListEventsHandler implements ToolHandler {
           };
         }
         const calendars = await ctx.contactService.getCalendarsForContact(ctx.caller.contactId);
-        if (calendars.length === 0) {
+        principalListing = ctx.caller.contactId === router.principalContactId;
+        if (calendars.length === 0 && !principalListing) {
           return { success: false, error: await noCalendarsError(ctx, 'No calendars registered for this contact — register a calendar first') };
         }
         calendarIds = calendars.map((c) => c.nylasCalendarId);
@@ -155,49 +160,72 @@ export class CalendarListEventsHandler implements ToolHandler {
       // rather than sending an oversized (and 400-rejected) Nylas limit (#1798).
       const fetchLimit = typeof maxResults === 'number' && maxResults > 0 ? { limit: maxResults } : undefined;
 
-      // Fetch events from all resolved calendars in parallel, then merge.
-      // Use allSettled so one bad calendar (stale grant, revoked access) doesn't
-      // poison the entire result — return partial results and log failures.
-      // Each calendar goes through its own mailbox (#2475); one that cannot be routed fails
-      // like one whose fetch failed, and the others still answer.
-      const settled = await Promise.allSettled(
-        calendarIds.map(async (cid) => {
-          const routed = preRouted.get(cid) ?? (await router.route(cid, mailbox.mailbox));
-          const listed = await routed.client.listEvents(routed.calendarId, timeMin, timeMax, fetchLimit);
-          return listed.map((evt) => ({ evt, mailboxId: routed.mailboxId, calendarId: routed.calendarId }));
-        }),
-      );
-
+      // Route every calendar to its mailbox first (#2475), then fetch in parallel and merge.
+      // allSettled throughout: one bad calendar (stale grant, revoked access) doesn't poison the
+      // listing; it is named in `warnings` and the result is `partial`.
       const failedCalendarIds: string[] = [];
       const rejectionReasons: unknown[] = [];
       // "<calendarId>: <upstream message>" per failure, so the agent can see *why*
       // a calendar failed and correct its own inputs instead of retrying blind (#1798).
       const failureDetails: string[] = [];
-      const successfulEvents: SourcedEvent[][] = [];
-      for (let i = 0; i < settled.length; i++) {
-        // settled is mapped 1:1 from calendarIds and i is bounded by settled.length, so
-        // both indexed accesses are guaranteed present (noUncheckedIndexedAccess types
-        // them as possibly-undefined). The guard on .status then narrows the
-        // PromiseSettledResult to its fulfilled/rejected member (.value / .reason).
-        const result = settled[i]!;
-        const calendarId = calendarIds[i]!;
-        if (result.status === 'fulfilled') {
-          successfulEvents.push(result.value);
+      const fail = (id: string, reason: unknown): void => {
+        failedCalendarIds.push(id);
+        rejectionReasons.push(reason);
+        failureDetails.push(`${id}: ${describeRejection(reason)}`);
+        if (reason instanceof CalendarRouteError) {
+          ctx.log.warn({ code: reason.code }, 'calendar-list-events: a calendar could not be routed to its mailbox');
         } else {
-          failedCalendarIds.push(calendarId);
-          rejectionReasons.push(result.reason);
-          failureDetails.push(`${calendarId}: ${describeRejection(result.reason)}`);
-          if (result.reason instanceof CalendarRouteError) {
-            ctx.log.warn({ code: result.reason.code }, 'calendar-list-events: a calendar could not be routed to its mailbox');
-          } else {
-            ctx.log.error({ ...grantSafeErrorFields(result.reason) }, 'Failed to fetch events for calendar');
-          }
+          ctx.log.error({ ...grantSafeErrorFields(reason) }, 'Failed to fetch events for calendar');
         }
+      };
+      // A removed mailbox's calendars (R104): listed once as removed, not as failures. Their rows
+      // stay (R75); calendar-register re-homes one through a live mailbox (R77).
+      const removed: string[] = [];
+      const targets: Array<{ id: string; routed: RoutedCalendar }> = [];
+      const routedSettled = await Promise.allSettled(
+        calendarIds.map(async (cid) => preRouted.get(cid) ?? (await router.route(cid, mailbox.mailbox))),
+      );
+      routedSettled.forEach((r, i) => {
+        const id = calendarIds[i]!;
+        if (r.status === 'fulfilled') {
+          targets.push({ id, routed: r.value });
+        } else if (r.reason instanceof CalendarRouteError && r.reason.code === 'mailbox_removed') {
+          const label = r.reason.removedMailbox?.label ?? 'a removed mailbox';
+          if (!removed.includes(label)) removed.push(label);
+          ctx.log.info({ mailboxId: r.reason.removedMailbox?.id }, 'calendar-list-events: a calendar of a removed mailbox was not read');
+        } else {
+          fail(id, r.reason);
+        }
+      });
+
+      // Every live account the principal's listing did not reach gets its home calendar read;
+      // one whose home calendar cannot be found is named, never left out (R103).
+      const uncovered: string[] = [];
+      if (principalListing) {
+        const cover = await coverEveryAccount(ctx, targets);
+        targets.push(...cover.added);
+        uncovered.push(...cover.uncovered);
+      }
+      if (targets.length === 0 && failedCalendarIds.length === 0 && uncovered.length === 0 && removed.length === 0) {
+        return { success: false, error: await noCalendarsError(ctx, 'No calendars registered for this contact — register a calendar first') };
       }
 
-      if (successfulEvents.length === 0) {
+      const settled = await Promise.allSettled(
+        targets.map(async ({ routed }) => {
+          const listed = await routed.client.listEvents(routed.calendarId, timeMin, timeMax, fetchLimit);
+          return listed.map((evt) => ({ evt, mailboxId: routed.mailboxId, calendarId: routed.calendarId }));
+        }),
+      );
+
+      const successfulEvents: SourcedEvent[][] = [];
+      settled.forEach((result, i) => {
+        if (result.status === 'fulfilled') successfulEvents.push(result.value);
+        else fail(targets[i]!.id, result.reason);
+      });
+
+      if (successfulEvents.length === 0 && (failedCalendarIds.length > 0 || uncovered.length > 0)) {
         if (failedCalendarIds.length === 0) {
-          return { success: false, error: 'No events found' };
+          return { success: false, error: `Failed to list events: ${uncovered.join('; ')}` };
         }
         // When every calendar fails with an auth-class error (Nylas statusCode
         // 401/403), name the grant/reconnect action so the briefing can tell the
@@ -216,7 +244,7 @@ export class CalendarListEventsHandler implements ToolHandler {
         }
         return {
           success: false,
-          error: `Failed to list events from any calendar (${failedCalendarIds.length} failed: ${failureDetails.join('; ')})`,
+          error: `Failed to list events from any calendar (${failedCalendarIds.length} failed: ${failureDetails.join('; ')})${uncovered.length > 0 ? `; ${uncovered.join('; ')}` : ''}`,
         };
       }
 
@@ -276,15 +304,31 @@ export class CalendarListEventsHandler implements ToolHandler {
         return calendars ? { ...shown, calendars } : shown;
       });
 
-      ctx.log.info({ calendarCount: calendarIds.length, count: formattedEvents.length, failedCount: failedCalendarIds.length }, 'Listed events');
+      ctx.log.info(
+        { calendarCount: targets.length, count: formattedEvents.length, failedCount: failedCalendarIds.length, uncoveredCount: uncovered.length, removedCount: removed.length },
+        'Listed events',
+      );
       const data: Record<string, unknown> = {
         events: formattedEvents,
         count: formattedEvents.length,
         displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : null,
       };
       // Surface partial failures so the LLM can inform the user
+      const warnings: string[] = [];
       if (failedCalendarIds.length > 0) {
-        data.warnings = [`Failed to fetch events from ${failedCalendarIds.length} calendar(s): ${failureDetails.join('; ')}`];
+        warnings.push(`Failed to fetch events from ${failedCalendarIds.length} calendar(s): ${failureDetails.join('; ')}`);
+      }
+      warnings.push(...uncovered);
+      if (warnings.length > 0) {
+        data.warnings = warnings;
+        // Structured, so a caller never reads a meeting missing from a partial listing as gone (SF-I3).
+        data.partial = true;
+        data.note = 'Not every calendar could be read: a meeting missing from this list may be on one that was not. Do not say it is not there.';
+      }
+      if (removed.length > 0) {
+        data.removed = removed;
+        data.removed_note =
+          'These mailboxes were removed, so their calendars were not read. To read one again, re-register it with calendar-register through a live mailbox.';
       }
       return { success: true, data };
     } catch (err) {
@@ -293,6 +337,38 @@ export class CalendarListEventsHandler implements ToolHandler {
       return { success: false, error: `Failed to list events: ${message}` };
     }
   }
+}
+
+/**
+ * The home calendars of the live accounts `targets` does not reach (R103): the principal's
+ * listing reads every account. A home calendar that cannot be found, or a mailbox list that
+ * cannot be read, is a warning naming the account, never a silent gap. Never throws.
+ */
+async function coverEveryAccount(
+  ctx: ToolContext,
+  targets: Array<{ id: string; routed: RoutedCalendar }>,
+): Promise<{ added: Array<{ id: string; routed: RoutedCalendar }>; uncovered: string[] }> {
+  const router = ctx.calendarRouter!;
+  let live: Awaited<ReturnType<typeof router.liveMailboxes>>;
+  try {
+    live = await router.liveMailboxes();
+  } catch (err) {
+    ctx.log.warn({ ...grantSafeErrorFields(err) }, 'calendar-list-events: could not list the mailboxes; accounts without a registered calendar may be missing');
+    return { added: [], uncovered: [`The mailboxes could not be listed, so an account with no registered calendar may be missing: ${calendarRouteErrorMessage(err)}`] };
+  }
+  const covered = new Set(targets.map((t) => t.routed.mailboxId));
+  const added: Array<{ id: string; routed: RoutedCalendar }> = [];
+  const uncovered: string[] = [];
+  for (const m of live.filter((x) => !covered.has(x.id))) {
+    const home = await routeCalendar(ctx, 'calendar-list-events', PRIMARY_CALENDAR_ALIAS, m.id);
+    if (home.ok) {
+      ctx.log.info({ mailboxId: m.id }, 'calendar-list-events: read the home calendar of an account with no registered calendar');
+      added.push({ id: home.routed.calendarId, routed: home.routed });
+    } else {
+      uncovered.push(`The "${m.label}" account's calendar could not be read: ${home.error}`);
+    }
+  }
+  return { added, uncovered };
 }
 
 /** An event with the mailbox and (routed) calendar it was read through. */
@@ -316,8 +392,9 @@ export interface EventCalendarRef {
  * which gains `calendars` naming each calendar it is on, only when all of these agree:
  *   - the iCal UID (non-empty; events without one are never merged);
  *   - the occurrence (a recurring series' instances share one UID);
- *   - start, end and title (R82: a UID is set by whoever sends the invite, so a spoofed UID must
- *     not let one event hide another that differs in what the principal would see).
+ *   - start, end, title, organizer, location and conferencing link (R82, R99: a UID is set by
+ *     whoever sends the invite, so a spoofed copy must neither hide another event nor stand in
+ *     for the real one with its own link, place or organizer).
  * Only copies read through different mailboxes merge (M1): a second copy from a mailbox already
  * in the group stays its own entry, whatever else is in the listing. A single-mailbox listing is
  * therefore unchanged.

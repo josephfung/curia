@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
-import { HOME_CALENDAR_PENDING_WARNING, PrincipalMailboxAdmin } from '../../../src/principal-mailboxes/admin.js';
+import { HOME_CALENDAR_PENDING_WARNING, NO_HOME_CALENDAR_WARNING, PrincipalMailboxAdmin } from '../../../src/principal-mailboxes/admin.js';
 import { createMailboxCalendarHooks } from '../../../src/principal-mailboxes/calendar-hooks.js';
 import type { PrincipalMailboxStore } from '../../../src/principal-mailboxes/store.js';
 import { RemovedMailboxError, type PrincipalMailboxRecord } from '../../../src/principal-mailboxes/types.js';
@@ -877,12 +877,10 @@ describe('PrincipalMailboxAdmin calendars (#2475, D7)', () => {
     expect(records.map((r) => r.id)).toEqual(['personal']);
   });
 
-  it('a grant listing no primary calendar is the same warning: nothing was registered', async () => {
+  it('an account with no primary calendar to register is a warning too (SF-I2)', async () => {
     const calendars = { registerHome: vi.fn(async () => 'no_primary_calendar' as const), listForMailbox: vi.fn(async () => []) };
-    const { admin, records } = setup({ grants: { g: google('pat@gmail.com') }, calendars });
-    const out = await admin.add({ id: 'personal', label: 'Personal', grantId: 'g' });
-    expect(out).toMatchObject({ ok: true, warning: HOME_CALENDAR_PENDING_WARNING });
-    expect(records.map((r) => r.id)).toEqual(['personal']);
+    const { admin } = setup({ grants: { g: google('pat@gmail.com') }, calendars });
+    expect(await admin.add({ id: 'personal', label: 'Personal', grantId: 'g' })).toMatchObject({ ok: true, warning: NO_HOME_CALENDAR_WARNING });
   });
 
   it("removalPreview lists the mailbox's calendars, and says when they could not be read", async () => {

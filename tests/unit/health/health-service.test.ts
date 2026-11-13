@@ -206,7 +206,8 @@ describe('HealthService.getStatus()', () => {
   it('returns degraded when the calendar probe through the router fails (#1561)', async () => {
     const svc = new HealthService(makeDeps({
       calendarRouterProbe: {
-        listDefaultCalendars: vi.fn().mockRejectedValue(Object.assign(new Error('Unauthorized'), { statusCode: 401 })),
+        liveMailboxIds: vi.fn().mockResolvedValue(['work']),
+        listCalendars: vi.fn().mockRejectedValue(Object.assign(new Error('Unauthorized'), { statusCode: 401 })),
       },
     }) as never);
     const result = await svc.getStatus();
@@ -214,16 +215,32 @@ describe('HealthService.getStatus()', () => {
     expect(result.checks.nylas_calendar).toBe('fail');
   });
 
-  it('health calendar probe goes through the router (#2475, Task 33b)', async () => {
-    const listDefaultCalendars = vi.fn().mockResolvedValue('listed');
-    const svc = new HealthService(makeDeps({ calendarRouterProbe: { listDefaultCalendars } }) as never);
+  it('health calendar probe goes through the router, every live mailbox (#2475, SF-I4)', async () => {
+    const liveMailboxIds = vi.fn().mockResolvedValue(['work', 'personal']);
+    const listCalendars = vi.fn().mockResolvedValue(undefined);
+    const svc = new HealthService(makeDeps({ calendarRouterProbe: { liveMailboxIds, listCalendars } }) as never);
     expect((await svc.getStatus()).checks.nylas_calendar).toBe('ok');
-    expect(listDefaultCalendars).toHaveBeenCalledTimes(1);
+    expect(listCalendars.mock.calls.map((c) => c[0])).toEqual(['work', 'personal']);
+    // A broken non-default mailbox fails the check.
+    listCalendars.mockImplementation(async (id: string) => { if (id === 'personal') throw new Error('revoked'); });
+    expect((await svc.getStatus()).checks.nylas_calendar).toBe('fail');
     // No mailbox connected yet: nothing to probe, not a failure.
-    listDefaultCalendars.mockResolvedValue('no_mailbox');
+    liveMailboxIds.mockResolvedValue([]);
     expect((await svc.getStatus()).checks.nylas_calendar).toBe('skipped');
     // No router (no Nylas key or no principal): skipped.
     expect((await new HealthService(makeDeps({}) as never).getStatus()).checks.nylas_calendar).toBe('skipped');
+  });
+
+  it('checkCalendarRouter names the failing mailbox and flags an auth failure', async () => {
+    const { checkCalendarRouter } = await import('../../../src/health/health-checks.js');
+    const warn = vi.fn();
+    const log = { warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
+    const r = await checkCalendarRouter({
+      liveMailboxIds: async () => ['work', 'personal'],
+      listCalendars: async (id) => { if (id === 'personal') throw Object.assign(new Error('Unauthorized'), { statusCode: 401 }); },
+    }, log);
+    expect(r).toEqual({ status: 'fail', authFailure: true, failedMailboxes: ['personal'] });
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ mailboxId: 'personal' }), expect.any(String));
   });
 
   describe('principal mailbox canaries (#2475)', () => {
