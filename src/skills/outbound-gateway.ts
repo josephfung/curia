@@ -471,7 +471,12 @@ export type PrincipalSendRefusal =
   // and card backstop (A3). The daily cap (A4) is an AutonomousLimitRefusal.
   | 'origin_unknown' | 'not_latest_message' | 'financial_details'
   // Cross-mailbox (#2475 Task 18): the principal's addresses could not be read.
-  | 'principal_addresses_unreadable';
+  | 'principal_addresses_unreadable'
+  // The task's draft writes could not be read (#2475 SF3): a failure to check, not not_curia_draft.
+  | 'provenance_unreadable';
+
+/** How a limit refusal's agent-facing text starts (R47): the cue ceo-inbox's triage summary lists apart. */
+export const LIMIT_CUE = 'Waiting (limit): ';
 
 /** How every autonomous refusal ends: the principal still has the draft. */
 const STILL_A_DRAFT = ' Nothing was sent; the draft is still in their Drafts folder.';
@@ -496,6 +501,7 @@ export const PRINCIPAL_SEND_REFUSALS: Record<PrincipalSendRefusal, string> = {
   no_send_ledger: `The send record isn't available, so Curia won't send from the principal's mailbox on its own.${STILL_A_DRAFT}`,
   thread_unreadable: `Couldn't read the thread to check who's on it, so Curia didn't send on its own.${STILL_A_DRAFT}`,
   not_curia_draft: `Curia sends on its own only a reply it drafted in this same pass.${STILL_A_DRAFT}`,
+  provenance_unreadable: `Couldn't check who wrote the draft, so Curia didn't send on its own.${STILL_A_DRAFT}`,
   draft_changed_since_curia: `The draft changed after Curia wrote it, so Curia left it for the principal.${STILL_A_DRAFT}`,
   not_a_reply: `Curia sends on its own only replies on an existing thread.${STILL_A_DRAFT}`,
   mailing_list: `The thread is a mailing list, so Curia didn't reply on its own.${STILL_A_DRAFT}`,
@@ -506,8 +512,9 @@ export const PRINCIPAL_SEND_REFUSALS: Record<PrincipalSendRefusal, string> = {
   recipient_not_on_thread: `The reply goes to someone who isn't genuinely on the thread.${STILL_A_DRAFT}`,
   too_many_recipients: `The reply goes to more than five people, so Curia left it for the principal.${STILL_A_DRAFT}`,
   has_attachments: `The reply has attachments, so Curia left it for the principal.${STILL_A_DRAFT}`,
-  thread_cooldown: `Curia already replied or held a reply on this thread in the last day.${STILL_A_DRAFT}`,
-  daily_cap: `Curia already sent ${AUTONOMOUS_DAILY_CAP} replies on its own in the last day, its daily limit.${STILL_A_DRAFT}`,
+  // Limits lead with a fixed cue the triage summary keys on (R47); never "held", which reads as a judgement.
+  thread_cooldown: `${LIMIT_CUE}Curia already dealt with a reply on this thread in the last day.${STILL_A_DRAFT}`,
+  daily_cap: `${LIMIT_CUE}Curia already sent ${AUTONOMOUS_DAILY_CAP} replies on its own in the last day, its daily limit.${STILL_A_DRAFT}`,
   origin_unknown: `Curia couldn't confirm this work came from its own inbox check, so it didn't send on its own.${STILL_A_DRAFT}`,
   not_latest_message: `The reply doesn't answer the latest message on its thread, so Curia didn't send it on its own.${STILL_A_DRAFT}`,
   financial_details: `It contains bank or card details, which Curia never sends on its own.${STILL_A_DRAFT}`,
@@ -537,6 +544,7 @@ export const PRINCIPAL_SEND_DIGEST_REASONS: Record<DigestRefusal, string> = {
   no_send_ledger: `Curia couldn't check its send log. ${IN_YOUR_DRAFTS}`,
   thread_unreadable: `Curia couldn't read the thread to check who's on it, so it didn't send on its own. ${IN_YOUR_DRAFTS}`,
   not_curia_draft: `Curia sends on its own only a reply it drafted in this same pass. ${IN_YOUR_DRAFTS}`,
+  provenance_unreadable: `Curia couldn't check who wrote the draft. ${IN_YOUR_DRAFTS}`,
   draft_changed_since_curia: `The draft changed after Curia wrote it, so Curia left it for you. ${IN_YOUR_DRAFTS}`,
   not_a_reply: `Curia sends on its own only replies on an existing thread. ${IN_YOUR_DRAFTS}`,
   mailing_list: `The thread is a mailing list, so Curia didn't reply on its own. ${IN_YOUR_DRAFTS}`,
@@ -546,7 +554,7 @@ export const PRINCIPAL_SEND_DIGEST_REASONS: Record<DigestRefusal, string> = {
   recipient_not_on_thread: `The reply goes to someone who isn't genuinely on the thread. ${IN_YOUR_DRAFTS}`,
   too_many_recipients: `The reply goes to more than five people, so Curia left it for you. ${IN_YOUR_DRAFTS}`,
   has_attachments: `The reply has attachments, so Curia left it for you. ${IN_YOUR_DRAFTS}`,
-  thread_cooldown: `Curia already replied or held a reply on this thread in the last day. ${IN_YOUR_DRAFTS}`,
+  thread_cooldown: `Curia already dealt with a reply on this thread in the last day. ${IN_YOUR_DRAFTS}`,
   daily_cap: `Curia already sent ${AUTONOMOUS_DAILY_CAP} replies on its own in the last day, its daily limit. ${IN_YOUR_DRAFTS}`,
   not_latest_message: `The reply doesn't answer the latest message on its thread, so Curia didn't send it on its own. ${IN_YOUR_DRAFTS}`,
   financial_details: `It contains bank or card details, which Curia never sends on its own. ${IN_YOUR_DRAFTS}`,
@@ -656,6 +664,7 @@ export const LIMIT_REFUSALS: ReadonlySet<PrincipalSendRefusal> = new Set<Princip
 const OTHER_REFUSALS: ReadonlySet<PrincipalSendRefusal> = new Set<PrincipalSendRefusal>([
   'mailbox_unavailable', 'unknown_mailbox', 'ambiguous_mailbox', 'setting_off', 'not_requested', 'approval_replay',
   'not_found', 'lookup_failed', 'send_unconfirmed', 'no_send_ledger', 'thread_unreadable', 'principal_addresses_unreadable', 'no_band_review',
+  'provenance_unreadable',
 ]);
 
 /** limit, other, or judgement (the default for a refusal about the reply itself). */
@@ -664,8 +673,13 @@ export function refusalKindOf(refusal: PrincipalSendRefusal): RefusalKind {
   return OTHER_REFUSALS.has(refusal) ? 'other' : 'judgement';
 }
 
-/** The first daily-cap stop in a rolling 24h files this notice (digest items are immutable). */
-const DAILY_LIMIT_NOTICE = `Reached the daily limit of ${AUTONOMOUS_DAILY_CAP} replies Curia sends on its own. Replies it would have sent wait in your Drafts until you send them or the limit resets.`;
+/**
+ * The first daily-cap stop in a rolling 24h files this notice (digest items are immutable). It
+ * names the reply that hit the limit (SF10), with the mailbox when there are several.
+ */
+function dailyLimitNotice(what: string, where: string): string {
+  return `Reached the daily limit of ${AUTONOMOUS_DAILY_CAP} replies Curia sends on its own. Waiting only because of the daily limit: ${what}${where}. Later replies it would have sent wait in your Drafts too, until you send them or the limit resets.`;
+}
 
 /** sendPrincipalDraft's result (#2474). */
 export interface PrincipalDraftSendResult extends OutboundSendResult {
@@ -1025,6 +1039,14 @@ function wakeAskFor(request: OutboundSendRequest, ask: BandReviewAsk): ApprovalW
 export const PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL =
   "This email account is the principal's own mailbox. Curia sends from it only through the ceo-inbox specialist, so nothing was sent.";
 
+/**
+ * Refusal when the principal's addresses could not be read to check a Curia account (#2475 SF1):
+ * the account may or may not be theirs, so nothing is sent, and the reason says so rather than
+ * claiming it is the principal's mailbox.
+ */
+export const MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL =
+  "Couldn't verify the sending account just now; nothing was sent; retry shortly.";
+
 export class OutboundGateway {
   /** All configured email accounts: accountId → NylasClient. */
   private readonly nylasClients: Map<string, NylasClient>;
@@ -1290,12 +1312,15 @@ export class OutboundGateway {
         const projected = this.projectRecipients(request);
         return projected.length > 0 && projected.every((r) => r.principalEligible && this.isPrincipalOnChannel('email', r.identifier));
       })();
-    if (request.channel === 'email' && !principalOnlyNotice && (this.isPrincipalMailbox(request.accountId) || await this.isAnyMailboxAccount(request.accountId))) {
-      this.log.warn(
-        { accountId: request.accountId },
-        'outbound-gateway: send refused — account is the principal\'s own mailbox (#2474)',
-      );
-      return { success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL };
+    if (request.channel === 'email' && !principalOnlyNotice) {
+      const refusal = await this.principalAccountRefusal(request.accountId);
+      if (refusal !== null) {
+        this.log.warn(
+          { accountId: request.accountId, unverified: refusal === MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL },
+          'outbound-gateway: send refused — account is (or may be) the principal\'s own mailbox (#2474)',
+        );
+        return { success: false, blockedReason: refusal };
+      }
     }
 
     // ------------------------------------------------------------------
@@ -3963,24 +3988,33 @@ export class OutboundGateway {
   }
 
   /**
-   * True when the account's own address is any of the principal's addresses: every live mailbox,
-   * not only the identities isPrincipalMailbox() reads (#2475, ADR-062). Fails closed: a lookup
-   * that throws counts as a match, so nothing is sent through an account that may be theirs.
-   * That refuses every Curia-account email send while the lookup is down, which is intended: send()
-   * still lets a principal-only system notice through, but sendEmailDraft has no such exemption.
+   * Whether the account's own address is any of the principal's addresses: every live mailbox,
+   * not only the identities isPrincipalMailbox() reads (#2475, ADR-062). Tri-state (SF1): a lookup
+   * that throws is `unknown`, which the caller refuses (fail closed) with a reason that says the
+   * account could not be verified, never that it is the principal's. That refuses every
+   * Curia-account email send while the lookup is down, which is intended: send() still lets a
+   * principal-only system notice through, but sendEmailDraft has no such exemption.
    */
-  private async isAnyMailboxAccount(accountId?: string): Promise<boolean> {
-    if (!this.principalEmailAddressLookup) return false;
+  private async mailboxAccountMatch(accountId?: string): Promise<'principal' | 'not' | 'unknown'> {
+    if (!this.principalEmailAddressLookup) return 'not';
     const name = accountId || this.nylasClients.keys().next().value;
     const address = name === undefined ? undefined : this.emailAccountAddresses.get(name);
-    if (address === undefined) return false;
+    if (address === undefined) return 'not';
     try {
       const mine = address.trim().toLowerCase();
-      return (await this.principalEmailAddressLookup()).some((a) => a.trim().toLowerCase() === mine);
+      return (await this.principalEmailAddressLookup()).some((a) => a.trim().toLowerCase() === mine) ? 'principal' : 'not';
     } catch (err) {
-      this.log.warn({ ...grantSafeErrorFields(err), accountId }, 'outbound-gateway: principal addresses unreadable — refusing the send through this account');
-      return true;
+      this.log.error({ ...grantSafeErrorFields(err), accountId }, 'outbound-gateway: principal addresses unreadable — the sending account could not be verified, refusing the send');
+      return 'unknown';
     }
+  }
+
+  /** The refusal for a send through this Curia account, or null when it is not the principal's. */
+  private async principalAccountRefusal(accountId?: string): Promise<string | null> {
+    if (this.isPrincipalMailbox(accountId)) return PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL;
+    const match = await this.mailboxAccountMatch(accountId);
+    if (match === 'principal') return PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL;
+    return match === 'unknown' ? MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL : null;
   }
 
   /**
@@ -4217,12 +4251,13 @@ export class OutboundGateway {
     options?: DraftSendOptions,
   ): Promise<OutboundSendResult> {
     // Closes the second outbound surface (#2474, design D1); see send(). Fail-closed.
-    if (this.isPrincipalMailbox(accountId) || await this.isAnyMailboxAccount(accountId)) {
+    const accountRefusal = await this.principalAccountRefusal(accountId);
+    if (accountRefusal !== null) {
       this.log.warn(
-        { draftId, accountId },
-        'outbound-gateway: draft send refused — account is the principal\'s own mailbox (#2474)',
+        { draftId, accountId, unverified: accountRefusal === MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL },
+        'outbound-gateway: draft send refused — account is (or may be) the principal\'s own mailbox (#2474)',
       );
-      return { success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL };
+      return { success: false, blockedReason: accountRefusal };
     }
 
     // ------------------------------------------------------------------
@@ -4469,8 +4504,10 @@ export class OutboundGateway {
     // found, or none connected, fails closed.
     const located = await this.resolveDraftMailbox(draftId, options.mailbox);
     if (!located.ok) {
-      // An autonomous send that cannot find its draft still reaches the principal (ADR-062).
-      if (options.authority.humanApproved !== true && !isPrincipalDirectedMailboxSend(options.authority)) {
+      // An autonomous send that cannot find its draft still reaches the principal (ADR-062), but
+      // only where a level would have let it send (SF9): under on_request it is refused quietly.
+      if (options.authority.humanApproved !== true && !isPrincipalDirectedMailboxSend(options.authority)
+        && await this.unlocatedLevelAllowsAutonomy(options.mailbox, draftId)) {
         await this.reportUnlocatedDraft(located.refusal, draftId, options);
       }
       return refuse(located.refusal);
@@ -4486,7 +4523,7 @@ export class OutboundGateway {
       if (this.readSendLevel) level = await this.readSendLevel(mailboxId);
     } catch (err) {
       // on_request, as the reader's own fallback: never widens autonomy, keeps principal-directed sends working.
-      this.log.warn({ err, draftId }, 'outbound-gateway: send level unreadable — using on_request');
+      this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: send level unreadable — using on_request');
     }
     if (level === 'off') return refuse('setting_off');
 
@@ -4539,7 +4576,7 @@ export class OutboundGateway {
       // Already read when several mailboxes were asked: the same copy, not a second read.
       draft = located.draft ?? await mailbox.getDraft(draftId);
     } catch (err) {
-      this.log.warn({ err, draftId }, 'outbound-gateway: principal-mailbox draft read failed — not sending it');
+      this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: principal-mailbox draft read failed — not sending it');
       lookedUp = true;
       return stop('lookup_failed');
     }
@@ -4576,7 +4613,7 @@ export class OutboundGateway {
           author = edited || !recent ? 'curia-edited' : 'principal';
         }
       } catch (err) {
-        this.log.warn({ err, draftId }, 'outbound-gateway: draft provenance unreadable — reviewing it as Curia-written');
+        this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: draft provenance unreadable — reviewing it as Curia-written');
         author = 'curia';
       }
     }
@@ -4602,7 +4639,7 @@ export class OutboundGateway {
           thread = await mailbox.listMessages({ threadId: draft.threadId, fields: 'include_headers', limit: AUTONOMOUS_THREAD_READ_LIMIT });
         } catch (err) {
           // Fail closed: who is on the thread is unknown.
-          this.log.warn({ err, draftId }, 'outbound-gateway: thread read failed — not sending on its own');
+          this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: thread read failed — not sending on its own');
           return stop('thread_unreadable');
         }
         // Fail closed: a full first page may not hold every participant.
@@ -4620,9 +4657,10 @@ export class OutboundGateway {
       try {
         curiaWrites = await this.draftProvenance!.curiaWritesInTask({ mailbox: mailboxId, draftId }, options.taskEventId!);
       } catch (err) {
-        // Fail closed: nothing shows Curia drafted it in this task.
-        this.log.warn({ err, draftId }, 'outbound-gateway: task draft writes unreadable — not sending on its own');
-        return stop('not_curia_draft');
+        // Fail closed: nothing shows Curia drafted it in this task. A failed read is operational
+        // (SF3), so it starts no cooldown and does not read as Curia's judgement on the reply.
+        this.log.warn({ ...grantSafeErrorFields(err), draftId, mailboxId }, 'outbound-gateway: task draft writes unreadable — not sending on its own');
+        return stop('provenance_unreadable');
       }
       let recentEntries: PrincipalSendEntry[] = [];
       let conversationEntries: PrincipalSendEntry[] = [];
@@ -4638,7 +4676,7 @@ export class OutboundGateway {
         // The same conversation in another mailbox has another thread id but the same Message-IDs.
         if (conversationIds.length > 0) conversationEntries = await this.sendLedger!.recentForConversation(conversationIds, cooldownSince, ledgerEntries);
       } catch (err) {
-        this.log.warn({ err, draftId }, 'outbound-gateway: send ledger unreadable — treating the thread as cooling down');
+        this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: send ledger unreadable — treating the thread as cooling down');
         return stop('no_send_ledger');
       }
       let sendsInWindow: number;
@@ -4647,7 +4685,7 @@ export class OutboundGateway {
       } catch (err) {
         // Normally unreachable: the cap reads the entries already scanned above. Kept for a ledger
         // implementation whose method reads anyway. Fail closed (#2474 final fixes A4).
-        this.log.warn({ err, draftId }, 'outbound-gateway: send ledger unreadable — the daily cap cannot be checked, not sending on its own');
+        this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: send ledger unreadable — the daily cap cannot be checked, not sending on its own');
         return stop('no_send_ledger');
       }
       const limit = checkAutonomousLimits({ draft, thread, principalAddresses, curiaWrites, recentThreadEntries: recentEntries, recentConversationEntries: conversationEntries, otherPrincipalAddresses, offLimitsRecipients, autonomousSendsInWindow: sendsInWindow });
@@ -4730,10 +4768,10 @@ export class OutboundGateway {
       });
     } catch (err) {
       if (autonomous) {
-        this.log.warn({ err, draftId }, 'outbound-gateway: send ledger marker not written — not sending on its own');
+        this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: send ledger marker not written — not sending on its own');
         return stop('no_send_ledger');
       }
-      this.log.warn({ err, draftId }, 'outbound-gateway: send ledger marker not written — sending anyway');
+      this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: send ledger marker not written — sending anyway');
     }
     let sent: NylasMessage;
     try {
@@ -4743,7 +4781,7 @@ export class OutboundGateway {
       // The outcome is unknown (final review C2): a timeout or 5xx may come after the email went.
       // So not leftAsDraft, and the text says to check Sent rather than that nothing was sent;
       // a principal resending from their mail app would otherwise send it twice.
-      this.log.error({ err, draftId }, 'outbound-gateway: principal-mailbox sendDraft failed — outcome unknown');
+      this.log.error({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: principal-mailbox sendDraft failed — outcome unknown');
       // Not "left as a draft": it may have gone. The `sending` marker already starts the cooldown.
       if (autonomous) {
         await this.publishMailboxDigest(`Tried to send for you from your mailbox: ${mailboxDraftLabel(draft, isPrincipal)}. ${SEND_UNCONFIRMED_DIGEST}`, options);
@@ -4754,7 +4792,7 @@ export class OutboundGateway {
     try {
       await this.sendLedger?.recordSent(draftId, sent.id);
     } catch (err) {
-      this.log.warn({ err, draftId, messageId: sent.id }, 'outbound-gateway: send ledger message id not recorded');
+      this.log.warn({ ...grantSafeErrorFields(err), draftId, messageId: sent.id }, 'outbound-gateway: send ledger message id not recorded');
     }
 
     // 10. Record it as sendEmailDraft does. Only outside recipients are promoted, and only on a
@@ -4839,7 +4877,7 @@ export class OutboundGateway {
     try {
       return hasFinancialDetails(texts.flatMap((t) => detectPii(t)), texts);
     } catch (err) {
-      this.log.error({ err, draftId }, 'outbound-gateway: PII detection failed in the financial-details check — not sending on its own');
+      this.log.error({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: PII detection failed in the financial-details check — not sending on its own');
       return true;
     }
   }
@@ -4886,7 +4924,7 @@ export class OutboundGateway {
         }
       } catch (err) {
         // Fail toward telling the principal: file the item.
-        this.log.warn({ err, draftId }, 'outbound-gateway: send ledger unreadable — reporting the gone draft');
+        this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: send ledger unreadable — reporting the gone draft');
       }
     }
     let draft = args.draft;
@@ -4895,7 +4933,7 @@ export class OutboundGateway {
       try {
         draft = await args.mailbox.getDraft(draftId);
       } catch (err) {
-        this.log.warn({ err, draftId }, 'outbound-gateway: draft unreadable for its digest item — reporting it unnamed');
+        this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: draft unreadable for its digest item — reporting it unnamed');
       }
     }
     const isPrincipal = (email: string) => this.isPrincipalOnChannel('email', email);
@@ -4922,7 +4960,7 @@ export class OutboundGateway {
         });
       } catch (err) {
         // The refusal stands; only this thread's cooldown is lost.
-        this.log.error({ err, draftId, refusal }, 'outbound-gateway: held marker not written — the thread\'s cooldown is not started');
+        this.log.error({ ...grantSafeErrorFields(err), draftId, refusal }, 'outbound-gateway: held marker not written — the thread\'s cooldown is not started');
       }
     }
     const what = draft ? mailboxDraftLabel(draft, isPrincipal) : 'a reply Curia drafted';
@@ -4978,13 +5016,13 @@ export class OutboundGateway {
         this.log.error({ ...grantSafeErrorFields(err), draftId, reason }, 'outbound-gateway: limit stop not recorded — the next one may file the notice again');
       }
     };
+    const where = await this.mailboxSuffix(mailboxId, draftId);
     if (reason === 'daily_cap' && first) {
       // The marker follows the notice: a notice that failed to publish is retried by the next stop.
-      if (await this.publishMailboxDigest(DAILY_LIMIT_NOTICE, options)) await record();
+      if (await this.publishMailboxDigest(dailyLimitNotice(what, where), options)) await record();
       return;
     }
     await record();
-    const where = await this.mailboxSuffix(mailboxId, draftId);
     let text: string;
     if (reason === 'daily_cap') text = `Waiting only because of the daily limit: ${what}${where}.`;
     else if (cooldownHeld) text = `Waiting because Curia held an earlier reply on this thread today: ${what}${where}.`;
@@ -5006,6 +5044,33 @@ export class OutboundGateway {
   }
 
   /**
+   * Whether an autonomous send whose draft was not located would have been allowed to send (SF9):
+   * the named live mailbox's level, else any live mailbox's, is routine or all. A level that can't
+   * be read is on_request, as in the send itself; a mailbox list that can't be read is "yes", so
+   * the principal still hears of the stop. Never throws.
+   */
+  private async unlocatedLevelAllowsAutonomy(explicit: string | undefined, draftId: string): Promise<boolean> {
+    if (!this.readSendLevel) return false;
+    let ids: readonly string[];
+    try {
+      ids = this.principalMailboxIds ? await this.principalMailboxIds() : [this.defaultMailboxId ? await this.defaultMailboxId() : DEFAULT_MAILBOX];
+    } catch (err) {
+      this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: mailboxes unreadable for an unlocated draft — reporting it');
+      return true;
+    }
+    const relevant = explicit !== undefined && ids.includes(explicit) ? [explicit] : ids;
+    for (const id of relevant) {
+      try {
+        const level = await this.readSendLevel(id);
+        if (level === 'routine' || level === 'all') return true;
+      } catch (err) {
+        this.log.warn({ ...grantSafeErrorFields(err), draftId, mailboxId: id }, 'outbound-gateway: send level unreadable for an unlocated draft — reading on_request');
+      }
+    }
+    return false;
+  }
+
+  /**
    * The digest item for an autonomous send whose draft could not be found in any mailbox (#2475).
    * No client or thread is known, so no held marker. Gone-from-everywhere stays quiet when the
    * ledger shows the draft already went out, as recordAutonomousStop does.
@@ -5019,7 +5084,7 @@ export class OutboundGateway {
       try {
         if (await this.sendLedger.sentForDraft(draftId)) return;
       } catch (err) {
-        this.log.warn({ err, draftId }, 'outbound-gateway: send ledger unreadable — reporting the gone draft');
+        this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: send ledger unreadable — reporting the gone draft');
       }
     }
     const why: Partial<Record<PrincipalSendRefusal, string>> = {
@@ -5045,7 +5110,7 @@ export class OutboundGateway {
       }));
       return true;
     } catch (err) {
-      this.log.error({ err }, 'outbound-gateway: principal-mailbox digest item not recorded');
+      this.log.error(grantSafeErrorFields(err), 'outbound-gateway: principal-mailbox digest item not recorded');
       return false;
     }
   }
