@@ -836,6 +836,29 @@ describe('removing a mailbox with scoped inbox rules (#2475 task 27)', () => {
     expect(rulesDoc.write).not.toHaveBeenCalled();
   });
 
+  it('a move choice given when no sole rule existed yet is applied to one added before the reread', async () => {
+    const reads = ['## Both\n- Mailbox: work, personal\n', RULES];
+    let written = '';
+    const rulesDoc = {
+      read: vi.fn(async () => reads.shift() ?? RULES),
+      write: vi.fn(async (t: string) => { written = t; }),
+    };
+    const { admin } = setup({ records: two(), rulesDoc });
+    const out = await admin.remove({ id: 'work', stillOwned: true, rules: { rescopeTo: 'personal' } });
+    expect(out.cleanupIncomplete).toEqual([]);
+    // Moved, not deleted.
+    expect(written).toContain('## Work only\n- When: a\n- Do: b\n- Mailbox: personal\n');
+  });
+
+  it('an invalid move choice with no sole rule at check time leaves a later sole rule alone', async () => {
+    const reads = ['## Both\n- Mailbox: work, personal\n', RULES];
+    const rulesDoc = { read: vi.fn(async () => reads.shift() ?? RULES), write: vi.fn(async () => {}) };
+    const { admin } = setup({ records: two(), rulesDoc });
+    const out = await admin.remove({ id: 'work', stillOwned: true, rules: { rescopeTo: 'nope' } });
+    expect(out.cleanupIncomplete).toContain('inbox_rules');
+    expect(rulesDoc.write).not.toHaveBeenCalled();
+  });
+
   it('lists a failed inbox_rules step in cleanup_incomplete and the removal stands', async () => {
     const { rulesDoc } = docOf(RULES);
     rulesDoc.write.mockRejectedValueOnce(new Error('docs down'));
