@@ -46,6 +46,7 @@ import {
   createRecordingPrincipalMailbox,
   createRecordingTransports,
   createTestModePrincipalMailboxes,
+  needsMailClient,
   emailText,
   TEST_MODE_PRINCIPAL_MAILBOX_ID,
   recordingBandReview,
@@ -548,6 +549,14 @@ describe('createTestModePrincipalMailboxes', () => {
     await expect(mailboxes.gatewayClient(TEST_MODE_PRINCIPAL_MAILBOX_ID)).rejects.toBeInstanceOf(MissingNylasApiKeyError);
     await expect(mailboxes.ceoClient(TEST_MODE_PRINCIPAL_MAILBOX_ID, logger)).rejects.toBeInstanceOf(MissingNylasApiKeyError);
     expect(constructed.clients).toEqual([]);
+  });
+
+  it('counts a principalMailboxes tool as needing a mail client unless its mail comes through the gateway', () => {
+    expect(needsMailClient({ capabilities: ['principalMailboxes'] })).toBe(true);
+    expect(needsMailClient({ capabilities: ['auditLogRepo', 'principalMailboxes'] })).toBe(true);
+    expect(needsMailClient({ capabilities: ['outboundGateway', 'principalMailboxes'] })).toBe(false);
+    expect(needsMailClient({ capabilities: ['calendarRouter'] })).toBe(false);
+    expect(needsMailClient({})).toBe(false);
   });
 
   it('gives ceo-inbox-send-draft every capability it declares, with the gateway', () => {

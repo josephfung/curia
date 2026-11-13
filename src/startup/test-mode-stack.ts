@@ -87,7 +87,7 @@ import { OutboundLlmJudge, type JudgeConfig } from '../dispatch/outbound-judge.j
 import { PiiRedactor } from '../dispatch/pii-redactor.js';
 import { extractPromptExfiltrationMarkers } from '../dispatch/prompt-exfiltration-markers.js';
 import { parseExtraPiiPatterns } from '../pii/scrubber.js';
-import { createRecordingOutboundGateway, createRecordingPrincipalMailbox, createTestModePrincipalMailboxes, PerRunFailOpenLimiter, subscribeRecordingRelays, type SendRecorder } from './test-mode-sends.js';
+import { createRecordingOutboundGateway, createRecordingPrincipalMailbox, createTestModePrincipalMailboxes, needsMailClient, NO_MAIL_CLIENT, PerRunFailOpenLimiter, subscribeRecordingRelays, type SendRecorder } from './test-mode-sends.js';
 import { createVerificationRuntime, type VerificationRuntime } from '../verification/index.js';
 import { createLogger, type Logger } from '../logger.js';
 import { createPool, type DbPool } from '../db/connection.js';
@@ -548,6 +548,13 @@ export interface TestModeStack {
    * Measured on the unwrapped layer — a stub wrapper may answer some of these.
    */
   disabledTools: Record<string, Array<{ tool: string; missing: string[] }>>;
+  /**
+   * What test mode lacks to run `toolName` for real: the agent layer's missing capabilities,
+   * plus NO_MAIL_CLIENT for a tool that reads the principal's mail through a client
+   * (needsMailClient). `disabledTools` is built from this; a harness asks it for tools an
+   * agent can activate or discover.
+   */
+  unservableCapabilities(toolName: string): string[];
   /**
    * Tools registered from an MCP tools/list snapshot (#2024). Their session answers
    * with a canned result and reaches no account, so they are safe to run unstubbed
@@ -1594,10 +1601,20 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       }
     }
 
+    // The principal's mailboxes are wired (#2475) but hand out no client, so a tool that reads
+    // mail through one is as unservable as one missing a capability: unstubbed, the scenario
+    // layer refuses it (a counted stub hole) rather than letting it fail on a missing key.
+    const unservableCapabilities = (toolName: string): string[] => {
+      const missing = baseExecutionLayer.unavailableCapabilities(toolName);
+      const manifest = toolRegistry.get(toolName)?.manifest;
+      return manifest && needsMailClient(manifest) && !missing.includes('principalMailboxes')
+        ? [...missing, NO_MAIL_CLIENT]
+        : missing;
+    };
     const disabledTools: TestModeStack['disabledTools'] = {};
     for (const assembled of agents) {
       const disabled = assembled.toolDefs
-        .map(def => ({ tool: def.name, missing: baseExecutionLayer.unavailableCapabilities(def.name) }))
+        .map(def => ({ tool: def.name, missing: unservableCapabilities(def.name) }))
         .filter(entry => entry.missing.length > 0);
       if (disabled.length > 0) disabledTools[assembled.agentConfig.name] = disabled;
     }
@@ -1647,6 +1664,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       injectionScanner,
       agents,
       disabledTools,
+      unservableCapabilities,
       snapshotMcpTools: snapshotMcp.tools,
       warnings,
       ...(recording?.bandReviewJudgeMissing ? { bandReviewJudgeMissing: recording.bandReviewJudgeMissing } : {}),

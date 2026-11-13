@@ -38,7 +38,7 @@ import { EmailAdapter } from '../channels/email/email-adapter.js';
 import { SignalAdapter } from '../channels/signal/signal-adapter.js';
 import type { BusEvent, EventType, Layer, OutboundMessageEvent } from '../bus/events.js';
 import type { PrincipalEmailRef } from '../contacts/types.js';
-import type { AgentPersona } from '../skills/types.js';
+import type { AgentPersona, ToolManifest } from '../skills/types.js';
 import { REPLY_QUOTE_HTML_OPEN } from '../skills/_shared/reply-quote.js';
 import { DEFAULT_MAILBOX, DEFAULT_SEND_LEVEL, type SendLevel } from '../skills/principal-send/send-level.js';
 import { PrincipalMailboxes } from '../principal-mailboxes/service.js';
@@ -420,6 +420,21 @@ export function createTestModePrincipalMailboxes(principalAddress: () => string,
     apiKey: () => undefined,
     logger,
   });
+}
+
+/** What a tool lacks in test mode when it reads the principal's mail through a client (needsMailClient). */
+export const NO_MAIL_CLIENT = 'principalMailboxes (no mail client in test mode)';
+
+/**
+ * True for a tool that reaches the principal's mail through a client from `principalMailboxes`,
+ * which createTestModePrincipalMailboxes never hands out. A tool that also declares
+ * `outboundGateway` (ceo-inbox-send-draft) reads only the registry from it and gets its mail
+ * through the gateway, which a through_gateway run gives the recording mailbox; every other
+ * declarer would fail on the missing key, an error production never shows.
+ */
+export function needsMailClient(manifest: Pick<ToolManifest, 'capabilities'>): boolean {
+  const caps = manifest.capabilities ?? [];
+  return caps.includes('principalMailboxes') && !caps.includes('outboundGateway');
 }
 
 /** Production's review, as the recording gateway takes it (built in createTestModeStack). */
