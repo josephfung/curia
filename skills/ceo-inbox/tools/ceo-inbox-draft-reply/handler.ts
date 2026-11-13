@@ -1,6 +1,6 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { locateInMailbox, mailboxFields, mailboxClient, readMailboxInput, type MailboxClient } from '../../../_shared/principal-mailbox-client.js';
-import { type NylasParticipant, type DraftAttachment, type NylasMessageFull, type NylasDraftSummary } from '../../../_shared/ceo-nylas-client.js';
+import { type NylasParticipant, type DraftAttachment, type NylasMessageFull, type NylasDraftSummary, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
 import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 import { buildReplyQuote } from '../../../../src/skills/_shared/reply-quote.js';
 import { markdownToHtml } from '../../../../src/format/markdown-to-html.js';
@@ -40,6 +40,17 @@ function withTimeout<T>(work: Promise<T>, deadline: number): Promise<T> {
   return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
 }
 
+/** A message's own RFC Message-ID (via the gateway client, headers included), and the message. */
+async function ownId(ctx: ToolContext, clientAt: string, id: string): Promise<{ id?: string; msg: NylasMessage }> {
+  const gateway = await ctx.principalMailboxes!.gatewayClient(clientAt);
+  const msg = await gateway.getMessage(id, { includeHeaders: true, budget: ctx });
+  const header = (msg.headers ?? []).find((h) => h.name.trim().toLowerCase() === 'message-id');
+  return { ...(header ? { id: firstMessageId(header.value) } : {}), msg };
+}
+
+/** A message's sender set, lowercased and sorted, for comparing copies. */
+const senders = (m: { from: NylasParticipant[] }): string => [...new Set(m.from.map((p) => p.email.toLowerCase()))].sort().join(',');
+
 /**
  * Mail sent to both of the principal's mailboxes is answered from the one the sender addressed
  * first: the first live mailbox address in To, else in Cc. Finds that mailbox's copy by Message-ID.
@@ -74,15 +85,8 @@ async function addressedCopy(ctx: ToolContext, at: MailboxClient, original: Nyla
     );
     return { kind: 'fallback', reason: `${reason}; drafted in the ${at.mailbox.label} mailbox instead of ${target.label}` };
   };
-  const ownId = async (clientAt: string, id: string): Promise<{ id?: string; msg: NylasMessage }> => {
-    const gateway = await ctx.principalMailboxes!.gatewayClient(clientAt);
-    const msg = await gateway.getMessage(id, { includeHeaders: true, budget: ctx });
-    const header = (msg.headers ?? []).find((h) => h.name.trim().toLowerCase() === 'message-id');
-    return { ...(header ? { id: firstMessageId(header.value) } : {}), msg };
-  };
-  const senders = (m: { from: NylasParticipant[] }) => [...new Set(m.from.map((p) => p.email.toLowerCase()))].sort().join(',');
   try {
-    const rfcId = (await withTimeout(ownId(at.mailbox.id, messageId), deadline)).id;
+    const rfcId = (await withTimeout(ownId(ctx, at.mailbox.id, messageId), deadline)).id;
     if (!rfcId) return fallback('the message has no Message-ID to search by');
     // Nothing that could widen the search goes into the query.
     if (!SAFE_MESSAGE_ID.test(rfcId)) return fallback('the message has an unusual Message-ID that is not safe to search by');
@@ -104,7 +108,7 @@ async function addressedCopy(ctx: ToolContext, at: MailboxClient, original: Nyla
     const verified: NylasMessageFull[] = [];
     for (const hit of hits) {
       if (hit.folders.some((f) => EXCLUDED_COPY_FOLDERS.has(f.toUpperCase()))) continue;
-      const own = await withTimeout(ownId(target.id, hit.id), deadline);
+      const own = await withTimeout(ownId(ctx, target.id, hit.id), deadline);
       if (own.id !== rfcId) continue;
       const copy = await withTimeout(other.client.getMessage(hit.id), deadline);
       if (copy.from.length === 0 || senders(copy) !== senders(original)) continue;
@@ -145,20 +149,26 @@ async function earlierDraftOnOtherCopy(
     const recipients = new Set([...original.to, ...original.cc].map((p) => p.email.toLowerCase()));
     const others = live.filter((m) => m.id !== at.mailbox.id && recipients.has(m.address.toLowerCase()));
     if (others.length === 0) return null;
-    const gateway = await withTimeout(ctx.principalMailboxes!.gatewayClient(at.mailbox.id), deadline);
-    const msg = await withTimeout(gateway.getMessage(messageId, { includeHeaders: true, budget: ctx }), deadline);
-    const header = (msg.headers ?? []).find((h) => h.name.trim().toLowerCase() === 'message-id');
-    const rfcId = header ? firstMessageId(header.value) : undefined;
+    const rfcId = (await withTimeout(ownId(ctx, at.mailbox.id, messageId), deadline)).id;
     if (!rfcId || !SAFE_MESSAGE_ID.test(rfcId)) return null;
     for (const m of others) {
       const other = await withTimeout(mailboxClient(ctx, m.id), deadline);
-      const page = await withTimeout(other.client.listMessagesPage({ query: `rfc822msgid:${rfcId}`, limit: 5 }), deadline);
+      const page: { messages: NylasMessageSummary[]; nextCursor?: string } =
+        await withTimeout(other.client.listMessagesPage({ query: `rfc822msgid:${rfcId}`, limit: 5 }), deadline);
       // More hits than one page: the copy's thread may be among the unread ones.
       if (page.nextCursor) return 'incomplete';
-      const threads = new Set(page.messages
-        .filter((h) => !h.folders.some((f) => EXCLUDED_COPY_FOLDERS.has(f.toUpperCase())))
-        .map((h) => h.threadId)
-        .filter((t) => t !== ''));
+      // A search hit is a lead, not proof (R57): only a copy with the same Message-ID and sender,
+      // outside Sent, Drafts, Spam and Trash, names a thread whose draft answers this message.
+      const threads = new Set<string>();
+      for (const hit of page.messages) {
+        if (hit.folders.some((f) => EXCLUDED_COPY_FOLDERS.has(f.toUpperCase()))) continue;
+        const own: { id?: string } = await withTimeout(ownId(ctx, m.id, hit.id), deadline);
+        if (own.id !== rfcId) continue;
+        const copy: NylasMessageFull = await withTimeout(other.client.getMessage(hit.id), deadline);
+        if (copy.from.length === 0 || senders(copy) !== senders(original)) continue;
+        if (copy.folders.some((f) => EXCLUDED_COPY_FOLDERS.has(f.toUpperCase()))) continue;
+        if (copy.threadId) threads.add(copy.threadId);
+      }
       if (threads.size === 0) continue;
       const found = await withTimeout(other.client.listAllDrafts({ maxScan: DRAFT_SCAN_LIMIT, stopWhen: (d) => threads.has(d.threadId) }), deadline);
       const draft = found.drafts.find((d) => threads.has(d.threadId));
@@ -259,6 +269,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
         return { success: false, error: 'Message is in Spam or Trash; not drafting a reply' };
       }
 
+      let givenScanIncomplete = false;
       const explicit = readMailboxInput(input);
       if (explicit.ok && explicit.mailbox === undefined) {
         const redirect = await addressedCopy(ctx, picked.at, original, replyToMessageId);
@@ -288,10 +299,10 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
           const given = await picked.at.client.listAllDrafts({ maxScan: DRAFT_SCAN_LIMIT, stopWhen: (d) => d.threadId === givenThread });
           const earlier = given.drafts.find((d) => d.threadId === givenThread);
           if (!earlier && given.truncated) {
-            // The scan stopped at its cap without finding a draft: one may lie beyond it, so
-            // switching mailboxes could create a second draft. Refused, as for the drafted mailbox.
-            ctx.log.warn({ threadId: givenThread, cap: DRAFT_SCAN_LIMIT, mailboxId: picked.at.mailbox.id }, 'ceo-inbox-draft-reply: given-mailbox draft scan hit the cap — refusing to redirect');
-            return { success: false, error: 'Unable to determine whether this thread already has a draft; draft scan incomplete' };
+            // The scan stopped at its cap without finding a draft: one may lie beyond it. A draft
+            // already in the addressed mailbox still answers this call (checked below); only
+            // creating a new one is refused, as for the drafted mailbox's own incomplete scan.
+            givenScanIncomplete = true;
           }
           if (earlier) {
             ctx.log.info({ draftId: earlier.id, mailboxId: picked.at.mailbox.id }, 'ceo-inbox-draft-reply: the given mailbox already has a draft for this thread');
@@ -355,9 +366,9 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
             },
           };
         }
-        if (truncated) {
+        if (truncated || givenScanIncomplete) {
           ctx.log.warn(
-            { threadId: original.threadId, cap: DRAFT_SCAN_LIMIT },
+            { threadId: original.threadId, cap: DRAFT_SCAN_LIMIT, givenScanIncomplete },
             'ceo-inbox-draft-reply: draft scan hit the cap without finding this thread — refusing to create a draft',
           );
           return {
@@ -365,6 +376,9 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
             error: 'Unable to determine whether this thread already has a draft; draft scan incomplete',
           };
         }
+      } else if (givenScanIncomplete) {
+        // No thread to check here, so nothing can answer the call: the incomplete scan still refuses.
+        return { success: false, error: 'Unable to determine whether this thread already has a draft; draft scan incomplete' };
       }
 
       // To: the original sender

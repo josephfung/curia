@@ -1079,13 +1079,33 @@ describe('CeoInboxDraftReplyHandler', () => {
       mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
         const u = new URL(String(url));
         if (u.pathname.endsWith('/drafts') && (init?.method ?? 'GET') === 'GET' && u.pathname.includes('grant-personal')) {
-          return new Response(JSON.stringify({ data: [{ id: 'draft-fallback', thread_id: 'thread-other', subject: 'Re: Test Subject', to: [], cc: [], snippet: 'Earlier', date: 1 }] }), { status: 200 });
+          // On the verified copy's thread (the fixture's copies are all on thread-001).
+          return new Response(JSON.stringify({ data: [{ id: 'draft-fallback', thread_id: 'thread-001', subject: 'Re: Test Subject', to: [], cc: [], snippet: 'Earlier', date: 1 }] }), { status: 200 });
         }
         return prev(url, init);
       });
       const result = await handler.execute(ctx);
       expect(posts).toHaveLength(0);
       expect(result).toMatchObject({ success: true, data: { draft_id: 'draft-fallback', already_exists: true, mailbox: 'personal' } });
+    });
+
+    it('a search hit with another Message-ID or sender does not lend its thread\'s draft (R57)', async () => {
+      for (const copy of [{ messageId: 'other-id@example.com' }, { from: 'mallory@evil.example.org' }]) {
+        const { ctx, posts } = setup({ held: 'work', to: ['ceo@work.example.com'], cc: ['ceo@personal.example.com'], copy });
+        const prev = mockFetch.getMockImplementation()!;
+        mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+          const u = new URL(String(url));
+          if (u.pathname.endsWith('/drafts') && (init?.method ?? 'GET') === 'GET' && u.pathname.includes('grant-personal')) {
+            return new Response(JSON.stringify({ data: [{ id: 'unrelated-draft', thread_id: 'thread-001', subject: 'x', to: [], cc: [], snippet: '', date: 1 }] }), { status: 200 });
+          }
+          return prev(url, init);
+        });
+        const result = await handler.execute(ctx);
+        expect(posts, JSON.stringify(copy)).toHaveLength(1);
+        expect(posts[0]!.grant).toBe('grant-work');
+        expect((result as { data: Record<string, unknown> }).data.already_exists).not.toBe(true);
+        mockFetch.mockReset();
+      }
     });
 
     it('from the addressed mailbox, an incomplete check of the other copy (search page or draft scan) refuses to draft', async () => {
@@ -1126,6 +1146,25 @@ describe('CeoInboxDraftReplyHandler', () => {
       const result = await handler.execute(ctx);
       expect(posts).toHaveLength(0);
       expect(result).toMatchObject({ success: false, error: expect.stringContaining('draft scan incomplete') });
+    });
+
+    it('with the given mailbox\'s scan incomplete, a draft already in the addressed mailbox still answers the retry', async () => {
+      const { ctx, posts } = setup(addressedBoth);
+      const prev = mockFetch.getMockImplementation()!;
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const u = new URL(String(url));
+        if (u.pathname.endsWith('/drafts') && (init?.method ?? 'GET') === 'GET') {
+          if (u.pathname.includes('grant-personal')) {
+            const data = Array.from({ length: 100 }, (_, i) => ({ id: `d${i}-${u.searchParams.get('page_token') ?? '0'}`, thread_id: `other-${i}`, subject: 's', to: [], cc: [], snippet: '', date: 1 }));
+            return new Response(JSON.stringify({ data, next_cursor: `c${Math.random()}` }), { status: 200 });
+          }
+          return new Response(JSON.stringify({ data: [{ id: 'work-draft', thread_id: 'thread-001', subject: 'Re: Test Subject', to: [], cc: [], snippet: 'Here', date: 1 }] }), { status: 200 });
+        }
+        return prev(url, init);
+      });
+      const result = await handler.execute(ctx);
+      expect(posts).toHaveLength(0);
+      expect(result).toMatchObject({ success: true, data: { draft_id: 'work-draft', already_exists: true, mailbox: 'work' } });
     });
 
     it('refuses a Spam copy even when the addressed mailbox holds a clean one', async () => {
