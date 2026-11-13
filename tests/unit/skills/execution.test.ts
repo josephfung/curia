@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ExecutionLayer, SKILL_ERROR_MIN_LENGTH } from '../../../src/skills/execution.js';
 import { SEND_OUTCOME_UNKNOWN } from '../../../skills/ceo-inbox/tools/ceo-inbox-send-draft/handler.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
@@ -6,7 +6,7 @@ import { EventBus } from '../../../src/bus/bus.js';
 import type { BusEvent } from '../../../src/bus/events.js';
 import type { ToolManifest, ToolHandler, ToolContext } from '../../../src/skills/types.js';
 import { ContactService } from '../../../src/contacts/contact-service.js';
-import type { PrincipalMailboxes } from '../../../src/principal-mailboxes/service.js';
+import { PrincipalMailboxes } from '../../../src/principal-mailboxes/service.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -233,19 +233,31 @@ describe('ExecutionLayer', () => {
   });
 
   describe('principalMailboxes capability (#2475)', () => {
-    it('injects principalMailboxes for a tool declaring it', async () => {
-      const service = { marker: 'principal-mailboxes' } as unknown as PrincipalMailboxes;
+    it('injects a narrowed principalMailboxes for a tool declaring it, with no credentials (F7)', async () => {
+      const list = vi.fn(async () => []);
+      const service = new PrincipalMailboxes({
+        store: { listLive: list, hasAnyRow: async () => true, getAny: async () => null } as never,
+        secrets: { get: async () => 'secret-grant' },
+        apiKey: () => 'secret-key',
+        logger,
+      });
       const withService = new ExecutionLayer(registry, logger, { principalMailboxes: service });
-      let seen: unknown;
+      let seen: Record<string, unknown> | undefined;
       registry.register(makeManifest({ capabilities: ['principalMailboxes'] }), {
         execute: async (ctx: ToolContext) => {
-          seen = ctx.principalMailboxes;
+          seen = ctx.principalMailboxes as unknown as Record<string, unknown>;
           return { success: true, data: 'ok' };
         },
       });
       const result = await withService.invoke('test-skill', { query: 'x' });
       expect(result.success).toBe(true);
-      expect(seen).toBe(service);
+      expect(seen).not.toBe(service);
+      expect(Object.keys(seen!).sort()).toEqual(['ceoClient', 'defaultMailbox', 'gatewayClient', 'get', 'list', 'principalEmailAddresses']);
+      expect(seen).not.toHaveProperty('credentials');
+      expect(seen).not.toHaveProperty('calendarClient');
+      // Still works, through the service.
+      await (seen!['list'] as () => Promise<unknown>)();
+      expect(list).toHaveBeenCalled();
     });
   });
 

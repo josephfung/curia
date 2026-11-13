@@ -5,7 +5,7 @@
 // One mailbox failing never hides the others: it gets `error` (a class name or HTTP status,
 // never a grant id) and zero counts. The per-mailbox lookups run in parallel under a deadline.
 
-import type { PrincipalMailboxes, PrincipalMailboxView } from './service.js';
+import type { SkillPrincipalMailboxes, PrincipalMailboxView } from './service.js';
 import type { NylasClient, NylasMessage } from '../channels/email/nylas-client.js';
 import { cleanSubject } from '../autonomy/sample-pool.js';
 import { nylasStatus } from '../channels/email/nylas-message-id.js';
@@ -86,7 +86,7 @@ async function foldersMessages(client: NylasClient, folder: string, recipients: 
 }
 
 async function one(
-  svc: PrincipalMailboxes,
+  svc: Pick<SkillPrincipalMailboxes, 'list' | 'gatewayClient'>,
   mailbox: PrincipalMailboxView,
   recipients: string[],
   limit: number,
@@ -138,7 +138,7 @@ async function one(
 
 /** Per-mailbox history with the recipients, for every live mailbox. Never throws on one mailbox. */
 export async function mailboxEvidence(
-  svc: PrincipalMailboxes,
+  svc: Pick<SkillPrincipalMailboxes, 'list' | 'gatewayClient'>,
   recipients: string[],
   opts: { limit?: number } = {},
 ): Promise<MailboxEvidence[]> {

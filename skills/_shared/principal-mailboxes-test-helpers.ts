@@ -3,6 +3,7 @@
 
 import type { ToolContext } from '../../src/skills/types.js';
 import type { PrincipalMailboxView } from '../../src/principal-mailboxes/service.js';
+import { CeoNylasClient } from '../../src/channels/email/ceo-nylas-client.js';
 import { RemovedMailboxError, UnknownMailboxError } from '../../src/principal-mailboxes/types.js';
 
 export function mailboxView(id: string, label: string, address: string, isDefault = false): PrincipalMailboxView {
@@ -43,7 +44,9 @@ export function stubPrincipalMailboxes(opts: StubOptions = {}): NonNullable<Tool
       if (!c) throw new Error(`no stub gateway client for ${id}`);
       return c;
     },
-    credentials: async (id: string) => ({ apiKey: opts.apiKey ?? 'test-api-key', grantId: grantFor(id) }),
+    // As the real service: the client is built where the key lives. No `credentials` member.
+    ceoClient: async (id: string, log: ConstructorParameters<typeof CeoNylasClient>[2], budget?: ConstructorParameters<typeof CeoNylasClient>[3]) =>
+      new CeoNylasClient(opts.apiKey ?? 'test-api-key', grantFor(id), log, budget),
   };
   return stub as unknown as NonNullable<ToolContext['principalMailboxes']>;
 }

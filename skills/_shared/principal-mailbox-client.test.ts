@@ -17,7 +17,7 @@ function makeCtx(mailboxes: PrincipalMailboxView[]): ToolContext {
       if (!m) throw new Error(`unknown ${id}`);
       return m;
     },
-    credentials: async (id: string) => ({ apiKey: 'key', grantId: `grant-${id}` }),
+    ceoClient: async (id: string, log: never, budget?: never) => new CeoNylasClient('key', `grant-${id}`, log, budget),
   };
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   return { principalMailboxes, log } as unknown as ToolContext;
@@ -121,10 +121,10 @@ describe('principal-mailbox-client', () => {
   it('implicit path survives one mailbox failing credentials', async () => {
     stubFetch(['grant-personal']);
     const ctx = makeCtx(two);
-    const orig = ctx.principalMailboxes!.credentials.bind(ctx.principalMailboxes!);
-    ctx.principalMailboxes!.credentials = async (id: string) => {
+    const orig = ctx.principalMailboxes!.ceoClient.bind(ctx.principalMailboxes!);
+    ctx.principalMailboxes!.ceoClient = async (id, log, budget) => {
       if (id === 'work') throw new Error('Mailbox "work" has no Nylas grant configured');
-      return orig(id);
+      return orig(id, log, budget);
     };
     const hit = await locate(ctx, 'message', 'm1');
     expect(hit.kind).toBe('found');
@@ -136,7 +136,7 @@ describe('principal-mailbox-client', () => {
   it('explicit path still throws when credentials fail', async () => {
     stubFetch([]);
     const ctx = makeCtx(two);
-    ctx.principalMailboxes!.credentials = async () => {
+    ctx.principalMailboxes!.ceoClient = async () => {
       throw new Error('no grant');
     };
     await expect(locate(ctx, 'message', 'm1', 'work')).rejects.toThrow('no grant');
@@ -212,7 +212,7 @@ describe('namedOrDefaultMailbox / checkMailboxInput (#2475)', () => {
   });
 
   it('never puts a grant id in an error', async () => {
-    const c = { principalMailboxes: { ...stubPrincipalMailboxes({ mailboxes: two }), credentials: async () => { throw new Error('grant-secret-123'); } }, log: { error: vi.fn() } } as unknown as ToolContext;
+    const c = { principalMailboxes: { ...stubPrincipalMailboxes({ mailboxes: two }), ceoClient: async () => { throw new Error('grant-secret-123'); } }, log: { error: vi.fn() } } as unknown as ToolContext;
     const r = await namedOrDefaultMailbox(c, {}, 't');
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).not.toContain('grant-secret-123');

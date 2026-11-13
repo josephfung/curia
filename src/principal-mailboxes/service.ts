@@ -8,6 +8,8 @@
 import type { Logger } from '../logger.js';
 import { NylasClient } from '../channels/email/nylas-client.js';
 import { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
+import { CeoNylasClient } from '../channels/email/ceo-nylas-client.js';
+import type { CallBudget } from '../util/call-budget.js';
 import type { PrincipalMailboxStore } from './store.js';
 import { principalMailboxGrantSecretName } from './secrets.js';
 import {
@@ -39,6 +41,22 @@ export interface PrincipalMailboxesDeps {
   createCalendarClient?: (apiKey: string, grantId: string) => NylasCalendarClient;
   /** The principal's verified, active email identity addresses (R32). Absent: mailboxes only. */
   principalEmailIdentities?: () => Promise<string[]>;
+}
+
+/**
+ * What a skill gets as `ctx.principalMailboxes` (security finding F7). The registry reads and a
+ * ready client per mailbox, and nothing that returns the Nylas API key or a grant id: those never
+ * cross into skill code. Built by `forSkills`, as a plain object of methods rather than the class.
+ */
+export interface SkillPrincipalMailboxes {
+  list(): Promise<PrincipalMailboxView[]>;
+  get(id: string): Promise<PrincipalMailboxView>;
+  defaultMailbox(): Promise<PrincipalMailboxView | null>;
+  principalEmailAddresses(): Promise<string[]>;
+  /** The Nylas SDK client for one live mailbox. */
+  gatewayClient(id: string): Promise<NylasClient>;
+  /** The ceo-inbox REST client for one live mailbox, bound to the tool call's budget. */
+  ceoClient(id: string, log: Logger, budget?: CallBudget): Promise<CeoNylasClient>;
 }
 
 function toView(r: PrincipalMailboxRecord): PrincipalMailboxView {
@@ -170,8 +188,31 @@ export class PrincipalMailboxes {
   async gatewayClient(id: string, timeoutMs?: number): Promise<NylasClient> {
     const { apiKey, grantId } = await this.credentials(id);
     return this.deps.createNylasClient
-      ? this.deps.createNylasClient(apiKey, grantId, timeoutMs)
+      ? (timeoutMs === undefined
+        ? this.deps.createNylasClient(apiKey, grantId)
+        : this.deps.createNylasClient(apiKey, grantId, timeoutMs))
       : new NylasClient(apiKey, grantId, this.deps.logger, timeoutMs);
+  }
+
+  /** A ceo-inbox client for one mailbox: the key and grant are read here and never returned. */
+  async ceoClient(id: string, log: Logger, budget?: CallBudget): Promise<CeoNylasClient> {
+    const { apiKey, grantId } = await this.credentials(id);
+    return new CeoNylasClient(apiKey, grantId, log, budget);
+  }
+
+  /**
+   * The narrowed view skills receive. Each member forwards to this instance, so there is no
+   * `credentials` member to reach, and the object holds no reference to the class itself.
+   */
+  forSkills(): SkillPrincipalMailboxes {
+    return {
+      list: () => this.list(),
+      get: (id) => this.get(id),
+      defaultMailbox: () => this.defaultMailbox(),
+      principalEmailAddresses: () => this.principalEmailAddresses(),
+      gatewayClient: (id) => this.gatewayClient(id),
+      ceoClient: (id, log, budget) => this.ceoClient(id, log, budget),
+    };
   }
 
   async calendarClient(id: string): Promise<NylasCalendarClient> {

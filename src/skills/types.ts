@@ -215,8 +215,9 @@ export interface ToolContext {
    *  All external communication (email, future Signal/Telegram) goes through the gateway,
    *  which enforces contact blocked checks and content filtering. */
   outboundGateway?: import('./outbound-gateway.js').OutboundGateway;
-  /** Principal mailbox registry and resolver — available to skills declaring 'principalMailboxes'. */
-  principalMailboxes?: import('../principal-mailboxes/service.js').PrincipalMailboxes;
+  /** Principal mailbox registry and per-mailbox clients — available to skills declaring 'principalMailboxes'.
+   *  Narrowed: no credentials, API key or grant id are reachable from it (F7). */
+  principalMailboxes?: import('../principal-mailboxes/service.js').SkillPrincipalMailboxes;
   /** Scheduler service — available to skills declaring 'schedulerService' in capabilities */
   schedulerService?: import('../scheduler/scheduler-service.js').SchedulerService;
   /** Entity memory (knowledge graph) — available to skills declaring 'entityMemory' in capabilities.
