@@ -298,10 +298,19 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
       }
     }
 
+    // Each scope's queue is cleared on its own: one failing write must not stop the others, nor the
+    // notification below for completions that are already durable. Failures are reported after it.
+    const cleanupFailed: string[] = [];
     if (digestStored && Object.keys(remaining).length !== Object.keys(candidateMap).length) {
       for (const { scope, map } of perScope) {
         const kept = Object.fromEntries(Object.entries(map).filter(([taskId]) => taskId in remaining));
-        if (Object.keys(kept).length !== Object.keys(map).length) await writeCompletionCandidates(store, kept, scope);
+        if (Object.keys(kept).length === Object.keys(map).length) continue;
+        try {
+          await writeCompletionCandidates(store, kept, scope);
+        } catch (err) {
+          cleanupFailed.push(scope.id ?? 'global');
+          ctx.log.error({ ...grantSafeErrorFields(err), mailboxId: scope.id }, 'task-completion-from-sent: could not clear consumed candidates from a mailbox queue');
+        }
       }
     }
 
@@ -325,6 +334,13 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
       { autoCompleted, queuedConfirm, skipped },
       'task-completion-from-sent: run complete',
     );
+
+    if (cleanupFailed.length > 0) {
+      return {
+        success: false,
+        error: `Completed ${autoCompleted} task(s) and notified the principal, but could not clear the candidate queue for ${cleanupFailed.join(', ')}; it is cleared on the next run.`,
+      };
+    }
 
     return {
       success: true,
