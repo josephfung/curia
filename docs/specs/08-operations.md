@@ -285,7 +285,8 @@ container startup; operators enable the profile only when Voice is configured.
     "sms": "skipped",
     "voice": "skipped",
     "signal_voice": "skipped",
-    "scheduler": "ok"
+    "scheduler": "ok",
+    "principal_mailbox_triage": "ok"
   }
 }
 ```

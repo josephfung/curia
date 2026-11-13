@@ -125,6 +125,9 @@ export interface HealthServiceDeps {
   /** Re-derives the flat principal-mailbox keys from the registry's default (R28); run on
    *  each canary tick so a copy that failed part-way is repaired. */
   reconcileFlatMailboxKeys?: () => Promise<FlatMirrorOutcome>;
+  /** The inbox triage heartbeat's health (R67), read on every request. Absent, or null (the
+   *  heartbeat is not running): skipped. */
+  inboxTriageHealth?: () => { ok: boolean; detail?: string } | null;
 }
 
 /** Tavily usage endpoint: validates the key without spending search credits. */
@@ -286,6 +289,7 @@ export class HealthService {
       voice: voice_check,
       signal_voice: signal_voice_check,
       scheduler: scheduler_check,
+      principal_mailbox_triage: this.inboxTriageCheck(),
     };
 
     const status = this.aggregateStatus(checks);
@@ -662,6 +666,22 @@ export class HealthService {
    *   - any other fail → 'degraded' (running but degraded)
    *   - all ok or skipped → 'ok'
    */
+  /** principal_mailbox_triage: the heartbeat's own verdict; a failure is logged with its reason. */
+  private inboxTriageCheck(): CheckResult {
+    const probe = this.deps.inboxTriageHealth;
+    if (!probe) return 'skipped';
+    try {
+      const h = probe();
+      if (h === null) return 'skipped';
+      if (h.ok) return 'ok';
+      this.deps.logger.debug({ check: 'principal_mailbox_triage', detail: h.detail }, 'Health: inbox triage is failing');
+      return 'fail';
+    } catch (err) {
+      this.deps.logger.error({ err }, 'Health: the inbox triage check threw');
+      return 'fail';
+    }
+  }
+
   private aggregateStatus(checks: HealthResponse['checks']): HealthStatus {
     if (checks.db === 'fail' || checks.bus === 'fail') return 'down';
 
@@ -676,6 +696,7 @@ export class HealthService {
       checks.voice,
       checks.signal_voice,
       checks.scheduler,
+      checks.principal_mailbox_triage,
     ];
     if (nonCritical.some(c => c === 'fail')) return 'degraded';
 

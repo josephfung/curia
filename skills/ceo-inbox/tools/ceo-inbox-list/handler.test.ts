@@ -1228,6 +1228,17 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     const r = await t.run({ triage: true }, { principalMailboxes: stubPrincipalMailboxes({ mailboxes: [mailboxView('work', 'Work', WORK_ADDR, true)], grantId: 'grant-work' }) });
     expect(r.success).toBe(false);
     if (!r.success) expect(r.error).toContain('HTTP 500');
+    // It counts as a triage call without progress, for the heartbeat's back-off (R67).
+    expect(await t.state.noProgress('work')).toBe(1);
+  });
+
+  it('a capped empty scan counts as no progress; a readable mailbox resets the count (R67)', async () => {
+    const junk = Array.from({ length: 40 }, (_, i) => msg(`j${i}`, NOW_S - i, { from: [{ email: 'curia@example.com' }] }));
+    const t = setup({ 'grant-work': junk, 'grant-personal': [msg('p1', NOW_S - 1)] }, { pageSize: 1, ctxExtra: { selfEmails: ['curia@example.com'] } });
+    await t.state.setNoProgress('personal', 2);
+    await t.run();
+    expect(await t.state.noProgress('work')).toBe(1);
+    expect(await t.state.noProgress('personal')).toBe(0);
   });
 
   it('counts a batch only when it returns messages', async () => {

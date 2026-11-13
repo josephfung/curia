@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { closeLegacyInboxDrains, InboxHeartbeat, INBOX_DRAIN_INTENT, type InboxHeartbeatOptions } from '../../../src/scheduler/inbox-heartbeat.js';
-import { parseCadence, TRIAGE_DAILY_CEILING, type Cadence } from '../../../src/principal-mailboxes/triage-cadence.js';
+import { parseCadence, type Cadence } from '../../../src/principal-mailboxes/triage-cadence.js';
 import { isAutonomousSendOrigin } from '../../../src/skills/outbound-gateway.js';
 import { TriageState } from '../../../src/principal-mailboxes/triage-state.js';
 
@@ -55,7 +55,6 @@ function make(over: {
     hasUnreadSince,
     taskRepo: { listTasks, createTask, completeTask },
     scheduler: { enqueueTaskWake, pullTaskWakeIn },
-    dailyCeiling: TRIAGE_DAILY_CEILING,
     tz: () => TZ,
     logger: log as never,
   });
@@ -237,6 +236,70 @@ describe('InboxHeartbeat.start', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('ticks once shortly after start, then on the quarter-hour grid (BR-M6, SF-M9)', async () => {
+    vi.useFakeTimers();
+    try {
+      // 10:07 Toronto: the boot tick lands at 10:08, then 10:15, 10:30.
+      const start = new Date('2026-11-12T15:07:00.000Z');
+      vi.setSystemTime(start);
+      const t = make({ hasUnread: vi.fn(async () => false) });
+      const ticks: number[] = [];
+      vi.spyOn(t.hb, 'tick').mockImplementation(async () => { ticks.push(Date.now()); return 'quiet'; });
+      t.hb.start(start);
+      await vi.advanceTimersByTimeAsync(24 * 60_000);
+      t.hb.stop();
+      expect(ticks.map((ms) => new Date(ms).toISOString().slice(11, 16))).toEqual(['15:08', '15:15', '15:30']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('InboxHeartbeat health (R67)', () => {
+  it('is ok after a clean tick, and fails when no tick has succeeded for 45 minutes', async () => {
+    const t = make({ hasUnread: vi.fn(async () => false) });
+    await t.hb.tick(NOW);
+    expect(t.hb.health(new Date(NOW.getTime() + 44 * 60_000))).toEqual({ ok: true });
+    const late = t.hb.health(new Date(NOW.getTime() + 46 * 60_000));
+    expect(late.ok).toBe(false);
+    expect(late.detail).toContain('no successful inbox triage check');
+  });
+
+  it('fails while a mailbox probe has failed four ticks running, and recovers', async () => {
+    let fail = true;
+    const t = make({ hasUnread: vi.fn(async () => { if (fail) throw new Error('down'); return false; }) });
+    for (let i = 0; i < 3; i++) await t.hb.tick(NOW);
+    expect(t.hb.health(NOW).ok).toBe(true);
+    await t.hb.tick(NOW);
+    expect(t.hb.health(NOW)).toMatchObject({ ok: false, detail: expect.stringContaining('work') });
+    expect(t.log.error).toHaveBeenCalledWith(expect.objectContaining({ mailboxId: 'work', consecutive: 4 }), expect.any(String));
+    fail = false;
+    await t.hb.tick(NOW);
+    expect(t.hb.health(NOW).ok).toBe(true);
+  });
+
+  it('fails while the drain is suspended', async () => {
+    const t = make({ tasks: [taskRow({ wakeState: 'suspended' })] });
+    await t.hb.tick(NOW);
+    expect(t.hb.health(NOW)).toMatchObject({ ok: false, detail: expect.stringContaining('suspended') });
+  });
+
+  it('backs a stuck mailbox off to its next slot, then gives it one try per slot', async () => {
+    const t = make({ seed: { 'triage.work.no_progress': '4' } });
+    expect(await t.hb.tick(NOW)).toBe('quiet');
+    expect(t.hasUnreadSince).not.toHaveBeenCalled();
+    expect(await t.state.lastDrainedAt('work')).toEqual(NOW);
+    expect(t.hb.health(NOW)).toMatchObject({ ok: false, detail: expect.stringContaining('no progress') });
+    // Next hourly slot: no attempt since the back-off, so it is tried once.
+    const later = new Date(NOW.getTime() + 60 * 60_000);
+    expect(await t.hb.tick(later)).toBe('woke');
+    // That attempt failed too: backed off again at the following tick.
+    await t.state.setNoProgress('work', 5);
+    await t.state.markDrained('work', new Date(later.getTime() - 60 * 60_000));
+    expect(await t.hb.tick(new Date(later.getTime() + 15 * 60_000))).toBe('quiet');
+    expect(t.hasUnreadSince).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -37,6 +37,18 @@ describe('HealthService.getStatus()', () => {
     expect(result.uptime_s).toBeGreaterThanOrEqual(0);
   });
 
+  it('principal_mailbox_triage: skipped without a heartbeat, ok, or a failure that degrades (R67)', async () => {
+    const check = async (inboxTriageHealth?: () => unknown) =>
+      new HealthService(makeDeps({ inboxTriageHealth }) as never).getStatus();
+    expect((await check()).checks.principal_mailbox_triage).toBe('skipped');
+    expect((await check(() => null)).checks.principal_mailbox_triage).toBe('skipped');
+    expect((await check(() => ({ ok: true }))).checks.principal_mailbox_triage).toBe('ok');
+    const failing = await check(() => ({ ok: false, detail: 'stuck' }));
+    expect(failing.checks.principal_mailbox_triage).toBe('fail');
+    expect(failing.status).toBe('degraded');
+    expect((await check(() => { throw new Error('boom'); })).checks.principal_mailbox_triage).toBe('fail');
+  });
+
   it('returns down when db fails', async () => {
     const svc = new HealthService(makeDeps({
       db: { query: vi.fn().mockRejectedValue(new Error('connection lost')) },

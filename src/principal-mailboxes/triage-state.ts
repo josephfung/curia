@@ -7,6 +7,7 @@
 //   triage.<id>.drain_started_at  ISO-8601 start of the current drain episode (R52), '' when none
 //   triage.<id>.backlog_alarmed   'true' | 'false' — the backlog alarm fired this episode
 //   triage.<id>.settle_pending    'true' | 'false' — the last batch was listed, not yet known settled (R68)
+//   triage.<id>.no_progress       consecutive triage calls with no progress for this mailbox (R67)
 //
 // Corrupt stored values fail safe, preferring to stop over running past the budget:
 //   - a bad last_drained_at reads as null, which makes the mailbox due (one extra drain at worst);
@@ -117,6 +118,30 @@ export class TriageState {
     if (await this.backlogAlarmed(id)) await this.setBacklogAlarmed(id, false);
   }
 
+  /**
+   * Consecutive triage calls in which this due mailbox made no progress: it could not be read,
+   * or the page cap stopped a scan that kept nothing (R67). A bad value reads as 0.
+   */
+  async noProgress(id: string): Promise<number> {
+    const raw = await this.read(`triage.${id}.no_progress`);
+    return raw !== null && /^\d+$/.test(raw) ? Number(raw) : 0;
+  }
+
+  async setNoProgress(id: string, n: number): Promise<void> {
+    await this.write(`triage.${id}.no_progress`, String(n));
+  }
+
+  /**
+   * Back a stuck mailbox off to its next cadence slot (R67): mark it drained now and drop any
+   * open episode, so it is not due again until the slot.
+   */
+  async backOff(id: string, now: Date): Promise<void> {
+    await this.markDrained(id, now);
+    await this.setDraining(id, false);
+    await this.setDrainStartedAt(id, null);
+    if (await this.settlePending(id)) await this.setSettlePending(id, false);
+  }
+
   async backlogAlarmed(id: string): Promise<boolean> {
     return (await this.read(`triage.${id}.backlog_alarmed`)) === 'true';
   }
@@ -124,4 +149,19 @@ export class TriageState {
   async setBacklogAlarmed(id: string, v: boolean): Promise<void> {
     await this.write(`triage.${id}.backlog_alarmed`, v ? 'true' : 'false');
   }
+}
+
+/**
+ * A process-memory stand-in for ConfigStore, for when the knowledge graph is off (ADR-051 gate):
+ * triage keeps running on default cadences, and its state starts over at each restart (R67).
+ */
+export function inMemoryTriageConfig(): Pick<ConfigStore, 'get' | 'set'> {
+  const data = new Map<string, string>();
+  return {
+    get: async (namespace, key) => data.get(`${namespace}\u0000${key}`) ?? null,
+    set: async (namespace, key, value) => {
+      data.set(`${namespace}\u0000${key}`, value);
+      return { stored: true, action: 'set' };
+    },
+  };
 }

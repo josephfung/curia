@@ -33,7 +33,7 @@ import type { Logger } from '../logger.js';
 import type { TaskListRow, TaskRepo } from '../db/task-repo.js';
 import type { SchedulerService } from './scheduler-service.js';
 import type { PrincipalMailboxes } from '../principal-mailboxes/service.js';
-import type { Cadence } from '../principal-mailboxes/triage-cadence.js';
+import { TRIAGE_DAILY_CEILING, type Cadence } from '../principal-mailboxes/triage-cadence.js';
 import type { TriageState } from '../principal-mailboxes/triage-state.js';
 import { dueMailboxes } from '../principal-mailboxes/triage-due.js';
 import { makeSystemOriginator } from '../contacts/principal.js';
@@ -50,6 +50,12 @@ export const STALLED_AFTER_MINUTES = 30;
 export type InboxHeartbeatResult = 'woke' | 'quiet' | 'drain_running' | 'drain_suspended' | 'ceiling';
 /** Consecutive drain_running ticks (an hour) after which the heartbeat warns (R64). */
 export const DRAIN_RUNNING_WARN_TICKS = 4;
+/** A tick older than this means the heartbeat stopped working (R67). */
+export const TICK_STALE_MINUTES = 45;
+/** Consecutive failing probes (an hour of ticks) after which a mailbox fails the health check. */
+export const PROBE_FAILURE_TICKS = 4;
+/** Consecutive triage calls without progress after which a mailbox is backed off to its next slot. */
+export const NO_PROGRESS_DRAINS = 4;
 
 export interface InboxHeartbeatOptions {
   mailboxes: Pick<PrincipalMailboxes, 'list'>;
@@ -60,10 +66,18 @@ export interface InboxHeartbeatOptions {
   hasUnreadSince: (mailboxId: string, since: Date | null) => Promise<boolean>;
   taskRepo: Pick<TaskRepo, 'listTasks' | 'createTask' | 'completeTask'>;
   scheduler: Pick<SchedulerService, 'enqueueTaskWake' | 'pullTaskWakeIn'>;
-  dailyCeiling: number;
   tz: () => string;
   logger: Logger;
   intervalMinutes?: number;
+  /** Delay of the one tick run shortly after start (default 60 s), so a restart does not wait a full interval. */
+  bootTickDelayMs?: number;
+}
+
+/** Health of the triage heartbeat, for the principal_mailbox_triage check (R67). */
+export interface InboxTriageHealth {
+  ok: boolean;
+  /** Why it fails; absent when ok. */
+  detail?: string;
 }
 
 /** The note a superseded drain task is closed with. */
@@ -100,6 +114,16 @@ export async function closeLegacyInboxDrains(
 
 export class InboxHeartbeat {
   private intervalHandle: NodeJS.Timeout | null = null;
+  private timers: NodeJS.Timeout[] = [];
+  private started = false;
+  private startedAt: Date | null = null;
+  private lastTickOkAt: Date | null = null;
+  // Consecutive failed probes per mailbox, reset by a probe that answers.
+  private readonly probeFailures = new Map<string, number>();
+  // Mailboxes at or past NO_PROGRESS_DRAINS, as of the last tick that read them.
+  private readonly stuck = new Set<string>();
+  // The no-progress count a mailbox was last backed off at, so it gets one try per slot.
+  private readonly backedOffAt = new Map<string, number>();
   // A slow tick (Nylas probes) must not overlap the next interval fire.
   private tickInFlight = false;
   // Set-aside drain task ids already warned about, so the 15-minute tick does not repeat the line.
@@ -112,10 +136,18 @@ export class InboxHeartbeat {
 
   constructor(private readonly o: InboxHeartbeatOptions) {}
 
-  start(): void {
-    if (this.intervalHandle) return;
+  /**
+   * Ticks on the wall-clock grid (:00, :15, :30, :45 for 15 minutes), so a window end such as
+   * 23:00 gets its tick (BR-M6), plus one tick shortly after start so a restart does not wait a
+   * whole interval (SF-M9). An overlapping fire is skipped while a tick is in flight.
+   */
+  start(now: Date = new Date()): void {
+    if (this.started) return;
+    this.started = true;
+    this.startedAt = now;
     const minutes = this.o.intervalMinutes ?? 15;
-    this.intervalHandle = setInterval(() => {
+    const intervalMs = minutes * 60_000;
+    const run = (): void => {
       if (this.tickInFlight) {
         this.o.logger.warn('InboxHeartbeat: previous tick still in flight; skipping this interval');
         return;
@@ -123,21 +155,49 @@ export class InboxHeartbeat {
       this.tickInFlight = true;
       this.tick()
         .catch((err) => {
-          this.o.logger.error({ err }, 'InboxHeartbeat: unhandled error in tick');
+          this.o.logger.error({ ...grantSafeErrorFields(err) }, 'InboxHeartbeat: unhandled error in tick');
         })
         .finally(() => {
           this.tickInFlight = false;
         });
-    }, minutes * 60_000);
-    this.o.logger.info({ intervalMinutes: minutes }, 'InboxHeartbeat started');
+    };
+    const toGrid = intervalMs - (now.getTime() % intervalMs);
+    this.timers.push(setTimeout(run, this.o.bootTickDelayMs ?? 60_000));
+    this.timers.push(setTimeout(() => {
+      run();
+      this.intervalHandle = setInterval(run, intervalMs);
+    }, toGrid));
+    this.o.logger.info({ intervalMinutes: minutes, firstGridTickInMs: toGrid }, 'InboxHeartbeat started');
   }
 
   stop(): void {
+    for (const t of this.timers) clearTimeout(t);
+    this.timers = [];
     if (this.intervalHandle) {
       clearInterval(this.intervalHandle);
       this.intervalHandle = null;
     }
+    this.started = false;
     this.o.logger.info('InboxHeartbeat stopped');
+  }
+
+  /**
+   * The principal_mailbox_triage health check (R67). Fails when no tick has succeeded for
+   * TICK_STALE_MINUTES (counted from start), a mailbox's probe has failed PROBE_FAILURE_TICKS
+   * ticks running, a mailbox has made no progress for NO_PROGRESS_DRAINS triage calls, or the
+   * drain's wake is suspended by the scheduler's circuit breaker.
+   */
+  health(now: Date = new Date()): InboxTriageHealth {
+    const problems: string[] = [];
+    const last = this.lastTickOkAt ?? this.startedAt;
+    if (last && now.getTime() - last.getTime() > TICK_STALE_MINUTES * 60_000) {
+      problems.push(`no successful inbox triage check since ${last.toISOString()}`);
+    }
+    const probing = [...this.probeFailures].filter(([, n]) => n >= PROBE_FAILURE_TICKS).map(([id]) => id);
+    if (probing.length > 0) problems.push(`unread check failing for ${probing.join(', ')}`);
+    if (this.stuck.size > 0) problems.push(`triage making no progress for ${[...this.stuck].join(', ')}`);
+    if (this.suspendedDrain) problems.push('the inbox drain was suspended after repeated failures; resume it in the console');
+    return problems.length > 0 ? { ok: false, detail: problems.join('; ') } : { ok: true };
   }
 
   /** The drain task whose wake the circuit breaker suspended, as of the last tick that looked; null when none. */
@@ -172,14 +232,15 @@ export class InboxHeartbeat {
 
   async tick(now: Date = new Date()): Promise<InboxHeartbeatResult> {
     const result = await this.tickOnce(now);
+    this.lastTickOkAt = now;
     if (result !== 'drain_running') this.drainRunningTicks = 0;
     return result;
   }
 
   private async tickOnce(now: Date): Promise<InboxHeartbeatResult> {
-    // The state's own ceiling (TRIAGE_DAILY_CEILING) gates; dailyCeiling is recorded for logs.
+    // TriageState gates on TRIAGE_DAILY_CEILING, the one value the list tool also reads (BR-M2).
     if (await this.o.state.ceilingReached(now)) {
-      this.o.logger.info({ dailyCeiling: this.o.dailyCeiling }, 'InboxHeartbeat: daily batch ceiling reached; not waking triage');
+      this.o.logger.info({ dailyCeiling: TRIAGE_DAILY_CEILING }, 'InboxHeartbeat: daily batch ceiling reached; not waking triage');
       return 'ceiling';
     }
 
@@ -205,26 +266,51 @@ export class InboxHeartbeat {
       now,
       tz: this.o.tz(),
     });
-    if (due.length === 0) return 'quiet';
+    // Forget counters of mailboxes that are no longer live.
+    for (const id of [...this.probeFailures.keys()]) if (!ids.includes(id)) this.probeFailures.delete(id);
+    this.stuck.clear();
+    for (const id of ids) if ((await this.o.state.noProgress(id)) >= NO_PROGRESS_DRAINS) this.stuck.add(id);
+
+    // R67: a mailbox whose triage made no progress NO_PROGRESS_DRAINS calls running is backed off
+    // to its next cadence slot instead of being woken every tick; it gets one try per slot, and
+    // stays failing in the health check until a call makes progress.
+    const toProbe: string[] = [];
+    for (const id of due) {
+      const n = await this.o.state.noProgress(id);
+      if (n >= NO_PROGRESS_DRAINS && this.backedOffAt.get(id) !== n) {
+        this.backedOffAt.set(id, n);
+        await this.o.state.backOff(id, now);
+        this.o.logger.warn({ mailboxId: id, noProgress: n }, 'InboxHeartbeat: triage of this mailbox keeps making no progress; skipping it until its next cadence slot');
+        continue;
+      }
+      toProbe.push(id);
+    }
+    if (toProbe.length === 0) return 'quiet';
 
     const startById = new Map(mailboxes.map((m) => [m.id, m.triageStartAt]));
     let failed = 0;
     let hasMail = false;
-    for (const id of due) {
+    for (const id of toProbe) {
       try {
-        if (await this.o.hasUnreadSince(id, startById.get(id) ?? null)) {
+        const has = await this.o.hasUnreadSince(id, startById.get(id) ?? null);
+        if ((this.probeFailures.get(id) ?? 0) >= PROBE_FAILURE_TICKS) this.o.logger.info({ mailboxId: id }, 'InboxHeartbeat: unread check recovered');
+        this.probeFailures.delete(id);
+        if (has) {
           hasMail = true;
           break;
         }
       } catch (err) {
         // A failed probe counts as "no mail" for this tick. Grant-safe: SDK errors can carry the grant id.
         failed += 1;
-        this.o.logger.warn({ mailboxId: id, ...grantSafeErrorFields(err) }, 'InboxHeartbeat: unread probe failed; treating as no mail this tick');
+        const n = (this.probeFailures.get(id) ?? 0) + 1;
+        this.probeFailures.set(id, n);
+        const level = n === PROBE_FAILURE_TICKS ? 'error' : 'warn';
+        this.o.logger[level]({ mailboxId: id, consecutive: n, ...grantSafeErrorFields(err) }, 'InboxHeartbeat: unread probe failed; treating as no mail this tick');
       }
     }
     if (!hasMail) {
-      if (failed === due.length) {
-        this.o.logger.warn({ failed, due: due.length }, 'InboxHeartbeat: every due mailbox probe failed; no triage this tick');
+      if (failed === toProbe.length) {
+        this.o.logger.warn({ failed, due: toProbe.length }, 'InboxHeartbeat: every due mailbox probe failed; no triage this tick');
       }
       return 'quiet';
     }

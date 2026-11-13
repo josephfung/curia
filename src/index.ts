@@ -232,9 +232,9 @@ import {
   type AssembledAgent,
 } from './startup/agent-assembly.js';
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
-import { closeLegacyInboxDrains, InboxHeartbeat } from './scheduler/inbox-heartbeat.js';
-import { readTriageCadences, TRIAGE_DAILY_CEILING } from './principal-mailboxes/triage-cadence.js';
-import { TriageState, TRIAGE_NAMESPACE } from './principal-mailboxes/triage-state.js';
+import { closeLegacyInboxDrains, InboxHeartbeat, type InboxTriageHealth } from './scheduler/inbox-heartbeat.js';
+import { readTriageCadences, type Cadence } from './principal-mailboxes/triage-cadence.js';
+import { inMemoryTriageConfig, TriageState, TRIAGE_NAMESPACE } from './principal-mailboxes/triage-state.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
 import { unreadCandidateProbe } from './principal-mailboxes/triage-candidate.js';
 import type { TriageServices } from './principal-mailboxes/triage-services.js';
@@ -2763,6 +2763,8 @@ async function main(): Promise<void> {
       'Principal mailbox outage alerts are off (no outbound gateway or no email adapter running); a failing mailbox shows only on the health status',
     );
   }
+  // The inbox heartbeat is built after the health service; its verdict is read through this.
+  const inboxTriageHealthRef: { current: (() => InboxTriageHealth) | null } = { current: null };
   const healthService = new HealthService({
     db: pool,
     bus,
@@ -2788,6 +2790,7 @@ async function main(): Promise<void> {
     // health service keeps it single-flight.
     retryMailboxMigration: retryMailboxMigration ? sendingKeyRename.run : undefined,
     reconcileFlatMailboxKeys: reconcileFlatMirror,
+    inboxTriageHealth: () => inboxTriageHealthRef.current?.() ?? null,
     // Calendar is bound to this grant at boot (the acquaintance check reads every live mailbox
     // per call); setup-status reports restart_required while the default mailbox's grant differs.
     calendarBoundGrant: () => calendarBoundGrantId ?? null,
@@ -2943,18 +2946,24 @@ async function main(): Promise<void> {
   // the principal's yes, and settles denials and expiries. Shared by the execution layer's
   // cardUse capability and the deny / expiry paths below.
   const cardUseService = new CardUseService({ repo: cardUseRepo, secrets: secretsService, approvalTrigger, bus, logger });
-  // ceo-inbox-list's triage mode (#2475, D4): cadences, state, dedupe and the start-line setter.
-  // Built once, on first use by a tool that declares 'triageServices'. Needs the config store.
+  // Triage state and cadences (#2475, D4) live in the KG-backed config store. With the knowledge
+  // graph off, an in-memory store keeps triage running on default cadences, its state reset at
+  // each restart, instead of no triage at all (R67). The list tool and the heartbeat share it.
+  const triageConfig: Pick<ConfigStore, 'get' | 'set'> = entityMemory ? new ConfigStore(entityMemory, logger) : inMemoryTriageConfig();
+  if (!entityMemory) logger.warn('Knowledge graph is off: inbox triage runs on default cadences with in-memory state until it is back');
+  const triageTz = (): string => principalContact?.timezone ?? config.timezone;
+  const triageState = new TriageState(triageConfig, triageTz);
+  const readCadences = async (ids: string[]): Promise<Record<string, Cadence>> =>
+    readTriageCadences(await triageConfig.get(TRIAGE_NAMESPACE, 'triage'), ids, logger);
+  // ceo-inbox-list's triage mode: cadences, state, dedupe and the start-line setter. Built once,
+  // on first use by a tool that declares 'triageServices'.
   let triageServicesCache: TriageServices | undefined;
   const triageServices = (): TriageServices | undefined => {
-    if (!entityMemory) return undefined;
     if (!triageServicesCache) {
-      const cfg = new ConfigStore(entityMemory, logger);
-      const triageTz = (): string => principalContact?.timezone ?? config.timezone;
       const dedupe = new TriageDedupe(pool, logger);
       triageServicesCache = {
-        cadences: async (ids) => readTriageCadences(await cfg.get(TRIAGE_NAMESPACE, 'triage'), ids, logger),
-        state: new TriageState(cfg, triageTz),
+        cadences: readCadences,
+        state: triageState,
         tz: triageTz,
         dedupe: { claim: (h, f, m, n) => dedupe.claim(h, f, m, n) },
         setTriageStart: (id, at) => principalMailboxStore.setTriageStart(id, at),
@@ -3360,9 +3369,10 @@ async function main(): Promise<void> {
   backlogHeartbeat.start();
 
   // Inbox heartbeat (#2475, D4): replaces ceo-inbox's hourly triage cron. Code only, no model
-  // call: every 15 minutes it wakes ceo-inbox only when a due mailbox has unread mail. Needs the
-  // config store (cadences, triage state), so it does not run without entity memory, and not in
-  // setup-required mode (no principal mailbox is connected yet).
+  // call: every 15 minutes it wakes ceo-inbox only when a due mailbox has unread mail. It runs
+  // with or without the knowledge graph (triageConfig falls back to memory, R67); not in
+  // setup-required mode (no principal mailbox is connected yet). Its health shows as
+  // principal_mailbox_triage.
   // Drains the old cron flow created would run beside the heartbeat's own (BR-C2): close them
   // once, before the first tick. Idempotent, so it runs every boot.
   if (agentRegistry.has('ceo-inbox')) {
@@ -3373,14 +3383,12 @@ async function main(): Promise<void> {
     }
   }
   let inboxHeartbeat: InboxHeartbeat | undefined;
-  if (entityMemory && !setupRequiredAtBoot && agentRegistry.has('ceo-inbox')) {
-    const triageConfig = new ConfigStore(entityMemory, logger);
-    const triageTz = (): string => principalContact?.timezone ?? config.timezone;
+  if (!setupRequiredAtBoot && agentRegistry.has('ceo-inbox')) {
     inboxHeartbeat = new InboxHeartbeat({
       mailboxes: principalMailboxes,
       // Read per tick so a console edit takes effect without a restart.
-      cadences: async (ids) => readTriageCadences(await triageConfig.get(TRIAGE_NAMESPACE, 'triage'), ids, logger),
-      state: new TriageState(triageConfig, triageTz),
+      cadences: readCadences,
+      state: triageState,
       // One cheap first-page list per due mailbox, kept by the triage list's own rule (BR-I3):
       // Curia's own unread mail is never triaged, so it must not wake a model run either.
       hasUnreadSince: unreadCandidateProbe({
@@ -3398,11 +3406,14 @@ async function main(): Promise<void> {
       }),
       taskRepo,
       scheduler: schedulerService,
-      dailyCeiling: TRIAGE_DAILY_CEILING,
       tz: triageTz,
       logger,
     });
     inboxHeartbeat.start();
+    const hb = inboxHeartbeat;
+    inboxTriageHealthRef.current = () => hb.health();
+  } else {
+    logger.warn({ setupRequired: setupRequiredAtBoot, ceoInbox: agentRegistry.has('ceo-inbox') }, 'Inbox heartbeat NOT started: principal inbox triage is off until restart');
   }
 
   const resumableContinuationSubscriber = new ResumableContinuationSubscriber({
