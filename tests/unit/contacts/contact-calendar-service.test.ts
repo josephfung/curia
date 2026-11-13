@@ -238,5 +238,49 @@ describe('ContactService — calendar methods', () => {
       const primary = await service.getPrimaryCalendar(ceoContact.id);
       expect(primary).toBeNull();
     });
+
+    it('with a mailbox, returns that mailbox\'s primary; without, the oldest, every time (#2475)', async () => {
+      await service.linkCalendar({ nylasCalendarId: 'c-work', contactId: ceoContact.id, label: 'W', isPrimary: true, principalMailboxId: 'work' });
+      await new Promise((r) => setTimeout(r, 2));
+      await service.linkCalendar({ nylasCalendarId: 'c-personal', contactId: ceoContact.id, label: 'P', isPrimary: true, principalMailboxId: 'personal' });
+      expect((await service.getPrimaryCalendar(ceoContact.id, 'personal'))?.nylasCalendarId).toBe('c-personal');
+      expect((await service.getPrimaryCalendar(ceoContact.id, 'work'))?.nylasCalendarId).toBe('c-work');
+      expect(await service.getPrimaryCalendar(ceoContact.id, 'other')).toBeNull();
+      for (let i = 0; i < 3; i++) {
+        expect((await service.getPrimaryCalendar(ceoContact.id))?.nylasCalendarId).toBe('c-work');
+      }
+    });
+  });
+
+  describe('mailbox reads and moves (#2475)', () => {
+    it('getCalendarsForMailbox lists any contact\'s calendars in that mailbox', async () => {
+      const other = await service.createContact({ displayName: 'Shared Owner', source: 'test' });
+      await service.linkCalendar({ nylasCalendarId: 'c1', contactId: ceoContact.id, label: 'A', principalMailboxId: 'work' });
+      await service.linkCalendar({ nylasCalendarId: 'c2', contactId: other.id, label: 'B', principalMailboxId: 'work' });
+      await service.linkCalendar({ nylasCalendarId: 'c3', contactId: ceoContact.id, label: 'C', principalMailboxId: 'personal' });
+      expect((await service.getCalendarsForMailbox('work')).map((c) => c.nylasCalendarId).sort()).toEqual(['c1', 'c2']);
+    });
+
+    it('setCalendarMailbox moves a calendar, refusing a second primary in the target mailbox', async () => {
+      await service.linkCalendar({ nylasCalendarId: 'home-w', contactId: ceoContact.id, label: 'W', isPrimary: true, principalMailboxId: 'work' });
+      await service.linkCalendar({ nylasCalendarId: 'home-p', contactId: ceoContact.id, label: 'P', isPrimary: true, principalMailboxId: 'personal' });
+      await service.linkCalendar({ nylasCalendarId: 'plain', contactId: ceoContact.id, label: 'X', principalMailboxId: 'work' });
+      expect(await service.setCalendarMailbox('plain', 'personal')).toBe(true);
+      expect((await service.resolveCalendar('plain'))?.principalMailboxId).toBe('personal');
+      await expect(service.setCalendarMailbox('home-w', 'personal')).rejects.toMatchObject({ code: '23505' });
+      expect(await service.setCalendarMailbox('missing', 'personal')).toBe(false);
+    });
+  });
+
+  describe('merge with calendars in several mailboxes (#2475)', () => {
+    it('keeps primaries in two mailboxes and demotes one in the same mailbox', async () => {
+      const secondary = await service.createContact({ displayName: 'Jane D', source: 'test' });
+      await service.linkCalendar({ nylasCalendarId: 's-a', contactId: ceoContact.id, label: 'A', isPrimary: true, principalMailboxId: 'work' });
+      await service.linkCalendar({ nylasCalendarId: 'm-b', contactId: secondary.id, label: 'B', isPrimary: true, principalMailboxId: 'personal' });
+      await service.linkCalendar({ nylasCalendarId: 'm-a', contactId: secondary.id, label: 'A2', isPrimary: true, principalMailboxId: 'work' });
+      await service.mergeContacts(ceoContact.id, secondary.id);
+      const byId = Object.fromEntries((await service.getCalendarsForContact(ceoContact.id)).map((c) => [c.nylasCalendarId, c.isPrimary]));
+      expect(byId).toEqual({ 's-a': true, 'm-b': true, 'm-a': false });
+    });
   });
 });
