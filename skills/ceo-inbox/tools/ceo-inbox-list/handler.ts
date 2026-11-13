@@ -114,8 +114,9 @@ export class CeoInboxListHandler implements ToolHandler {
 
     const unreadOnly = input.unread_only !== false; // default true
 
-    // A token continues only the listing that made it: same folder and unread filter.
-    const scope = pageScope({ tool: 'ceo-inbox-list', folder, unreadOnly });
+    // A token continues only the listing that made it: same folder, unread filter and mailbox
+    // selection (one named mailbox, or every one).
+    const scope = pageScope({ tool: 'ceo-inbox-list', folder, unreadOnly, mailbox: typeof input.mailbox === 'string' ? input.mailbox : null });
     const token = readPageToken(input, limit, scope);
     if (!token.ok) return { success: false, error: token.error };
 

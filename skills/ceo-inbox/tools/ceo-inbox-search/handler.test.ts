@@ -534,6 +534,17 @@ describe('CeoInboxSearchHandler — every mailbox (#2475)', () => {
     expect(f.requests).toHaveLength(before);
   });
 
+  it('refuses a page_token when the mailbox selection changed, without fetching', async () => {
+    const f = serve({ 'grant-work': Array.from({ length: 6 }, (_, i) => rawMessage(`w${i}`, 100 - i)) }, { pageSize: 3 });
+    const first = await run({ limit: 2, mailbox: 'work' });
+    if (!first.success) throw new Error(first.error);
+    const before = f.requests.length;
+    const second = await run({ limit: 2, page_token: (first.data as Data).next_page_token });
+    expect(second.success).toBe(false);
+    if (!second.success) expect(second.error).toContain('other filters');
+    expect(f.requests).toHaveLength(before);
+  });
+
   it('keeps a token open for a failed mailbox when the readable one is finished', async () => {
     serve({ 'grant-work': [rawMessage('w1', 100)] }, { failing: ['grant-personal'] });
     const result = await run({ limit: 10 });

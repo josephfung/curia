@@ -753,6 +753,29 @@ describe('CeoInboxListHandler — every mailbox (#2475)', () => {
     expect(data.mailbox_errors?.[0]).toMatchObject({ mailbox: 'personal', note: expect.stringContaining('later call retries') });
   });
 
+  it('keeps reading past an empty page that still has a next cursor', async () => {
+    const pages: Record<string, { data: Array<Record<string, unknown>>; next?: string }> = {
+      '': { data: [], next: 'c1' },
+      c1: { data: [rawMessage('w1', 100), rawMessage('w2', 99)] },
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const page = pages[new URL(String(url)).searchParams.get('page_token') ?? '']!;
+      return new Response(JSON.stringify({ data: page.data, ...(page.next ? { next_cursor: page.next } : {}) }), { status: 200 });
+    });
+    const result = await run({ limit: 5, mailbox: 'work' });
+    if (!result.success) throw new Error(result.error);
+    expect((result.data as Data).messages.map((m) => m.id)).toEqual(['w1', 'w2']);
+  });
+
+  it('refuses a page_token when the mailbox selection changed', async () => {
+    serve({ 'grant-work': Array.from({ length: 6 }, (_, i) => rawMessage(`w${i}`, 100 - i)) });
+    const first = await run({ limit: 2, mailbox: 'work' });
+    if (!first.success) throw new Error(first.error);
+    const second = await run({ limit: 2, page_token: (first.data as Data).next_page_token });
+    expect(second.success).toBe(false);
+    if (!second.success) expect(second.error).toContain('without page_token');
+  });
+
   it('refuses a page_token made for another folder or unread filter', async () => {
     serve({ 'grant-work': Array.from({ length: 6 }, (_, i) => rawMessage(`w${i}`, 100 - i)) });
     const first = await run({ limit: 2, mailbox: 'work' });
