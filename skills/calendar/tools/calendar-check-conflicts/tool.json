@@ -16,7 +16,7 @@
     "clear": "boolean (false whenever a calendar could not be read)",
     "partial": "array? ({mailbox_label, error}: calendars that could not be read)",
     "removed": "string[]? (removed mailboxes whose calendars were not read)",
-    "freebusy_via": "array? (which account someone else's free/busy was read through, and why)",
+    "freebusy_via": "array? (which account someone else's free/busy was read through, and why; fell_back_from when the chosen one failed)",
     "displayTimezone": "string|null (timezone label for conflict times; null when clear or no timezone)"
   },
   "permissions": [],

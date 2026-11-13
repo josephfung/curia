@@ -131,8 +131,11 @@ spoofed invite reusing a real meeting's UID and time but with another title or e
 its own key and cannot suppress the real meeting's debrief. Every copy of a meeting has the same key, and the
 instances of a recurring series have different ones, so a weekly meeting is still
 debriefed every week. The guards key on it, so a meeting is judged and debriefed
-once, whichever copy a scan sees. The prompt wake re-validates by finding the event
-whose `meetingKey` (or, for an older anchor, `id`) matches.
+once, whichever copy a scan sees. The intent anchor carries the key and the copy's
+event id; the prompt wake re-validates by finding the event whose `meetingKey` matches,
+else whose `id` matches (a moved or renamed meeting changes its key but keeps its id).
+For one release, Step 2 also skips an event with a legacy `seen:<eventId>` guard, so a
+meeting judged just before the upgrade is not judged and prompted twice.
 
 #### Cross-tick idempotency via `config-store`
 

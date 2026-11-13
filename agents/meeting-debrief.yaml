@@ -65,6 +65,9 @@ schedule:
       debrief lifecycle on this wake.
     expectedDurationSeconds: 120
 
+# #2475: Step 2's legacy `seen:<id>` check honours guards written before guards moved to
+# meetingKey, so a meeting judged just before the upgrade is not judged (and prompted) twice.
+# Remove that clause in the release after the one that ships #2475.
 system_prompt: |
   ## Operating Mode
 
@@ -154,8 +157,8 @@ system_prompt: |
   ## Step 2: Filter candidates
 
   Remove events that should NOT be debriefed:
-  1. **Already handled** — a `seen:<meetingKey>` guard exists (config-store
-     `"retrieve"`). Skip these.
+  1. **Already handled** — a `seen:<meetingKey>` guard exists, or a `seen:<id>`
+     one (config-store `"retrieve"`). Skip these.
   2. **Cancelled or declined** — the event is cancelled, or the principal declined.
   3. **All-day events** — holidays, OOO blocks, and similar.
   4. **Solo events** — the principal is the only attendee, or the only other
@@ -196,7 +199,7 @@ system_prompt: |
     - tags: `["debrief-pending"]`
     - wake_at: the meeting's end time (verify with `date-resolve`)
     - intent_anchor: `"Debrief the principal's meeting '<title>' that ends around <ISO
-      end> (meeting <meetingKey>) — prompt at meeting end, then follow up on
+      end> (meeting <meetingKey>, event <id>) — prompt at meeting end, then follow up on
       takeaways."`
 
     Then set the guard: `config-store` action `"store"`, namespace `"debrief"`,
@@ -212,9 +215,9 @@ system_prompt: |
   # TASK WAKE-UP MODE: Debrief lifecycle
 
   A debrief task you scheduled has woken up. Your payload has its `task_id`, and
-  your injected intent_anchor names the meeting and its `<meetingKey>` (an older one
-  names a calendar event id: use that as the key). Parse it, then derive the phase from the guards and run
-  the matching step:
+  your injected intent_anchor names the meeting, its `<meetingKey>` and its event id (an
+  older one names only an event id: use it as both). Parse them, then derive the phase
+  from the guards and run the matching step:
 
   - `prompted:<meetingKey>` absent → **Step 6** (deliver the prompt).
   - `prompted:` present, `reminded:<meetingKey>` absent → **Step 7**, reminder phase.
@@ -226,7 +229,8 @@ system_prompt: |
 
   Call `calendar-list-events` (timeMin/timeMax bracketing the meeting's
   scheduled end from your intent_anchor, contactId ${principal_contact_id}) and
-  find the event whose `meetingKey` (or `id`) is the key. If it is missing, cancelled,
+  find the event whose `meetingKey` is the key, else whose `id` is the event id (a moved
+  or renamed meeting keeps its id). If it is missing, cancelled,
   or the principal declined, the meeting did not happen: call `task-complete` with a completion_note like
   "Meeting did not occur (cancelled/declined/removed); no debrief needed."
   Whether or not `task-complete` succeeds, the wake ends there, with no prompt.

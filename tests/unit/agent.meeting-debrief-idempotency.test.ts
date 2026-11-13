@@ -131,6 +131,15 @@ describe('meeting-debrief keys its guards on the meeting, not one calendar copy 
     expect(prompt).not.toMatch(/<eventId>/);
   });
 
+  it('a moved or renamed meeting is still found at the wake: the anchor carries the event id too (review I2)', () => {
+    expect(prompt).toMatch(/\(meeting <meetingKey>, event <id>\)/);
+    expect(prompt).toMatch(/whose `meetingKey` is the key, else whose `id` is the event id/);
+  });
+
+  it('a legacy seen:<id> guard still skips the event for one release (review M3)', () => {
+    expect(prompt).toMatch(/`seen:<meetingKey>` guard exists, or a `seen:<id>`/);
+  });
+
   it("a weekly series' instances keep their own keys; an event without a UID keys on its id", () => {
     const thisWeek = evt('i1', { originalStartTime: 1_795_100_000 });
     const nextWeek = evt('i2', { originalStartTime: 1_795_704_800, startTime: 1_795_704_800, endTime: 1_795_708_400 });
