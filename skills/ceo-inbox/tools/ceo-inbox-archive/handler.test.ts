@@ -190,7 +190,7 @@ describe('CeoInboxArchiveHandler', () => {
     ) as ToolManifest;
     const registry = new ToolRegistry();
     registry.register({ ...manifest, timeout: 50 }, new CeoInboxArchiveHandler());
-    const execution = new ExecutionLayer(registry, logger, { principalMailboxes: { forSkills: () => stubPrincipalMailboxes({}) } as unknown as import('../../../../src/principal-mailboxes/service.js').PrincipalMailboxes });
+    const execution = new ExecutionLayer(registry, logger, { principalMailboxes: { forSkills: () => stubPrincipalMailboxes({}), forDirectory: () => ({ list: async () => [] }) } as unknown as import('../../../../src/principal-mailboxes/service.js').PrincipalMailboxes });
 
     // A slow read, like the 10–15 s Nylas bursts in prod. It honours the abort
     // signal the way a real fetch does.

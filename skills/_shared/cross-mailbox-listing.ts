@@ -42,7 +42,12 @@ export interface FailureLog {
 }
 
 const NOT_INCLUDED = 'Its mail is not included; a later call retries it.';
-const READ_TO_END = 'Not read on this page: the page_token marks it read to its end. Retry without page_token to read it again.';
+/**
+ * A mailbox the token marks finished: an earlier page read it to its end, so there is nothing to
+ * retry (M1). A live mailbox the token does not name at all is not skipped: it is read from the
+ * start (listAcrossMailboxes), so an old or forged token cannot hide it that way.
+ */
+const finishedEarlier = (label: string): string => `${label} finished earlier in this listing.`;
 
 /** A mailbox that failed, logged by class and HTTP status only (SF4). Never the error body. */
 function logMailboxFailure(where: FailureLog | undefined, mailboxId: string, err: unknown): void {
@@ -347,7 +352,7 @@ export async function listAcrossMailboxes<T extends { id: string; date: number }
   // A token can mark a live mailbox finished; a forged one could hide it that way, so it is named.
   const skipped: SkippedMailbox[] = ok
     .filter((o) => o.start === null)
-    .map((o) => ({ mailbox: o.target.mailbox.id, mailbox_label: o.target.mailbox.label, note: READ_TO_END }));
+    .map((o) => ({ mailbox: o.target.mailbox.id, mailbox_label: o.target.mailbox.label, note: finishedEarlier(o.target.mailbox.label) }));
   return {
     items,
     hasMore: leftover || cappedWithItems,

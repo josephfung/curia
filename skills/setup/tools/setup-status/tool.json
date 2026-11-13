@@ -28,6 +28,6 @@
   ],
   "timeout": 15000,
   "capabilities": ["entityMemory", "schedulerService", "officeIdentityService"],
-  "optional_capabilities": ["phoneAppReady", "emailChannelStatus", "principalMailboxReady", "browserService", "principalMailboxes"],
+  "optional_capabilities": ["phoneAppReady", "emailChannelStatus", "principalMailboxReady", "browserService", "mailboxDirectory"],
   "allowed_callers": ["setup-wizard"]
 }

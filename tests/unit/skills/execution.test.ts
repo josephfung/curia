@@ -261,6 +261,36 @@ describe('ExecutionLayer', () => {
     });
   });
 
+  describe('mailboxDirectory capability (#2475 M0)', () => {
+    it('injects a list-only view: ids, labels and triage starts, no clients or addresses', async () => {
+      const service = new PrincipalMailboxes({
+        store: {
+          listLive: async () => [{ id: 'work', label: 'Work', address: 'w@example.com', provider: 'google', isDefault: true, triageStartAt: null, removedAt: null, addedIdentityId: null }],
+          hasAnyRow: async () => true, getAny: async () => null,
+        } as never,
+        secrets: { get: async () => 'secret-grant' },
+        apiKey: () => 'secret-key',
+        logger,
+      });
+      const withService = new ExecutionLayer(registry, logger, { principalMailboxes: service });
+      let seen: Record<string, unknown> | undefined;
+      let mailboxes: unknown;
+      registry.register(makeManifest({ optional_capabilities: ['mailboxDirectory'] }), {
+        execute: async (ctx: ToolContext) => {
+          seen = ctx.mailboxDirectory as unknown as Record<string, unknown>;
+          mailboxes = ctx.principalMailboxes;
+          return { success: true, data: 'ok' };
+        },
+      });
+      expect((await withService.invoke('test-skill', { query: 'x' })).success).toBe(true);
+      expect(Object.keys(seen!)).toEqual(['list']);
+      expect(seen).not.toHaveProperty('ceoClient');
+      expect(seen).not.toHaveProperty('gatewayClient');
+      expect(mailboxes).toBeUndefined();
+      expect(await (seen!['list'] as () => Promise<unknown>)()).toEqual([{ id: 'work', label: 'Work', triageStartAt: null }]);
+    });
+  });
+
   describe('optional_capabilities (#2024)', () => {
     const seen: { bus?: unknown }[] = [];
     const handler: ToolHandler = {

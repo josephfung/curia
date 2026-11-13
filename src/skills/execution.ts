@@ -613,6 +613,8 @@ export class ExecutionLayer {
       nylasCalendarClient: this.nylasCalendarClient,
       // Skills get the narrowed view, never the service with credentials() (F7).
       principalMailboxes: this.principalMailboxes?.forSkills(),
+      // List-only: ids, labels, triage start. No clients (#2475).
+      mailboxDirectory: this.principalMailboxes?.forDirectory(),
       autonomyService: this.autonomyService,
       browserService: this.browserService,
       bullpenService: this.bullpenService,

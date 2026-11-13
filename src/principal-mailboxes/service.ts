@@ -48,6 +48,15 @@ export interface PrincipalMailboxesDeps {
  * ready client per mailbox, and nothing that returns the Nylas API key or a grant id: those never
  * cross into skill code. Built by `forSkills`, as a plain object of methods rather than the class.
  */
+/**
+ * The list-only view (`mailboxDirectory` capability, #2475): id, label and triage start of each
+ * live mailbox. No addresses, no clients. For skills that only name the mailboxes (config-store,
+ * setup-status).
+ */
+export interface MailboxDirectory {
+  list(): Promise<Array<{ id: string; label: string; triageStartAt: Date | null }>>;
+}
+
 export interface SkillPrincipalMailboxes {
   list(): Promise<PrincipalMailboxView[]>;
   get(id: string): Promise<PrincipalMailboxView>;
@@ -212,6 +221,13 @@ export class PrincipalMailboxes {
       principalEmailAddresses: () => this.principalEmailAddresses(),
       gatewayClient: (id) => this.gatewayClient(id),
       ceoClient: (id, log, budget) => this.ceoClient(id, log, budget),
+    };
+  }
+
+  /** The list-only view for skills that only name mailboxes. Holds nothing but this method. */
+  forDirectory(): MailboxDirectory {
+    return {
+      list: async () => (await this.list()).map(({ id, label, triageStartAt }) => ({ id, label, triageStartAt })),
     };
   }
 

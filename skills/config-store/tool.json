@@ -26,5 +26,5 @@
   "capabilities": [
     "entityMemory"
   ],
-  "optional_capabilities": ["principalMailboxes"]
+  "optional_capabilities": ["mailboxDirectory"]
 }

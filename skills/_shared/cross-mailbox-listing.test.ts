@@ -28,7 +28,9 @@ describe('listAcrossMailboxes — page tokens (S2)', () => {
       limit: 5, need: 6, pageCap: 1, fetchPage, keep: () => true,
     });
     expect(r.items.map((m) => m.id)).toEqual(['w1']);
-    expect(r.skipped).toEqual([{ mailbox: 'personal', mailbox_label: 'Personal', note: expect.stringMatching(/Retry without page_token/) }]);
+    expect(r.skipped).toEqual([{ mailbox: 'personal', mailbox_label: 'Personal', note: 'Personal finished earlier in this listing.' }]);
+    // M1: a finished mailbox is not something to retry.
+    expect(JSON.stringify(r.skipped)).not.toMatch(/page_token/);
   });
 
   it('a mailbox id like `constructor` reads only the token\'s own entries', async () => {

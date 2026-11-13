@@ -110,7 +110,11 @@ export function checkSendLevelWrite(
   raw: string,
   live: ReadonlyArray<SendLevelMailbox & { label: string }>,
 ): { ok: true } | { ok: false; error: string } {
-  const mailboxes = live.length > 0 ? live.map((m) => `${m.id} (${m.label})`).join(', ') : 'none connected';
+  // Nothing to key a level by (M3): say so rather than describe a shape no key can fill.
+  if (live.length === 0) {
+    return { ok: false, error: 'No principal mailbox is connected yet, so there is nothing to set a sending level for. Nothing was stored.' };
+  }
+  const mailboxes = live.map((m) => `${m.id} (${m.label})`).join(', ');
   const shape = `Store a JSON object {"<mailbox id>":"<level>"}, level ${LEVELS.join(' | ')}. Mailboxes: ${mailboxes}. Nothing was stored.`;
   let parsed: unknown;
   try {
@@ -125,7 +129,11 @@ export function checkSendLevelWrite(
   const entries = Object.entries(parsed as Record<string, unknown>);
   const unknown = ignoredKeys(entries.map(([k]) => k), live);
   if (unknown.length > 0) {
-    return { ok: false, error: `Not a connected mailbox: ${unknown.join(', ')}. ${shape}` };
+    // The legacy key is named apart (M2): it was a mailbox once, so "not connected" would mislead.
+    const legacy = unknown.includes(DEFAULT_MAILBOX) ? '"default" no longer applies; set a level per mailbox id. ' : '';
+    const others = unknown.filter((k) => k !== DEFAULT_MAILBOX);
+    const notConnected = others.length > 0 ? `Not a connected mailbox: ${others.join(', ')}. ` : '';
+    return { ok: false, error: `${legacy}${notConnected}${shape}` };
   }
   const badLevel = entries.filter(([, v]) => !isSendLevel(v)).map(([k]) => k);
   if (badLevel.length > 0) {
