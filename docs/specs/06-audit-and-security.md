@@ -133,6 +133,7 @@ The Coordinator agent processes every inbound message, making it the primary pro
 
 Before the Coordinator's LLM sees any message, the dispatch layer:
 - Strips XML/HTML tags that mimic system prompts (`<system>`, `<instructions>`, etc.)
+- Strips Unicode tag characters (U+E0000–U+E007F — "ASCII smuggling": invisible to a human reader, legible to the model) from message content, preserving well-formed subdivision flag sequences (England, Scotland, Wales). The same stripping runs on tool results in `sanitizeOutput`. When stripped characters decode to printable ASCII, the scan records a finding — the decoded text is audit-logged, never part of the message content — and the message's `risk_score` rises.
 - Detects instruction-like patterns ("ignore previous instructions", "you are now", "system:") via configurable regex
 - Flagged messages are **not blocked** — they're tagged with a `risk_score` in the message metadata. The Coordinator sees the risk score as structured metadata, not as part of the message content.
 - All flagged messages are audit-logged with the matched patterns.
