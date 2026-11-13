@@ -64,6 +64,19 @@ tool_stubs:
     - match: {}
       error: "Call ceo-inbox-list with triage: true for the drain batch (Step 3)."
   ceo-inbox-read:
+    - match: { message_id: msg-46i-personal }
+      return:
+        id: msg-46i-personal
+        threadId: thr-46i-p
+        mailbox: personal
+        mailbox_label: Personal
+        from: [{ name: Ines Moreau, email: ines.moreau@calder.example.test }]
+        to: [{ email: principal@work.example.test }, { email: principal@personal.example.test }]
+        cc: []
+        subject: Deck for the pilot kickoff
+        body_plain: "Hi,\n\nJust confirming I'll bring the pilot deck to Thursday's kickoff.\n\nThanks,\nInes"
+        labels: [INBOX, UNREAD]
+        attachments: []
     - match: { message_id: msg-46i-work }
       return:
         id: msg-46i-work
@@ -80,6 +93,15 @@ tool_stubs:
     - match: {}
       error: "Failed to read principal inbox message: not found"
   ceo-inbox-draft-reply:
+    - match: { reply_to_message_id: msg-46i-personal }
+      return:
+        draft_id: draft-46i-reply-p
+        mailbox: personal
+        mailbox_label: Personal
+        subject: "Re: Deck for the pilot kickoff"
+        to: [{ name: Ines Moreau, email: ines.moreau@calder.example.test }]
+        cc: []
+        already_exists: false
     - match: { reply_to_message_id: msg-46i-work }
       return:
         draft_id: draft-46i-reply
@@ -97,12 +119,15 @@ tool_stubs:
   # Housekeeping and lookups a triage run makes on the way (the first rerun called each):
   # answered, never refused. A rescheduling ask sent the first rerun into a calendar consult,
   # so the message is now a logistics note that triage answers with a short reply draft.
+  # A search does not dedupe across mailboxes (cross-mailbox-listing.ts), so it finds both copies:
+  # the personal one is the copy triage set aside, and the checks below forbid answering it.
   ceo-inbox-search:
     - match: {}
       return:
-        count: 1
+        count: 2
         messages:
           - { id: msg-46i-work, threadId: thr-46i, mailbox: work, mailbox_label: Work, from: [{ name: Ines Moreau, email: ines.moreau@calder.example.test }], subject: Deck for the pilot kickoff, date: "{{at:now-1h}}", snippet: "Just confirming I'll bring the pilot deck to Thursday's kickoff.", unread: true, folders: [INBOX, UNREAD] }
+          - { id: msg-46i-personal, threadId: thr-46i-p, mailbox: personal, mailbox_label: Personal, from: [{ name: Ines Moreau, email: ines.moreau@calder.example.test }], subject: Deck for the pilot kickoff, date: "{{at:now-1h}}", snippet: "Just confirming I'll bring the pilot deck to Thursday's kickoff.", unread: true, folders: [INBOX, UNREAD] }
   ceo-inbox-shadow-draft:
     - match: {}
       return: { captured: true, path: /shadow-drafts/scenario.md }
@@ -137,6 +162,18 @@ expected_behaviors:
       any_of:
         - { called: ceo-inbox-read, with: { message_id: msg-46i-work } }
         - { called: ceo-inbox-draft-reply, with: { reply_to_message_id: msg-46i-work } }
+  - id: personal_copy_not_read
+    weight: important
+    description: Does not open the personal copy a search may show; triage set it aside.
+    check:
+      not_called: [ceo-inbox-read]
+      with: { message_id: msg-46i-personal }
+  - id: no_reply_to_personal_copy
+    weight: critical
+    description: Drafts no reply to the personal copy.
+    check:
+      not_called: [ceo-inbox-draft-reply]
+      with: { reply_to_message_id: msg-46i-personal }
   - id: at_most_one_reply_draft
     weight: critical
     description: Drafts at most one reply across all mailboxes; the duplicate copy gets no second one.
