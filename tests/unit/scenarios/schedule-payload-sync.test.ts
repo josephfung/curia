@@ -13,6 +13,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadAgentConfig } from '../../../src/agents/loader.js';
 import { loadScenarioCases } from '../../scenarios/loader.js';
+import { INBOX_DRAIN_INTENT } from '../../../src/scheduler/inbox-heartbeat.js';
 
 const ROOT = path.resolve(import.meta.dirname, '../../..');
 const cases = loadScenarioCases(path.join(ROOT, 'tests/scenarios/cases'));
@@ -44,6 +45,18 @@ describe('scheduler scenario payloads match the agent YAML', () => {
     const drains = cases.filter((c) => c.agent === 'ceo-inbox' && c.inbound.from === 'task-wake' && c.inbound.task?.tags?.includes('inbox-drain'));
     expect(drains.length).toBeGreaterThanOrEqual(13);
     expect(drains.filter((c) => c.inbound.task?.originator !== 'system').map((c) => c.name)).toEqual([]);
+  });
+
+  // BR-I4: a case's drain wake is the one InboxHeartbeat.tick creates, and its batch listing is
+  // answered only in triage mode, so a run that lists without triage: true cannot pass.
+  it('seeds each inbox-drain wake with the heartbeat\'s own task text and a triage-mode list stub (R66)', () => {
+    const drains = cases.filter((c) => c.agent === 'ceo-inbox' && c.inbound.from === 'task-wake' && c.inbound.task?.tags?.includes('inbox-drain'));
+    expect(drains.filter((c) => c.inbound.task?.intent !== INBOX_DRAIN_INTENT || c.inbound.task?.title !== 'Inbox drain').map((c) => c.name)).toEqual([]);
+    const plainListAnswered = drains.filter((c) =>
+      (c.toolStubs['ceo-inbox-list'] ?? []).some((s) => Object.keys(s.match).length === 0 && s.error === undefined));
+    expect(plainListAnswered.map((c) => c.name)).toEqual([]);
+    const noTriageStub = drains.filter((c) => !(c.toolStubs['ceo-inbox-list'] ?? []).some((s) => s.match['triage'] === true));
+    expect(noTriageStub.map((c) => c.name)).toEqual([]);
   });
 
   it.each(scheduled.map((c) => [c.name, c] as const))('%s', (_name, scenario) => {

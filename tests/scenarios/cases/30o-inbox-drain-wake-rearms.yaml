@@ -20,8 +20,8 @@ inbound:
   from: task-wake
   task:
     id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303
-    title: Drain principal inbox backlog
-    intent: Continue batch-triaging the principal inbox until empty.
+    title: Inbox drain
+    intent: "Triage the principal's due mailboxes: call ceo-inbox-list with triage: true, one batch at a time (Steps 1-6)."
     tags: [inbox-drain]
     originator: system
     notes:
@@ -33,8 +33,8 @@ tool_stubs:
       return:
         tasks:
           - task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303
-            title: Drain principal inbox backlog
-            description: Continue batch-triaging the principal inbox until empty.
+            title: Inbox drain
+            description: "Triage the principal's due mailboxes: call ceo-inbox-list with triage: true, one batch at a time (Steps 1-6)."
             status: in_progress
             owner: curia
             tags: [inbox-drain]
@@ -42,12 +42,12 @@ tool_stubs:
         displayTimezone: "{{timezone}}"
   task-update:
     - match: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303 }
-      return: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303, title: Drain principal inbox backlog, status: in_progress, owner: curia, priority: 3, tags: [inbox-drain], updated_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+      return: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303, title: Inbox drain, status: in_progress, owner: curia, priority: 3, tags: [inbox-drain], updated_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
   task-complete:
     - match: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303 }
-      return: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303, title: Drain principal inbox backlog, status: done, completed_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+      return: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303, title: Inbox drain, status: done, completed_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
   ceo-inbox-list:
-    - match: {}
+    - match: { triage: true }
       return:
         count: 1
         has_more: true
@@ -63,6 +63,9 @@ tool_stubs:
             folders: [INBOX, UNREAD]
             attachments: []
             snippet: This week — onboarding flows that stick. Unsubscribe anytime.
+    # The drain's batch call is triage mode (Step 3, R66); any other plain listing is refused here.
+    - match: {}
+      error: "Call ceo-inbox-list with triage: true for the drain batch (Step 3)."
   ceo-inbox-read:
     - match: { message_id: msg-30o-news }
       return:
@@ -115,6 +118,6 @@ expected_behaviors:
       not_called: [task-complete]
       with: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000303 }
 failure_modes:
-  - Creates a second "Drain principal inbox backlog" task
+  - Creates a second "Inbox drain" task
   - Completes the drain task although has_more was true
   - Ends the run without re-arming, so the drain waits for the 15-minute cron

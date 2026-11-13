@@ -66,10 +66,7 @@ inbound:
     title: Inbox drain
     tags: [inbox-drain]
     originator: system
-    intent: Triage the due mailboxes' unread mail, one batch at a time, until none is left.
-    notes:
-      - at: "{{at:now-2m}}"
-        note: Heartbeat created this drain task; a mailbox is due. Next - triage one batch.
+    intent: "Triage the principal's due mailboxes: call ceo-inbox-list with triage: true, one batch at a time (Steps 1-6)."
 tool_stubs:
   # The drain task this wake runs: progress notes and completion are the wake's own writes.
   task-update:
@@ -98,7 +95,7 @@ tool_stubs:
             snippet: "Owen, we'll have the integration spec to you by {{day:next-monday+4}}."
     - match: { folder: DRAFTS }
       return: { folder: DRAFTS, drafts: [], count: 0 }
-    - match: {}
+    - match: { triage: true }
       return:
         count: 1
         has_more: false
@@ -113,6 +110,9 @@ tool_stubs:
             folders: [INBOX, UNREAD]
             attachments: []
             snippet: "Thanks. Can you confirm you'll deliver the spec by {{day:next-monday+4}}? Our team is planning the sprint around it."
+    # The drain's batch call is triage mode (Step 3, R66); any other plain listing is refused here.
+    - match: {}
+      error: "Call ceo-inbox-list with triage: true for the drain batch (Step 3)."
   ceo-inbox-search:
     - match: { folder: DRAFTS }
       return: { folder: DRAFTS, drafts: [], count: 0 }

@@ -391,19 +391,17 @@ system_prompt: |
 
   ## Step 3: List one batch of unread messages
 
-  Call ceo-inbox-list with:
-  - unread_only: true
-  - limit: 5
-
-  This returns at most 5 unread messages (one batch) plus a `has_more` flag
-  indicating whether more unread mail remains beyond this batch. The unread set
+  Call ceo-inbox-list with `triage: true` and nothing else. Code picks the due
+  mailboxes and a batch of at most 5, plus a `has_more` flag. The unread set
   is the untriaged set: every message you triage leaves it (Step 5), so the
   next batch holds the next untriaged messages.
 
-  If the count is 0, the inbox is drained for now. If this run has THE drain
-  task (the `inbox-drain` task you were woken for), call task-complete on it ("inbox drained"); an open
-  drain task keeps re-waking. Complete no other task. If task-complete fails,
-  log it and continue. Then exit without any further output.
+  If the count is 0 and `has_more` is true, duplicates were set aside: go to
+  Step 6. Otherwise a count of 0 (or `budget_exhausted`) means stop: if this run
+  has THE drain task (the `inbox-drain` task you were woken for), call
+  task-complete on it ("inbox drained"); an open drain task keeps re-waking.
+  Complete no other task. If task-complete fails, log it and continue. Then exit
+  without any further output.
 
   Otherwise, process every returned message through the full triage protocol
   (Steps 4-5). Remember `has_more` for Step 6.

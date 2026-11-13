@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { InboxHeartbeat, type InboxHeartbeatOptions } from '../../../src/scheduler/inbox-heartbeat.js';
+import { InboxHeartbeat, INBOX_DRAIN_INTENT, type InboxHeartbeatOptions } from '../../../src/scheduler/inbox-heartbeat.js';
 import { parseCadence, TRIAGE_DAILY_CEILING, type Cadence } from '../../../src/principal-mailboxes/triage-cadence.js';
 import { isAutonomousSendOrigin } from '../../../src/skills/outbound-gateway.js';
 import { TriageState } from '../../../src/principal-mailboxes/triage-state.js';
@@ -74,6 +74,13 @@ describe('InboxHeartbeat.tick', () => {
     expect(t.createTask).toHaveBeenCalledWith(expect.objectContaining({
       agentId: 'ceo-inbox', title: 'Inbox drain', tags: ['inbox-drain'], wakeAt: NOW, createdBy: 'heartbeat',
     }));
+  });
+
+  it('tells the drain to list with triage: true, as its intent and description (R66)', async () => {
+    const t = make();
+    await t.hb.tick(NOW);
+    expect(INBOX_DRAIN_INTENT).toContain('triage: true');
+    expect(t.createTask).toHaveBeenCalledWith(expect.objectContaining({ intentAnchor: INBOX_DRAIN_INTENT, description: INBOX_DRAIN_INTENT }));
   });
 
   it('does not wake while a drain is running', async () => {

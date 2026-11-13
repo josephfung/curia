@@ -433,4 +433,13 @@ describe('ceo-inbox prompt — inbox heartbeat replaces the triage cron (#2475)'
     expect(prompt).not.toMatch(/hourly|6am|11pm|operating hours/i);
     expect(prompt).toContain('inbox heartbeat');
   });
+
+  it('Step 3 lists the batch in triage mode (R66)', () => {
+    const prompt = loadCeoInboxPrompt();
+    const step3 = prompt.slice(prompt.indexOf('## Step 3'), prompt.indexOf('## Step 4'));
+    expect(step3).toContain('`triage: true`');
+    expect(step3).not.toContain('unread_only');
+    // count 0 with has_more true continues (duplicates set aside), as the tool text says.
+    expect(step3).toMatch(/count is 0 and `has_more` is true/);
+  });
 });

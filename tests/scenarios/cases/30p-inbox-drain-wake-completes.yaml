@@ -17,8 +17,8 @@ inbound:
   from: task-wake
   task:
     id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000304
-    title: Drain principal inbox backlog
-    intent: Continue batch-triaging the principal inbox until empty.
+    title: Inbox drain
+    intent: "Triage the principal's due mailboxes: call ceo-inbox-list with triage: true, one batch at a time (Steps 1-6)."
     tags: [inbox-drain]
     originator: system
     notes:
@@ -30,8 +30,8 @@ tool_stubs:
       return:
         tasks:
           - task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000304
-            title: Drain principal inbox backlog
-            description: Continue batch-triaging the principal inbox until empty.
+            title: Inbox drain
+            description: "Triage the principal's due mailboxes: call ceo-inbox-list with triage: true, one batch at a time (Steps 1-6)."
             status: in_progress
             owner: curia
             tags: [inbox-drain]
@@ -39,13 +39,16 @@ tool_stubs:
         displayTimezone: "{{timezone}}"
   task-update:
     - match: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000304 }
-      return: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000304, title: Drain principal inbox backlog, status: in_progress, owner: curia, priority: 3, tags: [inbox-drain], updated_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+      return: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000304, title: Inbox drain, status: in_progress, owner: curia, priority: 3, tags: [inbox-drain], updated_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
   task-complete:
     - match: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000304 }
-      return: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000304, title: Drain principal inbox backlog, status: done, completed_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+      return: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000304, title: Inbox drain, status: done, completed_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
   ceo-inbox-list:
-    - match: {}
+    - match: { triage: true }
       return: { count: 0, has_more: false, messages: [] }
+    # The drain's batch call is triage mode (Step 3, R66); any other plain listing is refused here.
+    - match: {}
+      error: "Call ceo-inbox-list with triage: true for the drain batch (Step 3)."
   contact-register:
     - match: {}
       return: { contact_id: 6c1d2e3f-4a5b-4c6d-8e7f-30f000000001, display_name: Product Weekly, contact_confidence: 0.5, created: true, verified: true }
