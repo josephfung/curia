@@ -3,6 +3,7 @@ import pino from 'pino';
 import {
   migrateFlatPrincipalMailbox,
   mailboxIdFromAddress,
+  migrationFailureReason,
 } from '../../../src/principal-mailboxes/migrate-flat-mailbox.js';
 import type { PrincipalMailboxStore } from '../../../src/principal-mailboxes/store.js';
 import { MAILBOX_ID_RE, RESERVED_MAILBOX_IDS, type PrincipalMailboxRecord } from '../../../src/principal-mailboxes/types.js';
@@ -73,6 +74,14 @@ describe('migrateFlatPrincipalMailbox', () => {
     expect(t.rows).toHaveLength(0);
     expect(t.secrets.set).not.toHaveBeenCalled();
     expect(onDeferred).toHaveBeenCalledWith(expect.stringMatching(reason));
+  });
+
+  it('points a Nylas failure at the Nylas settings and anything else at the server log', () => {
+    expect(migrationFailureReason(Object.assign(new Error('grants/g1'), { name: 'NylasApiError', statusCode: 401 })))
+      .toBe('The last attempt failed (NylasApiError, HTTP 401); check the Nylas API key and the grant');
+    const db = migrationFailureReason(new Error('relation "principal_mailboxes" is locked'));
+    expect(db).toBe('The last attempt failed (Error); see the server log for the cause');
+    expect(db).not.toMatch(/Nylas/);
   });
 
   it('tells why it deferred when no address is known', async () => {

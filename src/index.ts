@@ -2706,8 +2706,14 @@ async function main(): Promise<void> {
   // canary reports keyless mode (#2445). Google Workspace MCP uses OAuth env vars (no credential file)
   // — pass undefined; check falls back to a session ping if path is null.
   const healthConfig = resolveHealthConfig(yamlConfig.health);
-  if (!outboundGateway) {
-    logger.warn('Principal mailbox outage alerts are off: no outbound gateway, so a failing mailbox shows only on the health status');
+  // Outage alerts are emails: outbound.notification is delivered by an email adapter only. Without
+  // one a published alert reaches no one, so the notifier is not built and the boot says so.
+  const mailboxOutageAlerts = outboundGateway !== undefined && emailAdapters.length > 0;
+  if (!mailboxOutageAlerts) {
+    logger.warn(
+      { hasGateway: outboundGateway !== undefined, emailAdapters: emailAdapters.length },
+      'Principal mailbox outage alerts are off (no outbound gateway or no email adapter running); a failing mailbox shows only on the health status',
+    );
   }
   const healthService = new HealthService({
     db: pool,
@@ -2719,7 +2725,7 @@ async function main(): Promise<void> {
     nylasCalendarClient,
     // One canary per principal mailbox (#2475); an outage alerts the principal once per episode.
     principalMailboxes,
-    mailboxOutageNotifier: outboundGateway
+    mailboxOutageNotifier: mailboxOutageAlerts && outboundGateway
       ? new MailboxOutageNotifier({
           gateway: outboundGateway,
           // The designated primary email when it is a verified, active identity, as the gateway's

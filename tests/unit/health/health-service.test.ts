@@ -534,6 +534,39 @@ describe('HealthService.getStatus()', () => {
       }
     });
 
+    it('a migration retry that outlives its deadline is joined, never run twice at once', async () => {
+      vi.useFakeTimers();
+      try {
+        const deps = mailboxDeps([mailbox('mailbox', { isDefault: true })]);
+        deps.principalMailboxes.isFallbackActive.mockResolvedValue(true);
+        const retry = vi.fn(() => new Promise<never>(() => {}));
+        const svc = new HealthService(makeDeps({
+          ...deps,
+          principalMailboxes: { ...deps.principalMailboxes, setFallback: vi.fn() },
+          retryMailboxMigration: retry,
+        }) as never);
+        for (let i = 0; i < 2; i++) {
+          const run = svc.runCanaries();
+          await vi.advanceTimersByTimeAsync(30_000);
+          await run;
+        }
+        expect(retry).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('a stalled outage notice never holds the canaries, and is not sent twice at once', async () => {
+      const bad = mailbox('work', { isDefault: true, messages: vi.fn().mockRejectedValue(Object.assign(new Error('x'), { statusCode: 401 })) });
+      const deps = mailboxDeps([bad]);
+      deps.mailboxOutageNotifier.record.mockImplementation(() => new Promise(() => {}));
+      const svc = new HealthService(makeDeps(deps) as never);
+      const first = await svc.runCanaries();
+      expect(first.map((r) => r.name)).toContain('signal');
+      await svc.runCanaries();
+      expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledTimes(1);
+    });
+
     it('a stalled flat-key repair never holds the canaries, and is not started twice', async () => {
       const reconcile = vi.fn(() => new Promise<never>(() => {}));
       const svc = new HealthService(makeDeps({ ...mailboxDeps([mailbox('work', { isDefault: true })]), reconcileFlatMailboxKeys: reconcile }) as never);
