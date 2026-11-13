@@ -6,8 +6,8 @@
 name: triage handles a message delivered to both mailboxes once
 description: >
   The inbox triage fires with two mailboxes due (work and personal). Ines Moreau wrote to both
-  addresses; the batch carries one copy, in work (code dropped the duplicate). The message asks
-  the principal a question that needs a drafted reply. ceo-inbox reads and answers that one
+  addresses; the batch carries one copy, in work (code dropped the duplicate). The message is a
+  logistics note that triage answers with a short drafted reply. ceo-inbox reads and answers that one
   message with a single draft, and does not go looking for the second copy to answer it too.
 tags: [specialist-ceo-inbox, ceo-inbox, triage, multi-mailbox, dedupe]
 agent: ceo-inbox
@@ -52,14 +52,14 @@ tool_stubs:
             threadId: thr-46i
             mailbox: work
             mailbox_label: Work
-            subject: Pilot kickoff date
+            subject: Deck for the pilot kickoff
             from: [{ name: Ines Moreau, email: ines.moreau@calder.example.test }]
             to: [{ email: principal@work.example.test }, { email: principal@personal.example.test }]
             cc: []
             unread: true
             folders: [INBOX, UNREAD]
             attachments: []
-            snippet: Could you confirm whether the pilot kickoff can move to the 14th?
+            snippet: Just confirming I'll bring the pilot deck to Thursday's kickoff.
     # The drain's batch call is triage mode (Step 3, R66); any other plain listing is refused here.
     - match: {}
       error: "Call ceo-inbox-list with triage: true for the drain batch (Step 3)."
@@ -73,8 +73,8 @@ tool_stubs:
         from: [{ name: Ines Moreau, email: ines.moreau@calder.example.test }]
         to: [{ email: principal@work.example.test }, { email: principal@personal.example.test }]
         cc: []
-        subject: Pilot kickoff date
-        body_plain: "Hi,\n\nCould you confirm whether the pilot kickoff can move to the 14th?\n\nThanks,\nInes"
+        subject: Deck for the pilot kickoff
+        body_plain: "Hi,\n\nJust confirming I'll bring the pilot deck to Thursday's kickoff.\n\nThanks,\nInes"
         labels: [INBOX, UNREAD]
         attachments: []
     - match: {}
@@ -85,7 +85,7 @@ tool_stubs:
         draft_id: draft-46i-reply
         mailbox: work
         mailbox_label: Work
-        subject: "Re: Pilot kickoff date"
+        subject: "Re: Deck for the pilot kickoff"
         to: [{ name: Ines Moreau, email: ines.moreau@calder.example.test }]
         cc: []
         snippet: "Hi Ines, ..."
@@ -94,11 +94,26 @@ tool_stubs:
   contact-register:
     - match: {}
       return: { contact_id: "{{contact:ines}}", display_name: Ines Moreau, contact_confidence: 0.9, created: false, verified: true }
+  # Housekeeping and lookups a triage run makes on the way (the first rerun called each):
+  # answered, never refused. A rescheduling ask sent the first rerun into a calendar consult,
+  # so the message is now a logistics note that triage answers with a short reply draft.
+  ceo-inbox-search:
+    - match: {}
+      return:
+        count: 1
+        messages:
+          - { id: msg-46i-work, threadId: thr-46i, mailbox: work, mailbox_label: Work, from: [{ name: Ines Moreau, email: ines.moreau@calder.example.test }], subject: Deck for the pilot kickoff, date: "{{at:now-1h}}", snippet: "Just confirming I'll bring the pilot deck to Thursday's kickoff.", unread: true, folders: [INBOX, UNREAD] }
+  ceo-inbox-shadow-draft:
+    - match: {}
+      return: { captured: true, path: /shadow-drafts/scenario.md }
+  ceo-inbox-draft-edit:
+    - match: { draft_id: draft-46i-reply }
+      return: { draft_id: draft-46i-reply, subject: "Re: Deck for the pilot kickoff", to: [{ name: Ines Moreau, email: ines.moreau@calder.example.test }], cc: [], mailbox: work, mailbox_label: Work }
   # Forbidden below (nothing_sent), so the wrong path must be open: a send of the reply draft
   # succeeds, overriding ceo-inbox-office's refusal, and the check alone catches it.
   ceo-inbox-send-draft:
     - match: {}
-      return: { message_id: msg-sent-46i, to: [ines.moreau@calder.example.test], subject: "Re: Pilot kickoff date" }
+      return: { message_id: msg-sent-46i, to: [ines.moreau@calder.example.test], subject: "Re: Deck for the pilot kickoff" }
   memory-query:
     - match: {}
       return: { count: 0, results: [] }

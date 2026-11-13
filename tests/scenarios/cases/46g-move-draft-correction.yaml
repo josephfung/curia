@@ -54,6 +54,18 @@ tool_stubs:
         body_plain: "Priya, attached are my tax slips for this year. Let me know if you need anything else."
         body_html: "<p>Priya, attached are my tax slips for this year. Let me know if you need anything else.</p>"
         is_draft: true
+    # The moved copy, read back to check the move.
+    - match: { draft_id: draft-priya-2 }
+      return:
+        id: draft-priya-2
+        threadId: thr-46g-tax-p
+        to: [{ name: Priya Nair, email: priya.nair@ledger.example.test }]
+        cc: []
+        bcc: []
+        subject: Tax slips
+        body_plain: "Priya, attached are my tax slips for this year. Let me know if you need anything else."
+        body_html: "<p>Priya, attached are my tax slips for this year. Let me know if you need anything else.</p>"
+        is_draft: true
   ceo-inbox-draft-edit:
     - match: { move_to_mailbox: personal }
       return:
