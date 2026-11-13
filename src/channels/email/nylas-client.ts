@@ -27,6 +27,7 @@ import type {
   ListDraftsQueryParams,
 } from 'nylas';
 import type { Logger } from '../../logger.js';
+import { grantSafeErrorFields } from '../../principal-mailboxes/error-fields.js';
 import { budgetExpired, remainingMs } from '../../util/call-budget.js';
 import type { CallBudget } from '../../util/call-budget.js';
 import { markMessageRequestError, nylasStatus } from './nylas-message-id.js';
@@ -395,7 +396,7 @@ export class NylasClient {
       }
     }
 
-    this.log.debug({ queryParams }, 'listing messages');
+    this.log.debug({ queryKeys: Object.keys(queryParams) }, 'listing messages');
 
     // The SDK's list() returns an AsyncListResponse which is both a Promise
     // and an async iterable. Awaiting it gives us the first page of results.
@@ -406,7 +407,7 @@ export class NylasClient {
       });
       return response.data.map((msg) => this.normalizeMessage(msg));
     } catch (err) {
-      this.log.error({ err, grantId: this.grantId, queryParams }, 'Nylas listMessages failed');
+      this.log.error({ ...grantSafeErrorFields(err), queryKeys: Object.keys(queryParams) }, 'Nylas listMessages failed');
       throw err;
     }
   }
@@ -428,7 +429,7 @@ export class NylasClient {
       // Draft and Message share BaseMessage, as in createDraft.
       return response.data.map((draft) => this.normalizeMessage(draft as unknown as NylasSdkMessage));
     } catch (err) {
-      this.log.error({ err, grantId: this.grantId, queryParams }, 'Nylas listDrafts failed');
+      this.log.error({ ...grantSafeErrorFields(err), queryKeys: Object.keys(queryParams) }, 'Nylas listDrafts failed');
       throw err;
     }
   }
@@ -440,10 +441,10 @@ export class NylasClient {
       return this.normalizeMessage(response.data as unknown as NylasSdkMessage);
     } catch (err) {
       if (nylasStatus(err) === 404) {
-        this.log.debug({ grantId: this.grantId, draftId }, 'Nylas getDraft: no such draft');
+        this.log.debug({ draftId }, 'Nylas getDraft: no such draft');
         return null;
       }
-      this.log.error({ err, grantId: this.grantId, draftId }, 'Nylas getDraft failed');
+      this.log.error({ ...grantSafeErrorFields(err), draftId }, 'Nylas getDraft failed');
       throw err;
     }
   }
@@ -468,7 +469,7 @@ export class NylasClient {
       });
       return this.normalizeMessage(response.data);
     } catch (err) {
-      this.log.error({ err, grantId: this.grantId, messageId }, 'Nylas getMessage failed');
+      this.log.error({ ...grantSafeErrorFields(err), messageId }, 'Nylas getMessage failed');
       throw markMessageRequestError(err);
     }
   }
@@ -479,7 +480,7 @@ export class NylasClient {
    */
   async sendMessage(options: SendEmailOptions): Promise<NylasMessage> {
     this.log.debug(
-      { to: options.to, subject: options.subject, isReply: !!options.replyToMessageId },
+      { recipientCount: options.to.length + (options.cc?.length ?? 0), isReply: !!options.replyToMessageId },
       'sending message',
     );
 
@@ -503,7 +504,7 @@ export class NylasClient {
       return this.normalizeMessage(response.data);
     } catch (err) {
       this.log.error(
-        { err, grantId: this.grantId, to: options.to, subject: options.subject, isReply: !!options.replyToMessageId },
+        { ...grantSafeErrorFields(err), recipientCount: options.to.length + (options.cc?.length ?? 0), isReply: !!options.replyToMessageId },
         'Nylas sendMessage failed',
       );
       throw err;
@@ -522,7 +523,7 @@ export class NylasClient {
    */
   async createDraft(options: SendEmailOptions): Promise<NylasMessage> {
     this.log.debug(
-      { to: options.to, subject: options.subject, isReply: !!options.replyToMessageId },
+      { recipientCount: options.to.length + (options.cc?.length ?? 0), isReply: !!options.replyToMessageId },
       'creating draft',
     );
 
@@ -548,7 +549,7 @@ export class NylasClient {
       return this.normalizeMessage(response.data as unknown as NylasSdkMessage);
     } catch (err) {
       this.log.error(
-        { err, grantId: this.grantId, to: options.to, subject: options.subject, isReply: !!options.replyToMessageId },
+        { ...grantSafeErrorFields(err), recipientCount: options.to.length + (options.cc?.length ?? 0), isReply: !!options.replyToMessageId },
         'Nylas createDraft failed',
       );
       throw err;
@@ -575,7 +576,7 @@ export class NylasClient {
       });
       return this.normalizeMessage(response.data);
     } catch (err) {
-      this.log.error({ err, grantId: this.grantId, draftId }, 'Nylas sendDraft failed');
+      this.log.error({ ...grantSafeErrorFields(err), draftId }, 'Nylas sendDraft failed');
       throw err;
     }
   }
@@ -592,7 +593,7 @@ export class NylasClient {
         this.log.info({ draftId }, 'Nylas deleteDraft: draft already gone');
         return;
       }
-      this.log.error({ err, grantId: this.grantId, draftId }, 'Nylas deleteDraft failed');
+      this.log.error({ ...grantSafeErrorFields(err), draftId }, 'Nylas deleteDraft failed');
       throw err;
     }
   }
@@ -641,7 +642,7 @@ export class NylasClient {
       });
       this.log.info({ messageId, updatedFolders: currentFolders }, 'message archived successfully');
     } catch (err) {
-      this.log.error({ err, grantId: this.grantId, messageId }, 'Nylas messages.update failed during archive');
+      this.log.error({ ...grantSafeErrorFields(err), messageId }, 'Nylas messages.update failed during archive');
       throw markMessageRequestError(err);
     }
   }
@@ -661,7 +662,7 @@ export class NylasClient {
       });
       this.log.info({ messageId }, 'message marked as read');
     } catch (err) {
-      this.log.error({ err, grantId: this.grantId, messageId }, 'Nylas markAsRead failed');
+      this.log.error({ ...grantSafeErrorFields(err), messageId }, 'Nylas markAsRead failed');
       throw markMessageRequestError(err);
     }
   }
@@ -704,7 +705,7 @@ export class NylasClient {
         pageToken = response.nextCursor;
       }
     } catch (err) {
-      this.log.error({ err, grantId: this.grantId }, 'Nylas listFolders failed');
+      this.log.error({ ...grantSafeErrorFields(err) }, 'Nylas listFolders failed');
       throw err;
     }
 
@@ -728,7 +729,7 @@ export class NylasClient {
       this.log.info({ folderId: response.data.id, name }, 'folder created');
       return { id: response.data.id, name: response.data.name };
     } catch (err) {
-      this.log.error({ err, grantId: this.grantId, name }, 'Nylas createFolder failed');
+      this.log.error({ ...grantSafeErrorFields(err), name }, 'Nylas createFolder failed');
       throw err;
     }
   }
@@ -753,7 +754,7 @@ export class NylasClient {
       this.log.info({ messageId, folders }, 'message folders updated');
       return this.normalizeMessage(response.data);
     } catch (err) {
-      this.log.error({ err, grantId: this.grantId, messageId }, 'Nylas updateMessageFolders failed');
+      this.log.error({ ...grantSafeErrorFields(err), messageId }, 'Nylas updateMessageFolders failed');
       throw markMessageRequestError(err);
     }
   }
@@ -847,7 +848,7 @@ export class NylasClient {
         queryParams: { messageId },
       });
     } catch (err) {
-      this.log.error({ err, attachmentId, messageId }, 'nylas: downloadAttachment failed');
+      this.log.error({ ...grantSafeErrorFields(err), attachmentId, messageId }, 'nylas: downloadAttachment failed');
       throw err;
     }
   }

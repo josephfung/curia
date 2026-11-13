@@ -87,6 +87,27 @@ describe('mailboxEvidence', () => {
     expect(out.find((e) => e.mailbox === 'personal')!.domain_match).toBe(false);
   });
 
+  it('does not count another public provider as a domain match', async () => {
+    const svc = stubPrincipalMailboxes({
+      mailboxes: [mailboxView('work', 'Work', 'ceo@acme.example.com', true), mailboxView('personal', 'Personal', 'me@outlook.com')],
+      gatewayClients: { work: fakeClient([], []), personal: fakeClient([], []) },
+    });
+    const out = await mailboxEvidence(svc, ['friend@outlook.com']);
+    expect(out.find((e) => e.mailbox === 'personal')!.domain_match).toBe(false);
+  });
+
+  it('counts a message the principal sent to the recipient in bcc', async () => {
+    const svc = stubPrincipalMailboxes({
+      mailboxes,
+      gatewayClients: {
+        work: fakeClient([msg('1', 1000, { bcc: [{ email: 'bob@acme.example.com' }] })], []),
+        personal: fakeClient([], []),
+      },
+    });
+    const out = await mailboxEvidence(svc, ['bob@acme.example.com']);
+    expect(out.find((e) => e.mailbox === 'work')).toMatchObject({ sent_count: 1, recent_subjects: ['subj 1'] });
+  });
+
   it('reports a failing mailbox with a class only and still computes the others', async () => {
     const svc = stubPrincipalMailboxes({
       mailboxes,

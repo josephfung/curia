@@ -30,9 +30,14 @@ const LOOKUP_TIMEOUT_MS = 8_000;
 const SENT_ATTRIBUTE = '\\Sent';
 const INBOX_ATTRIBUTE = '\\Inbox';
 
-// Two people on gmail.com share a domain by accident, not because they work together, so a
-// consumer domain never counts as a domain match.
-const CONSUMER_DOMAINS = new Set(['gmail.com', 'googlemail.com']);
+// Two people on a public mail provider share a domain by accident, not because they work
+// together, so a consumer domain never counts as a domain match (R38). The list covers the
+// large providers; a miss only adds a weak domain point, never a send.
+const CONSUMER_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com',
+  'yahoo.com', 'ymail.com', 'icloud.com', 'me.com', 'mac.com', 'aol.com', 'proton.me',
+  'protonmail.com', 'gmx.com', 'gmx.net', 'zoho.com', 'yandex.com', 'mail.com', 'fastmail.com',
+]);
 
 function domainOf(address: string): string {
   const at = address.lastIndexOf('@');
@@ -109,7 +114,7 @@ async function one(
       ]);
       // any_email also matches the address as a sender, so check the direction ourselves.
       const sentTo = sentAll
-        .filter((m) => [...m.to, ...m.cc].some((p) => wanted.has(p.email.trim().toLowerCase())))
+        .filter((m) => [...m.to, ...m.cc, ...m.bcc].some((p) => wanted.has(p.email.trim().toLowerCase())))
         .sort((a, b) => b.date - a.date)
         .slice(0, limit);
       const receivedFrom = inboxAll
