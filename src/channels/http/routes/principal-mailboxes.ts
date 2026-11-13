@@ -192,14 +192,22 @@ export async function principalMailboxesRoutes(
   app.delete(`${base}/:id`, AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     const { id } = request.params as { id: string };
-    const body = (request.body ?? {}) as { still_owned?: unknown; new_default_id?: unknown; new_primary_email?: unknown };
+    const body = (request.body ?? {}) as { still_owned?: unknown; new_default_id?: unknown; new_primary_email?: unknown; rules?: unknown };
     if (typeof body.still_owned !== 'boolean') {
       return reply.status(400).send({ error: 'still_owned (boolean) is required' });
     }
     const newDefaultId = str(body.new_default_id) || undefined;
     const newPrimaryEmail = str(body.new_primary_email) || undefined;
+    // rules: "delete", or { rescope_to: "<mailbox id>" }; the service decides whether it is needed.
+    let rules: 'delete' | { rescopeTo: string } | undefined;
+    if (body.rules !== undefined) {
+      const r = body.rules as { rescope_to?: unknown } | string | null;
+      if (r === 'delete') rules = 'delete';
+      else if (r !== null && typeof r === 'object' && str(r.rescope_to)) rules = { rescopeTo: str(r.rescope_to) };
+      else return reply.status(400).send({ error: 'rules must be "delete" or { rescope_to: <mailbox id> }' });
+    }
     try {
-      const outcome = await admin.remove({ id, stillOwned: body.still_owned, newDefaultId, newPrimaryEmail });
+      const outcome = await admin.remove({ id, stillOwned: body.still_owned, newDefaultId, newPrimaryEmail, ...(rules ? { rules } : {}) });
       // Past the tombstone the mailbox is removed: unfinished cleanup is reported, not a failure.
       if (outcome.cleanupIncomplete.length > 0) {
         request.log.warn({ mailboxId: id, cleanupIncomplete: outcome.cleanupIncomplete }, 'principal mailbox removed; some cleanup did not finish');

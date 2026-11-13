@@ -29,6 +29,7 @@ function setup(opts: {
   logger?: pino.Logger;
   reconcileFlatKeys?: () => Promise<unknown>;
   curiaGrants?: string[];
+  rulesDoc?: { read(): Promise<string | null>; write(s: string): Promise<void> };
 } = {}) {
   const records: PrincipalMailboxRecord[] = [...(opts.records ?? [])];
   const identities: Identity[] = [...(opts.identities ?? [])];
@@ -99,6 +100,7 @@ function setup(opts: {
     forgetLegacySendLevel: opts.forgetLegacySendLevel,
     isFallbackActive: opts.isFallbackActive,
     reconcileFlatKeys: opts.reconcileFlatKeys,
+    ...(opts.rulesDoc ? { rulesDoc: opts.rulesDoc } : {}),
     ...(opts.curiaGrants ? { curiaAccountGrantIds: async () => opts.curiaGrants! } : {}),
     logger: opts.logger ?? logger,
     maxLiveMailboxes: opts.maxLiveMailboxes,
@@ -746,5 +748,86 @@ describe('removing a mailbox drops the legacy send-level key (#2475 R41)', () =>
     expect(lines.join('')).toContain('legacy_send_level');
     expect(s.store.tombstone).toHaveBeenCalledWith('work', null);
     expect(s.secretStore.delete).toHaveBeenCalledWith(principalMailboxGrantSecretName('work'));
+  });
+});
+
+describe('removing a mailbox with scoped inbox rules (#2475 task 27)', () => {
+  const RULES = [
+    '## Work only', '- When: a', '- Do: b', '- Mailbox: work', '- Status: active', '',
+    '## Both', '- When: c', '- Do: d', '- Mailbox: work, personal', '- Status: active', '',
+    '## Everywhere', '- When: e', '- Do: f', '- Status: active', '',
+  ].join('\n');
+  const two = () => [
+    rec(),
+    rec({ id: 'work', label: 'Work', address: 'pat@work.example.com', isDefault: false }),
+  ];
+  const docOf = (initial: string | null) => {
+    const state = { text: initial };
+    const rulesDoc = {
+      read: vi.fn(async () => state.text),
+      write: vi.fn(async (t: string) => { state.text = t; }),
+    };
+    return { state, rulesDoc };
+  };
+
+  it('removalPreview lists rules scoped only to the mailbox', async () => {
+    const { rulesDoc } = docOf(RULES);
+    const { admin } = setup({ records: two(), rulesDoc });
+    const p = await admin.removalPreview('work');
+    expect(p.scopedRules).toEqual([
+      { title: 'Work only', onlyThisMailbox: true },
+      { title: 'Both', onlyThisMailbox: false },
+    ]);
+  });
+
+  it('requires a choice when rules are scoped only to the mailbox, before the tombstone', async () => {
+    const { rulesDoc } = docOf(RULES);
+    const { admin, store } = setup({ records: two(), rulesDoc });
+    await expect(admin.remove({ id: 'work', stillOwned: true })).rejects.toThrow(/rules/);
+    expect(store.tombstone).not.toHaveBeenCalled();
+  });
+
+  it('refuses a rescope target that is not another live mailbox, before the tombstone', async () => {
+    const { rulesDoc } = docOf(RULES);
+    const { admin, store } = setup({ records: two(), rulesDoc });
+    for (const to of ['work', 'nope']) {
+      await expect(admin.remove({ id: 'work', stillOwned: true, rules: { rescopeTo: to } })).rejects.toThrow(/live mailbox/);
+    }
+    expect(store.tombstone).not.toHaveBeenCalled();
+    expect(rulesDoc.write).not.toHaveBeenCalled();
+  });
+
+  it('deletes or rescopes the rules after the grant and flat-key steps', async () => {
+    const del = docOf(RULES);
+    const a = setup({ records: two(), rulesDoc: del.rulesDoc });
+    expect(await a.admin.remove({ id: 'work', stillOwned: true, rules: 'delete' })).toEqual({ cleanupIncomplete: [], restartRequired: false });
+    expect(del.state.text).not.toContain('Work only');
+    expect(del.state.text).toContain('- Mailbox: personal');
+
+    const res = docOf(RULES);
+    const order: string[] = [];
+    res.rulesDoc.write.mockImplementation(async (t: string) => { order.push('rules'); res.state.text = t; });
+    const b = setup({ records: two(), rulesDoc: res.rulesDoc });
+    b.secretStore.delete.mockImplementation(async () => { order.push('grant'); });
+    await b.admin.remove({ id: 'work', stillOwned: true, rules: { rescopeTo: 'personal' } });
+    expect(order).toEqual(['grant', 'rules']);
+    expect(res.state.text).toContain('## Work only\n- When: a\n- Do: b\n- Mailbox: personal\n');
+  });
+
+  it('ignores the choice when no rule is scoped only to the mailbox', async () => {
+    const { rulesDoc, state } = docOf('## Both\n- Mailbox: work, personal\n');
+    const { admin, store } = setup({ records: two(), rulesDoc });
+    await admin.remove({ id: 'work', stillOwned: true, rules: { rescopeTo: 'nope' } });
+    expect(store.tombstone).toHaveBeenCalled();
+    expect(state.text).toBe('## Both\n- Mailbox: personal\n');
+  });
+
+  it('lists a failed inbox_rules step in cleanup_incomplete and the removal stands', async () => {
+    const { rulesDoc } = docOf(RULES);
+    rulesDoc.write.mockRejectedValueOnce(new Error('docs down'));
+    const { admin, store } = setup({ records: two(), rulesDoc });
+    const out = await admin.remove({ id: 'work', stillOwned: true, rules: 'delete' });
+    expect(out.cleanupIncomplete).toEqual(['inbox_rules']);
+    expect(store.tombstone).toHaveBeenCalled();
   });
 });

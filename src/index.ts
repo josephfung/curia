@@ -96,6 +96,7 @@ import { NylasCalendarClient } from './channels/calendar/nylas-calendar-client.j
 import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
+import { createRulesDoc } from './principal-mailboxes/rules-doc.js';
 import { migrateFlatPrincipalMailbox, migrationFailureReason } from './principal-mailboxes/migrate-flat-mailbox.js';
 import { renameSendingKeyAfterMigration, dropLegacyDefaultKey, type SendingConfigStore } from './principal-mailboxes/migrate-config-keys.js';
 import { reconcileFlatMailboxKeys } from './principal-mailboxes/flat-mirror.js';
@@ -1316,6 +1317,12 @@ async function main(): Promise<void> {
           return new NylasClient(principalMailboxApiKey, grantId, logger).getGrant();
         },
         isFallbackActive: () => principalMailboxes.isFallbackActive(),
+        // Scoped inbox rules on removal (task 27). The working-docs repo is built further down;
+        // the adapter reads it only when a removal runs, after boot.
+        rulesDoc: createRulesDoc({
+          read: (path) => workingDocsRepo.read(path),
+          update: (path, params) => workingDocsRepo.update(path, params),
+        }),
         forgetLegacySendLevel: async () => { if (sendingKeyStore) await dropLegacyDefaultKey(sendingKeyStore, logger); else logger.warn('Mailbox removal: the sending-level store is not ready yet, so the legacy default send-level key was not checked'); },
         logger,
       })
