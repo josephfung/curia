@@ -38,6 +38,9 @@ import { makeSystemOriginator } from '../contacts/principal.js';
 import { grantSafeErrorFields } from '../principal-mailboxes/error-fields.js';
 
 export const INBOX_DRAIN_TAG = 'inbox-drain';
+/** The drain task's intent and description: what the wake tells ceo-inbox to do (R66). */
+export const INBOX_DRAIN_INTENT =
+  "Triage the principal's due mailboxes: call ceo-inbox-list with triage: true, one batch at a time (Steps 1-6).";
 const INBOX_AGENT = 'ceo-inbox';
 /** A drain task untouched for this long, with no wake pending, is stalled. */
 export const STALLED_AFTER_MINUTES = 30;
@@ -177,6 +180,8 @@ export class InboxHeartbeat {
     const task = await this.o.taskRepo.createTask({
       agentId: INBOX_AGENT,
       title: 'Inbox drain',
+      description: INBOX_DRAIN_INTENT,
+      intentAnchor: INBOX_DRAIN_INTENT,
       tags: [INBOX_DRAIN_TAG],
       wakeAt: now,
       createdBy: 'heartbeat',

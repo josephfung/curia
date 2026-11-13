@@ -127,6 +127,12 @@ describe('loadScenarioCase', () => {
     expect(plain.inbound.task).not.toHaveProperty('originator');
   });
 
+  it('lets only a fresh inbox-drain wake omit its notes, as the heartbeat writes none (#2475)', () => {
+    const bare = WAKE_TASK.replace(/, notes: .*\}$/, ', tags: [inbox-drain], originator: system }');
+    const c = loadScenarioCase(write('wd.yaml', VALID.replace(PRINCIPAL_INBOUND, `from: task-wake\n  task: ${bare}`)));
+    expect(c.inbound.task?.notes).toEqual([]);
+  });
+
   it('rejects a task wake originator other than system (#2475)', () => {
     const bad = VALID.replace(PRINCIPAL_INBOUND, `from: task-wake\n  task: ${WAKE_TASK.replace(/ }$/, ', originator: principal }')}`);
     expect(() => loadScenarioCase(write('wb.yaml', bad))).toThrow(/inbound\.task: 'originator' must be 'system'/);

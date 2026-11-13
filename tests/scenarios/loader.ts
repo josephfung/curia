@@ -899,8 +899,11 @@ function parseWakeTask(raw: unknown, file: string): ScenarioWakeTask {
     onlyKeys(n, WAKE_NOTE_KEYS, file, `inbound.task.notes[${i}]`);
     return { at: str(n, 'at', file, `inbound.task.notes[${i}]`), note: str(n, 'note', file, `inbound.task.notes[${i}]`) };
   });
-  if (notes.length === 0) throw new CaseError(file, `inbound.task: 'notes' must list the progress the wake resumes from`);
   const tags = strList(raw, 'tags', file, 'inbound.task');
+  // The inbox heartbeat's fresh drain task has no progress yet (#2475): only it may omit notes.
+  if (notes.length === 0 && !tags.includes('inbox-drain')) {
+    throw new CaseError(file, `inbound.task: 'notes' must list the progress the wake resumes from`);
+  }
   // Only the system lineage the inbox heartbeat stamps is modelled (#2475); other lineages come
   // from a live turn, which a wake does not have.
   const originator = optStr(raw, 'originator', file, 'inbound.task');

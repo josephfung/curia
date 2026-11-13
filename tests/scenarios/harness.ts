@@ -1108,7 +1108,7 @@ export async function createScenarioHarness(
       const wakeTask = inbound.task;
       inboundContent = wakeTask
         ? formatTaskWakeContent(
-            { taskId: wakeTask.id, title: wakeTask.title, progress: { notes: wakeTask.notes }, agentId: scenario.agent, tags: wakeTask.tags ?? [] },
+            { taskId: wakeTask.id, title: wakeTask.title, progress: wakeProgress(wakeTask), agentId: scenario.agent, tags: wakeTask.tags ?? [] },
             { type: 'task-wake' },
             recordedReplyViews(await scopedOutbound.getActiveWithReplies(scenario.agent, { taskId: wakeTask.id }), wakeTask.id),
           )
@@ -1535,6 +1535,11 @@ export function scheduledJobTask(agentId: string, conversationId: string, conten
  * and the bound-task metadata. A wake_at job carries no standing, so no wakeContext. It does carry
  * the task's stored originator: `system` for the inbox heartbeat's drain task (#2475).
  */
+/** A wake task's progress block: {} for a fresh task with no notes (the heartbeat's new drain). */
+function wakeProgress(task: ScenarioWakeTask): Record<string, unknown> {
+  return task.notes.length > 0 ? { notes: task.notes } : {};
+}
+
 export function taskWakeEvent(agentId: string, conversationId: string, content: string, task: ScenarioWakeTask): AgentTaskEvent {
   return createAgentTask({
     agentId,
@@ -1545,7 +1550,7 @@ export function taskWakeEvent(agentId: string, conversationId: string, content: 
     intentAnchor: task.intent,
     metadata: {
       ...(task.originator === 'system' ? { originator: makeSystemOriginator() } : {}),
-      boundTask: { taskId: task.id, errorBudget: {}, tags: task.tags ?? [], progress: { notes: task.notes } },
+      boundTask: { taskId: task.id, errorBudget: {}, tags: task.tags ?? [], progress: wakeProgress(task) },
     },
     parentEventId: randomUUID(),
   });
