@@ -6623,7 +6623,7 @@ describe('sendPrincipalDraft (#2474)', () => {
         const { gw, client, ledger } = makeAuto(setup);
         expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true, refusal: 'no_band_review', blockedReason: text });
         expect(client!.sendDraft).not.toHaveBeenCalled();
-        expect(ledger.recordHeld).toHaveBeenCalledOnce();
+        expect(ledger.recordHeld).not.toHaveBeenCalled();
         expect(reports()).toHaveLength(1);
       }
     });
@@ -6724,7 +6724,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       const text = "Couldn't read the thread to check who's on it, so Curia didn't send on its own." + SUFFIX;
       expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'thread_unreadable', blockedReason: text });
       expect(client.sendDraft).not.toHaveBeenCalled();
-      expect(ledger.recordHeld).toHaveBeenCalledOnce();
+      expect(ledger.recordHeld).not.toHaveBeenCalled();
       expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('thread_unreadable') })]);
     });
 
@@ -7028,6 +7028,42 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(ledger.recordLimitStop).not.toHaveBeenCalled();
       // Never says Curia already replied.
       expect(reports()).toEqual([expect.objectContaining({ summary: 'Not sent from your mailbox: "Re: Friday" to Dana Example. Curia couldn\'t check its send log. It\'s in your Drafts.' })]);
+    });
+
+    it('an operational stop writes no held marker, and the next attempt on the thread is not a thread_cooldown', async () => {
+      const entries: Array<Record<string, unknown>> = [];
+      const ledger = {
+        recordSending: vi.fn(async (e: Record<string, unknown>) => { entries.push({ ...e, outcome: 'sending' }); }),
+        recordSent: vi.fn().mockResolvedValue(undefined),
+        recordHeld: vi.fn(async (e: Record<string, unknown>) => { entries.push({ ...e, outcome: 'held' }); }),
+        list: vi.fn(async () => [...entries]),
+        recentForThread: vi.fn(async (threadId: string, _since: number, _mailbox: string, scan?: readonly Record<string, unknown>[]) => (scan ?? entries).filter((e) => e['threadId'] === threadId)),
+      };
+      const client = autoClient();
+      client.listMessages.mockRejectedValueOnce(new Error('503'));
+      const { gw } = makeAuto({ client, ledger });
+      expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'thread_unreadable', refusalKind: 'other' });
+      expect(ledger.recordHeld).not.toHaveBeenCalled();
+      const second = await gw.sendPrincipalDraft('d1', auto);
+      expect(second.refusal).not.toBe('thread_cooldown');
+    });
+
+    it('writes no held marker for any operational (other-kind) stop reached in an autonomous send', async () => {
+      // no_send_ledger (list throws), thread_unreadable, no_band_review: every `other` stop reachable here.
+      const cases: Array<{ code: string; setup: () => Parameters<typeof makeAuto>[0] }> = [
+        { code: 'no_send_ledger', setup: () => ({}) },
+        { code: 'thread_unreadable', setup: () => { const c = autoClient(); c.listMessages.mockRejectedValue(new Error('503')); return { client: c }; } },
+        { code: 'no_band_review', setup: () => ({ withoutBandReview: true as const }) },
+      ];
+      for (const c of cases) {
+        mocks = createMocks();
+        const opts = c.setup();
+        const made = makeAuto(opts);
+        if (c.code === 'no_send_ledger') made.ledger.recentForThread.mockRejectedValue(new Error('db down'));
+        const r = await made.gw.sendPrincipalDraft('d1', auto);
+        expect(r).toMatchObject({ refusal: c.code, refusalKind: 'other' });
+        expect(made.ledger.recordHeld, c.code).not.toHaveBeenCalled();
+      }
     });
 
     it('refuses a second autonomous send on the thread within 24h', async () => {

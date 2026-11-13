@@ -35,7 +35,7 @@ export interface PrincipalMailboxesDeps {
   secrets: { get(name: string): Promise<string | null> };
   apiKey: () => string | undefined;
   logger: Logger;
-  createNylasClient?: (apiKey: string, grantId: string) => NylasClient;
+  createNylasClient?: (apiKey: string, grantId: string, timeoutMs?: number) => NylasClient;
   createCalendarClient?: (apiKey: string, grantId: string) => NylasCalendarClient;
   /** The principal's verified, active email identity addresses (R32). Absent: mailboxes only. */
   principalEmailIdentities?: () => Promise<string[]>;
@@ -166,11 +166,12 @@ export class PrincipalMailboxes {
     return { apiKey, grantId };
   }
 
-  async gatewayClient(id: string): Promise<NylasClient> {
+  /** `timeoutMs`: an SDK request timeout for callers with a deadline (default: the SDK's). */
+  async gatewayClient(id: string, timeoutMs?: number): Promise<NylasClient> {
     const { apiKey, grantId } = await this.credentials(id);
     return this.deps.createNylasClient
-      ? this.deps.createNylasClient(apiKey, grantId)
-      : new NylasClient(apiKey, grantId, this.deps.logger);
+      ? this.deps.createNylasClient(apiKey, grantId, timeoutMs)
+      : new NylasClient(apiKey, grantId, this.deps.logger, timeoutMs);
   }
 
   async calendarClient(id: string): Promise<NylasCalendarClient> {

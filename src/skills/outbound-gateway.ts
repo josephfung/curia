@@ -4647,7 +4647,6 @@ export class OutboundGateway {
       } catch (err) {
         // Normally unreachable: the cap reads the entries already scanned above. Kept for a ledger
         // implementation whose method reads anyway. Fail closed (#2474 final fixes A4).
-
         this.log.warn({ err, draftId }, 'outbound-gateway: send ledger unreadable — the daily cap cannot be checked, not sending on its own');
         return stop('no_send_ledger');
       }
@@ -4900,9 +4899,12 @@ export class OutboundGateway {
       }
     }
     const isPrincipal = (email: string) => this.isPrincipalOnChannel('email', email);
-    if (refusal === 'thread_cooldown' || refusal === 'daily_cap' || refusal === 'principal_addresses_unreadable' || refusal === 'outsider_originated' || refusal === 'origin_unknown') {
-      // No marker: these file the digest item only. A cap or origin stop says nothing about this
-      // thread's reply, so it must not burn the thread's 24h autonomous window.
+    if (args.kind !== 'judgement' || refusal === 'outsider_originated' || refusal === 'origin_unknown') {
+      // No marker: only a judgement hold starts the thread's 24h cooldown. A limit stop is
+      // recorded as `limited` by its own report, and an operational stop (no_send_ledger,
+      // thread_unreadable, no_band_review, …) says nothing about the reply, so the next
+      // autonomous attempt retries rather than reading as "held earlier". An origin stop
+      // is a judgement but says nothing about this thread's reply either.
     } else if (!draft?.threadId) {
       // No thread (the draft is gone or unreadable): there is no cooldown to start.
       this.log.info({ draftId, refusal }, 'outbound-gateway: autonomous stop on a draft with no known thread — no held marker');
