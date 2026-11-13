@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { loadScenarioCase } from '../../scenarios/loader.js';
-import { mailboxEvidence } from '../../../src/principal-mailboxes/evidence.js';
+import { chosenAccountFields, mailboxEvidence, type EvidenceVerdict } from '../../../src/principal-mailboxes/evidence.js';
 import { mailboxFields } from '../../../skills/_shared/principal-mailbox-client.js';
 import { mailboxView, stubPrincipalMailboxes } from '../../../skills/_shared/principal-mailboxes-test-helpers.js';
 
@@ -59,13 +59,15 @@ describe('cases 46a–46j: stubbed results match the real tools (#2475 item 7)',
     }
   });
 
-  it('draft-compose: a created draft names its mailbox as mailboxFields does, with a real verdict', () => {
-    const fieldKeys = Object.keys(mailboxFields(mailboxView('work', 'Work', 'w@example.com'))).sort();
+  it('draft-compose: a created draft names its mailbox as chosenAccountFields does, with a real verdict', () => {
     const created = returnsOf('ceo-inbox-draft-compose').filter((r) => r.value['draft_id'] !== undefined);
     expect(created.length).toBeGreaterThan(0);
     for (const { file, value } of created) {
-      for (const k of fieldKeys) expect(value, file).toHaveProperty(k);
-      if (value['evidence'] !== undefined) expect(['agrees', 'leans_other', 'none', 'split'], file).toContain(value['evidence']);
+      const verdict = value['evidence'] as EvidenceVerdict;
+      expect(['agrees', 'leans_other', 'none', 'split'], file).toContain(verdict);
+      // The account fields exactly as the handler builds them for this verdict (D5).
+      const account = Object.fromEntries(Object.entries(value).filter(([k]) => k !== 'draft_id'));
+      expect(account, file).toEqual(chosenAccountFields(String(value['mailbox']), (value['mailbox_label'] as string | undefined) ?? null, { evidence: verdict }));
     }
   });
 

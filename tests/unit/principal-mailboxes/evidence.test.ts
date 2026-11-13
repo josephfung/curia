@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mailboxEvidence, classifyEvidence, type MailboxEvidence } from '../../../src/principal-mailboxes/evidence.js';
+import { ACCOUNT_NOT_IN_DOUBT, chosenAccountFields, mailboxEvidence, classifyEvidence, type MailboxEvidence } from '../../../src/principal-mailboxes/evidence.js';
 import { mailboxView, stubPrincipalMailboxes } from '../../../skills/_shared/principal-mailboxes-test-helpers.js';
 
 function ev(id: string, over: Partial<MailboxEvidence> = {}): MailboxEvidence {
@@ -170,5 +170,19 @@ describe('mailboxEvidence', () => {
     const out = await mailboxEvidence(svc, ['bob@acme.example.com']);
     const subject = out.find((e) => e.mailbox === 'work')!.recent_subjects[0]!;
     expect(subject).toBe(`${'x'.repeat(79)}…`);
+  });
+});
+
+describe('chosenAccountFields (D5: mention the account only on a judgement call)', () => {
+  it('drops the label and says not to name the account when the evidence agrees', () => {
+    expect(chosenAccountFields('work', 'Work', { evidence: 'agrees' })).toEqual({ mailbox: 'work', evidence: 'agrees', account_note: ACCOUNT_NOT_IN_DOUBT });
+  });
+
+  it.each(['leans_other', 'none', 'split'] as const)('keeps the label when the evidence is %s', (verdict) => {
+    expect(chosenAccountFields('personal', 'Personal', { evidence: verdict })).toEqual({ mailbox: 'personal', mailbox_label: 'Personal', evidence: verdict });
+  });
+
+  it('keeps the label when the evidence could not be read', () => {
+    expect(chosenAccountFields('work', 'Work', { evidence_unavailable: true })).toEqual({ mailbox: 'work', mailbox_label: 'Work', evidence_unavailable: true });
   });
 });
