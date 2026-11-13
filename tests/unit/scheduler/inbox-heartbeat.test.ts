@@ -44,20 +44,22 @@ function make(over: {
   const hasUnreadSince = over.hasUnread ?? vi.fn(async () => true);
   const listTasks = vi.fn(async () => (over.tasks ?? []) as never);
   const createTask = vi.fn(async (_p: unknown) => ({ id: 'new-task' }) as never);
+  const completeTask = vi.fn(async (_id: string, _note?: string) => null);
   const enqueueTaskWake = vi.fn(async (_p: unknown) => ({ jobId: 'j' }));
+  const pullTaskWakeIn = vi.fn(async (_id: string, _at: Date) => true);
   const log = logger();
   const hb = new InboxHeartbeat({
     mailboxes: { list: async () => mbs.map((m) => ({ id: m.id, label: m.id, address: '', isDefault: false, triageStartAt: m.triageStartAt ?? null })) },
     cadences: async () => over.cadences ?? Object.fromEntries(mbs.map((m) => [m.id, hourly])),
     state,
     hasUnreadSince,
-    taskRepo: { listTasks, createTask },
-    scheduler: { enqueueTaskWake },
+    taskRepo: { listTasks, createTask, completeTask },
+    scheduler: { enqueueTaskWake, pullTaskWakeIn },
     dailyCeiling: TRIAGE_DAILY_CEILING,
     tz: () => TZ,
     logger: log as never,
   });
-  return { hb, state, hasUnreadSince, listTasks, createTask, enqueueTaskWake, log };
+  return { hb, state, hasUnreadSince, listTasks, createTask, completeTask, enqueueTaskWake, pullTaskWakeIn, log };
 }
 
 describe('InboxHeartbeat.tick', () => {
@@ -157,11 +159,34 @@ describe('InboxHeartbeat.tick', () => {
     expect(isAutonomousSendOrigin({ originator: arg.originator as Record<string, unknown> })).toBe(true);
   });
 
-  it('re-wakes a suspended drain (and warns) instead of counting it live', async () => {
+  it('never re-wakes a drain the circuit breaker suspended, nor creates a second (R67)', async () => {
     const t = make({ tasks: [taskRow({ wakeState: 'suspended', nextWakeAt: '2026-11-12T16:00:00.000Z' })] });
+    expect(await t.hb.tick(NOW)).toBe('drain_suspended');
+    await t.hb.tick(NOW);
+    expect(t.enqueueTaskWake).not.toHaveBeenCalled();
+    expect(t.createTask).not.toHaveBeenCalled();
+    expect(t.log.error.mock.calls.filter((c) => (c[0] as { wakeState?: string }).wakeState === 'suspended')).toHaveLength(1);
+    expect(t.hb.suspendedDrainTaskId()).toBe('task-1');
+  });
+
+  it('pulls in a drain wake set far in the future instead of counting it live (R64)', async () => {
+    const t = make({ tasks: [taskRow({ wakeState: 'pending', nextWakeAt: '2099-01-01T00:00:00.000Z', updatedAt: NOW.toISOString() })] });
     expect(await t.hb.tick(NOW)).toBe('woke');
-    expect(t.enqueueTaskWake).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-1' }));
-    expect(t.log.warn).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-1', wakeState: 'suspended' }), expect.any(String));
+    expect(t.pullTaskWakeIn).toHaveBeenCalledWith('task-1', NOW);
+    expect(t.createTask).not.toHaveBeenCalled();
+    expect(t.log.warn).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-1' }), expect.stringContaining('far out'));
+  });
+
+  it('a pending wake due within 30 minutes is live (R64)', async () => {
+    const t = make({ tasks: [taskRow({ wakeState: 'pending', nextWakeAt: new Date(NOW.getTime() + 29 * 60_000).toISOString() })] });
+    expect(await t.hb.tick(NOW)).toBe('drain_running');
+    expect(t.pullTaskWakeIn).not.toHaveBeenCalled();
+  });
+
+  it('warns once after four consecutive drain_running ticks (R64)', async () => {
+    const t = make({ tasks: [taskRow({ wakeState: 'running' })] });
+    for (let i = 0; i < 6; i++) expect(await t.hb.tick(NOW)).toBe('drain_running');
+    expect(t.log.warn.mock.calls.filter((c) => String(c[1]).includes('running for an hour'))).toHaveLength(1);
   });
 
   it('a paused drain is an operator hold: warns, does not wake or create', async () => {
@@ -249,11 +274,18 @@ describe('InboxHeartbeat origin safety (R56)', () => {
     expect(t.log.warn.mock.calls.some((c) => String(c[1]).includes('no stored originator'))).toBe(true);
   });
 
-  it('warns about a null-originator task once per id (P2)', async () => {
+  it('closes a stalled null-originator task rather than leaving it open (RR-M1)', async () => {
     const t = make({ tasks: [taskRow({ originator: null })] });
     await t.hb.tick(NOW);
+    expect(t.completeTask).toHaveBeenCalledWith('task-1', expect.stringContaining('no stored originator'));
+  });
+
+  it('warns once per id when a null-originator task cannot be closed (P2)', async () => {
+    const t = make({ tasks: [taskRow({ originator: null })] });
+    t.completeTask.mockRejectedValue(new Error('terminal'));
     await t.hb.tick(NOW);
-    expect(t.log.warn.mock.calls.filter((c) => String(c[1]).includes('no stored originator'))).toHaveLength(1);
+    await t.hb.tick(NOW);
+    expect(t.log.warn.mock.calls.filter((c) => String(c[1]).includes('could not be closed'))).toHaveLength(1);
   });
 
   it('re-wakes a stalled own task with an originator rather than one without', async () => {
