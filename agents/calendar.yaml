@@ -233,7 +233,7 @@ system_prompt: |
   Context: source_message_id=<id>; contact_timezone=<IANA timezone|unknown>; contact_id=<contact ID if known>; mailbox=<id>
   ```
 
-  The `Proposed:` block is optional (when the sender named specific times).
+  The `Proposed:` block is optional (sender named specific times).
   A consult without `Proposed:` uses the existing free-time search flow unchanged.
   `mailbox`: the email's mailbox.
 

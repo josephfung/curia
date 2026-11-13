@@ -27,7 +27,9 @@ interface RemovalPreview {
   stillOwnedDefault: boolean;
   otherLive: Mailbox[];
   primaryEmailCandidates: string[];
-  scopedRules: Array<{ title: string; onlyThisMailbox: boolean }>;
+  /** null when the rules document could not be read. */
+  scopedRules: Array<{ title: string; onlyThisMailbox: boolean }> | null;
+  rulesUnreadable?: boolean;
   calendars: Array<{ calendarId: string; label: string }>;
 }
 
@@ -87,7 +89,8 @@ function RemovePanel({ preview, onDone, onCancel }: {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const needsRules = preview.scopedRules.some(r => r.onlyThisMailbox);
+  const scopedRules = preview.scopedRules ?? [];
+  const needsRules = scopedRules.some(r => r.onlyThisMailbox);
   const rulesReady = !needsRules || rulesChoice === 'delete' || (rulesChoice === 'move' && rescopeTo !== '');
   const needsDefault = preview.isDefault && preview.otherLive.length > 0;
   const needsPrimary = preview.isPrimaryEmail;
@@ -155,11 +158,17 @@ function RemovePanel({ preview, onDone, onCancel }: {
         </label>
       )}
 
-      {preview.scopedRules.length > 0 && (
+      {preview.scopedRules === null && (
+        <p className="autonomy-error" style={{ margin: '0 0 8px' }}>
+          Couldn't check the inbox rules. You can still remove this mailbox; afterwards, check that no
+          rule is left scoped to it.
+        </p>
+      )}
+      {scopedRules.length > 0 && (
         <div>
           <span>Rules that mention this mailbox:</span>
           <ul>
-            {preview.scopedRules.map((r, i) => (
+            {scopedRules.map((r, i) => (
               <li key={i}>{r.title}{r.onlyThisMailbox ? ' (only this mailbox, will stop applying)' : ''}</li>
             ))}
           </ul>

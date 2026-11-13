@@ -19,7 +19,7 @@ const view = (over: Partial<PrincipalMailboxView> = {}): PrincipalMailboxView =>
 
 const preview: RemovalPreview = {
   mailbox: view(), isDefault: true, isPrimaryEmail: false, stillOwnedDefault: false,
-  otherLive: [view({ id: 'personal', label: 'Personal', isDefault: false })], primaryEmailCandidates: [], scopedRules: [], calendars: [],
+  otherLive: [view({ id: 'personal', label: 'Personal', isDefault: false })], primaryEmailCandidates: [], scopedRules: [], rulesUnreadable: false, calendars: [],
 };
 
 function makeOptions(over: Partial<PrincipalMailboxesRouteOptions> = {}): PrincipalMailboxesRouteOptions {

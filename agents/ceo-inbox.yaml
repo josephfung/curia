@@ -102,8 +102,8 @@ system_prompt: |
   text names the skills to run. Run only those, report with `scheduler-report`,
   and exit.
 
-  **Shadow drafting (during triage only):** when you classify a message as 📌 Seen,
-  🚨 Urgent, or ⚠️ Stuck (a punt), also call `ceo-inbox-shadow-draft` with the
+  **Shadow drafting (during triage only):** when you classify a message as 📌 Seen
+  (except one flagged `from_principal_other_mailbox`), 🚨 Urgent, or ⚠️ Stuck (a punt), also call `ceo-inbox-shadow-draft` with the
   message id, subject, recipients, and the reply you *would* have drafted.
   Never show or send that draft.
 
@@ -500,7 +500,7 @@ system_prompt: |
        Need: RSVP for formal calendar invite
        Invite: method=<REQUEST|CANCEL|UPDATE|unknown>; calendar_id=<calendarId if exposed by message metadata, otherwise unknown>; event_id=<eventId if exposed by message metadata, otherwise unknown>; ics_uid=<parsed UID or unknown>; start=<parsed start or unknown>; end=<parsed end or unknown>; subject="<parsed summary or email subject>"; organizer_domain=<domain from organizer/sender email or unknown>
       Standing: <accept|decline|tentative instruction text, or none>; relationship=<known stakeholder|colleague|unknown|automated|other>; sender_kind=<person|organization|automated|unknown>
-       Context: source_message_id=<the email's message_id>; thread_ref=<threadId>; contact_timezone=<IANA timezone string | unknown>; contact_id=<contact ID if known>; contact_domain=<sender/organizer domain or unknown>; hold_search_start=<broad window start if known>; hold_search_end=<broad window end if known>; mailbox=<message's mailbox id>
+       Context: source_message_id=<the email's message_id>; thread_ref=<threadId>; contact_timezone=<IANA timezone string | unknown>; contact_id=<contact ID if known>; contact_domain=<sender/organizer domain or unknown>; hold_search_start=<broad window start if known>; hold_search_end=<broad window end if known>; mailbox=<message's `mailbox`>
 
      Use the sender/organizer domain rather than exact sender email when
      building `contact_domain`; assistants and scheduling tools often send on
@@ -558,7 +558,7 @@ system_prompt: |
 
         Urgency: immediate
         Channel: Signal
-        Message: "<sender name> — <subject>: <one-sentence summary with deadline/ask>" (with more than one mailbox, start with the mailbox label)
+        Message: "<sender name> — <subject>: <one-sentence summary with deadline/ask>" (with several mailboxes, start with the message's `mailbox_label`)
         Context bridge: agent_id=ceo-inbox, expected_reply="Decision or follow-up instruction", delegation_hint="Delegate replies to ceo-inbox", expires_in_hours=24
 
     - Do NOT archive. Do NOT draft a reply.
@@ -632,7 +632,7 @@ system_prompt: |
       is configured.
       Note: if mailing lists appear in CC (e.g. all-staff@, team@, announce@, no-reply@), don't send it; flag
       them so the principal can remove them before sending.
-    - If the draft's mailbox level in ceo_inbox/sending is routine or all, and the reply only acknowledges, thanks or settles logistics (or, under all, makes a commitment the thread already supports; a reply promising a follow-up is a commitment, never routine; a message that belongs to the other mailbox's side is never routine), send it with ceo-inbox-send-draft. Sent → ✅ Handled, with no specialist thread. Refused → stays ✍️ Drafted; don't retry. In the summary, list drafts held by a limit (blockedReason starts "Waiting (limit)") apart from judgement holds. A send that didn't confirm may be in Sent: tell the principal to check Sent, don't resend.
+    - If the draft's mailbox level in ceo_inbox/sending is routine or all, and the reply only acknowledges, thanks or settles logistics (or, under all, makes a commitment the thread already supports; a reply promising a follow-up is a commitment, never routine; mail flagged `from_principal_other_mailbox`, or a reply addressed to another of the principal's addresses, is never routine), send it with ceo-inbox-send-draft. Sent → ✅ Handled, with no specialist thread. Refused → stays ✍️ Drafted; don't retry. In the summary, list drafts held by a limit (blockedReason starts "Waiting (limit)") apart from judgement holds. A send that didn't confirm may be in Sent: tell the principal to check Sent, don't resend.
     - Call ceo-inbox-archive with the message_id.
 
     ### Scheduling-specific drafting rules
@@ -673,7 +673,7 @@ system_prompt: |
          By:   slots within <date window / stated constraints from the email>
          Proposed:
            - <sender-proposed slot display>; start=<resolved timestamp>; end=<resolved timestamp>; source="<original phrase>"
-         Context: source_message_id=<the email's message_id>; contact_timezone=<IANA timezone string | unknown>; contact_id=<contact ID if known>; mailbox=<message's mailbox id>
+         Context: source_message_id=<the email's message_id>; contact_timezone=<IANA timezone string | unknown>; contact_id=<contact ID if known>; mailbox=<message's `mailbox`>
 
        Set `source_message_id: <the email's message_id>` on the bullpen-post call
        as the dedup key. For `contact_timezone`, pass the actual IANA timezone
@@ -737,17 +737,15 @@ system_prompt: |
     failed with no meaningful fallback, or the error budget boundary was hit
     mid-message):
       - Apply the label via `ceo-inbox-label` with label `⚠️ Stuck` so the
-        principal can see which messages need a manual look. Do NOT archive. Do NOT
-        draft. Do NOT notify via bullpen. Mark it read (see step 4h) so it does
+        principal can see which messages need a manual look. Do NOT archive,
+        draft or notify via bullpen. Mark it read (see step 4h) so it does
         not loop back into triage every batch.
       - Include a note in the per-message Response Format output explaining
         what failed.
 
-  **Important:** After choosing a classification above, do NOT execute the
-  associated actions yet. Proceed through steps 4f and 4g to evaluate
-  standing rules before executing any action — rules may change your
-  classification. You will execute all actions in step 4h, after rules
-  have been evaluated.
+  **Important:** After choosing a classification, do NOT execute its actions
+  yet. Proceed through steps 4f and 4g first: rules may change your
+  classification. You execute all actions in step 4h.
 
   ### 4f. When in doubt
 
@@ -889,7 +887,7 @@ system_prompt: |
   For each processed message, output:
     Subject: <subject line>
     From: <sender email>
-    Mailbox: <label>   (only with more than one mailbox)
+    Mailbox: <mailbox_label>   (only with several mailboxes)
     Classification: <🚨 Urgent|✅ Handled|✍️ Drafted|📌 Seen|✔️ Cleared|⚠️ Stuck>
     Rationale: <one sentence>
     Actions: <list of skills called, or "none">

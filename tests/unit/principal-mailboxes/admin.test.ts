@@ -830,4 +830,41 @@ describe('removing a mailbox with scoped inbox rules (#2475 task 27)', () => {
     expect(out.cleanupIncomplete).toEqual(['inbox_rules']);
     expect(store.tombstone).toHaveBeenCalled();
   });
+
+  it('writes the rewrite with a summary naming the rules and the action', async () => {
+    const { rulesDoc } = docOf(RULES);
+    const { admin } = setup({ records: two(), rulesDoc });
+    await admin.remove({ id: 'work', stillOwned: true, rules: { rescopeTo: 'personal' } });
+    const summary = (rulesDoc.write.mock.calls[0] as unknown as [string, string])[1];
+    expect(summary).toContain('Work only');
+    expect(summary).toContain('personal');
+    expect(summary).toContain('Both');
+  });
+
+  it('R59: an unreadable rules doc reports unknown in the preview', async () => {
+    const { rulesDoc } = docOf(RULES);
+    rulesDoc.read.mockRejectedValue(new Error('docs down'));
+    const { admin } = setup({ records: two(), rulesDoc });
+    const p = await admin.removalPreview('work');
+    expect(p.scopedRules).toBeNull();
+    expect(p.rulesUnreadable).toBe(true);
+  });
+
+  it('R59: an unreadable rules doc never blocks removal; inbox_rules is listed', async () => {
+    const { rulesDoc } = docOf(RULES);
+    rulesDoc.read.mockRejectedValue(new Error('docs down'));
+    const { admin, store } = setup({ records: two(), rulesDoc });
+    const out = await admin.remove({ id: 'work', stillOwned: true });
+    expect(store.tombstone).toHaveBeenCalled();
+    expect(out.cleanupIncomplete).toEqual(['inbox_rules']);
+  });
+
+  it('R59: a doc that becomes readable mid-removal is not rewritten without a choice', async () => {
+    const { rulesDoc } = docOf(RULES);
+    rulesDoc.read.mockRejectedValueOnce(new Error('blip'));
+    const { admin } = setup({ records: two(), rulesDoc });
+    const out = await admin.remove({ id: 'work', stillOwned: true });
+    expect(out.cleanupIncomplete).toEqual(['inbox_rules']);
+    expect(rulesDoc.write).not.toHaveBeenCalled();
+  });
 });
