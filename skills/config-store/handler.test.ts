@@ -706,6 +706,16 @@ describe('ConfigStoreHandler — ceo_inbox/sending', () => {
     expect(r).toEqual({ success: false, error: 'No principal mailbox is connected yet, so there is nothing to set a sending level for. Nothing was stored.' });
   });
 
+  it('refuses the mailbox-keyed settings when the mailbox directory is absent, storing nothing', async () => {
+    for (const [key, value] of [['sending', '{"work":"routine"}'], ['triage', '{"work":"hourly 06:00-23:00"}']] as const) {
+      const em = makeEntityMemory();
+      const r = await new ConfigStoreHandler().execute(makeCtx(em, { action: 'store', namespace: 'ceo_inbox', key, value }, {}));
+      expect(r.success, key).toBe(false);
+      if (!r.success) expect(r.error).toContain('Nothing was stored');
+      expect(em.storeFact).not.toHaveBeenCalled();
+    }
+  });
+
   it('declares only the list-only directory, never the mailbox clients (M0)', () => {
     const manifest = JSON.parse(readFileSync(resolve(import.meta.dirname, 'tool.json'), 'utf8')) as { capabilities?: string[]; optional_capabilities?: string[] };
     expect(manifest.optional_capabilities).toEqual(['mailboxDirectory']);

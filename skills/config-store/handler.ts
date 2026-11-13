@@ -87,6 +87,15 @@ export class ConfigStoreHandler implements ToolHandler {
       return { success: false, error: `${namespace}/${key} is state Curia keeps itself; it cannot be stored here.` };
     }
 
+    // Both mailbox-keyed settings are checked against the live mailboxes; without the directory
+    // nothing can be checked, so nothing is stored (a reader would ignore a bad value while the
+    // agent reported it set).
+    const mailboxKeyed = (namespace === TRIAGE_NAMESPACE && key === TRIAGE_CADENCE_KEY) || isSendLevelKey(namespace, key);
+    if (mailboxKeyed && !ctx.mailboxDirectory) {
+      ctx.log.warn({ namespace, key }, 'config-store: mailbox directory unavailable — mailbox-keyed setting not stored');
+      return { success: false, error: `The principal mailboxes are not available, so ${namespace}/${key} cannot be checked. Nothing was stored.` };
+    }
+
     // ceo_inbox/triage holds per-mailbox cadences (R65): validated like the send level.
     if (namespace === TRIAGE_NAMESPACE && key === TRIAGE_CADENCE_KEY && ctx.mailboxDirectory) {
       const live = await liveMailboxes(ctx);
