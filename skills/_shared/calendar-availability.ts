@@ -20,7 +20,7 @@
 
 import { DateTime } from 'luxon';
 import type { ToolContext } from '../../src/skills/types.js';
-import { CalendarRouteError, PRIMARY_CALENDAR_ALIAS, type RoutedCalendar } from '../../src/channels/calendar/calendar-router.js';
+import { CalendarRouteError, NO_MAILBOX_MESSAGE, PRIMARY_CALENDAR_ALIAS, type RoutedCalendar } from '../../src/channels/calendar/calendar-router.js';
 import { LIST_EVENTS_MAX_TOTAL, type NylasCalendarEvent } from '../../src/channels/calendar/nylas-calendar-client.js';
 import { sameMeetingKey } from '../../src/channels/calendar/event-identity.js';
 import { eventsOverlap, findMatchingHolds, type HoldMatchCriteria } from '../../src/channels/calendar/holds.js';
@@ -112,6 +112,11 @@ export async function readAvailability(
     // A stated mailbox is validated even when nothing ends up routed through it.
     if (req.mailbox !== undefined) await router.mailbox(req.mailbox);
     live = await router.liveMailboxes();
+    // Enrolled with no mailbox yet (R95): say so, rather than "no calendar could be read".
+    if (live.length === 0) {
+      ctx.log.info({ tool }, `${tool}: no principal mailbox is connected`);
+      return { ok: false, error: NO_MAILBOX_MESSAGE };
+    }
     for (const id of req.calendarIds) (await router.isPrincipalCalendar(id) ? principalIds : otherIds).push(id);
   } catch (err) {
     ctx.log.warn({ tool, ...(err instanceof CalendarRouteError ? { code: err.code } : grantSafeErrorFields(err)) }, `${tool}: could not resolve the calendars to read`);

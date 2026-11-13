@@ -117,8 +117,8 @@ export async function seedVault(
   log: pino.Logger,
   options: {
     only?: ReadonlySet<string>;
-    /** True once the principal mailbox registry has rows (#2475): the console then mirrors
-     *  the default mailbox into the flat keys, and a .env value would split them from it. */
+    /** True once the principal mailbox registry has rows (#2475): the flat keys are retired
+     *  then (boot deletes them), so a .env value would only be written to be deleted. */
     flatKeysManaged?: () => Promise<boolean>;
   } = {},
 ): Promise<{ seeded: string[]; skipped: string[] }> {

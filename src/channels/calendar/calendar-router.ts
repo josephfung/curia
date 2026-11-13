@@ -62,6 +62,9 @@ export function calendarRouterEnabled(opts: { hasNylasApiKey: boolean; hasPrinci
   return opts.hasNylasApiKey && opts.hasPrincipalContact;
 }
 
+/** The `no_mailbox` answer: what a calendar tool says while no principal mailbox is connected. */
+export const NO_MAILBOX_MESSAGE = 'No principal mailbox is connected, so there is no calendar to use. Add one in the console first.';
+
 /** A calendar call that cannot be routed. The message says what to pass; it never names a grant. */
 export class CalendarRouteError extends Error {
   constructor(
@@ -343,7 +346,7 @@ export class CalendarRouter {
   /** The one live mailbox, or the error naming the choices when there are several (or none). */
   private soleMailbox(code: 'needs_mailbox' | 'primary_alias_needs_mailbox', calendarId: string, live: PrincipalMailboxView[]): PrincipalMailboxView {
     if (live.length === 1) return live[0]!;
-    if (live.length === 0) throw new CalendarRouteError('no_mailbox', 'No principal mailbox is connected, so there is no calendar to use.');
+    if (live.length === 0) throw new CalendarRouteError('no_mailbox', NO_MAILBOX_MESSAGE);
     this.log.info({ code, liveCount: live.length }, 'Calendar call needs a mailbox');
     if (code === 'primary_alias_needs_mailbox') {
       throw new CalendarRouteError(code, `"primary" is ambiguous with ${live.length} mailboxes connected; pass mailbox as one of: ${choices(live)}.`, options(live));

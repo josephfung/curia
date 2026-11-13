@@ -30,7 +30,7 @@
 
 - **Flat mailbox vault keys** — `ceo_nylas_grant_id` and `ceo_self_email` are deleted at boot; the registry replaces them. (#2475)
 - **Secrets page flat keys** — the Secrets page no longer accepts the two retired mailbox keys. (#2475)
-- **Mailbox removal `restart_required`** — the remove route and console drop it; no change needs a restart. (#2475)
+- **Mailbox `restart_required` (public API)** — removal route, console and `principalMailboxReady` drop it; nothing needs a restart. (#2475)
 
 ### Fixed
 

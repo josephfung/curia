@@ -137,8 +137,9 @@ describe('meeting-debrief keys its guards on the meeting, not one calendar copy 
   });
 
   it('a moved meeting gets one prompt: the old wake defers to a newer task, else claims the new key (re-review N1)', () => {
-    expect(prompt).toMatch(/Found by `id` only: if `seen:<its meetingKey>` exists, a\s+later scan took it over, so `task-complete`/);
-    expect(prompt).toMatch(/else store that guard, so no scan schedules it twice/);
+    expect(prompt).toMatch(/Found by `id` only: if `seen:<its meetingKey>` holds anything but\s+your task_id, a later scan took it over, so `task-complete`/);
+    // Review m1: the wake's own guard carries its task id, so a re-woken task never supersedes itself.
+    expect(prompt).toMatch(/else store that guard with value your task_id, so no scan schedules it twice/);
   });
 
   it('a legacy seen:<id> guard still skips the event for one release (review M3)', () => {

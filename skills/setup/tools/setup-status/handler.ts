@@ -227,8 +227,9 @@ export class SetupStatusHandler implements ToolHandler {
         }
       }
 
-      // Done when a live principal mailbox in the registry passed its last health canary
-      // (#2475). Calendar reads each mailbox's grant per call, so no restart is ever needed.
+      // Done when a live principal mailbox (a registry row, or the deferred-migration fallback
+      // mailbox) passed its last health canary (#2475). Calendar reads each mailbox's grant per
+      // call, so no restart is ever needed.
       let principalMailboxStatus: PrincipalMailboxReadiness = 'pending';
       if (ctx.principalMailboxReady) {
         try {

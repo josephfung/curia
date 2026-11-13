@@ -474,7 +474,7 @@ describe('SecretCaptureService refuses names the principal mailbox registry owns
     ? { rows: [{ expires_at: new Date(Date.now() + 30 * 60_000) }] }
     : { rows: [] };
 
-  it('mintSystemSecret refuses a flat key once the registry has rows, minting nothing', async () => {
+  it('mintSystemSecret refuses a retired flat key outside the deferred fallback, minting nothing', async () => {
     const { svc, queries } = make(mintHandler, true);
     await expect(svc.mintSystemSecret({ rawName: 'ceo_nylas_grant_id' })).rejects.toThrow("Principal's mailboxes");
     await expect(svc.mintSystemSecret({ rawName: 'ceo_self_email' })).rejects.toThrow("Principal's mailboxes");
@@ -482,7 +482,7 @@ describe('SecretCaptureService refuses names the principal mailbox registry owns
     expect((await svc.mintSystemSecret({ rawName: 'anthropic_api_key' })).secretName).toBe('anthropic_api_key');
   });
 
-  it('mintSystemSecret still mints a flat key while the registry is empty', async () => {
+  it('mintSystemSecret still mints a flat key while the deferred fallback is active', async () => {
     const { svc } = make(mintHandler, false);
     expect((await svc.mintSystemSecret({ rawName: 'ceo_nylas_grant_id' })).secretName).toBe('ceo_nylas_grant_id');
   });

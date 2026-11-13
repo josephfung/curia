@@ -42,8 +42,8 @@ import { actorFromRequest } from './sessions.js';
 import { isPlatformVaultKey, platformKeyLabel } from '../../../secrets/platform-keys.js';
 import { StaleCardEditError, type PersonalSecretWrite, type SecretMetadata, type UserSecretDetailsPatch } from '../../../secrets/secrets-service.js';
 import {
-  FLAT_EMAIL_KEY, FLAT_GRANT_KEY, FLAT_KEYS_MANAGED_MESSAGE, FLAT_PRINCIPAL_MAILBOX_KEYS,
-  PER_MAILBOX_GRANT_MANAGED_MESSAGE, isPrincipalMailboxGrantKey,
+  FLAT_EMAIL_KEY, FLAT_GRANT_KEY, FLAT_PRINCIPAL_MAILBOX_KEYS,
+  PER_MAILBOX_GRANT_MANAGED_MESSAGE, isPrincipalMailboxGrantKey, retiredFlatKeyRefusal,
 } from '../../../principal-mailboxes/secrets.js';
 import type { SecretUsagePort } from '../../../secrets/secret-usage-repo.js';
 import { consoleSecretNameInput, resolveUserSecretName, USER_SECRET_PREFIX } from '../../../secrets/user-secret-name.js';
@@ -387,10 +387,10 @@ export async function vaultRoutes(
   // so a write would do nothing. Allowed only while the deferred fallback still serves them.
   // Sends the 409 and returns true when it refused.
   async function refuseRetiredFlatKey(request: FastifyRequest, reply: FastifyReply, name: string): Promise<boolean> {
-    if (!PRINCIPAL_MAILBOX_KEYS.has(name)) return false;
-    if (options.principalFallbackActive && (await options.principalFallbackActive())) return false;
+    const refusal = await retiredFlatKeyRefusal(name, options.principalFallbackActive);
+    if (refusal === null) return false;
     request.log.info({ name }, 'vault set rejected: the flat principal mailbox keys are retired');
-    void reply.status(409).send({ error: FLAT_KEYS_MANAGED_MESSAGE });
+    void reply.status(409).send({ error: refusal });
     return true;
   }
 
@@ -800,8 +800,8 @@ export async function vaultRoutes(
       return reply.status(400).send({ error: `${FLAT_EMAIL_KEY} must be an email address.` });
     }
     // A per-mailbox grant is set only through the principal-mailboxes routes, which check the
-    // grant is Google's, is for that mailbox's address and is not another mailbox's, and mirror
-    // the default (#2475). Clearing one here (DELETE) stays allowed.
+    // grant is Google's, is for that mailbox's address and is not another mailbox's (#2475).
+    // Clearing one here (DELETE) stays allowed.
     if (isPrincipalMailboxGrantKey(name)) {
       request.log.info({ name }, 'vault set rejected: per-mailbox grants are set through the principal mailboxes console');
       return reply.status(409).send({ error: PER_MAILBOX_GRANT_MANAGED_MESSAGE });
@@ -859,9 +859,10 @@ export async function vaultRoutes(
       const affected = ((await collectDeclarations()).get(name) ?? [])
         .filter(d => d.required && d.enabled);
       if (affected.length > 0 && !force) {
-        // Tool secrets are re-read from the vault on every call; channel credentials, MCP
-        // keys and the principal grant are read at boot, so they keep working until restart.
-        const effect = (d: VaultSecretDeclarer) => d.kind === 'tool' ? 'on its next call' : 'after the next restart';
+        // Tool secrets and the deferred-fallback principal grant (R9) are re-read from the vault
+        // on every call; channel credentials and MCP keys are read at boot, so they keep
+        // working until restart.
+        const effect = (d: VaultSecretDeclarer) => d.kind === 'tool' || d.kind === 'principal-mailbox' ? 'on its next call' : 'after the next restart';
         return reply.status(409).send({
           error: `'${name}' is required by ${affected.map(d => `enabled ${d.kind === 'principal-mailbox' ? d.name : `${d.kind === 'email-account' ? 'email account' : d.kind} '${d.name}'`} (stops working ${effect(d)})`).join(', ')}. ` +
             `It will not work again until the secret is set.`,

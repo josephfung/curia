@@ -104,7 +104,7 @@ import { FALLBACK_MAILBOX_ID, SENT_OBSERVE_FAILED_RUNS_LIMIT, sentObserveFailedR
 import { renameSendingKeyAfterMigration, dropLegacyDefaultKey, type SendingConfigStore } from './principal-mailboxes/migrate-config-keys.js';
 import { emailAccountGrantSecretName } from './channels/email/email-account-secrets.js';
 import { grantSafeErrorFields, mayCarryGrantId } from './principal-mailboxes/error-fields.js';
-import { FLAT_KEYS_MANAGED_MESSAGE, FLAT_PRINCIPAL_MAILBOX_KEYS } from './principal-mailboxes/secrets.js';
+import { retiredFlatKeyRefusal } from './principal-mailboxes/secrets.js';
 import { PrincipalAcquaintanceCheck } from './contacts/principal-acquaintance.js';
 import { MultiPrincipalMailbox } from './contacts/multi-principal-mailbox.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
@@ -1351,7 +1351,11 @@ async function main(): Promise<void> {
       })
     : undefined;
 
-  if (!principalContact || !calendarRouterEnabled({ hasNylasApiKey: Boolean(config.nylasApiKey), hasPrincipalContact: true })) {
+  // The same condition the test-mode stack uses (calendarRouterEnabled), so they agree.
+  const routerPrincipal = calendarRouterEnabled({ hasNylasApiKey: Boolean(config.nylasApiKey), hasPrincipalContact: Boolean(principalContact) })
+    ? principalContact
+    : null;
+  if (!routerPrincipal) {
     if (!config.nylasApiKey) {
       // Calendar shares the Nylas API key with email; its absence is already reported as a
       // warning by the email-channel bootstrap above. Logged at debug here to keep this path
@@ -1365,7 +1369,7 @@ async function main(): Promise<void> {
     calendarRouter = new CalendarRouter({
       mailboxes: principalMailboxes.forCalendarRouter(),
       contacts: contactService,
-      principalContactId: principalContact.id,
+      principalContactId: routerPrincipal.id,
       logger,
     });
     // The router reads the registry and each mailbox's grant per call, so the calendar tools
@@ -3157,8 +3161,7 @@ async function main(): Promise<void> {
       new Set([...registryService.declaredSecretNames(), ...channelCredentialKeys(), ...principalMailboxKeys()]),
     // The flat keys are retired (#2475): refused, as in the vault routes, except while the
     // deferred-migration fallback still serves them (an operator may need to set the address).
-    refuseSystemName: async (name) =>
-      FLAT_PRINCIPAL_MAILBOX_KEYS.has(name) && !(await principalMailboxes.isFallbackActive()) ? FLAT_KEYS_MANAGED_MESSAGE : null,
+    refuseSystemName: (name) => retiredFlatKeyRefusal(name, () => principalMailboxes.isFallbackActive()),
     logger,
   });
   // Injected after construction because the ExecutionLayer is created before registryService

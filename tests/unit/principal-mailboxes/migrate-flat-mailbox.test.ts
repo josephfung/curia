@@ -218,10 +218,21 @@ describe('retiring the flat keys (#2475, Task 33b)', () => {
     expect(t.secrets.delete).not.toHaveBeenCalled();
   });
 
-  it('keeps the flat keys when no live default row exists', async () => {
-    const t = setup({ ceo_nylas_grant_id: 'g1' }, ops);
+  it('keeps the flat keys quietly while the registry is empty (nothing migrated yet, e.g. no Nylas key)', async () => {
+    const { log, lines } = capture();
+    const t = setup({ ceo_nylas_grant_id: 'g1' }, ops, { log });
     expect(await retireFlatMailboxKeys(t.deps)).toBe('kept');
     expect(t.vault['ceo_nylas_grant_id']).toBe('g1');
+    expect(lines.map((l) => JSON.parse(l) as { level: number }).filter((l) => l.level >= 40)).toEqual([]);
+  });
+
+  it('keeps the flat keys when every mailbox was removed, and says to delete them on the Secrets page', async () => {
+    const { log, lines } = capture();
+    const t = setup({ ceo_nylas_grant_id: 'g1' }, ops, { log });
+    (t.store.hasAnyRow as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    expect(await retireFlatMailboxKeys(t.deps)).toBe('kept');
+    expect(t.vault['ceo_nylas_grant_id']).toBe('g1');
+    expect(lines.join('')).toContain('delete them on the Secrets page');
   });
 
   it('flat keys are kept while the deferred fallback is active', async () => {
