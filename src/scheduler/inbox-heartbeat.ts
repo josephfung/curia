@@ -17,8 +17,13 @@
 //             while one is open.
 //   held    = a `paused` wake is an operator's deliberate hold. It is left alone (warn), and
 //             counts as the drain being in charge: no wake, no second task.
-// Every drain is stamped with the system originator, as the old declarative cron was, so its
-// autonomous sends pass the outbound gateway's origin check (isAutonomousSendOrigin).
+// Every drain the heartbeat CREATES is stamped with the system originator, as the old declarative
+// cron was, so its autonomous sends pass the outbound gateway's origin check
+// (isAutonomousSendOrigin). The heartbeat only considers drain tasks it created itself
+// (createdBy 'heartbeat'); an `inbox-drain` task the agent made (possibly during an
+// outsider-originated turn) is ignored: it neither blocks a heartbeat drain nor is re-woken, and a
+// re-wake passes the task's STORED originator, never an upgrade (R56).
+const HEARTBEAT_CREATED_BY = 'heartbeat';
 import type { Logger } from '../logger.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import type { SchedulerService } from './scheduler-service.js';
@@ -55,6 +60,8 @@ export class InboxHeartbeat {
   private intervalHandle: NodeJS.Timeout | null = null;
   // A slow tick (Nylas probes) must not overlap the next interval fire.
   private tickInFlight = false;
+  // Foreign drain task ids already logged, so the 15-minute tick does not repeat the line.
+  private readonly ignoredLogged = new Set<string>();
 
   constructor(private readonly o: InboxHeartbeatOptions) {}
 
@@ -131,24 +138,31 @@ export class InboxHeartbeat {
       tag: INBOX_DRAIN_TAG,
       limit: 25,
     })).filter((t) => t.agentId === INBOX_AGENT);
+    const own = open.filter((t) => t.createdBy === HEARTBEAT_CREATED_BY);
+    for (const t of open) {
+      if (t.createdBy !== HEARTBEAT_CREATED_BY && !this.ignoredLogged.has(t.id)) {
+        this.ignoredLogged.add(t.id);
+        this.o.logger.info({ taskId: t.id }, 'InboxHeartbeat: ignoring an inbox-drain task it did not create (never re-woken, does not block)');
+      }
+    }
 
     const staleBefore = now.getTime() - STALLED_AFTER_MINUTES * 60_000;
-    const paused = open.find((t) => t.wakeState === 'paused');
+    const paused = own.find((t) => t.wakeState === 'paused');
     if (paused) {
       this.o.logger.warn({ taskId: paused.id, wakeState: 'paused' }, 'InboxHeartbeat: inbox-drain wake is paused by an operator; leaving it, no triage until it is resumed');
       return 'drain_running';
     }
-    const isLive = (t: (typeof open)[number]): boolean =>
+    const isLive = (t: (typeof own)[number]): boolean =>
       (t.wakeState !== 'suspended' && (t.nextWakeAt !== null || t.wakeState !== null)) ||
       new Date(t.updatedAt).getTime() > staleBefore;
-    if (open.some(isLive)) return 'drain_running';
+    if (own.some(isLive)) return 'drain_running';
 
-    const stalled = open[0];
+    const stalled = own[0];
     if (stalled) {
       if (stalled.wakeState === 'suspended') {
         this.o.logger.warn({ taskId: stalled.id, wakeState: 'suspended' }, 'InboxHeartbeat: re-waking an inbox-drain task whose wake was suspended');
       }
-      await this.o.scheduler.enqueueTaskWake({ taskId: stalled.id, agentId: INBOX_AGENT, runAt: now, originator: makeSystemOriginator() });
+      await this.o.scheduler.enqueueTaskWake({ taskId: stalled.id, agentId: INBOX_AGENT, runAt: now, originator: stalled.originator });
       this.o.logger.info({ taskId: stalled.id }, 'InboxHeartbeat: re-woke a stalled inbox-drain task');
       return 'woke';
     }

@@ -626,8 +626,8 @@ function checkStopDigest(result: OutboundSendResult): string {
 
 /**
  * The task lineage that may send from the principal's mailbox on Curia's own (#2474 final fixes
- * A9, security review B3). The hourly inbox check is a declarative scheduled job, stamped
- * `systemRole: 'system'` (makeSystemOriginator); its woken drain task can be downgraded to
+ * A9, security review B3). The inbox heartbeat (every 15 minutes, no model call) creates the drain task
+ * stamped `systemRole: 'system'` (makeSystemOriginator); that task can be downgraded to
  * `'agent'` by the bypass ladder (computeEffectiveTaskMetadata), and the gateway reads the
  * effective metadata. The RAW lineage must be `system`: either still `system`, or `agent` with
  * `ladderedFrom: 'system'` (the ladder's record of what it demoted). A genuine `agent` lineage
