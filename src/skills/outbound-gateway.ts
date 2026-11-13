@@ -93,7 +93,7 @@ import { DEFAULT_MAILBOX, type SendLevel, type SendLevelReader } from './princip
 import { isPrincipalDirectedMailboxSend, type SendAuthorityInput } from './principal-send/authority.js';
 import { dropOwnIdentityItems, quoteHeaderParticipants, splitReplyQuote } from './principal-send/own-text.js';
 import { PROVENANCE_LOOKBACK_DAYS, draftKey, type CuriaDraftWrites, type DraftProvenance } from './principal-send/draft-provenance.js';
-import type { PrincipalSendEntry, PrincipalSendLedger } from './principal-send/send-ledger.js';
+import type { LimitStopReason, PrincipalSendEntry, PrincipalSendLedger } from './principal-send/send-ledger.js';
 import {
   AUTONOMOUS_DAILY_CAP, AUTONOMOUS_DAILY_CAP_WINDOW_MS, AUTONOMOUS_THREAD_COOLDOWN_MS, checkAutonomousLimits, conversationIdsOf, repliedToLatest,
   type AutonomousLimitRefusal,
@@ -443,7 +443,7 @@ export interface OutboundGatewayConfig {
    * and the daily cap (final fixes A4). Absent: no markers, and an autonomous send is refused
    * (no_send_ledger).
    */
-  sendLedger?: Pick<PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentForConversation' | 'recentAutonomousSends' | 'sentForDraft' | 'list'>;
+  sendLedger?: Pick<PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentForConversation' | 'recentAutonomousSends' | 'sentForDraft' | 'list' | 'recordLimitStop' | 'limitStopsSince'>;
   /**
    * Every address that is the principal's: live mailbox addresses plus verified, active email
    * identities, lowercase (PrincipalMailboxes.principalEmailAddresses, #2475). Absent: the
@@ -452,6 +452,8 @@ export interface OutboundGatewayConfig {
   principalEmailAddresses?: () => Promise<readonly string[]>;
   /** A mailbox's own address, or undefined when unknown (the single-mailbox fallback has none read). */
   mailboxAddress?: (mailboxId: string) => Promise<string | undefined>;
+  /** A mailbox's label for the principal ("Work"), or undefined when unknown (#2475, Task 19). */
+  mailboxLabel?: (mailboxId: string) => Promise<string | undefined>;
 }
 
 /**
@@ -639,11 +641,43 @@ function recipientNotOnThread(detail: string): string {
  */
 const AUTONOMOUS_THREAD_READ_LIMIT = 50;
 
+/** Why a send did not go out, as the principal reads it (#2475, Task 19). */
+export type RefusalKind = 'limit' | 'judgement' | 'other';
+
+/**
+ * The refusals that are only a limit (#2475, D6): the daily cap and the thread cooldown (a
+ * cooldown from the same conversation in another mailbox is reported as `thread_cooldown` too).
+ * Exactly these two: the principal reads them as "Curia would have sent it". Every other
+ * refusal about the reply stays judgement; OTHER_REFUSALS are operational (a lookup failed, a
+ * mailbox is missing or unreadable, a setting) and are neither.
+ */
+export const LIMIT_REFUSALS: ReadonlySet<PrincipalSendRefusal> = new Set<PrincipalSendRefusal>(['daily_cap', 'thread_cooldown']);
+
+const OTHER_REFUSALS: ReadonlySet<PrincipalSendRefusal> = new Set<PrincipalSendRefusal>([
+  'mailbox_unavailable', 'unknown_mailbox', 'ambiguous_mailbox', 'setting_off', 'not_requested', 'approval_replay',
+  'not_found', 'lookup_failed', 'send_unconfirmed', 'no_send_ledger', 'thread_unreadable', 'principal_addresses_unreadable',
+]);
+
+/** limit, other, or judgement (the default for a refusal about the reply itself). */
+export function refusalKindOf(refusal: PrincipalSendRefusal): RefusalKind {
+  if (LIMIT_REFUSALS.has(refusal)) return 'limit';
+  return OTHER_REFUSALS.has(refusal) ? 'other' : 'judgement';
+}
+
+/** The first daily-cap stop in a rolling 24h files this notice (digest items are immutable). */
+const DAILY_LIMIT_NOTICE = `Reached the daily limit of ${AUTONOMOUS_DAILY_CAP} replies Curia sends on its own. Replies it would have sent wait in your Drafts until you send them or the limit resets.`;
+
 /** sendPrincipalDraft's result (#2474). */
 export interface PrincipalDraftSendResult extends OutboundSendResult {
   /** Nothing was sent and the draft is still in the principal's Drafts folder. */
   leftAsDraft?: true;
   refusal?: PrincipalSendRefusal;
+  /**
+   * Why it was not sent, for the principal's triage summary (#2475, Task 19): `limit` (the daily
+   * cap or the thread cooldown, nothing about the reply itself), `judgement` (Curia's own call on
+   * the reply), `other` (a failure, an off setting or a missing mailbox). Set with `refusal`.
+   */
+  refusalKind?: RefusalKind;
   /** On success: every non-principal recipient, lowercased. */
   to?: string[];
   subject?: string;
@@ -1031,6 +1065,7 @@ export class OutboundGateway {
   private readonly readSendLevel?: SendLevelReader;
   private readonly principalEmailAddressLookup?: () => Promise<readonly string[]>;
   private readonly mailboxAddressLookup?: (mailboxId: string) => Promise<string | undefined>;
+  private readonly mailboxLabelLookup?: (mailboxId: string) => Promise<string | undefined>;
   private readonly draftProvenance?: OutboundGatewayConfig['draftProvenance'];
   private readonly sendLedger?: OutboundGatewayConfig['sendLedger'];
   private flushInFlight = new Set<string>();
@@ -1070,6 +1105,7 @@ export class OutboundGateway {
     this.readSendLevel = config.readSendLevel;
     this.principalEmailAddressLookup = config.principalEmailAddresses;
     this.mailboxAddressLookup = config.mailboxAddress;
+    this.mailboxLabelLookup = config.mailboxLabel;
     this.draftProvenance = config.draftProvenance;
     this.sendLedger = config.sendLedger;
     if (this.gating === 'band' && !this.bandReview) {
@@ -4422,9 +4458,9 @@ export class OutboundGateway {
     /** The mailbox to send from: the only one asked for the draft. Absent: the one holding it. */
     mailbox?: string;
   }): Promise<PrincipalDraftSendResult> {
-    const refuse = (refusal: PrincipalSendRefusal, blockedReason: string = PRINCIPAL_SEND_REFUSALS[refusal]): PrincipalDraftSendResult => {
-      this.log.info({ draftId, refusal }, 'outbound-gateway: principal-mailbox draft not sent');
-      return { success: false, leftAsDraft: true, refusal, blockedReason };
+    const refuse = (refusal: PrincipalSendRefusal, blockedReason: string = PRINCIPAL_SEND_REFUSALS[refusal], kind: RefusalKind = refusalKindOf(refusal)): PrincipalDraftSendResult => {
+      this.log.info({ draftId, refusal, kind }, 'outbound-gateway: principal-mailbox draft not sent');
+      return { success: false, leftAsDraft: true, refusal, refusalKind: kind, blockedReason };
     };
 
     // 1. The mailbox holding the draft, resolved once per call (so a re-sign-in applies at once,
@@ -4473,7 +4509,8 @@ export class OutboundGateway {
       if (autonomous) {
         await this.recordAutonomousStop({ mailbox, mailboxId, conversationIds, draftId, draft, lookedUp, refusal, reason: blockedReason, reasonCode, ...(digest !== undefined ? { digest } : {}), options });
       }
-      return refuse(refusal, blockedReason);
+      // A thread_cooldown stop that is really an unreadable ledger is a failure, not a limit.
+      return refuse(refusal, blockedReason, refusal === 'thread_cooldown' && reasonCode !== refusal ? 'other' : refusalKindOf(refusal));
     };
 
     let autonomy: AutonomyRead | undefined;
@@ -4597,7 +4634,7 @@ export class OutboundGateway {
         if (conversationIds.length > 0) conversationEntries = await this.sendLedger!.recentForConversation(conversationIds, cooldownSince, ledgerEntries);
       } catch (err) {
         this.log.warn({ err, draftId }, 'outbound-gateway: send ledger unreadable — treating the thread as cooling down');
-        return stop('thread_cooldown');
+        return stop('thread_cooldown', PRINCIPAL_SEND_REFUSALS.thread_cooldown, 'ledger_unreadable');
       }
       let sendsInWindow: number;
       try {
@@ -4871,6 +4908,12 @@ export class OutboundGateway {
       }
     }
     const what = draft ? mailboxDraftLabel(draft, isPrincipal) : 'a reply Curia drafted';
+    // Held only by a limit (#2475, D6): reported as the limit, not as a judgement. A thread_cooldown
+    // whose reasonCode differs is an unreadable ledger, which stays a "Left as a draft" item.
+    if (refusal !== undefined && LIMIT_REFUSALS.has(refusal) && reasonCode === refusal) {
+      await this.reportLimitStop(refusal as LimitStopReason, what, args.mailboxId, draftId, options);
+      return;
+    }
     if (refusal === 'not_found' || refusal === 'lookup_failed') {
       const why = refusal === 'not_found'
         ? "It isn't in your Drafts any more (sent, deleted or replaced)."
@@ -4884,6 +4927,57 @@ export class OutboundGateway {
       ? PRINCIPAL_SEND_DIGEST_REASONS[refusal]
       : principalFacing(reason));
     await this.publishMailboxDigest(`Left as a draft in your mailbox: ${what}. ${said}`, options);
+  }
+
+  /**
+   * The digest item for a reply held only by a limit (#2475, D6). Digest items are immutable audit
+   * rows, so the first daily-cap stop in a rolling 24h files the notice and each later one a short
+   * "waiting" item. The stop is recorded as a `limited` ledger entry (which the cap and both
+   * cooldowns ignore). A ledger that cannot be read files the short item: never "Left as a draft".
+   * Two stops racing may both file the notice, which is harmless for a single user. Never throws.
+   */
+  private async reportLimitStop(
+    reason: LimitStopReason,
+    what: string,
+    mailboxId: string,
+    draftId: string,
+    options: { taskEventId?: string; conversationId?: string },
+  ): Promise<void> {
+    let first = false;
+    if (reason === 'daily_cap' && this.sendLedger) {
+      try {
+        first = (await this.sendLedger.limitStopsSince(Date.now() - AUTONOMOUS_DAILY_CAP_WINDOW_MS, 'daily_cap')).length === 0;
+      } catch (err) {
+        this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: limit stops unreadable — filing the short waiting item');
+      }
+    }
+    try {
+      await this.sendLedger?.recordLimitStop({ draftId, mailbox: mailboxId, reason, at: new Date().toISOString() });
+    } catch (err) {
+      this.log.error({ ...grantSafeErrorFields(err), draftId, reason }, 'outbound-gateway: limit stop not recorded — the next one may file the notice again');
+    }
+    if (reason === 'daily_cap' && first) {
+      await this.publishMailboxDigest(DAILY_LIMIT_NOTICE, options);
+      return;
+    }
+    const where = await this.mailboxSuffix(mailboxId, draftId);
+    const text = reason === 'daily_cap'
+      ? `Waiting only because of the daily limit: ${what}${where}.`
+      : `Waiting only because Curia already replied on this thread today: ${what}${where}.`;
+    await this.publishMailboxDigest(text, options);
+  }
+
+  /** ` (<label>)` when the principal has more than one live mailbox, else empty. Never throws. */
+  private async mailboxSuffix(mailboxId: string, draftId: string): Promise<string> {
+    if (!this.principalMailboxIds || !this.mailboxLabelLookup) return '';
+    try {
+      if ((await this.principalMailboxIds()).length < 2) return '';
+      const label = (await this.mailboxLabelLookup(mailboxId))?.trim();
+      return label ? ` (${label})` : '';
+    } catch (err) {
+      this.log.warn({ ...grantSafeErrorFields(err), draftId, mailboxId }, 'outbound-gateway: mailbox label unreadable — filing the item without it');
+      return '';
+    }
   }
 
   /**

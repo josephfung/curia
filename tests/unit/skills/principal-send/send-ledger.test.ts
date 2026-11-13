@@ -252,3 +252,40 @@ describe('PrincipalSendLedger across mailboxes (#2475)', () => {
     expect(await ledger.recentAutonomousSends(since)).toHaveLength(10);
   });
 });
+
+describe('limit stops (#2475 Task 19)', () => {
+  const recent = new Date().toISOString();
+  const since = Date.now() - 24 * 3600_000;
+  const base = { draftId: 'd1', threadId: 't1', recipients: [] as string[], mode: 'autonomous' as const, at: recent, mailbox: 'work', conversationIds: ['a@x'] };
+
+  it('a limited entry is ignored by the cap and by both cooldowns', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    await ledger.recordSending({ ...base, draftId: 'old', at: '2020-01-01T00:00:00.000Z' });
+    await ledger.recordLimitStop({ draftId: 'd2', mailbox: 'work', reason: 'daily_cap', at: recent });
+    const doc = [...docs.docs.values()].find((d) => d.frontmatter['outcome'] === 'limited')!;
+    // Even a limited marker that carries the thread and the conversation must not count.
+    const entries = [parseLedgerDoc({ ...doc, frontmatter: { ...doc.frontmatter, thread_id: 't1', conversation_ids: ['a@x'] } })!];
+    expect(entries[0]!.outcome).toBe('limited');
+    expect(await ledger.recentAutonomousSends(since, entries)).toEqual([]);
+    expect(await ledger.recentForThread('t1', since, 'work', entries)).toEqual([]);
+    expect(await ledger.recentForConversation(['a@x'], since, entries)).toEqual([]);
+  });
+
+  it('limitStopsSince returns only limited entries for that reason inside the window', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    await ledger.recordLimitStop({ draftId: 'a', mailbox: 'work', reason: 'daily_cap', at: recent });
+    await ledger.recordLimitStop({ draftId: 'b', mailbox: 'work', reason: 'thread_cooldown', at: recent });
+    await ledger.recordLimitStop({ draftId: 'c', mailbox: 'work', reason: 'daily_cap', at: '2020-01-01T00:00:00.000Z' });
+    await ledger.recordHeld({ ...base, draftId: 'e', reasonCode: 'daily_cap' });
+    const got = await ledger.limitStopsSince(since, 'daily_cap');
+    expect(got.map((e) => e.draftId)).toEqual(['a']);
+  });
+
+  it('limitStopsSince throws on a repo failure', async () => {
+    const docs = makeDocs();
+    docs.listByPrefix.mockRejectedValue(new Error('db down'));
+    await expect(new PrincipalSendLedger(docs, logger).limitStopsSince(since, 'daily_cap')).rejects.toThrow('db down');
+  });
+});

@@ -32,7 +32,12 @@ export interface PrincipalSendEntry {
   mode: 'principal-directed' | 'autonomous';
   at: string;
   messageId?: string;
-  outcome: 'sending' | 'sent' | 'held';
+  /**
+   * `limited` (#2475, Task 19): an autonomous send stopped only by the daily cap or the thread
+   * cooldown. It is a record for the principal's report, never a send and never a cooldown: the
+   * cap and both cooldowns skip it, so a limit stop cannot extend or deepen what stopped it.
+   */
+  outcome: 'sending' | 'sent' | 'held' | 'limited';
   /**
    * Why an autonomous send was held or refused (#2474 PR 2), as a code: the refusal code, or the
    * band rule ids (final fixes B2, security review L2). Never the free text: it can name
@@ -43,7 +48,10 @@ export interface PrincipalSendEntry {
 }
 
 const MODES: readonly string[] = ['principal-directed', 'autonomous'];
-const OUTCOMES: readonly string[] = ['sending', 'sent', 'held'];
+const OUTCOMES: readonly string[] = ['sending', 'sent', 'held', 'limited'];
+
+/** The limits a `limited` entry can name (the same codes the gateway refuses with). */
+export type LimitStopReason = 'daily_cap' | 'thread_cooldown';
 
 /** The path prefix of one draft's markers. The id is encoded: a path segment must not carry '/'. */
 function draftPrefix(draftId: string): string {
@@ -122,6 +130,36 @@ export class PrincipalSendLedger {
   }
 
   /**
+   * Records an autonomous send stopped only by a limit (#2475, Task 19): `outcome: limited`, the
+   * reason as the code. It is ignored by the cap and by both cooldowns, so recording it never
+   * extends one; limitStopsSince reads it to tell the first stop of a day from a later one.
+   * Create-only like recordSending. Throws on a repo failure.
+   */
+  async recordLimitStop(e: { draftId: string; mailbox: string; reason: LimitStopReason; at: string }): Promise<void> {
+    const path = `${draftPrefix(e.draftId)}${Date.now()}.md`;
+    await this.docs.create({
+      path,
+      type: PRINCIPAL_SEND_DOC_TYPE,
+      frontmatter: {
+        draft_id: e.draftId, thread_id: '', mailbox: e.mailbox, conversation_ids: [],
+        recipients: [], mode: 'autonomous', at: e.at,
+        outcome: 'limited', reason_code: e.reason,
+      },
+      body: '',
+      taskId: null,
+    });
+  }
+
+  /**
+   * The `limited` entries for `reason` at or after `sinceEpochMs`. Unlike the cap's lookups an
+   * unreadable `at` does not count here: this only decides which digest text is filed, and
+   * "first" is the safe default for a broken marker. Throws on a repo failure.
+   */
+  async limitStopsSince(sinceEpochMs: number, reason: LimitStopReason, entries?: readonly PrincipalSendEntry[]): Promise<PrincipalSendEntry[]> {
+    return (entries ?? await this.list()).filter((e) => e.outcome === 'limited' && e.reasonCode === reason && Date.parse(e.at) >= sinceEpochMs);
+  }
+
+  /**
    * Adds the sent message's id to the draft's latest `sending` marker. Throws on a repo failure;
    * a missing marker (its write failed earlier) is logged and skipped.
    */
@@ -160,7 +198,7 @@ export class PrincipalSendLedger {
    */
   async recentForThread(threadId: string, sinceEpochMs: number, mailbox: string, entries?: readonly PrincipalSendEntry[]): Promise<PrincipalSendEntry[]> {
     // An entry with no mailbox (written before the registry) matches any: only more cooldown.
-    return (entries ?? await this.list()).filter((e) => e.mode === 'autonomous' && e.threadId === threadId
+    return (entries ?? await this.list()).filter((e) => e.mode === 'autonomous' && e.outcome !== 'limited' && e.threadId === threadId
       && (e.mailbox === undefined || e.mailbox === mailbox) && atOrAfter(e, sinceEpochMs));
   }
 
@@ -173,7 +211,7 @@ export class PrincipalSendLedger {
   async recentForConversation(conversationIds: readonly string[], sinceEpochMs: number, entries?: readonly PrincipalSendEntry[]): Promise<PrincipalSendEntry[]> {
     if (conversationIds.length === 0) return [];
     const wanted = new Set(conversationIds);
-    return (entries ?? await this.list()).filter((e) => e.mode === 'autonomous'
+    return (entries ?? await this.list()).filter((e) => e.mode === 'autonomous' && e.outcome !== 'limited'
       && e.conversationIds.some((id) => wanted.has(id)) && atOrAfter(e, sinceEpochMs));
   }
 
@@ -183,7 +221,7 @@ export class PrincipalSendLedger {
    * `at` counts, as in recentForThread (fail closed). Throws on a repo failure.
    */
   async recentAutonomousSends(sinceEpochMs: number, entries?: readonly PrincipalSendEntry[]): Promise<PrincipalSendEntry[]> {
-    return (entries ?? await this.list()).filter((e) => e.mode === 'autonomous' && e.outcome !== 'held' && atOrAfter(e, sinceEpochMs));
+    return (entries ?? await this.list()).filter((e) => e.mode === 'autonomous' && e.outcome !== 'held' && e.outcome !== 'limited' && atOrAfter(e, sinceEpochMs));
   }
 
   /**
