@@ -1,15 +1,19 @@
 // inbound-scanner.ts — Layer 1 prompt injection detection for the dispatch layer.
 //
 // Runs on every inbound message before it reaches the Coordinator's LLM.
-// Two responsibilities:
+// Three responsibilities:
 //   1. Strip instruction-mimicking XML/HTML markup from message content.
-//   2. Detect instruction-like phrases and score the message's risk.
+//   2. Strip Unicode tag characters (ASCII smuggling — #2093); hidden text
+//      that decodes to printable ASCII is recorded as a finding.
+//   3. Detect instruction-like phrases and score the message's risk.
 //
 // Flagged messages are NOT blocked — they pass through with a risk_score in the
 // agent.task event metadata. The Coordinator's system prompt (Layer 2) instructs
 // it how to handle elevated scores. Blocking is reserved for future policy config.
 //
 // Spec: docs/specs/06-audit-and-security.md — Prompt Injection Defense → Layer 1
+
+import { stripTagCharacters } from '../security/tag-chars.js';
 
 // XML/HTML tags that mimic system prompt structures. Stripped from content before
 // any downstream consumer (LLM or subscriber) sees the message. We strip both the
@@ -96,8 +100,10 @@ export class InboundScanner {
    *
    * Steps:
    * 1. Strip instruction-mimicking XML/HTML tags from the content.
-   * 2. Check the original content for instruction-like phrases.
-   * 3. Compute a risk score proportional to the fraction of patterns that fired.
+   * 2. Strip Unicode tag characters (keeping subdivision flags); if the
+   *    stripped characters decode to printable ASCII, record a finding.
+   * 3. Check the original content for instruction-like phrases.
+   * 4. Compute a risk score proportional to the fraction of patterns that fired.
    *
    * Note: pattern detection runs on the ORIGINAL content (before tag stripping)
    * so that a `<system>ignore previous instructions</system>` payload registers
@@ -116,7 +122,17 @@ export class InboundScanner {
     INSTRUCTION_TAG_ORPHAN_PATTERN.lastIndex = 0;
     sanitizedContent = sanitizedContent.replace(INSTRUCTION_TAG_ORPHAN_PATTERN, '');
 
-    // Step 2: Detect instruction-like phrases in the original content.
+    // Step 2: Strip Unicode tag characters (ASCII smuggling). These are
+    // invisible to a human reader but legible to the model. Well-formed
+    // subdivision flag sequences are preserved by stripTagCharacters.
+    // When the stripped characters decode to printable ASCII there was
+    // hidden text — never benign — so it is recorded as a finding below,
+    // with the decoded text as the match (the raw characters are invisible
+    // and would be useless in an audit record).
+    const tagStrip = stripTagCharacters(sanitizedContent);
+    sanitizedContent = tagStrip.text;
+
+    // Step 3: Detect instruction-like phrases in the original content.
     // We test the raw content so that stripped tags still contribute to the risk
     // score — a message that contained <system>...</system> is riskier even after
     // its markup is removed.
@@ -136,7 +152,18 @@ export class InboundScanner {
       }
     }
 
-    // Step 3: Compute risk score.
+    // Hidden tag-character text counts as one finding, like one pattern
+    // match, so it raises the risk score computed below. The decoded text
+    // goes in the finding for audit; it is NOT part of sanitizedContent,
+    // so it never reaches the agent's context.
+    if (tagStrip.decoded.length > 0) {
+      findings.push({
+        pattern: 'unicode tag characters (ascii smuggling)',
+        match: tagStrip.decoded.slice(0, 100),
+      });
+    }
+
+    // Step 4: Compute risk score.
     // matchedPatterns / totalPatterns, capped at 1.0.
     // Using the combined count (defaults + extras) as the denominator so scores are
     // consistent: a message that matches 3 of 10 configured patterns scores 0.3

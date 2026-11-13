@@ -9,6 +9,7 @@
 
 import sanitizeHtml from 'sanitize-html';
 import { createSecretPatterns } from '../security/secret-patterns.js';
+import { stripTagCharacters } from '../security/tag-chars.js';
 
 export interface SanitizeOptions {
   /** Max output length in characters. Default: Infinity (no truncation). */
@@ -97,10 +98,12 @@ function stripDangerousTags(text: string): string {
  *
  * Steps (in order):
  * 1. Coerce non-strings to JSON
- * 2. Strip dangerous HTML/XML tags (tag pairs + content for listed tags, just the tag for others)
- * 3. Redact secret patterns
- * 4. Truncate to length limit (only if caller passes maxLength; no limit by default)
- * 5. Wrap errors in <tool_error> tags
+ * 2. Strip Unicode tag characters (ASCII smuggling — invisible to a human
+ *    reader but legible to the model; subdivision flags are preserved)
+ * 3. Strip dangerous HTML/XML tags (tag pairs + content for listed tags, just the tag for others)
+ * 4. Redact secret patterns
+ * 5. Truncate to length limit (only if caller passes maxLength; no limit by default)
+ * 6. Wrap errors in <tool_error> tags
  */
 export function sanitizeOutput(
   raw: string | unknown,
@@ -122,14 +125,20 @@ export function sanitizeOutput(
     }
   }
 
-  // 2. Strip dangerous tags using a hardened HTML parser.
+  // 2. Strip Unicode tag characters before anything else reads the text.
+  // They encode ASCII invisibly (ASCII smuggling — #2093): a tool result is
+  // exactly where a hidden instruction would ride in. Well-formed
+  // subdivision flag sequences survive (see tag-chars.ts).
+  text = stripTagCharacters(text).text;
+
+  // 3. Strip dangerous tags using a hardened HTML parser.
   // Using a library (sanitize-html) instead of regex chains prevents:
   //   - js/incomplete-multi-character-sanitization: the parser handles all tag variants
   //   - js/bad-tag-filter: whitespace-padded closing tags (</script >) are handled correctly
   //   - js/polynomial-redos: no catastrophic backtracking — parser runs in linear time
   text = stripDangerousTags(text);
 
-  // 3. Redact known secret patterns (shared with llm_call_archive via secret-patterns.ts).
+  // 4. Redact known secret patterns (shared with llm_call_archive via secret-patterns.ts).
   // When the caller opts out (skill declares skip_secret_redaction), we skip ONLY the broad
   // long-hex catch — the rule that falsely scrubs a capability token in that skill's
   // output. The structured credential patterns (API keys, JWT/Bearer, AWS) stay active, so an
@@ -142,12 +151,12 @@ export function sanitizeOutput(
     text = text.replace(pattern, '[REDACTED]');
   }
 
-  // 4. Truncate if exceeding length limit
+  // 5. Truncate if exceeding length limit
   if (text.length > maxLength) {
     text = text.slice(0, maxLength) + '[truncated — output exceeded limit]';
   }
 
-  // 5. Wrap errors in <tool_error> tags so the LLM can distinguish
+  // 6. Wrap errors in <tool_error> tags so the LLM can distinguish
   // error output from normal output and handle it appropriately
   if (isError) {
     text = `<tool_error>${text}</tool_error>`;
