@@ -144,7 +144,11 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // respond-to-invite's `mailbox` says it is required and found by iCal UID (+37): 28,755.
   // #2475 Part 4 final fixes: needs_mailbox is an error (create-event/create-hold `mailbox`) and
   // the 30-day RSVP hold window, +80 bytes under the same pre-approval: 28,835 over 23 local tools.
-  { agent: 'calendar', alwaysOnPromptTokens: 5_700, localToolDefinitionBytes: 28_835, allowMcpPins: false },
+  // #2475 Task 33: find-free-time and check-conflicts read every account's calendar and return
+  // what blocks (description lines, find-free-time's `treat_as_free` input, both `mailbox`
+  // inputs reworded since someone else's free/busy no longer needs one), +610 bytes under the
+  // same pre-approval: 29,445 over 23 local tools.
+  { agent: 'calendar', alwaysOnPromptTokens: 5_700, localToolDefinitionBytes: 29_445, allowMcpPins: false },
   // ceo-inbox: YAML 60,090 → 49,037 chars (~16,416 → ~13,653 tokens always-on with its SKILL.md bodies),
   // its task-wake steps now riding on the wake; 43,469 bytes over 41 local tools.
   // archive-extract plus the longer file-parse description (#2208) is +1,831 bytes, the same

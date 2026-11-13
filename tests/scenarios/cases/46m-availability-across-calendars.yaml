@@ -1,0 +1,69 @@
+# Case 46m (#2475, D7; decided by the principal 2026-11-11, item 2): availability sees both
+# accounts' calendars. The work calendar is clear next workday afternoon; the personal calendar has a
+# dentist appointment from 2 to 3 PM. find-free-time reads both and returns the free windows
+# around it. calendar should offer times outside the dentist appointment and never 2 to 3 PM.
+name: availability covers the personal calendar too
+description: >
+  The coordinator asks calendar for a free hour for the principal next workday afternoon (1 PM to
+  5 PM) for a call with an investor. The principal has a work and a personal account. The work
+  calendar is clear; the personal one has "Dentist" from 2 to 3 PM. find-free-time returns free
+  windows 1–2 PM and 3–5 PM, listing the dentist under blocking with calendar Personal. calendar
+  should offer an hour in those windows (or name them) and never offer 2–3 PM.
+tags: [specialist-calendar, calendar, availability, multi-mailbox]
+agent: calendar
+stub_sets: [calendar-specialist, calendar-office]
+seed:
+  contacts:
+    - key: ana
+      display_name: Ana Ruiz
+      channel: email
+      identifier: ana.ruiz@lumen-ventures.example.test
+inbound:
+  from: delegate
+  content: "The principal asked: find me a free hour on {{day:workday+1}} afternoon, between 1 and 5 PM, for a call with Ana Ruiz. Just tell me the options; don't book anything."
+tool_stubs:
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:workday+1 13:00}}", end: "{{time:workday+1 14:00}}" }
+          - { start: "{{time:workday+1 15:00}}", end: "{{time:workday+1 17:00}}" }
+        blocking:
+          - { eventId: evt-dentist, title: Dentist, calendar_label: Personal, start: "{{time:workday+1 14:00}}", end: "{{time:workday+1 15:00}}" }
+        treated_as_free: []
+  calendar-check-conflicts:
+    - agent: calendar
+      match: {}
+      return: { clear: true, conflicts: [], displayTimezone: "{{timezone}}" }
+  calendar-list-events:
+    - agent: calendar
+      match: {}
+      return:
+        count: 1
+        displayTimezone: "{{timezone}}"
+        events:
+          - { id: evt-dentist, calendarId: ceo@personal.example.test, title: Dentist, description: "", location: Downtown Dental, startTime: "{{time:workday+1 14:00}}", endTime: "{{time:workday+1 15:00}}", status: confirmed, busy: true, participants: [], metadata: null }
+expected_behaviors:
+  - id: reads_availability
+    weight: critical
+    description: Reads the principal's availability.
+    check:
+      called: [calendar-find-free-time, calendar-list-events]
+      agent: calendar
+      success: true
+  - id: avoids_dentist
+    weight: critical
+    description: >
+      Offers only times inside 1–2 PM or 3–5 PM that day. Never offers or suggests 2–3 PM,
+      when the dentist appointment on the personal calendar is.
+  - id: no_writes
+    weight: important
+    description: Books nothing and places no hold (the principal asked for options only).
+    check:
+      not_called: [calendar-create-event, calendar-create-hold]
+failure_modes:
+  - Offers 2 PM, overlooking the personal calendar
+  - Says the whole afternoon is free
+  - Books the call

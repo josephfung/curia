@@ -1,0 +1,72 @@
+# Case 46k (#2475, D5/D7; decided by the principal 2026-11-11, items 3 and 10): a meeting with
+# the CFO belongs on the work calendar. calendar-create-event without a mailbox returns
+# needs_mailbox with evidence that all points to work, so calendar books it there and does not
+# mention the account: it was no judgement call.
+name: meeting with the cfo goes on the work calendar without saying so
+description: >
+  The coordinator asks calendar to book a 45-minute meeting with Dana Whitfield, the CFO, on
+  Thursday next week at 2 PM about the Q3 budget. The principal has a work and a personal
+  account. The first create call (no mailbox) returns needs_mailbox with evidence: every mail
+  with Dana went through work and she is on the work domain. calendar should book it on the
+  work calendar and say nothing about which account it used.
+tags: [specialist-calendar, calendar, mailbox-choice, multi-mailbox]
+agent: calendar
+stub_sets: [calendar-specialist, calendar-office]
+seed:
+  contacts:
+    - key: cfo
+      display_name: Dana Whitfield
+      channel: email
+      identifier: dana.whitfield@work.example.test
+inbound:
+  from: delegate
+  content: "The principal asked: book a 45-minute meeting with Dana Whitfield (our CFO) on {{day:next-monday+3}} at 2 PM about the Q3 budget, and send her the invite."
+tool_stubs:
+  calendar-create-event:
+    - agent: calendar
+      match: { mailbox: null }
+      return:
+        needs_mailbox: true
+        created: false
+        mailboxes: [{ id: work, label: Work }, { id: personal, label: Personal }]
+        note: "Nothing was created. Several accounts are connected: call again with mailbox set to the account this belongs to."
+        evidence:
+          - { mailbox: work, mailbox_label: Work, sent_count: 14, received_count: 22, domain_match: true }
+          - { mailbox: personal, mailbox_label: Personal, sent_count: 0, received_count: 0, domain_match: false }
+    - agent: calendar
+      match: {}
+      return:
+        event: { id: evt-q3-budget, calendarId: ceo@work.example.test, status: confirmed, title: Q3 budget }
+        mailbox: work
+        mailbox_label: Work
+        evidence: agrees
+expected_behaviors:
+  - id: books_on_work
+    weight: critical
+    description: Creates the event in the work account.
+    check:
+      called: calendar-create-event
+      agent: calendar
+      with: { mailbox: work }
+      min: 1
+  - id: nothing_on_personal
+    weight: critical
+    description: Creates no event in the personal account.
+    check:
+      not_called: [calendar-create-event]
+      with: { mailbox: personal }
+  - id: account_not_mentioned
+    weight: important
+    description: >
+      The reply does not announce or ask about the account: the evidence all pointed to work,
+      so this was no judgement call. Saying the meeting is booked is fine.
+  - id: account_not_announced
+    weight: important
+    description: The reply has no phrase that announces the account, such as "on your work calendar" (a code check beside the judged one).
+    check:
+      reply_excludes:
+        - '\b(on|in|to|from|using|via) (your |the )?(work|personal)( account| calendar| mailbox)?\b'
+failure_modes:
+  - Books the meeting on the personal calendar
+  - Asks the principal which calendar to use although the evidence was one-sided
+  - Tells the principal it used the work calendar

@@ -56,22 +56,6 @@ export async function routeCalendar(ctx: ToolContext, tool: string, calendarId: 
   }
 }
 
-/** Route several calendars; the first failure is returned. Never throws. */
-export async function routeCalendars(
-  ctx: ToolContext,
-  tool: string,
-  calendarIds: string[],
-  mailbox?: string,
-): Promise<{ ok: true; routed: RoutedCalendar[] } | { ok: false; error: string }> {
-  const routed: RoutedCalendar[] = [];
-  for (const id of calendarIds) {
-    const r = await routeCalendar(ctx, tool, id, mailbox);
-    if (!r.ok) return r;
-    routed.push(r.routed);
-  }
-  return { ok: true, routed };
-}
-
 /** The live mailboxes as `{id, label}` choices. */
 export type MailboxChoice = { id: string; label: string };
 

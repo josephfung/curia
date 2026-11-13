@@ -757,3 +757,54 @@ describe('fix round 2: a skipped home pass is visible (N2)', () => {
     expect(data['calendarErrors']).toBe(1);
   });
 });
+
+describe('Task 33a: the skipped home pass is counted once, for this sweep only (Task 32 L1, L2)', () => {
+  it('a sweep scoped to one mailbox does not count a failed list read that belongs to other accounts (L1)', async () => {
+    const third = calendarMailbox('third', 'Third', 'ceo@third.example.com');
+    const clients = { work: stubClient(), personal: stubClient(), third: stubClient() };
+    const router = routerFixture({
+      mailboxes: [WORK, PERSONAL, third],
+      clients,
+      registry: { 'cal-work': { principalMailboxId: 'work' }, 'cal-third': { principalMailboxId: 'third' } },
+    });
+    Object.assign(router, { liveMailboxes: async () => { throw new Error('registry down'); } });
+    const c = ctx(router, { contactId: PRINCIPAL, mailbox: 'personal' });
+    (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { nylasCalendarId: 'cal-work', principalMailboxId: 'work' },
+      { nylasCalendarId: 'cal-third', principalMailboxId: 'third' },
+    ]);
+    const data = dataOf(await run(new CalendarHoldsSweepHandler(), c));
+    expect(data['calendarErrors']).toBe(0);
+  });
+
+  it('a scoped sweep still counts it when the home pass would have covered that mailbox', async () => {
+    const { router } = setup();
+    Object.assign(router, { liveMailboxes: async () => { throw new Error('registry down'); } });
+    const c = ctx(router, { contactId: PRINCIPAL, mailbox: 'work' });
+    (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { nylasCalendarId: 'cal-work', principalMailboxId: 'work' },
+      { nylasCalendarId: 'cal-personal', principalMailboxId: 'personal' },
+    ]);
+    const data = dataOf(await run(new CalendarHoldsSweepHandler(), c));
+    expect(data['calendarErrors']).toBe(1);
+  });
+
+  it("a removed mailbox's stale row is counted once, not again as a second mailbox (L2)", async () => {
+    const work = stubClient();
+    const router = routerFixture({
+      mailboxes: [WORK],
+      removed: { old: 'Old job' },
+      clients: { work },
+      registry: { 'cal-work': { principalMailboxId: 'work' }, 'cal-old': { principalMailboxId: 'old' } },
+    });
+    Object.assign(router, { liveMailboxes: async () => { throw new Error('registry down'); } });
+    const c = ctx(router, { contactId: PRINCIPAL });
+    (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { nylasCalendarId: 'cal-work', principalMailboxId: 'work' },
+      { nylasCalendarId: 'cal-old', principalMailboxId: 'old' },
+    ]);
+    const data = dataOf(await run(new CalendarHoldsSweepHandler(), c));
+    // The stale row's own route failure only; the failed list read is not a second error.
+    expect(data['calendarErrors']).toBe(1);
+  });
+});

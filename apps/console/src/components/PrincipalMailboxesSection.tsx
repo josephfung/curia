@@ -297,8 +297,8 @@ export function PrincipalMailboxesSection() {
   const idOk = ID_RE.test(id.trim()) && id.trim() !== 'primary' && id.trim() !== 'default';
   // Add sends the grant in the input, so the tested address must be that grant's.
   const testedCurrent = tested !== null && tested.grantId === grantId.trim();
-  // The deferred-migration fallback counts as the one mailbox: adding is refused until it
-  // has moved into the list.
+  // While the deferred-migration fallback is served, adding is refused until that mailbox has
+  // moved into the list (an added row would hide it).
   const migrating = mailboxes.some(m => m.pending_migration);
 
   return (

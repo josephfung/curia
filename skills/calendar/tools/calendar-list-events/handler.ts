@@ -15,7 +15,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import type { NylasCalendarEvent } from '../../../../src/channels/calendar/nylas-calendar-client.js';
 import { formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { localizeEventTimes } from '../../../../src/channels/calendar/event-display.js';
-import { sameMeetingKey } from '../../../../src/channels/calendar/event-identity.js';
+import { meetingKey, sameMeetingKey } from '../../../../src/channels/calendar/event-identity.js';
 import { isSystemOriginated, isPrincipalOriginated } from '../../../../src/contacts/principal.js';
 import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from '../../../../src/skills/_shared/placeholder-guard.js';
 import { guardNylasExplicitCalendarIdentity } from '../../../../src/skills/_shared/calendar-identity-guard.js';
@@ -254,9 +254,11 @@ export class CalendarListEventsHandler implements ToolHandler {
       // correct wall-clock times. Falls back to UTC when timezone is not configured,
       // and returns null for null/invalid timestamp values.
       const tz = ctx.timezone;
+      // meetingKey: the same for a meeting on every calendar it is on (meeting-debrief's guards).
       const formattedEvents = events.map((evt) => {
         const calendars = calendarsOf.get(evt);
-        return calendars ? { ...localizeEventTimes(evt, tz), calendars } : localizeEventTimes(evt, tz);
+        const shown = { ...localizeEventTimes(evt, tz), meetingKey: meetingKey(evt) };
+        return calendars ? { ...shown, calendars } : shown;
       });
 
       ctx.log.info({ calendarCount: calendarIds.length, count: formattedEvents.length, failedCount: failedCalendarIds.length }, 'Listed events');

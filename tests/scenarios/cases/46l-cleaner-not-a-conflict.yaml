@@ -1,0 +1,98 @@
+# Case 46l (#2475, D7; decided by the principal 2026-11-12, item 11): not every event is a
+# conflict. The principal's calendar rules say home-service visits on the personal calendar do
+# not block them. A cleaner's visit on the personal calendar overlaps the asked-about slot; the
+# availability tools list it with its title and calendar. calendar should judge it against the
+# rule and answer that the principal is free, not report a conflict or offer another time.
+name: the cleaner's visit is not a conflict
+description: >
+  The coordinator asks calendar whether the principal is free on Tuesday next week from 10 AM
+  to noon for a call with Ana Ruiz. The work calendar is empty then. The personal calendar has
+  "Cleaner" from 10 AM to noon. The principal's scheduling rules say home-service visits on the
+  personal calendar (cleaner, lawn service) don't block them. check-conflicts and
+  find-free-time return the cleaner as blocking, with its title and calendar; find-free-time
+  with the cleaner's eventId in treat_as_free returns the window as free. calendar should answer
+  that the principal is free, and may say the cleaner is there, which they've said doesn't block
+  them. It should not report a conflict, suggest another time, or book anything.
+tags: [specialist-calendar, calendar, availability, standing-rules, multi-mailbox]
+agent: calendar
+stub_sets: [calendar-specialist, calendar-office]
+seed:
+  contacts:
+    - key: ana
+      display_name: Ana Ruiz
+      channel: email
+      identifier: ana.ruiz@lumen-ventures.example.test
+  pinned:
+    docs:
+      /shared/calendar/rules.md: |
+        ---
+        type: agent-settings
+        title: Scheduling rules
+        ---
+        Each rule is a `##` section with Applies to / Do / Status lines. Status is active or paused.
+
+        ## Home services
+
+        - Applies to: home-service visits on my personal calendar (cleaner, lawn service, repairs)
+        - Do: they don't block me; schedule over them
+        - Status: active
+inbound:
+  from: delegate
+  content: "The principal asked: am I free on {{day:next-monday+1}} from 10 AM to noon for a call with Ana Ruiz? Just tell me; don't book anything yet."
+tool_stubs:
+  calendar-check-conflicts:
+    - agent: calendar
+      match: {}
+      return:
+        clear: false
+        displayTimezone: "{{timezone}}"
+        conflicts:
+          - { calendarId: ceo@personal.example.test, contactName: null, startTime: "{{time:next-monday+1 10:00}}", endTime: "{{time:next-monday+1 12:00}}", status: busy, eventId: evt-cleaner, title: Cleaner, calendar_label: Personal }
+  calendar-find-free-time:
+    - agent: calendar
+      match: { treat_as_free: null }
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-monday+1 09:00}}", end: "{{time:next-monday+1 10:00}}" }
+          - { start: "{{time:next-monday+1 12:00}}", end: "{{time:next-monday+1 17:00}}" }
+        blocking:
+          - { eventId: evt-cleaner, title: Cleaner, calendar_label: Personal, start: "{{time:next-monday+1 10:00}}", end: "{{time:next-monday+1 12:00}}" }
+        treated_as_free: []
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-monday+1 09:00}}", end: "{{time:next-monday+1 17:00}}" }
+        blocking: []
+        treated_as_free:
+          - { eventId: evt-cleaner, title: Cleaner, calendar_label: Personal, start: "{{time:next-monday+1 10:00}}", end: "{{time:next-monday+1 12:00}}" }
+  calendar-list-events:
+    - agent: calendar
+      match: {}
+      return:
+        count: 1
+        displayTimezone: "{{timezone}}"
+        events:
+          - { id: evt-cleaner, calendarId: ceo@personal.example.test, title: Cleaner, description: "", location: Home, startTime: "{{time:next-monday+1 10:00}}", endTime: "{{time:next-monday+1 12:00}}", status: confirmed, busy: true, participants: [], metadata: null }
+expected_behaviors:
+  - id: answers_free
+    weight: critical
+    description: >
+      Says the principal is free from 10 AM to noon on Tuesday for the call with Ana. Mentioning
+      that the cleaner is there, which the principal has said doesn't block them, is fine.
+  - id: no_conflict_reported
+    weight: critical
+    description: >
+      Does not report the cleaner's visit as a conflict, call the slot busy, or propose another
+      time instead.
+  - id: no_writes
+    weight: important
+    description: Books nothing and places no hold (the principal asked only whether they are free).
+    check:
+      not_called: [calendar-create-event, calendar-create-hold, calendar-update-event, calendar-delete-event]
+failure_modes:
+  - Reports "a conflict with Cleaner" and offers other times
+  - Says the principal is busy from 10 to noon
+  - Books the call or places a hold

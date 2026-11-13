@@ -1,13 +1,16 @@
 // skills/calendar-check-conflicts/handler.ts
 //
-// Checks whether a proposed time slot conflicts with existing busy periods.
-// Annotates each conflict with the calendar owner's name from the registry.
-// Returns an empty array (clear=true) if the time is free.
+// Checks whether a proposed time slot conflicts with existing busy periods. The principal's
+// calendars are read as events across every connected account (#2475, D7), so each conflict
+// carries its title and calendar; other people's calendars are read as free/busy. Each conflict
+// is annotated with the calendar owner's name from the registry. clear=true only when nothing
+// conflicts and every calendar was read.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds, repairQueriedUnixRange } from '../../../../src/time/timestamp.js';
-import { eventsOverlap, findMatchingHolds, type HoldMatchCriteria } from '../../../../src/channels/calendar/holds.js';
-import { freeBusyAcross, readCalendarMailbox, routeCalendars } from '../../../_shared/calendar-route.js';
+import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
+import type { HoldMatchCriteria } from '../../../../src/channels/calendar/holds.js';
+import { readCalendarMailbox } from '../../../_shared/calendar-route.js';
+import { contactNameFor, readAvailability } from '../../../_shared/calendar-availability.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 
 export class CalendarCheckConflictsHandler implements ToolHandler {
@@ -33,46 +36,42 @@ export class CalendarCheckConflictsHandler implements ToolHandler {
       return { success: false, error: 'Missing required input: proposedEnd' };
     }
 
+    if (isNaN(new Date(proposedStart).getTime())) {
+      return { success: false, error: 'Invalid input: proposedStart is not a valid date' };
+    }
+    if (isNaN(new Date(proposedEnd).getTime())) {
+      return { success: false, error: 'Invalid input: proposedEnd is not a valid date' };
+    }
+
     const mailbox = readCalendarMailbox(ctx.input);
     if (!mailbox.ok) return { success: false, error: mailbox.error };
 
     try {
-      // Each calendar goes through its own mailbox (#2475): one free/busy call per mailbox.
-      const routes = await routeCalendars(ctx, 'calendar-check-conflicts', calendarIds, mailbox.mailbox);
-      if (!routes.ok) return { success: false, error: routes.error };
-      const freeBusyResults = await freeBusyAcross(routes.routed, calendarIds, proposedStart, proposedEnd);
-
-      const proposedStartTs = Math.floor(new Date(proposedStart).getTime() / 1000);
-      const proposedEndTs = Math.floor(new Date(proposedEnd).getTime() / 1000);
-      const ignoredHoldWindowsByCalendar = new Map<string, Array<{ startTime: number; endTime: number }>>();
-      if (ignoreHoldCriteria && hasHoldMatchSignal(ignoreHoldCriteria)) {
-        for (const [i, calendarId] of calendarIds.entries()) {
-          const routed = routes.routed[i]!;
-          try {
-            const events = await routed.client.listEvents(routed.calendarId, proposedStart, proposedEnd);
-            const matches = findMatchingHolds(events, {
-              ...ignoreHoldCriteria,
-              startTime: proposedStartTs,
-              endTime: proposedEndTs,
-            });
-            if (matches.length > 0) {
-              ignoredHoldWindowsByCalendar.set(
-                calendarId,
-                matches
-                  .filter((match) => match.hold.startTime !== null && match.hold.endTime !== null)
-                  .map((match) => ({
-                    startTime: match.hold.startTime!,
-                    endTime: match.hold.endTime!,
-                  })),
-              );
-            }
-          } catch (err) {
-            ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: routed.mailboxId }, 'calendar-check-conflicts: failed to inspect holds for ignore criteria');
-          }
-        }
+      const availability = await readAvailability(ctx, 'calendar-check-conflicts', {
+        calendarIds,
+        mailbox: mailbox.mailbox,
+        timeMin: proposedStart,
+        timeMax: proposedEnd,
+        ...(ignoreHoldCriteria && hasHoldMatchSignal(ignoreHoldCriteria) ? { ignoreHolds: ignoreHoldCriteria } : {}),
+      });
+      if (!availability.ok) return { success: false, error: availability.error };
+      const read = availability.read;
+      if (!read.anyRead) {
+        const reasons = read.partial.map((p) => `${p.mailbox_label}: ${p.error}`).join('; ');
+        const removed = read.removed.length > 0 ? ` Removed mailboxes: ${read.removed.join(', ')}.` : '';
+        return { success: false, error: `Failed to check conflicts: no calendar could be read${reasons ? ` (${reasons})` : ''}.${removed}` };
       }
 
       const tz = ctx.timezone;
+      const proposedStartTs = Math.floor(new Date(proposedStart).getTime() / 1000);
+      const proposedEndTs = Math.floor(new Date(proposedEnd).getTime() / 1000);
+
+      // Resolve each calendar's owner once, not once per busy period (no N+1 DB calls).
+      const names = new Map<string, string | null>();
+      const contactName = async (calendarId: string): Promise<string | null> => {
+        if (!names.has(calendarId)) names.set(calendarId, await contactNameFor(ctx, calendarId));
+        return names.get(calendarId) ?? null;
+      };
 
       const conflicts: Array<{
         calendarId: string;
@@ -80,68 +79,40 @@ export class CalendarCheckConflictsHandler implements ToolHandler {
         startTime: string;
         endTime: string;
         status: string;
+        eventId?: string | null;
+        title?: string | null;
+        calendar_label?: string;
       }> = [];
-
-      for (const { queriedId: queriedCalendarId, result } of freeBusyResults) {
-        // Resolve contact name once per calendar result, not once per busy slot — avoids N+1 DB calls.
-        let contactName: string | null = null;
-        if (ctx.contactService) {
-          const registry = await ctx.contactService.resolveCalendar(result.email);
-          if (registry?.contactId) {
-            const contact = await ctx.contactService.getContact(registry.contactId);
-            contactName = contact?.displayName ?? null;
-          }
-        }
-
-        for (const slot of result.timeSlots) {
-          // Free events do not conflict; only non-free (busy/tentative) slots are conflicts. See #1137.
-          if (slot.status === 'free') continue;
-          // One-sided epoch-zero / non-finite / millisecond timestamps: clamp the
-          // corrupt endpoint to the proposed window so a valid end still conflicts.
-          // Drop only when neither endpoint is usable (#370).
-          const repaired = repairQueriedUnixRange(slot.startTime, slot.endTime, proposedStartTs, proposedEndTs);
-          if (!repaired) {
-            ctx.log.warn(
-              { startTime: slot.startTime, endTime: slot.endTime },
-              'calendar-check-conflicts: skipping free/busy slot with suspicious Unix timestamp',
-            );
-            continue;
-          }
-          if (!isPlausibleUnixSeconds(slot.startTime) || !isPlausibleUnixSeconds(slot.endTime)) {
-            ctx.log.warn(
-              { startTime: slot.startTime, endTime: slot.endTime, repairedStart: repaired.start, repairedEnd: repaired.end },
-              'calendar-check-conflicts: clamping free/busy slot with suspicious Unix timestamp to query window',
-            );
-          }
-          const ignoredHoldWindows =
-            ignoredHoldWindowsByCalendar.get(result.email) ??
-            ignoredHoldWindowsByCalendar.get(queriedCalendarId);
-          if (ignoredHoldWindows && ignoredHoldWindows.length > 0) {
-            const overlapsIgnoredHold = ignoredHoldWindows.some((event) =>
-              eventsOverlap(repaired.start, repaired.end, event.startTime, event.endTime),
-            );
-            if (overlapsIgnoredHold) continue;
-          }
-          // Check overlap: busy slot overlaps the proposed range
-          if (repaired.start < proposedEndTs && repaired.end > proposedStartTs) {
-            // repaired endpoints are plausible by construction, so toLocalIso is non-null.
-            conflicts.push({
-              calendarId: result.email,
-              contactName,
-              startTime: toLocalIso(repaired.start, tz)!,
-              endTime: toLocalIso(repaired.end, tz)!,
-              status: slot.status,
-            });
-          }
-        }
+      for (const b of read.blocking) {
+        if (!(b.start < proposedEndTs && b.end > proposedStartTs)) continue;
+        conflicts.push({
+          calendarId: b.calendarId,
+          contactName: await contactName(b.calendarId),
+          // Blocks are clamped to the plausible window by construction, so toLocalIso is non-null.
+          startTime: toLocalIso(b.start, tz)!,
+          endTime: toLocalIso(b.end, tz)!,
+          status: b.status,
+          // The principal's calendars come back as events: what it is and where, so the agent can
+          // judge it against the principal's calendaring preferences (D7).
+          ...(b.principal ? { eventId: b.eventId, title: b.title, calendar_label: b.calendarLabel } : {}),
+        });
       }
 
-      const clear = conflicts.length === 0;
+      // Never clear when a calendar could not be read: a skipped calendar is not a free one.
+      const clear = conflicts.length === 0 && read.partial.length === 0;
       // Derive displayTimezone from the proposed start time rather than "now" so
       // the label's DST offset matches the offsets baked into the conflict timestamps.
       const labelDate = new Date(proposedStart);
-      ctx.log.info({ calendarCount: calendarIds.length, conflictCount: conflicts.length }, 'Checked conflicts');
-      return { success: true, data: { conflicts, clear, displayTimezone: tz && !clear ? formatDisplayTimezone(tz, labelDate) : null } };
+      const data: Record<string, unknown> = {
+        conflicts,
+        clear,
+        displayTimezone: tz && conflicts.length > 0 ? formatDisplayTimezone(tz, labelDate) : null,
+      };
+      if (read.partial.length > 0) data['partial'] = read.partial;
+      if (read.removed.length > 0) data['removed'] = read.removed;
+      if (read.readVia.length > 0) data['freebusy_via'] = read.readVia;
+      ctx.log.info({ calendarCount: calendarIds.length, conflictCount: conflicts.length, partialCount: read.partial.length }, 'Checked conflicts');
+      return { success: true, data };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ ...grantSafeErrorFields(err) }, 'Failed to check conflicts');
@@ -153,3 +124,4 @@ export class CalendarCheckConflictsHandler implements ToolHandler {
 function hasHoldMatchSignal(criteria: HoldMatchCriteria): boolean {
   return Boolean(criteria.subject || criteria.contactDomain || criteria.contactId || criteria.sourceRef || criteria.threadRef);
 }
+

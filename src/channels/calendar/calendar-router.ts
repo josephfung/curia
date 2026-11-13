@@ -40,11 +40,6 @@ export interface RoutedCalendar {
   placedBy?: 'owner' | 'registry' | 'primary' | 'hint' | 'sole';
 }
 
-/** A mailbox's home (primary) calendar. A removed mailbox's has no client: its grant is gone. */
-export type HomeCalendar =
-  | (RoutedCalendar & { label: string; removed: false })
-  | { mailboxId: string; calendarId: string; client: null; label: string; removed: true };
-
 export type CalendarRouteErrorCode =
   | 'needs_mailbox'
   | 'primary_alias_needs_mailbox'
@@ -64,6 +59,8 @@ export class CalendarRouteError extends Error {
     message: string,
     /** The live mailboxes the caller can choose from (needs_mailbox, primary_alias_needs_mailbox). */
     readonly mailboxes: Array<{ id: string; label: string }> = [],
+    /** mailbox_removed: the removed mailbox, so availability can list its calendar as removed. */
+    readonly removedMailbox?: { id: string; label: string },
   ) {
     super(message);
     this.name = 'CalendarRouteError';
@@ -133,7 +130,7 @@ export class CalendarRouter {
     } catch (err) {
       if (err instanceof RemovedMailboxError) {
         const live = await this.deps.mailboxes.list();
-        throw new CalendarRouteError('mailbox_removed', `Mailbox "${id}" (${err.label}) has been removed.`, options(live));
+        throw new CalendarRouteError('mailbox_removed', `Mailbox "${id}" (${err.label}) has been removed.`, options(live), { id, label: err.label });
       }
       if (err instanceof UnknownMailboxError) {
         const live = await this.deps.mailboxes.list();
@@ -249,6 +246,7 @@ export class CalendarRouter {
           `Calendar "${calendarId}" was registered through mailbox "${mailboxId}", which has been removed. ` +
             `To use it again, re-register it with calendar-register, passing ${next}.`,
           options(live),
+          err.removedMailbox,
         );
       }
       throw err;
@@ -272,18 +270,18 @@ export class CalendarRouter {
   }
 
   /**
-   * Every live mailbox's home calendar, plus the home calendars the registry still holds for
-   * removed mailboxes (listed as removed, with no client). A live mailbox whose home calendar
-   * cannot be found throws: availability must never skip a calendar silently (D7).
+   * Every home calendar, for availability (D7): each live mailbox's, looked up on its own (one
+   * that cannot be found is a `failure`, never silently skipped), plus the home calendars the
+   * registry still holds for removed mailboxes (`removed`: no client, their grant is gone).
    */
-  async homeCalendars(): Promise<HomeCalendar[]> {
-    const live = await this.deps.mailboxes.list();
-    const out: HomeCalendar[] = [];
-    for (const mb of live) {
-      const client = await this.deps.mailboxes.calendarClient(mb.id);
-      out.push({ mailboxId: mb.id, calendarId: await this.homeCalendarId(mb.id, client, live), client, label: mb.label, removed: false });
-    }
-    const liveIds = new Set(live.map((m) => m.id));
+  async homeCalendars(): Promise<{
+    found: Array<RoutedCalendar & { label: string }>;
+    failures: Array<{ mailboxId: string; label: string; code: string; error: unknown }>;
+    removed: Array<{ mailboxId: string; calendarId: string; label: string }>;
+  }> {
+    const { found, failures } = await this.liveHomeCalendarsSettled();
+    const liveIds = new Set([...found.map((f) => f.mailboxId), ...failures.map((f) => f.mailboxId)]);
+    const removed: Array<{ mailboxId: string; calendarId: string; label: string }> = [];
     const rows = await this.deps.contacts.getCalendarsForContact(this.deps.principalContactId);
     for (const row of rows) {
       if (!row.isPrimary || !row.principalMailboxId || liveIds.has(row.principalMailboxId)) continue;
@@ -291,20 +289,19 @@ export class CalendarRouter {
         await this.deps.mailboxes.get(row.principalMailboxId);
       } catch (err) {
         if (err instanceof RemovedMailboxError) {
-          out.push({ mailboxId: row.principalMailboxId, calendarId: row.nylasCalendarId, client: null, label: err.label, removed: true });
+          removed.push({ mailboxId: row.principalMailboxId, calendarId: row.nylasCalendarId, label: err.label });
           continue;
         }
         throw err;
       }
     }
-    return out;
+    return { found, failures, removed };
   }
 
   /**
    * Every live mailbox's home calendar, each looked up on its own: a mailbox whose home calendar
    * cannot be found is a `failure` (its id, a code and a grant-safe reason), and the others are
-   * still `found`. For best-effort cleanup (hold release, the sweep), where one broken account
-   * must not hide the others' holds. Availability keeps the strict `homeCalendars()`.
+   * still `found`. One broken account must not hide the others' calendars or holds.
    */
   async liveHomeCalendarsSettled(): Promise<{
     found: Array<RoutedCalendar & { label: string }>;

@@ -21,7 +21,6 @@ function setup(opts: {
   secrets?: Record<string, string>;
   grants?: Record<string, { email: string; provider: string }>;
   curia?: string[];
-  maxLiveMailboxes?: number;
   otherContacts?: Record<string, string>;
   insertFails?: boolean;
   onRemoved?: Array<(id: string) => Promise<void>>;
@@ -106,7 +105,6 @@ function setup(opts: {
     ...(opts.curiaGrants ? { curiaAccountGrantIds: async () => opts.curiaGrants! } : {}),
     ...(opts.calendars ? { calendars: opts.calendars } : {}),
     logger: opts.logger ?? logger,
-    maxLiveMailboxes: opts.maxLiveMailboxes,
   });
   return { admin, store, contacts, secretStore, records, identities, secrets, contact };
 }
@@ -144,9 +142,12 @@ describe('PrincipalMailboxAdmin.add', () => {
     expect(await admin.add({ id: 'gone', label: 'x', grantId: 'g' })).toMatchObject({ refusal: 'id_taken' });
   });
 
-  it('refuses when the live cap is reached', async () => {
-    const { admin } = setup({ records: [rec()], grants: { g: google('a@gmail.com') } });
-    expect(await admin.add({ id: 'work', label: 'Work', grantId: 'g' })).toMatchObject({ refusal: 'cap_reached' });
+  it('two live mailboxes can be added', async () => {
+    // The one-mailbox cap is lifted (#2475, Part 4): a second and a third live mailbox are added.
+    const { admin, records } = setup({ records: [rec()], grants: { g: google('pat@work.example.com'), g3: google('pat@side.example.org') } });
+    expect(await admin.add({ id: 'work', label: 'Work', grantId: 'g' })).toMatchObject({ ok: true });
+    expect(await admin.add({ id: 'side', label: 'Side', grantId: 'g3' })).toMatchObject({ ok: true });
+    expect(records.filter((r) => !r.removedAt).map((r) => r.id).sort()).toEqual(['personal', 'side', 'work']);
   });
 
   it('refuses a grant that cannot be read', async () => {
@@ -161,7 +162,7 @@ describe('PrincipalMailboxAdmin.add', () => {
 
   it('refuses a grant id already stored for a live mailbox', async () => {
     const { admin } = setup({
-      records: [rec()], maxLiveMailboxes: 5,
+      records: [rec()],
       secrets: { [principalMailboxGrantSecretName('personal')]: 'g' },
       grants: { g: google('other@gmail.com') },
     });
@@ -169,7 +170,7 @@ describe('PrincipalMailboxAdmin.add', () => {
   });
 
   it('refuses an address that is already a live mailbox', async () => {
-    const { admin } = setup({ records: [rec()], maxLiveMailboxes: 5, grants: { g2: google('PAT@gmail.com') } });
+    const { admin } = setup({ records: [rec()], grants: { g2: google('PAT@gmail.com') } });
     expect(await admin.add({ id: 'work', label: 'Work', grantId: 'g2' })).toMatchObject({ refusal: 'address_in_use' });
   });
 
@@ -242,14 +243,14 @@ describe('PrincipalMailboxAdmin.add', () => {
   });
 
   it('makeDefault moves the default to the new mailbox', async () => {
-    const { admin, records } = setup({ records: [rec()], maxLiveMailboxes: 5, grants: { g: google('pat@work.example.com') } });
+    const { admin, records } = setup({ records: [rec()], grants: { g: google('pat@work.example.com') } });
     await admin.add({ id: 'work', label: 'Work', grantId: 'g', makeDefault: true });
     expect(records.find((r) => r.id === 'work')!.isDefault).toBe(true);
     expect(records.find((r) => r.id === 'personal')!.isDefault).toBe(false);
   });
 
   it('a second mailbox is not default unless asked', async () => {
-    const { admin, records } = setup({ records: [rec()], maxLiveMailboxes: 5, grants: { g: google('pat@work.example.com') } });
+    const { admin, records } = setup({ records: [rec()], grants: { g: google('pat@work.example.com') } });
     await admin.add({ id: 'work', label: 'Work', grantId: 'g' });
     expect(records.find((r) => r.id === 'work')!.isDefault).toBe(false);
   });
@@ -455,7 +456,7 @@ describe('PrincipalMailboxAdmin flat-key mirror (R28)', () => {
 
   it('does not touch the flat keys for a non-default add', async () => {
     const { admin, secrets } = setup({
-      records: [rec()], maxLiveMailboxes: 5,
+      records: [rec()],
       secrets: { [FLAT_GRANT]: 'g-personal', [FLAT_EMAIL]: 'pat@gmail.com' },
       grants: { g: google('pat@work.example.com') },
     });
@@ -656,13 +657,13 @@ describe('PrincipalMailboxAdmin.remove "No, forget it" (R30)', () => {
 });
 
 describe('PrincipalMailboxAdmin.add during the deferred-migration fallback (I5)', () => {
-  it('refuses cap_reached while the fallback is active, before reading the grant', async () => {
+  it('refuses migration_pending while the fallback is active, before reading the grant', async () => {
     const { admin, secretStore } = setup({
-      maxLiveMailboxes: 5,
+     
       isFallbackActive: async () => true,
       grants: { g: google('pat@work.example.com') },
     });
-    expect(await admin.add({ id: 'work', label: 'Work', grantId: 'g' })).toMatchObject({ ok: false, refusal: 'cap_reached' });
+    expect(await admin.add({ id: 'work', label: 'Work', grantId: 'g' })).toMatchObject({ ok: false, refusal: 'migration_pending' });
     expect(secretStore.set).not.toHaveBeenCalled();
   });
 

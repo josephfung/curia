@@ -1070,6 +1070,18 @@
     "mail from the principal's other address is only marked seen": {
       "unstubbed": null,
       "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "meeting with the cfo goes on the work calendar without saying so": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "the cleaner's visit is not a conflict": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "availability covers the personal calendar too": {
+      "unstubbed": null,
+      "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
     }
   }
 }

@@ -47,7 +47,8 @@ function domainOf(address: string): string {
   return at < 0 ? '' : address.slice(at + 1).trim().toLowerCase();
 }
 
-function domainMatches(mailboxAddress: string, recipients: string[]): boolean {
+/** True when a recipient shares the mailbox's own (non-consumer) domain. */
+export function domainMatches(mailboxAddress: string, recipients: string[]): boolean {
   const own = domainOf(mailboxAddress);
   if (own === '' || CONSUMER_DOMAINS.has(own)) return false;
   return recipients.some((r) => domainOf(r) === own);
@@ -192,4 +193,16 @@ export function classifyEvidence(e: Scored[], chosen: string): EvidenceVerdict {
   if (others.every((s) => s === 0) && mine > 0) return unreadable ? 'split' : 'agrees';
   if (others.some((s) => s > mine)) return 'leans_other';
   return 'split';
+}
+
+/**
+ * The one mailbox the evidence points to, or null when none does or it is a tie. Only readable
+ * mailboxes count; counts and the domain match only (R81).
+ */
+export function leadingMailbox(e: Scored[]): string | null {
+  const scored = e.filter((x) => x.error === undefined).map((x) => ({ id: x.mailbox, s: score(x) })).filter((x) => x.s > 0);
+  if (scored.length === 0) return null;
+  const top = Math.max(...scored.map((x) => x.s));
+  const leaders = scored.filter((x) => x.s === top);
+  return leaders.length === 1 ? leaders[0]!.id : null;
 }

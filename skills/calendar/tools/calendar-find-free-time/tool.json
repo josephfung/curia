@@ -1,6 +1,6 @@
 {
   "name": "calendar-find-free-time",
-  "description": "Find available time windows across one or more calendars. Returns free slots within a date range. Only busy/tentative events block availability; free-status events do not block. Use duration (minutes) to filter to slots at least that long. Supports checking multiple people's availability at once.",
+  "description": "Find available time windows across one or more calendars. Returns free slots within a date range. Only busy/tentative events block availability; free-status events do not block. Use duration (minutes) to filter to slots at least that long. Supports checking multiple people's availability at once. Naming any of the principal's calendars reads all of them (every account); `blocking` lists what takes their time. If the principal's calendaring preferences say an event doesn't block them (the cleaner's visit), rerun with its eventId in treat_as_free.",
   "version": "1.1.4",
   "sensitivity": "normal",
   "action_risk": "none",
@@ -9,10 +9,16 @@
     "timeMin": "timestamp (start of search window, inclusive)",
     "timeMax": "timestamp (end of search window, exclusive)",
     "duration": "number?",
-    "mailbox": "string? (mailbox id; required for an unregistered calendar or \"primary\" when several are connected)"
+    "treat_as_free": "string[]? (eventIds from blocking that the principal's preferences say don't block)",
+    "mailbox": "string? (mailbox id to read an unregistered calendar through; omit and Curia picks one, named in freebusy_via)"
   },
   "outputs": {
-    "freeWindows": "array"
+    "freeWindows": "array",
+    "blocking": "array? ({eventId, title, calendar_label, start, end} on the principal's calendars; eventId null: busy, no details)",
+    "treated_as_free": "array? (events from treat_as_free that were not counted)",
+    "partial": "array? ({mailbox_label, error}: calendars that could not be read; the windows are not known free there)",
+    "removed": "string[]? (removed mailboxes whose calendars were not read)",
+    "freebusy_via": "array? (which account someone else's free/busy was read through, and why)"
   },
   "permissions": [],
   "secrets": [],

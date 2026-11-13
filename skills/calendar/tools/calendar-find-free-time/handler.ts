@@ -1,11 +1,13 @@
 // skills/calendar-find-free-time/handler.ts
 //
-// Finds free time windows across one or more calendars by inverting
-// the busy periods returned by the Nylas free/busy API.
+// Finds free time windows across one or more calendars. The principal's calendars are read as
+// events across every connected account (#2475, D7), so the result can say what blocks and the
+// agent can rerun with `treat_as_free`; other people's calendars are read as free/busy.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds, repairQueriedUnixRange } from '../../../../src/time/timestamp.js';
-import { freeBusyAcross, readCalendarMailbox, routeCalendars } from '../../../_shared/calendar-route.js';
+import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds } from '../../../../src/time/timestamp.js';
+import { readCalendarMailbox } from '../../../_shared/calendar-route.js';
+import { blockView, readAvailability } from '../../../_shared/calendar-availability.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 
 export class CalendarFindFreeTimeHandler implements ToolHandler {
@@ -49,45 +51,31 @@ export class CalendarFindFreeTimeHandler implements ToolHandler {
       return { success: false, error: 'Invalid input: timeMax is outside the supported calendar range (after 1970 through 2100-01-01)' };
     }
 
+    const treatAsFree = (ctx.input as { treat_as_free?: unknown }).treat_as_free;
+    if (treatAsFree !== undefined && (!Array.isArray(treatAsFree) || !treatAsFree.every((x) => typeof x === 'string' && x.trim() !== ''))) {
+      return { success: false, error: 'Invalid input: treat_as_free must be an array of event IDs (strings)' };
+    }
+
     const mailbox = readCalendarMailbox(ctx.input);
     if (!mailbox.ok) return { success: false, error: mailbox.error };
 
     try {
-      // Each calendar goes through its own mailbox (#2475): one free/busy call per mailbox.
-      const routes = await routeCalendars(ctx, 'calendar-find-free-time', calendarIds, mailbox.mailbox);
-      if (!routes.ok) return { success: false, error: routes.error };
-      const freeBusyResults = await freeBusyAcross(routes.routed, calendarIds, timeMin, timeMax);
-
-      // Collect all busy periods across all calendars
-      const allBusy: Array<{ start: number; end: number }> = [];
-      for (const { result } of freeBusyResults) {
-        for (const slot of result.timeSlots) {
-          // A free/busy slot blocks the window unless it is explicitly `free`. Tentative
-          // holds (busy=true, status=tentative) and any non-free status still block,
-          // which prevents re-offering a held slot. Only `free` is non-blocking (overlap
-          // with free events is allowed). See #1137.
-          if (slot.status === 'free') continue;
-          // One-sided epoch-zero / non-finite / millisecond timestamps: clamp the
-          // corrupt endpoint to the queried window so a valid end still blocks.
-          // Drop only when neither endpoint is usable (#370).
-          const repaired = repairQueriedUnixRange(slot.startTime, slot.endTime, rangeStart, rangeEnd);
-          if (!repaired) {
-            ctx.log.warn(
-              { startTime: slot.startTime, endTime: slot.endTime },
-              'calendar-find-free-time: skipping free/busy slot with suspicious Unix timestamp',
-            );
-            continue;
-          }
-          if (!isPlausibleUnixSeconds(slot.startTime) || !isPlausibleUnixSeconds(slot.endTime)) {
-            ctx.log.warn(
-              { startTime: slot.startTime, endTime: slot.endTime, repairedStart: repaired.start, repairedEnd: repaired.end },
-              'calendar-find-free-time: clamping free/busy slot with suspicious Unix timestamp to query window',
-            );
-          }
-          if (repaired.end <= rangeStart || repaired.start >= rangeEnd) continue;
-          allBusy.push(repaired);
-        }
+      const availability = await readAvailability(ctx, 'calendar-find-free-time', {
+        calendarIds,
+        mailbox: mailbox.mailbox,
+        timeMin,
+        timeMax,
+        treatAsFree: treatAsFree as string[] | undefined,
+      });
+      if (!availability.ok) return { success: false, error: availability.error };
+      const read = availability.read;
+      if (!read.anyRead) {
+        const reasons = read.partial.map((p) => `${p.mailbox_label}: ${p.error}`).join('; ');
+        const removed = read.removed.length > 0 ? ` Removed mailboxes: ${read.removed.join(', ')}.` : '';
+        return { success: false, error: `Failed to find free time: no calendar could be read${reasons ? ` (${reasons})` : ''}.${removed}` };
       }
+
+      const allBusy = read.blocking.map(({ start, end }) => ({ start, end }));
 
       // Sort and merge overlapping busy periods so inversion is clean
       allBusy.sort((a, b) => a.start - b.start);
@@ -128,8 +116,31 @@ export class CalendarFindFreeTimeHandler implements ToolHandler {
         end: toLocalIso(w.end, tz),
       }));
 
-      ctx.log.info({ calendarCount: calendarIds.length, freeWindowCount: freeWindowsFormatted.length }, 'Found free time');
-      return { success: true, data: { freeWindows: freeWindowsFormatted, displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : null } };
+      const data: Record<string, unknown> = {
+        freeWindows: freeWindowsFormatted,
+        displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : null,
+      };
+      if (read.principalRead) {
+        // What takes the principal's time, so the agent can judge it against their calendaring
+        // preferences (the cleaner's visit) and rerun with treat_as_free (D7).
+        data['blocking'] = read.blocking.filter((b) => b.principal).map((b) => blockView(b, tz));
+        data['treated_as_free'] = read.treatedAsFree.map((b) => blockView(b, tz));
+        if (read.treatAsFreeUnmatched.length > 0) data['treat_as_free_unmatched'] = read.treatAsFreeUnmatched;
+      }
+      if (read.partial.length > 0) {
+        data['partial'] = read.partial;
+        data['note'] =
+          `Not every calendar could be read (${read.partial.map((p) => p.mailbox_label).join(', ')}): ` +
+          'these windows are free only on the calendars that were read. Say so; do not call them free.';
+      }
+      if (read.removed.length > 0) data['removed'] = read.removed;
+      if (read.readVia.length > 0) data['freebusy_via'] = read.readVia;
+
+      ctx.log.info(
+        { calendarCount: calendarIds.length, freeWindowCount: freeWindowsFormatted.length, partialCount: read.partial.length, treatedCount: read.treatedAsFree.length },
+        'Found free time',
+      );
+      return { success: true, data };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ ...grantSafeErrorFields(err) }, 'Failed to find free time');
