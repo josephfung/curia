@@ -415,11 +415,14 @@ export class PrincipalMailboxAdmin {
     // is logged and named in the outcome, and the rest still run. The grant and the flat keys
     // go first, so a later failure cannot leave the inbox tools acting on the removed mailbox.
     const cleanupIncomplete: string[] = [];
-    const step = async (name: string, work: () => Promise<void>): Promise<void> => {
+    // `reported`: the failure's cause was already logged earlier in this removal, so it is only
+    // listed (it still reaches cleanup_incomplete and the route's warn), not logged twice.
+    const step = async (name: string, work: () => Promise<void>, reported: () => boolean = () => false): Promise<void> => {
       try {
         await work();
       } catch (err) {
         cleanupIncomplete.push(name);
+        if (reported()) return;
         this.log.error({ ...this.safeErrFields(err), mailboxId: id, step: name }, 'Principal mailbox removed but a cleanup step failed');
       }
     };
@@ -441,8 +444,16 @@ export class PrincipalMailboxAdmin {
     // naming a mailbox that no longer exists (it matches nothing).
     const rulesDoc = this.deps.rulesDoc;
     if (rulesDoc) {
+      // An unreadable document was warned about by scopedRules above; failing again is listed only.
+      let unreadableAgain = false;
       await step('inbox_rules', async () => {
-        const text = await rulesDoc.read();
+        let text: string | null;
+        try {
+          text = await rulesDoc.read();
+        } catch (err) {
+          unreadableAgain = rulesUnknown;
+          throw err;
+        }
         if (text === null) return;
         const now = parseRuleScopes(text).filter((r) => r.mailboxes?.includes(id));
         const onlyHere = now.filter((r) => r.mailboxes!.length === 1);
@@ -458,9 +469,9 @@ export class PrincipalMailboxAdmin {
           ...now.filter((r) => r.mailboxes!.length > 1).map((r) => `"${r.title}" no longer names it`),
         ];
         const summary = `mailbox ${id} removed by the principal in the console: ${parts.join('; ')}`;
-        this.log.info({ mailboxId: id, rules: parts }, 'Inbox rules rewritten for a removed mailbox');
         await rulesDoc.write(next, summary);
-      });
+        this.log.info({ mailboxId: id, rules: parts }, 'Inbox rules rewritten for a removed mailbox');
+      }, () => unreadableAgain);
     }
     if (rec.triageStartAt === null && this.deps.forgetLegacySendLevel) {
       const forget = this.deps.forgetLegacySendLevel;
