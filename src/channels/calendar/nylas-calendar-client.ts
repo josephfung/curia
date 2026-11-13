@@ -117,6 +117,8 @@ interface NylasRawCalendar {
 
 interface NylasRawEvent {
   id: string;
+  /** RFC 5545 UID, shared by the copies of one event across the attendees' calendars. */
+  icalUid?: string;
   title?: string;
   description?: string;
   location?: string;
@@ -185,6 +187,8 @@ export interface NylasCalendar {
 
 export interface NylasCalendarEvent {
   id: string;
+  /** RFC 5545 UID: the same event on two of the principal's calendars has the same UID. */
+  icalUid?: string;
   title: string;
   description: string;
   location: string;
@@ -755,6 +759,7 @@ export class NylasCalendarClient {
 
     return {
       id: evt.id,
+      ...(evt.icalUid ? { icalUid: evt.icalUid } : {}),
       title: evt.title ?? '',
       description: evt.description ?? '',
       location: evt.location ?? '',

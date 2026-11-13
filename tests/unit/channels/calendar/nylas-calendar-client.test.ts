@@ -97,6 +97,28 @@ describe('NylasCalendarClient — metadata/status/busy plumbing', () => {
   });
 });
 
+describe('NylasCalendarClient — iCal UID', () => {
+  it('normalizeEvent maps icalUid', async () => {
+    const create = vi.fn().mockResolvedValue({
+      data: { id: 'evt_u', icalUid: 'uid-123@google.com', when: { startTime: 1000, endTime: 2000 } },
+    });
+    const client = makeClientWith({ events: { create } as unknown as NylasCalendarLike['events'] });
+    const out = await client.createEvent('cal_1', {
+      title: 'x',
+      start: '2026-06-25T14:30:00Z',
+      end: '2026-06-25T15:00:00Z',
+    });
+    expect(out.icalUid).toBe('uid-123@google.com');
+  });
+
+  it('omits icalUid when the raw event has none', async () => {
+    const create = vi.fn().mockResolvedValue({ data: { id: 'evt_n', when: { startTime: 1000, endTime: 2000 } } });
+    const client = makeClientWith({ events: { create } as unknown as NylasCalendarLike['events'] });
+    const out = await client.createEvent('cal_1', { title: 'x', start: '2026-06-25T14:30:00Z', end: '2026-06-25T15:00:00Z' });
+    expect(out).not.toHaveProperty('icalUid');
+  });
+});
+
 describe('NylasCalendarClient — recurrence plumbing', () => {
   it('sends recurrence with start/end timezones on create and surfaces it on the result', async () => {
     const create = vi.fn().mockResolvedValue({

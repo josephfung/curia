@@ -97,6 +97,7 @@ import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
 import { createRulesDoc } from './principal-mailboxes/rules-doc.js';
+import { backfillCalendarMailboxes } from './principal-mailboxes/backfill-calendar-mailboxes.js';
 import { migrateFlatPrincipalMailbox, migrationFailureReason, warnIfFallbackIdIsLive } from './principal-mailboxes/migrate-flat-mailbox.js';
 import { FALLBACK_MAILBOX_ID, SENT_OBSERVE_FAILED_RUNS_LIMIT, sentObserveFailedRunsKey } from './principal-mailboxes/state-keys.js';
 import { renameSendingKeyAfterMigration, dropLegacyDefaultKey, type SendingConfigStore } from './principal-mailboxes/migrate-config-keys.js';
@@ -1286,6 +1287,15 @@ async function main(): Promise<void> {
         logger.error({ err: readErr }, 'Could not read ceo_nylas_grant_id for the mailbox fallback');
       }
     }
+  }
+
+  // Calendars registered before they belonged to a mailbox are the default mailbox's (R3).
+  // Idempotent, so it runs on every boot after the flat migration. A failure is logged at error
+  // by the backfill and again here; calendars keep a null mailbox until the next boot.
+  try {
+    await backfillCalendarMailboxes(pool, (await principalMailboxes.defaultMailbox())?.id ?? null, logger);
+  } catch (err) {
+    logger.error({ err }, 'Calendar mailbox backfill failed; calendars stay unassigned until the next boot');
   }
 
   // R63: a live row under the reserved fallback id predates the reservation; say so once at boot.

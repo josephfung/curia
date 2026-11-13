@@ -655,7 +655,7 @@ export class EntityContextAssembler {
    */
   private async getConnectedAccounts(contactId: string): Promise<ConnectedAccount[]> {
     const calendarResult = await this.pool.query<CalendarRow>(
-      `SELECT nylas_calendar_id, label, is_primary, read_only, timezone
+      `SELECT nylas_calendar_id, label, is_primary, read_only, timezone, principal_mailbox_id
        FROM contact_calendars
        WHERE contact_id = $1`,
       [contactId],
@@ -667,7 +667,10 @@ export class EntityContextAssembler {
       serviceId: row.nylas_calendar_id,
       isPrimary: row.is_primary,
       readOnly: row.read_only,
-      metadata: row.timezone ? { timezone: row.timezone } : {},
+      metadata: {
+        ...(row.timezone ? { timezone: row.timezone } : {}),
+        ...(row.principal_mailbox_id ? { mailboxId: row.principal_mailbox_id } : {}),
+      },
     }));
   }
 
@@ -763,6 +766,7 @@ interface CalendarRow {
   is_primary: boolean;
   read_only: boolean;
   timezone: string | null;
+  principal_mailbox_id: string | null;
 }
 
 interface RelationshipRow {
