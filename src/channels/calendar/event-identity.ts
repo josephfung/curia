@@ -49,7 +49,7 @@ export function sameOrganizer(a: NylasCalendarEvent, b: NylasCalendarEvent): boo
  * meeting-debrief keys its `seen:` / `prompted:` / `reminded:` guards on it, so a meeting on two
  * of the principal's calendars, or listed through the other account on a later run, is judged and
  * debriefed once. With an iCal UID: `ical-` and a hash of the same fields `sameMeetingKey` uses
- * (UID, occurrence, start, end, title; R91), so a spoofed invite reusing a real meeting's UID and
+ * (UID, occurrence, start, end, title, organizer, location, link; R91, R99), so a spoofed invite reusing a real meeting's UID and
  * time but differing in what the principal sees gets its own key and cannot suppress the real
  * meeting's debrief. The occurrence keeps a weekly series' instances apart; the hash keeps the key
  * short whatever the UID's length. Without a UID: the event id, as before.
