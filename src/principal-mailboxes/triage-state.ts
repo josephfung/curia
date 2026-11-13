@@ -63,6 +63,11 @@ export class TriageState {
     return /^\d+$/.test(raw) ? Number(raw) : TRIAGE_DAILY_CEILING;
   }
 
+  /** True once today's batches reach the ceiling; a corrupt count counts as reached. */
+  async ceilingReached(now: Date): Promise<boolean> {
+    return (await this.batchesToday(now)) >= TRIAGE_DAILY_CEILING;
+  }
+
   /** Count one batch for the local day of `now`; returns the new count. */
   async addBatch(now: Date): Promise<number> {
     const next = (await this.batchesToday(now)) + 1;
