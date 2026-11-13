@@ -167,9 +167,14 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f\u0085\u2028\u2029]/g;
 const INVISIBLE_CHARS = /[\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g;
 // An unpaired surrogate half; a valid pair (an emoji) stays.
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+// Every other format character (S1): Unicode tag characters (U+E0000-E007F, which can smuggle
+// hidden ASCII to a model), word joiners and invisible operators (U+2060-2064), the soft hyphen,
+// U+061C, U+180E and the BOM. Code-point mode, so a tag character's surrogate pair goes whole and
+// an emoji's pair is untouched. Run after the lone-surrogate pass.
+const FORMAT_CHARS = /\p{Cf}/gu;
 
 function stripUnsafeChars(s: string): string {
-  return s.replace(CONTROL_CHARS, ' ').replace(INVISIBLE_CHARS, '').replace(LONE_SURROGATE, '');
+  return s.replace(CONTROL_CHARS, ' ').replace(INVISIBLE_CHARS, '').replace(LONE_SURROGATE, '').replace(FORMAT_CHARS, '');
 }
 
 /** A subject made safe to show: tags stripped, secrets redacted, no link, tag or entity left. */

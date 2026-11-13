@@ -50,6 +50,7 @@ import {
   type RecordedReview,
   type RecordedSend,
   type SendRecorder,
+  inMemorySendLedger,
 } from '../../../src/startup/test-mode-sends.js';
 import { scheduledJobTask } from '../../scenarios/harness.js';
 
@@ -498,5 +499,18 @@ describe('recordingBandReview', () => {
     const recorder: SendRecorder = { ...runRecorder(), reviewed: (r) => { reviews.push(r); } };
     await recordingBandReview({ review: vi.fn().mockResolvedValue({ kind: 'send' }) }, recorder).review({} as BandReviewInput);
     expect(reviews).toEqual([{ labels: [], quoteLabels: [], outcome: 'send' }]);
+  });
+});
+
+describe('inMemorySendLedger matches production (#2475 item 12)', () => {
+  it('recentForConversation counts an entry whose conversation ids were unreadable, and nothing for no ids', async () => {
+    const store: PrincipalSendEntry[] = [
+      { draftId: 'a', threadId: 't1', mailbox: 'work', conversationIds: [], conversationIdsUnreadable: true, recipients: [], mode: 'autonomous', at: new Date().toISOString(), outcome: 'held' },
+      { draftId: 'b', threadId: 't2', mailbox: 'work', conversationIds: ['<x@example.com>'], recipients: [], mode: 'autonomous', at: new Date().toISOString(), outcome: 'sent' },
+    ];
+    const ledger = inMemorySendLedger(() => store);
+    expect((await ledger.recentForConversation(['<y@example.com>'], 0)).map((e) => e.draftId)).toEqual(['a']);
+    expect((await ledger.recentForConversation(['<x@example.com>'], 0)).map((e) => e.draftId)).toEqual(['a', 'b']);
+    expect(await ledger.recentForConversation([], 0)).toEqual([]);
   });
 });

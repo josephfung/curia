@@ -11,7 +11,9 @@ export interface GrantSafeErrorFields {
 /** Class name and HTTP status only: safe to log for any error, Nylas or not. */
 export function grantSafeErrorFields(err: unknown): GrantSafeErrorFields {
   const errName = err instanceof Error ? err.name : typeof err;
-  const code = typeof err === 'object' && err !== null ? (err as { statusCode?: unknown }).statusCode : undefined;
+  // The SDK sets statusCode; ceo-inbox's REST client (NylasApiError) sets status.
+  const e = typeof err === 'object' && err !== null ? (err as { statusCode?: unknown; status?: unknown }) : undefined;
+  const code = typeof e?.statusCode === 'number' ? e.statusCode : e?.status;
   return typeof code === 'number' ? { errName, statusCode: code } : { errName };
 }
 

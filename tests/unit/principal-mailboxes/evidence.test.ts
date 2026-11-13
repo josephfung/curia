@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mailboxEvidence, classifyEvidence, type MailboxEvidence } from '../../../src/principal-mailboxes/evidence.js';
 import { mailboxView, stubPrincipalMailboxes } from '../../../skills/_shared/principal-mailboxes-test-helpers.js';
 
@@ -119,6 +119,27 @@ describe('mailboxEvidence', () => {
     expect(bad.sent_count).toBe(0);
     expect(bad.error).toBeDefined();
     expect(JSON.stringify(bad)).not.toContain('grant-personal');
+  });
+
+  it('a mailbox that times out is labelled TimeoutError and logged by name (SF4, SF12)', async () => {
+    vi.useFakeTimers();
+    try {
+      const warn = vi.fn();
+      const svc = stubPrincipalMailboxes({
+        mailboxes,
+        gatewayClients: {
+          work: fakeClient([], []),
+          personal: { listFolders: () => new Promise(() => {}), listMessages: async () => [] },
+        },
+      });
+      const pending = mailboxEvidence(svc, ['bob@acme.example.com'], { log: { warn } as never });
+      await vi.advanceTimersByTimeAsync(8_000);
+      const out = await pending;
+      expect(out.find((e) => e.mailbox === 'personal')!.error).toBe('TimeoutError');
+      expect(warn).toHaveBeenCalledWith(expect.objectContaining({ mailboxId: 'personal', errName: 'TimeoutError' }), expect.any(String));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('cleans hostile subjects inside mailboxEvidence', async () => {

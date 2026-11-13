@@ -188,9 +188,11 @@ export class NylasApiError extends Error {
 // ── Client ──────────────────────────────────────────────────────────────────
 
 export class CeoNylasClient {
-  private readonly baseUrl: string;
-  private readonly grantId: string;
-  private readonly headers: Record<string, string>;
+  // ECMAScript private (#), not TypeScript `private` (item 8, B6): the grant (in the URL) and the
+  // API key (in the Authorization header) are not reachable at runtime from code holding a client.
+  readonly #baseUrl: string;
+  readonly #grantId: string;
+  readonly #headers: Record<string, string>;
   private readonly log: Logger;
   private readonly budget: CallBudget | undefined;
 
@@ -200,9 +202,9 @@ export class CeoNylasClient {
    *                is sent.
    */
   constructor(apiKey: string, grantId: string, log: Logger, budget?: CallBudget) {
-    this.baseUrl = `${NYLAS_BASE}/${grantId}`;
-    this.grantId = grantId;
-    this.headers = {
+    this.#baseUrl = `${NYLAS_BASE}/${grantId}`;
+    this.#grantId = grantId;
+    this.#headers = {
       Authorization: `Bearer ${apiKey}`,
       Accept: 'application/json',
       'Content-Type': 'application/json',
@@ -248,7 +250,7 @@ export class CeoNylasClient {
       this.setMessageFilters(params, options, !options.pageToken);
     }
 
-    const url = `${this.baseUrl}/messages?${params}`;
+    const url = `${this.#baseUrl}/messages?${params}`;
     const { data, nextCursor } = await this.requestWithCursor<NylasApiMessage[]>('GET', url, 'listMessages');
 
     return { messages: data.map(normalizeMessageSummary), nextCursor };
@@ -302,7 +304,7 @@ export class CeoNylasClient {
       params.set('limit', String(pageSize));
       if (pageToken) params.set('page_token', pageToken);
       this.setMessageFilters(params, options, false);
-      const url = `${this.baseUrl}/messages?${params}`;
+      const url = `${this.#baseUrl}/messages?${params}`;
 
       const { data, nextCursor } = await this.requestWithCursor<NylasApiMessage[]>(
         'GET',
@@ -334,7 +336,7 @@ export class CeoNylasClient {
   }
 
   async getMessage(messageId: string): Promise<NylasMessageFull> {
-    const url = `${this.baseUrl}/messages/${encodeURIComponent(messageId)}`;
+    const url = `${this.#baseUrl}/messages/${encodeURIComponent(messageId)}`;
     const data = await this.request<NylasApiMessage>('GET', url, 'getMessage').catch((err: unknown) => {
       throw markMessageRequestError(err);
     });
@@ -351,7 +353,7 @@ export class CeoNylasClient {
     cc?: NylasParticipant[];
     attachments?: DraftAttachment[];
   }): Promise<NylasDraft> {
-    const url = `${this.baseUrl}/drafts`;
+    const url = `${this.#baseUrl}/drafts`;
     const messagePayload: Record<string, unknown> = {
       reply_to_message_id: options.replyToMessageId,
       subject: options.subject,
@@ -382,7 +384,7 @@ export class CeoNylasClient {
     bcc?: NylasParticipant[];
     attachments?: DraftAttachment[];
   }): Promise<NylasDraft> {
-    const url = `${this.baseUrl}/drafts`;
+    const url = `${this.#baseUrl}/drafts`;
     const messagePayload: Record<string, unknown> = {
       subject: options.subject,
       body: options.body,
@@ -412,7 +414,7 @@ export class CeoNylasClient {
   async listDrafts(options: { limit?: number } = {}): Promise<NylasDraftSummary[]> {
     const params = new URLSearchParams();
     params.set('limit', String(Math.min(options.limit ?? NYLAS_MAX_LIST_LIMIT, NYLAS_MAX_LIST_LIMIT)));
-    const url = `${this.baseUrl}/drafts?${params}`;
+    const url = `${this.#baseUrl}/drafts?${params}`;
     const data = await this.request<NylasApiDraftFull[]>('GET', url, 'listDrafts');
     return data.map(normalizeDraftSummary);
   }
@@ -442,7 +444,7 @@ export class CeoNylasClient {
       const params = new URLSearchParams();
       params.set('limit', String(pageSize));
       if (pageToken) params.set('page_token', pageToken);
-      const url = `${this.baseUrl}/drafts?${params}`;
+      const url = `${this.#baseUrl}/drafts?${params}`;
 
       const { data, nextCursor } = await this.requestWithCursor<NylasApiDraftFull[]>('GET', url, 'listAllDrafts');
       const pageStart = drafts.length;
@@ -471,7 +473,7 @@ export class CeoNylasClient {
   }
 
   async getDraft(draftId: string): Promise<NylasDraftFull> {
-    const url = `${this.baseUrl}/drafts/${encodeURIComponent(draftId)}`;
+    const url = `${this.#baseUrl}/drafts/${encodeURIComponent(draftId)}`;
     const data = await this.request<NylasApiDraftFull>('GET', url, 'getDraft');
     return normalizeDraftFull(data);
   }
@@ -480,7 +482,7 @@ export class CeoNylasClient {
   // sent; omitted fields are preserved server-side. This is the capability that
   // lets the principal fix a wrong-recipient or wrong-body draft without recreating it.
   async updateDraft(draftId: string, updates: UpdateDraftOptions): Promise<NylasDraftFull> {
-    const url = `${this.baseUrl}/drafts/${encodeURIComponent(draftId)}`;
+    const url = `${this.#baseUrl}/drafts/${encodeURIComponent(draftId)}`;
     const payload: Record<string, unknown> = {};
     if (updates.to !== undefined) payload.to = updates.to;
     if (updates.cc !== undefined) payload.cc = updates.cc;
@@ -492,21 +494,21 @@ export class CeoNylasClient {
 
   // Delete an unsent draft (DELETE /drafts/{id}).
   async deleteDraft(draftId: string): Promise<void> {
-    const url = `${this.baseUrl}/drafts/${encodeURIComponent(draftId)}`;
+    const url = `${this.#baseUrl}/drafts/${encodeURIComponent(draftId)}`;
     await this.request<unknown>('DELETE', url, 'deleteDraft');
   }
 
   // ── Message updates ──────────────────────────────────────────────────────
 
   async markAsRead(messageId: string): Promise<void> {
-    const url = `${this.baseUrl}/messages/${encodeURIComponent(messageId)}`;
+    const url = `${this.#baseUrl}/messages/${encodeURIComponent(messageId)}`;
     await this.request<NylasApiMessage>('PUT', url, 'markAsRead', { unread: false }).catch((err: unknown) => {
       throw markMessageRequestError(err);
     });
   }
 
   async markAsStarred(messageId: string, starred = true): Promise<void> {
-    const url = `${this.baseUrl}/messages/${encodeURIComponent(messageId)}`;
+    const url = `${this.#baseUrl}/messages/${encodeURIComponent(messageId)}`;
     await this.request<NylasApiMessage>('PUT', url, 'markAsStarred', { starred }).catch((err: unknown) => {
       throw markMessageRequestError(err);
     });
@@ -516,7 +518,7 @@ export class CeoNylasClient {
     messageId: string,
     folders: string[],
   ): Promise<{ id: string; folders: string[] }> {
-    const url = `${this.baseUrl}/messages/${encodeURIComponent(messageId)}`;
+    const url = `${this.#baseUrl}/messages/${encodeURIComponent(messageId)}`;
     const payload = { folders: withoutReadOnlySystemLabels(folders) };
     const data = await this.request<NylasApiMessage>('PUT', url, 'updateMessageFolders', payload).catch(
       (err: unknown) => {
@@ -531,7 +533,7 @@ export class CeoNylasClient {
   // Cached per grant for FOLDER_CACHE_TTL_MS. Returns a copy, so a caller that
   // edits the array cannot change what the next caller sees.
   async listFolders(): Promise<NylasFolder[]> {
-    const cached = folderCache.get(this.grantId);
+    const cached = folderCache.get(this.#grantId);
     if (cached && cached.expiresAt > Date.now()) {
       return [...cached.folders];
     }
@@ -543,7 +545,7 @@ export class CeoNylasClient {
       const params = new URLSearchParams();
       params.set('limit', String(NYLAS_MAX_LIST_LIMIT));
       if (pageToken) params.set('page_token', pageToken);
-      const url = `${this.baseUrl}/folders?${params}`;
+      const url = `${this.#baseUrl}/folders?${params}`;
       const { data, nextCursor } = await this.requestWithCursor<NylasApiFolder[]>('GET', url, 'listFolders');
       folders.push(...data.map((f) => ({ id: f.id, name: f.name ?? '' })));
 
@@ -559,15 +561,15 @@ export class CeoNylasClient {
       pageToken = nextCursor;
     }
 
-    folderCache.set(this.grantId, { folders, expiresAt: Date.now() + FOLDER_CACHE_TTL_MS });
+    folderCache.set(this.#grantId, { folders, expiresAt: Date.now() + FOLDER_CACHE_TTL_MS });
     return [...folders];
   }
 
   async createFolder(name: string): Promise<NylasFolder> {
-    const url = `${this.baseUrl}/folders`;
+    const url = `${this.#baseUrl}/folders`;
     const payload = { name };
     const data = await this.request<NylasApiFolder>('POST', url, 'createFolder', payload);
-    folderCache.delete(this.grantId);
+    folderCache.delete(this.#grantId);
     return { id: data.id, name: data.name ?? name };
   }
 
@@ -582,7 +584,7 @@ export class CeoNylasClient {
    * @param messageId     ID of the message the attachment belongs to (required by Nylas API)
    */
   async downloadAttachment(attachmentId: string, messageId: string): Promise<Buffer> {
-    const url = `${this.baseUrl}/attachments/${encodeURIComponent(attachmentId)}/download?message_id=${encodeURIComponent(messageId)}`;
+    const url = `${this.#baseUrl}/attachments/${encodeURIComponent(attachmentId)}/download?message_id=${encodeURIComponent(messageId)}`;
     this.log.debug({ operation: 'downloadAttachment' }, 'nylas: downloadAttachment');
     this.throwIfCancelled('downloadAttachment');
 
@@ -594,7 +596,7 @@ export class CeoNylasClient {
           // Always set in the constructor; the Record<string, string> index access types
           // it as possibly-undefined, which the DOM HeadersInit (in scope for the skills
           // typecheck) rejects.
-          Authorization: this.headers.Authorization!,
+          Authorization: this.#headers.Authorization!,
           Accept: 'application/octet-stream',
         },
         signal: this.budget?.signal,
@@ -673,7 +675,7 @@ export class CeoNylasClient {
     }
 
     // Omit Content-Type — fetch sets it automatically with the multipart boundary.
-    const headersWithoutContentType: Record<string, string> = { ...this.headers };
+    const headersWithoutContentType: Record<string, string> = { ...this.#headers };
     delete headersWithoutContentType['Content-Type'];
     this.throwIfCancelled(operation);
     let res: Response;
@@ -733,7 +735,7 @@ export class CeoNylasClient {
   ): Promise<{ data: T; nextCursor?: string }> {
     this.log.debug({ operation, method }, `nylas: ${operation}`);
 
-    const init: RequestInit = { method, headers: this.headers, signal: this.budget?.signal };
+    const init: RequestInit = { method, headers: this.#headers, signal: this.budget?.signal };
     if (body !== undefined) {
       init.body = JSON.stringify(body);
     }

@@ -102,19 +102,45 @@ describe('createPrincipalMailboxResolver', () => {
     const mailboxes = { defaultMailbox: async () => ({ id: 'work', label: 'Work', address: '', isDefault: true, triageStartAt: null }), credentials: async () => ({ apiKey: 'key', grantId: '   ' }) };
     const resolve = createPrincipalMailboxResolver({ mailboxes, logger: log, createClient: vi.fn() });
     expect(await resolve('work')).toBeNull();
-    expect(warnSpy).toHaveBeenCalledWith({ hasGrant: false, hasApiKey: true }, expect.stringContaining('blank'));
+    expect(warnSpy).toHaveBeenCalledWith({ mailboxId: 'work', emptyGrant: true, emptyKey: false }, expect.stringContaining('blank'));
   });
 
-  it('returns null and logs an error when the secret read throws', async () => {
+  it('returns null and logs an error, class only, when the secret read throws', async () => {
     const errorSpy = vi.fn();
     const log = { ...logger, error: errorSpy } as unknown as typeof logger;
     const resolve = createPrincipalMailboxResolver({
-      mailboxes: services({ secret: async () => { throw new Error('decrypt failed'); } }),
+      mailboxes: services({ secret: async () => { throw new Error('decrypt failed grant-xyz'); } }),
       logger: log,
       createClient: vi.fn(),
     });
     expect(await resolve('work')).toBeNull();
-    expect(errorSpy).toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(expect.objectContaining({ errName: 'Error', mailboxId: 'work' }), expect.any(String));
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('grant-xyz');
+  });
+
+  it('an unknown or removed id is a warning, not an outage error (SF14)', async () => {
+    const errorSpy = vi.fn();
+    const warnSpy = vi.fn();
+    const log = { ...logger, error: errorSpy, warn: warnSpy } as unknown as typeof logger;
+    const removed = { ...REC, id: 'old', removedAt: new Date() };
+    const resolve = createPrincipalMailboxResolver({ mailboxes: services({ records: [REC, removed] }), logger: log, createClient: vi.fn() });
+    expect(await resolve('nope')).toBeNull();
+    expect(await resolve('old')).toBeNull();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(warnSpy.mock.calls.map((c) => (c[0] as { errName: string }).errName)).toEqual(['UnknownMailboxError', 'RemovedMailboxError']);
+  });
+
+  it('warns on a blank grant', async () => {
+    const warnSpy = vi.fn();
+    const createClient = vi.fn();
+    const resolve = createPrincipalMailboxResolver({
+      mailboxes: { credentials: async () => ({ apiKey: 'key', grantId: '  ' }) },
+      logger: { ...logger, warn: warnSpy } as unknown as typeof logger,
+      createClient,
+    });
+    expect(await resolve('work')).toBeNull();
+    expect(createClient).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(expect.objectContaining({ emptyGrant: true }), expect.any(String));
   });
 
   it('reuses the client while the grant is unchanged', async () => {
