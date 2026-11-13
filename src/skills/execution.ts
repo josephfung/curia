@@ -611,7 +611,8 @@ export class ExecutionLayer {
       schedulerService: this.schedulerService,
       entityMemory: this.entityMemory,
       nylasCalendarClient: this.nylasCalendarClient,
-      principalMailboxes: this.principalMailboxes,
+      // Skills get the narrowed view, never the service with credentials() (F7).
+      principalMailboxes: this.principalMailboxes?.forSkills(),
       autonomyService: this.autonomyService,
       browserService: this.browserService,
       bullpenService: this.bullpenService,

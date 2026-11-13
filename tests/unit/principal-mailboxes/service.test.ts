@@ -196,4 +196,16 @@ describe('PrincipalMailboxes', () => {
     expect(createNylasClient).toHaveBeenCalledWith('k', 'g1');
     expect(createCalendarClient).toHaveBeenCalledWith('k', 'g1');
   });
+
+  it('ceoClient builds a ready client without returning the key, and forSkills has no credentials', async () => {
+    const { svc } = build([rec()], { [principalMailboxGrantSecretName('work')]: 'g1' });
+    const client = await svc.ceoClient('work', logger);
+    expect(client).toBeDefined();
+    const view = svc.forSkills();
+    expect(view).not.toHaveProperty('credentials');
+    expect(view).not.toHaveProperty('calendarClient');
+    expect((await view.list()).map((m) => m.id)).toEqual(['work']);
+    expect(await view.ceoClient('work', logger)).toBeDefined();
+    await expect(view.ceoClient('nope', logger)).rejects.toBeInstanceOf(UnknownMailboxError);
+  });
 });

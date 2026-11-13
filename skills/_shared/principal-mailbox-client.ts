@@ -1,9 +1,9 @@
 // Per-mailbox Nylas clients for the ceo-inbox tools (#2475).
-// Credentials always come from ctx.principalMailboxes; there is deliberately no
+// Clients always come from ctx.principalMailboxes (which holds no credentials); there is deliberately no
 // fallback to the flat ceo_nylas_grant_id secret. Grant ids never appear in errors or logs.
 
 import type { ToolContext } from '../../src/skills/types.js';
-import type { PrincipalMailboxView, PrincipalMailboxes } from '../../src/principal-mailboxes/service.js';
+import type { PrincipalMailboxView, SkillPrincipalMailboxes } from '../../src/principal-mailboxes/service.js';
 import type { ErrorType } from '../../src/errors/types.js';
 import { messageNotFoundError, nylasStatus } from '../../src/channels/email/nylas-message-id.js';
 import { CeoNylasClient } from './ceo-nylas-client.js';
@@ -21,16 +21,16 @@ export type LocateResult =
   | { kind: 'ambiguous'; mailboxes: PrincipalMailboxView[] }
   | { kind: 'no_mailboxes' };
 
-function service(ctx: ToolContext): PrincipalMailboxes {
+function service(ctx: ToolContext): SkillPrincipalMailboxes {
   if (!ctx.principalMailboxes) {
     throw new Error('This tool needs the principalMailboxes capability, which is not available');
   }
   return ctx.principalMailboxes;
 }
 
-async function build(ctx: ToolContext, svc: PrincipalMailboxes, mailbox: PrincipalMailboxView): Promise<MailboxClient> {
-  const { apiKey, grantId } = await svc.credentials(mailbox.id);
-  return { mailbox, client: new CeoNylasClient(apiKey, grantId, ctx.log, ctx) };
+async function build(ctx: ToolContext, svc: SkillPrincipalMailboxes, mailbox: PrincipalMailboxView): Promise<MailboxClient> {
+  // The service builds the client: the key and grant id stay on its side.
+  return { mailbox, client: await svc.ceoClient(mailbox.id, ctx.log, ctx) };
 }
 
 /** Client for one live mailbox. Throws UnknownMailboxError / RemovedMailboxError for a bad id. */
