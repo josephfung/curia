@@ -461,7 +461,7 @@ describe('SecretCaptureService.redeem', () => {
 
 describe('SecretCaptureService refuses names the principal mailbox registry owns (#2475, R33)', () => {
   const FLAT = new Set(['ceo_nylas_grant_id', 'ceo_self_email', 'anthropic_api_key']);
-  const MESSAGE = "The principal's mailbox is managed in the console: Channels → Email → Principal's mailboxes.";
+  const MESSAGE = "The principal's mailbox is managed in the console: Settings → Personality → Email & Calendar.";
   function make(handler: (sql: string) => { rows: Record<string, unknown>[] }, refused: boolean) {
     const { pool, queries } = makePool(handler);
     const secrets = makeSecretsPort();
@@ -476,8 +476,8 @@ describe('SecretCaptureService refuses names the principal mailbox registry owns
 
   it('mintSystemSecret refuses a retired flat key outside the deferred fallback, minting nothing', async () => {
     const { svc, queries } = make(mintHandler, true);
-    await expect(svc.mintSystemSecret({ rawName: 'ceo_nylas_grant_id' })).rejects.toThrow("Principal's mailboxes");
-    await expect(svc.mintSystemSecret({ rawName: 'ceo_self_email' })).rejects.toThrow("Principal's mailboxes");
+    await expect(svc.mintSystemSecret({ rawName: 'ceo_nylas_grant_id' })).rejects.toThrow('Settings → Personality → Email & Calendar');
+    await expect(svc.mintSystemSecret({ rawName: 'ceo_self_email' })).rejects.toThrow('Settings → Personality → Email & Calendar');
     expect(queries.some(q => q.sql.includes('INSERT INTO secret_capture_tokens'))).toBe(false);
     expect((await svc.mintSystemSecret({ rawName: 'anthropic_api_key' })).secretName).toBe('anthropic_api_key');
   });

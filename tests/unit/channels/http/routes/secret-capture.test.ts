@@ -214,10 +214,10 @@ describe('secret-capture routes', () => {
     });
 
     it('maps refused → 409 with the reason (#2475, R33)', async () => {
-      app = await build(makeFakeService({ redeem: { status: 'refused', message: "Managed in the console under Principal's mailboxes." } }));
+      app = await build(makeFakeService({ redeem: { status: 'refused', message: "Managed in the console under Settings → Personality → Email & Calendar." } }));
       const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { value: 'v' } });
       expect(res.statusCode).toBe(409);
-      expect(res.json().error).toContain("Principal's mailboxes");
+      expect(res.json().error).toContain('Settings → Personality → Email & Calendar');
     });
 
     it('maps invalid_json → 400', async () => {

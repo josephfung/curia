@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Link, useSearch } from '@tanstack/react-router';
 import { MobileMenuContext } from '../context/MobileMenu.js';
 import { Sidebar } from '../components/Sidebar.js';
 import { Topbar } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
 import { EmailAccountsSection } from '../components/EmailAccountsSection.js';
-import { PrincipalMailboxesSection } from '../components/PrincipalMailboxesSection.js';
 
 // ── Types (mirror src/channels/credential-resolver.ts CredentialFieldStatus and
 //    src/registry/channel-registry-types.ts ChannelRegistryEntry) ──────────────
@@ -256,8 +256,13 @@ function ChannelDrawer({ entry, onClose, onChanged }: {
               at least one of them, so a change re-reads the channel status (#2409). */}
           {entry.name === 'email' && <EmailAccountsSection onChanged={onChanged} />}
 
-          {/* The principal's own mailboxes (#2475) — separate from Curia's accounts. */}
-          {entry.name === 'email' && <PrincipalMailboxesSection />}
+          {/* The principal's own mailboxes have their own page (#2475, R79). */}
+          {entry.name === 'email' && (
+            <p className="settings-page-sub" style={{ margin: 0 }}>
+              Your own email and calendars, which Curia monitors, are under{' '}
+              <Link to="/settings/email-calendar">Settings → Personality → Email &amp; Calendar</Link>.
+            </p>
+          )}
 
           <div className="form-field">
             <label>Installed</label>
@@ -401,6 +406,16 @@ export function ChannelsPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  // ?channel=<name> opens that channel's drawer once, on the first list that has it.
+  const { channel: urlChannel } = useSearch({ strict: false }) as { channel?: string };
+  const openedFromUrl = useRef(false);
+  useEffect(() => {
+    if (openedFromUrl.current || !urlChannel || entries.length === 0) return;
+    openedFromUrl.current = true;
+    const hit = entries.find(e => e.name === urlChannel);
+    if (hit) setSelected(hit);
+  }, [entries, urlChannel]);
 
   const counts = useMemo(() => ({
     all:         entries.length,

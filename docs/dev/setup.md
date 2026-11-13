@@ -267,7 +267,7 @@ Restart Curia (`pnpm local`). The email channel boots one adapter per enabled ac
 
 **5. Connect the principal's own mailbox (optional)**
 
-Calendar and the `ceo-inbox` tools work in the principal's own mailbox, through a second Nylas grant. Connect that mailbox in Nylas the same way, then in **Settings -> Channels -> Email -> Principal's mailboxes** add it (a short id, a label and its grant ID). Add each of the principal's Gmail accounts the same way. No restart is needed. Until a mailbox is connected, calendar and the inbox tools answer that none is.
+Calendar and the `ceo-inbox` tools work in the principal's own mailbox, through a second Nylas grant. Connect that mailbox in Nylas the same way, then in **Settings -> Personality -> Email & Calendar** add it (a short id, a label and its grant ID). Add each of the principal's Gmail accounts the same way. No restart is needed. The page needs the email channel's Nylas API key from step 4; until it is saved, the page says so and adding is off. Until a mailbox is connected, calendar and the inbox tools answer that none is.
 
 ### Embeddings
 

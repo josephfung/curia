@@ -285,6 +285,8 @@ const SECTION_GROUPS = {
       { id: 'personality',  label: 'Personality',  href: '/settings/personality' },
       { id: 'ghostwriting', label: 'Ghostwriting', href: '/settings/ghostwriting' },
       { id: 'posture',      label: 'Standing preferences', href: '/settings/posture' },
+      // The principal's own mailboxes and calendars (#2475); Curia's own are Channels → Email.
+      { id: 'email-calendar', label: 'Email & Calendar', href: '/settings/email-calendar' },
       { id: 'autonomy',     label: 'Autonomy',     href: '/settings/autonomy' },
     ],
   },

@@ -64,7 +64,7 @@ export class MailboxOutageNotifier {
         'Mail and calendar for that account are not being read or written until it is reachable again.',
         ...(opts.authFailure
           ? [
-            "Nylas refused the connection, which usually means it was revoked or expired: reconnect the account in Nylas, then use Replace grant on the mailbox in the console (Channels → Email → Principal's mailboxes).",
+            "Nylas refused the connection, which usually means it was revoked or expired: reconnect the account in Nylas, then use Replace grant on the mailbox in the console (Settings → Personality → Email & Calendar).",
             'If the account no longer exists, remove the mailbox there so Curia stops checking it.',
           ]
           : [

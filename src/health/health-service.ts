@@ -568,7 +568,7 @@ export class HealthService {
         name,
         status: 'fail',
         detail: authFailure
-          ? `Mailbox "${view.label}" grant auth failed (401/403) — reconnect it in Nylas, then use Replace grant on it in the console (Channels → Email → Principal's mailboxes)`
+          ? `Mailbox "${view.label}" grant auth failed (401/403) — reconnect it in Nylas, then use Replace grant on it in the console (Settings → Personality → Email & Calendar)`
           : errName === 'TimeoutError'
             ? `Mailbox "${view.label}" probe timed out after ${MAILBOX_PROBE_TIMEOUT_MS / 1000} s — check Nylas connectivity`
             : `Mailbox "${view.label}" probe failed (${errName}) — check Nylas connectivity`,

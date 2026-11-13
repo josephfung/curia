@@ -1,7 +1,7 @@
 // The retired flat keys' write rule (#2475, review m8): vault PUT and secret capture both call
 // retiredFlatKeyRefusal, so this is the wiring index.ts and the vault route rely on.
 import { describe, it, expect, vi } from 'vitest';
-import { FLAT_KEYS_MANAGED_MESSAGE, retiredFlatKeyRefusal } from '../../../src/principal-mailboxes/secrets.js';
+import { FLAT_KEYS_MANAGED_MESSAGE, PER_MAILBOX_GRANT_MANAGED_MESSAGE, retiredFlatKeyRefusal } from '../../../src/principal-mailboxes/secrets.js';
 
 describe('retiredFlatKeyRefusal', () => {
   it.each(['ceo_nylas_grant_id', 'ceo_self_email'])('refuses %s outside the deferred fallback', async (name) => {
@@ -22,5 +22,13 @@ describe('retiredFlatKeyRefusal', () => {
 
   it('a failing fallback check throws (the caller answers 500), never allows the write', async () => {
     await expect(retiredFlatKeyRefusal('ceo_self_email', async () => { throw new Error('db down'); })).rejects.toThrow('db down');
+  });
+});
+
+// Both messages send the operator to the console page that manages the mailboxes (#2475, R79).
+describe('mailbox refusal messages', () => {
+  it.each([FLAT_KEYS_MANAGED_MESSAGE, PER_MAILBOX_GRANT_MANAGED_MESSAGE])('message %# names Settings → Personality → Email & Calendar', (message) => {
+    expect(message).toContain('Settings → Personality → Email & Calendar');
+    expect(message).not.toContain('Channels → Email');
   });
 });
