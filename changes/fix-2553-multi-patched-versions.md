@@ -5,3 +5,4 @@
 ### Security
 
 - **Dependency floors** — raise `hono`, `@hono/node-server` and `brace-expansion` past upstream-only advisories, one HIGH. (#2553)
+- **`glob`** — move every 13.x consumer to 14.0.6, clearing two advisories. (#2568)
