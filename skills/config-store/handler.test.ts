@@ -736,3 +736,46 @@ describe('ConfigStoreHandler — ceo_inbox/sending', () => {
     if (r.success) expect(r.data).not.toHaveProperty('mailboxes');
   });
 });
+
+// #2475 R65: code-owned triage / sent-observe / voice-learning state is refused; the cadence key
+// `triage` itself is validated against the live mailboxes.
+describe('ConfigStoreHandler — code-owned ceo_inbox state and the triage cadence (R65)', () => {
+  const directory: NonNullable<ToolContext['mailboxDirectory']> = {
+    list: async () => [mailboxView('work', 'Work', 'w@example.com', true), mailboxView('personal', 'Personal', 'p@example.com')]
+      .map(({ id, label, triageStartAt }) => ({ id, label, triageStartAt })),
+  };
+  const store = (key: string, value: string, em = makeEntityMemory(), namespace = 'ceo_inbox') =>
+    new ConfigStoreHandler().execute(makeCtx(em, { action: 'store', namespace, key, value }, { mailboxDirectory: directory }));
+
+  it.each([
+    'triage.batches.2026-11-12', 'triage.work.draining', 'triage.work.last_drained_at',
+    'sent_observe.work.last_seen_at', 'sent_observe.matched_draft_ids', 'voice_learn.proposal',
+  ])('refuses %s and stores nothing', async (key) => {
+    const em = makeEntityMemory();
+    const r = await store(key, '0', em);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('state Curia keeps itself');
+    expect(em.storeFact).not.toHaveBeenCalled();
+  });
+
+  it('leaves the same key names in other namespaces alone', async () => {
+    expect((await store('triage.notes', 'x', makeEntityMemory(), 'my_notes')).success).toBe(true);
+  });
+
+  it('stores a valid cadence keyed by live mailbox ids', async () => {
+    expect((await store('triage', '{"work":"every 30m 08:00-18:00 weekdays","personal":"daily 08:00"}')).success).toBe(true);
+  });
+
+  it.each([
+    ['not JSON', 'hourly'],
+    ['an unknown mailbox', '{"wrk":"hourly"}'],
+    ['an invalid cadence', '{"work":"every 7m"}'],
+    ['a non-string cadence', '{"work":15}'],
+  ])('refuses %s and stores nothing', async (_what, value) => {
+    const em = makeEntityMemory();
+    const r = await store('triage', value, em);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('Nothing was stored');
+    expect(em.storeFact).not.toHaveBeenCalled();
+  });
+});

@@ -36,6 +36,8 @@ pinned_context:
       description: '{"enabled": true} turns on Gmail labels for each final classification.'
     - key: ceo_inbox/sending
       description: '{"<mailbox id>": level}; legacy "default" = the migrated mailbox, write ids; unlisted = on_request. off = never send; on_request = only when the principal asks; routine = also thanks, acks, logistics; all = also replies making commitments the thread supports. Money, contracts: only when asked.'
+    - key: ceo_inbox/triage
+      description: '{"<mailbox id>": cadence}: (every Nm | every Nh | hourly | daily HH:MM)[ HH:MM-HH:MM][ weekdays], local time; unlisted = hourly 06:00-23:00.'
 
 pinned_skills:
   - ceo-inbox
@@ -933,6 +935,7 @@ system_prompt: |
   - **Sending level:** config-store store, namespace `ceo_inbox`, key `sending`, value the
     JSON string `{"<mailbox id>":"<level>"}`, level off | on_request | routine | all. Keep
     other keys the store accepts. Confirm it.
+  - **Triage cadence:** the same, key `triage`, value `{"<mailbox id>":"<cadence>"}` in the pinned grammar.
   - **Rules** are `##` sections of `/shared/inbox/rules.md`, each named for its rule
     with three lines: `- When: <condition>`, `- Do: <instruction>`,
     `- Status: active` (or `paused`). Change them with `doc-write`:
