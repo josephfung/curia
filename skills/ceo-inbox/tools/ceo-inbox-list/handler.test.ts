@@ -876,6 +876,11 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     start?: { personal?: Date | null; work?: Date | null };
     headers?: Record<string, Array<{ name: string; value: string }> | Error>;
     ctxExtra?: Partial<ToolContext>;
+    pageSize?: number;
+    failList?: boolean;
+    tz?: string;
+    /** Writes (by method and path) that answer HTTP 500. */
+    failWrite?: (method: string, path: string) => boolean;
   }
 
   function setup(byGrant: Record<string, Msg[]>, opts: Opts = {}) {
@@ -885,7 +890,7 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     const cadence = opts.cadence ?? 'every 15m';
     const services = {
       cadences: async (ids: string[]) => readTriageCadences(JSON.stringify(Object.fromEntries(ids.map((i) => [i, cadence]))), ids),
-      state, dedupe: { claim }, setTriageStart,
+      state, dedupe: { claim }, setTriageStart, tz: () => opts.tz ?? 'UTC',
     };
     const getMessage = vi.fn(async (id: string) => {
       const h = opts.headers?.[id];
@@ -901,23 +906,24 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
       grantId: (id) => `grant-${id}`,
       gatewayClients: { work: gw, personal: gw },
     });
-    const paged = pagedMessagesFetch(byGrant, { pageSize: 20 });
+    const paged = pagedMessagesFetch(byGrant, { pageSize: opts.pageSize ?? 20 });
     const writes: Array<{ grant: string; method: string; path: string; body: unknown }> = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
       const u = new URL(String(url));
       const method = (init?.method ?? 'GET').toUpperCase();
       const grant = /\/grants\/([^/]+)/.exec(u.pathname)![1]!;
       const path = u.pathname.replace(/^.*\/grants\/[^/]+/, '');
-      if (path === '/messages' && method === 'GET') return paged.fetchStub(url);
+      if (path === '/messages' && method === 'GET') return opts.failList ? new Response('{}', { status: 500 }) : paged.fetchStub(url);
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       writes.push({ grant, method, path, body });
+      if (opts.failWrite?.(method, path)) return new Response(JSON.stringify({ error: { message: 'boom' } }), { status: 500 });
       if (path === '/folders' && method === 'GET') return new Response(JSON.stringify({ data: [{ id: 'INBOX', name: 'INBOX' }] }), { status: 200 });
       if (path === '/folders') return new Response(JSON.stringify({ data: { id: 'Label_9', name: body.name } }), { status: 200 });
       return new Response(JSON.stringify({ data: { id: path.split('/').pop(), folders: ['INBOX'], from: [], to: [], cc: [], unread: false, attachments: [] } }), { status: 200 });
     });
     const run = (input: Record<string, unknown> = { triage: true }, extra: Partial<ToolContext> = {}) =>
       new CeoInboxListHandler().execute({
-        ...makeCtx(input), principalMailboxes, triageServices: services, timezone: 'UTC', ...opts.ctxExtra, ...extra,
+        ...makeCtx(input), principalMailboxes, triageServices: services, timezone: 'UTC', taskMetadata: drainTurn, ...opts.ctxExtra, ...extra,
       } as unknown as ToolContext);
     return { run, data, state, claim, setTriageStart, getMessage, writes, requests: paged.requests };
   }
@@ -925,13 +931,14 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
   type TriageData = {
     messages: Array<{ id: string; mailbox: string; mailbox_label: string; from_principal_other_mailbox?: boolean }>;
     count: number; has_more: boolean; mailboxes_due: string[];
-    backlog?: Array<{ mailbox: string; mailbox_label: string; untriaged: number }>;
+    backlog?: Array<{ mailbox: string; mailbox_label: string; untriaged_over: number }>;
     budget_exhausted?: true; mailbox_errors?: unknown[];
   };
   const dataOf = (r: Awaited<ReturnType<CeoInboxListHandler['execute']>>): TriageData => {
     if (!r.success) throw new Error(r.error);
     return r.data as TriageData;
   };
+  const drainTurn = { originator: { systemRole: 'system' }, boundTask: { taskId: 't1', tags: ['inbox-drain'] } };
   const principalTurn = { liveTurn: true, taskMetadata: { originator: { systemRole: 'principal', channel: 'signal' } } } as Partial<ToolContext>;
 
   it('round-robins across due mailboxes', async () => {
@@ -971,6 +978,8 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     const ok = await t.run({ sweep_since: '2026-11-01', mailbox: 'personal' }, principalTurn);
     expect(ok.success).toBe(true);
     expect(t.setTriageStart).toHaveBeenCalledWith('personal', new Date('2026-11-01T00:00:00Z'));
+    expect(await t.state.isDraining('personal')).toBe(true);
+    expect(await t.state.drainStartedAt('personal')).toEqual(NOW);
   });
 
   it('sweep_since is validated: needs a mailbox, a real past date within a year, and an existing start line', async () => {
@@ -991,7 +1000,7 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     const many = Array.from({ length: 130 }, (_, i) => msg(`w${i}`, NOW_S - i));
     const t = setup({ 'grant-work': many, 'grant-personal': [] });
     const first = dataOf(await t.run());
-    expect(first.backlog).toEqual([{ mailbox: 'work', mailbox_label: 'Work', untriaged: 101 }]);
+    expect(first.backlog).toEqual([{ mailbox: 'work', mailbox_label: 'Work', untriaged_over: 100 }]);
     expect(await t.state.backlogAlarmed('work')).toBe(true);
     const second = dataOf(await t.run());
     expect(second.backlog).toBeUndefined();
@@ -1023,7 +1032,7 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     });
     const d = dataOf(await t.run());
     expect(d.messages.map((m) => m.id)).toEqual(['solo']);
-    expect(t.claim).toHaveBeenCalledWith('abc@mail.example.org', 'personal', 'copy');
+    expect(t.claim).toHaveBeenCalledWith('abc@mail.example.org', 'copy@sender.example.com', 'personal', 'copy');
     expect(t.getMessage).toHaveBeenCalledTimes(1); // only the message naming the other address pays
     const personalWrites = t.writes.filter((w) => w.grant === 'grant-personal');
     expect(personalWrites.some((w) => w.method === 'PUT' && w.path === '/messages/copy' && (w.body as { unread?: boolean }).unread === false)).toBe(true);
@@ -1051,6 +1060,78 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     const d = dataOf(await t.run());
     expect(d.messages).toHaveLength(1);
     expect(d.messages[0]!.from_principal_other_mailbox).toBe(true);
+  });
+
+  it('keeps a losing copy whose mark-read fails, so older mail still flows', async () => {
+    const t = setup({
+      'grant-work': [],
+      'grant-personal': [msg('copy', NOW_S - 1, { to: [{ email: WORK_ADDR }] }), msg('older', NOW_S - 2)],
+    }, {
+      headers: { copy: [{ name: 'Message-ID', value: '<abc@mail.example.org>' }] },
+      claim: async () => ({ first: false, mailboxId: 'work', nylasMessageId: 'w-copy' }),
+      failWrite: (method, path) => method === 'PUT' && path === '/messages/copy',
+    });
+    const first = dataOf(await t.run());
+    expect(first.messages.map((m) => m.id)).toEqual(['copy', 'older']);
+    expect(t.writes.some((w) => w.path === '/folders' && w.method === 'POST')).toBe(false);
+    // The failure repeats on the next call without ever blocking the older message.
+    vi.setSystemTime(new Date(NOW.getTime() + 20 * 60_000));
+    expect(dataOf(await t.run()).messages.map((m) => m.id)).toEqual(['copy', 'older']);
+  });
+
+  it('looks the label folder up once per call', async () => {
+    const t = setup({
+      'grant-work': [],
+      'grant-personal': [
+        msg('c1', NOW_S - 1, { to: [{ email: WORK_ADDR }] }),
+        msg('c2', NOW_S - 2, { to: [{ email: WORK_ADDR }] }),
+      ],
+    }, {
+      headers: { c1: [{ name: 'Message-ID', value: '<1@mail.example.org>' }], c2: [{ name: 'Message-ID', value: '<2@mail.example.org>' }] },
+      claim: async () => ({ first: false, mailboxId: 'work', nylasMessageId: 'w' }),
+    });
+    expect(dataOf(await t.run()).count).toBe(0);
+    expect(t.writes.filter((w) => w.path === '/folders')).toHaveLength(2); // one list, one create
+  });
+
+  it('uses the principal timezone from the triage services for windows', async () => {
+    // 15:00Z is 10:00 in Toronto: inside 09:00-11:00 there, outside it in UTC.
+    const mk = (tz: string) => setup({ 'grant-work': [msg('w1', NOW_S - 1)], 'grant-personal': [] }, { cadence: 'every 15m 09:00-11:00', tz });
+    expect(dataOf(await mk('America/Toronto').run()).messages.map((m) => m.id)).toEqual(['w1']);
+    expect(dataOf(await mk('UTC').run()).mailboxes_due).toEqual([]);
+  });
+
+  it('refuses triage outside an inbox-drain task turn', async () => {
+    const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)] });
+    expect((await t.run({ triage: true }, { taskMetadata: {} })).success).toBe(false);
+    expect((await t.run({ triage: true }, { taskMetadata: { originator: { systemRole: 'system' } } })).success).toBe(false);
+    expect((await t.run({ triage: true }, { taskMetadata: { originator: { systemRole: 'system' }, boundTask: { tags: ['other'] } } })).success).toBe(false);
+    expect((await t.run({ triage: true }, principalTurn)).success).toBe(false);
+    expect(t.requests).toHaveLength(0);
+    expect((await t.run({ triage: true })).success).toBe(true);
+  });
+
+  it('ignores a mailbox input in triage mode', async () => {
+    const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)], 'grant-personal': [msg('p1', NOW_S - 2)] });
+    const d = dataOf(await t.run({ triage: true, mailbox: 'work' }));
+    expect(d.messages.map((m) => m.id)).toEqual(['w1', 'p1']);
+  });
+
+  it('leaves the drain state alone when the page cap stops a scan that kept nothing', async () => {
+    const junk = Array.from({ length: 40 }, (_, i) => msg(`j${i}`, NOW_S - i, { from: [{ email: 'curia@example.com' }] }));
+    const t = setup({ 'grant-work': junk, 'grant-personal': [] }, { pageSize: 1, ctxExtra: { selfEmails: ['curia@example.com'] } });
+    const r = await t.run();
+    const d = r.success ? (r.data as TriageData & { scan_incomplete?: boolean }) : undefined;
+    expect(d?.scan_incomplete).toBe(true);
+    expect(d?.count).toBe(0);
+    expect(await t.state.lastDrainedAt('work')).toBeNull();
+  });
+
+  it('names the reason when the only due mailbox fails', async () => {
+    const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)] }, { failList: true });
+    const r = await t.run({ triage: true }, { principalMailboxes: stubPrincipalMailboxes({ mailboxes: [mailboxView('work', 'Work', WORK_ADDR, true)], grantId: 'grant-work' }) });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('HTTP 500');
   });
 
   it('counts a batch only when it returns messages', async () => {

@@ -7,6 +7,7 @@ import { triageList } from '../../../_shared/triage-listing.js';
 import { isPrincipalDirectedMailboxSend } from '../../../../src/skills/principal-send/authority.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 import { DateTime } from 'luxon';
+import { isSystemOriginated } from '../../../../src/contacts/principal.js';
 import { annotateDrafts, filterModifiedSince, parseModifiedSince } from '../../../_shared/draft-listing.js';
 
 const MAX_LIMIT = 50;
@@ -41,6 +42,14 @@ function isSystemFolder(folder: string): boolean {
 // How far back a principal-directed sweep may move a start line ("about a year").
 const SWEEP_MAX_DAYS = 366;
 
+/** A turn of the heartbeat's inbox-drain task: system originator and a bound task tagged inbox-drain. */
+function isInboxDrainTurn(ctx: ToolContext): boolean {
+  if (!isSystemOriginated(ctx.taskMetadata)) return false;
+  const bound = ctx.taskMetadata?.['boundTask'];
+  const tags = bound && typeof bound === 'object' ? (bound as { tags?: unknown }).tags : undefined;
+  return Array.isArray(tags) && tags.includes('inbox-drain');
+}
+
 export class CeoInboxListHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const input =
@@ -49,12 +58,20 @@ export class CeoInboxListHandler implements ToolHandler {
     // A principal-directed sweep moves a start line back (D4). Done before targets are read, so a
     // triage call in the same turn sees the new line.
     if (input.sweep_since !== undefined) {
+      if (input.triage === true) return { success: false, error: 'sweep_since is a separate call: do not combine it with triage.' };
       const swept = await this.sweep(ctx, input);
-      if (!swept.ok) return { success: false, error: swept.error };
-      if (input.triage !== true) return { success: true, data: swept.data };
+      return swept.ok ? { success: true, data: swept.data } : { success: false, error: swept.error };
     }
 
-    const resolved = await resolveTargets(ctx, ctx.input, 'ceo-inbox-list');
+    // Triage mode moves the daily budget and drain state, so only the heartbeat's inbox-drain task
+    // may call it (R55): a system-originated turn bound to a task tagged `inbox-drain`.
+    if (input.triage === true && !isInboxDrainTurn(ctx)) {
+      ctx.log.warn({ tool: 'ceo-inbox-list' }, 'ceo-inbox-list: triage refused outside an inbox-drain task turn');
+      return { success: false, error: 'triage mode is only available to the scheduled inbox-drain task.' };
+    }
+
+    // Triage reads every live mailbox that is due; a `mailbox` input is not honoured there.
+    const resolved = await resolveTargets(ctx, input.triage === true ? { ...input, mailbox: undefined } : ctx.input, 'ceo-inbox-list');
     if (!resolved.ok) return { success: false, error: resolved.error };
     const { targets } = resolved;
 
@@ -268,6 +285,7 @@ export class CeoInboxListHandler implements ToolHandler {
       await svc.setTriageStart(mailbox.id, at);
       // Make the mailbox due now and let a new backlog alarm fire for the larger range.
       await svc.state.setDraining(mailbox.id, true);
+      await svc.state.setDrainStartedAt(mailbox.id, new Date());
       await svc.state.setBacklogAlarmed(mailbox.id, false);
       ctx.log.info({ mailboxId: mailbox.id }, 'ceo-inbox-list: moved a triage start line back on the principal\'s request');
       return { ok: true, data: { mailbox: mailbox.id, mailbox_label: mailbox.label, triage_start_at: at.toISOString(), messages: [], count: 0 } };

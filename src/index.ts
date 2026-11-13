@@ -2949,10 +2949,13 @@ async function main(): Promise<void> {
     if (!entityMemory) return undefined;
     if (!triageServicesCache) {
       const cfg = new ConfigStore(entityMemory, logger);
+      const triageTz = (): string => principalContact?.timezone ?? config.timezone;
+      const dedupe = new TriageDedupe(pool, logger);
       triageServicesCache = {
         cadences: async (ids) => readTriageCadences(await cfg.get(TRIAGE_NAMESPACE, 'triage'), ids, logger),
-        state: new TriageState(cfg, () => principalContact?.timezone ?? config.timezone),
-        dedupe: new TriageDedupe(pool, logger),
+        state: new TriageState(cfg, triageTz),
+        tz: triageTz,
+        dedupe: { claim: (h, f, m, n) => dedupe.claim(h, f, m, n) },
         setTriageStart: (id, at) => principalMailboxStore.setTriageStart(id, at),
       };
     }

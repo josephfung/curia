@@ -17,6 +17,7 @@ describeIf('TriageDedupe', () => {
   let seq = 0;
 
   // Unique per test; every header ends in the per-run suffix so cleanup touches only our rows.
+  const FROM = 'sender@example.org';
   const header = () => `<msg${(seq += 1)}-${suffix}@example.com>`;
 
   beforeAll(async () => {
@@ -31,45 +32,57 @@ describeIf('TriageDedupe', () => {
   });
 
   it('first claim wins', async () => {
-    expect(await dedupe.claim(header(), 'work', 'n1')).toEqual({ first: true });
+    expect(await dedupe.claim(header(), FROM, 'work', 'n1')).toEqual({ first: true });
   });
 
   it('second claim returns the winner', async () => {
     const h = header();
-    await dedupe.claim(h, 'work', 'n1');
-    expect(await dedupe.claim(h, 'personal', 'n2')).toEqual({ first: false, mailboxId: 'work', nylasMessageId: 'n1' });
+    await dedupe.claim(h, FROM, 'work', 'n1');
+    expect(await dedupe.claim(h, FROM, 'personal', 'n2')).toEqual({ first: false, mailboxId: 'work', nylasMessageId: 'n1' });
   });
 
   it('normalises the header so <A@x> and a@x collide', async () => {
     const h = header();
-    await dedupe.claim(`  ${h.toUpperCase()}  `, 'work', 'n1');
-    const r = await dedupe.claim(h.slice(1, -1), 'personal', 'n2');
+    await dedupe.claim(`  ${h.toUpperCase()}  `, FROM, 'work', 'n1');
+    const r = await dedupe.claim(h.slice(1, -1), FROM, 'personal', 'n2');
     expect(r).toEqual({ first: false, mailboxId: 'work', nylasMessageId: 'n1' });
   });
 
+  it('a reused Message-ID from another sender is not a duplicate (R54)', async () => {
+    const h = header();
+    await dedupe.claim(h, 'real@example.org', 'work', 'n1');
+    expect(await dedupe.claim(h, 'spoof@example.org', 'personal', 'n2')).toEqual({ first: true });
+    // The same sender still collides, case and spacing aside.
+    expect(await dedupe.claim(h, '  REAL@example.org ', 'personal', 'n3')).toEqual({ first: false, mailboxId: 'work', nylasMessageId: 'n1' });
+  });
+
+  it('refuses an empty From address and claims nothing', async () => {
+    await expect(dedupe.claim(header(), '  ', 'work', 'n1')).rejects.toThrow(/From/);
+  });
+
   it('refuses an empty or whitespace header and claims nothing', async () => {
-    await expect(dedupe.claim('', 'work', 'n1')).rejects.toThrow(/Message-ID/);
-    await expect(dedupe.claim('  <> ', 'work', 'n1')).rejects.toThrow(/Message-ID/);
+    await expect(dedupe.claim('', FROM, 'work', 'n1')).rejects.toThrow(/Message-ID/);
+    await expect(dedupe.claim('  <> ', FROM, 'work', 'n1')).rejects.toThrow(/Message-ID/);
     const { rows } = await pool.query(`SELECT 1 FROM principal_mail_dedupe WHERE message_id_header = ''`);
     expect(rows).toHaveLength(0);
   });
 
   it('a claim after the 30-day retention expires wins as first, replacing the old row', async () => {
     const h = header();
-    await dedupe.claim(h, 'work', 'n1');
+    await dedupe.claim(h, FROM, 'work', 'n1');
     await pool.query(
       `UPDATE principal_mail_dedupe SET triaged_at = now() - interval '31 days' WHERE message_id_header = $1`,
       [h.slice(1, -1).toLowerCase()],
     );
-    expect(await dedupe.claim(h, 'personal', 'n2')).toEqual({ first: true });
-    expect(await dedupe.claim(h, 'work', 'n3')).toEqual({ first: false, mailboxId: 'personal', nylasMessageId: 'n2' });
+    expect(await dedupe.claim(h, FROM, 'personal', 'n2')).toEqual({ first: true });
+    expect(await dedupe.claim(h, FROM, 'work', 'n3')).toEqual({ first: false, mailboxId: 'personal', nylasMessageId: 'n2' });
   });
 
   it('sweep removes rows older than 30 days and keeps newer ones', async () => {
     const old = header();
     const fresh = header();
-    await dedupe.claim(old, 'work', 'n1');
-    await dedupe.claim(fresh, 'work', 'n2');
+    await dedupe.claim(old, FROM, 'work', 'n1');
+    await dedupe.claim(fresh, FROM, 'work', 'n2');
     await pool.query(
       `UPDATE principal_mail_dedupe SET triaged_at = now() - interval '31 days' WHERE message_id_header = $1`,
       [old.slice(1, -1).toLowerCase()],
