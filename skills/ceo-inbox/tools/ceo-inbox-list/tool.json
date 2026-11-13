@@ -26,7 +26,7 @@
     "mailbox_errors": "array? of { mailbox, mailbox_label, error }: mailboxes not checked; say so",
     "skipped_mailboxes": "array? of { mailbox, mailbox_label }: not read on this page; say so",
     "has_more": "boolean — true when more unread messages remain beyond this batch (lets the caller drain the inbox in batches); absent for DRAFTS",
-    "scan_incomplete": "boolean? — true when paging stopped at the cap while more messages (or, for DRAFTS with modified_since, more drafts) may remain. Absent when the scan finished. Outside triage an empty batch has has_more false, so the drain loop does not spin"
+    "scan_incomplete": "boolean? — paging stopped at the cap; more messages (DRAFTS with modified_since: drafts) may remain. With count 0, has_more is false: stop. Triage: count 0 with has_more true means duplicates were set aside: continue"
   },
   "permissions": [],
   "secrets": [],
