@@ -3,7 +3,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { CalendarListEventsHandler } from '../../../skills/calendar/tools/calendar-list-events/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
-import { singleMailboxRouter } from '../../../skills/_shared/calendar-router-test-helpers.js';
+import { routerFixture, singleMailboxRouter } from '../../../skills/_shared/calendar-router-test-helpers.js';
+import { NO_MAILBOX_MESSAGE } from '../../../src/channels/calendar/calendar-router.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -381,6 +382,20 @@ describe('CalendarListEventsHandler', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('No calendars registered');
+  });
+
+  it('says no principal mailbox is connected when none is, instead of asking to register a calendar (review m6)', async () => {
+    const contactService = { getCalendarsForContact: vi.fn().mockResolvedValue([]) };
+    const result = await handler.execute(makeCtx(
+      { timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
+      {
+        calendarRouter: routerFixture({ mailboxes: [], clients: {} }),
+        contactService: contactService as never,
+        caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'cli' },
+      },
+    ));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toBe(NO_MAILBOX_MESSAGE);
   });
 
   it('returns failure when no calendarId and no contactService', async () => {

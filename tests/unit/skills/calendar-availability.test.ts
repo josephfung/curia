@@ -13,6 +13,7 @@ import {
 } from '../../../skills/_shared/calendar-router-test-helpers.js';
 import { CalendarCheckConflictsHandler } from '../../../skills/calendar/tools/calendar-check-conflicts/handler.js';
 import { CalendarFindFreeTimeHandler } from '../../../skills/calendar/tools/calendar-find-free-time/handler.js';
+import { NO_MAILBOX_MESSAGE } from '../../../src/channels/calendar/calendar-router.js';
 import { buildHoldMetadata } from '../../../src/channels/calendar/holds.js';
 import { LIST_EVENTS_MAX_TOTAL, type NylasCalendarEvent } from '../../../src/channels/calendar/nylas-calendar-client.js';
 
@@ -234,6 +235,12 @@ describe('availability across the principal\'s calendars', () => {
     })], []);
     expect(data<ConflictData>(await conflicts(router)).clear).toBe(false);
     expect(data<ConflictData>(await conflicts(router, { ignoreHoldCriteria: { sourceRef: 'msg-1' } })).clear).toBe(true);
+  });
+
+  it('with no principal mailbox connected, both tools say so (review m6)', async () => {
+    const router = routerFixture({ mailboxes: [], clients: {} });
+    expect(await free(router)).toEqual({ success: false, error: NO_MAILBOX_MESSAGE });
+    expect(await conflicts(router)).toEqual({ success: false, error: NO_MAILBOX_MESSAGE });
   });
 
   it('no calendar readable at all is an error, as before', async () => {

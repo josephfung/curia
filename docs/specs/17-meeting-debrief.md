@@ -136,7 +136,8 @@ event id; the prompt wake re-validates by finding the event whose `meetingKey` m
 else whose `id` matches (a moved or renamed meeting changes its key but keeps its id).
 A meeting found by id only gets one prompt: if a later scan already set `seen:` for its
 new key (and so scheduled its own task), the old task closes as superseded; otherwise the
-wake sets that guard before prompting, so no later scan schedules the meeting again.
+wake sets that guard, valued with its own task id, before prompting, so no later scan
+schedules the meeting again and a re-woken task (a failed post) never supersedes itself.
 For one release, Step 2 also skips an event with a legacy `seen:<eventId>` guard, so a
 meeting judged just before the upgrade is not judged and prompted twice.
 

@@ -159,8 +159,8 @@ export type FlatKeyRetirement = 'none' | 'deleted' | 'kept';
  * Deletes the retired flat keys once the registry serves the mailbox they held: a live default
  * row exists and its grant secret is stored (#2475). Idempotent, and run on every boot, so an
  * install migrated before the keys were retired loses them on its first boot after the upgrade.
- * Kept (with a warning) when the default row or its grant is missing: the flat grant may then be
- * the only copy. Never throws: a failed read or delete is logged, and the next boot retries.
+ * Kept quietly while the registry is empty (nothing migrated yet), and with a warning when the
+ * default row or its grant is missing: the flat grant may then be the only copy. Never throws: a failed read or delete is logged, and the next boot retries.
  * Logs name keys and mailbox ids only, never a value (R20).
  */
 export async function retireFlatMailboxKeys(
@@ -173,6 +173,12 @@ export async function retireFlatMailboxKeys(
       if ((await secrets.get(key)) !== null) present.push(key);
     }
     if (present.length === 0) return 'none';
+    // Nothing migrated yet (an empty registry): the keys are the migration's input, or the
+    // deferred fallback's grant. Not this function's to report; the migration says why it waits.
+    if (!(await store.hasAnyRow())) {
+      logger.debug({ keys: present }, 'Kept the flat mailbox keys: the registry is empty, so nothing has migrated yet');
+      return 'kept';
+    }
 
     const def = (await store.listLive()).find((m) => m.isDefault);
     const grant = def ? (await secrets.get(principalMailboxGrantSecretName(def.id)))?.trim() : undefined;
@@ -181,7 +187,7 @@ export async function retireFlatMailboxKeys(
         { keys: present, ...(def ? { mailboxId: def.id } : {}) },
         def
           ? 'Kept the flat mailbox keys: the default mailbox has no grant in the vault yet (use Replace grant on it in the console)'
-          : 'Kept the flat mailbox keys: the registry has no live default mailbox',
+          : 'Kept the flat mailbox keys: every principal mailbox was removed, so nothing reads them; delete them on the Secrets page',
       );
       return 'kept';
     }

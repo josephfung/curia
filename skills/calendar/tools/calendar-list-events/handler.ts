@@ -20,9 +20,24 @@ import { isSystemOriginated, isPrincipalOriginated } from '../../../../src/conta
 import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from '../../../../src/skills/_shared/placeholder-guard.js';
 import { guardNylasExplicitCalendarIdentity } from '../../../../src/skills/_shared/calendar-identity-guard.js';
 import { isUuid } from '../../../../src/util/uuid.js';
-import { CalendarRouteError, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
+import { CalendarRouteError, NO_MAILBOX_MESSAGE, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
 import { readCalendarMailbox, routeCalendar } from '../../../_shared/calendar-route.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
+
+/**
+ * With no calendar registered, the cause is usually that no principal mailbox is connected yet
+ * (the calendar tools are enrolled without one, R95): say that, so the agent does not try
+ * calendar-register first. A failed check keeps the registration hint (logged).
+ */
+async function noCalendarsError(ctx: ToolContext, otherwise: string): Promise<string> {
+  if (!ctx.calendarRouter) return otherwise;
+  try {
+    return (await ctx.calendarRouter.liveMailboxes()).length === 0 ? NO_MAILBOX_MESSAGE : otherwise;
+  } catch (err) {
+    ctx.log.warn({ ...grantSafeErrorFields(err) }, 'calendar-list-events: could not check for a connected mailbox');
+    return otherwise;
+  }
+}
 
 export class CalendarListEventsHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -105,7 +120,7 @@ export class CalendarListEventsHandler implements ToolHandler {
         }
         const calendars = await ctx.contactService.getCalendarsForContact(contactId);
         if (calendars.length === 0) {
-          return { success: false, error: `No calendars registered for contact ${contactId} — register a calendar first` };
+          return { success: false, error: await noCalendarsError(ctx, `No calendars registered for contact ${contactId} — register a calendar first`) };
         }
         calendarIds = calendars.map((c) => c.nylasCalendarId);
         ctx.log.info({ contactId, calendarCount: calendarIds.length }, 'Resolved calendars for explicit contactId');
@@ -128,7 +143,7 @@ export class CalendarListEventsHandler implements ToolHandler {
         }
         const calendars = await ctx.contactService.getCalendarsForContact(ctx.caller.contactId);
         if (calendars.length === 0) {
-          return { success: false, error: 'No calendars registered for this contact — register a calendar first' };
+          return { success: false, error: await noCalendarsError(ctx, 'No calendars registered for this contact — register a calendar first') };
         }
         calendarIds = calendars.map((c) => c.nylasCalendarId);
         ctx.log.info({ contactId: ctx.caller.contactId, calendarCount: calendarIds.length }, 'Resolved caller calendars');
