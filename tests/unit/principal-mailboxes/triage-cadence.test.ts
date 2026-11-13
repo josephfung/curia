@@ -203,6 +203,12 @@ describe('fix round 1', () => {
     expect(isDue(c, at('2026-06-10T10:00:05Z'), at('2026-06-10T11:00:00Z'), TZ)).toBe(true);
     expect(isDue(c, at('2026-06-10T10:00:05Z'), at('2026-06-10T10:52:00Z'), TZ)).toBe(false);
   });
+  it('R50: hourly turns due exactly at 52.5 minutes (every - 7m30s), not a millisecond before (P8)', () => {
+    const c = parseCadence('hourly')!;
+    const drained = at('2026-06-10T10:00:00Z');
+    expect(isDue(c, drained, at('2026-06-10T10:52:29.999Z'), TZ)).toBe(false);
+    expect(isDue(c, drained, at('2026-06-10T10:52:30Z'), TZ)).toBe(true);
+  });
   it('R50: every 15m is not due 8 minutes after a drain, but is at 15', () => {
     const c = parseCadence('every 15m')!;
     expect(isDue(c, at('2026-06-10T10:00:00Z'), at('2026-06-10T10:08:00Z'), TZ)).toBe(false);
