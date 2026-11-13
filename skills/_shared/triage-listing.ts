@@ -15,7 +15,6 @@ import type { PrincipalMailboxView } from '../../src/principal-mailboxes/service
 import { grantSafeErrorFields } from '../../src/principal-mailboxes/error-fields.js';
 import { dueMailboxes } from '../../src/principal-mailboxes/triage-due.js';
 import { BACKLOG_ALARM_THRESHOLD, TRIAGE_BATCH_SIZE } from '../../src/principal-mailboxes/triage-cadence.js';
-import { messageIdsIn } from '../../src/skills/principal-send/autonomous-limits.js';
 import type { CeoNylasClient, NylasMessageSummary } from './ceo-nylas-client.js';
 import { NYLAS_MAX_LIST_LIMIT } from './ceo-nylas-client.js';
 import { describeError, scanMailbox, type MailboxError, type Target } from './cross-mailbox-listing.js';
@@ -27,6 +26,15 @@ const QUEUE_NEED = TRIAGE_BATCH_SIZE * 2 + 1;
 const TOOL = 'ceo-inbox-list';
 const NOTE = 'Its mail is not included; a later call retries it.';
 const lc = (s: string): string => s.toLowerCase();
+
+/**
+ * The first bracketed `<left@right>` id in a Message-ID header (P5). A bare token is not used: a
+ * sender that stamps the same junk value on every message would otherwise make distinct messages
+ * collide. Brackets are kept off; TriageDedupe normalises case.
+ */
+export function firstMessageId(value: string): string | undefined {
+  return /<([^<>\s@]+@[^<>\s@]+)>/.exec(value)?.[1];
+}
 
 interface Scanned {
   target: Target;
@@ -82,7 +90,7 @@ async function lostClaim(
     const gateway = await ctx.principalMailboxes!.gatewayClient(mailbox.id);
     const full = await gateway.getMessage(msg.id, { includeHeaders: true, budget: ctx });
     const header = (full.headers ?? []).find((h) => h.name.trim().toLowerCase() === 'message-id');
-    const messageId = header ? messageIdsIn(header.value)[0] : undefined;
+    const messageId = header ? firstMessageId(header.value) : undefined;
     if (!messageId) {
       ctx.log.warn({ tool: TOOL, mailboxId: mailbox.id }, 'ceo-inbox-list: a cross-mailbox message has no Message-ID; not deduped');
       return false;
