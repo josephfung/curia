@@ -5,10 +5,11 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds, repairQueriedUnixRange } from '../../../../src/time/timestamp.js';
+import { freeBusyAcross, readCalendarMailbox, routeCalendars } from '../../../_shared/calendar-route.js';
 
 export class CalendarFindFreeTimeHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    if (!ctx.nylasCalendarClient) {
+    if (!ctx.calendarRouter) {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }
 
@@ -47,12 +48,18 @@ export class CalendarFindFreeTimeHandler implements ToolHandler {
       return { success: false, error: 'Invalid input: timeMax is outside the supported calendar range (after 1970 through 2100-01-01)' };
     }
 
+    const mailbox = readCalendarMailbox(ctx.input);
+    if (!mailbox.ok) return { success: false, error: mailbox.error };
+
     try {
-      const freeBusyResults = await ctx.nylasCalendarClient.getFreeBusy(calendarIds, timeMin, timeMax);
+      // Each calendar goes through its own mailbox (#2475): one free/busy call per mailbox.
+      const routes = await routeCalendars(ctx, 'calendar-find-free-time', calendarIds, mailbox.mailbox);
+      if (!routes.ok) return { success: false, error: routes.error };
+      const freeBusyResults = await freeBusyAcross(routes.routed, calendarIds, timeMin, timeMax);
 
       // Collect all busy periods across all calendars
       const allBusy: Array<{ start: number; end: number }> = [];
-      for (const result of freeBusyResults) {
+      for (const { result } of freeBusyResults) {
         for (const slot of result.timeSlots) {
           // A free/busy slot blocks the window unless it is explicitly `free`. Tentative
           // holds (busy=true, status=tentative) and any non-free status still block,

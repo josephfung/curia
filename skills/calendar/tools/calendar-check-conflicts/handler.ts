@@ -7,10 +7,11 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds, repairQueriedUnixRange } from '../../../../src/time/timestamp.js';
 import { eventsOverlap, findMatchingHolds, type HoldMatchCriteria } from '../../../../src/channels/calendar/holds.js';
+import { freeBusyAcross, readCalendarMailbox, routeCalendars } from '../../../_shared/calendar-route.js';
 
 export class CalendarCheckConflictsHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    if (!ctx.nylasCalendarClient) {
+    if (!ctx.calendarRouter) {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }
 
@@ -31,16 +32,23 @@ export class CalendarCheckConflictsHandler implements ToolHandler {
       return { success: false, error: 'Missing required input: proposedEnd' };
     }
 
+    const mailbox = readCalendarMailbox(ctx.input);
+    if (!mailbox.ok) return { success: false, error: mailbox.error };
+
     try {
-      const freeBusyResults = await ctx.nylasCalendarClient.getFreeBusy(calendarIds, proposedStart, proposedEnd);
+      // Each calendar goes through its own mailbox (#2475): one free/busy call per mailbox.
+      const routes = await routeCalendars(ctx, 'calendar-check-conflicts', calendarIds, mailbox.mailbox);
+      if (!routes.ok) return { success: false, error: routes.error };
+      const freeBusyResults = await freeBusyAcross(routes.routed, calendarIds, proposedStart, proposedEnd);
 
       const proposedStartTs = Math.floor(new Date(proposedStart).getTime() / 1000);
       const proposedEndTs = Math.floor(new Date(proposedEnd).getTime() / 1000);
       const ignoredHoldWindowsByCalendar = new Map<string, Array<{ startTime: number; endTime: number }>>();
       if (ignoreHoldCriteria && hasHoldMatchSignal(ignoreHoldCriteria)) {
-        for (const calendarId of calendarIds) {
+        for (const [i, calendarId] of calendarIds.entries()) {
+          const routed = routes.routed[i]!;
           try {
-            const events = await ctx.nylasCalendarClient.listEvents(calendarId, proposedStart, proposedEnd);
+            const events = await routed.client.listEvents(routed.calendarId, proposedStart, proposedEnd);
             const matches = findMatchingHolds(events, {
               ...ignoreHoldCriteria,
               startTime: proposedStartTs,
@@ -73,9 +81,7 @@ export class CalendarCheckConflictsHandler implements ToolHandler {
         status: string;
       }> = [];
 
-      for (let resultIndex = 0; resultIndex < freeBusyResults.length; resultIndex++) {
-        const result = freeBusyResults[resultIndex]!;
-        const queriedCalendarId = calendarIds[resultIndex] ?? result.email;
+      for (const { queriedId: queriedCalendarId, result } of freeBusyResults) {
         // Resolve contact name once per calendar result, not once per busy slot — avoids N+1 DB calls.
         let contactName: string | null = null;
         if (ctx.contactService) {

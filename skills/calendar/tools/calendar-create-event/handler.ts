@@ -17,15 +17,17 @@ import { holdHasAttendees, isHoldEvent, eventsOverlap } from '../../../../src/ch
 import { parseRecurrence } from '../../../../src/channels/calendar/recurrence-input.js';
 import { parseConferencing } from '../../../../src/channels/calendar/conferencing-input.js';
 import { undeclaredInputError } from '../../../../src/skills/_shared/undeclared-input-guard.js';
+import { readCalendarMailbox, routeCalendar } from '../../../_shared/calendar-route.js';
 
 // Mirrors tool.json `inputs`. Anything else is refused rather than silently dropped (#2385).
 const DECLARED_INPUTS = [
   'calendarId', 'title', 'start', 'end', 'description', 'location', 'attendees', 'conferencing', 'recurrence',
+  'mailbox',
 ] as const;
 
 export class CalendarCreateEventHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    if (!ctx.nylasCalendarClient) {
+    if (!ctx.calendarRouter) {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }
 
@@ -89,12 +91,20 @@ export class CalendarCreateEventHandler implements ToolHandler {
       parsedConferencing = parsed.conferencing;
     }
 
+    const mailbox = readCalendarMailbox(ctx.input);
+    if (!mailbox.ok) return { success: false, error: mailbox.error };
+
     try {
+      // The mailbox the calendar belongs to (#2475); `primary` becomes its home calendar's ID.
+      const route = await routeCalendar(ctx, 'calendar-create-event', calendarId, mailbox.mailbox);
+      if (!route.ok) return { success: false, error: route.error };
+      const { client, calendarId: targetCalendarId, mailboxId } = route.routed;
+
       // Read-only check: if the calendar is registered and marked read-only, refuse.
       // Unregistered calendars (null) proceed — Nylas enforces its own permissions.
       // Moved inside try so DB errors from resolveCalendar are caught with skill-level context.
       if (ctx.contactService) {
-        const registry = await ctx.contactService.resolveCalendar(calendarId);
+        const registry = await ctx.contactService.resolveCalendar(targetCalendarId);
         if (registry?.readOnly) {
           return { success: false, error: 'Calendar is read-only' };
         }
@@ -110,8 +120,8 @@ export class CalendarCreateEventHandler implements ToolHandler {
         eventData.timezone = ctx.timezone;
       }
 
-      const event = await ctx.nylasCalendarClient.createEvent(calendarId, eventData);
-      ctx.log.info({ calendarId, eventId: event.id }, 'Created calendar event');
+      const event = await client.createEvent(targetCalendarId, eventData);
+      ctx.log.info({ calendarId, eventId: event.id, mailboxId }, 'Created calendar event');
 
       // Self-release: a real booking supersedes any tentative holds we placed on the
       // same slot. List overlapping events and delete only our own curia-hold events.
@@ -122,7 +132,7 @@ export class CalendarCreateEventHandler implements ToolHandler {
       try {
         const startUnix = Math.floor(new Date(start).getTime() / 1000);
         const endUnix = Math.floor(new Date(end).getTime() / 1000);
-        const overlapping = await ctx.nylasCalendarClient.listEvents(calendarId, start, end);
+        const overlapping = await client.listEvents(targetCalendarId, start, end);
         for (const e of overlapping) {
           if (e.id === event.id) continue;           // skip the event we just created
           if (!isHoldEvent(e)) continue;             // skip real (non-hold) events
@@ -138,7 +148,7 @@ export class CalendarCreateEventHandler implements ToolHandler {
           // Per-event try/catch: one failing delete must not abort the rest of the loop.
           // A transient Nylas error on one hold should not prevent releasing the others.
           try {
-            await ctx.nylasCalendarClient.deleteEvent(calendarId, e.id); // no notify flag: no attendees to email, and Microsoft rejects false
+            await client.deleteEvent(targetCalendarId, e.id); // no notify flag: no attendees to email, and Microsoft rejects false
             ctx.log.info({ releasedHoldId: e.id, bookedEventId: event.id }, 'calendar-create-event: released overlapping hold');
           } catch (err) {
             ctx.log.warn({ err, holdId: e.id, bookedEventId: event.id }, 'calendar-create-event: failed to release overlapping hold, continuing');

@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { CalendarListEventsHandler } from '../../../skills/calendar/tools/calendar-list-events/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
+import { singleMailboxRouter } from '../../../skills/_shared/calendar-router-test-helpers.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -29,7 +30,7 @@ const mockEvents = [
 describe('CalendarListEventsHandler', () => {
   const handler = new CalendarListEventsHandler();
 
-  it('returns failure when nylasCalendarClient is not available', async () => {
+  it('returns failure when the calendar router is not available', async () => {
     const result = await handler.execute(makeCtx({ calendarId: 'cal-1', timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' }));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('Calendar not configured');
@@ -39,7 +40,7 @@ describe('CalendarListEventsHandler', () => {
     const nylasCalendarClient = { listEvents: vi.fn() };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('timeMin');
@@ -52,7 +53,7 @@ describe('CalendarListEventsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -71,7 +72,7 @@ describe('CalendarListEventsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z', query: 'chiropractor' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -89,7 +90,7 @@ describe('CalendarListEventsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z', query: 'daily sync' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -107,7 +108,7 @@ describe('CalendarListEventsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z', attendeeEmail: 'bob@co.com' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -134,7 +135,7 @@ describe('CalendarListEventsHandler', () => {
     const result = await handler.execute(makeCtx(
       { timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
       {
-        nylasCalendarClient: nylasCalendarClient as never,
+        calendarRouter: singleMailboxRouter(nylasCalendarClient),
         contactService: contactService as never,
         caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'cli' },
       },
@@ -171,7 +172,7 @@ describe('CalendarListEventsHandler', () => {
     const result = await handler.execute(makeCtx(
       { timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
       {
-        nylasCalendarClient: nylasCalendarClient as never,
+        calendarRouter: singleMailboxRouter(nylasCalendarClient),
         contactService: contactService as never,
         caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'cli' },
       },
@@ -208,7 +209,7 @@ describe('CalendarListEventsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', timeMin: '2026-04-06T00:00:00Z', timeMax: '2026-04-09T00:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -244,7 +245,7 @@ describe('CalendarListEventsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', timeMin: '2026-04-06T00:00:00Z', timeMax: '2026-04-07T00:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never, timezone: 'America/Toronto' },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient), timezone: 'America/Toronto' },
     ));
 
     expect(result.success).toBe(true);
@@ -281,7 +282,7 @@ describe('CalendarListEventsHandler', () => {
     // No timezone in context — should fall back to UTC Z-suffix
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', timeMin: '2026-04-06T00:00:00Z', timeMax: '2026-04-07T00:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -315,7 +316,7 @@ describe('CalendarListEventsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', timeMin: '2026-04-06T00:00:00Z', timeMax: '2026-04-07T00:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -351,7 +352,7 @@ describe('CalendarListEventsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', timeMin: '2026-04-06T00:00:00Z', timeMax: '2026-04-07T00:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -372,7 +373,7 @@ describe('CalendarListEventsHandler', () => {
     const result = await handler.execute(makeCtx(
       { timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
       {
-        nylasCalendarClient: nylasCalendarClient as never,
+        calendarRouter: singleMailboxRouter(nylasCalendarClient),
         contactService: contactService as never,
         caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'cli' },
       },
@@ -387,7 +388,7 @@ describe('CalendarListEventsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(false);
@@ -403,7 +404,7 @@ describe('CalendarListEventsHandler', () => {
     const result = await handler.execute(makeCtx(
       { timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
       {
-        nylasCalendarClient: nylasCalendarClient as never,
+        calendarRouter: singleMailboxRouter(nylasCalendarClient),
         contactService: contactService as never,
         caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'cli' },
       },
@@ -429,7 +430,7 @@ describe('CalendarListEventsHandler', () => {
     const result = await handler.execute(makeCtx(
       { timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
       {
-        nylasCalendarClient: nylasCalendarClient as never,
+        calendarRouter: singleMailboxRouter(nylasCalendarClient),
         contactService: contactService as never,
         caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'cli' },
       },
@@ -458,7 +459,7 @@ describe('CalendarListEventsHandler', () => {
     const result = await handler.execute(makeCtx(
       { timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
       {
-        nylasCalendarClient: nylasCalendarClient as never,
+        calendarRouter: singleMailboxRouter(nylasCalendarClient),
         contactService: contactService as never,
         caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'cli' },
       },
@@ -475,7 +476,7 @@ describe('CalendarListEventsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z', maxResults: 2 },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -504,7 +505,7 @@ describe('CalendarListEventsHandler', () => {
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-curia', timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
       {
-        nylasCalendarClient: { listEvents } as never,
+        calendarRouter: singleMailboxRouter({ listEvents }),
         contactService: contactService as never,
         agentContactId,
         taskMetadata: { originator: makeSystemOriginator() },
@@ -538,7 +539,7 @@ describe('CalendarListEventsHandler', () => {
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-sarah', timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
       {
-        nylasCalendarClient: { listEvents } as never,
+        calendarRouter: singleMailboxRouter({ listEvents }),
         contactService: contactService as never,
         agentContactId,
         taskMetadata: { originator: makeSystemOriginator() },

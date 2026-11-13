@@ -135,7 +135,10 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // out (YAML 23,890 → 21,918 chars, ~5,983 → ~5,490 tokens) and doc-write was pinned to edit
   // the document (+2,100 bytes, 26,729 over 23 local tools). The prompt budget drops by the
   // cut and the tool budget rises by exactly doc-write's definition, so the total holds.
-  { agent: 'calendar', alwaysOnPromptTokens: 5_700, localToolDefinitionBytes: 27_100, allowMcpPins: false },
+  // #2475 the optional `mailbox` input on all 11 calendar tools (net +1,355 bytes after shortening
+  // respond-to-invite's account note), covered by the maintainer's mailbox-input approval (2026-11-12):
+  // 28,447 over 23 local tools.
+  { agent: 'calendar', alwaysOnPromptTokens: 5_700, localToolDefinitionBytes: 28_450, allowMcpPins: false },
   // ceo-inbox: YAML 60,090 → 49,037 chars (~16,416 → ~13,653 tokens always-on with its SKILL.md bodies),
   // its task-wake steps now riding on the wake; 43,469 bytes over 41 local tools.
   // archive-extract plus the longer file-parse description (#2208) is +1,831 bytes, the same
@@ -156,7 +159,9 @@ const AGENT_BUDGETS: AgentBudget[] = [
   { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 49_416, allowMcpPins: false },
   // contacts: YAML 15,595 → 11,423 chars (~4,831 → ~3,788 tokens always-on with its SKILL.md bodies);
   // 35,311 bytes over its local tools.
-  { agent: 'contacts', alwaysOnPromptTokens: 3_900, localToolDefinitionBytes: 36_400, allowMcpPins: false },
+  // #2475 the optional `mailbox` input on calendar-list-events (+136 bytes), covered by the same
+  // approval: 36,512 over its local tools.
+  { agent: 'contacts', alwaysOnPromptTokens: 3_900, localToolDefinitionBytes: 36_520, allowMcpPins: false },
   // meeting-debrief: YAML 18,627 → 14,682 chars (~4,670 → ~3,681 tokens always-on); 22,685 bytes over 17 local tools.
   { agent: 'meeting-debrief', alwaysOnPromptTokens: 3_800, localToolDefinitionBytes: 23_200, allowMcpPins: false },
 ];

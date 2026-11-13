@@ -126,7 +126,7 @@ import type { EntityMemory, CreateEntityOptions, StoreFactResult } from '../memo
 import type { SensitivityClassifier } from '../memory/sensitivity.js';
 import type { StoreFactOptions } from '../memory/types.js';
 import { createMemoryStore } from '../bus/events.js';
-import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
+import type { CalendarRouter } from '../channels/calendar/calendar-router.js';
 import type { PrincipalMailboxes } from '../principal-mailboxes/service.js';
 import type { EntityContextAssembler } from '../entity-context/assembler.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
@@ -377,7 +377,7 @@ export class ExecutionLayer {
   private schedulerService?: SchedulerService;
   private entityMemory?: EntityMemory;
   private agentPersona?: AgentPersona;
-  private nylasCalendarClient?: NylasCalendarClient;
+  private calendarRouter?: CalendarRouter;
   private principalMailboxes?: PrincipalMailboxes;
   private triageServices?: () => import('../principal-mailboxes/triage-services.js').TriageServices | undefined;
   private entityContextAssembler?: EntityContextAssembler;
@@ -459,7 +459,7 @@ export class ExecutionLayer {
     schedulerService?: SchedulerService;
     entityMemory?: EntityMemory;
     agentPersona?: AgentPersona;
-    nylasCalendarClient?: NylasCalendarClient;
+    calendarRouter?: CalendarRouter;
     principalMailboxes?: PrincipalMailboxes;
     /** Builds the triage view on demand; called only for a tool that declares 'triageServices' (#2475). */
     triageServices?: () => import('../principal-mailboxes/triage-services.js').TriageServices | undefined;
@@ -547,7 +547,7 @@ export class ExecutionLayer {
     this.schedulerService = options?.schedulerService;
     this.entityMemory = options?.entityMemory;
     this.agentPersona = options?.agentPersona;
-    this.nylasCalendarClient = options?.nylasCalendarClient;
+    this.calendarRouter = options?.calendarRouter;
     this.principalMailboxes = options?.principalMailboxes;
     this.triageServices = options?.triageServices;
     this.entityContextAssembler = options?.entityContextAssembler;
@@ -616,7 +616,7 @@ export class ExecutionLayer {
       outboundGateway,
       schedulerService: this.schedulerService,
       entityMemory: this.entityMemory,
-      nylasCalendarClient: this.nylasCalendarClient,
+      calendarRouter: this.calendarRouter,
       // Skills get the narrowed view, never the service with credentials() (F7). Getters, so a
       // view is built only when a tool declares that capability: callers read this map by key.
       get principalMailboxes() { return mailboxes?.forSkills(); },

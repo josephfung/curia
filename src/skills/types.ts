@@ -62,7 +62,7 @@ export interface ToolManifest {
    *  The manifest is frozen after loading — capabilities cannot be mutated at runtime.
    *
    *  Valid capabilities: bus, agentRegistry, outboundGateway,
-   *  schedulerService, entityMemory, nylasCalendarClient, principalMailboxes, autonomyService,
+   *  schedulerService, entityMemory, calendarRouter, principalMailboxes, autonomyService,
    *  executiveProfileService, officeIdentityService, browserService, bullpenService, toolSearch,
    *  actionLogRepo, auditLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext,
    *  taskRepo, workingDocs, secretCapture, cardUse, secretResolver, userSecretIndex, taskOutreach, disclosureDecisions,
@@ -236,10 +236,11 @@ export interface ToolContext {
    *  coordinator's persona config. Universal (not capability-gated)
    *  so templates can reference the agent's identity without hardcoding it. */
   agentPersona?: AgentPersona;
-  /** Nylas calendar client — available to skills declaring 'nylasCalendarClient' in capabilities.
-   *  Provides CRUD operations on calendar events and free/busy queries
-   *  via the Nylas unified API (provider-agnostic). */
-  nylasCalendarClient?: import('../channels/calendar/nylas-calendar-client.js').NylasCalendarClient;
+  /** Calendar router (#2475, D7) — available to skills declaring 'calendarRouter' in capabilities.
+   *  Resolves each calendar to the principal mailbox it belongs to and hands back that mailbox's
+   *  Nylas calendar client. Holds no credentials of its own (it reads the registry's narrowed
+   *  view); the clients it returns hold their grant internally, as before. */
+  calendarRouter?: import('../channels/calendar/calendar-router.js').CalendarRouter;
   /** Bullpen service — available to skills declaring 'bullpenService' in capabilities for inter-agent discussion threads */
   bullpenService?: import('../memory/bullpen.js').BullpenService;
   /** ID of the agent invoking this skill — injected by the execution layer */

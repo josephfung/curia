@@ -705,7 +705,7 @@ describe('gated stubs (#2499)', () => {
     const executed: string[] = [];
     // Real manifests declare the calendar client, which test mode never wires.
     for (const [name, risk] of [['calendar-create-event', 'high'], ['calendar-list-events', 'none']] as const) {
-      registry.register({ ...manifest(name, risk), capabilities: ['nylasCalendarClient'] }, {
+      registry.register({ ...manifest(name, risk), capabilities: ['calendarRouter'] }, {
         execute: async () => { executed.push(name); return { success: true, data: `real ${name}` }; },
       });
     }
@@ -755,9 +755,9 @@ describe('gated stubs (#2499)', () => {
   it('drops only for the gated call the capabilities the review layer lacks', async () => {
     const { controller } = gatedSetup({ ok: true, purpose: 'serving', reason: 'fine' });
     const registry = new ToolRegistry();
-    registry.register({ ...manifest('calendar-create-event', 'high'), capabilities: ['nylasCalendarClient'] }, { execute: async () => ({ success: true, data: null }) });
+    registry.register({ ...manifest('calendar-create-event', 'high'), capabilities: ['calendarRouter'] }, { execute: async () => ({ success: true, data: null }) });
     // Outside a gated call the manifest is the real one, so an ungated call still fails closed.
-    expect(controller.reviewRegistry(registry).get('calendar-create-event')!.manifest.capabilities).toEqual(['nylasCalendarClient']);
+    expect(controller.reviewRegistry(registry).get('calendar-create-event')!.manifest.capabilities).toEqual(['calendarRouter']);
   });
 
   it('leaves tools it does not gate, and runs without gated_tools, answered before any gate', async () => {

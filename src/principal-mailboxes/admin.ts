@@ -9,6 +9,7 @@ import type { PrincipalMailboxView } from './service.js';
 import { principalMailboxGrantSecretName } from './secrets.js';
 import { applyRemoval, parseRuleScopes, type RuleRemovalAction } from './rules-scope.js';
 import { grantLookupFailureDetail, grantSafeErrorFields, mayCarryGrantId } from './error-fields.js';
+import type { MailboxCalendarHooks } from './calendar-hooks.js';
 import {
   MAILBOX_ID_RE,
   MAX_LIVE_MAILBOXES,
@@ -45,18 +46,24 @@ export interface RemovalPreview {
   scopedRules: Array<{ title: string; onlyThisMailbox: boolean }> | null;
   /** True when the rules document could not be read: scopedRules is then null (unknown). */
   rulesUnreadable: boolean;
-  /** Filled by the calendar task; [] in this part. */
+  /** Calendars registered through this mailbox; they are disconnected by the removal. */
   calendars: Array<{ calendarId: string; label: string }>;
+  /** True when the calendar registry could not be read: calendars is then [] (unknown). */
+  calendarsUnreadable: boolean;
 }
 
 /** Outcome of a removal that went through: the tombstone is committed whatever else failed. */
 export interface RemovalOutcome {
   /** Cleanup steps after the tombstone that did not finish (names only). Empty when all did. */
   cleanupIncomplete: string[];
-  /** The removed mailbox was the default, so calendar still holds its grant (bound at boot)
-   *  until a restart. */
+  /** Always false since the calendar router (#2475, Part 4) reads each mailbox's grant per call;
+   *  nothing holds a removed mailbox's grant until a restart any more. Kept for the console. */
   restartRequired: boolean;
 }
+
+/** Shown when a mailbox was added but its home calendar could not be registered. */
+export const HOME_CALENDAR_PENDING_WARNING =
+  "Saved. Registering the mailbox's calendar failed; register it from the calendar agent (calendar-register) or remove and add the mailbox again.";
 
 /** Shown when the registry change committed but copying the default into the flat keys failed. */
 export const MIRROR_PENDING_WARNING =
@@ -104,6 +111,8 @@ export interface PrincipalMailboxAdminDeps {
    *  fallback (any row hides it) and drop the flat mailbox from the list, so add refuses. */
   isFallbackActive?: () => Promise<boolean>;
   logger: Logger;
+  /** Calendar side of add and remove (#2475, D7). Absent: calendars are left alone. */
+  calendars?: Pick<MailboxCalendarHooks, 'registerHome' | 'listForMailbox'>;
   /** Test seam: the live-mailbox cap. Defaults to MAX_LIVE_MAILBOXES. */
   maxLiveMailboxes?: number;
 }
@@ -240,10 +249,28 @@ export class PrincipalMailboxAdmin {
 
     const rec = await this.deps.store.getAny(id);
     if (!rec) throw new Error(`Mailbox "${id}" vanished after insert`);
-    const warning = rec.isDefault
+    const mirrorWarning = rec.isDefault
       ? await this.mirrorAfterCommit(id, () => this.mirrorFlatKeys(id, grantId, rec.address))
       : undefined;
+    const calendarWarning = await this.registerHomeCalendar(id, rec.label);
+    const warning = [mirrorWarning, calendarWarning].filter((w) => w !== undefined).join(' ');
     return { ok: true, mailbox: toView(rec), ...(warning ? { warning } : {}) };
+  }
+
+  /**
+   * The new mailbox's home calendar, registered after the mailbox committed: a failure is a
+   * warning, never a failed add (the mailbox works; only routing `primary` falls back to the
+   * grant's own listing). Never throws.
+   */
+  private async registerHomeCalendar(id: string, label: string): Promise<string | undefined> {
+    if (!this.deps.calendars) return undefined;
+    try {
+      await this.deps.calendars.registerHome(id, label);
+      return undefined;
+    } catch (err) {
+      this.log.error({ ...this.safeErrFields(err), mailboxId: id }, "Could not register the new mailbox's home calendar");
+      return HOME_CALENDAR_PENDING_WARNING;
+    }
   }
 
   /** The new default is committed first; a failed flat-key copy after it is a warning, not a failure. */
@@ -309,6 +336,7 @@ export class PrincipalMailboxAdmin {
     ]);
     candidates.delete(lower(rec.address));
     const scoped = await this.scopedRules(id);
+    const calendars = await this.calendarsOf(id);
     return {
       mailbox: toView(rec),
       isDefault: rec.isDefault,
@@ -318,8 +346,20 @@ export class PrincipalMailboxAdmin {
       primaryEmailCandidates: [...candidates],
       scopedRules: scoped === null ? null : scoped.map((r) => ({ title: r.title, onlyThisMailbox: r.mailboxes!.length === 1 })),
       rulesUnreadable: scoped === null,
-      calendars: [],
+      calendars: calendars ?? [],
+      calendarsUnreadable: calendars === null,
     };
+  }
+
+  /** Calendars registered through the mailbox; null when the registry could not be read. */
+  private async calendarsOf(id: string): Promise<Array<{ calendarId: string; label: string }> | null> {
+    if (!this.deps.calendars) return [];
+    try {
+      return await this.deps.calendars.listForMailbox(id);
+    } catch (err) {
+      this.log.warn({ ...this.safeErrFields(err), mailboxId: id }, "Could not read the mailbox's calendars for the removal preview");
+      return null;
+    }
   }
 
   async remove(input: {
@@ -514,7 +554,8 @@ export class PrincipalMailboxAdmin {
         this.log.error({ ...this.safeErrFields(err), mailboxId: id }, 'Could not reconcile the flat keys after removing a principal mailbox');
       }
     }
-    return { cleanupIncomplete, restartRequired: wasDefault };
+    // No restart: the calendar router reads grants per call, so nothing kept the removed one.
+    return { cleanupIncomplete, restartRequired: false };
   }
 
   /** Rules that name the mailbox (scoped only to it, or to it and others); null = unreadable. */

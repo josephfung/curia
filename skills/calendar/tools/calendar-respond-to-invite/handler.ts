@@ -13,6 +13,8 @@ import {
 } from '../../../../src/channels/calendar/holds.js';
 import { formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { localizeEventTimes } from '../../../../src/channels/calendar/event-display.js';
+import type { RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
+import { readCalendarMailbox, routeCalendar } from '../../../_shared/calendar-route.js';
 
 type InviteResponse = 'accept' | 'decline' | 'tentative';
 
@@ -26,7 +28,7 @@ const HOLD_SEARCH_PADDING_MS = 14 * 24 * 60 * 60 * 1000;
 
 export class CalendarRespondToInviteHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    if (!ctx.nylasCalendarClient) {
+    if (!ctx.calendarRouter) {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }
 
@@ -70,36 +72,45 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
       return { success: false, error: 'Invalid input: holdSearchEnd must be after holdSearchStart' };
     }
 
+    const mailbox = readCalendarMailbox(ctx.input);
+    if (!mailbox.ok) return { success: false, error: mailbox.error };
+
     const warnings: string[] = [];
     if (input.account) {
-      warnings.push("account is informational; RSVP runs under the principal's own Nylas grant (ceo_nylas_grant_id)");
+      warnings.push("account is informational; RSVP runs as the mailbox the calendar belongs to");
     }
     if (input.comment) {
       warnings.push('comment was not sent because the installed Nylas sendRsvp SDK accepts RSVP status only');
     }
 
     try {
+      // RSVP is first-person: it answers as the grant it goes through, so it must be the
+      // mailbox the calendar belongs to (#2475). `primary` becomes that mailbox's home calendar.
+      const route = await routeCalendar(ctx, 'calendar-respond-to-invite', calendarId, mailbox.mailbox);
+      if (!route.ok) return { success: false, error: route.error };
+      const routed = route.routed;
+
       if (ctx.contactService) {
-        const registry = await ctx.contactService.resolveCalendar(calendarId);
+        const registry = await ctx.contactService.resolveCalendar(routed.calendarId);
         if (registry?.readOnly) {
           return { success: false, error: 'Calendar is read-only' };
         }
       }
 
       const participantStatus = RESPONSE_TO_NYLAS[normalizedResponse];
-      const rsvp = await ctx.nylasCalendarClient.sendRsvp(calendarId, eventId, participantStatus);
-      ctx.log.info({ calendarId, eventId, response: normalizedResponse }, 'Responded to calendar invite');
+      const rsvp = await routed.client.sendRsvp(routed.calendarId, eventId, participantStatus);
+      ctx.log.info({ calendarId, eventId, response: normalizedResponse, mailboxId: routed.mailboxId }, 'Responded to calendar invite');
 
       let event: NylasCalendarEvent | null = null;
       try {
-        event = await ctx.nylasCalendarClient.getEvent(calendarId, eventId);
+        event = await routed.client.getEvent(routed.calendarId, eventId);
       } catch (err) {
         ctx.log.warn({ err, calendarId, eventId }, 'calendar-respond-to-invite: RSVP succeeded but event fetch failed');
         warnings.push('RSVP succeeded, but fetching the updated event failed');
       }
 
       const releaseResult = normalizedResponse === 'accept'
-        ? await this.releaseMatchingHolds(ctx, calendarId, input.holdMatchCriteria, event, input.holdSearchStart, input.holdSearchEnd)
+        ? await this.releaseMatchingHolds(ctx, routed, input.holdMatchCriteria, event, input.holdSearchStart, input.holdSearchEnd)
         : { releasedHolds: [] as string[], releaseWarnings: [] as string[] };
 
       const tz = ctx.timezone;
@@ -130,13 +141,14 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
 
   private async releaseMatchingHolds(
     ctx: ToolContext,
-    calendarId: string,
+    routed: RoutedCalendar,
     criteria: HoldMatchCriteria | undefined,
     event: NylasCalendarEvent | null,
     holdSearchStart?: string,
     holdSearchEnd?: string,
   ): Promise<{ releasedHolds: string[]; releaseWarnings: string[] }> {
-    if (!ctx.nylasCalendarClient || !criteria || !hasHoldMatchSignal(criteria)) {
+    const { client, calendarId } = routed;
+    if (!criteria || !hasHoldMatchSignal(criteria)) {
       return { releasedHolds: [], releaseWarnings: [] };
     }
 
@@ -150,7 +162,7 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
 
     let events: NylasCalendarEvent[];
     try {
-      events = await ctx.nylasCalendarClient.listEvents(calendarId, window.start, window.end);
+      events = await client.listEvents(calendarId, window.start, window.end);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.warn({ err, calendarId }, 'calendar-respond-to-invite: failed to list holds for cleanup');
@@ -178,7 +190,7 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
       }
       try {
         // No notify flag: no attendees to email, and Microsoft rejects false.
-        await ctx.nylasCalendarClient.deleteEvent(calendarId, hold.id);
+        await client.deleteEvent(calendarId, hold.id);
         releasedHolds.push(hold.id);
         ctx.log.info(
           { calendarId, holdId: hold.id },

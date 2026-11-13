@@ -286,18 +286,18 @@ describe('reconcileRegistries', () => {
       agents: [],
       skills: ['calendar'],
       members: { calendar: ['calendar-list-events', 'calendar-register'] },
-      caps: { 'calendar-list-events': ['nylasCalendarClient'], 'calendar-register': ['entityMemory'] },
+      caps: { 'calendar-list-events': ['calendarRouter'], 'calendar-register': ['entityMemory'] },
     };
 
     it('holds back a member whose declared capability this boot did not build', async () => {
-      await run({ tools: [], agents: [], skills: ['calendar'] }, disk, [], ['nylasCalendarClient']);
+      await run({ tools: [], agents: [], skills: ['calendar'] }, disk, [], ['calendarRouter']);
       expect(await toolRepo.getRow('calendar-list-events')).toBeNull();
       // A capability that IS available doesn't hold anything back.
       expect((await toolRepo.getRow('calendar-register'))?.enabled).toBe(true);
     });
 
     it('enrolls it on a later boot once the integration is configured', async () => {
-      await run({ tools: [], agents: [], skills: ['calendar'] }, disk, [], ['nylasCalendarClient']);
+      await run({ tools: [], agents: [], skills: ['calendar'] }, disk, [], ['calendarRouter']);
       await run({ tools: [], agents: [], skills: ['calendar'] }, disk, [], []);
       expect((await toolRepo.getRow('calendar-list-events'))?.enabled).toBe(true);
     });

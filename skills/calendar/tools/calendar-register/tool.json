@@ -8,18 +8,23 @@
     "nylas_calendar_id": "string",
     "label": "string",
     "contact_id": "string",
-    "is_primary": "boolean?"
+    "is_primary": "boolean?",
+    "mailbox": "string? (mailbox id it is read through; required when several are connected, unless the ID is a mailbox's own address)"
   },
   "outputs": {
     "calendar_id": "string",
     "nylas_calendar_id": "string",
     "contact_id": "string",
     "label": "string",
-    "is_primary": "boolean"
+    "is_primary": "boolean",
+    "mailbox": "string|null"
   },
   "permissions": [],
   "secrets": [],
   "timeout": 15000,
+  "capabilities": [
+    "calendarRouter"
+  ],
   "allowed_callers": [
     "calendar"
   ]

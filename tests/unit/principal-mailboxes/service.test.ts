@@ -208,4 +208,13 @@ describe('PrincipalMailboxes', () => {
     expect(await view.ceoClient('work', logger)).toBeDefined();
     await expect(view.ceoClient('nope', logger)).rejects.toBeInstanceOf(UnknownMailboxError);
   });
+
+  it('forCalendarRouter holds closures only: no credentials, no instance (#2475, F7)', async () => {
+    const { svc } = build([rec()], { [principalMailboxGrantSecretName('work')]: 'g1' });
+    const view = svc.forCalendarRouter();
+    expect(Object.keys(view).sort()).toEqual(['calendarClient', 'get', 'isFallbackActive', 'list']);
+    expect(view).not.toHaveProperty('credentials');
+    expect((await view.list()).map((m) => m.id)).toEqual(['work']);
+    await expect(view.calendarClient('nope')).rejects.toBeInstanceOf(UnknownMailboxError);
+  });
 });

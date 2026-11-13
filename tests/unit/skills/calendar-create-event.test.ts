@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { CalendarCreateEventHandler } from '../../../skills/calendar/tools/calendar-create-event/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
+import { singleMailboxRouter } from '../../../skills/_shared/calendar-router-test-helpers.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -12,7 +13,7 @@ function makeCtx(input: Record<string, unknown>, overrides?: Partial<ToolContext
 describe('CalendarCreateEventHandler', () => {
   const handler = new CalendarCreateEventHandler();
 
-  it('returns failure when nylasCalendarClient is not available', async () => {
+  it('returns failure when the calendar router is not available', async () => {
     const result = await handler.execute(makeCtx({ calendarId: 'cal-1', title: 'Test', start: '2026-04-01T09:00:00Z', end: '2026-04-01T10:00:00Z' }));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('Calendar not configured');
@@ -22,7 +23,7 @@ describe('CalendarCreateEventHandler', () => {
     const nylasCalendarClient = { createEvent: vi.fn() };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', title: 'Test' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('start');
@@ -35,7 +36,7 @@ describe('CalendarCreateEventHandler', () => {
     };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', title: 'Test', start: '2026-04-01T09:00:00Z', end: '2026-04-01T10:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never, contactService: contactService as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient), contactService: contactService as never },
     ));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('read-only');
@@ -50,7 +51,7 @@ describe('CalendarCreateEventHandler', () => {
     };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', title: 'Team Meeting', start: '2026-04-06T09:00:00Z', end: '2026-04-06T10:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never, contactService: contactService as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient), contactService: contactService as never },
     ));
     expect(result.success).toBe(true);
     if (result.success) {
@@ -70,7 +71,7 @@ describe('CalendarCreateEventHandler', () => {
     };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', title: 'Team Meeting', start: '2026-04-01T09:00:00Z', end: '2026-04-01T10:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never, contactService: contactService as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient), contactService: contactService as never },
     ));
     expect(result.success).toBe(true);
     expect(nylasCalendarClient.createEvent).toHaveBeenCalled();
@@ -81,7 +82,7 @@ describe('CalendarCreateEventHandler', () => {
     const nylasCalendarClient = { createEvent: vi.fn().mockResolvedValue(createdEvent) };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', title: 'Test', start: '2026-04-01T09:00:00Z', end: '2026-04-01T10:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(true);
   });
@@ -96,7 +97,7 @@ describe('CalendarCreateEventHandler', () => {
         end: '2026-04-01T10:00:00Z',
         attendees: [{ email: 'a@example.test', status: 'yes' }],
       },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(false);
     if (!result.success) {

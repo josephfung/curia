@@ -4,6 +4,7 @@ import type { ToolContext } from '../../../../src/skills/types.js';
 import type { NylasCalendarEvent } from '../../../../src/channels/calendar/nylas-calendar-client.js';
 import { createSilentLogger } from '../../../../src/logger.js';
 import { buildHoldMetadata } from '../../../../src/channels/calendar/holds.js';
+import { singleMailboxRouter, calendarClientOf } from '../../../_shared/calendar-router-test-helpers.js';
 
 const START_UNIX = 1_780_000_000;
 const END_UNIX = 1_780_003_600;
@@ -63,14 +64,14 @@ function makeCtx(overrides?: Partial<ToolContext>, clientOverrides?: Record<stri
     secret: () => { throw new Error('no secret in test'); },
     log: createSilentLogger(),
     timezone: 'UTC',
-    nylasCalendarClient: {
+    calendarRouter: singleMailboxRouter({
       sendRsvp,
       getEvent,
       listEvents,
       deleteEvent,
       updateEvent: vi.fn(),
       ...clientOverrides,
-    } as unknown as ToolContext['nylasCalendarClient'],
+    }),
     ...overrides,
   } as ToolContext;
 }
@@ -89,7 +90,7 @@ describe('CalendarRespondToInviteHandler', () => {
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
-    expect(ctx.nylasCalendarClient!.sendRsvp).toHaveBeenCalledWith('cal_1', 'evt_invite', status);
+    expect(calendarClientOf(ctx).sendRsvp).toHaveBeenCalledWith('cal_1', 'evt_invite', status);
   });
 
   it('uses sendRsvp only and never writes a participants array through updateEvent', async () => {
@@ -99,7 +100,7 @@ describe('CalendarRespondToInviteHandler', () => {
 
     await handler.execute(ctx);
 
-    expect(ctx.nylasCalendarClient!.sendRsvp).toHaveBeenCalledOnce();
+    expect(calendarClientOf(ctx).sendRsvp).toHaveBeenCalledOnce();
     expect(updateEvent).not.toHaveBeenCalled();
   });
 

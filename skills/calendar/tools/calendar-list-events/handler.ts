@@ -19,11 +19,13 @@ import { isSystemOriginated, isPrincipalOriginated } from '../../../../src/conta
 import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from '../../../../src/skills/_shared/placeholder-guard.js';
 import { guardNylasExplicitCalendarIdentity } from '../../../../src/skills/_shared/calendar-identity-guard.js';
 import { isUuid } from '../../../../src/util/uuid.js';
+import { CalendarRouteError, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
+import { readCalendarMailbox, routeCalendar } from '../../../_shared/calendar-route.js';
 
 export class CalendarListEventsHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const calendarClient = ctx.nylasCalendarClient;
-    if (!calendarClient) {
+    const router = ctx.calendarRouter;
+    if (!router) {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }
 
@@ -43,16 +45,23 @@ export class CalendarListEventsHandler implements ToolHandler {
     if (!timeMax || typeof timeMax !== 'string') {
       return { success: false, error: 'Missing required input: timeMax' };
     }
+    const mailbox = readCalendarMailbox(ctx.input);
+    if (!mailbox.ok) return { success: false, error: mailbox.error };
 
     try {
       // Resolve which calendar(s) to query.
       // Priority: explicit calendarId > explicit contactId lookup > caller auto-lookup.
       let calendarIds: string[];
+      const preRouted = new Map<string, RoutedCalendar>();
 
       if (calendarId && typeof calendarId === 'string') {
         // Principal-scoped task + calendar registered to a non-principal contact → fail closed (#1854).
         const identityGuard = await guardNylasExplicitCalendarIdentity({ calendarId, ctx });
         if (identityGuard) return identityGuard;
+        // An explicit calendar that cannot be routed (needs a mailbox, say) is the caller's to fix.
+        const route = await routeCalendar(ctx, 'calendar-list-events', calendarId, mailbox.mailbox);
+        if (!route.ok) return { success: false, error: route.error };
+        preRouted.set(calendarId, route.routed);
         calendarIds = [calendarId];
       } else if (contactId && typeof contactId === 'string') {
         // Explicit contactId provided — used by scheduled agents that don't have a
@@ -132,8 +141,13 @@ export class CalendarListEventsHandler implements ToolHandler {
       // Fetch events from all resolved calendars in parallel, then merge.
       // Use allSettled so one bad calendar (stale grant, revoked access) doesn't
       // poison the entire result — return partial results and log failures.
+      // Each calendar goes through its own mailbox (#2475); one that cannot be routed fails
+      // like one whose fetch failed, and the others still answer.
       const settled = await Promise.allSettled(
-        calendarIds.map((cid) => calendarClient.listEvents(cid, timeMin, timeMax, fetchLimit)),
+        calendarIds.map(async (cid) => {
+          const routed = preRouted.get(cid) ?? (await router.route(cid, mailbox.mailbox));
+          return routed.client.listEvents(routed.calendarId, timeMin, timeMax, fetchLimit);
+        }),
       );
 
       const failedCalendarIds: string[] = [];
@@ -155,7 +169,11 @@ export class CalendarListEventsHandler implements ToolHandler {
           failedCalendarIds.push(calendarId);
           rejectionReasons.push(result.reason);
           failureDetails.push(`${calendarId}: ${describeRejection(result.reason)}`);
-          ctx.log.error({ err: result.reason, calendarId }, 'Failed to fetch events for calendar');
+          if (result.reason instanceof CalendarRouteError) {
+            ctx.log.warn({ code: result.reason.code }, 'calendar-list-events: a calendar could not be routed to its mailbox');
+          } else {
+            ctx.log.error({ err: result.reason, calendarId }, 'Failed to fetch events for calendar');
+          }
         }
       }
 
@@ -174,8 +192,8 @@ export class CalendarListEventsHandler implements ToolHandler {
             errorType: 'AUTH_FAILURE',
             error:
               `Calendar authorization failed for all calendars (${failedCalendarIds.join(', ')}): ` +
-              'the principal calendar grant (ceo_nylas_grant_id) was rejected by Google/Nylas ' +
-              '(401/403). Reconnect the grant in the Nylas dashboard, then retry.',
+              "the principal mailbox's Nylas grant was rejected by Google/Nylas " +
+              "(401/403). Reconnect it in the Nylas dashboard, use Replace grant on the mailbox in the console, then retry.",
           };
         }
         return {

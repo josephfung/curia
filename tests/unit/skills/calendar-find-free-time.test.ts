@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { CalendarFindFreeTimeHandler } from '../../../skills/calendar/tools/calendar-find-free-time/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
+import { singleMailboxRouter } from '../../../skills/_shared/calendar-router-test-helpers.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -25,7 +26,7 @@ const mockFreeBusy = [
 describe('CalendarFindFreeTimeHandler', () => {
   const handler = new CalendarFindFreeTimeHandler();
 
-  it('returns failure when nylasCalendarClient is not available', async () => {
+  it('returns failure when the calendar router is not available', async () => {
     const result = await handler.execute(makeCtx({ calendarIds: ['cal-1'], timeMin: 'a', timeMax: 'b' }));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('Calendar not configured');
@@ -35,7 +36,7 @@ describe('CalendarFindFreeTimeHandler', () => {
     const nylasCalendarClient = { getFreeBusy: vi.fn() };
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'] },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('timeMin');
@@ -46,7 +47,7 @@ describe('CalendarFindFreeTimeHandler', () => {
 
     const epoch = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], timeMin: '1970-01-01T00:00:00Z', timeMax: '2026-04-06T16:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(epoch.success).toBe(false);
     if (!epoch.success) expect(epoch.error).toContain('timeMin');
@@ -54,7 +55,7 @@ describe('CalendarFindFreeTimeHandler', () => {
 
     const farFuture = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], timeMin: '2026-04-06T12:00:00Z', timeMax: '2100-01-01T00:00:01Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(farFuture.success).toBe(false);
     if (!farFuture.success) expect(farFuture.error).toContain('timeMax');
@@ -70,7 +71,7 @@ describe('CalendarFindFreeTimeHandler', () => {
     // Free windows: 12:00Z–12:30Z, 13:00Z–14:30Z, 15:00Z–16:00Z
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], timeMin: '2026-04-06T12:00:00Z', timeMax: '2026-04-06T16:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -98,7 +99,7 @@ describe('CalendarFindFreeTimeHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], timeMin: '2026-04-06T12:00:00Z', timeMax: '2026-04-06T16:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -127,7 +128,7 @@ describe('CalendarFindFreeTimeHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], timeMin: '2026-04-06T12:00:00Z', timeMax: '2026-04-06T16:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -153,7 +154,7 @@ describe('CalendarFindFreeTimeHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], timeMin: '2026-04-06T12:00:00Z', timeMax: '2026-04-06T16:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -190,7 +191,7 @@ describe('CalendarFindFreeTimeHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], timeMin: '2026-04-06T12:00:00Z', timeMax: '2026-04-06T16:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -219,7 +220,7 @@ describe('CalendarFindFreeTimeHandler', () => {
     // 5 min = 300s filter keeps both; but using 15 min = 900s keeps only the longer window
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], timeMin: '2026-04-06T12:00:00Z', timeMax: '2026-04-06T13:00:00Z', duration: 15 },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -247,7 +248,7 @@ describe('CalendarFindFreeTimeHandler', () => {
     // 1775491200 = 2026-04-06T16:00:00Z = 12:00 PM EDT
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], timeMin: '2026-04-06T12:00:00Z', timeMax: '2026-04-06T16:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never, timezone: 'America/Toronto' },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient), timezone: 'America/Toronto' },
     ));
 
     expect(result.success).toBe(true);
@@ -273,7 +274,7 @@ describe('CalendarFindFreeTimeHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], timeMin: '2026-04-06T12:00:00Z', timeMax: '2026-04-06T16:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);

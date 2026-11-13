@@ -18,6 +18,9 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { ConfigStore } from '../../../../src/memory/config-store.js';
 import { buildHoldMetadata } from '../../../../src/channels/calendar/holds.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
+import { CalendarRouteError, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
+import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
+import { calendarRouteErrorMessage, readCalendarMailbox } from '../../../_shared/calendar-route.js';
 
 // The namespace / key where the holds toggle lives in the config store.
 const HOLDS_NAMESPACE = 'calendar_holds';
@@ -25,8 +28,8 @@ const HOLDS_KEY = 'enabled';
 
 export class CalendarCreateHoldHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    // Guard: Nylas calendar client is required.
-    if (!ctx.nylasCalendarClient) {
+    // Guard: the calendar router is required.
+    if (!ctx.calendarRouter) {
       return { success: false, error: 'Calendar not configured -- Nylas credentials missing' };
     }
 
@@ -62,6 +65,8 @@ export class CalendarCreateHoldHandler implements ToolHandler {
     if (new Date(end) <= new Date(start)) {
       return { success: false, error: 'Invalid input: end must be after start' };
     }
+    const mailbox = readCalendarMailbox(ctx.input);
+    if (!mailbox.ok) return { success: false, error: mailbox.error };
 
     // Build the display string early so we can return it even on toggle-off / error paths.
     // toLocalIso converts Unix seconds to the user's timezone; formatDisplayTimezone labels it.
@@ -135,8 +140,26 @@ export class CalendarCreateHoldHandler implements ToolHandler {
     // the calendar that this is a provisional block, not a real commitment.
     const holdTitle = `HOLD (TBC): ${subject ?? 'tentative'}`;
 
+    // -- Route to the calendar's mailbox (#2475) --
+    // A route the caller can fix (needs_mailbox, an unknown mailbox) is a tool error naming what
+    // to pass. Anything else (credentials unreadable) is a hold failure: non-fatal, as below.
+    let routed: RoutedCalendar;
     try {
-      const event = await ctx.nylasCalendarClient.createEvent(calendarId, {
+      routed = await ctx.calendarRouter.route(calendarId, mailbox.mailbox);
+    } catch (err) {
+      if (err instanceof CalendarRouteError) {
+        ctx.log.warn({ code: err.code }, 'calendar-create-hold: calendar could not be routed');
+        return { success: false, error: err.message };
+      }
+      ctx.log.error({ ...grantSafeErrorFields(err), subject }, 'calendar-create-hold: calendar routing failed -- proceeding without hold');
+      return {
+        success: true,
+        data: { held: false, holdEventId: null, display, displayTimezone: tzLabel, reason: calendarRouteErrorMessage(err) },
+      };
+    }
+
+    try {
+      const event = await routed.client.createEvent(routed.calendarId, {
         title: holdTitle,
         start,
         end,
@@ -147,7 +170,7 @@ export class CalendarCreateHoldHandler implements ToolHandler {
         metadata,
       });
 
-      ctx.log.info({ calendarId, holdEventId: event.id, subject }, 'calendar-create-hold: placed hold');
+      ctx.log.info({ calendarId, holdEventId: event.id, subject, mailboxId: routed.mailboxId }, 'calendar-create-hold: placed hold');
 
       return {
         success: true,

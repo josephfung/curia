@@ -31,6 +31,8 @@ interface RemovalPreview {
   scopedRules: Array<{ title: string; onlyThisMailbox: boolean }> | null;
   rulesUnreadable?: boolean;
   calendars: Array<{ calendarId: string; label: string }>;
+  /** True when the calendar registry could not be read: calendars is then empty (unknown). */
+  calendarsUnreadable?: boolean;
 }
 
 const BASE = '/api/registry/principal-mailboxes';
@@ -195,9 +197,12 @@ function RemovePanel({ preview, onDone, onCancel }: {
       )}
       {preview.calendars.length > 0 && (
         <div>
-          <span>Calendars read through this mailbox:</span>
+          <span>Calendars read through this mailbox (disconnected by the removal):</span>
           <ul>{preview.calendars.map(c => <li key={c.calendarId}>{c.label}</li>)}</ul>
         </div>
+      )}
+      {preview.calendarsUnreadable && (
+        <p style={{ margin: '0 0 8px' }}>Could not read which calendars go through this mailbox; they are disconnected by the removal too.</p>
       )}
 
       {err && <p className="autonomy-error" style={{ margin: '0 0 8px' }}>{err}</p>}

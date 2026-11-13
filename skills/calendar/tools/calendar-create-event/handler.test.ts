@@ -12,6 +12,7 @@ import type { ToolContext } from '../../../../src/skills/types.js';
 import type { NylasCalendarEvent } from '../../../../src/channels/calendar/nylas-calendar-client.js';
 import type { Logger } from '../../../../src/logger.js';
 import { CURIA_HOLD_KEY } from '../../../../src/channels/calendar/holds.js';
+import { singleMailboxRouter } from '../../../_shared/calendar-router-test-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -90,11 +91,11 @@ function makeCtx(opts: {
       error: vi.fn(),
       debug: vi.fn(),
     } as unknown as Logger,
-    nylasCalendarClient: {
+    calendarRouter: singleMailboxRouter({
       createEvent,
       listEvents,
       deleteEvent,
-    } as unknown as ToolContext['nylasCalendarClient'],
+    }),
     timezone: 'America/Toronto',
   } as unknown as ToolContext;
 }
@@ -222,9 +223,9 @@ describe('CalendarCreateEventHandler -- input validation', () => {
   let handler: CalendarCreateEventHandler;
   beforeEach(() => { handler = new CalendarCreateEventHandler(); });
 
-  it('returns success:false when nylasCalendarClient is missing', async () => {
+  it('returns success:false when the calendar router is missing', async () => {
     const ctx = makeCtx({});
-    ctx.nylasCalendarClient = undefined;
+    ctx.calendarRouter = undefined;
 
     const result = await handler.execute(ctx);
 

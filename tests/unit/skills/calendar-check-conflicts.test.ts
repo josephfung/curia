@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { CalendarCheckConflictsHandler } from '../../../skills/calendar/tools/calendar-check-conflicts/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
+import { singleMailboxRouter } from '../../../skills/_shared/calendar-router-test-helpers.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -12,7 +13,7 @@ function makeCtx(input: Record<string, unknown>, overrides?: Partial<ToolContext
 describe('CalendarCheckConflictsHandler', () => {
   const handler = new CalendarCheckConflictsHandler();
 
-  it('returns failure when nylasCalendarClient is not available', async () => {
+  it('returns failure when the calendar router is not available', async () => {
     const result = await handler.execute(makeCtx({ calendarIds: ['cal-1'], proposedStart: 'a', proposedEnd: 'b' }));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('Calendar not configured');
@@ -22,7 +23,7 @@ describe('CalendarCheckConflictsHandler', () => {
     const nylasCalendarClient = { getFreeBusy: vi.fn() };
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'] },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('proposedStart');
@@ -34,7 +35,7 @@ describe('CalendarCheckConflictsHandler', () => {
     };
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], proposedStart: '2026-04-01T09:00:00Z', proposedEnd: '2026-04-01T10:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(true);
     if (result.success) {
@@ -61,7 +62,7 @@ describe('CalendarCheckConflictsHandler', () => {
     // Proposed time overlaps with the busy period
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], proposedStart: '1970-01-01T00:00:00Z', proposedEnd: '1970-01-01T01:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never, contactService: contactService as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient), contactService: contactService as never },
     ));
 
     expect(result.success).toBe(true);
@@ -89,7 +90,7 @@ describe('CalendarCheckConflictsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], proposedStart: '2026-04-06T12:00:00Z', proposedEnd: '2026-04-06T12:30:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -121,7 +122,7 @@ describe('CalendarCheckConflictsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], proposedStart: '2026-04-06T12:00:00Z', proposedEnd: '2026-04-06T13:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -151,7 +152,7 @@ describe('CalendarCheckConflictsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], proposedStart: '2026-04-06T12:30:00Z', proposedEnd: '2026-04-06T13:30:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);
@@ -176,7 +177,7 @@ describe('CalendarCheckConflictsHandler', () => {
     const result = await handler.execute(makeCtx(
       // These ISO strings translate to times WAY after timestamp 100
       { calendarIds: ['cal-1'], proposedStart: '2026-04-01T09:00:00Z', proposedEnd: '2026-04-01T10:00:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(true);
     if (result.success) {
@@ -204,7 +205,7 @@ describe('CalendarCheckConflictsHandler', () => {
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], proposedStart: '2026-04-06T12:30:00Z', proposedEnd: '2026-04-06T13:30:00Z' },
       {
-        nylasCalendarClient: nylasCalendarClient as never,
+        calendarRouter: singleMailboxRouter(nylasCalendarClient),
         contactService: contactService as never,
         timezone: 'America/Toronto',
       },
@@ -238,7 +239,7 @@ describe('CalendarCheckConflictsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarIds: ['cal-1'], proposedStart: '2026-04-06T12:30:00Z', proposedEnd: '2026-04-06T13:30:00Z' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
 
     expect(result.success).toBe(true);

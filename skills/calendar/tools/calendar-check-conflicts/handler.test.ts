@@ -5,6 +5,8 @@ import { CalendarCheckConflictsHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import { createSilentLogger } from '../../../../src/logger.js';
 import { buildHoldMetadata } from '../../../../src/channels/calendar/holds.js';
+import type { NylasCalendarClient } from '../../../../src/channels/calendar/nylas-calendar-client.js';
+import { singleMailboxRouter } from '../../../_shared/calendar-router-test-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -20,9 +22,9 @@ function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
     secret: () => { throw new Error('no secret in test'); },
     log: createSilentLogger(),
     timezone: 'America/New_York',
-    nylasCalendarClient: {
+    calendarRouter: singleMailboxRouter({
       getFreeBusy: vi.fn().mockResolvedValue([]),
-    } as unknown as ToolContext['nylasCalendarClient'],
+    }),
     ...overrides,
   } as ToolContext;
 }
@@ -51,7 +53,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           ],
         },
       ]),
-    } as unknown as ToolContext['nylasCalendarClient'];
+    } as unknown as NylasCalendarClient;
 
     const result = await handler.execute(makeCtx({
       input: {
@@ -59,7 +61,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
         proposedStart,
         proposedEnd,
       },
-      nylasCalendarClient,
+      calendarRouter: singleMailboxRouter(nylasCalendarClient),
     }));
 
     expect(result.success).toBe(true);
@@ -88,7 +90,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           ],
         },
       ]),
-    } as unknown as ToolContext['nylasCalendarClient'];
+    } as unknown as NylasCalendarClient;
 
     const result = await handler.execute(makeCtx({
       input: {
@@ -96,7 +98,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
         proposedStart,
         proposedEnd,
       },
-      nylasCalendarClient,
+      calendarRouter: singleMailboxRouter(nylasCalendarClient),
     }));
 
     expect(result.success).toBe(true);
@@ -137,7 +139,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           ],
         },
       ]),
-    } as unknown as ToolContext['nylasCalendarClient'];
+    } as unknown as NylasCalendarClient;
 
     const result = await handler.execute(makeCtx({
       input: {
@@ -145,7 +147,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
         proposedStart,
         proposedEnd,
       },
-      nylasCalendarClient,
+      calendarRouter: singleMailboxRouter(nylasCalendarClient),
     }));
 
     expect(result.success).toBe(true);
@@ -201,7 +203,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           }),
         },
       ]),
-    } as unknown as ToolContext['nylasCalendarClient'];
+    } as unknown as NylasCalendarClient;
 
     const result = await handler.execute(makeCtx({
       input: {
@@ -213,7 +215,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           contactDomain: 'example.test',
         },
       },
-      nylasCalendarClient,
+      calendarRouter: singleMailboxRouter(nylasCalendarClient),
     }));
 
     expect(result.success).toBe(true);
@@ -267,7 +269,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           }),
         },
       ]),
-    } as unknown as ToolContext['nylasCalendarClient'];
+    } as unknown as NylasCalendarClient;
 
     const result = await handler.execute(makeCtx({
       input: {
@@ -280,7 +282,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           sourceRef: 'msg-negotiation',
         },
       },
-      nylasCalendarClient,
+      calendarRouter: singleMailboxRouter(nylasCalendarClient),
     }));
 
     expect(result.success).toBe(true);
@@ -334,7 +336,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           }),
         },
       ]),
-    } as unknown as ToolContext['nylasCalendarClient'];
+    } as unknown as NylasCalendarClient;
 
     const result = await handler.execute(makeCtx({
       input: {
@@ -347,7 +349,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           threadRef: 'invite-thread-only',
         },
       },
-      nylasCalendarClient,
+      calendarRouter: singleMailboxRouter(nylasCalendarClient),
     }));
 
     expect(result.success).toBe(true);

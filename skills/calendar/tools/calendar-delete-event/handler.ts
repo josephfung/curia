@@ -1,13 +1,15 @@
 // skills/calendar-delete-event/handler.ts
 //
 // Deletes a calendar event. Checks read-only flag before attempting deletion.
+// Goes through the mailbox the calendar belongs to (#2475).
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { isNylasBadRequest } from '../../../../src/channels/calendar/nylas-calendar-client.js';
+import { readCalendarMailbox, routeCalendar } from '../../../_shared/calendar-route.js';
 
 export class CalendarDeleteEventHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    if (!ctx.nylasCalendarClient) {
+    if (!ctx.calendarRouter) {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }
 
@@ -23,18 +25,24 @@ export class CalendarDeleteEventHandler implements ToolHandler {
     if (!eventId || typeof eventId !== 'string') {
       return { success: false, error: 'Missing required input: eventId' };
     }
+    const mailbox = readCalendarMailbox(ctx.input);
+    if (!mailbox.ok) return { success: false, error: mailbox.error };
 
     try {
+      const route = await routeCalendar(ctx, 'calendar-delete-event', calendarId, mailbox.mailbox);
+      if (!route.ok) return { success: false, error: route.error };
+      const { client, calendarId: target, mailboxId } = route.routed;
+
       // Read-only check — moved inside try so DB errors from resolveCalendar are caught with skill-level context.
       if (ctx.contactService) {
-        const registry = await ctx.contactService.resolveCalendar(calendarId);
+        const registry = await ctx.contactService.resolveCalendar(target);
         if (registry?.readOnly) {
           return { success: false, error: 'Calendar is read-only' };
         }
       }
 
-      await ctx.nylasCalendarClient.deleteEvent(calendarId, eventId, notifyAttendees);
-      ctx.log.info({ calendarId, eventId }, 'Deleted calendar event');
+      await client.deleteEvent(target, eventId, notifyAttendees);
+      ctx.log.info({ calendarId, eventId, mailboxId }, 'Deleted calendar event');
       return { success: true, data: { deleted: true } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

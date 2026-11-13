@@ -8,11 +8,12 @@
     "calendarId": "string (Nylas calendar ID containing the invite)",
     "eventId": "string (Nylas event ID to RSVP to)",
     "response": "string (accept | decline | tentative)",
-    "account": "string? (named account hint; informational — the calendar client is bound to the principal's own Nylas grant (ceo_nylas_grant_id), so RSVP always runs as the principal regardless of this hint)",
+    "account": "string? (informational only; RSVP runs as the mailbox the calendar belongs to)",
     "comment": "string? (optional RSVP comment; currently returned as a warning if provided because Nylas sendRsvp only accepts status in this SDK)",
     "holdMatchCriteria": "object? ({ subject?, contactDomain?, contactId?, sourceRef?, threadRef? } used only when response is accept to release matching Curia holds)",
     "holdSearchStart": "timestamp? (start of hold cleanup search window; defaults around the invite time)",
-    "holdSearchEnd": "timestamp? (end of hold cleanup search window; defaults around the invite time)"
+    "holdSearchEnd": "timestamp? (end of hold cleanup search window; defaults around the invite time)",
+    "mailbox": "string? (mailbox id; required for an unregistered calendar or \"primary\" when several are connected)"
   },
   "outputs": {
     "responded": "boolean",
@@ -28,7 +29,7 @@
   "secrets": [],
   "timeout": 30000,
   "capabilities": [
-    "nylasCalendarClient"
+    "calendarRouter"
   ],
   "allowed_callers": [
     "calendar"

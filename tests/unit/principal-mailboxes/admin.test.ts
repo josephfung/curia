@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
-import { MIRROR_PENDING_WARNING, PrincipalMailboxAdmin } from '../../../src/principal-mailboxes/admin.js';
+import { HOME_CALENDAR_PENDING_WARNING, MIRROR_PENDING_WARNING, PrincipalMailboxAdmin } from '../../../src/principal-mailboxes/admin.js';
+import { createMailboxCalendarHooks } from '../../../src/principal-mailboxes/calendar-hooks.js';
 import type { PrincipalMailboxStore } from '../../../src/principal-mailboxes/store.js';
 import { RemovedMailboxError, type PrincipalMailboxRecord } from '../../../src/principal-mailboxes/types.js';
 import { principalMailboxGrantSecretName } from '../../../src/principal-mailboxes/secrets.js';
@@ -30,6 +31,7 @@ function setup(opts: {
   reconcileFlatKeys?: () => Promise<unknown>;
   curiaGrants?: string[];
   rulesDoc?: { read(): Promise<string | null>; write(s: string): Promise<void> };
+  calendars?: ConstructorParameters<typeof PrincipalMailboxAdmin>[0]['calendars'];
 } = {}) {
   const records: PrincipalMailboxRecord[] = [...(opts.records ?? [])];
   const identities: Identity[] = [...(opts.identities ?? [])];
@@ -102,6 +104,7 @@ function setup(opts: {
     reconcileFlatKeys: opts.reconcileFlatKeys,
     ...(opts.rulesDoc ? { rulesDoc: opts.rulesDoc } : {}),
     ...(opts.curiaGrants ? { curiaAccountGrantIds: async () => opts.curiaGrants! } : {}),
+    ...(opts.calendars ? { calendars: opts.calendars } : {}),
     logger: opts.logger ?? logger,
     maxLiveMailboxes: opts.maxLiveMailboxes,
   });
@@ -366,7 +369,8 @@ describe('PrincipalMailboxAdmin.remove', () => {
     expect(order).toEqual([
       `delete:${principalMailboxGrantSecretName('personal')}`, 'delete:ceo_nylas_grant_id', 'delete:ceo_self_email', 'unlink', 'reconcile',
     ]);
-    expect(out).toEqual({ cleanupIncomplete: [], restartRequired: true });
+    // The calendar router reads grants per call (#2475, Part 4): no restart after removing the default.
+    expect(out).toEqual({ cleanupIncomplete: [], restartRequired: false });
   });
 
   it('a failed flat-key step that the reconcile repairs is not reported', async () => {
@@ -376,7 +380,7 @@ describe('PrincipalMailboxAdmin.remove', () => {
       if (n === 'ceo_nylas_grant_id') throw new Error('vault blip');
       await realDelete(n);
     });
-    expect(await s.admin.remove({ id: 'personal', stillOwned: true })).toEqual({ cleanupIncomplete: [], restartRequired: true });
+    expect(await s.admin.remove({ id: 'personal', stillOwned: true })).toEqual({ cleanupIncomplete: [], restartRequired: false });
   });
 
   it('refuses unknown and removed ids', async () => {
@@ -393,7 +397,7 @@ describe('PrincipalMailboxAdmin.removalPreview', () => {
       primaryEmail: 'pat@gmail.com',
     });
     const p = await admin.removalPreview('personal');
-    expect(p).toMatchObject({ isDefault: true, isPrimaryEmail: true, stillOwnedDefault: true, scopedRules: [], calendars: [] });
+    expect(p).toMatchObject({ isDefault: true, isPrimaryEmail: true, stillOwnedDefault: true, scopedRules: [], calendars: [], calendarsUnreadable: false });
     expect(p.otherLive.map((m) => m.id)).toEqual(['work']);
     const w = await admin.removalPreview('work');
     expect(w).toMatchObject({ isDefault: false, isPrimaryEmail: false, stillOwnedDefault: false });
@@ -927,5 +931,94 @@ describe('removing a mailbox with scoped inbox rules (#2475 task 27)', () => {
     const out = await admin.remove({ id: 'work', stillOwned: true });
     expect(out.cleanupIncomplete).toEqual(['inbox_rules']);
     expect(rulesDoc.write).not.toHaveBeenCalled();
+  });
+});
+
+describe('PrincipalMailboxAdmin calendars (#2475, D7)', () => {
+  function calendarContacts(rows: Array<{ nylasCalendarId: string; principalMailboxId: string | null; contactId?: string; isPrimary?: boolean; label?: string }> = []) {
+    const calendars = rows.map((r) => ({ label: r.nylasCalendarId, contactId: PRINCIPAL, isPrimary: false, ...r }));
+    return {
+      calendars,
+      resolveCalendar: vi.fn(async (id: string) => calendars.find((c) => c.nylasCalendarId === id) ?? null),
+      linkCalendar: vi.fn(async (o: { nylasCalendarId: string; principalMailboxId: string | null; isPrimary?: boolean; label: string; contactId: string | null }) => {
+        calendars.push({ nylasCalendarId: o.nylasCalendarId, principalMailboxId: o.principalMailboxId, isPrimary: o.isPrimary ?? false, label: o.label, contactId: o.contactId ?? PRINCIPAL });
+        return o;
+      }),
+      setCalendarMailbox: vi.fn(async (id: string, mb: string) => {
+        const c = calendars.find((x) => x.nylasCalendarId === id);
+        if (c) c.principalMailboxId = mb;
+        return c !== undefined;
+      }),
+      getCalendarsForMailbox: vi.fn(async (mb: string) => calendars.filter((c) => c.principalMailboxId === mb)),
+    };
+  }
+
+  function hooks(contacts: ReturnType<typeof calendarContacts>, listed: Array<{ id: string; isPrimary: boolean }>) {
+    const listCalendars = vi.fn(async () => listed);
+    return {
+      listCalendars,
+      hooks: createMailboxCalendarHooks({
+        contacts: contacts as never,
+        principalContactId: PRINCIPAL,
+        calendarClient: async () => ({ listCalendars }) as never,
+        logger,
+      }),
+    };
+  }
+
+  it("add registers the home calendar: the grant's primary by its real id, is_primary for that mailbox", async () => {
+    const contacts = calendarContacts();
+    const { hooks: h } = hooks(contacts, [{ id: 'shared-team', isPrimary: false }, { id: 'pat@gmail.com', isPrimary: true }]);
+    const { admin } = setup({ grants: { g: google('pat@gmail.com') }, calendars: h });
+    const out = await admin.add({ id: 'personal', label: 'Personal', grantId: 'g' });
+    expect(out).toMatchObject({ ok: true });
+    expect(out).not.toHaveProperty('warning');
+    expect(contacts.linkCalendar).toHaveBeenCalledWith({
+      nylasCalendarId: 'pat@gmail.com', contactId: PRINCIPAL, label: 'Personal', isPrimary: true, principalMailboxId: 'personal',
+    });
+  });
+
+  it('add moves a home calendar registered through another mailbox to its owner', async () => {
+    const contacts = calendarContacts([{ nylasCalendarId: 'pat@gmail.com', principalMailboxId: 'work', isPrimary: true }]);
+    const { hooks: h } = hooks(contacts, [{ id: 'pat@gmail.com', isPrimary: true }]);
+    const { admin } = setup({ grants: { g: google('pat@gmail.com') }, calendars: h });
+    await admin.add({ id: 'personal', label: 'Personal', grantId: 'g' });
+    expect(contacts.linkCalendar).not.toHaveBeenCalled();
+    expect(contacts.setCalendarMailbox).toHaveBeenCalledWith('pat@gmail.com', 'personal');
+  });
+
+  it('a failed home-calendar registration is a warning, never a failed add', async () => {
+    const calendars = { registerHome: vi.fn(async () => { throw Object.assign(new Error('grant g-secret down'), { statusCode: 503 }); }), listForMailbox: vi.fn(async () => []) };
+    const { admin, records } = setup({ grants: { g: google('pat@gmail.com') }, calendars });
+    const out = await admin.add({ id: 'personal', label: 'Personal', grantId: 'g' });
+    expect(out).toMatchObject({ ok: true, warning: HOME_CALENDAR_PENDING_WARNING });
+    expect(records.map((r) => r.id)).toEqual(['personal']);
+  });
+
+  it("removalPreview lists the mailbox's calendars, and says when they could not be read", async () => {
+    const contacts = calendarContacts([
+      { nylasCalendarId: 'pat@gmail.com', principalMailboxId: 'personal', label: 'Personal' },
+      { nylasCalendarId: 'team', principalMailboxId: 'personal', label: 'Team', contactId: 'someone-else' },
+      { nylasCalendarId: 'w', principalMailboxId: 'work', label: 'Work' },
+    ]);
+    const { hooks: h } = hooks(contacts, []);
+    const { admin } = setup({ records: [rec()], calendars: h });
+    expect(await admin.removalPreview('personal')).toMatchObject({
+      calendars: [{ calendarId: 'pat@gmail.com', label: 'Personal' }, { calendarId: 'team', label: 'Team' }],
+      calendarsUnreadable: false,
+    });
+    const broken = setup({ records: [rec()], calendars: { registerHome: vi.fn(), listForMailbox: vi.fn(async () => { throw new Error('db down'); }) } });
+    expect(await broken.admin.removalPreview('personal')).toMatchObject({ calendars: [], calendarsUnreadable: true });
+  });
+
+  it('remove marks its calendars disconnected through onRemoved, leaving the rows on the removed mailbox', async () => {
+    const contacts = calendarContacts([{ nylasCalendarId: 'pat@gmail.com', principalMailboxId: 'personal' }]);
+    const { hooks: h } = hooks(contacts, []);
+    const { admin } = setup({ records: [rec()], calendars: h, onRemoved: [h.onRemoved] });
+    expect(await admin.remove({ id: 'personal', stillOwned: true })).toEqual({ cleanupIncomplete: [], restartRequired: false });
+    expect(contacts.getCalendarsForMailbox).toHaveBeenCalledWith('personal');
+    // Not moved to another mailbox, not deleted: the router reads it as removed.
+    expect(contacts.calendars[0]!.principalMailboxId).toBe('personal');
+    expect(contacts.setCalendarMailbox).not.toHaveBeenCalled();
   });
 });

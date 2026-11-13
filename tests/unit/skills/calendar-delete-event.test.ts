@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { CalendarDeleteEventHandler } from '../../../skills/calendar/tools/calendar-delete-event/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
+import { singleMailboxRouter } from '../../../skills/_shared/calendar-router-test-helpers.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -12,7 +13,7 @@ function makeCtx(input: Record<string, unknown>, overrides?: Partial<ToolContext
 describe('CalendarDeleteEventHandler', () => {
   const handler = new CalendarDeleteEventHandler();
 
-  it('returns failure when nylasCalendarClient is not available', async () => {
+  it('returns failure when the calendar router is not available', async () => {
     const result = await handler.execute(makeCtx({ calendarId: 'cal-1', eventId: 'evt-1' }));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('Calendar not configured');
@@ -22,7 +23,7 @@ describe('CalendarDeleteEventHandler', () => {
     const nylasCalendarClient = { deleteEvent: vi.fn() };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('eventId');
@@ -35,7 +36,7 @@ describe('CalendarDeleteEventHandler', () => {
     };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', eventId: 'evt-1' },
-      { nylasCalendarClient: nylasCalendarClient as never, contactService: contactService as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient), contactService: contactService as never },
     ));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('read-only');
@@ -47,7 +48,7 @@ describe('CalendarDeleteEventHandler', () => {
     const contactService = { resolveCalendar: vi.fn().mockResolvedValue(null) };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', eventId: 'evt-1' },
-      { nylasCalendarClient: nylasCalendarClient as never, contactService: contactService as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient), contactService: contactService as never },
     ));
     expect(result.success).toBe(true);
     if (result.success) {
@@ -61,7 +62,7 @@ describe('CalendarDeleteEventHandler', () => {
     const nylasCalendarClient = { deleteEvent: vi.fn().mockRejectedValue(badRequest) };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', eventId: 'evt-1', notifyAttendees: false },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(nylasCalendarClient.deleteEvent).toHaveBeenCalledWith('cal-1', 'evt-1', false);
     expect(result.success).toBe(false);
@@ -75,7 +76,7 @@ describe('CalendarDeleteEventHandler', () => {
     const nylasCalendarClient = { deleteEvent: vi.fn().mockRejectedValue(new Error('Nylas SDK timed out')) };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', eventId: 'evt-1', notifyAttendees: false },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -88,7 +89,7 @@ describe('CalendarDeleteEventHandler', () => {
     const nylasCalendarClient = { deleteEvent: vi.fn().mockRejectedValue(new Error('404 Not Found')) };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', eventId: 'evt-1' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).not.toContain('Microsoft');

@@ -13,7 +13,8 @@
     "location": "string?",
     "attendees": "object[]? (each { email, name? }. Cannot set RSVP status; use calendar-respond-to-invite for the principal's own RSVP.)",
     "conferencing": "object? (new link: { provider: Google Meet/Microsoft Teams, autocreate: true }. Zoom/other existing link: { provider, details: { url } })",
-    "recurrence": "string[]? (one RRULE plus optional EXDATE lines, e.g. [\"RRULE:FREQ=WEEKLY;BYDAY=MO\"]; start is the first occurrence)"
+    "recurrence": "string[]? (one RRULE plus optional EXDATE lines, e.g. [\"RRULE:FREQ=WEEKLY;BYDAY=MO\"]; start is the first occurrence)",
+    "mailbox": "string? (mailbox id; required for an unregistered calendar or \"primary\" when several are connected)"
   },
   "outputs": {
     "event": "object",
@@ -23,7 +24,7 @@
   "secrets": [],
   "timeout": 30000,
   "capabilities": [
-    "nylasCalendarClient"
+    "calendarRouter"
   ],
   "allowed_callers": [
     "calendar",
