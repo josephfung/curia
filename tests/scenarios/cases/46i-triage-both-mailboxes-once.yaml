@@ -29,6 +29,7 @@ inbound:
     id: 7a1b2c3d-46a0-4b1c-8d2e-461a0b1c2d3e
     title: Inbox drain
     tags: [inbox-drain]
+    originator: system
     intent: Triage the due mailboxes' unread mail, one batch at a time, until none is left.
     notes:
       - at: "{{time:today-1 09:00}}"
