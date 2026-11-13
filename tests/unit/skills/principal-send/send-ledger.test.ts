@@ -78,12 +78,12 @@ describe('parseLedgerDoc', () => {
     expect(parseLedgerDoc({ ...doc, type: 'voice-learning-draft' })).toBeNull();
   });
 
-  it('rejects a doc with malformed frontmatter', async () => {
+  it('keeps a ledger doc with malformed frontmatter, read conservatively (never dropped)', async () => {
     const docs = makeDocs();
     await new PrincipalSendLedger(docs, logger).recordSending(entry);
     const doc = [...docs.docs.values()][0]!;
-    expect(parseLedgerDoc({ ...doc, frontmatter: { ...doc.frontmatter, mode: 'whatever' } })).toBeNull();
-    expect(parseLedgerDoc({ ...doc, frontmatter: { ...doc.frontmatter, recipients: 'x' } })).toBeNull();
+    expect(parseLedgerDoc({ ...doc, frontmatter: { ...doc.frontmatter, mode: 'whatever' } })).toMatchObject({ mode: 'autonomous' });
+    expect(parseLedgerDoc({ ...doc, frontmatter: { ...doc.frontmatter, recipients: 'x' } })).toMatchObject({ recipients: [] });
   });
 });
 
@@ -128,7 +128,7 @@ describe('PrincipalSendLedger autonomous lookups (#2474 PR 2)', () => {
     const docs = makeDocs();
     await new PrincipalSendLedger(docs, logger).recordHeld({ ...entry, reasonCode: 'x' });
     const doc = [...docs.docs.values()][0]!;
-    expect(parseLedgerDoc({ ...doc, frontmatter: { ...doc.frontmatter, reason_code: 7 } })).toBeNull();
+    expect(parseLedgerDoc({ ...doc, frontmatter: { ...doc.frontmatter, reason_code: 7 } })).not.toHaveProperty('reasonCode');
   });
 });
 
@@ -241,6 +241,40 @@ describe('PrincipalSendLedger across mailboxes (#2475)', () => {
     docs.docs.set(doc.path, { ...doc, frontmatter: { ...doc.frontmatter, conversation_ids: 'nope' } });
     expect(await ledger.recentAutonomousSends(since)).toHaveLength(1);
     expect(await ledger.recentForThread('t1', since, 'work')).toHaveLength(1);
+  });
+
+  describe.each([
+    ['at', { at: 7 }],
+    ['mode', { mode: 'whatever' }],
+    ['outcome', { outcome: 'whatever' }],
+    ['recipients', { recipients: 'x' }],
+    ['draft_id', { draft_id: 7 }],
+    ['thread_id', { thread_id: 7 }],
+  ])('an entry with an unreadable %s', (_field, bad) => {
+    async function ledgerWithBad() {
+      const docs = makeDocs();
+      const ledger = new PrincipalSendLedger(docs, logger);
+      await ledger.recordSending({ ...entry, draftId: 'a', mode: 'autonomous', at: recent });
+      const doc = [...docs.docs.values()][0]!;
+      docs.docs.set(doc.path, { ...doc, frontmatter: { ...doc.frontmatter, ...bad } });
+      return ledger;
+    }
+    it('still counts toward the daily cap', async () => {
+      expect(await (await ledgerWithBad()).recentAutonomousSends(since)).toHaveLength(1);
+    });
+    it('still triggers the thread cooldown', async () => {
+      expect(await (await ledgerWithBad()).recentForThread('t1', since, 'work')).toHaveLength(1);
+    });
+  });
+
+  it('excludes a cleanly-read limited entry from the cap and the cooldowns', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    await ledger.recordSending({ ...entry, draftId: 'a', mode: 'autonomous', at: recent });
+    const doc = [...docs.docs.values()][0]!;
+    docs.docs.set(doc.path, { ...doc, frontmatter: { ...doc.frontmatter, outcome: 'limited' } });
+    expect(await ledger.recentAutonomousSends(since)).toEqual([]);
+    expect(await ledger.recentForThread('t1', since, 'work')).toEqual([]);
   });
 
   it('cap counts sends from every mailbox', async () => {

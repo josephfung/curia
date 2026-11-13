@@ -3966,8 +3966,9 @@ export class OutboundGateway {
    * True when the account's own address is any of the principal's addresses: every live mailbox,
    * not only the identities isPrincipalMailbox() reads (#2475, ADR-062). Fails closed: a lookup
    * that throws counts as a match, so nothing is sent through an account that may be theirs.
+   * That refuses every Curia-account email send while the lookup is down, which is intended: send()
+   * still lets a principal-only system notice through, but sendEmailDraft has no such exemption.
    */
-  // A lookup failure refuses every Curia-account email send except principal-only notices: intended, fail closed.
   private async isAnyMailboxAccount(accountId?: string): Promise<boolean> {
     if (!this.principalEmailAddressLookup) return false;
     const name = accountId || this.nylasClients.keys().next().value;
@@ -4626,7 +4627,9 @@ export class OutboundGateway {
       // One scan of the ledger serves the cooldowns and the cap.
       let ledgerEntries: PrincipalSendEntry[];
       try {
-        // Fail closed on a failed read: the thread's cooldown may be running.
+        // Fail closed on a failed read: the thread's cooldown may be running. Any ledger read
+        // failure lands here, even for a draft with no thread (which would refuse anyway as
+        // not_a_reply): it refuses as thread_cooldown, the accepted reason.
         ledgerEntries = await this.sendLedger!.list();
         const cooldownSince = Date.now() - AUTONOMOUS_THREAD_COOLDOWN_MS;
         if (draft.threadId) recentEntries = await this.sendLedger!.recentForThread(draft.threadId, cooldownSince, mailboxId, ledgerEntries);
@@ -4640,7 +4643,9 @@ export class OutboundGateway {
       try {
         sendsInWindow = (await this.sendLedger!.recentAutonomousSends(Date.now() - AUTONOMOUS_DAILY_CAP_WINDOW_MS, ledgerEntries)).length;
       } catch (err) {
-        // Fail closed (#2474 final fixes A4): the daily cap can't be checked.
+        // Normally unreachable: the cap reads the entries already scanned above. Kept for a ledger
+        // implementation whose method reads anyway. Fail closed (#2474 final fixes A4).
+
         this.log.warn({ err, draftId }, 'outbound-gateway: send ledger unreadable — the daily cap cannot be checked, not sending on its own');
         return stop('no_send_ledger');
       }
@@ -4797,7 +4802,10 @@ export class OutboundGateway {
   /**
    * Every principal email address, and those other than the sending mailbox's own (#2475, D6).
    * Without the lookup (no registry wired) it is the identities and no others. A mailbox whose
-   * own address is unknown (the single-mailbox fallback) has no others. Throws on a failed lookup.
+   * own address is unknown (the single-mailbox fallback) has no `others`, the mailboxes the
+   * reply-to rule reads. `offLimits` is the set a recipient may not be: the `others`, or (R43)
+   * every address when the own address is unknown and the principal has two or more. Throws on a
+   * failed lookup.
    */
   private async principalAddressesFor(mailboxId: string): Promise<{ all: string[]; others: string[]; offLimits: string[] }> {
     if (!this.principalEmailAddressLookup) return { all: this.principalEmailAddresses(), others: [], offLimits: [] };

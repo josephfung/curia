@@ -6930,6 +6930,31 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(client!.sendDraft).not.toHaveBeenCalled();
       });
 
+      it('R43: a cc to the principal\'s primary address is refused too', async () => {
+        const two = { principalAddrs: [PRINCIPAL, 'personal@example.com'], mailboxAddresses: { default: '' } };
+        const { gw, client } = makeAuto({ ...two, client: autoClient(autoDraft({ cc: [{ email: PRINCIPAL }] }), [withIds()]) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'principal_address_recipient' });
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+      });
+
+      it('R43: reply_to_principal_address keeps its rule (no "other" addresses to answer)', async () => {
+        const two = { principalAddrs: [PRINCIPAL, 'personal@example.com'], mailboxAddresses: { default: '' } };
+        const fromOther = withIds({ from: [{ email: 'personal@example.com' }] });
+        const { gw } = makeAuto({ ...two, client: autoClient(autoDraft(), [fromOther]) });
+        expect((await gw.sendPrincipalDraft('d1', auto)).refusal).not.toBe('reply_to_principal_address');
+      });
+
+      it('refuses (thread_cooldown, fail closed) when the ledger cannot be listed, even with no thread', async () => {
+        const { gw, ledger, client } = makeAuto({ client: autoClient(autoDraft({ threadId: '' }), []) });
+        ledger.list.mockRejectedValue(new Error('db down'));
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ success: false, leftAsDraft: true });
+        const lister = makeAuto();
+        lister.ledger.list.mockRejectedValue(new Error('db down'));
+        expect(await lister.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'thread_cooldown' });
+        expect(lister.client!.sendDraft).not.toHaveBeenCalled();
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+      });
+
       it('R43: unknown own address and one principal address: unchanged', async () => {
         const one = { principalAddrs: [PRINCIPAL], mailboxAddresses: { default: '' } };
         const { gw } = makeAuto({ ...one, client: autoClient(autoDraft({ cc: [{ email: PRINCIPAL }] }), [withIds()]) });
@@ -6961,7 +6986,9 @@ describe('sendPrincipalDraft (#2474)', () => {
         recordSending: vi.fn(async (e: Record<string, unknown>) => { entries.push({ ...e, outcome: 'sending' }); }),
         recordSent: vi.fn().mockResolvedValue(undefined),
         recordHeld: vi.fn(async (e: Record<string, unknown>) => { entries.push({ ...e, outcome: 'held' }); }),
-        recentForThread: vi.fn(async (threadId: string, _sinceEpochMs: number) => entries.filter((e) => e['threadId'] === threadId)),
+        list: vi.fn(async () => [...entries]),
+        // Reads the shared scan (4th argument), as the real ledger does.
+        recentForThread: vi.fn(async (threadId: string, _sinceEpochMs: number, _mailbox: string, scan?: readonly Record<string, unknown>[]) => (scan ?? entries).filter((e) => e['threadId'] === threadId)),
       };
       const { gw, client } = makeAuto({ ledger });
       const before = Date.now();
