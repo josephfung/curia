@@ -20,9 +20,12 @@
 // Every drain the heartbeat CREATES is stamped with the system originator, as the old declarative
 // cron was, so its autonomous sends pass the outbound gateway's origin check
 // (isAutonomousSendOrigin). The heartbeat only considers drain tasks it created itself
-// (createdBy 'heartbeat'); an `inbox-drain` task the agent made (possibly during an
-// outsider-originated turn) is ignored: it neither blocks a heartbeat drain nor is re-woken, and a
-// re-wake passes the task's STORED originator, never an upgrade (R56).
+// (createdBy 'heartbeat', filtered in the query); an `inbox-drain` task the agent made (possibly
+// during an outsider-originated turn) is ignored: it neither blocks a heartbeat drain nor is
+// re-woken, and a re-wake passes the task's STORED originator, never an upgrade (R56).
+// A stalled own task with NO stored originator (pre-lineage rows) cannot be re-woken without
+// erasing its lineage, so it is set aside (warned once per id) and, when no other own task can
+// be re-woken, a fresh system-originated drain is created in its place.
 const HEARTBEAT_CREATED_BY = 'heartbeat';
 import type { Logger } from '../logger.js';
 import type { TaskRepo } from '../db/task-repo.js';
@@ -60,7 +63,7 @@ export class InboxHeartbeat {
   private intervalHandle: NodeJS.Timeout | null = null;
   // A slow tick (Nylas probes) must not overlap the next interval fire.
   private tickInFlight = false;
-  // Foreign drain task ids already logged, so the 15-minute tick does not repeat the line.
+  // Set-aside drain task ids already warned about, so the 15-minute tick does not repeat the line.
   private readonly ignoredLogged = new Set<string>();
 
   constructor(private readonly o: InboxHeartbeatOptions) {}
@@ -133,19 +136,14 @@ export class InboxHeartbeat {
       return 'quiet';
     }
 
-    const open = (await this.o.taskRepo.listTasks({
+    // Only the heartbeat's own tasks are fetched (R56), so foreign inbox-drain tasks cannot push
+    // its own out of the page. The createdBy check below repeats the filter defensively.
+    const own = (await this.o.taskRepo.listTasks({
       statuses: ['open', 'in_progress'],
       tag: INBOX_DRAIN_TAG,
-      // Wide, so foreign inbox-drain tasks cannot push the heartbeat's own out of the page.
-      limit: 200,
-    })).filter((t) => t.agentId === INBOX_AGENT);
-    const own = open.filter((t) => t.createdBy === HEARTBEAT_CREATED_BY);
-    for (const t of open) {
-      if (t.createdBy !== HEARTBEAT_CREATED_BY && !this.ignoredLogged.has(t.id)) {
-        this.ignoredLogged.add(t.id);
-        this.o.logger.info({ taskId: t.id }, 'InboxHeartbeat: ignoring an inbox-drain task it did not create (never re-woken, does not block)');
-      }
-    }
+      createdBy: HEARTBEAT_CREATED_BY,
+      limit: 50,
+    })).filter((t) => t.agentId === INBOX_AGENT && t.createdBy === HEARTBEAT_CREATED_BY);
 
     const staleBefore = now.getTime() - STALLED_AFTER_MINUTES * 60_000;
     const paused = own.find((t) => t.wakeState === 'paused');
@@ -158,13 +156,16 @@ export class InboxHeartbeat {
       new Date(t.updatedAt).getTime() > staleBefore;
     if (own.some(isLive)) return 'drain_running';
 
-    const stalled = own[0];
-    if (stalled) {
-      if (!stalled.originator) {
-        // Re-waking with null would erase its system lineage; skip loudly instead of stalling silently.
-        this.o.logger.warn({ taskId: stalled.id }, 'InboxHeartbeat: stalled inbox-drain task has no stored originator; not re-waking it');
-        return 'drain_running';
+    // Re-waking with a null originator would erase its system lineage, and leaving it in charge
+    // would block triage forever: set it aside (warn once per id) and fall through to a fresh drain.
+    for (const t of own) {
+      if (!t.originator && !this.ignoredLogged.has(t.id)) {
+        this.ignoredLogged.add(t.id);
+        this.o.logger.warn({ taskId: t.id }, 'InboxHeartbeat: stalled inbox-drain task has no stored originator; setting it aside and creating a fresh drain');
       }
+    }
+    const stalled = own.find((t) => t.originator);
+    if (stalled?.originator) {
       if (stalled.wakeState === 'suspended') {
         this.o.logger.warn({ taskId: stalled.id, wakeState: 'suspended' }, 'InboxHeartbeat: re-waking an inbox-drain task whose wake was suspended');
       }

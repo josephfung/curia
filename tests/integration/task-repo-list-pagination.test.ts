@@ -148,3 +148,33 @@ describeIf('TaskRepo keyset pagination (#1433)', () => {
     expect(warnings).toHaveLength(0); // no spurious "safety ceiling" warning
   });
 });
+
+// #2475 P3: the inbox heartbeat asks for its own drain tasks by created_by, so foreign
+// inbox-drain tasks cannot push its own out of a capped page.
+describeIf('TaskRepo.listTasks createdBy filter (#2475)', () => {
+  const CB_PREFIX = 'TaskRepoCreatedBy Test';
+  const CB_TAG = 'taskrepo-createdby-test';
+  let pool: pg.Pool;
+  let repo: TaskRepo;
+
+  beforeAll(async () => {
+    pool = new Pool({ connectionString: DATABASE_URL });
+    repo = new TaskRepo(pool, noopBus, logger as never, 'UTC');
+    await pool.query(`DELETE FROM tasks WHERE title LIKE $1`, [`${CB_PREFIX}%`]);
+    for (let i = 0; i < 3; i++) {
+      await repo.createTask({ agentId: 'ceo-inbox', title: `${CB_PREFIX} foreign ${i}`, tags: [CB_TAG], createdBy: 'ceo-inbox' });
+    }
+    await repo.createTask({ agentId: 'ceo-inbox', title: `${CB_PREFIX} own`, tags: [CB_TAG], createdBy: 'heartbeat' });
+  });
+  afterAll(async () => {
+    await pool.query(`DELETE FROM tasks WHERE title LIKE $1`, [`${CB_PREFIX}%`]);
+    await pool.end();
+  });
+
+  it('returns only rows with the given created_by, even under a page limit foreign rows would fill', async () => {
+    const own = await repo.listTasks({ tag: CB_TAG, createdBy: 'heartbeat', limit: 1 });
+    expect(own.map((t) => t.title)).toEqual([`${CB_PREFIX} own`]);
+    const all = await repo.listTasks({ tag: CB_TAG, limit: 10 });
+    expect(all).toHaveLength(4);
+  });
+});
