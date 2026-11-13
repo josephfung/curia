@@ -42,7 +42,9 @@ export interface RemovalPreview {
    *  active principal email identities, minus the removed address; lowercased, deduped. */
   primaryEmailCandidates: string[];
   /** Inbox rules that name this mailbox; onlyThisMailbox = they stop applying once it is removed. */
-  scopedRules: Array<{ title: string; onlyThisMailbox: boolean }>;
+  scopedRules: Array<{ title: string; onlyThisMailbox: boolean }> | null;
+  /** True when the rules document could not be read: scopedRules is then null (unknown). */
+  rulesUnreadable: boolean;
   /** Filled by the calendar task; [] in this part. */
   calendars: Array<{ calendarId: string; label: string }>;
 }
@@ -95,7 +97,7 @@ export interface PrincipalMailboxAdminDeps {
   lookupGrant: (grantId: string) => Promise<{ email: string; provider: string }>;
   onRemoved?: Array<(id: string) => Promise<void>>;
   /** The standing inbox rules document (/shared/inbox/rules.md), for scoped rules on removal. */
-  rulesDoc?: { read(): Promise<string | null>; write(s: string): Promise<void> };
+  rulesDoc?: { read(): Promise<string | null>; write(s: string, summary?: string): Promise<void> };
   /** Drops the legacy `default` ceo_inbox/sending key; best-effort after a tombstone (R41). */
   forgetLegacySendLevel?: () => Promise<void>;
   /** True while the deferred-migration fallback is served. An add then would end the
@@ -306,6 +308,7 @@ export class PrincipalMailboxAdmin {
         .map((i) => lower(i.channelIdentifier)),
     ]);
     candidates.delete(lower(rec.address));
+    const scoped = await this.scopedRules(id);
     return {
       mailbox: toView(rec),
       isDefault: rec.isDefault,
@@ -313,7 +316,8 @@ export class PrincipalMailboxAdmin {
       stillOwnedDefault: CONSUMER_DOMAINS.has(domain),
       otherLive: others.map(toView),
       primaryEmailCandidates: [...candidates],
-      scopedRules: (await this.scopedRules(id)).map((r) => ({ title: r.title, onlyThisMailbox: r.mailboxes!.length === 1 })),
+      scopedRules: scoped === null ? null : scoped.map((r) => ({ title: r.title, onlyThisMailbox: r.mailboxes!.length === 1 })),
+      rulesUnreadable: scoped === null,
       calendars: [],
     };
   }
@@ -340,9 +344,13 @@ export class PrincipalMailboxAdmin {
     }
 
     // Rules scoped only to this mailbox need a decision, and a rescope target must be live.
-    const soleRules = (await this.scopedRules(id)).filter((r) => r.mailboxes!.length === 1);
+    // R59: an unreadable rules document never blocks a removal; the inbox_rules step below
+    // then fails and is listed, so the principal knows to check the rules by hand.
+    const scoped = await this.scopedRules(id);
+    const rulesUnknown = scoped === null;
+    const soleRules = (scoped ?? []).filter((r) => r.mailboxes!.length === 1);
     let ruleAction: RuleRemovalAction = 'delete';
-    if (soleRules.length > 0) {
+    if (soleRules.length > 0 || (rulesUnknown && input.rules !== undefined)) {
       const choice = input.rules;
       if (choice === undefined) {
         throw new MailboxRemovalError(
@@ -436,8 +444,22 @@ export class PrincipalMailboxAdmin {
       await step('inbox_rules', async () => {
         const text = await rulesDoc.read();
         if (text === null) return;
+        const now = parseRuleScopes(text).filter((r) => r.mailboxes?.includes(id));
+        const onlyHere = now.filter((r) => r.mailboxes!.length === 1);
+        // The check could not read the document and no choice was given: do not guess.
+        if (rulesUnknown && input.rules === undefined && onlyHere.length > 0) {
+          throw new MailboxRemovalError('Inbox rules apply only to this mailbox and no choice was given');
+        }
         const next = applyRemoval(text, id, ruleAction);
-        if (next !== text) await rulesDoc.write(next);
+        if (next === text) return;
+        const doneTo = ruleAction === 'delete' ? 'deleted' : `rescoped to ${ruleAction.rescopeTo}`;
+        const parts = [
+          ...onlyHere.map((r) => `"${r.title}" ${doneTo}`),
+          ...now.filter((r) => r.mailboxes!.length > 1).map((r) => `"${r.title}" no longer names it`),
+        ];
+        const summary = `mailbox ${id} removed by the principal in the console: ${parts.join('; ')}`;
+        this.log.info({ mailboxId: id, rules: parts }, 'Inbox rules rewritten for a removed mailbox');
+        await rulesDoc.write(next, summary);
       });
     }
     if (rec.triageStartAt === null && this.deps.forgetLegacySendLevel) {
@@ -476,12 +498,17 @@ export class PrincipalMailboxAdmin {
     return { cleanupIncomplete, restartRequired: wasDefault };
   }
 
-  /** Rules that name the mailbox (scoped only to it, or to it and others). */
-  private async scopedRules(id: string): Promise<Array<{ title: string; mailboxes: string[] | null }>> {
+  /** Rules that name the mailbox (scoped only to it, or to it and others); null = unreadable. */
+  private async scopedRules(id: string): Promise<Array<{ title: string; mailboxes: string[] | null }> | null> {
     if (!this.deps.rulesDoc) return [];
-    const text = await this.deps.rulesDoc.read();
-    if (text === null) return [];
-    return parseRuleScopes(text).filter((r) => r.mailboxes?.includes(id));
+    try {
+      const text = await this.deps.rulesDoc.read();
+      if (text === null) return [];
+      return parseRuleScopes(text).filter((r) => r.mailboxes?.includes(id));
+    } catch (err) {
+      this.log.warn({ ...this.safeErrFields(err), mailboxId: id }, 'Could not read the inbox rules; their scope is unknown');
+      return null;
+    }
   }
 
   private async liveTarget(id: string): Promise<{ rec: PrincipalMailboxRecord; others: PrincipalMailboxRecord[] }> {

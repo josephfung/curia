@@ -214,6 +214,19 @@ describe('PrincipalMailboxesSection', () => {
       expect(JSON.parse(del.init!.body as string)).toEqual({ still_owned: false, rules: { rescope_to: 'personal' } });
     });
 
+    it("says the rules could not be checked and still lets the removal go ahead", async () => {
+      mocks.respond = (path) => path.endsWith('/removal-preview')
+        ? json(preview({ scopedRules: null, rulesUnreadable: true, isDefault: false }))
+        : json({ mailboxes: [work, personal] });
+      await mount();
+      await click('Remove');
+      expect(container.textContent).toContain("Couldn't check the inbox rules");
+      expect(confirmButton().disabled).toBe(false);
+      await click('Remove mailbox');
+      const del = mocks.calls.find(c => c.init?.method === 'DELETE')!;
+      expect(JSON.parse(del.init!.body as string)).toEqual({ still_owned: false });
+    });
+
     it('offers no choice and sends no rules when every listed rule is shared', async () => {
       mocks.respond = (path) => path.endsWith('/removal-preview') ? json(preview({ isDefault: false })) : json({ mailboxes: [work, personal] });
       await mount();

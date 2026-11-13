@@ -1322,7 +1322,9 @@ async function main(): Promise<void> {
         rulesDoc: createRulesDoc({
           read: (path) => workingDocsRepo.read(path),
           update: (path, params) => workingDocsRepo.update(path, params),
-        }),
+          create: (params) => workingDocsRepo.create(params),
+          append: (path, params) => workingDocsRepo.append(path, params),
+        }, logger),
         forgetLegacySendLevel: async () => { if (sendingKeyStore) await dropLegacyDefaultKey(sendingKeyStore, logger); else logger.warn('Mailbox removal: the sending-level store is not ready yet, so the legacy default send-level key was not checked'); },
         logger,
       })

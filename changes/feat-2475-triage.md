@@ -6,4 +6,4 @@
 ### Changed
 
 - **Urgent, digest and consult lines** — name the mailbox when there is more than one. (#2475)
-- **Mail from the principal's other address** — only marked Seen, never drafted or escalated. (#2475)
+- **Mail from the principal's other address** — only marked Seen, never drafted, sent to or escalated. (#2475)
