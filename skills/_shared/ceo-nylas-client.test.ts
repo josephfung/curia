@@ -590,3 +590,13 @@ describe('CeoNylasClient — call budget', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('CeoNylasClient credentials at runtime', () => {
+  it('exposes no request helper that would attach the Authorization header to any URL', () => {
+    const client = makeClient() as unknown as Record<string, unknown>;
+    for (const name of ['request', 'requestWithCursor', 'requestDraft', 'headers', 'baseUrl', 'grantId']) {
+      expect(client[name], name).toBeUndefined();
+    }
+    expect(JSON.stringify(client)).not.toContain('test-api-key');
+  });
+});

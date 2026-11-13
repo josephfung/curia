@@ -190,6 +190,7 @@ export class NylasApiError extends Error {
 export class CeoNylasClient {
   // ECMAScript private (#), not TypeScript `private` (item 8, B6): the grant (in the URL) and the
   // API key (in the Authorization header) are not reachable at runtime from code holding a client.
+  // The request helpers are # too: each takes any URL and attaches the Authorization header.
   readonly #baseUrl: string;
   readonly #grantId: string;
   readonly #headers: Record<string, string>;
@@ -251,7 +252,7 @@ export class CeoNylasClient {
     }
 
     const url = `${this.#baseUrl}/messages?${params}`;
-    const { data, nextCursor } = await this.requestWithCursor<NylasApiMessage[]>('GET', url, 'listMessages');
+    const { data, nextCursor } = await this.#requestWithCursor<NylasApiMessage[]>('GET', url, 'listMessages');
 
     return { messages: data.map(normalizeMessageSummary), nextCursor };
   }
@@ -306,7 +307,7 @@ export class CeoNylasClient {
       this.setMessageFilters(params, options, false);
       const url = `${this.#baseUrl}/messages?${params}`;
 
-      const { data, nextCursor } = await this.requestWithCursor<NylasApiMessage[]>(
+      const { data, nextCursor } = await this.#requestWithCursor<NylasApiMessage[]>(
         'GET',
         url,
         'listAllMessages',
@@ -337,7 +338,7 @@ export class CeoNylasClient {
 
   async getMessage(messageId: string): Promise<NylasMessageFull> {
     const url = `${this.#baseUrl}/messages/${encodeURIComponent(messageId)}`;
-    const data = await this.request<NylasApiMessage>('GET', url, 'getMessage').catch((err: unknown) => {
+    const data = await this.#request<NylasApiMessage>('GET', url, 'getMessage').catch((err: unknown) => {
       throw markMessageRequestError(err);
     });
     return normalizeMessageFull(data);
@@ -363,7 +364,7 @@ export class CeoNylasClient {
     if (options.cc && options.cc.length > 0) {
       messagePayload.cc = options.cc;
     }
-    const data = await this.requestDraft(url, 'createDraftReply', messagePayload, options.attachments);
+    const data = await this.#requestDraft(url, 'createDraftReply', messagePayload, options.attachments);
     return {
       id: data.id,
       threadId: data.thread_id ?? '',
@@ -396,7 +397,7 @@ export class CeoNylasClient {
     if (options.bcc && options.bcc.length > 0) {
       messagePayload.bcc = options.bcc;
     }
-    const data = await this.requestDraft(url, 'createDraft', messagePayload, options.attachments);
+    const data = await this.#requestDraft(url, 'createDraft', messagePayload, options.attachments);
     return {
       id: data.id,
       threadId: data.thread_id ?? '',
@@ -415,7 +416,7 @@ export class CeoNylasClient {
     const params = new URLSearchParams();
     params.set('limit', String(Math.min(options.limit ?? NYLAS_MAX_LIST_LIMIT, NYLAS_MAX_LIST_LIMIT)));
     const url = `${this.#baseUrl}/drafts?${params}`;
-    const data = await this.request<NylasApiDraftFull[]>('GET', url, 'listDrafts');
+    const data = await this.#request<NylasApiDraftFull[]>('GET', url, 'listDrafts');
     return data.map(normalizeDraftSummary);
   }
 
@@ -446,7 +447,7 @@ export class CeoNylasClient {
       if (pageToken) params.set('page_token', pageToken);
       const url = `${this.#baseUrl}/drafts?${params}`;
 
-      const { data, nextCursor } = await this.requestWithCursor<NylasApiDraftFull[]>('GET', url, 'listAllDrafts');
+      const { data, nextCursor } = await this.#requestWithCursor<NylasApiDraftFull[]>('GET', url, 'listAllDrafts');
       const pageStart = drafts.length;
       drafts.push(...data.map(normalizeDraftSummary));
 
@@ -474,7 +475,7 @@ export class CeoNylasClient {
 
   async getDraft(draftId: string): Promise<NylasDraftFull> {
     const url = `${this.#baseUrl}/drafts/${encodeURIComponent(draftId)}`;
-    const data = await this.request<NylasApiDraftFull>('GET', url, 'getDraft');
+    const data = await this.#request<NylasApiDraftFull>('GET', url, 'getDraft');
     return normalizeDraftFull(data);
   }
 
@@ -488,28 +489,28 @@ export class CeoNylasClient {
     if (updates.cc !== undefined) payload.cc = updates.cc;
     if (updates.subject !== undefined) payload.subject = updates.subject;
     if (updates.body !== undefined) payload.body = updates.body;
-    const data = await this.request<NylasApiDraftFull>('PUT', url, 'updateDraft', payload);
+    const data = await this.#request<NylasApiDraftFull>('PUT', url, 'updateDraft', payload);
     return normalizeDraftFull(data);
   }
 
   // Delete an unsent draft (DELETE /drafts/{id}).
   async deleteDraft(draftId: string): Promise<void> {
     const url = `${this.#baseUrl}/drafts/${encodeURIComponent(draftId)}`;
-    await this.request<unknown>('DELETE', url, 'deleteDraft');
+    await this.#request<unknown>('DELETE', url, 'deleteDraft');
   }
 
   // ── Message updates ──────────────────────────────────────────────────────
 
   async markAsRead(messageId: string): Promise<void> {
     const url = `${this.#baseUrl}/messages/${encodeURIComponent(messageId)}`;
-    await this.request<NylasApiMessage>('PUT', url, 'markAsRead', { unread: false }).catch((err: unknown) => {
+    await this.#request<NylasApiMessage>('PUT', url, 'markAsRead', { unread: false }).catch((err: unknown) => {
       throw markMessageRequestError(err);
     });
   }
 
   async markAsStarred(messageId: string, starred = true): Promise<void> {
     const url = `${this.#baseUrl}/messages/${encodeURIComponent(messageId)}`;
-    await this.request<NylasApiMessage>('PUT', url, 'markAsStarred', { starred }).catch((err: unknown) => {
+    await this.#request<NylasApiMessage>('PUT', url, 'markAsStarred', { starred }).catch((err: unknown) => {
       throw markMessageRequestError(err);
     });
   }
@@ -520,7 +521,7 @@ export class CeoNylasClient {
   ): Promise<{ id: string; folders: string[] }> {
     const url = `${this.#baseUrl}/messages/${encodeURIComponent(messageId)}`;
     const payload = { folders: withoutReadOnlySystemLabels(folders) };
-    const data = await this.request<NylasApiMessage>('PUT', url, 'updateMessageFolders', payload).catch(
+    const data = await this.#request<NylasApiMessage>('PUT', url, 'updateMessageFolders', payload).catch(
       (err: unknown) => {
         throw markMessageRequestError(err);
       },
@@ -546,7 +547,7 @@ export class CeoNylasClient {
       params.set('limit', String(NYLAS_MAX_LIST_LIMIT));
       if (pageToken) params.set('page_token', pageToken);
       const url = `${this.#baseUrl}/folders?${params}`;
-      const { data, nextCursor } = await this.requestWithCursor<NylasApiFolder[]>('GET', url, 'listFolders');
+      const { data, nextCursor } = await this.#requestWithCursor<NylasApiFolder[]>('GET', url, 'listFolders');
       folders.push(...data.map((f) => ({ id: f.id, name: f.name ?? '' })));
 
       // An empty page with a cursor would otherwise spin forever.
@@ -568,7 +569,7 @@ export class CeoNylasClient {
   async createFolder(name: string): Promise<NylasFolder> {
     const url = `${this.#baseUrl}/folders`;
     const payload = { name };
-    const data = await this.request<NylasApiFolder>('POST', url, 'createFolder', payload);
+    const data = await this.#request<NylasApiFolder>('POST', url, 'createFolder', payload);
     folderCache.delete(this.#grantId);
     return { id: data.id, name: data.name ?? name };
   }
@@ -645,14 +646,14 @@ export class CeoNylasClient {
    * We intentionally omit the Content-Type header when using FormData so that fetch
    * can set it automatically with the correct multipart boundary.
    */
-  private async requestDraft(
+  async #requestDraft(
     url: string,
     operation: string,
     messagePayload: Record<string, unknown>,
     attachments?: DraftAttachment[],
   ): Promise<NylasApiDraft> {
     if (!attachments || attachments.length === 0) {
-      return this.request<NylasApiDraft>('POST', url, operation, messagePayload);
+      return this.#request<NylasApiDraft>('POST', url, operation, messagePayload);
     }
 
     this.log.debug({ operation, attachmentCount: attachments.length }, `nylas: ${operation} (multipart)`);
@@ -702,13 +703,13 @@ export class CeoNylasClient {
     return json.data;
   }
 
-  private async request<T>(
+  async #request<T>(
     method: string,
     url: string,
     operation: string,
     body?: unknown,
   ): Promise<T> {
-    const { data } = await this.requestWithCursor<T>(method, url, operation, body);
+    const { data } = await this.#requestWithCursor<T>(method, url, operation, body);
     return data;
   }
 
@@ -727,7 +728,7 @@ export class CeoNylasClient {
   //
   // With a budget, a delay that would end after the deadline is not slept: the
   // call fails at once with the same status, marked transient (#2083).
-  private async requestWithCursor<T>(
+  async #requestWithCursor<T>(
     method: string,
     url: string,
     operation: string,
