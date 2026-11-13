@@ -194,6 +194,15 @@ describe('fix round 1', () => {
   it('daily 02:30 fires exactly once on the spring-forward day (02:30 does not exist)', () => {
     expect(replay('daily 02:30', '2026-03-08')).toBe(1);
   });
+  it('a missed-slot catch-up skips a day the cadence excludes (weekdays): Monday morning is not due', () => {
+    const c = parseCadence('daily 18:00 06:00-23:00 weekdays')!;
+    const fridayDrain = new Date('2026-06-12T18:05:00Z');
+    expect(isDue(c, fridayDrain, new Date('2026-06-15T06:00:00Z'), 'UTC')).toBe(false); // Monday 06:00
+    expect(isDue(c, fridayDrain, new Date('2026-06-15T18:00:00Z'), 'UTC')).toBe(true); // Monday's slot
+    // A weekday slot that was missed is still served the next morning.
+    const tuesday = new Date('2026-06-16T06:00:00Z');
+    expect(isDue(c, new Date('2026-06-14T18:05:00Z'), tuesday, 'UTC')).toBe(true); // Monday 18:00 unserved
+  });
   it('refuses a daily time after the heartbeat\'s last check of the day (23:45)', () => {
     expect(parseCadence('daily 23:45')).not.toBeNull();
     expect(parseCadence('daily 23:46')).toBeNull();

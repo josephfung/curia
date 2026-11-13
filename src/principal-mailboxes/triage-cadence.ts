@@ -202,8 +202,12 @@ export function isDue(c: Cadence, lastDrainedAt: Date | null, now: Date, tz: str
     const today = slotOn(local);
     if (now.getTime() >= today) return lastDrainedAt === null || lastDrainedAt.getTime() < today;
     // Before today's slot, yesterday's may still be unserved (Curia was down at the slot), so it
-    // is served once after midnight. A mailbox never drained waits for today's slot.
-    return lastDrainedAt !== null && lastDrainedAt.getTime() < slotOn(local.minus({ days: 1 }));
+    // is served once after midnight, but only if that slot was itself eligible (in the window, on
+    // an allowed weekday): Sunday's slot under `weekdays` was never owed. A mailbox never drained
+    // waits for today's slot.
+    if (lastDrainedAt === null) return false;
+    const yesterday = slotOn(local.minus({ days: 1 }));
+    return inWindow(c, new Date(yesterday), tz) && lastDrainedAt.getTime() < yesterday;
   }
 
   if (lastDrainedAt === null) return true;
