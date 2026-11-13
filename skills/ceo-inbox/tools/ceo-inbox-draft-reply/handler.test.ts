@@ -4,6 +4,9 @@ import type { ToolContext } from '../../../../src/skills/types.js';
 import type { Logger } from '../../../../src/logger.js';
 import { readFile, realpath } from 'node:fs/promises';
 import { mailboxView, stubPrincipalMailboxes, twoMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
+import { DraftProvenance } from '../../../../src/skills/principal-send/draft-provenance.js';
+import type { AuditLogRow } from '../../../../src/audit/audit-log-repo.js';
+import pino from 'pino';
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
@@ -844,6 +847,150 @@ describe('CeoInboxDraftReplyHandler', () => {
         success: true,
         data: { mailbox: 'personal', mailbox_label: 'Personal', reply_to_message_id: 'msg-001' },
       });
+    });
+  });
+
+  describe('reply from the copy the sender addressed (#2475)', () => {
+    const MSG_ID = 'abc123@mail.example.net';
+
+    // The triaged copy (msg-001) is in `held`. The other mailbox's copy is msg-other, found by the
+    // Message-ID search unless `search` says otherwise.
+    function setup(opts: {
+      held: 'work' | 'personal';
+      to: string[];
+      cc?: string[];
+      search?: 'hit' | 'empty' | 'error';
+      mailboxInput?: string;
+    }) {
+      const posts: Array<{ grant: string; body: { reply_to_message_id?: string } }> = [];
+      const searches: Array<{ grant: string; q: string | null }> = [];
+      const mailboxes = [
+        mailboxView('work', 'Work', 'ceo@work.example.com', true),
+        mailboxView('personal', 'Personal', 'ceo@personal.example.com'),
+      ];
+      const gatewayGets: string[] = [];
+      const ctx = buildCtx();
+      (ctx.input as Record<string, unknown>).mailbox = opts.mailboxInput;
+      if (opts.mailboxInput === undefined) delete (ctx.input as Record<string, unknown>).mailbox;
+      (ctx as { principalMailboxes: unknown }).principalMailboxes = stubPrincipalMailboxes({
+        mailboxes,
+        grantId: (id) => `grant-${id}`,
+        gatewayClients: {
+          work: { getMessage: async () => { gatewayGets.push('work'); return { headers: [{ name: 'Message-ID', value: `<${MSG_ID}>` }] }; } },
+          personal: { getMessage: async () => { gatewayGets.push('personal'); return { headers: [{ name: 'Message-ID', value: `<${MSG_ID}>` }] }; } },
+        },
+      });
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const u = new URL(String(url));
+        const grant = /\/grants\/([^/]+)/.exec(u.pathname)![1]!;
+        const method = (init?.method ?? 'GET').toUpperCase();
+        const heldGrant = `grant-${opts.held}`;
+        if (u.pathname.endsWith('/messages') && u.searchParams.has('search_query_native')) {
+          searches.push({ grant, q: u.searchParams.get('search_query_native') });
+          if (opts.search === 'error') return new Response(JSON.stringify({ error: { message: 'boom' } }), { status: 400 });
+          const data = opts.search === 'empty' ? [] : [{ id: 'msg-other', thread_id: 'thread-other', subject: 'Test Subject', from: [{ email: 'alice@external.com' }], to: [], cc: [], folders: ['INBOX'] }];
+          return new Response(JSON.stringify({ data }), { status: 200 });
+        }
+        if (u.pathname.includes('/messages/')) {
+          const id = u.pathname.split('/').pop();
+          if ((id === 'msg-001') !== (grant === heldGrant)) return new Response('{}', { status: 404 });
+          const m = buildNylasMessage({
+            from: [{ email: 'alice@external.com' }],
+            to: opts.to.map((email) => ({ email })),
+            cc: (opts.cc ?? []).map((email) => ({ email })),
+          });
+          m.data.id = id!;
+          return new Response(JSON.stringify(m), { status: 200 });
+        }
+        if (u.pathname.endsWith('/drafts') && method === 'GET') return new Response(JSON.stringify({ data: [] }), { status: 200 });
+        if (u.pathname.endsWith('/drafts') && method === 'POST') {
+          posts.push({ grant, body: JSON.parse(init!.body as string) });
+          return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch: ${method} ${u.pathname}`);
+      });
+      return { ctx, posts, searches, gatewayGets };
+    }
+
+    it('drafts on the copy in the mailbox named first in To', async () => {
+      const { ctx, posts, searches } = setup({ held: 'personal', to: ['ceo@work.example.com'], cc: ['ceo@personal.example.com'] });
+      const result = await handler.execute(ctx);
+      expect(searches).toEqual([{ grant: 'grant-work', q: `rfc822msgid:${MSG_ID}` }]);
+      expect(posts).toHaveLength(1);
+      expect(posts[0]!.grant).toBe('grant-work');
+      expect(posts[0]!.body.reply_to_message_id).toBe('msg-other');
+      expect(result).toMatchObject({
+        success: true,
+        data: { mailbox: 'work', mailbox_label: 'Work', reply_to_message_id: 'msg-other' },
+      });
+      expect((result as { data: Record<string, unknown> }).data.reply_mailbox_fallback).toBeUndefined();
+    });
+
+    it('falls back to the triaged mailbox and says so', async () => {
+      for (const search of ['empty', 'error'] as const) {
+        const { ctx, posts } = setup({ held: 'personal', to: ['CEO@work.example.com'], cc: ['ceo@personal.example.com'], search });
+        const result = await handler.execute(ctx);
+        expect(posts[posts.length - 1]!.grant).toBe('grant-personal');
+        expect(result).toMatchObject({
+          success: true,
+          data: { mailbox: 'personal', mailbox_label: 'Personal', reply_mailbox_fallback: true },
+        });
+        expect(typeof (result as { data: Record<string, unknown> }).data.reply_mailbox_note).toBe('string');
+        mockFetch.mockReset();
+      }
+    });
+
+    it('keeps an explicit mailbox without searching', async () => {
+      const { ctx, posts, searches, gatewayGets } = setup({ held: 'personal', to: ['ceo@work.example.com'], mailboxInput: 'personal' });
+      const result = await handler.execute(ctx);
+      expect(searches).toHaveLength(0);
+      expect(gatewayGets).toHaveLength(0);
+      expect(posts[0]!.grant).toBe('grant-personal');
+      expect(result).toMatchObject({ success: true, data: { mailbox: 'personal' } });
+    });
+
+    it('makes no extra calls when the message is already in the addressed mailbox', async () => {
+      const { ctx, searches, gatewayGets } = setup({ held: 'work', to: ['ceo@work.example.com'], cc: ['ceo@personal.example.com'] });
+      await handler.execute(ctx);
+      expect(searches).toHaveLength(0);
+      expect(gatewayGets).toHaveLength(0);
+    });
+
+    it('makes no extra calls on a single-mailbox install', async () => {
+      const gatewayGets: string[] = [];
+      const searches: string[] = [];
+      const ctx = buildCtx();
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const u = new URL(String(url));
+        const method = (init?.method ?? 'GET').toUpperCase();
+        if (u.searchParams.has('search_query_native')) searches.push(String(url));
+        if (u.pathname.includes('/messages/')) {
+          return new Response(JSON.stringify(buildNylasMessage({ from: [{ email: 'alice@external.com' }], to: [{ email: 'ceo@example.com' }] })), { status: 200 });
+        }
+        if (u.pathname.endsWith('/drafts') && method === 'GET') return new Response(JSON.stringify({ data: [] }), { status: 200 });
+        return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
+      });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      expect(searches).toHaveLength(0);
+      expect(gatewayGets).toHaveLength(0);
+    });
+
+    it('the redirected draft reads as Curia\'s: provenance keys on the drafted mailbox', async () => {
+      const { ctx } = setup({ held: 'personal', to: ['ceo@work.example.com'], cc: ['ceo@personal.example.com'] });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      const row = {
+        id: 'r1', timestamp: new Date(Date.now() - 1000), eventType: 'tool.result', sourceLayer: 'execution', sourceId: 'ceo-inbox',
+        conversationId: null, taskId: null, parentEventId: null,
+        payload: { toolName: 'ceo-inbox-draft-reply', result },
+        action: null, outcome: null, targetType: 'skill', targetId: 'ceo-inbox-draft-reply',
+        initiatorType: null, initiatorId: null, entryHash: null,
+      } as unknown as AuditLogRow;
+      const repo = { findToolResults: vi.fn().mockResolvedValue([row]), findToolResultsForTasks: vi.fn().mockResolvedValue([]) };
+      const prov = new DraftProvenance(repo, pino({ level: 'silent' }), () => new Date(), async () => 'work');
+      const created = await prov.createdByCuria([{ mailbox: 'work', draftId: 'draft-1' }, { mailbox: 'personal', draftId: 'draft-1' }]);
+      expect(created).toEqual(new Set(['work:draft-1']));
     });
   });
 });

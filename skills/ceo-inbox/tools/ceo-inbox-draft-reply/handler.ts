@@ -1,6 +1,6 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { locateInMailbox, mailboxFields } from '../../../_shared/principal-mailbox-client.js';
-import { type NylasParticipant, type DraftAttachment } from '../../../_shared/ceo-nylas-client.js';
+import { locateInMailbox, mailboxFields, mailboxClient, readMailboxInput, type MailboxClient } from '../../../_shared/principal-mailbox-client.js';
+import { type NylasParticipant, type DraftAttachment, type NylasMessageFull } from '../../../_shared/ceo-nylas-client.js';
 import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 import { buildReplyQuote } from '../../../../src/skills/_shared/reply-quote.js';
 import { markdownToHtml } from '../../../../src/format/markdown-to-html.js';
@@ -8,11 +8,66 @@ import { parseAttachmentInputs } from '../../../_shared/parse-attachments.js';
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES } from '../../../../src/skills/_shared/read-attachments.js';
 import { captureDraftSnapshot } from '../../../_shared/voice-learning-capture.js';
 import { isSpamOrTrash } from '../../../_shared/mail-folders.js';
+import { messageIdsIn } from '../../../../src/skills/principal-send/autonomous-limits.js';
+import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 
 // Same ceiling ceo-inbox-search uses when it scans drafts. A match stops the
 // scan early. Hitting the ceiling without a match means we cannot prove the
 // thread is draft-free, so we refuse to create rather than risk a duplicate.
 const DRAFT_SCAN_LIMIT = 500;
+
+// A redirect lookup that takes longer than this counts as unreachable; the tool's own timeout is 30 s.
+const REDIRECT_TIMEOUT_MS = 8_000;
+
+type Redirect =
+  | { kind: 'same' }
+  | { kind: 'moved'; at: MailboxClient; original: NylasMessageFull }
+  | { kind: 'fallback'; reason: string };
+
+function withTimeout<T>(work: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('timed out')), REDIRECT_TIMEOUT_MS);
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Mail sent to both of the principal's mailboxes is answered from the one the sender addressed
+ * first: the first live mailbox address in To, else in Cc. Finds that mailbox's copy by Message-ID.
+ * Never throws; an unreachable or empty target is a fallback to the mailbox the message was given in.
+ */
+async function addressedCopy(ctx: ToolContext, at: MailboxClient, original: NylasMessageFull, messageId: string): Promise<Redirect> {
+  const live = await ctx.principalMailboxes!.list();
+  if (live.length < 2) return { kind: 'same' };
+  const byAddress = new Map(live.map((m) => [m.address.toLowerCase(), m]));
+  const firstIn = (list: NylasParticipant[]) => list.map((p) => byAddress.get(p.email.toLowerCase())).find((m) => m !== undefined);
+  const target = firstIn(original.to) ?? firstIn(original.cc);
+  if (!target || target.id === at.mailbox.id) return { kind: 'same' };
+
+  const fallback = (reason: string, err?: unknown): Redirect => {
+    ctx.log.warn(
+      { tool: 'ceo-inbox-draft-reply', from: at.mailbox.id, target: target.id, reason, ...(err !== undefined ? grantSafeErrorFields(err) : {}) },
+      'ceo-inbox-draft-reply: addressed copy unavailable; drafting in the given mailbox',
+    );
+    return { kind: 'fallback', reason: `${reason}; drafted in the ${at.mailbox.label} mailbox instead of ${target.label}` };
+  };
+  try {
+    const gateway = await ctx.principalMailboxes!.gatewayClient(at.mailbox.id);
+    const full = await gateway.getMessage(messageId, { includeHeaders: true, budget: ctx });
+    const header = (full.headers ?? []).find((h) => h.name.trim().toLowerCase() === 'message-id');
+    const rfcId = header ? messageIdsIn(header.value)[0] : undefined;
+    if (!rfcId) return fallback('the message has no Message-ID to search by');
+    const other = await withTimeout(mailboxClient(ctx, target.id));
+    const { messages } = await withTimeout(other.client.listMessagesPage({ query: `rfc822msgid:${rfcId}`, limit: 5 }));
+    const hit = messages.find((m) => !isSpamOrTrash(m.folders));
+    if (!hit) return fallback(`the ${target.label} copy was not found`);
+    const copy = await withTimeout(other.client.getMessage(hit.id));
+    return { kind: 'moved', at: other, original: copy };
+  } catch (err) {
+    return fallback(`the ${target.label} mailbox could not be reached`, err);
+  }
+}
 
 export class CeoInboxDraftReplyHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -56,9 +111,10 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
     if (!picked.ok) {
       return { success: false, error: picked.error, ...(picked.errorType ? { errorType: picked.errorType } : {}) };
     }
-    const client = picked.at.client;
-    const mbx = mailboxFields(picked.at.mailbox);
-    const selfEmail = picked.at.mailbox.address.toLowerCase();
+    let client = picked.at.client;
+    let mbx: Record<string, unknown> = mailboxFields(picked.at.mailbox);
+    let selfEmail = picked.at.mailbox.address.toLowerCase();
+    let replyId = replyToMessageId;
 
     // Guard: the mailbox address must be known — without it we cannot filter the principal's own
     // address from reply recipients, which would cause self-addressed drafts.
@@ -75,7 +131,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
     try {
       // Fetch the original message to compute reply-all recipients.
       // Reply-all: original sender → to, original to + cc (minus self) → cc.
-      const original = await client.getMessage(replyToMessageId);
+      let original = await client.getMessage(replyToMessageId);
 
       // Guard: without a sender we have no valid To address — fail rather than
       // silently creating a draft addressed to the placeholder 'unknown'.
@@ -85,6 +141,22 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
           'ceo-inbox-draft-reply: original message has no sender address; cannot create reply draft',
         );
         return { success: false, error: 'Original message has no sender address; cannot create a reply draft' };
+      }
+
+      // Mail sent to both mailboxes is answered from the copy the sender addressed first. A
+      // mailbox the principal named is never overridden (#2475).
+      const explicit = readMailboxInput(input);
+      if (explicit.ok && explicit.mailbox === undefined) {
+        const redirect = await addressedCopy(ctx, picked.at, original, replyToMessageId);
+        if (redirect.kind === 'moved') {
+          client = redirect.at.client;
+          mbx = mailboxFields(redirect.at.mailbox);
+          selfEmail = redirect.at.mailbox.address.toLowerCase();
+          original = redirect.original;
+          replyId = redirect.original.id;
+        } else if (redirect.kind === 'fallback') {
+          mbx = { ...mbx, reply_mailbox_fallback: true, reply_mailbox_note: redirect.reason };
+        }
       }
 
       // Spam and Trash are not triage. Search omits them by default; this
@@ -193,7 +265,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
       }
 
       const draft = await client.createDraftReply({
-        replyToMessageId,
+        replyToMessageId: replyId,
         subject: replySubject,
         body: draftBody,
         to,
@@ -231,7 +303,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
           already_exists: false,
           // The message this draft answers (#2474 final fixes A5): an autonomous send reads it
           // from this result's audit row and requires it to be the thread's latest message.
-          reply_to_message_id: replyToMessageId,
+          reply_to_message_id: replyId,
           ...mbx,
         },
       };

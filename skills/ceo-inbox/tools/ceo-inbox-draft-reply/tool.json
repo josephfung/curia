@@ -17,7 +17,8 @@
     "cc": "array of { name?, email }",
     "already_exists": "boolean — true when a draft for this thread already existed and was returned instead of creating another",
     "snippet": "string? (present when already_exists is true — the existing draft's snippet, so you can see what it already says)",
-    "date": "number? (unix timestamp, present when already_exists is true)"
+    "date": "number? (unix timestamp, present when already_exists is true)",
+    "reply_mailbox_fallback": "boolean? (true when the copy the sender addressed was unreachable, so the draft is in another mailbox; reply_mailbox_note says why — tell the principal)"
   },
   "permissions": [],
   "secrets": [],
