@@ -146,9 +146,9 @@ async function earlierDraftOnOtherCopy(
       ...(await withTimeout(ctx.principalMailboxes!.principalEmailAddresses(), deadline)).map((a) => a.toLowerCase()),
     ]);
     if (original.from.some((p) => principal.has(p.email.toLowerCase()))) return null;
-    const recipients = new Set([...original.to, ...original.cc].map((p) => p.email.toLowerCase()));
-    const others = live.filter((m) => m.id !== at.mailbox.id && recipients.has(m.address.toLowerCase()));
-    if (others.length === 0) return null;
+    // Every other live mailbox, not only those visible in To/Cc: a copy delivered by Bcc or a
+    // forward lists only this mailbox, yet an earlier call may have fallen back and drafted there.
+    const others = live.filter((m) => m.id !== at.mailbox.id);
     const rfcId = (await withTimeout(ownId(ctx, at.mailbox.id, messageId), deadline)).id;
     if (!rfcId || !SAFE_MESSAGE_ID.test(rfcId)) return null;
     for (const m of others) {
