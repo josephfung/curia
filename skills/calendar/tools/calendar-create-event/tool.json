@@ -14,13 +14,16 @@
     "attendees": "object[]? (each { email, name? }. Cannot set RSVP status; use calendar-respond-to-invite for the principal's own RSVP.)",
     "conferencing": "object? (new link: { provider: Google Meet/Microsoft Teams, autocreate: true }. Zoom/other existing link: { provider, details: { url } })",
     "recurrence": "string[]? (one RRULE plus optional EXDATE lines, e.g. [\"RRULE:FREQ=WEEKLY;BYDAY=MO\"]; start is the first occurrence)",
+    "topic_matches_account": "boolean? (true if the topic plainly belongs to that account)",
     "mailbox": "string? (account the event goes out from. With several connected it is required on the principal's calendars and must own calendarId; without it nothing is created and a needs_mailbox error gives per-account evidence for the attendees. Mention the account only when evidence or topic left it in doubt; ask when split.)"
   },
   "outputs": {
     "event": "object",
     "warnings": "string[]? (an overlapping hold left in place or not checked)",
     "mailbox": "string? (the account used, when several are connected)",
-    "evidence": "string? (agrees | leans_other | none | split for the account used)"
+    "mailbox_label": "string? (absent with account_note)",
+    "evidence": "string? (agrees | leans_other | none | split for the account used)",
+    "account_note": "string? (evidence and topic agreed: don't name the account)"
   },
   "permissions": [],
   "secrets": [],

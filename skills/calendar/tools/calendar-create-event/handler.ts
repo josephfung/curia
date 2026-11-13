@@ -26,14 +26,14 @@ import {
   readCalendarMailbox,
 } from '../../../_shared/calendar-route.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
-import { chosenAccountFields } from '../../../../src/principal-mailboxes/evidence.js';
+import { chosenAccountFields, readTopicMatches } from '../../../../src/principal-mailboxes/evidence.js';
 
 const TOOL = 'calendar-create-event';
 
 // Mirrors tool.json `inputs`. Anything else is refused rather than silently dropped (#2385).
 const DECLARED_INPUTS = [
   'calendarId', 'title', 'start', 'end', 'description', 'location', 'attendees', 'conferencing', 'recurrence',
-  'mailbox',
+  'mailbox', 'topic_matches_account',
 ] as const;
 
 export class CalendarCreateEventHandler implements ToolHandler {
@@ -188,13 +188,14 @@ export class CalendarCreateEventHandler implements ToolHandler {
 
       // With several mailboxes the result names the account and how the attendee evidence
       // bears on it (D5), so the agent can tell an obvious choice from one worth mentioning.
-      // Evidence that agrees drops the label and says not to name the account (chosenAccountFields).
+      // Evidence and topic that both agree drop the label and say not to name the account
+      // (chosenAccountFields); otherwise the label stays.
       let account: Record<string, unknown> = {};
       if (gate.multi) {
         const label = gate.live.find((m) => m.id === mailboxId)?.label ?? null;
         const recipients = evidenceRecipients(attendeeAddresses, gate.live);
         account = recipients.length > 0
-          ? chosenAccountFields(mailboxId, label, await evidenceVerdict(ctx, TOOL, mailboxId, recipients))
+          ? chosenAccountFields(mailboxId, label, await evidenceVerdict(ctx, TOOL, mailboxId, recipients), readTopicMatches(ctx.input))
           : { mailbox: mailboxId, mailbox_label: label };
       }
 

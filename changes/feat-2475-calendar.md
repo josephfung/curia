@@ -23,7 +23,8 @@
 - **No-mailbox answers** — every tool needing a principal mailbox names Settings → Personality → Email & Calendar. (#2475)
 - **Mailbox add refusal (public API)** — `cap_reached` is now `migration_pending`, returned only while the upgrade finishes. (#2475)
 - **`nylas_calendar` health check** — lists every live mailbox's calendars, so one broken account fails it. (#2475)
-- **Account mentions** — an account the evidence clearly favours comes back unlabelled, so replies stop naming it. (#2475)
+- **Account mentions** — an account both evidence and topic favour comes back unlabelled, so replies stop naming it. (#2475)
+- **Account writes (public API)** — `ceo-inbox-draft-compose` and `calendar-create-event` take optional `topic_matches_account`. (#2475)
 
 ### Removed
 

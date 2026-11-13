@@ -222,7 +222,7 @@ describe('CeoInboxDraftComposeHandler', () => {
       listFolders: async () => folders,
       listMessages: async (o: { folders: string[] }) => (o.folders[0] === 'SENT' ? sent : []),
     });
-    function twoCtx(extra: Record<string, unknown> = {}): ToolContext {
+    function twoCtx(extra: Record<string, unknown> = {}, history: 'work' | 'personal' = 'work'): ToolContext {
       const base = buildCtx();
       return {
         ...base,
@@ -233,7 +233,9 @@ describe('CeoInboxDraftComposeHandler', () => {
             mailboxView('personal', 'Personal', 'ceo@personal.example.com'),
           ],
           grantId: (id) => `grant-${id}`,
-          gatewayClients: { work: fake([sentToAlice]), personal: fake([]) },
+          gatewayClients: history === 'work'
+            ? { work: fake([sentToAlice]), personal: fake([]) }
+            : { work: fake([]), personal: fake([{ ...sentToAlice, from: [{ email: 'ceo@personal.example.com' }] }]) },
         }),
       } as unknown as ToolContext;
     }
@@ -247,16 +249,33 @@ describe('CeoInboxDraftComposeHandler', () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it('creates in the stated mailbox and reports the verdict', async () => {
+    it('creates in the stated mailbox and reports the verdict, keeping the label without the topic', async () => {
       mockFetch.mockResolvedValue(new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 }));
       const result = await handler.execute(twoCtx({ mailbox: 'work' }));
       expect(result.success).toBe(true);
-      expect((result as { data: Record<string, unknown> }).data).toMatchObject({
-        draft_id: 'draft-compose-1', mailbox: 'work', evidence: 'agrees', account_note: ACCOUNT_NOT_IN_DOUBT,
-      });
-      // No judgement call (D5): the label is left out so the agent does not name the account.
-      expect((result as { data: Record<string, unknown> }).data).not.toHaveProperty('mailbox_label');
+      const data = (result as { data: Record<string, unknown> }).data;
+      // Evidence alone is half of D5: with no topic asserted, the label stays and there is no note.
+      expect(data).toMatchObject({ draft_id: 'draft-compose-1', mailbox: 'work', mailbox_label: 'Work', evidence: 'agrees' });
+      expect(data).not.toHaveProperty('account_note');
       expect(String(mockFetch.mock.calls[0]![0])).toContain('grant-work');
+    });
+
+    it('evidence and topic both agreeing drop the label and add the note', async () => {
+      mockFetch.mockResolvedValue(new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 }));
+      const result = await handler.execute(twoCtx({ mailbox: 'work', topic_matches_account: true }));
+      const data = (result as { data: Record<string, unknown> }).data;
+      expect(data).toMatchObject({ draft_id: 'draft-compose-1', mailbox: 'work', evidence: 'agrees', account_note: ACCOUNT_NOT_IN_DOUBT });
+      // No judgement call (D5): the label is left out so the agent does not name the account.
+      expect(data).not.toHaveProperty('mailbox_label');
+    });
+
+    it('a personal contact on a work topic drafted in personal keeps the label and gets no note', async () => {
+      mockFetch.mockResolvedValue(new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 }));
+      // All the history is in personal (evidence agrees), but the agent does not assert the topic.
+      const result = await handler.execute(twoCtx({ mailbox: 'personal', topic_matches_account: false }, 'personal'));
+      const data = (result as { data: Record<string, unknown> }).data;
+      expect(data).toMatchObject({ mailbox: 'personal', mailbox_label: 'Personal', evidence: 'agrees' });
+      expect(data).not.toHaveProperty('account_note');
     });
 
     it('a created draft is still reported when evidence fails afterwards', async () => {

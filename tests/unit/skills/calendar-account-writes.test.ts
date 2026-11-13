@@ -267,6 +267,17 @@ describe('calendar-create-event: the account is a stated choice (D5)', () => {
     })));
     expect(work.createEvent).toHaveBeenCalledWith('ceo@work.example.com', expect.objectContaining({ title: 'Q3 audit' }));
     expect(personal.createEvent).not.toHaveBeenCalled();
+    // Evidence alone is half of D5: with no topic asserted, the label stays and there is no note.
+    expect(data).toMatchObject({ mailbox: 'work', mailbox_label: 'Work', evidence: 'agrees' });
+    expect(data).not.toHaveProperty('account_note');
+  });
+
+  it('evidence and the asserted topic both agreeing drop the label and add the note', async () => {
+    const { router } = setup();
+    const data = dataOf(await run(new CalendarCreateEventHandler(), ctx(router, {
+      calendarId: 'primary', title: 'Q3 audit', start: START, end: END, mailbox: 'work', attendees: [{ email: 'cfo@work.example.com' }],
+      topic_matches_account: true,
+    })));
     expect(data).toMatchObject({ mailbox: 'work', evidence: 'agrees', account_note: ACCOUNT_NOT_IN_DOUBT });
     // No judgement call (D5): the label is left out so the agent does not name the account.
     expect(data).not.toHaveProperty('mailbox_label');

@@ -12,13 +12,18 @@
     "to_addresses": "string[]? (email addresses of people who are not contacts, copied exactly from the principal's mail or the principal's message. At least one of to or to_addresses is required)",
     "cc_addresses": "string[]? (CC addresses of people who are not contacts, same rule as to_addresses)",
     "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string}. file_url must be a file:// URL from ceo-inbox-download-attachment or similar. Max 10 attachments, 20 MB total.)",
+    "topic_matches_account": "boolean? (true if the topic plainly belongs to that account)",
     "mailbox": "string? (Mailbox id. Required once there are several accounts; choose per the description.)"
   },
   "outputs": {
     "draft_id": "string (Nylas draft ID)",
     "subject": "string (subject as saved)",
     "to": "array of { name?, email }",
-    "cc": "array of { name?, email }"
+    "cc": "array of { name?, email }",
+    "mailbox": "string (the account the draft is in)",
+    "mailbox_label": "string? (absent with account_note)",
+    "evidence": "string? (agrees | leans_other | none | split, with several accounts)",
+    "account_note": "string? (evidence and topic agreed: don't name the account)"
   },
   "permissions": [],
   "secrets": [],

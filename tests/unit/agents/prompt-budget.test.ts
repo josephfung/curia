@@ -149,7 +149,9 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // #2475 Part 4 final fixes: needs_mailbox is an error (create-event/create-hold `mailbox`), the
   // 20-calendar cap on both availability tools and the 30-day RSVP hold window, +88 bytes under the
   // same pre-approval: 29,453 over 23 local tools.
-  { agent: 'calendar', alwaysOnPromptTokens: 5_700, localToolDefinitionBytes: 29_453, allowMcpPins: false },
+  // #2475 review I1: create-event's optional topic_matches_account (D5: topic AND evidence), +109
+  // bytes under the coordinator's pre-approval of multi-mailbox wording: 29,562 over 23 local tools.
+  { agent: 'calendar', alwaysOnPromptTokens: 5_700, localToolDefinitionBytes: 29_562, allowMcpPins: false },
   // ceo-inbox: YAML 60,090 → 49,037 chars (~16,416 → ~13,653 tokens always-on with its SKILL.md bodies),
   // its task-wake steps now riding on the wake; 43,469 bytes over 41 local tools.
   // archive-extract plus the longer file-parse description (#2208) is +1,831 bytes, the same
@@ -167,7 +169,9 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // #2475 D5 account-choice guidance on draft-compose (+521 bytes), approved by the maintainer (2026-11-12).
   // #2475 move_to_mailbox on draft-edit (+139 bytes), approved by the maintainer: 49,087 over 46 local tools.
   // #2475 D6 which-draft guidance on send-draft (+329 bytes), approved by the maintainer: 49,416 over 46 local tools.
-  { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 49_416, allowMcpPins: false },
+  // #2475 review I1: draft-compose's optional topic_matches_account (D5: topic AND evidence), +100
+  // bytes under the coordinator's pre-approval of multi-mailbox wording: 49,516 over 46 local tools.
+  { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 49_516, allowMcpPins: false },
   // contacts: YAML 15,595 → 11,423 chars (~4,831 → ~3,788 tokens always-on with its SKILL.md bodies);
   // 35,311 bytes over its local tools.
   // #2475 the optional `mailbox` input on calendar-list-events (+136 bytes), covered by the same

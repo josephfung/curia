@@ -195,26 +195,35 @@ export function classifyEvidence(e: Scored[], chosen: string): EvidenceVerdict {
   return 'split';
 }
 
-/** What a write's result says when the evidence agreed with the account it used (D5). */
+/** What a write's result says when the mail history and the topic both pointed to the account it used (D5). */
 export const ACCOUNT_NOT_IN_DOUBT =
-  "The history with these recipients all points to this account, so the choice was obvious: leave the account out of what you report (no account or calendar line, no account name, no account address).";
+  "The mail history and the topic you confirmed both point to this account, so the choice was not in doubt: leave the account out of what you report (no account or calendar line, no account name or address). Still relay any warnings.";
 
 /**
  * The account fields of a write's result once several mailboxes are live (D5: mention the account
- * only on a real judgement call). Evidence that agrees leaves no doubt, so the result carries the
- * id the agent needs for later calls but not the display label, and says not to name it: with the
- * label up front the agent named the account every time (#2475 scenarios 46a, 46k). Any other
- * verdict keeps the label for the agent to weigh.
+ * only on a real judgement call). D5 skips the mention only when the evidence AND the topic point
+ * the same way. The mail history is the evidence verdict; the topic is what the agent asserted
+ * with `topic_matches_account` (code cannot judge it). Only when both agree does the result keep
+ * just the id the agent needs for later calls, drop the display label and carry ACCOUNT_NOT_IN_DOUBT:
+ * with the label up front the agent named the account every time (#2475 scenarios 46a, 46k).
+ * Otherwise, including when the topic was not asserted, the label stays and there is no note, so a
+ * personal contact on a work topic drafted in personal is still named (fail toward mentioning).
  */
 export function chosenAccountFields(
   mailbox: string,
   label: string | null,
   verdict: { evidence: EvidenceVerdict } | { evidence_unavailable: true },
+  topicMatches: boolean,
 ): Record<string, unknown> {
-  if ('evidence' in verdict && verdict.evidence === 'agrees') {
+  if (topicMatches && 'evidence' in verdict && verdict.evidence === 'agrees') {
     return { mailbox, evidence: 'agrees', account_note: ACCOUNT_NOT_IN_DOUBT };
   }
   return { mailbox, mailbox_label: label, ...verdict };
+}
+
+/** The optional `topic_matches_account` input of a write: true only when the agent passed exactly true. */
+export function readTopicMatches(input: unknown): boolean {
+  return input !== null && typeof input === 'object' && (input as Record<string, unknown>)['topic_matches_account'] === true;
 }
 
 /**
