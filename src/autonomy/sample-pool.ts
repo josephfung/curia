@@ -9,6 +9,7 @@ import { AutonomyService } from './autonomy-service.js';
 import { HUMAN_SEND_SKILLS } from './band-policy.js';
 import type { ActionRisk } from '../skills/types.js';
 import { sanitizeDisplayName, sanitizeOutput } from '../skills/sanitize.js';
+import { createSecretPatterns } from '../security/secret-patterns.js';
 
 export const SAMPLE_POOL_SCORED_BY = 'sample-pool';
 export const PRINCIPAL_SCORED_BY = 'principal';
@@ -177,11 +178,20 @@ function stripUnsafeChars(s: string): string {
   return s.replace(CONTROL_CHARS, ' ').replace(INVISIBLE_CHARS, '').replace(LONE_SURROGATE, '').replace(FORMAT_CHARS, '');
 }
 
+/** Secret patterns redacted again (sanitizeOutput's own set), for text that changed since. */
+function redactSecrets(s: string): string {
+  let text = s;
+  for (const pattern of createSecretPatterns()) text = text.replace(pattern, '[REDACTED]');
+  return text;
+}
+
 /** A subject made safe to show: tags stripped, secrets redacted, no link, tag or entity left. */
 export function cleanSubject(raw: string): string {
   // Stripped before decoding and again after, so the result does not depend on what the decoder yields.
   const decoded = fullyDecoded(stripUnsafeChars(raw));
-  return oneLine(stripUnsafeChars(defuseEntities(neutralizeMarkup(stripUnsafeChars(decoded)))));
+  // Redacted again once the decoded invisible characters are gone: a secret split by encoded
+  // zero-width characters only becomes contiguous here, after sanitizeOutput's pass.
+  return oneLine(stripUnsafeChars(defuseEntities(neutralizeMarkup(redactSecrets(stripUnsafeChars(decoded))))));
 }
 
 /** A sender name through the display-name allowlist (which drops brackets, colons, slashes). */
