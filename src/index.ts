@@ -2783,6 +2783,9 @@ async function main(): Promise<void> {
           principalEmail: () =>
             findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
             ?? (principalEmail.current || undefined),
+          // Delivered only by the primary ('curia') adapter once it has subscribed (start() runs
+          // after the health service): until then an alert is not counted as sent, and retried.
+          canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
           logger,
         })
       : undefined,

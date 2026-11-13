@@ -15,6 +15,10 @@
 - **Triage cadence** — `ceo_inbox/triage` is pinned for ceo-inbox, validated and changeable in conversation. (#2475)
 - **Triage window** — triage follows each mailbox's window; drains pause at window end. (#2475)
 
+### Fixed
+
+- **Mailbox outage alerts** — counted as sent only once the primary email adapter delivers them; otherwise retried. (#2475)
+
 ### Security
 
 - **Code-owned inbox state** — config-store refuses writes to triage, sent-observe and voice-learning state keys. (#2475)

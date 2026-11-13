@@ -76,4 +76,23 @@ describe('MailboxOutageNotifier', () => {
     await n.record('work', 'Work', false);
     expect(sendNotification).not.toHaveBeenCalled();
   });
+
+  it('with no delivering email adapter (none, or not yet subscribed) it is not counted as sent, and retries', async () => {
+    const sendNotification = vi.fn().mockResolvedValue(true);
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    let delivering = false;
+    const n = new MailboxOutageNotifier({
+      gateway: { sendNotification },
+      principalEmail: () => 'owner@example.com',
+      canDeliver: () => delivering,
+      logger: logger as never,
+    });
+    await n.record('work', 'Work', false);
+    expect(sendNotification).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.objectContaining({ mailboxId: 'work' }), expect.stringContaining('no email adapter'));
+    // The primary adapter has subscribed: the next failing probe alerts.
+    delivering = true;
+    await n.record('work', 'Work', false);
+    expect(sendNotification).toHaveBeenCalledTimes(1);
+  });
 });
