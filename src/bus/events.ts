@@ -413,6 +413,7 @@ interface OutboundNoReplyPayload {
 //                           the scheduled digest that used to surface them (#1466)
 //   - 'database_unavailable': principal alert that Postgres has been unreachable for >5 minutes (#1381)
 //   - 'principal_mailbox_outage': principal alert that a principal mailbox failed its health canary (#2475)
+//   - 'inbox_triage_paused': principal alert that inbox triage hit its daily batch ceiling; once a day (#2475)
 //   - 'principal_note':     no longer emitted (#2159: notes go to the digest queue); kept for historical audit rows
 export interface OutboundNotificationPayload {
   notificationType:
@@ -425,6 +426,7 @@ export interface OutboundNotificationPayload {
     | 'learning_proposal'       // learning-digest item surfaced event-driven when produced (#1466)
     | 'database_unavailable'  // Postgres unreachable beyond escalation threshold (#1381)
     | 'principal_mailbox_outage' // a principal mailbox failed its health canary; once per outage (#2475)
+    | 'inbox_triage_paused'      // inbox triage hit its daily batch ceiling; once a local day (#2475)
     | 'principal_note';       // no longer emitted (#2159); kept for historical audit rows
   /** Recipient email for this notification (always the principal email today). */
   ceoEmail: string;

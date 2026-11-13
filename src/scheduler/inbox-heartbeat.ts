@@ -69,6 +69,13 @@ export interface InboxHeartbeatOptions {
   tz: () => string;
   logger: Logger;
   intervalMinutes?: number;
+  /**
+   * Tells the principal that triage paused for the day at the ceiling (R67). Called once per
+   * local day; false (not sent) is retried on the next tick. Absent: logged only.
+   */
+  notifyCeiling?: (batches: number) => Promise<boolean>;
+  /** Deletes expired cross-mailbox dedupe rows; run once per local day (BR-M1, SEC-L6). */
+  sweepDedupe?: () => Promise<number>;
   /** Delay of the one tick run shortly after start (default 60 s), so a restart does not wait a full interval. */
   bootTickDelayMs?: number;
 }
@@ -124,6 +131,8 @@ export class InboxHeartbeat {
   private readonly stuck = new Set<string>();
   // The no-progress count a mailbox was last backed off at, so it gets one try per slot.
   private readonly backedOffAt = new Map<string, number>();
+  // The local day the dedupe sweep last ran.
+  private sweptDay: string | null = null;
   // A slow tick (Nylas probes) must not overlap the next interval fire.
   private tickInFlight = false;
   // Set-aside drain task ids already warned about, so the 15-minute tick does not repeat the line.
@@ -237,10 +246,44 @@ export class InboxHeartbeat {
     return result;
   }
 
+  /**
+   * The ceiling stops triage until local midnight and no drain runs to report it, so code tells
+   * the principal, once a local day (R67, SEC-L9). Recorded only once sent; a failure is logged
+   * and retried on the next tick.
+   */
+  private async noticeCeiling(now: Date): Promise<void> {
+    if (await this.o.state.ceilingNotified(now)) return;
+    const batches = await this.o.state.batchesToday(now);
+    this.o.logger.warn({ batches, dailyCeiling: TRIAGE_DAILY_CEILING }, 'InboxHeartbeat: inbox triage paused for the rest of the day at the batch ceiling');
+    if (!this.o.notifyCeiling) return;
+    try {
+      if (await this.o.notifyCeiling(batches)) await this.o.state.setCeilingNotified(now);
+      else this.o.logger.error('InboxHeartbeat: the triage-paused notice could not be sent; retrying next tick');
+    } catch (err) {
+      this.o.logger.error({ ...grantSafeErrorFields(err) }, 'InboxHeartbeat: the triage-paused notice failed; retrying next tick');
+    }
+  }
+
+  /** Expired dedupe rows are swept on the first tick of each local day; a failure retries next tick. */
+  private async sweepOncePerDay(now: Date): Promise<void> {
+    if (!this.o.sweepDedupe) return;
+    const day = this.o.state.localDay(now);
+    if (this.sweptDay === day) return;
+    try {
+      const removed = await this.o.sweepDedupe();
+      this.sweptDay = day;
+      this.o.logger.info({ removed }, 'InboxHeartbeat: swept expired cross-mailbox dedupe rows');
+    } catch (err) {
+      this.o.logger.error({ ...grantSafeErrorFields(err) }, 'InboxHeartbeat: the dedupe sweep failed; retrying next tick');
+    }
+  }
+
   private async tickOnce(now: Date): Promise<InboxHeartbeatResult> {
     // TriageState gates on TRIAGE_DAILY_CEILING, the one value the list tool also reads (BR-M2).
+    await this.sweepOncePerDay(now);
     if (await this.o.state.ceilingReached(now)) {
       this.o.logger.info({ dailyCeiling: TRIAGE_DAILY_CEILING }, 'InboxHeartbeat: daily batch ceiling reached; not waking triage');
+      await this.noticeCeiling(now);
       return 'ceiling';
     }
 

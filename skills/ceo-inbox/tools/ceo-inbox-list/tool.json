@@ -21,7 +21,7 @@
     "count": "number of items returned",
     "mailboxes_due": "string[]? (triage: mailbox ids in this drain)",
     "backlog": "array? of { mailbox, mailbox_label, untriaged_over }: over 100 untriaged (say \"over 100\"), once",
-    "budget_exhausted": "boolean? (triage: daily ceiling hit; tell the principal once, do not continue)",
+    "budget_exhausted": "boolean? (triage: daily ceiling hit; Curia tells the principal; stop)",
     "next_page_token": "string? (pass as page_token for the next page)",
     "mailbox_errors": "array? of { mailbox, mailbox_label, error }: mailboxes not checked; say so",
     "skipped_mailboxes": "array? of { mailbox, mailbox_label }: not read on this page; say so",

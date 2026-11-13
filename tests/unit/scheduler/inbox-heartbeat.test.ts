@@ -36,6 +36,7 @@ function make(over: {
   seed?: Record<string, string>;
   hasUnread?: InboxHeartbeatOptions['hasUnreadSince'];
   tasks?: unknown[];
+  extra?: Partial<InboxHeartbeatOptions>;
 } = {}) {
   const cfg = memoryConfig(over.seed);
   const state = new TriageState(cfg, () => TZ);
@@ -57,6 +58,7 @@ function make(over: {
     scheduler: { enqueueTaskWake, pullTaskWakeIn },
     tz: () => TZ,
     logger: log as never,
+    ...over.extra,
   });
   return { hb, state, hasUnreadSince, listTasks, createTask, completeTask, enqueueTaskWake, pullTaskWakeIn, log };
 }
@@ -433,5 +435,39 @@ describe('InboxHeartbeat settles a finished drain (R68)', () => {
     expect(await t.hb.tick(NOW)).toBe('drain_running');
     expect(await t.state.isDraining('work')).toBe(true);
     expect(await t.state.settlePending('work')).toBe(true);
+  });
+});
+
+describe('InboxHeartbeat ceiling notice and dedupe sweep (R67, BR-M1)', () => {
+  it('tells the principal once a local day when triage stops at the ceiling, retrying an unsent notice', async () => {
+    const notify = vi.fn(async (_n: number) => false);
+    const t = make({ seed: { 'triage.batches.2026-11-12': '120' }, extra: { notifyCeiling: notify } });
+    expect(await t.hb.tick(NOW)).toBe('ceiling');
+    notify.mockResolvedValue(true);
+    await t.hb.tick(NOW);
+    await t.hb.tick(NOW);
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenCalledWith(120);
+    expect(await t.state.ceilingNotified(NOW)).toBe(true);
+  });
+
+  it('sweeps expired dedupe rows on the first tick of each local day', async () => {
+    const sweep = vi.fn(async () => 3);
+    const t = make({ hasUnread: vi.fn(async () => false), extra: { sweepDedupe: sweep } });
+    await t.hb.tick(NOW);
+    await t.hb.tick(new Date(NOW.getTime() + 15 * 60_000));
+    expect(sweep).toHaveBeenCalledTimes(1);
+    await t.hb.tick(new Date(NOW.getTime() + 24 * 3600_000));
+    expect(sweep).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('TriageState corrupt batch counter (SF-M4)', () => {
+  it('reads as the ceiling and warns once per key', async () => {
+    const warn = vi.fn();
+    const state = new TriageState(memoryConfig({ 'triage.batches.2026-11-12': 'x' }), () => TZ, warn);
+    expect(await state.ceilingReached(NOW)).toBe(true);
+    expect(await state.ceilingReached(NOW)).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });

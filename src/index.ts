@@ -2952,7 +2952,8 @@ async function main(): Promise<void> {
   const triageConfig: Pick<ConfigStore, 'get' | 'set'> = entityMemory ? new ConfigStore(entityMemory, logger) : inMemoryTriageConfig();
   if (!entityMemory) logger.warn('Knowledge graph is off: inbox triage runs on default cadences with in-memory state until it is back');
   const triageTz = (): string => principalContact?.timezone ?? config.timezone;
-  const triageState = new TriageState(triageConfig, triageTz);
+  const triageState = new TriageState(triageConfig, triageTz, (fields, msg) => logger.warn(fields, msg));
+  const triageDedupe = new TriageDedupe(pool, logger);
   const readCadences = async (ids: string[]): Promise<Record<string, Cadence>> =>
     readTriageCadences(await triageConfig.get(TRIAGE_NAMESPACE, 'triage'), ids, logger);
   // ceo-inbox-list's triage mode: cadences, state, dedupe and the start-line setter. Built once,
@@ -2960,7 +2961,7 @@ async function main(): Promise<void> {
   let triageServicesCache: TriageServices | undefined;
   const triageServices = (): TriageServices | undefined => {
     if (!triageServicesCache) {
-      const dedupe = new TriageDedupe(pool, logger);
+      const dedupe = triageDedupe;
       triageServicesCache = {
         cadences: readCadences,
         state: triageState,
@@ -3408,6 +3409,23 @@ async function main(): Promise<void> {
       scheduler: schedulerService,
       tz: triageTz,
       logger,
+      sweepDedupe: () => triageDedupe.sweep(),
+      // One email a day when triage pauses at the ceiling (R67); the same path as the outage alert.
+      notifyCeiling: async (batches) => {
+        const ceoEmail = findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
+          ?? (principalEmail.current || undefined);
+        if (!outboundGateway || !ceoEmail) return false;
+        return outboundGateway.sendNotification({
+          notificationType: 'inbox_triage_paused',
+          ceoEmail,
+          subject: 'Curia paused inbox triage for today',
+          body: [
+            `Curia triaged ${batches} batches of your mail today, its daily limit, so it has stopped until midnight.`,
+            '',
+            'Unread mail waits in your inbox and is triaged from midnight. A sudden flood of mail is the usual cause.',
+          ].join('\n'),
+        });
+      },
     });
     inboxHeartbeat.start();
     const hb = inboxHeartbeat;
