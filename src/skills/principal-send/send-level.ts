@@ -53,6 +53,11 @@ export function readSendLevelValue(
   return isSendLevel(value) ? { level: value, malformed: false } : fallback(true);
 }
 
+/** The more restrictive of two levels (off < on_request < routine < all). */
+export function stricterLevel(a: SendLevel, b: SendLevel): SendLevel {
+  return LEVELS.indexOf(a) <= LEVELS.indexOf(b) ? a : b;
+}
+
 /** readSendLevelValue's level alone. */
 export function parseSendLevel(raw: string | null, mailbox: string = DEFAULT_MAILBOX): SendLevel {
   return readSendLevelValue(raw, mailbox).level;
@@ -133,7 +138,7 @@ export function checkSendLevelWrite(
     const legacy = unknown.includes(DEFAULT_MAILBOX) ? '"default" no longer applies; set a level per mailbox id. ' : '';
     const others = unknown.filter((k) => k !== DEFAULT_MAILBOX);
     const notConnected = others.length > 0 ? `Not a connected mailbox: ${others.join(', ')}. ` : '';
-    return { ok: false, error: `${legacy}${notConnected}${shape}` };
+    return { ok: false, error: `${legacy}${notConnected}Leave those keys out and store again. ${shape}` };
   }
   const badLevel = entries.filter(([, v]) => !isSendLevel(v)).map(([k]) => k);
   if (badLevel.length > 0) {
@@ -157,7 +162,7 @@ export function createSendLevelReader(deps: {
   const warned = new Set<string>();
   return async (mailbox) => {
     try {
-      // A failed lookup reads as "not the only mailbox": the stricter, never-widening side.
+      // A failed lookup never widens: the legacy key is applied only where it is stricter (below).
       let live: readonly SendLevelMailbox[] | undefined;
       if (deps.liveMailboxes) {
         try {
@@ -185,6 +190,12 @@ export function createSendLevelReader(deps: {
       const { level, malformed } = readSendLevelValue(raw, mailbox, legacyDefault);
       // Never the stored value: only that it could not be read as a level.
       if (malformed) deps.logger.warn({ mailbox }, 'ceo_inbox/sending is malformed or names an unknown level; using on_request');
+      if (deps.liveMailboxes && live === undefined) {
+        // Who the legacy `default` belongs to is unknown: it may be this mailbox's. Apply it only
+        // where it is stricter (a stored "off" stays off), never where it would widen.
+        const legacy = readSendLevelValue(raw, mailbox, true).level;
+        return stricterLevel(level, legacy);
+      }
       return level;
     } catch (err) {
       // Fall back to on_request: never widens autonomy, keeps principal-directed sends working.
