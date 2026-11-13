@@ -15,25 +15,31 @@ import { formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { localizeEventTimes } from '../../../../src/channels/calendar/event-display.js';
 import { CalendarRouteError, PRIMARY_CALENDAR_ALIAS, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
 import {
+  attendeeEvidence,
   calendarRouteErrorMessage,
   evidenceRecipients,
   gateCalendarWrite,
   holdReleaseTargets,
-  needsMailboxResult,
   readCalendarMailbox,
   routeCalendar,
 } from '../../../_shared/calendar-route.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 import type { PrincipalMailboxView } from '../../../../src/principal-mailboxes/service.js';
+import type { CountsOnlyEvidence } from '../../../../src/principal-mailboxes/evidence.js';
+import { sameMeetingKey, sameOrganizer } from '../../../../src/channels/calendar/event-identity.js';
 
 const TOOL = 'calendar-respond-to-invite';
 
 /** How far around the invite the arrival calendar is searched for its copy. */
 const UID_LOOKUP_PADDING_MS = 24 * 60 * 60 * 1000;
 
-/** The slot an event holds: a recurring instance's original start, else its start. */
-function occurrenceOf(e: NylasCalendarEvent): string {
-  return String(e.originalStartTime ?? e.startTime ?? e.startDate ?? '');
+/** One line of evidence per account, for an error text: counts and domain match only (R81). */
+function summarizeEvidence(evidence: CountsOnlyEvidence[]): string {
+  return evidence
+    .map((e) => e.error !== undefined
+      ? `${e.mailbox_label}: unreadable (${e.error})`
+      : `${e.mailbox_label}: sent ${e.sent_count}, received ${e.received_count}${e.domain_match ? ', same domain' : ''}`)
+    .join('; ');
 }
 
 /** The window to search the arrival calendar in: the invite's time, a day either side. */
@@ -229,16 +235,25 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
 
     if (mailbox === undefined) {
       ctx.log.info({ code: 'needs_mailbox', liveCount: live.length }, 'calendar-respond-to-invite: an RSVP on the principal\'s calendar needs the arrival mailbox');
-      const recipients = await this.inviteParticipants(ctx, calendarId, eventId, live);
-      const result = await needsMailboxResult(
-        ctx,
-        TOOL,
-        live.map(({ id, label }) => ({ id, label })),
-        recipients,
-        { responded: false },
-        'Nothing was sent. Several accounts are connected: call again with mailbox set to the mailbox the invite arrived in (the consult\'s mailbox=).',
-      );
-      return { kind: 'needs_mailbox', result };
+      // A failure, not a success (R88): the invite flow reports a successful call as an RSVP sent.
+      const participants = await this.inviteParticipants(ctx, calendarId, eventId, live);
+      let evidenceLine = '';
+      if (participants.unreadable) {
+        evidenceLine = ' The invite\'s participants could not be read, so there is no evidence.';
+      } else if (participants.recipients.length > 0) {
+        const evidence = await attendeeEvidence(ctx, TOOL, participants.recipients);
+        evidenceLine = evidence ? ` Evidence for the participants: ${summarizeEvidence(evidence)}.` : ' Evidence for the participants is unavailable.';
+      }
+      const choices = live.map((m) => `${m.id} (${m.label})`).join(', ');
+      return {
+        kind: 'needs_mailbox',
+        result: {
+          success: false,
+          error:
+            `needs_mailbox: nothing was sent. Several accounts are connected; pass mailbox as the mailbox the invite arrived in ` +
+            `(the consult's mailbox=), one of: ${choices}.${evidenceLine}`,
+        },
+      };
     }
 
     // The hint is validated; a registered or owned calendar routes to its own mailbox regardless.
@@ -260,10 +275,10 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
       ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: source.routed.mailboxId }, 'calendar-respond-to-invite: could not read the invite to find it in the arrival mailbox');
       return { kind: 'error', error: `Could not read the invite to find it in ${where}: ${message}. Nothing was sent.` };
     }
-    const uid = invite.icalUid?.trim();
+    const key = sameMeetingKey(invite);
     const window = lookupWindow(invite);
-    if (!uid || !window) {
-      ctx.log.info({ mailboxId: mailbox, hasUid: Boolean(uid) }, 'calendar-respond-to-invite: invite has no iCal UID or time to match by');
+    if (key === null || !window) {
+      ctx.log.info({ mailboxId: mailbox, hasUid: key !== null }, 'calendar-respond-to-invite: invite has no iCal UID or time to match by');
       return { kind: 'error', error: `The invite has no iCal UID or time, so it cannot be found in ${where}. Nothing was sent. Pass calendarId and eventId of the invite as it appears on that mailbox's calendar.` };
     }
     const home = await routeCalendar(ctx, TOOL, PRIMARY_CALENDAR_ALIAS, mailbox);
@@ -276,28 +291,46 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
       ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: mailbox }, 'calendar-respond-to-invite: could not list the arrival mailbox\'s calendar');
       return { kind: 'error', error: `Could not search ${where} for the invite: ${message}. Nothing was sent.` };
     }
-    const occurrence = occurrenceOf(invite);
-    const match = candidates.find((c) => c.icalUid?.trim() === uid && occurrenceOf(c) === occurrence);
-    if (!match) {
-      ctx.log.info({ mailboxId: mailbox, candidateCount: candidates.length }, 'calendar-respond-to-invite: invite not found in the arrival mailbox');
+    // The UID is set by whoever sent the invite, so it is never enough on its own (R87): the
+    // arrival copy must agree on UID, occurrence, start, end and title (the list-events rule)
+    // and have the same organizer. Exactly one such copy is answered; none or several, nothing.
+    const matches = candidates.filter((c) => sameMeetingKey(c) === key && sameOrganizer(c, invite));
+    if (matches.length !== 1) {
+      const ambiguous = matches.length > 1;
+      ctx.log.info({ mailboxId: mailbox, candidateCount: candidates.length, matchCount: matches.length }, ambiguous
+        ? 'calendar-respond-to-invite: invite is ambiguous in the arrival mailbox'
+        : 'calendar-respond-to-invite: invite not found in the arrival mailbox');
       return {
         kind: 'error',
-        error: `This invite was not found on the calendar of ${where}, the mailbox it arrived in. Nothing was sent; it is not answered from another account.`,
+        error: ambiguous
+          ? `This invite matches ${matches.length} events on the calendar of ${where}, the mailbox it arrived in, so it is ambiguous. Nothing was sent from either account.`
+          : `This invite was not found on the calendar of ${where}, the mailbox it arrived in (same UID, time, title and organizer). Nothing was sent; it is not answered from another account.`,
       };
     }
-    return { kind: 'proceed', routed: home.routed, eventId: match.id, multi, principal, foundByIcalUid: true };
+    return { kind: 'proceed', routed: home.routed, eventId: matches[0]!.id, multi, principal, foundByIcalUid: true };
   }
 
-  /** The invite's participants, for evidence when the mailbox is missing. Best-effort: [] when unreadable. */
-  private async inviteParticipants(ctx: ToolContext, calendarId: string, eventId: string, live: PrincipalMailboxView[]): Promise<string[]> {
+  /**
+   * The invite's participants, for evidence when the mailbox is missing. Best-effort:
+   * `unreadable` when the calendar could not be routed without a mailbox (`primary`, an
+   * unregistered calendar) or the event could not be read, so the caller can say so.
+   */
+  private async inviteParticipants(
+    ctx: ToolContext,
+    calendarId: string,
+    eventId: string,
+    live: PrincipalMailboxView[],
+  ): Promise<{ recipients: string[]; unreadable: boolean }> {
     try {
       const routed = await ctx.calendarRouter!.route(calendarId);
       const evt = await routed.client.getEvent(routed.calendarId, eventId);
-      return evidenceRecipients(evt.participants.map((p) => p.email), live);
+      return { recipients: evidenceRecipients(evt.participants.map((p) => p.email), live), unreadable: false };
     } catch (err) {
-      // `primary` or an unregistered calendar cannot be routed without a mailbox: no evidence then.
-      ctx.log.debug(err instanceof CalendarRouteError ? { code: err.code } : grantSafeErrorFields(err), 'calendar-respond-to-invite: no participants for evidence');
-      return [];
+      ctx.log.warn(
+        err instanceof CalendarRouteError ? { code: err.code } : grantSafeErrorFields(err),
+        'calendar-respond-to-invite: the invite\'s participants could not be read for evidence',
+      );
+      return { recipients: [], unreadable: true };
     }
   }
 

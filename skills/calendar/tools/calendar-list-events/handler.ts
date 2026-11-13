@@ -15,6 +15,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import type { NylasCalendarEvent } from '../../../../src/channels/calendar/nylas-calendar-client.js';
 import { formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { localizeEventTimes } from '../../../../src/channels/calendar/event-display.js';
+import { sameMeetingKey } from '../../../../src/channels/calendar/event-identity.js';
 import { isSystemOriginated, isPrincipalOriginated } from '../../../../src/contacts/principal.js';
 import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from '../../../../src/skills/_shared/placeholder-guard.js';
 import { guardNylasExplicitCalendarIdentity } from '../../../../src/skills/_shared/calendar-identity-guard.js';
@@ -329,18 +330,11 @@ async function collapseAcrossMailboxes(
   const events: NylasCalendarEvent[] = [];
   for (const s of sourced) {
     const e = s.evt;
-    const uid = e.icalUid?.trim();
-    if (!uid) {
+    const key = sameMeetingKey(e);
+    if (key === null) {
       events.push(e);
       continue;
     }
-    const key = JSON.stringify([
-      uid,
-      e.originalStartTime ?? null,
-      e.startTime ?? e.startDate ?? null,
-      e.endTime ?? e.endDate ?? null,
-      e.title,
-    ]);
     const seen = firstByKey.get(key);
     if (seen && !seen.refs.some((r) => r.mailbox === s.mailboxId)) {
       seen.refs.push(ref(s));

@@ -162,9 +162,16 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
       try {
         multi = (await router.liveMailboxes()).length > 1;
       } catch (err) {
-        // Not counted: with one mailbox this read did not exist, and the routes above already
-        // count every registered calendar that a registry outage stopped.
-        ctx.log.error(grantSafeErrorFields(err), 'calendar-holds-sweep: could not list the mailboxes; home pass skipped');
+        // A skipped home pass is counted when the install has several mailboxes, as far as the
+        // registered calendars show (N2). With one mailbox this read did not exist before, so a
+        // failure there changes nothing (M2).
+        const seen = new Set<string>([
+          ...targets.map((t) => t.mailboxId),
+          ...calendars.flatMap((c) => (c.principalMailboxId ? [c.principalMailboxId] : [])),
+        ]);
+        const counted = seen.size > 1;
+        if (counted) calendarErrors++;
+        ctx.log.error({ ...grantSafeErrorFields(err), counted }, 'calendar-holds-sweep: could not list the mailboxes; home pass skipped');
       }
     }
     if (multi) {

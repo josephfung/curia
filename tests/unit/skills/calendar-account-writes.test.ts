@@ -264,13 +264,16 @@ describe('calendar-respond-to-invite answers as the arrival mailbox (D7)', () =>
     expect(data['mailbox']).toBe('personal');
   });
 
+  // The invite as each account's calendar shows it: same UID, time, title and organizer.
+  const BOARD = { icalUid: 'uid-board', title: 'Board meeting', organizerEmail: 'Chair@Board.example.org' };
+
   it('RSVP finds the invite in the arrival mailbox by iCal UID', async () => {
     const { work, personal, router } = setup();
     // The agent passes work's copy (calendarId/eventId) but the invite arrived in personal.
-    work.getEvent.mockResolvedValue(event('w-77', 'cal-work', { icalUid: 'uid-board' }));
+    work.getEvent.mockResolvedValue(event('w-77', 'cal-work', BOARD));
     personal.listEvents.mockResolvedValue([
       event('p-other', 'ceo@personal.example.com', { icalUid: 'uid-other' }),
-      event('p-77', 'ceo@personal.example.com', { icalUid: 'uid-board' }),
+      event('p-77', 'ceo@personal.example.com', { ...BOARD, organizerEmail: 'chair@board.example.org' }),
     ]);
     const data = dataOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'w-77', response: 'accept', mailbox: 'personal' })));
     expect(personal.sendRsvp).toHaveBeenCalledWith('ceo@personal.example.com', 'p-77', 'yes');
@@ -282,12 +285,64 @@ describe('calendar-respond-to-invite answers as the arrival mailbox (D7)', () =>
 
   it('not found in the arrival mailbox: refused, nothing sent from either account', async () => {
     const { work, personal, router } = setup();
-    work.getEvent.mockResolvedValue(event('w-77', 'cal-work', { icalUid: 'uid-board' }));
+    work.getEvent.mockResolvedValue(event('w-77', 'cal-work', BOARD));
     // Same UID, another occurrence of a series: not this invite.
-    personal.listEvents.mockResolvedValue([event('p-next', 'ceo@personal.example.com', { icalUid: 'uid-board', originalStartTime: START_UNIX + 7 * 86_400 })]);
+    personal.listEvents.mockResolvedValue([event('p-next', 'ceo@personal.example.com', { ...BOARD, originalStartTime: START_UNIX + 7 * 86_400 })]);
     const err = errorOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'w-77', response: 'accept', mailbox: 'personal' })));
     expect(err).toContain('not found');
     expect(err).toContain('"personal" (Personal)');
+    noWrites(work, personal);
+  });
+
+  it.each([
+    ['another title', { title: 'Lunch' }],
+    ['another time', { endTime: END_UNIX + 1800 }],
+    ['another organizer', { organizerEmail: 'attacker@evil.example.net' }],
+    ['no organizer', { organizerEmail: undefined }],
+  ])('a spoofed copy with the same UID and occurrence but %s is not answered (R87)', async (_name, diff) => {
+    const { work, personal, router } = setup();
+    work.getEvent.mockResolvedValue(event('w-77', 'cal-work', BOARD));
+    personal.listEvents.mockResolvedValue([event('p-spoof', 'ceo@personal.example.com', { ...BOARD, ...diff })]);
+    const err = errorOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'w-77', response: 'accept', mailbox: 'personal' })));
+    expect(err).toContain('not found');
+    noWrites(work, personal);
+  });
+
+  it('a source invite without an organizer matches nothing', async () => {
+    const { work, personal, router } = setup();
+    work.getEvent.mockResolvedValue(event('w-77', 'cal-work', { ...BOARD, organizerEmail: undefined }));
+    personal.listEvents.mockResolvedValue([event('p-77', 'ceo@personal.example.com', BOARD)]);
+    errorOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'w-77', response: 'accept', mailbox: 'personal' })));
+    noWrites(work, personal);
+  });
+
+  it('two identical matches in the arrival mailbox: refused as ambiguous, nothing sent', async () => {
+    const { work, personal, router } = setup();
+    work.getEvent.mockResolvedValue(event('w-77', 'cal-work', BOARD));
+    personal.listEvents.mockResolvedValue([event('p-a', 'ceo@personal.example.com', BOARD), event('p-b', 'ceo@personal.example.com', BOARD)]);
+    const err = errorOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'w-77', response: 'accept', mailbox: 'personal' })));
+    expect(err).toContain('ambiguous');
+    noWrites(work, personal);
+  });
+
+  it('the source invite cannot be read: refused with the upstream reason, nothing sent (R86)', async () => {
+    const { work, personal, router } = setup();
+    work.getEvent.mockRejectedValue(new Error('event gone (404)'));
+    const err = errorOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'w-77', response: 'accept', mailbox: 'personal' })));
+    expect(err).toContain('Could not read the invite');
+    expect(err).toContain('event gone (404)');
+    expect(err).toContain('Nothing was sent');
+    expect(personal.listEvents).not.toHaveBeenCalled();
+    noWrites(work, personal);
+  });
+
+  it("the arrival calendar cannot be listed: refused with the upstream reason, nothing sent", async () => {
+    const { work, personal, router } = setup();
+    work.getEvent.mockResolvedValue(event('w-77', 'cal-work', BOARD));
+    personal.listEvents.mockRejectedValue(new Error('rate limited (429)'));
+    const err = errorOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'w-77', response: 'accept', mailbox: 'personal' })));
+    expect(err).toContain('Could not search mailbox "personal" (Personal)');
+    expect(err).toContain('rate limited (429)');
     noWrites(work, personal);
   });
 
@@ -298,23 +353,25 @@ describe('calendar-respond-to-invite answers as the arrival mailbox (D7)', () =>
     noWrites(work, personal);
   });
 
-  it("principal calendar without mailbox with two live: needs_mailbox with the participants' evidence, nothing sent", async () => {
+  it("principal calendar without mailbox with two live: a needs_mailbox failure with the participants' evidence, nothing sent (R88)", async () => {
     const { work, personal, router, evidence } = setup();
     work.getEvent.mockResolvedValue(event('w-77', 'cal-work', {
       participants: [{ email: 'Chair@Board.example.org', name: 'Chair', status: 'yes' }, { email: 'ceo@work.example.com', name: 'Me', status: 'noreply' }],
     }));
-    const data = dataOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'w-77', response: 'accept' })));
-    expect(data).toMatchObject({ needs_mailbox: true, responded: false, mailboxes: [{ id: 'work' }, { id: 'personal' }] });
+    const err = errorOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'cal-work', eventId: 'w-77', response: 'accept' })));
+    expect(err).toContain('needs_mailbox: nothing was sent');
+    expect(err).toContain('work (Work), personal (Personal)');
+    expect(err).toContain('Work: sent 4, received 0, same domain; Personal: sent 0, received 0');
     expect(evidence).toHaveBeenCalledWith(['chair@board.example.org']);
-    expect(data['evidence']).toBeDefined();
     noWrites(work, personal);
   });
 
-  it('bare primary without mailbox with two live: needs_mailbox, no evidence, nothing sent', async () => {
-    const { work, personal, router } = setup();
-    const data = dataOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'primary', eventId: 'e1', response: 'accept' })));
-    expect(data).toMatchObject({ needs_mailbox: true, responded: false });
-    expect(data).not.toHaveProperty('evidence');
+  it('bare primary without mailbox with two live: a needs_mailbox failure noting the participants could not be read', async () => {
+    const { work, personal, router, evidence } = setup();
+    const err = errorOf(await run(new CalendarRespondToInviteHandler(), ctx(router, { calendarId: 'primary', eventId: 'e1', response: 'accept' })));
+    expect(err).toContain('needs_mailbox: nothing was sent');
+    expect(err).toContain('participants could not be read');
+    expect(evidence).not.toHaveBeenCalled();
     noWrites(work, personal);
   });
 
@@ -529,5 +586,19 @@ describe('fix round 1: collapse rules (R82, M1)', () => {
     const events = data['events'] as Array<{ id: string; calendars?: unknown }>;
     expect(events).toHaveLength(3);
     expect(events.every((e) => e.calendars === undefined)).toBe(true);
+  });
+});
+
+describe('fix round 2: a skipped home pass is visible (N2)', () => {
+  it('with several mailboxes, a failed mailbox-list read counts one calendarError', async () => {
+    const { router } = setup();
+    Object.assign(router, { liveMailboxes: async () => { throw new Error('registry down'); } });
+    const c = ctx(router, { contactId: PRINCIPAL });
+    (c.contactService!.getCalendarsForContact as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { nylasCalendarId: 'cal-work', principalMailboxId: 'work' },
+      { nylasCalendarId: 'cal-personal', principalMailboxId: 'personal' },
+    ]);
+    const data = dataOf(await run(new CalendarHoldsSweepHandler(), c));
+    expect(data['calendarErrors']).toBe(1);
   });
 });

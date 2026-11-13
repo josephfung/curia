@@ -119,6 +119,8 @@ interface NylasRawEvent {
   id: string;
   /** RFC 5545 UID, shared by the copies of one event across the attendees' calendars. */
   icalUid?: string;
+  /** The event's organizer (Nylas `organizer`), when the provider reports one. */
+  organizer?: { email?: string; name?: string } | null;
   title?: string;
   description?: string;
   location?: string;
@@ -189,6 +191,8 @@ export interface NylasCalendarEvent {
   id: string;
   /** RFC 5545 UID: the same event on two of the principal's calendars has the same UID. */
   icalUid?: string;
+  /** The organizer's address, when the provider reports one (#2475: RSVP arrival-copy match). */
+  organizerEmail?: string;
   title: string;
   description: string;
   location: string;
@@ -760,6 +764,8 @@ export class NylasCalendarClient {
     return {
       id: evt.id,
       ...(evt.icalUid ? { icalUid: evt.icalUid } : {}),
+      // Included only when present, so events without one read exactly as before.
+      ...(evt.organizer?.email ? { organizerEmail: evt.organizer.email } : {}),
       title: evt.title ?? '',
       description: evt.description ?? '',
       location: evt.location ?? '',

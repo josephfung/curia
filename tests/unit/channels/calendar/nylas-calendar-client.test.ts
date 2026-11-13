@@ -116,6 +116,16 @@ describe('NylasCalendarClient — iCal UID', () => {
     const client = makeClientWith({ events: { create } as unknown as NylasCalendarLike['events'] });
     const out = await client.createEvent('cal_1', { title: 'x', start: '2026-06-25T14:30:00Z', end: '2026-06-25T15:00:00Z' });
     expect(out).not.toHaveProperty('icalUid');
+    expect(out).not.toHaveProperty('organizerEmail');
+  });
+
+  it('normalizeEvent maps the organizer address', async () => {
+    const create = vi.fn().mockResolvedValue({
+      data: { id: 'evt_o', organizer: { email: 'chair@board.example.org', name: 'Chair' }, when: { startTime: 1000, endTime: 2000 } },
+    });
+    const client = makeClientWith({ events: { create } as unknown as NylasCalendarLike['events'] });
+    const out = await client.createEvent('cal_1', { title: 'x', start: '2026-06-25T14:30:00Z', end: '2026-06-25T15:00:00Z' });
+    expect(out.organizerEmail).toBe('chair@board.example.org');
   });
 });
 
