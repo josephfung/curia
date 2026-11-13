@@ -46,6 +46,7 @@ import {
   createRecordingPrincipalMailbox,
   createRecordingTransports,
   createTestModePrincipalMailboxes,
+  GATEWAY_MEDIATED_MAIL_TOOLS,
   needsMailClient,
   emailText,
   TEST_MODE_PRINCIPAL_MAILBOX_ID,
@@ -551,12 +552,44 @@ describe('createTestModePrincipalMailboxes', () => {
     expect(constructed.clients).toEqual([]);
   });
 
-  it('counts a principalMailboxes tool as needing a mail client unless its mail comes through the gateway', () => {
-    expect(needsMailClient({ capabilities: ['principalMailboxes'] })).toBe(true);
-    expect(needsMailClient({ capabilities: ['auditLogRepo', 'principalMailboxes'] })).toBe(true);
-    expect(needsMailClient({ capabilities: ['outboundGateway', 'principalMailboxes'] })).toBe(false);
-    expect(needsMailClient({ capabilities: ['calendarRouter'] })).toBe(false);
-    expect(needsMailClient({})).toBe(false);
+  it('counts every principalMailboxes tool as needing a mail client except the gateway-mediated ones', () => {
+    expect(needsMailClient({ name: 'ceo-inbox-read', capabilities: ['principalMailboxes'] })).toBe(true);
+    expect(needsMailClient({ name: 'ceo-inbox-search', capabilities: ['auditLogRepo', 'principalMailboxes'] })).toBe(true);
+    expect(needsMailClient({ name: 'ceo-inbox-send-draft', capabilities: ['outboundGateway', 'principalMailboxes'] })).toBe(false);
+    // A new tool declaring both is not exempt by convention: it must be listed.
+    expect(needsMailClient({ name: 'some-new-tool', capabilities: ['outboundGateway', 'principalMailboxes'] })).toBe(true);
+    expect(needsMailClient({ name: 'calendar-create-event', capabilities: ['calendarRouter'] })).toBe(false);
+    expect(needsMailClient({ name: 'x' })).toBe(false);
+    expect([...GATEWAY_MEDIATED_MAIL_TOOLS]).toEqual(['ceo-inbox-send-draft']);
+  });
+
+  it('logs once when the principal has no address', async () => {
+    const warn = vi.spyOn(logger, 'warn');
+    try {
+      const mailboxes = createTestModePrincipalMailboxes(() => '', logger);
+      await mailboxes.list();
+      await mailboxes.list();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // #2475 review I3: with a directory, config-store would store ceo_inbox/sending and
+  // ceo_inbox/triage in a database a real instance shares.
+  it('offers no mailbox directory, so an optional mailboxDirectory is not injected', async () => {
+    let seen: unknown = 'not called';
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'directory-probe', description: 'probe', version: '0.1.0', sensitivity: 'normal', action_risk: 'none',
+      inputs: {}, outputs: {}, permissions: [], secrets: [], optional_capabilities: ['mailboxDirectory'],
+    } as unknown as ToolManifest, { execute: async (ctx) => { seen = ctx.mailboxDirectory; return { success: true, data: {} }; } });
+    const layer = new ExecutionLayer(registry, logger, {
+      principalMailboxes: createTestModePrincipalMailboxes(() => 'avery@example.test', logger),
+    });
+    const result = await layer.invoke('directory-probe', {});
+    expect(result.success).toBe(true);
+    expect(seen).toBeUndefined();
   });
 
   it('gives ceo-inbox-send-draft every capability it declares, with the gateway', () => {
