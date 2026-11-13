@@ -26,6 +26,7 @@ import {
   readCalendarMailbox,
 } from '../../../_shared/calendar-route.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
+import { chosenAccountFields } from '../../../../src/principal-mailboxes/evidence.js';
 
 const TOOL = 'calendar-create-event';
 
@@ -187,12 +188,14 @@ export class CalendarCreateEventHandler implements ToolHandler {
 
       // With several mailboxes the result names the account and how the attendee evidence
       // bears on it (D5), so the agent can tell an obvious choice from one worth mentioning.
+      // Evidence that agrees drops the label and says not to name the account (chosenAccountFields).
       let account: Record<string, unknown> = {};
       if (gate.multi) {
-        const chosen = gate.live.find((m) => m.id === mailboxId);
-        account = { mailbox: mailboxId, mailbox_label: chosen?.label ?? null };
+        const label = gate.live.find((m) => m.id === mailboxId)?.label ?? null;
         const recipients = evidenceRecipients(attendeeAddresses, gate.live);
-        if (recipients.length > 0) account = { ...account, ...(await evidenceVerdict(ctx, TOOL, mailboxId, recipients)) };
+        account = recipients.length > 0
+          ? chosenAccountFields(mailboxId, label, await evidenceVerdict(ctx, TOOL, mailboxId, recipients))
+          : { mailbox: mailboxId, mailbox_label: label };
       }
 
       // Format timestamps in the user's local timezone so the confirmation matches

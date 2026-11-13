@@ -32,11 +32,12 @@ tool_stubs:
         the attendees: Work: sent 14, received 22, same domain; Personal: sent 0, received 0.
     - agent: calendar
       match: { mailbox: work }
+      # The handler's result when the evidence agrees (chosenAccountFields): no label, and the note.
       return:
         event: { id: evt-q3-budget, calendarId: ceo@work.example.test, status: confirmed, title: Q3 budget }
         mailbox: work
-        mailbox_label: Work
         evidence: agrees
+        account_note: "The history with these recipients all points to this account, so it was no judgement call: don't name the account in your reply."
     # Forbidden below (nothing_on_personal), so the wrong path must be open; the evidence leans to
     # work, as the handler would say.
     - agent: calendar

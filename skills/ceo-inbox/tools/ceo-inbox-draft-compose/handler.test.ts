@@ -12,6 +12,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { mailboxView, stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
+import { ACCOUNT_NOT_IN_DOUBT } from '../../../../src/principal-mailboxes/evidence.js';
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
@@ -251,8 +252,10 @@ describe('CeoInboxDraftComposeHandler', () => {
       const result = await handler.execute(twoCtx({ mailbox: 'work' }));
       expect(result.success).toBe(true);
       expect((result as { data: Record<string, unknown> }).data).toMatchObject({
-        draft_id: 'draft-compose-1', mailbox: 'work', mailbox_label: 'Work', evidence: 'agrees',
+        draft_id: 'draft-compose-1', mailbox: 'work', evidence: 'agrees', account_note: ACCOUNT_NOT_IN_DOUBT,
       });
+      // No judgement call (D5): the label is left out so the agent does not name the account.
+      expect((result as { data: Record<string, unknown> }).data).not.toHaveProperty('mailbox_label');
       expect(String(mockFetch.mock.calls[0]![0])).toContain('grant-work');
     });
 

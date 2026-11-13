@@ -1,7 +1,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { mailboxFields, namedOrDefaultMailbox, readMailboxInput } from '../../../_shared/principal-mailbox-client.js';
 import type { PrincipalMailboxView } from '../../../../src/principal-mailboxes/service.js';
-import { classifyEvidence, mailboxEvidence } from '../../../../src/principal-mailboxes/evidence.js';
+import { chosenAccountFields, classifyEvidence, mailboxEvidence } from '../../../../src/principal-mailboxes/evidence.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 import { type DraftAttachment } from '../../../_shared/ceo-nylas-client.js';
 import { markdownToHtml } from '../../../../src/format/markdown-to-html.js';
@@ -91,11 +91,12 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
     // The draft already exists: evidence trouble must not turn that into a failure.
     try {
       const evidence = await mailboxEvidence(ctx.principalMailboxes!, recipients, { log: ctx.log });
-      return { ...mailboxFields(mailbox), evidence: classifyEvidence(evidence, mailbox.id) };
+      // Evidence that agrees drops the label and says not to name the account (D5).
+      return chosenAccountFields(mailbox.id, mailbox.label, { evidence: classifyEvidence(evidence, mailbox.id) });
     } catch (err) {
       // Class and status only (B8): evidence reads every mailbox, and a Nylas error can carry a grant id.
       ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: mailbox.id }, 'ceo-inbox-draft-compose: mailbox evidence failed after the draft was created');
-      return { ...mailboxFields(mailbox), evidence_unavailable: true };
+      return chosenAccountFields(mailbox.id, mailbox.label, { evidence_unavailable: true });
     }
   }
 

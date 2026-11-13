@@ -15,6 +15,7 @@ import { CalendarHoldsSweepHandler } from '../../../skills/calendar/tools/calend
 import { CalendarListEventsHandler } from '../../../skills/calendar/tools/calendar-list-events/handler.js';
 import { CalendarRespondToInviteHandler } from '../../../skills/calendar/tools/calendar-respond-to-invite/handler.js';
 import { buildHoldMetadata } from '../../../src/channels/calendar/holds.js';
+import { ACCOUNT_NOT_IN_DOUBT } from '../../../src/principal-mailboxes/evidence.js';
 import type { NylasCalendarEvent } from '../../../src/channels/calendar/nylas-calendar-client.js';
 
 const logger = pino({ level: 'silent' });
@@ -266,7 +267,9 @@ describe('calendar-create-event: the account is a stated choice (D5)', () => {
     })));
     expect(work.createEvent).toHaveBeenCalledWith('ceo@work.example.com', expect.objectContaining({ title: 'Q3 audit' }));
     expect(personal.createEvent).not.toHaveBeenCalled();
-    expect(data).toMatchObject({ mailbox: 'work', mailbox_label: 'Work', evidence: 'agrees' });
+    expect(data).toMatchObject({ mailbox: 'work', evidence: 'agrees', account_note: ACCOUNT_NOT_IN_DOUBT });
+    // No judgement call (D5): the label is left out so the agent does not name the account.
+    expect(data).not.toHaveProperty('mailbox_label');
   });
 
   it('evidence leaning to the other account is reported as leans_other', async () => {
@@ -275,6 +278,9 @@ describe('calendar-create-event: the account is a stated choice (D5)', () => {
       calendarId: 'primary', title: 'Q3 audit', start: START, end: END, mailbox: 'personal', attendees: [{ email: 'cfo@work.example.com' }],
     })));
     expect(data['evidence']).toBe('leans_other');
+    // A real judgement call keeps the label for the agent to name.
+    expect(data['mailbox_label']).toBe('Personal');
+    expect(data).not.toHaveProperty('account_note');
   });
 
   it('evidence failing after the create is evidence_unavailable, never a failed booking', async () => {

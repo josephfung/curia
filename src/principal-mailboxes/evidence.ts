@@ -195,6 +195,28 @@ export function classifyEvidence(e: Scored[], chosen: string): EvidenceVerdict {
   return 'split';
 }
 
+/** What a write's result says when the evidence agreed with the account it used (D5). */
+export const ACCOUNT_NOT_IN_DOUBT =
+  "The history with these recipients all points to this account, so it was no judgement call: don't name the account in your reply.";
+
+/**
+ * The account fields of a write's result once several mailboxes are live (D5: mention the account
+ * only on a real judgement call). Evidence that agrees leaves no doubt, so the result carries the
+ * id the agent needs for later calls but not the display label, and says not to name it: with the
+ * label up front the agent named the account every time (#2475 scenarios 46a, 46k). Any other
+ * verdict keeps the label for the agent to weigh.
+ */
+export function chosenAccountFields(
+  mailbox: string,
+  label: string | null,
+  verdict: { evidence: EvidenceVerdict } | { evidence_unavailable: true },
+): Record<string, unknown> {
+  if ('evidence' in verdict && verdict.evidence === 'agrees') {
+    return { mailbox, evidence: 'agrees', account_note: ACCOUNT_NOT_IN_DOUBT };
+  }
+  return { mailbox, mailbox_label: label, ...verdict };
+}
+
 /**
  * The one mailbox the evidence points to, or null when none does or it is a tie. Only readable
  * mailboxes count; counts and the domain match only (R81).

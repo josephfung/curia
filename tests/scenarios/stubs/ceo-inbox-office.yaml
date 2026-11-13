@@ -41,11 +41,13 @@ contact-register:
     return: { contact_id: "{{contact:sam}}", display_name: Sam Rivera, contact_confidence: 0.9, created: false, verified: true }
 # Two principal mailboxes (#2475): `work` (Work, a company domain) and `personal` (Personal, a
 # consumer account). A compose with a stated mailbox succeeds in that mailbox; the case stubs
-# the no-mailbox call (needs_mailbox plus the evidence), which differs per case.
+# the no-mailbox call (needs_mailbox plus the evidence), which differs per case. Evidence that
+# agrees gets the handler's result for it (chosenAccountFields in
+# src/principal-mailboxes/evidence.ts; keep the two in step): no label, and the note.
 ceo-inbox-draft-compose:
   - agent: ceo-inbox
     match: { mailbox: work }
-    return: { draft_id: draft-work-new, mailbox: work, mailbox_label: Work, evidence: agrees }
+    return: { draft_id: draft-work-new, mailbox: work, evidence: agrees, account_note: "The history with these recipients all points to this account, so it was no judgement call: don't name the account in your reply." }
   - agent: ceo-inbox
     match: { mailbox: personal }
-    return: { draft_id: draft-personal-new, mailbox: personal, mailbox_label: Personal, evidence: agrees }
+    return: { draft_id: draft-personal-new, mailbox: personal, evidence: agrees, account_note: "The history with these recipients all points to this account, so it was no judgement call: don't name the account in your reply." }
