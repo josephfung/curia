@@ -283,9 +283,10 @@ export class CeoInboxListHandler implements ToolHandler {
       if (mailbox.triageStartAt === null) return { ok: false, error: `${mailbox.label} has no start line: all of its unread mail is already triaged.` };
       if (at.getTime() >= mailbox.triageStartAt.getTime()) return { ok: false, error: `${mailbox.label}'s start line is already earlier than that.` };
       await svc.setTriageStart(mailbox.id, at);
-      // Make the mailbox due now and let a new backlog alarm fire for the larger range.
+      // Make the mailbox due now and let a new backlog alarm fire for the larger range. A drain
+      // already running keeps its start (R52): markDrained stamps the episode's first batch.
+      if (!(await svc.state.isDraining(mailbox.id))) await svc.state.setDrainStartedAt(mailbox.id, new Date());
       await svc.state.setDraining(mailbox.id, true);
-      await svc.state.setDrainStartedAt(mailbox.id, new Date());
       await svc.state.setBacklogAlarmed(mailbox.id, false);
       ctx.log.info({ mailboxId: mailbox.id }, 'ceo-inbox-list: moved a triage start line back on the principal\'s request');
       return { ok: true, data: { mailbox: mailbox.id, mailbox_label: mailbox.label, triage_start_at: at.toISOString(), messages: [], count: 0 } };

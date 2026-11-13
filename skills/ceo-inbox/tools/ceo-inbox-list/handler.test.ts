@@ -982,6 +982,17 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     expect(await t.state.drainStartedAt('personal')).toEqual(NOW);
   });
 
+  it('sweep_since keeps the start of a drain already running (P6, R52)', async () => {
+    const start = new Date('2026-11-10T00:00:00Z');
+    const t = setup({ 'grant-personal': [] }, { start: { personal: start } });
+    const began = new Date(NOW.getTime() - 40 * 60_000);
+    await t.state.setDraining('personal', true);
+    await t.state.setDrainStartedAt('personal', began);
+    expect((await t.run({ sweep_since: '2026-11-01', mailbox: 'personal' }, principalTurn)).success).toBe(true);
+    expect(await t.state.isDraining('personal')).toBe(true);
+    expect(await t.state.drainStartedAt('personal')).toEqual(began);
+  });
+
   it('sweep_since is validated: needs a mailbox, a real past date within a year, and an existing start line', async () => {
     const start = new Date('2026-11-10T00:00:00Z');
     const t = setup({ 'grant-personal': [], 'grant-work': [] }, { start: { personal: start } });
@@ -1071,6 +1082,16 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     expect(t.writes).toHaveLength(0);
   });
 
+  it('keeps a cross-mailbox message with no From address in the batch without claiming it (P6)', async () => {
+    const t = setup({
+      'grant-work': [],
+      'grant-personal': [msg('nofrom', NOW_S - 1, { from: [], to: [{ email: WORK_ADDR }] })],
+    }, { headers: { nofrom: [{ name: 'Message-ID', value: '<nofrom@mail.example.org>' }] } });
+    expect(dataOf(await t.run()).messages.map((m) => m.id)).toEqual(['nofrom']);
+    expect(t.claim).not.toHaveBeenCalled();
+    expect(t.writes).toHaveLength(0);
+  });
+
   it('flags mail from the other principal address', async () => {
     const t = setup({
       'grant-work': [],
@@ -1128,6 +1149,16 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     expect((await t.run({ triage: true }, principalTurn)).success).toBe(false);
     expect(t.requests).toHaveLength(0);
     expect((await t.run({ triage: true })).success).toBe(true);
+  });
+
+  it('needs system lineage as well as the inbox-drain tag (P6, R55)', async () => {
+    const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)] });
+    const tagged = (originator: Record<string, unknown>) => ({ taskMetadata: { originator, boundTask: { taskId: 't1', tags: ['inbox-drain'] } } });
+    expect((await t.run({ triage: true }, tagged({ systemRole: 'principal', channel: 'signal' }))).success).toBe(false);
+    expect((await t.run({ triage: true }, tagged({ systemRole: null, contactId: 'c-1', tier: 'outsider' }))).success).toBe(false);
+    expect(t.requests).toHaveLength(0);
+    // Raw system lineage on a task tagged inbox-drain: the heartbeat's own drain.
+    expect((await t.run({ triage: true }, tagged({ systemRole: 'system' }))).success).toBe(true);
   });
 
   it('accepts a laddered system lineage and refuses other laddered agents', async () => {
