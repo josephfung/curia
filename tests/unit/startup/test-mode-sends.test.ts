@@ -45,7 +45,9 @@ import {
   createRecordingOutboundGateway,
   createRecordingPrincipalMailbox,
   createRecordingTransports,
+  createTestModePrincipalMailboxes,
   emailText,
+  TEST_MODE_PRINCIPAL_MAILBOX_ID,
   recordingBandReview,
   type RecordedReview,
   type RecordedSend,
@@ -53,6 +55,13 @@ import {
   inMemorySendLedger,
 } from '../../../src/startup/test-mode-sends.js';
 import { scheduledJobTask } from '../../scenarios/harness.js';
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+import { ExecutionLayer } from '../../../src/skills/execution.js';
+import { ToolRegistry } from '../../../src/skills/registry.js';
+import type { ToolManifest } from '../../../src/skills/types.js';
+import { DEFAULT_MAILBOX } from '../../../src/skills/principal-send/send-level.js';
+import { MissingNylasApiKeyError, UnknownMailboxError } from '../../../src/principal-mailboxes/types.js';
 
 const logger = createLogger('error');
 
@@ -512,5 +521,49 @@ describe('inMemorySendLedger matches production (#2475 item 12)', () => {
     expect((await ledger.recentForConversation(['<y@example.com>'], 0)).map((e) => e.draftId)).toEqual(['a']);
     expect((await ledger.recentForConversation(['<x@example.com>'], 0)).map((e) => e.draftId)).toEqual(['a', 'b']);
     expect(await ledger.recentForConversation([], 0)).toEqual([]);
+  });
+});
+
+// #2475: the test-mode ExecutionLayer had no principalMailboxes, so every real ceo-inbox-send-draft
+// in a through_gateway case failed its capability check before the gateway saw it.
+describe('createTestModePrincipalMailboxes', () => {
+  beforeEach(() => { constructed.clients.length = 0; });
+
+  it('lists one default mailbox, the id the recording gateway serves, at the principal\'s address read per call', async () => {
+    let address = 'avery@example.test';
+    const mailboxes = createTestModePrincipalMailboxes(() => address, logger);
+    expect((await mailboxes.list()).map(m => [m.id, m.address, m.isDefault])).toEqual([[TEST_MODE_PRINCIPAL_MAILBOX_ID, 'avery@example.test', true]]);
+    expect(TEST_MODE_PRINCIPAL_MAILBOX_ID).toBe(DEFAULT_MAILBOX);
+    address = 'avery.new@example.test';
+    expect((await mailboxes.forSkills().get(TEST_MODE_PRINCIPAL_MAILBOX_ID)).address).toBe('avery.new@example.test');
+  });
+
+  it('refuses any other mailbox id, as production refuses an unknown one', async () => {
+    const mailboxes = createTestModePrincipalMailboxes(() => 'avery@example.test', logger);
+    await expect(mailboxes.get('work')).rejects.toBeInstanceOf(UnknownMailboxError);
+  });
+
+  it('hands out no client: there is no API key or grant, and no Nylas client is constructed', async () => {
+    const mailboxes = createTestModePrincipalMailboxes(() => 'avery@example.test', logger).forSkills();
+    await expect(mailboxes.gatewayClient(TEST_MODE_PRINCIPAL_MAILBOX_ID)).rejects.toBeInstanceOf(MissingNylasApiKeyError);
+    await expect(mailboxes.ceoClient(TEST_MODE_PRINCIPAL_MAILBOX_ID, logger)).rejects.toBeInstanceOf(MissingNylasApiKeyError);
+    expect(constructed.clients).toEqual([]);
+  });
+
+  it('gives ceo-inbox-send-draft every capability it declares, with the gateway', () => {
+    const manifest = JSON.parse(readFileSync(
+      path.resolve(import.meta.dirname, '../../../skills/ceo-inbox/tools/ceo-inbox-send-draft/tool.json'), 'utf8',
+    )) as ToolManifest;
+    const registry = new ToolRegistry();
+    registry.register(manifest, { execute: async () => ({ success: true, data: {} }) });
+    // Presence is all the capability check reads.
+    const gateway = {} as OutboundGateway;
+    const without = new ExecutionLayer(registry, logger, { outboundGateway: gateway });
+    expect(without.unavailableCapabilities('ceo-inbox-send-draft')).toEqual(['principalMailboxes']);
+    const withMailboxes = new ExecutionLayer(registry, logger, {
+      outboundGateway: gateway,
+      principalMailboxes: createTestModePrincipalMailboxes(() => 'avery@example.test', logger),
+    });
+    expect(withMailboxes.unavailableCapabilities('ceo-inbox-send-draft')).toEqual([]);
   });
 });

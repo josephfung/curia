@@ -40,7 +40,10 @@ import type { BusEvent, EventType, Layer, OutboundMessageEvent } from '../bus/ev
 import type { PrincipalEmailRef } from '../contacts/types.js';
 import type { AgentPersona } from '../skills/types.js';
 import { REPLY_QUOTE_HTML_OPEN } from '../skills/_shared/reply-quote.js';
-import { DEFAULT_SEND_LEVEL, type SendLevel } from '../skills/principal-send/send-level.js';
+import { DEFAULT_MAILBOX, DEFAULT_SEND_LEVEL, type SendLevel } from '../skills/principal-send/send-level.js';
+import { PrincipalMailboxes } from '../principal-mailboxes/service.js';
+import type { PrincipalMailboxStore } from '../principal-mailboxes/store.js';
+import type { PrincipalMailboxRecord } from '../principal-mailboxes/types.js';
 import type { PrincipalSendEntry } from '../skills/principal-send/send-ledger.js';
 import { draftKey, type DraftRef } from '../skills/principal-send/draft-provenance.js';
 
@@ -378,6 +381,45 @@ export function createRecordingPrincipalMailbox(recorder: SendRecorder, principa
     // Cast: sendPrincipalDraft calls only the methods above on this client.
     return mailbox as unknown as NylasClient;
   };
+}
+
+/** The one principal mailbox test mode has: the id the recording gateway asks for (DEFAULT_MAILBOX). */
+export const TEST_MODE_PRINCIPAL_MAILBOX_ID = DEFAULT_MAILBOX;
+
+/**
+ * The `principalMailboxes` capability for the test-mode ExecutionLayer (#2475). Production's
+ * class over an in-memory registry of one mailbox, `default` (the id the recording gateway's
+ * createRecordingPrincipalMailbox serves), at the principal's address. Without it every
+ * ceo-inbox tool that runs for real, ceo-inbox-send-draft in a through_gateway case, fails its
+ * capability check before the gateway sees the send. It has no Nylas API key and no grant, so
+ * any client it is asked for fails (MissingNylasApiKeyError): the drafts and the send come from
+ * the recording gateway, never from here. Nothing is read from or written to the database's
+ * mailbox registry, which a real instance shares.
+ */
+export function createTestModePrincipalMailboxes(principalAddress: () => string, logger: Logger): PrincipalMailboxes {
+  const record = (): PrincipalMailboxRecord => ({
+    id: TEST_MODE_PRINCIPAL_MAILBOX_ID,
+    label: 'Mailbox',
+    address: principalAddress(),
+    provider: 'google',
+    isDefault: true,
+    triageStartAt: null,
+    removedAt: null,
+    addedIdentityId: null,
+  });
+  const store = {
+    listLive: async (): Promise<PrincipalMailboxRecord[]> => [record()],
+    hasAnyRow: async (): Promise<boolean> => true,
+    getAny: async (id: string): Promise<PrincipalMailboxRecord | null> => (id === TEST_MODE_PRINCIPAL_MAILBOX_ID ? record() : null),
+  };
+  return new PrincipalMailboxes({
+    // Cast: PrincipalMailboxes reads the store through these three methods only; the writes
+    // (insert, relabel, tombstone...) belong to the admin routes, which test mode never builds.
+    store: store as unknown as PrincipalMailboxStore,
+    secrets: { get: async () => null },
+    apiKey: () => undefined,
+    logger,
+  });
 }
 
 /** Production's review, as the recording gateway takes it (built in createTestModeStack). */
