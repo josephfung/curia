@@ -48,13 +48,14 @@ export function sameOrganizer(a: NylasCalendarEvent, b: NylasCalendarEvent): boo
  * A stable key for one occurrence of a meeting, the same on every calendar it is on (#2475, D7):
  * meeting-debrief keys its `seen:` / `prompted:` / `reminded:` guards on it, so a meeting on two
  * of the principal's calendars, or listed through the other account on a later run, is judged and
- * debriefed once. With an iCal UID: `ical-` and a hash of the UID and the occurrence (the series
- * instances share one UID, so a weekly meeting is still debriefed each week; the hash keeps the
- * key short whatever the UID's length). Without one: the event id, as before.
+ * debriefed once. With an iCal UID: `ical-` and a hash of the same fields `sameMeetingKey` uses
+ * (UID, occurrence, start, end, title; R91), so a spoofed invite reusing a real meeting's UID and
+ * time but differing in what the principal sees gets its own key and cannot suppress the real
+ * meeting's debrief. The occurrence keeps a weekly series' instances apart; the hash keeps the key
+ * short whatever the UID's length. Without a UID: the event id, as before.
  */
-export function meetingKey(e: Pick<NylasCalendarEvent, 'id' | 'icalUid' | 'originalStartTime' | 'startTime' | 'startDate'>): string {
-  const uid = e.icalUid?.trim();
-  if (!uid) return e.id;
-  const occurrence = e.originalStartTime ?? e.startTime ?? e.startDate ?? '';
-  return `ical-${createHash('sha256').update(`${uid}\n${occurrence}`).digest('hex').slice(0, 24)}`;
+export function meetingKey(e: NylasCalendarEvent): string {
+  const key = sameMeetingKey(e);
+  if (key === null) return e.id;
+  return `ical-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`;
 }
