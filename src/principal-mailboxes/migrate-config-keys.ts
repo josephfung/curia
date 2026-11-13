@@ -206,7 +206,7 @@ export function renameSendingKeyAfterMigration(deps: {
       if (outcome === 'renamed') deps.logger.info('Renamed the default send-level key to the migrated mailbox id');
     } catch (err) {
       // Retried on the next run or boot; until then the legacy key applies only to the migrated sole mailbox.
-      deps.logger.warn({ errName: err instanceof Error ? err.name : typeof err }, 'Could not reconcile the ceo_inbox/sending default key; it is retried at the next boot');
+      deps.logger.warn(grantSafeErrorFields(err), 'Could not reconcile the ceo_inbox/sending default key; it is retried at the next boot');
     }
     // Same wiring, separate failure: the sent-observe and learning-state keys follow the same mailbox
     // (R60). Until they move, the readers honour the global keys for that mailbox.
