@@ -783,7 +783,8 @@ export class Scheduler {
                t.progress,
                t.error_budget AS task_error_budget,
                t.tags AS task_tags,
-               t.title AS task_title
+               t.title AS task_title,
+               t.created_by AS task_created_by
           FROM scheduled_jobs sj
           LEFT JOIN tasks t ON sj.task_id = t.id
          WHERE sj.status IN ('pending', 'failed')
@@ -816,6 +817,7 @@ export class Scheduler {
           taskErrorBudget: row.task_error_budget ?? null,
           taskTags: row.task_tags ?? null,
           taskTitle: row.task_title ?? null,
+          taskCreatedBy: row.task_created_by ?? null,
           runStartedAt: row.run_started_at ?? null,
           expectedDurationSeconds: row.expected_duration_seconds ?? null,
           lastRunOutcome: row.last_run_outcome ?? null,
@@ -1217,6 +1219,7 @@ export class Scheduler {
           errorBudget: job.taskErrorBudget ?? {},
           tags: job.taskTags ?? [],
           progress: job.progress ?? {},
+          createdBy: job.taskCreatedBy ?? null,
         };
       }
     }

@@ -941,7 +941,7 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     if (!r.success) throw new Error(r.error);
     return r.data as TriageData;
   };
-  const drainTurn = { originator: { systemRole: 'system' }, boundTask: { taskId: 't1', tags: ['inbox-drain'] } };
+  const drainTurn = { originator: { systemRole: 'system' }, boundTask: { taskId: 't1', tags: ['inbox-drain'], createdBy: 'heartbeat' } };
   const principalTurn = { liveTurn: true, taskMetadata: { originator: { systemRole: 'principal', channel: 'signal' } } } as Partial<ToolContext>;
 
   it('round-robins across due mailboxes', async () => {
@@ -1222,7 +1222,7 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
 
   it('needs system lineage as well as the inbox-drain tag (P6, R55)', async () => {
     const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)] });
-    const tagged = (originator: Record<string, unknown>) => ({ taskMetadata: { originator, boundTask: { taskId: 't1', tags: ['inbox-drain'] } } });
+    const tagged = (originator: Record<string, unknown>) => ({ taskMetadata: { originator, boundTask: { taskId: 't1', tags: ['inbox-drain'], createdBy: 'heartbeat' } } });
     expect((await t.run({ triage: true }, tagged({ systemRole: 'principal', channel: 'signal' }))).success).toBe(false);
     expect((await t.run({ triage: true }, tagged({ systemRole: null, contactId: 'c-1', tier: 'outsider' }))).success).toBe(false);
     expect(t.requests).toHaveLength(0);
@@ -1230,9 +1230,20 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     expect((await t.run({ triage: true }, tagged({ systemRole: 'system' }))).success).toBe(true);
   });
 
+  it('refuses a system-lineage drain task the heartbeat did not create (SEC-L1)', async () => {
+    const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)] });
+    const foreign = (createdBy: unknown) => ({ taskMetadata: { originator: { systemRole: 'system' }, boundTask: { taskId: 't2', tags: ['inbox-drain'], createdBy } } });
+    expect((await t.run({ triage: true }, foreign('ceo-inbox'))).success).toBe(false);
+    expect((await t.run({ triage: true }, foreign(undefined))).success).toBe(false);
+    // And its plain unread listing is not forced into triage mode either.
+    const plain = await t.run({ unread_only: true, limit: 5 }, foreign('ceo-inbox'));
+    expect(plain.success && (plain.data as Record<string, unknown>)['mailboxes_due']).toBeFalsy();
+    expect(t.data.get('triage.batches.2026-11-12')).toBeUndefined();
+  });
+
   it('accepts a laddered system lineage and refuses other laddered agents', async () => {
     const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)] });
-    const agentTurn = (ladderedFrom: string | null) => ({ taskMetadata: { originator: { systemRole: 'agent', ladderedFrom }, boundTask: { tags: ['inbox-drain'] } } });
+    const agentTurn = (ladderedFrom: string | null) => ({ taskMetadata: { originator: { systemRole: 'agent', ladderedFrom }, boundTask: { tags: ['inbox-drain'], createdBy: 'heartbeat' } } });
     expect((await t.run({ triage: true }, agentTurn('principal'))).success).toBe(false);
     expect((await t.run({ triage: true }, agentTurn(null))).success).toBe(false);
     expect((await t.run({ triage: true }, agentTurn('system'))).success).toBe(true);

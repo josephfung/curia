@@ -1443,7 +1443,19 @@ describe('Scheduler', () => {
             next: 'Continue',
           },
         },
+        createdBy: null,
       });
+    });
+
+    it('stamps who created the bound task, which the inbox drain check reads (#2475, SEC-L1)', async () => {
+      const row = fakeDbRow({ agent_task_id: 'task-drain-1', task_tags: ['inbox-drain'], task_created_by: 'heartbeat' });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce(claimed());
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
+      expect(taskEvent.payload.metadata?.boundTask).toMatchObject({ taskId: 'task-drain-1', tags: ['inbox-drain'], createdBy: 'heartbeat' });
     });
 
     it('stamps a wakeContext for a heartbeat wake (task-wake payload) so the ladder applies (#1125)', async () => {
