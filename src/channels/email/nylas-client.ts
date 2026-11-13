@@ -413,6 +413,31 @@ export class NylasClient {
   }
 
   /** List unsent drafts, newest first (first page only, like listMessages). */
+  /**
+   * One page of unread INBOX messages, with the cursor to the next (#2475, R71: the triage probe
+   * pages past mail it filters out). Every filter is re-sent with the page token, so a cursor
+   * that drops them (#2377) cannot widen the listing.
+   */
+  async listUnreadInboxPage(options: { limit: number; receivedAfter?: number; pageToken?: string }): Promise<{ messages: NylasMessage[]; nextCursor?: string }> {
+    const queryParams = {
+      limit: options.limit,
+      unread: true,
+      in: ['INBOX'],
+      ...(options.receivedAfter !== undefined ? { receivedAfter: options.receivedAfter } : {}),
+      ...(options.pageToken ? { pageToken: options.pageToken } : {}),
+    } as ListMessagesQueryParams;
+    try {
+      const response = await this.nylas.messages.list({ identifier: this.grantId, queryParams });
+      return {
+        messages: response.data.map((msg) => this.normalizeMessage(msg)),
+        ...(response.nextCursor ? { nextCursor: response.nextCursor } : {}),
+      };
+    } catch (err) {
+      this.log.error({ ...grantSafeErrorFields(err) }, 'Nylas listUnreadInboxPage failed');
+      throw err;
+    }
+  }
+
   async listDrafts(
     options?: { limit?: number; threadId?: string; subject?: string; unread?: boolean; anyEmail?: string },
   ): Promise<NylasMessage[]> {
