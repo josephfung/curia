@@ -8,12 +8,11 @@
     "calendarId": "string (Nylas calendar ID containing the invite)",
     "eventId": "string (Nylas event ID to RSVP to)",
     "response": "string (accept | decline | tentative)",
-    "account": "string? (informational only; RSVP runs as the mailbox the calendar belongs to)",
     "comment": "string? (optional RSVP comment; currently returned as a warning if provided because Nylas sendRsvp only accepts status in this SDK)",
     "holdMatchCriteria": "object? ({ subject?, contactDomain?, contactId?, sourceRef?, threadRef? } used only when response is accept to release matching Curia holds)",
     "holdSearchStart": "timestamp? (start of hold cleanup search window; defaults around the invite time)",
     "holdSearchEnd": "timestamp? (end of hold cleanup search window; defaults around the invite time)",
-    "mailbox": "string? (mailbox id; required for an unregistered calendar or \"primary\" when several are connected)"
+    "mailbox": "string? (the mailbox the invite arrived in, the consult's mailbox; the RSVP answers as it and calendarId must be its calendar. Required for \"primary\" or an unregistered calendar when several are connected)"
   },
   "outputs": {
     "responded": "boolean",
@@ -23,7 +22,8 @@
     "rsvp": "object (Nylas RSVP request result, including sendIcsError if present)",
     "releasedHolds": "array (hold event IDs released after accepting)",
     "releaseWarnings": "array (non-fatal hold cleanup failures)",
-    "warnings": "array (non-fatal RSVP/fetch/comment warnings)"
+    "warnings": "array (non-fatal RSVP/fetch/comment warnings)",
+    "mailbox": "string? (the account that answered, when several are connected)"
   },
   "permissions": [],
   "secrets": [],

@@ -47,7 +47,7 @@ import type { NylasCalendarEvent } from '../../src/channels/calendar/nylas-calen
 import type { ToolContext } from '../../src/skills/types.js';
 import type { Logger } from '../../src/logger.js';
 import { CURIA_HOLD_KEY, buildHoldMetadata } from '../../src/channels/calendar/holds.js';
-import { singleMailboxRouter } from '../../skills/_shared/calendar-router-test-helpers.js';
+import { calendarMailbox, routerFixture, singleMailboxRouter } from '../../skills/_shared/calendar-router-test-helpers.js';
 
 const { Pool } = pg;
 
@@ -330,6 +330,62 @@ describeIf('calendar-holds — hold place → self-release (real Postgres)', () 
     const [delCalId, delEventId] = deleteEvent.mock.calls[0]!;
     expect(delCalId).toBe(CAL_ID);
     expect(delEventId).toBe(holdEventId);
+  });
+
+  it('two mailboxes: a hold on the personal home calendar is released by a booking on the work calendar (#2475)', async () => {
+    const holdEventId = `hold-two-${randomUUID()}`;
+    const personalHome = 'ceo@personal.example.com';
+    const workHome = 'ceo@work.example.com';
+    const createdHold = makeHoldEvent(holdEventId, { calendarId: personalHome });
+    const personal = {
+      createEvent: vi.fn().mockResolvedValue(createdHold),
+      listEvents: vi.fn().mockResolvedValue([createdHold]),
+      deleteEvent: vi.fn().mockResolvedValue(undefined),
+    };
+    const work = {
+      createEvent: vi.fn().mockResolvedValue(makeBookedEvent(`booked-${randomUUID()}`)),
+      listEvents: vi.fn().mockResolvedValue([]),
+      deleteEvent: vi.fn().mockResolvedValue(undefined),
+    };
+    const router = routerFixture({
+      mailboxes: [calendarMailbox('work', 'Work', workHome, true), calendarMailbox('personal', 'Personal', personalHome)],
+      clients: { work, personal },
+      principalCalendars: [
+        { nylasCalendarId: workHome, isPrimary: true, principalMailboxId: 'work' },
+        { nylasCalendarId: personalHome, isPrimary: true, principalMailboxId: 'personal' },
+      ],
+    });
+
+    // Without a mailbox the hold is not placed: the account is a stated choice.
+    const unplaced = await new CalendarCreateHoldHandler().execute({
+      input: { calendarId: 'primary', start: SLOT_START, end: SLOT_END, subject: 'two-mailbox hold' },
+      secret: () => { throw new Error('no secret'); },
+      log: silentLog(),
+      entityMemory,
+      calendarRouter: router,
+    } as unknown as ToolContext);
+    expect(unplaced).toMatchObject({ success: true, data: { needs_mailbox: true, held: false } });
+    expect(personal.createEvent).not.toHaveBeenCalled();
+
+    const placed = await new CalendarCreateHoldHandler().execute({
+      input: { calendarId: 'primary', start: SLOT_START, end: SLOT_END, subject: 'two-mailbox hold', mailbox: 'personal' },
+      secret: () => { throw new Error('no secret'); },
+      log: silentLog(),
+      entityMemory,
+      calendarRouter: router,
+    } as unknown as ToolContext);
+    expect(placed).toMatchObject({ success: true, data: { held: true, mailbox: 'personal', calendarId: personalHome } });
+    expect(personal.createEvent).toHaveBeenCalledWith(personalHome, expect.objectContaining({ status: 'tentative' }));
+
+    const booked = await new CalendarCreateEventHandler().execute({
+      input: { calendarId: 'primary', title: 'Real Meeting', start: SLOT_START, end: SLOT_END, mailbox: 'work' },
+      secret: () => { throw new Error('no secret'); },
+      log: silentLog(),
+      calendarRouter: router,
+    } as unknown as ToolContext);
+    expect(booked.success).toBe(true);
+    expect(work.createEvent).toHaveBeenCalledWith(workHome, expect.anything());
+    expect(personal.deleteEvent).toHaveBeenCalledWith(personalHome, holdEventId);
   });
 });
 

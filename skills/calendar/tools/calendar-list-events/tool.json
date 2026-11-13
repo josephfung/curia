@@ -15,7 +15,7 @@
     "mailbox": "string? (mailbox id; required for an unregistered calendar or \"primary\" when several are connected)"
   },
   "outputs": {
-    "events": "array",
+    "events": "array (a meeting on calendars of two accounts is listed once, with calendars: [{ calendarId, mailbox, mailbox_label, eventId }])",
     "count": "number"
   },
   "permissions": [],
