@@ -881,6 +881,8 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     tz?: string;
     /** Writes (by method and path) that answer HTTP 500. */
     failWrite?: (method: string, path: string) => boolean;
+    /** Verified principal addresses with no mailbox. */
+    identityAddresses?: string[];
   }
 
   function setup(byGrant: Record<string, Msg[]>, opts: Opts = {}) {
@@ -905,6 +907,7 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
       ],
       grantId: (id) => `grant-${id}`,
       gatewayClients: { work: gw, personal: gw },
+      identityAddresses: opts.identityAddresses,
     });
     const paged = pagedMessagesFetch(byGrant, { pageSize: opts.pageSize ?? 20 });
     const writes: Array<{ grant: string; method: string; path: string; body: unknown }> = [];
@@ -1063,7 +1066,9 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     const d = dataOf(await t.run());
     expect(d.messages.map((m) => m.id)).toEqual(['solo']);
     expect(t.claim).toHaveBeenCalledWith('abc@mail.example.org', 'copy@sender.example.com', 'personal', 'copy');
-    expect(t.getMessage).toHaveBeenCalledTimes(1); // only the message naming the other address pays
+    // With two live mailboxes every batched message is claimed (R70); solo has no Message-ID.
+    expect(t.getMessage).toHaveBeenCalledTimes(2);
+    expect(t.claim).toHaveBeenCalledTimes(1);
     const personalWrites = t.writes.filter((w) => w.grant === 'grant-personal');
     expect(personalWrites.some((w) => w.method === 'PUT' && w.path === '/messages/copy' && (w.body as { unread?: boolean }).unread === false)).toBe(true);
     expect(personalWrites.some((w) => w.method === 'POST' && w.path === '/folders' && (w.body as { name: string }).name === '↔ In Work')).toBe(true);
@@ -1119,6 +1124,48 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     const d = dataOf(await t.run());
     expect(d.messages).toHaveLength(1);
     expect(d.messages[0]!.from_principal_other_mailbox).toBe(true);
+  });
+
+  it('drops an auto-forwarded copy that names no other mailbox when the first copy was triaged (R70)', async () => {
+    const t = setup({
+      'grant-work': [],
+      'grant-personal': [msg('fwd', NOW_S - 1, { to: [{ email: PERSONAL_ADDR }] })],
+    }, {
+      headers: { fwd: [{ name: 'Message-ID', value: '<fwd@mail.example.org>' }] },
+      claim: async () => ({ first: false, mailboxId: 'work', nylasMessageId: 'w-fwd' }),
+    });
+    expect(dataOf(await t.run()).messages).toEqual([]);
+    expect(t.claim).toHaveBeenCalledWith('fwd@mail.example.org', 'fwd@sender.example.com', 'personal', 'fwd');
+  });
+
+  it('claims nothing while only one mailbox is live (R70)', async () => {
+    const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)] }, { headers: { w1: [{ name: 'Message-ID', value: '<w1@mail.example.org>' }] } });
+    const one = stubPrincipalMailboxes({ mailboxes: [mailboxView('work', 'Work', WORK_ADDR, true)], grantId: 'grant-work', gatewayClients: { work: { getMessage: t.getMessage } } });
+    expect(dataOf(await t.run({ triage: true }, { principalMailboxes: one })).messages.map((m) => m.id)).toEqual(['w1']);
+    expect(t.getMessage).not.toHaveBeenCalled();
+  });
+
+  it('triages a copy whose claim belongs to a mailbox no longer live (SEC-L3)', async () => {
+    const t = setup({
+      'grant-work': [],
+      'grant-personal': [msg('copy', NOW_S - 1, { to: [{ email: WORK_ADDR }] })],
+    }, {
+      headers: { copy: [{ name: 'Message-ID', value: '<abc@mail.example.org>' }] },
+      claim: async () => ({ first: false, mailboxId: 'removed-box', nylasMessageId: 'x' }),
+    });
+    expect(dataOf(await t.run()).messages.map((m) => m.id)).toEqual(['copy']);
+    expect(t.writes).toHaveLength(0);
+  });
+
+  it('flags mail from a verified principal address that has no mailbox (BR-M5)', async () => {
+    const t = setup({
+      'grant-work': [msg('from-alias', NOW_S - 1, { from: [{ email: 'Ceo@Alias.example.org' }] }), msg('own', NOW_S - 2, { from: [{ email: WORK_ADDR }] })],
+      'grant-personal': [],
+    }, { identityAddresses: ['ceo@alias.example.org'] });
+    const d = dataOf(await t.run());
+    expect(d.messages.find((m) => m.id === 'from-alias')?.from_principal_other_mailbox).toBe(true);
+    // Mail from the mailbox's own address is not another principal address.
+    expect(d.messages.find((m) => m.id === 'own')?.from_principal_other_mailbox).toBeUndefined();
   });
 
   it('keeps a losing copy whose mark-read fails, so older mail still flows', async () => {
