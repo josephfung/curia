@@ -679,6 +679,19 @@ describe('ConfigStoreHandler — ceo_inbox/sending', () => {
     expect(em.storeFact).not.toHaveBeenCalled();
   });
 
+  it('checks a case or whitespace variant of the namespace and key the same way, and stores the normal form', async () => {
+    for (const [namespace, key] of [['CEO_INBOX', 'sending'], [' Ceo_Inbox ', ' SENDING ']] as const) {
+      const em = makeEntityMemory();
+      const r = await new ConfigStoreHandler().execute(makeCtx(em, { action: 'store', namespace, key, value: '{"wrk":"routine"}' }, { mailboxDirectory: two }));
+      expect(r.success, `${namespace}/${key}`).toBe(false);
+      if (!r.success) expect(r.error).toContain('Not a connected mailbox: wrk');
+      expect(em.storeFact).not.toHaveBeenCalled();
+    }
+    const em = makeEntityMemory();
+    const ok = await new ConfigStoreHandler().execute(makeCtx(em, { action: 'store', namespace: 'CEO_INBOX', key: 'Sending', value: '{"work":"routine"}' }, { mailboxDirectory: two }));
+    expect(ok).toMatchObject({ success: true, data: { namespace: 'ceo_inbox', key: 'sending' } });
+  });
+
   it('refuses a legacy default key once there are two mailboxes, saying it no longer applies (M2)', async () => {
     const r = await store('{"default":"routine"}');
     expect(r.success).toBe(false);

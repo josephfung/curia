@@ -45,11 +45,18 @@ export class ConfigStoreHandler implements ToolHandler {
   }
 
   private async store(ctx: ToolContext): Promise<ToolResult> {
-    const { namespace, key, value } = ctx.input as {
+    const raw = ctx.input as {
       namespace?: string;
       key?: string;
       value?: string;
     };
+    // Normalised once, before any check (#2475): the anchor lookup is case-insensitive
+    // (findNodesByLabel compares lower(label)), so `CEO_INBOX` reaches the real ceo_inbox anchor
+    // and must meet the same checks. The normalised form is what is stored.
+    const namespace = normalizeNamespace(raw.namespace);
+    // A case variant of the send-level key is that key: checked, and stored under its real name.
+    const key = canonicalKey(namespace, normalizeKey(raw.key));
+    const value = raw.value;
 
     if (!namespace || typeof namespace !== 'string') {
       return { success: false, error: 'Missing required input: namespace' };
@@ -141,7 +148,10 @@ export class ConfigStoreHandler implements ToolHandler {
   }
 
   private async retrieve(ctx: ToolContext): Promise<ToolResult> {
-    const { namespace, key } = ctx.input as { namespace?: string; key?: string };
+    const raw = ctx.input as { namespace?: string; key?: string };
+    // Same normalisation as store, so a read names the same entry a write did.
+    const namespace = normalizeNamespace(raw.namespace);
+    const key = canonicalKey(namespace, normalizeKey(raw.key));
 
     if (!namespace || typeof namespace !== 'string') {
       return { success: false, error: 'Missing required input: namespace' };
@@ -271,6 +281,22 @@ export class ConfigStoreHandler implements ToolHandler {
   }
 }
 
+/** Trimmed and lowercased: namespaces are matched case-insensitively by the anchor lookup. */
+function normalizeNamespace(raw: unknown): string | undefined {
+  return typeof raw === 'string' ? raw.trim().toLowerCase() : undefined;
+}
+
+/** Trimmed only: keys are matched exactly (matchConfigFact). */
+function normalizeKey(raw: unknown): string | undefined {
+  return typeof raw === 'string' ? raw.trim() : undefined;
+}
+
+/** The send-level key under its real name when `key` is a case variant of it; else unchanged. */
+function canonicalKey(namespace: string | undefined, key: string | undefined): string | undefined {
+  return namespace === SEND_SETTING_NAMESPACE && key?.toLowerCase() === SEND_SETTING_KEY ? SEND_SETTING_KEY : key;
+}
+
+/** The send-level entry (namespace and key arrive normalised). */
 function isSendLevelKey(namespace: string, key: string | undefined): boolean {
   return namespace === SEND_SETTING_NAMESPACE && key === SEND_SETTING_KEY;
 }
