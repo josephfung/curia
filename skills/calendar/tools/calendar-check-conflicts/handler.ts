@@ -10,7 +10,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import type { HoldMatchCriteria } from '../../../../src/channels/calendar/holds.js';
 import { readCalendarMailbox } from '../../../_shared/calendar-route.js';
-import { contactNameFor, readAvailability } from '../../../_shared/calendar-availability.js';
+import { calendarIdsCapError, contactNameFor, readAvailability } from '../../../_shared/calendar-availability.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 
 export class CalendarCheckConflictsHandler implements ToolHandler {
@@ -29,6 +29,8 @@ export class CalendarCheckConflictsHandler implements ToolHandler {
     if (!calendarIds || !Array.isArray(calendarIds) || calendarIds.length === 0) {
       return { success: false, error: 'Missing required input: calendarIds (must be a non-empty array)' };
     }
+    const overCap = calendarIdsCapError(calendarIds);
+    if (overCap) return { success: false, error: overCap };
     if (!proposedStart || typeof proposedStart !== 'string') {
       return { success: false, error: 'Missing required input: proposedStart' };
     }
@@ -98,8 +100,10 @@ export class CalendarCheckConflictsHandler implements ToolHandler {
         });
       }
 
-      // Never clear when a calendar could not be read: a skipped calendar is not a free one.
-      const clear = conflicts.length === 0 && read.partial.length === 0;
+      // Never clear when a calendar could not be read: a skipped calendar is not a free one. That
+      // includes a calendar the caller named whose mailbox was removed (R101), and a check whose
+      // ignore-holds step was skipped (its holds still block, so a conflict is reported, not hidden).
+      const clear = conflicts.length === 0 && read.partial.length === 0 && read.removedRequested.length === 0;
       // Derive displayTimezone from the proposed start time rather than "now" so
       // the label's DST offset matches the offsets baked into the conflict timestamps.
       const labelDate = new Date(proposedStart);
@@ -110,6 +114,12 @@ export class CalendarCheckConflictsHandler implements ToolHandler {
       };
       if (read.partial.length > 0) data['partial'] = read.partial;
       if (read.removed.length > 0) data['removed'] = read.removed;
+      if (read.removedRequested.length > 0) {
+        data['note'] =
+          `Calendars of removed mailboxes were not read (${read.removedRequested.join(', ')}): this is not clear. ` +
+          'Say so; to read one again, re-register it with calendar-register through a live mailbox.';
+      }
+      if (read.ignoreHoldsUnchecked.length > 0) data['ignore_holds_unchecked'] = read.ignoreHoldsUnchecked;
       if (read.readVia.length > 0) data['freebusy_via'] = read.readVia;
       ctx.log.info({ calendarCount: calendarIds.length, conflictCount: conflicts.length, partialCount: read.partial.length }, 'Checked conflicts');
       return { success: true, data };

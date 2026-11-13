@@ -33,6 +33,26 @@ import { attendeeEvidence, calendarRouteErrorMessage, freeBusyAcross, type Queri
 /** How long choosing a mailbox for someone else's free/busy waits for mail evidence. */
 const FREEBUSY_EVIDENCE_TIMEOUT_MS = 3_000;
 
+/**
+ * At most this many calendars per availability call (R100): each one may cost registry reads and,
+ * for another person, mail searches on every mailbox. A longer list is refused, not truncated.
+ */
+export const MAX_AVAILABILITY_CALENDARS = 20;
+
+/**
+ * At most this many mail-evidence lookups per call (R100) to choose the mailbox for someone
+ * else's free/busy. Nylas calls cannot be cancelled, so a lookup past the cap (or the deadline)
+ * is never started: that calendar goes through the default mailbox.
+ */
+const MAX_FREEBUSY_EVIDENCE_LOOKUPS = 3;
+
+/** The error for a calendarIds list over the cap, or null. Shared by both availability tools. */
+export function calendarIdsCapError(calendarIds: unknown[]): string | null {
+  return calendarIds.length > MAX_AVAILABILITY_CALENDARS
+    ? `Too many calendars: ${calendarIds.length} given, at most ${MAX_AVAILABILITY_CALENDARS} per call. Nothing was checked; split the check into smaller calls.`
+    : null;
+}
+
 /** One busy period. `eventId`/`title` are null for free/busy without an event behind it. */
 export interface BusyBlock {
   start: number;
@@ -62,6 +82,13 @@ export interface AvailabilityRead {
   treatAsFreeUnmatched: string[];
   partial: Array<{ mailbox_label: string; error: string }>;
   removed: string[];
+  /**
+   * Removed mailboxes whose calendar the caller named (R101): such a calendar was not read, so
+   * it counts as unread: never "clear", never "free".
+   */
+  removedRequested: string[];
+  /** Calendars whose Curia holds could not be checked for ignoreHolds (SF-M8): their holds still block. */
+  ignoreHoldsUnchecked: string[];
   readVia: Array<{
     calendarId: string;
     mailbox: string;
@@ -117,7 +144,8 @@ export async function readAvailability(
       ctx.log.info({ tool }, `${tool}: no principal mailbox is connected`);
       return { ok: false, error: NO_MAILBOX_MESSAGE };
     }
-    for (const id of req.calendarIds) (await router.isPrincipalCalendar(id) ? principalIds : otherIds).push(id);
+    // One snapshot of the live mailboxes for every id (R100), not a registry read per id.
+    for (const id of req.calendarIds) (await router.isPrincipalCalendar(id, live) ? principalIds : otherIds).push(id);
   } catch (err) {
     ctx.log.warn({ tool, ...(err instanceof CalendarRouteError ? { code: err.code } : grantSafeErrorFields(err)) }, `${tool}: could not resolve the calendars to read`);
     return { ok: false, error: calendarRouteErrorMessage(err) };
@@ -131,10 +159,13 @@ export async function readAvailability(
     treatAsFreeUnmatched: [],
     partial: [],
     removed: [],
+    removedRequested: [],
+    ignoreHoldsUnchecked: [],
     readVia: [],
   };
-  const addRemoved = (label: string): void => {
+  const addRemoved = (label: string, requested = false): void => {
     if (!read.removed.includes(label)) read.removed.push(label);
+    if (requested && !read.removedRequested.includes(label)) read.removedRequested.push(label);
   };
   const addPartial = (label: string, error: string): void => {
     if (!read.partial.some((p) => p.mailbox_label === label)) read.partial.push({ mailbox_label: label, error });
@@ -153,8 +184,8 @@ export async function readAvailability(
   if (otherIds.length > 0) {
     // Routed in parallel under one deadline for the whole call (I3): a slow mail search for one
     // address cannot add up across several, and a late answer is ignored (the default is used).
-    const deadline = Date.now() + FREEBUSY_EVIDENCE_TIMEOUT_MS;
-    const outcomes = await Promise.all(otherIds.map((id) => routeOther(ctx, tool, id, req.mailbox, live, deadline)));
+    const budget = { deadline: Date.now() + FREEBUSY_EVIDENCE_TIMEOUT_MS, lookupsLeft: MAX_FREEBUSY_EVIDENCE_LOOKUPS };
+    const outcomes = await Promise.all(otherIds.map((id) => routeOther(ctx, tool, id, req.mailbox, live, budget)));
     const routed: RoutedCalendar[] = [];
     const vias: Array<AvailabilityRead['readVia'][number] | undefined> = [];
     for (const r of outcomes) {
@@ -165,7 +196,11 @@ export async function readAvailability(
     const answers = await freeBusyWithFallback(ctx, tool, routed, vias, otherIds, live, req, addPartial);
     read.readVia.push(...vias.filter((v): v is AvailabilityRead['readVia'][number] => v !== undefined));
     read.anyRead = read.anyRead || answers.length > 0;
-    const ignored = req.ignoreHolds ? await holdWindowsOnOthers(ctx, tool, otherIds, routed, req, rangeStart, rangeEnd) : new Map<string, Array<{ start: number; end: number }>>();
+    const ignored = req.ignoreHolds
+      ? await holdWindowsOnOthers(ctx, tool, otherIds, routed, req, rangeStart, rangeEnd, (label) => {
+          if (!read.ignoreHoldsUnchecked.includes(label)) read.ignoreHoldsUnchecked.push(label);
+        })
+      : new Map<string, Array<{ start: number; end: number }>>();
     const names = new Map<string, string | null>();
     for (const { queriedId, result } of answers) {
       if (!names.has(result.email)) names.set(result.email, await contactNameFor(ctx, result.email));
@@ -212,7 +247,7 @@ async function readPrincipalCalendars(
   live: PrincipalMailboxView[],
   rangeStart: number,
   rangeEnd: number,
-  addRemoved: (label: string) => void,
+  addRemoved: (label: string, requested?: boolean) => void,
   addPartial: (label: string, error: string) => void,
 ): Promise<
   | { ok: true; anyRead: boolean; blocking: BusyBlock[]; treated: BusyBlock[]; unmatched: string[] }
@@ -242,13 +277,18 @@ async function readPrincipalCalendars(
     // `primary` stands for the home calendars, which are all read.
     if (id === PRIMARY_CALENDAR_ALIAS) continue;
     if (targets.some((t) => lower(t.routed.calendarId) === lower(id))) continue;
-    if (homes.removed.some((r) => lower(r.calendarId) === lower(id))) continue;
+    // A removed mailbox's calendar the caller named was not read: unread, not free (R101).
+    const removedHome = homes.removed.find((r) => lower(r.calendarId) === lower(id));
+    if (removedHome) {
+      addRemoved(removedHome.label, true);
+      continue;
+    }
     let routed: RoutedCalendar;
     try {
       routed = await router.route(id, req.mailbox);
     } catch (err) {
       if (err instanceof CalendarRouteError && err.code === 'mailbox_removed' && err.removedMailbox) {
-        addRemoved(err.removedMailbox.label);
+        addRemoved(err.removedMailbox.label, true);
         continue;
       }
       ctx.log.warn({ tool, ...(err instanceof CalendarRouteError ? { code: err.code } : grantSafeErrorFields(err)) }, `${tool}: a principal calendar could not be routed; availability is partial`);
@@ -266,15 +306,20 @@ async function readPrincipalCalendars(
   const reads = await Promise.all(
     targets.map(async (t) => {
       try {
+        let cutShort = false;
         const [events, freeBusy] = await Promise.all([
-          t.routed.client.listEvents(t.routed.calendarId, req.timeMin, req.timeMax, { limit: LIST_EVENTS_MAX_TOTAL, expandRecurring: true }),
+          t.routed.client.listEvents(t.routed.calendarId, req.timeMin, req.timeMax, {
+            limit: LIST_EVENTS_MAX_TOTAL,
+            expandRecurring: true,
+            onIncomplete: () => { cutShort = true; },
+          }),
           t.routed.client.getFreeBusy([t.routed.calendarId], req.timeMin, req.timeMax),
         ]);
         if (events.length >= LIST_EVENTS_MAX_TOTAL) {
           // Free/busy still covers what the listing cut off (untitled), so nothing reads as free.
           ctx.log.warn({ tool, mailboxId: t.routed.mailboxId, count: events.length }, `${tool}: event listing hit its cap; busy times beyond it come from free/busy`);
         }
-        return { t, ok: true as const, events, freeBusy };
+        return { t, ok: true as const, events, freeBusy, cutShort };
       } catch (err) {
         ctx.log.warn({ tool, mailboxId: t.routed.mailboxId, ...grantSafeErrorFields(err) }, `${tool}: a principal calendar could not be read; availability is partial`);
         return { t, ok: false as const, error: readFailureMessage(err) };
@@ -283,7 +328,7 @@ async function readPrincipalCalendars(
   );
 
   // treat_as_free names one copy's event id; the same meeting's copy on the other account's
-  // calendar (same UID, time and title) is treated the same way.
+  // calendar (same UID, time, title, organizer, location and link; R99) is treated the same way.
   const treatIds = new Set(req.treatAsFree ?? []);
   const matchedIds = new Set<string>();
   const treatKeys = new Set<string>();
@@ -316,7 +361,7 @@ async function readPrincipalCalendars(
     // treated or ignored event. Then only events that still block may explain free/busy, so a
     // busy time is never returned free (I1); treat_as_free and ignored holds only stop blocking
     // what free/busy can be matched against when the listing is complete.
-    const complete = listingComplete(r.events);
+    const complete = !r.cutShort && listingComplete(r.events);
     if (!complete) {
       ctx.log.warn({ tool, mailboxId: routed.mailboxId, count: r.events.length }, `${tool}: event listing may be incomplete; treated and ignored events do not free their time`);
     }
@@ -456,7 +501,7 @@ function collapseSameMeeting(blocks: BusyBlock[]): BusyBlock[] {
     }
     const seen = byKey.get(b.meetingKey);
     if (seen) {
-      // Same meeting (UID, occurrence, start, end, title): one entry, whichever calendars and
+      // Same meeting (UID, occurrence, start, end, title, organizer, location, link): one entry, whichever calendars and
       // accounts it is on, including two calendars of one account (M5).
       if (!seen.block.calendarLabel.split(', ').includes(b.calendarLabel)) seen.block.calendarLabel += `, ${b.calendarLabel}`;
       continue;
@@ -505,7 +550,7 @@ async function routeOther(
   id: string,
   mailbox: string | undefined,
   live: PrincipalMailboxView[],
-  deadline: number,
+  budget: EvidenceBudget,
 ): Promise<
   | { ok: true; routed: RoutedCalendar; via?: AvailabilityRead['readVia'][number] }
   | { ok: false; error: string }
@@ -519,7 +564,7 @@ async function routeOther(
       return { ok: false, error: calendarRouteErrorMessage(err) };
     }
   }
-  const choice = await chooseFreeBusyMailbox(ctx, tool, id, live, deadline);
+  const choice = await chooseFreeBusyMailbox(ctx, tool, id, live, budget);
   try {
     const routed = await router.route(id, choice.mailbox.id);
     ctx.log.info({ tool, mailboxId: choice.mailbox.id, chosenBy: choice.by }, `${tool}: free/busy for an unregistered calendar read through a chosen mailbox`);
@@ -530,22 +575,32 @@ async function routeOther(
   }
 }
 
+/** The call's shared allowance for mail-evidence lookups (R100): one deadline, a few lookups. */
+interface EvidenceBudget {
+  deadline: number;
+  lookupsLeft: number;
+}
+
 async function chooseFreeBusyMailbox(
   ctx: ToolContext,
   tool: string,
   id: string,
   live: PrincipalMailboxView[],
-  deadline: number,
+  budget: EvidenceBudget,
 ): Promise<{ mailbox: PrincipalMailboxView; by: 'domain' | 'history' | 'default' }> {
   const address = lower(id);
   // A Google group or resource calendar id is not a person's address: no mail history to read.
   if (address.includes('@') && !address.endsWith('calendar.google.com')) {
     const byDomain = live.filter((m) => domainMatches(m.address, [address]));
     if (byDomain.length === 1) return { mailbox: byDomain[0]!, by: 'domain' };
-    // What is left of the call's shared deadline. Once it is spent no mail search is started
-    // (N3): its answer could not be used, and the searches would run on unawaited.
-    const left = deadline - Date.now();
-    if (left > 0) {
+    // What is left of the call's shared deadline and lookup allowance. Once either is spent no
+    // mail search is started (N3, R100): its answer could not be used, and Nylas calls cannot be
+    // cancelled, so they would run on unawaited.
+    const left = budget.deadline - Date.now();
+    if (budget.lookupsLeft <= 0) {
+      ctx.log.info({ tool, cap: MAX_FREEBUSY_EVIDENCE_LOOKUPS }, `${tool}: the evidence lookup cap is reached; free/busy goes through the default mailbox`);
+    } else if (left > 0) {
+      budget.lookupsLeft--;
       const evidence = await attendeeEvidence(ctx, tool, [address], left);
       const lead = evidence ? leadingMailbox(evidence) : null;
       const m = lead !== null ? live.find((x) => x.id === lead) : undefined;
@@ -578,13 +633,19 @@ async function freeBusyWithFallback(
   req: AvailabilityRequest,
   addPartial: (label: string, error: string) => void,
 ): Promise<QueriedFreeBusy[]> {
+  // A calendar free/busy gave no answer for was not read: unread, never free (SF-M3).
+  const unread = ({ answers, unanswered }: { answers: QueriedFreeBusy[]; unanswered: string[] }): QueriedFreeBusy[] => {
+    if (unanswered.length > 0) ctx.log.warn({ tool, count: unanswered.length }, `${tool}: free/busy gave no answer for some calendars; partial`);
+    for (const id of unanswered) addPartial(id, 'free/busy returned no answer for this calendar');
+    return answers;
+  };
   const byMailbox = new Map<string, number[]>();
   routed.forEach((r, i) => byMailbox.set(r.mailboxId, [...(byMailbox.get(r.mailboxId) ?? []), i]));
   const def = live.length > 0 ? defaultMailbox(live) : undefined;
   const groups = await Promise.all(
     [...byMailbox.entries()].map(async ([mailboxId, idx]) => {
       try {
-        return await freeBusyAcross(idx.map((i) => routed[i]!), idx.map((i) => ids[i]!), req.timeMin, req.timeMax);
+        return unread(await freeBusyAcross(idx.map((i) => routed[i]!), idx.map((i) => ids[i]!), req.timeMin, req.timeMax));
       } catch (err) {
         if (!idx.every((i) => vias[i] !== undefined)) throw err;
         const label = vias[idx[0]!]!.mailbox_label;
@@ -595,7 +656,7 @@ async function freeBusyWithFallback(
         }
         try {
           const again = await Promise.all(idx.map((i) => ctx.calendarRouter!.route(ids[i]!, def.id)));
-          const answers = await freeBusyAcross(again, idx.map((i) => ids[i]!), req.timeMin, req.timeMax);
+          const answers = unread(await freeBusyAcross(again, idx.map((i) => ids[i]!), req.timeMin, req.timeMax));
           for (const [k, i] of idx.entries()) {
             routed[i] = again[k]!;
             vias[i] = { ...vias[i]!, mailbox: def.id, mailbox_label: def.label, fell_back_from: mailboxId };
@@ -622,6 +683,7 @@ async function holdWindowsOnOthers(
   req: AvailabilityRequest,
   rangeStart: number,
   rangeEnd: number,
+  onUnchecked: (label: string) => void,
 ): Promise<Map<string, Array<{ start: number; end: number }>>> {
   const out = new Map<string, Array<{ start: number; end: number }>>();
   for (const [i, id] of ids.entries()) {
@@ -633,7 +695,9 @@ async function holdWindowsOnOthers(
         .map((m) => ({ start: m.hold.startTime!, end: m.hold.endTime! }));
       if (windows.length > 0) out.set(id, windows);
     } catch (err) {
+      // Fails safe (the holds still block), and the result says why they did (SF-M8).
       ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: r.mailboxId }, `${tool}: failed to inspect holds for ignore criteria`);
+      onUnchecked(id);
     }
   }
   return out;

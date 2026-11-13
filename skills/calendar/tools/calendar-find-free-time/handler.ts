@@ -7,7 +7,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds } from '../../../../src/time/timestamp.js';
 import { readCalendarMailbox } from '../../../_shared/calendar-route.js';
-import { blockView, readAvailability } from '../../../_shared/calendar-availability.js';
+import { blockView, calendarIdsCapError, readAvailability } from '../../../_shared/calendar-availability.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 
 export class CalendarFindFreeTimeHandler implements ToolHandler {
@@ -26,6 +26,8 @@ export class CalendarFindFreeTimeHandler implements ToolHandler {
     if (!calendarIds || !Array.isArray(calendarIds) || calendarIds.length === 0) {
       return { success: false, error: 'Missing required input: calendarIds (must be a non-empty array)' };
     }
+    const overCap = calendarIdsCapError(calendarIds);
+    if (overCap) return { success: false, error: overCap };
     if (!timeMin || typeof timeMin !== 'string') {
       return { success: false, error: 'Missing required input: timeMin' };
     }
@@ -127,10 +129,12 @@ export class CalendarFindFreeTimeHandler implements ToolHandler {
         data['treated_as_free'] = read.treatedAsFree.map((b) => blockView(b, tz));
         if (read.treatAsFreeUnmatched.length > 0) data['treat_as_free_unmatched'] = read.treatAsFreeUnmatched;
       }
-      if (read.partial.length > 0) {
-        data['partial'] = read.partial;
+      if (read.partial.length > 0) data['partial'] = read.partial;
+      // A calendar the caller named whose mailbox was removed was not read either (R101).
+      const unread = [...read.partial.map((p) => p.mailbox_label), ...read.removedRequested];
+      if (unread.length > 0) {
         data['note'] =
-          `Not every calendar could be read (${read.partial.map((p) => p.mailbox_label).join(', ')}): ` +
+          `Not every calendar could be read (${unread.join(', ')}): ` +
           'these windows are free only on the calendars that were read. Say so; do not call them free.';
       }
       if (read.removed.length > 0) data['removed'] = read.removed;
