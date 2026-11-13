@@ -56,8 +56,25 @@ describe('calendar mailbox pre-gate (BR-m5)', () => {
     const { layer, execute, request } = setup();
     const r = await layer.invoke('calendar-create-event', { calendarId: 'cal-work', title: 'Q3' }, undefined, { taskEventId: 'task-1' });
     expect(r).toMatchObject({ success: false, error: expect.stringContaining('needs_mailbox: nothing was created') });
+    // Wrapped like every other execution-layer refusal (N1).
+    if (!r.success) expect(r.error).toMatch(/^<skill_error>[\s\S]*<\/skill_error>$/);
     expect(request).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('mailbox null or empty is absent: answered before the gates too (N2)', async () => {
+    for (const mailbox of [null, '']) {
+      const { layer, request } = setup();
+      const r = await layer.invoke('calendar-create-event', { calendarId: 'cal-work', title: 'Q3', mailbox }, undefined, { taskEventId: 'task-1' });
+      expect(r).toMatchObject({ success: false, error: expect.stringContaining('needs_mailbox') });
+      expect(request).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a non-principal calendar with several mailboxes passes straight to the gates", async () => {
+    const { layer, request } = setup();
+    await layer.invoke('calendar-create-event', { calendarId: 'someone@partner.example', title: 'Q3' }, undefined, { taskEventId: 'task-1' });
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it('with mailbox stated, the gate asks for approval once, as before', async () => {
