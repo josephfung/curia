@@ -228,26 +228,46 @@ describe('InboxHeartbeat origin safety (R56)', () => {
     }));
   });
 
-  it('warns and skips a stalled own task whose stored originator is null', async () => {
+  // P1: a stalled own task with no stored originator cannot be re-woken (null would erase its
+  // lineage), and it must not block triage forever either. It is set aside and a fresh
+  // system-originated drain is created (createTask stamps system lineage).
+  it('sets aside a stalled own task whose stored originator is null and creates a fresh system drain', async () => {
     const t = make({ tasks: [taskRow({ originator: null })] });
-    expect(await t.hb.tick(NOW)).toBe('drain_running');
+    expect(await t.hb.tick(NOW)).toBe('woke');
     expect(t.enqueueTaskWake).not.toHaveBeenCalled();
-    expect(t.createTask).not.toHaveBeenCalled();
+    expect(t.createTask).toHaveBeenCalledWith(expect.objectContaining({
+      originator: expect.objectContaining({ systemRole: 'system' }),
+      createdBy: 'heartbeat',
+    }));
     expect(t.log.warn.mock.calls.some((c) => String(c[1]).includes('no stored originator'))).toBe(true);
   });
 
-  it('lists enough tasks that foreign ones cannot push its own out', async () => {
-    const t = make({ tasks: [] });
+  it('warns about a null-originator task once per id (P2)', async () => {
+    const t = make({ tasks: [taskRow({ originator: null })] });
     await t.hb.tick(NOW);
-    expect((t.listTasks.mock.calls as unknown as Array<[{ limit: number }]>)[0]![0].limit).toBeGreaterThanOrEqual(200);
+    await t.hb.tick(NOW);
+    expect(t.log.warn.mock.calls.filter((c) => String(c[1]).includes('no stored originator'))).toHaveLength(1);
   });
 
-  it('logs a foreign drain task once per id', async () => {
-    const t = make({ tasks: [taskRow({ createdBy: 'ceo-inbox', originator: outsider })] });
+  it('re-wakes a stalled own task with an originator rather than one without', async () => {
+    const t = make({ tasks: [taskRow({ id: 'bare', originator: null }), taskRow({ id: 'good' })] });
+    expect(await t.hb.tick(NOW)).toBe('woke');
+    expect(t.enqueueTaskWake).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'good' }));
+    expect(t.createTask).not.toHaveBeenCalled();
+  });
+
+  it('a live own task with no originator still owns the inbox (only a stalled one is set aside)', async () => {
+    const t = make({ tasks: [taskRow({ originator: null, wakeState: 'running' })] });
+    expect(await t.hb.tick(NOW)).toBe('drain_running');
+    expect(t.createTask).not.toHaveBeenCalled();
+  });
+
+  // P3: the query asks for the heartbeat's own tasks, so no number of foreign inbox-drain tasks
+  // can push its own out of the page.
+  it('lists only the drain tasks it created', async () => {
+    const t = make({ tasks: [] });
     await t.hb.tick(NOW);
-    await t.hb.tick(NOW);
-    const calls = t.log.info.mock.calls.filter((c) => String(c[1]).includes('ignoring an inbox-drain'));
-    expect(calls).toHaveLength(1);
+    expect((t.listTasks.mock.calls as unknown as Array<[{ createdBy?: string }]>)[0]![0].createdBy).toBe('heartbeat');
   });
 
   it('still creates no second task while its own is open', async () => {

@@ -147,6 +147,8 @@ export interface ListTasksFilters {
   /** Only rows last updated strictly after this instant. For a terminal task that is
    *  when it closed, so the dedup scan uses it to find recently decided pairs (#2493). */
   updatedAfter?: Date;
+  /** Only rows with this created_by (e.g. 'heartbeat' for the inbox heartbeat's drains, #2475). */
+  createdBy?: string;
   limit?: number;
   /** Keyset pagination cursor (#1433). When set, only rows strictly *after* this row in the
    *  (priority DESC, due_at ASC NULLS LAST, id ASC) ordering are returned. Build it from the
@@ -430,7 +432,7 @@ export class TaskRepo {
    * Joins with scheduled_jobs to include the next pending wake-up time.
    */
   async listTasks(filters: ListTasksFilters = {}): Promise<TaskListRow[]> {
-    const { statuses, owner, tag, parentTaskId, dueBefore, updatedAfter, cursor, limit = 25 } = filters;
+    const { statuses, owner, tag, parentTaskId, dueBefore, updatedAfter, createdBy, cursor, limit = 25 } = filters;
 
     const conditions: string[] = [];
     const queryParams: unknown[] = [];
@@ -459,6 +461,10 @@ export class TaskRepo {
     if (updatedAfter) {
       conditions.push(`t.updated_at > $${idx++}`);
       queryParams.push(updatedAfter);
+    }
+    if (createdBy) {
+      conditions.push(`t.created_by = $${idx++}`);
+      queryParams.push(createdBy);
     }
     if (cursor) {
       // Keyset predicate: keep only rows strictly *after* the cursor row in the
