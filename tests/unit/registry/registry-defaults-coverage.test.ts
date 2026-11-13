@@ -61,7 +61,7 @@ let toolManifests: Map<string, ToolGateInfo | null>;
 let allDeclaredKeys: string[];
 
 /** Capabilities boot leaves unbuilt when their integration isn't configured (src/index.ts). */
-const INTEGRATION_CAPABILITIES = ['nylasCalendarClient'];
+const INTEGRATION_CAPABILITIES = ['calendarRouter'];
 
 /** True when a tool declares a gate that can hold it back on an unconfigured install. */
 function isGated(tool: string): boolean {
@@ -180,7 +180,7 @@ describe('registry-defaults.yaml on a fresh install (#1974)', () => {
     const nylasBacked = calendar.filter(t => t !== 'calendar-register');
     expect(nylasBacked.length).toBeGreaterThanOrEqual(10);
     for (const tool of nylasBacked) {
-      expect(toolManifests.get(tool)?.capabilities, `${tool} declares nylasCalendarClient`).toContain('nylasCalendarClient');
+      expect(toolManifests.get(tool)?.capabilities, `${tool} declares calendarRouter`).toContain('calendarRouter');
       expect(enabled.tools.has(tool), tool).toBe(false);
     }
   });

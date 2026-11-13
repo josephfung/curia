@@ -110,7 +110,7 @@ export interface ReconcileDeps {
    *  tool that declares secrets is held back (fail closed), never enrolled unverified. */
   secrets: SecretsLister | undefined;
   /** Capabilities whose backing service this boot did NOT build because its integration
-   *  isn't configured (e.g. nylasCalendarClient without a Nylas key + principal grant).
+   *  isn't configured (e.g. calendarRouter without a Nylas key + principal mailbox).
    *  A tool declaring one is held back: it would only fail closed at call time while
    *  sitting in agents' tool lists. Only list integration-optional services here. */
   unavailableCapabilities: ReadonlySet<string>;

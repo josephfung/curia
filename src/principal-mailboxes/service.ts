@@ -66,6 +66,14 @@ export interface SkillPrincipalMailboxes {
   ceoClient(id: string, log: Logger, budget?: CallBudget): Promise<CeoNylasClient>;
 }
 
+/** What the calendar router reads: the registry and a calendar client per live mailbox. */
+export interface CalendarRouterMailboxes {
+  list(): Promise<PrincipalMailboxView[]>;
+  get(id: string): Promise<PrincipalMailboxView>;
+  isFallbackActive(): Promise<boolean>;
+  calendarClient(id: string): Promise<NylasCalendarClient>;
+}
+
 function toView(r: PrincipalMailboxRecord): PrincipalMailboxView {
   return {
     id: r.id,
@@ -227,6 +235,20 @@ export class PrincipalMailboxes {
   forDirectory(): MailboxDirectory {
     return {
       list: async () => (await this.list()).map(({ id, label, triageStartAt }) => ({ id, label, triageStartAt })),
+    };
+  }
+
+  /**
+   * The view the calendar router holds (#2475, Part 4). The router is handed to skills as the
+   * `calendarRouter` capability, so like `forSkills` it gets closures, never this instance or
+   * `credentials` (F7).
+   */
+  forCalendarRouter(): CalendarRouterMailboxes {
+    return {
+      list: () => this.list(),
+      get: (id) => this.get(id),
+      isFallbackActive: () => this.isFallbackActive(),
+      calendarClient: (id) => this.calendarClient(id),
     };
   }
 

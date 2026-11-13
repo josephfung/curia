@@ -9,6 +9,7 @@ import { CalendarUpdateEventHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { NylasCalendarEvent } from '../../../../src/channels/calendar/nylas-calendar-client.js';
 import type { Logger } from '../../../../src/logger.js';
+import { singleMailboxRouter } from '../../../_shared/calendar-router-test-helpers.js';
 
 function makeEvent(overrides: Partial<NylasCalendarEvent> & { id: string }): NylasCalendarEvent {
   return {
@@ -37,10 +38,10 @@ function makeCtx(input: Record<string, unknown>, opts: {
     input,
     secret: () => { throw new Error('no secret in test'); },
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
-    nylasCalendarClient: {
+    calendarRouter: singleMailboxRouter({
       getEvent: opts.getEvent ?? vi.fn().mockResolvedValue(makeEvent({ id: 'master', recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'] })),
       updateEvent: opts.updateEvent ?? vi.fn().mockResolvedValue(makeEvent({ id: 'master' })),
-    } as unknown as ToolContext['nylasCalendarClient'],
+    }),
     timezone: 'America/Toronto',
   } as unknown as ToolContext;
 }

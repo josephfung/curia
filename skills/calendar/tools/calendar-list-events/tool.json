@@ -5,13 +5,14 @@
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
-    "calendarId": "string? (specific Nylas calendar ID — omit to auto-query all calendars for the resolved contact)",
-    "contactId": "string? (UUID — look up calendars registered to this contact; required in scheduled/system-context where the caller is not a real contact, e.g. pass the principal's contact ID as given in your system prompt)",
     "timeMin": "timestamp (start of range, inclusive)",
     "timeMax": "timestamp (end of range, exclusive)",
+    "calendarId": "string? (specific Nylas calendar ID — omit to auto-query all calendars for the resolved contact)",
+    "contactId": "string? (UUID — look up calendars registered to this contact; required in scheduled/system-context where the caller is not a real contact, e.g. pass the principal's contact ID as given in your system prompt)",
     "maxResults": "number?",
     "query": "string?",
-    "attendeeEmail": "string?"
+    "attendeeEmail": "string?",
+    "mailbox": "string? (mailbox id; required for an unregistered calendar or \"primary\" when several are connected)"
   },
   "outputs": {
     "events": "array",
@@ -21,7 +22,7 @@
   "secrets": [],
   "timeout": 30000,
   "capabilities": [
-    "nylasCalendarClient"
+    "calendarRouter"
   ],
   "allowed_callers": [
     "calendar",

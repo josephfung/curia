@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { CalendarRegisterHandler } from '../../../skills/calendar/tools/calendar-register/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
+import { calendarMailbox, routerFixture, singleMailboxRouter } from '../../../skills/_shared/calendar-router-test-helpers.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -16,7 +17,27 @@ function makeCtx(
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,
+    calendarRouter: singleMailboxRouter({}),
     ...overrides,
+  };
+}
+
+/** Two live mailboxes: work (default) and personal, each owning its address's calendar. */
+function twoMailboxRouter(registry: Parameters<typeof routerFixture>[0]['registry'] = {}) {
+  return routerFixture({
+    mailboxes: [
+      calendarMailbox('work', 'Work', 'ceo@work.example.com', true),
+      calendarMailbox('personal', 'Personal', 'ceo@personal.example.com'),
+    ],
+    clients: { work: {}, personal: {} },
+    registry,
+  });
+}
+
+function linked(nylasCalendarId: string, principalMailboxId: string | null) {
+  return {
+    id: 'link-uuid', nylasCalendarId, contactId: 'contact-abc', label: 'Cal', isPrimary: false,
+    readOnly: false, timezone: null, principalMailboxId, createdAt: new Date(), updatedAt: new Date(),
   };
 }
 
@@ -160,7 +181,11 @@ describe('CalendarRegisterHandler', () => {
       code: '23505',
       constraint: 'contact_calendars_nylas_calendar_id_key',
     });
-    const contactService = { linkCalendar: vi.fn().mockRejectedValue(pgError) };
+    const contactService = {
+      linkCalendar: vi.fn().mockRejectedValue(pgError),
+      resolveCalendar: vi.fn().mockResolvedValue({ contactId: 'contact-abc', label: 'Work', isPrimary: false, readOnly: false, principalMailboxId: 'work' }),
+      setCalendarMailbox: vi.fn(),
+    };
 
     const result = await handler.execute(
       makeCtx(
@@ -173,7 +198,9 @@ describe('CalendarRegisterHandler', () => {
     if (!result.success) {
       expect(result.error).toContain('already registered');
       expect(result.error).toContain('cal-1');
+      expect(result.error).toContain('"work" mailbox');
     }
+    expect(contactService.setCalendarMailbox).not.toHaveBeenCalled();
   });
 
   it('returns a readable error when contact already has a primary calendar (Postgres 23505)', async () => {
@@ -214,5 +241,100 @@ describe('CalendarRegisterHandler', () => {
     if (!result.success) {
       expect(result.error).toContain('connection refused');
     }
+  });
+
+  describe('mailbox placement (#2475)', () => {
+    it('registers through the single live mailbox when no mailbox is given', async () => {
+      const contactService = { linkCalendar: vi.fn().mockResolvedValue(linked('cal-1', 'work')) };
+      const result = await handler.execute(makeCtx(
+        { nylas_calendar_id: 'cal-1', label: 'Work', contact_id: 'contact-abc' },
+        { contactService: contactService as never },
+      ));
+      expect(result.success).toBe(true);
+      expect(contactService.linkCalendar).toHaveBeenCalledWith(expect.objectContaining({ principalMailboxId: 'work' }));
+      if (result.success) expect(result.data).toMatchObject({ mailbox: 'work' });
+    });
+
+    it('needs a mailbox for a calendar no mailbox owns when two are connected', async () => {
+      const contactService = { linkCalendar: vi.fn() };
+      const result = await handler.execute(makeCtx(
+        { nylas_calendar_id: 'team@group.calendar.google.com', label: 'Team', contact_id: 'contact-abc' },
+        { contactService: contactService as never, calendarRouter: twoMailboxRouter() },
+      ));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('pass mailbox');
+        expect(result.error).toContain('work (Work)');
+        expect(result.error).toContain('personal (Personal)');
+      }
+      expect(contactService.linkCalendar).not.toHaveBeenCalled();
+    });
+
+    it('registers through the named mailbox', async () => {
+      const contactService = { linkCalendar: vi.fn().mockResolvedValue(linked('team@group.calendar.google.com', 'personal')) };
+      const result = await handler.execute(makeCtx(
+        { nylas_calendar_id: 'team@group.calendar.google.com', label: 'Team', contact_id: 'contact-abc', mailbox: 'personal' },
+        { contactService: contactService as never, calendarRouter: twoMailboxRouter() },
+      ));
+      expect(result.success).toBe(true);
+      expect(contactService.linkCalendar).toHaveBeenCalledWith(expect.objectContaining({ principalMailboxId: 'personal' }));
+    });
+
+    it('owning grant wins on register: a mailbox address registers to that mailbox whatever mailbox says', async () => {
+      const contactService = { linkCalendar: vi.fn().mockResolvedValue(linked('ceo@personal.example.com', 'personal')) };
+      const result = await handler.execute(makeCtx(
+        { nylas_calendar_id: 'CEO@personal.example.com', label: 'Personal', contact_id: 'contact-abc', mailbox: 'work' },
+        { contactService: contactService as never, calendarRouter: twoMailboxRouter() },
+      ));
+      expect(result.success).toBe(true);
+      expect(contactService.linkCalendar).toHaveBeenCalledWith(expect.objectContaining({ principalMailboxId: 'personal' }));
+    });
+
+    it('owning grant wins on register: an existing row under another mailbox is rewritten to the owner', async () => {
+      const dup = Object.assign(new Error('duplicate key'), { code: '23505', constraint: 'contact_calendars_nylas_calendar_id_key' });
+      const contactService = {
+        linkCalendar: vi.fn().mockRejectedValue(dup),
+        resolveCalendar: vi.fn().mockResolvedValue({ contactId: 'contact-abc', label: 'Personal', isPrimary: true, readOnly: false, principalMailboxId: 'work' }),
+        setCalendarMailbox: vi.fn().mockResolvedValue(true),
+      };
+      const result = await handler.execute(makeCtx(
+        { nylas_calendar_id: 'ceo@personal.example.com', label: 'Personal', contact_id: 'contact-abc' },
+        { contactService: contactService as never, calendarRouter: twoMailboxRouter() },
+      ));
+      expect(result.success).toBe(true);
+      expect(contactService.setCalendarMailbox).toHaveBeenCalledWith('ceo@personal.example.com', 'personal');
+      if (result.success) expect(result.data).toMatchObject({ mailbox: 'personal', moved_from_mailbox: 'work' });
+    });
+
+    it('refuses an unknown mailbox, never falling back to the default', async () => {
+      const contactService = { linkCalendar: vi.fn() };
+      const result = await handler.execute(makeCtx(
+        { nylas_calendar_id: 'cal-1', label: 'Work', contact_id: 'contact-abc', mailbox: 'nope' },
+        { contactService: contactService as never },
+      ));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('Unknown mailbox "nope"');
+      expect(contactService.linkCalendar).not.toHaveBeenCalled();
+    });
+
+    it('refuses the primary alias', async () => {
+      const contactService = { linkCalendar: vi.fn() };
+      const result = await handler.execute(makeCtx(
+        { nylas_calendar_id: 'primary', label: 'Work', contact_id: 'contact-abc' },
+        { contactService: contactService as never },
+      ));
+      expect(result.success).toBe(false);
+      expect(contactService.linkCalendar).not.toHaveBeenCalled();
+    });
+
+    it('registers with no mailbox while the deferred-migration fallback is served', async () => {
+      const contactService = { linkCalendar: vi.fn().mockResolvedValue(linked('cal-1', null)) };
+      const result = await handler.execute(makeCtx(
+        { nylas_calendar_id: 'cal-1', label: 'Work', contact_id: 'contact-abc' },
+        { contactService: contactService as never, calendarRouter: routerFixture({ clients: { work: {} }, fallbackActive: true }) },
+      ));
+      expect(result.success).toBe(true);
+      expect(contactService.linkCalendar).toHaveBeenCalledWith(expect.objectContaining({ principalMailboxId: null }));
+    });
   });
 });

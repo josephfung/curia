@@ -7,6 +7,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { CalendarHoldsSweepHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import { createSilentLogger } from '../../../../src/logger.js';
+import { singleMailboxRouter, calendarClientOf } from '../../../_shared/calendar-router-test-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Fixed test-time reference
@@ -90,10 +91,10 @@ function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
         { nylasCalendarId: 'cal-work' },
       ]),
     } as unknown as ToolContext['contactService'],
-    nylasCalendarClient: {
+    calendarRouter: singleMailboxRouter({
       listEvents: vi.fn().mockResolvedValue([pastHold, freshHold, oldHold, realMeeting]),
       deleteEvent: vi.fn().mockResolvedValue(undefined),
-    } as unknown as ToolContext['nylasCalendarClient'],
+    }),
     ...overrides,
   } as ToolContext;
 }
@@ -121,11 +122,11 @@ describe('CalendarHoldsSweepHandler — core sweep logic', () => {
     // Guard: listEvents must be called with a timeMin EARLIER than now (lookback window).
     // This ensures past-slot holds are returned by Nylas (AC #6) and not silently missed
     // by a forward-only window (timeMin=now). If this assertion fails, Fix 1 was regressed.
-    const listEvents = ctx.nylasCalendarClient!.listEvents as ReturnType<typeof vi.fn>;
+    const listEvents = calendarClientOf(ctx).listEvents as ReturnType<typeof vi.fn>;
     const timeMinArg: string = (listEvents.mock.calls[0] as [string, string, string])[1];
     expect(new Date(timeMinArg).getTime()).toBeLessThan(NOW_MS);
 
-    const deleteEvent = ctx.nylasCalendarClient!.deleteEvent as ReturnType<typeof vi.fn>;
+    const deleteEvent = calendarClientOf(ctx).deleteEvent as ReturnType<typeof vi.fn>;
     // deleteEvent must have been called exactly for the two stale holds
     expect(deleteEvent).toHaveBeenCalledTimes(2);
     const deletedIds = deleteEvent.mock.calls.map((c: unknown[]) => (c as [string, string, boolean])[1]);
@@ -143,7 +144,7 @@ describe('CalendarHoldsSweepHandler — core sweep logic', () => {
 
     await handler.execute(ctx);
 
-    const deleteEvent = ctx.nylasCalendarClient!.deleteEvent as ReturnType<typeof vi.fn>;
+    const deleteEvent = calendarClientOf(ctx).deleteEvent as ReturnType<typeof vi.fn>;
     expect(deleteEvent).toHaveBeenCalled();
     for (const call of deleteEvent.mock.calls as unknown[][]) {
       expect(call).toHaveLength(2);
@@ -155,10 +156,10 @@ describe('CalendarHoldsSweepHandler — core sweep logic', () => {
     const pastHoldWithGuest = { ...pastHold, participants: [{ email: 'guest@example.test', name: 'Guest', status: 'noreply' }] };
     const deleteEvent = vi.fn().mockResolvedValue(undefined);
     const ctx = makeCtx({
-      nylasCalendarClient: {
+      calendarRouter: singleMailboxRouter({
         listEvents: vi.fn().mockResolvedValue([pastHoldWithGuest, oldHold]),
         deleteEvent,
-      } as unknown as ToolContext['nylasCalendarClient'],
+      }),
     });
 
     const result = await handler.execute(ctx);
@@ -174,10 +175,10 @@ describe('CalendarHoldsSweepHandler — core sweep logic', () => {
   it('returns scanned=0, expired=0 when the calendar has no events', async () => {
     const handler = new CalendarHoldsSweepHandler();
     const ctx = makeCtx({
-      nylasCalendarClient: {
+      calendarRouter: singleMailboxRouter({
         listEvents: vi.fn().mockResolvedValue([]),
         deleteEvent: vi.fn(),
-      } as unknown as ToolContext['nylasCalendarClient'],
+      }),
     });
 
     const result = await handler.execute(ctx);
@@ -200,10 +201,10 @@ describe('CalendarHoldsSweepHandler — core sweep logic', () => {
         maxAgeDays: 7,
         nowMs: NOW_MS,
       },
-      nylasCalendarClient: {
+      calendarRouter: singleMailboxRouter({
         listEvents: vi.fn().mockResolvedValue([sixDayOldHold]),
         deleteEvent: vi.fn(),
-      } as unknown as ToolContext['nylasCalendarClient'],
+      }),
     });
 
     const result = await handler.execute(ctx);
@@ -212,7 +213,7 @@ describe('CalendarHoldsSweepHandler — core sweep logic', () => {
     const data = (result as { success: true; data: { scanned: number; expired: number; failed: number; calendarErrors: number } }).data;
     expect(data.scanned).toBe(1);
     expect(data.expired).toBe(0); // 6d < 7d threshold — not stale
-    expect(ctx.nylasCalendarClient!.deleteEvent).not.toHaveBeenCalled();
+    expect(calendarClientOf(ctx).deleteEvent).not.toHaveBeenCalled();
   });
 
   it('a hold exactly 7 days old is NOT stale (isHoldStale uses strict-greater-than)', async () => {
@@ -221,10 +222,10 @@ describe('CalendarHoldsSweepHandler — core sweep logic', () => {
     const sevenDayOldHold = makeEvent({ id: 'evt-7d', slotOffset: +24, createdDaysAgo: 7 });
     const ctx = makeCtx({
       input: { contactId: 'deadbeef-0000-0000-0000-000000000001', maxAgeDays: 7, nowMs: NOW_MS },
-      nylasCalendarClient: {
+      calendarRouter: singleMailboxRouter({
         listEvents: vi.fn().mockResolvedValue([sevenDayOldHold]),
         deleteEvent: vi.fn(),
-      } as unknown as ToolContext['nylasCalendarClient'],
+      }),
     });
 
     const result = await handler.execute(ctx);
@@ -249,10 +250,10 @@ describe('CalendarHoldsSweepHandler — resilience', () => {
     );
 
     const ctx = makeCtx({
-      nylasCalendarClient: {
+      calendarRouter: singleMailboxRouter({
         listEvents: vi.fn().mockResolvedValue([pastHold, freshHold, oldHold, realMeeting]),
         deleteEvent,
-      } as unknown as ToolContext['nylasCalendarClient'],
+      }),
     });
 
     const result = await handler.execute(ctx);
@@ -334,10 +335,10 @@ describe('CalendarHoldsSweepHandler — resilience', () => {
     expect(data).toEqual({ scanned: 0, expired: 0, failed: 0, calendarErrors: 0, skippedWithAttendees: 0 });
   });
 
-  it('returns success:false when nylasCalendarClient is not configured', async () => {
+  it('returns success:false when the calendar router is not configured', async () => {
     const handler = new CalendarHoldsSweepHandler();
     const ctx = makeCtx({
-      nylasCalendarClient: undefined,
+      calendarRouter: undefined,
     });
 
     const result = await handler.execute(ctx);
@@ -370,7 +371,7 @@ describe('CalendarHoldsSweepHandler — resilience', () => {
           { nylasCalendarId: 'cal-personal' },
         ]),
       } as unknown as ToolContext['contactService'],
-      nylasCalendarClient: {
+      calendarRouter: singleMailboxRouter({
         // cal-work fails; cal-personal succeeds with one stale hold
         listEvents: vi.fn().mockImplementation((_calId: string) => {
           if (_calId === 'cal-work') {
@@ -379,7 +380,7 @@ describe('CalendarHoldsSweepHandler — resilience', () => {
           return Promise.resolve([pastHold]);
         }),
         deleteEvent: vi.fn().mockResolvedValue(undefined),
-      } as unknown as ToolContext['nylasCalendarClient'],
+      }),
     });
 
     const result = await handler.execute(ctx);
@@ -393,6 +394,6 @@ describe('CalendarHoldsSweepHandler — resilience', () => {
     expect(data.calendarErrors).toBe(1);
     // No per-event delete failures
     expect(data.failed).toBe(0);
-    expect(ctx.nylasCalendarClient!.deleteEvent).toHaveBeenCalledWith('cal-personal', 'evt-past');
+    expect(calendarClientOf(ctx).deleteEvent).toHaveBeenCalledWith('cal-personal', 'evt-past');
   });
 });

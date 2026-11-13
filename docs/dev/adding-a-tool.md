@@ -180,7 +180,7 @@ Valid capability names and what they grant:
 | `outboundGateway` | `OutboundGateway` | Sending email and Signal messages |
 | `schedulerService` | `SchedulerService` | Creating and managing scheduled jobs |
 | `entityMemory` | `EntityMemory` | Reading and writing the knowledge graph |
-| `nylasCalendarClient` | `NylasCalendarClient` | Calendar CRUD operations |
+| `calendarRouter` | `CalendarRouter` | Calendar CRUD operations, through the principal mailbox each calendar belongs to |
 | `autonomyService` | `AutonomyService` | Reading or setting the autonomy score |
 | `executiveProfileService` | `ExecutiveProfileService` | Managing the principal's writing voice profile |
 | `browserService` | `BrowserService` | Controlling a real web browser (Playwright) |
@@ -281,7 +281,7 @@ Secret names are **vault secret keys** resolved via `ctx.secret()` (vault-first,
 "secrets": ["brave_api_key"]
 ```
 
-Note: Infrastructure skills (email, calendar) access Nylas clients via `ctx.outboundGateway` and `ctx.nylasCalendarClient`, which are bootstrapped at startup. These are not secrets — do not declare them in `secrets`.
+Note: Infrastructure skills (email, calendar) access Nylas clients via `ctx.outboundGateway` and `ctx.calendarRouter`, which are bootstrapped at startup. These are not secrets — do not declare them in `secrets`.
 
 #### `install.requires_secrets` (optional)
 
@@ -399,8 +399,8 @@ interface ToolContext {
    *  Never access email credentials directly; go through the gateway. */
   outboundGateway?: OutboundGateway;
 
-  /** Nylas calendar client — declare "nylasCalendarClient" in capabilities */
-  nylasCalendarClient?: NylasCalendarClient;
+  /** Calendar router (per-mailbox Nylas calendar clients) — declare "calendarRouter" in capabilities */
+  calendarRouter?: CalendarRouter;
 
   /** Bus access — declare "bus" in capabilities */
   bus?: EventBus;

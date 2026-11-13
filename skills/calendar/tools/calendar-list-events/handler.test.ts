@@ -6,6 +6,7 @@ import type { ToolContext } from '../../../../src/skills/types.js';
 import { createSilentLogger } from '../../../../src/logger.js';
 import { NylasCalendarClient } from '../../../../src/channels/calendar/nylas-calendar-client.js';
 import type { NylasCalendarLike } from '../../../../src/channels/calendar/nylas-calendar-client.js';
+import { singleMailboxRouter } from '../../../_shared/calendar-router-test-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -19,9 +20,9 @@ function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
     },
     secret: () => { throw new Error('no secret in test'); },
     log: createSilentLogger(),
-    nylasCalendarClient: {
+    calendarRouter: singleMailboxRouter({
       listEvents: vi.fn().mockResolvedValue([]),
-    } as unknown as ToolContext['nylasCalendarClient'],
+    }),
     ...overrides,
   } as ToolContext;
 }
@@ -78,9 +79,9 @@ describe('CalendarListEventsHandler — system caller guard', () => {
     const result = await handler.execute(makeCtx({
       caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'signal' },
       contactService,
-      nylasCalendarClient: {
+      calendarRouter: singleMailboxRouter({
         listEvents: vi.fn().mockResolvedValue([]),
-      } as unknown as ToolContext['nylasCalendarClient'],
+      }),
     }));
 
     // Guard must not have fired — contactService was called with the UUID
@@ -111,9 +112,9 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
       caller: { contactId: 'system', role: null, channel: 'internal' },
       taskMetadata: { originator: { systemRole: 'system' } },
       contactService,
-      nylasCalendarClient: {
+      calendarRouter: singleMailboxRouter({
         listEvents: vi.fn().mockResolvedValue([]),
-      } as unknown as ToolContext['nylasCalendarClient'],
+      }),
     }));
 
     expect(contactService!.getCalendarsForContact).toHaveBeenCalledWith(principalId);
@@ -215,9 +216,9 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
       caller: { contactId: callerId, role: 'ceo', channel: 'signal' },
       taskMetadata: { originator: { systemRole: 'principal' } },
       contactService,
-      nylasCalendarClient: {
+      calendarRouter: singleMailboxRouter({
         listEvents: vi.fn().mockResolvedValue([]),
-      } as unknown as ToolContext['nylasCalendarClient'],
+      }),
     }));
 
     expect(contactService!.getCalendarsForContact).toHaveBeenCalledWith(principalId);
@@ -282,7 +283,7 @@ describe('CalendarListEventsHandler — auth-class all-fail (#1561)', () => {
         timeMin: '2026-05-26T00:00:00Z',
         timeMax: '2026-05-26T23:59:59Z',
       },
-      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+      calendarRouter: singleMailboxRouter({ listEvents }),
     }));
 
     expect(result.success).toBe(false);
@@ -302,7 +303,7 @@ describe('CalendarListEventsHandler — auth-class all-fail (#1561)', () => {
         timeMin: '2026-05-26T00:00:00Z',
         timeMax: '2026-05-26T23:59:59Z',
       },
-      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+      calendarRouter: singleMailboxRouter({ listEvents }),
     }));
 
     expect(result.success).toBe(false);
@@ -330,7 +331,7 @@ describe('CalendarListEventsHandler — auth-class all-fail (#1561)', () => {
     const result = await handler.execute(makeCtx({
       caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'signal' },
       contactService,
-      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+      calendarRouter: singleMailboxRouter({ listEvents }),
     }));
 
     expect(result.success).toBe(true);
@@ -359,7 +360,7 @@ describe('CalendarListEventsHandler — failure reasons reach the caller', () =>
         timeMax: '2026-05-26T23:59:59Z',
         maxResults: 250,
       },
-      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+      calendarRouter: singleMailboxRouter({ listEvents }),
     }));
 
     expect(result.success).toBe(false);
@@ -383,7 +384,7 @@ describe('CalendarListEventsHandler — failure reasons reach the caller', () =>
     const result = await handler.execute(makeCtx({
       caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'signal' },
       contactService,
-      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+      calendarRouter: singleMailboxRouter({ listEvents }),
     }));
 
     expect(result.success).toBe(false);
@@ -411,7 +412,7 @@ describe('CalendarListEventsHandler — failure reasons reach the caller', () =>
     const result = await handler.execute(makeCtx({
       caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'signal' },
       contactService,
-      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+      calendarRouter: singleMailboxRouter({ listEvents }),
     }));
 
     expect(result.success).toBe(true);
@@ -433,13 +434,13 @@ describe('CalendarListEventsHandler — failure reasons reach the caller', () =>
         timeMin: '2026-05-26T00:00:00Z',
         timeMax: '2026-05-26T23:59:59Z',
       },
-      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+      calendarRouter: singleMailboxRouter({ listEvents }),
     }));
 
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.errorType).toBe('AUTH_FAILURE');
-      expect(result.error).toMatch(/Reconnect the grant/);
+      expect(result.error).toMatch(/Replace grant/);
     }
   });
 
@@ -453,7 +454,7 @@ describe('CalendarListEventsHandler — failure reasons reach the caller', () =>
         timeMin: '2026-05-26T00:00:00Z',
         timeMax: '2026-05-26T23:59:59Z',
       },
-      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+      calendarRouter: singleMailboxRouter({ listEvents }),
     }));
 
     expect(result.success).toBe(false);
@@ -474,7 +475,7 @@ describe('CalendarListEventsHandler — failure reasons reach the caller', () =>
         timeMax: '2026-06-01T00:00:00Z',
         maxResults: 250,
       },
-      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+      calendarRouter: singleMailboxRouter({ listEvents }),
     }));
 
     expect(listEvents).toHaveBeenCalledWith(
@@ -516,7 +517,7 @@ describe('CalendarListEventsHandler — maxResults > 200 end to end', () => {
         timeMax: '2026-09-30T00:00:00Z',
         maxResults: 250,
       },
-      nylasCalendarClient: NylasCalendarClient.createWithSdk(sdk, 'grant-123', createSilentLogger()),
+      calendarRouter: singleMailboxRouter(NylasCalendarClient.createWithSdk(sdk, 'grant-123', createSilentLogger())),
     }));
 
     expect(result.success).toBe(true);
@@ -541,7 +542,7 @@ describe('CalendarListEventsHandler — recurring occurrences (#2385)', () => {
 
     const result = await handler.execute(makeCtx({
       input: { calendarId: 'cal-primary', timeMin: '2026-11-09T00:00:00Z', timeMax: '2026-11-10T00:00:00Z' },
-      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+      calendarRouter: singleMailboxRouter({ listEvents }),
       timezone: 'America/Toronto',
     }));
 

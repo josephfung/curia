@@ -43,10 +43,11 @@ import { CalendarCreateHoldHandler } from '../../skills/calendar/tools/calendar-
 import { CalendarCreateEventHandler } from '../../skills/calendar/tools/calendar-create-event/handler.js';
 
 // Nylas types for mock events
-import type { NylasCalendarClient, NylasCalendarEvent } from '../../src/channels/calendar/nylas-calendar-client.js';
+import type { NylasCalendarEvent } from '../../src/channels/calendar/nylas-calendar-client.js';
 import type { ToolContext } from '../../src/skills/types.js';
 import type { Logger } from '../../src/logger.js';
 import { CURIA_HOLD_KEY, buildHoldMetadata } from '../../src/channels/calendar/holds.js';
+import { singleMailboxRouter } from '../../skills/_shared/calendar-router-test-helpers.js';
 
 const { Pool } = pg;
 
@@ -178,7 +179,7 @@ describeIf('calendar-holds — config-store toggle (real Postgres)', () => {
       secret: () => { throw new Error('no secret in integration test'); },
       log: silentLog(),
       entityMemory,
-      nylasCalendarClient: { createEvent } as unknown as NylasCalendarClient,
+      calendarRouter: singleMailboxRouter({ createEvent }),
     } as unknown as ToolContext;
 
     const handler = new CalendarCreateHoldHandler();
@@ -214,7 +215,7 @@ describeIf('calendar-holds — config-store toggle (real Postgres)', () => {
       secret: () => { throw new Error('no secret in integration test'); },
       log: silentLog(),
       entityMemory,
-      nylasCalendarClient: { createEvent } as unknown as NylasCalendarClient,
+      calendarRouter: singleMailboxRouter({ createEvent }),
     } as unknown as ToolContext;
 
     const handler = new CalendarCreateHoldHandler();
@@ -278,7 +279,7 @@ describeIf('calendar-holds — hold place → self-release (real Postgres)', () 
       secret: () => { throw new Error('no secret'); },
       log: silentLog(),
       entityMemory,
-      nylasCalendarClient: { createEvent: holdCreateEvent } as unknown as NylasCalendarClient,
+      calendarRouter: singleMailboxRouter({ createEvent: holdCreateEvent }),
     } as unknown as ToolContext;
 
     const holdResult = await new CalendarCreateHoldHandler().execute(holdCtx);
@@ -310,11 +311,11 @@ describeIf('calendar-holds — hold place → self-release (real Postgres)', () 
       },
       secret: () => { throw new Error('no secret'); },
       log: silentLog(),
-      nylasCalendarClient: {
+      calendarRouter: singleMailboxRouter({
         createEvent: bookCreateEvent,
         listEvents,
         deleteEvent,
-      } as unknown as NylasCalendarClient,
+      }),
       // No contactService → read-only check is skipped (handled in try block)
     } as unknown as ToolContext;
 

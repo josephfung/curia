@@ -28,6 +28,9 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { holdHasAttendees, isHoldEvent, isHoldStale } from '../../../../src/channels/calendar/holds.js';
 import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from '../../../../src/skills/_shared/placeholder-guard.js';
 import { isUuid } from '../../../../src/util/uuid.js';
+import { CalendarRouteError, type RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
+import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
+import { readCalendarMailbox } from '../../../_shared/calendar-route.js';
 
 // Default maximum hold age in days.
 const DEFAULT_MAX_AGE_DAYS = 7;
@@ -66,10 +69,13 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
       return { success: false, error: `Invalid contactId — must be a UUID, got "${contactId}"` };
     }
 
-    // Guard: Nylas calendar client must be configured.
-    if (!ctx.nylasCalendarClient) {
+    // Guard: the calendar router must be configured.
+    const router = ctx.calendarRouter;
+    if (!router) {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }
+    const mailbox = readCalendarMailbox(ctx.input);
+    if (!mailbox.ok) return { success: false, error: mailbox.error };
 
     // nowMs: UNDOCUMENTED test-only seam — not part of the skill's public contract and
     // NOT listed in tool.json. Tests inject it via ctx.input.nowMs for deterministic
@@ -129,9 +135,23 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
     for (const cal of calendars) {
       const calId = cal.nylasCalendarId;
 
+      // Each calendar goes through its own mailbox (#2475); one that cannot be routed (its
+      // mailbox removed, say) is skipped and counted like a calendar whose listing failed.
+      let routed: RoutedCalendar;
+      try {
+        routed = await router.route(calId, mailbox.mailbox);
+      } catch (err) {
+        ctx.log.error(
+          err instanceof CalendarRouteError ? { code: err.code } : grantSafeErrorFields(err),
+          'calendar-holds-sweep: could not route a calendar to its mailbox, skipping',
+        );
+        calendarErrors++;
+        continue;
+      }
+
       let events: Array<{ id: string; startTime: number | null; endTime: number | null; metadata: Record<string, string> | null; participants: readonly unknown[] }>;
       try {
-        events = await ctx.nylasCalendarClient.listEvents(calId, windowStartIso, windowEndIso);
+        events = await routed.client.listEvents(routed.calendarId, windowStartIso, windowEndIso);
       } catch (err) {
         // One calendar failed — log it, increment the counter, and move on to the next.
         ctx.log.error({ err, calId }, 'calendar-holds-sweep: failed to list events for calendar, skipping');
@@ -168,7 +188,7 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
         // The hold has no attendees, so the default delete emails nobody. Omit
         // notifyAttendees: Microsoft rejects notify_participants=false with a 400.
         try {
-          await ctx.nylasCalendarClient.deleteEvent(calId, event.id);
+          await routed.client.deleteEvent(routed.calendarId, event.id);
           expired++;
           ctx.log.info({ calId, eventId: event.id }, 'calendar-holds-sweep: deleted stale hold');
         } catch (err) {

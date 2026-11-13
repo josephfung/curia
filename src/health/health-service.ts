@@ -45,7 +45,8 @@ export interface HealthServiceDeps {
   /** Optional Nylas client for the daily Nylas email-grant canary. */
   nylasClient?: NylasClient;
   /**
-   * Optional Nylas calendar client bound to `ceo_nylas_grant_id` (#1561).
+   * Optional calendar liveness probe (#1561): lists the default principal mailbox's calendars
+   * through the calendar router (#2475). Absent when calendar is not enrolled this boot.
    * Distinct from `nylasClient` (email/messaging grant).
    */
   nylasCalendarClient?: Pick<NylasCalendarClient, 'listCalendars'>;
@@ -111,8 +112,11 @@ export interface HealthServiceDeps {
     | 'pendingMigrationReason' | 'setPendingMigrationReason'
   >;
   /**
-   * The grant calendar was bound to at boot, or null when none was. It picks up a different default grant only after a restart, which the setup catalog
-   * reports as `restart_required`. Absent: no restart check.
+   * The grant calendar was bound to at boot, or null when none was. It picks up a different
+   * default grant only after a restart, which the setup catalog reports as `restart_required`.
+   * Absent: no restart check. Since the calendar router (#2475) reads grants per call, boot
+   * passes `() => null` only when no mailbox existed at boot (the calendar tools are unenrolled
+   * until a restart), and omits it otherwise.
    */
   calendarBoundGrant?: () => string | null;
   /** Alerts the principal once per mailbox outage episode. */
@@ -638,7 +642,7 @@ export class HealthService {
       return {
         name,
         status: 'fail',
-        detail: `Mailbox "${view.label}" answers, but calendar still uses the grant from boot — restart Curia`,
+        detail: `Mailbox "${view.label}" answers, but calendar has not picked it up since boot — restart Curia`,
       };
     }
     // Not awaited: a stalled notice delivery must not hold the canary run. One per mailbox at a

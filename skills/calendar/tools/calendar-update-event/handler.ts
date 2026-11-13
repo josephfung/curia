@@ -20,16 +20,17 @@ import { localizeEventTimes } from '../../../../src/channels/calendar/event-disp
 import { parseRecurrence } from '../../../../src/channels/calendar/recurrence-input.js';
 import { parseConferencing } from '../../../../src/channels/calendar/conferencing-input.js';
 import { undeclaredInputError } from '../../../../src/skills/_shared/undeclared-input-guard.js';
+import { readCalendarMailbox, routeCalendar } from '../../../_shared/calendar-route.js';
 
 // Mirrors tool.json `inputs`. Anything else is refused rather than silently dropped (#2385).
 const DECLARED_INPUTS = [
   'calendarId', 'eventId', 'title', 'start', 'end', 'description', 'location', 'attendees',
-  'conferencing', 'recurrence', 'notifyAttendees',
+  'conferencing', 'recurrence', 'notifyAttendees', 'mailbox',
 ] as const;
 
 export class CalendarUpdateEventHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    if (!ctx.nylasCalendarClient) {
+    if (!ctx.calendarRouter) {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }
 
@@ -60,10 +61,18 @@ export class CalendarUpdateEventHandler implements ToolHandler {
       return { success: false, error: 'Invalid input: notifyAttendees must be a boolean' };
     }
 
+    const mailbox = readCalendarMailbox(ctx.input);
+    if (!mailbox.ok) return { success: false, error: mailbox.error };
+
     try {
+      // The mailbox the calendar belongs to (#2475); `primary` becomes its home calendar's ID.
+      const route = await routeCalendar(ctx, 'calendar-update-event', calendarId, mailbox.mailbox);
+      if (!route.ok) return { success: false, error: route.error };
+      const { client, calendarId: targetCalendarId } = route.routed;
+
       // Read-only check — moved inside try so DB errors from resolveCalendar are caught with skill-level context.
       if (ctx.contactService) {
-        const registry = await ctx.contactService.resolveCalendar(calendarId);
+        const registry = await ctx.contactService.resolveCalendar(targetCalendarId);
         if (registry?.readOnly) {
           return { success: false, error: 'Calendar is read-only' };
         }
@@ -108,7 +117,7 @@ export class CalendarUpdateEventHandler implements ToolHandler {
         }
         // The rule lives on the series master. An instance id here would at best
         // detach that one occurrence, so refuse and name the master instead.
-        const target = await ctx.nylasCalendarClient.getEvent(calendarId, eventId);
+        const target = await client.getEvent(targetCalendarId, eventId);
         if (target.masterEventId) {
           return {
             success: false,
@@ -146,8 +155,8 @@ export class CalendarUpdateEventHandler implements ToolHandler {
         return { success: false, error: 'No fields provided to update — at least one of title, start, end, description, location, attendees, conferencing, or recurrence is required' };
       }
 
-      const event = await ctx.nylasCalendarClient.updateEvent(
-        calendarId,
+      const event = await client.updateEvent(
+        targetCalendarId,
         eventId,
         changes,
         notifyAttendees,

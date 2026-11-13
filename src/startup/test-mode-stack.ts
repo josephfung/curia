@@ -997,7 +997,7 @@ async function productionEnabledNames(
     // out, fail closed. The caller adds that gap to the stack's warnings.
     secrets: vault,
     // Production's condition for building the calendar client, without building one.
-    unavailableCapabilities: new Set(calendarConfigured ? [] : ['nylasCalendarClient']),
+    unavailableCapabilities: new Set(calendarConfigured ? [] : ['calendarRouter']),
     defaults: loadRegistryDefaults(path.join(configDir, 'registry-defaults.yaml')),
     logger,
   });
@@ -1143,7 +1143,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     // loadEncryptionKey() throws for it in every mode.
     let vault: SecretsService | undefined;
     let encryptionKey: Buffer | undefined;
-    // Whether production would build its calendar client (Nylas key + principal grant).
+    // Whether production would enroll its calendar tools (Nylas key + principal grant).
     // Decides if reconcile holds back the calendar tools (#1974); no client is built here.
     let calendarConfigured = false;
     if (process.env.SECRET_ENCRYPTION_KEY) {
@@ -1414,7 +1414,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     const lateDelivery = resolveLateDeliveryConfig(yamlConfig.delegate);
     // Deliberately absent (see header — deferred work a real instance would act on):
     // schedulerService, taskRepo, bullpenService, workingDocsRepo, approvalTrigger,
-    // nylasCalendarClient, browserService; and, unless the caller opts in,
+    // calendarRouter, browserService; and, unless the caller opts in,
     // outboundContextService, openDelegationLookup, and (recordSends) the action log,
     // approval delivery, disclosure decisions and the escalation judge.
     const outboundContextService = options.wrapOutboundContext

@@ -12,7 +12,8 @@
     "sourceRef": "string? (originating message id / task ref, stored in metadata for traceability)",
     "threadRef": "string? (scheduling thread id or conversation id, stored in metadata for fuzzy release)",
     "contactId": "string? (contact id for the scheduling counterpart, stored in metadata for matching)",
-    "contactDomain": "string? (email/domain for the scheduling counterpart's organization, stored normalized for matching assistant/tool-sent invites)"
+    "contactDomain": "string? (email/domain for the scheduling counterpart's organization, stored normalized for matching assistant/tool-sent invites)",
+    "mailbox": "string? (mailbox id; required for an unregistered calendar or \"primary\" when several are connected)"
   },
   "outputs": {
     "holdEventId": "string|null (Nylas event id of the placed hold, or null when not held)",
@@ -25,7 +26,7 @@
   "secrets": [],
   "timeout": 20000,
   "capabilities": [
-    "nylasCalendarClient",
+    "calendarRouter",
     "entityMemory"
   ],
   "allowed_callers": [

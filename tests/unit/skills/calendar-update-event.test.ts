@@ -3,6 +3,7 @@ import { CalendarUpdateEventHandler } from '../../../skills/calendar/tools/calen
 import type { ToolContext } from '../../../src/skills/types.js';
 import type { NylasCalendarEvent } from '../../../src/channels/calendar/nylas-calendar-client.js';
 import pino from 'pino';
+import { singleMailboxRouter } from '../../../skills/_shared/calendar-router-test-helpers.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -33,7 +34,7 @@ function makeEvent(overrides?: Partial<NylasCalendarEvent>): NylasCalendarEvent 
 describe('CalendarUpdateEventHandler', () => {
   const handler = new CalendarUpdateEventHandler();
 
-  it('returns failure when nylasCalendarClient is not available', async () => {
+  it('returns failure when the calendar router is not available', async () => {
     const result = await handler.execute(makeCtx({ calendarId: 'cal-1', eventId: 'evt-1' }));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('Calendar not configured');
@@ -43,7 +44,7 @@ describe('CalendarUpdateEventHandler', () => {
     const nylasCalendarClient = { updateEvent: vi.fn() };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1' },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('eventId');
@@ -56,7 +57,7 @@ describe('CalendarUpdateEventHandler', () => {
     };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', eventId: 'evt-1', title: 'New Title' },
-      { nylasCalendarClient: nylasCalendarClient as never, contactService: contactService as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient), contactService: contactService as never },
     ));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('read-only');
@@ -68,7 +69,7 @@ describe('CalendarUpdateEventHandler', () => {
     const contactService = { resolveCalendar: vi.fn().mockResolvedValue(null) };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', eventId: 'evt-1', title: 'Updated' },
-      { nylasCalendarClient: nylasCalendarClient as never, contactService: contactService as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient), contactService: contactService as never },
     ));
     expect(result.success).toBe(true);
     if (result.success) {
@@ -91,7 +92,7 @@ describe('CalendarUpdateEventHandler', () => {
           { email: 'b@example.test', name: 'B' },
         ],
       },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -109,7 +110,7 @@ describe('CalendarUpdateEventHandler', () => {
         eventId: 'evt-1',
         attendees: [{ email: 'a@example.test', responseStatus: 'accepted' }],
       },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/response status cannot be set/i);
@@ -134,7 +135,7 @@ describe('CalendarUpdateEventHandler', () => {
           { email: 'b@example.test', name: 'B' },
         ],
       },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(true);
     expect(nylasCalendarClient.updateEvent).toHaveBeenCalledWith(
@@ -170,7 +171,7 @@ describe('CalendarUpdateEventHandler', () => {
           { email: 'b@example.test', name: 'B' },
         ],
       },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(true);
     if (result.success) {
@@ -195,7 +196,7 @@ describe('CalendarUpdateEventHandler', () => {
         eventId: 'evt-1',
         attendees: [{ email: 'a@example.test', name: 'A' }],
       },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(true);
     if (result.success) {
@@ -208,7 +209,7 @@ describe('CalendarUpdateEventHandler', () => {
     const nylasCalendarClient = { updateEvent: vi.fn().mockResolvedValue(makeEvent()) };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', eventId: 'evt-1', title: 'Quiet update', notifyAttendees: false },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(true);
     expect(nylasCalendarClient.updateEvent).toHaveBeenCalledWith(
@@ -228,7 +229,7 @@ describe('CalendarUpdateEventHandler', () => {
     const nylasCalendarClient = { updateEvent: vi.fn().mockRejectedValue(badRequest) };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', eventId: 'evt-1', title: 'Quiet update', notifyAttendees: false },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -242,7 +243,7 @@ describe('CalendarUpdateEventHandler', () => {
     const nylasCalendarClient = { updateEvent: vi.fn().mockRejectedValue(serverError) };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', eventId: 'evt-1', title: 'Quiet update', notifyAttendees: false },
-      { nylasCalendarClient: nylasCalendarClient as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient) },
     ));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).not.toContain('was not changed');

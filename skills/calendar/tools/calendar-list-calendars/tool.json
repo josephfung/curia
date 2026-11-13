@@ -4,7 +4,9 @@
   "version": "1.0.2",
   "sensitivity": "normal",
   "action_risk": "none",
-  "inputs": {},
+  "inputs": {
+    "mailbox": "string? (mailbox id; omit to list every mailbox's calendars)"
+  },
   "outputs": {
     "calendars": "array"
   },
@@ -12,7 +14,7 @@
   "secrets": [],
   "timeout": 15000,
   "capabilities": [
-    "nylasCalendarClient"
+    "calendarRouter"
   ],
   "allowed_callers": [
     "calendar"

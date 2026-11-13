@@ -92,12 +92,13 @@ import { closeDedupTasksForMergedContact } from './contacts/dedup-tasks.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
 import { createContactDuplicateDetected, createContactElevated, createContactMerged } from './bus/events.js';
 import { NylasClient } from './channels/email/nylas-client.js';
-import { NylasCalendarClient } from './channels/calendar/nylas-calendar-client.js';
+import { CalendarRouter } from './channels/calendar/calendar-router.js';
 import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
 import { PrincipalMailboxAdmin } from './principal-mailboxes/admin.js';
 import { createRulesDoc } from './principal-mailboxes/rules-doc.js';
 import { backfillCalendarMailboxes } from './principal-mailboxes/backfill-calendar-mailboxes.js';
+import { createMailboxCalendarHooks } from './principal-mailboxes/calendar-hooks.js';
 import { migrateFlatPrincipalMailbox, migrationFailureReason, warnIfFallbackIdIsLive } from './principal-mailboxes/migrate-flat-mailbox.js';
 import { FALLBACK_MAILBOX_ID, SENT_OBSERVE_FAILED_RUNS_LIMIT, sentObserveFailedRunsKey } from './principal-mailboxes/state-keys.js';
 import { renameSendingKeyAfterMigration, dropLegacyDefaultKey, type SendingConfigStore } from './principal-mailboxes/migrate-config-keys.js';
@@ -1061,7 +1062,7 @@ async function main(): Promise<void> {
   }
 
   // Keep a reference to the first client for backward-compat code paths that
-  // still use a single-client assumption (e.g. NylasCalendarClient setup below).
+  // still use a single-client assumption (e.g. the health service's email canary).
   const primaryNylasClient = nylasClientMap.values().next().value as NylasClient | undefined;
 
   // EmailAdapters are built later (post-gateway) and stored here.
@@ -1177,24 +1178,21 @@ async function main(): Promise<void> {
     logger.warn('Voice credentials not fully configured — voice channel disabled. Set the LiveKit, Deepgram, and Cartesia values (including the Cartesia voice ID) in the console (Settings → Channels → Voice); credentials are vault-only (no env fallback).');
   }
 
-  // Calendar client — operates as the principal, not as Curia's mailbox.
+  // Calendar router (#2475, D7) — operates as the principal, not as Curia's mailbox.
   // RSVP is first-person: Nylas/Google records the response of the attendee whose
-  // identity matches the authenticated grant. So the calendar client binds to the
-  // principal's OWN grant (ceo_nylas_grant_id) — the same identity ceo-inbox uses. Binding
-  // to Curia's mailbox grant made Curia a third-party delegate, and Google rejected
-  // RSVPs with `omittedAttendeesSpecified` (#1217).
+  // identity matches the authenticated grant. So every calendar call goes through one of the
+  // principal's OWN mailbox grants — the mailbox the calendar belongs to — never Curia's
+  // mailbox grant, which made Curia a third-party delegate and Google rejected RSVPs with
+  // `omittedAttendeesSpecified` (#1217). The router reads the grant per call, so a replaced
+  // grant or a new default applies without a restart.
   //
-  // Fail closed: with no principal grant configured there is no principal to act as, so the
-  // client is left undefined and calendar skills return a clean "not configured"
-  // result via their existing `if (!ctx.nylasCalendarClient)` guard. We deliberately
-  // do NOT fall back to the email account grant — that is the delegate-identity bug
-  // this change removes.
-  // Every disabled path logs exactly once — none is silent. Guard on the API key first so
-  // we don't read the grant (or log a spurious read error) when Nylas isn't configured at all.
-  let nylasCalendarClient: NylasCalendarClient | undefined;
-  // The grant the calendar client was bound to at boot; setup-status compares it with the
-  // default mailbox's grant to report a restart as required (#2475).
-  let calendarBoundGrantId: string | undefined;
+  // Fail closed: with no principal mailbox configured at boot the calendar tools are held back
+  // (and calendar skills return a clean "not configured" result if called). We deliberately do
+  // NOT fall back to the email account grant — that is the delegate-identity bug #1217 removed.
+  // Every disabled path logs exactly once — none is silent.
+  let calendarRouter: CalendarRouter | undefined;
+  // Whether a principal mailbox existed at boot, i.e. the calendar tools are enrolled this boot.
+  let calendarConfigured = false;
 
   // Principal mailbox registry (#2475). The flat ceo_nylas_grant_id moves into it BEFORE the
   // resolver, calendar client and acquaintance mailbox are built, so they all read the registry.
@@ -1292,9 +1290,15 @@ async function main(): Promise<void> {
   // Calendars registered before they belonged to a mailbox are the default mailbox's (R3).
   // Idempotent, so it runs on every boot after the flat migration. A failure is logged at error
   // by the backfill and again here; calendars keep a null mailbox until the next boot.
+  // While the deferred-migration fallback is served there is no registry row to reference (the
+  // column is a foreign key), so the backfill waits for the migration; the router sends
+  // unassigned calendars through the sole live mailbox meanwhile.
   try {
-    await backfillCalendarMailboxes(pool, (await principalMailboxes.defaultMailbox())?.id ?? null, logger);
+    const backfillTo = (await principalMailboxes.isFallbackActive()) ? null : ((await principalMailboxes.defaultMailbox())?.id ?? null);
+    await backfillCalendarMailboxes(pool, backfillTo, logger);
   } catch (err) {
+    // Deliberately non-fatal: unassigned calendars still route through the sole live mailbox,
+    // and the idempotent backfill retries on the next boot.
     logger.error({ err }, 'Calendar mailbox backfill failed; calendars stay unassigned until the next boot');
   }
 
@@ -1320,6 +1324,14 @@ async function main(): Promise<void> {
   // without one the process is in setup-required mode and the routes are not mounted.
   // Without a Nylas API key the routes still list and remove, but add and test answer 503.
   const principalMailboxApiKey = config.nylasApiKey;
+  const mailboxCalendarHooks = principalContact && principalMailboxApiKey
+    ? createMailboxCalendarHooks({
+        contacts: contactService,
+        principalContactId: principalContact.id,
+        calendarClient: (mailboxId) => principalMailboxes.calendarClient(mailboxId),
+        logger,
+      })
+    : undefined;
   const principalMailboxAdmin = principalContact
     ? new PrincipalMailboxAdmin({
         store: principalMailboxStore,
@@ -1344,6 +1356,9 @@ async function main(): Promise<void> {
           append: (path, params) => workingDocsRepo.append(path, params),
         }, logger),
         forgetLegacySendLevel: async () => { if (sendingKeyStore) await dropLegacyDefaultKey(sendingKeyStore, logger); else logger.warn('Mailbox removal: the sending-level store is not ready yet, so the legacy default send-level key was not checked'); },
+        // Home calendar on add, calendars in the removal preview, disconnected on removal (#2475, D7).
+        calendars: mailboxCalendarHooks,
+        onRemoved: mailboxCalendarHooks ? [mailboxCalendarHooks.onRemoved] : [],
         logger,
       })
     : undefined;
@@ -1353,17 +1368,25 @@ async function main(): Promise<void> {
     // warning by the email-channel bootstrap above. Logged at debug here to keep this path
     // non-silent without duplicating that warning for the common "no Nylas at all" case.
     logger.debug('Calendar disabled — no Nylas API key configured');
+  } else if (!principalContact) {
+    // Setup-required mode: no principal to own the home calendars yet.
+    logger.warn('Calendar disabled — no principal contact yet; finish setup, then restart, to enable calendar');
   } else {
-    // Read the default mailbox's grant. Absence -> undefined (calendar simply not set up). A DB
-    // or decrypt failure THROWS; catch it here so a single channel's secret read can't crash
-    // boot, but log at `error` with the real cause — a wrong SECRET_ENCRYPTION_KEY breaks every
-    // secret, and must not be mistaken for "the grant isn't set".
-    let principalCalendarGrant: string | undefined;
+    calendarRouter = new CalendarRouter({
+      mailboxes: principalMailboxes.forCalendarRouter(),
+      contacts: contactService,
+      principalContactId: principalContact.id,
+      logger,
+    });
+    // Read the default mailbox's grant once, as before, to decide whether the calendar tools
+    // are enrolled this boot. A DB or decrypt failure THROWS; catch it so one secret read can't
+    // crash boot, but log at `error` with the real cause — a wrong SECRET_ENCRYPTION_KEY breaks
+    // every secret, and must not be mistaken for "the grant isn't set".
     let grantReadFailed = false;
     try {
       const defaultMailbox = await principalMailboxes.defaultMailbox();
       if (defaultMailbox) {
-        principalCalendarGrant = (await principalMailboxes.credentials(defaultMailbox.id)).grantId;
+        calendarConfigured = Boolean((await principalMailboxes.credentials(defaultMailbox.id)).grantId);
       }
     } catch (err) {
       grantReadFailed = true;
@@ -1372,10 +1395,8 @@ async function main(): Promise<void> {
         'Failed to read the principal mailbox grant — calendar disabled this boot. Check the database and SECRET_ENCRYPTION_KEY (a wrong key breaks all secrets, not just calendar).',
       );
     }
-    calendarBoundGrantId = principalCalendarGrant;
-    if (principalCalendarGrant) {
-      nylasCalendarClient = new NylasCalendarClient(config.nylasApiKey, principalCalendarGrant, logger);
-      logger.info('Nylas calendar client initialized (bound to the principal\'s Nylas grant)');
+    if (calendarConfigured) {
+      logger.info("Calendar router initialized (each calendar goes through the principal's mailbox it belongs to)");
     } else if (!grantReadFailed) {
       // Genuine absence (the read-failure path logged its own error above).
       logger.warn(
@@ -1484,7 +1505,7 @@ async function main(): Promise<void> {
       // because the key resolves from three sources (channel key, env, legacy key).
       // entityMemory is deliberately not listed: the memory-* and setup-* tools are enabled
       // without an embedding source and fail closed when entity memory is off.
-      unavailableCapabilities: new Set(nylasCalendarClient ? [] : ['nylasCalendarClient']),
+      unavailableCapabilities: new Set(calendarRouter && calendarConfigured ? [] : ['calendarRouter']),
       defaults: registryDefaults,
       logger,
     });
@@ -2799,7 +2820,20 @@ async function main(): Promise<void> {
     scheduler,
     emailAdapter: emailAdapters[0],
     nylasClient: primaryNylasClient,
-    nylasCalendarClient,
+    // The liveness probe lists the default mailbox's calendars through the router (#2475). Only
+    // when calendar is enrolled this boot, so an install without calendar stays `skipped`.
+    nylasCalendarClient: calendarRouter && calendarConfigured
+      ? (() => {
+          const router = calendarRouter;
+          return {
+            listCalendars: async () => {
+              const def = await principalMailboxes.defaultMailbox();
+              if (!def) throw new Error('No principal mailbox is connected');
+              return (await router.clientFor(def.id)).listCalendars();
+            },
+          };
+        })()
+      : undefined,
     // One canary per principal mailbox (#2475); an outage alerts the principal once per episode.
     principalMailboxes,
     mailboxOutageNotifier: mailboxOutageAlerts && outboundGateway
@@ -2821,9 +2855,10 @@ async function main(): Promise<void> {
     retryMailboxMigration: retryMailboxMigration ? sendingKeyRename.run : undefined,
     reconcileFlatMailboxKeys: reconcileFlatMirror,
     inboxTriageHealth: () => inboxTriageHealthRef.current?.() ?? null,
-    // Calendar is bound to this grant at boot (the acquaintance check reads every live mailbox
-    // per call); setup-status reports restart_required while the default mailbox's grant differs.
-    calendarBoundGrant: () => calendarBoundGrantId ?? null,
+    // Calendar reads each mailbox's grant per call (#2475), so a grant change needs no restart.
+    // Only when no mailbox existed at boot are the calendar tools still unenrolled: a mailbox
+    // added since then needs one restart, which setup-status reports as restart_required.
+    ...(calendarConfigured ? {} : { calendarBoundGrant: () => null }),
     signalRpcClient,
     browserService,
     // Pass channel health deps only when the adapter was constructed (enabled +
@@ -3002,7 +3037,7 @@ async function main(): Promise<void> {
     }
     return triageServicesCache;
   };
-  const executionLayer = new ExecutionLayer(toolRegistry, logger, { triageServices, bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, principalMailboxes, cardUseRepo, cardUseService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, principalMailboxReady: () => healthService.principalMailboxReady(), curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
+  const executionLayer = new ExecutionLayer(toolRegistry, logger, { triageServices, bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, calendarRouter, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, principalMailboxes, cardUseRepo, cardUseService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, principalMailboxReady: () => healthService.principalMailboxReady(), curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
     findInFlight: (targetAgent: string, originConversationId: string) =>
       findInFlightPendingDelegation(pool, { targetAgent, originConversationId }),
     acquireRunning: (params: Parameters<typeof acquireRunningDelegation>[1]) =>

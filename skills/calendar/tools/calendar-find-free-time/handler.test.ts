@@ -4,6 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { CalendarFindFreeTimeHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import { createSilentLogger } from '../../../../src/logger.js';
+import { singleMailboxRouter } from '../../../_shared/calendar-router-test-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -19,9 +20,9 @@ function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
     secret: () => { throw new Error('no secret in test'); },
     log: createSilentLogger(),
     timezone: 'UTC',
-    nylasCalendarClient: {
+    calendarRouter: singleMailboxRouter({
       getFreeBusy: vi.fn().mockResolvedValue([]),
-    } as unknown as ToolContext['nylasCalendarClient'],
+    }),
     ...overrides,
   } as ToolContext;
 }
@@ -62,9 +63,9 @@ describe('CalendarFindFreeTimeHandler — free vs busy status', () => {
         timeMin: '2026-05-26T09:00:00Z',
         timeMax: '2026-05-26T12:00:00Z',
       },
-      nylasCalendarClient: {
+      calendarRouter: singleMailboxRouter({
         getFreeBusy,
-      } as unknown as ToolContext['nylasCalendarClient'],
+      }),
     }));
 
     expect(result.success).toBe(true);

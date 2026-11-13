@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { CalendarListCalendarsHandler } from '../../../skills/calendar/tools/calendar-list-calendars/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
+import { singleMailboxRouter } from '../../../skills/_shared/calendar-router-test-helpers.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -23,7 +24,7 @@ function makeCtx(
 describe('CalendarListCalendarsHandler', () => {
   const handler = new CalendarListCalendarsHandler();
 
-  it('returns failure when nylasCalendarClient is not available', async () => {
+  it('returns failure when the calendar router is not available', async () => {
     const result = await handler.execute(makeCtx({}));
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -47,7 +48,7 @@ describe('CalendarListCalendarsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       {},
-      { nylasCalendarClient: nylasCalendarClient as never, contactService: contactService as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient), contactService: contactService as never },
     ));
 
     expect(result.success).toBe(true);
@@ -67,7 +68,7 @@ describe('CalendarListCalendarsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       {},
-      { nylasCalendarClient: nylasCalendarClient as never, contactService: {} as never },
+      { calendarRouter: singleMailboxRouter(nylasCalendarClient), contactService: {} as never },
     ));
 
     expect(result.success).toBe(false);
