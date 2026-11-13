@@ -111,6 +111,31 @@ describe('extractStructuredFields', () => {
     )).toMatchObject({ action: 'details', outcome: 'success', target_id: 'user.x_password' });
   });
 
+  it.each([
+    ['requested', 'pending'],
+    ['completed', 'success'],
+  ])('maps a %s principal_mailbox.changed to outcome %s, targeting the mailbox id (#2475)', (stage, outcome) => {
+    expect(extractStructuredFields(
+      'principal_mailbox.changed',
+      { stage, action: 'remove', mailboxId: 'personal', initiatedBy: 'session', actorSessionId: 'actor-1', rules: 'delete' },
+      'evt-mailbox',
+      logger,
+    )).toEqual({
+      action: 'remove',
+      outcome,
+      target_type: 'principal_mailbox',
+      target_id: 'personal',
+      initiator_type: 'human',
+      initiator_id: 'actor-1',
+    });
+    expect(extractStructuredFields(
+      'principal_mailbox.changed',
+      { stage, action: 'add', mailboxId: 'work', initiatedBy: 'bootstrap_secret' },
+      'evt-mailbox-hdr',
+      logger,
+    )).toMatchObject({ initiator_type: 'system', initiator_id: 'bootstrap_secret' });
+  });
+
   it('secret.accessed maps to a secret target', () => {
     expect(extractStructuredFields(
       'secret.accessed',

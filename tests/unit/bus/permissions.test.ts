@@ -232,6 +232,15 @@ describe('Bus Permissions', () => {
     }
   });
 
+  it('allows only the system layer to publish or subscribe to principal_mailbox.changed (#2475)', () => {
+    expect(canPublish('system', 'principal_mailbox.changed')).toBe(true);
+    expect(canSubscribe('system', 'principal_mailbox.changed')).toBe(true);
+    for (const layer of ['channel', 'dispatch', 'agent', 'execution'] as const) {
+      expect(canPublish(layer, 'principal_mailbox.changed')).toBe(false);
+      expect(canSubscribe(layer, 'principal_mailbox.changed')).toBe(false);
+    }
+  });
+
   it('allows only the system layer to publish document.console_action (#1822)', () => {
     expect(canPublish('system', 'document.console_action')).toBe(true);
     expect(canSubscribe('system', 'document.console_action')).toBe(true);

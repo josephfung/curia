@@ -149,6 +149,18 @@ const EXTRACTORS: Readonly<Record<string, Extractor>> = {
       : p.initiatedBy === 'bootstrap_secret' ? 'bootstrap_secret' : str(p, 'initiatedBy', fail),
   }),
 
+  // Console mailbox admin (#2475): the target is the mailbox id, never a grant id or address.
+  // Actor mapped as secret.changed does.
+  'principal_mailbox.changed': (p, fail) => ({
+    action: str(p, 'action', fail),
+    outcome: p.stage === 'requested' ? 'pending' : p.stage === 'completed' ? 'success' : fail('stage'),
+    target_type: 'principal_mailbox',
+    target_id: str(p, 'mailboxId', fail),
+    initiator_type: p.initiatedBy === 'bootstrap_secret' ? 'system' : 'human',
+    initiator_id: typeof p.actorSessionId === 'string' ? p.actorSessionId
+      : p.initiatedBy === 'bootstrap_secret' ? 'bootstrap_secret' : str(p, 'initiatedBy', fail),
+  }),
+
   // A skill read a secret via ctx.secret() / ctx.resolveSecretRef(). The target is the key
   // name, never a value. Agent-less reads (startup, system skills) are attributed to the tool.
   'secret.accessed': (p, fail) => ({
