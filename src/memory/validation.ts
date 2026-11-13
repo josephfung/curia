@@ -85,6 +85,15 @@ function isConfigStoreSystemSource(source: string): boolean {
  *   appended to properties.previous_values for an audit trail)
  * - Equal confidence → conflict (escalated to human review)
  */
+/**
+ * The write-cap key of a fact source. A `/mailboxes:<ids>` segment records where the data came
+ * from (checkpoint provenance, #2475), not who is writing, so it must not open a fresh budget:
+ * the cap counts per writer, whichever mailboxes a batch touched.
+ */
+export function rateLimitKeyOf(source: string): string {
+  return source.replace(/\/mailboxes:[^/]*/g, '');
+}
+
 export class MemoryValidator {
   // Tracks write counts per agent+task key across a task execution.
   // Key format mirrors the source provenance string, e.g. "agent:coordinator/task:abc123".
@@ -105,8 +114,9 @@ export class MemoryValidator {
     // would trip the limit after 50 infrastructure writes. Other system:
     // sources (e.g. checkpoint extraction) must still be capped.
     if (isConfigStoreSystemSource(agentTaskKey)) return;
-    const count = this.writeCounts.get(agentTaskKey) ?? 0;
-    this.writeCounts.set(agentTaskKey, count + 1);
+    const key = rateLimitKeyOf(agentTaskKey);
+    const count = this.writeCounts.get(key) ?? 0;
+    this.writeCounts.set(key, count + 1);
   }
 
   /**
@@ -114,7 +124,7 @@ export class MemoryValidator {
    * Should be called when a task completes so the next task gets a clean slate.
    */
   resetRateLimit(agentTaskKey: string): void {
-    this.writeCounts.delete(agentTaskKey);
+    this.writeCounts.delete(rateLimitKeyOf(agentTaskKey));
   }
 
   /**
@@ -134,7 +144,7 @@ export class MemoryValidator {
     //    is exempt (process-lifetime, never reset). Checkpoint extraction and
     //    other system: sources stay capped.
     if (!isConfigStoreSystemSource(options.source)) {
-      const writeCount = this.writeCounts.get(options.source) ?? 0;
+      const writeCount = this.writeCounts.get(rateLimitKeyOf(options.source)) ?? 0;
       if (writeCount >= MAX_WRITES_PER_AGENT_TASK) {
         return {
           action: 'rate_limited',

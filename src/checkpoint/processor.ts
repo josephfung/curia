@@ -100,9 +100,8 @@ export class ConversationCheckpointProcessor {
     // A sign-in code must not become a fact or relationship (#2017).
     const transcript = this.verification ? this.verification.tracker.scrubText(rawTranscript) : rawTranscript;
 
-    // The mailbox suffix makes the source vary with the mailboxes this batch touched. The memory
-    // write cap counts per source string (MemoryValidator), so batches touching different
-    // mailbox sets count against separate caps; each checkpoint batch is still capped.
+    // The mailbox suffix records which mailboxes this batch touched. The memory write cap ignores
+    // it (rateLimitKeyOf), so the conversation's extraction shares one cap whatever the mailbox set.
     let source = `system:checkpoint/conversation:${conversationId}/agent:${agentId}/channel:${channelId}`;
     if (this.mailboxProvenance) {
       try {
