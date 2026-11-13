@@ -9,7 +9,7 @@ import { readAttachmentFiles, MAX_ATTACHMENT_BYTES } from '../../../../src/skill
 import { captureDraftSnapshot } from '../../../_shared/voice-learning-capture.js';
 import { isSpamOrTrash } from '../../../_shared/mail-folders.js';
 import type { NylasMessage } from '../../../../src/channels/email/nylas-client.js';
-import { messageIdsIn } from '../../../../src/skills/principal-send/autonomous-limits.js';
+import { firstMessageId } from '../../../_shared/triage-listing.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 
 // Same ceiling ceo-inbox-search uses when it scans drafts. A match stops the
@@ -44,10 +44,19 @@ function withTimeout<T>(work: Promise<T>): Promise<T> {
  * Never throws; an unreachable or empty target is a fallback to the mailbox the message was given in.
  */
 async function addressedCopy(ctx: ToolContext, at: MailboxClient, original: NylasMessageFull, messageId: string): Promise<Redirect> {
-  const live = await ctx.principalMailboxes!.list();
-  if (live.length < 2) return { kind: 'same' };
+  let live: Awaited<ReturnType<NonNullable<ToolContext['principalMailboxes']>['list']>>;
+  let principalAddrs: string[];
+  try {
+    live = await ctx.principalMailboxes!.list();
+    if (live.length < 2) return { kind: 'same' };
+    principalAddrs = await ctx.principalMailboxes!.principalEmailAddresses();
+  } catch (err) {
+    // SF-M2: "never throws" holds for the registry reads too; the given mailbox still works.
+    ctx.log.warn({ tool: 'ceo-inbox-draft-reply', ...grantSafeErrorFields(err) }, 'ceo-inbox-draft-reply: mailbox registry unreadable; drafting in the given mailbox');
+    return { kind: 'fallback', reason: `the mailbox registry could not be read; drafted in the ${at.mailbox.label} mailbox` };
+  }
   // Mail the principal sent from one account must never be redirected to the other (R58).
-  const principal = new Set([...live.map((m) => m.address.toLowerCase()), ...(await ctx.principalMailboxes!.principalEmailAddresses())]);
+  const principal = new Set([...live.map((m) => m.address.toLowerCase()), ...principalAddrs]);
   if (original.from.some((p) => principal.has(p.email.toLowerCase()))) return { kind: 'same' };
   const byAddress = new Map(live.map((m) => [m.address.toLowerCase(), m]));
   const firstIn = (list: NylasParticipant[]) => list.map((p) => byAddress.get(p.email.toLowerCase())).find((m) => m !== undefined);
@@ -65,7 +74,7 @@ async function addressedCopy(ctx: ToolContext, at: MailboxClient, original: Nyla
     const gateway = await ctx.principalMailboxes!.gatewayClient(clientAt);
     const msg = await gateway.getMessage(id, { includeHeaders: true, budget: ctx });
     const header = (msg.headers ?? []).find((h) => h.name.trim().toLowerCase() === 'message-id');
-    return { ...(header ? { id: messageIdsIn(header.value)[0] } : {}), msg };
+    return { ...(header ? { id: firstMessageId(header.value) } : {}), msg };
   };
   const senders = (m: { from: NylasParticipant[] }) => [...new Set(m.from.map((p) => p.email.toLowerCase()))].sort().join(',');
   try {
@@ -180,6 +189,23 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
       const explicit = readMailboxInput(input);
       if (explicit.ok && explicit.mailbox === undefined) {
         const redirect = await addressedCopy(ctx, picked.at, original, replyToMessageId);
+        if (redirect.kind === 'moved' && original.threadId) {
+          // SF-M3: an earlier call may have fallen back and drafted in the given mailbox; one
+          // draft per message across both, so that draft answers this call too.
+          const givenThread = original.threadId;
+          const given = await picked.at.client.listAllDrafts({ maxScan: DRAFT_SCAN_LIMIT, stopWhen: (d) => d.threadId === givenThread });
+          const earlier = given.drafts.find((d) => d.threadId === givenThread);
+          if (earlier) {
+            ctx.log.info({ draftId: earlier.id, mailboxId: picked.at.mailbox.id }, 'ceo-inbox-draft-reply: the given mailbox already has a draft for this thread');
+            return {
+              success: true,
+              data: {
+                draft_id: earlier.id, subject: earlier.subject, to: earlier.to, cc: earlier.cc,
+                snippet: earlier.snippet, date: earlier.date, already_exists: true, ...mbx,
+              },
+            };
+          }
+        }
         if (redirect.kind === 'moved') {
           client = redirect.at.client;
           mbx = mailboxFields(redirect.at.mailbox);
