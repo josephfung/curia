@@ -43,20 +43,16 @@ export interface PrincipalMailboxesDeps {
   principalEmailIdentities?: () => Promise<string[]>;
 }
 
+/** The list-only `mailboxDirectory` view (#2475): each live mailbox's id, label and triage start. */
+export interface MailboxDirectory {
+  list(): Promise<Array<{ id: string; label: string; triageStartAt: Date | null }>>;
+}
+
 /**
  * What a skill gets as `ctx.principalMailboxes` (security finding F7). The registry reads and a
  * ready client per mailbox, and nothing that returns the Nylas API key or a grant id: those never
  * cross into skill code. Built by `forSkills`, as a plain object of methods rather than the class.
  */
-/**
- * The list-only view (`mailboxDirectory` capability, #2475): id, label and triage start of each
- * live mailbox. No addresses, no clients. For skills that only name the mailboxes (config-store,
- * setup-status).
- */
-export interface MailboxDirectory {
-  list(): Promise<Array<{ id: string; label: string; triageStartAt: Date | null }>>;
-}
-
 export interface SkillPrincipalMailboxes {
   list(): Promise<PrincipalMailboxView[]>;
   get(id: string): Promise<PrincipalMailboxView>;

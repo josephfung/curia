@@ -50,8 +50,8 @@ export interface RemovalPreview {
 export interface RemovalOutcome {
   /** Cleanup steps after the tombstone that did not finish (names only). Empty when all did. */
   cleanupIncomplete: string[];
-  /** The removed mailbox was the default, so calendar and the acquaintance check still hold its
-   *  grant (bound at boot) until a restart. */
+  /** The removed mailbox was the default, so calendar still holds its grant (bound at boot)
+   *  until a restart. */
   restartRequired: boolean;
 }
 

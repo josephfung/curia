@@ -111,8 +111,7 @@ export interface HealthServiceDeps {
     | 'pendingMigrationReason' | 'setPendingMigrationReason'
   >;
   /**
-   * The grant calendar (and the acquaintance check) were bound to at boot, or null when none
-   * was. They pick up a different default grant only after a restart, which the setup catalog
+   * The grant calendar was bound to at boot, or null when none was. It picks up a different default grant only after a restart, which the setup catalog
    * reports as `restart_required`. Absent: no restart check.
    */
   calendarBoundGrant?: () => string | null;
@@ -628,7 +627,7 @@ export class HealthService {
       if (timer !== undefined) clearTimeout(timer);
     }
     this.mailboxOk.set(view.id, { ok: result.status === 'ok', grantId });
-    // The mailbox answers, but calendar (and the acquaintance check) are still bound to another
+    // The mailbox answers, but calendar is still bound to another
     // grant, or none, since boot: not healthy for them until a restart. No heartbeat ping (the
     // result is not ok) and no outage episode either way: the mailbox itself is fine.
     if (result.status === 'ok' && view.isDefault && calendarBoundGrant && calendarBoundGrant() !== grantId) {
