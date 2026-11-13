@@ -111,5 +111,11 @@ describe('rules parser edge cases (SEC-L8)', () => {
     const out = applyRemoval(fenced('````', '```', '````'), 'work', { rescopeTo: 'home' });
     expect(out).toContain('````\n## Example\n- Mailbox: work\n```\n## Still example\n````');
     expect(out).toContain('## Real two\n- Mailbox: home');
+    // The same for the trailing-text and tilde cases: the example stays as written.
+    for (const [inner] of [['``` not a close'], ['~~~']]) {
+      const rescoped = applyRemoval(fenced('```', inner!, '```'), 'work', { rescopeTo: 'home' });
+      expect(rescoped, inner).toContain(`\`\`\`\n## Example\n- Mailbox: work\n${inner}\n## Still example\n\`\`\``);
+      expect(rescoped, inner).toContain('## Real two\n- Mailbox: home');
+    }
   });
 });

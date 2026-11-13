@@ -349,20 +349,25 @@ export class PrincipalMailboxAdmin {
     const scoped = await this.scopedRules(id);
     const rulesUnknown = scoped === null;
     const soleRules = (scoped ?? []).filter((r) => r.mailboxes!.length === 1);
+    // A supplied choice is validated and kept whether or not a sole rule exists now: one may be
+    // added before the cleanup reread, which then applies this choice (or, with no valid choice,
+    // leaves the rules alone and reports inbox_rules incomplete).
+    const choice = input.rules;
     let ruleAction: RuleRemovalAction = 'delete';
-    if (soleRules.length > 0 || (rulesUnknown && input.rules !== undefined)) {
-      const choice = input.rules;
+    let choiceValid = false;
+    if (choice === 'delete') {
+      choiceValid = true;
+    } else if (choice !== undefined && typeof choice === 'object' && others.some((m) => m.id === choice.rescopeTo)) {
+      ruleAction = choice;
+      choiceValid = true;
+    }
+    if (soleRules.length > 0 || (rulesUnknown && choice !== undefined)) {
       if (choice === undefined) {
         throw new MailboxRemovalError(
           `Inbox rules (${soleRules.length}) apply only to "${id}"; choose to delete them or move them to another mailbox`,
         );
       }
-      if (choice !== 'delete') {
-        if (typeof choice !== 'object' || !others.some((m) => m.id === choice.rescopeTo)) {
-          throw new MailboxRemovalError('Move the rules to another live mailbox, or delete them');
-        }
-        ruleAction = choice;
-      }
+      if (!choiceValid) throw new MailboxRemovalError('Move the rules to another live mailbox, or delete them');
     }
 
     const principal = await this.deps.contacts.getContactWithIdentities(this.deps.principalContactId);
@@ -457,10 +462,11 @@ export class PrincipalMailboxAdmin {
         if (text === null) return;
         const now = parseRuleScopes(text).filter((r) => r.mailboxes?.includes(id));
         const onlyHere = now.filter((r) => r.mailboxes!.length === 1);
-        // Rules scoped only here need the principal's choice. None was given (the first check
-        // could not read the document, or found none and one was added since): do not guess. The
-        // document is left as it is and inbox_rules is reported incomplete.
-        if (input.rules === undefined && onlyHere.length > 0) {
+        // Rules scoped only here need the principal's valid choice. None was given, or the one given
+        // was not valid (the first check could not read the document, or found no sole rule and
+        // one was added since): do not guess. The document is left as it is and inbox_rules is
+        // reported incomplete.
+        if (!choiceValid && onlyHere.length > 0) {
           throw new MailboxRemovalError('Inbox rules apply only to this mailbox and no choice was given');
         }
         const next = applyRemoval(text, id, ruleAction);
