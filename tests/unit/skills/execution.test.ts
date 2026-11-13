@@ -289,6 +289,19 @@ describe('ExecutionLayer', () => {
       expect(mailboxes).toBeUndefined();
       expect(await (seen!['list'] as () => Promise<unknown>)()).toEqual([{ id: 'work', label: 'Work', triageStartAt: null }]);
     });
+
+    it('builds neither mailbox view for a tool that declares neither capability', async () => {
+      // A stub with no forDirectory/forSkills: building a view for an unrelated tool would throw.
+      const forSkills = vi.fn(() => { throw new Error('forSkills called'); });
+      const forDirectory = vi.fn(() => { throw new Error('forDirectory called'); });
+      const stub = { forSkills, forDirectory } as unknown as PrincipalMailboxes;
+      const withService = new ExecutionLayer(registry, logger, { principalMailboxes: stub });
+      registry.register(makeManifest({}), { execute: async () => ({ success: true, data: 'ok' }) });
+      expect((await withService.invoke('test-skill', { query: 'x' })).success).toBe(true);
+      expect(withService.unavailableCapabilities('test-skill')).toEqual([]);
+      expect(forSkills).not.toHaveBeenCalled();
+      expect(forDirectory).not.toHaveBeenCalled();
+    });
   });
 
   describe('optional_capabilities (#2024)', () => {

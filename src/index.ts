@@ -1183,6 +1183,9 @@ async function main(): Promise<void> {
   // Every disabled path logs exactly once — none is silent. Guard on the API key first so
   // we don't read the grant (or log a spurious read error) when Nylas isn't configured at all.
   let nylasCalendarClient: NylasCalendarClient | undefined;
+  // The grant the calendar client was bound to at boot; setup-status compares it with the
+  // default mailbox's grant to report a restart as required (#2475).
+  let calendarBoundGrantId: string | undefined;
 
   // Principal mailbox registry (#2475). The flat ceo_nylas_grant_id moves into it BEFORE the
   // resolver, calendar client and acquaintance mailbox are built, so they all read the registry.
@@ -1336,6 +1339,7 @@ async function main(): Promise<void> {
         'Failed to read the principal mailbox grant — calendar disabled this boot. Check the database and SECRET_ENCRYPTION_KEY (a wrong key breaks all secrets, not just calendar).',
       );
     }
+    calendarBoundGrantId = principalCalendarGrant;
     if (principalCalendarGrant) {
       nylasCalendarClient = new NylasCalendarClient(config.nylasApiKey, principalCalendarGrant, logger);
       logger.info('Nylas calendar client initialized (bound to the principal\'s Nylas grant)');
@@ -2778,9 +2782,9 @@ async function main(): Promise<void> {
     // health service keeps it single-flight.
     retryMailboxMigration: retryMailboxMigration ? sendingKeyRename.run : undefined,
     reconcileFlatMailboxKeys: reconcileFlatMirror,
-    // Calendar and the acquaintance check are bound to this grant at boot; setup-status reports
-    // restart_required while the default mailbox's grant differs from it.
-    calendarBoundGrant: () => principalNylasGrantId ?? null,
+    // Calendar is bound to this grant at boot (the acquaintance check reads every live mailbox
+    // per call); setup-status reports restart_required while the default mailbox's grant differs.
+    calendarBoundGrant: () => calendarBoundGrantId ?? null,
     signalRpcClient,
     browserService,
     // Pass channel health deps only when the adapter was constructed (enabled +

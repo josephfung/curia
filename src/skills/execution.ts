@@ -604,6 +604,7 @@ export class ExecutionLayer {
     // Using a map rather than `(this as Record<string, unknown>)[cap]` keeps TypeScript
     // aware that each field is read, satisfying noUnusedLocals.
     // Field names here MUST match the VALID_CAPABILITIES set in loader.ts.
+    const mailboxes = this.principalMailboxes;
     return {
       bus: this.bus,
       agentRegistry: this.agentRegistry,
@@ -611,10 +612,11 @@ export class ExecutionLayer {
       schedulerService: this.schedulerService,
       entityMemory: this.entityMemory,
       nylasCalendarClient: this.nylasCalendarClient,
-      // Skills get the narrowed view, never the service with credentials() (F7).
-      principalMailboxes: this.principalMailboxes?.forSkills(),
+      // Skills get the narrowed view, never the service with credentials() (F7). Getters, so a
+      // view is built only when a tool declares that capability: callers read this map by key.
+      get principalMailboxes() { return mailboxes?.forSkills(); },
       // List-only: ids, labels, triage start. No clients (#2475).
-      mailboxDirectory: this.principalMailboxes?.forDirectory(),
+      get mailboxDirectory() { return mailboxes?.forDirectory(); },
       autonomyService: this.autonomyService,
       browserService: this.browserService,
       bullpenService: this.bullpenService,

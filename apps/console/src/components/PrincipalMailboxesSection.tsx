@@ -343,8 +343,8 @@ export function PrincipalMailboxesSection() {
       )}
 
       <p className="settings-page-sub" style={{ margin: '12px 0 0' }}>
-        Calendar changes take effect after a restart, as does a replaced grant for calendar and
-        for checking whom the principal has written to. Use Replace grant after reconnecting a
+        Calendar changes take effect after a restart, as does a replaced grant for calendar.
+        Use Replace grant after reconnecting a
         mailbox's account in Nylas.
       </p>
 
