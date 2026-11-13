@@ -31,6 +31,13 @@ inbound:
       - at: "{{time:today-1 09:00}}"
         note: Heartbeat created this drain task; the mailboxes below are due. Next - triage one batch.
 tool_stubs:
+  # The drain task this wake runs: progress notes and completion are the wake's own writes.
+  task-update:
+    - match: { task_id: 7a1b2c3d-46a0-4b1c-8d2e-461b0b1c2d3e }
+      return: { task_id: 7a1b2c3d-46a0-4b1c-8d2e-461b0b1c2d3e, title: Inbox drain, status: in_progress, owner: curia, priority: 3, tags: [inbox-drain], updated_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+  task-complete:
+    - match: { task_id: 7a1b2c3d-46a0-4b1c-8d2e-461b0b1c2d3e }
+      return: { task_id: 7a1b2c3d-46a0-4b1c-8d2e-461b0b1c2d3e, title: Inbox drain, status: done, completed_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
   ceo-inbox-list:
     - match: { folder: DRAFTS }
       return: { folder: DRAFTS, count: 0, drafts: [] }
@@ -92,6 +99,18 @@ expected_behaviors:
     description: Sends no draft; nothing is sent in answer to the principal's own other address.
     check:
       not_called: [ceo-inbox-send-draft]
+  - id: no_other_draft
+    weight: critical
+    description: Writes no new draft and no shadow draft either; a draft is how a loop would start.
+    check:
+      not_called: [ceo-inbox-draft-compose, ceo-inbox-shadow-draft]
+  - id: filed_seen
+    weight: important
+    description: Files the message 📌 Seen (the stay-in-inbox marker once it is read).
+    check:
+      called: ceo-inbox-label
+      with: { message_id: msg-46j-self }
+      contains: { labels: Seen }
   - id: not_archived_away
     weight: important
     description: Leaves the message in the inbox rather than archiving it (Seen is not Cleared).
@@ -100,7 +119,9 @@ expected_behaviors:
       with: { message_id: msg-46j-self }
   - id: no_escalation
     weight: important
-    description: Does not escalate or notify the principal about their own reminder.
+    description: Does not escalate or notify the principal about their own reminder (no bullpen send request, no star).
+    check:
+      not_called: [bullpen-post, bullpen-reply, ceo-inbox-mark-starred]
 failure_modes:
   - Drafts or sends a reply to the principal's other address
   - Escalates the principal's own reminder as urgent
