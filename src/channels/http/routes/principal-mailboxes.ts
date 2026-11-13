@@ -81,6 +81,18 @@ export async function principalMailboxesRoutes(
   const requireAuth = (request: FastifyRequest, reply: FastifyReply): boolean =>
     assertSecret(request, reply, webAppBootstrapSecret, sessions);
 
+  // The actor is read once per request, at the first audit stage, and reused for the second: a
+  // session revoked while the change runs must not turn the completed event into another actor.
+  const actors = new WeakMap<FastifyRequest, ReturnType<typeof actorFromRequest>>();
+  const actorOf = (request: FastifyRequest): ReturnType<typeof actorFromRequest> => {
+    let actor = actors.get(request);
+    if (!actor) {
+      actor = actorFromRequest(request, sessions);
+      actors.set(request, actor);
+    }
+    return actor;
+  };
+
   const changeEvent = (
     request: FastifyRequest,
     change: MailboxChange,
@@ -89,7 +101,7 @@ export async function principalMailboxesRoutes(
   ) => createPrincipalMailboxChanged({
     ...change,
     stage,
-    ...actorFromRequest(request, sessions),
+    ...actorOf(request),
     ...(outcome.cleanupIncomplete && outcome.cleanupIncomplete.length > 0 ? { cleanupIncomplete: outcome.cleanupIncomplete } : {}),
     ...(outcome.warning ? { warning: true } : {}),
   });

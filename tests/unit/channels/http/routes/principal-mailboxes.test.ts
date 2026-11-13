@@ -9,6 +9,7 @@ import {
 import { MailboxRemovalError, type RemovalPreview } from '../../../../../src/principal-mailboxes/admin.js';
 import { RemovedMailboxError, UnknownMailboxError } from '../../../../../src/principal-mailboxes/types.js';
 import type { PrincipalMailboxView } from '../../../../../src/principal-mailboxes/service.js';
+import { hashToken, type SessionStore } from '../../../../../src/channels/http/session-auth.js';
 
 const BOOTSTRAP = 'test-bootstrap-secret';
 const auth = { 'x-web-bootstrap-secret': BOOTSTRAP };
@@ -372,6 +373,20 @@ describe('principal-mailboxes routes', () => {
         { mailboxId: 'work', action: 'add', stage: 'completed', initiatedBy: 'bootstrap_secret' },
       ]);
       expect(JSON.stringify(vi.mocked(opts.bus.publish).mock.calls)).not.toMatch(/grant-secret-123|boss@example\.com/);
+    });
+
+    it('keeps the session actor on the completed row when the session is revoked mid-change', async () => {
+      const sessions: SessionStore = new Map([[hashToken('tok-1'), { id: 'sess-1', expiresAt: Date.now() + 60_000, renewedAt: Date.now() }]]);
+      const opts = makeOptions({ sessions });
+      vi.mocked(opts.admin.add).mockImplementation(async () => { sessions.clear(); return { ok: true as const, mailbox: view() }; });
+      app = Fastify();
+      app.addHook('onRequest', async (request) => { (request as unknown as { cookies: Record<string, string> }).cookies = { curia_session: 'tok-1' }; });
+      await app.register(principalMailboxesRoutes, opts);
+      expect((await req('POST', URL, { id: 'work', label: 'Work', grant_id: 'grant-secret-123' })).statusCode).toBe(201);
+      expect(audited(opts).map((p) => [p.stage, p.initiatedBy, p.actorSessionId])).toEqual([
+        ['requested', 'session', 'sess-1'],
+        ['completed', 'session', 'sess-1'],
+      ]);
     });
 
     it('a malformed id or rescope target is refused before anything is audited (SEC-L5)', async () => {

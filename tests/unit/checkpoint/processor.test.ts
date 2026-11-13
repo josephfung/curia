@@ -319,7 +319,7 @@ describe('ConversationCheckpointProcessor', () => {
   // #2475 D8 — cheap provenance: the mailboxes the conversation's ceo-inbox calls touched.
   describe('mailbox provenance on the extraction source (#2475)', () => {
     const turns = [{ role: 'user' as const, content: 'hello' }];
-    const payload = { conversationId: 'conv-prov', agentId: 'ceo-inbox', channelId: 'email', since: '2026-01-01T00:00:00Z', turns };
+    const payload = { conversationId: 'conv-prov', agentId: 'ceo-inbox', channelId: 'email', since: '2026-01-01T00:00:00Z', through: '2026-01-02T00:00:00Z', turns };
     const plain = 'system:checkpoint/conversation:conv-prov/agent:ceo-inbox/channel:email';
 
     function sources(): string[] {
@@ -334,7 +334,8 @@ describe('ConversationCheckpointProcessor', () => {
         stubs.bus, stubs.executionLayer, stubs.pool, stubs.logger, undefined, undefined, { findMailboxesForConversation: findMailboxes },
       ).register();
       await fireCheckpoint(stubs.subscribeHandlers, payload);
-      expect(findMailboxes).toHaveBeenCalledWith('conv-prov', '2026-01-01T00:00:00Z');
+      // Bounded by the batch: (since, through].
+      expect(findMailboxes).toHaveBeenCalledWith('conv-prov', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z');
       expect(sources()).toEqual([`${plain}/mailboxes:personal,work`, `${plain}/mailboxes:personal,work`]);
     });
 
@@ -344,7 +345,7 @@ describe('ConversationCheckpointProcessor', () => {
         stubs.bus, stubs.executionLayer, stubs.pool, stubs.logger, undefined, undefined, { findMailboxesForConversation: findMailboxes },
       ).register();
       await fireCheckpoint(stubs.subscribeHandlers, { ...payload, since: '' });
-      expect(findMailboxes).toHaveBeenCalledWith('conv-prov', undefined);
+      expect(findMailboxes).toHaveBeenCalledWith('conv-prov', undefined, '2026-01-02T00:00:00Z');
     });
 
     it('keeps the plain source when no mailbox was touched', async () => {

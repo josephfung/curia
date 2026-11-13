@@ -597,11 +597,12 @@ export class AuditLogRepo {
    * Reads `tool.result` rows of `ceo-inbox-*` tools for the conversation: the result's own
    * `mailbox`, and the `mailbox` each listed message carries. With `since` (the checkpoint's
    * watermark) only rows after it count, so provenance means "touched since the last
-   * checkpoint" and the scan is bounded. Rides idx_audit_log_conversation_timestamp, so the
-   * cost is the conversation's own rows in the window. Cheap provenance for checkpoint
-   * extraction only.
+   * checkpoint" and the scan is bounded. With `through` (the checkpoint batch's end, inclusive)
+   * a result that arrived after the batch was read does not count: its turn is not in the batch.
+   * Rides idx_audit_log_conversation_timestamp, so the cost is the conversation's own rows in
+   * the window. Cheap provenance for checkpoint extraction only.
    */
-  async findMailboxesForConversation(conversationId: string, since?: string): Promise<string[]> {
+  async findMailboxesForConversation(conversationId: string, since?: string, through?: string): Promise<string[]> {
     const result = await this.pool.query<{ mailbox: string }>(
       `SELECT DISTINCT m.mailbox
        FROM audit_log a
@@ -617,12 +618,13 @@ export class AuditLogRepo {
        ) m
        WHERE a.conversation_id = $1
          AND ($2::timestamptz IS NULL OR a.timestamp > $2::timestamptz)
+         AND ($3::timestamptz IS NULL OR a.timestamp <= $3::timestamptz)
          AND a.event_type = 'tool.result'
          AND a.payload->>'toolName' LIKE 'ceo-inbox-%'
          AND m.mailbox IS NOT NULL
          AND m.mailbox <> ''
        ORDER BY m.mailbox`,
-      [conversationId, since ?? null],
+      [conversationId, since ?? null, through ?? null],
     );
     return result.rows.map((r) => r.mailbox);
   }
