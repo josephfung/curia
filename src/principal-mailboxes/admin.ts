@@ -401,9 +401,11 @@ export class PrincipalMailboxAdmin {
         await this.mirrorDefaultFromVault(next);
       });
     }
-    // The legacy `default` send level was set for the migrated mailbox; if its rename never
-    // landed it must not outlive that mailbox and be inherited by a new sole one (R41).
-    if (this.deps.forgetLegacySendLevel) {
+    // The legacy `default` send level was set for the migrated mailbox (the only row with no
+    // triage start); if its rename never landed it must not outlive that mailbox and be inherited
+    // by a new sole one (R41, SF8). Removing any other mailbox leaves it alone. Its own step: a
+    // failure is logged and named, the rest still run, and boot reconciles the key again.
+    if (rec.triageStartAt === null && this.deps.forgetLegacySendLevel) {
       const forget = this.deps.forgetLegacySendLevel;
       await step('legacy_send_level', () => forget());
     }

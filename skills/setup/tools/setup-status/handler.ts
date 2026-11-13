@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import * as yaml from 'js-yaml';
 import type { ToolHandler, ToolContext, ToolResult, EmailChannelStatus, PrincipalMailboxReadiness } from '../../../../src/skills/types.js';
 import { ConfigStore } from '../../../../src/memory/config-store.js';
-import { DEFAULT_MAILBOX, readSendLevelValue } from '../../../../src/skills/principal-send/send-level.js';
+import { DEFAULT_MAILBOX, legacyDefaultMailbox, readSendLevelValue, type SendLevelMailbox } from '../../../../src/skills/principal-send/send-level.js';
 
 // ── Catalog types ──────────────────────────────────────────────────────────
 
@@ -255,19 +255,26 @@ export class SetupStatusHandler implements ToolHandler {
           const value = await configStore.get(c.namespace, c.key);
           let set = typeof value === 'string' && value.trim() !== '';
           if (set && c.valid_as === 'send_level') {
-            // A level counts only when "default" (not yet renamed) or a live mailbox's id names a
-            // valid one (#2475): readSendLevelValue's fallback for {} or junk is on_request, which
-            // no one chose.
-            let live: string[] = [];
-            try {
-              live = (await ctx.principalMailboxes?.list() ?? []).map((m) => m.id);
-            } catch (err) {
-              ctx.log.warn({ err }, 'setup-status: could not list mailboxes for the send level — counting the default key only');
+            // A level counts only when a live mailbox's id, or a `default` key while it still
+            // applies (the migrated sole mailbox, B5/SF6), names a valid one (#2475):
+            // readSendLevelValue's fallback for {} or junk is on_request, which no one chose.
+            if (readSendLevelValue(value, '').malformed) {
+              // Not a JSON object: guarded before any parse here (SF13). Never the value itself.
+              ctx.log.warn({ namespace: c.namespace, key: c.key }, 'setup-status: the send level setting is malformed — reporting pending');
+              set = false;
+            } else {
+              // Unknown (no registry wired, or the list failed): the default key is counted.
+              let live: SendLevelMailbox[] | undefined;
+              try {
+                if (ctx.principalMailboxes) live = await ctx.principalMailboxes.list();
+              } catch (err) {
+                ctx.log.warn({ errName: err instanceof Error ? err.name : typeof err }, 'setup-status: could not list mailboxes for the send level — counting the default key only');
+              }
+              const legacy = live === undefined ? null : legacyDefaultMailbox(live);
+              const keys = Object.keys(JSON.parse(value as string) as object);
+              set = keys.some((k) => (k === DEFAULT_MAILBOX ? live === undefined || legacy !== null : live?.some((m) => m.id === k) === true)
+                && !readSendLevelValue(value, k).malformed);
             }
-            const parsed = JSON.parse(value as string) as unknown;
-            const keys = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? Object.keys(parsed) : [];
-            set = keys.some((k) => (k === DEFAULT_MAILBOX || live.includes(k))
-              && !readSendLevelValue(value, k).malformed);
           }
           configSet.set(id, set);
         } catch (err) {

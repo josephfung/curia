@@ -1237,19 +1237,19 @@ async function main(): Promise<void> {
         });
       })()
     : undefined;
-  // The send-level rename follows the migration wherever it returns 'migrated' (R41): here at boot
+  // The legacy send-level key is reconciled after every migration run (B1, S-I1): here at boot
   // (the config store exists later; flushed there) and in the health retry.
   let sendingKeyStore: { get(ns: string, key: string): Promise<string | null>; set(ns: string, key: string, v: string): Promise<unknown> } | undefined;
   const sendingKeyRename = {
     setStore: (st: typeof sendingKeyStore) => { sendingKeyStore = st; },
-    run: retryMailboxMigration
-      ? renameSendingKeyAfterMigration({
-          migrate: retryMailboxMigration,
-          liveIds: async () => (await principalMailboxes.list()).map((m) => m.id),
-          store: () => sendingKeyStore,
-          logger,
-        })
-      : Object.assign(async () => 'nothing' as const, { flush: async () => {} }),
+    // Without an API key there is no migration to run, but the key is still reconciled at flush.
+    run: renameSendingKeyAfterMigration({
+      migrate: retryMailboxMigration ?? (async () => 'nothing' as const),
+      mailboxes: () => principalMailboxes.list(),
+      isFallbackActive: () => principalMailboxes.isFallbackActive(),
+      store: () => sendingKeyStore,
+      logger,
+    }),
   };
   if (retryMailboxMigration) {
     try {
@@ -2100,8 +2100,8 @@ async function main(): Promise<void> {
       if (!def) throw new Error('No default principal mailbox');
       return def.id;
     };
-    // The pre-#2475 `default` send-level key was renamed right after the flat-mailbox migration
-    // (renameSendingKeyAfterMigration, R41); at boot the rename waits for this store.
+    // The pre-#2475 `default` send-level key is renamed to the migrated mailbox, or dropped once it
+    // is gone (renameSendingKeyAfterMigration: B1, S-I1); at boot that waits for this store.
     sendingKeyRename.setStore(sendLevelStore);
     await sendingKeyRename.run.flush();
     outboundGateway = new OutboundGateway({
@@ -2148,7 +2148,7 @@ async function main(): Promise<void> {
       mailboxAddress: async (id) => (await principalMailboxes.list()).find((m) => m.id === id)?.address,
       mailboxLabel: async (id) => (await principalMailboxes.list()).find((m) => m.id === id)?.label,
       ...(sendLevelStore
-        ? { readSendLevel: createSendLevelReader({ get: (ns, k) => sendLevelStore.get(ns, k), logger, liveMailboxIds: async () => (await principalMailboxes.list()).map((m) => m.id) }) }
+        ? { readSendLevel: createSendLevelReader({ get: (ns, k) => sendLevelStore.get(ns, k), logger, liveMailboxes: () => principalMailboxes.list() }) }
         : {}),
       // Provenance rows from before #2475 carry no mailbox and belong to the default mailbox.
       defaultMailboxId,

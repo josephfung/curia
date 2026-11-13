@@ -14,6 +14,7 @@ import { KnowledgeGraphStore } from '../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../src/memory/embedding.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
 import { createSilentLogger } from '../../src/logger.js';
+import { mailboxView, stubPrincipalMailboxes } from '../_shared/principal-mailboxes-test-helpers.js';
 
 function makeEntityMemory(overrides: Record<string, unknown> = {}) {
   return {
@@ -653,5 +654,51 @@ describe('ConfigStoreHandler exact-key semantics (real validator)', () => {
     const anchors = await entityMemory.findEntities('config:debrief');
     const facts = await entityMemory.getFacts(anchors[0]!.id);
     expect(facts.map((f) => f.properties.key).sort()).toEqual([keyA, keyB].sort());
+  });
+});
+
+// #2475 SF5/B1: ceo_inbox/sending is keyed by live mailbox id; the tool names the live ones.
+describe('ConfigStoreHandler — ceo_inbox/sending', () => {
+  const two = stubPrincipalMailboxes({ mailboxes: [mailboxView('work', 'Work', 'w@example.com', true), mailboxView('personal', 'Personal', 'p@example.com')] });
+  const store = (value: string, principalMailboxes: ToolContext['principalMailboxes'] = two, em = makeEntityMemory()) =>
+    new ConfigStoreHandler().execute(makeCtx(em, { action: 'store', namespace: 'ceo_inbox', key: 'sending', value }, { principalMailboxes }));
+
+  it('refuses a key that is not a live mailbox, naming the live ids and labels, and stores nothing', async () => {
+    const em = makeEntityMemory();
+    const r = await store('{"wrk":"routine"}', two, em);
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error).toContain('Not a connected mailbox: wrk');
+      expect(r.error).toContain('work (Work), personal (Personal)');
+    }
+    expect(em.storeFact).not.toHaveBeenCalled();
+  });
+
+  it('refuses a legacy default key once there are two mailboxes', async () => {
+    expect((await store('{"default":"routine"}')).success).toBe(false);
+  });
+
+  it('stores a valid per-mailbox value and returns the live mailboxes', async () => {
+    const r = await store('{"work":"routine","personal":"on_request"}');
+    expect(r).toMatchObject({ success: true, data: { stored: true, mailboxes: [{ id: 'work', label: 'Work' }, { id: 'personal', label: 'Personal' }] } });
+  });
+
+  it('refuses the write when the mailbox list cannot be read (nothing stored)', async () => {
+    const broken = { ...two, list: async () => { throw new Error('db down'); } } as unknown as ToolContext['principalMailboxes'];
+    const em = makeEntityMemory();
+    const r = await store('{"work":"routine"}', broken, em);
+    expect(r.success).toBe(false);
+    expect(em.storeFact).not.toHaveBeenCalled();
+  });
+
+  it('a read of the key names the live mailboxes', async () => {
+    const r = await new ConfigStoreHandler().execute(makeCtx(undefined, { action: 'retrieve', namespace: 'ceo_inbox', key: 'sending' }, { principalMailboxes: two }));
+    expect(r).toMatchObject({ success: true, data: { found: false, mailboxes: [{ id: 'work', label: 'Work' }, { id: 'personal', label: 'Personal' }] } });
+  });
+
+  it('other keys are untouched by the check', async () => {
+    const r = await new ConfigStoreHandler().execute(makeCtx(undefined, { action: 'store', namespace: 'ceo_inbox', key: 'decision_tagging', value: '{"enabled":true}' }, { principalMailboxes: two }));
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data).not.toHaveProperty('mailboxes');
   });
 });
