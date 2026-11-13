@@ -779,3 +779,28 @@ describe('ConfigStoreHandler — code-owned ceo_inbox state and the triage caden
     expect(em.storeFact).not.toHaveBeenCalled();
   });
 });
+
+// I1 (#2475 re-review): the knowledge graph matches anchor labels case-insensitively, so a
+// namespace spelled differently must not slip past R65's refusal or the cadence validation.
+describe('ConfigStoreHandler — ceo_inbox checks ignore namespace case and padding (R65, I1)', () => {
+  const directory: NonNullable<ToolContext['mailboxDirectory']> = {
+    list: async () => [mailboxView('work', 'Work', 'w@example.com', true)].map(({ id, label, triageStartAt }) => ({ id, label, triageStartAt })),
+  };
+  const store = (namespace: string, key: string, value: string, em = makeEntityMemory()) =>
+    new ConfigStoreHandler().execute(makeCtx(em, { action: 'store', namespace, key, value }, { mailboxDirectory: directory }));
+
+  it.each(['CEO_INBOX', ' Ceo_Inbox '])('refuses code-owned state under %j', async (ns) => {
+    const em = makeEntityMemory();
+    const r = await store(ns, 'triage.batches.2026-11-12', '0', em);
+    expect(r.success).toBe(false);
+    expect(em.storeFact).not.toHaveBeenCalled();
+  });
+
+  it.each(['CEO_INBOX', ' Ceo_Inbox '])('validates the cadence under %j', async (ns) => {
+    const em = makeEntityMemory();
+    const r = await store(ns, 'triage', '{"work":"every 7m"}', em);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('Not a valid cadence');
+    expect(em.storeFact).not.toHaveBeenCalled();
+  });
+});
