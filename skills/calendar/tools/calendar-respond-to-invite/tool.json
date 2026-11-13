@@ -24,7 +24,6 @@
     "releaseWarnings": "array (non-fatal hold cleanup failures)",
     "warnings": "array (non-fatal RSVP/fetch/comment warnings)",
     "mailbox": "string? (the account that answered, when several are connected)",
-    "needs_mailbox": "boolean? (true: nothing was sent; call again with the arrival mailbox)",
     "found_by_ical_uid": "boolean? (true: answered on the arrival mailbox's own copy, whose calendarId and eventId are returned)"
   },
   "permissions": [],
