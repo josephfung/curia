@@ -36,6 +36,9 @@ export interface HealthResponse {
      */
     signal_voice: CheckResult;
     scheduler: CheckResult;
+    /** Inbox triage heartbeat (#2475, R67): ticks, unread probes, stuck mailboxes, a suspended
+     *  drain. Skipped when the heartbeat is not running (no ceo-inbox, setup mode). */
+    principal_mailbox_triage: CheckResult;
   };
 }
 

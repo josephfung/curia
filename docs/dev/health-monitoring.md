@@ -24,7 +24,8 @@ Curia exposes a three-state health endpoint and a daily credential canary that f
     "sms":       "ok | fail | skipped",
     "voice":     "ok | fail | skipped",
     "signal_voice": "ok | fail | skipped",
-    "scheduler": "ok | fail"
+    "scheduler": "ok | fail",
+    "principal_mailbox_triage": "ok | fail | skipped"
   }
 }
 ```
@@ -53,6 +54,7 @@ Curia exposes a three-state health endpoint and a daily credential canary that f
 | `mcp.<server>` | `ping()` per enabled server (3s budget each, run concurrently) | Server disabled, so never attempted at boot |
 | `nylas_calendar` | `listCalendars()` via the principal calendar grant | Calendar not configured |
 | `scheduler` | Watchdog: last tick within `schedulerMaxTickS`, with a boot grace window | Never skipped |
+| `principal_mailbox_triage` | The inbox heartbeat's own verdict: a successful tick within 45 min, no mailbox whose unread check failed 4 ticks running or whose triage made no progress 4 calls running, and no drain wake suspended by the circuit breaker | The heartbeat is not running (no ceo-inbox agent, or setup-required mode) |
 
 **Three separate voice-adjacent probes, deliberately.** `signal` covers Signal *messaging*
 (the JSON-RPC socket), `voice` covers *console* WebRTC (LiveKit), and `signal_voice` covers
@@ -75,7 +77,7 @@ belongs in a periodic canary instead. A health check must never cost money or em
 ### Which checks are critical vs. non-critical
 
 **Critical (down → 503):** `db`, `bus`
-**Non-critical (degraded → 200):** `signal`, `email`, `browser`, `mcp.*`, `nylas_calendar`, `slack`, `sms`, `voice`, `signal_voice`, `scheduler`
+**Non-critical (degraded → 200):** `signal`, `email`, `browser`, `mcp.*`, `nylas_calendar`, `slack`, `sms`, `voice`, `signal_voice`, `scheduler`, `principal_mailbox_triage`
 
 Rationale: a dead Signal socket should not page as a full outage when email still works.
 

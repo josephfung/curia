@@ -201,6 +201,10 @@ export async function triageList(ctx: ToolContext, targets: Target[], curiaEmail
     }));
     scans.sort((a, b) => ids.indexOf(a.target.mailbox.id) - ids.indexOf(b.target.mailbox.id));
 
+    // No-progress count (R67): a due mailbox that could not be read counts one, before an
+    // all-failed call returns. The heartbeat backs a mailbox that keeps failing off.
+    for (const e of errors) await svc.state.setNoProgress(e.mailbox, (await svc.state.noProgress(e.mailbox)) + 1);
+
     if (dueTargets.length > 0 && scans.length === 0) {
       return { success: false, error: `Failed to list principal inbox messages for triage (${errors.map((e) => `${e.mailbox_label}: ${e.error}`).join('; ')})` };
     }
@@ -230,6 +234,14 @@ export async function triageList(ctx: ToolContext, targets: Target[], curiaEmail
 
     for (const s of scans) {
       s.more = s.queue.length > 0 || (!s.exhausted && s.scannedAny);
+    }
+
+    // No-progress count (R67), continued: a capped scan that kept nothing counts one; any other
+    // outcome resets it.
+    for (const s of scans) {
+      const id = s.target.mailbox.id;
+      if (s.capped && !s.scannedAny) await svc.state.setNoProgress(id, (await svc.state.noProgress(id)) + 1);
+      else if ((await svc.state.noProgress(id)) > 0) await svc.state.setNoProgress(id, 0);
     }
 
     // Drain bookkeeping (R52).
