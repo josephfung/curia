@@ -2,12 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   CeoInboxSentObserveHandler,
   CONFIG_NAMESPACE,
-  WATERMARK_KEY,
-  IDLE_BACKOFF_KEY,
+  WATERMARK_KEY as GLOBAL_WATERMARK_KEY,
+  IDLE_BACKOFF_KEY as GLOBAL_IDLE_BACKOFF_KEY,
   PENDING_DIFFS_PATH,
-  BACKFILL_BEFORE_KEY,
-  BACKFILL_TARGET_KEY,
-  HELD_SINCE_KEY,
+  BACKFILL_BEFORE_KEY as GLOBAL_BACKFILL_BEFORE_KEY,
+  BACKFILL_TARGET_KEY as GLOBAL_BACKFILL_TARGET_KEY,
+  HELD_SINCE_KEY as GLOBAL_HELD_SINCE_KEY,
   MAX_JUDGE_PAIRS,
   JUDGE_CHUNK_SIZE,
   SHADOW_SEND_WINDOW_SEC,
@@ -18,8 +18,24 @@ import { VOICE_LEARNING_DOC_TYPE } from '../../../_shared/voice-learning-capture
 import { SHADOW_DOC_TYPE, shadowDraftPath, SHADOW_SCRATCH_PREFIX } from '../../../_shared/shadow-draft.js';
 import type { ActionLogInsert } from '../../../../src/autonomy/action-log-types.js';
 import type { InfraLlm } from '../../../../src/skills/infra-llm.js';
-import { COMPLETION_CANDIDATES_KEY, ASKED_TASK_IDS_KEY, MATCHED_DRAFT_IDS_KEY } from '../../../_shared/learning-state.js';
-import { stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
+import {
+  COMPLETION_CANDIDATES_KEY as GLOBAL_COMPLETION_CANDIDATES_KEY,
+  ASKED_TASK_IDS_KEY as GLOBAL_ASKED_TASK_IDS_KEY,
+  MATCHED_DRAFT_IDS_KEY as GLOBAL_MATCHED_DRAFT_IDS_KEY,
+} from '../../../_shared/learning-state.js';
+import { scopedKey } from '../../../_shared/mailbox-state.js';
+import { stubPrincipalMailboxes, mailboxView } from '../../../_shared/principal-mailboxes-test-helpers.js';
+
+// The default stub mailbox is `work`: its state lives under per-mailbox keys (#2475, D8).
+const WORK = { id: 'work', legacy: true };
+const WATERMARK_KEY = scopedKey(WORK, GLOBAL_WATERMARK_KEY);
+const IDLE_BACKOFF_KEY = scopedKey(WORK, GLOBAL_IDLE_BACKOFF_KEY);
+const BACKFILL_BEFORE_KEY = scopedKey(WORK, GLOBAL_BACKFILL_BEFORE_KEY);
+const BACKFILL_TARGET_KEY = scopedKey(WORK, GLOBAL_BACKFILL_TARGET_KEY);
+const HELD_SINCE_KEY = scopedKey(WORK, GLOBAL_HELD_SINCE_KEY);
+const COMPLETION_CANDIDATES_KEY = scopedKey(WORK, GLOBAL_COMPLETION_CANDIDATES_KEY);
+const ASKED_TASK_IDS_KEY = scopedKey(WORK, GLOBAL_ASKED_TASK_IDS_KEY);
+const MATCHED_DRAFT_IDS_KEY = scopedKey(WORK, GLOBAL_MATCHED_DRAFT_IDS_KEY);
 
 function makeEntityMemory(seed: Record<string, string> = {}): EntityMemory & {
   __values: Map<string, string>;
@@ -94,6 +110,10 @@ function buildCtx(overrides: {
   nowMs?: number;
   infraLlm?: InfraLlm;
   withActionLogRepo?: boolean;
+  /** Live mailboxes for the registry stub (default: one migrated mailbox `work`). Grant is `grant-<id>`. */
+  mailboxes?: ReturnType<typeof mailboxView>[];
+  fallbackActive?: boolean;
+  input?: Record<string, unknown>;
 } = {}): ToolContext & {
   __mem: ReturnType<typeof makeEntityMemory>;
   __docs: Map<string, { path: string; type: string; frontmatter: Record<string, unknown>; body: string; version: number }>;
@@ -164,12 +184,17 @@ function buildCtx(overrides: {
 
   const ctx = {
     input: {
+      ...(overrides.input ?? {}),
       ...(overrides.force ? { force: true } : {}),
       ...(typeof overrides.nowMs === 'number' ? { nowMs: overrides.nowMs } : {}),
     },
     agentId: 'ceo-inbox',
     taskEventId: 'task-evt-1',
-    principalMailboxes: stubPrincipalMailboxes({ grantId: 'grant', apiKey: 'key' }),
+    principalMailboxes: stubPrincipalMailboxes({
+      ...(overrides.mailboxes ? { mailboxes: overrides.mailboxes, grantId: (id: string) => `grant-${id}` } : { grantId: 'grant' }),
+      ...(overrides.fallbackActive ? { fallbackActive: true } : {}),
+      apiKey: 'key',
+    }),
     entityMemory: mem as unknown as EntityMemory,
     workingDocs,
     taskRepo: {
@@ -2312,5 +2337,140 @@ describe('#2474 Curia sends from the principal mailbox are not the principal\'s 
     expect(result.success).toBe(true);
     expect((result as { data: { draft_matches: number } }).data.draft_matches).toBe(1);
     expect(ctx.log.warn).toHaveBeenCalled();
+  });
+});
+
+describe('CeoInboxSentObserveHandler — independent state per mailbox (#2475, D8)', () => {
+  let handler: CeoInboxSentObserveHandler;
+  let mockFetch: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    handler = new CeoInboxSentObserveHandler();
+    mockFetch = vi.spyOn(globalThis, 'fetch');
+  });
+  afterEach(() => mockFetch.mockRestore());
+
+  // `work` is the migrated mailbox (no triage start); `personal` was added later.
+  const TWO = [
+    mailboxView('work', 'Work', 'ceo@work.example.com', true),
+    { ...mailboxView('personal', 'Personal', 'ceo@personal.example.com'), triageStartAt: new Date('2026-11-01T00:00:00Z') },
+  ];
+  const sent = (id: string, date: number) => ({
+    id, thread_id: 'thread-1', subject: 'Re: Hello', from: [{ email: 'ceo@example.com' }],
+    to: [{ email: 'alice@example.com' }], cc: [], snippet: 'Thanks', date, unread: false, folders: ['SENT'], attachments: [],
+  });
+  /** Per-grant list responses; a grant mapped to a number answers with that HTTP error. */
+  function serve(byGrant: Record<string, Array<ReturnType<typeof sent>> | number>) {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      const grant = /\/grants\/([^/]+)/.exec(u)![1]!;
+      const answer = byGrant[grant];
+      if (typeof answer === 'number') return new Response('boom', { status: answer });
+      const list = answer ?? [];
+      const single = /\/messages\/([^/?]+)/.exec(u);
+      if (single) {
+        const m = list.find((x) => x.id === single[1]);
+        return new Response(JSON.stringify({ data: { ...m, body: '<p>Body</p>', bcc: [], labels: [] } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ data: list }), { status: 200 });
+    });
+  }
+  const urlsFor = (grant: string) => mockFetch.mock.calls.map((c: unknown[]) => String(c[0])).filter((u: string) => u.includes(`/grants/${grant}/messages?`));
+  const snapshot = (extra: Record<string, unknown> = {}) => ({
+    path: '/scratch/voice-learning/draft-1.md',
+    type: VOICE_LEARNING_DOC_TYPE,
+    frontmatter: {
+      draft_id: 'draft-1', thread_id: 'thread-1', subject: 'Re: Hello',
+      recipients: { to: [{ email: 'alice@example.com' }], cc: [] }, created_at: '2024-07-03T00:00:00.000Z', ...extra,
+    },
+    body: 'Thanks Alice.',
+  });
+
+  it('watermarks are independent per mailbox', async () => {
+    serve({ 'grant-work': [sent('w1', 1_720_000_200)], 'grant-personal': [sent('p1', 1_730_000_500)] });
+    const ctx = buildCtx({ mailboxes: TWO, force: true, nowMs: 1_740_000_000_000 });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const values = ctx.__mem.__values;
+    expect(values.get('sent_observe.work.last_seen_at')).toBe('1720000201');
+    expect(values.get('sent_observe.personal.last_seen_at')).toBe('1730000501');
+    // The global keys are neither read nor written.
+    expect(values.has('sent_observe.last_seen_at')).toBe(false);
+    const data = (result as { data: { messages_scanned: number; mailboxes: Array<{ mailbox: string }> } }).data;
+    expect(data.messages_scanned).toBe(2);
+    expect(data.mailboxes.map((x) => x.mailbox)).toEqual(['work', 'personal']);
+  });
+
+  it('a failing mailbox does not move the other, and its own watermark stays', async () => {
+    serve({ 'grant-work': 403, 'grant-personal': [sent('p1', 1_730_000_500)] });
+    const ctx = buildCtx({ mailboxes: TWO, force: true, nowMs: 1_740_000_000_000, seed: { 'sent_observe.work.last_seen_at': '1720000000' } });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const data = (result as { data: { mailbox_errors: Array<{ mailbox: string; error: string }> } }).data;
+    expect(data.mailbox_errors.map((e) => e.mailbox)).toEqual(['work']);
+    expect(ctx.__mem.__values.get('sent_observe.work.last_seen_at')).toBe('1720000000');
+    expect(ctx.__mem.__values.get('sent_observe.personal.last_seen_at')).toBe('1730000501');
+    // Logged without the raw error (a Nylas error can carry the grant id).
+    const errorCalls = (ctx.log.error as ReturnType<typeof vi.fn>).mock.calls;
+    expect(errorCalls.length).toBeGreaterThan(0);
+    for (const call of errorCalls) expect(call[0]).not.toHaveProperty('err');
+  });
+
+  it('every mailbox failing is a failure result naming each mailbox', async () => {
+    serve({ 'grant-work': 403, 'grant-personal': 403 });
+    const result = await handler.execute(buildCtx({ mailboxes: TWO, force: true }));
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toMatch(/work:.*personal:/);
+  });
+
+  it('honours the pre-migration global keys for the migrated mailbox only', async () => {
+    serve({ 'grant-work': [], 'grant-personal': [] });
+    const ctx = buildCtx({ mailboxes: TWO, force: true, nowMs: 1_740_000_000_000, seed: { 'sent_observe.last_seen_at': '1720000101' } });
+    await handler.execute(ctx);
+    expect(urlsFor('grant-work')[0]).toContain('received_after=1720000101');
+    expect(urlsFor('grant-personal')[0]).not.toContain('received_after');
+  });
+
+  it('writes the migrated mailbox\'s state under its own keys, which then win over the global ones', async () => {
+    serve({ 'grant-work': [sent('w1', 1_720_000_200)] });
+    const ctx = buildCtx({ mailboxes: [TWO[0]!], force: true, nowMs: 1_740_000_000_000, seed: { 'sent_observe.last_seen_at': '1720000101' } });
+    await handler.execute(ctx);
+    expect(ctx.__mem.__values.get('sent_observe.work.last_seen_at')).toBe('1720000201');
+    expect(ctx.__mem.__values.get('sent_observe.last_seen_at')).toBe('1720000101');
+    mockFetch.mockClear();
+    serve({ 'grant-work': [] });
+    await handler.execute(ctx);
+    expect(urlsFor('grant-work')[0]).toContain('received_after=1720000201');
+  });
+
+  it('keeps the global keys while the deferred fallback is served', async () => {
+    serve({ 'grant-mailbox': [sent('w1', 1_720_000_200)] });
+    const ctx = buildCtx({
+      mailboxes: [mailboxView('mailbox', 'Mailbox', '', true)], fallbackActive: true, force: true, nowMs: 1_740_000_000_000,
+    });
+    await handler.execute(ctx);
+    expect(ctx.__mem.__values.get('sent_observe.last_seen_at')).toBe('1720000201');
+    expect(ctx.__mem.__values.has('sent_observe.mailbox.last_seen_at')).toBe(false);
+  });
+
+  it('matches a draft snapshot within its mailbox only; one with no mailbox is the migrated mailbox\'s', async () => {
+    serve({ 'grant-work': [sent('m1', 1_720_000_200)], 'grant-personal': [sent('m1', 1_720_000_200)] });
+    const forPersonal = buildCtx({ mailboxes: TWO, force: true, nowMs: 1_740_000_000_000, snapshots: [snapshot({ mailbox: 'personal' })] });
+    const r1 = (await handler.execute(forPersonal)) as { data: { mailboxes: Array<{ mailbox: string; draft_matches: number }> } };
+    expect(r1.data.mailboxes.map((x) => [x.mailbox, x.draft_matches])).toEqual([['work', 0], ['personal', 1]]);
+
+    const legacy = buildCtx({ mailboxes: TWO, force: true, nowMs: 1_740_000_000_000, snapshots: [snapshot()] });
+    const r2 = (await handler.execute(legacy)) as { data: { mailboxes: Array<{ mailbox: string; draft_matches: number }> } };
+    expect(r2.data.mailboxes.map((x) => [x.mailbox, x.draft_matches])).toEqual([['work', 1], ['personal', 0]]);
+  });
+
+  it('a mailbox argument runs that mailbox only, and an unknown one is an error', async () => {
+    serve({ 'grant-work': [sent('w1', 1_720_000_200)], 'grant-personal': [sent('p1', 1_730_000_500)] });
+    const ctx = buildCtx({ mailboxes: TWO, force: true, nowMs: 1_740_000_000_000, input: { mailbox: 'personal' } });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect(urlsFor('grant-work')).toHaveLength(0);
+    expect(ctx.__mem.__values.has('sent_observe.work.last_seen_at')).toBe(false);
+    const bad = await handler.execute(buildCtx({ mailboxes: TWO, force: true, input: { mailbox: 'nope' } }));
+    expect(bad.success).toBe(false);
   });
 });

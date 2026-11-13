@@ -507,3 +507,42 @@ describe('learning-state config accessors', () => {
     });
   });
 });
+
+describe('learning-state per-mailbox keys (#2475, D8)', () => {
+  const work = { id: 'work', legacy: true };
+  const personal = { id: 'personal', legacy: false };
+  const map = { t1: { messageId: 'm1', confidence: 'high', reason: 'r', sentAt: 's', subject: 'x', recipients: ['a@example.com'], taskTitle: 'T' } } as CompletionCandidateMap;
+
+  it('stores the per-mailbox sets and queue under the mailbox keys and keeps the others apart', async () => {
+    const { store, values } = fakeStore();
+    await writeCompletionCandidates(store, map, work);
+    await writeIdSet(store, ASKED_TASK_IDS_KEY, new Set(['t1']), personal);
+    expect(values.has('sent_observe.work.completion_candidates')).toBe(true);
+    expect(values.has('sent_observe.personal.asked_task_ids')).toBe(true);
+    expect(values.has(COMPLETION_CANDIDATES_KEY)).toBe(false);
+    expect(await readCompletionCandidates(store, undefined, personal)).toEqual({});
+    expect([...(await readIdSet(store, ASKED_TASK_IDS_KEY, undefined, work))]).toEqual([]);
+  });
+
+  it('lets only the migrated mailbox read the global key, and its own key wins once written', async () => {
+    const { store } = fakeStore({ [ASKED_TASK_IDS_KEY]: '["g1"]', [COMPLETION_CANDIDATES_KEY]: JSON.stringify(map) });
+    expect([...(await readIdSet(store, ASKED_TASK_IDS_KEY, undefined, work))]).toEqual(['g1']);
+    expect([...(await readIdSet(store, ASKED_TASK_IDS_KEY, undefined, personal))]).toEqual([]);
+    expect(Object.keys(await readCompletionCandidates(store, undefined, work))).toEqual(['t1']);
+    await writeIdSet(store, ASKED_TASK_IDS_KEY, new Set(), work);
+    expect([...(await readIdSet(store, ASKED_TASK_IDS_KEY, undefined, work))]).toEqual([]);
+  });
+
+  it('treats a cleared (migrated) global key as unset', async () => {
+    const { store } = fakeStore({ [ASKED_TASK_IDS_KEY]: '' });
+    expect([...(await readIdSet(store, ASKED_TASK_IDS_KEY, undefined, work))]).toEqual([]);
+  });
+
+  it('keeps the digest, its high-water mark and the voice proposal global whatever the scope', async () => {
+    const { store, values } = fakeStore();
+    await writeCompletionDigest(store, {});
+    await writeDigestHighWater(store, 4);
+    await writeVoiceProposal(store, null);
+    expect([...values.keys()].sort()).toEqual([COMPLETION_DIGEST_HIGH_WATER_KEY, COMPLETION_DIGEST_KEY, VOICE_PROPOSAL_KEY].sort());
+  });
+});

@@ -2,6 +2,7 @@
 // Kept free of I/O so unit tests can cover draft-match and task-match heuristics.
 
 import type { PrincipalSendEntry } from '../../src/skills/principal-send/send-ledger.js';
+import { recordBelongsTo, type MailboxStateScope } from './mailbox-state.js';
 
 export interface SentMessageLike {
   id: string;
@@ -26,6 +27,8 @@ export interface DraftSnapshotLike {
   body: string;
   /** ISO timestamp when Curia captured the draft. */
   createdAt: string;
+  /** The mailbox the draft was created in (#2475). Absent on a snapshot written before the registry. */
+  mailbox?: string;
 }
 
 export interface TaskMatchCandidate {
@@ -272,14 +275,20 @@ export const CURIA_SEND_WINDOW_SEC = 600;
  * id was never recorded — the same thread, an intersecting recipient set (case-insensitive) and a
  * send landing within `windowSec` after the entry's `at`. A principal reply on the same thread an
  * hour later is outside the window and still counts as theirs. The fallback skips `held` entries.
+ *
+ * With a `scope` only that mailbox's entries count (#2475): a send recorded for another mailbox
+ * never claims this mailbox's message, and a legacy entry with no mailbox claims the migrated
+ * mailbox's messages only. Without a scope every entry counts (single global scope).
  */
 export function isCuriaSend(
   msg: { id: string; threadId: string; to: Array<{ email: string }>; cc: Array<{ email: string }>; date: number },
   entries: readonly PrincipalSendEntry[],
+  scope?: MailboxStateScope,
   windowSec: number = CURIA_SEND_WINDOW_SEC,
 ): boolean {
   let msgRecipients: Set<string> | null = null;
   for (const entry of entries) {
+    if (scope && !recordBelongsTo(scope, entry.mailbox)) continue;
     if (entry.messageId !== undefined && entry.messageId === msg.id) return true;
     // Only an attempt that went (or may have gone) out can claim a message by thread and time. A
     // held entry sent nothing, so the principal's own reply after it is theirs (#2474 PR 2).
@@ -298,11 +307,12 @@ export function isCuriaSend(
 }
 
 /** Format a (draft, sent) pair for the rolling evidence doc. */
-export function formatDiffBlock(match: DraftMatch, sentBody: string): string {
+export function formatDiffBlock(match: DraftMatch, sentBody: string, mailbox?: string): string {
   return [
     '',
     `## Diff — draft ${match.draftId} ↔ sent ${match.messageId}`,
     '',
+    ...(mailbox ? [`- mailbox: ${mailbox}`] : []),
     `- thread_id: ${match.threadId || '(none)'}`,
     `- sent_at: ${match.sentAt}`,
     `- subject: ${match.sentSubject}`,

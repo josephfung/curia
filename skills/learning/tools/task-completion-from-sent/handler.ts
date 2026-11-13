@@ -24,6 +24,7 @@ import {
   type CompletionDigestMap,
   type CompletionDigestItem,
 } from '../../../_shared/learning-state.js';
+import { resolveStateScopes } from '../../../_shared/mailbox-state.js';
 import { buildCompletionDigestNotification } from '../../../_shared/learning-digest.js';
 import { notifyLearningProposal } from '../../../_shared/learning-notify.js';
 
@@ -62,7 +63,16 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
     const classify = (text: string) => ctx.sensitivityClassifier!.classify(text, {});
 
     const store = new ConfigStore(ctx.entityMemory, ctx.log);
-    const candidateMap = await readCompletionCandidates(store, ctx.log);
+    // Candidates queue per mailbox (#2475, D8); a task is completed from whichever mailbox matched it.
+    // A task queued in two mailboxes is one candidate (the first scope's), and consuming it clears both.
+    const scopes = await resolveStateScopes(ctx);
+    const perScope = await Promise.all(
+      scopes.map(async (scope) => ({ scope, map: await readCompletionCandidates(store, ctx.log, scope) })),
+    );
+    const candidateMap: CompletionCandidateMap = {};
+    for (const { map } of perScope) {
+      for (const [taskId, c] of Object.entries(map)) if (!(taskId in candidateMap)) candidateMap[taskId] = c;
+    }
     const candidates = Object.entries(candidateMap).map(([taskId, c]) => ({ taskId, ...c }));
     if (candidates.length === 0) {
       return { success: true, data: { auto_completed: 0, queued_confirm: 0, skipped: 0 } };
@@ -283,7 +293,10 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
     }
 
     if (digestStored && Object.keys(remaining).length !== Object.keys(candidateMap).length) {
-      await writeCompletionCandidates(store, remaining);
+      for (const { scope, map } of perScope) {
+        const kept = Object.fromEntries(Object.entries(map).filter(([taskId]) => taskId in remaining));
+        if (Object.keys(kept).length !== Object.keys(map).length) await writeCompletionCandidates(store, kept, scope);
+      }
     }
 
     // Surface this run's newly produced items to the principal the moment they're durably written (#1466).

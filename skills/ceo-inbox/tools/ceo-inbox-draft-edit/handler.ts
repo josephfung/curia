@@ -361,6 +361,7 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
         to: draft.to,
         cc: draft.cc,
         body: snapshotBody,
+        mailbox: picked.at.mailbox.id,
       }).catch((err) =>
         ctx.log.error({ err }, 'ceo-inbox-draft-edit: voice snapshot capture rejected'),
       );
@@ -483,6 +484,7 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
       to: created.to,
       cc: created.cc,
       body: args.markdownBody ?? htmlToPlainText(body),
+      mailbox: target.mailbox.id,
     }).catch((err) => log.error({ ...grantSafeErrorFields(err) }, 'ceo-inbox-draft-edit: voice snapshot capture rejected'));
 
     let warning: string | undefined;

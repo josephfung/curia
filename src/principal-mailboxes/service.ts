@@ -57,6 +57,8 @@ export interface SkillPrincipalMailboxes {
   list(): Promise<PrincipalMailboxView[]>;
   get(id: string): Promise<PrincipalMailboxView>;
   defaultMailbox(): Promise<PrincipalMailboxView | null>;
+  /** True while the deferred-migration fallback is served (no registry rows): per-mailbox state keeps the global keys. */
+  isFallbackActive(): Promise<boolean>;
   principalEmailAddresses(): Promise<string[]>;
   /** The Nylas SDK client for one live mailbox. */
   gatewayClient(id: string): Promise<NylasClient>;
@@ -214,6 +216,7 @@ export class PrincipalMailboxes {
       list: () => this.list(),
       get: (id) => this.get(id),
       defaultMailbox: () => this.defaultMailbox(),
+      isFallbackActive: () => this.isFallbackActive(),
       principalEmailAddresses: () => this.principalEmailAddresses(),
       gatewayClient: (id) => this.gatewayClient(id),
       ceoClient: (id, log, budget) => this.ceoClient(id, log, budget),

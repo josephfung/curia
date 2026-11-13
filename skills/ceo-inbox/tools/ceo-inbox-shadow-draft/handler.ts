@@ -1,5 +1,6 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { checkMailboxInput } from '../../../_shared/principal-mailbox-client.js';
+import { checkMailboxInput, readMailboxInput } from '../../../_shared/principal-mailbox-client.js';
+import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 import { shadowDraftPath, SHADOW_DOC_TYPE } from '../../../_shared/shadow-draft.js';
 
 export class CeoInboxShadowDraftHandler implements ToolHandler {
@@ -21,6 +22,19 @@ export class CeoInboxShadowDraftHandler implements ToolHandler {
     const mailboxError = await checkMailboxInput(ctx, input, 'ceo-inbox-shadow-draft');
     if (mailboxError) return { success: false, error: mailboxError };
 
+    // The shadow records its mailbox so sent-observe pairs it only with sends from that mailbox
+    // (#2475, D8). Omitted: the default mailbox, which is where a single-mailbox install lives. No
+    // registry (unit tests) or no mailbox: no field, which reads as the migrated mailbox's.
+    const named = readMailboxInput(input);
+    let mailboxId = named.ok ? named.mailbox : undefined;
+    if (mailboxId === undefined && ctx.principalMailboxes) {
+      try {
+        mailboxId = (await ctx.principalMailboxes.defaultMailbox())?.id;
+      } catch (err) {
+        ctx.log.warn({ ...grantSafeErrorFields(err) }, 'ceo-inbox-shadow-draft: default mailbox unreadable — shadow stored without a mailbox');
+      }
+    }
+
     const recipients = Array.isArray(input.recipients)
       ? input.recipients.filter((r): r is string => typeof r === 'string')
       : [];
@@ -39,6 +53,7 @@ export class CeoInboxShadowDraftHandler implements ToolHandler {
           thread_id: typeof input.thread_id === 'string' ? input.thread_id : '',
           subject,
           recipients,
+          ...(mailboxId ? { mailbox: mailboxId } : {}),
           created_at: new Date().toISOString(),
           shadow: true,
         },
