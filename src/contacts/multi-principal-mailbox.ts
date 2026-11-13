@@ -102,6 +102,6 @@ export class MultiPrincipalMailbox implements PrincipalMailbox {
     if (!sent) throw new Error('principal mailbox has no folder with the \\Sent attribute');
     const messages = await client.listMessages({ folders: [sent.id], anyEmail: address, limit: LOOKUP_LIMIT });
     const wanted = address.toLowerCase();
-    return messages.some((m) => [...m.to, ...m.cc].some((p) => p.email.trim().toLowerCase() === wanted));
+    return messages.some((m) => [...m.to, ...m.cc, ...m.bcc].some((p) => p.email.trim().toLowerCase() === wanted));
   }
 }
