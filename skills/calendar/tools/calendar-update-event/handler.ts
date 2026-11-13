@@ -20,7 +20,7 @@ import { localizeEventTimes } from '../../../../src/channels/calendar/event-disp
 import { parseRecurrence } from '../../../../src/channels/calendar/recurrence-input.js';
 import { parseConferencing } from '../../../../src/channels/calendar/conferencing-input.js';
 import { undeclaredInputError } from '../../../../src/skills/_shared/undeclared-input-guard.js';
-import { readCalendarMailbox, routeCalendar } from '../../../_shared/calendar-route.js';
+import { gateCalendarWrite, readCalendarMailbox } from '../../../_shared/calendar-route.js';
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 
 // Mirrors tool.json `inputs`. Anything else is refused rather than silently dropped (#2385).
@@ -67,9 +67,11 @@ export class CalendarUpdateEventHandler implements ToolHandler {
 
     try {
       // The mailbox the calendar belongs to (#2475); `primary` becomes its home calendar's ID.
-      const route = await routeCalendar(ctx, 'calendar-update-event', calendarId, mailbox.mailbox);
-      if (!route.ok) return { success: false, error: route.error };
-      const { client, calendarId: targetCalendarId } = route.routed;
+      // A stated mailbox that does not own the calendar is refused (calendar_mailbox_mismatch),
+      // never quietly overridden, so the agent never names the wrong account (SF-M1).
+      const gate = await gateCalendarWrite(ctx, 'calendar-update-event', calendarId, mailbox.mailbox, { requireMailbox: false });
+      if (gate.kind !== 'proceed') return { success: false, error: gate.kind === 'error' ? gate.error : 'needs_mailbox' };
+      const { client, calendarId: targetCalendarId } = gate.routed;
 
       // Read-only check — moved inside try so DB errors from resolveCalendar are caught with skill-level context.
       if (ctx.contactService) {

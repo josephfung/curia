@@ -168,9 +168,8 @@ export class CalendarCreateHoldHandler implements ToolHandler {
     }
     if (gate.kind === 'needs_mailbox') {
       const counterpart = typeof contactDomain === 'string' ? [contactDomain] : [];
-      const needs = await needsMailboxResult(ctx, TOOL, gate.mailboxes, evidenceRecipients(counterpart, gate.live));
-      if (!needs.success) return needs;
-      return { success: true, data: { held: false, holdEventId: null, display, displayTimezone: tzLabel, ...(needs.data as Record<string, unknown>) } };
+      // A failure, not held:false (R102): nothing was placed and the caller must choose.
+      return needsMailboxResult(ctx, TOOL, gate.mailboxes, evidenceRecipients(counterpart, gate.live), 'placed');
     }
     const multiMailbox = gate.multi;
     let routed: RoutedCalendar = gate.routed;

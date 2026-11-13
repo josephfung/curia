@@ -11,7 +11,7 @@
     "comment": "string? (optional RSVP comment; currently returned as a warning if provided because Nylas sendRsvp only accepts status in this SDK)",
     "holdMatchCriteria": "object? ({ subject?, contactDomain?, contactId?, sourceRef?, threadRef? } used only when response is accept to release matching Curia holds)",
     "holdSearchStart": "timestamp? (start of hold cleanup search window; defaults around the invite time)",
-    "holdSearchEnd": "timestamp? (end of hold cleanup search window; defaults around the invite time)",
+    "holdSearchEnd": "timestamp? (end of hold cleanup search window, at most 30 days after start; defaults around the invite time)",
     "mailbox": "string? (the mailbox the invite arrived in, the consult's mailbox. Required on the principal's calendars when several are connected; the RSVP answers as it, finding its own copy of the invite by iCal UID, and is never sent from another account)"
   },
   "outputs": {

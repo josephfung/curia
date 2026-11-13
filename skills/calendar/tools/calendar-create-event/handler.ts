@@ -173,11 +173,15 @@ export class CalendarCreateEventHandler implements ToolHandler {
               ctx.log.info({ releasedHoldId: e.id, bookedEventId: event.id, mailboxId: target.mailboxId }, 'calendar-create-event: released overlapping hold');
             } catch (err) {
               ctx.log.warn({ ...grantSafeErrorFields(err), holdId: e.id, bookedEventId: event.id, mailboxId: target.mailboxId }, 'calendar-create-event: failed to release overlapping hold, continuing');
+              // In the result too (SF-M4), as respond-to-invite does: the slot is not clean.
+              warnings.push(`Hold ${e.id} overlaps this booking but could not be removed; it is still on the calendar.`);
             }
           }
         } catch (err) {
           // One calendar's listing failing must not stop the search of the others.
           ctx.log.warn({ ...grantSafeErrorFields(err), bookedEventId: event.id, mailboxId: target.mailboxId }, 'calendar-create-event: hold self-release failed (booking unaffected)');
+          const label = gate.live.find((m) => m.id === target.mailboxId)?.label ?? target.mailboxId;
+          warnings.push(`Holds on the "${label}" mailbox's calendar were not checked for this slot: listing them failed.`);
         }
       }
 

@@ -142,7 +142,9 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // holds-sweep say when an account is required and how to choose it (D5), and respond-to-invite
   // drops `account` (net +271 bytes, same approval): 28,718 over 23 local tools. Fix round 1:
   // respond-to-invite's `mailbox` says it is required and found by iCal UID (+37): 28,755.
-  { agent: 'calendar', alwaysOnPromptTokens: 5_700, localToolDefinitionBytes: 28_760, allowMcpPins: false },
+  // #2475 Part 4 final fixes: needs_mailbox is an error (create-event/create-hold `mailbox`) and
+  // the 30-day RSVP hold window, +80 bytes under the same pre-approval: 28,835 over 23 local tools.
+  { agent: 'calendar', alwaysOnPromptTokens: 5_700, localToolDefinitionBytes: 28_835, allowMcpPins: false },
   // ceo-inbox: YAML 60,090 → 49,037 chars (~16,416 → ~13,653 tokens always-on with its SKILL.md bodies),
   // its task-wake steps now riding on the wake; 43,469 bytes over 41 local tools.
   // archive-extract plus the longer file-parse description (#2208) is +1,831 bytes, the same

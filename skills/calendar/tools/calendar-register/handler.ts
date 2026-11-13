@@ -20,7 +20,7 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { ContactCalendar } from '../../../../src/contacts/calendar-types.js';
-import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
+import { grantSafeErrorFields, mayCarryGrantId } from '../../../../src/principal-mailboxes/error-fields.js';
 import { CalendarRouteError, PRIMARY_CALENDAR_ALIAS } from '../../../../src/channels/calendar/calendar-router.js';
 import { calendarRouteErrorMessage, readCalendarMailbox } from '../../../_shared/calendar-route.js';
 
@@ -77,6 +77,14 @@ export class CalendarRegisterHandler implements ToolHandler {
       return { success: false, error: calendarRouteErrorMessage(err) };
     }
 
+    // One of the principal's calendars decides routing and is read as their events, so it must be
+    // one the mailbox's account can see (SEC-L5): an arbitrary id (someone's public calendar) is
+    // refused. Other contacts' calendars are read as free/busy, which needs no visibility.
+    if (resolvedContactId === ctx.calendarRouter.principalContactId && placement.mailboxId !== null && !placement.owner) {
+      const visible = await this.visibleToMailbox(ctx, nylas_calendar_id, placement.mailboxId);
+      if (visible !== true) return { success: false, error: visible };
+    }
+
     ctx.log.info(
       { contactId: resolvedContactId, label, isPrimary: is_primary ?? false, mailboxId: placement.mailboxId, owner: placement.owner },
       'Registering calendar',
@@ -110,15 +118,37 @@ export class CalendarRegisterHandler implements ToolHandler {
           );
           return {
             success: false,
-            error: `Contact ${resolvedContactId ?? '(none)'} already has a primary calendar for this mailbox. Set is_primary to false, or unregister the existing primary calendar first.`,
+            error:
+              `Contact ${resolvedContactId ?? '(none)'} already has a primary calendar for this mailbox. Register this one with is_primary false. ` +
+              'No tool unregisters a calendar: to make this one the primary instead, tell the principal an operator must change the registry.',
           };
         }
         return this.alreadyRegistered(ctx, nylas_calendar_id, placement, { contactId: resolvedContactId, label, isPrimary: is_primary ?? false });
       }
 
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, contactId: resolvedContactId }, 'Failed to register calendar');
+      ctx.log.error({ ...safeErrFields(err), contactId: resolvedContactId }, 'Failed to register calendar');
       return { success: false, error: `Failed to register calendar: ${message}` };
+    }
+  }
+
+  /**
+   * True when the mailbox's account lists this calendar, else the error to return. A listing that
+   * fails refuses too (nothing is registered): the check is what keeps an arbitrary id out.
+   */
+  private async visibleToMailbox(ctx: ToolContext, calendarId: string, mailboxId: string): Promise<true | string> {
+    try {
+      const client = await ctx.calendarRouter!.clientFor(mailboxId);
+      const id = calendarId.trim().toLowerCase();
+      if ((await client.listCalendars()).some((c) => c.id.trim().toLowerCase() === id)) return true;
+      ctx.log.warn({ mailboxId }, 'calendar-register: the calendar is not visible to the mailbox\'s account; refused');
+      return (
+        `Calendar ${calendarId} is not one the "${mailboxId}" mailbox's account can see, so it was not registered as the principal's calendar. ` +
+        'Use an id from calendar-list-calendars, with the mailbox it lists.'
+      );
+    } catch (err) {
+      ctx.log.warn({ mailboxId, ...safeErrFields(err) }, 'calendar-register: could not list the mailbox\'s calendars; refused');
+      return `Could not check the calendar against the "${mailboxId}" mailbox's account, so nothing was registered: ${calendarRouteErrorMessage(err)}`;
     }
   }
 
@@ -170,7 +200,9 @@ export class CalendarRegisterHandler implements ToolHandler {
               ...(notApplied.length > 0
                 ? {
                     not_applied: notApplied,
-                    note: `It was already registered, so only its mailbox changed; ${notApplied.join(', ')} kept the registered values. Unregister and register it again to change them.`,
+                    note:
+                      `It was already registered, so only its mailbox changed; ${notApplied.join(', ')} kept the registered values. ` +
+                      'No tool unregisters a calendar: changing them needs an operator, so tell the principal if it matters.',
                   }
                 : {}),
             },
@@ -190,14 +222,21 @@ export class CalendarRegisterHandler implements ToolHandler {
         ctx.log.warn({ mailboxId: placement.mailboxId }, 'calendar-register: the target mailbox already has a primary for this contact');
         return {
           success: false,
-          error: `Calendar ${nylasCalendarId} cannot move to the "${placement.mailboxId}" mailbox, which already has a primary calendar for that contact; unregister one first.`,
+          error:
+            `Calendar ${nylasCalendarId} cannot move to the "${placement.mailboxId}" mailbox, which already has a primary calendar for that contact. ` +
+            'No tool unregisters a calendar: tell the principal an operator must change the registry.',
         };
       }
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err }, 'calendar-register: could not check or move the existing registration');
+      ctx.log.error({ ...safeErrFields(err) }, 'calendar-register: could not check or move the existing registration');
       return { success: false, error: `Failed to register calendar: ${message}` };
     }
   }
+}
+
+/** Grant-safe log fields: the class and status, plus the message only when it cannot echo a grant (SEC-L6). */
+function safeErrFields(err: unknown): Record<string, unknown> {
+  return { ...grantSafeErrorFields(err), ...(err instanceof Error && !mayCarryGrantId(err) ? { errMessage: err.message } : {}) };
 }
 
 function registered(calendar: ContactCalendar): Record<string, unknown> {

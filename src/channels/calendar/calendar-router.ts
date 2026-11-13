@@ -108,9 +108,10 @@ export class CalendarRouter {
    * calendar (its address), or a calendar registered to the principal's contact. Writes on these
    * need a stated mailbox once several are live (D5).
    */
-  async isPrincipalCalendar(calendarId: string): Promise<boolean> {
+  async isPrincipalCalendar(calendarId: string, live?: PrincipalMailboxView[]): Promise<boolean> {
     if (calendarId === PRIMARY_CALENDAR_ALIAS) return true;
-    if (this.owner(calendarId, await this.deps.mailboxes.list())) return true;
+    // `live`: a snapshot the caller already read, so a list of ids costs one registry read (R100).
+    if (this.owner(calendarId, live ?? (await this.deps.mailboxes.list()))) return true;
     const row = await this.deps.contacts.resolveCalendar(calendarId);
     return row?.contactId === this.deps.principalContactId;
   }
@@ -178,7 +179,7 @@ export class CalendarRouter {
     if (row?.principalMailboxId) {
       const mb = live.find((m) => m.id === row.principalMailboxId) ?? (await this.registeredMailbox(calendarId, row.principalMailboxId, live));
       if (hinted && hinted.id !== mb.id) {
-        this.log.debug({ mailboxId: mb.id, hintedMailboxId: hinted.id }, 'Registered calendar routed to its own mailbox, not the hint');
+        this.log.info({ mailboxId: mb.id, hintedMailboxId: hinted.id }, 'Registered calendar routed to its own mailbox, not the hint');
       }
       return { mailboxId: mb.id, calendarId, client: await this.deps.mailboxes.calendarClient(mb.id) };
     }
@@ -186,6 +187,29 @@ export class CalendarRouter {
     // Not placed by the registry (unregistered, or a row the boot backfill has not assigned).
     const mb = hinted ?? this.soleMailbox('needs_mailbox', calendarId, live);
     return { mailboxId: mb.id, calendarId, client: await this.deps.mailboxes.calendarClient(mb.id) };
+  }
+
+  /**
+   * For a calendar neither its address nor a registry row places: another live mailbox whose
+   * account owns it (Nylas `isOwnedByUser`), if any (SEC-L1). A write through a mailbox it is only
+   * shared into would go out as the wrong identity. Best-effort: a mailbox whose calendars cannot
+   * be listed is skipped (logged), so this never blocks a write on its own failure.
+   */
+  async ownedElsewhere(calendarId: string, mailboxId: string): Promise<PrincipalMailboxView | undefined> {
+    const live = await this.deps.mailboxes.list();
+    if (live.length < 2 || this.owner(calendarId, live)) return undefined;
+    if ((await this.deps.contacts.resolveCalendar(calendarId))?.principalMailboxId) return undefined;
+    const id = lower(calendarId);
+    for (const m of live) {
+      if (m.id === mailboxId) continue;
+      try {
+        const listed = await (await this.deps.mailboxes.calendarClient(m.id)).listCalendars();
+        if (listed.some((c) => c.isOwnedByUser && lower(c.id) === id)) return m;
+      } catch (err) {
+        this.log.warn({ mailboxId: m.id, errName: err instanceof Error ? err.name : 'Error' }, 'Could not list a mailbox\'s calendars to check who owns a calendar; skipped');
+      }
+    }
+    return undefined;
   }
 
   /**

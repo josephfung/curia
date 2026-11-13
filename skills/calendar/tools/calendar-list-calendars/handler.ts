@@ -12,7 +12,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { NylasCalendar } from '../../../../src/channels/calendar/nylas-calendar-client.js';
 import type { PrincipalMailboxView } from '../../../../src/principal-mailboxes/service.js';
-import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
+import { grantSafeErrorFields, mayCarryGrantId } from '../../../../src/principal-mailboxes/error-fields.js';
 import { calendarRouteErrorMessage, readCalendarMailbox } from '../../../_shared/calendar-route.js';
 
 export class CalendarListCalendarsHandler implements ToolHandler {
@@ -100,7 +100,8 @@ export class CalendarListCalendarsHandler implements ToolHandler {
       return { success: true, data: { calendars, ...(warnings.length > 0 ? { warnings } : {}) } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, calendarCount: listedCount }, 'Failed to list calendars');
+      // Grant-safe (SEC-L6): the class and status, plus the message only when it cannot echo a grant.
+      ctx.log.error({ ...grantSafeErrorFields(err), ...(err instanceof Error && !mayCarryGrantId(err) ? { errMessage: err.message } : {}), calendarCount: listedCount }, 'Failed to list calendars');
       return { success: false, error: `Failed to list calendars: ${message}` };
     }
   }
