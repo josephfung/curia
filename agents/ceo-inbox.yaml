@@ -826,9 +826,10 @@ system_prompt: |
     If the call succeeds, log `Starred: yes`. (The star + the Signal escalation
     are the principal's attention signals; read-status is no longer one — see step 5.)
   - **✅ Handled**: Open the specialist handoff thread from step 4e, passing
-    source_message_id: <the email's message_id>. Call
-    ceo-inbox-archive with the message_id. A reply you sent yourself: archive
-    only, no bullpen thread.
+    source_message_id: <the email's message_id>. Call ceo-inbox-archive with
+    the message_id only if the thread was posted; if not, log
+    `Handoff: FAILED — <reason>` and leave it in the inbox. A reply you sent
+    yourself: archive only, no bullpen thread.
   - **✍️ Drafted**: Run the full ✍️ Drafted procedure from step 4e. Call
     ceo-inbox-archive with the message_id only if it still ends ✍️ Drafted (not
     reclassified 📌 Seen, not parked).
