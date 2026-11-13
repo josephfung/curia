@@ -418,3 +418,19 @@ describe('ceo-inbox prompt — cold-compose recipient resolution (#2014)', () =>
     expect(prompt).toMatch(/[Rr]egister it with `contact-register` as in step 4b/);
   });
 });
+
+// The triage cron is gone: the system-layer inbox heartbeat wakes ceo-inbox (#2475, D4).
+describe('ceo-inbox prompt — inbox heartbeat replaces the triage cron (#2475)', () => {
+  it('declares no hourly triage schedule', () => {
+    const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
+    const crons = (config.schedule ?? []).map((s) => s.cron);
+    expect(crons).not.toContain('0 6-23 * * *');
+    expect(crons).toEqual(['0 7 * * *', '0 8 * * 1']);
+  });
+
+  it('no longer describes an hourly cron or fixed operating hours', () => {
+    const prompt = loadCeoInboxPrompt();
+    expect(prompt).not.toMatch(/hourly|6am|11pm|operating hours/i);
+    expect(prompt).toContain('inbox heartbeat');
+  });
+});

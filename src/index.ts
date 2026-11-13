@@ -232,6 +232,9 @@ import {
   type AssembledAgent,
 } from './startup/agent-assembly.js';
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
+import { InboxHeartbeat } from './scheduler/inbox-heartbeat.js';
+import { readTriageCadences, TRIAGE_DAILY_CEILING } from './principal-mailboxes/triage-cadence.js';
+import { TriageState, TRIAGE_NAMESPACE } from './principal-mailboxes/triage-state.js';
 import { taskHasPendingWake } from './agents/resumable-continuation.js';
 import { ResumableContinuationSubscriber } from './agents/resumable-continuation-subscriber.js';
 import { LateDelegationSubscriber } from './agents/late-delegation-subscriber.js';
@@ -3334,6 +3337,40 @@ async function main(): Promise<void> {
 
   backlogHeartbeat.start();
 
+  // Inbox heartbeat (#2475, D4): replaces ceo-inbox's hourly triage cron. Code only, no model
+  // call: every 15 minutes it wakes ceo-inbox only when a due mailbox has unread mail. Needs the
+  // config store (cadences, triage state), so it does not run without entity memory, and not in
+  // setup-required mode (no principal mailbox is connected yet).
+  let inboxHeartbeat: InboxHeartbeat | undefined;
+  if (entityMemory && !setupRequiredAtBoot && agentRegistry.has('ceo-inbox')) {
+    const triageConfig = new ConfigStore(entityMemory, logger);
+    const triageTz = (): string => principalContact?.timezone ?? config.timezone;
+    inboxHeartbeat = new InboxHeartbeat({
+      mailboxes: principalMailboxes,
+      // Read per tick so a console edit takes effect without a restart.
+      cadences: async (ids) => readTriageCadences(await triageConfig.get(TRIAGE_NAMESPACE, 'triage'), ids, logger),
+      state: new TriageState(triageConfig, triageTz),
+      // One cheap first-page list per due mailbox. The filters ride on this first request, so
+      // the Nylas cursor-drops-filters bug (#2377) cannot touch it.
+      hasUnreadSince: async (mailboxId, since) => {
+        const client = await principalMailboxes.gatewayClient(mailboxId);
+        const messages = await client.listMessages({
+          unread: true,
+          folders: ['INBOX'],
+          limit: 1,
+          ...(since ? { receivedAfter: Math.floor(since.getTime() / 1000) } : {}),
+        });
+        return messages.length > 0;
+      },
+      taskRepo,
+      scheduler: schedulerService,
+      dailyCeiling: TRIAGE_DAILY_CEILING,
+      tz: triageTz,
+      logger,
+    });
+    inboxHeartbeat.start();
+  }
+
   const resumableContinuationSubscriber = new ResumableContinuationSubscriber({
     pool,
     bus,
@@ -3908,6 +3945,11 @@ async function main(): Promise<void> {
       backlogHeartbeat.stop();
     } catch (err) {
       logger.error({ err }, 'Error stopping backlog heartbeat during shutdown');
+    }
+    try {
+      inboxHeartbeat?.stop();
+    } catch (err) {
+      logger.error({ err }, 'Error stopping inbox heartbeat during shutdown');
     }
     if (lateDelegationSweep) {
       try {
