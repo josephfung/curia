@@ -3414,9 +3414,10 @@ async function main(): Promise<void> {
       notifyCeiling: async (batches) => {
         const ceoEmail = findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
           ?? (principalEmail.current || undefined);
-        // outbound.notification is delivered by an email adapter only (as the outage alerts):
-        // without one a publish reaches no one, so it is not reported as sent and is retried.
-        if (!outboundGateway || !ceoEmail || emailAdapters.length === 0) return false;
+        // outbound.notification is delivered only by the primary ('curia') email adapter once its
+        // outbound side has subscribed (start() does that, after the heartbeat starts). Until
+        // then a publish reaches no one, so it is not reported as sent and the heartbeat retries.
+        if (!outboundGateway || !ceoEmail || !emailAdapters.some((a) => a.deliversNotifications())) return false;
         return outboundGateway.sendNotification({
           notificationType: 'inbox_triage_paused',
           ceoEmail,

@@ -619,7 +619,18 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
 
     // Non-primary adapter should not call send
     expect(mocks.outboundGateway.send).not.toHaveBeenCalled();
+    // …and does not claim to deliver notifications (the ceiling notice's gate, #2475).
+    expect(adapter.deliversNotifications()).toBe(false);
 
+    await adapter.stop();
+  });
+
+  it('delivers notifications only once the primary adapter has subscribed (#2475)', async () => {
+    const adapter = makeAdapter(mocks);
+    // Before start(): nothing is subscribed yet, so a published notification would reach no one.
+    expect(adapter.deliversNotifications()).toBe(false);
+    await adapter.start();
+    expect(adapter.deliversNotifications()).toBe(true);
     await adapter.stop();
   });
 

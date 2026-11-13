@@ -36,9 +36,11 @@ const HEARTBEAT_CREATED_BY = 'heartbeat';
  * resume sets it to). Missing any, a drain in that status would look absent and get a second
  * drain beside it. Only `done` and `cancelled` end a drain.
  */
+/** Page size of the legacy-drain cutover's keyset walk. */
+const LEGACY_SCAN_PAGE = 200;
 const OPEN_DRAIN_STATUSES = ['open', 'in_progress', 'waiting', 'blocked', 'active', 'paused'] as const;
 import type { Logger } from '../logger.js';
-import type { TaskListRow, TaskRepo } from '../db/task-repo.js';
+import type { TaskListCursor, TaskListRow, TaskRepo } from '../db/task-repo.js';
 import type { SchedulerService } from './scheduler-service.js';
 import type { PrincipalMailboxes } from '../principal-mailboxes/service.js';
 import { TRIAGE_DAILY_CEILING, type Cadence } from '../principal-mailboxes/triage-cadence.js';
@@ -107,16 +109,22 @@ export const LEGACY_DRAIN_CLOSE_NOTE = 'superseded by the inbox heartbeat (#2475
  * cannot be closed is logged and the rest still close. Returns how many were closed.
  */
 export async function closeLegacyInboxDrains(
-  taskRepo: Pick<TaskRepo, 'listAllTasks' | 'completeTask'>,
+  taskRepo: Pick<TaskRepo, 'listTasks' | 'completeTask'>,
   logger: Logger,
 ): Promise<number> {
-  // Every page (keyset), not one capped page: unrelated inbox-drain rows must not hide a legacy
-  // drain whose pending wake would then run beside the heartbeat's.
-  const found = await taskRepo.listAllTasks({ statuses: [...OPEN_DRAIN_STATUSES], tag: INBOX_DRAIN_TAG });
-  if (found.truncated) {
-    logger.warn({ fetched: found.tasks.length }, 'InboxHeartbeat: too many inbox-drain tasks to check in one pass; the rest are checked at the next boot');
+  // Every keyset page, with no ceiling: unrelated or heartbeat-owned inbox-drain rows ahead of a
+  // legacy drain must not hide it (its pending wake would run beside the heartbeat's). Boot awaits
+  // this before the heartbeat starts. Each page moves the cursor strictly forward, so it ends.
+  const open: TaskListRow[] = [];
+  let cursor: TaskListCursor | undefined;
+  for (;;) {
+    const rows = await taskRepo.listTasks({ statuses: [...OPEN_DRAIN_STATUSES], tag: INBOX_DRAIN_TAG, limit: LEGACY_SCAN_PAGE, cursor });
+    open.push(...rows.filter((t) => t.agentId === INBOX_AGENT && t.createdBy !== HEARTBEAT_CREATED_BY));
+    if (rows.length < LEGACY_SCAN_PAGE) break;
+    const last = rows[rows.length - 1]!;
+    if (cursor && cursor.id === last.id) break; // defensive: a page that did not advance
+    cursor = { priority: last.priority, dueAt: last.dueAt, id: last.id };
   }
-  const open = found.tasks.filter((t) => t.agentId === INBOX_AGENT && t.createdBy !== HEARTBEAT_CREATED_BY);
   let closed = 0;
   for (const t of open) {
     try {
