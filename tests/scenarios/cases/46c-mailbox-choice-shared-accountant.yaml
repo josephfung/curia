@@ -87,6 +87,8 @@ tool_stubs:
   ceo-inbox-draft-edit:
     - match: { move_to_mailbox: work }
       return: { draft_id: draft-r7f3a9c3, mailbox: work, mailbox_label: Work, moved_from: { mailbox: personal, draft_id: draft-r4b81d6e }, new_thread: false, subject: Paperwork, to: [{ name: Priya Nair, email: priya.nair@ledger.example.test }], cc: [] }
+    - match: { draft_id: draft-r7f3a9c3, move_to_mailbox: null }
+      return: { draft_id: draft-r7f3a9c3, mailbox: work, mailbox_label: Work, subject: Paperwork, to: [{ name: Priya Nair, email: priya.nair@ledger.example.test }], cc: [] }
     - match: { move_to_mailbox: personal }
       return: { draft_id: draft-r4b81d6f, mailbox: personal, mailbox_label: Personal, moved_from: { mailbox: work, draft_id: draft-r7f3a9c2 }, new_thread: false, subject: Paperwork, to: [{ name: Priya Nair, email: priya.nair@ledger.example.test }], cc: [] }
 expected_behaviors:
