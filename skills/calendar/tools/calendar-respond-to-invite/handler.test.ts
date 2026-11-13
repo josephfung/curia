@@ -152,6 +152,24 @@ describe('CalendarRespondToInviteHandler', () => {
     }
   });
 
+  it('skips cleanup, with a warning, when the window derived from a long event exceeds 30 days', async () => {
+    const handler = new CalendarRespondToInviteHandler();
+    const listEvents = vi.fn().mockResolvedValue([]);
+    // A four-day event: the derived window pads each side, so it runs past 30 days.
+    const longEvent = makeEvent({ startTime: START_UNIX, endTime: START_UNIX + 4 * 86_400 });
+    const ctx = makeCtx({
+      input: {
+        calendarId: 'cal_1', eventId: 'evt_invite', response: 'accept',
+        holdMatchCriteria: { subject: 'Project Delta sync', contactDomain: 'example.test', threadRef: 'thread-negotiation' },
+      },
+    }, { getEvent: vi.fn().mockResolvedValue(longEvent), listEvents });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect(calendarClientOf(ctx).sendRsvp).toHaveBeenCalledOnce();
+    expect(listEvents).not.toHaveBeenCalled();
+    if (result.success) expect((result.data as { releaseWarnings: string[] }).releaseWarnings[0]).toContain('longer than 30 days');
+  });
+
   it('does not release same-domain holds from a different conversation', async () => {
     const handler = new CalendarRespondToInviteHandler();
     const conversationHold = makeHold('hold_a', START_UNIX, END_UNIX);

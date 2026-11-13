@@ -995,6 +995,14 @@ describe('PrincipalMailboxAdmin calendars (#2475, D7)', () => {
     expect(records.map((r) => r.id)).toEqual(['personal']);
   });
 
+  it('a grant listing no primary calendar is the same warning: nothing was registered', async () => {
+    const calendars = { registerHome: vi.fn(async () => 'no_primary_calendar' as const), listForMailbox: vi.fn(async () => []) };
+    const { admin, records } = setup({ grants: { g: google('pat@gmail.com') }, calendars });
+    const out = await admin.add({ id: 'personal', label: 'Personal', grantId: 'g' });
+    expect(out).toMatchObject({ ok: true, warning: HOME_CALENDAR_PENDING_WARNING });
+    expect(records.map((r) => r.id)).toEqual(['personal']);
+  });
+
   it("removalPreview lists the mailbox's calendars, and says when they could not be read", async () => {
     const contacts = calendarContacts([
       { nylasCalendarId: 'pat@gmail.com', principalMailboxId: 'personal', label: 'Personal' },

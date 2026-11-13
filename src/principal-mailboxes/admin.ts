@@ -265,7 +265,10 @@ export class PrincipalMailboxAdmin {
   private async registerHomeCalendar(id: string, label: string): Promise<string | undefined> {
     if (!this.deps.calendars) return undefined;
     try {
-      await this.deps.calendars.registerHome(id, label);
+      const outcome = await this.deps.calendars.registerHome(id, label);
+      // No primary calendar listed: nothing was registered, so the principal gets the same
+      // recovery instructions as for a failure (the mailbox itself stays saved).
+      if (outcome === 'no_primary_calendar') return HOME_CALENDAR_PENDING_WARNING;
       return undefined;
     } catch (err) {
       this.log.error({ ...this.safeErrFields(err), mailboxId: id }, "Could not register the new mailbox's home calendar");

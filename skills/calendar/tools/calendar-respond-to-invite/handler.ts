@@ -352,6 +352,15 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
         releaseWarnings: ['Skipped hold cleanup because no hold search window or timed event window was available'],
       };
     }
+    // The same 30-day bound applies to a window derived from the event (it pads each side), not
+    // only to stated bounds (SEC-L2). The RSVP is already sent, so cleanup is skipped with a warning.
+    if (new Date(window.end).getTime() - new Date(window.start).getTime() > MAX_HOLD_SEARCH_WINDOW_MS) {
+      ctx.log.warn({ tool: TOOL }, 'calendar-respond-to-invite: derived hold search window longer than 30 days; cleanup skipped');
+      return {
+        releasedHolds: [],
+        releaseWarnings: ['Skipped hold cleanup: the search window around this event is longer than 30 days. Release any holds by hand.'],
+      };
+    }
 
     // With several mailboxes the conversation's holds may be on another account's home
     // calendar (D7): every live home calendar is searched. With one mailbox: this calendar only.
