@@ -62,6 +62,38 @@ export interface InboxHeartbeatOptions {
   intervalMinutes?: number;
 }
 
+/** The note a superseded drain task is closed with. */
+export const LEGACY_DRAIN_CLOSE_NOTE = 'superseded by the inbox heartbeat (#2475)';
+
+/**
+ * Boot step (BR-C2): close every open `inbox-drain` task of ceo-inbox that the heartbeat did not
+ * create — drains the old triage cron's agent turns made with task-create. The heartbeat never
+ * sees them (R56), so left open one would run beside a heartbeat drain on the same mail. Closing
+ * (completeTask, which also cancels the pending wake) is not a re-wake, so R56's lineage rule
+ * holds. Idempotent: run every boot, it finds nothing once the cutover is done. A task that
+ * cannot be closed is logged and the rest still close. Returns how many were closed.
+ */
+export async function closeLegacyInboxDrains(
+  taskRepo: Pick<TaskRepo, 'listTasks' | 'completeTask'>,
+  logger: Logger,
+): Promise<number> {
+  const open = (await taskRepo.listTasks({ statuses: ['open', 'in_progress'], tag: INBOX_DRAIN_TAG, limit: 200 }))
+    .filter((t) => t.agentId === INBOX_AGENT && t.createdBy !== HEARTBEAT_CREATED_BY);
+  let closed = 0;
+  for (const t of open) {
+    try {
+      await taskRepo.completeTask(t.id, LEGACY_DRAIN_CLOSE_NOTE);
+      closed += 1;
+    } catch (err) {
+      logger.warn({ taskId: t.id, ...grantSafeErrorFields(err) }, 'InboxHeartbeat: could not close a legacy inbox-drain task');
+    }
+  }
+  if (closed > 0 || open.length > 0) {
+    logger.info({ closed, found: open.length }, 'InboxHeartbeat: closed legacy inbox-drain tasks the heartbeat supersedes');
+  }
+  return closed;
+}
+
 export class InboxHeartbeat {
   private intervalHandle: NodeJS.Timeout | null = null;
   // A slow tick (Nylas probes) must not overlap the next interval fire.

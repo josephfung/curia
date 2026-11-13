@@ -872,17 +872,12 @@ system_prompt: |
   the batch, decide whether to keep draining:
 
   1. **More unread remain** (`has_more` was true in Step 3). Schedule the next
-     batch on THE drain task: the `inbox-drain` task this run was woken for. If
-     this run has none, create one. Aim `wake_at` ~90 seconds out.
-     - If this run has THE drain task, call task-update on it: status
-       'in_progress', a short progress note (e.g. "batch done, more queued"), and
-       the `wake_at`.
-     - Otherwise call task-create with: title "Drain principal inbox backlog",
-       description "Continue batch-triaging the principal inbox until empty.",
-       owner 'curia', tags ['inbox-drain'], and that `wake_at`. Do
-       NOT pass target_agent_id — it stays self-owned.
-     - If task-create or task-update fails, log it and continue; the inbox heartbeat
-       re-wakes a stalled drain task, so the drain still completes, just slower.
+     batch on THE drain task: the `inbox-drain` task this run was woken for. Call
+     task-update on it: status 'in_progress', a short progress note (e.g. "batch
+     done, more queued"), and `wake_at` ~90 seconds out. Never create a drain
+     task: if this run has none, stop; the inbox heartbeat starts drains.
+     - If task-update fails, log it and continue; the inbox heartbeat re-wakes a
+       stalled drain task, so the drain still completes, just slower.
   2. **No more unread** (`has_more` was false): the inbox is drained. Complete
      THE drain task if this run has one ("inbox drained"), as in Step 3. If
      task-complete fails, log it and continue. Then exit.
