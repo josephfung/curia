@@ -48,6 +48,20 @@ describeIf('TriageDedupe', () => {
     expect(r).toEqual({ first: false, mailboxId: 'work', nylasMessageId: 'n1' });
   });
 
+  it('two concurrent claims of one message: exactly one wins, the other names it (P5)', async () => {
+    const h = header();
+    const [a, b] = await Promise.all([
+      dedupe.claim(h, FROM, 'work', 'n-work'),
+      dedupe.claim(h, FROM, 'personal', 'n-personal'),
+    ]);
+    const results = [a, b];
+    expect(results.filter((r) => r.first)).toHaveLength(1);
+    const loser = results.find((r) => !r.first) as { first: false; mailboxId: string; nylasMessageId: string };
+    const winnerMailbox = a.first ? 'work' : 'personal';
+    expect(loser.mailboxId).toBe(winnerMailbox);
+    expect(loser.nylasMessageId).toBe(winnerMailbox === 'work' ? 'n-work' : 'n-personal');
+  });
+
   it('a reused Message-ID from another sender is not a duplicate (R54)', async () => {
     const h = header();
     await dedupe.claim(h, 'real@example.org', 'work', 'n1');

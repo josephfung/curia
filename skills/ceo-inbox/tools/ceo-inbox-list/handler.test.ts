@@ -1041,6 +1041,25 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     expect(t.writes.some((w) => w.grant === 'grant-work')).toBe(false);
   });
 
+  it('claims the first <id> of a Message-ID header that carries more than one token (P5)', async () => {
+    const t = setup({
+      'grant-work': [],
+      'grant-personal': [msg('copy', NOW_S - 1, { to: [{ email: WORK_ADDR }] })],
+    }, { headers: { copy: [{ name: 'message-id', value: ' <First@Mail.example.org> (relay) <second@mail.example.org>' }] } });
+    dataOf(await t.run());
+    expect(t.claim).toHaveBeenCalledTimes(1);
+    expect(t.claim.mock.calls[0]![0]).toBe('First@Mail.example.org'); // TriageDedupe lowercases
+  });
+
+  it('does not dedupe a message whose Message-ID header holds no <id> (P5)', async () => {
+    const t = setup({
+      'grant-work': [],
+      'grant-personal': [msg('copy', NOW_S - 1, { to: [{ email: WORK_ADDR }] })],
+    }, { headers: { copy: [{ name: 'Message-ID', value: 'not-an-id' }] } });
+    expect(dataOf(await t.run()).messages.map((m) => m.id)).toEqual(['copy']);
+    expect(t.claim).not.toHaveBeenCalled();
+  });
+
   it('keeps a message in the batch when its headers cannot be fetched', async () => {
     const t = setup({
       'grant-work': [],
