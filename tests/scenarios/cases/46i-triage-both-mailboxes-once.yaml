@@ -7,7 +7,7 @@ name: triage handles a message delivered to both mailboxes once
 description: >
   The inbox triage fires with two mailboxes due (work and personal). Ines Moreau wrote to both
   addresses; the batch carries one copy, in work (code dropped the duplicate). The message is a
-  logistics note that triage answers with a short drafted reply. ceo-inbox reads and answers that one
+  logistics question that triage answers with a short drafted reply. ceo-inbox reads and answers that one
   message with a single draft, and does not go looking for the second copy to answer it too.
 tags: [specialist-ceo-inbox, ceo-inbox, triage, multi-mailbox, dedupe]
 agent: ceo-inbox
@@ -59,7 +59,7 @@ tool_stubs:
             unread: true
             folders: [INBOX, UNREAD]
             attachments: []
-            snippet: Just confirming I'll bring the pilot deck to Thursday's kickoff.
+            snippet: I'll bring the pilot deck to Thursday's kickoff. Should I print copies for everyone, or will you share it on screen?
     # The drain's batch call is triage mode (Step 3, R66); any other plain listing is refused here.
     - match: {}
       error: "Call ceo-inbox-list with triage: true for the drain batch (Step 3)."
@@ -74,7 +74,7 @@ tool_stubs:
         to: [{ email: principal@work.example.test }, { email: principal@personal.example.test }]
         cc: []
         subject: Deck for the pilot kickoff
-        body_plain: "Hi,\n\nJust confirming I'll bring the pilot deck to Thursday's kickoff.\n\nThanks,\nInes"
+        body_plain: "Hi,\n\nI'll bring the pilot deck to Thursday's kickoff. Should I print copies for everyone, or will you share it on screen?\n\nThanks,\nInes"
         labels: [INBOX, UNREAD]
         attachments: []
     - match: { message_id: msg-46i-work }
@@ -87,7 +87,7 @@ tool_stubs:
         to: [{ email: principal@work.example.test }, { email: principal@personal.example.test }]
         cc: []
         subject: Deck for the pilot kickoff
-        body_plain: "Hi,\n\nJust confirming I'll bring the pilot deck to Thursday's kickoff.\n\nThanks,\nInes"
+        body_plain: "Hi,\n\nI'll bring the pilot deck to Thursday's kickoff. Should I print copies for everyone, or will you share it on screen?\n\nThanks,\nInes"
         labels: [INBOX, UNREAD]
         attachments: []
     - match: {}
@@ -118,7 +118,7 @@ tool_stubs:
       return: { contact_id: "{{contact:ines}}", display_name: Ines Moreau, contact_confidence: 0.9, created: false, verified: true }
   # Housekeeping and lookups a triage run makes on the way (the first rerun called each):
   # answered, never refused. A rescheduling ask sent the first rerun into a calendar consult,
-  # so the message is now a logistics note that triage answers with a short reply draft.
+  # so the message is now a logistics question that triage answers with a short reply draft.
   # A search does not dedupe across mailboxes (cross-mailbox-listing.ts), so it finds both copies:
   # the personal one is the copy triage set aside, and the checks below forbid answering it.
   ceo-inbox-search:
@@ -126,8 +126,8 @@ tool_stubs:
       return:
         count: 2
         messages:
-          - { id: msg-46i-work, threadId: thr-46i, mailbox: work, mailbox_label: Work, from: [{ name: Ines Moreau, email: ines.moreau@calder.example.test }], subject: Deck for the pilot kickoff, date: "{{at:now-1h}}", snippet: "Just confirming I'll bring the pilot deck to Thursday's kickoff.", unread: true, folders: [INBOX, UNREAD] }
-          - { id: msg-46i-personal, threadId: thr-46i-p, mailbox: personal, mailbox_label: Personal, from: [{ name: Ines Moreau, email: ines.moreau@calder.example.test }], subject: Deck for the pilot kickoff, date: "{{at:now-1h}}", snippet: "Just confirming I'll bring the pilot deck to Thursday's kickoff.", unread: true, folders: [INBOX, UNREAD] }
+          - { id: msg-46i-work, threadId: thr-46i, mailbox: work, mailbox_label: Work, from: [{ name: Ines Moreau, email: ines.moreau@calder.example.test }], subject: Deck for the pilot kickoff, date: "{{at:now-1h}}", snippet: "I'll bring the pilot deck to Thursday's kickoff. Should I print copies for everyone, or will you share it on screen?", unread: true, folders: [INBOX, UNREAD] }
+          - { id: msg-46i-personal, threadId: thr-46i-p, mailbox: personal, mailbox_label: Personal, from: [{ name: Ines Moreau, email: ines.moreau@calder.example.test }], subject: Deck for the pilot kickoff, date: "{{at:now-1h}}", snippet: "I'll bring the pilot deck to Thursday's kickoff. Should I print copies for everyone, or will you share it on screen?", unread: true, folders: [INBOX, UNREAD] }
   ceo-inbox-shadow-draft:
     - match: {}
       return: { captured: true, path: /shadow-drafts/scenario.md }

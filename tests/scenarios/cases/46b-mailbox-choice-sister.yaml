@@ -53,6 +53,24 @@ tool_stubs:
     - match: {}
       return: { count: 0, messages: [], has_more: false }
   # Polishing the draft it just created is fine; the edit is answered.
+  # Opening the message a search found, or replying on its thread, is answered too.
+  ceo-inbox-read:
+    - match: { message_id: msg-46b-1 }
+      return:
+        id: msg-46b-1
+        threadId: thr-46b-sat
+        mailbox: personal
+        mailbox_label: Personal
+        from: [{ name: Maya Hart, email: maya.hart@family.example.test }]
+        to: [{ email: principal@personal.example.test }]
+        cc: []
+        subject: "Re: Saturday"
+        body_plain: "Lunch Saturday works, see you then!"
+        labels: [INBOX]
+        attachments: []
+  ceo-inbox-draft-reply:
+    - match: { reply_to_message_id: msg-46b-1 }
+      return: { draft_id: draft-r4b81d6e, mailbox: personal, mailbox_label: Personal, subject: "Re: Saturday", to: [{ name: Maya Hart, email: maya.hart@family.example.test }], cc: [], already_exists: false }
   ceo-inbox-draft-edit:
     - match: { draft_id: draft-r4b81d6e }
       return: { draft_id: draft-r4b81d6e, subject: Saturday lunch, to: [{ name: Maya Hart, email: maya.hart@family.example.test }], cc: [], mailbox: personal, mailbox_label: Personal }
