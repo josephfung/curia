@@ -52,7 +52,9 @@ export type CalendarRouteErrorCode =
   /** No principal mailbox is connected at all. */
   | 'no_mailbox'
   /** The mailbox's grant has no primary calendar to stand for `primary`. */
-  | 'no_home_calendar';
+  | 'no_home_calendar'
+  /** Another mailbox's calendars could not be listed, so a hint-placed calendar's owner is unknown (R106). */
+  | 'owner_unconfirmed';
 
 /** A calendar call that cannot be routed. The message says what to pass; it never names a grant. */
 export class CalendarRouteError extends Error {
@@ -198,22 +200,33 @@ export class CalendarRouter {
   /**
    * For a calendar neither its address nor a registry row places: another live mailbox whose
    * account owns it (Nylas `isOwnedByUser`), if any (SEC-L1). A write through a mailbox it is only
-   * shared into would go out as the wrong identity. Best-effort: a mailbox whose calendars cannot
-   * be listed is skipped (logged), so this never blocks a write on its own failure.
+   * shared into would go out as the wrong identity. Fails closed (R106): when another mailbox's
+   * calendars cannot be listed and no owner was found, it throws `owner_unconfirmed` rather than
+   * let the write go out through the hinted account.
    */
   async ownedElsewhere(calendarId: string, mailboxId: string): Promise<PrincipalMailboxView | undefined> {
     const live = await this.deps.mailboxes.list();
     if (live.length < 2 || this.owner(calendarId, live)) return undefined;
     if ((await this.deps.contacts.resolveCalendar(calendarId))?.principalMailboxId) return undefined;
     const id = lower(calendarId);
+    const unlisted: PrincipalMailboxView[] = [];
     for (const m of live) {
       if (m.id === mailboxId) continue;
       try {
         const listed = await (await this.deps.mailboxes.calendarClient(m.id)).listCalendars();
         if (listed.some((c) => c.isOwnedByUser && lower(c.id) === id)) return m;
       } catch (err) {
-        this.log.warn({ mailboxId: m.id, errName: err instanceof Error ? err.name : 'Error' }, 'Could not list a mailbox\'s calendars to check who owns a calendar; skipped');
+        this.log.warn({ mailboxId: m.id, errName: err instanceof Error ? err.name : 'Error' }, 'Could not list a mailbox\'s calendars to check who owns a calendar; refusing');
+        unlisted.push(m);
       }
+    }
+    if (unlisted.length > 0) {
+      throw new CalendarRouteError(
+        'owner_unconfirmed',
+        `Could not confirm which account owns calendar "${calendarId}": the calendars of ${choices(unlisted)} could not be listed. ` +
+          'Nothing was changed; try again shortly.',
+        options(live),
+      );
     }
     return undefined;
   }

@@ -3,13 +3,12 @@
 - **Calendar per mailbox** — each mailbox's calendar is registered on add; calendars record their mailbox. (#2475)
 - **Event identity (public API)** — calendar events now carry `icalUid` and `organizerEmail`. (#2475)
 - **`calendar-list-events` (public API)** — a meeting on two accounts lists once, with `calendars` naming each copy. (#2475)
-- **Account choice for meetings** — create-event and create-hold fail with `needs_mailbox` and evidence when unsure, before approval. (#2475)
 
 ### Changed
 
 - **`calendarRouter` (public API)** — ToolContext capability `calendarRouter` replaces `nylasCalendarClient`; calls route through each calendar's mailbox. (#2475)
 - **Calendar `mailbox` input (public API)** — every calendar tool takes `mailbox`; bare `primary` needs one with several accounts. (#2475)
-- **`needs_mailbox` (public API)** — create-event and create-hold return it as an error, no longer a success output. (#2475)
+- **`needs_mailbox` (public API)** — create-event and create-hold fail with it and evidence when unsure, before any approval. (#2475)
 - **`calendar-register`** — needs a connected principal mailbox; registers through that mailbox. (#2475)
 - **`calendar-register` and `calendar-list-calendars` (public API)** — outputs now declare `moved_from_mailbox`, `note`, per-calendar mailbox fields and `warnings`. (#2475)
 - **`calendar-respond-to-invite` (public API)** — `account` is replaced by `mailbox`, required with several accounts. (#2475)

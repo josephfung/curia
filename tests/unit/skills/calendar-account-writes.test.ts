@@ -194,6 +194,16 @@ describe('calendar-create-event: the account is a stated choice (D5)', () => {
     expect(personal.listCalendars).not.toHaveBeenCalled();
   });
 
+  it("fails closed when another account's calendars cannot be listed to confirm the owner (R106)", async () => {
+    const { work, personal, router } = setup();
+    personal.listCalendars.mockRejectedValue(new Error('nylas 503'));
+    const err = errorOf(await run(new CalendarCreateEventHandler(), ctx(router, { calendarId: 'c_x@group.calendar.google.com', title: 'T', start: START, end: END, mailbox: 'work' })));
+    expect(err).toContain('Could not confirm which account owns calendar');
+    expect(err).toContain('personal (Personal)');
+    expect(err).toContain('Nothing was changed; try again shortly');
+    noWrites(work, personal);
+  });
+
   it('the execution-layer pre-gate answers needs_mailbox before any approval, with the same text (BR-m5)', async () => {
     const { router, evidence } = setup();
     const input = { calendarId: 'cal-work', title: 'Q3 audit', start: START, end: END, attendees: [{ email: 'cfo@work.example.com' }] };
@@ -205,6 +215,10 @@ describe('calendar-create-event: the account is a stated choice (D5)', () => {
     // Holds too; nothing for a stated mailbox, a non-principal calendar or another tool.
     expect(await calendarWritePregate(router, logger, 'calendar-create-hold', { calendarId: 'primary' })).toMatchObject({ error: expect.stringContaining('nothing was placed') });
     expect(await calendarWritePregate(router, logger, 'calendar-create-event', { ...input, mailbox: 'work' })).toBeNull();
+    // null and '' are absent (N2): answered here, not after an approval.
+    for (const mailbox of [null, '']) {
+      expect(await calendarWritePregate(router, logger, 'calendar-create-event', { ...input, mailbox }), String(mailbox)).toMatchObject({ success: false, error: expect.stringContaining('needs_mailbox') });
+    }
     expect(await calendarWritePregate(router, logger, 'calendar-create-event', { ...input, calendarId: 'curia-own' })).toBeNull();
     expect(await calendarWritePregate(router, logger, 'calendar-update-event', input)).toBeNull();
     // A failed check is not a refusal: the handler checks again.

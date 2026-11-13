@@ -2391,7 +2391,8 @@ export class ExecutionLayer {
     // nothing; the retry with `mailbox` would otherwise raise a second approval (#2475, BR-m5).
     if (this.calendarRouter && !options?.humanApproved) {
       const needsMailbox = await calendarWritePregate(this.calendarRouter, skillLogger, toolName, input);
-      if (needsMailbox) return needsMailbox;
+      // Wrapped like every other early return (N1), so the model sees one format either way.
+      if (needsMailbox) return needsMailbox.success ? needsMailbox : { ...needsMailbox, error: this.wrapSkillError(needsMailbox.error) };
     }
     if (manifest.sensitivity !== 'elevated' && !options?.humanApproved) {
       if (this.autonomyService && autonomyConfig !== null) {

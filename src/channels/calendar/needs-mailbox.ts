@@ -124,7 +124,10 @@ export async function calendarWritePregate(
   input: Record<string, unknown>,
 ): Promise<ToolResult | null> {
   const what = MAILBOX_CHOICE_WRITES[toolName];
-  if (what === undefined || input['mailbox'] !== undefined) return null;
+  // null and '' count as absent here (N2): otherwise such a call is approval-gated first and the
+  // handler then answers needs_mailbox (null) or an unknown mailbox (''), asking twice.
+  const stated = input['mailbox'];
+  if (what === undefined || (stated !== undefined && stated !== null && stated !== '')) return null;
   const calendarId = input['calendarId'];
   if (typeof calendarId !== 'string' || calendarId === '') return null;
   try {
