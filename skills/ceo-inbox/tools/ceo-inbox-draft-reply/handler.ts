@@ -21,8 +21,9 @@ const DRAFT_SCAN_LIMIT = 500;
 const REDIRECT_TIMEOUT_MS = 8_000;
 
 const EXCLUDED_COPY_FOLDERS = new Set(['SENT', 'DRAFT', 'DRAFTS', 'SPAM', 'TRASH']);
-// RFC 5322 atext plus '.', '@': no space, quote or angle bracket reaches the Gmail query.
-const SAFE_MESSAGE_ID = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.@-]+$/;
+// A conservative subset of RFC 5322 atext plus '.', '@'. No space, quote, angle bracket, brace,
+// '|', '*', '?', '~', '^' or backtick reaches the Gmail query: each can widen or group a search.
+const SAFE_MESSAGE_ID = /^[A-Za-z0-9!#$%&+/=_.@-]+$/;
 
 type Redirect =
   | { kind: 'same' }
@@ -66,7 +67,7 @@ async function addressedCopy(ctx: ToolContext, at: MailboxClient, original: Nyla
     const header = (msg.headers ?? []).find((h) => h.name.trim().toLowerCase() === 'message-id');
     return { ...(header ? { id: messageIdsIn(header.value)[0] } : {}), msg };
   };
-  const senders = (m: { from: NylasParticipant[] }) => m.from.map((p) => p.email.toLowerCase()).sort().join(',');
+  const senders = (m: { from: NylasParticipant[] }) => [...new Set(m.from.map((p) => p.email.toLowerCase()))].sort().join(',');
   try {
     const rfcId = (await ownId(at.mailbox.id, messageId)).id;
     if (!rfcId) return fallback('the message has no Message-ID to search by');
