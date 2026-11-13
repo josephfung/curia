@@ -254,3 +254,115 @@ describe('availability across the principal\'s calendars', () => {
     expect(d).not.toHaveProperty('blocking');
   });
 });
+
+describe('fix round 1 (Task 33a review)', () => {
+  it('I1: with an incomplete listing, treat_as_free never frees a busy time the listing missed', async () => {
+    // The cleaner is 10:00–12:00. A weekly 1:1 at 11:00–11:30 came back only as its series
+    // master (Nylas did not expand it), so free/busy merges both into one busy 10–12 slot.
+    const cleaner = evt('p-clean', 'Cleaner', '2026-11-20T16:00:00Z', '2026-11-20T17:00:00Z');
+    const master = evt('p-1on1', '1:1', '2026-10-02T16:30:00Z', '2026-10-02T17:00:00Z', { recurrence: ['RRULE:FREQ=WEEKLY'] });
+    const { clients, router } = twoAccounts([], [cleaner, master]);
+    clients.personal.getFreeBusy.mockResolvedValue([{ email: PERSONAL_HOME, timeSlots: [{ startTime: at('2026-11-20T16:00:00Z'), endTime: at('2026-11-20T17:00:00Z'), status: 'busy' }] }]);
+    const d = data<FreeData>(await free(router, { duration: 60, treat_as_free: ['p-clean'] }));
+    expect(d.treated_as_free.map((b) => b.eventId)).toEqual(['p-clean']);
+    // The slot stays busy (untitled): never returned free.
+    expect(d.blocking).toEqual([expect.objectContaining({ eventId: null, start: '2026-11-20T16:00:00.000Z', end: '2026-11-20T17:00:00.000Z' })]);
+    expect(d.freeWindows.some((w) => w.start <= '2026-11-20T16:00:00.000Z' && w.end > '2026-11-20T16:00:00.000Z')).toBe(false);
+  });
+
+  it('I1: a listing at its cap does not let an ignored hold free its slot', async () => {
+    const hold = evt('h1', 'HOLD (TBC): Acme sync', '2026-11-20T16:00:00Z', '2026-11-20T17:00:00Z', {
+      status: 'tentative', metadata: buildHoldMetadata({ createdAtIso: '2026-11-19T00:00:00Z', subject: 'Acme sync', sourceRef: 'msg-1' }),
+    });
+    const filler = Array.from({ length: LIST_EVENTS_MAX_TOTAL - 1 }, (_, i) => evt(`f${i}`, 'x', '2026-11-20T15:00:00Z', '2026-11-20T15:00:01Z', { busy: false }));
+    const { clients, router } = twoAccounts([hold, ...filler], []);
+    clients.work.getFreeBusy.mockResolvedValue([{ email: WORK_HOME, timeSlots: [{ startTime: at('2026-11-20T16:00:00Z'), endTime: at('2026-11-20T17:00:00Z'), status: 'busy' }] }]);
+    const c = data<ConflictData>(await conflicts(router, { ignoreHoldCriteria: { sourceRef: 'msg-1' } }));
+    expect(c.clear).toBe(false);
+    expect(c.conflicts).toEqual([expect.objectContaining({ eventId: null })]);
+  });
+
+  it('M5: one meeting on two calendars of the same account is listed once', async () => {
+    const shared = { icalUid: 'uid-fam@google.com' };
+    const clients = { work: client([evt('w1', 'Family dinner', '2026-11-20T16:00:00Z', '2026-11-20T17:00:00Z', shared)]), personal: client([]) };
+    const router = routerFixture({
+      mailboxes: [work, personal],
+      clients,
+      principalCalendars: [
+        { nylasCalendarId: WORK_HOME, isPrimary: true, principalMailboxId: 'work' },
+        { nylasCalendarId: PERSONAL_HOME, isPrimary: true, principalMailboxId: 'personal' },
+      ],
+      registry: { 'family@group.calendar.google.com': { principalMailboxId: 'work', contactId: TEST_PRINCIPAL_CONTACT_ID } },
+    });
+    const d = data<FreeData>(await free(router, { calendarIds: [WORK_HOME, 'family@group.calendar.google.com'] }));
+    expect(d.blocking.filter((b) => b.title === 'Family dinner')).toHaveLength(1);
+  });
+
+  it('a principal free/busy failure is partial, never clear', async () => {
+    const { clients, router } = twoAccounts([], []);
+    clients.work.getFreeBusy.mockRejectedValue(new Error('free/busy down'));
+    const c = data<ConflictData>(await conflicts(router));
+    expect(c.clear).toBe(false);
+    expect(c.partial).toEqual([{ mailbox_label: 'Work', error: 'free/busy down' }]);
+  });
+});
+
+describe("fix round 1: someone else's free/busy across several mailboxes (I3, M6, R93)", () => {
+  function fbClient() {
+    return { listCalendars: vi.fn().mockResolvedValue([]), listEvents: vi.fn().mockResolvedValue([]), getFreeBusy: vi.fn().mockImplementation(async (ids: string[]) => ids.map((email) => ({ email, timeSlots: [] }))) };
+  }
+
+  it('I3: several unregistered addresses are routed in parallel under one deadline; late evidence is ignored', async () => {
+    vi.useFakeTimers();
+    try {
+      const clients = { work: fbClient(), personal: fbClient() };
+      const evidence = vi.fn(() => new Promise<never>(() => undefined));
+      const router = routerFixture({ mailboxes: [work, personal], clients, evidence });
+      const ids = ['a@one.example.org', 'b@two.example.org', 'c@three.example.org', 'd@four.example.org'];
+      const started = Date.now();
+      const pending = new CalendarFindFreeTimeHandler().execute(ctx(router, { calendarIds: ids, timeMin: T0, timeMax: T1 }));
+      await vi.advanceTimersByTimeAsync(3_100);
+      const d = data<{ freebusy_via: Array<{ mailbox: string; chosen_by: string }> }>(await pending);
+      expect(Date.now() - started).toBeLessThan(3_500);
+      expect(evidence).toHaveBeenCalledTimes(4);
+      expect(d.freebusy_via.map((v) => [v.mailbox, v.chosen_by])).toEqual(ids.map(() => ['work', 'default']));
+      expect(clients.work.getFreeBusy).toHaveBeenCalledWith(ids, T0, T1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('M6: a failed free/busy on the chosen mailbox is read once through the default, and says so', async () => {
+    const clients = { work: fbClient(), personal: fbClient() };
+    clients.personal.getFreeBusy.mockRejectedValue(new Error('personal grant expired'));
+    const router = routerFixture({
+      mailboxes: [work, personal],
+      clients,
+      evidence: async () => [
+        { mailbox: 'work', mailbox_label: 'Work', sent_count: 0, received_count: 0, domain_match: false },
+        { mailbox: 'personal', mailbox_label: 'Personal', sent_count: 4, received_count: 2, domain_match: false },
+      ],
+    });
+    const d = data<{ freebusy_via: Array<Record<string, unknown>>; partial?: unknown }>(
+      await new CalendarFindFreeTimeHandler().execute(ctx(router, { calendarIds: ['sister@gmail.com'], timeMin: T0, timeMax: T1 })),
+    );
+    expect(clients.work.getFreeBusy).toHaveBeenCalledWith(['sister@gmail.com'], T0, T1);
+    expect(d.freebusy_via).toEqual([{ calendarId: 'sister@gmail.com', mailbox: 'work', mailbox_label: 'Work', chosen_by: 'history', fell_back_from: 'personal' }]);
+    expect(d.partial).toBeUndefined();
+  });
+
+  it('M6: when the default fails too, it is partial and never clear', async () => {
+    const clients = { work: fbClient(), personal: fbClient() };
+    // The default (work) is the chosen mailbox and fails; nothing else to fall back to. The
+    // principal's personal calendar is still read, so the answer is partial, not an error.
+    clients.work.getFreeBusy.mockRejectedValue(new Error('work down'));
+    const router = routerFixture({
+      mailboxes: [work, personal],
+      clients,
+      principalCalendars: [{ nylasCalendarId: PERSONAL_HOME, isPrimary: true, principalMailboxId: 'personal' }],
+    });
+    const c = data<ConflictData>(await new CalendarCheckConflictsHandler().execute(ctx(router, { calendarIds: ['someone@example.org', PERSONAL_HOME], proposedStart: '2026-11-20T16:00:00Z', proposedEnd: '2026-11-20T17:00:00Z' })));
+    expect(c.clear).toBe(false);
+    expect(c.partial?.map((p) => p.mailbox_label)).toContain('Work');
+  });
+});

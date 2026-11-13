@@ -3,12 +3,13 @@
 - **Several principal mailboxes** — the one-mailbox cap is lifted; connect work and personal accounts together. (#2475)
 - **Calendar per mailbox** — each mailbox's calendar is registered on add; calendars record their mailbox. (#2475)
 - **Availability across accounts** — `calendar-find-free-time` and `calendar-check-conflicts` read every account's calendar. (#2475)
-- **`calendar-find-free-time` (public API)** — new `treat_as_free` input; outputs `blocking`, `treated_as_free`, `partial`, `removed`, `freebusy_via`. (#2475)
-- **`calendar-check-conflicts` (public API)** — conflicts add `eventId`, `title`, `calendar_label`; new `partial`, `removed`, `freebusy_via` outputs. (#2475)
+- **`calendar-find-free-time` (public API)** — new `treat_as_free` input; outputs `blocking`, `treated_as_free`, `treat_as_free_unmatched`, `note`. (#2475)
+- **Availability outputs (public API)** — both availability tools add `partial`, `removed` and `freebusy_via` (with `fell_back_from`). (#2475)
+- **`calendar-check-conflicts` (public API)** — conflicts add `eventId`, `title`, `calendar_label`; `clear` is false when a calendar is unread. (#2475)
 - **Event identity (public API)** — calendar events now carry `icalUid` and `organizerEmail`. (#2475)
 - **`calendar-list-events` (public API)** — a meeting on two accounts lists once, with `calendars`; events add `meetingKey`. (#2475)
 - **Account choice for meetings** — `calendar-create-event` and `calendar-create-hold` return `needs_mailbox` with evidence when unsure. (#2475)
-- **Scenario cases 45k–45m** — meeting on the work calendar, cleaner not a conflict, availability across calendars. (#2475)
+- **Scenario cases 46k–46m** — meeting on the work calendar, cleaner not a conflict, availability across calendars. (#2475)
 
 ### Changed
 

@@ -16,9 +16,11 @@
     "freeWindows": "array",
     "blocking": "array? ({eventId, title, calendar_label, start, end} on the principal's calendars; eventId null: busy, no details)",
     "treated_as_free": "array? (events from treat_as_free that were not counted)",
+    "treat_as_free_unmatched": "string[]? (treat_as_free ids that matched no event in the window)",
+    "note": "string? (with partial: say not every calendar was read; never call the windows free)",
     "partial": "array? ({mailbox_label, error}: calendars that could not be read; the windows are not known free there)",
     "removed": "string[]? (removed mailboxes whose calendars were not read)",
-    "freebusy_via": "array? (which account someone else's free/busy was read through, and why)"
+    "freebusy_via": "array? (which account someone else's free/busy was read through, and why; fell_back_from when the chosen one failed)"
   },
   "permissions": [],
   "secrets": [],
