@@ -103,7 +103,7 @@ import { emailAccountGrantSecretName } from './channels/email/email-account-secr
 import { grantSafeErrorFields, mayCarryGrantId } from './principal-mailboxes/error-fields.js';
 import { FLAT_KEYS_MANAGED_MESSAGE, FLAT_PRINCIPAL_MAILBOX_KEYS } from './principal-mailboxes/secrets.js';
 import { PrincipalAcquaintanceCheck } from './contacts/principal-acquaintance.js';
-import { NylasPrincipalMailbox } from './contacts/nylas-principal-mailbox.js';
+import { MultiPrincipalMailbox } from './contacts/multi-principal-mailbox.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
 import { EmailAccountsRepo, CURIA_ADDRESS_LOOKUP_TIMEOUT_MS } from './channels/email/email-accounts-repo.js';
 import { resolveEmailAccounts } from './channels/email/resolve-email-accounts.js';
@@ -1183,8 +1183,6 @@ async function main(): Promise<void> {
   // Every disabled path logs exactly once — none is silent. Guard on the API key first so
   // we don't read the grant (or log a spurious read error) when Nylas isn't configured at all.
   let nylasCalendarClient: NylasCalendarClient | undefined;
-  // The principal's own grant, kept for the dispatcher's principal-mailbox lookup (#2227).
-  let principalNylasGrantId: string | undefined;
 
   // Principal mailbox registry (#2475). The flat ceo_nylas_grant_id moves into it BEFORE the
   // resolver, calendar client and acquaintance mailbox are built, so they all read the registry.
@@ -1338,7 +1336,6 @@ async function main(): Promise<void> {
         'Failed to read the principal mailbox grant — calendar disabled this boot. Check the database and SECRET_ENCRYPTION_KEY (a wrong key breaks all secrets, not just calendar).',
       );
     }
-    principalNylasGrantId = principalCalendarGrant;
     if (principalCalendarGrant) {
       nylasCalendarClient = new NylasCalendarClient(config.nylasApiKey, principalCalendarGrant, logger);
       logger.info('Nylas calendar client initialized (bound to the principal\'s Nylas grant)');
@@ -3490,9 +3487,8 @@ async function main(): Promise<void> {
             orgDomains: yamlConfig.security?.principal_org_domains ?? [],
             principalEmails: () =>
               principalIdentities.filter((id) => id.channel === 'email').map((id) => id.channelIdentifier),
-            mailbox: config.nylasApiKey && principalNylasGrantId
-              ? new NylasPrincipalMailbox(config.nylasApiKey, principalNylasGrantId, logger)
-              : undefined,
+            // Every live mailbox, resolved per call so a replaced grant applies without a restart.
+            mailbox: config.nylasApiKey ? new MultiPrincipalMailbox(principalMailboxes, logger) : undefined,
             logger,
           }),
           contacts: contactService,
