@@ -14,6 +14,12 @@ export interface MailboxOutageNotifierDeps {
   gateway: Pick<OutboundGateway, 'sendNotification'>;
   /** Live lookup: the principal's email may be bound after boot. */
   principalEmail: () => string | undefined;
+  /**
+   * Whether a published notification is delivered right now: the primary ('curia') email adapter
+   * has subscribed (EmailAdapter.deliversNotifications). A publish before that reaches no one, so
+   * it is not counted as sent and the next failing probe tries again. Absent: assumed delivered.
+   */
+  canDeliver?: () => boolean;
   logger: Logger;
 }
 
@@ -40,6 +46,11 @@ export class MailboxOutageNotifier {
     const ceoEmail = this.deps.principalEmail();
     if (!ceoEmail) {
       this.log.warn({ mailboxId }, 'Principal mailbox is failing but the principal email is not bound yet; will alert on a later probe');
+      return;
+    }
+
+    if (this.deps.canDeliver && !this.deps.canDeliver()) {
+      this.log.warn({ mailboxId }, 'Principal mailbox is failing but no email adapter delivers alerts yet; will alert on a later probe');
       return;
     }
 
