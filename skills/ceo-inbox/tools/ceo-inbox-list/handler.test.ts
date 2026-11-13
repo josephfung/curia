@@ -1007,6 +1007,9 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     expect(await bad({ sweep_since: '2026-11-11', mailbox: 'personal' })).toBe(false); // not earlier than the start line
     expect(await bad({ sweep_since: '2026-11-01', mailbox: 'work' })).toBe(false); // work has no start line
     expect(await bad({ sweep_since: '2026-11-01', mailbox: 'nope' })).toBe(false);
+    // The service's typed error is passed on (BR-M4); any other failure reads generically.
+    const unknown = await t.run({ sweep_since: '2026-11-01', mailbox: 'nope' }, principalTurn);
+    expect(unknown.success ? '' : unknown.error).toBe('Unknown mailbox "nope"');
     expect(t.setTriageStart).not.toHaveBeenCalled();
   });
 

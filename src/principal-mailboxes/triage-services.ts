@@ -14,5 +14,5 @@ export interface TriageServices {
   /** The principal's timezone: the one source the heartbeat and TriageState also use. */
   tz(): string;
   /** Move a live mailbox's start line (principal-directed sweep). Unknown or removed ids throw. */
-  setTriageStart(id: string, at: Date | null): Promise<void>;
+  setTriageStart(id: string, at: Date): Promise<void>;
 }
