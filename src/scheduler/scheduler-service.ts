@@ -1296,6 +1296,25 @@ export class SchedulerService {
    *  authorization standing. `derived` is carried in task_payload.standing and replayed by
    *  fireJob into the agent.task `wakeContext`, which drives the bypass ladder: the score can
    *  only ever DOWNGRADE the lineage's standing for this open-ended backlog wake, never grant it. */
+  /**
+   * Bring a task's pending wake forward to `runAt` (#2475, R64). Only a pending task-wake whose
+   * run_at is later than `runAt` moves; a running, failed or suspended wake, or one already due
+   * sooner, is left alone. Updating in place keeps scheduled_jobs_one_active_wake_per_task_uq
+   * satisfied, which a second enqueueTaskWake would violate. Returns whether a wake moved.
+   */
+  async pullTaskWakeIn(taskId: string, runAt: Date): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE scheduled_jobs
+          SET run_at = $2, next_run_at = $2
+        WHERE task_id = $1
+          AND task_payload->>'type' = 'task-wake'
+          AND status = 'pending'
+          AND run_at > $2`,
+      [taskId, runAt],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
   async enqueueTaskWake(params: {
     taskId: string;
     agentId: string;
