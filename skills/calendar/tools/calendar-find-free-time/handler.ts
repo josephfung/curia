@@ -6,6 +6,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds, repairQueriedUnixRange } from '../../../../src/time/timestamp.js';
 import { freeBusyAcross, readCalendarMailbox, routeCalendars } from '../../../_shared/calendar-route.js';
+import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 
 export class CalendarFindFreeTimeHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -131,7 +132,7 @@ export class CalendarFindFreeTimeHandler implements ToolHandler {
       return { success: true, data: { freeWindows: freeWindowsFormatted, displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : null } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err }, 'Failed to find free time');
+      ctx.log.error({ ...grantSafeErrorFields(err) }, 'Failed to find free time');
       return { success: false, error: `Failed to find free time: ${message}` };
     }
   }

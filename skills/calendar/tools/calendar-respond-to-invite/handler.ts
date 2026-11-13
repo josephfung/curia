@@ -15,6 +15,7 @@ import { formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { localizeEventTimes } from '../../../../src/channels/calendar/event-display.js';
 import type { RoutedCalendar } from '../../../../src/channels/calendar/calendar-router.js';
 import { readCalendarMailbox, routeCalendar } from '../../../_shared/calendar-route.js';
+import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 
 type InviteResponse = 'accept' | 'decline' | 'tentative';
 
@@ -99,13 +100,13 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
 
       const participantStatus = RESPONSE_TO_NYLAS[normalizedResponse];
       const rsvp = await routed.client.sendRsvp(routed.calendarId, eventId, participantStatus);
-      ctx.log.info({ calendarId, eventId, response: normalizedResponse, mailboxId: routed.mailboxId }, 'Responded to calendar invite');
+      ctx.log.info({ eventId, response: normalizedResponse, mailboxId: routed.mailboxId }, 'Responded to calendar invite');
 
       let event: NylasCalendarEvent | null = null;
       try {
         event = await routed.client.getEvent(routed.calendarId, eventId);
       } catch (err) {
-        ctx.log.warn({ err, calendarId, eventId }, 'calendar-respond-to-invite: RSVP succeeded but event fetch failed');
+        ctx.log.warn({ ...grantSafeErrorFields(err), eventId }, 'calendar-respond-to-invite: RSVP succeeded but event fetch failed');
         warnings.push('RSVP succeeded, but fetching the updated event failed');
       }
 
@@ -134,7 +135,7 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, calendarId, eventId, response: normalizedResponse }, 'Failed to respond to calendar invite');
+      ctx.log.error({ ...grantSafeErrorFields(err), eventId, response: normalizedResponse }, 'Failed to respond to calendar invite');
       return { success: false, error: `Failed to respond to calendar invite: ${message}` };
     }
   }
@@ -165,7 +166,7 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
       events = await client.listEvents(calendarId, window.start, window.end);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.warn({ err, calendarId }, 'calendar-respond-to-invite: failed to list holds for cleanup');
+      ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: routed.mailboxId }, 'calendar-respond-to-invite: failed to list holds for cleanup');
       return {
         releasedHolds: [],
         releaseWarnings: [`Failed to list holds for cleanup: ${message}`],
@@ -175,7 +176,7 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
     const matches = findHoldsForConversationRelease(events, enrichCriteriaWithEventWindow(criteria, event));
     if (matches.length === 0) {
       ctx.log.info(
-        { calendarId, criteria, eventWindow: window },
+        { mailboxId: routed.mailboxId, criteria, eventWindow: window },
         'calendar-respond-to-invite: no holds matched conversation ref for release; orphans left to sweep',
       );
     }
@@ -185,7 +186,7 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
       if (holdHasAttendees(hold)) {
         // Deleting would email its attendees a cancellation; leave it for a person.
         releaseWarnings.push(`Hold ${hold.id} has attendees, so it was left in place to avoid emailing them a cancellation.`);
-        ctx.log.warn({ calendarId, holdId: hold.id }, 'calendar-respond-to-invite: matching hold has attendees, not releasing');
+        ctx.log.warn({ mailboxId: routed.mailboxId, holdId: hold.id }, 'calendar-respond-to-invite: matching hold has attendees, not releasing');
         continue;
       }
       try {
@@ -199,7 +200,7 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         releaseWarnings.push(`Failed to release hold ${hold.id}: ${message}`);
-        ctx.log.warn({ err, calendarId, holdId: hold.id }, 'calendar-respond-to-invite: failed to release matching hold');
+        ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: routed.mailboxId, holdId: hold.id }, 'calendar-respond-to-invite: failed to release matching hold');
       }
     }
 

@@ -87,8 +87,11 @@ export class CalendarListCalendarsHandler implements ToolHandler {
             contactId: registry?.contactId ?? null,
             contactName: contactName ?? null,
             registryLabel: registry?.label ?? null,
+            // The mailbox it was seen through; a calendar shared into two is listed once per mailbox.
             mailbox: mailbox.id,
             mailbox_label: mailbox.label,
+            // The mailbox its registry row names: calls on it go through this one.
+            registered_mailbox: registry?.principalMailboxId ?? null,
           };
         }),
       );

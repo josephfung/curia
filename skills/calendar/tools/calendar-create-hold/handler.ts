@@ -112,7 +112,7 @@ export class CalendarCreateHoldHandler implements ToolHandler {
 
     if (!holdsEnabled) {
       // Toggle is off -- return early without placing a hold.
-      ctx.log.info({ calendarId }, 'calendar-create-hold: holds disabled by toggle');
+      ctx.log.info('calendar-create-hold: holds disabled by toggle');
       return {
         success: true,
         data: {
@@ -170,7 +170,7 @@ export class CalendarCreateHoldHandler implements ToolHandler {
         metadata,
       });
 
-      ctx.log.info({ calendarId, holdEventId: event.id, subject, mailboxId: routed.mailboxId }, 'calendar-create-hold: placed hold');
+      ctx.log.info({ holdEventId: event.id, subject, mailboxId: routed.mailboxId }, 'calendar-create-hold: placed hold');
 
       return {
         success: true,
@@ -186,7 +186,7 @@ export class CalendarCreateHoldHandler implements ToolHandler {
       // Return success:true with held:false so the caller still proceeds.
       const reason = err instanceof Error ? err.message : String(err);
       ctx.log.error(
-        { err, calendarId, subject },
+        { ...grantSafeErrorFields(err), subject, mailboxId: routed.mailboxId },
         'calendar-create-hold: failed to place hold -- proceeding without hold',
       );
       return {

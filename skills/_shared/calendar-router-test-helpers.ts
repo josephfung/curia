@@ -29,6 +29,9 @@ export interface RouterFixture {
   /** The principal's calendars (getCalendarsForContact / getPrimaryCalendar read these). */
   principalCalendars?: Array<Pick<ContactCalendar, 'nylasCalendarId' | 'isPrimary' | 'principalMailboxId'>>;
   fallbackActive?: boolean;
+  /** A real registry to read instead of `registry` / `principalCalendars` (e.g. an in-memory ContactService). */
+  contacts?: ConstructorParameters<typeof CalendarRouter>[0]['contacts'];
+  principalContactId?: string;
 }
 
 /** A real CalendarRouter over the fixture. */
@@ -61,7 +64,7 @@ export function routerFixture(f: RouterFixture): CalendarRouter {
         return c as NylasCalendarClient;
       },
     },
-    contacts: {
+    contacts: f.contacts ?? {
       resolveCalendar: async (calId: string) => {
         const row = f.registry?.[calId];
         return row
@@ -72,7 +75,7 @@ export function routerFixture(f: RouterFixture): CalendarRouter {
       getPrimaryCalendar: async (_contactId: string, mailboxId?: string) =>
         principalCalendars.find((c) => c.isPrimary && (mailboxId === undefined || c.principalMailboxId === mailboxId)) ?? null,
     },
-    principalContactId: TEST_PRINCIPAL_CONTACT_ID,
+    principalContactId: f.principalContactId ?? TEST_PRINCIPAL_CONTACT_ID,
     logger: createSilentLogger(),
   });
 }

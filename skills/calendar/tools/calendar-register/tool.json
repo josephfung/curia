@@ -12,12 +12,14 @@
     "mailbox": "string? (mailbox id it is read through; required when several are connected, unless the ID is a mailbox's own address)"
   },
   "outputs": {
-    "calendar_id": "string",
+    "calendar_id": "string|null",
     "nylas_calendar_id": "string",
     "contact_id": "string",
     "label": "string",
     "is_primary": "boolean",
-    "mailbox": "string|null"
+    "mailbox": "string|null",
+    "updated": "string[]? (present when an existing registration was moved: only its mailbox changed)",
+    "not_applied": "string[]? (requested fields kept at their registered values on a move)"
   },
   "permissions": [],
   "secrets": [],

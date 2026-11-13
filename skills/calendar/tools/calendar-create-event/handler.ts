@@ -18,6 +18,7 @@ import { parseRecurrence } from '../../../../src/channels/calendar/recurrence-in
 import { parseConferencing } from '../../../../src/channels/calendar/conferencing-input.js';
 import { undeclaredInputError } from '../../../../src/skills/_shared/undeclared-input-guard.js';
 import { readCalendarMailbox, routeCalendar } from '../../../_shared/calendar-route.js';
+import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 
 // Mirrors tool.json `inputs`. Anything else is refused rather than silently dropped (#2385).
 const DECLARED_INPUTS = [
@@ -121,7 +122,7 @@ export class CalendarCreateEventHandler implements ToolHandler {
       }
 
       const event = await client.createEvent(targetCalendarId, eventData);
-      ctx.log.info({ calendarId, eventId: event.id, mailboxId }, 'Created calendar event');
+      ctx.log.info({ eventId: event.id, mailboxId }, 'Created calendar event');
 
       // Self-release: a real booking supersedes any tentative holds we placed on the
       // same slot. List overlapping events and delete only our own curia-hold events.
@@ -151,11 +152,11 @@ export class CalendarCreateEventHandler implements ToolHandler {
             await client.deleteEvent(targetCalendarId, e.id); // no notify flag: no attendees to email, and Microsoft rejects false
             ctx.log.info({ releasedHoldId: e.id, bookedEventId: event.id }, 'calendar-create-event: released overlapping hold');
           } catch (err) {
-            ctx.log.warn({ err, holdId: e.id, bookedEventId: event.id }, 'calendar-create-event: failed to release overlapping hold, continuing');
+            ctx.log.warn({ ...grantSafeErrorFields(err), holdId: e.id, bookedEventId: event.id }, 'calendar-create-event: failed to release overlapping hold, continuing');
           }
         }
       } catch (err) {
-        ctx.log.warn({ err, bookedEventId: event.id }, 'calendar-create-event: hold self-release failed (booking unaffected)');
+        ctx.log.warn({ ...grantSafeErrorFields(err), bookedEventId: event.id }, 'calendar-create-event: hold self-release failed (booking unaffected)');
       }
 
       // Format timestamps in the user's local timezone so the confirmation matches
@@ -171,7 +172,7 @@ export class CalendarCreateEventHandler implements ToolHandler {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, calendarId }, 'Failed to create event');
+      ctx.log.error({ ...grantSafeErrorFields(err) }, 'Failed to create event');
       return { success: false, error: `Failed to create event: ${message}` };
     }
   }
