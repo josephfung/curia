@@ -235,6 +235,8 @@ import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 import { InboxHeartbeat } from './scheduler/inbox-heartbeat.js';
 import { readTriageCadences, TRIAGE_DAILY_CEILING } from './principal-mailboxes/triage-cadence.js';
 import { TriageState, TRIAGE_NAMESPACE } from './principal-mailboxes/triage-state.js';
+import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
+import type { TriageServices } from './principal-mailboxes/triage-services.js';
 import { taskHasPendingWake } from './agents/resumable-continuation.js';
 import { ResumableContinuationSubscriber } from './agents/resumable-continuation-subscriber.js';
 import { LateDelegationSubscriber } from './agents/late-delegation-subscriber.js';
@@ -2940,7 +2942,23 @@ async function main(): Promise<void> {
   // the principal's yes, and settles denials and expiries. Shared by the execution layer's
   // cardUse capability and the deny / expiry paths below.
   const cardUseService = new CardUseService({ repo: cardUseRepo, secrets: secretsService, approvalTrigger, bus, logger });
-  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, principalMailboxes, cardUseRepo, cardUseService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, principalMailboxReady: () => healthService.principalMailboxReady(), curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
+  // ceo-inbox-list's triage mode (#2475, D4): cadences, state, dedupe and the start-line setter.
+  // Built once, on first use by a tool that declares 'triageServices'. Needs the config store.
+  let triageServicesCache: TriageServices | undefined;
+  const triageServices = (): TriageServices | undefined => {
+    if (!entityMemory) return undefined;
+    if (!triageServicesCache) {
+      const cfg = new ConfigStore(entityMemory, logger);
+      triageServicesCache = {
+        cadences: async (ids) => readTriageCadences(await cfg.get(TRIAGE_NAMESPACE, 'triage'), ids, logger),
+        state: new TriageState(cfg, () => principalContact?.timezone ?? config.timezone),
+        dedupe: new TriageDedupe(pool, logger),
+        setTriageStart: (id, at) => principalMailboxStore.setTriageStart(id, at),
+      };
+    }
+    return triageServicesCache;
+  };
+  const executionLayer = new ExecutionLayer(toolRegistry, logger, { triageServices, bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, principalMailboxes, cardUseRepo, cardUseService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, principalMailboxReady: () => healthService.principalMailboxReady(), curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
     findInFlight: (targetAgent: string, originConversationId: string) =>
       findInFlightPendingDelegation(pool, { targetAgent, originConversationId }),
     acquireRunning: (params: Parameters<typeof acquireRunningDelegation>[1]) =>

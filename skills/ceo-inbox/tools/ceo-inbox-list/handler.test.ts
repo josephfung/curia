@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxListHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { Logger } from '../../../../src/logger.js';
-import { pagedMessagesFetch, rawMessage, stubPrincipalMailboxes, twoMailboxes, twoMailboxFixture } from '../../../_shared/principal-mailboxes-test-helpers.js';
+import { TriageState } from '../../../../src/principal-mailboxes/triage-state.js';
+import type { DedupeClaim } from '../../../../src/principal-mailboxes/triage-dedupe.js';
+import { dueMailboxes } from '../../../../src/principal-mailboxes/triage-due.js';
+import { parseCadence, readTriageCadences } from '../../../../src/principal-mailboxes/triage-cadence.js';
+import { mailboxView, pagedMessagesFetch, rawMessage, stubPrincipalMailboxes, twoMailboxes, twoMailboxFixture } from '../../../_shared/principal-mailboxes-test-helpers.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -839,5 +843,242 @@ describe('CeoInboxListHandler — every mailbox (#2475)', () => {
     expect(second.success).toBe(false);
     if (!second.success) expect(second.error).toContain('without page_token');
     expect(f.requests).toHaveLength(before);
+  });
+});
+
+// ── Triage mode (#2475, D4, Task 25) ────────────────────────────────────────
+
+describe('CeoInboxListHandler — triage mode (#2475)', () => {
+  const NOW = new Date('2026-11-12T15:00:00Z');
+  const NOW_S = Math.floor(NOW.getTime() / 1000);
+  const WORK_ADDR = 'ceo@work.example.com';
+  const PERSONAL_ADDR = 'ceo@personal.example.com';
+
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  type Msg = Record<string, unknown>;
+  const msg = (id: string, date: number, extra: Record<string, unknown> = {}): Msg => rawMessage(id, date, extra as never);
+
+  /** An in-memory ConfigStore stand-in for the real TriageState. */
+  function memoryState() {
+    const data = new Map<string, string>();
+    const cfg = {
+      get: async (_ns: string, key: string) => data.get(key) ?? null,
+      set: async (_ns: string, key: string, value: string) => { data.set(key, value); },
+    };
+    return { data, state: new TriageState(cfg as never, () => 'UTC') };
+  }
+
+  interface Opts {
+    claim?: (header: string, mailboxId: string, id: string) => Promise<DedupeClaim>;
+    cadence?: string;
+    start?: { personal?: Date | null; work?: Date | null };
+    headers?: Record<string, Array<{ name: string; value: string }> | Error>;
+    ctxExtra?: Partial<ToolContext>;
+  }
+
+  function setup(byGrant: Record<string, Msg[]>, opts: Opts = {}) {
+    const { data, state } = memoryState();
+    const claim = vi.fn(opts.claim ?? (async () => ({ first: true } as DedupeClaim)));
+    const setTriageStart = vi.fn(async () => undefined);
+    const cadence = opts.cadence ?? 'every 15m';
+    const services = {
+      cadences: async (ids: string[]) => readTriageCadences(JSON.stringify(Object.fromEntries(ids.map((i) => [i, cadence]))), ids),
+      state, dedupe: { claim }, setTriageStart,
+    };
+    const getMessage = vi.fn(async (id: string) => {
+      const h = opts.headers?.[id];
+      if (h instanceof Error) throw h;
+      return { id, headers: h ?? [] };
+    });
+    const gw = { getMessage };
+    const principalMailboxes = stubPrincipalMailboxes({
+      mailboxes: [
+        { ...mailboxView('work', 'Work', WORK_ADDR, true), triageStartAt: opts.start?.work ?? null },
+        { ...mailboxView('personal', 'Personal', PERSONAL_ADDR), triageStartAt: opts.start?.personal ?? null },
+      ],
+      grantId: (id) => `grant-${id}`,
+      gatewayClients: { work: gw, personal: gw },
+    });
+    const paged = pagedMessagesFetch(byGrant, { pageSize: 20 });
+    const writes: Array<{ grant: string; method: string; path: string; body: unknown }> = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = new URL(String(url));
+      const method = (init?.method ?? 'GET').toUpperCase();
+      const grant = /\/grants\/([^/]+)/.exec(u.pathname)![1]!;
+      const path = u.pathname.replace(/^.*\/grants\/[^/]+/, '');
+      if (path === '/messages' && method === 'GET') return paged.fetchStub(url);
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      writes.push({ grant, method, path, body });
+      if (path === '/folders' && method === 'GET') return new Response(JSON.stringify({ data: [{ id: 'INBOX', name: 'INBOX' }] }), { status: 200 });
+      if (path === '/folders') return new Response(JSON.stringify({ data: { id: 'Label_9', name: body.name } }), { status: 200 });
+      return new Response(JSON.stringify({ data: { id: path.split('/').pop(), folders: ['INBOX'], from: [], to: [], cc: [], unread: false, attachments: [] } }), { status: 200 });
+    });
+    const run = (input: Record<string, unknown> = { triage: true }, extra: Partial<ToolContext> = {}) =>
+      new CeoInboxListHandler().execute({
+        ...makeCtx(input), principalMailboxes, triageServices: services, timezone: 'UTC', ...opts.ctxExtra, ...extra,
+      } as unknown as ToolContext);
+    return { run, data, state, claim, setTriageStart, getMessage, writes, requests: paged.requests };
+  }
+
+  type TriageData = {
+    messages: Array<{ id: string; mailbox: string; mailbox_label: string; from_principal_other_mailbox?: boolean }>;
+    count: number; has_more: boolean; mailboxes_due: string[];
+    backlog?: Array<{ mailbox: string; mailbox_label: string; untriaged: number }>;
+    budget_exhausted?: true; mailbox_errors?: unknown[];
+  };
+  const dataOf = (r: Awaited<ReturnType<CeoInboxListHandler['execute']>>): TriageData => {
+    if (!r.success) throw new Error(r.error);
+    return r.data as TriageData;
+  };
+  const principalTurn = { liveTurn: true, taskMetadata: { originator: { systemRole: 'principal', channel: 'signal' } } } as Partial<ToolContext>;
+
+  it('round-robins across due mailboxes', async () => {
+    const t = setup({
+      'grant-work': [1, 2, 3, 4, 5, 6].map((i) => msg(`w${i}`, NOW_S - i)),
+      'grant-personal': [1, 2, 3].map((i) => msg(`p${i}`, NOW_S - i)),
+    });
+    const d = dataOf(await t.run());
+    expect(d.messages.map((m) => m.id)).toEqual(['w1', 'p1', 'w2', 'p2', 'w3']);
+    expect(d.messages.map((m) => m.mailbox_label)).toEqual(['Work', 'Personal', 'Work', 'Personal', 'Work']);
+    expect(d.mailboxes_due).toEqual(['work', 'personal']);
+    expect(d.has_more).toBe(true);
+    expect(await t.state.isDraining('work')).toBe(true);
+  });
+
+  it('ignores mail before the start line', async () => {
+    const start = new Date((NOW_S - 100) * 1000);
+    const t = setup({
+      'grant-work': [msg('w1', NOW_S - 500)],
+      'grant-personal': [msg('p-new', NOW_S - 10), msg('p-old', NOW_S - 500)],
+    }, { start: { personal: start } });
+    const d = dataOf(await t.run());
+    expect(d.messages.map((m) => m.id).sort()).toEqual(['p-new', 'w1']);
+    const personal = t.requests.find((r) => r.grant === 'grant-personal')!;
+    expect(personal.params.get('received_after')).toBe(String(NOW_S - 100));
+    expect(t.requests.find((r) => r.grant === 'grant-work')!.params.get('received_after')).toBeNull();
+  });
+
+  it('sweep_since moves the start line on a principal turn only', async () => {
+    const start = new Date('2026-11-10T00:00:00Z');
+    const t = setup({ 'grant-personal': [] }, { start: { personal: start } });
+    const refused = await t.run({ sweep_since: '2026-11-01', mailbox: 'personal' });
+    expect(refused.success).toBe(false);
+    // A live turn that is not the principal's is refused too.
+    expect((await t.run({ sweep_since: '2026-11-01', mailbox: 'personal' }, { liveTurn: true, taskMetadata: {} })).success).toBe(false);
+    expect(t.setTriageStart).not.toHaveBeenCalled();
+    const ok = await t.run({ sweep_since: '2026-11-01', mailbox: 'personal' }, principalTurn);
+    expect(ok.success).toBe(true);
+    expect(t.setTriageStart).toHaveBeenCalledWith('personal', new Date('2026-11-01T00:00:00Z'));
+  });
+
+  it('sweep_since is validated: needs a mailbox, a real past date within a year, and an existing start line', async () => {
+    const start = new Date('2026-11-10T00:00:00Z');
+    const t = setup({ 'grant-personal': [], 'grant-work': [] }, { start: { personal: start } });
+    const bad = async (input: Record<string, unknown>) => (await t.run(input, principalTurn)).success;
+    expect(await bad({ sweep_since: '2026-11-01' })).toBe(false); // no mailbox
+    expect(await bad({ sweep_since: 'last week', mailbox: 'personal' })).toBe(false);
+    expect(await bad({ sweep_since: '2026-12-25', mailbox: 'personal' })).toBe(false); // future
+    expect(await bad({ sweep_since: '2025-01-01', mailbox: 'personal' })).toBe(false); // over a year
+    expect(await bad({ sweep_since: '2026-11-11', mailbox: 'personal' })).toBe(false); // not earlier than the start line
+    expect(await bad({ sweep_since: '2026-11-01', mailbox: 'work' })).toBe(false); // work has no start line
+    expect(await bad({ sweep_since: '2026-11-01', mailbox: 'nope' })).toBe(false);
+    expect(t.setTriageStart).not.toHaveBeenCalled();
+  });
+
+  it('backlog alarm once per episode', async () => {
+    const many = Array.from({ length: 130 }, (_, i) => msg(`w${i}`, NOW_S - i));
+    const t = setup({ 'grant-work': many, 'grant-personal': [] });
+    const first = dataOf(await t.run());
+    expect(first.backlog).toEqual([{ mailbox: 'work', mailbox_label: 'Work', untriaged: 101 }]);
+    expect(await t.state.backlogAlarmed('work')).toBe(true);
+    const second = dataOf(await t.run());
+    expect(second.backlog).toBeUndefined();
+  });
+
+  it('the backlog alarm resets when the backlog is cleared', async () => {
+    const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)], 'grant-personal': [] });
+    await t.state.setBacklogAlarmed('work', true);
+    dataOf(await t.run());
+    expect(await t.state.backlogAlarmed('work')).toBe(false);
+  });
+
+  it('budget_exhausted at the ceiling with an empty batch', async () => {
+    const t = setup({ 'grant-work': [msg('w1', NOW_S - 1)] });
+    t.data.set('triage.batches.2026-11-12', '120');
+    const d = dataOf(await t.run());
+    expect(d).toMatchObject({ messages: [], count: 0, has_more: false, budget_exhausted: true });
+    expect(t.requests).toHaveLength(0);
+    expect(t.data.get('triage.batches.2026-11-12')).toBe('120');
+  });
+
+  it('the second copy of a message is marked read and labelled', async () => {
+    const t = setup({
+      'grant-work': [],
+      'grant-personal': [msg('copy', NOW_S - 1, { to: [{ email: WORK_ADDR }] }), msg('solo', NOW_S - 2)],
+    }, {
+      headers: { copy: [{ name: 'Message-ID', value: '<abc@mail.example.org>' }] },
+      claim: async () => ({ first: false, mailboxId: 'work', nylasMessageId: 'w-copy' }),
+    });
+    const d = dataOf(await t.run());
+    expect(d.messages.map((m) => m.id)).toEqual(['solo']);
+    expect(t.claim).toHaveBeenCalledWith('abc@mail.example.org', 'personal', 'copy');
+    expect(t.getMessage).toHaveBeenCalledTimes(1); // only the message naming the other address pays
+    const personalWrites = t.writes.filter((w) => w.grant === 'grant-personal');
+    expect(personalWrites.some((w) => w.method === 'PUT' && w.path === '/messages/copy' && (w.body as { unread?: boolean }).unread === false)).toBe(true);
+    expect(personalWrites.some((w) => w.method === 'POST' && w.path === '/folders' && (w.body as { name: string }).name === '↔ In Work')).toBe(true);
+    expect(personalWrites.some((w) => w.method === 'PUT' && w.path === '/messages/copy' && JSON.stringify(w.body).includes('Label_9'))).toBe(true);
+    expect(t.writes.some((w) => w.grant === 'grant-work')).toBe(false);
+  });
+
+  it('keeps a message in the batch when its headers cannot be fetched', async () => {
+    const t = setup({
+      'grant-work': [],
+      'grant-personal': [msg('copy', NOW_S - 1, { to: [{ email: WORK_ADDR }] })],
+    }, { headers: { copy: new Error('boom grant-personal') } });
+    const d = dataOf(await t.run());
+    expect(d.messages.map((m) => m.id)).toEqual(['copy']);
+    expect(t.claim).not.toHaveBeenCalled();
+    expect(t.writes).toHaveLength(0);
+  });
+
+  it('flags mail from the other principal address', async () => {
+    const t = setup({
+      'grant-work': [],
+      'grant-personal': [msg('fwd', NOW_S - 1, { from: [{ email: WORK_ADDR }] })],
+    }, { headers: { fwd: [{ name: 'Message-ID', value: '<fwd@mail.example.org>' }] } });
+    const d = dataOf(await t.run());
+    expect(d.messages).toHaveLength(1);
+    expect(d.messages[0]!.from_principal_other_mailbox).toBe(true);
+  });
+
+  it('counts a batch only when it returns messages', async () => {
+    const empty = setup({ 'grant-work': [], 'grant-personal': [] });
+    expect(dataOf(await empty.run()).count).toBe(0);
+    expect(empty.data.get('triage.batches.2026-11-12')).toBeUndefined();
+    const busy = setup({ 'grant-work': [msg('w1', NOW_S - 1)], 'grant-personal': [] });
+    dataOf(await busy.run());
+    expect(busy.data.get('triage.batches.2026-11-12')).toBe('1');
+  });
+
+  it('stamps a drain with its start so every 15m is due at the next tick (R52)', async () => {
+    const work = Array.from({ length: 16 }, (_, i) => msg(`w${i}`, NOW_S - i));
+    const t = setup({ 'grant-work': work, 'grant-personal': [] });
+    const at = (m: number) => new Date(NOW.getTime() + m * 60_000);
+    for (const minute of [0, 7, 14, 20]) {
+      vi.setSystemTime(at(minute));
+      const d = dataOf(await t.run());
+      // The agent marks the batch read, so those messages leave the unread set.
+      for (const m of d.messages) work.splice(work.findIndex((w) => w['id'] === m.id), 1);
+    }
+    expect(work).toHaveLength(0);
+    expect(await t.state.isDraining('work')).toBe(false);
+    expect(await t.state.lastDrainedAt('work')).toEqual(NOW); // the start, not minute 20
+    expect(await t.state.drainStartedAt('work')).toBeNull();
+    const due = await dueMailboxes({
+      mailboxIds: ['work'], cadences: { work: parseCadence('every 15m')! }, state: t.state, now: at(30), tz: 'UTC',
+    });
+    expect(due).toEqual(['work']);
   });
 });

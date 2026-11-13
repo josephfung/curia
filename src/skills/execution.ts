@@ -379,6 +379,7 @@ export class ExecutionLayer {
   private agentPersona?: AgentPersona;
   private nylasCalendarClient?: NylasCalendarClient;
   private principalMailboxes?: PrincipalMailboxes;
+  private triageServices?: () => import('../principal-mailboxes/triage-services.js').TriageServices | undefined;
   private entityContextAssembler?: EntityContextAssembler;
   private autonomyService?: AutonomyService;
   // secretsService is NOT in capabilityServices — it is infrastructure accessed
@@ -460,6 +461,8 @@ export class ExecutionLayer {
     agentPersona?: AgentPersona;
     nylasCalendarClient?: NylasCalendarClient;
     principalMailboxes?: PrincipalMailboxes;
+    /** Builds the triage view on demand; called only for a tool that declares 'triageServices' (#2475). */
+    triageServices?: () => import('../principal-mailboxes/triage-services.js').TriageServices | undefined;
     entityContextAssembler?: EntityContextAssembler;
     autonomyService?: AutonomyService;
     secretsService?: import('../secrets/secrets-service.js').SecretsService;
@@ -546,6 +549,7 @@ export class ExecutionLayer {
     this.agentPersona = options?.agentPersona;
     this.nylasCalendarClient = options?.nylasCalendarClient;
     this.principalMailboxes = options?.principalMailboxes;
+    this.triageServices = options?.triageServices;
     this.entityContextAssembler = options?.entityContextAssembler;
     this.autonomyService = options?.autonomyService;
     this.secretsService = options?.secretsService;
@@ -605,6 +609,7 @@ export class ExecutionLayer {
     // aware that each field is read, satisfying noUnusedLocals.
     // Field names here MUST match the VALID_CAPABILITIES set in loader.ts.
     const mailboxes = this.principalMailboxes;
+    const triage = this.triageServices;
     return {
       bus: this.bus,
       agentRegistry: this.agentRegistry,
@@ -617,6 +622,8 @@ export class ExecutionLayer {
       get principalMailboxes() { return mailboxes?.forSkills(); },
       // List-only: ids, labels, triage start. No clients (#2475).
       get mailboxDirectory() { return mailboxes?.forDirectory(); },
+      // Built only for a tool that declares it (#2475): no credentials in it.
+      get triageServices() { return triage?.(); },
       autonomyService: this.autonomyService,
       browserService: this.browserService,
       bullpenService: this.bullpenService,

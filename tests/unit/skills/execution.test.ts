@@ -304,6 +304,28 @@ describe('ExecutionLayer', () => {
     });
   });
 
+  describe('triageServices capability (#2475)', () => {
+    it('is built only for a tool that declares it, and carries no mailbox clients', async () => {
+      const services = { cadences: async () => ({}), state: {}, dedupe: {}, setTriageStart: async () => undefined };
+      const build = vi.fn(() => services as never);
+      const withTriage = new ExecutionLayer(registry, logger, { triageServices: build });
+      registry.register(makeManifest({}), { execute: async () => ({ success: true, data: 'ok' }) });
+      expect((await withTriage.invoke('test-skill', { query: 'x' })).success).toBe(true);
+      expect(build).not.toHaveBeenCalled();
+    });
+
+    it('injects the services for a tool that declares it', async () => {
+      const services = { cadences: async () => ({}), state: {}, dedupe: {}, setTriageStart: async () => undefined };
+      const withTriage = new ExecutionLayer(registry, logger, { triageServices: () => services as never });
+      let seen: unknown;
+      registry.register(makeManifest({ optional_capabilities: ['triageServices'] }), {
+        execute: async (ctx: ToolContext) => { seen = ctx.triageServices; return { success: true, data: 'ok' }; },
+      });
+      expect((await withTriage.invoke('test-skill', { query: 'x' })).success).toBe(true);
+      expect(Object.keys(seen as object).sort()).toEqual(['cadences', 'dedupe', 'setTriageStart', 'state']);
+    });
+  });
+
   describe('optional_capabilities (#2024)', () => {
     const seen: { bus?: unknown }[] = [];
     const handler: ToolHandler = {
