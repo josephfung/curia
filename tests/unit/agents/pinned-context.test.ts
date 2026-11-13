@@ -275,6 +275,7 @@ describe('shipped agents on pinned_context (#2339)', () => {
       { kind: 'doc', path: '/shared/inbox/rules.md' },
       { kind: 'config', namespace: 'ceo_inbox', key: 'decision_tagging' },
       { kind: 'config', namespace: 'ceo_inbox', key: 'sending' },
+      { kind: 'config', namespace: 'ceo_inbox', key: 'triage' },
     ]],
     ['meeting-debrief', [{ kind: 'config', namespace: 'debrief', key: 'config' }]],
   ])('%s declares its standing state', (name, expected) => {

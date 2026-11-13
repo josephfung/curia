@@ -208,3 +208,37 @@ export function isDue(c: Cadence, lastDrainedAt: Date | null, now: Date, tz: str
   const threshold = Math.max(everyMs - TOLERANCE_MS, MIN_INTERVAL_MS);
   return now.getTime() - lastDrainedAt.getTime() >= threshold;
 }
+
+/** The config-store key that holds the per-mailbox cadences, in namespace `ceo_inbox`. */
+export const TRIAGE_CADENCE_KEY = 'triage';
+
+/**
+ * Validate a `ceo_inbox/triage` write (R65): a JSON object keyed by live mailbox ids whose values
+ * all parse as cadences. A bad write would otherwise be stored, ignored by the reader with a
+ * warning, and confirmed to the principal as if it had taken effect. Nothing is echoed back.
+ */
+export function checkTriageCadenceWrite(
+  raw: string,
+  live: ReadonlyArray<{ id: string; label: string }>,
+): { ok: true } | { ok: false; error: string } {
+  if (live.length === 0) {
+    return { ok: false, error: 'No principal mailbox is connected yet, so there is no triage cadence to set. Nothing was stored.' };
+  }
+  const shape = `Store a JSON object {"<mailbox id>":"<cadence>"}, cadence like "hourly 06:00-23:00", "every 30m 08:00-18:00 weekdays" or "daily 08:00". Mailboxes: ${live.map((m) => `${m.id} (${m.label})`).join(', ')}. Nothing was stored.`;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    return { ok: false, error: `ceo_inbox/triage must be JSON (${err instanceof Error ? err.name : 'parse error'}). ${shape}` };
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { ok: false, error: `ceo_inbox/triage must be an object keyed by mailbox id. ${shape}` };
+  }
+  const entries = Object.entries(parsed as Record<string, unknown>);
+  const liveIds = new Set(live.map((m) => m.id));
+  const unknown = entries.filter(([k]) => !liveIds.has(k)).map(([k]) => k);
+  if (unknown.length > 0) return { ok: false, error: `Not a connected mailbox: ${unknown.join(', ')}. ${shape}` };
+  const bad = entries.filter(([, v]) => typeof v !== 'string' || parseCadence(v) === null).map(([k]) => k);
+  if (bad.length > 0) return { ok: false, error: `Not a valid cadence for: ${bad.join(', ')}. ${shape}` };
+  return { ok: true };
+}

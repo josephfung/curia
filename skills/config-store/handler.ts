@@ -20,6 +20,8 @@ import {
   SEND_SETTING_NAMESPACE,
   checkSendLevelWrite,
 } from '../../src/skills/principal-send/send-level.js';
+import { checkTriageCadenceWrite, TRIAGE_CADENCE_KEY } from '../../src/principal-mailboxes/triage-cadence.js';
+import { TRIAGE_NAMESPACE } from '../../src/principal-mailboxes/triage-state.js';
 
 const INDEX_LABEL = 'config-store-index';
 
@@ -75,6 +77,25 @@ export class ConfigStoreHandler implements ToolHandler {
     }
     if (value.length > 2000) {
       return { success: false, error: 'value must be 2000 characters or fewer' };
+    }
+
+    // Code-owned state (#2475, R65): triage counters and drain state, sent-observe watermarks and
+    // the learning queues are written only by code through ConfigStore. A turn reading untrusted
+    // mail could otherwise reset the daily ceiling or corrupt drain and learning state.
+    if (isCodeOwnedStateKey(namespace, key)) {
+      ctx.log.info({ namespace, key }, 'config-store: write to a code-owned state key refused');
+      return { success: false, error: `${namespace}/${key} is state Curia keeps itself; it cannot be stored here.` };
+    }
+
+    // ceo_inbox/triage holds per-mailbox cadences (R65): validated like the send level.
+    if (namespace === TRIAGE_NAMESPACE && key === TRIAGE_CADENCE_KEY && ctx.mailboxDirectory) {
+      const live = await liveMailboxes(ctx);
+      if (!live.ok) return { success: false, error: live.error };
+      const check = checkTriageCadenceWrite(value, live.mailboxes);
+      if (!check.ok) {
+        ctx.log.info({ namespace, key }, 'config-store: ceo_inbox/triage write refused — not live mailbox ids with valid cadences');
+        return { success: false, error: check.error };
+      }
     }
 
     // ceo_inbox/sending is keyed by mailbox id (#2475 SF5, B1): a key naming no live mailbox would
@@ -281,6 +302,13 @@ export class ConfigStoreHandler implements ToolHandler {
   }
 }
 
+/** Keys in ceo_inbox that only code writes: triage, sent-observe and voice-learning state (R65). */
+const CODE_OWNED_STATE_KEY = /^(triage|sent_observe|voice_learn)\./;
+
+function isCodeOwnedStateKey(namespace: string, key: string): boolean {
+  return namespace === TRIAGE_NAMESPACE && CODE_OWNED_STATE_KEY.test(key);
+}
+
 /** Trimmed and lowercased: namespaces are matched case-insensitively by the anchor lookup. */
 function normalizeNamespace(raw: unknown): string | undefined {
   return typeof raw === 'string' ? raw.trim().toLowerCase() : undefined;
@@ -310,7 +338,7 @@ async function liveMailboxes(ctx: ToolContext): Promise<
     const list = await ctx.mailboxDirectory!.list();
     return { ok: true, mailboxes: list.map((m) => ({ id: m.id, label: m.label, triageStartAt: m.triageStartAt })) };
   } catch (err) {
-    ctx.log.error({ errName: err instanceof Error ? err.name : typeof err }, 'config-store: could not list the principal mailboxes for ceo_inbox/sending');
-    return { ok: false, error: "Couldn't read the principal's connected mailboxes just now, so the sending level was not stored. Try again shortly." };
+    ctx.log.error({ errName: err instanceof Error ? err.name : typeof err }, 'config-store: could not list the principal mailboxes for a per-mailbox ceo_inbox key');
+    return { ok: false, error: "Couldn't read the principal's connected mailboxes just now, so nothing was stored. Try again shortly." };
   }
 }
