@@ -20,15 +20,22 @@ describeIf('TriageDedupe', () => {
   const FROM = 'sender@example.org';
   const header = () => `<msg${(seq += 1)}-${suffix}@example.com>`;
 
+  // Teardown deletes only after the database was confirmed to be curia_test.
+  let dbValidated = false;
+
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
     await requireCuriaTestDatabase(pool);
+    dbValidated = true;
     dedupe = new TriageDedupe(pool, createSilentLogger());
   });
 
   afterAll(async () => {
-    await pool.query(`DELETE FROM principal_mail_dedupe WHERE message_id_header LIKE $1`, [`%-${suffix}@example.com`]);
-    await pool.end();
+    try {
+      if (dbValidated) await pool.query(`DELETE FROM principal_mail_dedupe WHERE message_id_header LIKE $1`, [`%-${suffix}@example.com`]);
+    } finally {
+      await pool.end();
+    }
   });
 
   it('first claim wins', async () => {
