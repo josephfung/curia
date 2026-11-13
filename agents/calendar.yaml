@@ -230,12 +230,12 @@ system_prompt: |
   By:   slots within <date window / stated constraints>
   Proposed:
     - <sender-proposed slot display>; start=<resolved timestamp>; end=<resolved timestamp>; source="<original phrase>"
-  Context: source_message_id=<id>; contact_timezone=<IANA timezone|unknown>; contact_id=<contact ID if known>
+  Context: source_message_id=<id>; contact_timezone=<IANA timezone|unknown>; contact_id=<contact ID if known>; mailbox=<id>
   ```
 
-  The `Proposed:` block is optional. It is present only when the sender named
-  specific meeting times in the inbound email. A consult without `Proposed:`
-  uses the existing free-time search flow unchanged.
+  The `Proposed:` block is optional (when the sender named specific times).
+  A consult without `Proposed:` uses the existing free-time search flow unchanged.
+  `mailbox`: the email's mailbox.
 
   A formal invite consult is shaped like this instead:
 
@@ -244,7 +244,7 @@ system_prompt: |
   Need: RSVP for formal calendar invite
   Invite: method=REQUEST; calendar_id=<calendarId if known>; event_id=<eventId if known>; ics_uid=<UID if parsed>; start=<timestamp>; end=<timestamp>; subject="<event subject>"; organizer_domain=<domain>
   Standing: <matched per-sender standing instruction, or none>; relationship=<known stakeholder|colleague|unknown|automated|other>; sender_kind=<person|organization|automated|unknown>
-  Context: source_message_id=<id>; thread_ref=<thread id>; contact_timezone=<IANA timezone|unknown>; contact_id=<contact ID if known>; contact_domain=<domain>; hold_search_start=<timestamp>; hold_search_end=<timestamp>
+  Context: source_message_id=<id>; thread_ref=<thread id>; contact_timezone=<IANA timezone|unknown>; contact_id=<contact ID if known>; contact_domain=<domain>; hold_search_start=<timestamp>; hold_search_end=<timestamp>; mailbox=<id>
   ```
 
   For formal invite consults, follow this path and then exit:
@@ -256,13 +256,12 @@ system_prompt: |
      available. If no clear event with concrete start/end matches, reply
      `Result: escalate` with `Reason: could not link invite to calendar event`.
   2. Only after concrete start/end are known, call `calendar-check-conflicts`
-     for the invite start/end with
-     `ignoreHoldCriteria` containing the invite `subject`, `contact_domain`,
-     `contact_id`, `sourceRef: source_message_id`, and `threadRef: thread_ref`
-     when present. A matching HOLD (TBC) for this conversation is not a
-     conflict.
+     for the invite start/end with `ignoreHoldCriteria` containing the invite
+     `subject`, `contact_domain`, `contact_id`, `sourceRef: source_message_id`,
+     and `threadRef: thread_ref` if present. A matching HOLD (TBC) for this
+     conversation is not a conflict.
   3. Decide the RSVP for this invite only, using the RSVP policy above. Standing
-     instructions are strong evidence, but not required: use relationship tier, sender kind,
+     instructions are strong evidence, not required: use relationship tier, sender kind,
      prior correspondence, stakeholder status, invite subject/body, and the
      conflict result. When the response is clear, call `calendar-respond-to-invite`
      with `calendarId`, `eventId`, `response`, and, for accepts, the same hold

@@ -260,6 +260,20 @@ describe('principal-mailboxes routes', () => {
     expect(res.json()).toEqual({ ok: true, removed: true, cleanup_incomplete: [], restart_required: false });
   });
 
+  it('DELETE passes the rules choice and rejects a malformed one', async () => {
+    const opts = makeOptions();
+    await build(opts);
+    const url = '/api/registry/principal-mailboxes/work';
+    await req('DELETE', url, { still_owned: true, rules: 'delete' });
+    expect(opts.admin.remove).toHaveBeenLastCalledWith(expect.objectContaining({ rules: 'delete' }));
+    await req('DELETE', url, { still_owned: true, rules: { rescope_to: 'personal' } });
+    expect(opts.admin.remove).toHaveBeenLastCalledWith(expect.objectContaining({ rules: { rescopeTo: 'personal' } }));
+    vi.mocked(opts.admin.remove).mockClear();
+    expect((await req('DELETE', url, { still_owned: true, rules: 'keep' })).statusCode).toBe(400);
+    expect((await req('DELETE', url, { still_owned: true, rules: {} })).statusCode).toBe(400);
+    expect(opts.admin.remove).not.toHaveBeenCalled();
+  });
+
   it('DELETE reports unfinished cleanup and a needed restart as a 200, never a failure', async () => {
     const opts = makeOptions({ admin: { ...makeOptions().admin, remove: vi.fn(async () => ({ cleanupIncomplete: ['identity'], restartRequired: true })) } });
     await build(opts);

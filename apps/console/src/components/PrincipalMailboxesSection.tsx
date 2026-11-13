@@ -82,13 +82,17 @@ function RemovePanel({ preview, onDone, onCancel }: {
   const [stillOwned, setStillOwned] = useState(preview.stillOwnedDefault);
   const [newDefaultId, setNewDefaultId] = useState('');
   const [newPrimary, setNewPrimary] = useState('');
+  const [rulesChoice, setRulesChoice] = useState<'' | 'delete' | 'move'>('');
+  const [rescopeTo, setRescopeTo] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const needsRules = preview.scopedRules.some(r => r.onlyThisMailbox);
+  const rulesReady = !needsRules || rulesChoice === 'delete' || (rulesChoice === 'move' && rescopeTo !== '');
   const needsDefault = preview.isDefault && preview.otherLive.length > 0;
   const needsPrimary = preview.isPrimaryEmail;
   const noPrimaryChoice = needsPrimary && preview.primaryEmailCandidates.length === 0;
-  const ready = !noPrimaryChoice && (!needsDefault || newDefaultId !== '') && (!needsPrimary || newPrimary !== '');
+  const ready = !noPrimaryChoice && (!needsDefault || newDefaultId !== '') && (!needsPrimary || newPrimary !== '') && rulesReady;
 
   const confirm = useCallback(async () => {
     setBusy(true);
@@ -97,6 +101,7 @@ function RemovePanel({ preview, onDone, onCancel }: {
       const body: Record<string, unknown> = { still_owned: stillOwned };
       if (needsDefault) body['new_default_id'] = newDefaultId;
       if (needsPrimary) body['new_primary_email'] = newPrimary;
+      if (needsRules) body['rules'] = rulesChoice === 'delete' ? 'delete' : { rescope_to: rescopeTo };
       const res = await apiFetch(`${BASE}/${encodeURIComponent(preview.mailbox.id)}`, jsonInit('DELETE', body));
       if (!res.ok) throw new Error(await errorMessage(res));
       onDone(await successNotice(res));
@@ -105,7 +110,7 @@ function RemovePanel({ preview, onDone, onCancel }: {
     } finally {
       setBusy(false);
     }
-  }, [stillOwned, needsDefault, needsPrimary, newDefaultId, newPrimary, preview.mailbox.id, onDone]);
+  }, [stillOwned, needsDefault, needsPrimary, newDefaultId, newPrimary, needsRules, rulesChoice, rescopeTo, preview.mailbox.id, onDone]);
 
   return (
     <div className="form-field" style={{ border: '1px solid var(--border, #ccc)', padding: 8, borderRadius: 6 }}>
@@ -158,6 +163,25 @@ function RemovePanel({ preview, onDone, onCancel }: {
               <li key={i}>{r.title}{r.onlyThisMailbox ? ' (only this mailbox, will stop applying)' : ''}</li>
             ))}
           </ul>
+          {needsRules && (
+            <fieldset style={{ border: 0, padding: 0, margin: '4px 0 8px' }}>
+              <legend>What should happen to the rules that apply only to this mailbox?</legend>
+              <label>
+                <input type="radio" name="rules-choice" aria-label="Rules: delete them" checked={rulesChoice === 'delete'}
+                  onChange={() => setRulesChoice('delete')} /> Delete them
+              </label>
+              <br />
+              <label>
+                <input type="radio" name="rules-choice" aria-label="Rules: move them" checked={rulesChoice === 'move'}
+                  disabled={preview.otherLive.length === 0} onChange={() => setRulesChoice('move')} /> Move them to another mailbox:{' '}
+                <select aria-label="Move rules to" value={rescopeTo} disabled={rulesChoice !== 'move'}
+                  onChange={e => setRescopeTo(e.target.value)}>
+                  <option value="">Choose…</option>
+                  {preview.otherLive.map(m => <option key={m.id} value={m.id}>{m.label} ({m.address})</option>)}
+                </select>
+              </label>
+            </fieldset>
+          )}
         </div>
       )}
       {preview.calendars.length > 0 && (

@@ -37,7 +37,7 @@ Alternatives considered:
 
 - Adding, relabelling, defaulting and removing a mailbox is a console list, not a settings edit, and the setup catalog reports the capability done once one mailbox passes its canary.
 - Every handler that used the flat grant must go through the service. A call that cannot name an account fails loudly instead of acting on the wrong one; that is an accepted cost.
-- Removal cannot be undone by re-adding the same address: it gets a new id and a clean slate. Stale keyed state is left to age out.
+- Removal cannot be undone by re-adding the same address: it gets a new id and a clean slate. Stale keyed state is left to age out, except inbox rules: a `Mailbox:` line in `/shared/inbox/rules.md` is edited at removal. A rule scoped only to the removed mailbox is deleted or moved to another live mailbox (the principal chooses; removal is refused without a choice), and a rule scoped to several just drops the id.
 - The registry is capped at one live mailbox by a code constant until every handler is converted, so no intermediate release runs a second mailbox through half-converted code.
 - While the stack is converting it, calendar keeps the client built at boot, as before the registry: it picks up a new default mailbox or a replaced grant at the next restart. The console says so, and the setup catalog reports a restart as required until then. The acquaintance check (who the principal has written to) reads every live mailbox per call.
 - Until the calendar tools are converted, the flat settings remain mirrored from the default mailbox; retiring them waits for that work.

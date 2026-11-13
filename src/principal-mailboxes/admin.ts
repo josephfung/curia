@@ -7,6 +7,7 @@ import type { ContactService } from '../contacts/contact-service.js';
 import type { PrincipalMailboxStore } from './store.js';
 import type { PrincipalMailboxView } from './service.js';
 import { principalMailboxGrantSecretName } from './secrets.js';
+import { applyRemoval, parseRuleScopes, type RuleRemovalAction } from './rules-scope.js';
 import { grantLookupFailureDetail, grantSafeErrorFields, mayCarryGrantId } from './error-fields.js';
 import {
   MAILBOX_ID_RE,
@@ -40,7 +41,7 @@ export interface RemovalPreview {
   /** Addresses that can become the new primary email: other live mailboxes plus verified
    *  active principal email identities, minus the removed address; lowercased, deduped. */
   primaryEmailCandidates: string[];
-  /** Filled by the rules task via onRemoved hooks / later deps; [] in this part. */
+  /** Inbox rules that name this mailbox; onlyThisMailbox = they stop applying once it is removed. */
   scopedRules: Array<{ title: string; onlyThisMailbox: boolean }>;
   /** Filled by the calendar task; [] in this part. */
   calendars: Array<{ calendarId: string; label: string }>;
@@ -93,6 +94,8 @@ export interface PrincipalMailboxAdminDeps {
   reconcileFlatKeys?: () => Promise<unknown>;
   lookupGrant: (grantId: string) => Promise<{ email: string; provider: string }>;
   onRemoved?: Array<(id: string) => Promise<void>>;
+  /** The standing inbox rules document (/shared/inbox/rules.md), for scoped rules on removal. */
+  rulesDoc?: { read(): Promise<string | null>; write(s: string): Promise<void> };
   /** Drops the legacy `default` ceo_inbox/sending key; best-effort after a tombstone (R41). */
   forgetLegacySendLevel?: () => Promise<void>;
   /** True while the deferred-migration fallback is served. An add then would end the
@@ -310,7 +313,7 @@ export class PrincipalMailboxAdmin {
       stillOwnedDefault: CONSUMER_DOMAINS.has(domain),
       otherLive: others.map(toView),
       primaryEmailCandidates: [...candidates],
-      scopedRules: [],
+      scopedRules: (await this.scopedRules(id)).map((r) => ({ title: r.title, onlyThisMailbox: r.mailboxes!.length === 1 })),
       calendars: [],
     };
   }
@@ -320,6 +323,8 @@ export class PrincipalMailboxAdmin {
     stillOwned: boolean;
     newDefaultId?: string;
     newPrimaryEmail?: string;
+    /** Required when rules are scoped only to this mailbox; otherwise ignored. */
+    rules?: 'delete' | { rescopeTo: string };
   }): Promise<RemovalOutcome> {
     const { id } = input;
     // 1. Validate.
@@ -332,6 +337,24 @@ export class PrincipalMailboxAdmin {
         );
       }
       newDefault = input.newDefaultId;
+    }
+
+    // Rules scoped only to this mailbox need a decision, and a rescope target must be live.
+    const soleRules = (await this.scopedRules(id)).filter((r) => r.mailboxes!.length === 1);
+    let ruleAction: RuleRemovalAction = 'delete';
+    if (soleRules.length > 0) {
+      const choice = input.rules;
+      if (choice === undefined) {
+        throw new MailboxRemovalError(
+          `Inbox rules (${soleRules.length}) apply only to "${id}"; choose to delete them or move them to another mailbox`,
+        );
+      }
+      if (choice !== 'delete') {
+        if (typeof choice !== 'object' || !others.some((m) => m.id === choice.rescopeTo)) {
+          throw new MailboxRemovalError('Move the rules to another live mailbox, or delete them');
+        }
+        ruleAction = choice;
+      }
     }
 
     const principal = await this.deps.contacts.getContactWithIdentities(this.deps.principalContactId);
@@ -405,6 +428,18 @@ export class PrincipalMailboxAdmin {
     // triage start); if its rename never landed it must not outlive that mailbox and be inherited
     // by a new sole one (R41, SF8). Removing any other mailbox leaves it alone. Its own step: a
     // failure is logged and named, the rest still run, and boot reconciles the key again.
+    // Rules named for this mailbox: scoped only to it they are deleted or moved; shared ones
+    // just lose the id. Runs after the grant and flat keys, so a failure here is only a rule
+    // naming a mailbox that no longer exists (it matches nothing).
+    const rulesDoc = this.deps.rulesDoc;
+    if (rulesDoc) {
+      await step('inbox_rules', async () => {
+        const text = await rulesDoc.read();
+        if (text === null) return;
+        const next = applyRemoval(text, id, ruleAction);
+        if (next !== text) await rulesDoc.write(next);
+      });
+    }
     if (rec.triageStartAt === null && this.deps.forgetLegacySendLevel) {
       const forget = this.deps.forgetLegacySendLevel;
       await step('legacy_send_level', () => forget());
@@ -439,6 +474,14 @@ export class PrincipalMailboxAdmin {
       }
     }
     return { cleanupIncomplete, restartRequired: wasDefault };
+  }
+
+  /** Rules that name the mailbox (scoped only to it, or to it and others). */
+  private async scopedRules(id: string): Promise<Array<{ title: string; mailboxes: string[] | null }>> {
+    if (!this.deps.rulesDoc) return [];
+    const text = await this.deps.rulesDoc.read();
+    if (text === null) return [];
+    return parseRuleScopes(text).filter((r) => r.mailboxes?.includes(id));
   }
 
   private async liveTarget(id: string): Promise<{ rec: PrincipalMailboxRecord; others: PrincipalMailboxRecord[] }> {

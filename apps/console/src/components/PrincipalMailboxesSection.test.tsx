@@ -30,7 +30,7 @@ const personal = { id: 'personal', label: 'Personal', address: 'boss@gmail.com',
 function preview(over: Record<string, unknown> = {}) {
   return {
     mailbox: work, isDefault: true, isPrimaryEmail: false, stillOwnedDefault: false,
-    otherLive: [personal], primaryEmailCandidates: ['boss@gmail.com', 'boss@home-example.org'], scopedRules: [{ title: 'Newsletter rule', onlyThisMailbox: true }],
+    otherLive: [personal], primaryEmailCandidates: ['boss@gmail.com', 'boss@home-example.org'], scopedRules: [{ title: 'Newsletter rule', onlyThisMailbox: false }],
     calendars: [{ calendarId: 'c1', label: 'Work calendar' }], ...over,
   };
 }
@@ -176,6 +176,54 @@ describe('PrincipalMailboxesSection', () => {
     const del = mocks.calls.find(c => c.init?.method === 'DELETE')!;
     expect(del.path).toBe('/api/registry/principal-mailboxes/work');
     expect(JSON.parse(del.init!.body as string)).toEqual({ still_owned: false, new_default_id: 'personal' });
+  });
+
+  describe('rules scoped only to the mailbox', () => {
+    const only = { scopedRules: [{ title: 'Work invoices', onlyThisMailbox: true }], isDefault: false };
+    const withOnly = () => {
+      mocks.respond = (path) => path.endsWith('/removal-preview') ? json(preview(only)) : json({ mailboxes: [work, personal] });
+    };
+    const confirmButton = () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Remove mailbox')!;
+    const radio = async (label: string) => {
+      await act(async () => { (byLabel(label) as HTMLInputElement).click(); });
+    };
+
+    it('keeps Remove disabled until the rules choice is made, then sends delete', async () => {
+      withOnly();
+      await mount();
+      await click('Remove');
+      expect(container.textContent).toContain('Work invoices (only this mailbox, will stop applying)');
+      expect(confirmButton().disabled).toBe(true);
+      await radio('Rules: delete them');
+      expect(confirmButton().disabled).toBe(false);
+      await click('Remove mailbox');
+      const del = mocks.calls.find(c => c.init?.method === 'DELETE')!;
+      expect(JSON.parse(del.init!.body as string)).toEqual({ still_owned: false, rules: 'delete' });
+    });
+
+    it('moving the rules needs a target mailbox and sends rescope_to', async () => {
+      withOnly();
+      await mount();
+      await click('Remove');
+      await radio('Rules: move them');
+      expect(confirmButton().disabled).toBe(true);
+      await type('Move rules to', 'personal');
+      expect(confirmButton().disabled).toBe(false);
+      await click('Remove mailbox');
+      const del = mocks.calls.find(c => c.init?.method === 'DELETE')!;
+      expect(JSON.parse(del.init!.body as string)).toEqual({ still_owned: false, rules: { rescope_to: 'personal' } });
+    });
+
+    it('offers no choice and sends no rules when every listed rule is shared', async () => {
+      mocks.respond = (path) => path.endsWith('/removal-preview') ? json(preview({ isDefault: false })) : json({ mailboxes: [work, personal] });
+      await mount();
+      await click('Remove');
+      expect(byLabel('Rules: delete them')).toBeNull();
+      expect(confirmButton().disabled).toBe(false);
+      await click('Remove mailbox');
+      const del = mocks.calls.find(c => c.init?.method === 'DELETE')!;
+      expect(JSON.parse(del.init!.body as string)).toEqual({ still_owned: false });
+    });
   });
 
   it('asks for a new primary email when removing the primary address', async () => {
