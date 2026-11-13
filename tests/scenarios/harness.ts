@@ -123,7 +123,7 @@ import {
   type SeededRun,
 } from './seed.js';
 import { createStubController, type StubController, type StubbedCall } from './stub-layer.js';
-import { COORDINATOR, type CapturedToolCall, type ScenarioCase, type ScenarioRun } from './types.js';
+import { COORDINATOR, type CapturedToolCall, type ScenarioCase, type ScenarioRun, type ScenarioWakeTask } from './types.js';
 import type { AutonomyService } from '../../src/autonomy/autonomy-service.js';
 
 /**
@@ -1103,8 +1103,8 @@ export async function createScenarioHarness(
       const inbound = resolvePlaceholders(dated.inbound, seeded.refs);
       // A task wake's body comes from the scheduler's own builder, so the case sees the
       // wake instruction production sends. A wake_at job's payload is the bare envelope.
-      // The scheduler's job has no originator, so the wake lists every recorded reply on
-      // the agent's open sends, as Scheduler.recordedRepliesFor reads them (#2261).
+      // The job's originator is none or system, never an outsider, so the wake lists every
+      // recorded reply on the agent's open sends, as Scheduler.recordedRepliesFor reads them (#2261).
       const wakeTask = inbound.task;
       inboundContent = wakeTask
         ? formatTaskWakeContent(
@@ -1208,21 +1208,7 @@ export async function createScenarioHarness(
         } else if (sender === 'scheduler') {
           delivery = bus.publish('system', scheduledJobTask(agent, runConversationId, inbound.content));
         } else if (sender === 'task-wake') {
-          // What Scheduler.fireJob publishes for a task's wake_at: the wake body, the
-          // task's intent anchor and the bound-task metadata. A wake_at job carries no
-          // standing, so no wakeContext.
-          delivery = bus.publish('system', createAgentTask({
-            agentId: agent,
-            conversationId: runConversationId,
-            channelId: 'scheduler',
-            senderId: 'scheduler',
-            content: inboundContent,
-            intentAnchor: wakeTask!.intent,
-            metadata: {
-              boundTask: { taskId: wakeTask!.id, errorBudget: {}, tags: wakeTask!.tags ?? [], progress: { notes: wakeTask!.notes } },
-            },
-            parentEventId: randomUUID(),
-          }));
+          delivery = bus.publish('system', taskWakeEvent(agent, runConversationId, inboundContent, wakeTask!));
         } else if (sender !== 'bullpen' && 'channelId' in sender) {
           const nylasMessageId = inbound.email?.nylasMessageId ?? `scenario-msg-${randomUUID()}`;
           // What the fake mailbox serves an email-reply to this message (#2312).
@@ -1540,6 +1526,27 @@ export function scheduledJobTask(agentId: string, conversationId: string, conten
     senderId: 'scheduler',
     content: JSON.stringify({ task: content }),
     metadata: { originator: makeSystemOriginator() },
+    parentEventId: randomUUID(),
+  });
+}
+
+/**
+ * What Scheduler.fireJob publishes for a task's wake_at: the wake body, the task's intent anchor
+ * and the bound-task metadata. A wake_at job carries no standing, so no wakeContext. It does carry
+ * the task's stored originator: `system` for the inbox heartbeat's drain task (#2475).
+ */
+export function taskWakeEvent(agentId: string, conversationId: string, content: string, task: ScenarioWakeTask): AgentTaskEvent {
+  return createAgentTask({
+    agentId,
+    conversationId,
+    channelId: 'scheduler',
+    senderId: 'scheduler',
+    content,
+    intentAnchor: task.intent,
+    metadata: {
+      ...(task.originator === 'system' ? { originator: makeSystemOriginator() } : {}),
+      boundTask: { taskId: task.id, errorBudget: {}, tags: task.tags ?? [], progress: { notes: task.notes } },
+    },
     parentEventId: randomUUID(),
   });
 }

@@ -459,36 +459,6 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-14T16:53:34.402Z"
     },
-    "inbox cron closes a stalled drain task when the inbox is empty": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-31T18:45:10.795Z"
-    },
-    "inbox cron closes a stalled duplicate beside a live drain task": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-31T18:45:27.815Z"
-    },
-    "inbox cron leaves a running drain cycle alone": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-31T18:44:16.683Z"
-    },
-    "inbox cron leaves a running drain cycle alone with mail waiting": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-31T18:44:16.683Z"
-    },
-    "inbox cron takes over a stalled drain task": {
-      "unstubbed": 0,
-      "runs": 3,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-31T18:44:53.751Z"
-    },
     "inbox delegated rules request runs no triage": {
       "unstubbed": 0,
       "runs": 5,

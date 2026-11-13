@@ -120,6 +120,18 @@ describe('loadScenarioCase', () => {
     });
   });
 
+  it('loads a task wake stamped with the system originator, as the inbox heartbeat stamps its drain (#2475)', () => {
+    const c = loadScenarioCase(write('ws.yaml', VALID.replace(PRINCIPAL_INBOUND, `from: task-wake\n  task: ${WAKE_TASK.replace(/ }$/, ', originator: system }')}`)));
+    expect(c.inbound.task?.originator).toBe('system');
+    const plain = loadScenarioCase(write('wp.yaml', VALID.replace(PRINCIPAL_INBOUND, `from: task-wake\n  task: ${WAKE_TASK}`)));
+    expect(plain.inbound.task).not.toHaveProperty('originator');
+  });
+
+  it('rejects a task wake originator other than system (#2475)', () => {
+    const bad = VALID.replace(PRINCIPAL_INBOUND, `from: task-wake\n  task: ${WAKE_TASK.replace(/ }$/, ', originator: principal }')}`);
+    expect(() => loadScenarioCase(write('wb.yaml', bad))).toThrow(/inbound\.task: 'originator' must be 'system'/);
+  });
+
   it('loads a mid-turn follow-up on a channel inbound (#2018)', () => {
     const body = VALID.replace(
       PRINCIPAL_INBOUND,
