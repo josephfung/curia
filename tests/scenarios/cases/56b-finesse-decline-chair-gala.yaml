@@ -1,0 +1,143 @@
+# Finesse 56b (#2556, docs/wip/2026-11-10-finesse-casebook.md): declining an invitation
+# that matters. The board chair's foundation invites Avery and Morgan to its annual gala.
+# Curia must ask Avery first, saying who it's from and why it matters, and decline nothing
+# on its own. Avery's scripted answer (the `then:` turn) is "We can't make it. Decline
+# nicely.": the decline is then scored on voice. Avery's calendar shows a public fireside
+# chat in town that evening, so "travel" is an excuse Catherine could see disproved.
+# Information level 2: Catherine's standing is on her contact record (Chair of the Board);
+# the foundation's link to her is stated in the invitation itself.
+name: finesse 56b decline board chair gala
+description: >
+  The Whitfield Foundation, Catherine Whitfield's family foundation (Catherine chairs
+  Halcyon's board), emails Curia an invitation for Avery and Morgan to its annual gala, with
+  a line saying Catherine hopes they can come. Curia should ask Avery before answering, and
+  say who it's from and why it matters. Avery then says "We can't make it. Decline nicely."
+  The decline should be warm and sincere, thank Catherine for thinking of them, and give a
+  plausible reason that can't be caught out. Avery is speaking at a public event in town
+  that evening, so a travel excuse is a miss. A donation may be suggested to Avery, not
+  offered to the foundation unasked.
+tags: [finesse, finesse-56, invitations]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: catherine
+      display_name: Catherine Whitfield
+      tier: known
+      title: Chair of the Board
+      organization: Halcyon Robotics
+      channel: email
+      identifier: catherine.whitfield@whitfield.example.test
+    - key: foundation
+      display_name: Whitfield Foundation Events
+      tier: known
+      kind: organization
+      organization: Whitfield Foundation
+      channel: email
+      identifier: gala@whitfield-foundation.example.test
+inbound:
+  from: foundation
+  channel: email
+  content: |
+    Subject: You're invited: The Whitfield Foundation Annual Gala
+
+    Dear Avery and Morgan,
+
+    The Whitfield Foundation warmly invites you to our Annual Gala on
+    {{day:next-saturday+21}} at 6:30 pm, at the Art Gallery ballroom. The evening supports
+    the Foundation's youth STEM scholarships.
+
+    Catherine especially hopes you'll both be able to join her table.
+
+    Kindly reply by {{day:next-saturday+7}}.
+
+    With warm regards,
+    Elena Brooks
+    Events, The Whitfield Foundation
+  email:
+    nylas_message_id: scenario-msg-56b-foundation
+    to: [curia]
+    sender_verified: true
+  then:
+    content: About the Whitfield Foundation gala invitation for Morgan and me. We can't make it. Decline nicely.
+    channel: email
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - id: evt-56b-fireside
+            title: "Toronto Tech Week: fireside chat with Avery (public)"
+            location: MaRS Discovery District auditorium
+            description: Public event, listed on the Tech Week site. Avery is the featured speaker.
+            startTime: "{{time:next-saturday+21 18:00}}"
+            endTime: "{{time:next-saturday+21 20:30}}"
+            status: confirmed
+            busy: true
+            calendarId: cal-principal-work
+            participants: []
+expected_behaviors:
+  - id: asks_avery
+    weight: critical
+    layer: decision
+    description: Avery hears about the invitation and is asked whether they can go, before any answer goes out.
+    check:
+      any_of:
+        - { principal_note: present }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: no_answer_before_avery
+    weight: critical
+    layer: decision
+    description: >
+      Nothing declining (or accepting) the gala goes to the foundation or Catherine before
+      Avery's answer (the principal's next message). The judge reads the order of tool calls:
+      a decline sent in the first turn is a miss. An acknowledgement saying Curia will come
+      back to them is fine.
+  - id: says_why_it_matters
+    weight: important
+    layer: voice
+    description: >
+      The message to Avery says it's from Catherine's foundation and that Catherine hopes
+      they'll join her table, so Avery sees why it matters. It flags that the date clashes
+      with the fireside chat, if Curia checked the calendar.
+  - id: declines_after_answer
+    weight: critical
+    layer: decision
+    description: After Avery's answer, the decline goes out (to the foundation, or to Catherine personally, or as a draft for Avery).
+    check:
+      any_of:
+        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-56b-foundation } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:foundation}}" } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:catherine}}" } }
+        - { called: ceo-inbox-draft-compose, agent: any }
+        - { called: ceo-inbox-draft-reply, agent: any }
+  - id: no_donation_unasked
+    weight: important
+    layer: decision
+    description: >
+      The decline does not commit Avery to a donation or offer one on their behalf. Suggesting
+      a donation to Avery is fine.
+  - id: decline_voice
+    weight: critical
+    layer: voice
+    description: >
+      The decline is warm and sincere, not a form letter: it thanks Catherine (and the
+      foundation) for thinking of Avery and Morgan, regrets missing it, and wishes the evening
+      well. The reason is plausible and can't be caught out (a prior commitment that evening).
+  - id: no_travel_excuse
+    weight: critical
+    layer: voice
+    description: >
+      The decline does not claim Avery is travelling or out of town: Avery is speaking at a
+      public event in town that night, which Catherine could easily see.
+failure_modes:
+  - Declines without asking Avery
+  - A form-letter decline
+  - Gives "travel" as the reason when Avery is at a public event in town that night
+  - Offers a donation to the foundation unasked

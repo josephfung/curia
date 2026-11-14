@@ -1,0 +1,97 @@
+# Finesse 53d (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery asks for lunch with a
+# friend. A casual note offering two or three days, not a formal request. Information level
+# 3: Josh's contact record says only former Halcyon engineer; Curia's notes say he and Avery
+# are friends who play pickup basketball. (The casebook gives no "what Curia knows" for 53d;
+# this follows 51e.)
+name: finesse 53d ask time with friend
+description: >
+  Avery tells Curia to set up lunch with Josh sometime in the next couple of weeks. Josh
+  Tanaka was one of Halcyon's first engineers and left two years ago to start his own
+  company; Curia's notes say he and Avery are friends who play pickup basketball. Curia
+  should send Josh a casual note offering two or three days. A formal request is the failure.
+tags: [finesse, finesse-53, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: josh
+      display_name: Josh Tanaka
+      tier: known
+      title: Founder (former Halcyon engineer)
+      channel: email
+      identifier: josh.tanaka@tanaka.example.test
+inbound:
+  from: principal
+  content: Set up lunch with Josh sometime in the next couple of weeks.
+tool_stubs:
+  # Curia's notes: the only place the friendship is recorded (information level 3).
+  memory-query:
+    - match: {}
+      return:
+        count: 1
+        results:
+          - id: 7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b5303
+            type: fact
+            label: Avery and Josh Tanaka
+            properties: { value: "Josh Tanaka and Avery are good friends; they play pickup basketball most Sundays. Josh was one of Halcyon's first engineers." }
+            confidence: 0.9
+            decay_class: slow
+            sensitivity: internal
+            last_confirmed_at: "2026-10-01T10:00:00-04:00"
+            score: 0.84
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - { id: evt-53d-standup, title: Leadership stand-up, location: Room 4B, startTime: "{{time:workday+1 09:00}}", endTime: "{{time:workday+1 09:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-monday+1 11:30}}", end: "{{time:next-monday+1 14:00}}" }
+          - { start: "{{time:next-monday+3 11:30}}", end: "{{time:next-monday+3 14:00}}" }
+          - { start: "{{time:next-monday+8 11:30}}", end: "{{time:next-monday+8 14:00}}" }
+expected_behaviors:
+  - id: writes_to_josh
+    weight: critical
+    layer: decision
+    description: Curia writes to Josh proposing lunch.
+    check:
+      any_of:
+        - { called: email-send, agent: any, contains: { to: "{{contact:josh}}" } }
+        - { called: signal-send, agent: any, contains: { recipient: "{{contact:josh}}" } }
+        - { called: sms-send, agent: any, contains: { recipient: "{{contact:josh}}" } }
+  - id: offers_days
+    weight: important
+    layer: decision
+    description: The note offers two or three days in the next couple of weeks rather than booking one or asking open-endedly.
+  - id: no_pointless_lookup
+    weight: nice-to-have
+    layer: decision
+    description: No web search on a friend Curia already has notes on.
+    check:
+      not_called: [web-search]
+      agent: any
+  - id: josh_note_casual
+    weight: critical
+    layer: voice
+    description: >
+      The note to Josh is short and casual, as to a friend ("Hey Josh, Avery's keen to grab
+      lunch..."). No formal request, no "Avery would like to request a meeting", no corporate
+      sign-off.
+contrast:
+  group: finesse-53-ask-for-time
+  recipient: A close friend of the executive, a former employee who now runs his own company.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:josh}}" } }
+    - { tool: signal-send, arg: message, with: { recipient: "{{contact:josh}}" } }
+failure_modes:
+  - A formal request
+  - Corporate language

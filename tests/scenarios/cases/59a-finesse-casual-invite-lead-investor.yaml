@@ -1,0 +1,146 @@
+# Finesse 59a (#2556, docs/wip/2026-11-10-finesse-casebook.md): a casual invitation from
+# the lead investor. David writes informally to Avery for a beer next week. Curia's notes say
+# "Always make time for David", so Curia makes it happen: offers David a few free evenings
+# (or drafts a reply in Avery's voice for Avery to send) and tells Avery either way, matching
+# David's informality. Information level 3: the "always make time" rule is only in Curia's
+# notes (memory); David's title is on his contact record.
+#
+# The casebook has David write to Avery, with Curia seeing it in Avery's inbox. The scenario
+# harness's principal-mailbox cases run ceo-inbox alone, not the real-delegation office the
+# finesse cases use, so here David writes to Avery with Curia copied (the envelope's To and
+# CC): Curia sees the same message on a live turn.
+name: finesse 59a casual invite from lead investor
+description: >
+  David Okonkwo, General Partner at Ridgeline Ventures, Halcyon's lead investor and a board
+  member, emails Avery (Curia copied): "Hey, grab a beer next week? Been too long." Curia's
+  notes say "Always make time for David." Curia should make it happen: offer David a few
+  evenings next week that are free, or draft a reply for Avery in Avery's voice, and tell Avery
+  either way. The reply matches David's informality ("Hey David, Avery would love that.
+  Tuesday or Thursday evening next week?"). A stiff reply, or leaving it unanswered, is a miss.
+tags: [finesse, finesse-59, invitations]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: david
+      display_name: David Okonkwo
+      tier: known
+      title: General Partner (Halcyon board member)
+      organization: Ridgeline Ventures
+      channel: email
+      identifier: david.okonkwo@ridgeline.example.test
+      principal_wrote: true
+inbound:
+  from: david
+  channel: email
+  content: |
+    Subject: beer?
+
+    Hey, grab a beer next week? Been too long.
+
+    D
+  email:
+    nylas_message_id: scenario-msg-59a-david
+    to: [principal]
+    cc: [curia]
+    sender_verified: true
+tool_stubs:
+  # Curia's notes: the only place the "always make time" rule is recorded (information level 3).
+  memory-query:
+    - match: {}
+      return:
+        count: 1
+        results:
+          - id: 7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b59a1
+            type: fact
+            label: David Okonkwo
+            properties: { value: "Always make time for David. Avery and David are close; they usually catch up over a beer." }
+            confidence: 0.9
+            decay_class: slow
+            sensitivity: internal
+            last_confirmed_at: "2026-08-20T10:00:00-04:00"
+            score: 0.84
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 3
+        events:
+          - { id: evt-59a-mon-dinner, title: Customer dinner (Meridian), location: Canoe, startTime: "{{time:next-monday 18:30}}", endTime: "{{time:next-monday 21:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: robert.achebe@meridian.example.test }] }
+          - { id: evt-59a-wed-board, title: Board dinner, location: Boardroom, startTime: "{{time:next-monday+2 18:00}}", endTime: "{{time:next-monday+2 21:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: catherine.whitfield@whitfield.example.test }] }
+          - { id: evt-59a-fri-family, title: Family night, location: Home, startTime: "{{time:next-monday+4 17:30}}", endTime: "{{time:next-monday+4 21:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-monday+1 17:30}}", end: "{{time:next-monday+1 21:00}}" }
+          - { start: "{{time:next-monday+3 17:30}}", end: "{{time:next-monday+3 21:00}}" }
+expected_behaviors:
+  - id: makes_it_happen
+    weight: critical
+    layer: decision
+    description: >
+      David gets a yes with times, from Curia on the thread or as a draft in Avery's mailbox
+      for Avery to send. Either is right.
+    check:
+      any_of:
+        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-59a-david } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:david}}" } }
+        - { called: ceo-inbox-draft-reply, agent: any }
+        - { called: ceo-inbox-draft-compose, agent: any, contains: { to: "{{contact:david}}" } }
+        - { reply: not_no_reply }
+  - id: does_not_decline_or_stall
+    weight: critical
+    layer: decision
+    description: >
+      Curia does not decline, hedge ("Avery's very busy next week") or leave it for Avery to
+      answer later with nothing done. Asking Avery an open question instead of acting is a miss.
+  - id: offers_free_evenings
+    weight: important
+    layer: decision
+    description: >
+      The times offered are evenings next week that are free on Avery's calendar (the Tuesday
+      or Thursday), not Monday, Wednesday or Friday, which are taken.
+  - id: tells_avery
+    weight: important
+    layer: decision
+    description: Avery is told what Curia offered or drafted.
+    check:
+      any_of:
+        - { principal_note: present }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: draft_not_sent
+    weight: important
+    layer: decision
+    description: A draft in Avery's mailbox is left for Avery to send, not sent by Curia.
+    check:
+      not_called: [ceo-inbox-send-draft]
+      agent: any
+  - id: matches_david
+    weight: critical
+    layer: voice
+    description: >
+      The message to David matches his informality: a line or two, like "Hey David, Avery
+      would love that. Tuesday or Thursday evening next week?" No stiff phrasing ("Avery would
+      be delighted to accept your kind invitation"), no formal sign-off, no over-familiarity
+      beyond David's own tone.
+contrast:
+  group: finesse-59-casual-invite
+  recipient: The company's lead investor, a board member with a warm, informal relationship with the principal.
+  message:
+    - reply
+    - { tool: email-reply, arg: body }
+    - { tool: email-send, arg: body, with: { to: "{{contact:david}}" } }
+    - { tool: ceo-inbox-draft-reply, arg: body }
+    - { tool: ceo-inbox-draft-compose, arg: body }
+failure_modes:
+  - A stiff reply ("Avery would be delighted to accept your kind invitation")
+  - Leaves it unanswered or stalls
+  - Declines or hedges
+  - Offers evenings that are already taken

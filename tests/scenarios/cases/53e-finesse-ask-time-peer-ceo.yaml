@@ -1,0 +1,104 @@
+# Finesse 53e (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery asks for an hour with a
+# peer CEO. Curia writes peer to peer: direct, friendly and efficient. Information level 5:
+# Greg's contact record has only his name and email; only earlier email threads in Avery's
+# mailbox show the two on easy first-name terms, joking about each other's boards.
+name: finesse 53e ask time with peer ceo
+description: >
+  Avery tells Curia to set up an hour with Greg to talk about the joint pilot. Greg Holloway
+  is CEO of Tessellate, a partner company, but his contact record has only his name and
+  email. Earlier email threads between Avery and Greg show easy first-name banter, with jokes
+  about each other's boards. Curia should write peer to peer: direct, friendly and efficient.
+  Deferential (as if Greg were senior) or stiff (as if he were a stranger) is the failure.
+tags: [finesse, finesse-53, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    # Name and email only: the relationship shows only in earlier threads (level 5).
+    - key: greg
+      display_name: Greg Holloway
+      tier: known
+      channel: email
+      identifier: greg.holloway@tessellate.example.test
+inbound:
+  from: principal
+  content: Set up an hour with Greg to talk about the joint pilot.
+tool_stubs:
+  # Avery's mail history with Greg: the only place the register shows (information level 5).
+  ceo-inbox-search:
+    - match: {}
+      return:
+        count: 2
+        messages:
+          - { id: msg-53e-greg-1, threadId: thr-53e-greg-1, from: "Greg Holloway <greg.holloway@tessellate.example.test>", subject: "Re: Pilot scope", date: "{{date:today-12}}", snippet: "Ha, if your board signs off before mine I'll buy the beers. Let's get the pilot scope nailed down.", unread: false, folders: [INBOX] }
+          - { id: msg-53e-greg-2, threadId: thr-53e-greg-1, from: "Avery <avery.testwell@example.test>", subject: "Re: Pilot scope", date: "{{date:today-12}}", snippet: "Deal. Though my board needs three decks to agree on lunch. Talk soon, Greg.", unread: false, folders: [SENT] }
+  ceo-inbox-read:
+    - match: {}
+      return:
+        id: msg-53e-greg-1
+        threadId: thr-53e-greg-1
+        from: "Greg Holloway <greg.holloway@tessellate.example.test>"
+        subject: "Re: Pilot scope"
+        date: "{{date:today-12}}"
+        body: |
+          Ha, if your board signs off before mine I'll buy the beers. Let's get the pilot
+          scope nailed down so we can start in January.
+
+          > Deal. Though my board needs three decks to agree on lunch. Talk soon, Greg.
+          > Avery
+
+          G
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - { id: evt-53e-standup, title: Leadership stand-up, location: Room 4B, startTime: "{{time:workday+1 09:00}}", endTime: "{{time:workday+1 09:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:workday+2 13:00}}", end: "{{time:workday+2 17:00}}" }
+          - { start: "{{time:workday+3 09:00}}", end: "{{time:workday+3 12:00}}" }
+          - { start: "{{time:workday+4 13:00}}", end: "{{time:workday+4 17:00}}" }
+expected_behaviors:
+  - id: writes_to_greg
+    weight: critical
+    layer: decision
+    description: Curia writes to Greg (or his assistant, if it finds one) to set up the hour.
+    check:
+      called: email-send
+      agent: any
+      contains: { to: "{{contact:greg}}" }
+  - id: reads_the_history
+    weight: nice-to-have
+    layer: decision
+    description: Curia looks at Avery's earlier mail with Greg before writing, to pitch the register.
+    check:
+      called: [ceo-inbox-search, ceo-inbox-read]
+      agent: any
+  - id: offers_times
+    weight: important
+    layer: decision
+    description: The note offers a few concrete times (or asks for his) for an hour on the joint pilot.
+  - id: greg_note_peer
+    weight: critical
+    layer: voice
+    description: >
+      The note reads peer to peer: first names, direct, friendly and efficient, with the
+      purpose (the joint pilot) and a few times. Not deferential, as if Greg were senior
+      ("would you be so kind as to spare an hour"), and not stiff, as if he were a stranger.
+contrast:
+  group: finesse-53-ask-for-time
+  recipient: The CEO of a partner company, a peer the executive is on easy first-name terms with.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:greg}}" } }
+failure_modes:
+  - Deferential, as if Greg were senior
+  - Stiff, as if Greg were a stranger

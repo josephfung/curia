@@ -1,0 +1,117 @@
+# Finesse 55d (#2556, docs/wip/2026-11-10-finesse-casebook.md): the largest customer asks for
+# 30 minutes about the renewal. Not a request to decline: Curia books it or offers times
+# promptly, and tells Avery. The "say yes" counterpoint to 55a and 55c. Information level 3:
+# Robert's contact record says COO, Meridian Health (level 2); only Curia's notes say
+# Meridian is Halcyon's largest customer. (The casebook gives no "what Curia knows" for 55d;
+# this follows 52c.)
+name: finesse 55d largest customer asks for time
+description: >
+  Robert Achebe, COO of Meridian Health, emails Curia asking for 30 minutes with Avery to
+  discuss Meridian's renewal. Curia's notes say Meridian is Halcyon's largest customer.
+  Curia should not decline: it books the meeting or offers times promptly, and tells Avery.
+  Treating it like any other request for time, declining it or sending Robert to someone
+  else, is the failure.
+tags: [finesse, finesse-55, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: robert
+      display_name: Robert Achebe
+      tier: known
+      title: COO
+      organization: Meridian Health
+      channel: email
+      identifier: robert.achebe@meridian.example.test
+inbound:
+  from: robert
+  channel: email
+  content: |
+    Subject: Renewal conversation
+
+    Hi,
+
+    Our contract with Halcyon comes up for renewal next quarter, and I'd like 30 minutes
+    with Avery to talk it through before our team starts the review. Could you find a time
+    in the next week or two?
+
+    Best regards,
+    Robert Achebe
+    COO, Meridian Health
+  email:
+    nylas_message_id: scenario-msg-55d-robert
+    to: [curia]
+    sender_verified: true
+tool_stubs:
+  # Curia's notes: the only place Meridian's weight is recorded (information level 3).
+  memory-query:
+    - match: {}
+      return:
+        count: 1
+        results:
+          - id: 7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b5501
+            type: fact
+            label: Meridian Health
+            properties: { value: "Meridian Health is Halcyon's largest customer. Robert Achebe (COO) is the executive sponsor of the account." }
+            confidence: 0.9
+            decay_class: slow
+            sensitivity: internal
+            last_confirmed_at: "2026-09-20T10:00:00-04:00"
+            score: 0.83
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - { id: evt-55d-standup, title: Leadership stand-up, location: Room 4B, startTime: "{{time:workday+1 09:00}}", endTime: "{{time:workday+1 09:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:workday+2 10:00}}", end: "{{time:workday+2 12:00}}" }
+          - { start: "{{time:workday+3 14:00}}", end: "{{time:workday+3 17:00}}" }
+          - { start: "{{time:workday+5 09:00}}", end: "{{time:workday+5 11:00}}" }
+expected_behaviors:
+  - id: engages_robert
+    weight: critical
+    layer: decision
+    description: Curia offers Robert times (or books the meeting) promptly.
+    check:
+      any_of:
+        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-55d-robert } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:robert}}" } }
+        - { called: calendar-create-event, agent: any, contains: { attendees: robert.achebe@meridian.example.test } }
+        - { reply: not_no_reply }
+  - id: does_not_decline
+    weight: critical
+    layer: decision
+    description: >
+      Curia does not decline Robert, put him off, or send him to someone else (sales or
+      account management) instead of Avery. The largest customer's renewal gets Avery's time.
+  - id: tells_avery
+    weight: important
+    layer: decision
+    description: Avery is told about the meeting (booked or offered).
+    check:
+      any_of:
+        - { principal_note: present }
+        - { called: report-to-principal, agent: any }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: robert_reply_voice
+    weight: important
+    layer: voice
+    description: >
+      The reply to Robert is prompt, professional and warm: glad to make time, with two or
+      three concrete times in the next week or two (or a booked time). Not a form answer, and
+      not a deferral.
+failure_modes:
+  - Declines Robert like any other request for time
+  - Sends Robert to someone else instead of Avery
+  - Doesn't tell Avery

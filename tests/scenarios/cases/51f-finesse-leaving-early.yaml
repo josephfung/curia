@@ -1,0 +1,121 @@
+# Finesse 51f (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery has to leave the
+# board chair's one-on-one half an hour early. Curia keeps the meeting and gives Paula an
+# early, apologetic heads-up about the hard stop, offering a follow-up slot if they need more
+# time. Rescheduling the whole meeting, or saying nothing until the day, is the failure.
+# Information level 3: as in 51c, only Curia's notes (memory) say Catherine's calendar runs
+# through Paula.
+name: finesse 51f leaves the chair's meeting early
+description: >
+  Avery (the principal) tells Curia "I have to leave the Catherine meeting at 2:30 instead
+  of 3." The meeting is Avery's one-on-one with Catherine Whitfield, Chair of Halcyon's
+  board, on Thursday from 2 to 3. Curia's notes say Catherine's calendar runs through her
+  executive assistant, Paula Greene, and that she is hard to schedule. Curia should keep the
+  meeting and give Paula an early heads-up that Avery has a hard stop at 2:30, with an
+  apology, offering to find a follow-up slot if they need more time.
+tags: [finesse, finesse-51, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: catherine
+      display_name: Catherine Whitfield
+      tier: known
+      title: Chair of the Board
+      organization: Halcyon Robotics
+      channel: email
+      identifier: catherine.whitfield@whitfield.example.test
+    - key: paula
+      display_name: Paula Greene
+      tier: known
+      channel: email
+      identifier: paula.greene@whitfield.example.test
+inbound:
+  from: principal
+  content: I have to leave the Catherine meeting at 2:30 instead of 3.
+tool_stubs:
+  memory-query:
+    - match: {}
+      return:
+        count: 2
+        results:
+          - id: 7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c31
+            type: fact
+            label: Catherine Whitfield's calendar
+            properties: { value: "Catherine's calendar runs through her executive assistant, Paula Greene (paula.greene@whitfield.example.test). Book and move meetings with Catherine through Paula." }
+            confidence: 0.9
+            decay_class: slow
+            sensitivity: internal
+            last_confirmed_at: "2026-09-02T10:00:00-04:00"
+            score: 0.82
+          - id: 7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c32
+            type: fact
+            label: Scheduling Catherine
+            properties: { value: "Catherine is hard to pin down. The upcoming one-on-one with Avery took three weeks of back and forth with Paula to land." }
+            confidence: 0.8
+            decay_class: slow
+            sensitivity: internal
+            last_confirmed_at: "2026-10-20T10:00:00-04:00"
+            score: 0.78
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 2
+        events:
+          - { id: evt-51f-chair, title: "Avery / Catherine 1:1", location: Video call, startTime: "{{time:next-thursday 14:00}}", endTime: "{{time:next-thursday 15:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: catherine.whitfield@whitfield.example.test }] }
+          - { id: evt-51f-focus, title: "Focus: hiring plan", location: null, startTime: "{{time:next-thursday 10:00}}", endTime: "{{time:next-thursday 11:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-thursday+1 09:00}}", end: "{{time:next-thursday+1 17:00}}" }
+          - { start: "{{time:next-thursday+4 09:00}}", end: "{{time:next-thursday+4 17:00}}" }
+expected_behaviors:
+  - id: keeps_the_meeting
+    weight: critical
+    layer: decision
+    description: >
+      The one-on-one stays on Thursday at 2. It is not cancelled or moved to another time
+      (shortening its end to 2:30 is fine).
+    check:
+      not_called: [calendar-delete-event]
+      agent: any
+      with: { eventId: evt-51f-chair }
+  - id: not_rescheduled
+    weight: critical
+    layer: decision
+    description: >
+      Curia does not try to reschedule the whole meeting, with Paula or on the calendar.
+      Offering a follow-up slot for the remaining time is right.
+  - id: heads_up_to_paula
+    weight: critical
+    layer: decision
+    description: Curia tells Paula now (Catherine may be copied) that Avery has a hard stop at 2:30.
+    check:
+      called: email-send
+      agent: any
+      contains: { to: "{{contact:paula}}" }
+  - id: not_to_catherine_alone
+    weight: important
+    layer: decision
+    description: Does not write to Catherine directly, without Paula.
+    check:
+      not_called: [email-send]
+      agent: any
+      contains: { to: "{{contact:catherine}}" }
+  - id: paula_note_voice
+    weight: critical
+    layer: voice
+    description: >
+      The message to Paula is short and apologetic: Avery has a hard stop at 2:30, sorry for
+      the change, and an offer to find a follow-up slot if Catherine needs more time. No long
+      explanation.
+failure_modes:
+  - Reschedules the whole meeting
+  - Says nothing until the day
+  - Writes to Catherine directly instead of Paula

@@ -1,0 +1,131 @@
+# Finesse 54b (#2556, docs/wip/2026-11-10-finesse-casebook.md): the same reference request,
+# now eight business days old, and the candidate's offer expires Friday. One gentle nudge,
+# mentioning the timing lightly and offering an easier way to help, and Avery is told. The
+# "act" twin of 54a. Information level 2: David's contact record, as in 54a.
+#
+# Shape as 54a; the send is backdated eleven calendar days (about eight business days).
+name: finesse 54b nudge investor with deadline
+description: >
+  Eight business days ago, on Avery's behalf, Curia emailed David Okonkwo, General Partner
+  at Ridgeline Ventures (Halcyon's lead investor and a board member), asking him to give a
+  reference for Jordan Reyes, a senior engineering candidate. David hasn't replied. Jordan's
+  offer expires on Friday. The reminder Curia set itself comes due. Curia should send one
+  gentle nudge that mentions the timing lightly and makes it easy (a 15-minute call, or a
+  couple of lines by email instead), and tell Avery it has been sent. Guilt, pressure, or a
+  nudge with no easier way to help are the failures.
+tags: [finesse, finesse-54, task-wake]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: david
+      display_name: David Okonkwo
+      tier: known
+      title: General Partner (Halcyon board member)
+      organization: Ridgeline Ventures
+      channel: email
+      identifier: david.okonkwo@ridgeline.example.test
+  outbound_context:
+    - key: ask_david
+      channel: email
+      agent: coordinator
+      recipients: [david]
+      content: >
+        Hi David, Avery asked me to reach out: Jordan Reyes is a finalist for Halcyon's
+        VP Engineering role, and Avery would be grateful if you could give a reference,
+        since you worked with Jordan at Corvid. A short call or a few lines by email would
+        both be great. Thank you.
+      expected_reply: whether David will give a reference for Jordan Reyes
+      metadata: { task_id: 54b0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d }
+      sent_minutes_ago: 15840
+      expires_in_hours: 240
+inbound:
+  from: task-wake
+  task:
+    id: 54b0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d
+    title: Reference from David Okonkwo for Jordan Reyes
+    intent: >
+      Get a reference from David Okonkwo for Jordan Reyes, a VP Engineering candidate, and
+      pass it to Avery before Jordan's offer expires.
+    notes:
+      - at: "{{time:today-11 10:15}}"
+        note: >
+          Emailed David Okonkwo for Avery asking for a reference on Jordan Reyes. Set a
+          reminder to check whether he has replied.
+      - at: "{{time:today-4 16:00}}"
+        note: >
+          Still no reply from David. Avery says Jordan's offer is open until
+          {{day:next-friday}}, and the reference matters before then.
+tool_stubs:
+  ceo-inbox-search:
+    - match: {}
+      return: { count: 0, messages: [] }
+  bullpen-read:
+    - match: {}
+      error: No bullpen thread with that ID exists
+  context-bridge-release:
+    - match: {}
+      return: { released: true }
+  task-update:
+    - match: { task_id: 54b0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d }
+      return:
+        task_id: 54b0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d
+        title: Reference from David Okonkwo for Jordan Reyes
+        status: waiting
+        owner: curia
+        priority: 3
+        tags: []
+        updated_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
+expected_behaviors:
+  - id: nudges_david_once
+    weight: critical
+    layer: decision
+    description: Curia sends David one follow-up, and only one.
+    check:
+      called: email-send
+      agent: any
+      contains: { to: "{{contact:david}}" }
+      min: 1
+      max: 1
+  - id: tells_avery
+    weight: important
+    layer: decision
+    description: Avery is told the nudge has gone.
+    check:
+      any_of:
+        - { called: report-to-principal, agent: any }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: keeps_task_open
+    weight: nice-to-have
+    layer: decision
+    description: The task stays open, waiting on David's answer.
+    check:
+      not_called: [task-complete]
+      agent: any
+  - id: david_nudge_gentle
+    weight: critical
+    layer: voice
+    description: >
+      The nudge is a gentle follow-up: it names the reference for Jordan, mentions lightly
+      that the offer is open until Friday, and offers an easier way to help (a 15-minute
+      call, or even a couple of lines by email). No guilt ("we haven't heard back"), no
+      pressure or urgency that leans on an investor, and it does not repeat the original
+      request in full.
+contrast:
+  group: finesse-54-nudge
+  recipient: A general partner at the company's lead investor, who sits on its board.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:david}}" } }
+failure_modes:
+  - Guilt ("we haven't heard back")
+  - Urgency that pressures an investor
+  - Nudges without offering an easier way to help
+  - Sends more than one nudge

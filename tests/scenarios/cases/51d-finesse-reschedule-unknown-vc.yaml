@@ -1,0 +1,124 @@
+# Finesse 51d (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery asks Curia to move
+# their Thursday 2pm and gives no reason. The meeting is an intro with a VC partner Curia
+# has no record of. Curia should look her up before writing, see that Avery is the one
+# asking for her time, write graciously, and save what it learned to a new contact.
+# Information level 4: no contact record and no notes; only a web search shows who Rina is.
+#
+# The casebook gives the invite's address as rina@foundrypeak.example; the case uses a
+# .test domain like every other finesse identifier.
+name: finesse 51d reschedules an unknown vc
+description: >
+  Avery (the principal) tells Curia "I need to move my Thursday 2pm with Rina. Something
+  came up." The Thursday 2pm is "Intro: Avery / Rina", accepted a week ago after a mutual
+  contact made the introduction; the invite came from rina@foundrypeak.example.test. Curia
+  has no contact record or notes on her. A web search shows Rina Patel is a Partner at
+  Foundry Peak Ventures who has led several notable rounds. Curia should look her up before
+  writing, recognize that Avery is the one asking for her time, write graciously (thanks for
+  making the time, an apology, a light reason, a few options and an offer to fit her
+  calendar) and save what it learned to a new contact record.
+tags: [finesse, finesse-51, calendar, lookup]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+inbound:
+  from: principal
+  content: I need to move my Thursday 2pm with Rina. Something came up.
+tool_stubs:
+  # Nothing on file (information level 4).
+  memory-query:
+    - match: {}
+      return: { count: 0, results: [] }
+  web-search:
+    - match: {}
+      return:
+        count: 2
+        results:
+          - title: Rina Patel, Partner | Foundry Peak Ventures
+            url: https://foundrypeak.example.test/team/rina-patel
+            content: Rina Patel is a Partner at Foundry Peak Ventures, where she leads investments in robotics and industrial automation. She led the firm's Series B rounds in Arcwell Robotics and Tensile Systems.
+            score: 0.93
+          - title: Foundry Peak closes $600M fund, names Rina Patel to lead robotics practice
+            url: https://news.example.test/foundry-peak-fund-iv
+            content: Foundry Peak Ventures has closed its fourth fund. Partner Rina Patel, who has led several of the firm's most notable rounds, will head its robotics practice.
+            score: 0.88
+  # Saving what Curia learned: the new contact for Rina, scored below.
+  contact-create:
+    - match: {}
+      return: { contact_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000051d1, display_name: Rina Patel, role: null, kg_node_id: null, identities_added: 1 }
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 2
+        events:
+          - { id: evt-51d-intro, title: "Intro: Avery / Rina", location: Video call, description: "Introduced by a mutual contact. Organizer: rina@foundrypeak.example.test", startTime: "{{time:next-thursday 14:00}}", endTime: "{{time:next-thursday 14:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: rina@foundrypeak.example.test }] }
+          - { id: evt-51d-focus, title: "Focus: hiring plan", location: null, startTime: "{{time:next-thursday 10:00}}", endTime: "{{time:next-thursday 11:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-thursday+1 09:00}}", end: "{{time:next-thursday+1 17:00}}" }
+          - { start: "{{time:next-thursday+4 09:00}}", end: "{{time:next-thursday+4 17:00}}" }
+          - { start: "{{time:next-thursday+5 13:00}}", end: "{{time:next-thursday+5 17:00}}" }
+          - { start: "{{time:next-thursday+6 09:00}}", end: "{{time:next-thursday+6 12:00}}" }
+expected_behaviors:
+  - id: looks_her_up
+    weight: critical
+    layer: decision
+    description: Curia looks Rina up on the web.
+    check:
+      called: web-search
+      agent: any
+  - id: looks_up_before_writing
+    weight: important
+    layer: decision
+    description: The lookup comes before the message to Rina, so the message can reflect who she is.
+    check:
+      order: [web-search, email-send]
+      agent: any
+  - id: saves_what_it_learned
+    weight: important
+    layer: decision
+    description: What was learned (Partner, Foundry Peak Ventures) is saved to a contact record for Rina.
+    check:
+      any_of:
+        - { called: contact-create, agent: any, contains: { notes: Foundry Peak } }
+        - { called: contact-create, agent: any, contains: { role: Foundry Peak } }
+        - { called: contact-update, agent: any, contains: { fields: Foundry Peak } }
+  - id: writes_to_rina
+    weight: critical
+    layer: decision
+    description: Curia writes to Rina to move the intro.
+    check:
+      called: email-send
+      agent: any
+      contains: { to: 0e5d6c7b-1a2b-4c3d-8e9f-0000000051d1 }
+  - id: not_moved_unilaterally
+    weight: important
+    layer: decision
+    description: The intro is not moved to a time Rina has not agreed to.
+    check:
+      not_called: [calendar-update-event]
+      agent: any
+      with: { eventId: evt-51d-intro }
+  - id: rina_note_gracious
+    weight: critical
+    layer: voice
+    description: >
+      The message reads as from someone asking for a busy investor's time: it thanks Rina for
+      making the time in the first place, apologizes for the change, gives a light reason,
+      and makes rebooking easy with a few options and an offer to fit her calendar. Brief.
+      A generic transactional reschedule, or only times that suit Avery, is a miss.
+contrast:
+  group: finesse-51-reschedule
+  recipient: A partner at a venture firm whom the executive hasn't met yet; a mutual contact made the introduction.
+  message:
+    - { tool: email-send, arg: body, with: { to: 0e5d6c7b-1a2b-4c3d-8e9f-0000000051d1 } }
+failure_modes:
+  - Writes without looking her up, as a generic transactional reschedule
+  - Proposes only times that suit Avery
+  - Doesn't save what it learned about Rina

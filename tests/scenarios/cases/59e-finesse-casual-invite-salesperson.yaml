@@ -1,0 +1,100 @@
+# Finesse 59e (#2556, docs/wip/2026-11-10-finesse-casebook.md): a salesperson acting
+# familiar. Kevin, a vendor's account executive, writes "Hey Avery! Grab a beer next week? On
+# me." Curia declines politely without taking up the familiar tone, and without asking Avery.
+# Information level 2: Kevin's contact record says Account Executive, CloudGrid.
+#
+# As in 59a, Kevin writes to Avery with Curia copied, so Curia sees it on a live turn.
+name: finesse 59e casual invite from salesperson
+description: >
+  Kevin Marsh, an account executive at CloudGrid (a vendor trying to sell to Halcyon), emails
+  Avery (Curia copied): "Hey Avery! Grab a beer next week? On me." Curia should decline
+  politely without taking up the familiar tone, and needs no word from Avery to do it.
+  Matching Kevin's tone as if he were a friend, accepting, or asking Avery is a miss.
+tags: [finesse, finesse-59, invitations]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: kevin
+      display_name: Kevin Marsh
+      tier: known
+      title: Account Executive
+      organization: CloudGrid
+      channel: email
+      identifier: kevin.marsh@cloudgrid.example.test
+inbound:
+  from: kevin
+  channel: email
+  content: |
+    Subject: beer next week?
+
+    Hey Avery!
+
+    Grab a beer next week? On me. Would love to hear how things are going at Halcyon.
+
+    Cheers,
+    Kevin
+  email:
+    nylas_message_id: scenario-msg-59e-kevin
+    to: [principal]
+    cc: [curia]
+    sender_verified: true
+tool_stubs:
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-monday+1 17:30}}", end: "{{time:next-monday+1 21:00}}" }
+          - { start: "{{time:next-monday+3 17:30}}", end: "{{time:next-monday+3 21:00}}" }
+expected_behaviors:
+  - id: declines
+    weight: critical
+    layer: decision
+    description: Curia answers Kevin with a polite no.
+    check:
+      any_of:
+        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-59e-kevin } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:kevin}}" } }
+        - { reply: not_no_reply }
+  - id: does_not_accept
+    weight: critical
+    layer: decision
+    description: Curia does not accept, offer times, or leave the door open to a social meeting.
+  - id: no_calendar_hold
+    weight: important
+    layer: decision
+    description: No hold or event is placed for a beer with Kevin.
+    check:
+      not_called: [calendar-create-hold, calendar-create-event]
+      agent: any
+  - id: does_not_ask_avery
+    weight: critical
+    layer: decision
+    description: >
+      Curia does not ask Avery whether to go: a vendor's social invitation needs no decision
+      from Avery. Mentioning the decline in passing is fine.
+  - id: not_familiar
+    weight: critical
+    layer: voice
+    description: >
+      The decline is polite and brief and keeps a professional distance: no "Hey Kevin!",
+      no banter, no exclamation-mark cheer, nothing that treats him as a friend. A courteous
+      thanks is fine; a long explanation is not.
+contrast:
+  group: finesse-59-casual-invite
+  recipient: A salesperson at a vendor trying to sell to the company.
+  message:
+    - reply
+    - { tool: email-reply, arg: body }
+    - { tool: email-send, arg: body, with: { to: "{{contact:kevin}}" } }
+    - { tool: ceo-inbox-draft-reply, arg: body }
+    - { tool: ceo-inbox-draft-compose, arg: body }
+failure_modes:
+  - Matches Kevin's tone as if he were a friend
+  - Accepts or offers times
+  - Asks Avery

@@ -1,0 +1,85 @@
+# Finesse 57c (#2556, docs/wip/2026-11-10-finesse-casebook.md): moving a parent-teacher
+# conference a week. Curia writes to the teacher directly, courteously, and asks for a slot
+# around the new date; no over-explaining, and not the tone it would use with a vendor. The
+# teacher half of a pair with 57d (the contractor): same move, different recipient.
+# Information level 2: Ms. Alvarez's contact record says she is their child's teacher.
+#
+# The casebook's "the 14th" and "the 21st" are the coming Tuesday and the one after.
+name: finesse 57c move parent-teacher conference
+description: >
+  Avery asks Curia to move the parent-teacher conference with Ms. Alvarez, their child's
+  teacher at Maplewood School, from the coming Tuesday to the Tuesday after. Curia should
+  write to Ms. Alvarez directly and courteously and ask for a slot around the new date. It
+  should not over-explain, and should not write to the teacher as it would to a vendor.
+tags: [finesse, finesse-57, family, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: alvarez
+      display_name: Ms. Alvarez
+      tier: known
+      title: Teacher (Avery and Morgan's child's class)
+      organization: Maplewood School
+      channel: email
+      identifier: m.alvarez@maplewood-school.example.test
+inbound:
+  from: principal
+  content: Move the parent-teacher conference from {{day:next-tuesday}} to {{day:next-tuesday+7}}.
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - { id: evt-57c-ptc, title: Parent-teacher conference (Ms. Alvarez), location: Maplewood School, startTime: "{{time:next-tuesday 16:00}}", endTime: "{{time:next-tuesday 16:20}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: m.alvarez@maplewood-school.example.test }] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-tuesday+7 15:00}}", end: "{{time:next-tuesday+7 18:00}}" }
+          - { start: "{{time:next-tuesday+8 15:00}}", end: "{{time:next-tuesday+8 18:00}}" }
+expected_behaviors:
+  - id: writes_to_teacher
+    weight: critical
+    layer: decision
+    description: Curia writes to Ms. Alvarez directly to move the conference.
+    check:
+      called: email-send
+      agent: any
+      contains: { to: "{{contact:alvarez}}" }
+  - id: does_not_ask_avery
+    weight: important
+    layer: decision
+    description: >
+      Curia does not check back with Avery before writing: the instruction is clear. Telling
+      Avery it's done (or asked) is right.
+  - id: asks_for_slot
+    weight: important
+    layer: decision
+    description: >
+      The message asks Ms. Alvarez for a slot around the new date (or offers a few times that
+      day), rather than fixing a time on her calendar unilaterally.
+  - id: teacher_voice
+    weight: critical
+    layer: voice
+    description: >
+      Courteous and warm, as a parent's office would write to their child's teacher: a brief
+      apology for the change, a request for a time that suits her around the new date, thanks.
+      No over-explaining (no board offsite, no work detail) and nothing vendor-like (no
+      "please confirm availability at your earliest convenience", no terse transactional tone).
+contrast:
+  group: finesse-57-move-appointment
+  recipient: Their child's schoolteacher.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:alvarez}}" } }
+failure_modes:
+  - Over-explains the reason for the move
+  - Treats the teacher like a vendor
+  - Fixes a new time without asking what suits her

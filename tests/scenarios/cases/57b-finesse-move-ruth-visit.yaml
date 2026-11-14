@@ -1,0 +1,94 @@
+# Finesse 57b (#2556, docs/wip/2026-11-10-finesse-casebook.md): moving a family visit.
+# Avery says Ruth's visit has to move a week because the board offsite moved. Rearranging
+# a mother-in-law's visit is personal: Curia suggests it come from Avery or Morgan and offers
+# a draft for them to send, rather than emailing Ruth from the office. Avery's scripted answer
+# (the `then:` turn) asks for the draft, which is then scored on voice. Information level 2:
+# Ruth's contact record says she is Morgan's mother.
+#
+# The casebook's "the 14th" and "the 21st" are the coming Saturday and the one after.
+name: finesse 57b move ruth's visit
+description: >
+  Avery tells Curia that Ruth's visit on the coming Saturday has to move to the Saturday
+  after, because the board offsite got moved. Ruth Abernathy is Morgan's mother. Curia should
+  suggest that this come from Avery or Morgan personally and offer a draft for them to send,
+  not send a scheduling email to Ruth from the office. Avery then asks for the draft. The
+  draft (in Avery's own mailbox) should be warm, apologetic, kind about the change and light
+  on work detail: no "the board offsite has been rescheduled".
+tags: [finesse, finesse-57, family]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: ruth
+      display_name: Ruth Abernathy
+      tier: known
+      title: Morgan's mother (Avery's mother-in-law)
+      channel: email
+      identifier: ruth.abernathy@abernathy.example.test
+inbound:
+  from: principal
+  content: Ruth's visit on {{day:next-saturday}} has to move to {{day:next-saturday+7}}. The board offsite got moved.
+  then:
+    content: Yes, please draft the note to Ruth about moving her visit to {{day:next-saturday+7}} and I'll send it myself.
+    channel: email
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 2
+        events:
+          - { id: evt-57b-ruth, title: Ruth visiting, location: Home, startTime: "{{time:next-saturday 11:00}}", endTime: "{{time:next-saturday 18:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+          - { id: evt-57b-offsite, title: Board offsite, location: Langdon Hall, startTime: "{{time:next-saturday 09:00}}", endTime: "{{time:next-saturday 17:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: catherine.whitfield@whitfield.example.test }] }
+expected_behaviors:
+  - id: not_sent_from_office
+    weight: critical
+    layer: decision
+    description: Curia does not write to Ruth from its own address or channels about moving the visit.
+    check:
+      not_called: [email-send]
+      agent: any
+      contains: { to: "{{contact:ruth}}" }
+  - id: suggests_personal_note
+    weight: critical
+    layer: decision
+    description: >
+      In its first answer, Curia suggests the change come from Avery or Morgan personally and
+      offers a draft for them to send (or writes the draft in Avery's mailbox and says so).
+      Saying it will email Ruth itself is a miss.
+  - id: drafts_for_avery
+    weight: important
+    layer: decision
+    description: A draft to Ruth is written in Avery's own mailbox for Avery to send.
+    check:
+      called: [ceo-inbox-draft-compose, ceo-inbox-draft-reply]
+      agent: any
+  - id: never_sends_draft
+    weight: important
+    layer: decision
+    description: Curia leaves the draft for Avery to send; it does not send it from Avery's mailbox.
+    check:
+      not_called: [ceo-inbox-send-draft]
+      agent: any
+  - id: draft_no_offsite
+    weight: important
+    layer: voice
+    description: The draft keeps work detail out; it does not mention the board offsite.
+    check:
+      text: { tool: ceo-inbox-draft-compose, arg: body }
+      excludes: ['offsite', '\bboard\b']
+  - id: draft_voice
+    weight: critical
+    layer: voice
+    description: >
+      The draft reads as Avery writing to their mother-in-law: warm, sorry about the change,
+      kind (looking forward to the new date), and light on work detail ("something came up
+      at work" at most). It names the new date. No business language ("the board offsite has
+      been rescheduled", "please confirm your availability").
+failure_modes:
+  - Sends Ruth a scheduling email from the office
+  - Business language in the note ("the board offsite has been rescheduled")
+  - Sends the draft from Avery's mailbox without being asked
