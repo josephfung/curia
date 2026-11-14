@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import pino from 'pino';
-import { ContactUpdateHandler } from './handler.js';
+import { ContactUpdateHandler, PRINCIPAL_TIMEZONE_REFUSAL } from './handler.js';
 import { ContactService } from '../../../../src/contacts/contact-service.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 
@@ -148,6 +148,93 @@ describe('ContactUpdateHandler', () => {
 
     expect(result.success).toBe(false);
     expect((result as { success: false; error: string }).error).toMatch(/No principal contact/);
+  });
+
+  // ── The principal's home timezone ─────────────────────────────────────────
+  // A calendar-invite footer once became the principal's timezone and stopped inbox triage.
+  // Only the principal, live, changes it; travel is a separate override (#2598).
+
+  const PRINCIPAL_LIVE = {
+    liveTurn: true,
+    taskMetadata: {
+      originator: { contactId: 'p', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-11-14T12:00:00Z', tier: null },
+    },
+  } as unknown as Partial<ToolContext>;
+
+  async function makePrincipal() {
+    const created = await contactService.createContact({ displayName: 'Avery Testwell', source: 'ceo_stated', timezone: 'America/Toronto' });
+    const principal = { ...created, systemRole: 'principal' as const };
+    vi.spyOn(contactService, 'findContactBySystemRole').mockResolvedValue(principal);
+    vi.spyOn(contactService, 'getContact').mockResolvedValue(principal);
+    return principal;
+  }
+
+  it('refuses to change the principal\'s timezone outside a live principal turn', async () => {
+    const principal = await makePrincipal();
+    const update = vi.spyOn(contactService, 'updateContactFields');
+    const ctx = makeCtx({ input: { contact_id: 'principal', fields: { timezone: 'Asia/Tokyo' } }, contactService });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect((result as { success: false; error: string }).error).toBe(PRINCIPAL_TIMEZONE_REFUSAL);
+    expect(update).not.toHaveBeenCalled();
+    expect(principal.timezone).toBe('America/Toronto');
+  });
+
+  it('refuses on a wake of a principal task: a wake is not the principal speaking', async () => {
+    await makePrincipal();
+    const ctx = makeCtx({
+      ...PRINCIPAL_LIVE,
+      taskMetadata: { ...(PRINCIPAL_LIVE.taskMetadata as Record<string, unknown>), wakeContext: { derived: false } },
+      input: { contact_id: 'principal', fields: { timezone: 'Asia/Tokyo' } },
+      contactService,
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+  });
+
+  it('changes the principal\'s timezone on a live principal turn, normalized', async () => {
+    const principal = await makePrincipal();
+    const update = vi.spyOn(contactService, 'updateContactFields');
+    const ctx = makeCtx({
+      ...PRINCIPAL_LIVE,
+      input: { contact_id: 'principal', fields: { timezone: 'Pacific Time - Los Angeles' } },
+      contactService,
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(update).toHaveBeenCalledWith(principal.id, { timezone: 'Pacific Time - Los Angeles' });
+    const row = await (update.mock.results[0]!.value as Promise<{ timezone: string | null }>);
+    expect(row.timezone).toBe('America/Los_Angeles');
+  });
+
+  it('still updates the principal\'s other fields outside a live turn', async () => {
+    await makePrincipal();
+    const ctx = makeCtx({ input: { contact_id: 'principal', fields: { title: 'CEO' } }, contactService });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('explains an unrecognized timezone without the primaryEmail hint', async () => {
+    const contact = await contactService.createContact({ displayName: 'Tz Person', source: 'ceo_stated' });
+    const ctx = makeCtx({
+      input: { contact_id: contact.id, fields: { timezone: 'Eastern Time - US & Canada' } },
+      contactService,
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    const error = (result as { success: false; error: string }).error;
+    expect(error).toMatch(/not a recognized timezone/);
+    expect(error).not.toMatch(/contact-link-identity/);
   });
 
   // ── Happy path ────────────────────────────────────────────────────────────
