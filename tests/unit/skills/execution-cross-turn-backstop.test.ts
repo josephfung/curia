@@ -347,3 +347,101 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
     );
   });
 });
+
+describe('ExecutionLayer cross-turn backstop outcomes (#2588)', () => {
+  it('a failed call is dropped, so the next turn is not held', async () => {
+    const { registry, layer, turnActivity } = setup();
+    const handler = makeHandler();
+    handler.execute.mockResolvedValueOnce({ success: false, error: 'provider refused' });
+    registry.register(makeRiskyManifest('contact-message', 'medium'), handler);
+    startRoot(turnActivity, 'task-a');
+    startRoot(turnActivity, 'task-b');
+
+    expect((await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a'))).success).toBe(false);
+    expect(turnActivity.actionsOf('task-a')).toHaveLength(0);
+    expect((await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-b'))).success).toBe(true);
+    expect(handler.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('a thrown handler error drops the call too', async () => {
+    const { registry, layer, turnActivity } = setup();
+    const handler = makeHandler();
+    handler.execute.mockRejectedValueOnce(new Error('boom'));
+    registry.register(makeRiskyManifest('contact-message', 'medium'), handler);
+    startRoot(turnActivity, 'task-a');
+
+    expect((await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a'))).success).toBe(false);
+    expect(turnActivity.actionsOf('task-a')).toHaveLength(0);
+  });
+
+  it('a call still running holds the other turn with "right now"', async () => {
+    const { registry, layer, turnActivity } = setup();
+    let finish: (r: { success: true; data: string }) => void = () => {};
+    const handler = makeHandler();
+    handler.execute.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    registry.register(makeRiskyManifest('contact-message', 'medium'), handler);
+    startRoot(turnActivity, 'task-a');
+    startRoot(turnActivity, 'task-b');
+
+    const first = layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a'));
+    await vi.waitFor(() => expect(handler.execute).toHaveBeenCalledTimes(1));
+    expect(turnActivity.actionsOf('task-a')[0]!.outcome).toBe('pending');
+
+    const held = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-b'));
+    expect(held.success).toBe(false);
+    if (held.success) throw new Error('expected a held result');
+    expect(held.error).toContain('is doing this right now');
+
+    finish({ success: true, data: 'ok' });
+    expect((await first).success).toBe(true);
+    expect(turnActivity.actionsOf('task-a')[0]!.outcome).toBe('succeeded');
+  });
+
+  it('a succeeded call holds with "already did this"', async () => {
+    const { registry, layer, turnActivity } = setup();
+    registry.register(makeRiskyManifest('contact-message', 'medium'), makeHandler());
+    startRoot(turnActivity, 'task-a');
+    startRoot(turnActivity, 'task-b');
+
+    await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a'));
+    const held = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-b'));
+    if (held.success) throw new Error('expected a held result');
+    expect(held.error).toContain('already did this');
+  });
+
+  it('a timed-out call stays recorded with an unknown outcome', async () => {
+    const { registry, layer, turnActivity } = setup();
+    const handler = makeHandler();
+    handler.execute.mockImplementationOnce(() => new Promise(() => {}));
+    registry.register({ ...makeRiskyManifest('contact-message', 'medium'), timeout: 20 }, handler);
+    startRoot(turnActivity, 'task-a');
+    startRoot(turnActivity, 'task-b');
+
+    const result = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a'));
+    expect(result.success).toBe(false);
+    expect(turnActivity.actionsOf('task-a')[0]!.outcome).toBe('unknown');
+    const held = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-b'));
+    if (held.success) throw new Error('expected a held result');
+    expect(held.error).toContain('tried this; the outcome is unknown');
+  });
+
+  it('a settle failure is logged and the result still returns', async () => {
+    const childLogger: Logger = pino({ level: 'silent' });
+    const errorSpy = vi.spyOn(childLogger, 'error');
+    const parentLogger: Logger = pino({ level: 'silent' });
+    vi.spyOn(parentLogger, 'child').mockReturnValue(childLogger as unknown as ReturnType<Logger['child']>);
+    const { registry, layer, turnActivity } = setup({ logger: parentLogger });
+    registry.register(makeRiskyManifest('contact-message', 'medium'), makeHandler());
+    startRoot(turnActivity, 'task-a');
+    vi.spyOn(turnActivity, 'settle').mockImplementation(() => {
+      throw new Error('settle exploded');
+    });
+
+    const result = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a'));
+    expect(result.success).toBe(true);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: 'contact-message', taskEventId: 'task-a', outcome: 'succeeded' }),
+      expect.any(String),
+    );
+  });
+});

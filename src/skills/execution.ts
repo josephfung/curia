@@ -3660,6 +3660,8 @@ export class ExecutionLayer {
     // failure or return leave a phantom action that holds another turn. Deliberately
     // fail-open: this is a duplicate-avoidance aid, not an authorization gate, so a registry
     // error logs and lets the call run.
+    // The recorded call's handle, settled once with the handler's outcome below.
+    let backstopActionId: string | undefined;
     if (crossTurnBackstop) {
       let held: BackstopMatches | null = null;
       try {
@@ -3667,6 +3669,7 @@ export class ExecutionLayer {
           crossTurnBackstop.taskEventId, toolName, crossTurnBackstop.targets,
         );
         if (decision.held) held = decision.matches;
+        else backstopActionId = decision.actionId;
       } catch (err) {
         skillLogger.error(
           { err, toolName, taskEventId: crossTurnBackstop.taskEventId },
@@ -3676,6 +3679,22 @@ export class ExecutionLayer {
       // Held: nothing was recorded, so awaiting the contact names below is safe.
       if (held) return this.crossTurnHoldResult(held, toolName, crossTurnBackstop, skillLogger);
     }
+
+    // Settle the recorded backstop action once (#2588): a failed call is dropped so it holds
+    // no one, a timed-out one stays with an unknown outcome. Fail-open like the check.
+    const settleBackstopAction = (outcome: 'succeeded' | 'failed' | 'unknown'): void => {
+      const actionId = backstopActionId;
+      if (actionId === undefined || !crossTurnBackstop) return;
+      backstopActionId = undefined;
+      try {
+        crossTurnBackstop.turnActivity.settle(actionId, outcome);
+      } catch (err) {
+        skillLogger.error(
+          { err, toolName, taskEventId: crossTurnBackstop.taskEventId, outcome },
+          'cross-turn backstop: could not settle the recorded action',
+        );
+      }
+    };
 
     skillLogger.info({ input: Object.keys(input) }, 'Invoking skill');
 
@@ -3690,8 +3709,10 @@ export class ExecutionLayer {
     // Without cleanup, successful skill invocations leak timers that keep the
     // process alive during graceful shutdown.
     let timer: NodeJS.Timeout;
+    let timedOut = false;
     const timeoutPromise = new Promise<ToolResult>((_, reject) => {
       timer = setTimeout(() => {
+        timedOut = true;
         const err = new Error(`Tool '${toolName}' timed out after ${manifest.timeout}ms`);
         abort.abort(err);
         reject(err);
@@ -3708,6 +3729,7 @@ export class ExecutionLayer {
         handler.execute(ctx),
         timeoutPromise,
       ]);
+      settleBackstopAction(result.success ? 'succeeded' : 'failed');
 
       if (result.success) {
         await this.recordSampledAction(toolName, manifest.action_risk, input, options, gateProceeded, skillLogger, result.data);
@@ -3799,6 +3821,8 @@ export class ExecutionLayer {
 
       return result;
     } catch (err) {
+      // A no-op when the handler already returned and a later step threw.
+      settleBackstopAction(timedOut ? 'unknown' : 'failed');
       const message = err instanceof Error ? err.message : String(err);
       skillLogger.error({ err }, 'Skill invocation failed');
       // Classify DB outages so the runtime can track them separately from the
