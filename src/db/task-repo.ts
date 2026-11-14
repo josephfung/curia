@@ -55,7 +55,10 @@ const TASK_COLUMNS = `
 
 // -- Public types --
 
-/** A status change away from done or cancelled. Callers match the class, not the message. */
+/**
+ * A status change away from done or cancelled, or an update to a task in a status the caller
+ * rejected (updateTask's rejectStatuses). Callers match the class, not the message.
+ */
 export class TaskTerminalStateError extends Error {
   readonly status: string;
   constructor(status: string) {
@@ -626,11 +629,18 @@ export class TaskRepo {
    * and armed by the run's completion path (#1938).
    *
    * Returns the updated task row, or null if the task was not found.
+   *
+   * `options.rejectStatuses` refuses the whole update, not only a status change, while the
+   * task is in one of those statuses. It throws TaskTerminalStateError, like done and
+   * cancelled do. It is checked in the UPDATE's own WHERE as well as up front, so a status
+   * committed concurrently between the read and the write is caught too (#2592: a reply
+   * must not move a task that just failed back to in_progress).
    */
   async updateTask(
     taskId: string,
     updates: UpdateTaskParams,
     callerAgentId?: string,
+    options?: { rejectStatuses?: readonly string[] },
   ): Promise<TaskRow | null> {
     const current = await this.getTask(taskId);
     if (!current) return null;
@@ -640,6 +650,10 @@ export class TaskRepo {
       if (TERMINAL_STATUSES.has(current.status)) {
         throw new TaskTerminalStateError(current.status);
       }
+    }
+    const rejectStatuses = options?.rejectStatuses ?? [];
+    if (rejectStatuses.includes(current.status)) {
+      throw new TaskTerminalStateError(current.status);
     }
 
     // Build the SET clause dynamically — only update columns that were supplied.
@@ -683,16 +697,23 @@ export class TaskRepo {
       updateParams.push(updates.blockedByTaskId ?? null);
     }
 
+    let rejectIdx: number | null = null;
+    if (rejectStatuses.length > 0) {
+      rejectIdx = idx++;
+      updateParams.push([...rejectStatuses]);
+    }
+
     updateParams.push(taskId); // $N — WHERE id = $N
     const whereIdx = idx;
 
     // WHERE clause includes the terminal-state guard. If a concurrent write moved
-    // the task to 'done' or 'cancelled' between our pre-check and this UPDATE,
-    // the guard here ensures we don't overwrite the terminal state. An empty
+    // the task to 'done' or 'cancelled' (or a caller's rejectStatuses) between our
+    // pre-check and this UPDATE, the guard here ensures we don't overwrite it. An empty
     // RETURNING is then handled below with a follow-up SELECT.
+    const rejectGuard = rejectIdx !== null ? ` AND status <> ALL($${rejectIdx}::text[])` : '';
     const updateSql = `
       UPDATE tasks SET ${setClauses.join(', ')}
-      WHERE id = $${whereIdx} AND status NOT IN ('done', 'cancelled')
+      WHERE id = $${whereIdx} AND status NOT IN ('done', 'cancelled')${rejectGuard}
       RETURNING ${TASK_COLUMNS}
     `;
 

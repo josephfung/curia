@@ -158,9 +158,13 @@ export async function recordTaskWakeReply(options: {
 
   let updated: Awaited<ReturnType<TaskRepo['updateTask']>>;
   try {
-    updated = await options.taskRepo.updateTask(taskId, updates, 'coordinator');
+    // rejectStatuses guards the write itself, so a task that fails (or completes, or is
+    // cancelled) after the check above is not moved back to in_progress by this reply.
+    updated = await options.taskRepo.updateTask(taskId, updates, 'coordinator', {
+      rejectStatuses: [...ENDED_TASK_STATUSES],
+    });
   } catch (err) {
-    // The task ended between getTask and updateTask. Same outcome as the up-front check.
+    // The task ended between getTask and the write. Same outcome as the up-front check.
     if (err instanceof TaskTerminalStateError) {
       return releaseUnattached(`task already ${err.status}`, 'info');
     }

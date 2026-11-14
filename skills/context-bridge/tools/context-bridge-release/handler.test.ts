@@ -386,7 +386,7 @@ describe('ContextBridgeReleaseHandler', () => {
       await handler.execute(ctx);
 
       expect(taskRepo.updateTask).toHaveBeenCalledWith(
-        TASK_ID, expect.objectContaining({ progressNote: 'Xiaopu Fung replied: Thur Nov 5' }), 'coordinator',
+        TASK_ID, expect.objectContaining({ progressNote: 'Xiaopu Fung replied: Thur Nov 5' }), 'coordinator', expect.anything(),
       );
     });
 
@@ -431,6 +431,7 @@ describe('ContextBridgeReleaseHandler', () => {
         TASK_ID,
         expect.objectContaining({ progressNote: 'Xiaopu Fung replied: Thur Nov 5', status: 'in_progress' }),
         'coordinator',
+        expect.anything(),
       );
     });
   });
