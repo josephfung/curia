@@ -249,9 +249,9 @@ export interface QueriedFreeBusy {
  * mailbox, through that mailbox's client, with the routed IDs (so `primary` goes out as the
  * real home ID). Each answer is matched to the calendar it is for by its email (SF-M3), never by
  * position alone: an answer Nylas gave in another order must not lend one calendar's slots or
- * ignored holds to another. An answer whose email matches no unanswered calendar takes the next
- * unanswered one in order (an alias Nylas rewrote), else stands under its own email. A calendar
- * with no answer at all is `unanswered`: the caller reports it unread, never free. A Nylas error
+ * ignored holds to another. An answer whose email matches no unanswered calendar (an alias Nylas
+ * rewrote) is given to none of them: it stands under its own email, so its busy times still block.
+ * A calendar with no answer of its own is `unanswered`: the caller reports it unread, never free. A Nylas error
  * propagates (throws) as getFreeBusy's did; only routing is turned into a result.
  */
 export async function freeBusyAcross(

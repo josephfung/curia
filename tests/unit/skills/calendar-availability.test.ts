@@ -351,6 +351,8 @@ describe('fix round 1 (Task 33a review)', () => {
     const c = data<ConflictData>(await new CalendarCheckConflictsHandler().execute(ctx(router, { calendarIds: ['someone@example.org'], proposedStart: '2026-11-20T16:00:00Z', proposedEnd: '2026-11-20T17:00:00Z' })));
     expect(c.clear).toBe(false);
     expect(c.partial?.map((p) => p.error)).toContain('free/busy returned no answer for this calendar');
+    // The alias's busy slot still blocks, under its own email.
+    expect(c.conflicts.map((x) => x.calendarId)).toContain('alias@example.org');
   });
 
   it('a principal free/busy failure is partial, never clear', async () => {
