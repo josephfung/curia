@@ -339,6 +339,22 @@ describe('CalendarRegisterHandler', () => {
       expect(contactService.setCalendarMailbox).not.toHaveBeenCalled();
     });
 
+    it('a move whose row cannot be read back is still a success, with a warning', async () => {
+      const dup = Object.assign(new Error('duplicate key'), { code: '23505', constraint: 'contact_calendars_nylas_calendar_id_key' });
+      const contactService = {
+        linkCalendar: vi.fn().mockRejectedValue(dup),
+        resolveCalendar: vi.fn().mockResolvedValue({ contactId: 'contact-abc', label: 'Personal', isPrimary: true, readOnly: false, principalMailboxId: 'work' }),
+        setCalendarMailbox: vi.fn().mockResolvedValue(true),
+        getCalendarsForMailbox: vi.fn().mockRejectedValue(new Error('db down')),
+      };
+      const result = await handler.execute(makeCtx(
+        { nylas_calendar_id: 'ceo@personal.example.com', label: 'Personal', contact_id: 'contact-abc' },
+        { contactService: contactService as never, calendarRouter: twoMailboxRouter() },
+      ));
+      expect(contactService.setCalendarMailbox).toHaveBeenCalledWith('ceo@personal.example.com', 'personal');
+      expect(result).toMatchObject({ success: true, data: { calendar_id: null, mailbox: 'personal', moved_from_mailbox: 'work', warning: expect.stringContaining('could not be read back') } });
+    });
+
     it('refuses an unknown mailbox, never falling back to the default', async () => {
       const contactService = { linkCalendar: vi.fn() };
       const result = await handler.execute(makeCtx(

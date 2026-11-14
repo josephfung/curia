@@ -495,6 +495,27 @@ describe('calendar-respond-to-invite answers as the arrival mailbox (D7)', () =>
     expect(work.deleteEvent).toHaveBeenCalledWith('ceo@work.example.com', 'hold-w');
     expect(data['releasedHolds']).toEqual(['hold-w']);
   });
+
+  it('one conversation ref for every calendar: an overlapping hold of another conversation is left alone', async () => {
+    const { work, personal, router } = setup();
+    const meta = (thread: string) => buildHoldMetadata({ createdAtIso: '2026-11-01T00:00:00Z', threadRef: thread, subject: 'Q3 audit' });
+    // Both calendars hold the accepted slot, for different conversations; personal also has an
+    // earlier hold of the first conversation. No ref in the criteria: recovery anchors on overlap.
+    work.listEvents.mockResolvedValue([hold('hold-w', 'ceo@work.example.com', { metadata: meta('thread-1') })]);
+    personal.listEvents.mockResolvedValue([
+      hold('hold-p', 'ceo@personal.example.com', { metadata: meta('thread-2') }),
+      hold('hold-p1', 'ceo@personal.example.com', { metadata: meta('thread-1'), startTime: START_UNIX - 86_400, endTime: END_UNIX - 86_400 }),
+    ]);
+    const data = dataOf(await run(new CalendarRespondToInviteHandler(), ctx(router, {
+      calendarId: 'primary', eventId: 'e1', response: 'accept', mailbox: 'personal',
+      holdMatchCriteria: { subject: 'Q3 audit', contactDomain: 'example.org' }, holdSearchStart: '2026-11-19T00:00:00Z', holdSearchEnd: '2026-11-22T00:00:00Z',
+    })));
+    const released = data['releasedHolds'] as string[];
+    // Released holds all belong to one conversation: never thread-2's hold-p beside thread-1's.
+    const threadOf: Record<string, string> = { 'hold-w': 'thread-1', 'hold-p': 'thread-2', 'hold-p1': 'thread-1' };
+    expect(released.length).toBeGreaterThan(0);
+    expect(new Set(released.map((id) => threadOf[id])).size).toBe(1);
+  });
 });
 
 describe('calendar-holds-sweep covers every account', () => {

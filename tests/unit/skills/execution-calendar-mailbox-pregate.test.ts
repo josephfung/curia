@@ -48,7 +48,7 @@ function setup(mailboxes = [calendarMailbox('work', 'Work', 'ceo@work.example.co
     bus: { publish: vi.fn(async () => undefined) } as unknown as EventBus,
     calendarRouter,
   });
-  return { layer, execute, request };
+  return { layer, execute, request, calendarRouter };
 }
 
 describe('calendar mailbox pre-gate (BR-m5)', () => {
@@ -98,11 +98,25 @@ describe('calendar mailbox pre-gate (BR-m5)', () => {
     const stored = (first.request.mock.calls[0]![0] as { input: Record<string, unknown> }).input;
     expect(stored).toMatchObject({ mailbox: 'work' });
     // By the replay, work was removed and personal is the only live mailbox: the replay carries
-    // mailbox=work, so the handler (not the live set) decides, and an unknown mailbox is an error.
+    // mailbox=work, so routing refuses the unknown mailbox instead of using the live set.
     const later = setup([calendarMailbox('personal', 'Personal', 'ceo@personal.example.com', true)]);
-    await later.layer.invoke('calendar-create-event', stored, undefined, { taskEventId: 'task-1', humanApproved: true });
-    expect(later.execute).toHaveBeenCalledOnce();
-    expect((later.execute.mock.calls[0]![0] as { input: Record<string, unknown> }).input).toMatchObject({ mailbox: 'work' });
+    // A handler that routes as the real calendar tools do: through the router, with the stored mailbox.
+    const created: string[] = [];
+    later.execute.mockImplementation(async (ctx) => {
+      const input = ctx.input as { calendarId: string; mailbox?: string };
+      try {
+        const routed = await later.calendarRouter.route(input.calendarId, input.mailbox);
+        created.push(routed.mailboxId);
+        return { success: true, data: {} };
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    });
+    const r = await later.layer.invoke('calendar-create-event', stored, undefined, { taskEventId: 'task-1', humanApproved: true });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('work');
+    // Nothing went through the account that is live now.
+    expect(created).toEqual([]);
   });
 
   it('when the mailbox cannot be bound, no approval is created (fail closed)', async () => {

@@ -215,7 +215,16 @@ export class CalendarRegisterHandler implements ToolHandler {
             { fromMailboxId: from, mailboxId: target, owner: placement.owner },
             'calendar-register: moved an existing calendar registration to another mailbox',
           );
-          const row = (await contacts.getCalendarsForMailbox(target)).find((c) => c.nylasCalendarId === nylasCalendarId);
+          // The move is done; reading back its row id is only for the response, so a failed read
+          // is a warning, never a failed registration (a retry would just say "already registered").
+          let row: { id: string } | undefined;
+          let readBackFailed = false;
+          try {
+            row = (await contacts.getCalendarsForMailbox(target)).find((c) => c.nylasCalendarId === nylasCalendarId);
+          } catch (err) {
+            readBackFailed = true;
+            ctx.log.warn({ ...safeErrFields(err), mailboxId: target }, 'calendar-register: moved, but could not read the row back for its id');
+          }
           const notApplied = [
             ...(existing.contactId !== requested.contactId ? ['contact_id'] : []),
             ...(existing.label !== requested.label ? ['label'] : []),
@@ -232,6 +241,7 @@ export class CalendarRegisterHandler implements ToolHandler {
               mailbox: target,
               moved_from_mailbox: from,
               updated: ['mailbox'],
+              ...(readBackFailed ? { warning: 'The calendar was moved, but its registry row could not be read back, so calendar_id is unknown.' } : {}),
               ...(notApplied.length > 0
                 ? {
                     not_applied: notApplied,
