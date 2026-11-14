@@ -43,7 +43,7 @@ Two-stage pipeline on each detection run (3x/day at `0 7,12,16`):
 ### Stage 1: Calendar scan (deterministic)
 
 1. Call `calendar-list-events` for events scheduled between now and end-of-day (forward scan, not backward)
-2. Only meetings the principal accepted or organised are listed (R108): for meeting-debrief, `calendar-list-events` drops declined, tentative and unanswered invites in code, so they are never judged or prompted. A meeting accepted through one account keeps its other accounts' copies.
+2. Only meetings the principal accepted or organised are listed (R108): for meeting-debrief, `calendar-list-events` drops declined, tentative and unanswered invites in code, so they are never judged or prompted. A meeting accepted through one account keeps its other accounts' copies. The debrief's listing also expands recurring series into their occurrences, so each occurrence carries its original start and its own key.
 3. Skip events already seen: check `config-store` for a `seen:<meetingKey>` key (set by previous detection runs for both YES and NO judgments; the meeting key is below)
 4. Extract attendee context (names, roles, org affiliations via entity context enrichment) and recurrence pattern
 5. Pass candidates to Stage 2 with: title, description, duration, attendee list, recurrence pattern, and enriched entity context for known attendees

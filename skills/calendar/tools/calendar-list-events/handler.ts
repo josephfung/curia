@@ -158,7 +158,15 @@ export class CalendarListEventsHandler implements ToolHandler {
 
       // maxResults is the total wanted, not a page size — the client pages for it
       // rather than sending an oversized (and 400-rejected) Nylas limit (#1798).
-      const fetchLimit = typeof maxResults === 'number' && maxResults > 0 ? { limit: maxResults } : undefined;
+      // meeting-debrief keys its guards on each occurrence of a recurring series (R108), so it gets
+      // every occurrence, never the series' master alone: a master has no original start, and its
+      // key would stand for every week's meeting. Other callers' listings are unchanged.
+      const debrief = ctx.agentId === 'meeting-debrief';
+      const fetchOpts = {
+        ...(typeof maxResults === 'number' && maxResults > 0 ? { limit: maxResults } : {}),
+        ...(debrief ? { expandRecurring: true } : {}),
+      };
+      const fetchLimit = Object.keys(fetchOpts).length > 0 ? fetchOpts : undefined;
 
       // Route every calendar to its mailbox first (#2475), then fetch in parallel and merge.
       // allSettled throughout: one bad calendar (stale grant, revoked access) doesn't poison the
@@ -283,7 +291,7 @@ export class CalendarListEventsHandler implements ToolHandler {
       }
 
       // meeting-debrief sees only meetings the principal accepted or organised (R108).
-      if (ctx.agentId === 'meeting-debrief') {
+      if (debrief) {
         const kept = await keepAttendedMeetings(ctx, filtered);
         if (!kept.ok) return { success: false, error: kept.error };
         filtered = kept.events;
