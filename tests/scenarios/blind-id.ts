@@ -89,10 +89,13 @@ export function formatBlindIdInput(recipients: readonly string[], messages: read
 }
 
 /**
- * The judge's letter for each message number (1-based), from its reply, or why the reply could
- * not be read. A message it left out simply has no letter, and counts as a wrong match.
+ * The judge's letter for each message number (1-based) of an `n`-message trial, or why the
+ * reply is not a usable answer. Only a complete one-to-one answer is scored: messages 1..n
+ * each once, letters A.. each once. Anything else (a short list, 0-based numbers, a repeated
+ * or unknown letter, "Person A") is the judge failing at the task, not Curia writing alike,
+ * so it is an error and counts in neither correct nor total.
  */
-export function parseBlindIdResponse(raw: string): { matches: Map<number, string> } | { error: string } {
+export function parseBlindIdResponse(raw: string, n: number): { matches: Map<number, string> } | { error: string } {
   let parsed: { matches?: unknown };
   try {
     parsed = JSON.parse(extractJsonObject(raw)) as { matches?: unknown };
@@ -100,11 +103,18 @@ export function parseBlindIdResponse(raw: string): { matches: Map<number, string
     return { error: `unparseable reply: ${e instanceof Error ? e.message : String(e)}` };
   }
   if (!Array.isArray(parsed.matches)) return { error: 'reply has no matches array' };
+  const letters = new Set(LETTERS.slice(0, n).split(''));
   const matches = new Map<number, string>();
   for (const m of parsed.matches as Array<{ message?: unknown; recipient?: unknown }>) {
-    const n = typeof m.message === 'number' ? m.message : Number(m.message);
-    if (Number.isInteger(n) && typeof m.recipient === 'string') matches.set(n, m.recipient.trim().toUpperCase());
+    const num = typeof m.message === 'number' ? m.message : Number(m.message);
+    const letter = typeof m.recipient === 'string' ? m.recipient.trim().toUpperCase() : '';
+    if (!Number.isInteger(num) || num < 1 || num > n) return { error: `message number '${String(m.message)}' is not 1..${n}` };
+    if (!letters.has(letter)) return { error: `recipient '${String(m.recipient)}' is not one of ${[...letters].join(', ')}` };
+    if (matches.has(num)) return { error: `message ${num} matched twice` };
+    matches.set(num, letter);
   }
+  if (matches.size !== n) return { error: `matched ${matches.size} of ${n} messages` };
+  if (new Set(matches.values()).size !== n) return { error: 'a recipient letter was used more than once' };
   return { matches };
 }
 
@@ -170,6 +180,7 @@ export async function runBlindId(
   let total = 0;
   let calls = 0;
   let judgeErrors = 0;
+  let firstJudgeError: string | undefined;
   let chanceSum = 0;
   let asked = 0;
 
@@ -182,12 +193,20 @@ export async function runBlindId(
     const shuffled = seededShuffle(present.map(m => m.scenario.name), `${group}#${trial.runIndex}`);
     for (const order of [shuffled, [...shuffled].reverse()]) {
       calls++;
-      const raw = await askJudge(judge, formatBlindIdInput(recipients, order.map(name => trial.messages.get(name)!)), usage);
-      const answer = raw === null ? { error: 'failed after retries' } : parseBlindIdResponse(raw);
+      let answer: ReturnType<typeof parseBlindIdResponse>;
+      try {
+        const raw = await askJudge(judge, formatBlindIdInput(recipients, order.map(name => trial.messages.get(name)!)), usage);
+        answer = raw === null ? { error: 'failed after retries' } : parseBlindIdResponse(raw, present.length);
+      } catch (e) {
+        // A non-retryable error on one trial (a content filter, an over-long input) loses that
+        // trial, not the group's: the trials already paid for still count.
+        answer = { error: e instanceof Error ? e.message : String(e) };
+      }
       if ('error' in answer) {
         // The judge failing is not Curia failing: the call counts in neither correct nor
-        // total, and judgeErrors says how much went unmeasured.
+        // total, and judgeErrors (with the first reason) says how much went unmeasured.
         judgeErrors++;
+        firstJudgeError ??= answer.error;
         continue;
       }
       order.forEach((name, i) => {
@@ -213,21 +232,29 @@ export async function runBlindId(
     byCase,
     skippedTrials: skipped,
     judgeErrors,
+    ...(firstJudgeError !== undefined ? { firstJudgeError } : {}),
   };
 }
 
-/** "50-attendee-drops-out: 7/12 (58%; chance 33%)" and the cases that were hard to place. */
+/**
+ * "finesse-51-reschedule: 7/12 matched (58%; chance 33%)", then each case's hits. A case with
+ * no message in any trial is named: its source may match nothing, and the group's chance figure
+ * is then over fewer recipients than it has.
+ */
 export function formatBlindIdLines(results: readonly ContrastGroupResult[]): string[] {
   const pct = (v: number): string => `${Math.round(v * 100)}%`;
   return results.flatMap(r => {
-    if (r.accuracy === null) {
-      return [`${r.group}: not measured (${r.skippedTrials} trial(s) had fewer than two messages${r.judgeErrors > 0 ? `, ${r.judgeErrors} judge error(s)` : ''})`];
-    }
-    const lines = [`${r.group}: ${r.correct}/${r.total} matched (${pct(r.accuracy)}; chance ${pct(r.chance!)})` +
-      `${r.missing.length > 0 ? `; not in this run: ${r.missing.join(', ')}` : ''}` +
-      `${r.judgeErrors > 0 ? `; ${r.judgeErrors} judge error(s)` : ''}`];
+    const notes = [
+      ...(r.missing.length > 0 ? [`not in this run: ${r.missing.join(', ')}`] : []),
+      ...(r.skippedTrials > 0 ? [`${r.skippedTrials} trial(s) skipped, under two messages`] : []),
+      ...(r.judgeErrors > 0 ? [`${r.judgeErrors} judge error(s), first: ${r.firstJudgeError ?? '(no reason)'}`] : []),
+    ];
+    const head = r.accuracy === null
+      ? `${r.group}: not measured`
+      : `${r.group}: ${r.correct}/${r.total} matched (${pct(r.accuracy)}; chance ${pct(r.chance!)})`;
+    const lines = [`${head}${notes.length > 0 ? `; ${notes.join('; ')}` : ''}`];
     for (const [name, c] of Object.entries(r.byCase)) {
-      if (c.total > 0) lines.push(`  ${name}: ${c.correct}/${c.total}`);
+      lines.push(c.total > 0 ? `  ${name}: ${c.correct}/${c.total}` : `  ${name}: no message in any trial (check its contrast.message source)`);
     }
     return lines;
   });

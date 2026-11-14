@@ -679,9 +679,11 @@ the case's message is: `reply`, or `{ tool, arg, with? }`, the run's last matchi
 `with` placeholders resolve per run). After every case is scored, `blind-id.ts` takes one
 run's message from each case in the group, and the judge matches messages to recipient
 descriptions: once in a seeded shuffle, once reversed, to cancel position bias. A run that
-wrote no message (a case whose right call is not to write) sits that trial out. Results carry
-`contrastGroups` (accuracy, chance, per-case hits) and its judge spend; the console prints a
-line per group. It is tracked, not gated: if the judge cannot tell which message went to whom,
+wrote no message (a case whose right call is not to write) sits that trial out, and a case
+with no message in any trial is named in the report. Only a complete one-to-one answer is
+scored; anything else, or a failed call, is a judge error that counts in neither the hits nor
+the total. Results carry `contrastGroups` (accuracy, chance, per-case hits, judge errors) and
+its judge spend; the console prints a line per group. It is tracked, not gated: if the judge cannot tell which message went to whom,
 Curia is not writing differently for different people, however well each message scores. The
 loader refuses a one-case group and two cases with the same recipient description.
 
@@ -693,7 +695,15 @@ each case's own judge unless `--judge` names one. It reports flipped verdicts an
 ratings, the behaviors added, removed or edited since the run, and the layer scores before and
 after, and writes the re-scored results beside the original (`<run>.rescored-<time>.json`). It
 refuses, by name, every case whose setup changed since the run or that has no hash, and then
-exits 1: those need a new run, not a new score. Only judge calls are paid for.
+exits 1: those need a new run, not a new score. Judge errors are listed on their own, left out
+of the comparison, and also exit 1. Results record the judge that rated each case (`judge`,
+`caseJudges`); a case now judged by a different model is flagged, since its verdict changes
+may be the judge's, not the case file's (pass `--judge` with the run's judge to hold it
+fixed). Every judge is created before the first paid call. Only judge calls are paid for.
+
+Two limits, both failing closed: re-scoring reads the core `cases/` and stub sets, so a run
+made with `--cases` or `--stubs` is refused rather than compared; and the hash covers the
+merged stubs, `defaults` included, so an edit to a shared stub set refuses every case using it.
 
 ## Per-case fixtures: autonomy
 

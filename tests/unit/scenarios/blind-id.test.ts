@@ -93,11 +93,22 @@ describe('seededShuffle', () => {
 });
 
 describe('parseBlindIdResponse', () => {
-  it('reads matches, and says why a reply is unreadable', () => {
-    const ok = parseBlindIdResponse('```json\n{"matches": [{"message": 1, "recipient": "b"}, {"message": "2", "recipient": "A"}]}\n```');
+  it('reads a complete one-to-one answer', () => {
+    const ok = parseBlindIdResponse('```json\n{"matches": [{"message": 1, "recipient": "b"}, {"message": "2", "recipient": " A "}]}\n```', 2);
     expect('matches' in ok && [...ok.matches]).toEqual([[1, 'B'], [2, 'A']]);
-    expect(parseBlindIdResponse('no idea')).toMatchObject({ error: expect.stringMatching(/unparseable/) });
-    expect(parseBlindIdResponse('{"answer": 1}')).toEqual({ error: 'reply has no matches array' });
+  });
+
+  it('refuses anything short of one, as a judge error rather than wrong matches', () => {
+    const m = (pairs: Array<[unknown, unknown]>): string => JSON.stringify({ matches: pairs.map(([message, recipient]) => ({ message, recipient })) });
+    expect(parseBlindIdResponse('no idea', 2)).toMatchObject({ error: expect.stringMatching(/unparseable/) });
+    expect(parseBlindIdResponse('{"answer": 1}', 2)).toEqual({ error: 'reply has no matches array' });
+    expect(parseBlindIdResponse(m([]), 2)).toEqual({ error: 'matched 0 of 2 messages' });
+    expect(parseBlindIdResponse(m([[0, 'A'], [1, 'B']]), 2)).toMatchObject({ error: expect.stringMatching(/not 1\.\.2/) });
+    expect(parseBlindIdResponse(m([['Message 1', 'A'], [2, 'B']]), 2)).toMatchObject({ error: expect.stringMatching(/not 1\.\.2/) });
+    expect(parseBlindIdResponse(m([[1, 'Person A'], [2, 'B']]), 2)).toMatchObject({ error: expect.stringMatching(/not one of A, B/) });
+    expect(parseBlindIdResponse(m([[1, 'C'], [2, 'B']]), 2)).toMatchObject({ error: expect.stringMatching(/not one of A, B/) });
+    expect(parseBlindIdResponse(m([[1, 'A'], [1, 'B']]), 2)).toEqual({ error: 'message 1 matched twice' });
+    expect(parseBlindIdResponse(m([[1, 'A'], [2, 'A']]), 2)).toEqual({ error: 'a recipient letter was used more than once' });
   });
 });
 
@@ -134,14 +145,38 @@ describe('runBlindId (#2556)', () => {
     expect(formatBlindIdLines([r])[0]).toBe('late: 10/10 matched (100%; chance 42%)');
   });
 
-  it('counts a judge that always answers A as mostly wrong, and an unreadable reply as a judge error', async () => {
-    const lazy = await runBlindId('late', members(), ['absent'], fakeJudge((_r, messages) => JSON.stringify({ matches: messages.map((_m, i) => ({ message: i + 1, recipient: 'A' })) })));
-    expect(lazy.accuracy).toBeLessThan(0.5);
-    expect(formatBlindIdLines([lazy])[0]).toMatch(/not in this run: absent/);
+  it('scores a judge that matches in reverse as wrong, and names a group member left out of this run', async () => {
+    const reversed = await runBlindId('late', members(), ['absent'], fakeJudge((recipients, messages) => JSON.stringify({
+      matches: messages.map((_m, i) => ({ message: i + 1, recipient: String.fromCharCode(65 + recipients.length - 1 - i) })),
+    })));
+    expect(reversed.judgeErrors).toBe(0);
+    expect(reversed.accuracy).toBeLessThan(1);
+    expect(formatBlindIdLines([reversed])[0]).toMatch(/not in this run: absent/);
+  });
 
+  it('counts unusable answers and thrown judge calls as judge errors, keeping the other trials', async () => {
     const broken = await runBlindId('late', members(), [], fakeJudge(() => 'I cannot say'));
-    expect(broken).toMatchObject({ judgeErrors: 4, total: 0, accuracy: null });
-    expect(formatBlindIdLines([broken])[0]).toMatch(/^late: not measured/);
+    expect(broken).toMatchObject({ judgeErrors: 4, total: 0, accuracy: null, firstJudgeError: expect.stringMatching(/unparseable/) });
+    expect(formatBlindIdLines([broken])[0]).toMatch(/^late: not measured; 4 judge error\(s\), first: unparseable/);
+
+    // The first call throws a non-retryable error; the three after it still count.
+    let n = 0;
+    const flaky = fakeJudge((recipients, messages) => {
+      if (n++ === 0) throw new Error('content filter');
+      return JSON.stringify({ matches: messages.map((m, i) => ({ message: i + 1, recipient: String.fromCharCode(65 + recipients.findIndex(r => new RegExp(`^(${truth[r]})`).test(m))) })) });
+    });
+    const partial = await runBlindId('late', members(), [], flaky);
+    expect(partial).toMatchObject({ judgeErrors: 1, firstJudgeError: 'content filter', correct: 7, total: 7 });
+  });
+
+  it('names a case that never produced a message', async () => {
+    const all = members();
+    // The report's runs all wrote nothing: its source matched nothing in any trial.
+    const silent = all.map(m => (m.scenario.name === 'report'
+      ? { ...m, result: { ...m.result, runs: m.result.runs.map(r => ({ ...r, toolCalls: [], reply: 'NO_REPLY' })) } }
+      : m));
+    const r = await runBlindId('late', silent, [], fakeJudge((_r, messages) => JSON.stringify({ matches: messages.map((_m, i) => ({ message: i + 1, recipient: String.fromCharCode(65 + i) })) })));
+    expect(formatBlindIdLines([r])).toContain('  report: no message in any trial (check its contrast.message source)');
   });
 });
 

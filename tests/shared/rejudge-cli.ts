@@ -17,7 +17,8 @@
 //   pnpm rejudge --from-cases tests/scenarios/results/<run>.json
 //
 // It refuses, by name, every case whose setup changed since the run (setup-hash.ts), and
-// then exits 1: those need a new run, not a new score.
+// then exits 1: those need a new run, not a new score. Judge errors also exit 1, and a case
+// whose judge differs from the one that rated the run is flagged.
 import { readFileSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { createTestModeStack } from '../../src/startup/test-mode-stack.js';
@@ -185,7 +186,7 @@ async function rejudgeScenarios(suite: SuiteResult, judge: Judge, concurrency: n
  * --from-cases (#2556): score a scenario run's transcripts against the behaviors in the current
  * case files, report what moved, and save the re-scored results beside the original. Cases
  * whose setup changed since the run are refused by name: they need a new run.
- * Returns whether every case could be re-scored.
+ * Returns whether every case was re-scored cleanly: none refused, and no judge errors.
  */
 async function rescoreFromCases(
   file: string,
@@ -197,6 +198,20 @@ async function rescoreFromCases(
   const usage = new UsageLedger();
   const byName = new Map(loadScenarioCases(SCENARIO_CASES_DIR).map(c => [c.name, c]));
   const refusals: string[] = [];
+
+  // Every judge first, before any paid call: an unpriced judge_model stops the command here,
+  // not after earlier cases have spent. And a judge that differs from the one that rated the
+  // run would move verdicts by itself, which would read as the rubric's doing: say so.
+  const judgeChanges: string[] = [];
+  const usedJudges: Record<string, string> = {};
+  for (const saved of suite.cases) {
+    const scenario = byName.get(saved.name);
+    if (!scenario) continue;
+    const now = judgeFor(scenario).model;
+    usedJudges[saved.name] = now;
+    const before = suite.caseJudges?.[saved.name] ?? suite.judge;
+    if (before !== now) judgeChanges.push(`${saved.name}: ${before ?? '(not recorded)'} → ${now}`);
+  }
   const rescored = await runConcurrently(suite.cases, concurrency, async (saved): Promise<{ saved: CaseResult; now: Rescored } | undefined> => {
     const scenario = byName.get(saved.name);
     if (!scenario) {
@@ -216,17 +231,35 @@ async function rescoreFromCases(
   });
   const done = rescored.filter((r): r is { saved: CaseResult; now: Rescored } => r !== undefined);
 
+  // A rating either judge failed to produce compares nothing: leave it out, and report the
+  // new run's judge errors on their own, so a rate-limited judge never reads as a rubric
+  // that fails Curia.
+  const judgeFailed = (r: RunRating): boolean => r.justification.startsWith(JUDGE_ERROR_PREFIX);
   const comparisons: CaseComparison[] = done.map(({ saved, now }) => ({
     name: saved.name,
     passedBefore: saved.criticalFailures.length === 0,
     passedAfter: now.result.criticalFailures.length === 0,
     ratings: now.result.behaviors.flatMap(b => {
       const old = saved.behaviors.find(s => s.behavior.id === b.behavior.id);
-      return old ? b.ratings.map((after, i) => ({ behaviorId: b.behavior.id, run: i + 1, before: old.ratings[i]!, after })) : [];
+      return old
+        ? b.ratings.flatMap((after, i) => (judgeFailed(after) || judgeFailed(old.ratings[i]!) ? [] : [{ behaviorId: b.behavior.id, run: i + 1, before: old.ratings[i]!, after }]))
+        : [];
     }),
   }));
+  if (judgeChanges.length > 0) {
+    out('');
+    out('   [WARN] These cases are judged by a different model than rated the run, so a verdict change');
+    out('   may be the judge\'s, not the case file\'s. Pass --judge <the run\'s judge> to hold it fixed:');
+    for (const c of judgeChanges) out(`   - ${c}`);
+  }
   out('');
   for (const line of formatAgreement(summarize(comparisons), 'current cases', 'saved')) out(`   ${line}`);
+  const judgeErrored = done.filter(({ now }) => now.result.judgeErrors > 0);
+  if (judgeErrored.length > 0) {
+    out('');
+    out('   Judge errors (those ratings are left out above; re-run the command):');
+    for (const { now } of judgeErrored) out(`   - ${now.result.name}: ${now.result.judgeErrors} run(s)`);
+  }
   const edits = done.filter(({ now }) => now.added.length + now.removed.length + now.edited.length > 0);
   if (edits.length > 0) {
     out('');
@@ -255,21 +288,34 @@ async function rescoreFromCases(
   }
 
   const outFile = file.replace(/\.json$/, '') + `.rescored-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  const cases = done.map(({ now }) => now.result);
+  // The same reasons a live run gates on (known failures, judge errors, errored runs), plus
+  // the refusals: `passed` is read from this list, so the two cannot disagree.
+  const failures = [...gateFailures(cases), ...refusals];
+  const judges = cases.map(c => usedJudges[c.name]!);
+  const defaultJudge = judges.length > 0 && judges.every(j => j === judges[0]) ? judges[0] : suite.judge;
+  const caseJudges = Object.fromEntries(cases.filter(c => usedJudges[c.name] !== defaultJudge).map(c => [c.name, usedJudges[c.name]!]));
   const result: SuiteResult = {
     ...suite,
-    cases: done.map(({ now }) => now.result),
-    runsPerCase: Object.fromEntries(done.map(({ now }) => [now.result.name, now.result.runs.length])),
-    passed: done.every(({ now }) => now.result.criticalFailures.length === 0) && refusals.length === 0,
-    knownFailures: knownFailureLines(done.map(({ now }) => now.result)),
+    ...(defaultJudge !== undefined ? { judge: defaultJudge } : {}),
+    caseJudges,
+    cases,
+    runsPerCase: Object.fromEntries(cases.map(c => [c.name, c.runs.length])),
+    passed: failures.length === 0,
+    knownFailures: knownFailureLines(cases),
     // The re-scored file is a scoring of old transcripts, not a run: say so where a reader looks.
-    warnings: [...suite.warnings, `re-scored against the case files at ${new Date().toISOString()} (pnpm rejudge --from-cases); transcripts are from ${suite.timestamp}`],
-    gateFailures: [...gateFailures(done.map(({ now }) => now.result)), ...refusals],
+    warnings: [
+      ...suite.warnings,
+      `re-scored against the case files at ${new Date().toISOString()} (pnpm rejudge --from-cases); transcripts are from ${suite.timestamp}`,
+      ...judgeChanges.map(c => `judge changed since the run: ${c}`),
+    ],
+    gateFailures: failures,
   };
   writeFileSync(outFile, JSON.stringify(result, null, 2));
   out('');
   out(`   Judge spend: ${formatUsd(usage.snapshot().judge.estimatedCostUsd)} (${usage.snapshot().judge.calls} calls)`);
   out(`   Re-scored results: ${outFile}`);
-  return refusals.length === 0;
+  return refusals.length === 0 && judgeErrored.length === 0;
 }
 
 async function main(): Promise<void> {
@@ -288,8 +334,8 @@ async function main(): Promise<void> {
     const principal = stack.principalContactId ? await stack.contactService.getContact(stack.principalContactId) : undefined;
 
     if (args.fromCases) {
-      // Each case's own judge (judge-models.ts) unless --judge names one for all. Created
-      // lazily and kept, so each model is checked for a price once, before its first call.
+      // Each case's own judge (judge-models.ts) unless --judge names one for all. Created once
+      // per model; rescoreFromCases asks for every case's before any paid call.
       const judges = new Map<string, Judge>();
       const judgeFor = (scenario: ScenarioCase): Judge => {
         const model = args.judge ?? caseJudgeModel(scenario) ?? JUDGE_MODEL;

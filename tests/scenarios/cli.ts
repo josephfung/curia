@@ -634,6 +634,7 @@ async function main(): Promise<void> {
       autonomy: autonomyInForce,
       ...(Object.keys(caseAutonomy).length > 0 ? { caseAutonomy } : {}),
       runsPerCase: Object.fromEntries(results.map(r => [r.name, r.runs.length])),
+      judge: judge.model,
       ...(Object.keys(caseJudges).length > 0 ? { caseJudges } : {}),
       cases: results,
       passed: failures.length === 0,

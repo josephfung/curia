@@ -943,8 +943,13 @@ export interface ContrastGroupResult {
   byCase: Record<string, { correct: number; total: number }>;
   /** Trials with fewer than two messages (a case decided not to write), which were not asked. */
   skippedTrials: number;
-  /** Judge calls that failed after retries; their assignments count in neither correct nor total. */
+  /**
+   * Judge calls that failed (after retries, a non-retryable error, or an answer that is not a
+   * one-to-one match); their assignments count in neither correct nor total.
+   */
   judgeErrors: number;
+  /** The first of those failures' reasons. */
+  firstJudgeError?: string;
 }
 
 /** One layer's share of a case result (#2556). */
@@ -976,6 +981,8 @@ export interface SuiteResult {
   caseAutonomy?: Record<string, string>;
   /** Runs each case actually got (a case's `runs` or --runs can differ from the default). */
   runsPerCase: Record<string, number>;
+  /** The suite's default judge model (#2556). Absent on results saved before it existed. */
+  judge?: string;
   /** The judge model, for every case not judged by the suite default (#2556). */
   caseJudges?: Record<string, string>;
   cases: CaseResult[];
