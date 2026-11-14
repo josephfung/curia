@@ -1,0 +1,113 @@
+# Finesse 53b (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery asks for 45 minutes
+# with a prospective investor who owes Avery nothing. Curia writes to Hannah, works around
+# her calendar, keeps the email short, and may shrink the ask to 30 minutes (telling Avery).
+# Information level 2 for her standing (contact record: Partner, Northbeam Capital) and
+# level 3 for the relationship (Curia's notes say Avery is courting her).
+name: finesse 53b ask time with prospective investor
+description: >
+  Avery tells Curia to get 45 minutes with Hannah Lindqvist at Northbeam to walk her through
+  the business before Halcyon raises. Hannah's contact record says Partner, Northbeam
+  Capital; Curia's notes say Avery is courting her ahead of the next round. Curia should
+  write to Hannah: a clear reason in a sentence, respectful of her time, easy to say yes to,
+  offering to come to her or work around her calendar. Asking for 30 minutes rather than 45
+  (and telling Avery) is a good move. Leading with Avery's availability, a long pitch, or
+  presumptuous framing ("present the investment opportunity") are the failures.
+tags: [finesse, finesse-53, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: hannah
+      display_name: Hannah Lindqvist
+      tier: known
+      title: Partner
+      organization: Northbeam Capital
+      channel: email
+      identifier: hannah.lindqvist@northbeam.example.test
+inbound:
+  from: principal
+  content: Get me 45 minutes with Hannah Lindqvist at Northbeam to walk her through the business before we raise.
+tool_stubs:
+  # Curia's notes: the only place the relationship is recorded (information level 3).
+  memory-query:
+    - match: {}
+      return:
+        count: 1
+        results:
+          - id: 7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b5301
+            type: fact
+            label: Hannah Lindqvist and Halcyon
+            properties: { value: "Avery is courting Hannah Lindqvist (Partner, Northbeam Capital) as a possible investor in Halcyon's next round. Northbeam has not committed to anything; keep her warm." }
+            confidence: 0.85
+            decay_class: slow
+            sensitivity: internal
+            last_confirmed_at: "2026-09-15T10:00:00-04:00"
+            score: 0.8
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - { id: evt-53b-standup, title: Leadership stand-up, location: Room 4B, startTime: "{{time:workday+1 09:00}}", endTime: "{{time:workday+1 09:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-monday+7 09:00}}", end: "{{time:next-monday+7 17:00}}" }
+          - { start: "{{time:next-monday+8 09:00}}", end: "{{time:next-monday+8 17:00}}" }
+          - { start: "{{time:next-monday+9 13:00}}", end: "{{time:next-monday+9 17:00}}" }
+          - { start: "{{time:next-monday+10 09:00}}", end: "{{time:next-monday+10 12:00}}" }
+expected_behaviors:
+  - id: writes_to_hannah
+    weight: critical
+    layer: decision
+    description: Curia writes to Hannah asking for the meeting.
+    check:
+      called: email-send
+      agent: any
+      contains: { to: "{{contact:hannah}}" }
+  - id: no_event_before_she_agrees
+    weight: important
+    layer: decision
+    description: No meeting with Hannah is put on the calendar before she has agreed to one. A tentative hold on Avery's side is fine.
+    check:
+      not_called: [calendar-create-event]
+      agent: any
+      contains: { attendees: hannah.lindqvist@northbeam.example.test }
+  - id: smaller_ask_told
+    weight: nice-to-have
+    layer: decision
+    description: >
+      Curia asks for 30 minutes rather than 45, as a smaller ask is easier to accept, and
+      tells Avery it did. Asking for 45 is not a failure; shrinking it without telling Avery is.
+  - id: avery_told
+    weight: important
+    layer: decision
+    description: Avery's reply says the request has gone to Hannah (and what was asked for).
+    check:
+      reply: not_no_reply
+  - id: hannah_ask_voice
+    weight: critical
+    layer: voice
+    description: >
+      The email to Hannah is short and respectful of her time: one sentence on why (Avery
+      would like to walk her through the business ahead of the raise), an offer to work
+      around her calendar or come to her, and an easy yes. It does not lead with Avery's
+      availability, pitch the business at length, or frame it presumptuously ("present the
+      investment opportunity").
+contrast:
+  group: finesse-53-ask-for-time
+  recipient: A partner at a venture firm the executive hopes will invest. She has no obligation to the executive.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:hannah}}" } }
+failure_modes:
+  - Leads with Avery's availability
+  - A long pitch in the email
+  - Presumptuous framing ("Avery would like to present the investment opportunity")
+  - Books a meeting before Hannah has agreed

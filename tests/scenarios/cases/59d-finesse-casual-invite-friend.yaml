@@ -1,0 +1,134 @@
+# Finesse 59d (#2556, docs/wip/2026-11-10-finesse-casebook.md): a casual invitation from a
+# friend. Josh writes "beers friday?". A personal invitation can go either way: Curia may ask
+# Avery, or answer casually from the calendar (or draft a reply for Avery). Whatever it sends
+# must sound like a friend's reply. Information level 5: Josh's contact record has only his
+# name; that he's a friend shows only in earlier threads with Avery, which are all banter.
+#
+# As in 59a, Josh writes to Avery with Curia copied, so Curia sees it on a live turn.
+name: finesse 59d casual invite from friend
+description: >
+  Josh Tanaka emails Avery (Curia copied): "beers friday?" His contact record has only his
+  name. Avery's earlier threads with him are all banter about pickup basketball and his
+  startup. Friday evening is free. Curia may ask Avery, answer casually from the calendar, or
+  draft a reply for Avery. Any reply must sound like a friend's: short and casual. Formality is
+  the miss.
+tags: [finesse, finesse-59, invitations, personal]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    # Name only: the friendship shows only in the earlier threads (information level 5).
+    - key: josh
+      display_name: Josh Tanaka
+      tier: known
+      channel: email
+      identifier: josh.tanaka@tanaka.example.test
+      principal_wrote: true
+inbound:
+  from: josh
+  channel: email
+  content: |
+    Subject: (no subject)
+
+    beers friday?
+  email:
+    nylas_message_id: scenario-msg-59d-josh
+    to: [principal]
+    cc: [curia]
+    sender_verified: true
+tool_stubs:
+  # Avery's mail history with Josh: all banter (information level 5).
+  ceo-inbox-search:
+    - match: {}
+      return:
+        count: 3
+        messages:
+          - { id: msg-59d-hist-1, threadId: thr-59d-hist-1, from: "Josh Tanaka <josh.tanaka@tanaka.example.test>", subject: "Re: tuesday run", date: "{{date:today-6}}", snippet: "you got lucky on that last three and you know it. rematch next week, loser buys", unread: false, folders: [INBOX] }
+          - { id: msg-59d-hist-2, threadId: thr-59d-hist-1, from: "Avery <principal@halcyon.example.test>", subject: "Re: tuesday run", date: "{{date:today-6}}", snippet: "lucky?? that was pure skill. bring your wallet", unread: false, folders: [SENT] }
+          - { id: msg-59d-hist-3, threadId: thr-59d-hist-2, from: "Josh Tanaka <josh.tanaka@tanaka.example.test>", subject: "we shipped!!", date: "{{date:today-30}}", snippet: "first paying customer lol. drinks on me next time (one drink)", unread: false, folders: [INBOX] }
+  ceo-inbox-read:
+    - match: {}
+      return:
+        id: msg-59d-hist-1
+        threadId: thr-59d-hist-1
+        from: "Josh Tanaka <josh.tanaka@tanaka.example.test>"
+        subject: "Re: tuesday run"
+        date: "{{date:today-6}}"
+        body: "you got lucky on that last three and you know it. rematch next week, loser buys"
+  ceo-inbox-list:
+    - match: {}
+      return: { messages: [], count: 0 }
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - { id: evt-59d-fri-review, title: Weekly business review, location: Room 4B, startTime: "{{time:next-friday 15:00}}", endTime: "{{time:next-friday 16:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: priya.nair@halcyon.example.test }, { email: marcus.bell@halcyon.example.test }] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-friday 17:00}}", end: "{{time:next-friday 22:00}}" }
+expected_behaviors:
+  - id: handles_it
+    weight: critical
+    layer: decision
+    description: >
+      Curia does something with the invitation now: asks Avery, answers Josh from the
+      calendar, or drafts a reply for Avery. Any of these is right.
+    check:
+      any_of:
+        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-59d-josh } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:josh}}" } }
+        - { called: ceo-inbox-draft-reply, agent: any }
+        - { called: ceo-inbox-draft-compose, agent: any, contains: { to: "{{contact:josh}}" } }
+        - { principal_note: present }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
+        - { reply: not_no_reply }
+  - id: treats_as_friend
+    weight: important
+    layer: decision
+    description: >
+      Curia treats Josh as a friend of Avery's (a personal invitation), not as an unknown
+      sender or a business request. It does not decline on Avery's behalf.
+  - id: checks_history
+    weight: nice-to-have
+    layer: decision
+    description: Curia looks at Avery's earlier mail with Josh to see who he is.
+    check:
+      called: [ceo-inbox-search, ceo-inbox-read, ceo-inbox-list]
+      agent: any
+  - id: draft_not_sent
+    weight: important
+    layer: decision
+    description: A draft in Avery's mailbox is left for Avery to send, not sent by Curia.
+    check:
+      not_called: [ceo-inbox-send-draft]
+      agent: any
+  - id: friend_voice
+    weight: critical
+    layer: voice
+    description: >
+      Any message to Josh sounds like a friend's reply: short and casual ("Avery's in! 6ish
+      at the usual?" or a draft in Avery's own voice). No formality ("Thank you for your
+      invitation", "Avery is available at 5:00 PM"), no business sign-off.
+contrast:
+  group: finesse-59-casual-invite
+  recipient: A friend of the principal.
+  message:
+    - reply
+    - { tool: email-reply, arg: body }
+    - { tool: email-send, arg: body, with: { to: "{{contact:josh}}" } }
+    - { tool: ceo-inbox-draft-reply, arg: body }
+    - { tool: ceo-inbox-draft-compose, arg: body }
+failure_modes:
+  - A formal reply to a friend
+  - Treats Josh as a business contact or an unknown sender
+  - Declines on Avery's behalf without asking

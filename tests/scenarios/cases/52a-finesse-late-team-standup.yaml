@@ -1,0 +1,115 @@
+# Finesse 52a (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery is running about ten
+# minutes behind, and the next meeting is the weekly leadership stand-up. Curia sends one
+# message to the group before the start telling them to begin without Avery: no long
+# apology, no message per person, no asking Avery what to say. Information level 2: the
+# calendar plus contact records that put every attendee at Halcyon.
+#
+# The casebook names three of the eight attendees (Priya, Tomás, Marcus); the other five
+# are fictional leadership-team members added for this case.
+name: finesse 52a late to team stand-up
+description: >
+  Avery (the principal) tells Curia "I'm running about ten minutes behind." The next meeting,
+  starting in five minutes, is Avery's weekly stand-up with eight people from Halcyon's
+  leadership team, all Halcyon employees. Curia should send one message to the group before
+  the start: "Avery's running ten minutes behind. Please start without them." Apologizing at
+  length, messaging each person separately, or asking Avery what to say are the failures.
+tags: [finesse, finesse-52]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - { key: priya, display_name: Priya Nair, tier: known, title: VP Product, organization: Halcyon Robotics, channel: email, identifier: priya.nair@halcyon.example.test }
+    - { key: tomas, display_name: Tomás Herrera, tier: known, title: Director of Engineering, organization: Halcyon Robotics, channel: email, identifier: tomas.herrera@halcyon.example.test }
+    - { key: marcus, display_name: Marcus Bell, tier: known, title: Head of Sales Operations, organization: Halcyon Robotics, channel: email, identifier: marcus.bell@halcyon.example.test }
+    - { key: elena, display_name: Elena Sorensen, tier: known, title: CFO, organization: Halcyon Robotics, channel: email, identifier: elena.sorensen@halcyon.example.test }
+    - { key: jordan, display_name: Jordan Reyes, tier: known, title: VP Marketing, organization: Halcyon Robotics, channel: email, identifier: jordan.reyes@halcyon.example.test }
+    - { key: wei, display_name: Wei Chen, tier: known, title: VP Operations, organization: Halcyon Robotics, channel: email, identifier: wei.chen@halcyon.example.test }
+    - { key: fatima, display_name: Fatima Osei, tier: known, title: Head of People, organization: Halcyon Robotics, channel: email, identifier: fatima.osei@halcyon.example.test }
+    - { key: liam, display_name: Liam O'Brien, tier: known, title: General Counsel, organization: Halcyon Robotics, channel: email, identifier: liam.obrien@halcyon.example.test }
+inbound:
+  from: principal
+  content: I'm running about ten minutes behind.
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 3
+        events:
+          - { id: evt-52a-prev, title: "Investor call: pipeline review", location: Video call, startTime: "{{at:now-55m}}", endTime: "{{at:now+5m}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+          - id: evt-52a-standup
+            title: Weekly leadership stand-up
+            location: Room 4B
+            startTime: "{{at:now+5m}}"
+            endTime: "{{at:now+35m}}"
+            status: confirmed
+            busy: true
+            calendarId: cal-principal-work
+            participants:
+              - { email: priya.nair@halcyon.example.test }
+              - { email: tomas.herrera@halcyon.example.test }
+              - { email: marcus.bell@halcyon.example.test }
+              - { email: elena.sorensen@halcyon.example.test }
+              - { email: jordan.reyes@halcyon.example.test }
+              - { email: wei.chen@halcyon.example.test }
+              - { email: fatima.osei@halcyon.example.test }
+              - { email: liam.obrien@halcyon.example.test }
+          - { id: evt-52a-later, title: "Focus: board prep", location: null, startTime: "{{at:now+3h}}", endTime: "{{at:now+4h}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+expected_behaviors:
+  - id: tells_the_group
+    weight: critical
+    layer: decision
+    description: The stand-up attendees are told, before the start, that Avery is running late.
+    check:
+      called: [email-send, signal-send, sms-send, slack-send]
+      agent: any
+  - id: one_message_not_eight
+    weight: important
+    layer: decision
+    description: >
+      One message reaches the group (one email to the attendees, a group chat message);
+      not a separate message to each of the eight.
+    check:
+      called: [email-send, signal-send, sms-send, slack-send]
+      agent: any
+      min: 1
+      max: 2
+  - id: does_not_ask_avery
+    weight: important
+    layer: decision
+    description: Does not ask Avery what to say or whether to tell the team. It just tells them.
+  - id: meeting_left_alone
+    weight: nice-to-have
+    layer: decision
+    description: The stand-up is not moved or cancelled.
+    check:
+      not_called: [calendar-update-event, calendar-delete-event]
+      agent: any
+      with: { eventId: evt-52a-standup }
+  - id: no_pointless_lookup
+    weight: nice-to-have
+    layer: decision
+    description: Does not search the web for anyone on Avery's own team.
+    check:
+      not_called: [web-search]
+      agent: any
+  - id: group_note_voice
+    weight: critical
+    layer: voice
+    description: >
+      The message is one or two lines: Avery is running about ten minutes behind, please
+      start without them. No lengthy apology and no explanation.
+contrast:
+  group: finesse-52-running-late
+  recipient: The executive's own leadership team, a group of their direct reports.
+  message:
+    - { tool: email-send, arg: body }
+    - { tool: slack-send, arg: message }
+    - { tool: signal-send, arg: message }
+failure_modes:
+  - Apologizes at length
+  - Emails each person separately
+  - Asks Avery what to say

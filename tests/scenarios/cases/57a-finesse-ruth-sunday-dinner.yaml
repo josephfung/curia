@@ -1,0 +1,87 @@
+# Finesse 57a (#2556, docs/wip/2026-11-10-finesse-casebook.md): family logistics. Ruth,
+# Avery's mother-in-law, asks Curia whether Sunday dinner is still on and what to bring.
+# Curia confirms warmly from the calendar, and checks with Avery (or Morgan) about what to
+# bring rather than guessing. Information level 2: Ruth's contact record says she is
+# Morgan's mother; Sunday dinner is on Avery's calendar; nothing says what to bring.
+name: finesse 57a ruth asks about sunday dinner
+description: >
+  Ruth Abernathy, Morgan's mother (Avery's mother-in-law), who has Curia's address for family
+  logistics, emails: "Is Sunday dinner still on? What can I bring?" Sunday dinner is on
+  Avery's calendar. Nothing anywhere says what she should bring. Curia should reply warmly that
+  dinner is on, and check with Avery or Morgan about what to bring (or tell Ruth one of them
+  will let her know). A corporate tone, or guessing what to bring, is a miss.
+tags: [finesse, finesse-57, family]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: ruth
+      display_name: Ruth Abernathy
+      tier: known
+      title: Morgan's mother (Avery's mother-in-law)
+      channel: email
+      identifier: ruth.abernathy@abernathy.example.test
+inbound:
+  from: ruth
+  channel: email
+  content: |
+    Subject: Sunday
+
+    Hello dear,
+
+    Is Sunday dinner still on? What can I bring?
+
+    Love,
+    Ruth
+  email:
+    nylas_message_id: scenario-msg-57a-ruth
+    to: [curia]
+    sender_verified: true
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - { id: evt-57a-dinner, title: Sunday dinner with Ruth, location: Home, startTime: "{{time:next-sunday 17:30}}", endTime: "{{time:next-sunday 20:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: ruth.abernathy@abernathy.example.test }] }
+expected_behaviors:
+  - id: answers_ruth
+    weight: critical
+    layer: decision
+    description: Curia replies to Ruth that Sunday dinner is on.
+    check:
+      any_of:
+        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-57a-ruth } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:ruth}}" } }
+        - { reply: not_no_reply }
+  - id: no_guess_what_to_bring
+    weight: critical
+    layer: decision
+    description: >
+      Curia does not answer "what can I bring?" with a guess (a dessert, wine, a salad). It
+      says it will check with Morgan or Avery, or that one of them will let her know.
+  - id: checks_with_avery
+    weight: important
+    layer: decision
+    description: Avery (or Morgan, through Avery) is asked what Ruth should bring.
+    check:
+      any_of:
+        - { principal_note: present }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: ruth_reply_warm
+    weight: critical
+    layer: voice
+    description: >
+      The reply to Ruth is warm and personal, like "Hi Ruth, yes, Sunday is still on, and
+      they're looking forward to it. I'll check with Morgan about what to bring and get back
+      to you today." No corporate phrasing ("Per Avery's calendar, the event is confirmed"),
+      no calendar jargon, no sign-off that reads like an office.
+failure_modes:
+  - Corporate tone ("Per Avery's calendar, the event is confirmed")
+  - Guesses what Ruth should bring
+  - Ignores the "what can I bring" question

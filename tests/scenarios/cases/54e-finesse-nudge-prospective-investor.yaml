@@ -1,0 +1,164 @@
+# Finesse 54e (#2556, docs/wip/2026-11-10-finesse-casebook.md): six days after Curia asked a
+# prospective investor for a meeting (53b), no reply. One short, light follow-up that gives
+# her a reason to engage and an easy out, or a check with Avery first: both pass.
+# Information level 5: only earlier threads in Avery's mailbox show that Hannah writes
+# briefly and formally. Her contact record (Partner, Northbeam Capital) is level 2.
+#
+# Shape: a task wake plus the seeded ask it waits on, backdated six days.
+name: finesse 54e nudge prospective investor
+description: >
+  Six days ago Curia emailed Hannah Lindqvist, Partner at Northbeam Capital, asking for 30
+  minutes for Avery to walk her through Halcyon ahead of the next round. Avery is courting
+  her; she has no obligation to Avery. No reply. The reminder Curia set comes due. Earlier
+  threads in Avery's mailbox show Hannah writes briefly and formally. Curia should send one
+  short, light follow-up that gives her a reason to engage (a one-line update on the
+  business, say) and an easy out, matched to her brief, formal register; or check with Avery
+  first. A guilt-laden nudge, several nudges, or repeating the original email in full are
+  the failures.
+tags: [finesse, finesse-54, task-wake]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: hannah
+      display_name: Hannah Lindqvist
+      tier: known
+      title: Partner
+      organization: Northbeam Capital
+      channel: email
+      identifier: hannah.lindqvist@northbeam.example.test
+  outbound_context:
+    - key: ask_hannah
+      channel: email
+      agent: coordinator
+      recipients: [hannah]
+      content: >
+        Dear Hannah, I'm Curia, Avery's assistant at Halcyon Robotics. Ahead of Halcyon's
+        next round, Avery would value 30 minutes to walk you through the business. Happy to
+        work around your calendar, by video or at your office. Would any time in the next two
+        weeks suit?
+      expected_reply: whether Hannah will meet Avery, and when
+      metadata: { task_id: 54e0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d }
+      sent_minutes_ago: 8640
+      expires_in_hours: 240
+inbound:
+  from: task-wake
+  task:
+    id: 54e0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d
+    title: Meeting with Hannah Lindqvist
+    intent: >
+      Get Avery 30 minutes with Hannah Lindqvist (Northbeam Capital) to walk her through
+      Halcyon ahead of the next round.
+    notes:
+      - at: "{{time:today-6 10:00}}"
+        note: >
+          Emailed Hannah Lindqvist asking for 30 minutes with Avery in the next two weeks.
+          Set a reminder to check for her reply.
+tool_stubs:
+  # Curia's notes: the relationship, and a fresh line of news Curia could use.
+  memory-query:
+    - match: {}
+      return:
+        count: 2
+        results:
+          - id: 7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b5401
+            type: fact
+            label: Hannah Lindqvist and Halcyon
+            properties: { value: "Avery is courting Hannah Lindqvist (Partner, Northbeam Capital) as a possible investor in Halcyon's next round. Northbeam has not committed to anything." }
+            confidence: 0.85
+            decay_class: slow
+            sensitivity: internal
+            last_confirmed_at: "2026-09-15T10:00:00-04:00"
+            score: 0.8
+          - id: 7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b5402
+            type: fact
+            label: Halcyon news
+            properties: { value: "Halcyon signed its third hospital network customer last week; the announcement is public." }
+            confidence: 0.9
+            decay_class: fast
+            sensitivity: internal
+            last_confirmed_at: "{{at:now-48h}}"
+            score: 0.6
+  # Avery's earlier mail with Hannah: brief and formal (information level 5).
+  ceo-inbox-search:
+    - match: {}
+      return:
+        count: 2
+        messages:
+          - { id: msg-54e-hannah-1, threadId: thr-54e-hannah-1, from: "Hannah Lindqvist <hannah.lindqvist@northbeam.example.test>", subject: "Re: Halcyon update", date: "{{date:today-40}}", snippet: "Dear Avery, Thank you for the update. Noted with interest. Kind regards, Hannah Lindqvist", unread: false, folders: [INBOX] }
+          - { id: msg-54e-hannah-2, threadId: thr-54e-hannah-2, from: "Hannah Lindqvist <hannah.lindqvist@northbeam.example.test>", subject: "Re: Introduction", date: "{{date:today-90}}", snippet: "Dear Avery, Thank you for the introduction. I would be glad to stay in touch. Kind regards, Hannah Lindqvist", unread: false, folders: [INBOX] }
+  ceo-inbox-read:
+    - match: {}
+      return:
+        id: msg-54e-hannah-1
+        threadId: thr-54e-hannah-1
+        from: "Hannah Lindqvist <hannah.lindqvist@northbeam.example.test>"
+        subject: "Re: Halcyon update"
+        date: "{{date:today-40}}"
+        body: |
+          Dear Avery,
+
+          Thank you for the update. Noted with interest.
+
+          Kind regards,
+          Hannah Lindqvist
+  bullpen-read:
+    - match: {}
+      error: No bullpen thread with that ID exists
+  context-bridge-release:
+    - match: {}
+      return: { released: true }
+  task-update:
+    - match: { task_id: 54e0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d }
+      return:
+        task_id: 54e0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d
+        title: Meeting with Hannah Lindqvist
+        status: waiting
+        owner: curia
+        priority: 3
+        tags: []
+        updated_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
+expected_behaviors:
+  - id: follows_up_or_checks
+    weight: critical
+    layer: decision
+    description: Curia either sends Hannah one follow-up, or checks with Avery first. Both are acceptable; doing nothing is not.
+    check:
+      any_of:
+        - { called: email-send, agent: any, contains: { to: "{{contact:hannah}}" } }
+        - { called: report-to-principal, agent: any }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: at_most_one_nudge
+    weight: critical
+    layer: decision
+    description: No more than one follow-up goes to Hannah (none, when Curia checks with Avery first).
+    check:
+      any_of:
+        - { not_called: [email-send], agent: any, contains: { to: "{{contact:hannah}}" } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:hannah}}" }, max: 1 }
+  - id: hannah_nudge_light
+    weight: critical
+    layer: voice
+    description: >
+      Any follow-up to Hannah is short and light, in her brief, formal register ("Dear
+      Hannah"): it gives her a reason to engage (a one-line update, such as Halcyon's new
+      hospital network customer) and an easy out. It does not guilt her ("we haven't heard
+      back"), and does not repeat the original request in full. If Curia checks with Avery
+      instead, the note to Avery is brief and recommends a course.
+contrast:
+  group: finesse-54-nudge
+  recipient: A partner at a venture firm the executive hopes will invest. She has no obligation to the executive.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:hannah}}" } }
+failure_modes:
+  - A guilt-laden nudge
+  - More than one nudge
+  - Repeats the original email in full
