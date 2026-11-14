@@ -158,11 +158,13 @@ describe('createSendLevelReader', () => {
     expect(readSendLevelValue('{"default":"of"}')).toEqual({ level: 'on_request', malformed: true });
     expect(readSendLevelValue(null)).toEqual({ level: 'on_request', malformed: false });
   });
-  it('returns on_request and warns when get throws', async () => {
+  // #2587: the gateway falls back to on_request itself, and must know the read failed so the
+  // refusal it causes is a failure on the console, not the principal's setting at work.
+  it('warns and rethrows when get throws, leaving the on_request fallback to the caller', async () => {
     const warn = vi.fn();
     const log = { ...logger, warn } as unknown as typeof logger;
     const read = createSendLevelReader({ get: async () => { throw new Error('db down'); }, logger: log });
-    expect(await read('default')).toBe('on_request');
+    await expect(read('default')).rejects.toThrow('db down');
     expect(warn).toHaveBeenCalled();
   });
 });

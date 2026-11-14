@@ -199,9 +199,11 @@ export function createSendLevelReader(deps: {
       }
       return level;
     } catch (err) {
-      // Fall back to on_request: never widens autonomy, keeps principal-directed sends working.
-      deps.logger.warn({ errName: err instanceof Error ? err.name : typeof err, mailbox }, 'Could not read ceo_inbox sending level; using on_request');
-      return DEFAULT_SEND_LEVEL;
+      // Rethrown, not swallowed (#2587): the caller (OutboundGateway.sendPrincipalDraft) falls back
+      // to on_request itself, which never widens autonomy, and needs to know the read failed so a
+      // refusal it causes counts as a failure on the console, not as a policy hold.
+      deps.logger.warn({ errName: err instanceof Error ? err.name : typeof err, mailbox }, 'Could not read ceo_inbox sending level; the caller uses on_request');
+      throw err;
     }
   };
 }
