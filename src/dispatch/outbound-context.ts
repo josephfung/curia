@@ -11,7 +11,10 @@ import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import { attributeOutboundEntry, type DelegationHintRoster } from './delegation-hint.js';
 import { isUuid } from '../util/uuid.js';
-import { TASK_WAKE_TASK_ID_KEY, isTaskWakeReplyBinding } from './task-wake-reply.js';
+import { TASK_WAKE_BIND_REPLY_KEY, TASK_WAKE_TASK_ID_KEY, isTaskWakeReplyBinding } from './task-wake-reply.js';
+
+/** Metadata flag on a task-wake binding that its task's end released, so reopen can restore it (#2592). */
+export const RELEASED_ON_TASK_END_KEY = 'released_on_task_end';
 
 const MAX_PREVIEW_LENGTH = 300;
 // Metadata carries structured delegation context (e.g. resume_tokens for
@@ -516,6 +519,50 @@ export class OutboundContextService {
   /** Release by entry id only — conversation-agnostic (task-wake bindings span channels). */
   async releaseEntry(entryId: string): Promise<void> {
     return this.release(entryId);
+  }
+
+  /**
+   * Release every active task-wake binding for a task that just ended (#2592). A finished
+   * task cannot take the reply, so an active binding only catches later, unrelated replies.
+   * Each row is stamped with RELEASED_ON_TASK_END_KEY so a reopen restores these rows and
+   * not the ones a reply released. Returns how many were released.
+   */
+  async releaseTaskWakeBindingsForTask(taskId: string): Promise<number> {
+    const result = await this.pool.query(
+      `UPDATE outbound_context
+          SET released = true,
+              metadata = metadata || jsonb_build_object($3::text, true)
+        WHERE released = false AND expires_at > now()
+          AND metadata ->> $1::text = 'true'
+          AND metadata ->> $2::text = $4::text`,
+      [TASK_WAKE_BIND_REPLY_KEY, TASK_WAKE_TASK_ID_KEY, RELEASED_ON_TASK_END_KEY, taskId],
+    );
+    const released = result.rowCount ?? 0;
+    if (released > 0) {
+      this.logger.info({ taskId, released }, 'outbound-context: released task-wake bindings of a finished task');
+    }
+    return released;
+  }
+
+  /**
+   * Undo releaseTaskWakeBindingsForTask when the task is reopened: reactivate the unexpired
+   * bindings that the task's end released. Returns how many were restored.
+   */
+  async restoreTaskWakeBindingsForTask(taskId: string): Promise<number> {
+    const result = await this.pool.query(
+      `UPDATE outbound_context
+          SET released = false,
+              metadata = metadata - $2::text
+        WHERE released = true AND expires_at > now()
+          AND metadata ->> $1::text = $3::text
+          AND (metadata ->> $2::text) = 'true'`,
+      [TASK_WAKE_TASK_ID_KEY, RELEASED_ON_TASK_END_KEY, taskId],
+    );
+    const restored = result.rowCount ?? 0;
+    if (restored > 0) {
+      this.logger.info({ taskId, restored }, 'outbound-context: restored task-wake bindings of a reopened task');
+    }
+    return restored;
   }
 
   /**
