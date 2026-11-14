@@ -117,8 +117,8 @@ describe('runtime turn activity (#2588)', () => {
         conversationId: 'conv-other',
         channelId: 'sms',
         parentEventId: undefined,
-        metadata: undefined,
-        content: 'book the 9am flight to Montreal',
+        // As the dispatcher stamps them: the sender's text and a clean scan.
+        metadata: { inboundSenderText: 'book the 9am flight to Montreal', inboundScanFindingCount: 0 },
         startedAt: Date.now() - 60_000,
         originatorContactId: CONTACT,
         originatorResolved: true,

@@ -93,7 +93,8 @@ function startRoot(
     channelId?: string;
     /** Defaults to a one-to-one Signal conversation, where a person may see hold details. */
     conversationId?: string;
-    content?: string;
+    /** The sender's text, as the dispatcher stamps it. */
+    senderText?: string;
     originatorContactId?: string | null;
     originatorResolved?: boolean;
     originatorIsSystem?: boolean;
@@ -121,8 +122,12 @@ function startRoot(
     conversationId: extra?.conversationId ?? `signal:conv-${taskEventId}`,
     channelId,
     parentEventId: undefined,
-    metadata: { ...(originator ? { originator } : {}), ...extra?.metadata },
-    content: extra?.content ?? 'please do the thing',
+    metadata: {
+      inboundSenderText: extra?.senderText ?? 'please do the thing',
+      inboundScanFindingCount: 0,
+      ...(originator ? { originator } : {}),
+      ...extra?.metadata,
+    },
     startedAt: Date.now(),
     originatorContactId: extra?.originatorContactId === undefined ? PRINCIPAL : extra.originatorContactId,
     originatorResolved: extra?.originatorResolved ?? extra?.originatorContactId !== null,
@@ -296,7 +301,7 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
     const { registry, layer, turnActivity } = setup();
     const handler = makeHandler();
     registry.register(makeRiskyManifest('contact-message', 'medium'), handler);
-    startRoot(turnActivity, 'task-a', { content: 'secret plan' });
+    startRoot(turnActivity, 'task-a', { senderText: 'secret plan' });
     startRoot(turnActivity, 'task-b');
 
     expect((await layer.invoke('contact-message', { contact_id: ALICE, text: 'body one' }, undefined, opts('task-a'))).success).toBe(true);
