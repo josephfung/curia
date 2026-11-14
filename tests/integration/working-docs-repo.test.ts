@@ -411,5 +411,46 @@ describeIf('WorkingDocsRepo (integration)', () => {
       expect(edited.ok).toBe(true);
       expect((await repo.read(path))!.sectionVersions).toEqual({ 'Board mail': 2 });
     });
+
+    it('makes a section delete holding the pre-replace counter conflict', async () => {
+      const path = '/projects/sv-d/rules.md';
+      await repo.create({ path, type: 'agent-settings', body: RULES });
+      await repo.editSection(path, { section: 'Board mail', content: '- Status: active' });
+      const before = (await repo.read(path))!;
+      expect(before.sectionVersions).toEqual({ 'Board mail': 1 });
+
+      // A replace that changes Board mail bumps its counter past the one a stale writer holds.
+      const replaced = await repo.update(path, {
+        body: '## Board mail\n\n- Status: paused\n\n## Newsletters\n\n- Status: paused\n',
+        expectedVersion: before.version,
+      });
+      expect(replaced.ok).toBe(true);
+      const replacedBody = (await repo.read(path))!.body;
+
+      const stale = await repo.deleteSection(path, { section: 'Board mail', expectedSectionVersion: 1 });
+      expect(stale.ok).toBe(false);
+      if (!stale.ok) expect('conflict' in stale && stale.conflict).toBe(true);
+      expect((await repo.read(path))!.body).toBe(replacedBody);
+    });
+
+    it('checks a section delete against a counter stored under another spelling', async () => {
+      const path = '/projects/sv-e/rules.md';
+      await repo.create({ path, type: 'agent-settings', body: RULES });
+      // The counter is keyed by the caller's spelling, not the body heading's.
+      expect((await repo.editSection(path, { section: 'board mail', content: '- Status: active' })).ok).toBe(true);
+      expect((await repo.read(path))!.sectionVersions).toEqual({ 'board mail': 1 });
+
+      const stale = await repo.deleteSection(path, { section: 'Board mail', expectedSectionVersion: 0 });
+      expect(stale.ok).toBe(false);
+      if (!stale.ok) expect('conflict' in stale && stale.conflict).toBe(true);
+      expect((await repo.read(path))!.body).toContain('## Board mail');
+
+      // The current counter deletes the section and drops its key.
+      const deleted = await repo.deleteSection(path, { section: 'Board mail', expectedSectionVersion: 1 });
+      expect(deleted.ok).toBe(true);
+      const after = (await repo.read(path))!;
+      expect(after.body).not.toContain('Board mail');
+      expect(after.sectionVersions).toEqual({});
+    });
   });
 });
