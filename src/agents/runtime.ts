@@ -8,6 +8,7 @@ import type { EventBus } from '../bus/bus.js';
 import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, createDelegationTimedOut, createDelegationRequesterContext, createDelegationPrincipalNote, createAgentTaskInputInjected, isInjectionDrainPoint, type AgentResponseFailureReason, type AgentTaskEvent, type InjectionDrainPoint } from '../bus/events.js';
 import { holderFromAgentTask, originatorIsSystem, type TurnLanes } from '../dispatch/turn-lanes.js';
 import type { TurnActivityRegistry } from '../dispatch/turn-activity.js';
+import { isCrossTurnHold } from '../dispatch/backstop-message.js';
 import { frameInjectedInput } from './injected-input.js';
 import type { Tier } from './llm/model-router.js';
 import { ContextBudget } from './llm/context-budget.js';
@@ -2925,7 +2926,9 @@ export class AgentRuntime {
           const mismatchFromFailure = identityMismatchFromToolResult(toolCall.name, result);
           if (isDbFailure) {
             budget.dbFailures++;
-          } else {
+          } else if (!isCrossTurnHold(result)) {
+            // A cross-turn hold (#2588) is a pause the model is told to weigh and may re-issue,
+            // not a tool error: it must not push the turn toward the abort budget.
             budget.consecutiveErrors++;
           }
           const agentErr = isDbFailure

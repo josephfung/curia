@@ -293,6 +293,9 @@ describe('cross-conversation backstop (#2588)', () => {
     expect.soft(h.email.execute).toHaveBeenCalledTimes(1);
     expect(h.transcript('SIGNAL-REQUEST')).toContain(HOLD_TEXT);
     expect(h.transcript('EMAIL-REQUEST')).not.toContain(HOLD_TEXT);
+    // The hold was the Signal turn's first tool result, and it did not count as an error
+    // against the turn's consecutive-error budget.
+    expect(h.transcript('SIGNAL-REQUEST')).toMatch(/<attempt>0 of \d+<\/attempt>/);
   });
 
   it('the same person on two channels acting on different people is never held', async () => {

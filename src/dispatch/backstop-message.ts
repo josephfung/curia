@@ -1,10 +1,12 @@
 // backstop-message.ts — the text a held risky call returns to the model (#2588).
 //
-// It names what the other turn did (tool, target, local time) and nothing else: never the
-// other turn's request text or any message body, which may belong to another conversation.
-// Even those details go only to a viewer entitled to them (viewerSeesDetail); anyone else
-// gets a generic line, so one person's turn cannot learn what another person's turn did.
+// It names what the other turn did (whose turn, tool, target, local time, and what came of
+// it) and nothing else: never the other turn's request text or any message body, which may
+// belong to another conversation. Even those details go only to a viewer entitled to them
+// (viewerSeesDetail); anyone else gets a generic line, so one person's turn cannot learn
+// what another person's turn did.
 
+import type { ToolResult } from '../skills/types.js';
 import { toLocalIso } from '../time/timestamp.js';
 import type { ActionOutcome, ActionTarget, BackstopDecision, RootTurn } from './turn-activity.js';
 
@@ -15,6 +17,7 @@ const HEADER = "Not run yet: another conversation's turn already acted on the sa
 const FOOTER = "If your call still applies after this, call it again unchanged; if it would duplicate that work, don't.";
 const GENERIC_LINE = '- Another conversation already acted on this same target recently.';
 const NAME_MAX = 80;
+const CHANNEL_MAX = 32;
 /** What the other turn's call came to, as far as the registry knows. */
 const OUTCOME_TEXT: Record<ActionOutcome, string> = {
   pending: 'is doing this right now',
@@ -39,6 +42,25 @@ export function viewerSeesDetail(
   return other.originatorResolved && other.originatorContactId === viewer.originatorContactId;
 }
 
+/** Both roots belong to the same resolved contact. */
+function sameResolvedContact(viewer: RootTurn | undefined, other: RootTurn): boolean {
+  return viewer !== undefined
+    && viewer.originatorResolved
+    && other.originatorResolved
+    && viewer.originatorContactId !== null
+    && viewer.originatorContactId === other.originatorContactId;
+}
+
+/**
+ * The contact whose name a detail line shows as "a conversation with …": the other turn's
+ * resolved person, when that is not the viewer and not Curia's own work. Null otherwise.
+ */
+export function otherTurnContactId(viewer: RootTurn | undefined, other: RootTurn): string | null {
+  if (other.originatorIsSystem || !other.originatorResolved) return null;
+  if (sameResolvedContact(viewer, other)) return null;
+  return other.originatorContactId;
+}
+
 /** One line, bounded: a stored display name must not break out of its line. */
 function singleLine(value: string, max: number): string {
   const flat = value
@@ -49,6 +71,15 @@ function singleLine(value: string, max: number): string {
   return flat.length <= max ? flat : flat.slice(0, max);
 }
 
+/**
+ * A stored display name, single-lined, capped and JSON-quoted: it is untrusted data, and the
+ * quotes keep it from reading as part of the sentence around it. Undefined when empty.
+ */
+function quotedName(name: string | undefined): string | undefined {
+  const flat = name === undefined ? '' : singleLine(name, NAME_MAX);
+  return flat === '' ? undefined : JSON.stringify(flat);
+}
+
 function localTime(atMs: number, timezone: string): string {
   const iso = toLocalIso(Math.floor(atMs / 1000), timezone) ?? new Date(atMs).toISOString();
   // Whole seconds only: the milliseconds are noise in a prompt line.
@@ -57,11 +88,8 @@ function localTime(atMs: number, timezone: string): string {
 
 function targetDisplay(target: ActionTarget, contactName: (id: string) => string | undefined): string | null {
   switch (target.kind) {
-    case 'contact': {
-      const name = contactName(target.value);
-      const shown = name === undefined ? '' : singleLine(name, NAME_MAX);
-      return shown === '' ? 'a contact' : shown;
-    }
+    case 'contact':
+      return quotedName(contactName(target.value)) ?? 'a contact';
     case 'site':
     case 'id':
       return target.value;
@@ -71,9 +99,26 @@ function targetDisplay(target: ActionTarget, contactName: (id: string) => string
   }
 }
 
+/** Whose turn acted, from the viewer's side. */
+function whoseTurn(
+  viewer: RootTurn | undefined,
+  other: RootTurn,
+  contactName: (id: string) => string | undefined,
+): string {
+  if (other.originatorIsSystem) return 'a scheduled task';
+  if (sameResolvedContact(viewer, other)) {
+    const channel = singleLine(other.channelId, CHANNEL_MAX);
+    return channel === '' ? 'your other conversation' : `your other conversation on ${channel}`;
+  }
+  const owner = otherTurnContactId(viewer, other);
+  const name = owner === null ? undefined : quotedName(contactName(owner));
+  return `a conversation with ${name ?? 'another contact'}`;
+}
+
 /**
- * `showDetail` decides per match whether the line names the tool, target and time; it
- * defaults to yes. Matches without detail share one generic line.
+ * `showDetail` decides per match whether the line names whose turn it was, the tool, target,
+ * time and outcome; it defaults to yes. Matches without detail share one generic line.
+ * `viewer` is the held root, for "your other conversation".
  */
 export function renderBackstopHold(
   matches: BackstopMatches,
@@ -81,6 +126,7 @@ export function renderBackstopHold(
     timezone: string;
     contactName: (id: string) => string | undefined;
     showDetail?: (match: BackstopMatch) => boolean;
+    viewer?: RootTurn;
   },
 ): string {
   const lines = new Set<string>();
@@ -89,10 +135,33 @@ export function renderBackstopHold(
       lines.add(GENERIC_LINE);
       continue;
     }
+    const whose = whoseTurn(opts.viewer, match.other, opts.contactName);
     const shown = targetDisplay(match.target, opts.contactName);
     const on = shown === null ? '' : ` on ${shown}`;
     const state = OUTCOME_TEXT[match.action.outcome];
-    lines.add(`- another conversation ${state}: ${match.action.toolName}${on} at ${localTime(match.action.at, opts.timezone)}`);
+    lines.add(`- ${whose} ${state}: ${match.action.toolName}${on} at ${localTime(match.action.at, opts.timezone)}`);
   }
   return [HEADER, ...lines, FOOTER].join('\n');
+}
+
+/** The hold text with no detail at all: the fallback when building the detailed one fails. */
+export function renderGenericBackstopHold(): string {
+  return [HEADER, GENERIC_LINE, FOOTER].join('\n');
+}
+
+/**
+ * Held results, by identity. A hold returns `success: false` so the model re-issues rather
+ * than assuming the work ran, but it is not a tool error: the runtime checks this before
+ * counting a failure against the turn's consecutive-error budget. A marker set rather than a
+ * field, so the public ToolResult type is unchanged.
+ */
+const crossTurnHolds = new WeakSet<object>();
+
+export function markCrossTurnHold(result: ToolResult): ToolResult {
+  crossTurnHolds.add(result);
+  return result;
+}
+
+export function isCrossTurnHold(result: ToolResult): boolean {
+  return crossTurnHolds.has(result);
 }
