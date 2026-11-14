@@ -56,6 +56,22 @@ ceo-inbox-draft-edit:
 ceo-inbox-send-draft:
   - match: {}
     error: "Curia sends from the principal's mailbox only when the principal asks on a live turn. Nothing was sent; the draft is still in their Drafts folder."
+# The principal's mailbox reads (test mode has no mail client): a quiet mailbox, so a
+# specialist looking for context finds nothing instead of a refusal production never shows.
+# A case that seeds an earlier thread (information level 5) stubs these itself, first.
+ceo-inbox-list:
+  - match: {}
+    return: { messages: [], count: 0 }
+ceo-inbox-search:
+  - match: {}
+    return: { messages: [], count: 0 }
+ceo-inbox-read:
+  - match: {}
+    error: Message not found in this mailbox.
+# A working note an agent keeps on the way (58c): a fair write.
+doc-write:
+  - match: {}
+    return: { action: created, path: /scratch/notes.md, version: 1, displayTimezone: America/Toronto }
 # ceo-inbox's housekeeping on a message it handled.
 ceo-inbox-label:
   - agent: ceo-inbox
