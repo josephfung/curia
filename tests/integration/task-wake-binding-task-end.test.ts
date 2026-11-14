@@ -4,13 +4,13 @@
 // so later, unrelated principal replies kept matching it, and each context-bridge-release
 // failed with "failed to persist task-wake reply" without releasing it. Now:
 //   - a reply to a binding whose task is done releases it and succeeds (reply not attached);
-//   - completing a task releases its bindings, and reopening restores only those.
+//   - completing or cancelling a task releases its bindings, and no other task's.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { EventBus } from '../../src/bus/bus.js';
-import { OutboundContextService, RELEASED_ON_TASK_END_KEY } from '../../src/dispatch/outbound-context.js';
+import { OutboundContextService } from '../../src/dispatch/outbound-context.js';
 import { TaskRepo } from '../../src/db/task-repo.js';
 import { TASK_WAKE_BIND_REPLY_KEY, TASK_WAKE_TASK_ID_KEY } from '../../src/dispatch/task-wake-reply.js';
 import { createSilentLogger } from '../../src/logger.js';
@@ -114,7 +114,12 @@ describeIf('task-wake bindings of finished tasks (#2592)', () => {
 
     expect(result).toEqual({
       success: true,
-      data: { released: entryId, task_id: taskId, reply_attached: false, note: 'task already done; reply not attached' },
+      data: {
+        released: entryId,
+        task_id: taskId,
+        reply_attached: false,
+        note: expect.stringMatching(/^task already done; reply not attached\./),
+      },
     });
     expect((await entryState(entryId)).released).toBe(true);
     const task = await taskRepo.getTask(taskId);
@@ -132,9 +137,7 @@ describeIf('task-wake bindings of finished tasks (#2592)', () => {
     await taskRepo.completeTask(taskId, 'Done');
 
     for (const id of [a, b]) {
-      const state = await entryState(id);
-      expect(state.released).toBe(true);
-      expect(state.metadata[RELEASED_ON_TASK_END_KEY]).toBe(true);
+      expect((await entryState(id)).released).toBe(true);
     }
     expect((await entryState(other)).released).toBe(false);
   });
@@ -148,18 +151,4 @@ describeIf('task-wake bindings of finished tasks (#2592)', () => {
     expect((await entryState(entryId)).released).toBe(true);
   });
 
-  it('reopening restores the bindings the task end released, not ones a reply released', async () => {
-    const taskId = await insertTask('waiting');
-    const endReleased = await bind(taskId);
-    const replyReleased = await bind(taskId);
-    await outboundContext.releaseEntry(replyReleased);
-
-    await taskRepo.completeTask(taskId, 'Done');
-    await taskRepo.reopenTask(taskId, 'Undo');
-
-    const restored = await entryState(endReleased);
-    expect(restored.released).toBe(false);
-    expect(restored.metadata[RELEASED_ON_TASK_END_KEY]).toBeUndefined();
-    expect((await entryState(replyReleased)).released).toBe(true);
-  });
 });

@@ -227,14 +227,11 @@ export class TaskRepo {
      */
     private readonly outreach?: Pick<TaskOutreachRepo, 'closeForTask' | 'reopenForTask'>,
     /**
-     * Releases a finished task's task-wake reply bindings in outbound_context (#2592), and
-     * restores them on reopen. Injected for the same reason as `outreach`; absent, a binding
-     * stays active until its TTL (7 days) and keeps catching the principal's replies.
+     * Releases an ended task's task-wake reply bindings in outbound_context (#2592). Injected
+     * for the same reason as `outreach`; absent, a binding stays active until its TTL
+     * (7 days), and recordTaskWakeReply releases it when a reply arrives.
      */
-    private readonly taskWakeBindings?: Pick<
-      OutboundContextService,
-      'releaseTaskWakeBindingsForTask' | 'restoreTaskWakeBindingsForTask'
-    >,
+    private readonly taskWakeBindings?: Pick<OutboundContextService, 'releaseTaskWakeBindingsForTask'>,
   ) {}
 
   /**
@@ -1137,14 +1134,8 @@ export class TaskRepo {
         this.logger.warn({ err, taskId: updated.id }, 'task-repo: failed to reopen task outreach — replies will not link to the reopened task');
       }
     }
-    // Likewise its task-wake asks: only the bindings the task's end released come back (#2592).
-    if (this.taskWakeBindings) {
-      try {
-        await this.taskWakeBindings.restoreTaskWakeBindingsForTask(updated.id);
-      } catch (err) {
-        this.logger.warn({ err, taskId: updated.id }, 'task-repo: failed to restore task-wake bindings — replies to its asks will not bind to the reopened task');
-      }
-    }
+    // Its task-wake bindings are not restored (#2592): cleanupExpired deletes released rows
+    // daily, so they are usually gone. If the reopened task still needs an answer, it asks again.
 
     this.logger.info({ taskId: updated.id }, 'task-repo: reopened task');
     return updated;
