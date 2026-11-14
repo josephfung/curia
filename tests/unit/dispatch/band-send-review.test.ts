@@ -76,6 +76,8 @@ describe('BandSendReview', () => {
       expect(d.kind).toBe('hold');
       if (d.kind === 'hold') {
         expect(d.findings[0]!.rule).toBe('review-unavailable');
+        // Nothing ruled on it: a failure on the console, not a policy hold (#2587).
+        expect(d.findings[0]!.unjudged).toBe(true);
         expect(d.reason).toContain('could not be read');
       }
       expect(review).not.toHaveBeenCalled();
@@ -238,7 +240,11 @@ describe('BandSendReview', () => {
             const { svc } = make([verdict]);
             const d = await svc.review({ ...auto, content: 'Call 416-555-0199.', detectedItems: [item], score: 100, stakesCeiling: 'commitment' });
             expect(d.kind).toBe('hold');
-            if (d.kind === 'hold') expect(d.findings.map((f) => f.rule)).toEqual(['review-unavailable', 'pii-not-authorized']);
+            if (d.kind === 'hold') {
+              expect(d.findings.map((f) => f.rule)).toEqual(['review-unavailable', 'pii-not-authorized']);
+              // The reviewer checked neither: both are outages, not rulings (#2587).
+              expect(d.findings.every((f) => f.unjudged === true)).toBe(true);
+            }
           }
         });
 

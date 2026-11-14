@@ -658,6 +658,25 @@ describe('OutboundGateway', () => {
       expect(result.policyHold).toBe(true);
     });
 
+    it('does not mark a block from a judge that could not rule as a policy hold (#2587)', async () => {
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+        passed: false,
+        findings: [{ rule: 'llm-judge-unavailable', detail: 'timeout', unjudged: true }],
+        stage: 'llm-review',
+      });
+      const gateway = new OutboundGateway({
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+        logger: mocks.logger,
+      });
+      const result = await gateway.send(baseRequest);
+      expect(result.success).toBe(false);
+      expect(result.policyHold).toBeUndefined();
+    });
+
     it('returns the judge\'s abstract reason and rule name so the agent can self-correct (LLM-judge block)', async () => {
       // #1051: when a Stage-2 LLM judge blocks the send, the skill result must
       // carry the judge's abstract reason (safe to surface — it never quotes the
@@ -3127,6 +3146,34 @@ describe('gated draft-fallback (two-step pattern)', () => {
     expect(result.gated).toBe(true);
     expect(result.actionRef).toMatch(/^[0-9a-f]{8}$/);
     expect(result.blockedReason).toMatch(/autonomy score.*65.*below.*send threshold/i);
+    // Held for an approval the principal can act on: a policy hold (#2587).
+    expect(result.policyHold).toBe(true);
+  });
+
+  it('is a failure, not a policy hold, when the approval row cannot be written (#2587)', async () => {
+    const mocks = createMocks();
+    const actionLogRepo = makeActionLogRepo();
+    vi.mocked(actionLogRepo.insert).mockRejectedValue(new Error('db down'));
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo,
+    });
+    const result = await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123', conversationId: 'conv-456', reExecRecipe: TEST_RECIPE },
+    );
+    // Still blocked (fail closed), but nobody will be asked, so it stays a hiccup.
+    expect(result.success).toBe(false);
+    expect(result.gated).toBe(true);
+    expect(result.actionRef).toBeUndefined();
+    expect(result.policyHold).toBeUndefined();
+    expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
   });
 
   it('skips action_log write and returns no actionRef when reExecRecipe is not provided', async () => {
@@ -4279,6 +4326,30 @@ describe('band review (#2159)', () => {
         expect(result.success, outcome.kind).toBe(false);
         expect(result.policyHold, outcome.kind).toBe(true);
       }
+    });
+
+    it('does not mark a hold or bounce the reviewer could not judge', async () => {
+      const outcomes = [
+        { kind: 'hold', reason: 'Held: reviewer unavailable.', findings: [{ rule: 'review-unavailable', detail: 'x', unjudged: true }] },
+        { kind: 'bounce', findings: [{ rule: 'pii', detail: 'The reviewer could not check these.', unjudged: true }] },
+      ];
+      for (const outcome of outcomes) {
+        const gw = makeBandGateway({ review: vi.fn().mockResolvedValue(outcome), score: 84 });
+        const result = await gw.send(emailReq);
+        expect(result.success, outcome.kind).toBe(false);
+        expect(result.policyHold, outcome.kind).toBeUndefined();
+      }
+    });
+
+    it('does not mark a hold whose approval row could not be written', async () => {
+      const actionLogRepo = makeActionLogRepo();
+      vi.mocked(actionLogRepo.insert).mockRejectedValue(new Error('db down'));
+      const gw = makeBandGateway({ review: vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held.', findings: [{ rule: 'steered', detail: 'x' }] }), score: 84, actionLogRepo });
+      const recipe = { toolName: 'email-send', description: 'Email Joel', partialPayload: {} };
+      const result = await gw.send(emailReq, { taskEventId: 't1', reExecRecipe: recipe });
+      expect(result.success).toBe(false);
+      expect(result.blockedReason).toContain('No approval request could be recorded');
+      expect(result.policyHold).toBeUndefined();
     });
 
     it('does not mark the hold that stands in for a review that threw', async () => {
@@ -6149,7 +6220,10 @@ describe('sendPrincipalDraft (#2474)', () => {
     expect(client!.sendDraft).toHaveBeenCalled();
     // on_request still refuses an autonomous call.
     const system = { originator: { contactId: 'system', systemRole: 'system', channel: 'scheduler', initiatedAt: '2026-11-07T10:00:00.000Z' } };
-    expect(await gw.sendPrincipalDraft('d1', { ...opts, authority: { taskMetadata: system } })).toMatchObject({ refusal: 'not_requested' });
+    const refused = await gw.sendPrincipalDraft('d1', { ...opts, authority: { taskMetadata: system } });
+    expect(refused).toMatchObject({ refusal: 'not_requested' });
+    // An unreadable setting is a failure, not the principal's setting at work (#2587).
+    expect(refused.policyHold).toBeUndefined();
   });
 
   it('1. refuses with mailbox_unavailable when the principal mailbox is not connected', async () => {
@@ -6185,6 +6259,8 @@ describe('sendPrincipalDraft (#2474)', () => {
     const system = { originator: { contactId: 'system', systemRole: 'system', channel: 'scheduler', initiatedAt: '2026-11-07T10:00:00.000Z' } };
     const r = await gw.sendPrincipalDraft('d1', { ...opts, authority: { taskMetadata: system } });
     expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'not_requested', blockedReason: PRINCIPAL_SEND_REFUSALS.not_requested });
+    // A setting the principal chose: a policy hold (#2587).
+    expect(r.policyHold).toBe(true);
     expect(client!.getDraft).not.toHaveBeenCalled();
   });
 

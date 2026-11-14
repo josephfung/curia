@@ -202,7 +202,7 @@ export class OutboundLlmJudge implements OutboundJudge {
     if (this.config.failMode === 'closed') {
       // Outage under closed is not a model verdict — keep it out of judged_block.
       await this.publishDecision(input, 'failed_closed', 'unreachable', reason);
-      return [{ rule: 'llm-judge-unavailable', detail: reason }];
+      return [{ rule: 'llm-judge-unavailable', detail: reason, unjudged: true }];
     }
     // split / open → deliver with Stage-1-only filtering. This used to be silent;
     // failed_open makes the availability choice visible in audit_log (#1911).
@@ -219,7 +219,8 @@ export class OutboundLlmJudge implements OutboundJudge {
     // Live model responded but we couldn't parse — still a block, tagged unparseable
     // so queries don't conflate it with audience_leak.
     await this.publishDecision(input, 'judged_block', 'unparseable', raw);
-    return [{ rule: 'llm-judge-parse-error', detail: raw }];
+    // unjudged (#2587): no verdict was read, so the block is a failure, not a policy hold.
+    return [{ rule: 'llm-judge-parse-error', detail: raw, unjudged: true }];
   }
 
   private async publishDecision(

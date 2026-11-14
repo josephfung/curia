@@ -732,13 +732,29 @@ function asPolicyHold<T extends OutboundSendResult>(result: T): T {
   return { ...result, policyHold: true };
 }
 
+/** `result` without the policy-hold mark: the guard could not run, so it is a failure (#2587). */
+function withoutPolicyHold<T extends OutboundSendResult>(result: T): T {
+  const failure = { ...result };
+  delete failure.policyHold;
+  return failure;
+}
+
 /**
- * A content-filter block (#1051, #1158). A policy hold (#2587) unless the filter itself threw:
- * then nothing judged the message, and the block is a failure that should show as a hiccup.
+ * Whether any finding records a check that could not run rather than a judgement (#2587): a
+ * filter stage or the judge failed, the reviewer was unavailable, a tier was unresolvable. The
+ * block still stands; it is just a failure on the console, not a policy hold.
  */
-function contentFilterBlock(blockedReason: string, blockedRules: string[]): OutboundSendResult {
-  const result: OutboundSendResult = { success: false, blockedReason, blockedRules };
-  return blockedRules.includes(FILTER_ERROR_RULE) ? result : asPolicyHold(result);
+function findingsUnjudged(findings: readonly FilterFinding[]): boolean {
+  return findings.some((f) => f.unjudged === true || f.rule === FILTER_ERROR_RULE);
+}
+
+/**
+ * A content-filter block (#1051, #1158). A policy hold (#2587) only when the filter actually
+ * judged the message; a stage that threw or a judge that was unavailable is a failure.
+ */
+function contentFilterBlock(blockedReason: string, findings: readonly FilterFinding[]): OutboundSendResult {
+  const result: OutboundSendResult = { success: false, blockedReason, blockedRules: findings.map((f) => f.rule) };
+  return findingsUnjudged(findings) ? result : asPolicyHold(result);
 }
 
 /** limit, other, or judgement (the default for a refusal about the reply itself). */
@@ -1490,13 +1506,17 @@ export class OutboundGateway {
           });
         }
 
-        return asPolicyHold({
+        const refused: OutboundSendResult = {
           success: false,
           gated: true,
           blockedReason:
             `Autonomy score is ${autonomyConfig.score} — direct sends require a score of at least ${sendThreshold}. ` +
             `Use createEmailDraft() for drafts, or ask the principal to raise the score with set-autonomy.`,
-        });
+        };
+        // An approval was attempted and could not be recorded (#2587): the principal is never
+        // asked, so this is a failure, a hiccup. With no recipe there was nothing to raise: a hold.
+        const approvalFailed = Boolean(options?.taskEventId && options?.reExecRecipe);
+        return approvalFailed ? refused : asPolicyHold(refused);
       }
     }
 
@@ -1751,12 +1771,16 @@ export class OutboundGateway {
             // actionRef is set only after an insert that required taskEventId, so it is present.
             await this.queueApprovalMention(actionRef, options.reExecRecipe.description, options.taskEventId ?? options.parentEventId ?? '', options.conversationId ?? undefined);
           }
-          return asPolicyHold({
+          const held: OutboundSendResult = {
             success: false,
             gated: true,
             actionRef,
             blockedReason: `${outcome.message}\n\n${itemSummary}${actionRef ? `\n\n${approvalAdvisory(actionRef, undefined, approvalNumber)}` : ''}`,
-          });
+          };
+          // As at the score gate (#2587): an approval that was attempted and not recorded is a
+          // failure, since nobody will be asked. No recipe means nothing to raise: a hold.
+          const approvalFailed = Boolean(options?.taskEventId && options?.reExecRecipe) && actionRef === undefined;
+          return approvalFailed ? held : asPolicyHold(held);
         }
 
         if (outcome.action === 'allow') {
@@ -2004,7 +2028,7 @@ export class OutboundGateway {
       // signal to rewrite the message and retry organically; blockedRules carries
       // the specific rule category (rule names only) so it can fix the root cause.
       return this.withUnmatchedRecipientNote(
-        contentFilterBlock(reasonSummary, filterFindings.map((f) => f.rule)),
+        contentFilterBlock(reasonSummary, filterFindings),
         unmatched,
       );
     }
@@ -2840,6 +2864,10 @@ export class OutboundGateway {
       decision = { kind: 'hold', reason, findings: [{ rule: BAND_RULES.unreviewed, detail: reason }] };
       reviewFailed = true;
     }
+    // A review that ran but could not judge (reviewer unavailable, fail-open cap, a PII check the
+    // judge failed) holds or bounces by design, yet nothing ruled on the send: a failure (#2587).
+    const ruled = decision.kind === 'send' ? [] : [...decision.findings, ...('heldBeside' in decision ? decision.heldBeside ?? [] : [])];
+    if (findingsUnjudged(ruled)) reviewFailed = true;
 
     // A principal-mailbox draft stays a draft on a hold, an ask or a block (#2474, design D5): no
     // approval, so nothing can be replayed from a queue, and no digest item, since the agent tells
@@ -3019,8 +3047,11 @@ export class OutboundGateway {
       const askGuidance = ask && raised
         ? ` This is waiting on the principal. Deliver approval ${raised.approvalNumber ?? raised.shortRef} to them now with deliver-approval on their urgent channel, then send ${normalizeCounterparty(ask.requester)} a short holding reply that doesn't include the requested details.`
         : '';
+      // Held for an approval that was never recorded (#2587): the principal has nothing to act
+      // on, so this is a failure. The digest report above still tells them.
+      const holdOrFailure = raised ? reviewed : withoutPolicyHold;
       return {
-        result: reviewed({
+        result: holdOrFailure({
           success: false,
           gated: true,
           ...(raised ? { actionRef: raised.shortRef } : {}),
@@ -4604,11 +4635,13 @@ export class OutboundGateway {
     // 2. The setting is read here, not by the caller, so no caller can skip it (design D3). An
     // absent reader is the default level; the reader itself turns unreadable into on_request.
     let level: SendLevel = 'on_request';
+    let levelUnreadable = false;
     try {
       // The level of the mailbox that holds this draft (#2475, D6), never another's.
       if (this.readSendLevel) level = await this.readSendLevel(mailboxId);
     } catch (err) {
-      // on_request, as the reader's own fallback: never widens autonomy, keeps principal-directed sends working.
+      // on_request: never widens autonomy, keeps principal-directed sends working.
+      levelUnreadable = true;
       this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: send level unreadable — using on_request');
     }
     if (level === 'off') return refuse('setting_off');
@@ -4617,7 +4650,12 @@ export class OutboundGateway {
     if (options.authority.humanApproved === true) return refuse('approval_replay');
     const autonomous = !isPrincipalDirectedMailboxSend(options.authority);
     // on_request: only what the principal asks for on a live turn (design D3). Nothing to report.
-    if (autonomous && level === 'on_request') return refuse('not_requested');
+    // When on_request is only the fallback for an unreadable setting, the refusal is a failure,
+    // not the principal's setting at work (#2587): it stays a hiccup.
+    if (autonomous && level === 'on_request') {
+      const refused = refuse('not_requested');
+      return levelUnreadable ? withoutPolicyHold(refused) : refused;
+    }
 
     // From here an autonomous stop is final (design D9): a held marker and one digest item.
     let draft: NylasMessage | null = null;
@@ -4652,7 +4690,9 @@ export class OutboundGateway {
       autonomy = await this.readAutonomy();
       if (this.currentGating(autonomy) !== 'band' || !this.bandReview) return stop('no_band_review');
       // Fail closed: with no task or no provenance, nothing can show Curia drafted it in this task (D4.1).
-      if (!options.taskEventId || !this.draftProvenance) return stop('not_curia_draft');
+      // Fail closed as before, but with no task or no provenance store wired nothing was checked:
+      // a failure on the console, not a hold (#2587). The refusal text is unchanged.
+      if (!options.taskEventId || !this.draftProvenance) return withoutPolicyHold(await stop('not_curia_draft'));
       // Fail closed: with no ledger, the thread cooldown (D4.6) can be neither read nor started.
       if (!this.sendLedger) return stop('no_send_ledger');
     }
@@ -4821,10 +4861,7 @@ export class OutboundGateway {
         const stopped = await stop('review_hold', `${checked.held}${PRINCIPAL_SEND_REFUSALS.review_hold}`, rules ?? 'review_hold', reviewHoldDigest(ruleList, checked.held));
         // review_hold is a policy hold, unless the hold came from a review that could not run
         // (checkDraftSend leaves policyHold off then): that one stays a hiccup (#2587).
-        if (checked.result.policyHold === true) return stopped;
-        const failure = { ...stopped };
-        delete failure.policyHold;
-        return failure;
+        return checked.result.policyHold === true ? stopped : withoutPolicyHold(stopped);
       }
       // Every other stop leaves the draft where it is and returns its reason: a review bounce
       // (on a principal-directed send the drafter edits once and resends), a blocked contact, the
@@ -5520,7 +5557,7 @@ export class OutboundGateway {
       // carries rule names only. Mirrors the send() block path (#1051).
       return {
         result: this.withUnmatchedRecipientNote(
-          contentFilterBlock(reasonSummary, filterFindings.map((f) => f.rule)),
+          contentFilterBlock(reasonSummary, filterFindings),
           unmatched,
         ),
       };
