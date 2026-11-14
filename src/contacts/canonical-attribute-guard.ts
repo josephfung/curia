@@ -19,7 +19,8 @@
 // (logged as a warning so the gap is observable).
 
 import { parsePhoneNumber, isValidPhoneNumber, ParseError } from 'libphonenumber-js';
-import type { ContactCanonicalFields } from './types.js';
+import type { Contact, ContactCanonicalFields } from './types.js';
+import { normalizeTimezone } from '../time/timezone-normalize.js';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Deny-list: KG attribute keys → ContactCanonicalFields key
@@ -143,5 +144,37 @@ export function buildCanonicalPatch(
     return { fields: { primaryPhone: normalized }, fallbackToKg: false };
   }
 
+  if (fieldKey === 'timezone') {
+    // A calendar label ("Eastern Time - Toronto") maps to its zone; a region spanning several
+    // zones ("Eastern Time - US & Canada") has no safe answer and stays a KG fact.
+    // ContactService.updateContactFields enforces the same rule; checking here keeps the
+    // fact instead of failing the write.
+    const normalized = normalizeTimezone(value);
+    if (!normalized) {
+      return { fallbackToKg: true, reason: 'timezone_unrecognized' };
+    }
+    return { fields: { timezone: normalized }, fallbackToKg: false };
+  }
+
   return { fields: { [fieldKey]: value } as ContactCanonicalFields, fallbackToKg: false };
+}
+
+/**
+ * Canonical fields on the principal's contact that automatic writers (extract-facts reading
+ * mail, memory-store) must not change. The principal's timezone is their HOME zone: it anchors
+ * inbox triage, digests and date resolution, and the text that mentions timezones (invite
+ * footers, signatures, other people's mail) is rarely about where the principal lives. A
+ * Google Calendar invite footer set it once and stopped triage. Only the setup wizard, the
+ * console, and contact-update on the principal's own say-so change it; travel is a separate,
+ * time-bounded override (#2598).
+ */
+const PRINCIPAL_LOCKED_FIELDS: ReadonlyArray<keyof ContactCanonicalFields> = ['timezone'];
+
+/** The fields in `fields` an automatic writer may not set on this contact (empty when none). */
+export function principalLockedFields(
+  contact: Pick<Contact, 'systemRole'>,
+  fields: ContactCanonicalFields,
+): Array<keyof ContactCanonicalFields> {
+  if (contact.systemRole !== 'principal') return [];
+  return PRINCIPAL_LOCKED_FIELDS.filter((key) => key in fields);
 }
