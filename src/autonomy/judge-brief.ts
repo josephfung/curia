@@ -154,7 +154,7 @@ export interface BriefEvidence {
   threadMessagesOlderLeftOut?: boolean;
   /**
    * An autonomous principal-mailbox reply (#2589): the sender of the message it answers, and the
-   * people that message newly copied who this reply also goes to. Rendered only when
+   * people that message newly copied (whether or not this reply goes to them). Rendered only when
    * `high-stakes-copy` is asked.
    */
   copied?: { sender: CopiedParty | null; newlyCopied: readonly CopiedParty[] };
@@ -196,7 +196,7 @@ export const OFF_THREAD_LINE = `For offThread: true when the message shares any 
  * than it may read, and the principal decides how to answer. A colleague or the sender's own
  * assistant is ordinary. Thin facts alone don't hold: most copied people have no contact record.
  */
-export const HIGH_STAKES_COPY_LINE = `For highStakesCopy: the sender of the message this reply answers newly copied the people below, and this reply goes to them too. true when any of them is from legal, HR or the board (by title, role, organization or address: counsel, legal@, people@, a board member), or is clearly more senior than the sender (their boss, an executive above them), so the matter may be more serious than it reads. false for peers, team members, the sender's own assistant or another address of the sender's. Use the facts below and what the message says about who they are. Missing facts alone are not a reason for true.`;
+export const HIGH_STAKES_COPY_LINE = `For highStakesCopy: the sender of the message this reply answers newly copied the people below (whether or not this reply goes to them). true when any of them is from legal, HR or the board (by title, role, organization or address: counsel, legal@, people@, a board member), or is clearly more senior than the sender (their boss, an executive above them), so the matter may be more serious than it reads. false for peers, team members, the sender's own assistant or another address of the sender's. Use the facts below and what the message says about who they are. Missing facts alone are not a reason for true.`;
 
 export interface BriefAnswers {
   purpose?: 'serving' | 'steered';

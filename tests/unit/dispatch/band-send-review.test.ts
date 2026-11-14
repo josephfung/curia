@@ -338,7 +338,7 @@ describe('BandSendReview', () => {
         };
         const withCopies: BandReviewInput = { ...auto, score: 100, stakesCeiling: 'commitment', copied };
 
-        it('is asked only when the answered message newly copied someone the reply goes to', async () => {
+        it('is asked only when the answered message newly copied someone', async () => {
           const { svc, review } = make([{ ...rated('routine'), highStakesCopy: false }, rated('routine'), rated('routine')]);
           await svc.review(withCopies);
           await svc.review({ ...withCopies, copied: { sender: null, newlyCopied: [] } });

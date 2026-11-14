@@ -63,8 +63,9 @@ function headerCount(msg: NylasMessage, name: string): number {
  *  - not a principal-From message (those are vouched for by SENT, in receivedBy);
  *  - a single From, verified by the provider's own Authentication-Results (SPF, DKIM and DMARC
  *    pass): the list is then the authenticated sender's own claim, not a third party's forgery;
- *  - that From is in `knownSenders`: an active, verified address of a contact at tier known or
- *    above, resolved by the gateway at send time. A stranger's fresh address, however well
+ *  - that From is in `knownSenders`: an active, verified address of a person contact (not an
+ *    organization: those reach known on their first inbound) at tier known or above, resolved by
+ *    the gateway at send time. A stranger's fresh address, however well
  *    authenticated (`"Jane Smith" <random@gmail.com>`), names no one;
  *  - at most one To and one Cc header. A header added after signing is a second copy, and
  *    which one a parser reads is not ours to guess.
@@ -137,10 +138,14 @@ export function receivedBy(
 
 /**
  * The people the message being answered newly copied, lowercased (#2589, ADR-062 rule 12): its
- * vouched To/Cc that no earlier thread message shows receiving (receivedBy). On a thread's first
- * message that is everyone the sender copied. "Shows receiving" uses the same vouched rule, so an
- * earlier unverified message that merely listed an address does not make it old news (fail
- * closed: more of these reach band review's high-stakes-copy question, never fewer).
+ * To/Cc, minus the principal and the sender, that no earlier thread message shows receiving
+ * (receivedBy). On a thread's first message that is everyone the sender copied.
+ *
+ * This feeds a hold signal (band review's high-stakes-copy), not membership, so both sides lean
+ * toward asking: the candidates are the raw To/Cc whether or not the sender vouches for them (a
+ * forged Cc of the board can only cause a hold, never a send to the board), and "shows receiving"
+ * uses the vouched rule, so an earlier unverified message that merely listed an address does not
+ * make it old news.
  */
 export function newlyCopied(
   thread: readonly NylasMessage[],
@@ -155,7 +160,9 @@ export function newlyCopied(
     if (msg.id === answered.id || !(msg.date < answered.date)) continue;
     for (const address of receivedBy(msg, principalAddresses, knownSenders)) seen.add(address);
   }
-  return vouchedCopies(answered, principalAddresses, knownSenders).filter((a) => !isPrincipal(a) && !seen.has(a));
+  const sender = new Set(answered.from.map((p) => lower(p.email)));
+  const copies = [...new Set([...answered.to, ...answered.cc].map((p) => lower(p.email)).filter((e) => e.length > 0))];
+  return copies.filter((a) => !isPrincipal(a) && !sender.has(a) && !seen.has(a));
 }
 
 /**

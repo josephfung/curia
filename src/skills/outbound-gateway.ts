@@ -3592,8 +3592,18 @@ export class OutboundGateway {
     for (const address of candidates) {
       const contact = await this.contactService.resolveByChannelIdentity('email', address);
       // `verified` is false for an unverified, defunct or bounced identity: such an address
-      // lends the contact's tier to no one.
-      if (contact !== null && contact.verified && meetsMinimumTier(contact.tier, 'known')) known.add(address);
+      // lends the contact's tier to no one. Only a person vouches: an organization contact is
+      // raised to known on its first inbound (domain-validated), and a shared or ticketing
+      // mailbox copies whatever addresses its users supply.
+      const why = contact === null ? 'no contact'
+        : !contact.verified ? 'identity not verified or not active'
+          : contact.kind !== 'person' ? `contact kind ${contact.kind}`
+            : !meetsMinimumTier(contact.tier, 'known') ? `tier ${contact.tier}`
+              : null;
+      if (why === null) known.add(address);
+      // Not an error: the copies just don't count, and the refusal (if any) names the recipient.
+      // Logged so "why didn't it reply-all?" can be answered.
+      else this.log.debug({ sender: redactId(address), why }, 'outbound-gateway: thread sender does not vouch for the people they copied');
     }
     return known;
   }
@@ -3608,6 +3618,9 @@ export class OutboundGateway {
     const resolved = await this.contactService.resolveByChannelIdentity('email', email);
     if (resolved === null) return { email, contact: false };
     const record = await this.contactService.getContact(resolved.contactId);
+    // A contact that resolved but can't be read (merged or deleted in between) would lose its
+    // title, and a lost "General Counsel" reads as no reason to hold: refuse instead (fail closed).
+    if (record === undefined) throw new Error('contact resolved but its record could not be read');
     const set = (key: 'name' | 'title' | 'organization' | 'role', value: string | null | undefined) =>
       value && value.trim().length > 0 ? { [key]: value.trim() } : {};
     return {
@@ -4917,9 +4930,10 @@ export class OutboundGateway {
       // model-written quote block could pass off new information as already on the thread.
       const { quote } = splitReplyQuote(draft.body);
       if (quote && !quoteMatchesThread(quote, proofs, outside)) return stop('review_hold', QUOTE_MISMATCH_REASON, 'quote-mismatch');
-      // Who the answered message newly copied that this reply also reaches (#2589), with their
-      // contact facts, for band review's high-stakes-copy question.
-      const fresh = newlyCopied(thread, principalAddresses, knownSenders).filter((a) => outside.includes(a));
+      // Who the answered message newly copied (#2589), with their contact facts, for band review's
+      // high-stakes-copy question. Not narrowed to this reply's recipients: the sender's
+      // escalation is the trigger, and a reply that leaves counsel off is no less escalated.
+      const fresh = newlyCopied(thread, principalAddresses, knownSenders);
       let copied: DraftSendProfile['copied'];
       if (fresh.length > 0) {
         try {

@@ -213,7 +213,7 @@ export interface BandReviewInput {
   threadMessages?: ReadonlyArray<{ at?: string; text: string }>;
   /**
    * Autonomous principal mailbox only (#2589): the answered message's sender and the people it
-   * newly copied who this reply goes to, with their contact facts. `high-stakes-copy` is asked
+   * newly copied (whether or not this reply goes to them), with their contact facts. `high-stakes-copy` is asked
    * only when `newlyCopied` is non-empty.
    */
   copied?: { sender: CopiedParty | null; newlyCopied: readonly CopiedParty[] };
@@ -736,8 +736,8 @@ export class BandSendReview {
     // definition, so that question is not asked (review() sets it); stakes still is.
     // `off-thread` (#2474, design D10) is asked here only: a principal-directed send may share
     // what the principal chose to.
-    // `high-stakes-copy` (#2589) only when the answered message newly copied someone this reply
-    // goes to: with no one new, there is nothing for it to judge.
+    // `high-stakes-copy` (#2589) only when the answered message newly copied someone: with no one
+    // new, there is nothing for it to judge.
     if (isAutonomousMailbox(input)) {
       const asked: BriefQuestion[] = ['purpose', 'stakes', 'grounding', 'necessity', 'off-thread'];
       return (input.copied?.newlyCopied.length ?? 0) > 0 ? [...asked, 'high-stakes-copy'] : asked;
