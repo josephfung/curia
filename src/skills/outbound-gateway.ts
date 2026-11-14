@@ -95,7 +95,7 @@ import { dropOwnIdentityItems, quoteHeaderParticipants, splitReplyQuote } from '
 import { PROVENANCE_LOOKBACK_DAYS, draftKey, type CuriaDraftWrites, type DraftProvenance } from './principal-send/draft-provenance.js';
 import type { LimitStopReason, PrincipalSendEntry, PrincipalSendLedger } from './principal-send/send-ledger.js';
 import {
-  AUTONOMOUS_DAILY_CAP, AUTONOMOUS_DAILY_CAP_WINDOW_MS, AUTONOMOUS_THREAD_COOLDOWN_MS, checkAutonomousLimits, conversationIdsOf, repliedToLatest,
+  AUTONOMOUS_DAILY_CAP, AUTONOMOUS_DAILY_CAP_WINDOW_MS, AUTONOMOUS_THREAD_COOLDOWN_MS, checkAutonomousLimits, conversationIdsOf, newlyCopied, repliedToLatest,
   type AutonomousLimitRefusal,
 } from './principal-send/autonomous-limits.js';
 import { hasSystemLineage, isOutsiderOriginated } from '../contacts/principal.js';
@@ -105,10 +105,11 @@ import {
 } from './principal-send/quote-proof.js';
 import { hasFinancialDetails } from './principal-send/financial-details.js';
 import { htmlToText } from '../channels/email/html-to-text.js';
-import type { SendStakes } from '../autonomy/judge-brief.js';
+import type { CopiedParty, SendStakes } from '../autonomy/judge-brief.js';
+import { meetsMinimumTier } from '../contacts/types.js';
 import type { CallBudget } from '../util/call-budget.js';
 import { nylasMessageFailure } from '../channels/email/nylas-message-id.js';
-import { normalizeForComparison } from '../channels/email/message-converter.js';
+import { normalizeForComparison, parseSenderVerified } from '../channels/email/message-converter.js';
 import {
   PRINCIPAL_RECIPIENT_ALIAS,
   parseRecipientReference,
@@ -482,7 +483,9 @@ export type PrincipalSendRefusal =
   // Cross-mailbox (#2475 Task 18): the principal's addresses could not be read.
   | 'principal_addresses_unreadable'
   // The task's draft writes could not be read (#2475 SF3): a failure to check, not not_curia_draft.
-  | 'provenance_unreadable';
+  | 'provenance_unreadable'
+  // The contacts behind the thread's senders or the copied recipients could not be read (#2589).
+  | 'contacts_unreadable';
 
 /** How a limit refusal's agent-facing text starts (R47): the cue ceo-inbox's triage summary lists apart. */
 export const LIMIT_CUE = 'Waiting (limit): ';
@@ -511,6 +514,7 @@ export const PRINCIPAL_SEND_REFUSALS: Record<PrincipalSendRefusal, string> = {
   thread_unreadable: `Couldn't read the thread to check who's on it, so Curia didn't send on its own.${STILL_A_DRAFT}`,
   not_curia_draft: `Curia sends on its own only a reply it drafted in this same pass.${STILL_A_DRAFT}`,
   provenance_unreadable: `Couldn't check who wrote the draft, so Curia didn't send on its own.${STILL_A_DRAFT}`,
+  contacts_unreadable: `Couldn't look up who's on the thread, so Curia didn't send on its own.${STILL_A_DRAFT}`,
   draft_changed_since_curia: `The draft changed after Curia wrote it, so Curia left it for the principal.${STILL_A_DRAFT}`,
   not_a_reply: `Curia sends on its own only replies on an existing thread.${STILL_A_DRAFT}`,
   mailing_list: `The thread is a mailing list, so Curia didn't reply on its own.${STILL_A_DRAFT}`,
@@ -554,6 +558,7 @@ export const PRINCIPAL_SEND_DIGEST_REASONS: Record<DigestRefusal, string> = {
   thread_unreadable: `Curia couldn't read the thread to check who's on it, so it didn't send on its own. ${IN_YOUR_DRAFTS}`,
   not_curia_draft: `Curia sends on its own only a reply it drafted in this same pass. ${IN_YOUR_DRAFTS}`,
   provenance_unreadable: `Curia couldn't check who wrote the draft. ${IN_YOUR_DRAFTS}`,
+  contacts_unreadable: `Curia couldn't look up who's on the thread. ${IN_YOUR_DRAFTS}`,
   draft_changed_since_curia: `The draft changed after Curia wrote it, so Curia left it for you. ${IN_YOUR_DRAFTS}`,
   not_a_reply: `Curia sends on its own only replies on an existing thread. ${IN_YOUR_DRAFTS}`,
   mailing_list: `The thread is a mailing list, so Curia didn't reply on its own. ${IN_YOUR_DRAFTS}`,
@@ -674,7 +679,7 @@ export const LIMIT_REFUSALS: ReadonlySet<PrincipalSendRefusal> = new Set<Princip
 const OTHER_REFUSALS: ReadonlySet<PrincipalSendRefusal> = new Set<PrincipalSendRefusal>([
   'mailbox_unavailable', 'unknown_mailbox', 'ambiguous_mailbox', 'setting_off', 'not_requested', 'approval_replay',
   'not_found', 'lookup_failed', 'send_unconfirmed', 'no_send_ledger', 'thread_unreadable', 'principal_addresses_unreadable', 'no_band_review',
-  'provenance_unreadable',
+  'provenance_unreadable', 'contacts_unreadable',
 ]);
 
 /**
@@ -1058,6 +1063,11 @@ interface DraftSendProfile {
    * review's off-thread question (design D10).
    */
   threadText?: ReadonlyArray<{ at?: string; text: string }>;
+  /**
+   * Autonomous only (#2589): the answered message's sender and the people it newly copied who
+   * this reply goes to, for band review's high-stakes-copy question.
+   */
+  copied?: { sender: CopiedParty | null; newlyCopied: readonly CopiedParty[] };
 }
 /** sendEmailDraft's options, passed through to the draft checks unchanged. */
 interface DraftSendOptions {
@@ -2817,6 +2827,8 @@ export class OutboundGateway {
     origin?: { content: string; at?: string; senderVerified: boolean };
     /** An autonomous principal-mailbox send: the thread's messages, for the off-thread question. */
     threadMessages?: ReadonlyArray<{ at?: string; text: string }>;
+    /** An autonomous principal-mailbox send (#2589): who the answered message newly copied, for high-stakes-copy. */
+    copied?: { sender: CopiedParty | null; newlyCopied: readonly CopiedParty[] };
     /**
      * A hold, an ask or a block leaves the draft unsent and returns `held` (#2474, design D5): no
      * approval row and no digest item. The principal-mailbox path never raises approvals.
@@ -2856,6 +2868,7 @@ export class OutboundGateway {
         ...(args.stakesCeiling ? { stakesCeiling: args.stakesCeiling } : {}),
         ...(args.origin ? { origin: args.origin } : {}),
         ...(args.threadMessages ? { threadMessages: args.threadMessages } : {}),
+        ...(args.copied ? { copied: args.copied } : {}),
       });
     } catch (err) {
       // BandSendReview is not meant to throw; if it does, the send was not reviewed. Hold.
@@ -3557,6 +3570,53 @@ export class OutboundGateway {
       }
     }
     return null;
+  }
+
+  /**
+   * The thread's inbound senders whose To/Cc an autonomous reply may follow (#2589, ADR-062 rule
+   * 3), lowercased: a single, provider-verified From that resolves to an active, verified email
+   * identity of a contact at tier known or above, read now (at send time). Only senders whose
+   * copies could count are looked up. A lookup that throws propagates, and the caller refuses
+   * (fail closed); a sender with no contact, or below known, is simply not in the set.
+   */
+  private async knownThreadSenders(thread: readonly NylasMessage[], principalAddresses: readonly string[]): Promise<Set<string>> {
+    const own = new Set(principalAddresses.map((a) => normalizeForComparison(a.trim())));
+    const candidates = new Set<string>();
+    for (const m of thread) {
+      if (m.from.length !== 1) continue;
+      const from = m.from[0]!.email.trim().toLowerCase();
+      if (from.length === 0 || own.has(normalizeForComparison(from)) || !parseSenderVerified(m.headers)) continue;
+      candidates.add(from);
+    }
+    const known = new Set<string>();
+    for (const address of candidates) {
+      const contact = await this.contactService.resolveByChannelIdentity('email', address);
+      // `verified` is false for an unverified, defunct or bounced identity: such an address
+      // lends the contact's tier to no one.
+      if (contact !== null && contact.verified && meetsMinimumTier(contact.tier, 'known')) known.add(address);
+    }
+    return known;
+  }
+
+  /**
+   * Someone on the message an autonomous reply answers, as band review's high-stakes-copy
+   * question sees them (#2589): the address and what their contact record says. No record is
+   * `contact: false`; a lookup that throws propagates (the caller refuses).
+   */
+  private async copiedParty(address: string): Promise<CopiedParty> {
+    const email = address.trim().toLowerCase();
+    const resolved = await this.contactService.resolveByChannelIdentity('email', email);
+    if (resolved === null) return { email, contact: false };
+    const record = await this.contactService.getContact(resolved.contactId);
+    const set = (key: 'name' | 'title' | 'organization' | 'role', value: string | null | undefined) =>
+      value && value.trim().length > 0 ? { [key]: value.trim() } : {};
+    return {
+      email, contact: true,
+      ...set('name', resolved.displayName),
+      ...set('title', record?.title),
+      ...set('organization', record?.organization),
+      ...set('role', resolved.role),
+    };
   }
 
   /** Append the unmatched-recipient note to a blocked result (#2033). */
@@ -4828,7 +4888,17 @@ export class OutboundGateway {
         this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: send ledger unreadable — the daily cap cannot be checked, not sending on its own');
         return stop('no_send_ledger');
       }
-      const limit = checkAutonomousLimits({ draft, thread, principalAddresses, curiaWrites, recentThreadEntries: recentEntries, recentConversationEntries: conversationEntries, otherPrincipalAddresses, offLimitsRecipients, autonomousSendsInWindow: sendsInWindow });
+      // The thread's verified senders who vouch for the people they copied (#2589): resolved now,
+      // at send time, since Curia often creates a sender's contact minutes after their mail lands.
+      let knownSenders: ReadonlySet<string>;
+      try {
+        knownSenders = await this.knownThreadSenders(thread, principalAddresses);
+      } catch (err) {
+        // Fail closed: who the senders are is unknown. Not a call on the reply (kind other).
+        this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: thread senders\' contacts unreadable — not sending on its own');
+        return stop('contacts_unreadable');
+      }
+      const limit = checkAutonomousLimits({ draft, thread, principalAddresses, curiaWrites, recentThreadEntries: recentEntries, recentConversationEntries: conversationEntries, otherPrincipalAddresses, offLimitsRecipients, autonomousSendsInWindow: sendsInWindow, knownSenders });
       if (limit) {
         const blockers = [...recentEntries, ...conversationEntries];
         cooldownHeld = limit.refusal === 'thread_cooldown' && blockers.length > 0 && blockers.every((e) => e.outcome === 'held');
@@ -4842,11 +4912,28 @@ export class OutboundGateway {
       // Bank or card details never go out on Curia's own (#2474 final fixes A3): checked on the
       // whole draft, quote included, whatever the review would rule.
       if (this.hasFinancialDetails(draft, draftId)) return stop('financial_details');
-      const proofs = thread.map((m) => threadMessageProof(m, principalAddresses));
+      const proofs = thread.map((m) => threadMessageProof(m, principalAddresses, knownSenders));
       // A quote must reproduce a message every recipient received (#2474 final fixes A10): a
       // model-written quote block could pass off new information as already on the thread.
       const { quote } = splitReplyQuote(draft.body);
       if (quote && !quoteMatchesThread(quote, proofs, outside)) return stop('review_hold', QUOTE_MISMATCH_REASON, 'quote-mismatch');
+      // Who the answered message newly copied that this reply also reaches (#2589), with their
+      // contact facts, for band review's high-stakes-copy question.
+      const fresh = newlyCopied(thread, principalAddresses, knownSenders).filter((a) => outside.includes(a));
+      let copied: DraftSendProfile['copied'];
+      if (fresh.length > 0) {
+        try {
+          const sender = target.from[0]?.email;
+          copied = {
+            sender: sender ? await this.copiedParty(sender) : null,
+            newlyCopied: await Promise.all(fresh.map((a) => this.copiedParty(a))),
+          };
+        } catch (err) {
+          // Fail closed: without the facts the high-stakes-copy question can't be judged.
+          this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: copied recipients\' contacts unreadable — not sending on its own');
+          return stop('contacts_unreadable');
+        }
+      }
       profile = {
         ...profile,
         autonomous: true,
@@ -4855,7 +4942,8 @@ export class OutboundGateway {
         origin: replyOrigin(target),
         threadMessages: proofs,
         // `outside` is every non-principal recipient on To, Cc and Bcc.
-        threadText: threadTextSeenByAll(thread, outside, principalAddresses),
+        threadText: threadTextSeenByAll(thread, outside, principalAddresses, knownSenders),
+        ...(copied ? { copied } : {}),
       };
     }
 
@@ -5623,6 +5711,7 @@ export class OutboundGateway {
             ...(profile.stakesCeiling ? { stakesCeiling: profile.stakesCeiling } : {}),
             ...(profile.origin ? { origin: profile.origin } : {}),
             ...(profile.threadText ? { threadMessages: profile.threadText } : {}),
+            ...(profile.copied ? { copied: profile.copied } : {}),
           }
           : { editable: false }),
       });
