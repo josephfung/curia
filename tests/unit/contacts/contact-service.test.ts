@@ -1258,6 +1258,18 @@ describe('ContactService', () => {
       expect((await service.getContact(contact.id))?.timezone).toBe('Europe/London');
     });
 
+    it('updateContactFields refreshes the principal on a timezone-only change', async () => {
+      const onIdentitiesChanged = vi.fn();
+      const svc = ContactService.createInMemory(entityMemory, { onIdentitiesChanged });
+      const contact = await svc.createContact({ displayName: 'Tz Refresh', source: 'test' });
+      onIdentitiesChanged.mockClear();
+
+      await svc.updateContactFields(contact.id, { timezone: 'Asia/Tokyo' });
+
+      // Inbox triage reads the principal's timezone from the holder this refresh updates.
+      expect(onIdentitiesChanged).toHaveBeenCalledWith(contact.id);
+    });
+
     it('updateContactFields still clears a timezone with null', async () => {
       const contact = await service.createContact({ displayName: 'Clear TZ', source: 'test', timezone: 'UTC' });
       const updated = await service.updateContactFields(contact.id, { timezone: null });
@@ -1316,7 +1328,8 @@ describe('ContactService', () => {
       });
       onIdentitiesChanged.mockClear();
 
-      await svc.updateContactFields(contact.id, { timezone: 'America/Toronto' });
+      // A field nothing refreshed reads. (timezone now refreshes: inbox triage reads it.)
+      await svc.updateContactFields(contact.id, { organization: 'Acme' });
       expect(onIdentitiesChanged).not.toHaveBeenCalled();
 
       await svc.updateContactFields(contact.id, { primaryEmail: 'primary-notify@example.com' });

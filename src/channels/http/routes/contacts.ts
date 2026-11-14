@@ -8,7 +8,8 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
-import { ContactValidationError, PRINCIPAL_PROMPT_FIELDS } from '../../../contacts/contact-service.js';
+import { ContactValidationError, InvalidTimezoneError, PRINCIPAL_REFRESH_FIELDS } from '../../../contacts/contact-service.js';
+import { normalizeTimezone } from '../../../time/timezone-normalize.js';
 import type { ChannelIdentity, Contact, ContactCanonicalFields, ContactKind, ContactTier, IdentityStatus } from '../../../contacts/types.js';
 import {
   IdentityNotFoundError,
@@ -307,6 +308,17 @@ export async function contactRoutes(
       }
     }
 
+    // Same timezone rule as ContactService's own writers (this route saves the whole row, which
+    // does not run it): a calendar label maps to its zone, anything else is a 400 before any
+    // write. This is the screen the bad-timezone warnings send operators to.
+    if (typeof canonicalFields.timezone === 'string') {
+      const normalized = normalizeTimezone(canonicalFields.timezone);
+      if (normalized === null) {
+        return reply.status(400).send({ error: new InvalidTimezoneError(canonicalFields.timezone).message });
+      }
+      canonicalFields.timezone = normalized;
+    }
+
     // Build the complete updated contact in memory. All field changes are merged
     // here so the transaction only needs one write — avoids non-transactional stale
     // reads that occur when individual per-field setters each load the contact.
@@ -394,8 +406,9 @@ export async function contactRoutes(
     // The columns are committed above. Identity mutations notify on their own; these
     // do not, and the prompt block reads primary_email (#1950) and the profile fields
     // (#2226): the canonical ones and the display name.
+    // PRINCIPAL_REFRESH_FIELDS adds timezone: inbox triage reads it from the refreshed holder.
     const touchesPromptBlock =
-      PRINCIPAL_PROMPT_FIELDS.some((key) => canonicalFields[key] !== undefined)
+      PRINCIPAL_REFRESH_FIELDS.some((key) => canonicalFields[key] !== undefined)
       || (typeof body.displayName === 'string' && body.displayName.trim().length > 0);
     if (updated.systemRole === 'principal' && touchesPromptBlock) {
       contactService.notePrimaryEmailChanged(updated.id);

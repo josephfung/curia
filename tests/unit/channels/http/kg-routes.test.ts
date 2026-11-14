@@ -987,6 +987,69 @@ describe('console routes (kg / tasks / contacts / chat)', () => {
       await app.close();
     });
 
+    // The bad-timezone warnings send operators to this screen, so it must normalize too, and a
+    // principal timezone edit must refresh the copy inbox triage reads.
+    it('normalizes a timezone label, saves the zone, and refreshes the principal', async () => {
+      const contactService = createContactService();
+      const contact = makeContact({ systemRole: 'principal', tier: 'principal', kind: 'principal' });
+      vi.mocked(contactService.getContact).mockResolvedValue(contact as never);
+      vi.mocked(contactService.saveContact).mockResolvedValue(contact as never);
+      const note = vi.fn();
+      (contactService as unknown as { notePrimaryEmailChanged: typeof note }).notePrimaryEmailChanged = note;
+      const client: Partial<PoolClient> = { query: vi.fn().mockResolvedValue({ rows: [] }), release: vi.fn() };
+
+      const app = Fastify();
+      await registerConsoleRoutes(app, {
+        pool: createTransactionalPool(client) as unknown as Pool,
+        logger: createLogger(),
+        webAppBootstrapSecret: 'secret-1',
+        sessions: new Map(),
+        contactService,
+        include: ['contacts'],
+      });
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/api/contacts/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: { timezone: 'Eastern Time - Toronto' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [savedContact] = (contactService.saveContact as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(savedContact.timezone).toBe('America/Toronto');
+      expect(note).toHaveBeenCalledWith(contact.id);
+      await app.close();
+    });
+
+    it('rejects an unrecognized timezone with 400 before any write', async () => {
+      const contactService = createContactService();
+      vi.mocked(contactService.getContact).mockResolvedValue(makeContact() as never);
+      const client: Partial<PoolClient> = { query: vi.fn().mockResolvedValue({ rows: [] }), release: vi.fn() };
+
+      const app = Fastify();
+      await registerConsoleRoutes(app, {
+        pool: createTransactionalPool(client) as unknown as Pool,
+        logger: createLogger(),
+        webAppBootstrapSecret: 'secret-1',
+        sessions: new Map(),
+        contactService,
+        include: ['contacts'],
+      });
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/api/contacts/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: { timezone: 'Eastern Time - US & Canada' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/not a recognized timezone/);
+      expect(contactService.saveContact).not.toHaveBeenCalled();
+      await app.close();
+    });
+
     it('rejects kind changes for agent contacts with 400', async () => {
       const contactService = createContactService();
       vi.mocked(contactService.getContact).mockResolvedValue(
