@@ -70,6 +70,20 @@ describe('normalizeTimezone', () => {
     expect(normalizeTimezone('not a timezone')).toBeNull();
   });
 
+  it('collapses odd whitespace around the separator', () => {
+    expect(normalizeTimezone('Eastern Time  -   Toronto')).toBe('America/Toronto');
+    expect(normalizeTimezone('Eastern\tTime - Toronto')).toBe('America/Toronto');
+  });
+
+  // The console's free-text field takes up to 64 KiB. A long whitespace run with no dash
+  // made a `\s+`-led separator backtrack quadratically and block the event loop.
+  it('handles a long whitespace run in linear time', () => {
+    const hostile = `a${' '.repeat(60_000)}b`;
+    const start = performance.now();
+    expect(normalizeTimezone(hostile)).toBeNull();
+    expect(performance.now() - start).toBeLessThan(200);
+  });
+
   it('rejects empty input', () => {
     expect(normalizeTimezone('')).toBeNull();
     expect(normalizeTimezone('   ')).toBeNull();
