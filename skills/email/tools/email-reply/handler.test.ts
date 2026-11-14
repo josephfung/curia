@@ -128,7 +128,7 @@ describe('EmailReplyHandler', () => {
       subject: 'Project update',
       body: '',
       date: 0,
-      headers: [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass dkim=pass dmarc=pass' }],
+      headers: [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass; dkim=pass; dmarc=pass' }],
     });
     (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
       success: true, messageId: 'reply-123',
@@ -155,7 +155,7 @@ describe('EmailReplyHandler', () => {
       subject: 'Sent',
       body: '',
       date: 0,
-      headers: [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass dkim=pass dmarc=pass' }],
+      headers: [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass; dkim=pass; dmarc=pass' }],
     });
     (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
       success: true, messageId: 'reply-123',

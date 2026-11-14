@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { convertNylasMessage, parseSenderVerified, senderAuthenticationStatus } from '../../../../src/channels/email/message-converter.js';
+import { convertNylasMessage, parseSenderVerified, senderAuthenticationStatus, spfAlignedWithFrom } from '../../../../src/channels/email/message-converter.js';
 import type { NylasMessage } from '../../../../src/channels/email/nylas-client.js';
 
 // ---------------------------------------------------------------------------
@@ -380,6 +380,49 @@ describe('senderAuthenticationStatus (#2312)', () => {
     expect(senderAuthenticationStatus(undefined)).toBe('not confirmed');
     expect(senderAuthenticationStatus([{ name: 'Subject', value: 'hi' }])).toBe('not confirmed');
     expect(senderAuthenticationStatus(ar('mx.google.com; spf=none; dkim=none; dmarc=none'))).toBe('not confirmed');
+  });
+});
+
+// #2589 security review H2: results are read as RFC 7601 resinfo, never as substrings, so text an
+// attacker controls inside the provider's own header (an envelope local part, a comment) can't pass.
+describe('parseSenderVerified reads each result, not a substring', () => {
+  const ar = (value: string) => [{ name: 'Authentication-Results', value }];
+
+  it('does not read dmarc=pass out of an attacker\'s envelope address or a comment', () => {
+    // The real DMARC result is none (a domain with no record); "dmarc=pass" sits in smtp.mailfrom.
+    expect(parseSenderVerified(ar('mx.google.com; spf=pass (google.com: domain of dmarc=pass@attacker.example designates 1.2.3.4) smtp.mailfrom=dmarc=pass@attacker.example; dkim=pass header.i=@attacker.example; dmarc=none (p=NONE) header.from=smallbiz.example'))).toBe(false);
+    expect(parseSenderVerified(ar('mx.google.com; spf=pass smtp.mailfrom=a@x.example; dkim=pass (dmarc=pass) header.d=x.example'))).toBe(false);
+    expect(parseSenderVerified(ar('mx.google.com; spf=pass smtp.mailfrom="x;dmarc=pass"@a.example; dkim=pass header.d=a.example'))).toBe(false);
+  });
+
+  it('still reads Gmail\'s real header, comments and all', () => {
+    expect(parseSenderVerified(ar('mx.google.com; dkim=pass header.i=@gmail.com header.s=20230601 header.b=abc; spf=pass (google.com: domain of dana@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=dana@gmail.com; dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com'))).toBe(true);
+  });
+
+  it('needs the authserv-id first: a header with none is not the provider\'s verdict', () => {
+    expect(parseSenderVerified(ar('spf=pass; dkim=pass; dmarc=pass'))).toBe(false);
+  });
+});
+
+describe('spfAlignedWithFrom (#2589)', () => {
+  const ar = (value: string) => [{ name: 'Authentication-Results', value }];
+  const GMAIL = 'mx.google.com; spf=pass (google.com: domain of dana@example.org designates x) smtp.mailfrom=dana@example.org; dkim=pass header.d=example.org; dmarc=pass header.from=example.org';
+
+  it('is true when the provider\'s SPF pass is for the From domain or a related subdomain', () => {
+    expect(spfAlignedWithFrom(ar(GMAIL), 'Dana@Example.org')).toBe(true);
+    expect(spfAlignedWithFrom(ar(GMAIL.replace('smtp.mailfrom=dana@example.org', 'smtp.mailfrom=bounce@mail.example.org')), 'dana@example.org')).toBe(true);
+    expect(spfAlignedWithFrom(ar(GMAIL.replace('smtp.mailfrom=dana@example.org', 'smtp.mailfrom=example.org')), 'dana@example.org')).toBe(true);
+  });
+
+  it('is false for a replay sent from another domain\'s servers, or anything unreadable', () => {
+    expect(spfAlignedWithFrom(ar(GMAIL.replace('smtp.mailfrom=dana@example.org', 'smtp.mailfrom=x@attacker.example')), 'dana@example.org')).toBe(false);
+    // A look-alike suffix is not a subdomain.
+    expect(spfAlignedWithFrom(ar(GMAIL.replace('smtp.mailfrom=dana@example.org', 'smtp.mailfrom=x@badexample.org')), 'dana@example.org')).toBe(false);
+    expect(spfAlignedWithFrom(ar(GMAIL.replace('spf=pass', 'spf=softfail')), 'dana@example.org')).toBe(false);
+    expect(spfAlignedWithFrom(ar(GMAIL.replace(' smtp.mailfrom=dana@example.org', '')), 'dana@example.org')).toBe(false);
+    expect(spfAlignedWithFrom(undefined, 'dana@example.org')).toBe(false);
+    // Only the provider's (first) header counts.
+    expect(spfAlignedWithFrom([{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass smtp.mailfrom=x@attacker.example' }, ...ar(GMAIL)], 'dana@example.org')).toBe(false);
   });
 });
 

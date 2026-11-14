@@ -111,10 +111,91 @@ function authenticationResultsHeaders(
   return headers.filter((h) => h.name.toLowerCase() === 'authentication-results');
 }
 
-/** SPF, DKIM, and DMARC each reported as pass on this one header. */
+/** One RFC 7601 resinfo: `method=result` and its `ptype.property=value` pairs, lowercased keys. */
+interface AuthResult {
+  method: string;
+  result: string;
+  props: Record<string, string>;
+}
+
+/**
+ * The header value with comments and quoted strings blanked (#2589 security review H2). Both can
+ * hold text the sender chose: Gmail echoes the envelope sender in a comment, and a quoted local
+ * part may carry `;` or `dmarc=pass`. Nested comments and backslash escapes are honoured.
+ */
+function stripCommentsAndQuotes(value: string): string {
+  let out = '';
+  let depth = 0;
+  let quoted = false;
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i]!;
+    if (quoted || depth > 0) {
+      if (c === '\\') { i++; continue; }
+      if (quoted && c === '"') quoted = false;
+      else if (!quoted && c === '(') depth++;
+      else if (!quoted && c === ')') depth--;
+      continue;
+    }
+    if (c === '"') { quoted = true; out += ' '; continue; }
+    if (c === '(') { depth = 1; out += ' '; continue; }
+    out += c;
+  }
+  return out;
+}
+
+/**
+ * The results on one Authentication-Results value (RFC 7601 §2.2): the first `;`-separated part
+ * is the authserv-id and is skipped, and each later part's FIRST token is its `method=result`.
+ * Only that token counts, so `smtp.mailfrom=dmarc=pass@attacker.example` is a property, never a
+ * DMARC result. A part whose first token is not `method=result` is dropped (fail closed).
+ */
+function authResults(value: string): AuthResult[] {
+  const out: AuthResult[] = [];
+  for (const part of stripCommentsAndQuotes(value).split(';').slice(1)) {
+    const [head, ...rest] = part.trim().split(/\s+/).filter((t) => t.length > 0);
+    const m = head ? /^([a-z0-9_-]+)(?:\/\d+)?=([a-z0-9_-]+)$/i.exec(head) : null;
+    if (!m) continue;
+    const props: Record<string, string> = {};
+    for (const token of rest) {
+      const p = /^([a-z0-9_-]+\.[a-z0-9_.-]+)=(.+)$/i.exec(token);
+      if (p) props[p[1]!.toLowerCase()] = p[2]!;
+    }
+    out.push({ method: m[1]!.toLowerCase(), result: m[2]!.toLowerCase(), props });
+  }
+  return out;
+}
+
+/** SPF, DKIM, and DMARC each reported as pass on this one header, as results (not substrings). */
 function authenticationMechanismsPass(value: string): boolean {
-  // \b after "pass" guards against hypothetical tokens like "spf=passthrough".
-  return /\bspf=pass\b/i.test(value) && /\bdkim=pass\b/i.test(value) && /\bdmarc=pass\b/i.test(value);
+  const results = authResults(value);
+  const passes = (method: string) => results.some((r) => r.method === method && r.result === 'pass');
+  return passes('spf') && passes('dkim') && passes('dmarc');
+}
+
+/** The domain part of an address (or a bare domain), lowercased. */
+function domainOf(address: string): string {
+  const at = address.lastIndexOf('@');
+  return (at === -1 ? address : address.slice(at + 1)).trim().toLowerCase();
+}
+
+/** The same domain, or one a subdomain of the other (a dot boundary, so badexample.org ≠ example.org). */
+function domainsAligned(a: string, b: string): boolean {
+  return a.length > 0 && b.length > 0 && (a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`));
+}
+
+/**
+ * Whether the provider's own SPF pass (the first Authentication-Results header) is for the From
+ * address's domain or a related subdomain (#2589 security review H1): relaxed SPF alignment,
+ * approximated without a public-suffix list. DMARC passes on DKIM alone, so a DKIM-signed message
+ * replayed from an attacker's server, with SPF passing for the attacker's own envelope domain,
+ * still verifies; this is what tells them apart. Anything missing or unreadable is false.
+ */
+export function spfAlignedWithFrom(headers: Array<{ name: string; value: string }> | undefined, fromEmail: string): boolean {
+  const provider = headers ? authenticationResultsHeaders(headers)[0] : undefined;
+  if (!provider) return false;
+  const spf = authResults(provider.value).find((r) => r.method === 'spf' && r.result === 'pass');
+  const mailfrom = spf?.props['smtp.mailfrom'];
+  return mailfrom !== undefined && domainsAligned(domainOf(mailfrom), domainOf(fromEmail));
 }
 
 /** An explicit fail for SPF, DKIM, or DMARC. softfail and other results are not this. */

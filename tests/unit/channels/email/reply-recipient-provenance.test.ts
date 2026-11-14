@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { replyDisplayName, replyRecipientSource } from '../../../../src/channels/email/reply-recipient-provenance.js';
 
-const PASSING = [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass dkim=pass dmarc=pass' }];
+const PASSING = [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass; dkim=pass; dmarc=pass' }];
 
 describe('replyRecipientSource', () => {
   it('returns email_participant when auth passes and the address is not ours', () => {
@@ -20,7 +20,7 @@ describe('replyRecipientSource', () => {
       selfEmails: [],
       headers: [
         { name: 'Authentication-Results', value: 'mx.google.com; spf=fail dkim=fail dmarc=fail' },
-        { name: 'Authentication-Results', value: 'mx.example; spf=pass dkim=pass dmarc=pass' },
+        { name: 'Authentication-Results', value: 'mx.example; spf=pass; dkim=pass; dmarc=pass' },
       ],
     })).toBeUndefined();
   });
