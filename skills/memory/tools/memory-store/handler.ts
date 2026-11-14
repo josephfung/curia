@@ -23,6 +23,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { DECAY_CLASSES, SENSITIVITY_LEVELS, NODE_TYPES } from '../../../../src/memory/types.js';
 import type { DecayClass, Sensitivity, NodeType, KgNode } from '../../../../src/memory/types.js';
 import { buildCanonicalPatch, principalLockedFields } from '../../../../src/contacts/canonical-attribute-guard.js';
+import { principalVouchesNow } from '../../../../src/skills/_shared/principal-directed.js';
 import { isUuid } from '../../../../src/util/uuid.js';
 
 const DECAY_CLASSES_SET: ReadonlySet<string> = new Set(DECAY_CLASSES);
@@ -268,10 +269,12 @@ export class MemoryStoreHandler implements ToolHandler {
               );
             }
 
-            if (contact && principalLockedFields(contact, patch.fields).length > 0) {
-              // The principal's home timezone is set by the wizard, the console, or
-              // contact-update on the principal's own say-so, never by a remembered fact.
-              // The fact still lands in the KG below.
+            if (contact && principalLockedFields(contact, patch.fields).length > 0 && !principalVouchesNow(ctx)) {
+              // The principal's home timezone changes only on the principal's own say-so (the
+              // same rule as contact-update), never from a fact an agent picked up elsewhere.
+              // On a live principal turn the redirect below runs, so the column and the KG
+              // never disagree about what the principal just said. The fact still lands in
+              // the KG below.
               ctx.log.info(
                 { entityNodeId: entityNode.id, field, contactId: contact.id },
                 'memory-store: principal field is locked against memory writes — keeping the fact in the KG',

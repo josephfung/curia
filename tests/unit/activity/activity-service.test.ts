@@ -60,6 +60,18 @@ describe('ActivityService', () => {
     expect(d.auditLogRepo.findActivityJobs).toHaveBeenCalledWith(expect.objectContaining({ limit: 80 }));
   });
 
+  it('falls back to the office timezone when the principal\'s stored zone is unusable', async () => {
+    const base = deps();
+    const d = deps({
+      contactService: {
+        ...base.contactService,
+        findContactBySystemRole: vi.fn().mockResolvedValue({ displayName: 'Joseph', timezone: 'Eastern Time - US & Canada' }),
+      } as unknown as ActivityServiceDeps['contactService'],
+    });
+    const page = await new ActivityService(d).list({ from: new Date(0), to: T0, limit: 20 });
+    expect(page.timezone).toBe('UTC');
+  });
+
   it('falls back to the office timezone and to addresses when lookups fail', async () => {
     const d = deps({
       contactService: {
