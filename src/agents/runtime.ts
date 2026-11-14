@@ -7,6 +7,7 @@ import {
 import type { EventBus } from '../bus/bus.js';
 import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, createDelegationTimedOut, createDelegationRequesterContext, createDelegationPrincipalNote, createAgentTaskInputInjected, isInjectionDrainPoint, type AgentResponseFailureReason, type AgentTaskEvent, type InjectionDrainPoint } from '../bus/events.js';
 import { holderFromAgentTask, type TurnLanes } from '../dispatch/turn-lanes.js';
+import type { TurnActivityRegistry } from '../dispatch/turn-activity.js';
 import { frameInjectedInput } from './injected-input.js';
 import type { Tier } from './llm/model-router.js';
 import { ContextBudget } from './llm/context-budget.js';
@@ -372,6 +373,11 @@ export interface AgentConfig {
    */
   turnLanes?: TurnLanes;
   /**
+   * Cross-conversation turn activity (#2588). When set, every task's start and
+   * end is recorded. Fail-open: a registry error is logged and the turn runs.
+   */
+  turnActivity?: TurnActivityRegistry;
+  /**
    * Conversation-scoped contact IDs (#1818). When set, identities resolved by
    * a delegation are remembered and re-injected next turn from the current
    * contact row — working memory does not keep tool results.
@@ -493,12 +499,53 @@ export class AgentRuntime {
     await this.config.bus.publish('agent', event);
   }
 
+  /** Registry writes are best-effort: a failure must never fail the turn (#2588). */
+  private recordTaskStarted(taskEvent: AgentTaskEvent): void {
+    const registry = this.config.turnActivity;
+    if (!registry) return;
+    try {
+      const holder = holderFromAgentTask(taskEvent);
+      const { payload } = taskEvent;
+      registry.taskStarted({
+        taskEventId: taskEvent.id,
+        agentId: payload.agentId,
+        conversationId: payload.conversationId,
+        channelId: payload.channelId,
+        parentEventId: taskEvent.parentEventId,
+        metadata: payload.metadata as Record<string, unknown> | undefined,
+        content: payload.content,
+        startedAt: taskEvent.timestamp.getTime(),
+        originatorContactId: holder.originatorContactId,
+        originatorResolved: holder.originatorResolved,
+      });
+    } catch (err) {
+      this.config.logger.error(
+        { err, taskEventId: taskEvent.id },
+        'Turn activity registry failed to record a task start; continuing without it',
+      );
+    }
+  }
+
+  private recordTaskEnded(taskEventId: string): void {
+    const registry = this.config.turnActivity;
+    if (!registry) return;
+    try {
+      registry.taskEnded(taskEventId);
+    } catch (err) {
+      this.config.logger.error(
+        { err, taskEventId },
+        'Turn activity registry failed to record a task end; continuing without it',
+      );
+    }
+  }
+
   /**
    * Top-level error boundary for task processing.
    * Ensures the user always gets a response, even if something unexpected throws.
    * Database outages are classified as retryable DATABASE_UNAVAILABLE (#1381).
    */
   private async handleTask(taskEvent: AgentTaskEvent): Promise<void> {
+    this.recordTaskStarted(taskEvent);
     try {
       await this.processTask(taskEvent);
     } catch (err) {
@@ -546,6 +593,7 @@ export class AgentRuntime {
         this.config.logger.error({ err: publishErr }, 'Failed to publish error response');
       }
     } finally {
+      this.recordTaskEnded(taskEvent.id);
       // Backstop. Every response path releases before it publishes; a throw
       // before that still has to drop the hold or the next message waits out
       // the lane timeout.
