@@ -16,6 +16,7 @@ import type { LearnedDescriberRepo } from './learned-describer-repo.js';
 import { buildCatalog, EMPTY_CATALOG, type DescriberCatalog } from './learned-describers.js';
 import { collectActivityRefs, projectActivity, type ActivityRows } from './projection.js';
 import { scrubContactDetails } from './scrub.js';
+import { usableTimezone } from '../time/timezone-normalize.js';
 import type { ActivityItem, ActivityPage } from './types.js';
 
 export interface ActivityServiceDeps {
@@ -117,7 +118,9 @@ export class ActivityService implements ActivityFeedSource {
   ): Promise<{ items: ActivityItem[]; timezone: string }> {
     const { deps } = this;
     const principal = await this.lookup('principal contact', () => deps.contactService.findContactBySystemRole('principal'));
-    const timezone = principal?.timezone ?? deps.officeTimezone;
+    // usableTimezone, not `??`: a stored value the runtime cannot use (e.g. a calendar label
+    // left by the boot repair) must fall back to the office zone, not reach the formatter.
+    const timezone = usableTimezone(principal?.timezone, deps.officeTimezone).zone;
 
     const refs = collectActivityRefs(rows);
     const [names, jobLabels, autonomyRows] = await Promise.all([
