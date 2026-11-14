@@ -21,6 +21,7 @@ import {
   findRetiredRecipientField,
   retiredRecipientFieldError,
 } from '../../src/skills/_shared/recipient-reference.js';
+import { gatewaySendFailure } from '../../src/skills/_shared/policy-hold.js';
 
 /** Slack chat.postMessage hard limit. */
 const MAX_MESSAGE_LENGTH = 40_000;
@@ -75,7 +76,8 @@ export class SlackSendHandler implements ToolHandler {
     const resolved = await ctx.outboundGateway.resolveRecipientReference('slack', recipient as string, {
       field: 'recipient',
     });
-    if (!resolved.ok) return { success: false, error: resolved.error };
+    // A blocked contact is a policy hold (#2587); other refusals stay failures.
+    if (!resolved.ok) return { success: false, error: resolved.error, ...(resolved.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
     if (!SLACK_USER_ID_REGEX.test(resolved.identifier)) {
       // W… Enterprise Grid ids stay out of scope on the reference path too.
       ctx.log.warn({ contactId: resolved.contactId }, 'slack-send: verified Slack identity is not a U… user id — refusing (#2033)');
@@ -119,10 +121,7 @@ export class SlackSendHandler implements ToolHandler {
       );
 
       if (!result.success) {
-        return {
-          success: false,
-          error: result.blockedReason ?? 'Slack send failed',
-        };
+        return gatewaySendFailure(result, 'Slack send failed');
       }
 
       // A relay held for the digest never reached the principal: nothing for a reply to bind to (#1320).

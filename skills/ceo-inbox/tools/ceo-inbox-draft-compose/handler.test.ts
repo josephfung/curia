@@ -391,6 +391,13 @@ describe('CeoInboxDraftComposeHandler', () => {
       expect(error).toContain('No draft was saved.');
     });
 
+    it('marks the principal-only refusal as a policy hold, not a failure (#2587)', async () => {
+      const result = await handler.execute(buildCtx({ to: ['principal'], subject: 'Refresh done', body: 'Link.' }));
+      expect(result).toMatchObject({ success: false, errorType: 'POLICY_HOLD' });
+      const byId = await handler.execute(buildCtx({ to: [fixture.principalId], subject: 'Refresh done', body: 'Link.' }));
+      expect(byId).toMatchObject({ success: false, errorType: 'POLICY_HOLD' });
+    });
+
     it('refuses a draft to the principal\'s contact ID, not just the alias', async () => {
       const error = refused(await handler.execute(buildCtx({ to: [fixture.principalId], subject: 'Refresh done', body: 'Link.' })));
       expect(error).toMatch(/only to the principal/);
@@ -434,18 +441,24 @@ describe('CeoInboxDraftComposeHandler', () => {
     });
 
     it("refuses a sourced raw address that belongs to a blocked contact", async () => {
-      const error = refused(await handler.execute(buildCtx({
+      const result = await handler.execute(buildCtx({
         to_addresses: ['blake@example.com'], subject: 'Hello', body: 'Hi.',
-      }, sourcesWith('blake@example.com'))));
+      }, sourcesWith('blake@example.com')));
+      const error = refused(result);
       expect(error).toContain('blocked contact');
       expect(error).not.toContain('blake@example.com');
+      // The check ran and refused by rule: a policy hold (#2587).
+      expect(result).toMatchObject({ errorType: 'POLICY_HOLD' });
     });
 
     it('refuses a raw address when the blocked-contact check cannot run', async () => {
       const ctx = buildCtx({ to_addresses: ['jordan@quillfeather.example'], subject: 'Hello', body: 'Hi.' }, sourcesWith('jordan@quillfeather.example'));
       vi.spyOn(fixture.contacts, 'resolveByChannelIdentity').mockRejectedValue(new Error('db down'));
-      const error = refused(await handler.execute(ctx));
+      const result = await handler.execute(ctx);
+      const error = refused(result);
       expect(error).toContain('could not be checked');
+      // A failed lookup is a failure, not a hold (#2587).
+      expect(result).not.toHaveProperty('errorType');
     });
 
     it('refuses a blocked contact, and saves nothing', async () => {

@@ -321,6 +321,32 @@ describe('SignalSendHandler', () => {
     if (!result.success) expect(result.error).toMatch(/blocked/i);
   });
 
+  // #2587: the trust check ran and refused by rule, so the console counts it as held, not a hiccup.
+  it.each([
+    ['a blocked member', { contactId: 'c1', tier: 'blocked' }],
+    ['an unverified member', null],
+  ])('marks a group refused for %s as a policy hold', async (_label, contact) => {
+    const gateway = {
+      send: vi.fn().mockResolvedValue({ success: true }),
+      getSignalGroupMembers: vi.fn().mockResolvedValue(['+14155551234']),
+    };
+    const contactService = { resolveByChannelIdentity: vi.fn().mockResolvedValue(contact) };
+    const result = await handler.execute(makeCtx({ input: { group_id: 'grpABC==', message: 'team update' }, gateway, contactService }));
+    expect(result).toMatchObject({ success: false, errorType: 'POLICY_HOLD' });
+    expect(gateway.send).not.toHaveBeenCalled();
+  });
+
+  it('leaves a group trust check that threw as a failure, not a hold (#2587)', async () => {
+    const gateway = {
+      send: vi.fn().mockResolvedValue({ success: true }),
+      getSignalGroupMembers: vi.fn().mockResolvedValue(['+14155551234']),
+    };
+    const contactService = { resolveByChannelIdentity: vi.fn().mockRejectedValue(new Error('db down')) };
+    const result = await handler.execute(makeCtx({ input: { group_id: 'grpABC==', message: 'team update' }, gateway, contactService }));
+    expect(result.success).toBe(false);
+    expect(result).not.toHaveProperty('errorType');
+  });
+
   it('sends a group Signal message when all members are trusted', async () => {
     const gateway = {
       send: vi.fn().mockResolvedValue({ success: true }),

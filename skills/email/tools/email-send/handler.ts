@@ -27,6 +27,7 @@ import {
   findRetiredRecipientField,
   retiredRecipientFieldError,
 } from '../../../../src/skills/_shared/recipient-reference.js';
+import { gatewaySendFailure } from '../../../../src/skills/_shared/policy-hold.js';
 
 const MAX_TO_LENGTH = 1000;
 const MAX_SUBJECT_LENGTH = 500;
@@ -60,7 +61,7 @@ async function resolveReferenceList(
   raw: string,
   field: string,
   log: ToolContext['log'],
-): Promise<{ addresses: string[]; contactIds: Array<string | undefined>; identityNames: string[]; recipientContactIds: string[] } | { error: string }> {
+): Promise<{ addresses: string[]; contactIds: Array<string | undefined>; identityNames: string[]; recipientContactIds: string[] } | { error: string; policyHold?: true }> {
   const addresses: string[] = [];
   // Every resolved contact, the principal's included: stored on the outbound-context entry
   // (#2261), never shown to the model.
@@ -72,7 +73,7 @@ async function resolveReferenceList(
   const identityNames: string[] = [];
   for (const entry of new Set(splitList(raw))) {
     const resolved = await gateway.resolveRecipientReference('email', entry, { field });
-    if (!resolved.ok) return { error: resolved.error };
+    if (!resolved.ok) return { error: resolved.error, ...(resolved.policyHold ? { policyHold: true as const } : {}) };
     if (!EMAIL_REGEX.test(resolved.identifier)) {
       // A stored identity Nylas cannot address: a data defect. Refuse rather than guess,
       // and log the contact for an operator (never echo the ID: it may be the principal's).
@@ -169,7 +170,8 @@ export class EmailSendHandler implements ToolHandler {
 
     // Resolve references to addresses (#2033). Every failure is closed: no send.
     const resolvedTo = await resolveReferenceList(ctx.outboundGateway, to, 'to', ctx.log);
-    if ('error' in resolvedTo) return { success: false, error: resolvedTo.error };
+    // A blocked contact is a policy hold (#2587).
+    if ('error' in resolvedTo) return { success: false, error: resolvedTo.error, ...(resolvedTo.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
     const toAddresses = resolvedTo.addresses;
     const toContactId = resolvedTo.contactIds[0];
     const toIdentity = resolvedTo.identityNames[0];
@@ -178,7 +180,7 @@ export class EmailSendHandler implements ToolHandler {
     let ccContactIds: string[] = [];
     if (cc) {
       const resolved = await resolveReferenceList(ctx.outboundGateway, cc, 'cc', ctx.log);
-      if ('error' in resolved) return { success: false, error: resolved.error };
+      if ('error' in resolved) return { success: false, error: resolved.error, ...('policyHold' in resolved && resolved.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
       ccAddresses = resolved.addresses;
       ccIdentities = resolved.identityNames;
       ccContactIds = resolved.recipientContactIds;
@@ -269,7 +271,7 @@ export class EmailSendHandler implements ToolHandler {
       });
 
       if (!result.success) {
-        return { success: false, error: result.blockedReason ?? 'Email send failed' };
+        return gatewaySendFailure(result, 'Email send failed');
       }
 
       // Register outbound context entry (best-effort).

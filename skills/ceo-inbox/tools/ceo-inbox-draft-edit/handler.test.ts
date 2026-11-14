@@ -434,10 +434,13 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
 
     it("refuses to move a blocked contact's address that is already on the draft", async () => {
       serveDraft({ to: [STORED.to[0]], cc: [{ email: 'blake@example.com' }] });
-      const error = refusedUnchanged(await handler.execute(buildCtx({
+      const result = await handler.execute(buildCtx({
         draft_id: 'draft-1', add_to_addresses: ['blake@example.com'],
-      })));
+      }));
+      const error = refusedUnchanged(result);
       expect(error).toContain('blocked contact');
+      // The check ran and refused by rule: a policy hold (#2587).
+      expect(result).toMatchObject({ errorType: 'POLICY_HOLD' });
     });
 
     it('moves a To recipient to Cc by reference', async () => {

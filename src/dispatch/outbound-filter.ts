@@ -101,6 +101,13 @@ export interface FilterCheckInput {
 export interface FilterFinding {
   rule: string;
   detail: string;
+  /**
+   * Set when the finding records that a check could not run (a stage threw, the judge was
+   * unreachable or unparseable, the recipient's tier could not be resolved), not a judgement
+   * on the message (#2587). The block still stands (fail closed), but the console counts it as
+   * a hiccup, not as a policy hold. Structured so nothing has to match rule names or text.
+   */
+  unjudged?: true;
 }
 
 export interface FilterResult {
@@ -324,7 +331,7 @@ export class OutboundContentFilter {
     } catch (err) {
       // Fail-closed: if the LLM review crashes, block the message.
       const message = err instanceof Error ? err.message : String(err);
-      llmFindings = [{ rule: 'llm-review-error', detail: `LLM review threw: ${message}` }];
+      llmFindings = [{ rule: 'llm-review-error', detail: `LLM review threw: ${message}`, unjudged: true }];
     }
     if (llmFindings.length > 0) {
       return { passed: false, findings: llmFindings, stage: 'llm-review' };
@@ -342,7 +349,7 @@ export class OutboundContentFilter {
     } catch (err) {
       // Fail-closed: disclosure gate error blocks the message.
       const message = err instanceof Error ? err.message : String(err);
-      escalationFindings = [{ rule: 'disclosure-gate-error', detail: `Escalation judge threw: ${message}` }];
+      escalationFindings = [{ rule: 'disclosure-gate-error', detail: `Escalation judge threw: ${message}`, unjudged: true }];
     }
     if (escalationFindings.length > 0) {
       return { passed: false, findings: escalationFindings, stage: 'disclosure-gate' };
@@ -709,9 +716,13 @@ export class OutboundContentFilter {
       const unresolved = input.recipientTierUnresolved
         ? ' (recipient tier unresolved: contact lookup failed)'
         : '';
+      // A failed judge escalates with no disclosure class; a real verdict always names one. That,
+      // or a tier the contact lookup could not resolve, is an outage, not a judgement (#2587).
+      const unjudged = verdict.disclosureClass === undefined || input.recipientTierUnresolved === true;
       return [{
         rule: 'disclosure-tier-gate',
         detail: `Disclosure class '${verdict.disclosureClass ?? 'unknown'}' not permitted for tier '${input.recipientTier}'${unresolved}`,
+        ...(unjudged ? { unjudged: true as const } : {}),
       }];
     }
 

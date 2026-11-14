@@ -19,6 +19,7 @@ import {
   findRetiredRecipientField,
   retiredRecipientFieldError,
 } from '../../src/skills/_shared/recipient-reference.js';
+import { gatewaySendFailure } from '../../src/skills/_shared/policy-hold.js';
 
 const MAX_MESSAGE_LENGTH = 1600;
 const E164_REGEX = /^\+[1-9]\d{6,14}$/;
@@ -67,7 +68,8 @@ export class SmsSendHandler implements ToolHandler {
     const resolved = await ctx.outboundGateway.resolveRecipientReference('sms', recipient as string, {
       field: 'recipient',
     });
-    if (!resolved.ok) return { success: false, error: resolved.error };
+    // A blocked contact is a policy hold (#2587); other refusals stay failures.
+    if (!resolved.ok) return { success: false, error: resolved.error, ...(resolved.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
     if (!E164_REGEX.test(resolved.identifier)) {
       // A stored identity Telnyx cannot address: a data defect. Refuse rather than
       // guess, and log the contact for an operator (the ID may be the principal's).
@@ -106,10 +108,7 @@ export class SmsSendHandler implements ToolHandler {
       );
 
       if (!result.success) {
-        return {
-          success: false,
-          error: result.blockedReason ?? 'SMS send failed',
-        };
+        return gatewaySendFailure(result, 'SMS send failed');
       }
 
       // A relay held for the digest never reached the principal: nothing for a reply to bind to (#1320).

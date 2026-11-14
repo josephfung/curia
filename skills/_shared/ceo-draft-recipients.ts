@@ -29,11 +29,15 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export const MAX_DRAFT_RECIPIENTS = 25;
 
 export type RecipientList = { ok: true; entries: string[] } | { ok: false; error: string };
-export type ParticipantList = { ok: true; participants: NylasParticipant[] } | { ok: false; error: string };
+/**
+ * `policyHold` (#2587): the check ran and refused by rule (a blocked contact). Absent on a
+ * malformed entry or a failed lookup, which stay failures on the console.
+ */
+export type ParticipantList = { ok: true; participants: NylasParticipant[] } | { ok: false; error: string; policyHold?: true };
 /** Resolved references: `contactIds[i]` is the contact behind `participants[i]`. */
 export type ReferenceList =
   | { ok: true; participants: NylasParticipant[]; contactIds: string[] }
-  | { ok: false; error: string };
+  | { ok: false; error: string; policyHold?: true };
 
 /** The paired names of one recipient line: the reference input and its raw-address input. */
 export interface RecipientFieldPair {
@@ -113,6 +117,8 @@ export async function resolveReferenceRecipients(
         error:
           `${position}: ${resolved.error} ${consequence} Someone with no verified email on file can be ` +
           `addressed in ${fields.raw}, with the address copied exactly from the principal's mail.`,
+        // A blocked contact is a policy hold, as on the raw-address path (#2587).
+        ...(resolved.policyHold ? { policyHold: true as const } : {}),
       };
     }
     if (!EMAIL_REGEX.test(resolved.identifier)) {
@@ -166,7 +172,7 @@ export async function checkRawRecipients(
         const known = await ctx.contactService.resolveByChannelIdentity('email', address);
         if (known?.tier === 'blocked') {
           ctx.log.info({ field: fields.raw, position: index + 1 }, 'draft recipients: raw address belongs to a blocked contact — refusing');
-          return { ok: false, error: `${position} belongs to a blocked contact. ${consequence}` };
+          return { ok: false, error: `${position} belongs to a blocked contact. ${consequence}`, policyHold: true };
         }
       } catch (err) {
         ctx.log.warn({ err, field: fields.raw }, 'draft recipients: blocked-contact check failed — refusing (fail-closed)');

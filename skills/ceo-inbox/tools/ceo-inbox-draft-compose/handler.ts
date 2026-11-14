@@ -144,8 +144,9 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
       };
     }
     // The alias form is refused before any lookup; the contact-ID form after resolution below.
+    // A policy hold (#2587): the rule redirects a misroute, it is not a failure.
     if (isPrincipalAliasOnly(lists)) {
-      return { success: false, error: PRINCIPAL_ONLY_ERROR };
+      return { success: false, error: PRINCIPAL_ONLY_ERROR, errorType: 'POLICY_HOLD' };
     }
     const recipientCount = Object.values(lists).reduce((sum, entries) => sum + entries.length, 0);
     if (recipientCount > MAX_DRAFT_RECIPIENTS) {
@@ -166,17 +167,18 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
     const TO: RecipientFieldPair = { reference: 'to', raw: 'to_addresses' };
     const CC: RecipientFieldPair = { reference: 'cc', raw: 'cc_addresses' };
     const toRefs = await resolveReferenceRecipients(ctx, lists.to, TO, NOT_SAVED);
-    if (!toRefs.ok) return { success: false, error: toRefs.error };
+    if (!toRefs.ok) return { success: false, error: toRefs.error, ...(toRefs.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
     const ccRefs = await resolveReferenceRecipients(ctx, lists.cc, CC, NOT_SAVED);
-    if (!ccRefs.ok) return { success: false, error: ccRefs.error };
+    if (!ccRefs.ok) return { success: false, error: ccRefs.error, ...(ccRefs.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
     const toRaw = await checkRawRecipients(ctx, lists.to_addresses, TO, NOT_SAVED);
-    if (!toRaw.ok) return { success: false, error: toRaw.error };
+    // A blocked contact is a policy hold (#2587); a malformed entry or failed lookup is not.
+    if (!toRaw.ok) return { success: false, error: toRaw.error, ...(toRaw.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
     const ccRaw = await checkRawRecipients(ctx, lists.cc_addresses, CC, NOT_SAVED);
-    if (!ccRaw.ok) return { success: false, error: ccRaw.error };
+    if (!ccRaw.ok) return { success: false, error: ccRaw.error, ...(ccRaw.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
     // Every accepted recipient, before the To/Cc dedup collapses duplicates of the principal.
     const rawAddresses = [...toRaw.participants, ...ccRaw.participants].map((participant) => participant.email);
     if (await isPrincipalOnlyDraft(ctx, [...toRefs.contactIds, ...ccRefs.contactIds], rawAddresses)) {
-      return { success: false, error: PRINCIPAL_ONLY_ERROR };
+      return { success: false, error: PRINCIPAL_ONLY_ERROR, errorType: 'POLICY_HOLD' };
     }
 
     const to = uniqueParticipants(toRefs.participants, toRaw.participants);

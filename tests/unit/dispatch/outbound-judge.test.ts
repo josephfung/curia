@@ -120,6 +120,8 @@ describe('OutboundLlmJudge', () => {
       const { judge } = makeJudge(slowProvider(), { failMode: 'closed', timeoutMs: 5 });
       const findings = await judge.review(MIXED_INPUT);
       expect(findings[0]?.rule).toBe('llm-judge-unavailable');
+      // An outage, not a verdict: the console counts it as a failure (#2587).
+      expect(findings[0]?.unjudged).toBe(true);
     });
   });
 
@@ -142,7 +144,9 @@ describe('OutboundLlmJudge', () => {
     });
     it('closed → blocks with llm-judge-parse-error', async () => {
       const { judge } = makeJudge(providerReturning(textResponse('not json')), { failMode: 'closed' });
-      expect((await judge.review(MIXED_INPUT))[0]?.rule).toBe('llm-judge-parse-error');
+      const findings = await judge.review(MIXED_INPUT);
+      expect(findings[0]?.rule).toBe('llm-judge-parse-error');
+      expect(findings[0]?.unjudged).toBe(true);
     });
     it('open → delivers ([]) on malformed verdict', async () => {
       const { judge } = makeJudge(providerReturning(textResponse('not json')), { failMode: 'open' });

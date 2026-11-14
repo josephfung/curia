@@ -27,6 +27,7 @@ import {
   findRetiredRecipientField,
   retiredRecipientFieldError,
 } from '../../src/skills/_shared/recipient-reference.js';
+import { gatewaySendFailure } from '../../src/skills/_shared/policy-hold.js';
 
 const MAX_MESSAGE_LENGTH = 10_000;
 
@@ -126,9 +127,11 @@ export class SignalSendHandler implements ToolHandler {
       if (!trust.trusted) {
         // Blocked members: report existence but NOT their phone numbers (privacy).
         if (trust.blockedMembers.length > 0) {
+          // The trust check ran and refused: a policy hold, not a hiccup (#2587).
           return {
             success: false,
             error: `Cannot send to group: ${trust.blockedMembers.length} member(s) are blocked`,
+            errorType: 'POLICY_HOLD',
           };
         }
 
@@ -137,6 +140,7 @@ export class SignalSendHandler implements ToolHandler {
           return {
             success: false,
             error: `Cannot send to group: the following members have not been verified in contacts and must be verified before sending: ${trust.unknownMembers.join(', ')}`,
+            errorType: 'POLICY_HOLD',
           };
         }
       }
@@ -165,7 +169,7 @@ export class SignalSendHandler implements ToolHandler {
         });
 
         if (!result.success) {
-          return { success: false, error: result.blockedReason ?? 'Signal send failed' };
+          return gatewaySendFailure(result, 'Signal send failed');
         }
 
         // Register outbound context entry (best-effort).
@@ -199,7 +203,8 @@ export class SignalSendHandler implements ToolHandler {
     const resolved = await ctx.outboundGateway.resolveRecipientReference('signal', recipient as string, {
       field: 'recipient',
     });
-    if (!resolved.ok) return { success: false, error: resolved.error };
+    // A blocked contact is a policy hold (#2587); other refusals stay failures.
+    if (!resolved.ok) return { success: false, error: resolved.error, ...(resolved.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
     if (!E164_REGEX.test(resolved.identifier)) {
       // A stored identity that signal-cli cannot address: a data defect. Refuse rather
       // than guess, and log the contact for an operator (the ID may be the principal's).
@@ -237,10 +242,7 @@ export class SignalSendHandler implements ToolHandler {
       });
 
       if (!result.success) {
-        return {
-          success: false,
-          error: result.blockedReason ?? 'Signal send failed',
-        };
+        return gatewaySendFailure(result, 'Signal send failed');
       }
 
       // Register outbound context entry (best-effort).

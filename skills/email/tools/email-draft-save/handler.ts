@@ -18,6 +18,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { buildReplyQuote, quoteParticipants } from '../../../../src/skills/_shared/reply-quote.js';
 import { parseAttachmentInputs } from '../../../_shared/parse-attachments.js';
+import { gatewaySendFailure } from '../../../../src/skills/_shared/policy-hold.js';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -66,7 +67,8 @@ export class EmailDraftSaveHandler implements ToolHandler {
 
     // Resolve the reference (#2041). Every failure is closed: no draft is saved.
     const resolved = await ctx.outboundGateway.resolveRecipientReference('email', to, { field: 'to' });
-    if (!resolved.ok) return { success: false, error: resolved.error };
+    // A blocked contact is a policy hold (#2587); other refusals stay failures.
+    if (!resolved.ok) return { success: false, error: resolved.error, ...(resolved.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
     if (!EMAIL_REGEX.test(resolved.identifier)) {
       // A stored identity Nylas cannot address: a data defect. Log the contact for an
       // operator, as email-send does; never echo the ID to the agent (it may be the principal's).
@@ -143,7 +145,7 @@ export class EmailDraftSaveHandler implements ToolHandler {
 
     if (!result.success) {
       ctx.log.error({ to: address, accountId, reason: result.blockedReason }, 'email-draft-save: gateway rejected draft');
-      return { success: false, error: result.blockedReason ?? 'Failed to save draft' };
+      return gatewaySendFailure(result, 'Failed to save draft');
     }
 
     // OutboundDraftResult.draftId is typed optional; guard so we never violate the

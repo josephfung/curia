@@ -1517,6 +1517,7 @@ describe('autonomy gates', () => {
     const BOB_REF = '33333333-3333-4333-8333-333333333333';
     const OLD_ALICE_REF = '44444444-4444-4444-8444-444444444444';
     const UNVERIFIED_ALICE_REF = '55555555-5555-4555-8555-555555555555';
+    const BLOCKED_REF = '66666666-6666-4666-8666-666666666666';
 
     /**
      * Contacts for reference resolution: the principal, the sender (Alice), a third
@@ -1550,12 +1551,44 @@ describe('autonomy gates', () => {
           contact: { id: UNVERIFIED_ALICE_REF, displayName: 'Alice (unverified)', primaryEmail: null, primaryPhone: null },
           identities: [identity(UNVERIFIED_ALICE_REF, 'email', 'alice@unverified.com')],
         },
+        [BLOCKED_REF]: {
+          contact: { id: BLOCKED_REF, displayName: 'Blocked Person', primaryEmail: null, primaryPhone: null, tier: 'blocked' },
+          identities: [identity(BLOCKED_REF, 'email', 'blocked@example.com')],
+        },
       };
       return {
         getContactWithIdentities: vi.fn(async (id: string) => byId[id]),
         getIdentitiesForContact: vi.fn().mockResolvedValue(originatorIdentities),
       } as unknown as ContactService;
     }
+
+    // #2587: the resolver ran and refused by rule, so the console counts it as held, not a hiccup.
+    it('refuses email-send to a blocked contact before the gates, as a policy hold', async () => {
+      const { judge } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        contactService: makeReferenceContacts(),
+      });
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke('email-send', { to: BLOCKED_REF, subject: 'x', body: 'y' }, undefined, originatorMeta('known'));
+
+      expect(result).toMatchObject({ success: false, errorType: 'POLICY_HOLD' });
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('leaves an unknown contact reference refused before the gates as a failure (#2587)', async () => {
+      const { judge } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        contactService: makeReferenceContacts(),
+      });
+      registry.register(makeRiskyManifest('email-send', 'medium'), makeHandler('ok'));
+
+      const result = await layer.invoke('email-send', { to: '77777777-7777-4777-8777-777777777777', subject: 'x', body: 'y' }, undefined, originatorMeta('known'));
+
+      expect(result.success).toBe(false);
+      expect(result).not.toHaveProperty('errorType', 'POLICY_HOLD');
+    });
 
     it('allows email-send to "principal" from a known contact without consulting the judge', async () => {
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
