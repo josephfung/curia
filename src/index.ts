@@ -1006,11 +1006,16 @@ async function main(): Promise<void> {
 
   // Map timezone labels stored before writes were normalized ("Eastern Time - Toronto" →
   // America/Toronto). Before the principal is read, so the copy below is the repaired one.
-  // Not fatal: every consumer of a contact timezone falls back to config.timezone.
+  // Not fatal: the principal's timezone readers (triage, minutes, activity) fall back to
+  // config.timezone through usableTimezone(). Per-row failures are logged inside; this catch
+  // only sees the initial read failing, in which case nothing was changed.
   try {
     await repairStoredTimezones(pool, logger);
   } catch (err) {
-    logger.error({ err }, 'Contact timezone repair failed at startup; stored values are unchanged');
+    logger.error(
+      { err },
+      'Contact timezone repair could not read contacts at startup; no timezone was changed. It retries on the next boot',
+    );
   }
 
   try {

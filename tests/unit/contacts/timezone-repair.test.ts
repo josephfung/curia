@@ -25,7 +25,7 @@ describe('repairStoredTimezones', () => {
 
     const result = await repairStoredTimezones(pool, logger);
 
-    expect(result).toEqual({ repaired: 1, unrecognized: 0 });
+    expect(result).toEqual({ repaired: 1, unrecognized: 0, failed: 0 });
     const update = query.mock.calls.find(([sql]) => String(sql).startsWith('UPDATE'));
     expect(update).toBeDefined();
     // Parameterized, and only if the row still holds the value we read (no lost update).
@@ -38,8 +38,29 @@ describe('repairStoredTimezones', () => {
 
     const result = await repairStoredTimezones(pool, makeLogger());
 
-    expect(result).toEqual({ repaired: 0, unrecognized: 0 });
+    expect(result).toEqual({ repaired: 0, unrecognized: 0, failed: 0 });
     expect(query.mock.calls.some(([sql]) => String(sql).startsWith('UPDATE'))).toBe(false);
+  });
+
+  it('keeps going past a failed update and does not count a row someone else changed', async () => {
+    const rows = [
+      { id: 'boom', timezone: 'Eastern Time - Toronto' },
+      { id: 'raced', timezone: 'Pacific Time - Los Angeles' },
+      { id: 'ok', timezone: 'Central European Time - Paris' },
+    ];
+    const query = vi.fn(async (sql: string, params?: unknown[]) => {
+      if (sql.startsWith('SELECT')) return { rows };
+      if (params?.[1] === 'boom') throw new Error('lock timeout');
+      return { rows: [], rowCount: params?.[1] === 'raced' ? 0 : 1 };
+    });
+    const logger = makeLogger();
+
+    const result = await repairStoredTimezones({ query } as unknown as DbPool, logger);
+
+    expect(result).toEqual({ repaired: 1, unrecognized: 0, failed: 1 });
+    expect(logger.info).toHaveBeenCalledWith({ contactIds: ['ok'] }, expect.any(String));
+    expect((logger as unknown as { error: ReturnType<typeof vi.fn> }).error)
+      .toHaveBeenCalledWith(expect.objectContaining({ contactId: 'boom' }), expect.any(String));
   });
 
   it('warns about a value with no single zone and does not change it', async () => {
@@ -48,7 +69,7 @@ describe('repairStoredTimezones', () => {
 
     const result = await repairStoredTimezones(pool, logger);
 
-    expect(result).toEqual({ repaired: 0, unrecognized: 1 });
+    expect(result).toEqual({ repaired: 0, unrecognized: 1, failed: 0 });
     expect(query.mock.calls.some(([sql]) => String(sql).startsWith('UPDATE'))).toBe(false);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ contactIds: ['c2'] }),
