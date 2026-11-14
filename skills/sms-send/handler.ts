@@ -68,7 +68,8 @@ export class SmsSendHandler implements ToolHandler {
     const resolved = await ctx.outboundGateway.resolveRecipientReference('sms', recipient as string, {
       field: 'recipient',
     });
-    if (!resolved.ok) return { success: false, error: resolved.error };
+    // A blocked contact is a policy hold (#2587); other refusals stay failures.
+    if (!resolved.ok) return { success: false, error: resolved.error, ...(resolved.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
     if (!E164_REGEX.test(resolved.identifier)) {
       // A stored identity Telnyx cannot address: a data defect. Refuse rather than
       // guess, and log the contact for an operator (the ID may be the principal's).

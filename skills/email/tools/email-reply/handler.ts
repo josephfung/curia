@@ -59,7 +59,7 @@ async function resolveCcList(
   gateway: OutboundGateway,
   raw: string,
   log: ToolContext['log'],
-): Promise<{ cc: string } | { error: string }> {
+): Promise<{ cc: string } | { error: string; policyHold?: true }> {
   const entries = raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
   // A stray empty segment beside real entries (a trailing comma) is harmless; a
   // list with none at all is not sender-only, which is `cc: ""`.
@@ -79,7 +79,7 @@ async function resolveCcList(
       continue;
     }
     const resolved = await gateway.resolveRecipientReference('email', entry, { field: 'cc' });
-    if (!resolved.ok) return { error: resolved.error };
+    if (!resolved.ok) return { error: resolved.error, ...(resolved.policyHold ? { policyHold: true as const } : {}) };
     if (!isSendableIdentifier('email', resolved.identifier)) {
       // The resolver only returns sendable identities; this guards a future change to it.
       log.warn({ field: 'cc' }, 'email-reply: verified email identity is not a valid address — refusing (#2131)');
@@ -169,7 +169,8 @@ export class EmailReplyHandler implements ToolHandler {
     let ccResolved: unknown = ccInput;
     if (typeof ccInput === 'string' && ccInput.trim().length > 0) {
       const cc = await resolveCcList(ctx.outboundGateway, ccInput, ctx.log);
-      if ('error' in cc) return { success: false, error: cc.error };
+      // A blocked contact is a policy hold (#2587).
+      if ('error' in cc) return { success: false, error: cc.error, ...(cc.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
       ccResolved = cc.cc;
     }
 

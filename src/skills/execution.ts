@@ -1445,7 +1445,8 @@ export class ExecutionLayer {
             };
           }
           skillLogger.info({ toolName, field, isReference }, 'send recipient reference refused before the gates (#2033)');
-          return { ok: false, error: result.error };
+          // A blocked contact is a policy hold (#2587); the other refusals here stay failures.
+          return { ok: false, error: result.error, ...(result.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
         }
         resolved.set(entry.trim(), result.identifier);
         if (parsed?.label) {

@@ -37,7 +37,7 @@ export type ParticipantList = { ok: true; participants: NylasParticipant[] } | {
 /** Resolved references: `contactIds[i]` is the contact behind `participants[i]`. */
 export type ReferenceList =
   | { ok: true; participants: NylasParticipant[]; contactIds: string[] }
-  | { ok: false; error: string };
+  | { ok: false; error: string; policyHold?: true };
 
 /** The paired names of one recipient line: the reference input and its raw-address input. */
 export interface RecipientFieldPair {
@@ -117,6 +117,8 @@ export async function resolveReferenceRecipients(
         error:
           `${position}: ${resolved.error} ${consequence} Someone with no verified email on file can be ` +
           `addressed in ${fields.raw}, with the address copied exactly from the principal's mail.`,
+        // A blocked contact is a policy hold, as on the raw-address path (#2587).
+        ...(resolved.policyHold ? { policyHold: true as const } : {}),
       };
     }
     if (!EMAIL_REGEX.test(resolved.identifier)) {

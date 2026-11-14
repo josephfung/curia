@@ -67,7 +67,8 @@ export class EmailDraftSaveHandler implements ToolHandler {
 
     // Resolve the reference (#2041). Every failure is closed: no draft is saved.
     const resolved = await ctx.outboundGateway.resolveRecipientReference('email', to, { field: 'to' });
-    if (!resolved.ok) return { success: false, error: resolved.error };
+    // A blocked contact is a policy hold (#2587); other refusals stay failures.
+    if (!resolved.ok) return { success: false, error: resolved.error, ...(resolved.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
     if (!EMAIL_REGEX.test(resolved.identifier)) {
       // A stored identity Nylas cannot address: a data defect. Log the contact for an
       // operator, as email-send does; never echo the ID to the agent (it may be the principal's).

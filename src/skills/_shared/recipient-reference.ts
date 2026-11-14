@@ -138,7 +138,11 @@ export type RecipientResolution =
    * `error` is agent-facing and complete. `cause` is set only when the contact
    * lookup itself threw, so the caller can log it; the result still fails closed.
    */
-  | { ok: false; error: string; cause?: unknown };
+  /**
+   * `policyHold` (#2587): the lookup ran and refused by rule (a blocked contact). Absent on a
+   * malformed reference, a missing identity or a failed lookup, which stay failures.
+   */
+  | { ok: false; error: string; cause?: unknown; policyHold?: true };
 
 export interface RecipientReferenceFields {
   /** The reference input's name in tool.json (e.g. `to`, `recipient`). */
@@ -577,6 +581,7 @@ export async function resolveRecipientReference(
   if (found.contact.tier === 'blocked') {
     return {
       ok: false,
+      policyHold: true,
       error: isPrincipal
         ? 'The principal contact is marked blocked. Nothing was sent.'
         : `${contactWho(found.contact)} is blocked. Nothing was sent.`,

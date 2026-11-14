@@ -76,7 +76,8 @@ export class SlackSendHandler implements ToolHandler {
     const resolved = await ctx.outboundGateway.resolveRecipientReference('slack', recipient as string, {
       field: 'recipient',
     });
-    if (!resolved.ok) return { success: false, error: resolved.error };
+    // A blocked contact is a policy hold (#2587); other refusals stay failures.
+    if (!resolved.ok) return { success: false, error: resolved.error, ...(resolved.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
     if (!SLACK_USER_ID_REGEX.test(resolved.identifier)) {
       // W… Enterprise Grid ids stay out of scope on the reference path too.
       ctx.log.warn({ contactId: resolved.contactId }, 'slack-send: verified Slack identity is not a U… user id — refusing (#2033)');

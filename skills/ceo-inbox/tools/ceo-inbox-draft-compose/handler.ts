@@ -167,9 +167,9 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
     const TO: RecipientFieldPair = { reference: 'to', raw: 'to_addresses' };
     const CC: RecipientFieldPair = { reference: 'cc', raw: 'cc_addresses' };
     const toRefs = await resolveReferenceRecipients(ctx, lists.to, TO, NOT_SAVED);
-    if (!toRefs.ok) return { success: false, error: toRefs.error };
+    if (!toRefs.ok) return { success: false, error: toRefs.error, ...(toRefs.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
     const ccRefs = await resolveReferenceRecipients(ctx, lists.cc, CC, NOT_SAVED);
-    if (!ccRefs.ok) return { success: false, error: ccRefs.error };
+    if (!ccRefs.ok) return { success: false, error: ccRefs.error, ...(ccRefs.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
     const toRaw = await checkRawRecipients(ctx, lists.to_addresses, TO, NOT_SAVED);
     // A blocked contact is a policy hold (#2587); a malformed entry or failed lookup is not.
     if (!toRaw.ok) return { success: false, error: toRaw.error, ...(toRaw.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };

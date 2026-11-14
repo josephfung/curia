@@ -286,7 +286,16 @@ describe('resolveRecipientReference', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toBe(`Contact ${blocked.id} is blocked. Nothing was sent.`);
+      // The lookup ran and refused by rule: a policy hold, not a failure (#2587).
+      expect(result.policyHold).toBe(true);
     }
+  });
+
+  it('leaves a refusal that is not a blocked contact unmarked (#2587)', async () => {
+    // A well-formed contact ID that matches no contact: a failure, not a hold.
+    const result = await resolveRecipientReference('00000000-0000-4000-8000-000000000000', 'email', FIELDS, deps());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.policyHold).toBeUndefined();
   });
 
   it('skips a verified identity the channel cannot send to, so it does not shadow a sendable one', async () => {
