@@ -35,7 +35,8 @@ export function isPrincipalDirectedSend(
  * Whether the principal vouches for this call right now: a replay they approved, or a live
  * turn that is not a wake and whose live-turn grant, if it has one, is still active (#2515).
  * Stricter than isPrincipalDirectedSend: a wake of a principal task is not the principal
- * speaking. Read at the decision and again at the write, since the grant can end in between.
+ * speaking. The grant can end mid-call, so a caller that awaits slow checks between deciding
+ * and writing reads it again at the write (contact-link-identity does).
  * Used where a change is the principal's alone to make: verifying a contact identity
  * (contact-link-identity) and the principal's home timezone (contact-update).
  */
