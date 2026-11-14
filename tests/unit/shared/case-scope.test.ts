@@ -5,6 +5,7 @@ import { createAgentTask, createLlmCall, type AgentTaskEvent } from '../../../sr
 import type { LLMProvider, LLMResponse, LLMStreamEvent } from '../../../src/agents/llm/provider.js';
 import { createLogger } from '../../../src/logger.js';
 import {
+  attemptScope,
   closeAttempt,
   createCaseContext,
   guardProvider,
@@ -257,5 +258,23 @@ describe('runConcurrently', () => {
 
   it('rejects a bad concurrency', async () => {
     await expect(runConcurrently([1], 0, async () => 1)).rejects.toThrow(/positive integer/);
+  });
+});
+
+describe('attemptScope (#2588)', () => {
+  it('gives each attempt its own scope, stable within it, and none outside every attempt', async () => {
+    const context = createCaseContext<CaseAttempt>();
+    const scopeOf = attemptScope(context.current);
+    const first = newAttempt('case run 1');
+    const second = newAttempt('case run 2');
+    expect(scopeOf('conv-x')).toBeUndefined();
+    const a1 = await context.run(first, async () => scopeOf('conv-a'));
+    // Another conversation of the same attempt (a delegated specialist's) shares its scope.
+    const a2 = await context.run(first, async () => scopeOf('delegate-conv'));
+    const b = await context.run(second, async () => scopeOf('conv-a'));
+    expect(a1).toBeDefined();
+    expect(a2).toBe(a1);
+    expect(b).toBeDefined();
+    expect(b).not.toBe(a1);
   });
 });

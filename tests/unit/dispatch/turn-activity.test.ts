@@ -486,6 +486,60 @@ describe('TurnActivityRegistry repeated starts', () => {
   });
 });
 
+describe('TurnActivityRegistry scopes', () => {
+  function scoped() {
+    // The scope is read from the conversation id here; the suites read their attempt instead.
+    const registry = new TurnActivityRegistry({
+      logger: pino({ level: 'silent' }),
+      now: () => T0,
+      scopeOf: (conversationId) => conversationId.split('/')[0],
+    });
+    return registry;
+  }
+
+  it('roots in different scopes never hold each other', () => {
+    const registry = scoped();
+    start(registry, 'A', { conversationId: 'run1/conv' });
+    start(registry, 'B', { conversationId: 'run2/conv' });
+    expect(registry.checkAndRecord('A', 'email-send', [X]).held).toBe(false);
+    expect(registry.checkAndRecord('B', 'email-send', [X]).held).toBe(false);
+    expect(registry.otherRootsInWindow('A')).toEqual([]);
+  });
+
+  it('roots in the same scope still hold each other', () => {
+    const registry = scoped();
+    start(registry, 'A', { conversationId: 'run1/conv-a' });
+    start(registry, 'B', { conversationId: 'run1/conv-b' });
+    registry.checkAndRecord('A', 'email-send', [X]);
+    expect(registry.checkAndRecord('B', 'email-send', [X]).held).toBe(true);
+  });
+
+  it('an auto root takes the scope of its seed conversation', () => {
+    const registry = scoped();
+    start(registry, 'A', { conversationId: 'run1/conv-a' });
+    registry.ensureRoot('voice-1', { ...VOICE_SEED, conversationId: 'run2/voice' });
+    registry.checkAndRecord('voice-1', 'email-send', [X]);
+    expect(registry.checkAndRecord('A', 'email-send', [X]).held).toBe(false);
+  });
+
+  it('a throwing scope function falls back to the shared scope', () => {
+    const warn = vi.fn();
+    const logger = { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() } as unknown as Logger;
+    const registry = new TurnActivityRegistry({
+      logger,
+      now: () => T0,
+      scopeOf: () => {
+        throw new Error('scope exploded');
+      },
+    });
+    start(registry, 'A');
+    start(registry, 'B');
+    registry.checkAndRecord('A', 'email-send', [X]);
+    expect(registry.checkAndRecord('B', 'email-send', [X]).held).toBe(true);
+    expect(warn).toHaveBeenCalled();
+  });
+});
+
 describe('TurnActivityRegistry overlapping coordinator tasks', () => {
   it('ending one of two coordinator tasks keeps the slot on the other', () => {
     const { registry } = setup();

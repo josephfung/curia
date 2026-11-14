@@ -34,7 +34,7 @@ import type { EventBus } from '../../src/bus/bus.js';
 import type { Logger } from '../../src/logger.js';
 import type { BullpenService } from '../../src/memory/bullpen.js';
 import { createTestModeStack, type TestModeStack, type TierReasoningOverride } from '../../src/startup/test-mode-stack.js';
-import { closeAttempt, createCaseContext, guardProvider, meterAgentCalls, type TurnErrorKind } from '../shared/case-scope.js';
+import { attemptScope, closeAttempt, createCaseContext, guardProvider, meterAgentCalls, type TurnErrorKind } from '../shared/case-scope.js';
 import { createTurnCapture, withoutRecentHistory, type ObservedToolCall } from '../shared/turn-capture.js';
 import { UsageLedger, type UsageBreakdown } from '../shared/usage.js';
 import { createSmokeStubs, newSmokeCase, type SmokeCaseState, type SmokeStubs } from './stub-layer.js';
@@ -201,6 +201,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
     model: options.model,
     ...(options.reasoning ? { reasoning: options.reasoning } : {}),
     wrapExecutionLayer: (layer) => stubs.wrap(layer),
+    // One cross-turn backstop scope per case attempt (#2588): concurrent cases, and a case's
+    // later runs on the same fixtures, must not hold each other's sends.
+    turnActivityScope: attemptScope(context.current),
     // Times each model call against its case, and refuses a cancelled case's calls.
     wrapLlmProvider: (provider) => guardProvider(provider, context.current),
     // No contact recent history: a case must not inherit another case's turns, or the
