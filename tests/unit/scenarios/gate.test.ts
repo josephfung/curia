@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { emptyBreakdown } from '../../shared/usage.js';
-import { gateFailures, knownFailureLines, passRate, scoreCase, staleKnownFailures } from '../../scenarios/gate.js';
+import { formatCaseLayers, gateFailures, knownFailureLines, layerSummaryLines, passRate, scoreCase, staleKnownFailures } from '../../scenarios/gate.js';
 import type { ExpectedBehavior, RunRating, ScenarioRun } from '../../scenarios/types.js';
 
 const P: RunRating = { rating: 'PASS', justification: '' };
@@ -61,6 +61,43 @@ describe('scoreCase', () => {
 
   it('throws when a behavior is missing ratings instead of scoring it silently', () => {
     expect(() => scoreCase('c', [critical], runs(3), new Map([['routes', [P]]]))).toThrow(/1 rating\(s\) for 3 run/);
+  });
+});
+
+describe('behavior layers (#2556)', () => {
+  const decide: ExpectedBehavior = { id: 'keeps-meeting', description: '', weight: 'critical', layer: 'decision' };
+  const inform: ExpectedBehavior = { id: 'tells-principal', description: '', weight: 'important', layer: 'decision' };
+  const warm: ExpectedBehavior = { id: 'warm-reply', description: '', weight: 'critical', layer: 'voice' };
+
+  it('scores each layer apart from the case total', () => {
+    const result = scoreCase('c', [decide, inform, warm], runs(5), new Map([
+      ['keeps-meeting', [P, P, P, P, P]],
+      ['tells-principal', [P, P, P, M, M]],
+      ['warm-reply', [P, P, M, M, M]],
+    ]));
+    // decision: (3×1 + 2×0.6) / 5 = 0.84; voice: 0.4 and a critical failure.
+    expect(result.layers?.decision?.weightedScore).toBeCloseTo(0.84);
+    expect(result.layers?.decision?.criticalFailures).toEqual([]);
+    expect(result.layers?.voice?.weightedScore).toBeCloseTo(0.4);
+    expect(result.layers?.voice?.criticalFailures).toEqual(['warm-reply']);
+    expect(result.criticalFailures).toEqual(['warm-reply']);
+    expect(formatCaseLayers(result)).toBe('decision 84% · voice 40% FAIL');
+  });
+
+  it('leaves layers out of a case whose behaviors have none', () => {
+    const result = scoreCase('c', [critical], runs(1), new Map([['routes', [P]]]));
+    expect(result.layers).toBeUndefined();
+    expect(formatCaseLayers(result)).toBe('');
+    expect(layerSummaryLines([result])).toEqual([]);
+  });
+
+  it('summarizes each layer over the cases that use it', () => {
+    const a = scoreCase('a', [decide, warm], runs(1), new Map([['keeps-meeting', [P]], ['warm-reply', [M]]]));
+    const b = scoreCase('b', [decide], runs(1), new Map([['keeps-meeting', [M]]]));
+    expect(layerSummaryLines([a, b])).toEqual([
+      'decision  50% mean over 2 case(s); 1 failed a critical decision behavior',
+      'voice      0% mean over 1 case(s); 1 failed a critical voice behavior',
+    ]);
   });
 });
 

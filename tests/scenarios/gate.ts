@@ -1,10 +1,13 @@
 // tests/scenarios/gate.ts — pass rates and the release gate.
 import { sumBreakdowns } from '../shared/usage.js';
 import {
+  BEHAVIOR_LAYERS,
   CRITICAL_PASS_THRESHOLD,
   RATING_VALUES,
   WEIGHT_VALUES,
+  type BehaviorLayer,
   type BehaviorResult,
+  type LayerScore,
   type CaseResult,
   type ExpectedBehavior,
   type RunRating,
@@ -20,6 +23,45 @@ export function passRate(ratings: RunRating[]): number {
 export function strictPassRate(ratings: RunRating[]): number {
   if (ratings.length === 0) return 0;
   return ratings.filter(r => r.rating === 'PASS').length / ratings.length;
+}
+
+/** Σ(weight × passRate) / Σweight; 0 for no behaviors. */
+function weightedScore(results: BehaviorResult[]): number {
+  const totalWeight = results.reduce((s, r) => s + WEIGHT_VALUES[r.behavior.weight], 0);
+  const earned = results.reduce((s, r) => s + WEIGHT_VALUES[r.behavior.weight] * r.passRate, 0);
+  return totalWeight === 0 ? 0 : earned / totalWeight;
+}
+
+function criticalFailures(results: BehaviorResult[]): string[] {
+  return results
+    .filter(r => r.behavior.weight === 'critical' && r.strictPassRate < CRITICAL_PASS_THRESHOLD)
+    .map(r => r.behavior.id);
+}
+
+/**
+ * The per-layer summary for the cases that have layers (#2556): each layer's mean score over
+ * the cases that use it, and how many of those cases failed a critical behavior in it.
+ * Empty when no case has layers.
+ */
+export function layerSummaryLines(cases: CaseResult[]): string[] {
+  const lines: string[] = [];
+  for (const layer of BEHAVIOR_LAYERS) {
+    const scored = cases.flatMap(c => (c.layers?.[layer] ? [c.layers[layer]] : []));
+    if (scored.length === 0) continue;
+    const mean = scored.reduce((s, l) => s + l.weightedScore, 0) / scored.length;
+    const failed = scored.filter(l => l.criticalFailures.length > 0).length;
+    lines.push(`${layer.padEnd(8)} ${formatPct(mean).padStart(4)} mean over ${scored.length} case(s); ${failed} failed a critical ${layer} behavior`);
+  }
+  return lines;
+}
+
+/** "decision 80% · voice 55% FAIL": a case's layer scores for its summary line; '' without layers. */
+export function formatCaseLayers(c: CaseResult): string {
+  if (!c.layers) return '';
+  return BEHAVIOR_LAYERS.flatMap(layer => {
+    const l = c.layers![layer];
+    return l ? [`${layer} ${formatPct(l.weightedScore)}${l.criticalFailures.length > 0 ? ' FAIL' : ''}`] : [];
+  }).join(' · ');
 }
 
 /** Marks a rating the judge could not produce (an infrastructure failure, not the model's). */
@@ -47,17 +89,19 @@ export function scoreCase(
     return { behavior, ratings, passRate: passRate(ratings), strictPassRate: strictPassRate(ratings) };
   });
 
-  const totalWeight = results.reduce((s, r) => s + WEIGHT_VALUES[r.behavior.weight], 0);
-  const earned = results.reduce((s, r) => s + WEIGHT_VALUES[r.behavior.weight] * r.passRate, 0);
+  const layers: Partial<Record<BehaviorLayer, LayerScore>> = {};
+  for (const layer of BEHAVIOR_LAYERS) {
+    const own = results.filter(r => r.behavior.layer === layer);
+    if (own.length > 0) layers[layer] = { weightedScore: weightedScore(own), criticalFailures: criticalFailures(own) };
+  }
 
   return {
     name,
     runs,
     behaviors: results,
-    weightedScore: totalWeight === 0 ? 0 : earned / totalWeight,
-    criticalFailures: results
-      .filter(r => r.behavior.weight === 'critical' && r.strictPassRate < CRITICAL_PASS_THRESHOLD)
-      .map(r => r.behavior.id),
+    weightedScore: weightedScore(results),
+    criticalFailures: criticalFailures(results),
+    ...(Object.keys(layers).length > 0 ? { layers } : {}),
     ...(knownFailure ? { knownFailure } : {}),
     // Counted per run, not per behavior: one judge failure misses every judged behavior.
     judgeErrors: runs.filter((_, i) =>

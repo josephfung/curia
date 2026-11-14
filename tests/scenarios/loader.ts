@@ -13,13 +13,17 @@ import { registrableDomain } from '../../src/verification/domain.js';
 import { hasDatePlaceholders, resolveDatePlaceholders } from '../shared/date-placeholders.js';
 import { LIVE_SEARCH_TOOL } from '../shared/live-search.js';
 import { leafChecks } from './assertions.js';
+import { caseJudgeModel } from './judge-models.js';
 import { THROUGH_GATEWAY_TOOLS } from './stub-layer.js';
 import {
   ANY_AGENT,
+  BEHAVIOR_LAYERS,
   COORDINATOR,
   GATEWAY_CHECK_KINDS,
+  LAYERED_TAGS,
   REVIEW_OUTCOMES,
   type BehaviorCheck,
+  type BehaviorLayer,
   type BehaviorWeight,
   type DelegationMode,
   type DeliveryChannel,
@@ -84,7 +88,7 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
   }
 }
 
-const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway', 'gated_tools'] as const;
+const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway', 'gated_tools', 'judge_model'] as const;
 const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'principal_identities', 'tasks', 'outreach', 'pinned', 'principal_mailbox'] as const;
 const PRINCIPAL_MAILBOX_KEYS = ['send_level', 'drafts', 'threads', 'expect_no_band_review'] as const;
 const PRINCIPAL_DRAFT_KEYS = ['id', 'thread', 'to', 'cc', 'subject', 'body', 'modified', 'by_curia'] as const;
@@ -107,7 +111,7 @@ const VERIFICATION_KEYS = ['key', 'site', 'page_domain', 'delivery', 'browser_se
 const VERIFICATION_DELIVERIES: readonly SeedVerification['delivery'][] = ['email', 'sms', 'app'];
 const VERIFICATION_STATUSES: readonly SeedVerification['status'][] = ['pending', 'expired', 'satisfied', 'abandoned'];
 const BACKLOG_KEYS = ['decay_warnings', 'pending_approvals', 'principal_tasks'] as const;
-const CONTACT_KEYS = ['key', 'display_name', 'tier', 'kind', 'role', 'channel', 'identifier', 'principal_wrote'] as const;
+const CONTACT_KEYS = ['key', 'display_name', 'tier', 'kind', 'role', 'title', 'organization', 'channel', 'identifier', 'principal_wrote'] as const;
 const ENTRY_KEYS = ['key', 'channel', 'agent', 'content', 'expected_reply', 'delegation_hint', 'metadata', 'recipients', 'replies', 'sent_minutes_ago', 'expires_in_hours', 'resume'] as const;
 const RESUME_KEYS = ['agent', 'original_task', 'context'] as const;
 const REPLY_KEYS = ['from', 'content'] as const;
@@ -134,7 +138,7 @@ const TEST_DOMAIN = /^([a-z0-9-]+\.)+test$/i;
 const TEST_ADDRESS = /^[^@\s]+@([a-z0-9-]+\.)+test$/i;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STUB_KEYS = ['match', 'agent', 'return', 'error'] as const;
-const BEHAVIOR_KEYS = ['id', 'weight', 'description', 'check'] as const;
+const BEHAVIOR_KEYS = ['id', 'weight', 'description', 'check', 'layer'] as const;
 const CHECK_KEYS: Record<string, readonly string[]> = {
   called: ['called', 'agent', 'with', 'contains', 'min', 'max', 'success', 'returns'],
   not_called: ['not_called', 'agent', 'with', 'contains', 'returns'],
@@ -473,13 +477,32 @@ function parseBehaviors(raw: Raw, file: string): ExpectedBehavior[] {
     seen.add(id);
     const weight = (b['weight'] ?? 'important') as BehaviorWeight;
     if (!WEIGHTS.includes(weight)) throw new CaseError(file, `${where}: invalid weight '${String(b['weight'])}'`);
+    const layer = b['layer'];
+    if (layer !== undefined && !BEHAVIOR_LAYERS.includes(layer as BehaviorLayer)) {
+      throw new CaseError(file, `${where}: layer must be one of ${BEHAVIOR_LAYERS.join(', ')}`);
+    }
     return {
       id,
       description: str(b, 'description', file, where),
       weight,
       ...(b['check'] !== undefined ? { check: parseCheck(b['check'], file, `${where}.check`) } : {}),
+      ...(layer !== undefined ? { layer: layer as BehaviorLayer } : {}),
     };
   });
+}
+
+/**
+ * A case under a layered tag (#2556) marks every behavior `decision` or `voice`: one left
+ * unmarked would count in the case total but in neither layer, and the layer scores would
+ * quietly leave it out.
+ */
+function validateLayers(scenario: ScenarioCase, file: string): void {
+  const tag = scenario.tags.find(t => LAYERED_TAGS.includes(t));
+  if (tag === undefined) return;
+  const unmarked = scenario.expectedBehaviors.filter(b => b.layer === undefined).map(b => b.id);
+  if (unmarked.length > 0) {
+    throw new CaseError(file, `a '${tag}' case marks every behavior with a layer (${BEHAVIOR_LAYERS.join(' or ')}); missing on ${unmarked.join(', ')}`);
+  }
 }
 
 function parseContacts(raw: Raw, file: string): SeedContact[] {
@@ -501,12 +524,16 @@ function parseContacts(raw: Raw, file: string): SeedContact[] {
     if (principalWrote === true && c['channel'] !== 'email') {
       throw new CaseError(file, `${where}: principal_wrote needs an email contact (it stands for mail in the principal's Sent folder)`);
     }
+    const title = optStr(c, 'title', file, where);
+    const organization = optStr(c, 'organization', file, where);
     return {
       key: str(c, 'key', file, where),
       displayName: str(c, 'display_name', file, where),
       tier: tier as SeedContact['tier'],
       kind: kind as NonNullable<SeedContact['kind']>,
       role: optStr(c, 'role', file, where),
+      ...(title !== undefined ? { title } : {}),
+      ...(organization !== undefined ? { organization } : {}),
       channel: str(c, 'channel', file, where),
       identifier: str(c, 'identifier', file, where),
       ...(principalWrote === true ? { principalWrote: true } : {}),
@@ -1236,6 +1263,8 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
   const throughGateway = optBool(raw, 'through_gateway', file, 'case');
   if (throughGateway === false) throw new CaseError(file, `'through_gateway' is true or absent`);
   const gatedTools = strList(raw, 'gated_tools', file, 'case');
+  const judgeModel = optStr(raw, 'judge_model', file, 'case');
+  if (judgeModel !== undefined && judgeModel.trim() === '') throw new CaseError(file, `'judge_model' must name a model`);
   // The release gate is one unfiltered run on the database's identity. An autonomy fixture
   // is pinned per case (#2312), so a case with one can join it.
   if (identity && releaseGate) {
@@ -1263,10 +1292,18 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     ...(autonomy ? { autonomy } : {}),
     ...(throughGateway ? { throughGateway: true as const } : {}),
     ...(gatedTools.length > 0 ? { gatedTools } : {}),
+    ...(judgeModel !== undefined ? { judgeModel } : {}),
     sourceFile: file,
   };
 
+  // Tags that set different judges are a load error, not a choice made by tag order.
+  try {
+    caseJudgeModel(scenario);
+  } catch (e) {
+    throw new CaseError(file, e instanceof Error ? e.message : String(e));
+  }
   validateReferences(scenario, file);
+  validateLayers(scenario, file);
   validateDelegation(scenario, file);
   validateEnvelope(scenario, file);
   validateThroughGateway(scenario, file);

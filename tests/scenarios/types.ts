@@ -156,12 +156,25 @@ export const GATEWAY_CHECK_KINDS = ['delivered', 'not_delivered', 'held', 'not_h
 export type ReviewOutcome = RecordedReview['outcome'];
 export const REVIEW_OUTCOMES: readonly ReviewOutcome[] = ['send', 'bounce', 'block', 'hold'];
 
+/**
+ * What a behavior measures (#2556): `decision` is the call (act, ask, inform, do nothing; who
+ * sends), `voice` is how the resulting messages read. Scored apart, so a well-worded message
+ * that should never have been sent shows as a decision failure, not a passing case.
+ */
+export type BehaviorLayer = 'decision' | 'voice';
+export const BEHAVIOR_LAYERS: readonly BehaviorLayer[] = ['decision', 'voice'];
+
+/** Tags whose cases must mark every behavior with a layer. */
+export const LAYERED_TAGS: readonly string[] = ['finesse'];
+
 export interface ExpectedBehavior {
   id: string;
   description: string;
   weight: BehaviorWeight;
   /** Absent → scored by the LLM judge from `description`. */
   check?: BehaviorCheck;
+  /** Absent on cases outside LAYERED_TAGS: the behavior is scored only in the case total. */
+  layer?: BehaviorLayer;
 }
 
 /**
@@ -188,6 +201,12 @@ export interface SeedContact {
   tier: 'trusted' | 'known' | 'unknown';
   kind?: 'person' | 'organization' | 'automated';
   role?: string;
+  /**
+   * Profile fields (#2556): what the contact record says about the person, which agents read
+   * when they look the contact up. A case that tests "it was on the profile" sets these.
+   */
+  title?: string;
+  organization?: string;
   /** Channel identity used when this contact is the sender. */
   channel: string;
   identifier: string;
@@ -625,6 +644,11 @@ export interface ScenarioCase {
    * production's approval. Needs `through_gateway`. Absent: stubs answer before any gate.
    */
   gatedTools?: string[];
+  /**
+   * The judge model for this case (#2556), over its tag's and the suite default
+   * (judge-models.ts). Absent: the tag's, else the default.
+   */
+  judgeModel?: string;
   /** File the case came from, for messages. */
   sourceFile: string;
 }
@@ -859,12 +883,25 @@ export interface CaseResult {
   weightedScore: number;
   /** Critical behaviors whose strict pass rate is under CRITICAL_PASS_THRESHOLD. */
   criticalFailures: string[];
+  /**
+   * The same score and critical failures per behavior layer (#2556), for the layers the case's
+   * behaviors use. Absent when no behavior has a layer.
+   */
+  layers?: Partial<Record<BehaviorLayer, LayerScore>>;
   /** Copied from the case: when set, criticalFailures are reported, not gated. */
   knownFailure?: { issue: string; reason: string };
   /** Runs where the judge itself failed (not the model) — reported as a gate failure. */
   judgeErrors: number;
   /** Model spend on the case: its runs' agents and judge calls. */
   usage: UsageBreakdown;
+}
+
+/** One layer's share of a case result (#2556). */
+export interface LayerScore {
+  /** Σ(weight × passRate) / Σweight over the layer's behaviors. */
+  weightedScore: number;
+  /** The layer's critical behaviors under CRITICAL_PASS_THRESHOLD. */
+  criticalFailures: string[];
 }
 
 export interface SuiteResult {
@@ -888,6 +925,8 @@ export interface SuiteResult {
   caseAutonomy?: Record<string, string>;
   /** Runs each case actually got (a case's `runs` or --runs can differ from the default). */
   runsPerCase: Record<string, number>;
+  /** The judge model, for every case not judged by the suite default (#2556). */
+  caseJudges?: Record<string, string>;
   cases: CaseResult[];
   passed: boolean;
   /**

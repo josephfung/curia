@@ -16,7 +16,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { calledTools, evaluateCheck, leafChecks } from './assertions.js';
-import { formatPct, gateFailures, knownFailureLines, scoreCase, staleKnownFailures } from './gate.js';
+import { formatCaseLayers, formatPct, gateFailures, knownFailureLines, layerSummaryLines, scoreCase, staleKnownFailures } from './gate.js';
 import {
   acquireSuiteLock,
   createScenarioHarness,
@@ -25,6 +25,7 @@ import {
   type ScenarioHarness,
 } from './harness.js';
 import { createJudge, judgeRun, type Judge } from './judge.js';
+import { caseJudgeModel } from './judge-models.js';
 import { loadScenarioCases, resolveRunPlaceholders, selectRunCases } from './loader.js';
 import { describeError, fixtureSignalConversations, seedConflictKeys } from './seed.js';
 import { DEFAULT_CONCURRENCY, parseConcurrency, runConcurrently } from '../shared/case-scope.js';
@@ -405,9 +406,24 @@ async function main(): Promise<void> {
       ? await harness.stack.contactService.getContact(harness.stack.principalContactId)
       : undefined;
     const judge = createJudge(harness.stack.llmProviders, principal?.displayName, { logger: harness.stack.logger });
+    // A case or tag may name its own judge (#2556). Each is created here, before any paid
+    // call, so an unpriced model fails the run at boot rather than after its agents ran.
+    const judges = new Map<string, Judge>([[judge.model, judge]]);
+    const caseJudges: Record<string, string> = {};
+    for (const c of cases) {
+      const own = caseJudgeModel(c);
+      if (own === undefined || own === judge.model) continue;
+      caseJudges[c.name] = own;
+      if (!judges.has(own)) judges.set(own, createJudge(harness.stack.llmProviders, principal?.displayName, { model: own, logger: harness.stack.logger }));
+    }
+    const judgeFor = (c: ScenarioCase): Judge => judges.get(caseJudges[c.name] ?? judge.model)!;
     out(`   Model: ${model}`);
     out(`   Reasoning: ${reasoningLabel}`);
     out(`   Judge: ${judge.model} (OpenRouter)`);
+    for (const m of [...judges.keys()].filter(k => k !== judge.model)) {
+      const n = Object.values(caseJudges).filter(v => v === m).length;
+      out(`   Judge for ${n} case(s): ${m} (their judge_model or tag)`);
+    }
     if (cases.some(c => c.delegation === 'real')) {
       out(`   Real-delegation per-run timeout: ${Math.round(Math.max(RUN_TIMEOUT_MS, harness.delegationRunTimeoutMs) / 1000)}s (the longest delegate wait, plus a margin)`);
     }
@@ -503,7 +519,7 @@ async function main(): Promise<void> {
       }
       let rated: Awaited<ReturnType<typeof rateRuns>>;
       try {
-        rated = await rateRuns(scenario, runs, harness, judge);
+        rated = await rateRuns(scenario, runs, harness, judgeFor(scenario));
       } catch (e) {
         stopReason ??= `Rating '${scenario.name}' failed: ${describeError(e)}`;
         throw e;
@@ -519,7 +535,7 @@ async function main(): Promise<void> {
         const flag = result.criticalFailures.includes(b.behavior.id)
           ? (result.knownFailure ? 'KNWN' : 'FAIL')
           : b.passRate >= CRITICAL_PASS_THRESHOLD ? 'ok  ' : 'low ';
-        lines.push(`      ${flag} ${formatPct(b.passRate).padStart(4)}  ${b.behavior.id} [${b.behavior.weight}]`);
+        lines.push(`      ${flag} ${formatPct(b.passRate).padStart(4)}  ${b.behavior.id} [${b.behavior.weight}${b.behavior.layer ? `, ${b.behavior.layer}` : ''}]`);
         if (b.passRate < 1) {
           const firstMiss = b.ratings.find(r => r.rating !== 'PASS');
           if (firstMiss) lines.push(`             e.g. ${firstMiss.justification.slice(0, 220)}`);
@@ -574,6 +590,7 @@ async function main(): Promise<void> {
       autonomy: autonomyInForce,
       ...(Object.keys(caseAutonomy).length > 0 ? { caseAutonomy } : {}),
       runsPerCase: Object.fromEntries(results.map(r => [r.name, r.runs.length])),
+      ...(Object.keys(caseJudges).length > 0 ? { caseJudges } : {}),
       cases: results,
       passed: failures.length === 0,
       ...(filtered ? { filtered } : {}),
@@ -594,12 +611,19 @@ async function main(): Promise<void> {
     for (const r of results) {
       const status = r.criticalFailures.length === 0 ? 'PASS' : r.knownFailure ? 'KNWN' : 'FAIL';
       const retried = r.runs.reduce((n, run) => n + run.providerRetries.length, 0);
+      const layers = formatCaseLayers(r);
       out(
         `   ${status} ${formatPct(r.weightedScore).padStart(4)}  ${formatUsd(r.usage.total.estimatedCostUsd).padStart(7)}  ${r.name}` +
+        `${layers ? `  (${layers})` : ''}` +
         `${caseAutonomy[r.name] ? `  (autonomy ${caseAutonomy[r.name]})` : ''}` +
         `${r.knownFailure ? `  (known failure ${r.knownFailure.issue})` : ''}` +
         `${retried > 0 ? `  (${retried} provider retr${retried === 1 ? 'y' : 'ies'})` : ''}`,
       );
+    }
+    const layerLines = layerSummaryLines(results);
+    if (layerLines.length > 0) {
+      out('\n   Behavior layers (cases that mark them):');
+      for (const line of layerLines) out(`     ${line}`);
     }
     out(`\n   Commit:  ${suite.commit ?? '(unknown)'}`);
     if (suite.overlayCommit) out(`   Overlay: ${suite.overlayCommit}`);
