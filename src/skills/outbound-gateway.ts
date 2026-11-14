@@ -709,6 +709,8 @@ const POLICY_HOLD_REFUSALS: Record<PrincipalSendRefusal, boolean> = {
   thread_unreadable: false,
   principal_addresses_unreadable: false,
   provenance_unreadable: false,
+  // #2589: a contact lookup failed, not a rule; it counts as a hiccup like the reads above.
+  contacts_unreadable: false,
   // The principal's own settings, and deliberate send rules.
   setting_off: true,
   not_requested: true,
