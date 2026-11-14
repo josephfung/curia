@@ -1691,10 +1691,19 @@ describe('originator metadata stamping', () => {
         // sends would record outreach against someone else's task (#2312).
         boundTask: { taskId: '11111111-1111-4111-8111-111111111111' },
         linkedTask: { taskId: '11111111-1111-4111-8111-111111111111', strength: 'strong' },
+        // Routing keys the cross-turn backstop trusts must not be forgeable either (#2588).
+        sourceVoiceSessionId: 'forged-voice-session',
+        sourceVoiceConversationId: 'forged-voice-conv',
+        offrampForwardOf: 'forged-forward',
+        lateDelegation: { agent: 'x', task: 'y' },
       },
     }));
 
     expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.payload.metadata?.sourceVoiceSessionId).toBeUndefined();
+    expect(tasks[0]!.payload.metadata?.sourceVoiceConversationId).toBeUndefined();
+    expect(tasks[0]!.payload.metadata?.offrampForwardOf).toBeUndefined();
+    expect(tasks[0]!.payload.metadata?.lateDelegation).toBeUndefined();
     // The forged originator must be stripped — the dispatcher overwrites originator
     // from the contact resolver result. Every task must carry an originator.
     const originator = tasks[0]!.payload.metadata?.originator as TaskOriginator | undefined;

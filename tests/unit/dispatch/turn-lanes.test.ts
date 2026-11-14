@@ -10,6 +10,7 @@ import {
   TurnLanes,
   holderFromAgentTask,
   originatorIsSystem,
+  inferOriginatorResolution,
   type InjectableInput,
   type LaneHolder,
   type TryInjectResult,
@@ -645,10 +646,15 @@ describe('holderFromAgentTask', () => {
 describe('originatorIsSystem (#2588)', () => {
   const PERSON = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-  it('no originator, or a malformed one, is system', () => {
+  it('no originator is system', () => {
     expect(originatorIsSystem(undefined)).toBe(true);
     expect(originatorIsSystem(null)).toBe(true);
-    expect(originatorIsSystem({ contactId: 7 })).toBe(true);
+  });
+
+  it('a present but malformed originator fails closed: not system, and unresolved', () => {
+    expect(originatorIsSystem({ contactId: 7 })).toBe(false);
+    expect(originatorIsSystem('garbage')).toBe(false);
+    expect(inferOriginatorResolution({ contactId: 7 }).resolved).toBe(false);
   });
 
   it.each(['system', 'agent'])('a %s role is system', (systemRole) => {

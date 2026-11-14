@@ -106,6 +106,12 @@ function mergeTaskMetadata(
     ceoInitiated: undefined,          // strip legacy untrusted channel value (after all untrusted spreads)
     originator: undefined,            // strip untrusted channel value (after all untrusted spreads)
     delegationOrigin: undefined,      // strip untrusted task id — only delegate may stamp this (#1860)
+    // Routing keys the backstop's turn-activity registry reads (turn-activity.ts); only trusted
+    // internal publishers may stamp them (#2588).
+    sourceVoiceSessionId: undefined,
+    sourceVoiceConversationId: undefined,
+    offrampForwardOf: undefined,
+    lateDelegation: undefined,
     livePrincipal: undefined,         // defensive scrub — legacy alias; the real signal is the distinct payload field (#1126)
     liveTurn: undefined,              // defensive scrub — keep the real signal OFF the metadata bag so it can never be persisted (#1126)
     syntheticTurn: undefined,         // defensive scrub — same shape as liveTurn; a metadata bag must not be able to mark a human turn as Curia's (#1892)

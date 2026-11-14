@@ -1627,6 +1627,7 @@ export class ExecutionLayer {
       const contactService = this.contactService;
       const targets = await extractActionTargets(toolName, input, {
         principalContactId: this.principalIdentities[0]?.contactId,
+        agentContactId: this.agentContactId,
         isContact: async (id) => (contactService ? (await contactService.getContact(id)) !== undefined : false),
         // A calendar attendee names a person by address ({ email, name }), not by UUID.
         ...(contactService
@@ -3761,10 +3762,8 @@ export class ExecutionLayer {
     // Without cleanup, successful skill invocations leak timers that keep the
     // process alive during graceful shutdown.
     let timer: NodeJS.Timeout;
-    let timedOut = false;
     const timeoutPromise = new Promise<ToolResult>((_, reject) => {
       timer = setTimeout(() => {
-        timedOut = true;
         const err = new Error(`Tool '${toolName}' timed out after ${manifest.timeout}ms`);
         abort.abort(err);
         reject(err);
@@ -3873,8 +3872,10 @@ export class ExecutionLayer {
 
       return result;
     } catch (err) {
+      // A thrown error never proves the side effect did not happen: a handler can throw after
+      // it (a send, then a failed DB write). Only a RETURNED { success: false } is 'failed'.
       // A no-op when the handler already returned and a later step threw.
-      settleBackstopAction(timedOut ? 'unknown' : 'failed');
+      settleBackstopAction('unknown');
       const message = err instanceof Error ? err.message : String(err);
       skillLogger.error({ err }, 'Skill invocation failed');
       // Classify DB outages so the runtime can track them separately from the

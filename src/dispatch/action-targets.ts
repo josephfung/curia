@@ -114,6 +114,8 @@ export function collectCandidateValues(input: Record<string, unknown>): Candidat
 
 export interface ActionTargetDeps {
   principalContactId: string | undefined;
+  /** Curia's own agent contact; excluded the same way as the principal's. */
+  agentContactId?: string | undefined;
   isContact: (id: string) => Promise<boolean>;
   /** The contact an email address belongs to, if any. Without it, emails are ignored. */
   contactIdForEmail?: (email: string) => Promise<string | undefined>;
@@ -147,7 +149,8 @@ export async function extractActionTargets(
   const collected = collectCandidateValues(input);
   const { uuids, hosts, otherIds } = collected;
   const principal = deps.principalContactId?.toLowerCase();
-  const candidates = uuids.filter((u) => u !== principal);
+  const agent = deps.agentContactId?.toLowerCase();
+  const candidates = uuids.filter((u) => u !== principal && u !== agent);
   const excluded = deps.excludedEmails;
   const emails = deps.contactIdForEmail
     ? collected.emails.filter((e) => !(excluded?.has(e) ?? false))
@@ -187,7 +190,7 @@ export async function extractActionTargets(
   const seenContacts = new Set<string>();
   const addContact = (id: string): void => {
     const key = id.toLowerCase();
-    if (key === principal || seenContacts.has(key)) return;
+    if (key === principal || key === agent || seenContacts.has(key)) return;
     seenContacts.add(key);
     contactIds.push(key);
   };

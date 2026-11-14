@@ -30,6 +30,13 @@ describe('extractActionTargets', () => {
     expect(t).toEqual([{ kind: 'contact', value: X }]);
   });
 
+  it("Curia's own agent contact id is excluded like the principal's", async () => {
+    const A = '55555555-5555-4555-8555-555555555555';
+    const withAgent = { ...deps, agentContactId: A, isContact: async (id: string) => contacts.has(id) || id === A };
+    const t = await extractActionTargets('email-send', { recipient: A, cc: X }, withAgent);
+    expect(t).toEqual([{ kind: 'contact', value: X }]);
+  });
+
   it('url becomes its host without www', async () => {
     const t = await extractActionTargets('web-fetch', { url: 'https://www.cal.com/alan/30min' }, deps);
     expect(t).toEqual([{ kind: 'site', value: 'cal.com' }]);
