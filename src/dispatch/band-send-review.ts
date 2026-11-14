@@ -22,6 +22,10 @@
 //                                       thread" is only what every recipient received (the
 //                                       gateway filters it). A judge failure or a malformed
 //                                       answer holds, never bounces, even with personal data.
+//   high-stakes-copy (autonomous     → hold, at every band and under any stakes ceiling (#2589,
+//     mailbox, someone newly copied)    ADR-062 rule 12): the answered message newly copied
+//                                       legal, HR, the board or someone senior to its sender.
+//                                       Off-thread leads when both hold. Fails closed like it.
 //   speaks as principal              → by its stakes (#2473): routine sends at 80+, a commitment
 //                                       at 90+, financial or legal never; below that, hold. An
 //                                       autonomous principal-mailbox send (#2474) always speaks as
@@ -90,7 +94,7 @@ import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 import { replyTargetEvidence, reportEvidence, threadEvidence, type CollectedEvidence, type SendEvidenceCollector } from '../autonomy/send-evidence.js';
 import { describePiiLabels, normalizeCounterparty, type DisclosureDecisionRow } from '../autonomy/disclosure-decisions.js';
 import type {
-  BriefAnswers, BriefDetectedItem, BriefQuestion, BriefVerdict, DisclosureRuling, SendAuthority, SendStakes,
+  BriefAnswers, BriefDetectedItem, BriefQuestion, BriefVerdict, CopiedParty, DisclosureRuling, SendAuthority, SendStakes,
 } from '../autonomy/judge-brief.js';
 import type { ContactTier } from '../contacts/types.js';
 import { isSpotCheckOrAbove, type FailOpenLimiter } from '../autonomy/band-policy.js';
@@ -128,10 +132,17 @@ const ORIGIN_UNRESOLVED_REASON = 'Held for the principal: the message that start
 const OFF_THREAD_REASON = 'Held for the principal: it shares information that isn\'t on the thread, and Curia doesn\'t pass on new information without the principal.';
 const STAKES_UNREVIEWED_REASON = 'Held for the principal: the reviewer was unavailable, so what this message commits the principal to is unrated and treated as financial or legal. Stakes: financial or legal (unrated).';
 
+/**
+ * #2589 (ADR-062 rule 12): the answered message newly copied legal, HR, the board or someone
+ * senior to its sender. The principal decides how to answer a matter its sender escalated.
+ */
+const HIGH_STAKES_COPY_REASON = 'Held for the principal: the message it answers newly copies someone from legal, HR or the board, or someone senior to its sender, so the principal decides how to answer.';
+
 /** The principal-facing words for a review finding on an autonomous reply (#2474 addendum R3). */
 const PLAIN_REVIEW_REASON: Readonly<Record<string, string>> = {
   'ungrounded-claim': "It says things about the principal that Curia couldn't confirm.",
   'unneeded-disclosure': "It includes details the reply didn't need.",
+  'high-stakes-copy': 'The message it answers newly copies legal, HR, the board or someone senior.',
 };
 const PLAIN_REVIEW_FALLBACK = "Curia's review wasn't confident enough to send it.";
 
@@ -155,6 +166,7 @@ export const BAND_RULES = {
   pii: 'pii-not-authorized',
   token: 'redaction-token',
   offThread: 'off-thread',
+  highStakesCopy: 'high-stakes-copy',
 } as const;
 
 export interface BandReviewInput {
@@ -199,6 +211,12 @@ export interface BandReviewInput {
    * `off-thread` judges the reply against. Missing reads as an empty thread (fail closed).
    */
   threadMessages?: ReadonlyArray<{ at?: string; text: string }>;
+  /**
+   * Autonomous principal mailbox only (#2589): the answered message's sender and the people it
+   * newly copied who this reply goes to, with their contact facts. `high-stakes-copy` is asked
+   * only when `newlyCopied` is non-empty.
+   */
+  copied?: { sender: CopiedParty | null; newlyCopied: readonly CopiedParty[] };
 }
 
 /**
@@ -307,6 +325,11 @@ export class BandSendReview {
       this.deps.logger.error({ conversationId: input.conversationId }, 'band review: verdict does not answer off-thread — treating as a reviewer failure');
       verdict = { ok: false, failure: 'malformed' };
     }
+    if (verdict.ok && questions.includes('high-stakes-copy') && typeof verdict.highStakesCopy !== 'boolean') {
+      // Fail closed, as off-thread (#2589): asked only on an autonomous send, which is stakes-gated, so this holds.
+      this.deps.logger.error({ conversationId: input.conversationId }, 'band review: verdict does not answer high-stakes-copy — treating as a reviewer failure');
+      verdict = { ok: false, failure: 'malformed' };
+    }
 
     if (!verdict.ok) {
       if (own.length === 0 && !hasToken) {
@@ -374,6 +397,14 @@ export class BandSendReview {
       const quoteRulings = askedItems && quoted.every((q) => askedItems.includes(q)) ? rulings : undefined;
       const quote = await this.piiOutcome(input, quoted, quoteRulings, asked, false, prior !== undefined);
       decision = quote.kind === 'send' ? combine(base, quote) : withoutQuote(base, quoted);
+    }
+    if (questions.includes('high-stakes-copy') && verdict.highStakesCopy === true) {
+      // #2589 (ADR-062 rule 12): a sender who newly looped in legal, HR, the board or someone
+      // senior has escalated; the principal answers that, at every band and under any ceiling.
+      // TODO(#2589): deliberately strict to start. Revisit once we see how often it fires; it may
+      // be loosened (e.g. hold only above a stakes rating, or only for legal and HR).
+      this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel, score: input.score, other: decision.kind }, 'band review: held — the answered message newly copies someone high-stakes');
+      decision = leadingHold(decision, BAND_RULES.highStakesCopy, HIGH_STAKES_COPY_REASON);
     }
     if (questions.includes('off-thread') && verdict.offThread === true) {
       // #2474 (design D10): no score, ceiling or rewrite makes new information an autonomous
@@ -705,7 +736,12 @@ export class BandSendReview {
     // definition, so that question is not asked (review() sets it); stakes still is.
     // `off-thread` (#2474, design D10) is asked here only: a principal-directed send may share
     // what the principal chose to.
-    if (isAutonomousMailbox(input)) return ['purpose', 'stakes', 'grounding', 'necessity', 'off-thread'];
+    // `high-stakes-copy` (#2589) only when the answered message newly copied someone this reply
+    // goes to: with no one new, there is nothing for it to judge.
+    if (isAutonomousMailbox(input)) {
+      const asked: BriefQuestion[] = ['purpose', 'stakes', 'grounding', 'necessity', 'off-thread'];
+      return (input.copied?.newlyCopied.length ?? 0) > 0 ? [...asked, 'high-stakes-copy'] : asked;
+    }
     return input.principalDirected ? ['grounding'] : ALL_QUESTIONS;
   }
 
@@ -761,6 +797,8 @@ export class BandSendReview {
         ...(principalDecisions.length > 0 ? { principalDecisions } : {}),
         // Only with the question that reads it (#2474). No thread reads as empty: fail closed.
         ...(questions.includes('off-thread') ? threadEvidence(input.threadMessages ?? []) : {}),
+        // Only with the question that reads it (#2589).
+        ...(questions.includes('high-stakes-copy') && input.copied ? { copied: input.copied } : {}),
       },
       conversationId: input.conversationId ?? 'system',
       ...(input.senderProfile ? { senderProfile: input.senderProfile } : {}),
@@ -896,14 +934,22 @@ function isAutonomousMailbox(input: BandReviewInput): boolean {
  * off-thread only.
  */
 function offThreadHold(d: BandReviewDecision): BandReviewDecision {
+  return leadingHold(d, BAND_RULES.offThread, OFF_THREAD_REASON);
+}
+
+/**
+ * A hold whose reason leads, every other finding following in plain words (as offThreadHold
+ * describes). Used for off-thread and, since #2589, a high-stakes copy.
+ */
+function leadingHold(d: BandReviewDecision, rule: string, lead: string): BandReviewDecision {
   const others = d.kind === 'send' ? [] : [...d.findings, ...(d.kind === 'hold' ? [] : d.heldBeside ?? [])];
   const also = [...new Set(others.map((f) => {
     const stakesAt = f.rule === BAND_RULES.speaksAsPrincipal ? f.detail.indexOf('Stakes: ') : -1;
     const said = stakesAt >= 0 ? f.detail.slice(stakesAt).trim() : plainReviewReasons([f.rule])[0]!;
     return /[.!?…]$/.test(said) ? said : `${said}.`;
   }))];
-  const reason = [OFF_THREAD_REASON, ...also].join(' ');
-  return { kind: 'hold', reason, findings: [{ rule: BAND_RULES.offThread, detail: OFF_THREAD_REASON }, ...others] };
+  const reason = [lead, ...also].join(' ');
+  return { kind: 'hold', reason, findings: [{ rule, detail: lead }, ...others] };
 }
 
 /** A bounce with a personal-details finding: the drafter must rewrite without an item (#2333). */
