@@ -34,6 +34,16 @@ export interface ToolCall {
   /** `result.data` on success; null on failure or when the data is not an object. */
   data: Record<string, unknown> | null;
   ok: boolean;
+  /**
+   * Set on a failed call a policy guard held or refused by design (#2587): its result
+   * carried errorType POLICY_HOLD. Described as held for the principal, never as a failure.
+   */
+  held?: boolean;
+}
+
+/** The line for a call that did not happen: held for the principal (#2587), or a failure. */
+export function notDoneText(attempt: string, held: boolean | undefined): string {
+  return held === true ? `didn't ${attempt}: held for you` : `couldn't ${attempt}`;
 }
 
 export interface DescribeContext {
@@ -828,7 +838,7 @@ export function describeToolCall(call: ToolCall, ctx: DescribeContext): ToolDesc
     return { prominence: d.prominence, text, ...base };
   }
   const attempt = d.attempt?.(call, ctx) ?? `run ${call.toolName}`;
-  return { prominence: d.prominence, text: `couldn't ${attempt}`, ...base };
+  return { prominence: d.prominence, text: notDoneText(attempt, call.held), ...base };
 }
 
 /** "drafted a reply" / "drafted 3 replies". */

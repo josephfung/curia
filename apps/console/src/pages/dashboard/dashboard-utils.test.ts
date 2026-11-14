@@ -259,12 +259,25 @@ describe('fetchStats', () => {
     done: { current: 12, previous: 9 },
     openTasks: { total: 5, overdue: 2 },
     hiccups: { current: 1, byDay: [0, 1] },
+    held: { current: 3 },
     handledSinceYesterday: 4,
   };
 
   it('reads the open-task counts', async () => {
     vi.stubGlobal('fetch', mockFetch(200, body));
     expect((await fetchStats()).openTasks).toEqual({ total: 5, overdue: 2 });
+  });
+
+  it('reads the held-for-you count apart from the hiccups (#2587)', async () => {
+    vi.stubGlobal('fetch', mockFetch(200, body));
+    const stats = await fetchStats();
+    expect(stats.held).toEqual({ current: 3 });
+    expect(stats.hiccups.current).toBe(1);
+  });
+
+  it('throws when the held count is missing rather than showing a zero', async () => {
+    vi.stubGlobal('fetch', mockFetch(200, { ...body, held: undefined }));
+    await expect(fetchStats()).rejects.toThrow(/unexpected response/);
   });
 
   it('throws when open tasks are missing rather than showing a zero', async () => {

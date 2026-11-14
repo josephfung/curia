@@ -578,6 +578,79 @@ describeIf('briefing service against Postgres', () => {
       client.release();
     }
   });
+
+  it('keeps policy holds out of the hiccups and counts them as held for you (#2587)', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+      const now = await emptyFortnight(client);
+      const activity = new ActivityService({
+        auditLogRepo: new AuditLogRepo(client as unknown as pg.Pool, logger),
+        contactService: {
+          getContact: async () => null,
+          findContactBySystemRole: async () => null,
+          resolveByChannelIdentity: async () => null,
+        } as unknown as ConstructorParameters<typeof ActivityService>[0]['contactService'],
+        officeTimezone: 'UTC',
+        logger,
+      });
+      const bus = { publish: async () => {} } as unknown as EventBus;
+      const service = new BriefingService({
+        pool: asPool(client),
+        actionLogRepo: new ActionLogRepo(client as unknown as pg.Pool, logger),
+        taskRepo: new TaskRepo(client as unknown as pg.Pool, bus, logger),
+        contactService: { findContactBySystemRole: async () => null },
+        activity,
+        officeTimezone: 'UTC',
+        logger,
+      });
+
+      // One job per case, an hour apart, newest last. Each call is a visible describer.
+      let minute = 0;
+      const at = () => new Date(now.getTime() - 5 * 3_600_000 + (minute++) * 60_000);
+      const archived = { outcome: 'success', result: { success: true, data: {} } };
+      const held = { outcome: 'failure', result: { success: false, error: 'Held for the principal.', errorType: 'POLICY_HOLD' } };
+      const broke = { outcome: 'failure', result: { success: false, error: 'Nylas 503' } };
+      const job = async (agentId: string, calls: ReadonlyArray<{ tool: string; outcome: string; result: Record<string, unknown> }>) => {
+        const root = await seedAudit(client, { timestamp: at(), eventType: 'agent.task', payload: { agentId } });
+        for (const call of calls) {
+          const invoke = await seedAudit(client, { timestamp: at(), eventType: 'tool.invoke', parentEventId: root, payload: { toolName: call.tool, input: {} } });
+          await seedAudit(client, { timestamp: at(), eventType: 'tool.result', parentEventId: invoke, outcome: call.outcome, payload: { result: call.result } });
+        }
+        minute += 60;
+        return root;
+      };
+      const holdOnly = await job('ceo-inbox', [{ tool: 'email-send', ...held }]);
+      const failureOnly = await job('ceo-inbox', [{ tool: 'email-send', ...broke }]);
+      const holdAndSuccess = await job('ceo-inbox', [{ tool: 'email-archive', ...archived }, { tool: 'email-send', ...held }]);
+      const failureAndSuccess = await job('ceo-inbox', [{ tool: 'email-archive', ...archived }, { tool: 'email-send', ...broke }]);
+
+      const stats = await service.stats(now);
+      const histogram = await service.histogram(now);
+      const today = histogram.days.find((day) => day.key === localDayKey(now, 'UTC'));
+      // Only the two jobs with a real failure are hiccups; the holds are successes.
+      expect(today).toMatchObject({ total: 4, hiccups: 2 });
+      expect(today?.byOutcome).toEqual({ success: 2, partial: 1, failed: 1 });
+      expect(stats.hiccups.current).toBe(2);
+      // Still visible: both jobs with a hold count as held for you.
+      expect(stats.held.current).toBe(2);
+
+      const hiccups = await service.hiccups(now);
+      expect(hiccups.total).toBe(2);
+      expect(hiccups.items.map((item) => item.id)).toEqual([failureAndSuccess, failureOnly]);
+
+      // The feed agrees and says what was held, not that it failed.
+      const feed = await activity.listByIds([holdOnly, holdAndSuccess], now);
+      const byId = new Map(feed.map((item) => [item.id, item]));
+      expect(byId.get(holdOnly)?.outcome).toBe('success');
+      expect(byId.get(holdOnly)?.headline).toMatch(/^didn't email .*: held for you$/);
+      expect(byId.get(holdAndSuccess)?.outcome).toBe('success');
+      expect(byId.get(holdAndSuccess)?.details.some((line) => line.endsWith(': held for you'))).toBe(true);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+  });
 });
 
 async function emptyFortnight(client: pg.PoolClient): Promise<Date> {

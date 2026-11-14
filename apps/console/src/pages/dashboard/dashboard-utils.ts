@@ -598,6 +598,8 @@ export interface StatsData {
   /** Open principal-owned tasks, any open status, and how many are past due. */
   openTasks: { total: number; overdue: number };
   hiccups: { current: number; byDay: number[] };
+  /** Jobs in the last 7 days where a policy guard held something for the principal (#2587). Not hiccups. */
+  held: { current: number };
   handledSinceYesterday: number;
 }
 
@@ -677,6 +679,7 @@ export async function fetchStats(signal?: AbortSignal): Promise<StatsData> {
   const done = requireRecord(data['done'], '/api/dashboard/stats done');
   const openTasks = requireRecord(data['openTasks'], '/api/dashboard/stats open tasks');
   const hiccups = requireRecord(data['hiccups'], '/api/dashboard/stats hiccups');
+  const held = requireRecord(data['held'], '/api/dashboard/stats held');
   const byDay = requireArray<number>(hiccups['byDay'], '/api/dashboard/stats hiccups');
   if (byDay.some((n) => typeof n !== 'number')) {
     throw new Error('/api/dashboard/stats hiccups returned an unexpected response');
@@ -702,6 +705,7 @@ export async function fetchStats(signal?: AbortSignal): Promise<StatsData> {
       overdue: requireNumber(openTasks['overdue'], '/api/dashboard/stats open tasks'),
     },
     hiccups: { current: requireNumber(hiccups['current'], '/api/dashboard/stats hiccups'), byDay },
+    held: { current: requireNumber(held['current'], '/api/dashboard/stats held') },
     handledSinceYesterday: requireNumber(data['handledSinceYesterday'], '/api/dashboard/stats'),
   };
 }
