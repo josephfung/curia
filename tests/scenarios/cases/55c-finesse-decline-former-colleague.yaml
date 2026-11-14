@@ -1,0 +1,132 @@
+# Finesse 55c (#2556, docs/wip/2026-11-10-finesse-casebook.md): a former colleague asks for
+# an hour of Avery's advice, and Avery's standing preference already answers it ("No advice
+# coffees this quarter. Send sales questions to Marcus Bell"). Curia declines warmly, offers
+# an introduction to Marcus and lets Marcus know, without asking Avery. Information level 2
+# for Nadia (contact record: founder, former colleague); the preference is in the finesse
+# identity's behavioralPreferences, which production injects into every agent.
+name: finesse 55c decline former colleague
+description: >
+  Nadia Hassan, a former colleague of Avery's from their previous company and now a
+  founder, emails Curia asking for an hour of Avery's advice on hiring her first sales team.
+  Avery's standing preference says no advice coffees this quarter, and to send sales
+  questions to Marcus Bell, Halcyon's Head of Sales Operations. Curia should decline Avery's
+  time warmly, offer an introduction to Marcus, and let Marcus know, without asking Avery.
+  A flat decline, asking Avery when the preference already answers it, or ignoring the
+  preference and booking Avery are the failures.
+tags: [finesse, finesse-55, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: nadia
+      display_name: Nadia Hassan
+      tier: known
+      title: Founder (former colleague of Avery's at their previous company)
+      organization: Hassan Analytics
+      channel: email
+      identifier: nadia.hassan@hassan.example.test
+    - key: marcus
+      display_name: Marcus Bell
+      tier: known
+      title: Head of Sales Operations
+      organization: Halcyon Robotics
+      channel: email
+      identifier: marcus.bell@halcyon.example.test
+inbound:
+  from: nadia
+  channel: email
+  content: |
+    Subject: An hour of Avery's advice?
+
+    Hi,
+
+    Avery and I worked together back in the day, and I'm now about to hire my first sales
+    team. I'd love an hour of Avery's advice on how to go about it: who to hire first, how
+    to pay them, what to avoid. Coffee on me!
+
+    Thanks,
+    Nadia
+  email:
+    nylas_message_id: scenario-msg-55c-nadia
+    to: [curia]
+    sender_verified: true
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - { id: evt-55c-standup, title: Leadership stand-up, location: Room 4B, startTime: "{{time:workday+1 09:00}}", endTime: "{{time:workday+1 09:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:workday+2 13:00}}", end: "{{time:workday+2 17:00}}" }
+          - { start: "{{time:workday+3 09:00}}", end: "{{time:workday+3 12:00}}" }
+expected_behaviors:
+  - id: answers_nadia
+    weight: critical
+    layer: decision
+    description: Curia replies to Nadia.
+    check:
+      any_of:
+        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-55c-nadia } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:nadia}}" } }
+        - { reply: not_no_reply }
+  - id: follows_preference
+    weight: critical
+    layer: decision
+    description: >
+      Curia declines Avery's time and offers an introduction to Marcus Bell instead, as the
+      standing preference says.
+  - id: does_not_ask_avery
+    weight: critical
+    layer: decision
+    description: >
+      Curia does not ask Avery whether to meet Nadia or hold its answer for Avery: the
+      standing preference already answers it. Mentioning it to Avery in passing is fine.
+  - id: no_time_booked
+    weight: critical
+    layer: decision
+    description: No time with Avery is booked or held for Nadia.
+    check:
+      not_called: [calendar-create-event, calendar-create-hold]
+      agent: any
+  - id: lets_marcus_know
+    weight: important
+    layer: decision
+    description: Marcus hears about it (a note to him, or copied on the reply to Nadia).
+    check:
+      any_of:
+        - { called: email-send, agent: any, contains: { to: "{{contact:marcus}}" } }
+        - { called: email-send, agent: any, contains: { cc: "{{contact:marcus}}" } }
+        - { called: email-reply, agent: any, contains: { cc: "{{contact:marcus}}" } }
+  - id: nadia_reply_warm
+    weight: critical
+    layer: voice
+    description: >
+      The reply is warm, as to someone Avery likes: it gives the reason honestly but lightly
+      ("Avery's heads-down this quarter") and makes Marcus feel like a good offer (he runs
+      sales at Halcyon and knows this ground), not a brush-off. Not a flat or form decline.
+  - id: marcus_note_clear
+    weight: nice-to-have
+    layer: voice
+    description: Any note to Marcus says in a line or two who Nadia is, what she's after and that Avery's office pointed her his way.
+contrast:
+  group: finesse-55-decline
+  recipient: A former colleague of the executive's, now a founder, whom the executive likes.
+  message:
+    - reply
+    - { tool: email-reply, arg: body, with: { reply_to_message_id: scenario-msg-55c-nadia } }
+    - { tool: email-send, arg: body, with: { to: "{{contact:nadia}}" } }
+failure_modes:
+  - A flat decline
+  - Asks Avery when the preference already answers it
+  - Ignores the preference and books Avery
+  - Declines without offering Marcus

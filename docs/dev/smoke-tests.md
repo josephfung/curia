@@ -103,7 +103,9 @@ To see the real figure, note OpenRouter's credit balance (or the activity page) 
 pnpm rejudge --judge google/gemini-3.1-flash-lite tests/smoke/results/<run>.json tests/scenarios/results/<run>.json
 ```
 
-It re-judges every judged case (scenario runs too), prints how many verdicts and ratings match, lists every verdict change with both judges' reasons, and prices the candidate's calls. A new judge needs the same pass/fail verdict on at least 95% of cases, and every disagreement read by a person, before `JUDGE_MODEL` (`tests/scenarios/judge.ts`) changes.
+It re-judges every judged case (scenario runs too), prints how many verdicts and ratings match, lists every verdict change with both judges' reasons, and prices the candidate's calls. A new judge needs the same pass/fail verdict on at least 95% of cases, and every disagreement read by a person, before `JUDGE_MODEL` (`tests/scenarios/judge.ts`) changes. A judge for one group of cases only goes in `TAG_JUDGE_MODELS` (`tests/scenarios/judge-models.ts`) or a case's `judge_model` instead.
+
+`pnpm rejudge --from-cases tests/scenarios/results/<run>.json` answers a different question: what the same transcripts score once the cases' expected behaviors have been edited. See "Finesse cases" in `tests/scenarios/README.md`.
 
 ---
 

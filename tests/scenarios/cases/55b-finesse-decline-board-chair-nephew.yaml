@@ -1,0 +1,134 @@
+# Finesse 55b (#2556, docs/wip/2026-11-10-finesse-casebook.md): the board chair's nephew asks
+# for Avery's advice. Declining reflects on Catherine, so Curia asks Avery first with a
+# recommendation. Avery's scripted answer (the `then:` turn) agrees to a 20-minute call, and
+# the reply to Ethan is scored on voice. The "ask first" twin of 55a and 55c. Information
+# level 1: the email itself says who he is; Catherine's contact record says Chair of the
+# Board. Ethan has no title or notes on file.
+#
+# Ethan is seeded known-tier so the case tests the decision, not unknown-sender handling.
+name: finesse 55b decline board chair nephew
+description: >
+  Ethan Whitfield emails Curia: his aunt, Catherine Whitfield (Chair of Halcyon's board),
+  suggested he reach out, and he'd love 30 minutes of Avery's advice on breaking into
+  robotics. Declining without asking would reflect on Catherine, and booking without asking
+  spends Avery's time. Curia should ask Avery first with a recommendation (a 20-minute call,
+  say, or an introduction to someone on the team) and hold its answer to Ethan. Avery then
+  agrees to a 20-minute call next week, and Curia replies warmly to Ethan with times.
+tags: [finesse, finesse-55, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: ethan
+      display_name: Ethan Whitfield
+      tier: known
+      channel: email
+      identifier: ethan.whitfield@whitfield.example.test
+    - key: catherine
+      display_name: Catherine Whitfield
+      tier: known
+      title: Chair of the Board
+      organization: Halcyon Robotics
+      channel: email
+      identifier: catherine.whitfield@whitfield.example.test
+inbound:
+  from: ethan
+  channel: email
+  content: |
+    Subject: Introduction via Catherine Whitfield
+
+    Hello,
+
+    My aunt Catherine suggested I reach out. I graduated in mechanical engineering last
+    year and I'm trying to break into robotics. I'd love 30 minutes of Avery's advice on
+    how to get started, whenever might suit.
+
+    Many thanks,
+    Ethan Whitfield
+  email:
+    nylas_message_id: scenario-msg-55b-ethan
+    to: [curia]
+    sender_verified: true
+  # Avery's answer, as a turn of its own. It names Ethan, since it arrives on a new
+  # conversation.
+  then:
+    content: Happy to do 20 minutes with Catherine's nephew Ethan by phone next week. Go ahead and offer him some times.
+    channel: email
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - { id: evt-55b-standup, title: Leadership stand-up, location: Room 4B, startTime: "{{time:workday+1 09:00}}", endTime: "{{time:workday+1 09:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-monday+7 16:00}}", end: "{{time:next-monday+7 17:00}}" }
+          - { start: "{{time:next-monday+8 12:30}}", end: "{{time:next-monday+8 13:30}}" }
+          - { start: "{{time:next-monday+10 15:00}}", end: "{{time:next-monday+10 16:30}}" }
+expected_behaviors:
+  - id: asks_avery
+    weight: critical
+    layer: decision
+    description: Before answering Ethan, Curia asks Avery.
+    check:
+      any_of:
+        - { principal_note: present }
+        - { called: report-to-principal, agent: any }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: asks_with_recommendation
+    weight: important
+    layer: decision
+    description: >
+      The question to Avery notes that Ethan is Catherine's nephew and recommends a course
+      (for example a 20-minute call, or an introduction to someone on the team), rather than
+      an open "what do you want to do?".
+  - id: nothing_decided_before_answer
+    weight: critical
+    layer: decision
+    description: >
+      Before Avery's answer (the principal's next message), Curia neither declines Ethan nor
+      offers or books Avery's time. A holding note to Ethan saying Curia will come back to him
+      is fine. The judge reads the order of calls and messages.
+  - id: no_booking_without_ethan
+    weight: important
+    layer: decision
+    description: No meeting with Ethan is put on the calendar before he picks a time.
+    check:
+      not_called: [calendar-create-event]
+      agent: any
+      contains: { attendees: ethan.whitfield@whitfield.example.test }
+  - id: replies_to_ethan
+    weight: critical
+    layer: decision
+    description: After Avery's answer, Curia writes to Ethan offering a 20-minute call.
+    check:
+      any_of:
+        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-55b-ethan } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:ethan}}" } }
+  - id: ethan_reply_warm
+    weight: critical
+    layer: voice
+    description: >
+      The reply to Ethan is warm and encouraging, acknowledges Catherine's suggestion
+      graciously, offers a 20-minute phone call with two or three times next week, and is
+      short. It is not cool or transactional (he is the board chair's nephew), and not
+      fawning.
+  - id: avery_question_brief
+    weight: nice-to-have
+    layer: voice
+    description: The note to Avery is two or three lines with the recommendation up front.
+failure_modes:
+  - Declines Ethan without asking Avery
+  - Books Avery's time without asking
+  - Asks Avery an open question with no recommendation
+  - A cool or transactional reply to the chair's nephew

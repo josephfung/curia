@@ -1,0 +1,101 @@
+# Finesse 51a (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery asks Curia to move
+# their Thursday 2pm and gives no reason. The meeting is a roadmap review with a direct
+# report, so Curia just does it: picks a new time from both calendars, moves the meeting and
+# tells Priya in a line or two, with no apology, no excuse and no "whatever works for you".
+# Information level 2: Priya's standing (VP Product at Halcyon) is on her contact record only.
+name: finesse 51a reschedules a direct report
+description: >
+  Avery (the principal) tells Curia "I need to move my Thursday 2pm with Priya. Something
+  came up." The Thursday 2pm is a roadmap review with Priya Nair, VP Product at Halcyon and
+  a direct report. Curia should pick a new time that is free on both calendars, move the
+  meeting itself and tell Priya briefly ("Avery needs to move Thursday's roadmap review.
+  I've put it in for Friday at 10. Shout if that doesn't work."). Asking Priya for her
+  availability with a list of options, apologizing, or giving an excuse are the failures.
+tags: [finesse, finesse-51, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: priya
+      display_name: Priya Nair
+      tier: known
+      title: VP Product (reports to Avery)
+      organization: Halcyon Robotics
+      channel: email
+      identifier: priya.nair@halcyon.example.test
+inbound:
+  from: principal
+  content: I need to move my Thursday 2pm with Priya. Something came up.
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 2
+        events:
+          - { id: evt-51a-roadmap, title: "Roadmap review: Avery / Priya", location: Avery's office, startTime: "{{time:next-thursday 14:00}}", endTime: "{{time:next-thursday 15:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: priya.nair@halcyon.example.test }] }
+          - { id: evt-51a-focus, title: "Focus: hiring plan", location: null, startTime: "{{time:next-thursday 10:00}}", endTime: "{{time:next-thursday 11:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-thursday+1 10:00}}", end: "{{time:next-thursday+1 12:00}}" }
+          - { start: "{{time:next-thursday+4 13:00}}", end: "{{time:next-thursday+4 16:00}}" }
+expected_behaviors:
+  - id: moves_the_meeting
+    weight: critical
+    layer: decision
+    description: Curia moves the roadmap review to a new time itself.
+    check:
+      called: calendar-update-event
+      agent: any
+      with: { eventId: evt-51a-roadmap }
+  - id: does_not_poll_priya
+    weight: critical
+    layer: decision
+    description: >
+      Curia picks the new time; it does not send Priya a list of options and ask what works
+      best for her, or hold the move until she answers. Saying "shout if that doesn't work"
+      is fine.
+  - id: does_not_ask_avery
+    weight: important
+    layer: decision
+    description: Does not ask Avery which time to pick or whether to go ahead. Avery said to move it.
+  - id: tells_priya
+    weight: important
+    layer: decision
+    description: Priya is told the meeting has moved (a message to her, beyond the updated invite).
+    check:
+      any_of:
+        - { called: email-send, agent: any, contains: { to: "{{contact:priya}}" } }
+        - { called: [signal-send, sms-send, slack-send], agent: any, contains: { recipient: "{{contact:priya}}" } }
+  - id: no_pointless_lookup
+    weight: nice-to-have
+    layer: decision
+    description: Does not search the web for a direct report.
+    check:
+      not_called: [web-search]
+      agent: any
+  - id: priya_note_voice
+    weight: critical
+    layer: voice
+    description: >
+      The message to Priya is one or two plain lines: Avery needs to move Thursday's roadmap
+      review, here is the new time, say if it doesn't work. No apology, no excuse or reason,
+      and no "whatever works best for you".
+contrast:
+  group: finesse-51-reschedule
+  recipient: A senior employee who reports directly to the executive.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:priya}}" } }
+    - { tool: slack-send, arg: message, with: { recipient: "{{contact:priya}}" } }
+failure_modes:
+  - Asks Priya for her availability with a list of options and "whatever works best for you"
+  - Apologizes to a direct report for a routine move
+  - Gives an excuse
+  - Asks Avery which time to pick

@@ -1,0 +1,111 @@
+# Finesse 54d (#2556, docs/wip/2026-11-10-finesse-casebook.md): a direct report is a day late
+# with a draft Avery needs. Curia nudges Priya directly, short and plain, with a new deadline
+# and the reason, rather than escalating to Avery first. Information level 2: Priya's contact
+# record says VP Product at Halcyon.
+#
+# Shape: a task wake. The casebook's "before Friday" is the board meeting three workdays out.
+name: finesse 54d nudge late direct report
+description: >
+  Priya Nair, VP Product and a direct report, was due to send Avery her draft of the board
+  deck yesterday, so Avery can review it before the board meeting. Nothing has arrived. The
+  check Curia set itself comes round. Curia should send Priya a short, direct nudge with a
+  new deadline (for example noon tomorrow) and the reason (Avery needs time to review before
+  the board meeting). Softening it until the deadline disappears, sounding like a reprimand,
+  or escalating to Avery first are the failures.
+tags: [finesse, finesse-54, task-wake]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: priya
+      display_name: Priya Nair
+      tier: known
+      title: VP Product
+      organization: Halcyon Robotics
+      channel: email
+      identifier: priya.nair@halcyon.example.test
+inbound:
+  from: task-wake
+  task:
+    id: 54d0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d
+    title: Board deck draft from Priya
+    intent: >
+      Make sure Avery has Priya Nair's draft of the board deck in time to review it before
+      the board meeting on {{day:workday+3}}.
+    notes:
+      - at: "{{time:today-7 10:00}}"
+        note: >
+          Priya agreed to send Avery her draft of the board deck by end of day
+          {{day:today-1}}. The board meets {{day:workday+3}}. Check it arrived; chase if not.
+      - at: "{{time:today 08:30}}"
+        note: Due yesterday. Nothing from Priya in Avery's inbox or mine.
+tool_stubs:
+  ceo-inbox-search:
+    - match: {}
+      return: { count: 0, messages: [] }
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - { id: evt-54d-board, title: Halcyon board meeting, location: Halcyon boardroom, startTime: "{{time:workday+3 09:00}}", endTime: "{{time:workday+3 12:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: catherine.whitfield@whitfield.example.test }, { email: david.okonkwo@ridgeline.example.test }] }
+  bullpen-read:
+    - match: {}
+      error: No bullpen thread with that ID exists
+  task-update:
+    - match: { task_id: 54d0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d }
+      return:
+        task_id: 54d0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d
+        title: Board deck draft from Priya
+        status: waiting
+        owner: curia
+        priority: 3
+        tags: []
+        updated_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
+expected_behaviors:
+  - id: nudges_priya
+    weight: critical
+    layer: decision
+    description: Curia nudges Priya directly.
+    check:
+      called: email-send
+      agent: any
+      contains: { to: "{{contact:priya}}" }
+  - id: no_escalation_first
+    weight: critical
+    layer: decision
+    description: >
+      Curia does not escalate to Avery before nudging Priya (no "Priya's late, shall I chase
+      her?"). Telling Avery afterwards that the nudge went out is fine.
+  - id: no_pointless_lookup
+    weight: nice-to-have
+    layer: decision
+    description: No web search on a direct report.
+    check:
+      not_called: [web-search]
+      agent: any
+  - id: priya_nudge_direct
+    weight: critical
+    layer: voice
+    description: >
+      The nudge is short and direct, as to a colleague: it names the board deck draft, gives
+      a specific new deadline (for example noon tomorrow) and the reason (Avery needs time to
+      review it before the board meeting). It is not softened until the deadline disappears
+      ("whenever you get a chance") and does not read like a reprimand.
+contrast:
+  group: finesse-54-nudge
+  recipient: A direct report who reports to the executive.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:priya}}" } }
+failure_modes:
+  - Softens it until the deadline disappears
+  - Sounds like a reprimand
+  - Escalates to Avery first

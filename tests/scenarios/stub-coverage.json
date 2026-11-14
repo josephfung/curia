@@ -1082,6 +1082,186 @@
     "availability covers the personal calendar too": {
       "unstubbed": null,
       "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 50a drops out of board update": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 50b drops out of board deep dive": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 50c drops out of one-on-one": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 50d drops out of vendor demo": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 51a reschedules a direct report": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 51b reschedules an agency": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 51c reschedules the board chair": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 51d reschedules an unknown vc": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 51e reschedules a friend": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 51f leaves the chair's meeting early": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 52a late to team stand-up": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 52b late to board chair one-on-one": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 52c late to largest customer": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 52d late to lunch with a friend": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 52e two minutes late to stand-up": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 53a ask time with direct report": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 53b ask time with prospective investor": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 53c ask time with prominent stranger": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 53d ask time with friend": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 53e ask time with peer ceo": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 54a nudge investor too soon": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 54b nudge investor with deadline": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 54c nudge late agency": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 54d nudge late direct report": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 54e nudge prospective investor": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 55a decline persistent salesperson": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 55b decline board chair nephew": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 55c decline former colleague": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 55d largest customer asks for time": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 56a decline conference panel": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 56b decline board chair gala": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 56c friend wedding invitation": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 57a ruth asks about sunday dinner": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 57b move ruth's visit": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 57c move parent-teacher conference": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 57d move contractor walk-through": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 57e ruth's birthday": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 58a board agenda with staff copied": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 58b customer follow-up with sales copied": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 58c dinner invitation to mixed guests": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 59a casual invite from lead investor": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 59b casual invite from board chair": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 59c casual invite from unknown vc": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 59d casual invite from friend": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 59e casual invite from salesperson": {
+      "unstubbed": null,
+      "reason": "New in #2556; not yet run (paid suite). The first run records coverage."
     }
   }
 }

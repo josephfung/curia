@@ -1,0 +1,94 @@
+# Finesse 50c (#2556, docs/wip/2026-11-10-finesse-casebook.md): the same sick note, and the
+# 2pm is Avery's own one-on-one with Tomás. Obviously just do it: cancel or move it without
+# asking Avery, tell Tomás it's handled, and mention it to Avery in passing. The "just do it"
+# twin of 50b's "ask first". Information level 1: the calendar says it all.
+name: finesse 50c drops out of one-on-one
+description: >
+  Tomás Herrera, a direct report, emails Curia that he is out sick on the next workday and
+  can't make the 2pm. That 2pm is Avery's weekly one-on-one with Tomás. Curia should cancel
+  it, or move it to the next good slot, without asking Avery; tell Tomás it's handled; and
+  mention it to Avery in passing. Asking Avery whether to cancel is a failure, as is leaving
+  the meeting on the calendar.
+tags: [finesse, finesse-50, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: tomas
+      display_name: Tomás Herrera
+      tier: known
+      title: Director of Engineering
+      organization: Halcyon Robotics
+      channel: email
+      identifier: tomas.herrera@halcyon.example.test
+inbound:
+  from: tomas
+  channel: email
+  content: |
+    Subject: Out sick {{weekday:workday+1}}
+
+    Feeling awful. I'll be out sick {{weekday:workday+1}}, so I can't make the 2pm. Sorry!
+
+    Tomás
+  email:
+    nylas_message_id: scenario-msg-50c-tomas
+    to: [curia]
+    sender_verified: true
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 2
+        events:
+          - { id: evt-50c-standup, title: Leadership stand-up, location: Room 4B, startTime: "{{time:workday+1 09:00}}", endTime: "{{time:workday+1 09:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: tomas.herrera@halcyon.example.test }, { email: priya.nair@halcyon.example.test }] }
+          - { id: evt-50c-1on1, title: "Avery / Tomás 1:1", location: Avery's office, startTime: "{{time:workday+1 14:00}}", endTime: "{{time:workday+1 14:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: tomas.herrera@halcyon.example.test }] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:workday+3 10:00}}", end: "{{time:workday+3 12:00}}" }
+          - { start: "{{time:workday+4 14:00}}", end: "{{time:workday+4 16:00}}" }
+expected_behaviors:
+  - id: handles_the_one_on_one
+    weight: critical
+    layer: decision
+    description: The one-on-one is cancelled or moved; it does not stay on the calendar for a day Tomás is out.
+    check:
+      any_of:
+        - { called: calendar-delete-event, agent: any, with: { eventId: evt-50c-1on1 } }
+        - { called: calendar-update-event, agent: any, with: { eventId: evt-50c-1on1 } }
+  - id: does_not_ask_avery
+    weight: critical
+    layer: decision
+    description: >
+      Does not ask Avery whether to cancel or move the one-on-one, and does not hold the
+      change for Avery's approval. Telling Avery afterwards is right.
+  - id: tells_tomas
+    weight: important
+    layer: decision
+    description: Tells Tomás it's handled.
+    check:
+      any_of:
+        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-50c-tomas } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:tomas}}" } }
+        - { reply: not_no_reply }
+  - id: avery_hears_in_passing
+    weight: nice-to-have
+    layer: decision
+    description: Avery is told in passing (a note, the day's summary or a short message), not asked.
+  - id: tomas_reply_voice
+    weight: important
+    layer: voice
+    description: >
+      The message to Tomás is one or two warm lines: it's handled (cancelled, or moved to a
+      named time) and "feel better". No formality, no questions about work.
+failure_modes:
+  - Asks Avery whether to cancel the one-on-one
+  - Leaves the one-on-one on the calendar
+  - A formal or long reply to a sick colleague

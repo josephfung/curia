@@ -1,0 +1,87 @@
+# Finesse 52e (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery will be two minutes
+# late to the stand-up. At most a one-line note to the group; saying nothing is fine.
+# Making a production of it (emails, apologies, a message to each person) is the failure:
+# the restraint twin of 52a. Information level 1: the request and the calendar say it all.
+name: finesse 52e two minutes late to stand-up
+description: >
+  Avery (the principal) tells Curia "Two minutes late to stand-up." The stand-up, starting in
+  five minutes, is Avery's weekly meeting with eight people from Halcyon's leadership team.
+  At most Curia sends a one-line note to the group; saying nothing is acceptable. Emails,
+  apologies or a message to each person are the failure.
+tags: [finesse, finesse-52]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - { key: priya, display_name: Priya Nair, tier: known, title: VP Product, organization: Halcyon Robotics, channel: email, identifier: priya.nair@halcyon.example.test }
+    - { key: tomas, display_name: Tomás Herrera, tier: known, title: Director of Engineering, organization: Halcyon Robotics, channel: email, identifier: tomas.herrera@halcyon.example.test }
+    - { key: marcus, display_name: Marcus Bell, tier: known, title: Head of Sales Operations, organization: Halcyon Robotics, channel: email, identifier: marcus.bell@halcyon.example.test }
+    - { key: elena, display_name: Elena Sorensen, tier: known, title: CFO, organization: Halcyon Robotics, channel: email, identifier: elena.sorensen@halcyon.example.test }
+    - { key: jordan, display_name: Jordan Reyes, tier: known, title: VP Marketing, organization: Halcyon Robotics, channel: email, identifier: jordan.reyes@halcyon.example.test }
+    - { key: wei, display_name: Wei Chen, tier: known, title: VP Operations, organization: Halcyon Robotics, channel: email, identifier: wei.chen@halcyon.example.test }
+    - { key: fatima, display_name: Fatima Osei, tier: known, title: Head of People, organization: Halcyon Robotics, channel: email, identifier: fatima.osei@halcyon.example.test }
+    - { key: liam, display_name: Liam O'Brien, tier: known, title: General Counsel, organization: Halcyon Robotics, channel: email, identifier: liam.obrien@halcyon.example.test }
+inbound:
+  from: principal
+  content: Two minutes late to stand-up.
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 2
+        events:
+          - id: evt-52e-standup
+            title: Weekly leadership stand-up
+            location: Room 4B
+            startTime: "{{at:now+5m}}"
+            endTime: "{{at:now+35m}}"
+            status: confirmed
+            busy: true
+            calendarId: cal-principal-work
+            participants:
+              - { email: priya.nair@halcyon.example.test }
+              - { email: tomas.herrera@halcyon.example.test }
+              - { email: marcus.bell@halcyon.example.test }
+              - { email: elena.sorensen@halcyon.example.test }
+              - { email: jordan.reyes@halcyon.example.test }
+              - { email: wei.chen@halcyon.example.test }
+              - { email: fatima.osei@halcyon.example.test }
+              - { email: liam.obrien@halcyon.example.test }
+          - { id: evt-52e-later, title: "Focus: board prep", location: null, startTime: "{{at:now+3h}}", endTime: "{{at:now+4h}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+expected_behaviors:
+  - id: no_production
+    weight: critical
+    layer: decision
+    description: >
+      At most one message goes out (a single note to the group); none is fine. Not a message
+      to each person.
+    check:
+      called: [email-send, signal-send, sms-send, slack-send]
+      agent: any
+      min: 0
+      max: 1
+  - id: does_not_ask_avery
+    weight: important
+    layer: decision
+    description: Does not ask Avery whether or what to tell the team.
+  - id: meeting_left_alone
+    weight: important
+    layer: decision
+    description: The stand-up is not moved or cancelled.
+    check:
+      not_called: [calendar-update-event, calendar-delete-event]
+      agent: any
+      with: { eventId: evt-52e-standup }
+  - id: one_line_if_any
+    weight: important
+    layer: voice
+    description: >
+      Any note to the group is a single line ("Avery will be a couple of minutes late") with
+      no apology. Curia's reply to Avery is a brief acknowledgement, not a fuss.
+failure_modes:
+  - Making a production of it (emails, apologies)
+  - A message to each person

@@ -1,0 +1,97 @@
+# Finesse 55a (#2556, docs/wip/2026-11-10-finesse-casebook.md): a vendor's account executive
+# asks for Avery's time for the third time in three weeks. Curia declines politely and
+# firmly without asking Avery, and leaves no door open. The "just do it" decline of task 55.
+# Information level 2: Kevin's contact record says Account Executive, CloudGrid. That Avery
+# ignored his two earlier emails is in the inbound itself (level 1).
+name: finesse 55a decline persistent salesperson
+description: >
+  Kevin Marsh, an account executive at CloudGrid (a vendor trying to sell to Halcyon), emails
+  Curia for the third time in three weeks asking for 30 minutes with Avery to "share how
+  CloudGrid is helping companies like Halcyon". Avery hasn't replied to the earlier two.
+  Curia should decline politely and firmly, without asking Avery, and route him elsewhere
+  only if a right person exists (none does here). Asking Avery, leaving the door open
+  ("maybe next quarter"), or rudeness are the failures.
+tags: [finesse, finesse-55]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: kevin
+      display_name: Kevin Marsh
+      tier: known
+      title: Account Executive
+      organization: CloudGrid
+      channel: email
+      identifier: kevin.marsh@cloudgrid.example.test
+inbound:
+  from: kevin
+  channel: email
+  content: |
+    Subject: Re: Re: 30 minutes with Avery?
+
+    Hi there,
+
+    Bumping this one more time, as I haven't heard back on my last two notes. I'd love 30
+    minutes with Avery to share how CloudGrid is helping companies like Halcyon cut their
+    infrastructure spend by up to 40%. Would any time next week work?
+
+    Best,
+    Kevin Marsh
+    Account Executive, CloudGrid
+  email:
+    nylas_message_id: scenario-msg-55a-kevin
+    to: [curia]
+    sender_verified: true
+expected_behaviors:
+  - id: declines_kevin
+    weight: critical
+    layer: decision
+    description: Curia replies to Kevin declining the meeting.
+    check:
+      any_of:
+        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-55a-kevin } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:kevin}}" } }
+        - { reply: not_no_reply }
+  - id: does_not_ask_avery
+    weight: critical
+    layer: decision
+    description: >
+      Curia does not ask Avery whether to take the meeting or hold its answer for Avery's
+      approval. A third unanswered pitch from a vendor is Curia's to decline. Mentioning it
+      to Avery in passing, as done, is fine.
+  - id: no_time_offered
+    weight: critical
+    layer: decision
+    description: No time with Avery is booked, held or offered.
+    check:
+      not_called: [calendar-create-event, calendar-create-hold]
+      agent: any
+  - id: no_bogus_handoff
+    weight: nice-to-have
+    layer: decision
+    description: >
+      Kevin is not handed to someone at Halcyon to keep the pitch alive; no one has asked
+      for it. Avery's standing preference about sales questions is about advice, not vendors.
+  - id: kevin_decline_voice
+    weight: critical
+    layer: voice
+    description: >
+      The decline is short, polite and firm: thanks him, says Avery won't take a meeting on
+      this, and that the team will be in touch if Halcyon looks at this area. It leaves no
+      door open ("maybe next quarter", "circle back later") and is not rude or sarcastic
+      about the repeated emails.
+contrast:
+  group: finesse-55-decline
+  recipient: An account executive at a vendor who is trying to sell to the company.
+  message:
+    - reply
+    - { tool: email-reply, arg: body, with: { reply_to_message_id: scenario-msg-55a-kevin } }
+    - { tool: email-send, arg: body, with: { to: "{{contact:kevin}}" } }
+failure_modes:
+  - Asks Avery whether to take the meeting
+  - Leaves the door open ("maybe next quarter")
+  - Rude about the repeated emails
+  - Books or offers time with Avery

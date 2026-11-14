@@ -1,0 +1,136 @@
+# Finesse 59c (#2556, docs/wip/2026-11-10-finesse-casebook.md): a casual invitation from
+# a VC Curia knows nothing about. Rina writes "Hey Avery, I'm in town Thursday. Coffee?" with
+# no context. Curia looks her up, finds she is a Partner at Foundry Peak Ventures, and asks
+# Avery with a recommendation, since a VC reaching out ahead of a raise matters. Any reply to
+# her is warm but professional: this would be a first meeting. Information level 4: only a
+# web search says who she is (her contact record has her name alone).
+#
+# As in 59a, Rina writes to Avery with Curia copied, so Curia sees it on a live turn.
+name: finesse 59c casual invite from unknown vc
+description: >
+  Rina Patel emails Avery (Curia copied): "Hey Avery, I'm in town Thursday. Coffee?" Avery has
+  never dealt with her and Curia has nothing on file. A web search shows she is a Partner at
+  Foundry Peak Ventures. Curia should look her up, record who she is, and ask Avery with a
+  recommendation (a VC reaching out ahead of the next round is worth meeting). Any reply to
+  Rina is warm but professional. Treating it as spam, declining without asking, or matching
+  her casual tone too closely is a miss.
+tags: [finesse, finesse-59, invitations, lookup]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    # Name only: who she is has to be looked up (information level 4).
+    - key: rina
+      display_name: Rina Patel
+      tier: unknown
+      kind: person
+      channel: email
+      identifier: rina.patel@foundrypeak.example.test
+inbound:
+  from: rina
+  channel: email
+  content: |
+    Subject: Coffee Thursday?
+
+    Hey Avery, I'm in town Thursday. Coffee?
+
+    Rina
+  email:
+    nylas_message_id: scenario-msg-59c-rina
+    to: [principal]
+    cc: [curia]
+    sender_verified: true
+tool_stubs:
+  web-search:
+    - match: {}
+      return:
+        count: 2
+        results:
+          - title: "Rina Patel, Partner | Foundry Peak Ventures"
+            url: https://foundrypeak.example.test/team/rina-patel
+            content: Rina Patel is a Partner at Foundry Peak Ventures, where she leads growth-stage investments in robotics and industrial automation. She sits on four company boards.
+            score: 0.93
+          - title: Foundry Peak Ventures closes $600M growth fund
+            url: https://news.example.test/foundry-peak-fund-iv
+            content: Foundry Peak Ventures has closed its fourth growth fund, with Partner Rina Patel leading its robotics practice and writing Series B and C checks.
+            score: 0.87
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - { id: evt-59c-staff, title: Staff meeting, location: Room 4B, startTime: "{{time:next-thursday 09:00}}", endTime: "{{time:next-thursday 10:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: priya.nair@halcyon.example.test }, { email: tomas.herrera@halcyon.example.test }] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-thursday 10:30}}", end: "{{time:next-thursday 12:00}}" }
+          - { start: "{{time:next-thursday 14:00}}", end: "{{time:next-thursday 16:00}}" }
+expected_behaviors:
+  - id: looks_her_up
+    weight: critical
+    layer: decision
+    description: Curia searches the web to find out who Rina is.
+    check:
+      called: web-search
+      agent: any
+  - id: records_firm
+    weight: important
+    layer: decision
+    description: What it found (Partner, Foundry Peak Ventures) is saved on her contact or in Curia's notes.
+    check:
+      any_of:
+        - { called: contact-update, agent: any, contains: { fields: "Foundry Peak" } }
+        - { called: contact-create, agent: any, contains: { notes: "Foundry Peak" } }
+        - { called: contact-create, agent: any, contains: { role: "Foundry Peak" } }
+        - { called: memory-store, agent: any, contains: { value: "Foundry Peak" } }
+  - id: asks_avery
+    weight: critical
+    layer: decision
+    description: Avery is asked whether to meet Rina.
+    check:
+      any_of:
+        - { principal_note: present }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: with_recommendation
+    weight: critical
+    layer: decision
+    description: >
+      The ask says who Rina is (Partner at Foundry Peak Ventures, growth-stage robotics) and
+      recommends meeting her, given the coming raise, with a time Thursday that's free. An
+      open "do you want to meet her?" with no context is a miss.
+  - id: not_spam_not_declined
+    weight: critical
+    layer: decision
+    description: Curia neither ignores the message as spam nor declines it without asking Avery.
+  - id: no_commitment_before_avery
+    weight: important
+    layer: decision
+    description: Curia does not confirm the coffee with Rina before Avery has said yes; a holding reply is fine.
+  - id: reply_professional
+    weight: critical
+    layer: voice
+    description: >
+      Any reply to Rina is warm but professional, as for a first meeting with a senior
+      investor: courteous, brief, no "Hey!" banter and no mirroring of her casual tone.
+contrast:
+  group: finesse-59-casual-invite
+  recipient: A venture capitalist the principal has never dealt with.
+  message:
+    - reply
+    - { tool: email-reply, arg: body }
+    - { tool: email-send, arg: body, with: { to: "{{contact:rina}}" } }
+    - { tool: ceo-inbox-draft-reply, arg: body }
+    - { tool: ceo-inbox-draft-compose, arg: body }
+failure_modes:
+  - Treats the message as spam
+  - Declines without asking Avery
+  - Matches her casual tone too closely
+  - Asks Avery without saying who she is

@@ -179,7 +179,8 @@ seeded rows, stubs, model calls and spend are found through its own case context
 4. **Clean up** every seeded row and the run's own conversation rows.
 5. **Rate:** apply each `check` in code and send the other behaviors to the judge, one run
    at a time. To try a cheaper judge on saved runs, see `pnpm rejudge` in
-   [docs/dev/smoke-tests.md](../../docs/dev/smoke-tests.md#concurrency-cost-and-provider-failures).
+   [docs/dev/smoke-tests.md](../../docs/dev/smoke-tests.md#concurrency-cost-and-provider-failures);
+   to score saved runs against edited case files, `pnpm rejudge --from-cases` (Finesse cases).
 
 ### Seeded state and the shared database
 
@@ -333,12 +334,19 @@ identity: style-brief-dry                 # optional; run-level office identity,
 autonomy: { score: 84, gating: band }     # optional; this case's autonomy, see Per-case fixtures
 through_gateway: true                     # optional; sends run production's review, see Sends through the gateway
 gated_tools: [calendar-create-event]      # optional, through_gateway only; these stubs answer only after the gates, see Gated stubs
+judge_model: vendor/model                 # optional; this case's judge, see Finesse cases
+contrast:                                 # optional; blind identification, see Finesse cases
+  group: finesse-51-reschedule
+  recipient: A direct report.
+  message: [{ tool: email-send, arg: body, with: { to: "{{contact:sam}}" } }]
 seed:
   contacts:                               # → {{contact:<key>}}
     - key: sam
       display_name: Sam Rivera
       tier: known                         # trusted | known | unknown
       kind: person                        # person | organization | automated
+      title: VP Product                   # optional profile field (#2556)
+      organization: Halcyon Robotics      # optional profile field (#2556)
       channel: email
       identifier: sam@example.test        # under a .test name (example.test, vendorco.test)
       # principal_wrote: true             # email only: the principal has mailed Sam (see below)
@@ -419,6 +427,7 @@ tool_stubs:
 expected_behaviors:
   - id: routes_to_owner
     weight: critical                      # critical | important | nice-to-have
+    layer: decision                       # optional; decision | voice (required in finesse cases)
     description: Delegates to ceo-inbox with the entry id.
     check:                                # omit to have the judge score it
       called: delegate                    # or: not_called: [..] | order: [a, b]
@@ -613,6 +622,88 @@ judge. Only content is `critical`: brevity must never drop a fact. 40a needs a p
 with a Signal identity in the database the run uses. The design, and the baseline the
 later tone & style PRs compare against, are in
 [docs/wip/2026-10-15-tone-and-style-design.md](../../docs/wip/2026-10-15-tone-and-style-design.md#measurement).
+
+## Finesse cases
+
+The finesse cases, 50a–59e (#2556, tag `finesse`), measure whether Curia makes the right
+call and uses the right voice for the person it is dealing with: a board chair, a direct
+report, a vendor, a friend, the principal's mother-in-law. They are written from the
+casebook, [docs/wip/2026-11-10-finesse-casebook.md](../../docs/wip/2026-11-10-finesse-casebook.md),
+which is the source of truth: review edits go into the casebook first, then the YAML.
+`tests/unit/scenarios/finesse-casebook-sync.test.ts` fails when a casebook case has no case
+file or a `5Xy-` case file has no casebook case. It checks ids only; a changed right call
+still needs a person to diff the two.
+
+```bash
+pnpm scenarios --tags finesse --model deepseek/deepseek-v4.1-flash
+```
+
+All of them run under the `finesse` identity fixture (the principal's standing preferences, in
+a neutral tone that does not coach the behavior under test), so they run as a group, like the
+style cases. They delegate for real by default (decided on #2556): the coordinator then learns
+who someone is the way production does, and a draft a specialist writes in the principal's
+voice can be scored. Every case pins `autonomy: { score: 84, gating: band }` so an "ask first"
+answer is not an artefact of the autonomy setting, and is `release_gate: false`.
+
+**Information levels.** Each case puts what Curia knows about the recipient at one level, so
+the results show whether Curia looks things up rather than only reacting when told:
+
+1. Stated in the request.
+2. On the contact record only: seed the contact's `title` and `organization`.
+3. In Curia's notes only: stub `memory-query`.
+4. Discoverable only by looking it up: no record, a stubbed `web-search`, and checks that
+   Curia searched and saved what it found (`contact-create` / `contact-update`). A pointless
+   search (a direct report) is checked with `not_called: [web-search]`.
+5. Implied by an earlier thread: stub the principal's mail history (`ceo-inbox-search`,
+   `ceo-inbox-read`).
+
+**Behavior layers.** Each behavior is marked `layer: decision` (act, act and inform, ask
+first, or do nothing; and whether Curia or the principal sends) or `layer: voice` (how the
+messages read). The loader refuses a finesse case with an unmarked behavior. Each case result
+carries per-layer scores and critical failures (`layers` in the results JSON), the console
+shows them on the case's summary line, and the summary adds a line per layer across cases. A
+perfectly worded message that should never have been sent shows as a decision failure.
+
+**Judge.** A case's `judge_model`, or its tag's entry in `TAG_JUDGE_MODELS`
+(`judge-models.ts`), picks its judge; every other case keeps the suite default
+(`JUDGE_MODEL`, gpt-4o). Each judge is created at boot, so a model with no priced entry in the
+model registry fails the run before any paid call. Results list the cases off the default
+under `caseJudges`. The finesse judge is chosen by agreement with human grades on the pilot
+run (#2556); until then the tag has no entry.
+
+**Blind identification.** A case's `contrast` block puts it in a group with the other cases
+of its task that differ only in the recipient. `recipient` says who the person is to the
+principal, with no name and nothing about the situation (the messages name people, and a
+shared detail would let the judge match on content instead of voice). `message` lists where
+the case's message is: `reply`, or `{ tool, arg, with? }`, the run's last matching call (its
+`with` placeholders resolve per run). After every case is scored, `blind-id.ts` takes one
+run's message from each case in the group, and the judge matches messages to recipient
+descriptions: once in a seeded shuffle, once reversed, to cancel position bias. A run that
+wrote no message (a case whose right call is not to write) sits that trial out, and a case
+with no message in any trial is named in the report. Only a complete one-to-one answer is
+scored; anything else, or a failed call, is a judge error that counts in neither the hits nor
+the total. Results carry `contrastGroups` (accuracy, chance, per-case hits, judge errors) and
+its judge spend; the console prints a line per group. It is tracked, not gated: if the judge cannot tell which message went to whom,
+Curia is not writing differently for different people, however well each message scores. The
+loader refuses a one-case group and two cases with the same recipient description.
+
+**Re-scoring after the casebook changes.** Results record a hash of each case's setup
+(`setup-hash.ts`: seed, inbound, merged stubs, fixtures, delegation; not the rubric).
+`pnpm rejudge --from-cases <results.json>` scores a run's saved transcripts against the
+expected behaviors in the current case files: code checks re-evaluated, the rest judged by
+each case's own judge unless `--judge` names one. It reports flipped verdicts and changed
+ratings, the behaviors added, removed or edited since the run, and the layer scores before and
+after, and writes the re-scored results beside the original (`<run>.rescored-<time>.json`). It
+refuses, by name, every case whose setup changed since the run or that has no hash, and then
+exits 1: those need a new run, not a new score. Judge errors are listed on their own, left out
+of the comparison, and also exit 1. Results record the judge that rated each case (`judge`,
+`caseJudges`); a case now judged by a different model is flagged, since its verdict changes
+may be the judge's, not the case file's (pass `--judge` with the run's judge to hold it
+fixed). Every judge is created before the first paid call. Only judge calls are paid for.
+
+Two limits, both failing closed: re-scoring reads the core `cases/` and stub sets, so a run
+made with `--cases` or `--stubs` is refused rather than compared; and the hash covers the
+merged stubs, `defaults` included, so an edit to a shared stub set refuses every case using it.
 
 ## Per-case fixtures: autonomy
 

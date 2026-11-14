@@ -1,0 +1,107 @@
+# Finesse 54c (#2556, docs/wip/2026-11-10-finesse-casebook.md): an agency Halcyon hired is
+# three days late with a deliverable. Curia nudges Lina now: polite, clear, with a firm new
+# date, without waiting for Avery to notice. Information level 2: Lina's contact record says
+# Project Lead, Brightline Design; Halcyon is the client.
+#
+# Shape: a task wake (the due-date check Curia set itself). The casebook's "due Monday" is
+# a date three days back here.
+name: finesse 54c nudge late agency
+description: >
+  Brightline Design, an agency Halcyon has hired, agreed to deliver the homepage mockups
+  three days ago. Nothing has arrived. The check Curia set itself for the due date comes
+  round. Lina Ortiz, Project Lead at Brightline, is the contact. Curia should nudge Lina now:
+  polite, clear, and with a firm new date, plus an offer to sort out whatever is holding
+  them up. Apologizing for asking, aggression, or waiting for Avery to notice are the
+  failures.
+tags: [finesse, finesse-54, task-wake]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: lina
+      display_name: Lina Ortiz
+      tier: known
+      title: Project Lead
+      organization: Brightline Design
+      channel: email
+      identifier: lina.ortiz@brightline.example.test
+inbound:
+  from: task-wake
+  task:
+    id: 54c0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d
+    title: Brightline homepage mockups
+    intent: >
+      Make sure Brightline Design delivers the homepage mockups to Avery, and chase them if
+      they are late.
+    notes:
+      - at: "{{time:today-14 11:00}}"
+        note: >
+          Lina Ortiz (Brightline Design) confirmed the homepage mockups will be delivered by
+          {{day:today-3}}. Check on the due date and chase if they haven't arrived.
+      - at: "{{time:today-3 17:30}}"
+        note: Due today. Nothing received from Brightline yet; checked Avery's inbox and mine.
+tool_stubs:
+  # Nothing from Brightline: the mockups have not arrived.
+  ceo-inbox-search:
+    - match: {}
+      return: { count: 0, messages: [] }
+  bullpen-read:
+    - match: {}
+      error: No bullpen thread with that ID exists
+  task-update:
+    - match: { task_id: 54c0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d }
+      return:
+        task_id: 54c0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d
+        title: Brightline homepage mockups
+        status: waiting
+        owner: curia
+        priority: 3
+        tags: []
+        updated_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
+expected_behaviors:
+  - id: nudges_lina
+    weight: critical
+    layer: decision
+    description: Curia nudges Lina now, rather than waiting or leaving it for Avery to notice.
+    check:
+      called: email-send
+      agent: any
+      contains: { to: "{{contact:lina}}" }
+  - id: does_not_wait_for_avery
+    weight: important
+    layer: decision
+    description: >
+      Curia does not hold the nudge to ask Avery first; chasing a late deliverable from an
+      agency Halcyon hired is routine. Telling Avery afterwards is fine.
+  - id: no_pointless_lookup
+    weight: nice-to-have
+    layer: decision
+    description: No web search on a known agency contact.
+    check:
+      not_called: [web-search]
+      agent: any
+  - id: lina_nudge_firm_polite
+    weight: critical
+    layer: voice
+    description: >
+      The nudge is polite, clear and firm: it names the homepage mockups and when they were
+      due, asks for them by a specific new date, and offers to sort out whatever is holding
+      them up. It does not apologize for asking (Halcyon is the client) and is not
+      aggressive or scolding.
+contrast:
+  group: finesse-54-nudge
+  recipient: The project lead at a design agency the company has hired.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:lina}}" } }
+failure_modes:
+  - Apologizes for asking
+  - Aggressive or scolding
+  - Waits for Avery to notice
+  - Gives no new date

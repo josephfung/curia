@@ -1110,6 +1110,8 @@ async function seedContact(stack: TestModeStack, contact: SeedContact): Promise<
       tier: contact.tier === 'trusted' ? 'known' : contact.tier,
       kind: contact.kind,
       role: contact.role,
+      ...(contact.title !== undefined ? { title: contact.title } : {}),
+      ...(contact.organization !== undefined ? { organization: contact.organization } : {}),
       notes: SCENARIO_CONTACT_NOTE,
       source: SCENARIO_KG_SOURCE,
       kgNodeId,

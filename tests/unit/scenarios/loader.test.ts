@@ -84,6 +84,31 @@ describe('loadScenarioCase', () => {
     expect(c.expectedBehaviors[1]).toEqual({ id: 'silent', description: 'does not answer directly', weight: 'important' });
   });
 
+  it('loads a contact\'s title and organization (#2556)', () => {
+    const withProfile = VALID.replace(
+      '      tier: known\n',
+      '      tier: known\n      title: Board Chair\n      organization: Harbourline Capital\n',
+    );
+    const c = loadScenarioCase(write('a.yaml', withProfile));
+    expect(c.seed.contacts[0]).toMatchObject({ title: 'Board Chair', organization: 'Harbourline Capital' });
+    // Absent fields stay absent rather than appearing as undefined keys.
+    expect(Object.hasOwn(loadScenarioCase(write('b.yaml', VALID)).seed.contacts[0]!, 'title')).toBe(false);
+  });
+
+  it('loads behavior layers, and requires one on every behavior of a finesse case (#2556)', () => {
+    const layered = VALID
+      .replace('  - id: routes\n    weight: critical\n', '  - id: routes\n    weight: critical\n    layer: decision\n')
+      .replace('  - id: silent\n', '  - id: silent\n    layer: voice\n');
+    const c = loadScenarioCase(write('a.yaml', layered));
+    expect(c.expectedBehaviors.map(b => b.layer)).toEqual(['decision', 'voice']);
+
+    expect(() => loadScenarioCase(write('b.yaml', layered.replace('layer: voice', 'layer: tone'))))
+      .toThrow(/layer must be one of decision, voice/);
+    const finesse = VALID.replace('tags: [routing]', 'tags: [finesse]');
+    expect(() => loadScenarioCase(write('c.yaml', finesse))).toThrow(/'finesse' case marks every behavior with a layer.*missing on routes, silent/);
+    expect(loadScenarioCase(write('d.yaml', layered.replace('tags: [routing]', 'tags: [finesse]'))).tags).toEqual(['finesse']);
+  });
+
   it('loads the replies a recipient already sent on an entry (#2261)', () => {
     const withReplies = VALID.replace(
       '      delegation_hint: ceo-inbox\n',

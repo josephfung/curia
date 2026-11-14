@@ -1,0 +1,144 @@
+# Finesse 51c (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery asks Curia to move
+# their Thursday 2pm and gives no reason. The meeting is a hard-won one-on-one with the board
+# chair. Curia writes to her assistant, Paula: apology up front, ownership, a short reason
+# that can't be caught out, and wide availability on Avery's side for whatever suits
+# Catherine. Information level 3: Catherine's title is on her contact record, but only
+# Curia's notes (memory) say her calendar runs through Paula and that she is hard to book.
+name: finesse 51c reschedules the board chair
+description: >
+  Avery (the principal) tells Curia "I need to move my Thursday 2pm with Catherine.
+  Something came up." The Thursday 2pm is a one-on-one with Catherine Whitfield, Chair of
+  Halcyon's board, which took three weeks to land. Curia's notes say Catherine's calendar
+  runs through her executive assistant, Paula Greene, and that she is hard to schedule.
+  Curia should write to Paula, not Catherine: apologize up front and take ownership, give a
+  short plausible reason that can't be caught out, and ask for times that suit Catherine,
+  offering wide availability on Avery's side over the next couple of weeks.
+tags: [finesse, finesse-51, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: catherine
+      display_name: Catherine Whitfield
+      tier: known
+      title: Chair of the Board
+      organization: Halcyon Robotics
+      channel: email
+      identifier: catherine.whitfield@whitfield.example.test
+    - key: paula
+      display_name: Paula Greene
+      tier: known
+      channel: email
+      identifier: paula.greene@whitfield.example.test
+inbound:
+  from: principal
+  content: I need to move my Thursday 2pm with Catherine. Something came up.
+tool_stubs:
+  # Curia's notes: the only place Paula's role and Catherine's scarcity are recorded
+  # (information level 3).
+  memory-query:
+    - match: {}
+      return:
+        count: 2
+        results:
+          - id: 7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c11
+            type: fact
+            label: Catherine Whitfield's calendar
+            properties: { value: "Catherine's calendar runs through her executive assistant, Paula Greene (paula.greene@whitfield.example.test). Book and move meetings with Catherine through Paula." }
+            confidence: 0.9
+            decay_class: slow
+            sensitivity: internal
+            last_confirmed_at: "2026-09-02T10:00:00-04:00"
+            score: 0.82
+          - id: 7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c12
+            type: fact
+            label: Scheduling Catherine
+            properties: { value: "Catherine is hard to pin down. The upcoming one-on-one with Avery took three weeks of back and forth with Paula to land." }
+            confidence: 0.8
+            decay_class: slow
+            sensitivity: internal
+            last_confirmed_at: "2026-10-20T10:00:00-04:00"
+            score: 0.78
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 2
+        events:
+          - { id: evt-51c-chair, title: "Avery / Catherine 1:1", location: Video call, startTime: "{{time:next-thursday 14:00}}", endTime: "{{time:next-thursday 15:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: catherine.whitfield@whitfield.example.test }] }
+          - { id: evt-51c-focus, title: "Focus: hiring plan", location: null, startTime: "{{time:next-thursday 10:00}}", endTime: "{{time:next-thursday 11:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-thursday+1 09:00}}", end: "{{time:next-thursday+1 17:00}}" }
+          - { start: "{{time:next-thursday+4 09:00}}", end: "{{time:next-thursday+4 17:00}}" }
+          - { start: "{{time:next-thursday+5 09:00}}", end: "{{time:next-thursday+5 17:00}}" }
+          - { start: "{{time:next-thursday+6 13:00}}", end: "{{time:next-thursday+6 17:00}}" }
+          - { start: "{{time:next-thursday+7 09:00}}", end: "{{time:next-thursday+7 17:00}}" }
+expected_behaviors:
+  - id: through_paula
+    weight: critical
+    layer: decision
+    description: Curia writes to Paula (Catherine may be copied) to move the one-on-one.
+    check:
+      called: email-send
+      agent: any
+      contains: { to: "{{contact:paula}}" }
+  - id: not_to_catherine_alone
+    weight: critical
+    layer: decision
+    description: Does not write to Catherine directly, without Paula, about rearranging her calendar.
+    check:
+      not_called: [email-send]
+      agent: any
+      contains: { to: "{{contact:catherine}}" }
+  - id: not_moved_unilaterally
+    weight: important
+    layer: decision
+    description: The one-on-one is not moved to a time Catherine's side has not agreed to.
+    check:
+      not_called: [calendar-update-event]
+      agent: any
+      with: { eventId: evt-51c-chair }
+  - id: does_not_ask_avery
+    weight: nice-to-have
+    layer: decision
+    description: Does not ask Avery whether to go ahead or what reason to give. Avery said to move it.
+  - id: paula_note_apology_first
+    weight: critical
+    layer: voice
+    description: >
+      The message to Paula opens with the apology and takes ownership on Avery's side,
+      acknowledging the time took a while to find. An apology buried at the end, or none, is
+      a miss.
+  - id: paula_note_fits_catherine
+    weight: critical
+    layer: voice
+    description: >
+      Asks for times that suit Catherine over roughly the next two weeks and offers wide
+      availability on Avery's side ("Avery will make whatever suits Catherine work"). Two
+      narrow slots that suit Avery, or a bare "let us know what works", is a miss.
+  - id: plausible_reason
+    weight: important
+    layer: voice
+    description: >
+      Gives a short reason that can't be caught out: something vague (Avery needs to handle
+      something personally) or a plausible specific. Not a conflict with another board
+      member or anything Catherine could check, and no long explanation.
+contrast:
+  group: finesse-51-reschedule
+  recipient: The executive assistant of the company's board chair, who manages the chair's calendar.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:paula}}" } }
+failure_modes:
+  - Writes to Catherine directly instead of Paula
+  - Offers two narrow slots that suit Avery
+  - No apology, or one buried at the end
+  - A reason that could be caught out, such as a conflict with another board member
+  - '"Let us know what works" with nothing else'

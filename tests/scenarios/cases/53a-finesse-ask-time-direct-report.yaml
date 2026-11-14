@@ -1,0 +1,96 @@
+# Finesse 53a (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery asks for time with a
+# direct report. Curia books it straight onto both calendars and sends Priya a short note,
+# instead of asking her whether she might be available. The "just do it" end of task 53.
+# Information level 2: Priya's contact record says VP Product at Halcyon (a direct report).
+name: finesse 53a ask time with direct report
+description: >
+  Avery tells Curia to find 30 minutes with Priya Nair this week to go over the roadmap.
+  Priya is VP Product at Halcyon, a direct report (her contact record says so). Curia should
+  find a slot, book it directly and send Priya a short note saying it's booked. A
+  deferential request asking whether Priya might be available is the failure.
+tags: [finesse, finesse-53, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: priya
+      display_name: Priya Nair
+      tier: known
+      title: VP Product
+      organization: Halcyon Robotics
+      channel: email
+      identifier: priya.nair@halcyon.example.test
+inbound:
+  from: principal
+  content: Find 30 minutes with Priya this week to go over the roadmap.
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 2
+        events:
+          - { id: evt-53a-standup, title: Leadership stand-up, location: Room 4B, startTime: "{{time:workday+1 09:00}}", endTime: "{{time:workday+1 09:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: priya.nair@halcyon.example.test }] }
+          - { id: evt-53a-board-prep, title: "Focus: board prep", location: null, startTime: "{{time:workday+2 10:00}}", endTime: "{{time:workday+2 12:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:workday+1 14:00}}", end: "{{time:workday+1 16:00}}" }
+          - { start: "{{time:workday+2 15:00}}", end: "{{time:workday+2 17:00}}" }
+expected_behaviors:
+  - id: books_it
+    weight: critical
+    layer: decision
+    description: Curia books the 30 minutes with Priya on the calendar itself.
+    check:
+      called: calendar-create-event
+      agent: any
+      contains: { attendees: priya.nair@halcyon.example.test }
+  - id: does_not_ask_priya_first
+    weight: critical
+    layer: decision
+    description: >
+      Curia does not write to Priya asking whether she is free or which time suits her before
+      booking, and does not ask Avery to confirm a slot. Picking a time and booking it is the
+      right call for a direct report.
+  - id: tells_priya
+    weight: important
+    layer: decision
+    description: Priya gets a short note (or the invite carries one) saying the time is booked.
+    check:
+      any_of:
+        - { called: email-send, agent: any, contains: { to: "{{contact:priya}}" } }
+        - { called: calendar-create-event, agent: any, contains: { attendees: priya.nair@halcyon.example.test } }
+  - id: no_pointless_lookup
+    weight: nice-to-have
+    layer: decision
+    description: No web search on a direct report.
+    check:
+      not_called: [web-search]
+      agent: any
+  - id: priya_note_direct
+    weight: critical
+    layer: voice
+    description: >
+      The note to Priya is one or two plain lines: Avery wants 30 minutes on the roadmap and
+      it's booked for a named time. It is not deferential: no "would you possibly be
+      available", no list of options with "whatever works best for you", no apology.
+  - id: avery_told_briefly
+    weight: nice-to-have
+    layer: voice
+    description: Avery's reply names the booked time in a line, without asking anything.
+contrast:
+  group: finesse-53-ask-for-time
+  recipient: A direct report who reports to the executive.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:priya}}" } }
+failure_modes:
+  - Asks Priya deferentially whether she might be available
+  - Sends Priya a list of options instead of booking
+  - Asks Avery to pick a slot
