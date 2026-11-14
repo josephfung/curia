@@ -164,6 +164,51 @@ describe('ContextBridgeReleaseHandler', () => {
     expect(ctx.outboundContext!.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
   });
 
+  // #2592: the bound task already finished. The entry is released and the call succeeds,
+  // so the coordinator is not told the reply "failed to persist" and does not retry.
+  it('succeeds with reply_attached false when the bound task is already done', async () => {
+    const taskRepo = {
+      getTask: vi.fn().mockResolvedValue({ id: TASK_ID, status: 'done', owner: 'curia' }),
+      updateTask: vi.fn(),
+    } as unknown as TaskRepo;
+
+    const ctx = makeCtx(
+      { entry_id: ENTRY_ID, reply: 'Thx!' },
+      {
+        taskRepo,
+        outboundContext: {
+          register: vi.fn(),
+          release: vi.fn(),
+          releaseEntry: vi.fn().mockResolvedValue(undefined),
+          getEntry: vi.fn().mockResolvedValue({
+            id: ENTRY_ID,
+            metadata: { bind_reply: true, task_id: TASK_ID },
+          }),
+          clearBySubjects: vi.fn(),
+          markExchangeOpen: vi.fn(),
+          releaseUnlessKeptOpen: vi.fn(),
+          defaultExpiryHours: 6,
+          explicitExpiryHours: 24,
+          defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
+        },
+      },
+    );
+
+    const result = await handler.execute(ctx);
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        released: ENTRY_ID,
+        task_id: TASK_ID,
+        reply_attached: false,
+        note: 'task already done; reply not attached',
+      },
+    });
+    expect(taskRepo.updateTask).not.toHaveBeenCalled();
+    expect(ctx.outboundContext!.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+  });
+
   it('ignores reply on non-task-wake entries and releases normally', async () => {
     const logDebug = vi.fn();
     const ctx = makeCtx(
