@@ -112,6 +112,14 @@ export class ContextBridgeReleaseHandler implements ToolHandler {
             // The dispatcher stamped the sender's name on the entry before this turn ran.
             ...(outsider !== null ? { repliedBy: repliedByName(entry, outsider) } : {}),
           });
+          // The bound task is gone or finished (#2592): the entry is released and there is
+          // nothing to retry, so this is a success that says the reply was not attached.
+          if (!result.persisted && result.released) {
+            return {
+              success: true,
+              data: { released: entryId, task_id: result.taskId, reply_attached: false, note: result.note },
+            };
+          }
           if (!result.persisted) {
             return { success: false, error: result.error ?? 'failed to record task-wake reply' };
           }

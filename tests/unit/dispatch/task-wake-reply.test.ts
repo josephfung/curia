@@ -10,7 +10,7 @@ import {
   TASK_WAKE_TASK_ID_KEY,
 } from '../../../src/dispatch/task-wake-reply.js';
 import type { OutboundContextRow } from '../../../src/dispatch/outbound-context.js';
-import type { TaskRepo } from '../../../src/db/task-repo.js';
+import { TaskTerminalStateError, type TaskRepo } from '../../../src/db/task-repo.js';
 import type { OutboundContextCapability } from '../../../src/dispatch/outbound-context.js';
 
 const logger = pino({ level: 'silent' });
@@ -167,9 +167,48 @@ describe('task-wake-reply', () => {
         logger,
       });
 
-      expect(result.persisted).toBe(false);
+      expect(result).toMatchObject({ persisted: false, released: true, taskId: TASK_ID, entryId: ENTRY_ID });
+      expect(result.error).toBeUndefined();
+      expect(result.note).toMatch(/no longer exists/);
       expect(taskRepo.updateTask).not.toHaveBeenCalled();
       expect(outboundContext.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+    });
+
+    // #2592: a finished task cannot take a progress note, and the stale entry kept catching
+    // unrelated principal replies. Release it and report a non-error "not attached".
+    it.each(['done', 'cancelled'])('releases the entry without an error when the bound task is %s', async (status) => {
+      (taskRepo.getTask as ReturnType<typeof vi.fn>).mockResolvedValue({ id: TASK_ID, status, owner: 'curia' });
+      const result = await recordTaskWakeReply({
+        reply: 'Thx!', entryId: ENTRY_ID, entry: makeEntry(), taskRepo, outboundContext, logger,
+      });
+
+      expect(result).toMatchObject({ persisted: false, released: true, taskId: TASK_ID, entryId: ENTRY_ID });
+      expect(result.error).toBeUndefined();
+      expect(result.note).toBe(`task already ${status}; reply not attached`);
+      expect(taskRepo.updateTask).not.toHaveBeenCalled();
+      expect(outboundContext.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+    });
+
+    it('releases the entry without an error when the task ends between the read and the write', async () => {
+      (taskRepo.updateTask as ReturnType<typeof vi.fn>).mockRejectedValue(new TaskTerminalStateError('done'));
+      const result = await recordTaskWakeReply({
+        reply: 'Thursday is better', entryId: ENTRY_ID, entry: makeEntry(), taskRepo, outboundContext, logger,
+      });
+
+      expect(result).toMatchObject({ persisted: false, released: true, taskId: TASK_ID });
+      expect(result.error).toBeUndefined();
+      expect(result.note).toBe('task already done; reply not attached');
+      expect(outboundContext.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+    });
+
+    it('fails and keeps the entry when the write fails for any other reason', async () => {
+      (taskRepo.updateTask as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('connection reset'));
+      const result = await recordTaskWakeReply({
+        reply: 'Some answer', entryId: ENTRY_ID, entry: makeEntry(), taskRepo, outboundContext, logger,
+      });
+
+      expect(result).toEqual({ persisted: false, error: 'failed to persist task-wake reply' });
+      expect(outboundContext.releaseEntry).not.toHaveBeenCalled();
     });
 
     it('returns persisted: false when the repo throws', async () => {
@@ -184,6 +223,7 @@ describe('task-wake-reply', () => {
       });
 
       expect(result.persisted).toBe(false);
+      expect(result.released).toBeUndefined();
       expect(taskRepo.updateTask).not.toHaveBeenCalled();
       expect(outboundContext.releaseEntry).not.toHaveBeenCalled();
     });

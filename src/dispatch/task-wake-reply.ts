@@ -5,7 +5,7 @@
 // the coordinator persists via context-bridge-release(reply) after judging relevance.
 
 import type { Logger } from '../logger.js';
-import type { TaskRepo } from '../db/task-repo.js';
+import { TaskTerminalStateError, type TaskRepo } from '../db/task-repo.js';
 import type { OutboundContextCapability, OutboundContextRow } from './outbound-context.js';
 import type { ContextBridgeInput } from './context-bridge-parse.js';
 
@@ -50,6 +50,14 @@ export function buildTaskWakeAutoBridge(opts: {
 
 export interface TaskWakeReplyPersistResult {
   persisted: boolean;
+  /**
+   * True when the entry was released although nothing was written: the bound task no longer
+   * exists or has already ended (#2592). Not a failure. There is nothing left to attach the
+   * reply to, and keeping the entry active only lets it catch later, unrelated replies.
+   */
+  released?: boolean;
+  /** Why a released entry's reply was not attached. Set only with `released`. */
+  note?: string;
   taskId?: string;
   entryId?: string;
   error?: string;
@@ -86,12 +94,24 @@ export async function recordTaskWakeReply(options: {
 
   const taskId = options.entry.metadata![TASK_WAKE_TASK_ID_KEY] as string;
 
+  // The task is gone or finished, so the reply has nowhere to go. Release the entry and
+  // report that plainly. Leaving it active is what let one stale ask keep matching (and
+  // failing on) unrelated principal replies for days (#2592).
+  const releaseUnattached = async (note: string): Promise<TaskWakeReplyPersistResult> => {
+    options.logger.info({ taskId, entryId: options.entryId, note }, 'task-wake reply: releasing entry without attaching reply');
+    await options.outboundContext.releaseEntry(options.entryId);
+    return { persisted: false, released: true, note, taskId, entryId: options.entryId };
+  };
+
   try {
     const task = await options.taskRepo.getTask(taskId);
     if (!task) {
-      options.logger.warn({ taskId, entryId: options.entryId }, 'task-wake reply: bound task not found — releasing entry');
-      await options.outboundContext.releaseEntry(options.entryId);
-      return { persisted: false, error: `task not found: ${taskId}` };
+      return await releaseUnattached('task no longer exists; reply not attached');
+    }
+    // A done or cancelled task cannot take a progress note: updateTask's terminal guard
+    // rejects the write. Check up front rather than leaning on that error.
+    if (task.status === 'done' || task.status === 'cancelled') {
+      return await releaseUnattached(`task already ${task.status}; reply not attached`);
     }
 
     const progressNote = `${options.repliedBy ?? 'principal'} replied: ${reply.slice(0, 1500)}`;
@@ -118,6 +138,19 @@ export async function recordTaskWakeReply(options: {
 
     return { persisted: true, taskId, entryId: options.entryId };
   } catch (err) {
+    // The task ended between getTask and updateTask. Same outcome as the up-front check.
+    if (err instanceof TaskTerminalStateError) {
+      try {
+        return await releaseUnattached(`task already ${err.status}; reply not attached`);
+      } catch (releaseErr) {
+        options.logger.error(
+          { err: releaseErr, taskId, entryId: options.entryId },
+          'task-wake reply: failed to release entry for a finished task',
+        );
+        return { persisted: false, error: 'failed to persist task-wake reply' };
+      }
+    }
+    // Anything else (DB unavailable, etc.) leaves the entry active so the reply can be retried.
     options.logger.error(
       { err, taskId, entryId: options.entryId },
       'task-wake reply persistence failed',
