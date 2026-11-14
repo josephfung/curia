@@ -43,6 +43,7 @@ import { BedrockProvider } from './agents/llm/bedrock.js';
 import { AgentRuntime } from './agents/runtime.js';
 import { Dispatcher } from './dispatch/dispatcher.js';
 import { TurnLanes } from './dispatch/turn-lanes.js';
+import { TurnActivityRegistry } from './dispatch/turn-activity.js';
 import { createPrincipalBacklogSource } from './dispatch/principal-backlog.js';
 import { CliAdapter } from './channels/cli/cli-adapter.js';
 import { discoverAgentManifests } from './agents/loader.js';
@@ -2305,6 +2306,8 @@ async function main(): Promise<void> {
     logger,
   });
   logger.info({ enabled: turnInjection.enabled }, 'Turn lanes initialized');
+  // One registry shared by every AgentRuntime (#2588).
+  const turnActivity = new TurnActivityRegistry({ logger });
 
   // Construct one EmailAdapter per resolved account (but don't start any yet —
   // adapters must not poll until the dispatcher is registered, otherwise inbound.message
@@ -3314,6 +3317,7 @@ async function main(): Promise<void> {
     workingDocsRepo,
     taskRepo,
     turnLanes,
+    turnActivity,
     principalReach: async (tools) => {
       const configured = configuredReachChannels({
         clients: {

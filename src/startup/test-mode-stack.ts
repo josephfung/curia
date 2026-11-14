@@ -132,6 +132,7 @@ import { TaskOutreachRepo } from '../dispatch/task-outreach.js';
 import { TaskOutreachService, taskLookupFrom } from '../dispatch/task-outreach-capability.js';
 import { OutboundContentFilter } from '../dispatch/outbound-filter.js';
 import { TurnLanes } from '../dispatch/turn-lanes.js';
+import { TurnActivityRegistry } from '../dispatch/turn-activity.js';
 import { createInboundScanner } from '../dispatch/security-config-loader.js';
 import type { InboundScanner } from '../dispatch/inbound-scanner.js';
 import {
@@ -1529,6 +1530,8 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       laneWaitTimeoutMs: turnInjection.laneWaitTimeoutMs,
       logger,
     });
+    // One registry shared by every AgentRuntime (#2588).
+    const turnActivity = new TurnActivityRegistry({ logger });
     const agents = assembleAgents(agentConfigs, {
       logger,
       bus,
@@ -1577,6 +1580,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       conversationEntities,
       // No taskRepo or workingDocsRepo — see header.
       turnLanes,
+      turnActivity,
       // Production's reach rule (configuredReachChannels): a client production would
       // build and a verified principal identity on the channel. This stack has no push
       // service, so the phone is omitted, and it does not apply the channel registry
