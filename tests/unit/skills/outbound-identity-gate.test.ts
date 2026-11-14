@@ -34,6 +34,9 @@ function gateway(
   } as unknown as NylasClient;
   const contactService = options?.contactService ?? ({
     resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
+    // The gate reads the principal's name; without this the read throws, which the gate now
+    // reports as a failed lookup (#2587).
+    getContact: vi.fn().mockResolvedValue(null),
   } as unknown as ContactService);
   const contentFilter = {
     check: vi.fn().mockResolvedValue({ passed: true, findings: [] }),
@@ -96,6 +99,28 @@ describe('outbound identity gate (#1818)', () => {
     expect(result.blockedRules).toEqual(['unresolved-identity']);
     // The gate working as designed: the agent resolves and resends, so not a hiccup (#2587).
     expect(result.policyHold).toBe(true);
+    expect(nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('still blocks when a name lookup failed, but as a failure, not a policy hold (#2587)', async () => {
+    const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Joseph Fung']);
+    entities.turnIdentities.begin(TASK);
+    const contactService = {
+      resolveByChannelIdentity: vi.fn().mockRejectedValue(new Error('db down')),
+    } as unknown as ContactService;
+    const { gw, nylasClient } = gateway(entities, { contactService });
+
+    const result = await gw.send({
+      channel: 'email',
+      to: 'dani@wrcf.ca',
+      subject: 'Registration',
+      body: 'He and Xiaopu (last name to be confirmed) would like to attend.\n- Xiaopu (Joseph\'s guest)',
+    }, { taskEventId: TASK, conversationId: 'conv-1' });
+
+    // Fail closed as before; the outage may have caused the block, so it stays a hiccup.
+    expect(result.success).toBe(false);
+    expect(result.blockedRules).toEqual(['unresolved-identity']);
+    expect(result.policyHold).toBeUndefined();
     expect(nylasClient.sendMessage).not.toHaveBeenCalled();
   });
 
