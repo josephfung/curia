@@ -40,6 +40,14 @@ function start(
   id: string,
   over: Partial<TaskStartInput> = {},
 ) {
+  return startRoot(registry, id, over);
+}
+
+function startRoot(
+  registry: TurnActivityRegistry,
+  id: string,
+  over: Partial<TaskStartInput> = {},
+) {
   return registry.taskStarted({
     taskEventId: id,
     agentId: 'coordinator',
@@ -49,11 +57,20 @@ function start(
     metadata: undefined,
     content: `request ${id}`,
     startedAt: T0,
-    originatorContactId: null,
-    originatorResolved: false,
+    // Resolved by default: an unresolved root's actions hold no one (see the disclosure tests).
+    originatorContactId: 'contact-p',
+    originatorResolved: true,
     ...over,
   });
 }
+
+/** A resolved voice seed for ensureRoot. */
+const VOICE_SEED = {
+  channelId: 'voice',
+  agentId: 'coordinator',
+  originatorContactId: 'contact-p',
+  originatorResolved: true,
+};
 
 describe('TurnActivityRegistry root resolution', () => {
   it('delegated specialist maps to its coordinator root', () => {
@@ -241,13 +258,7 @@ describe('TurnActivityRegistry.checkAndRecord', () => {
   it('ensureRoot registers an auto root that counts and is idempotent', () => {
     const { registry } = setup();
     start(registry, 'A');
-    const seed = {
-      conversationId: 'voice-1',
-      channelId: 'voice',
-      agentId: 'coordinator',
-      originatorContactId: null,
-      originatorResolved: false,
-    };
+    const seed = { conversationId: 'voice-1', ...VOICE_SEED };
     const root = registry.ensureRoot('voice-1', seed);
     expect(root.autoRegistered).toBe(true);
     expect(root.endedAt).toBeNull();
@@ -317,6 +328,41 @@ describe('TurnActivityRegistry.checkAndRecord', () => {
   });
 });
 
+describe('TurnActivityRegistry unresolved originators', () => {
+  it("an unresolved stranger root's action holds no one", () => {
+    const { registry } = setup();
+    start(registry, 'S', { originatorContactId: '+15550001111', originatorResolved: false });
+    start(registry, 'P');
+    expect(registry.checkAndRecord('S', 'email-send', [X])).toEqual({ held: false });
+    expect(registry.checkAndRecord('P', 'email-send', [X])).toEqual({ held: false });
+    expect(registry.actionsOf('P')).toHaveLength(1);
+  });
+
+  it.each(['scheduler', 'internal', 'bullpen'])("a %s root's action holds others whatever its originator", (channelId) => {
+    const { registry } = setup();
+    start(registry, 'J', { channelId, originatorContactId: null, originatorResolved: false });
+    start(registry, 'P');
+    registry.checkAndRecord('J', 'email-send', [X]);
+    expect(registry.checkAndRecord('P', 'email-send', [X]).held).toBe(true);
+  });
+
+  it('an unresolved root is still checked against others', () => {
+    const { registry } = setup();
+    start(registry, 'P');
+    start(registry, 'S', { originatorContactId: '+15550001111', originatorResolved: false });
+    registry.checkAndRecord('P', 'email-send', [X]);
+    expect(registry.checkAndRecord('S', 'email-send', [X]).held).toBe(true);
+  });
+
+  it('an unresolved auto root holds no one', () => {
+    const { registry } = setup();
+    start(registry, 'P');
+    registry.ensureRoot('voice-1', { ...VOICE_SEED, conversationId: 'v', originatorContactId: null, originatorResolved: false });
+    registry.checkAndRecord('voice-1', 'email-send', [X]);
+    expect(registry.checkAndRecord('P', 'email-send', [X])).toEqual({ held: false });
+  });
+});
+
 describe('TurnActivityRegistry pruning', () => {
   it('a live auto root keeps an ended root still inside its window', () => {
     const { registry, set } = setup();
@@ -373,6 +419,10 @@ describe('TurnActivityRegistry action caps', () => {
   it('the global cap evicts ended roots first, then logs an error for live ones', () => {
     const { error, warn, logger } = noopLogger();
     const { registry } = setup(logger);
+    // Unresolved roots hold no one, so the 10k-call fill skips matching and stays fast; this
+    // test is about eviction, not holds.
+    const start = (r: TurnActivityRegistry, id: string) =>
+      startRoot(r, id, { originatorContactId: null, originatorResolved: false });
     const rootsNeeded = MAX_TRACKED_ACTIONS / MAX_ACTIONS_PER_ROOT;
     const fill = (id: string) => {
       for (let j = 0; j < MAX_ACTIONS_PER_ROOT; j++) {

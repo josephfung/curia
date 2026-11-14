@@ -26,6 +26,12 @@ export const MAX_TRACKED_ACTIONS = 5_000;
 /** One root cannot crowd out another's actions: past this, its own oldest action is dropped. */
 export const MAX_ACTIONS_PER_ROOT = 200;
 
+/**
+ * Channels whose turns are Curia's own work (scheduled jobs, internal tasks, the bullpen).
+ * Their actions hold others whatever the originator stamp says, and they see a hold's details.
+ */
+export const SYSTEM_TURN_CHANNELS: ReadonlySet<string> = new Set(['scheduler', 'internal', 'bullpen']);
+
 const REQUEST_TEXT_MAX_CODE_POINTS = 500;
 const COORDINATOR_AGENT_ID = 'coordinator';
 
@@ -202,13 +208,21 @@ export class TurnActivityRegistry {
    *
    * A target another qualifying root already acted on holds the caller once per (other root,
    * target) pair and records nothing; the re-issued call then proceeds and is recorded.
+   *
+   * An unresolved originator's actions hold no one, so a stranger cannot stall (or probe)
+   * the principal's turns by touching a target first. A system-channel root
+   * (SYSTEM_TURN_CHANNELS) still holds others: scheduled jobs carry no person originator
+   * and must still be caught. Unresolved roots are themselves still checked.
    */
   checkAndRecord(taskEventId: string, toolName: string, targets: readonly ActionTarget[]): BackstopDecision {
     const mine = this.rootStateOf(taskEventId);
     if (!mine) return { held: false };
 
     const qualifying = new Map<string, RootState>();
-    for (const other of this.qualifyingOthers(mine)) qualifying.set(other.rootId, other);
+    for (const other of this.qualifyingOthers(mine)) {
+      if (!other.originatorResolved && !SYSTEM_TURN_CHANNELS.has(other.channelId)) continue;
+      qualifying.set(other.rootId, other);
+    }
 
     let shown = this.shown.get(mine.rootId);
     const newPairs = new Set<string>();
@@ -219,9 +233,9 @@ export class TurnActivityRegistry {
       const other = qualifying.get(action.rootId);
       if (!other) continue;
       for (const target of targets) {
-        const key = targetKey(target);
-        if (!action.targets.some((t) => targetKey(t) === key)) continue;
-        const pair = `${other.rootId}|${key}`;
+        // Compare fields, not built keys: this loop runs over every recorded action.
+        if (!action.targets.some((t) => t.kind === target.kind && t.value === target.value)) continue;
+        const pair = `${other.rootId}|${targetKey(target)}`;
         if (shown?.has(pair) || newPairs.has(pair)) continue;
         newPairs.add(pair);
         matches.push({ action: this.copyAction(action), other: this.snapshot(other), target: { ...target } });

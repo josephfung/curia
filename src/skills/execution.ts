@@ -169,7 +169,7 @@ import type { VerificationRuntime } from '../verification/index.js';
 import type { ActionTarget, TurnActivityRegistry } from '../dispatch/turn-activity.js';
 import { extractActionTargets } from '../dispatch/action-targets.js';
 import { inferOriginatorResolution } from '../dispatch/turn-lanes.js';
-import { renderBackstopHold, type BackstopMatches } from '../dispatch/backstop-message.js';
+import { renderBackstopHold, viewerSeesDetail, type BackstopMatches } from '../dispatch/backstop-message.js';
 import {
   RECIPIENT_REFERENCE_SKILLS,
   addressOrReferenceError,
@@ -1614,26 +1614,37 @@ export class ExecutionLayer {
     }
   }
 
-  /** The result a held call returns: what the other turn did, never its words (#2588). */
+  /**
+   * The result a held call returns: what the other turn did, never its words (#2588). The
+   * tool, target and time are shown only to a viewer entitled to them (viewerSeesDetail:
+   * the principal, a system turn, or the same resolved contact); anyone else gets a generic
+   * line, so one person's turn cannot learn what another person's turn did.
+   */
   private async crossTurnHoldResult(
     matches: BackstopMatches,
     toolName: string,
-    taskEventId: string,
+    backstop: { turnActivity: TurnActivityRegistry; taskEventId: string },
     skillLogger: Logger,
   ): Promise<ToolResult> {
+    const { taskEventId } = backstop;
+    const viewer = backstop.turnActivity.rootOf(taskEventId);
+    const principalContactId = this.principalIdentities[0]?.contactId;
+    const detailed = new Set(matches.filter((m) => viewerSeesDetail(viewer, m.other, principalContactId)));
     skillLogger.info(
       {
         toolName,
         taskEventId,
         otherRoots: [...new Set(matches.map((m) => m.other.rootId))],
         targetKinds: matches.map((m) => m.target.kind),
+        detailedMatches: detailed.size,
       },
       'cross-turn backstop: held a call another turn already made on the same target',
     );
     const names = new Map<string, string>();
     const contactService = this.contactService;
     if (contactService) {
-      const ids = [...new Set(matches.filter((m) => m.target.kind === 'contact').map((m) => m.target.value))];
+      // Names only for lines that will show them.
+      const ids = [...new Set([...detailed].filter((m) => m.target.kind === 'contact').map((m) => m.target.value))];
       await Promise.all(ids.map(async (id) => {
         try {
           const contact = await contactService.getContact(id);
@@ -1644,13 +1655,15 @@ export class ExecutionLayer {
         }
       }));
     }
+    const contactName = (id: string) => names.get(id);
+    const showDetail = (m: BackstopMatches[number]) => detailed.has(m);
     let text: string;
     try {
-      text = renderBackstopHold(matches, { timezone: this.timezone, contactName: (id) => names.get(id) });
+      text = renderBackstopHold(matches, { timezone: this.timezone, contactName, showDetail });
     } catch (err) {
       // An invalid configured timezone makes toLocalIso throw; show UTC rather than fail.
       skillLogger.error({ err, toolName, taskEventId, timezone: this.timezone }, 'cross-turn backstop: local time render failed — using UTC');
-      text = renderBackstopHold(matches, { timezone: 'UTC', contactName: (id) => names.get(id) });
+      text = renderBackstopHold(matches, { timezone: 'UTC', contactName, showDetail });
     }
     return { success: false, error: this.wrapSkillError(text) };
   }
@@ -3639,7 +3652,7 @@ export class ExecutionLayer {
         );
       }
       // Held: nothing was recorded, so awaiting the contact names below is safe.
-      if (held) return this.crossTurnHoldResult(held, toolName, crossTurnBackstop.taskEventId, skillLogger);
+      if (held) return this.crossTurnHoldResult(held, toolName, crossTurnBackstop, skillLogger);
     }
 
     skillLogger.info({ input: Object.keys(input) }, 'Invoking skill');

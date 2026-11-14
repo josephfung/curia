@@ -34,12 +34,17 @@ describe('extractActionTargets', () => {
     expect(t).toEqual([{ kind: 'site', value: 'cal.com' }]);
   });
 
-  it('no contact or site falls back to ids plus tool name', async () => {
+  it('no contact or site falls back to ids only', async () => {
     const t = await extractActionTargets('email-draft-send', { draft_id: 'r-12ab34cd' }, deps);
-    expect(t).toEqual([
-      { kind: 'id', value: 'r-12ab34cd' },
-      { kind: 'tool', value: 'email-draft-send' },
-    ]);
+    expect(t).toEqual([{ kind: 'id', value: 'r-12ab34cd' }]);
+  });
+
+  it('two calls on different ids share no target', async () => {
+    const a = await extractActionTargets('email-reply', { reply_to_message_id: 'msg-1111aaaa' }, deps);
+    const b = await extractActionTargets('email-reply', { reply_to_message_id: 'msg-2222bbbb' }, deps);
+    const keys = (ts: typeof a) => new Set(ts.map((x) => `${x.kind}:${x.value}`));
+    const ka = keys(a);
+    expect([...keys(b)].filter((k) => ka.has(k))).toEqual([]);
   });
 
   it('empty input falls back to tool name only', async () => {
@@ -53,10 +58,7 @@ describe('extractActionTargets', () => {
 
   it('non-contact uuids fall back to ids', async () => {
     const t = await extractActionTargets('t', { account_id: M }, deps);
-    expect(t).toEqual([
-      { kind: 'id', value: M },
-      { kind: 'tool', value: 't' },
-    ]);
+    expect(t).toEqual([{ kind: 'id', value: M }]);
   });
 
   it('walk is bounded to 50 string values', async () => {

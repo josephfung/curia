@@ -85,7 +85,7 @@ function setup(opts?: { logger?: Logger }) {
 function startRoot(
   turnActivity: TurnActivityRegistry,
   taskEventId: string,
-  extra?: { channelId?: string; content?: string; originatorContactId?: string | null },
+  extra?: { channelId?: string; content?: string; originatorContactId?: string | null; originatorResolved?: boolean },
 ) {
   return turnActivity.taskStarted({
     taskEventId,
@@ -97,7 +97,7 @@ function startRoot(
     content: extra?.content ?? 'please do the thing',
     startedAt: Date.now(),
     originatorContactId: extra?.originatorContactId === undefined ? PRINCIPAL : extra.originatorContactId,
-    originatorResolved: extra?.originatorContactId !== null,
+    originatorResolved: extra?.originatorResolved ?? extra?.originatorContactId !== null,
   });
 }
 
@@ -251,6 +251,77 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
     if (held.success) throw new Error('expected a held result');
     expect(held.error).not.toContain('secret plan');
     expect(held.error).not.toContain('body one');
+  });
+
+  describe('hold disclosure', () => {
+    const GENERIC = 'Another conversation already acted on this same target recently.';
+    const ISO_TIME = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+
+    async function holdSeenBy(actor: string | null, viewer: string | null, viewerChannel = 'signal') {
+      const { registry, layer, turnActivity } = setup();
+      const handler = makeHandler();
+      registry.register(makeRiskyManifest('contact-message', 'medium'), handler);
+      startRoot(turnActivity, 'task-a', { originatorContactId: actor });
+      startRoot(turnActivity, 'task-b', { originatorContactId: viewer, channelId: viewerChannel });
+      expect((await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a'))).success).toBe(true);
+      const held = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-b', { channelId: viewerChannel }));
+      expect(held.success).toBe(false);
+      if (held.success) throw new Error('expected a held result');
+      expect(handler.execute).toHaveBeenCalledTimes(1);
+      expect(held.error).toContain("Not run yet: another conversation's turn already acted on the same target.");
+      expect(held.error).toContain('call it again unchanged');
+      return held.error;
+    }
+
+    it("a different person sees no tool, name or time of the principal's action", async () => {
+      const text = await holdSeenBy(PRINCIPAL, BOB);
+      expect(text).toContain(GENERIC);
+      expect(text).not.toContain('contact-message');
+      expect(text).not.toContain('Alice Example');
+      expect(text).not.toMatch(ISO_TIME);
+    });
+
+    it("the principal sees the details of another person's action", async () => {
+      const text = await holdSeenBy(BOB, PRINCIPAL);
+      expect(text).toContain('contact-message on Alice Example at ');
+      expect(text).toMatch(ISO_TIME);
+      expect(text).not.toContain(GENERIC);
+    });
+
+    it('the same resolved contact sees the details', async () => {
+      const text = await holdSeenBy(BOB, BOB);
+      expect(text).toContain('contact-message on Alice Example at ');
+    });
+
+    it('a system turn sees the details', async () => {
+      const text = await holdSeenBy(BOB, null, 'scheduler');
+      expect(text).toContain('contact-message on Alice Example at ');
+    });
+  });
+
+  it('a call refused by a later gate is not recorded', async () => {
+    const { registry, layer, turnActivity } = setup();
+    const handler = makeHandler();
+    // The executionLayer capability is reserved for approve-action: refused after the targets are read.
+    registry.register({ ...makeRiskyManifest('contact-message', 'medium'), capabilities: ['executionLayer'] }, handler);
+    startRoot(turnActivity, 'task-a');
+
+    const result = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a'));
+    expect(result.success).toBe(false);
+    expect(handler.execute).not.toHaveBeenCalled();
+    expect(turnActivity.actionsOf('task-a')).toHaveLength(0);
+  });
+
+  it('an auto root with an unresolved originator is stored unresolved', async () => {
+    const { registry, layer, turnActivity } = setup();
+    registry.register(makeRiskyManifest('contact-message', 'medium'), makeHandler());
+    const originator = { contactId: '+15550001111', channel: 'signal', systemRole: null, tier: 'unknown' };
+
+    await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('voice-session-2', { channelId: 'voice', originator }));
+    const root = turnActivity.rootOf('voice-session-2');
+    expect(root?.autoRegistered).toBe(true);
+    expect(root?.originatorContactId).toBe('+15550001111');
+    expect(root?.originatorResolved).toBe(false);
   });
 
   it('registry failure fails open', async () => {
