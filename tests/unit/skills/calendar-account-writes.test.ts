@@ -869,6 +869,18 @@ describe('R108: meeting-debrief lists only meetings the principal accepted or or
     expect(events[0]!.calendars!.map((c) => c.eventId).sort()).toEqual(['p-1', 'w-1']);
   });
 
+  it("asks for every occurrence of a recurring series, so each week's meeting has its own key (round 2)", async () => {
+    const { work, router } = setup();
+    await run(new CalendarListEventsHandler(), listCtx(router, listInput, debrief));
+    expect(work.listEvents).toHaveBeenCalledWith('ceo@work.example.com', START, END, { expandRecurring: true });
+    await run(new CalendarListEventsHandler(), listCtx(router, { ...listInput, maxResults: 5 }, debrief));
+    expect(work.listEvents).toHaveBeenLastCalledWith('ceo@work.example.com', START, END, { limit: 5, expandRecurring: true });
+    // Other callers' listings are unchanged.
+    work.listEvents.mockClear();
+    await run(new CalendarListEventsHandler(), listCtx(router, listInput, { ...debrief, agentId: 'calendar' }));
+    expect(work.listEvents).toHaveBeenCalledWith('ceo@work.example.com', START, END, undefined);
+  });
+
   it("fails rather than guess when the principal's addresses cannot be read", async () => {
     const { work, router } = setup();
     work.listEvents.mockResolvedValue([event('declined', 'ceo@work.example.com', { participants: me('no') })]);
