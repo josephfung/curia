@@ -344,8 +344,11 @@ type ErrorType =
   | 'SKILL_ERROR'
   | 'BUDGET_EXCEEDED'
   | 'IDENTITY_MISMATCH'     // wrong subject on calendar (etc.) read — fail closed (#1854)
+  | 'POLICY_HOLD'           // a policy guard held or refused the action as designed (#2587)
   | 'UNKNOWN';
 ```
+
+`POLICY_HOLD` marks a skill result that a guard refused on purpose: a band hold, a principal-send refusal, a blocked or no-reply recipient, the content filter. The outbound gateway reports it as `policyHold: true` on its send result and the send skills carry it as `errorType`. The console's Hiccups tile and histogram do not count a job whose only non-success calls are policy holds; it shows them as "held for you" instead (#2587). A guard that could not run is a failure, not a hold, even when it fails closed. Examples: a lookup failed, the review or judge was unavailable, an approval row could not be written, or the send-level setting was unreadable. The content filter, the outbound judge and the band review mark such findings `unjudged: true` on `FilterFinding`, and the gateway leaves `policyHold` off any block that carries one.
 
 Provider-specific errors are mapped to `ErrorType` inside the provider implementation — never leaked as raw strings to the agent runtime. This prevents the fragile string-matching pattern Zora suffered from. Database connection failures (pg SQLSTATE class `08` / `57P0x`, Node `ECONNREFUSED` / `ETIMEDOUT`, pool acquire timeouts) map to `DATABASE_UNAVAILABLE` rather than `PROVIDER_ERROR`. `IDENTITY_MISMATCH` is raised when a calendar read resolves to a non-principal identity while serving a principal-scoped task (e.g. `calendar-list-events` given a calendarId registered to the agent's own contact during a morning brief) — the runtime hard-fails the task so `scheduled_jobs.last_run_outcome` is not `completed` and the agent cannot report a silent empty day (#1854).
 

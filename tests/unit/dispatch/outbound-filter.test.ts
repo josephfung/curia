@@ -880,6 +880,8 @@ describe('Stage 2.5 escalation judge delegation', () => {
     expect(result.passed).toBe(false);
     expect(result.stage).toBe('disclosure-gate');
     expect(result.findings[0]!.rule).toBe('disclosure-tier-gate');
+    // A real verdict on a resolved tier is a judgement, not an outage (#2587).
+    expect(result.findings[0]!.unjudged).toBeUndefined();
     expect(judge.classifyDisclosure).toHaveBeenCalledWith(
       expect.objectContaining({ recipientTier: 'unknown' }),
     );
@@ -1025,6 +1027,20 @@ describe('Stage 2.5 escalation judge delegation', () => {
     expect(result.findings[0]!.detail).toBe(
       "Disclosure class 'principal-context' not permitted for tier 'unknown' (recipient tier unresolved: contact lookup failed)",
     );
+    // An outage-caused block: a failure on the console, not a policy hold (#2587).
+    expect(result.findings[0]!.unjudged).toBe(true);
+  });
+
+  it('marks a block from a judge that failed (no disclosure class) as unjudged (#2587)', async () => {
+    const judge = makeEscalationJudge({ decision: 'escalate', reason: 'judge unreachable or timed out' });
+    const filter = filterWithEscalationJudge(judge);
+    const result = await filter.check({
+      ...BASE_INPUT,
+      recipientTier: 'unknown',
+      content: 'Joseph is free on Thursday afternoon.',
+    });
+    expect(result.passed).toBe(false);
+    expect(result.findings[0]).toMatchObject({ rule: 'disclosure-tier-gate', unjudged: true });
   });
 
   describe('disclosureGateStatus()', () => {

@@ -27,6 +27,7 @@ import {
   findRetiredRecipientField,
   retiredRecipientFieldError,
 } from '../../src/skills/_shared/recipient-reference.js';
+import { gatewaySendFailure } from '../../src/skills/_shared/policy-hold.js';
 
 const MAX_MESSAGE_LENGTH = 10_000;
 
@@ -165,7 +166,7 @@ export class SignalSendHandler implements ToolHandler {
         });
 
         if (!result.success) {
-          return { success: false, error: result.blockedReason ?? 'Signal send failed' };
+          return gatewaySendFailure(result, 'Signal send failed');
         }
 
         // Register outbound context entry (best-effort).
@@ -237,10 +238,7 @@ export class SignalSendHandler implements ToolHandler {
       });
 
       if (!result.success) {
-        return {
-          success: false,
-          error: result.blockedReason ?? 'Signal send failed',
-        };
+        return gatewaySendFailure(result, 'Signal send failed');
       }
 
       // Register outbound context entry (best-effort).

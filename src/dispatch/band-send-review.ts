@@ -598,7 +598,7 @@ export class BandSendReview {
     const decisions: BandReviewDecision[] = [];
     if (items.length > 0) {
       decisions.push(hasPrior
-        ? this.hold(BAND_RULES.pii, `Held for the principal: it shares personal details (${labels}), and the reviewer was unavailable to check them.`)
+        ? this.hold(BAND_RULES.pii, `Held for the principal: it shares personal details (${labels}), and the reviewer was unavailable to check them.`, true)
         : {
           kind: 'bounce',
           findings: [{
@@ -606,6 +606,8 @@ export class BandSendReview {
             detail: items.length > MAX_REVIEWED_ITEMS
               ? TOO_MANY_DETAIL
               : `The reviewer could not check the personal details in this message: ${labels}. Rewrite it without them.`,
+            // The judge failed (#2587): an outage, not a ruling on these details.
+            unjudged: true,
           }],
         });
     }
@@ -615,9 +617,9 @@ export class BandSendReview {
 
   /** The reviewer is down and the send holds: name (by label) the personal data it carries. */
   private unreviewedHold(reason: string, items: readonly BriefDetectedItem[], hasToken: boolean): BandReviewDecision {
-    const findings: FilterFinding[] = [{ rule: BAND_RULES.unreviewed, detail: reason }];
+    const findings: FilterFinding[] = [{ rule: BAND_RULES.unreviewed, detail: reason, unjudged: true }];
     if (items.length > 0) {
-      findings.push({ rule: BAND_RULES.pii, detail: `It contains personal details the reviewer could not check: ${[...new Set(items.map((i) => i.label))].join(', ')}.` });
+      findings.push({ rule: BAND_RULES.pii, detail: `It contains personal details the reviewer could not check: ${[...new Set(items.map((i) => i.label))].join(', ')}.`, unjudged: true });
     }
     if (hasToken) findings.push({ rule: BAND_RULES.token, detail: TOKEN_DETAIL });
     return { kind: 'hold', reason, findings };
@@ -793,8 +795,10 @@ export class BandSendReview {
     };
   }
 
-  private hold(rule: string, reason: string): BandReviewDecision {
-    return { kind: 'hold', reason, findings: [{ rule, detail: reason }] };
+  private hold(rule: string, reason: string, unjudged?: true): BandReviewDecision {
+    // A review-unavailable hold is always unjudged (#2587): the reviewer did not rule on it.
+    const marked = unjudged === true || rule === BAND_RULES.unreviewed;
+    return { kind: 'hold', reason, findings: [{ rule, detail: reason, ...(marked ? { unjudged: true as const } : {}) }] };
   }
 
   /**

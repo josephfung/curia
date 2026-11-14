@@ -83,6 +83,12 @@ export interface StatsResponse {
   /** Open principal-owned tasks (every OPEN_TASK_STATUSES status), and how many are past due. */
   openTasks: { total: number; overdue: number };
   hiccups: { current: number; byDay: number[] };
+  /**
+   * Jobs in the last 7 local days where a policy guard held or refused something by design
+   * (#2587): a band hold, a principal-send refusal, a blocked recipient. Not hiccups, but
+   * shown beside them so a careful day is visible without reading as a broken one.
+   */
+  held: { current: number };
   handledSinceYesterday: number;
 }
 
@@ -137,6 +143,8 @@ interface BriefingWindow {
   minutesByDay: number[];
   /** Root ids of partial and failed jobs, newest first, with their local day. */
   hiccupRoots: { id: string; day: string }[];
+  /** Jobs with a policy hold per histogram day (#2587), same index as `model.days`. */
+  heldByDay: number[];
 }
 
 export class BriefingService {
@@ -235,7 +243,7 @@ export class BriefingService {
 
   async stats(now: Date = new Date()): Promise<StatsResponse> {
     const timezone = await this.timeZone();
-    const [{ model, minutesByDay }, openTasks] = await Promise.all([
+    const [{ model, minutesByDay, heldByDay }, openTasks] = await Promise.all([
       this.cachedModel(now, timezone),
       this.openTaskCounts(now),
     ]);
@@ -260,6 +268,7 @@ export class BriefingService {
         current: hiccupsOver(model, STATS_WINDOW_DAYS),
         byDay: model.days.map((day) => day.hiccups),
       },
+      held: { current: sumWindow(heldByDay.slice(-STATS_WINDOW_DAYS)) },
       handledSinceYesterday: outcomeTotal(sinceYesterday, ALL_OUTCOMES),
     };
   }
@@ -426,13 +435,15 @@ export class BriefingService {
       if (minutes <= 0) continue;
       perDay.set(saved.day, (perDay.get(saved.day) ?? 0) + minutes);
     }
-    for (const bucket of parseUndescribedByDay(row?.undescribed_by_day)) {
+    for (const bucket of parseDayCounts(row?.undescribed_by_day)) {
       perDay.set(bucket.day, (perDay.get(bucket.day) ?? 0) + bucket.n * UNDESCRIBED_CALL_MINUTES);
     }
+    const heldPerDay = new Map(parseDayCounts(row?.held_by_day).map((bucket) => [bucket.day, bucket.n]));
     return {
       model,
       minutesByDay: model.days.map((day) => perDay.get(day.key) ?? 0),
       hiccupRoots: parseHiccupRoots(row?.hiccup_roots),
+      heldByDay: model.days.map((day) => heldPerDay.get(day.key) ?? 0),
     };
   }
 
@@ -448,7 +459,7 @@ export class BriefingService {
     let failure: Error | undefined;
     try {
       await client.query('SET jit = off');
-      const result = await client.query<{ histogram: unknown; saved_calls: unknown; undescribed_by_day: unknown; hiccup_roots: unknown }>(
+      const result = await client.query<{ histogram: unknown; saved_calls: unknown; undescribed_by_day: unknown; hiccup_roots: unknown; held_by_day: unknown }>(
         HISTOGRAM_SQL,
         params,
       );
@@ -525,8 +536,9 @@ function outcomeTotal(days: HistogramModel['days'], outcomes: readonly JobOutcom
  * One row: `histogram` (day × actor × outcome counts), `saved_calls` (each
  * successful visible call, with the input and data its weight can depend on),
  * `undescribed_by_day` (a count per day of successful calls the describers
- * do not name), and `hiccup_roots` (the partial and failed roots behind the
- * histogram's hiccup counts, newest first).
+ * do not name), `hiccup_roots` (the partial and failed roots behind the
+ * histogram's hiccup counts, newest first), and `held_by_day` (a count per day
+ * of jobs a policy guard held something in).
  *
  * Root jobs in [$1, $2). Delegated tasks fold into their root, up to $5 levels,
  * and may finish as late as $3. The day is the root task's timestamp in $4, for
@@ -545,6 +557,10 @@ function outcomeTotal(days: HistogramModel['days'], outcomes: readonly JobOutcom
  * denied when the payload says success. Those three are failures even if the
  * payload says otherwise. A failed root reply with no successful visible call
  * is a failure; mixed with successes it is partial.
+ * A call whose result carries errorType POLICY_HOLD (#2587) is neither: a guard
+ * held or refused it by design. It never makes a job partial or failed, and
+ * `held_by_day` counts, per day, the jobs with at least one, whatever their
+ * outcome, for the tile's "held for you" line.
  *
  * Minutes are not a column here. A visible call carries its input and result data,
  * minus the fields describers never read (message bodies, and a document's body),
@@ -623,6 +639,7 @@ calls AS (
     ) AS tool_name,
     CASE
       WHEN r.outcome = 'success' THEN 'ok'
+      WHEN r.payload->'result'->>'errorType' = 'POLICY_HOLD' THEN 'held'
       WHEN r.outcome IN ('failure', 'error', 'denied') THEN 'bad'
       WHEN r.payload->'result'->>'success' = 'true' THEN 'ok'
       ELSE 'bad'
@@ -692,7 +709,8 @@ classified AS (
       WHEN COALESCE(resp.failed, false) AND COALESCE(ok.n, 0) > 0 THEN 'partial'
       WHEN COALESCE(resp.failed, false) THEN 'failed'
       ELSE 'success'
-    END AS outcome
+    END AS outcome,
+    COALESCE(held.n, 0) > 0 AS held
   FROM roots
   LEFT JOIN (
     SELECT root_id, count(*)::int AS n FROM results WHERE kind = 'ok' GROUP BY root_id
@@ -700,6 +718,9 @@ classified AS (
   LEFT JOIN (
     SELECT root_id, count(*)::int AS n FROM results WHERE kind = 'bad' GROUP BY root_id
   ) bad ON bad.root_id = roots.root_id
+  LEFT JOIN (
+    SELECT root_id, count(*)::int AS n FROM results WHERE kind = 'held' GROUP BY root_id
+  ) held ON held.root_id = roots.root_id
   LEFT JOIN responses resp ON resp.root_id = roots.root_id
 )
 SELECT
@@ -755,7 +776,21 @@ SELECT
     ) ORDER BY root_ts DESC, root_id DESC), '[]'::jsonb)
     FROM classified
     WHERE outcome <> 'success'
-  ) AS hiccup_roots`;
+  ) AS hiccup_roots,
+  (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'day', day,
+      'n', n
+    )), '[]'::jsonb)
+    FROM (
+      SELECT
+        to_char(root_ts AT TIME ZONE $4, 'YYYY-MM-DD') AS day,
+        count(*)::int AS n
+      FROM classified
+      WHERE held
+      GROUP BY 1
+    ) held_days
+  ) AS held_by_day`;
 
 function sumWindow(values: readonly number[]): number {
   let n = 0;
@@ -796,14 +831,15 @@ interface SavedCall {
   data: Record<string, unknown> | null;
 }
 
-interface UndescribedDay {
+/** A per-day count: `undescribed_by_day` and `held_by_day` share the shape. */
+interface DayCount {
   day: string;
   n: number;
 }
 
-function parseUndescribedByDay(value: unknown): UndescribedDay[] {
+function parseDayCounts(value: unknown): DayCount[] {
   if (!Array.isArray(value)) return [];
-  const days: UndescribedDay[] = [];
+  const days: DayCount[] = [];
   for (const entry of value) {
     const row = asRecord(entry);
     if (!row || typeof row.day !== 'string') continue;

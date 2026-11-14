@@ -19,6 +19,7 @@ import {
   describeToolCall,
   describerRefs,
   formatTally,
+  notDoneText,
   researchKind,
   type DescribeContext,
   type Tally,
@@ -107,6 +108,15 @@ function readCallOk(row: AuditLogRow): boolean {
   return rec(row.payload.result)?.success === true;
 }
 
+/**
+ * A failed call that a policy guard held or refused by design (#2587). Read from the
+ * structured errorType the send skills set, never from the error text. Same rule as
+ * the briefing histogram, so the feed and the Hiccups tile agree.
+ */
+function readCallHeld(row: AuditLogRow): boolean {
+  return rec(row.payload.result)?.errorType === 'POLICY_HOLD';
+}
+
 /** Group the rows into jobs keyed by root agent.task id, roots newest first. */
 function buildJobs(rows: ActivityRows): Job[] {
   const jobs = new Map<string, Job>();
@@ -187,6 +197,7 @@ function buildJobs(rows: ActivityRows): Job[] {
       input: rec(invoke.payload.input) ?? {},
       data,
       ok,
+      held: !ok && readCallHeld(result),
       agentId: agentOfTask.get(invoke.parentEventId!) ?? agentOf(job.root),
       taskEventId: invoke.parentEventId!,
       conversationId: invoke.conversationId,
@@ -336,14 +347,14 @@ function describeUndescribed(call: Call, catalog: DescriberCatalog): ToolDescrip
     const tally = { verb: learned.verb, one: learned.one, many: learned.many };
     return {
       prominence: 'count',
-      text: call.ok ? formatTally(tally, 1) : `couldn't ${learned.attempt}`,
+      text: call.ok ? formatTally(tally, 1) : notDoneText(learned.attempt, call.held),
       tally,
     };
   }
   if (!catalog.knownWrite(call.toolName)) return null;
   return {
     prominence: 'count',
-    text: call.ok ? formatTally(GENERIC_ACTION_TALLY, 1) : `couldn't ${GENERIC_ACTION_ATTEMPT}`,
+    text: call.ok ? formatTally(GENERIC_ACTION_TALLY, 1) : notDoneText(GENERIC_ACTION_ATTEMPT, call.held),
     tally: GENERIC_ACTION_TALLY,
   };
 }
@@ -368,13 +379,17 @@ function projectJob(job: Job, ctx: ProjectionContext): ActivityItem | null {
   const lines: ToolDescription[] = [];
   const counts: ToolDescription[] = [];
   const failures: ToolDescription[] = [];
+  // Calls a policy guard held or refused by design (#2587). Shown like a failure's line,
+  // after the failures, but they never make the job partial or failed.
+  const holds: ToolDescription[] = [];
   const autonomy: ActivityAutonomy[] = [];
   const catalog = ctx.catalog ?? EMPTY_CATALOG;
 
   for (const call of job.calls) {
     const desc = describeToolCall(call, ctx) ?? describeUndescribed(call, catalog);
     if (!desc || desc.prominence === 'hidden') continue;
-    if (!call.ok) failures.push(desc);
+    if (!call.ok && call.held === true) holds.push(desc);
+    else if (!call.ok) failures.push(desc);
     else if (desc.prominence === 'line') lines.push(desc);
     else counts.push(desc);
     autonomy.push(matchAutonomy(call, ctx.autonomyRows));
@@ -382,7 +397,8 @@ function projectJob(job: Job, ctx: ProjectionContext): ActivityItem | null {
 
   const research = researchPhrase(job);
   const responseFailed = job.rootResponse?.payload.isError === true;
-  const failureTexts = failures.map((f) => f.text);
+  // Everything that did not happen, failures first. The text uses it; the outcome uses failures only.
+  const failureTexts = [...failures, ...holds].map((f) => f.text);
   const jobId = parseSchedulerRunJobId(job.root.conversationId ?? undefined);
 
   let headline: string | null;
@@ -392,7 +408,7 @@ function projectJob(job: Job, ctx: ProjectionContext): ActivityItem | null {
     // Scheduled job: its name plus what it did, every action folded into counts.
     const label = ctx.jobLabel(jobId);
     const done = tallyPhrase([...lines, ...counts]) || research || job.summary || null;
-    const outcomeText = done ?? (failures.length > 0 || responseFailed ? null : 'no action needed');
+    const outcomeText = done ?? (failureTexts.length > 0 || responseFailed ? null : 'no action needed');
     headline = label
       ? (outcomeText ? `${label}: ${outcomeText}` : label)
       : (outcomeText ? `ran a scheduled job: ${outcomeText}` : 'ran a scheduled job');
@@ -408,7 +424,7 @@ function projectJob(job: Job, ctx: ProjectionContext): ActivityItem | null {
   } else if (counts.length > 0) {
     headline = tallyPhrase(counts);
     details = [...failureTexts, ...(research ? [research] : [])];
-  } else if (failures.length > 0) {
+  } else if (failureTexts.length > 0) {
     headline = failureTexts[0]!;
     details = [...failureTexts.slice(1), ...(research ? [research] : [])];
   } else if (research) {

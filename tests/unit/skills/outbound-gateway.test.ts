@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { OutboundGateway, UnknownEmailAccountError, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL, PRINCIPAL_SEND_DIGEST_REASONS, PRINCIPAL_SEND_REFUSALS, LIMIT_REFUSALS, refusalKindOf, askPreamble, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
+import { OutboundGateway, UnknownEmailAccountError, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL, PRINCIPAL_SEND_DIGEST_REASONS, PRINCIPAL_SEND_REFUSALS, LIMIT_REFUSALS, refusalKindOf, isPolicyHoldRefusal, askPreamble, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
 import { createLogger } from '../../../src/logger.js';
 import type { NylasClient, NylasMessage } from '../../../src/channels/email/nylas-client.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
@@ -158,6 +158,8 @@ describe('OutboundGateway', () => {
 
     expect(result.success).toBe(false);
     expect(result.blockedReason).toBe('Recipient is blocked');
+    // A blocked recipient is the rule working, not a fault (#2587).
+    expect(result.policyHold).toBe(true);
     // Safety check: we must never hit Nylas or the content filter for blocked contacts
     expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
     expect(mocks.contentFilter.check).not.toHaveBeenCalled();
@@ -248,7 +250,7 @@ describe('OutboundGateway', () => {
       const gateway = makeGateway();
 
       const blocked = await gateway.createEmailDraft({ ...baseRequest, additionalTo: ['blocked@example.com'] });
-      expect(blocked).toEqual({ success: false, blockedReason: 'Recipient is blocked' });
+      expect(blocked).toEqual({ success: false, blockedReason: 'Recipient is blocked', policyHold: true });
       expect(createDraft).not.toHaveBeenCalled();
 
       const drafted = await gateway.createEmailDraft({ ...baseRequest, additionalTo: ['second@example.com'] });
@@ -652,6 +654,27 @@ describe('OutboundGateway', () => {
       // For a Stage-1 deterministic rule, the summary is the rule name only.
       expect(reasonBeforeRecipientNote(result.blockedReason)).toBe('secret-pattern');
       expect(result.blockedRules).toEqual(['secret-pattern']);
+      // The filter judged the message: a policy hold, not a hiccup (#2587).
+      expect(result.policyHold).toBe(true);
+    });
+
+    it('does not mark a block from a judge that could not rule as a policy hold (#2587)', async () => {
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+        passed: false,
+        findings: [{ rule: 'llm-judge-unavailable', detail: 'timeout', unjudged: true }],
+        stage: 'llm-review',
+      });
+      const gateway = new OutboundGateway({
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+        logger: mocks.logger,
+      });
+      const result = await gateway.send(baseRequest);
+      expect(result.success).toBe(false);
+      expect(result.policyHold).toBeUndefined();
     });
 
     it('returns the judge\'s abstract reason and rule name so the agent can self-correct (LLM-judge block)', async () => {
@@ -966,6 +989,8 @@ describe('OutboundGateway', () => {
 
       // Filter crash must block the send
       expect(result.success).toBe(false);
+      // Nothing judged the message, so this block is a failure, not a policy hold (#2587).
+      expect(result.policyHold).toBeUndefined();
       // The block is queued for the principal's digest (#2159)
       const publishCalls = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls;
       const notificationCalls = publishCalls.filter(
@@ -3121,6 +3146,34 @@ describe('gated draft-fallback (two-step pattern)', () => {
     expect(result.gated).toBe(true);
     expect(result.actionRef).toMatch(/^[0-9a-f]{8}$/);
     expect(result.blockedReason).toMatch(/autonomy score.*65.*below.*send threshold/i);
+    // Held for an approval the principal can act on: a policy hold (#2587).
+    expect(result.policyHold).toBe(true);
+  });
+
+  it('is a failure, not a policy hold, when the approval row cannot be written (#2587)', async () => {
+    const mocks = createMocks();
+    const actionLogRepo = makeActionLogRepo();
+    vi.mocked(actionLogRepo.insert).mockRejectedValue(new Error('db down'));
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo,
+    });
+    const result = await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123', conversationId: 'conv-456', reExecRecipe: TEST_RECIPE },
+    );
+    // Still blocked (fail closed), but nobody will be asked, so it stays a hiccup.
+    expect(result.success).toBe(false);
+    expect(result.gated).toBe(true);
+    expect(result.actionRef).toBeUndefined();
+    expect(result.policyHold).toBeUndefined();
+    expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
   });
 
   it('skips action_log write and returns no actionRef when reExecRecipe is not provided', async () => {
@@ -4140,7 +4193,7 @@ describe('OutboundGateway — principal mailbox and email signature', () => {
   it('send() refuses an email whose account is the principal\'s mailbox', async () => {
     const { gateway, mocks } = makeGateway({ persona: PERSONA });
     const result = await gateway.send(email({ accountId: 'joseph' }));
-    expect(result).toEqual({ success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL });
+    expect(result).toEqual({ success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, policyHold: true });
     expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
     expect(mocks.bus.publish).not.toHaveBeenCalled();
   });
@@ -4157,8 +4210,8 @@ describe('OutboundGateway — principal mailbox and email signature', () => {
       principalEmailAddresses: async () => ['work@example.com', 'personal@example.com'],
       logger: mocks.logger,
     });
-    expect(await gateway.send(email({ accountId: 'spare' }))).toEqual({ success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL });
-    expect(await gateway.sendEmailDraft('d1', 'spare', { recipientEmail: 'priya@example.com', body: 'x', subject: 's' })).toEqual({ success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL });
+    expect(await gateway.send(email({ accountId: 'spare' }))).toEqual({ success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, policyHold: true });
+    expect(await gateway.sendEmailDraft('d1', 'spare', { recipientEmail: 'priya@example.com', body: 'x', subject: 's' })).toEqual({ success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, policyHold: true });
     expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
   });
 
@@ -4199,7 +4252,7 @@ describe('OutboundGateway — principal mailbox and email signature', () => {
       email({ accountId: 'joseph', to: 'priya@example.com' }),
       { isSystemNotification: true },
     );
-    expect(result).toEqual({ success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL });
+    expect(result).toEqual({ success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, policyHold: true });
     expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
   });
 
@@ -4208,7 +4261,7 @@ describe('OutboundGateway — principal mailbox and email signature', () => {
     const result = await gateway.sendEmailDraft('draft-1', 'joseph', {
       recipientEmail: 'priya@example.com', body: 'Hi', subject: 'Call',
     });
-    expect(result).toEqual({ success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL });
+    expect(result).toEqual({ success: false, blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, policyHold: true });
     expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
     expect(mocks.bus.publish).not.toHaveBeenCalled();
   });
@@ -4257,6 +4310,55 @@ describe('band review (#2159)', () => {
     });
     return { service: { getConfig } as unknown as AutonomyService, current };
   }
+
+  // #2587: the console counts a review's call as "held for you", and a review that could
+  // not run as a hiccup. The marker is structured, so nothing reads the reason text.
+  describe('marks the review\'s own calls as policy holds', () => {
+    it('marks a hold, a bounce and a block', async () => {
+      const outcomes = [
+        { kind: 'hold', reason: 'Held: commits the principal to a time.', findings: [{ rule: 'commitment', detail: 'x' }] },
+        { kind: 'bounce', findings: [{ rule: 'speaks-as-principal', detail: 'x' }] },
+        { kind: 'block', reason: 'Still wrong.', findings: [{ rule: 'speaks-as-principal', detail: 'x' }] },
+      ];
+      for (const outcome of outcomes) {
+        const gw = makeBandGateway({ review: vi.fn().mockResolvedValue(outcome), score: 84 });
+        const result = await gw.send(emailReq);
+        expect(result.success, outcome.kind).toBe(false);
+        expect(result.policyHold, outcome.kind).toBe(true);
+      }
+    });
+
+    it('does not mark a hold or bounce the reviewer could not judge', async () => {
+      const outcomes = [
+        { kind: 'hold', reason: 'Held: reviewer unavailable.', findings: [{ rule: 'review-unavailable', detail: 'x', unjudged: true }] },
+        { kind: 'bounce', findings: [{ rule: 'pii', detail: 'The reviewer could not check these.', unjudged: true }] },
+      ];
+      for (const outcome of outcomes) {
+        const gw = makeBandGateway({ review: vi.fn().mockResolvedValue(outcome), score: 84 });
+        const result = await gw.send(emailReq);
+        expect(result.success, outcome.kind).toBe(false);
+        expect(result.policyHold, outcome.kind).toBeUndefined();
+      }
+    });
+
+    it('does not mark a hold whose approval row could not be written', async () => {
+      const actionLogRepo = makeActionLogRepo();
+      vi.mocked(actionLogRepo.insert).mockRejectedValue(new Error('db down'));
+      const gw = makeBandGateway({ review: vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held.', findings: [{ rule: 'steered', detail: 'x' }] }), score: 84, actionLogRepo });
+      const recipe = { toolName: 'email-send', description: 'Email Joel', partialPayload: {} };
+      const result = await gw.send(emailReq, { taskEventId: 't1', reExecRecipe: recipe });
+      expect(result.success).toBe(false);
+      expect(result.blockedReason).toContain('No approval request could be recorded');
+      expect(result.policyHold).toBeUndefined();
+    });
+
+    it('does not mark the hold that stands in for a review that threw', async () => {
+      const gw = makeBandGateway({ review: vi.fn().mockRejectedValue(new Error('judge down')), score: 84 });
+      const result = await gw.send(emailReq);
+      expect(result.success).toBe(false);
+      expect(result.policyHold).toBeUndefined();
+    });
+  });
 
   // The scenario suite pins gating per case on one stack (#2312): the gateway reads it per call.
   describe('reads the gating from the autonomy config on each call', () => {
@@ -5406,6 +5508,7 @@ describe('band review (#2159)', () => {
         expect(result).toEqual({
           success: false,
           blockedReason: 'Not sent: this draft contains phone_us, which can\'t be sent to this recipient. Edit the draft to remove them, or ask the principal.',
+          policyHold: true,
         });
         expect(sendDraft).not.toHaveBeenCalled();
         expect(review).not.toHaveBeenCalled();
@@ -6117,7 +6220,10 @@ describe('sendPrincipalDraft (#2474)', () => {
     expect(client!.sendDraft).toHaveBeenCalled();
     // on_request still refuses an autonomous call.
     const system = { originator: { contactId: 'system', systemRole: 'system', channel: 'scheduler', initiatedAt: '2026-11-07T10:00:00.000Z' } };
-    expect(await gw.sendPrincipalDraft('d1', { ...opts, authority: { taskMetadata: system } })).toMatchObject({ refusal: 'not_requested' });
+    const refused = await gw.sendPrincipalDraft('d1', { ...opts, authority: { taskMetadata: system } });
+    expect(refused).toMatchObject({ refusal: 'not_requested' });
+    // An unreadable setting is a failure, not the principal's setting at work (#2587).
+    expect(refused.policyHold).toBeUndefined();
   });
 
   it('1. refuses with mailbox_unavailable when the principal mailbox is not connected', async () => {
@@ -6153,6 +6259,8 @@ describe('sendPrincipalDraft (#2474)', () => {
     const system = { originator: { contactId: 'system', systemRole: 'system', channel: 'scheduler', initiatedAt: '2026-11-07T10:00:00.000Z' } };
     const r = await gw.sendPrincipalDraft('d1', { ...opts, authority: { taskMetadata: system } });
     expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'not_requested', blockedReason: PRINCIPAL_SEND_REFUSALS.not_requested });
+    // A setting the principal chose: a policy hold (#2587).
+    expect(r.policyHold).toBe(true);
     expect(client!.getDraft).not.toHaveBeenCalled();
   });
 
@@ -6171,6 +6279,8 @@ describe('sendPrincipalDraft (#2474)', () => {
     const { gw } = make({ client });
     const r = await gw.sendPrincipalDraft('d1', opts);
     expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'lookup_failed' });
+    // A failed read is a hiccup, not a hold (#2587).
+    expect(r.policyHold).toBeUndefined();
     expect(client.sendDraft).not.toHaveBeenCalled();
   });
 
@@ -6811,7 +6921,7 @@ describe('sendPrincipalDraft (#2474)', () => {
 
     it('7. refuses with not_curia_draft when Curia did not create the draft in this task', async () => {
       const { gw, client } = makeAuto({ curiaWrites: { created: false, lastWriteAt: null, replyToMessageId: null } });
-      expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_curia_draft' });
+      expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_curia_draft', policyHold: true });
       expect(client!.sendDraft).not.toHaveBeenCalled();
     });
 
@@ -6828,6 +6938,8 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(r).toMatchObject({
         refusal: 'recipient_not_on_thread',
         blockedReason: "The reply goes to someone who isn't genuinely on the thread (sam@example.org is not on the thread)." + SUFFIX,
+        // A deliberate rule (#2587): held for the principal, not a hiccup.
+        policyHold: true,
       });
       expect(client!.sendDraft).not.toHaveBeenCalled();
       expect(ledger.recordSending).not.toHaveBeenCalled();
@@ -6921,6 +7033,18 @@ describe('sendPrincipalDraft (#2474)', () => {
         // Both attempts (the failed one and the retry) carried the notice.
         expect(reports().map((r) => r['summary'])).toEqual([FIRST, FIRST]);
         expect(ledger.recordLimitStop).toHaveBeenCalledOnce();
+      });
+
+      it('every refusal code is either a policy hold or a failure (#2587)', () => {
+        // Failures to send or to check stay hiccups; every other refusal is a rule working.
+        const failures = new Set<keyof typeof PRINCIPAL_SEND_REFUSALS>([
+          'mailbox_unavailable', 'unknown_mailbox', 'ambiguous_mailbox', 'not_found', 'lookup_failed', 'no_recipients',
+          'draft_changed', 'send_unconfirmed', 'no_band_review', 'no_send_ledger', 'thread_unreadable',
+          'principal_addresses_unreadable', 'provenance_unreadable',
+        ]);
+        for (const code of Object.keys(PRINCIPAL_SEND_REFUSALS) as Array<keyof typeof PRINCIPAL_SEND_REFUSALS>) {
+          expect(isPolicyHoldRefusal(code), code).toBe(!failures.has(code));
+        }
       });
 
       it('every refusal code has its kind and digest heading', async () => {

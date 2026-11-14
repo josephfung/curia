@@ -118,6 +118,10 @@ export function BigNumbers({ onHandled, onTimezone }: BigNumbersProps) {
           )}
           <TileValue loading={pending}>{data ? data.hiccups.current.toLocaleString('en-US') : null}</TileValue>
           {data && data.hiccups.byDay.length > 0 && <Sparkline values={data.hiccups.byDay} />}
+          {/* Policy holds are not hiccups (#2587), but they stay visible here, not silently hidden. */}
+          {data && data.held.current > 0 && (
+            <div className="dash-num-foot">{data.held.current.toLocaleString('en-US')} held for you</div>
+          )}
         </article>
       </div>
       {hiccupsOpen && <HiccupsDialog onClose={() => setHiccupsOpen(false)} />}

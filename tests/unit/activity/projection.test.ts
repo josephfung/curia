@@ -44,7 +44,7 @@ function toolCall(
   taskId: string,
   toolName: string,
   input: Record<string, unknown>,
-  result: { success: true; data: unknown } | { success: false; error: string },
+  result: { success: true; data: unknown } | { success: false; error: string; errorType?: string },
   at?: Date,
 ): AuditLogRow[] {
   const invoke = row({ eventType: 'tool.invoke', parentEventId: taskId, payload: { toolName, input, taskEventId: taskId }, ...(at ? { timestamp: at } : {}) });
@@ -219,6 +219,64 @@ describe('projectActivity', () => {
     expect(item.outcome).toBe('partial');
     // The raw provider error stays out of the feed.
     expect(JSON.stringify(item)).not.toContain('Nylas 500');
+  });
+
+  describe('policy holds (#2587)', () => {
+    const HOLD = { success: false as const, error: 'Held for the principal: commits to a meeting time.', errorType: 'POLICY_HOLD' };
+    const named = ctx({ name: (r) => (r === 'c-1' ? 'Jane Roe' : null) });
+
+    it('shows a hold-only job as held for you, not failed', () => {
+      const root = task('t1');
+      const children = toolCall('t1', 'email-send', { to: 'c-1' }, HOLD);
+      const item = projectActivity(rows([root], children), named)[0]!;
+      expect(item.headline).toBe("didn't email Jane Roe: held for you");
+      expect(item.outcome).toBe('success');
+      // The guard's reason text stays out of the feed, as a failure's does.
+      expect(JSON.stringify(item)).not.toContain('commits to a meeting time');
+    });
+
+    it('keeps a hold beside a success a success, with the hold as a detail', () => {
+      const root = task('t1');
+      const children = [
+        ...toolCall('t1', 'ceo-inbox-archive', { message_id: 'm' }, { success: true, data: {} }),
+        ...toolCall('t1', 'email-send', { to: 'c-1' }, HOLD),
+      ];
+      const item = projectActivity(rows([root], children), named)[0]!;
+      expect(item.headline).toBe('archived an email');
+      expect(item.details).toEqual(["didn't email Jane Roe: held for you"]);
+      expect(item.outcome).toBe('success');
+    });
+
+    it('still fails a job whose real failure sits beside a hold', () => {
+      const root = task('t1');
+      const children = [
+        ...toolCall('t1', 'email-send', { to: 'c-1' }, HOLD),
+        ...toolCall('t1', 'calendar-create-event', { title: 'Lunch' }, { success: false, error: 'Nylas 503' }),
+      ];
+      const item = projectActivity(rows([root], children), named)[0]!;
+      expect(item.outcome).toBe('failed');
+      // Failures lead; the hold follows.
+      expect(item.headline).toBe("couldn't schedule “Lunch”");
+      expect(item.details).toEqual(["didn't email Jane Roe: held for you"]);
+    });
+
+    it('reads the hold from errorType only, never from the error text', () => {
+      const root = task('t1');
+      const children = toolCall('t1', 'email-send', { to: 'c-1' }, { success: false, error: 'Held for the principal.' });
+      const item = projectActivity(rows([root], children), named)[0]!;
+      expect(item.headline).toBe("couldn't email Jane Roe");
+      expect(item.outcome).toBe('failed');
+    });
+
+    it('says a scheduled job with only a hold did something, not "no action needed"', () => {
+      const jobId = '0b8f2f8e-1f7a-4c3e-9a51-3f0e2a1d4c56';
+      const root = task('t1', { agentId: 'ceo-inbox', channelId: 'scheduler' }, { conversationId: `scheduler:${jobId}:run-1` });
+      const children = toolCall('t1', 'email-send', { to: 'c-1' }, HOLD);
+      const item = projectActivity(rows([root], children), ctx({ ...named, jobLabel: () => 'Inbox triage' }))[0]!;
+      expect(item.headline).toBe('Inbox triage');
+      expect(item.details).toEqual(["didn't email Jane Roe: held for you"]);
+      expect(item.outcome).toBe('success');
+    });
   });
 
   it('marks a job failed when its only action failed', () => {

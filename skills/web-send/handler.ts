@@ -12,6 +12,7 @@ import { RELAY_DEFERRED_NOTE, isPrincipalDirectedSend, originatorOption, relayDe
 import { FALLBACK_CHANNELS, type FallbackChannel } from '../../src/agents/principal-reach.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
+import { gatewaySendFailure } from '../../src/skills/_shared/policy-hold.js';
 
 const MAX_MESSAGE_LENGTH = 4000;
 
@@ -92,7 +93,7 @@ export class WebSendHandler implements ToolHandler {
       };
     }
     if (result.webDelivery !== 'fallback') {
-      return { success: false, error: result.blockedReason ?? 'Phone app send failed' };
+      return gatewaySendFailure(result, 'Phone app send failed');
     }
 
     const notice = result.webDeliveryDetail ?? result.blockedReason ?? 'The phone could not be reached.';
@@ -108,7 +109,7 @@ export class WebSendHandler implements ToolHandler {
       try {
         const sent = await ctx.outboundGateway.send(FALLBACK_REQUEST[channel](resolved.identifier, message), options);
         if (sent.gated || (sent.blockedRules !== undefined && sent.blockedRules.length > 0)) {
-          return { success: false, error: sent.blockedReason ?? 'The message was not sent.' };
+          return gatewaySendFailure(sent, 'The message was not sent.');
         }
         if (sent.deferredToDigest) {
           // Both notes: the queue one keeps the agent from re-sending, and the

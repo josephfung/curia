@@ -8,6 +8,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { checkMailboxInput, readMailboxInput } from '../../../_shared/principal-mailbox-client.js';
 import { PRINCIPAL_SEND_REFUSALS, type PrincipalDraftSendResult } from '../../../../src/skills/outbound-gateway.js';
+import { gatewaySendFailure } from '../../../../src/skills/_shared/policy-hold.js';
 
 // Time kept back from the skill's deadline, so this handler answers before the execution
 // layer's timeout does. That timeout's text reads like a refusal, but the send keeps running.
@@ -41,7 +42,7 @@ export class CeoInboxSendDraftHandler implements ToolHandler {
     // layer never queues this tool, so a replay can only be a stale or forged row.
     if (ctx.humanApproved === true) {
       ctx.log.warn({ draftId }, 'ceo-inbox-send-draft: approval replay refused');
-      return { success: false, error: PRINCIPAL_SEND_REFUSALS.approval_replay };
+      return { success: false, error: PRINCIPAL_SEND_REFUSALS.approval_replay, errorType: 'POLICY_HOLD' };
     }
 
     const send = ctx.outboundGateway.sendPrincipalDraft(draftId, {
@@ -85,7 +86,8 @@ export class CeoInboxSendDraftHandler implements ToolHandler {
       // A limit stop's text starts with the fixed "Waiting (limit)" cue (R47): that, not a
       // structured field, is what the model sees.
       ctx.log.info({ draftId, refusal: result.refusal, refusalKind: result.refusalKind, leftAsDraft: result.leftAsDraft }, 'ceo-inbox-send-draft: not sent');
-      return { success: false, error: result.blockedReason ?? 'The draft was not sent.' };
+      // A refusal the gateway made by design carries POLICY_HOLD (#2587): held, not a hiccup.
+      return gatewaySendFailure(result, 'The draft was not sent.');
     }
 
     return {

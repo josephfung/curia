@@ -144,8 +144,9 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
       };
     }
     // The alias form is refused before any lookup; the contact-ID form after resolution below.
+    // A policy hold (#2587): the rule redirects a misroute, it is not a failure.
     if (isPrincipalAliasOnly(lists)) {
-      return { success: false, error: PRINCIPAL_ONLY_ERROR };
+      return { success: false, error: PRINCIPAL_ONLY_ERROR, errorType: 'POLICY_HOLD' };
     }
     const recipientCount = Object.values(lists).reduce((sum, entries) => sum + entries.length, 0);
     if (recipientCount > MAX_DRAFT_RECIPIENTS) {
@@ -176,7 +177,7 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
     // Every accepted recipient, before the To/Cc dedup collapses duplicates of the principal.
     const rawAddresses = [...toRaw.participants, ...ccRaw.participants].map((participant) => participant.email);
     if (await isPrincipalOnlyDraft(ctx, [...toRefs.contactIds, ...ccRefs.contactIds], rawAddresses)) {
-      return { success: false, error: PRINCIPAL_ONLY_ERROR };
+      return { success: false, error: PRINCIPAL_ONLY_ERROR, errorType: 'POLICY_HOLD' };
     }
 
     const to = uniqueParticipants(toRefs.participants, toRaw.participants);
