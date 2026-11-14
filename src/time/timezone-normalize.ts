@@ -31,8 +31,10 @@ export function usableTimezone(
 }
 
 // Separator between the region and the city in calendar-style labels:
-// "Eastern Time - Toronto" (Google Calendar), with en/em dash variants.
-const LABEL_SEPARATOR = /\s+[-–—]\s+/;
+// "Eastern Time - Toronto" (Google Calendar), with en/em dash variants. Matched after
+// whitespace is collapsed to single spaces: a `\s+`-led pattern backtracks quadratically on a
+// long whitespace run with no dash (60k spaces took ~20s), and the console field takes 64 KiB.
+const LABEL_SEPARATOR = / [-–—] /;
 
 // City (last path segment, lowercased, spaces as underscores) → zones ending in it.
 // Built lazily: Intl.supportedValuesOf is cheap but there is no reason to pay for it
@@ -74,7 +76,7 @@ export function normalizeTimezone(raw: string): string | null {
     return resolved.toLowerCase() === trimmed.toLowerCase() ? resolved : trimmed;
   }
 
-  const parts = trimmed.split(LABEL_SEPARATOR);
+  const parts = trimmed.replace(/\s+/g, ' ').split(LABEL_SEPARATOR);
   const cityPart = parts[parts.length - 1]?.trim();
   if (!cityPart) return null;
   const matches = zonesForCity(cityPart.toLowerCase().replace(/\s+/g, '_'));
