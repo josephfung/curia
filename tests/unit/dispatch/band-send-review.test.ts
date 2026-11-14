@@ -327,6 +327,71 @@ describe('BandSendReview', () => {
         });
       });
 
+      // #2589 (ADR-062 rule 12): the message being answered newly copied legal, HR, the board or
+      // someone senior to its sender. Deliberately strict for now; see the TODO at the rule.
+      describe('a high-stakes copy', () => {
+        const COPY = 'Held for the principal: the message it answers newly copies someone from legal, HR or the board, or someone senior to its sender, so the principal decides how to answer.';
+        const OFF = 'Held for the principal: it shares information that isn\'t on the thread, and Curia doesn\'t pass on new information without the principal.';
+        const copied = {
+          sender: { email: 'dana@example.org', contact: true, title: 'Account Manager' },
+          newlyCopied: [{ email: 'counsel@example.org', contact: true, title: 'General Counsel' }],
+        };
+        const withCopies: BandReviewInput = { ...auto, score: 100, stakesCeiling: 'commitment', copied };
+
+        it('is asked only when the answered message newly copied someone the reply goes to', async () => {
+          const { svc, review } = make([{ ...rated('routine'), highStakesCopy: false }, rated('routine'), rated('routine')]);
+          await svc.review(withCopies);
+          await svc.review({ ...withCopies, copied: { sender: null, newlyCopied: [] } });
+          await svc.review(auto);
+          expect(review.mock.calls[0]![0].questions).toEqual(['purpose', 'stakes', 'grounding', 'necessity', 'off-thread', 'high-stakes-copy']);
+          expect(review.mock.calls[0]![0].evidence.copied).toEqual(copied);
+          for (const call of review.mock.calls.slice(1)) {
+            expect(call[0].questions).not.toContain('high-stakes-copy');
+            expect(call[0].evidence).not.toHaveProperty('copied');
+          }
+        });
+
+        it('holds at 100 under all when the judge says the copy raises the stakes', async () => {
+          const { svc, limiter } = make([{ ...rated('routine'), highStakesCopy: true }]);
+          const tryAcquire = vi.spyOn(limiter, 'tryAcquire');
+          const d = await svc.review(withCopies);
+          expect(d).toEqual({ kind: 'hold', reason: COPY, findings: [{ rule: 'high-stakes-copy', detail: COPY }] });
+          expect(tryAcquire).not.toHaveBeenCalled();
+        });
+
+        it('sends as before when the judge says it does not', async () => {
+          const { svc } = make([{ ...rated('routine'), highStakesCopy: false }]);
+          await expect(svc.review(withCopies)).resolves.toEqual({ kind: 'send', signals: { speaksAsPrincipal: true } });
+        });
+
+        it('holds when the answer is missing or not a boolean (fail closed)', async () => {
+          for (const highStakesCopy of [undefined, 'yes']) {
+            const verdict = { ...rated('routine'), ...(highStakesCopy === undefined ? {} : { highStakesCopy }) } as unknown as BriefVerdict;
+            const { svc } = make([verdict]);
+            const d = await svc.review(withCopies);
+            expect(d.kind).toBe('hold');
+            if (d.kind === 'hold') expect(d.findings.map((f) => f.rule)).toEqual(['review-unavailable']);
+          }
+        });
+
+        it('holds with both reasons when the reply is also off-thread, off-thread leading', async () => {
+          const { svc } = make([{ ...rated('routine'), offThread: true, highStakesCopy: true }]);
+          const d = await svc.review(withCopies);
+          expect(d.kind).toBe('hold');
+          if (d.kind === 'hold') {
+            expect(d.findings.map((f) => f.rule)).toEqual(['off-thread', 'high-stakes-copy']);
+            expect(d.reason).toBe(`${OFF} The message it answers newly copies legal, HR, the board or someone senior.`);
+          }
+        });
+
+        it('is never asked on a principal-directed send', async () => {
+          const { svc, review } = make([{ ok: true, purpose: 'serving', unsupportedClaims: [], reason: 'ok' }]);
+          await svc.review({ ...mailbox, draftAuthor: 'curia', copied });
+          expect(review.mock.calls[0]![0].questions).not.toContain('high-stakes-copy');
+          expect(review.mock.calls[0]![0].evidence).not.toHaveProperty('copied');
+        });
+      });
+
       it('treats an autonomous principal-mailbox send as speaking for the principal without asking', async () => {
         // The judge is not asked, so its answer has no speaksAsPrincipal; routine still needs 80.
         const at74 = make([rated('routine')]);
