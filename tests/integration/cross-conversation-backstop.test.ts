@@ -108,6 +108,12 @@ const CONTACT_NAMES: Record<string, string> = {
   [CONTACT_G]: 'Grace Hopper',
 };
 
+/** Each contact's email identity: a calendar attendee names a person by address. */
+const CONTACT_EMAILS: Record<string, string> = {
+  [CONTACT_B]: 'barbara@example.com',
+  [CONTACT_C]: 'carol@example.com',
+};
+
 type ScriptStep = (messages: unknown) => LLMResponse | Promise<LLMResponse>;
 
 function harness(contacts: Record<string, ReturnType<typeof person>>) {
@@ -144,6 +150,10 @@ function harness(contacts: Record<string, ReturnType<typeof person>>) {
       ? { contact: { id, displayName: CONTACT_NAMES[id], primaryEmail: null, primaryPhone: null }, identities: PRINCIPAL_IDENTITIES }
       : undefined)),
     getIdentitiesForContact: vi.fn().mockResolvedValue([]),
+    resolveByChannelIdentity: vi.fn(async (channel: string, identifier: string) => {
+      const contactId = Object.keys(CONTACT_EMAILS).find((id) => CONTACT_EMAILS[id] === identifier.toLowerCase());
+      return channel === 'email' && contactId ? { contactId, displayName: CONTACT_NAMES[contactId] } : null;
+    }),
   } as unknown as ContactService;
   const executionLayer = new ExecutionLayer(toolRegistry, logger, {
     contactService,
@@ -212,8 +222,14 @@ function harness(contacts: Record<string, ReturnType<typeof person>>) {
   return { bus, booking, email, inbound, script, transcript };
 }
 
+// The real tool's attendee shape (parseWritableAttendees): { email, name? }, so the booking
+// names the person by address and the send names them by contact UUID.
 const book = (attendee: string) => () =>
-  toolUse('calendar-create-event', { attendees: [attendee], title: 'Sync', start: '2026-11-12T15:00:00-05:00' });
+  toolUse('calendar-create-event', {
+    attendees: [{ email: CONTACT_EMAILS[attendee]!, name: CONTACT_NAMES[attendee]! }],
+    title: 'Sync',
+    start: '2026-11-12T15:00:00-05:00',
+  });
 const mail = (recipient: string) => () =>
   toolUse('email-send', { recipient, subject: 'Sync', body: 'Booked for Thursday 3pm.' });
 const say = (content: string) => () => text(content);

@@ -4,18 +4,32 @@
 // concurrent turns already acted on. Targets come from the input's values, not
 // its field names, so no per-tool knowledge is needed.
 
+import type { Logger } from '../logger.js';
 import { isUuid } from '../util/uuid.js';
 import type { ActionTarget } from './turn-activity.js';
 
 const MAX_DEPTH = 6;
 const MAX_STRINGS = 50;
-const MAX_CONTACT_CHECKS = 10;
+/** Contact lookups per call, UUID checks and email resolutions together. */
+const MAX_CONTACT_LOOKUPS = 10;
 const OTHER_ID_RE = /^[A-Za-z0-9_\-:.]+$/;
+// A bare address, as calendar attendees and send fields carry it. Not a validator: a
+// value that only looks like one is looked up and simply not found.
+const EMAIL_RE = /^[^\s@<>()[\]",;:]+@[^\s@<>()[\]",;:]+\.[^\s@<>()[\]",;:]+$/;
+const EMAIL_MAX = 254;
 
 export interface CandidateValues {
   uuids: string[];
   hosts: string[];
   otherIds: string[];
+  /** Email-shaped strings, lowercased. */
+  emails: string[];
+  /** Strings classified; the walk stops at MAX_STRINGS. */
+  stringsSeen: number;
+  /** The walk stopped at the string cap. */
+  stringCapReached: boolean;
+  /** Some container sat deeper than MAX_DEPTH and was skipped. */
+  depthCapReached: boolean;
 }
 
 function hostOf(s: string): string | undefined {
@@ -37,7 +51,10 @@ export function collectCandidateValues(input: Record<string, unknown>): Candidat
   const uuids = new Set<string>();
   const hosts = new Set<string>();
   const otherIds = new Set<string>();
+  const emails = new Set<string>();
   let seen = 0;
+  let stringCapReached = false;
+  let depthCapReached = false;
 
   const classify = (s: string): void => {
     // Annotated as boolean so the type guard does not narrow `s` to never below.
@@ -51,6 +68,11 @@ export function collectCandidateValues(input: Record<string, unknown>): Candidat
       hosts.add(host);
       return;
     }
+    const trimmed = s.trim();
+    if (trimmed.length <= EMAIL_MAX && EMAIL_RE.test(trimmed)) {
+      emails.add(trimmed.toLowerCase());
+      return;
+    }
     if (s.includes('@') || s.includes('://')) return;
     if (s.length >= 8 && s.length <= 128 && OTHER_ID_RE.test(s) && /\d/.test(s)) {
       otherIds.add(s);
@@ -58,13 +80,20 @@ export function collectCandidateValues(input: Record<string, unknown>): Candidat
   };
 
   const walk = (value: unknown, depth: number): void => {
-    if (seen >= MAX_STRINGS) return;
+    if (seen >= MAX_STRINGS) {
+      stringCapReached = true;
+      return;
+    }
     if (typeof value === 'string') {
       seen++;
       classify(value);
       return;
     }
-    if (depth > MAX_DEPTH || value === null || typeof value !== 'object') return;
+    if (value === null || typeof value !== 'object') return;
+    if (depth > MAX_DEPTH) {
+      depthCapReached = true;
+      return;
+    }
     const children = Array.isArray(value) ? value : Object.values(value);
     for (const child of children) {
       walk(child, depth + 1);
@@ -72,8 +101,31 @@ export function collectCandidateValues(input: Record<string, unknown>): Candidat
   };
 
   walk(input, 0);
-  return { uuids: [...uuids], hosts: [...hosts], otherIds: [...otherIds] };
+  return {
+    uuids: [...uuids],
+    hosts: [...hosts],
+    otherIds: [...otherIds],
+    emails: [...emails],
+    stringsSeen: seen,
+    stringCapReached,
+    depthCapReached,
+  };
 }
+
+export interface ActionTargetDeps {
+  principalContactId: string | undefined;
+  isContact: (id: string) => Promise<boolean>;
+  /** The contact an email address belongs to, if any. Without it, emails are ignored. */
+  contactIdForEmail?: (email: string) => Promise<string | undefined>;
+  /** Addresses never resolved: the principal's and Curia's own. Compared lowercased. */
+  excludedEmails?: ReadonlySet<string>;
+  /** For lookup failures (warn, id kind only) and truncation (debug, counts only). */
+  logger?: Logger;
+}
+
+type Lookup =
+  | { kind: 'uuid'; id: string; run: () => Promise<boolean> }
+  | { kind: 'email'; run: () => Promise<string | undefined> };
 
 /**
  * Derive the targets of a tool call. Contacts and sites win, so a shared
@@ -81,20 +133,80 @@ export function collectCandidateValues(input: Record<string, unknown>): Candidat
  * With neither, the call's other ids are its targets (two replies on different
  * threads do not collide). Only a call with no identifiable target at all
  * targets the tool itself.
- * An `isContact` rejection propagates; the caller fails open.
+ *
+ * A contact can be named by UUID or by email address (a calendar attendee is
+ * `{ email, name }`). Both are looked up, at most MAX_CONTACT_LOOKUPS together,
+ * UUIDs first. A rejected lookup is logged with its id kind only and counts as
+ * not-a-contact; an address that resolves to no contact is ignored.
  */
 export async function extractActionTargets(
   toolName: string,
   input: Record<string, unknown>,
-  deps: { principalContactId: string | undefined; isContact: (id: string) => Promise<boolean> },
+  deps: ActionTargetDeps,
 ): Promise<ActionTarget[]> {
-  const { uuids, hosts, otherIds } = collectCandidateValues(input);
+  const collected = collectCandidateValues(input);
+  const { uuids, hosts, otherIds } = collected;
   const principal = deps.principalContactId?.toLowerCase();
   const candidates = uuids.filter((u) => u !== principal);
-  const checked = candidates.slice(0, MAX_CONTACT_CHECKS);
-  const flags = await Promise.all(checked.map((id) => deps.isContact(id)));
+  const excluded = deps.excludedEmails;
+  const emails = deps.contactIdForEmail
+    ? collected.emails.filter((e) => !(excluded?.has(e) ?? false))
+    : [];
 
-  const contactIds = checked.filter((_, i) => flags[i]);
+  const lookups: Lookup[] = [];
+  for (const id of candidates) {
+    if (lookups.length >= MAX_CONTACT_LOOKUPS) break;
+    lookups.push({ kind: 'uuid', id, run: () => deps.isContact(id) });
+  }
+  const contactIdForEmail = deps.contactIdForEmail;
+  if (contactIdForEmail) {
+    for (const email of emails) {
+      if (lookups.length >= MAX_CONTACT_LOOKUPS) break;
+      lookups.push({ kind: 'email', run: () => contactIdForEmail(email) });
+    }
+  }
+  const lookupCapReached = candidates.length + emails.length > lookups.length;
+  if (collected.stringCapReached || collected.depthCapReached || lookupCapReached) {
+    deps.logger?.debug(
+      {
+        toolName,
+        stringsSeen: collected.stringsSeen,
+        stringCapReached: collected.stringCapReached,
+        depthCapReached: collected.depthCapReached,
+        lookups: lookups.length,
+        lookupCandidates: candidates.length + emails.length,
+      },
+      'cross-turn backstop: target extraction truncated',
+    );
+  }
+
+  // Each lookup is wrapped so a synchronous throw is a rejection like any other.
+  const settled = await Promise.allSettled(lookups.map(async (l) => l.run()));
+
+  const contactIds: string[] = [];
+  const seenContacts = new Set<string>();
+  const addContact = (id: string): void => {
+    const key = id.toLowerCase();
+    if (key === principal || seenContacts.has(key)) return;
+    seenContacts.add(key);
+    contactIds.push(key);
+  };
+  settled.forEach((outcome, i) => {
+    const lookup = lookups[i]!;
+    if (outcome.status === 'rejected') {
+      deps.logger?.warn(
+        { err: outcome.reason, toolName, idKind: lookup.kind },
+        'cross-turn backstop: contact lookup failed — treating the value as not a contact',
+      );
+      return;
+    }
+    if (lookup.kind === 'uuid') {
+      if (outcome.value === true) addContact(lookup.id);
+    } else if (typeof outcome.value === 'string' && isUuid(outcome.value)) {
+      addContact(outcome.value);
+    }
+  });
+
   const targets: ActionTarget[] = [
     ...contactIds.map((value): ActionTarget => ({ kind: 'contact', value })),
     ...hosts.map((value): ActionTarget => ({ kind: 'site', value })),

@@ -1603,6 +1603,15 @@ export class ExecutionLayer {
       const targets = await extractActionTargets(toolName, input, {
         principalContactId: this.principalIdentities[0]?.contactId,
         isContact: async (id) => (contactService ? (await contactService.getContact(id)) !== undefined : false),
+        // A calendar attendee names a person by address ({ email, name }), not by UUID.
+        ...(contactService
+          ? {
+              contactIdForEmail: async (email: string) =>
+                (await contactService.resolveByChannelIdentity('email', email))?.contactId,
+            }
+          : {}),
+        excludedEmails: this.backstopExcludedEmails(),
+        logger: skillLogger,
       });
       return { turnActivity, taskEventId, targets };
     } catch (err) {
@@ -1612,6 +1621,19 @@ export class ExecutionLayer {
       );
       return null;
     }
+  }
+
+  /**
+   * Addresses the backstop never resolves to a target (#2588): the principal's own email
+   * identities and every mailbox Curia sends from. Lowercased.
+   */
+  private backstopExcludedEmails(): ReadonlySet<string> {
+    const excluded = new Set<string>();
+    for (const identity of this.principalIdentities) {
+      if (identity.channel === 'email') excluded.add(identity.channelIdentifier.trim().toLowerCase());
+    }
+    for (const address of this.selfEmails) excluded.add(address.trim().toLowerCase());
+    return excluded;
   }
 
   /**
