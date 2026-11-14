@@ -48,6 +48,7 @@ import { normalizeExclusionPair, type ExclusionPair } from './dedup-exclusions.j
 import { canonicalPairKey } from './dedup-pair-key.js';
 import { comparableChannels, isNearMiss, sameIdentifier } from './identifier-near-miss.js';
 import { PERSONAL_EMAIL_DOMAINS } from './non-org-domains.js';
+import { normalizeTimezone } from '../time/timezone-normalize.js';
 
 /** Outcome of re-pointing a merged-away contact's dedup exclusions onto the survivor. */
 export interface ReattachExclusionsResult {
@@ -65,6 +66,32 @@ export class ContactValidationError extends Error {
     super(message);
     this.name = 'ContactValidationError';
   }
+}
+
+/**
+ * A contact timezone that is not a zone the runtime can compute with and cannot be mapped to
+ * one (normalizeTimezone returned null). A ContactValidationError, so callers that already fall
+ * back to the KG on validation failure (extract-facts, memory-store) keep doing so; callers that
+ * explain validation failures (contact-update) can tell it apart from the primaryEmail case.
+ */
+export class InvalidTimezoneError extends ContactValidationError {
+  constructor(readonly value: string) {
+    super(
+      `"${value}" is not a recognized timezone. Use an IANA name such as "America/Toronto" or "Europe/London".`,
+    );
+    this.name = 'InvalidTimezoneError';
+  }
+}
+
+/**
+ * Normalize a timezone on its way into the contacts table (see normalizeTimezone). null and
+ * undefined pass through: null clears the field, undefined leaves it untouched on a PATCH.
+ */
+function normalizeContactTimezone(value: string | null | undefined): string | null | undefined {
+  if (value === null || value === undefined) return value;
+  const normalized = normalizeTimezone(value);
+  if (normalized === null) throw new InvalidTimezoneError(value);
+  return normalized;
 }
 
 /**
@@ -440,6 +467,13 @@ export const NAME_NEAR_MISS_THRESHOLD = 0.95;
 export const PRINCIPAL_PROMPT_FIELDS = ['primaryEmail', 'preferredName', 'title', 'pronouns'] as const;
 
 /**
+ * Canonical fields whose change on the principal triggers the principal refresh: the prompt
+ * fields, plus the home timezone that inbox triage and meeting minutes read from the refreshed
+ * holder. Without timezone here, a console fix of a bad timezone needed a restart to take effect.
+ */
+export const PRINCIPAL_REFRESH_FIELDS = [...PRINCIPAL_PROMPT_FIELDS, 'timezone'] as const;
+
+/**
  * ContactService manages the lifecycle of contacts and their channel identities.
  *
  * Key behaviors:
@@ -790,6 +824,9 @@ export class ContactService {
     // organization routing all leave it false: those nodes outlive this contact.
     let kgNodeCreated = false;
 
+    // Validated before any KG node is minted, so a rejected timezone leaves nothing behind.
+    const timezone = normalizeContactTimezone(options.timezone) ?? null;
+
     // Defense-in-depth: sanitize display names at storage time to prevent
     // stored prompt injection. External sources (email participants, CRM imports)
     // may contain arbitrary content in the name field. See issue #39.
@@ -936,7 +973,7 @@ export class ContactService {
       organization: options.organization ?? null,
       primaryEmail: options.primaryEmail?.toLowerCase() ?? null,
       primaryPhone: options.primaryPhone ?? null,
-      timezone: options.timezone ?? null,
+      timezone,
       locale: options.locale ?? null,
       location: options.location ?? null,
       pronouns: options.pronouns ?? null,
@@ -1587,6 +1624,12 @@ export class ContactService {
       definedFields.primaryEmail = definedFields.primaryEmail.toLowerCase();
     }
 
+    // Only zones the runtime can compute with are stored; a calendar label maps to its zone,
+    // anything else throws InvalidTimezoneError before the write.
+    if ('timezone' in definedFields) {
+      definedFields.timezone = normalizeContactTimezone(definedFields.timezone);
+    }
+
     const updated: Contact = {
       ...contact,
       ...definedFields,
@@ -1596,7 +1639,7 @@ export class ContactService {
     const stored = await this.updateStoredContact(updated, client);
     // A caller-supplied client has not committed yet; that caller notifies
     // after COMMIT. The pool path commits inside updateStoredContact.
-    if (!client && PRINCIPAL_PROMPT_FIELDS.some((key) => key in definedFields)) {
+    if (!client && PRINCIPAL_REFRESH_FIELDS.some((key) => key in definedFields)) {
       this.notePrimaryEmailChanged(contactId);
     }
     return stored;

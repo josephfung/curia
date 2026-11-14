@@ -15,8 +15,9 @@
 // not silently fall through to the KG.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { CANONICAL_ATTRIBUTE_MAP, normalizePhone } from '../../../../src/contacts/canonical-attribute-guard.js';
-import { ContactValidationError } from '../../../../src/contacts/contact-service.js';
+import { CANONICAL_ATTRIBUTE_MAP, normalizePhone, principalLockedFields } from '../../../../src/contacts/canonical-attribute-guard.js';
+import { ContactValidationError, InvalidTimezoneError } from '../../../../src/contacts/contact-service.js';
+import { principalVouchesNow } from '../../../../src/skills/_shared/principal-directed.js';
 import type { ContactCanonicalFields } from '../../../../src/contacts/types.js';
 import { isUuid } from '../../../../src/util/uuid.js';
 
@@ -26,6 +27,10 @@ const VALID_FIELD_KEYS = new Set<keyof ContactCanonicalFields>(CANONICAL_ATTRIBU
 
 /** Reserved contact_id that means the principal's own contact. */
 const PRINCIPAL_ALIAS = 'principal';
+
+export const PRINCIPAL_TIMEZONE_REFUSAL =
+  'The principal\'s timezone is their home timezone and changes only when the principal asks for it directly ' +
+  'in a live conversation, or in the console\'s Contacts screen. Nothing changed. Do not change it for travel.';
 
 export class ContactUpdateHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -108,6 +113,15 @@ export class ContactUpdateHandler implements ToolHandler {
       };
     }
 
+    // The principal's timezone is their HOME zone: inbox triage, digests and date resolution
+    // run on it. It changes only on the principal's own say-so (a live principal turn or an
+    // approved replay), never from an agent acting on something it read: a calendar-invite
+    // footer set it once and stopped triage. Travel is a separate override (#2598).
+    if (principalLockedFields(existing, fields as ContactCanonicalFields).length > 0 && !principalVouchesNow(ctx)) {
+      ctx.log.warn({ contact_id }, 'contact-update: refused — the principal\'s timezone changes only on the principal\'s own say-so');
+      return { success: false, error: PRINCIPAL_TIMEZONE_REFUSAL };
+    }
+
     // Build the patch — validate types per field and normalize primaryPhone to E.164.
     const patch: ContactCanonicalFields = {};
     for (const [key, value] of fieldEntries) {
@@ -156,6 +170,10 @@ export class ContactUpdateHandler implements ToolHandler {
         },
       };
     } catch (err) {
+      // Checked before its ContactValidationError parent: the primaryEmail hint below is wrong for it.
+      if (err instanceof InvalidTimezoneError) {
+        return { success: false, error: `${err.message} Nothing changed.` };
+      }
       if (err instanceof ContactValidationError) {
         // primaryEmail is not registered in contact_channel_identities for this contact.
         // The address must be linked via contact-link-identity before it can be set as primary.

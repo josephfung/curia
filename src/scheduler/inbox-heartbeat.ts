@@ -47,7 +47,12 @@ import { TRIAGE_DAILY_CEILING, type Cadence } from '../principal-mailboxes/triag
 import type { TriageState } from '../principal-mailboxes/triage-state.js';
 import { dueMailboxes } from '../principal-mailboxes/triage-due.js';
 import { makeSystemOriginator } from '../contacts/principal.js';
-import { grantSafeErrorFields } from '../principal-mailboxes/error-fields.js';
+import { grantSafeErrorFields, mayCarryGrantId } from '../principal-mailboxes/error-fields.js';
+
+/** An error message with every double-quoted value replaced by "…": keeps the shape, drops the data. */
+export function blankQuotedValues(message: string): string {
+  return message.replace(/"[^"]*"/g, '"…"');
+}
 
 export const INBOX_DRAIN_TAG = 'inbox-drain';
 /** The drain task's intent and description: what the wake tells ceo-inbox to do (R66). */
@@ -191,7 +196,12 @@ export class InboxHeartbeat {
       this.tickInFlight = true;
       this.tick()
         .catch((err) => {
-          this.o.logger.error({ ...grantSafeErrorFields(err) }, 'InboxHeartbeat: unhandled error in tick');
+          // The message is logged only for an error that cannot carry a Nylas grant id (R20).
+          // Class name alone hid "TriageState: invalid timezone" behind `errName: "Error"`
+          // for every tick of a full day. Quoted values are blanked: messages such as
+          // `invalid timezone "<label>"` quote data, and a label can name where someone lives.
+          const message = mayCarryGrantId(err) ? {} : { errMessage: blankQuotedValues((err as Error).message) };
+          this.o.logger.error({ ...grantSafeErrorFields(err), ...message }, 'InboxHeartbeat: unhandled error in tick');
         })
         .finally(() => {
           this.tickInFlight = false;

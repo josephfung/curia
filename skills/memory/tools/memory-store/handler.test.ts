@@ -495,6 +495,84 @@ describe('MemoryStoreHandler', () => {
       expect(cs.updateContactFields).toHaveBeenCalledWith('contact-1', { timezone: 'America/Toronto' });
     });
 
+    it('keeps a principal timezone fact in the KG instead of changing the home timezone', async () => {
+      const mockMem = {
+        ...makeMockEntityMemory({}),
+        resolveOrCreate: vi.fn().mockResolvedValue({
+          kind: 'found',
+          node: { id: 'kg-p', label: 'The Principal', type: 'person' },
+        }),
+        storeFact: vi.fn().mockResolvedValue({ stored: true, action: 'created', nodeId: 'fact-1', sensitivity: 'internal' }),
+      };
+      const ctx = makeCtxWithContact(
+        mockMem,
+        { id: 'contact-p', systemRole: 'principal' } as { id: string },
+        { entity: 'The Principal', field: 'timezone', value: 'Asia/Tokyo', source: 'test' },
+      );
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.stored).toBe(true);
+      expect(data.canonical_redirect_skipped).toBe(true);
+      expect(data.canonical_redirect_skip_reason).toBe('principal_field_locked');
+      const cs = (ctx as unknown as { contactService: { updateContactFields: ReturnType<typeof vi.fn> } }).contactService;
+      expect(cs.updateContactFields).not.toHaveBeenCalled();
+      expect(mockMem.storeFact).toHaveBeenCalledTimes(1);
+    });
+
+    it('redirects a principal timezone the principal states on a live turn', async () => {
+      const mockMem = {
+        ...makeMockEntityMemory({}),
+        resolveOrCreate: vi.fn().mockResolvedValue({
+          kind: 'found',
+          node: { id: 'kg-p', label: 'The Principal', type: 'person' },
+        }),
+        storeFact: vi.fn().mockRejectedValue(new Error('storeFact should not be called')),
+      };
+      const ctx = {
+        ...makeCtxWithContact(
+          mockMem,
+          { id: 'contact-p', systemRole: 'principal' } as { id: string },
+          { entity: 'The Principal', field: 'timezone', value: 'Europe/London', source: 'test' },
+        ),
+        liveTurn: true,
+        taskMetadata: { originator: { contactId: 'contact-p', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-11-14T12:00:00Z', tier: null } },
+      } as unknown as ToolContext;
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      expect((result as { success: true; data: Record<string, unknown> }).data.action).toBe('redirected_to_contact');
+      const cs = (ctx as unknown as { contactService: { updateContactFields: ReturnType<typeof vi.fn> } }).contactService;
+      expect(cs.updateContactFields).toHaveBeenCalledWith('contact-p', { timezone: 'Europe/London' });
+    });
+
+    it('falls back to KG write when a timezone has no single zone', async () => {
+      const mockMem = {
+        ...makeMockEntityMemory({}),
+        resolveOrCreate: vi.fn().mockResolvedValue({
+          kind: 'found',
+          node: { id: 'kg-1', label: 'Jane Doe', type: 'person' },
+        }),
+        storeFact: vi.fn().mockResolvedValue({ stored: true, action: 'created', nodeId: 'fact-1', sensitivity: 'internal' }),
+      };
+      const ctx = makeCtxWithContact(
+        mockMem,
+        { id: 'contact-1' },
+        { entity: 'Jane Doe', field: 'timezone', value: 'Eastern Time - US & Canada', source: 'test' },
+      );
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.canonical_redirect_skip_reason).toBe('normalization_failed');
+      const cs = (ctx as unknown as { contactService: { updateContactFields: ReturnType<typeof vi.fn> } }).contactService;
+      expect(cs.updateContactFields).not.toHaveBeenCalled();
+    });
+
     it('normalizes phone numbers to E.164 before redirecting', async () => {
       const mockMem = {
         ...makeMockEntityMemory({}),

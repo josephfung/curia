@@ -673,6 +673,44 @@ describe('ExtractFactsHandler', () => {
       expect(call![0]).toHaveProperty('reason', 'phone_normalization_failed');
     });
 
+    // A calendar invite footer in an email set the principal's timezone and stopped inbox
+    // triage. Extraction keeps such a fact in the KG; it never changes the home timezone.
+    it('keeps a principal timezone fact in the KG and leaves the contact alone', async () => {
+      const entityMemory = makeEntityMemory();
+      const contactService = makeContactService({
+        findContactByKgNodeId: vi.fn(async () => ({ id: 'contact-p', systemRole: 'principal' })),
+      });
+      const ctx = makeCtx(
+        entityMemory,
+        { text: `${PII_SUBJECT} timezone is Eastern Time - Toronto.`, source: 'test' },
+        makeMockInfraLlm(['yes', factJson('timezone', 'Eastern Time - Toronto')]),
+        contactService,
+      );
+      const log = attachSpyLog(ctx);
+
+      await new ExtractFactsHandler().execute(ctx);
+
+      expect(contactService.updateContactFields).not.toHaveBeenCalled();
+      expect(findCall(log.info, /principal field is locked/)).toBeDefined();
+      const nodes = await entityMemory.findEntities(PII_SUBJECT);
+      expect(await entityMemory.getFacts(nodes[0]!.id)).toHaveLength(1);
+    });
+
+    it('still redirects a timezone for a non-principal contact, normalized', async () => {
+      const entityMemory = makeEntityMemory();
+      const contactService = makeContactService();
+      const ctx = makeCtx(
+        entityMemory,
+        { text: `${PII_SUBJECT} timezone is Eastern Time - Toronto.`, source: 'test' },
+        makeMockInfraLlm(['yes', factJson('timezone', 'Eastern Time - Toronto')]),
+        contactService,
+      );
+
+      await new ExtractFactsHandler().execute(ctx);
+
+      expect(contactService.updateContactFields).toHaveBeenCalledWith('contact-1', { timezone: 'America/Toronto' });
+    });
+
     it('findContactByKgNodeId-failed warn', async () => {
       const entityMemory = makeEntityMemory();
       const ctx = makeCtx(

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ContactService } from '../../../src/contacts/contact-service.js';
 import type { Contact } from '../../../src/contacts/types.js';
 import { ContactNotFoundError, StructuralContactMergeError } from '../../../src/contacts/types.js';
-import { ContactValidationError, survivingTier, type MergedContactRow } from '../../../src/contacts/contact-service.js';
+import { ContactValidationError, InvalidTimezoneError, survivingTier, type MergedContactRow } from '../../../src/contacts/contact-service.js';
 import { InvalidExclusionPairError } from '../../../src/contacts/dedup-exclusions.js';
 import { canonicalPairKey } from '../../../src/contacts/dedup-pair-key.js';
 import { DedupService } from '../../../src/contacts/dedup-service.js';
@@ -1219,6 +1219,63 @@ describe('ContactService', () => {
       expect(updated.timezone).toBe('Europe/London'); // unchanged
     });
 
+    // A calendar-invite footer ("Eastern Time - Toronto") stored as the principal's
+    // timezone made Luxon throw on every inbox-triage tick. Every write is normalized now.
+    it('createContact maps a calendar timezone label to its IANA zone', async () => {
+      const contact = await service.createContact({
+        displayName: 'Label TZ',
+        source: 'test',
+        timezone: 'Eastern Time - Toronto',
+      });
+      expect(contact.timezone).toBe('America/Toronto');
+    });
+
+    it('createContact rejects a timezone with no single zone', async () => {
+      await expect(service.createContact({
+        displayName: 'Bad TZ',
+        source: 'test',
+        timezone: 'Eastern Time - US & Canada',
+      })).rejects.toBeInstanceOf(InvalidTimezoneError);
+    });
+
+    it('updateContactFields maps a calendar timezone label to its IANA zone', async () => {
+      const contact = await service.createContact({ displayName: 'Label Update', source: 'test' });
+      const updated = await service.updateContactFields(contact.id, { timezone: 'Pacific Time - Los Angeles' });
+      expect(updated.timezone).toBe('America/Los_Angeles');
+    });
+
+    it('updateContactFields rejects an unrecognized timezone and leaves the stored one', async () => {
+      const contact = await service.createContact({
+        displayName: 'Keep TZ',
+        source: 'test',
+        timezone: 'Europe/London',
+      });
+      const err = await service.updateContactFields(contact.id, { timezone: 'Eastern Time - US & Canada' })
+        .catch((e: unknown) => e);
+      // A ContactValidationError subclass, so existing callers' fall-back-to-KG handling applies.
+      expect(err).toBeInstanceOf(InvalidTimezoneError);
+      expect(err).toBeInstanceOf(ContactValidationError);
+      expect((await service.getContact(contact.id))?.timezone).toBe('Europe/London');
+    });
+
+    it('updateContactFields refreshes the principal on a timezone-only change', async () => {
+      const onIdentitiesChanged = vi.fn();
+      const svc = ContactService.createInMemory(entityMemory, { onIdentitiesChanged });
+      const contact = await svc.createContact({ displayName: 'Tz Refresh', source: 'test' });
+      onIdentitiesChanged.mockClear();
+
+      await svc.updateContactFields(contact.id, { timezone: 'Asia/Tokyo' });
+
+      // Inbox triage reads the principal's timezone from the holder this refresh updates.
+      expect(onIdentitiesChanged).toHaveBeenCalledWith(contact.id);
+    });
+
+    it('updateContactFields still clears a timezone with null', async () => {
+      const contact = await service.createContact({ displayName: 'Clear TZ', source: 'test', timezone: 'UTC' });
+      const updated = await service.updateContactFields(contact.id, { timezone: null });
+      expect(updated.timezone).toBeNull();
+    });
+
     it('updateContactFields throws when contact not found', async () => {
       await expect(
         service.updateContactFields('non-existent-id', { title: 'X' }),
@@ -1271,7 +1328,8 @@ describe('ContactService', () => {
       });
       onIdentitiesChanged.mockClear();
 
-      await svc.updateContactFields(contact.id, { timezone: 'America/Toronto' });
+      // A field nothing refreshed reads. (timezone now refreshes: inbox triage reads it.)
+      await svc.updateContactFields(contact.id, { organization: 'Acme' });
       expect(onIdentitiesChanged).not.toHaveBeenCalled();
 
       await svc.updateContactFields(contact.id, { primaryEmail: 'primary-notify@example.com' });

@@ -4,7 +4,7 @@
 // Tests attribute resolution, phone normalization, and patch building.
 
 import { describe, it, expect } from 'vitest';
-import { resolveCanonicalField, normalizePhone, buildCanonicalPatch } from '../../../src/contacts/canonical-attribute-guard.js';
+import { resolveCanonicalField, normalizePhone, buildCanonicalPatch, principalLockedFields } from '../../../src/contacts/canonical-attribute-guard.js';
 
 describe('resolveCanonicalField', () => {
   it('maps known attribute keys to ContactCanonicalFields keys', () => {
@@ -140,5 +140,32 @@ describe('buildCanonicalPatch', () => {
     const result = buildCanonicalPatch('TIMEZONE', 'America/Toronto');
     expect(result).not.toBeNull();
     expect(result?.fallbackToKg).toBe(false);
+  });
+
+  it('maps a calendar timezone label to its IANA zone', () => {
+    const result = buildCanonicalPatch('timezone', 'Eastern Time - Toronto');
+    expect(result).toEqual({ fields: { timezone: 'America/Toronto' }, fallbackToKg: false });
+  });
+
+  it('returns fallbackToKg when the timezone has no single zone', () => {
+    const result = buildCanonicalPatch('tz', 'Eastern Time - US & Canada');
+    expect(result).toEqual({ fallbackToKg: true, reason: 'timezone_unrecognized' });
+  });
+});
+
+describe('principalLockedFields', () => {
+  const principal = { systemRole: 'principal' as const };
+  const other = { systemRole: null };
+
+  it('names timezone when an automatic writer targets the principal', () => {
+    expect(principalLockedFields(principal, { timezone: 'America/Toronto' })).toEqual(['timezone']);
+  });
+
+  it('is empty for other fields on the principal', () => {
+    expect(principalLockedFields(principal, { title: 'CEO' })).toEqual([]);
+  });
+
+  it('is empty for any non-principal contact', () => {
+    expect(principalLockedFields(other, { timezone: 'America/Toronto' })).toEqual([]);
   });
 });
