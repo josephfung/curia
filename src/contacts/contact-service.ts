@@ -48,6 +48,7 @@ import { normalizeExclusionPair, type ExclusionPair } from './dedup-exclusions.j
 import { canonicalPairKey } from './dedup-pair-key.js';
 import { comparableChannels, isNearMiss, sameIdentifier } from './identifier-near-miss.js';
 import { PERSONAL_EMAIL_DOMAINS } from './non-org-domains.js';
+import { normalizeTimezone } from '../time/timezone-normalize.js';
 
 /** Outcome of re-pointing a merged-away contact's dedup exclusions onto the survivor. */
 export interface ReattachExclusionsResult {
@@ -65,6 +66,32 @@ export class ContactValidationError extends Error {
     super(message);
     this.name = 'ContactValidationError';
   }
+}
+
+/**
+ * A contact timezone that is not a zone the runtime can compute with and cannot be mapped to
+ * one (normalizeTimezone returned null). A ContactValidationError, so callers that already fall
+ * back to the KG on validation failure (extract-facts, memory-store) keep doing so; callers that
+ * explain validation failures (contact-update) can tell it apart from the primaryEmail case.
+ */
+export class InvalidTimezoneError extends ContactValidationError {
+  constructor(readonly value: string) {
+    super(
+      `"${value}" is not a recognized timezone. Use an IANA name such as "America/Toronto" or "Europe/London".`,
+    );
+    this.name = 'InvalidTimezoneError';
+  }
+}
+
+/**
+ * Normalize a timezone on its way into the contacts table (see normalizeTimezone). null and
+ * undefined pass through: null clears the field, undefined leaves it untouched on a PATCH.
+ */
+function normalizeContactTimezone(value: string | null | undefined): string | null | undefined {
+  if (value === null || value === undefined) return value;
+  const normalized = normalizeTimezone(value);
+  if (normalized === null) throw new InvalidTimezoneError(value);
+  return normalized;
 }
 
 /**
@@ -790,6 +817,9 @@ export class ContactService {
     // organization routing all leave it false: those nodes outlive this contact.
     let kgNodeCreated = false;
 
+    // Validated before any KG node is minted, so a rejected timezone leaves nothing behind.
+    const timezone = normalizeContactTimezone(options.timezone) ?? null;
+
     // Defense-in-depth: sanitize display names at storage time to prevent
     // stored prompt injection. External sources (email participants, CRM imports)
     // may contain arbitrary content in the name field. See issue #39.
@@ -936,7 +966,7 @@ export class ContactService {
       organization: options.organization ?? null,
       primaryEmail: options.primaryEmail?.toLowerCase() ?? null,
       primaryPhone: options.primaryPhone ?? null,
-      timezone: options.timezone ?? null,
+      timezone,
       locale: options.locale ?? null,
       location: options.location ?? null,
       pronouns: options.pronouns ?? null,
@@ -1585,6 +1615,12 @@ export class ContactService {
     // Normalize primaryEmail to lowercase for consistent storage and CCI comparison.
     if (definedFields.primaryEmail != null) {
       definedFields.primaryEmail = definedFields.primaryEmail.toLowerCase();
+    }
+
+    // Only zones the runtime can compute with are stored; a calendar label maps to its zone,
+    // anything else throws InvalidTimezoneError before the write.
+    if ('timezone' in definedFields) {
+      definedFields.timezone = normalizeContactTimezone(definedFields.timezone);
     }
 
     const updated: Contact = {
