@@ -51,8 +51,20 @@ function errorLogFields(err: unknown): Record<string, unknown> {
 }
 
 /**
+ * Whether Nylas refused a write outright (a 4xx), so it certainly did not apply. Everything
+ * else may come after Nylas applied it: no HTTP answer (status 0), a 5xx (the client won't
+ * retry a PUT or POST for that reason), a 2xx whose body could not be read or normalised
+ * (status 200, or an error with no status at all), or a timeout while reading the reply.
+ */
+function writeRefused(err: unknown): boolean {
+  const status = nylasStatus(err);
+  return status !== undefined && status >= 400 && status < 500;
+}
+
+/**
  * A failed Nylas call on the draft itself (read or update), classified by HTTP status (#2593).
- * Only the Nylas call may sit inside the try that feeds this: it reports "not changed".
+ * Only the Nylas call may sit inside the try that feeds this: for a read, and for a refused
+ * write, it reports "not changed".
  *
  * Without an errorType the agent can't tell "this draft no longer exists" from a blip, and it
  * retries the same dead ID. A 404 gets the same "do not retry with this ID" wording the other
@@ -64,7 +76,7 @@ function draftCallFailure(
   err: unknown,
   draftId: string,
   summary: string,
-  /** True for a write: a 5xx or no answer may come after Nylas applied it (the client won't retry a PUT for that reason). */
+  /** True for a write: anything but a 4xx may come after Nylas applied it (see writeRefused). */
   isWrite = false,
 ): { success: false; error: string; errorType: ErrorType } {
   const status = nylasStatus(err);
@@ -78,12 +90,13 @@ function draftCallFailure(
     : status === 401 || status === 403 ? 'AUTH_FAILURE'
     : status >= 500 ? 'PROVIDER_ERROR'
     : status >= 400 ? 'VALIDATION_ERROR'
+    // A success status with a reply that could not be read: not an HTTP failure, never transient.
+    : status >= 200 ? 'UNKNOWN'
     // Status 0: no HTTP answer. A timeout when the call ran out of time, else a failed fetch.
     : budgetExpired(ctx) ? 'TIMEOUT'
     : 'PROVIDER_ERROR';
-  // A write with no clear answer may have landed: report "unknown", never "not changed". Repeating
-  // the same edit is harmless (a PUT sets the same fields), so these types stay retryable.
-  const outcome = isWrite && status !== undefined && (status === 0 || status >= 500)
+  // A write Nylas did not refuse may have landed: report "unknown", never "not changed".
+  const outcome = isWrite && !writeRefused(err)
     ? 'The edit may or may not have been applied; ceo-inbox-read with the draft_id shows the draft as it is now.'
     : NOT_CHANGED;
   return { success: false, error: `${summary}. ${outcome}`, errorType };
@@ -537,9 +550,13 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
         ...(current.bcc.length > 0 ? { bcc: current.bcc } : {}),
       });
     } catch (err) {
-      // Nothing was created, and the original is untouched.
+      // The original is untouched either way. Only a refused create (4xx) certainly made nothing:
+      // after any other failure the new draft may exist, and a blind retry would make a second one.
       log.error({ ...grantSafeErrorFields(err), draftId, targetMailbox: target.mailbox.id }, 'ceo-inbox-draft-edit: creating the draft in the target mailbox failed');
-      return { success: false, error: `Failed to create the draft in the ${target.mailbox.label} mailbox. The original draft is unchanged in ${source.mailbox.label}.` };
+      const created = writeRefused(err)
+        ? 'Nothing was created there.'
+        : `The new draft may or may not have been created there; check with ceo-inbox-list on ${target.mailbox.label} before trying the move again.`;
+      return { success: false, error: `Failed to create the draft in the ${target.mailbox.label} mailbox. ${created} The original draft is unchanged in ${source.mailbox.label}.` };
     }
 
     // Best-effort voice-learning snapshot of the new draft, as for any edit.

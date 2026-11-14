@@ -258,6 +258,31 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
       expect(result).toMatchObject({ success: false, errorType: 'PROVIDER_ERROR' });
     });
 
+    // A PUT Nylas answered 2xx has gone through, even when its reply can't be used: the failure is
+    // in reading the reply, so the edit may have applied (CodeRabbit, PR #2594).
+    describe('a successful PUT whose reply cannot be read never says "not changed"', () => {
+      function answerPut(reply: string): void {
+        mockFetch.mockImplementation(async (_url: unknown, init?: RequestInit) =>
+          init?.method === 'PUT'
+            ? new Response(reply, { status: 200 })
+            : new Response(JSON.stringify(draftResponse()), { status: 200 }),
+        );
+      }
+
+      it.each([
+        ['no data envelope (status 200 error)', '{}'],
+        ['a body that is not JSON (no status)', 'not json'],
+        ['a draft that cannot be normalised (no status)', '{"data":null}'],
+      ])('%s', async (_name, reply) => {
+        answerPut(reply);
+        const result = await handler.execute(buildCtx({ draft_id: 'draft-1', subject: 'x' }));
+        expect(result).toMatchObject({ success: false, errorType: 'UNKNOWN' });
+        const error = (result as { error: string }).error;
+        expect(error).toContain('may or may not have been applied');
+        expect(error).not.toContain('was not changed');
+      });
+    });
+
     it('a 404 reading the draft for a recipient edit is NOT_FOUND too', async () => {
       // First GET (locating the draft) succeeds; the second (reading its recipients) is a 404.
       let gets = 0;
@@ -505,6 +530,7 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
     let calls: Call[];
     let store: Record<string, Record<string, Record<string, unknown>>>;
     let failCreate: boolean;
+    let createStatus: number;
     let failDelete: boolean;
     let deleteStatus: number;
 
@@ -526,7 +552,7 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
         const id = decodeURIComponent(path.split('/')[2] ?? '');
         const json = (data: unknown, status = 200) => new Response(JSON.stringify({ data }), { status });
         if (method === 'POST') {
-          if (failCreate) return new Response('boom', { status: 500 });
+          if (failCreate) return new Response('boom', { status: createStatus });
           const created = { id: 'new-1', thread_id: '', ...body };
           drafts['new-1'] = created;
           store[grant] = drafts;
@@ -554,6 +580,7 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
     beforeEach(() => {
       calls = [];
       failCreate = false;
+      createStatus = 500;
       failDelete = false;
       deleteStatus = 500;
       store = { 'grant-work': { 'src-1': { ...SOURCE } }, 'grant-personal': {} };
@@ -596,6 +623,19 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
       expect(result.success).toBe(false);
       expect(methods()).not.toContain('DELETE grant-work');
       expect(store['grant-work']).toHaveProperty('src-1');
+      // A 5xx on the POST may come after Nylas created the draft: never claim nothing was created.
+      const error = (result as { error: string }).error;
+      expect(error).toContain('may or may not have been created');
+      expect(error).not.toContain('Nothing was created');
+    });
+
+    it('a refused create (4xx) says nothing was created', async () => {
+      failCreate = true;
+      createStatus = 422;
+      const result = await handler.execute(twoCtx({ draft_id: 'src-1', move_to_mailbox: 'personal' }));
+      const error = (result as { error: string }).error;
+      expect(error).toContain('Nothing was created there.');
+      expect(error).toContain('The original draft is unchanged');
     });
 
     it('a failed delete after a successful create is a success with a warning', async () => {
