@@ -1338,7 +1338,23 @@ async function main(): Promise<void> {
       logger,
     });
   };
-  await calendarCatchUp();
+  // Bounded at boot: the catch-up reads each mailbox's calendars from Nylas, whose requests can
+  // each wait out a long default timeout during an outage. Boot waits at most this long, then
+  // goes on while the catch-up finishes in the background (it is idempotent and never throws;
+  // what it leaves undone is retried at the next boot or deferred-migration retry).
+  const CALENDAR_CATCHUP_BOOT_BUDGET_MS = 15_000;
+  const catchUp = calendarCatchUp().catch((err: unknown) => {
+    logger.error({ ...grantSafeErrorFields(err) }, 'Calendar catch-up failed; retried at the next boot');
+  });
+  let catchUpTimer: NodeJS.Timeout | undefined;
+  const budget = new Promise<'timeout'>((resolve) => {
+    catchUpTimer = setTimeout(() => resolve('timeout'), CALENDAR_CATCHUP_BOOT_BUDGET_MS);
+    catchUpTimer.unref();
+  });
+  if ((await Promise.race([catchUp.then(() => 'done' as const), budget])) === 'timeout') {
+    logger.warn({ budgetMs: CALENDAR_CATCHUP_BOOT_BUDGET_MS }, 'Calendar catch-up is still running; startup continues and it finishes in the background');
+  }
+  clearTimeout(catchUpTimer);
 
   const principalMailboxAdmin = principalContact
     ? new PrincipalMailboxAdmin({

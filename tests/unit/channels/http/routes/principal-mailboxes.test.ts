@@ -78,6 +78,8 @@ describe('principal-mailboxes routes', () => {
     const res = await req('GET', '/api/registry/principal-mailboxes');
     expect(res.statusCode).toBe(200);
     expect(res.json().mailboxes).toHaveLength(1);
+    // add/test can look a grant up: the key was there at startup.
+    expect(res.json().can_add_mailboxes).toBe(true);
     expect(res.body).not.toMatch(/grant/i);
   });
 
@@ -157,6 +159,8 @@ describe('principal-mailboxes routes', () => {
     await build(makeOptions({ lookupGrant: undefined }));
     expect((await req('POST', '/api/registry/principal-mailboxes', { id: 'work', label: 'W', grant_id: 'grant-0002' })).statusCode).toBe(503);
     expect((await req('POST', '/api/registry/principal-mailboxes/test', { grant_id: 'grant-0002' })).statusCode).toBe(503);
+    // The list says so, so the console can ask for a restart rather than offer add and test.
+    expect((await req('GET', '/api/registry/principal-mailboxes')).json().can_add_mailboxes).toBe(false);
   });
 
   it('POST /test returns email and provider, storing nothing', async () => {
