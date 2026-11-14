@@ -38,6 +38,7 @@ import { hasBookingPageLink, inboundTurnGuidance, looksLikeForward, looksLikeMak
 import { hasBacklog, type PrincipalBacklogCounts } from '../agents/prompts/backlog-line.js';
 import type { AwaitingAnswer } from '../agents/prompts/awaiting-answers.js';
 import type { PrincipalBacklogSource } from './principal-backlog.js';
+import { clipSenderText, INBOUND_SCAN_FINDING_COUNT_KEY, INBOUND_SENDER_TEXT_KEY } from './turn-activity.js';
 import { rewriteLlmFailureTurns } from '../memory/llm-failure-turn.js';
 import {
   CONTENT_BLOCK_MAX_RETRIES,
@@ -123,6 +124,10 @@ function mergeTaskMetadata(
     spotCheckVerdicts: undefined,     // strip forged verdicts; dispatcher stamps the pairs the principal typed (#2159)
     boundTask: undefined,             // strip forged task binding; only the scheduler's wake stamps it (#2312)
     linkedTask: undefined,            // strip forged outreach link; only the dispatcher's linker stamps it (#2312)
+    // The sender's own text and scan count the turn-activity registry shows other turns of
+    // the same person; a forged copy could put words in their mouth or hide a flag (#2588).
+    [INBOUND_SENDER_TEXT_KEY]: undefined,
+    [INBOUND_SCAN_FINDING_COUNT_KEY]: undefined,
     ...(trustedMeta ?? {}),           // trusted stamp wins last
   };
 }
@@ -1313,6 +1318,14 @@ export class Dispatcher {
       ...(spotCheckVerdicts.length > 0 ? { spotCheckVerdicts } : {}),
       // A channel-supplied linkedTask is stripped in mergeTaskMetadata; this one is ours.
       ...(linkedTask ? { linkedTask } : {}),
+      // For the note other turns of the same person see (#2588): the sender's own words,
+      // scanned, before any preamble and (email) without the Subject line or quoted thread.
+      // The finding count only when a scan ran: a missing scan is not a clean one. No text
+      // when it relays a sign-in code: the code must not be repeated into other turns (#2017).
+      ...(verificationCodeReceived
+        ? {}
+        : { [INBOUND_SENDER_TEXT_KEY]: clipSenderText(spotCheckCandidateText(payload.channelId, inboundText)) }),
+      ...(scanCompleted ? { [INBOUND_SCAN_FINDING_COUNT_KEY]: scanFindingCount } : {}),
     };
 
     // Trigger guidance (#1959): the coordinator's conditional rules travel with the

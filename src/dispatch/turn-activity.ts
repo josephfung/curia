@@ -27,7 +27,6 @@ import {
   parseTaskOriginator,
 } from '../agents/delegated-task-context.js';
 import type { Logger } from '../logger.js';
-import { stripOutboundContextPreamble } from './outbound-context.js';
 import { isOneToOneAudience } from './audience.js';
 
 export const TURN_ACTIVITY_WINDOW_MS = 15 * 60_000;
@@ -48,6 +47,33 @@ const PRUNE_INTERVAL_MS = 60_000;
 const REQUEST_TEXT_MAX_CODE_POINTS = 500;
 const COORDINATOR_AGENT_ID = 'coordinator';
 
+/**
+ * Trusted task-metadata keys the dispatcher stamps on an inbound's coordinator task, and
+ * strips from channel-supplied metadata (mergeTaskMetadata). The sender's own text, before
+ * any dispatcher preamble (message id, thread participants, outbound context), clipped by
+ * clipSenderText; and the inbound injection scan's finding count, absent when no scan ran.
+ */
+export const INBOUND_SENDER_TEXT_KEY = 'inboundSenderText';
+export const INBOUND_SCAN_FINDING_COUNT_KEY = 'inboundScanFindingCount';
+
+/** The sender's text clipped to the registry's limit, by code points. */
+export function clipSenderText(text: string): string {
+  return Array.from(text).slice(0, REQUEST_TEXT_MAX_CODE_POINTS).join('');
+}
+
+/** The trusted sender text of a task, clipped; null when absent or empty. */
+function senderTextOf(metadata: Record<string, unknown> | undefined): string | null {
+  const value = metadata?.[INBOUND_SENDER_TEXT_KEY];
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  return clipSenderText(value);
+}
+
+/** The trusted finding count of a task: a non-negative integer, else null (unknown). */
+function scanFindingsOf(metadata: Record<string, unknown> | undefined): number | null {
+  const value = metadata?.[INBOUND_SCAN_FINDING_COUNT_KEY];
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
 export interface RootTurn {
   /** Root task event id (or voice session id). */
   rootId: string;
@@ -66,9 +92,13 @@ export interface RootTurn {
   originatorIsSystem: boolean;
   /** The root's conversation is one-to-one (audience.ts); false for an auto root or unknown audience. */
   audienceOneToOne: boolean;
-  /** The person's words, preamble stripped, clipped to 500 code points. */
+  /**
+   * The sender's own words, from the dispatcher's trusted INBOUND_SENDER_TEXT_KEY, clipped to
+   * 500 code points. Null for a root with no such stamp (scheduler, internal, voice): task
+   * content can carry dispatcher preamble and other people's words, so it is never used.
+   */
   requestText: string | null;
-  /** Injection-scan finding count of the root's inbound; null = unknown. */
+  /** Injection-scan finding count of the root's inbound (trusted stamp); null = unknown. */
   inboundScanFindings: number | null;
   /**
    * The dispatcher-stamped `metadata.originator.authenticated === true` of the root's task:
@@ -122,15 +152,13 @@ export interface TaskStartInput {
   conversationId: string;
   channelId: string;
   parentEventId: string | undefined;
+  /** Also the source of a root's request text and scan count (INBOUND_* keys). */
   metadata: Record<string, unknown> | undefined;
-  content: string;
   startedAt: number;
   originatorContactId: string | null;
   originatorResolved: boolean;
   /** turn-lanes.ts originatorIsSystem of the task's copied originator. */
   originatorIsSystem: boolean;
-  /** Finding count for a root's inbound. Defaults to null (unknown). */
-  inboundScanFindings?: number | null;
 }
 
 export interface EnsureRootSeed {
@@ -544,8 +572,8 @@ export class TurnActivityRegistry {
   private mergeOrCreateRoot(input: TaskStartInput): RootState {
     const existing = this.roots.get(input.taskEventId);
     if (!existing) return this.createRoot(input);
-    existing.requestText ??= this.requestTextOf(input.content);
-    existing.inboundScanFindings ??= input.inboundScanFindings ?? null;
+    existing.requestText ??= senderTextOf(input.metadata);
+    existing.inboundScanFindings ??= scanFindingsOf(input.metadata);
     if (existing.originatorContactId === null && input.originatorContactId !== null) {
       // The entry had no originator, so it was classed as system; take the task's.
       existing.originatorContactId = input.originatorContactId;
@@ -562,10 +590,6 @@ export class TurnActivityRegistry {
     return existing;
   }
 
-  private requestTextOf(content: string): string {
-    return Array.from(stripOutboundContextPreamble(content)).slice(0, REQUEST_TEXT_MAX_CODE_POINTS).join('');
-  }
-
   private createRoot(input: TaskStartInput): RootState {
     const root: RootState = {
       rootId: input.taskEventId,
@@ -576,8 +600,8 @@ export class TurnActivityRegistry {
       originatorResolved: input.originatorResolved,
       originatorIsSystem: input.originatorIsSystem,
       audienceOneToOne: isOneToOneAudience(input.channelId, input.conversationId, input.metadata, this.selfEmails),
-      requestText: this.requestTextOf(input.content),
-      inboundScanFindings: input.inboundScanFindings ?? null,
+      requestText: senderTextOf(input.metadata),
+      inboundScanFindings: scanFindingsOf(input.metadata),
       originatorAuthenticated: originatorAuthenticatedOf(input.metadata),
       startedAt: input.startedAt,
       endedAt: null,

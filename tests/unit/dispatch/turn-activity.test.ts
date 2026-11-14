@@ -13,6 +13,8 @@ import {
   MAX_ACTIONS_PER_ROOT,
   MAX_RUNNING_ROOT_AGE_MS,
   isAuthenticatedRoot,
+  INBOUND_SENDER_TEXT_KEY,
+  INBOUND_SCAN_FINDING_COUNT_KEY,
   type ActionTarget,
   type TaskStartInput,
 } from '../../../src/dispatch/turn-activity.js';
@@ -57,7 +59,6 @@ function startRoot(
     channelId: 'email',
     parentEventId: undefined,
     metadata: undefined,
-    content: `request ${id}`,
     startedAt: T0,
     // Resolved by default: an unresolved root's actions hold no one (see the disclosure tests).
     originatorContactId: 'contact-p',
@@ -202,20 +203,38 @@ describe('TurnActivityRegistry root resolution', () => {
     expect(registry.rootOf('coord')!.endedAt).toBe(T0 + 5_000);
   });
 
-  it('stores the request text for a root only, stripped and clipped by code points', () => {
+  it('stores the trusted sender text for a root only, clipped by code points', () => {
     const { registry } = setup();
-    const preamble = '[ACTIVE OUTBOUND CONTEXT]\nblock\n---\n\n';
-    const root = start(registry, 'coord', { content: `${preamble}hello` });
+    const root = start(registry, 'coord', {
+      metadata: { [INBOUND_SENDER_TEXT_KEY]: 'hello', [INBOUND_SCAN_FINDING_COUNT_KEY]: 0 },
+    });
     expect(root.requestText).toBe('hello');
-    const long = start(registry, 'long', { content: '😀'.repeat(600) });
+    expect(root.inboundScanFindings).toBe(0);
+    const long = start(registry, 'long', { metadata: { [INBOUND_SENDER_TEXT_KEY]: '😀'.repeat(600) } });
     expect(Array.from(long.requestText!)).toHaveLength(500);
     start(registry, 'spec', {
       agentId: 'calendar',
       parentEventId: 'coord',
-      metadata: { delegationOrigin: { taskEventId: 'coord' } },
-      content: 'specialist payload',
+      metadata: { delegationOrigin: { taskEventId: 'coord' }, [INBOUND_SENDER_TEXT_KEY]: 'specialist payload' },
     });
     expect(registry.rootOf('coord')!.requestText).toBe('hello');
+  });
+
+  it('an email root with no stamp has no request text: content is never read', () => {
+    const { registry } = setup();
+    // Without the dispatcher's stamp there is nothing trustworthy to show, whatever the
+    // task's content held (participants, outbound previews of other people's messages).
+    const root = start(registry, 'em', { channelId: 'email', metadata: { participants: [] } });
+    expect(root.requestText).toBeNull();
+    expect(root.inboundScanFindings).toBeNull();
+  });
+
+  it('takes the scan count only when it is a non-negative integer', () => {
+    const { registry } = setup();
+    for (const [id, value] of [['neg', -1], ['frac', 1.5], ['str', '0'], ['nan', Number.NaN]] as const) {
+      expect(start(registry, id, { metadata: { [INBOUND_SCAN_FINDING_COUNT_KEY]: value } }).inboundScanFindings).toBeNull();
+    }
+    expect(start(registry, 'two', { metadata: { [INBOUND_SCAN_FINDING_COUNT_KEY]: 2 } }).inboundScanFindings).toBe(2);
   });
 
   it('unresolved originator is stored unresolved', () => {
@@ -636,7 +655,7 @@ describe('TurnActivityRegistry repeated starts', () => {
       originatorContactId: null, originatorResolved: false, originatorIsSystem: false, originatorAuthenticated: false,
     });
     set(T0 + 5_000);
-    const root = start(registry, 'a', { startedAt: T0 + 5_000, content: 'hello' });
+    const root = start(registry, 'a', { startedAt: T0 + 5_000, metadata: { [INBOUND_SENDER_TEXT_KEY]: 'hello' } });
     expect(root.autoRegistered).toBe(true);
     expect(root.startedAt).toBe(T0);
     expect(root.requestText).toBe('hello');

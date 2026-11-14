@@ -515,7 +515,6 @@ export class AgentRuntime {
         channelId: payload.channelId,
         parentEventId: taskEvent.parentEventId,
         metadata: payload.metadata as Record<string, unknown> | undefined,
-        content: payload.content,
         startedAt: taskEvent.timestamp.getTime(),
         originatorContactId: holder.originatorContactId,
         originatorResolved: holder.originatorResolved,
