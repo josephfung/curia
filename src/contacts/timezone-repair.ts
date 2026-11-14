@@ -8,7 +8,8 @@
 //
 // A value that maps to one zone is rewritten. A value that does not ("Eastern Time - US &
 // Canada") is left as is and logged by contact id: nulling it would erase information an
-// operator can still correct in the console, and consumers that need a zone fall back.
+// operator can still correct in the console. The principal's readers (inbox triage, meeting
+// minutes, the activity view) fall back to the instance zone through usableTimezone().
 // Values are not logged: a timezone label can name where a person lives.
 
 import type { DbPool } from '../db/connection.js';
@@ -18,6 +19,8 @@ import { isValidTimezone, normalizeTimezone } from '../time/timezone-normalize.j
 export interface TimezoneRepairResult {
   repaired: number;
   unrecognized: number;
+  /** Rows whose UPDATE threw; they keep their stored value and are retried next boot. */
+  failed: number;
 }
 
 export async function repairStoredTimezones(pool: DbPool, logger: Logger): Promise<TimezoneRepairResult> {
@@ -28,6 +31,7 @@ export async function repairStoredTimezones(pool: DbPool, logger: Logger): Promi
   );
   const repairedIds: string[] = [];
   const unrecognizedIds: string[] = [];
+  const failedIds: string[] = [];
   for (const row of rows) {
     if (isValidTimezone(row.timezone)) continue;
     const normalized = normalizeTimezone(row.timezone);
@@ -35,12 +39,22 @@ export async function repairStoredTimezones(pool: DbPool, logger: Logger): Promi
       unrecognizedIds.push(row.id);
       continue;
     }
-    // Guarded on the value we read, so a concurrent console edit is never overwritten.
-    await pool.query(
-      'UPDATE contacts SET timezone = $1, updated_at = now() WHERE id = $2 AND timezone = $3',
-      [normalized, row.id, row.timezone],
-    );
-    repairedIds.push(row.id);
+    try {
+      // Guarded on the value we read, so a concurrent console edit is never overwritten.
+      const result = await pool.query(
+        'UPDATE contacts SET timezone = $1, updated_at = now() WHERE id = $2 AND timezone = $3',
+        [normalized, row.id, row.timezone],
+      );
+      // 0 rows: someone changed it since the read; their value wins and is not ours to count.
+      if (result.rowCount === 1) repairedIds.push(row.id);
+    } catch (err) {
+      // One row's failure must not stop the rest, or hide the ones already repaired.
+      failedIds.push(row.id);
+      logger.error(
+        { contactId: row.id, errName: err instanceof Error ? err.name : typeof err },
+        'Contact timezone repair: could not update this contact; its stored value is unchanged and will be retried next boot',
+      );
+    }
   }
   if (repairedIds.length > 0) {
     logger.info({ contactIds: repairedIds }, 'Contact timezone repair: mapped stored timezone labels to IANA zones');
@@ -51,5 +65,5 @@ export async function repairStoredTimezones(pool: DbPool, logger: Logger): Promi
       'Contact timezone repair: stored value is not a recognized timezone and could not be mapped; set an IANA zone (e.g. America/Toronto) in the console',
     );
   }
-  return { repaired: repairedIds.length, unrecognized: unrecognizedIds.length };
+  return { repaired: repairedIds.length, unrecognized: unrecognizedIds.length, failed: failedIds.length };
 }
