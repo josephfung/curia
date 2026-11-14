@@ -838,7 +838,7 @@ describe('fix round 2: a skipped home pass is visible (N2)', () => {
 });
 
 describe('Task 33a: the skipped home pass is counted once, for this sweep only (Task 32 L1, L2)', () => {
-  it('a sweep scoped to one mailbox does not count a failed list read that belongs to other accounts (L1)', async () => {
+  it('a sweep scoped to an unregistered mailbox counts the skipped home pass: it was the only way to its holds', async () => {
     const third = calendarMailbox('third', 'Third', 'ceo@third.example.com');
     const clients = { work: stubClient(), personal: stubClient(), third: stubClient() };
     const router = routerFixture({
@@ -853,7 +853,7 @@ describe('Task 33a: the skipped home pass is counted once, for this sweep only (
       { nylasCalendarId: 'cal-third', principalMailboxId: 'third' },
     ]);
     const data = dataOf(await run(new CalendarHoldsSweepHandler(), c));
-    expect(data['calendarErrors']).toBe(0);
+    expect(data['calendarErrors']).toBe(1);
   });
 
   it('a scoped sweep still counts it when the home pass would have covered that mailbox', async () => {

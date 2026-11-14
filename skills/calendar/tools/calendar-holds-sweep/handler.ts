@@ -176,9 +176,11 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
           ...targets.map((t) => t.mailboxId),
           ...calendars.flatMap((c) => (c.principalMailboxId && !removedMailboxIds.has(c.principalMailboxId) ? [c.principalMailboxId] : [])),
         ]);
-        // A sweep scoped to one mailbox counts the skipped home pass only when that mailbox is one
-        // the pass would have covered (L1): another account's failure is not this sweep's.
-        const counted = seen.size > 1 && (mailbox.mailbox === undefined || seen.has(mailbox.mailbox));
+        // A stated mailbox was validated live above, so the home pass would have covered its home
+        // calendar whether or not a registry row names it: it counts toward "several mailboxes",
+        // and the skipped pass is counted for it too.
+        if (mailbox.mailbox !== undefined) seen.add(mailbox.mailbox);
+        const counted = seen.size > 1;
         if (counted) calendarErrors++;
         ctx.log.error({ ...grantSafeErrorFields(err), counted }, 'calendar-holds-sweep: could not list the mailboxes; home pass skipped');
       }
