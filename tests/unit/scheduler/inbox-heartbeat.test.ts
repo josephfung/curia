@@ -248,6 +248,32 @@ describe('InboxHeartbeat.start', () => {
     }
   });
 
+  // errName alone ("Error") hid an invalid-timezone throw on every tick for a day.
+  it('logs the message of a plain error, but never of one that may carry a grant id', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = make();
+      const spy = vi.spyOn(t.state, 'ceilingReached').mockRejectedValue(new Error('TriageState: invalid timezone "Eastern Time - Toronto"'));
+      t.hb.start();
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(t.log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ errName: 'Error', errMessage: expect.stringContaining('invalid timezone') }),
+        'InboxHeartbeat: unhandled error in tick',
+      );
+
+      const nylas = Object.assign(new Error('GET /v3/grants/grant-abc/messages failed'), { statusCode: 500 });
+      spy.mockRejectedValue(nylas);
+      t.log.error.mockClear();
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      const logged = JSON.stringify(t.log.error.mock.calls);
+      expect(logged).toContain('"statusCode":500');
+      expect(logged).not.toContain('grant-abc');
+      t.hb.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('ticks once shortly after start, then on the quarter-hour grid (BR-M6, SF-M9)', async () => {
     vi.useFakeTimers();
     try {
