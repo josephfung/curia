@@ -182,7 +182,12 @@ overrides:
   ip-address: '>=10.7.4'
   uuid: '^11.1.1'
   # Security pins for v0.35 release gate (HIGH CVEs flagged by Trivy image scan):
-  ws: '>=8.21.0'         # CVE-2026-48779
+  # Originally >=8.21.0 for CVE-2026-48779. Raised off >=8.21.0 (#2597), which admitted
+  # 8.21.0-8.22.2 including the resolved 8.22.0/8.22.1, so the exposure was live.
+  # Published upstream only, 2026-11-12, fixed in 8.23.0:
+  #   - GHSA-37g9-w4hg-h9qr (HIGH): memory-exhaustion DoS via unbounded automatic pong
+  #     responses
+  ws: '>=8.23.0'
   form-data: '>=4.0.6'   # CVE-2026-12143
   esbuild: '>=0.28.1'    # GHSA-gv7w-rqvm-qjhr (dev-server SSRF)
   # Reached via promptfoo. The old >=7.28.0 floor did NOT "patch all": it admitted the
