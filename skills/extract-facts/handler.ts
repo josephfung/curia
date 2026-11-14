@@ -13,7 +13,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { DECAY_CLASSES, NODE_TYPES } from '../../src/memory/types.js';
 import type { DecayClass, NodeType, KgNode } from '../../src/memory/types.js';
-import { buildCanonicalPatch } from '../../src/contacts/canonical-attribute-guard.js';
+import { buildCanonicalPatch, principalLockedFields } from '../../src/contacts/canonical-attribute-guard.js';
 import type { Contact } from '../../src/contacts/types.js';
 import { ContactValidationError } from '../../src/contacts/contact-service.js';
 
@@ -324,7 +324,15 @@ ${text}`,
                   }
                 }
 
-                if (contact) {
+                // The principal's home timezone is not inferred from mail: a calendar
+                // invite footer set it once and stopped inbox triage. The fact still
+                // lands in the KG below; only the canonical column is protected.
+                if (contact && principalLockedFields(contact, patch.fields).length > 0) {
+                  ctx.log.info(
+                    { entityNodeId: entityNode.id, ...logSafeAttribute(attribute), contactId: contact.id },
+                    'extract-facts: principal field is locked against extraction — keeping the fact in the KG',
+                  );
+                } else if (contact) {
                   if (maxStored !== undefined && stored + redirected >= maxStored) break;
                   try {
                     await ctx.contactService.updateContactFields(contact.id, patch.fields);

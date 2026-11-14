@@ -22,7 +22,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { DECAY_CLASSES, SENSITIVITY_LEVELS, NODE_TYPES } from '../../../../src/memory/types.js';
 import type { DecayClass, Sensitivity, NodeType, KgNode } from '../../../../src/memory/types.js';
-import { buildCanonicalPatch } from '../../../../src/contacts/canonical-attribute-guard.js';
+import { buildCanonicalPatch, principalLockedFields } from '../../../../src/contacts/canonical-attribute-guard.js';
 import { isUuid } from '../../../../src/util/uuid.js';
 
 const DECAY_CLASSES_SET: ReadonlySet<string> = new Set(DECAY_CLASSES);
@@ -32,7 +32,7 @@ const ENTITY_NODE_TYPES = NODE_TYPES.filter(t => t !== 'fact');
 const ENTITY_NODE_TYPES_SET: ReadonlySet<string> = new Set(ENTITY_NODE_TYPES);
 
 /** Why a canonical contact attribute landed in the KG instead of the contact record. */
-type CanonicalRedirectSkipReason = 'lookup_failed' | 'no_contact_record' | 'normalization_failed';
+type CanonicalRedirectSkipReason = 'lookup_failed' | 'no_contact_record' | 'normalization_failed' | 'principal_field_locked';
 
 export class MemoryStoreHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -268,7 +268,16 @@ export class MemoryStoreHandler implements ToolHandler {
               );
             }
 
-            if (contact) {
+            if (contact && principalLockedFields(contact, patch.fields).length > 0) {
+              // The principal's home timezone is set by the wizard, the console, or
+              // contact-update on the principal's own say-so, never by a remembered fact.
+              // The fact still lands in the KG below.
+              ctx.log.info(
+                { entityNodeId: entityNode.id, field, contactId: contact.id },
+                'memory-store: principal field is locked against memory writes — keeping the fact in the KG',
+              );
+              canonicalRedirectSkipReason = 'principal_field_locked';
+            } else if (contact) {
               try {
                 await ctx.contactService.updateContactFields(contact.id, patch.fields);
                 ctx.log.info(
@@ -294,7 +303,8 @@ export class MemoryStoreHandler implements ToolHandler {
                 return { success: false, error: `Could not update contact field "${field}": ${msg}` };
               }
             }
-            canonicalRedirectSkipReason = lookupFailed ? 'lookup_failed' : 'no_contact_record';
+            // ??= keeps principal_field_locked: that branch has a contact, unlike the two set here.
+            canonicalRedirectSkipReason ??= lookupFailed ? 'lookup_failed' : 'no_contact_record';
           }
         }
       }
