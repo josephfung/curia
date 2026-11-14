@@ -188,3 +188,29 @@ describe('comparableText entities', () => {
     expect(comparableText('x &lt; y &amp; z')).toBe('x < y & z');
   });
 });
+
+// #2589: a verified, known sender's To/Cc count as received, so a reply-all may quote that message
+// to the people it copied (the 2026-11-11 quote-mismatch hold). Without the sender known, they don't.
+describe('a verified, known sender\'s copies in the quote proof (#2589)', () => {
+  const KNOWN = new Set(['dana@example.org']);
+  const copying = msg({
+    to: [{ email: 'avery@example.com' }], cc: [{ email: 'ea@example.org' }],
+    headers: [...VERIFIED, { name: 'To', value: 'avery@example.com' }, { name: 'Cc', value: 'ea@example.org' }],
+  });
+  const quote = `${HEADER}<blockquote><p>Does Friday work?</p><p>Dana<br>416-555-0199</p></blockquote>`;
+  const audience = ['dana@example.org', 'ea@example.org'];
+
+  it('matches a quote of the message for the people it copied', () => {
+    expect(quoteMatchesThread(quote, [threadMessageProof(copying, PRINCIPAL, KNOWN)], audience)).toBe(true);
+    expect(quoteItemsToReview(found(quote, ['416-555-0199']), quote, [threadMessageProof(copying, PRINCIPAL, KNOWN)], audience)).toEqual([]);
+  });
+
+  it('still refuses it when the sender is not known', () => {
+    expect(quoteMatchesThread(quote, [threadMessageProof(copying, PRINCIPAL)], audience)).toBe(false);
+  });
+
+  it('shows the message as thread text the copied people saw', () => {
+    expect(threadTextSeenByAll([copying], audience, PRINCIPAL, KNOWN).map((m) => m.text)).toEqual([expect.stringContaining('Does Friday work?')]);
+    expect(threadTextSeenByAll([copying], audience, PRINCIPAL)).toEqual([]);
+  });
+});

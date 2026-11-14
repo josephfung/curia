@@ -8,7 +8,8 @@
 // review only when the thread itself proves the recipients already had that value.
 //
 // "Had" means received (#2474 final fixes A2, security review M3): an inbound message's To/Cc
-// are its sender's claim, so receivedBy counts only what the mailbox can vouch for.
+// are its sender's claim, so receivedBy counts only what the mailbox can vouch for, plus the To/Cc
+// of a verified sender at tier known or above (#2589, vouchedCopies).
 
 import sanitizeHtml from 'sanitize-html';
 import type { NylasMessage } from '../../channels/email/nylas-client.js';
@@ -42,9 +43,12 @@ export function comparableText(html: string | undefined | null): string {
   return decodeEntities(htmlToText(html)).replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-/** A thread message as the quote proof needs it. */
-export function threadMessageProof(msg: NylasMessage, principalAddresses: readonly string[]): ThreadMessageProof {
-  return { text: comparableText(msg.body), receivedBy: receivedBy(msg, principalAddresses) };
+/**
+ * A thread message as the quote proof needs it. `knownSenders` (#2589): the verified, known senders
+ * whose To/Cc count as received (receivedBy); absent, no inbound To/Cc counts.
+ */
+export function threadMessageProof(msg: NylasMessage, principalAddresses: readonly string[], knownSenders?: ReadonlySet<string>): ThreadMessageProof {
+  return { text: comparableText(msg.body), receivedBy: receivedBy(msg, principalAddresses, knownSenders) };
 }
 
 /**
@@ -125,12 +129,14 @@ export function threadTextSeenByAll(
   thread: readonly NylasMessage[],
   audience: readonly string[],
   principalAddresses: readonly string[],
+  /** #2589: the verified, known senders whose To/Cc count as received; absent, none do. */
+  knownSenders?: ReadonlySet<string>,
 ): Array<{ at?: string; text: string }> {
   const recipients = audience.map((a) => a.trim().toLowerCase()).filter((a) => a.length > 0);
   if (recipients.length === 0) return [];
   return thread
     .filter((m) => {
-      const got = receivedBy(m, principalAddresses);
+      const got = receivedBy(m, principalAddresses, knownSenders);
       return recipients.every((r) => got.has(r));
     })
     .map((m) => ({
