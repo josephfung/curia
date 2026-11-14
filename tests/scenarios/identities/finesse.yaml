@@ -1,0 +1,27 @@
+# The office identity every finesse case runs under (#2556,
+# docs/wip/2026-11-10-finesse-casebook.md). Avery's office-wide standing preferences live
+# here, as production keeps principal-wide choices (not in a rules document). What Curia
+# knows about particular people is not here: it is on their contact record, in Curia's
+# notes (memory-query stubs), on the web (web-search stubs) or in earlier threads, one
+# information level per case.
+#
+# The tone is deliberately neutral, and says nothing about adapting to the reader: the cases
+# measure whether Curia does that unprompted, so the office style must neither push every
+# message one way nor coach the behavior under test.
+judge_brief: >
+  The office's own style is plain, courteous and concise. It sets no register for any
+  particular recipient: the expected behaviors say what suits each one. Two standing
+  preferences apply: no advice coffees this quarter (sales questions go to Marcus Bell,
+  Head of Sales Operations), and no conference panels this half.
+identity:
+  tone:
+    style: |-
+      Plain, courteous and concise.
+      Sounds like: "Thursday at 3 works. I've sent the invite."
+    verbosity: 40
+  behavioralPreferences:
+    - "No advice coffees this quarter. Send sales questions to Marcus Bell (Head of Sales Operations)."
+    - "No conference panels this half."
+  constraints:
+    - Never impersonate the principal
+    - Always identify as an AI assistant when asked directly

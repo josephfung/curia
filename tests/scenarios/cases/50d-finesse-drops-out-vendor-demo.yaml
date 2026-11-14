@@ -1,0 +1,107 @@
+# Finesse 50d (#2556, docs/wip/2026-11-10-finesse-casebook.md): the same sick note, and the
+# 2pm is a vendor demo where Tomás is the evaluator. The demo has no point without him:
+# Curia asks the vendor to move it and tells Avery (checking with Avery first is also
+# fine). Information level 2: Kevin's contact record says Account Executive, CloudGrid.
+name: finesse 50d drops out of vendor demo
+description: >
+  Tomás Herrera, a direct report, emails Curia that he is out sick on the next workday and
+  can't make the 2pm. That 2pm is a product demo from CloudGrid run by Kevin Marsh, an
+  account executive at a vendor; Tomás was the technical evaluator and Avery was going to
+  drop in for the last fifteen minutes. Curia should ask Kevin to move the demo to when
+  Tomás is back and tell Avery it's moved (checking with Avery first is also acceptable).
+  Letting the demo go ahead with nobody to evaluate it, unmentioned, is a failure, and so is
+  apologizing at length to the vendor.
+tags: [finesse, finesse-50, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: tomas
+      display_name: Tomás Herrera
+      tier: known
+      title: Director of Engineering
+      organization: Halcyon Robotics
+      channel: email
+      identifier: tomas.herrera@halcyon.example.test
+    - key: kevin
+      display_name: Kevin Marsh
+      tier: known
+      title: Account Executive
+      organization: CloudGrid
+      channel: email
+      identifier: kevin.marsh@cloudgrid.example.test
+inbound:
+  from: tomas
+  channel: email
+  content: |
+    Subject: Out sick {{weekday:workday+1}}
+
+    Feeling awful. I'll be out sick {{weekday:workday+1}}, so I can't make the 2pm. Sorry!
+
+    Tomás
+  email:
+    nylas_message_id: scenario-msg-50d-tomas
+    to: [curia]
+    sender_verified: true
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 2
+        events:
+          - { id: evt-50d-standup, title: Leadership stand-up, location: Room 4B, startTime: "{{time:workday+1 09:00}}", endTime: "{{time:workday+1 09:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: tomas.herrera@halcyon.example.test }, { email: priya.nair@halcyon.example.test }] }
+          - { id: evt-50d-demo, title: "CloudGrid product demo", location: Video call, description: "Technical evaluation of CloudGrid's platform. Evaluator: Tomás. Avery joins for the last 15 minutes.", startTime: "{{time:workday+1 14:00}}", endTime: "{{time:workday+1 15:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: kevin.marsh@cloudgrid.example.test }, { email: tomas.herrera@halcyon.example.test }] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:workday+3 13:00}}", end: "{{time:workday+3 17:00}}" }
+          - { start: "{{time:workday+4 13:00}}", end: "{{time:workday+4 17:00}}" }
+expected_behaviors:
+  - id: demo_not_left_alone
+    weight: critical
+    layer: decision
+    description: >
+      The demo does not silently go ahead without its evaluator: Curia either asks Kevin to
+      move it (and tells Avery), or checks with Avery first. Doing nothing, or only replying to
+      Tomás, is a miss.
+  - id: contacts_kevin_or_asks
+    weight: critical
+    layer: decision
+    description: Either Kevin is asked to move the demo, or Avery is asked first.
+    check:
+      any_of:
+        - { called: email-send, agent: any, contains: { to: "{{contact:kevin}}" } }
+        - { principal_note: present }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: not_cancelled_outright
+    weight: important
+    layer: decision
+    description: The demo is moved or offered new times, not cancelled with no new date.
+  - id: avery_told
+    weight: important
+    layer: decision
+    description: Avery hears that the demo is moving (or is asked about it).
+  - id: kevin_message_voice
+    weight: critical
+    layer: voice
+    description: >
+      Any message to Kevin is courteous and brief: the reason (the evaluator is out sick), and
+      two or three new times or a request for his. At most one short apology; Halcyon is the
+      prospective customer, so no grovelling and no long explanation.
+contrast:
+  group: finesse-50-sick-attendee
+  recipient: An account executive at a vendor who is trying to sell to the company.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:kevin}}" } }
+failure_modes:
+  - Lets the demo go ahead with nobody to evaluate it, without telling Avery
+  - Apologizes at length to the vendor
+  - Cancels the demo with no new date
