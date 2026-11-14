@@ -9,15 +9,27 @@
 //
 // The bar for switching judges is in rejudge.ts (REJUDGE_AGREEMENT_BAR). Exit code is 0
 // either way: this is a report for a person, and every disagreement needs reading.
-import { readFileSync } from 'node:fs';
+//
+// --from-cases (#2556) scores a scenario run's transcripts against the behaviors in the
+// current case files instead (checks re-evaluated, the rest judged by each case's own judge
+// unless --judge names one), and saves the re-scored results beside the original:
+//
+//   pnpm rejudge --from-cases tests/scenarios/results/<run>.json
+//
+// It refuses, by name, every case whose setup changed since the run (setup-hash.ts), and
+// then exits 1: those need a new run, not a new score.
+import { readFileSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { createTestModeStack } from '../../src/startup/test-mode-stack.js';
-import { createJudge, type Judge } from '../scenarios/judge.js';
+import { createJudge, JUDGE_MODEL, type Judge } from '../scenarios/judge.js';
 import { judgeRun } from '../scenarios/judge.js';
-import { scoreCase, JUDGE_ERROR_PREFIX } from '../scenarios/gate.js';
+import { formatCaseLayers, gateFailures, knownFailureLines, scoreCase, JUDGE_ERROR_PREFIX } from '../scenarios/gate.js';
+import { internalNamesFor } from '../scenarios/assertions.js';
+import { caseJudgeModel } from '../scenarios/judge-models.js';
 import { loadScenarioCases, resolveRunPlaceholders } from '../scenarios/loader.js';
+import { rescoreCase, rescoreRefusal, type Rescored } from '../scenarios/rescore.js';
 import { hasDatePlaceholders } from './date-placeholders.js';
-import type { RunRating, SuiteResult } from '../scenarios/types.js';
+import type { CaseResult, RunRating, ScenarioCase, SuiteResult } from '../scenarios/types.js';
 import { evaluateCases } from '../smoke/evaluator.js';
 import type { RunResult } from '../smoke/types.js';
 import { DEFAULT_CONCURRENCY, parseConcurrency, runConcurrently } from './case-scope.js';
@@ -30,14 +42,18 @@ const out = (line = ''): void => { process.stdout.write(`${line}\n`); };
 const err = (line: string): void => { process.stderr.write(`${line}\n`); };
 
 interface Args {
-  judge: string;
+  /** The candidate judge. Optional with --from-cases, where each case's own judge is the default. */
+  judge?: string;
   concurrency: number;
   files: string[];
+  /** Score against the current case files' behaviors instead of the saved ones (#2556). */
+  fromCases: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
   let judge: string | undefined;
   let concurrency = DEFAULT_CONCURRENCY;
+  let fromCases = false;
   const files: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -46,15 +62,17 @@ function parseArgs(argv: string[]): Args {
       if (v === undefined || v.startsWith('--')) throw new Error(`${a} needs a value`);
       if (a === '--judge') judge = v;
       else concurrency = parseConcurrency(v);
+    } else if (a === '--from-cases') {
+      fromCases = true;
     } else if (a.startsWith('--')) {
-      throw new Error(`unknown flag '${a}' — expected --judge or --concurrency`);
+      throw new Error(`unknown flag '${a}' — expected --judge, --concurrency or --from-cases`);
     } else {
       files.push(a);
     }
   }
-  if (!judge) throw new Error('--judge <model> is required (the candidate judge model)');
+  if (!judge && !fromCases) throw new Error('--judge <model> is required (the candidate judge model)');
   if (files.length === 0) throw new Error('name at least one results file');
-  return { judge, concurrency, files };
+  return { ...(judge ? { judge } : {}), concurrency, files, fromCases };
 }
 
 /** What a re-judge found, and what the candidate judge spent finding it. */
@@ -163,6 +181,97 @@ async function rejudgeScenarios(suite: SuiteResult, judge: Judge, concurrency: n
   return { comparisons: comparisons.filter((c): c is CaseComparison => c !== undefined), spend: usage.snapshot() };
 }
 
+/**
+ * --from-cases (#2556): score a scenario run's transcripts against the behaviors in the current
+ * case files, report what moved, and save the re-scored results beside the original. Cases
+ * whose setup changed since the run are refused by name: they need a new run.
+ * Returns whether every case could be re-scored.
+ */
+async function rescoreFromCases(
+  file: string,
+  suite: SuiteResult,
+  judgeFor: (scenario: ScenarioCase) => Judge,
+  internalNames: string[],
+  concurrency: number,
+): Promise<boolean> {
+  const usage = new UsageLedger();
+  const byName = new Map(loadScenarioCases(SCENARIO_CASES_DIR).map(c => [c.name, c]));
+  const refusals: string[] = [];
+  const rescored = await runConcurrently(suite.cases, concurrency, async (saved): Promise<{ saved: CaseResult; now: Rescored } | undefined> => {
+    const scenario = byName.get(saved.name);
+    if (!scenario) {
+      refusals.push(`${saved.name}: no such case in ${SCENARIO_CASES_DIR} any more`);
+      return undefined;
+    }
+    // Files saved before #1980 have no per-run spend; scoreCase sums it.
+    const withUsage: CaseResult = { ...saved, runs: saved.runs.map(r => ({ ...r, usage: r.usage ?? emptyBreakdown(), providerRetries: r.providerRetries ?? [] })) };
+    const refusal = rescoreRefusal(withUsage, scenario);
+    if (refusal) {
+      refusals.push(refusal);
+      return undefined;
+    }
+    const judge = judgeFor(scenario);
+    const now = await rescoreCase(withUsage, scenario, (s, run, behaviors) => judgeRun(s, run, behaviors, judge, usage), internalNames);
+    return { saved: withUsage, now };
+  });
+  const done = rescored.filter((r): r is { saved: CaseResult; now: Rescored } => r !== undefined);
+
+  const comparisons: CaseComparison[] = done.map(({ saved, now }) => ({
+    name: saved.name,
+    passedBefore: saved.criticalFailures.length === 0,
+    passedAfter: now.result.criticalFailures.length === 0,
+    ratings: now.result.behaviors.flatMap(b => {
+      const old = saved.behaviors.find(s => s.behavior.id === b.behavior.id);
+      return old ? b.ratings.map((after, i) => ({ behaviorId: b.behavior.id, run: i + 1, before: old.ratings[i]!, after })) : [];
+    }),
+  }));
+  out('');
+  for (const line of formatAgreement(summarize(comparisons), 'current cases', 'saved')) out(`   ${line}`);
+  const edits = done.filter(({ now }) => now.added.length + now.removed.length + now.edited.length > 0);
+  if (edits.length > 0) {
+    out('');
+    out('   Behaviors changed in the case files since the run:');
+    for (const { saved, now } of edits) {
+      const parts = [
+        ...(now.added.length > 0 ? [`added ${now.added.join(', ')}`] : []),
+        ...(now.removed.length > 0 ? [`removed ${now.removed.join(', ')}`] : []),
+        ...(now.edited.length > 0 ? [`edited ${now.edited.join(', ')}`] : []),
+      ];
+      out(`   - ${saved.name}: ${parts.join('; ')}`);
+    }
+  }
+  const layered = done.filter(({ saved, now }) => saved.layers || now.result.layers);
+  if (layered.length > 0) {
+    out('');
+    out('   Layer scores (saved → current cases):');
+    for (const { saved, now } of layered) {
+      out(`   - ${saved.name}: ${formatCaseLayers(saved) || '(none)'} → ${formatCaseLayers(now.result) || '(none)'}`);
+    }
+  }
+  if (refusals.length > 0) {
+    out('');
+    out('   Not re-scored (run these again):');
+    for (const r of refusals) out(`   - ${r}`);
+  }
+
+  const outFile = file.replace(/\.json$/, '') + `.rescored-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  const result: SuiteResult = {
+    ...suite,
+    cases: done.map(({ now }) => now.result),
+    runsPerCase: Object.fromEntries(done.map(({ now }) => [now.result.name, now.result.runs.length])),
+    passed: done.every(({ now }) => now.result.criticalFailures.length === 0) && refusals.length === 0,
+    knownFailures: knownFailureLines(done.map(({ now }) => now.result)),
+    // The re-scored file is a scoring of old transcripts, not a run: say so where a reader looks.
+    warnings: [...suite.warnings, `re-scored against the case files at ${new Date().toISOString()} (pnpm rejudge --from-cases); transcripts are from ${suite.timestamp}`],
+    gateFailures: [...gateFailures(done.map(({ now }) => now.result)), ...refusals],
+  };
+  writeFileSync(outFile, JSON.stringify(result, null, 2));
+  out('');
+  out(`   Judge spend: ${formatUsd(usage.snapshot().judge.estimatedCostUsd)} (${usage.snapshot().judge.calls} calls)`);
+  out(`   Re-scored results: ${outFile}`);
+  return refusals.length === 0;
+}
+
 async function main(): Promise<void> {
   let args: Args;
   try {
@@ -176,21 +285,45 @@ async function main(): Promise<void> {
   const stack = await createTestModeStack({});
   let exitCode = 0;
   try {
-    const judge = createJudge(stack.llmProviders, undefined, { model: args.judge, logger: stack.logger });
     const principal = stack.principalContactId ? await stack.contactService.getContact(stack.principalContactId) : undefined;
+
+    if (args.fromCases) {
+      // Each case's own judge (judge-models.ts) unless --judge names one for all. Created
+      // lazily and kept, so each model is checked for a price once, before its first call.
+      const judges = new Map<string, Judge>();
+      const judgeFor = (scenario: ScenarioCase): Judge => {
+        const model = args.judge ?? caseJudgeModel(scenario) ?? JUDGE_MODEL;
+        if (!judges.has(model)) judges.set(model, createJudge(stack.llmProviders, principal?.displayName, { model, logger: stack.logger }));
+        return judges.get(model)!;
+      };
+      const internalNames = internalNamesFor({
+        tools: stack.toolRegistry.list().map(t => t.manifest.name),
+        agents: stack.agentRegistry.list().map(a => a.name),
+      });
+      for (const file of args.files) {
+        const data = JSON.parse(readFileSync(file, 'utf-8')) as RunResult | SuiteResult;
+        if (!('runsPerCase' in data)) throw new Error(`${file}: --from-cases re-scores scenario results; this is a smoke run`);
+        out(`\n${file}`);
+        out(`   scenarios run of ${data.timestamp} on ${data.model ?? 'configured routing'}, commit ${data.commit ?? '(unknown)'}; scored against the current case files`);
+        if (!(await rescoreFromCases(file, data, judgeFor, internalNames, args.concurrency))) exitCode = 1;
+      }
+      return;
+    }
+
+    const judge = createJudge(stack.llmProviders, undefined, { model: args.judge!, logger: stack.logger });
     if (principal) judge.principalName = principal.displayName;
 
     for (const file of args.files) {
       const data = JSON.parse(readFileSync(file, 'utf-8')) as RunResult | SuiteResult;
       const isScenarios = 'runsPerCase' in data;
       out(`\n${file}`);
-      out(`   ${isScenarios ? 'scenarios' : 'smoke'} run of ${data.timestamp} on ${data.model ?? 'configured routing'}; candidate judge ${args.judge}`);
+      out(`   ${isScenarios ? 'scenarios' : 'smoke'} run of ${data.timestamp} on ${data.model ?? 'configured routing'}; candidate judge ${judge.model}`);
       const { comparisons, spend } = isScenarios
         ? await rejudgeScenarios(data as SuiteResult, judge, args.concurrency)
         : await rejudgeSmoke(data as RunResult, judge, args.concurrency);
       const agreement = summarize(comparisons);
       out('');
-      for (const line of formatAgreement(agreement, args.judge, 'baseline')) out(`   ${line}`);
+      for (const line of formatAgreement(agreement, judge.model, 'baseline')) out(`   ${line}`);
       const baselineSpend = data.usage?.judge.estimatedCostUsd;
       out('');
       out(`   Candidate judge spend: ${formatUsd(spend.judge.estimatedCostUsd)} (${spend.judge.calls} calls)` +

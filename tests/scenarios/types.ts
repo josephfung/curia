@@ -894,6 +894,11 @@ export interface CaseResult {
   judgeErrors: number;
   /** Model spend on the case: its runs' agents and judge calls. */
   usage: UsageBreakdown;
+  /**
+   * Fingerprint of the case's setup when it ran (setup-hash.ts, #2556): re-scoring against the
+   * current case file needs it unchanged. Absent on results saved before it existed.
+   */
+  setupHash?: string;
 }
 
 /** One layer's share of a case result (#2556). */
