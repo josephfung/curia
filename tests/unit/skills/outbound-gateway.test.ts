@@ -6992,7 +6992,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       const h = (name: string, value: string) => ({ name, value });
       const copying = () => inbound({
         cc: [{ name: 'Sam Assistant', email: 'sam@example.org' }],
-        headers: [...VERIFIED, h('To', PRINCIPAL), h('Cc', 'sam@example.org')],
+        headers: [h('Authentication-Results', 'mx.google.com; spf=pass smtp.mailfrom=dana@example.org; dkim=pass header.d=example.org; dmarc=pass header.from=example.org'), h('From', 'dana@example.org'), h('To', PRINCIPAL), h('Cc', 'sam@example.org')],
       });
       const replyAll = () => autoDraft({ cc: [{ email: 'sam@example.org' }] });
       /** Dana's contact at `tier`, with a verified identity unless told otherwise; Sam has a record too. */

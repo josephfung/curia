@@ -276,12 +276,16 @@ describe('receivedBy', () => {
 describe('inbound To/Cc from a verified, known sender (#2589)', () => {
   const KNOWN = new Set(['dana@example.org']);
   const h = (name: string, value: string) => ({ name, value });
-  // Dana writes to the principal and copies her assistant; the headers say one To and one Cc.
+  // The provider's header, with SPF passing for Dana's own domain (aligned).
+  const ALIGNED = [h('Authentication-Results', 'mx.google.com; spf=pass (google.com: domain of dana@example.org) smtp.mailfrom=dana@example.org; dkim=pass header.d=example.org; dmarc=pass header.from=example.org')];
+  // Dana writes to the principal and copies her assistant; one From, one To and one Cc header.
   const copying = msg({
     id: 'in1', from: [{ email: 'dana@example.org' }], to: [{ email: 'ceo@corp.example' }], cc: [{ email: 'Ea@Example.org' }],
-    headers: [...VERIFIED, h('To', 'ceo@corp.example'), h('Cc', 'Ea@Example.org')],
+    headers: [...ALIGNED, h('From', 'dana@example.org'), h('To', 'ceo@corp.example'), h('Cc', 'Ea@Example.org')],
   });
   const replyAll = { ...draft, to: [{ email: 'dana@example.org' }], cc: [{ email: 'ea@example.org' }] };
+  const refused = (thread: NylasMessage[], d = replyAll, over: Partial<Parameters<typeof checkAutonomousLimits>[0]> = {}) =>
+    check({ thread, draft: d, knownSenders: KNOWN, ...over })?.refusal;
 
   it('allows a reply-all to the people a verified, known sender copied', () => {
     expect(check({ thread: [copying], draft: replyAll, knownSenders: KNOWN })).toBeNull();
@@ -294,32 +298,55 @@ describe('inbound To/Cc from a verified, known sender (#2589)', () => {
 
   it('refuses the copies when the sender is not known (no knownSenders, or someone else)', () => {
     expect(check({ thread: [copying], draft: replyAll })?.refusal).toBe('recipient_not_on_thread');
-    expect(check({ thread: [copying], draft: replyAll, knownSenders: new Set(['someone@example.org']) })?.refusal).toBe('recipient_not_on_thread');
+    expect(refused([copying], replyAll, { knownSenders: new Set(['someone@example.org']) })).toBe('recipient_not_on_thread');
   });
 
   it('refuses the copies of an unverified sender, even a known one (a forged From and Cc)', () => {
-    const forged = { ...copying, headers: [h('To', 'ceo@corp.example'), h('Cc', 'cfo@corp.example')], cc: [{ email: 'cfo@corp.example' }] };
-    const r = check({ thread: [forged], draft: { ...draft, cc: [{ email: 'cfo@corp.example' }] }, knownSenders: KNOWN });
-    expect(r?.refusal).toBe('recipient_not_on_thread');
+    const forged = { ...copying, headers: [h('From', 'dana@example.org'), h('To', 'ceo@corp.example'), h('Cc', 'cfo@corp.example')], cc: [{ email: 'cfo@corp.example' }] };
+    expect(refused([forged], { ...draft, cc: [{ email: 'cfo@corp.example' }] })).toBe('recipient_not_on_thread');
   });
 
-  it('refuses the copies when the message carries two Cc or two To headers (fail closed)', () => {
-    const twoCc = { ...copying, headers: [...copying.headers!, h('Cc', 'cfo@corp.example')] };
-    expect(check({ thread: [twoCc], draft: replyAll, knownSenders: KNOWN })?.refusal).toBe('recipient_not_on_thread');
-    const twoTo = { ...copying, headers: [...copying.headers!, h('to', 'cfo@corp.example')] };
-    expect(check({ thread: [twoTo], draft: replyAll, knownSenders: KNOWN })?.refusal).toBe('recipient_not_on_thread');
+  // Security review H1: DMARC passes on DKIM alone, so a signed message replayed from an attacker's
+  // server verifies; its SPF pass is for the attacker's envelope domain.
+  it('refuses the copies when SPF passed for another domain than the From (a replay)', () => {
+    const replay = { ...copying, headers: [h('Authentication-Results', 'mx.google.com; spf=pass smtp.mailfrom=x@attacker.example; dkim=pass header.d=example.org; dmarc=pass header.from=example.org'), ...copying.headers!.slice(1)] };
+    expect(refused([replay])).toBe('recipient_not_on_thread');
+  });
+
+  it('refuses the copies when no principal address is on To or Cc (a Bcc or replayed copy)', () => {
+    const bcc = { ...copying, to: [{ email: 'someone@example.net' }] };
+    expect(refused([bcc])).toBe('recipient_not_on_thread');
+  });
+
+  it('refuses the copies when the message carries two From, two Cc or two To headers (fail closed)', () => {
+    for (const extra of [h('Cc', 'cfo@corp.example'), h('to', 'cfo@corp.example'), h('From', 'x@example.org')]) {
+      expect(refused([{ ...copying, headers: [...copying.headers!, extra] }])).toBe('recipient_not_on_thread');
+    }
   });
 
   it('refuses the copies of a multi-address From', () => {
-    const multi = { ...copying, from: [{ email: 'dana@example.org' }, { email: 'x@example.org' }] };
-    expect(check({ thread: [multi], draft: replyAll, knownSenders: KNOWN })?.refusal).toBe('recipient_not_on_thread');
+    expect(refused([{ ...copying, from: [{ email: 'dana@example.org' }, { email: 'x@example.org' }] }])).toBe('recipient_not_on_thread');
+  });
+
+  // Security review M2: one address under the cap can reach a whole company.
+  it('never vouches a role, system or group address', () => {
+    for (const group of ['all-staff@example.org', 'everyone@example.org', 'board@example.org', 'legal@example.org', 'info@example.org', 'noreply@example.org']) {
+      const copied = { ...copying, cc: [{ email: group }] };
+      expect(refused([copied], { ...draft, cc: [{ email: group }] })).toBe('recipient_not_on_thread');
+    }
+  });
+
+  // Security review M1: Curia's own mailbox never becomes a recipient this way.
+  it('never vouches an unvouchable address (Curia\'s own mailbox)', () => {
+    const copied = { ...copying, cc: [{ email: 'Curia@corp.example' }] };
+    expect(refused([copied], { ...draft, cc: [{ email: 'curia@corp.example' }] }, { unvouchable: new Set(['curia@corp.example']) })).toBe('recipient_not_on_thread');
   });
 
   it('counts only the message being answered: an earlier Cc the sender dropped stays off', () => {
     const earlier = { ...copying, id: 'in0', date: WRITE_SEC - 7200 };
     const latest = msg({
       id: 'in1', date: WRITE_SEC - 3600, from: [{ email: 'dana@example.org' }], to: [{ email: 'ceo@corp.example' }],
-      headers: [...VERIFIED, h('To', 'ceo@corp.example')],
+      headers: [...ALIGNED, h('From', 'dana@example.org'), h('To', 'ceo@corp.example')],
     });
     const r = check({ thread: [earlier, latest], draft: replyAll, knownSenders: KNOWN });
     expect(r?.refusal).toBe('recipient_not_on_thread');
@@ -328,8 +355,8 @@ describe('inbound To/Cc from a verified, known sender (#2589)', () => {
 
   it('still caps the recipients at five', () => {
     const people = Array.from({ length: 6 }, (_, i) => ({ email: `p${i}@example.org` }));
-    const big = { ...copying, cc: people, headers: [...VERIFIED, h('To', 'x'), h('Cc', 'x')] };
-    expect(check({ thread: [big], draft: { ...draft, cc: people }, knownSenders: KNOWN })?.refusal).toBe('too_many_recipients');
+    const big = { ...copying, cc: people };
+    expect(refused([big], { ...draft, cc: people })).toBe('too_many_recipients');
   });
 
   it('allowedThreadMembers adds the answered message\'s copies, lowercased, and only for a known sender', () => {
@@ -340,7 +367,7 @@ describe('inbound To/Cc from a verified, known sender (#2589)', () => {
   it('receivedBy counts the copies of any qualifying message, and never without a known sender', () => {
     expect(receivedBy(copying, PRINCIPAL, KNOWN)).toEqual(new Set(['ceo@corp.example', 'dana@example.org', 'ea@example.org']));
     expect(receivedBy(copying, PRINCIPAL)).toEqual(new Set(['ceo@corp.example', 'dana@example.org']));
-    const unverified = { ...copying, headers: [h('To', 'x'), h('Cc', 'x')] };
+    const unverified = { ...copying, headers: [h('From', 'dana@example.org'), h('To', 'x'), h('Cc', 'x')] };
     expect(receivedBy(unverified, PRINCIPAL, KNOWN)).toEqual(new Set(['ceo@corp.example']));
   });
 
@@ -351,39 +378,43 @@ describe('inbound To/Cc from a verified, known sender (#2589)', () => {
 });
 
 describe('newlyCopied (#2589)', () => {
-  const KNOWN = new Set(['dana@example.org']);
-  const h = (name: string, value: string) => ({ name, value });
   const from = (id: string, date: number, cc: string[]) => msg({
     id, date, from: [{ email: 'dana@example.org' }], to: [{ email: 'ceo@corp.example' }], cc: cc.map((email) => ({ email })),
-    headers: [...VERIFIED, h('To', 'ceo@corp.example'), ...(cc.length > 0 ? [h('Cc', cc.join(', '))] : [])],
+  });
+  const sent = (id: string, date: number, to: string[]) => msg({ id, date, from: [{ email: 'ceo@corp.example' }], folders: ['SENT'], to: to.map((email) => ({ email })) });
+
+  it('is everyone the sender copied on a thread the principal hasn\'t answered', () => {
+    expect(newlyCopied([from('in1', 100, ['ea@example.org'])], PRINCIPAL)).toEqual(['ea@example.org']);
   });
 
-  it('is everyone the sender copied on a thread\'s first message', () => {
-    expect(newlyCopied([from('in1', 100, ['ea@example.org'])], PRINCIPAL, KNOWN)).toEqual(['ea@example.org']);
-  });
-
-  it('leaves out anyone an earlier message already showed receiving the thread', () => {
+  it('leaves out anyone the principal already wrote to on the thread', () => {
     const first = from('in0', 100, ['ea@example.org']);
+    const reply = sent('out1', 150, ['dana@example.org', 'ea@example.org']);
     const latest = from('in1', 200, ['ea@example.org', 'Legal@Example.org']);
-    expect(newlyCopied([latest, first], PRINCIPAL, KNOWN)).toEqual(['legal@example.org']);
+    expect(newlyCopied([latest, reply, first], PRINCIPAL)).toEqual(['legal@example.org']);
   });
 
-  it('counts an address an earlier unverified message only claimed as new (fail closed)', () => {
-    const claimed = msg({ id: 'in0', date: 100, from: [{ email: 'x@example.net' }], cc: [{ email: 'legal@example.org' }] });
-    expect(newlyCopied([claimed, from('in1', 200, ['legal@example.org'])], PRINCIPAL, KNOWN)).toEqual(['legal@example.org']);
+  // Security review M3: an escalation on an earlier, unanswered message is still new to the principal.
+  it('still counts someone the sender copied on an earlier message the principal never answered', () => {
+    const first = from('in0', 100, ['legal@example.org']);
+    expect(newlyCopied([first, from('in1', 200, ['legal@example.org'])], PRINCIPAL)).toEqual(['legal@example.org']);
+  });
+
+  it('ignores a principal reply sent after the answered message, and a principal-From message outside SENT', () => {
+    const later = sent('out2', 300, ['legal@example.org']);
+    const spoof = msg({ id: 'x', date: 150, from: [{ email: 'ceo@corp.example' }], folders: ['INBOX'], to: [{ email: 'legal@example.org' }] });
+    expect(newlyCopied([from('in1', 200, ['legal@example.org']), later, spoof], PRINCIPAL)).toEqual(['legal@example.org']);
   });
 
   // A hold signal, not membership: a forged or unvouched Cc can only add holds, so it counts here.
-  it('names the answered message\'s raw To/Cc even when its sender vouches for no one', () => {
-    expect(newlyCopied([from('in1', 100, ['ea@example.org'])], PRINCIPAL)).toEqual(['ea@example.org']);
+  it('names the raw To/Cc of an unverified sender too', () => {
     const unverified = msg({ id: 'in1', date: 100, from: [{ email: 'x@example.net' }], to: [{ email: 'ceo@corp.example' }], cc: [{ email: 'Board@Example.org' }] });
     expect(newlyCopied([unverified], PRINCIPAL)).toEqual(['board@example.org']);
   });
 
   it('leaves out the principal and the sender, and is empty with no outside message', () => {
-    const self = msg({ id: 'in1', date: 100, from: [{ email: 'dana@example.org' }], to: [{ email: 'ceo@corp.example' }], cc: [{ email: 'dana@example.org' }] });
-    expect(newlyCopied([self], PRINCIPAL, KNOWN)).toEqual([]);
-    expect(newlyCopied([], PRINCIPAL, KNOWN)).toEqual([]);
+    expect(newlyCopied([from('in1', 100, ['dana@example.org'])], PRINCIPAL)).toEqual([]);
+    expect(newlyCopied([], PRINCIPAL)).toEqual([]);
   });
 });
 

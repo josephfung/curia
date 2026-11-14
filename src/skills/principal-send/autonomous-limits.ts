@@ -5,7 +5,7 @@
 // Principal-directed sends never come here.
 
 import type { NylasMessage } from '../../channels/email/nylas-client.js';
-import { normalizeForComparison, parseSenderVerified } from '../../channels/email/message-converter.js';
+import { normalizeForComparison, parseSenderVerified, spfAlignedWithFrom } from '../../channels/email/message-converter.js';
 import type { CuriaDraftWrites } from './draft-provenance.js';
 import type { PrincipalSendEntry } from './send-ledger.js';
 
@@ -52,6 +52,27 @@ function inSentFolder(msg: NylasMessage): boolean {
 /** No sender vouched for: an inbound message's To/Cc then count for nothing (the rule before #2589). */
 const NO_KNOWN_SENDERS: ReadonlySet<string> = new Set();
 
+/**
+ * Local parts that reach a role, a system or a group rather than one person (#2589 security review
+ * M2). A copy to one of these is never vouched for: `all-staff@` is one address under the five-
+ * recipient cap but can reach thousands, and the principal's direct copy of list mail may carry no
+ * list header. Mirrors contact-service.ts's AUTOMATED_LOCAL_RE and NON_PERSON_LOCAL_RE (not imported:
+ * this module stays free of the contacts service), plus group names. A false match only holds.
+ */
+const NOT_ONE_PERSON_LOCAL_RE = new RegExp(
+  '^(?:'
+  + 'no[_.-]?reply|noreply|donotreply|do[_.-]not[_.-]?reply|mailer[_.-]?daemon|notifications?|alerts?|newsletters?|updates?|bounces?|bounced|postmaster|automated|auto'
+  + '|info|support|hello|help|admin|contact|billing|feedback|news|team|sales|marketing|legal|security|service|services|orders?|invoices?|accounts?|system'
+  + '|all|all[_.-]?(?:staff|hands|company|employees|team|users)|everyone|everybody|staff|employees|company|board|directors|execs?|executives|leadership|managers|group|groups|list|lists|members|announce(?:ments)?'
+  + ')$',
+  'i',
+);
+
+function isOnePersonAddress(email: string): boolean {
+  const at = email.lastIndexOf('@');
+  return at > 0 && !NOT_ONE_PERSON_LOCAL_RE.test(email.slice(0, at));
+}
+
 /** How many raw headers of this name the message carries (names are case-insensitive). */
 function headerCount(msg: NylasMessage, name: string): number {
   return (msg.headers ?? []).filter((h) => h.name.trim().toLowerCase() === name).length;
@@ -67,19 +88,35 @@ function headerCount(msg: NylasMessage, name: string): number {
  *    organization: those reach known on their first inbound) at tier known or above, resolved by
  *    the gateway at send time. A stranger's fresh address, however well
  *    authenticated (`"Jane Smith" <random@gmail.com>`), names no one;
- *  - at most one To and one Cc header. A header added after signing is a second copy, and
- *    which one a parser reads is not ours to guess.
+ *  - exactly one From header, and at most one To and one Cc header. A header added after
+ *    signing is a second copy, and which one a parser reads is not ours to guess;
+ *  - the provider's SPF pass is aligned with the From domain (spfAlignedWithFrom). DMARC passes on
+ *    DKIM alone, so without this a DKIM-signed message replayed from an attacker's own server
+ *    (SPF passing for the attacker's envelope domain) would verify (#2589 security review H1);
+ *  - one of the principal's addresses is on its To or Cc: a message the principal got only as a
+ *    Bcc or an envelope recipient, as a replay would be, vouches for no one.
+ * Even then, a copy to a role, system or group address, or to one of `unvouchable` (Curia's own
+ * mailboxes), is left out: those never become recipients this way.
  * Microsoft 365's default DKIM signature covers neither To nor Cc, so coverage is not required:
- * it would refuse every M365 sender. Requiring SPF to pass too means a replayed message with
- * edited recipients has to come from the sender's own servers (an accepted risk, ADR-062).
+ * it would refuse every M365 sender. A replay with edited recipients therefore has to pass aligned
+ * SPF, i.e. leave from servers the sender's domain authorizes (an accepted risk, ADR-062).
  */
-export function vouchedCopies(msg: NylasMessage, principalAddresses: readonly string[], knownSenders: ReadonlySet<string>): string[] {
+export function vouchedCopies(
+  msg: NylasMessage,
+  principalAddresses: readonly string[],
+  knownSenders: ReadonlySet<string>,
+  unvouchable: ReadonlySet<string> = NO_KNOWN_SENDERS,
+): string[] {
   const isPrincipal = principalMatcher(principalAddresses);
   if (fromPrincipal(msg, isPrincipal)) return [];
   if (msg.from.length !== 1 || !parseSenderVerified(msg.headers)) return [];
-  if (!knownSenders.has(lower(msg.from[0]!.email))) return [];
-  if (headerCount(msg, 'to') > 1 || headerCount(msg, 'cc') > 1) return [];
-  return [...new Set([...msg.to, ...msg.cc].map((p) => lower(p.email)).filter((e) => e.length > 0))];
+  const from = lower(msg.from[0]!.email);
+  if (!knownSenders.has(from)) return [];
+  if (headerCount(msg, 'from') !== 1 || headerCount(msg, 'to') > 1 || headerCount(msg, 'cc') > 1) return [];
+  if (!spfAlignedWithFrom(msg.headers, from)) return [];
+  const copies = [...msg.to, ...msg.cc].map((p) => lower(p.email)).filter((e) => e.length > 0);
+  if (!copies.some(isPrincipal)) return [];
+  return [...new Set(copies)].filter((e) => isPrincipal(e) || (isOnePersonAddress(e) && !unvouchable.has(e)));
 }
 
 /**
@@ -95,12 +132,14 @@ export function allowedThreadMembers(
   thread: readonly NylasMessage[],
   principalAddresses: readonly string[],
   knownSenders: ReadonlySet<string> = NO_KNOWN_SENDERS,
+  /** Lowercased addresses never vouched in (Curia's own mailboxes, #2589 security review M1). */
+  unvouchable: ReadonlySet<string> = NO_KNOWN_SENDERS,
 ): Set<string> {
   const members = new Set(principalAddresses.map(lower));
   // Who demonstrably received a thread message, without any inbound copies (receivedBy).
   for (const msg of thread) for (const address of receivedBy(msg, principalAddresses)) members.add(address);
   const answered = replyTarget(thread, principalAddresses);
-  if (answered) for (const address of vouchedCopies(answered, principalAddresses, knownSenders)) members.add(address);
+  if (answered) for (const address of vouchedCopies(answered, principalAddresses, knownSenders, unvouchable)) members.add(address);
   return members;
 }
 
@@ -138,27 +177,28 @@ export function receivedBy(
 
 /**
  * The people the message being answered newly copied, lowercased (#2589, ADR-062 rule 12): its
- * To/Cc, minus the principal and the sender, that no earlier thread message shows receiving
- * (receivedBy). On a thread's first message that is everyone the sender copied.
+ * To/Cc, minus the principal and the sender, whom the principal has not already written to on
+ * this thread (an earlier message from a principal address, in SENT). On a thread the principal
+ * hasn't answered, that is everyone the sender copied.
  *
  * This feeds a hold signal (band review's high-stakes-copy), not membership, so both sides lean
  * toward asking: the candidates are the raw To/Cc whether or not the sender vouches for them (a
- * forged Cc of the board can only cause a hold, never a send to the board), and "shows receiving"
- * uses the vouched rule, so an earlier unverified message that merely listed an address does not
- * make it old news.
+ * forged Cc of the board can only cause a hold, never a send to the board), and only the
+ * principal's own replies make someone old news. A sender who copied legal on an earlier message
+ * the principal never answered has still escalated since the principal last spoke (security
+ * review M3).
  */
 export function newlyCopied(
   thread: readonly NylasMessage[],
   principalAddresses: readonly string[],
-  knownSenders: ReadonlySet<string> = NO_KNOWN_SENDERS,
 ): string[] {
   const answered = replyTarget(thread, principalAddresses);
   if (!answered) return [];
   const isPrincipal = principalMatcher(principalAddresses);
   const seen = new Set<string>();
   for (const msg of thread) {
-    if (msg.id === answered.id || !(msg.date < answered.date)) continue;
-    for (const address of receivedBy(msg, principalAddresses, knownSenders)) seen.add(address);
+    if (!fromPrincipal(msg, isPrincipal) || !inSentFolder(msg) || !(msg.date < answered.date)) continue;
+    for (const address of receivedBy(msg, principalAddresses)) seen.add(address);
   }
   const sender = new Set(answered.from.map((p) => lower(p.email)));
   const copies = [...new Set([...answered.to, ...answered.cc].map((p) => lower(p.email)).filter((e) => e.length > 0))];
@@ -240,8 +280,10 @@ export function checkAutonomousLimits(input: {
    * of a contact at tier known or above, resolved at send time. Absent: none (fail closed).
    */
   knownSenders?: ReadonlySet<string>;
+  /** Lowercased addresses a sender's copies never vouch in: Curia's own mailboxes (#2589). */
+  unvouchable?: ReadonlySet<string>;
 }): { refusal: AutonomousLimitRefusal; detail: string } | null {
-  const { draft, thread, principalAddresses, curiaWrites, recentThreadEntries, recentConversationEntries, otherPrincipalAddresses, offLimitsRecipients, autonomousSendsInWindow, knownSenders } = input;
+  const { draft, thread, principalAddresses, curiaWrites, recentThreadEntries, recentConversationEntries, otherPrincipalAddresses, offLimitsRecipients, autonomousSendsInWindow, knownSenders, unvouchable } = input;
 
   if (!curiaWrites.created) {
     return { refusal: 'not_curia_draft', detail: 'Curia did not create this draft in this task' };
@@ -281,7 +323,7 @@ export function checkAutonomousLimits(input: {
   }
 
   const isPrincipal = principalMatcher(principalAddresses);
-  const members = allowedThreadMembers(thread, principalAddresses, knownSenders);
+  const members = allowedThreadMembers(thread, principalAddresses, knownSenders, unvouchable);
   const recipients = [...new Set([...draft.to, ...draft.cc, ...draft.bcc].map((p: Party) => lower(p.email)))];
   const stranger = recipients.find((r) => !isPrincipal(r) && !members.has(r));
   if (stranger !== undefined) {
