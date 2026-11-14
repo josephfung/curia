@@ -28,7 +28,7 @@ const CONTACT_C = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'; // another third party
 const CONTACT_G = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'; // a second, unrelated sender
 const USAGE = { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 };
 const PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock' } as const;
-// The tool-error wrapper XML-escapes the apostrophe, so match the part after it.
+
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve: () => void = () => {};
   const promise = new Promise<void>((res) => {
@@ -37,6 +37,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
+// The tool-error wrapper XML-escapes the apostrophe, so match the part after it.
 const HOLD_TEXT = 'already acted on the same target';
 
 function text(content: string): LLMResponse {
@@ -274,9 +275,16 @@ describe('cross-conversation backstop (#2588)', () => {
     ]);
 
     const emailTurn = h.bus.publish('channel', h.inbound('EMAIL-REQUEST set up a sync', opts.emailSender, 'email:thread-1', 'email'));
-    await vi.waitFor(() => expect(state.emailParked).toBe(true));
-    const signalTurn = h.bus.publish('channel', h.inbound('SIGNAL-REQUEST set up a sync', opts.signalSender, 'signal:+15550000001', 'signal'));
-    await Promise.all([emailTurn, signalTurn]);
+    try {
+      await vi.waitFor(() => expect(state.emailParked).toBe(true));
+      const signalTurn = h.bus.publish('channel', h.inbound('SIGNAL-REQUEST set up a sync', opts.signalSender, 'signal:+15550000001', 'signal'));
+      await Promise.all([emailTurn, signalTurn]);
+    } finally {
+      // Never leave the email turn parked: a failed wait, or a Signal turn that throws before
+      // its second model call, would otherwise strand it on `release` past the test.
+      release.resolve();
+      await Promise.allSettled([emailTurn]);
+    }
     // The Signal turn's booking attempt came back while the email turn was still open.
     expect(overlap).toEqual([{ emailParked: true, emailDone: false }]);
   }
