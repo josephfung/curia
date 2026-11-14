@@ -48,14 +48,16 @@ export function sameOrganizer(a: NylasCalendarEvent, b: NylasCalendarEvent): boo
  * A stable key for one occurrence of a meeting, the same on every calendar it is on (#2475, D7):
  * meeting-debrief keys its `seen:` / `prompted:` / `reminded:` guards on it, so a meeting on two
  * of the principal's calendars, or listed through the other account on a later run, is judged and
- * debriefed once. With an iCal UID: `ical-` and a hash of the same fields `sameMeetingKey` uses
- * (UID, occurrence, start, end, title, organizer, location, link; R91, R99), so a spoofed invite reusing a real meeting's UID and
- * time but differing in what the principal sees gets its own key and cannot suppress the real
- * meeting's debrief. The occurrence keeps a weekly series' instances apart; the hash keeps the key
- * short whatever the UID's length. Without a UID: the event id, as before.
+ * debriefed once. With an iCal UID: `ical-` and a hash of the UID and, for a recurring instance,
+ * its original start (R108). Title, times, organizer, place and link are left out, so a renamed or
+ * rescheduled meeting keeps its key and is not prompted twice; the owner accepted that a spoofed
+ * invite reusing a real UID could share it (ADR-064). This is looser than `sameMeetingKey`, which
+ * list-events' collapse and RSVP matching keep strict. The hash keeps the key short whatever the
+ * UID's length. Without a UID: the event id, as before.
  */
 export function meetingKey(e: NylasCalendarEvent): string {
-  const key = sameMeetingKey(e);
-  if (key === null) return e.id;
-  return `ical-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`;
+  const uid = e.icalUid?.trim();
+  if (!uid) return e.id;
+  const identity = JSON.stringify([uid, e.originalStartTime ?? null]);
+  return `ical-${createHash('sha256').update(identity).digest('hex').slice(0, 24)}`;
 }

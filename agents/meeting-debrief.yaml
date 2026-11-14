@@ -159,7 +159,7 @@ system_prompt: |
   Remove events that should NOT be debriefed:
   1. **Already handled** — a `seen:<meetingKey>` guard exists, or a `seen:<id>`
      one for its `id` or any `calendars[].eventId` (config-store `"retrieve"`). Skip these.
-  2. **Cancelled or declined** — the event is cancelled, or the principal declined.
+  2. **Cancelled** — the event is cancelled (only accepted or organised meetings are listed).
   3. **All-day events** — holidays, OOO blocks, and similar.
   4. **Solo events** — the principal is the only attendee, or the only other
      attendees are the principal's own alternate calendar identities (e.g. a personal

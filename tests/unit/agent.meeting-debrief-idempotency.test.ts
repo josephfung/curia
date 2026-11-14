@@ -154,10 +154,14 @@ describe('meeting-debrief keys its guards on the meeting, not one calendar copy 
     expect(meetingKey(evt('long', { icalUid: 'x'.repeat(2000) })).length).toBeLessThanOrEqual(40);
   });
 
-  it('a spoofed invite reusing a meeting\'s UID and occurrence gets its own key when its title or end differs (R91)', () => {
-    const real = evt('real', { originalStartTime: 1_795_100_000 });
-    expect(meetingKey(evt('copy', { originalStartTime: 1_795_100_000 }))).toBe(meetingKey(real));
-    expect(meetingKey(evt('spoof-title', { originalStartTime: 1_795_100_000, title: 'Something else' }))).not.toBe(meetingKey(real));
-    expect(meetingKey(evt('spoof-end', { originalStartTime: 1_795_100_000, endTime: 1_795_107_200 }))).not.toBe(meetingKey(real));
+  it('the key is the UID and occurrence only: a renamed or rescheduled meeting keeps it (R108)', () => {
+    const single = evt('s');
+    expect(meetingKey(evt('s', { title: 'Acme partnership review (moved)' }))).toBe(meetingKey(single));
+    expect(meetingKey(evt('s', { startTime: 1_795_200_000, endTime: 1_795_203_600 }))).toBe(meetingKey(single));
+    expect(meetingKey(evt('s', { organizerEmail: 'x@acme.example.org', location: 'Room 9' }))).toBe(meetingKey(single));
+    // A recurring instance moved to another time keeps its original start, so its key.
+    const instance = evt('i1', { originalStartTime: 1_795_100_000 });
+    expect(meetingKey(evt('i1', { originalStartTime: 1_795_100_000, startTime: 1_795_110_000, endTime: 1_795_113_600 }))).toBe(meetingKey(instance));
+    expect(meetingKey(instance)).not.toBe(meetingKey(single));
   });
 });

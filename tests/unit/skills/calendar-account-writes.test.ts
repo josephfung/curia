@@ -774,7 +774,7 @@ describe('fix round 1: collapse rules (R82, M1)', () => {
     expect(events.every((e) => e.calendars === undefined)).toBe(true);
   });
 
-  it('R99: a spoofed copy matching UID, time and title but not organizer, place or link stays its own entry, with its own meetingKey', async () => {
+  it('R99: a spoofed copy matching UID, time and title but not organizer, place or link stays its own entry (R108: same meetingKey)', async () => {
     const base = { icalUid: 'uid-1', title: 'Board', organizerEmail: 'chair@board.example.org', location: 'Room 4', conferencing: { provider: 'Zoom', details: { url: 'https://zoom.example/real' } } };
     for (const spoof of [
       { organizerEmail: 'attacker@evil.example' },
@@ -788,7 +788,8 @@ describe('fix round 1: collapse rules (R82, M1)', () => {
       const events = data['events'] as Array<{ id: string; calendars?: unknown; meetingKey: string }>;
       expect(events.map((e) => e.id), JSON.stringify(spoof)).toEqual(['w-1', 'p-1']);
       expect(events.every((e) => e.calendars === undefined)).toBe(true);
-      expect(events[0]!.meetingKey).not.toBe(events[1]!.meetingKey);
+      // R108 (owner): the debrief key is the UID and occurrence only, so the copies share it.
+      expect(events[0]!.meetingKey).toBe(events[1]!.meetingKey);
     }
     // The real copies (same organizer, place and link, the organizer's case aside) still collapse.
     const { work, personal, router } = setup();
@@ -820,6 +821,61 @@ describe('fix round 1: collapse rules (R82, M1)', () => {
     const events = data['events'] as Array<{ id: string; calendars?: unknown }>;
     expect(events).toHaveLength(3);
     expect(events.every((e) => e.calendars === undefined)).toBe(true);
+  });
+});
+
+describe('R108: meeting-debrief lists only meetings the principal accepted or organised', () => {
+  const listInput = { contactId: PRINCIPAL, timeMin: START, timeMax: END };
+  const debrief = { taskMetadata: { originator: { systemRole: 'system' } }, agentId: 'meeting-debrief' } as Partial<ToolContext>;
+  const me = (status: string) => [
+    { email: 'CEO@work.example.com', name: 'CEO', status },
+    { email: 'guest@acme.example.org', name: 'Guest', status: 'yes' },
+  ];
+  const ids = (data: Record<string, unknown>) => (data['events'] as Array<{ id: string }>).map((e) => e.id);
+
+  it('drops declined, tentative and unanswered invites; keeps accepted, organised and own events', async () => {
+    const { work, router } = setup();
+    work.listEvents.mockResolvedValue([
+      event('accepted', 'ceo@work.example.com', { organizerEmail: 'guest@acme.example.org', participants: me('yes') }),
+      event('declined', 'ceo@work.example.com', { organizerEmail: 'guest@acme.example.org', participants: me('no') }),
+      event('tentative', 'ceo@work.example.com', { organizerEmail: 'guest@acme.example.org', participants: me('maybe') }),
+      event('noreply', 'ceo@work.example.com', { organizerEmail: 'guest@acme.example.org', participants: me('noreply') }),
+      event('organised', 'ceo@work.example.com', { organizerEmail: 'ceo@personal.example.com', participants: me('noreply') }),
+      event('own', 'ceo@work.example.com', { participants: [{ email: 'guest@acme.example.org', name: 'Guest', status: 'yes' }] }),
+    ]);
+    const data = dataOf(await run(new CalendarListEventsHandler(), listCtx(router, listInput, debrief)));
+    expect(ids(data)).toEqual(['accepted', 'organised', 'own']);
+  });
+
+  it('other callers still see every meeting', async () => {
+    const { work, router } = setup();
+    work.listEvents.mockResolvedValue([
+      event('declined', 'ceo@work.example.com', { organizerEmail: 'guest@acme.example.org', participants: me('no') }),
+    ]);
+    const data = dataOf(await run(new CalendarListEventsHandler(), listCtx(router, listInput, { ...debrief, agentId: 'calendar' })));
+    expect(ids(data)).toEqual(['declined']);
+  });
+
+  it("a meeting accepted on one account keeps its other account's unanswered copy, collapsed into it", async () => {
+    const { work, personal, router } = setup();
+    const shared = { icalUid: 'uid-1', title: 'Board', organizerEmail: 'guest@acme.example.org' };
+    work.listEvents.mockResolvedValue([event('w-1', 'ceo@work.example.com', { ...shared, participants: me('yes') })]);
+    personal.listEvents.mockResolvedValue([event('p-1', 'ceo@personal.example.com', {
+      ...shared, participants: [{ email: 'ceo@personal.example.com', name: 'CEO', status: 'noreply' }, { email: 'guest@acme.example.org', name: 'Guest', status: 'yes' }],
+    })]);
+    const data = dataOf(await run(new CalendarListEventsHandler(), listCtx(router, listInput, debrief)));
+    const events = data['events'] as Array<{ id: string; calendars?: Array<{ eventId: string }> }>;
+    expect(events).toHaveLength(1);
+    expect(events[0]!.calendars!.map((c) => c.eventId).sort()).toEqual(['p-1', 'w-1']);
+  });
+
+  it("fails rather than guess when the principal's addresses cannot be read", async () => {
+    const { work, router } = setup();
+    work.listEvents.mockResolvedValue([event('declined', 'ceo@work.example.com', { participants: me('no') })]);
+    const c = listCtx(router, listInput, debrief);
+    Object.assign(router, { liveMailboxes: async () => { throw new Error('registry down'); } });
+    const r = await run(new CalendarListEventsHandler(), c);
+    expect(r.success).toBe(false);
   });
 });
 
