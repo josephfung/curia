@@ -44,8 +44,8 @@ import {
 } from '../../../../src/skills/_shared/duplicate-refusal.js';
 import { structuralContactRefusal } from '../../../../src/skills/_shared/structural-contact-guard.js';
 import { identifierHasSource, unsourcedIdentifierError } from '../../../../src/skills/_shared/identifier-source.js';
-import { isLivePrincipalTurn } from '../../../../src/contacts/principal.js';
-import { isLiveTurnGrantActive } from '../../../../src/autonomy/live-turn-grants.js';
+// Moved to the shared module so contact-update applies the same rule to the principal's timezone.
+import { principalVouchesNow } from '../../../../src/skills/_shared/principal-directed.js';
 
 const NOT_LINKED = 'Nothing was linked.';
 const NOT_VERIFIED = 'Nothing was verified.';
@@ -71,18 +71,6 @@ function needsPrincipal(source: IdentitySource): string {
   return `That address is already on this contact, unverified, and ${principalOnlyReason(source)}. ` +
     'Only the principal can vouch for it. Nothing changed. The principal can verify it by asking Curia ' +
     "directly in a live conversation, or in the contact's identity editor in the console's Contacts screen.";
-}
-
-/**
- * Whether the principal vouches for this call right now: a replay they approved, or a live
- * turn that is not a wake and whose live-turn grant, if it has one, is still active (#2515).
- * Read at the decision and again at the write, since the grant can end in between.
- */
-function principalVouchesNow(ctx: ToolContext): boolean {
-  if (ctx.humanApproved === true) return true;
-  return isLivePrincipalTurn(ctx.liveTurn, ctx.taskMetadata)
-    && ctx.taskMetadata?.['wakeContext'] === undefined
-    && (ctx.liveTurnGrantId === undefined || isLiveTurnGrantActive(ctx.liveTurnGrantId));
 }
 
 /**
