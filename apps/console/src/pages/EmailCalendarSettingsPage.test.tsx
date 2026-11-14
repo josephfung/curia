@@ -142,6 +142,18 @@ describe('EmailCalendarPage', () => {
     expect(container.textContent).not.toContain('Changes apply at once');
   });
 
+  it('a key saved but not loaded at startup: alerts to restart, lists mailboxes read-only', async () => {
+    mocks.respond = (path) => path === '/api/registry/channels'
+      ? json(channels(true))
+      : json({ mailboxes: [work], can_add_mailboxes: false });
+    await mount();
+    const alert = container.querySelector('[role="alert"]')!;
+    expect(alert.textContent).toContain('Restart Curia to finish setting up');
+    expect(container.textContent).toContain('boss@acme-example.com');
+    expect((container.querySelector('[aria-label="Grant ID"]') as HTMLInputElement).disabled).toBe(true);
+    expect(button('Add mailbox')!.disabled).toBe(true);
+  });
+
   it('treats a missing email channel entry as no key', async () => {
     mocks.respond = (path) => path === '/api/registry/channels'
       ? json({ channels: [] })

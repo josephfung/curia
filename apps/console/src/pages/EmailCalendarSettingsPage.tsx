@@ -20,6 +20,8 @@ type KeyState =
   | { kind: 'checking' }
   | { kind: 'set' }
   | { kind: 'missing' }
+  // Saved, but not loaded: mailbox routes read the key at startup, so add and test need a restart.
+  | { kind: 'restart' }
   | { kind: 'error'; message: string };
 
 const EMAIL_CHANNEL_LINK = { to: '/channels', search: { channel: 'email' } } as const;
@@ -36,7 +38,15 @@ function EmailCalendarSection() {
         const data = await res.json() as { channels?: ChannelStatus[] };
         const email = (data.channels ?? []).find(c => c.name === 'email');
         const key = email?.credentialFields.find(f => f.key === 'nylas_api_key');
-        if (!cancelled) setKeyState(key?.configured ? { kind: 'set' } : { kind: 'missing' });
+        if (!key?.configured) {
+          if (!cancelled) setKeyState({ kind: 'missing' });
+          return;
+        }
+        // The saved key is not enough: the mailbox routes must have loaded it at startup.
+        const mres = await apiFetch('/api/registry/principal-mailboxes');
+        if (!mres.ok) throw new Error(await errorMessage(mres));
+        const mdata = await mres.json() as { can_add_mailboxes?: boolean };
+        if (!cancelled) setKeyState(mdata.can_add_mailboxes === false ? { kind: 'restart' } : { kind: 'set' });
       } catch (err) {
         console.error('[EmailCalendarSection] failed to read the email channel status:', err);
         if (!cancelled) {
@@ -72,6 +82,15 @@ function EmailCalendarSection() {
           <Link {...EMAIL_CHANNEL_LINK} className="btn btn-secondary btn-sm">Go to Channels → Email</Link>
         </div>
       )}
+      {keyState.kind === 'restart' && (
+        <div className="dash-alert danger" role="alert" style={{ marginBottom: 20 }}>
+          <div className="dash-alert-title">Restart Curia to finish setting up</div>
+          <div className="dash-alert-body">
+            The email channel&apos;s Nylas API key is saved, but Curia reads it when it starts.
+            Restart Curia, then come back to add a mailbox.
+          </div>
+        </div>
+      )}
       {keyState.kind === 'error' && (
         <p className="autonomy-error" role="alert">
           Couldn&apos;t check whether the email channel is set up: {keyState.message}
@@ -82,7 +101,7 @@ function EmailCalendarSection() {
         <div className="settings-section-body">
           {/* Read-only until the key is known to be set. A failed check leaves the controls on:
               the server still refuses a mailbox change it cannot make, with its own reason. */}
-          <PrincipalMailboxesSection readOnly={keyState.kind === 'checking' || keyState.kind === 'missing'} />
+          <PrincipalMailboxesSection readOnly={keyState.kind === 'checking' || keyState.kind === 'missing' || keyState.kind === 'restart'} />
         </div>
       </section>
     </>

@@ -162,6 +162,9 @@ export async function principalMailboxesRoutes(
         mailboxes: list.map((m) => (pending
           ? { ...m, pending_migration: true, ...(reason ? { pending_migration_reason: reason } : {}) }
           : m)),
+        // Whether add/test can look a grant up now: the Nylas key must have been there at boot,
+        // so a key saved since needs a restart first (the console says so).
+        can_add_mailboxes: lookupGrant !== undefined,
       });
     } catch (err) {
       return fail(request, reply, err, 'Listing principal mailboxes');
