@@ -9,6 +9,7 @@ import { MissingNylasApiKeyError, RemovedMailboxError, UnknownMailboxError } fro
 import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
 import { nylasStatus } from '../../../../src/channels/email/nylas-message-id.js';
 import { budgetExpired, remainingMs } from '../../../../src/util/call-budget.js';
+import type { ErrorType } from '../../../../src/errors/types.js';
 import {
   htmlToPlainText,
   type NylasDraftFull,
@@ -36,6 +37,43 @@ const NOT_CHANGED = 'The draft was not changed.';
  * delete, each one request. With less, the move is refused before anything is written.
  */
 const MOVE_MIN_REMAINING_MS = 5_000;
+
+/**
+ * A failed Nylas call on the draft itself (read or update), classified by HTTP status (#2593).
+ *
+ * Without an errorType the agent can't tell "this draft no longer exists" from a blip, and it
+ * retries the same dead ID. A 404 gets the same "do not retry with this ID" wording the other
+ * ceo-inbox tools use for a missing message. Status 0 is CeoNylasClient's "no HTTP answer":
+ * a timed-out call (the budget expired) or a failed fetch.
+ */
+function draftCallFailure(
+  ctx: ToolContext,
+  err: unknown,
+  draftId: string,
+  summary: string,
+): { success: false; error: string; errorType: ErrorType } {
+  const status = nylasStatus(err);
+  // Class and HTTP status only: a Nylas error can carry the grant id (#2475, R20).
+  ctx.log.error({ ...grantSafeErrorFields(err), draftId }, `ceo-inbox-draft-edit: ${summary}`);
+  if (status === 404) {
+    return {
+      success: false,
+      error:
+        `Draft not found: the mailbox has no draft with ID "${draftId}". ${NOT_CHANGED} ` +
+        'Do not retry with this ID. List the Drafts folder or search the mailbox to get the current one.',
+      errorType: 'NOT_FOUND',
+    };
+  }
+  const errorType: ErrorType =
+    status === 429 ? 'RATE_LIMIT'
+    : status === 401 || status === 403 ? 'AUTH_FAILURE'
+    : status !== undefined && status >= 500 ? 'PROVIDER_ERROR'
+    : status !== undefined && status >= 400 ? 'VALIDATION_ERROR'
+    : budgetExpired(ctx) ? 'TIMEOUT'
+    // No status at all (a network failure, or a non-HTTP error): treat as a transient provider fault.
+    : 'PROVIDER_ERROR';
+  return { success: false, error: `${summary}. ${NOT_CHANGED}`, errorType };
+}
 
 const TO: RecipientFieldPair = { reference: 'add_to', raw: 'add_to_addresses' };
 const CC: RecipientFieldPair = { reference: 'add_cc', raw: 'add_cc_addresses' };
@@ -311,7 +349,7 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
 
     // The draft is wherever it is: an explicit `mailbox`, else the one that holds it (#2475).
     const picked = await locateInMailbox(ctx, input, 'ceo-inbox-draft-edit', 'draft', draftId);
-    if (!picked.ok) return { success: false, error: picked.error };
+    if (!picked.ok) return { success: false, error: picked.error, ...(picked.errorType ? { errorType: picked.errorType } : {}) };
     const client = picked.at.client;
 
     if (moveTarget !== undefined) {
@@ -324,8 +362,7 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
       try {
         current = await client.getDraft(draftId);
       } catch (err) {
-        ctx.log.error({ err, draftId }, 'ceo-inbox-draft-edit: could not read the draft to change its recipients');
-        return { success: false, error: `Failed to read the draft in principal inbox. ${NOT_CHANGED}` };
+        return draftCallFailure(ctx, err, draftId, 'Failed to read the draft in principal inbox');
       }
       const edited = await editRecipients(ctx, current, lists);
       if (!edited.ok) return { success: false, error: edited.error };
@@ -378,8 +415,9 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
         },
       };
     } catch (err) {
-      ctx.log.error({ err, draftId }, 'ceo-inbox-draft-edit: Nylas API call failed');
-      return { success: false, error: 'Failed to update draft in principal inbox' };
+      // The locating GET can still return a draft Nylas no longer lets us write (#2593: a stale
+      // read answered 200 and the PUT failed), so a 404 here is a real "gone", not a lookup slip.
+      return draftCallFailure(ctx, err, draftId, 'Failed to update draft in principal inbox');
     }
   }
 

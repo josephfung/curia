@@ -194,6 +194,81 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
     expect(result).toMatchObject({ success: false, error: expect.any(String) });
   });
 
+  // #2593: the draft is found (the locating GET succeeds, as a stale read did in prod), then the
+  // write fails. Each status must reach the agent as its ErrorType, or a missing draft reads as a
+  // generic failure and the agent retries it.
+  describe('a failed update is classified by its Nylas status (#2593)', () => {
+    /** GETs answer with the draft; the PUT answers with `status`. */
+    function failPut(status: number): void {
+      mockFetch.mockImplementation(async (_url: unknown, init?: RequestInit) =>
+        init?.method === 'PUT'
+          ? new Response('{"error":{"message":"nope"}}', { status })
+          : new Response(JSON.stringify(draftResponse()), { status: 200 }),
+      );
+    }
+
+    it('a 404 is NOT_FOUND, says not to retry with this ID, and logs the status', async () => {
+      failPut(404);
+      const ctx = buildCtx({ draft_id: 'draft-1', subject: 'x' });
+      const result = await handler.execute(ctx);
+      expect(result).toMatchObject({ success: false, errorType: 'NOT_FOUND' });
+      const error = (result as { error: string }).error;
+      expect(error).toContain('"draft-1"');
+      expect(error).toContain('Do not retry with this ID');
+      expect(ctx.log.error).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 404, draftId: 'draft-1' }), expect.any(String));
+    });
+
+    it('a 429 is RATE_LIMIT', async () => {
+      failPut(429);
+      // A near deadline makes the client fail fast instead of backing off for seconds.
+      const ctx = { ...buildCtx({ draft_id: 'draft-1', subject: 'x' }), deadline: Date.now() + 200 } as ToolContext;
+      const result = await handler.execute(ctx);
+      expect(result).toMatchObject({ success: false, errorType: 'RATE_LIMIT' });
+    });
+
+    it('a 500 is PROVIDER_ERROR', async () => {
+      failPut(500);
+      const result = await handler.execute(buildCtx({ draft_id: 'draft-1', subject: 'x' }));
+      expect(result).toMatchObject({ success: false, errorType: 'PROVIDER_ERROR' });
+      expect((result as { error: string }).error).not.toContain('Do not retry');
+    });
+
+    it('any other status still carries an errorType', async () => {
+      failPut(400);
+      const result = await handler.execute(buildCtx({ draft_id: 'draft-1', subject: 'x' }));
+      expect(result).toMatchObject({ success: false, errorType: 'VALIDATION_ERROR' });
+    });
+
+    it('a network failure (no status) is PROVIDER_ERROR', async () => {
+      mockFetch.mockImplementation(async (_url: unknown, init?: RequestInit) => {
+        if (init?.method === 'PUT') throw new TypeError('fetch failed');
+        return new Response(JSON.stringify(draftResponse()), { status: 200 });
+      });
+      const result = await handler.execute(buildCtx({ draft_id: 'draft-1', subject: 'x' }));
+      expect(result).toMatchObject({ success: false, errorType: 'PROVIDER_ERROR' });
+    });
+
+    it('a 404 reading the draft for a recipient edit is NOT_FOUND too', async () => {
+      // First GET (locating the draft) succeeds; the second (reading its recipients) is a 404.
+      let gets = 0;
+      mockFetch.mockImplementation(async () => {
+        gets += 1;
+        return gets === 1
+          ? new Response(JSON.stringify(draftResponse()), { status: 200 })
+          : new Response('{"error":{"message":"not found"}}', { status: 404 });
+      });
+      const result = await handler.execute(buildCtx({ draft_id: 'draft-1', add_to: [fixture.aliceId] }));
+      expect(result).toMatchObject({ success: false, errorType: 'NOT_FOUND' });
+      expect((result as { error: string }).error).toContain('Do not retry with this ID');
+    });
+
+    it('passes on the errorType when the draft is not found in a named mailbox', async () => {
+      mockFetch.mockResolvedValue(new Response('{"error":{"message":"not found"}}', { status: 404 }));
+      const result = await handler.execute(buildCtx({ draft_id: 'missing', subject: 'x', mailbox: 'work' }, sourcesWith(), twoMailboxes()));
+      expect(result).toMatchObject({ success: false, errorType: 'NOT_FOUND' });
+    });
+  });
+
   // One recipient at a time (#2053, ADR-047). The draft as stored is read first; the
   // PUT carries the full new lists, so everyone not named keeps their entry.
   describe('recipients', () => {
