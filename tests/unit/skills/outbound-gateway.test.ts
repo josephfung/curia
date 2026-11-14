@@ -6986,6 +6986,79 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(ledger.recordSending).not.toHaveBeenCalled();
     });
 
+    // #2589 (ADR-062 rules 3 and 12): a verified sender at tier known or above vouches for the
+    // people they copied; the gateway resolves the tier at send time.
+    describe('people a verified, known sender copied (#2589)', () => {
+      const h = (name: string, value: string) => ({ name, value });
+      const copying = () => inbound({
+        cc: [{ name: 'Sam Assistant', email: 'sam@example.org' }],
+        headers: [...VERIFIED, h('To', PRINCIPAL), h('Cc', 'sam@example.org')],
+      });
+      const replyAll = () => autoDraft({ cc: [{ email: 'sam@example.org' }] });
+      /** Dana's contact at `tier`, with a verified identity unless told otherwise; Sam has a record too. */
+      function contacts(tier: string, verified = true) {
+        (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockImplementation(async (_ch: string, id: string) => {
+          if (id === 'dana@example.org') return { contactId: 'c-dana', displayName: 'Dana Example', role: null, systemRole: null, tier, kind: 'person', kgNodeId: null, verified, contactConfidence: 0.5 };
+          if (id === 'sam@example.org') return { contactId: 'c-sam', displayName: 'Sam Assistant', role: 'assistant', systemRole: null, tier: 'unknown', kind: 'person', kgNodeId: null, verified: true, contactConfidence: 0.3 };
+          return null;
+        });
+        (mocks.contactService as unknown as { getContact: ReturnType<typeof vi.fn> }).getContact = vi.fn(async (id: string) =>
+          id === 'c-sam' ? { title: 'Executive Assistant', organization: 'Example Org' } : { title: 'Account Manager', organization: 'Example Org' });
+      }
+
+      it('sends a reply-all to them, and gives band review who was newly copied', async () => {
+        contacts('known');
+        const { gw, client, review } = makeAuto({ client: autoClient(replyAll(), [copying()]) });
+        expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
+        expect(client!.sendDraft).toHaveBeenCalled();
+        expect(review.mock.calls[0]![0].copied).toEqual({
+          sender: { email: 'dana@example.org', contact: true, name: 'Dana Example', title: 'Account Manager', organization: 'Example Org' },
+          newlyCopied: [{ email: 'sam@example.org', contact: true, name: 'Sam Assistant', title: 'Executive Assistant', organization: 'Example Org', role: 'assistant' }],
+        });
+      });
+
+      it('refuses them when the sender is below known, has no contact, or only an unverified identity', async () => {
+        for (const setup of [() => contacts('unknown'), () => contacts('known', false), () => contacts('blocked')]) {
+          mocks = createMocks();
+          setup();
+          const { gw, client } = makeAuto({ client: autoClient(replyAll(), [copying()]) });
+          expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'recipient_not_on_thread' });
+          expect(client!.sendDraft).not.toHaveBeenCalled();
+        }
+        mocks = createMocks();
+        const none = makeAuto({ client: autoClient(replyAll(), [copying()]) });
+        expect(await none.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'recipient_not_on_thread' });
+      });
+
+      it('refuses with contacts_unreadable (operational, no held marker) when a sender lookup throws', async () => {
+        (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db down'));
+        const { gw, client, ledger } = makeAuto({ client: autoClient(replyAll(), [copying()]) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({
+          refusal: 'contacts_unreadable', refusalKind: 'other', blockedReason: "Couldn't look up who's on the thread, so Curia didn't send on its own." + SUFFIX,
+        });
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+        expect(ledger.recordHeld).not.toHaveBeenCalled();
+        expect(reports()).toEqual([expect.objectContaining({
+          summary: `Not sent from your mailbox: "Re: Friday" to Dana Example, sam@example.org. Curia couldn't look up who's on the thread.${IN_DRAFTS}`,
+        })]);
+      });
+
+      it('refuses with contacts_unreadable when a copied person\'s record cannot be read', async () => {
+        contacts('known');
+        (mocks.contactService as unknown as { getContact: ReturnType<typeof vi.fn> }).getContact = vi.fn().mockRejectedValue(new Error('db down'));
+        const { gw, client } = makeAuto({ client: autoClient(replyAll(), [copying()]) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'contacts_unreadable' });
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+      });
+
+      it('asks band review nothing about copies when the reply goes only to the sender', async () => {
+        contacts('known');
+        const { gw, review } = makeAuto({ client: autoClient(autoDraft(), [copying()]) });
+        expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
+        expect(review.mock.calls[0]![0]).not.toHaveProperty('copied');
+      });
+    });
+
     // ---- #2475 Task 19: replies held only by a limit are reported as the limit ----
     describe('limit holds (#2475 Task 19)', () => {
       // SF10: the notice names the reply that hit the limit.
@@ -7092,7 +7165,7 @@ describe('sendPrincipalDraft (#2474)', () => {
         const kinds: Record<keyof typeof PRINCIPAL_SEND_REFUSALS, 'limit' | 'judgement' | 'other'> = {
           daily_cap: 'limit', thread_cooldown: 'limit',
           mailbox_unavailable: 'other', unknown_mailbox: 'other', ambiguous_mailbox: 'other', setting_off: 'other', not_requested: 'other',
-          approval_replay: 'other', not_found: 'other', lookup_failed: 'other', send_unconfirmed: 'other', no_send_ledger: 'other', provenance_unreadable: 'other',
+          approval_replay: 'other', not_found: 'other', lookup_failed: 'other', send_unconfirmed: 'other', no_send_ledger: 'other', provenance_unreadable: 'other', contacts_unreadable: 'other',
           thread_unreadable: 'other', principal_addresses_unreadable: 'other', no_band_review: 'other',
           no_recipients: 'judgement', principal_only: 'judgement', review_hold: 'judgement', draft_changed: 'judgement',
           outsider_originated: 'judgement', origin_unknown: 'judgement', not_curia_draft: 'judgement', draft_changed_since_curia: 'judgement',
