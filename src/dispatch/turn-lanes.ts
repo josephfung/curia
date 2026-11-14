@@ -154,27 +154,37 @@ export interface TurnLanesOptions {
 const IMMEDIATE: LaneGrant = Object.freeze({ waitedMs: 0, timedOut: false });
 
 /**
+ * Infer whether a task's copied originator is a resolved contact, without the
+ * dispatcher's admission stamp. It is resolved only when it cannot be the
+ * unresolved branch: a UUID contact id, plus a system role or a tier of known,
+ * trusted, or principal. An unresolved stamp stores the raw sender id, a null
+ * role, and tier unknown. A Signal ACI is a UUID and still fails that check.
+ */
+export function inferOriginatorResolution(originator: unknown): { contactId: string | null; resolved: boolean } {
+  const parsed = parseTaskOriginator(originator);
+  const contactId = parsed?.contactId ?? null;
+  const role = parsed?.systemRole;
+  const tier = parsed?.tier;
+  const trustedRole = role === 'principal' || role === 'agent' || role === 'system';
+  const resolvedTier = tier === 'known' || tier === 'trusted' || tier === 'principal';
+  return { contactId, resolved: isUuid(contactId) && (trustedRole || resolvedTier) };
+}
+
+/**
  * Build the holder stamp for a task.
  *
  * `admission` is set only by the dispatcher, which saw the contact resolver.
  * That stamp is taken at reserve and a later acquire of the same task does not
  * replace it. Synthetic publishers never reserve. Their copied originator is
- * treated as resolved only when it cannot be the unresolved branch: a UUID
- * contact id, plus a system role or a tier of known, trusted, or principal.
- * An unresolved stamp stores the raw sender id, a null role, and tier unknown.
- * A Signal ACI is a UUID and still fails that check.
+ * treated as resolved by `inferOriginatorResolution`.
  */
 export function holderFromAgentTask(
   task: AgentTaskEvent,
   admission?: { originatorResolved: boolean },
 ): LaneHolder {
-  const originator = parseTaskOriginator(task.payload.metadata?.['originator']);
-  const contactId = originator?.contactId ?? null;
-  const role = originator?.systemRole;
-  const tier = originator?.tier;
-  const trustedRole = role === 'principal' || role === 'agent' || role === 'system';
-  const resolvedTier = tier === 'known' || tier === 'trusted' || tier === 'principal';
-  const inferred = isUuid(contactId) && (trustedRole || resolvedTier);
+  const rawOriginator = task.payload.metadata?.['originator'];
+  const role = parseTaskOriginator(rawOriginator)?.systemRole;
+  const { contactId, resolved: inferred } = inferOriginatorResolution(rawOriginator);
   const originatorResolved = admission
     ? admission.originatorResolved === true && isUuid(contactId)
     : inferred;

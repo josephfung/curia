@@ -1452,6 +1452,8 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       log: logger,
     };
     const taskOutreach = new TaskOutreachService(taskOutreachRepo, outreachDeps);
+    // One registry shared by every AgentRuntime and both execution layers (#2588).
+    const turnActivity = new TurnActivityRegistry({ logger });
     const layerOptions: NonNullable<ConstructorParameters<typeof ExecutionLayer>[2]> = {
       bus,
       agentRegistry,
@@ -1485,6 +1487,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       skillRegistry,
       verification,
       taskOutreach,
+      turnActivity,
       ...(outboundContextService ? { outboundContextService } : {}),
       ...(openDelegationLookup ? { openDelegationLookup } : {}),
     };
@@ -1530,8 +1533,6 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       laneWaitTimeoutMs: turnInjection.laneWaitTimeoutMs,
       logger,
     });
-    // One registry shared by every AgentRuntime (#2588).
-    const turnActivity = new TurnActivityRegistry({ logger });
     const agents = assembleAgents(agentConfigs, {
       logger,
       bus,
