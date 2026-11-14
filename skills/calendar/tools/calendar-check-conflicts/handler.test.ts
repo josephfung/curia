@@ -43,7 +43,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
     const nylasCalendarClient = {
       getFreeBusy: vi.fn().mockResolvedValue([
         {
-          email: 'freebusy@example.test',
+          email: 'test@example.com',
           timeSlots: [
             {
               startTime: proposedStartTs + 600, // overlaps proposed range
@@ -171,7 +171,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
     const nylasCalendarClient = {
       getFreeBusy: vi.fn().mockResolvedValue([
         {
-          email: 'test@example.com',
+          email: 'cal_primary',
           timeSlots: [
             {
               startTime: proposedStartTs,
@@ -235,7 +235,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
     const nylasCalendarClient = {
       getFreeBusy: vi.fn().mockResolvedValue([
         {
-          email: 'test@example.com',
+          email: 'cal_primary',
           timeSlots: [
             {
               startTime: proposedStartTs,
@@ -303,7 +303,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
     const nylasCalendarClient = {
       getFreeBusy: vi.fn().mockResolvedValue([
         {
-          email: 'test@example.com',
+          email: 'cal_primary',
           timeSlots: [
             {
               startTime: proposedStartTs,

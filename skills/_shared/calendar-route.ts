@@ -283,11 +283,10 @@ export async function freeBusyAcross(
         answered[i] = true;
         answers.push({ queriedId: g.inputIds[i]!, result });
       }
-      for (const result of strays) {
-        const i = answered.indexOf(false);
-        if (i >= 0) answered[i] = true;
-        answers.push({ queriedId: i >= 0 ? g.inputIds[i]! : result.email, result });
-      }
+      // An answer under an email no requested calendar has (an alias Nylas rewrote) is not given to
+      // any of them by guessing: it stands under its own email (its busy times still block), and
+      // the requested calendars it might belong to stay unanswered, so they read as partial.
+      for (const result of strays) answers.push({ queriedId: result.email, result });
       const unanswered = g.inputIds.filter((_, k) => !answered[k]);
       return { answers, unanswered };
     }),

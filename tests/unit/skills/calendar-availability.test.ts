@@ -333,6 +333,26 @@ describe('fix round 1 (Task 33a review)', () => {
     expect(d.blocking.filter((b) => b.title === 'Family dinner')).toHaveLength(1);
   });
 
+  it('a principal calendar free/busy gives no answer for is partial, never clear', async () => {
+    const { clients, router } = twoAccounts([], []);
+    clients.work.getFreeBusy.mockResolvedValue([]);
+    const c = data<ConflictData>(await conflicts(router));
+    expect(c.clear).toBe(false);
+    expect(c.partial).toEqual([{ mailbox_label: 'Work', error: expect.stringContaining('no answer') }]);
+  });
+
+  it("an answer under an email no requested calendar has is not given to one by guessing", async () => {
+    const { clients, router } = twoAccounts([], []);
+    // The other person's calendar comes back under an alias: it still blocks, but the requested
+    // calendar stays unanswered (partial), never read as free.
+    const alias = { email: 'alias@example.org', timeSlots: [{ startTime: at('2026-11-20T16:00:00Z'), endTime: at('2026-11-20T17:00:00Z'), status: 'busy' }] };
+    clients.work.getFreeBusy.mockImplementation(async (ids: string[]) =>
+      ids.includes('someone@example.org') ? [alias] : ids.map((email) => ({ email, timeSlots: [] })));
+    const c = data<ConflictData>(await new CalendarCheckConflictsHandler().execute(ctx(router, { calendarIds: ['someone@example.org'], proposedStart: '2026-11-20T16:00:00Z', proposedEnd: '2026-11-20T17:00:00Z' })));
+    expect(c.clear).toBe(false);
+    expect(c.partial?.map((p) => p.error)).toContain('free/busy returned no answer for this calendar');
+  });
+
   it('a principal free/busy failure is partial, never clear', async () => {
     const { clients, router } = twoAccounts([], []);
     clients.work.getFreeBusy.mockRejectedValue(new Error('free/busy down'));
@@ -405,11 +425,13 @@ describe("fix round 1: someone else's free/busy across several mailboxes (I3, M6
         getPrimaryCalendar: async () => null,
       };
       const router = routerFixture({ mailboxes: [work, personal], clients, evidence, contacts: contacts as never });
-      const ids = ['a@one.example.org', 'b@two.example.org', 'c@three.example.org', LATE];
+      // LATE is third, so the three-lookup cap alone would still allow its search: only the
+      // deadline stops it.
+      const ids = ['a@one.example.org', 'b@two.example.org', LATE];
       const pending = new CalendarFindFreeTimeHandler().execute(ctx(router, { calendarIds: ids, timeMin: T0, timeMax: T1 }));
       await vi.advanceTimersByTimeAsync(3_600);
       const d = data<{ freebusy_via: Array<{ calendarId: string; mailbox: string; chosen_by: string }> }>(await pending);
-      expect(evidence).toHaveBeenCalledTimes(3);
+      expect(evidence).toHaveBeenCalledTimes(2);
       expect(evidence).not.toHaveBeenCalledWith([LATE]);
       expect(d.freebusy_via.find((v) => v.calendarId === LATE)).toMatchObject({ mailbox: 'work', chosen_by: 'default' });
     } finally {
@@ -429,7 +451,11 @@ describe("fix round 1: someone else's free/busy across several mailboxes (I3, M6
     const router = routerFixture({
       mailboxes: [work, personal],
       clients,
-      principalCalendars: [{ nylasCalendarId: WORK_HOME, isPrimary: true, principalMailboxId: 'work' }],
+      // Both home calendars are readable, so a Personal partial can only come from the failed retry.
+      principalCalendars: [
+        { nylasCalendarId: WORK_HOME, isPrimary: true, principalMailboxId: 'work' },
+        { nylasCalendarId: PERSONAL_HOME, isPrimary: true, principalMailboxId: 'personal' },
+      ],
       evidence: async () => [
         { mailbox: 'work', mailbox_label: 'Work', sent_count: 0, received_count: 0, domain_match: false },
         { mailbox: 'personal', mailbox_label: 'Personal', sent_count: 4, received_count: 2, domain_match: false },
@@ -438,7 +464,7 @@ describe("fix round 1: someone else's free/busy across several mailboxes (I3, M6
     const d = data<FreeData & { freebusy_via?: unknown }>(await free(router, { calendarIds: ['sister@gmail.com', WORK_HOME] }));
     expect(clients.personal.getFreeBusy).toHaveBeenCalledWith(['sister@gmail.com'], T0, T1);
     expect(clients.work.getFreeBusy).toHaveBeenCalledWith(['sister@gmail.com'], T0, T1);
-    expect(d.partial?.map((p) => p.mailbox_label)).toEqual(['Personal']);
+    expect(d.partial).toEqual([{ mailbox_label: 'Personal', error: expect.stringContaining('grant expired') }]);
     expect(d.note).toBeDefined();
   });
 

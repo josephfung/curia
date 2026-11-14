@@ -313,7 +313,12 @@ async function readPrincipalCalendars(
             expandRecurring: true,
             onIncomplete: () => { cutShort = true; },
           }),
-          t.routed.client.getFreeBusy([t.routed.calendarId], req.timeMin, req.timeMax),
+          // No answer for the calendar is a failed read, as for other people's calendars (SF-M3):
+          // an empty list would otherwise read as "no busy times" and could free a busy slot.
+          t.routed.client.getFreeBusy([t.routed.calendarId], req.timeMin, req.timeMax).then((fb) => {
+            if (fb.length === 0) throw new Error('free/busy returned no answer for this calendar');
+            return fb;
+          }),
         ]);
         if (events.length >= LIST_EVENTS_MAX_TOTAL) {
           // Free/busy still covers what the listing cut off (untitled), so nothing reads as free.
