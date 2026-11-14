@@ -7199,7 +7199,7 @@ describe('sendPrincipalDraft (#2474)', () => {
         const failures = new Set<keyof typeof PRINCIPAL_SEND_REFUSALS>([
           'mailbox_unavailable', 'unknown_mailbox', 'ambiguous_mailbox', 'not_found', 'lookup_failed', 'no_recipients',
           'draft_changed', 'send_unconfirmed', 'no_band_review', 'no_send_ledger', 'thread_unreadable',
-          'principal_addresses_unreadable', 'provenance_unreadable',
+          'principal_addresses_unreadable', 'provenance_unreadable', 'contacts_unreadable',
         ]);
         for (const code of Object.keys(PRINCIPAL_SEND_REFUSALS) as Array<keyof typeof PRINCIPAL_SEND_REFUSALS>) {
           expect(isPolicyHoldRefusal(code), code).toBe(!failures.has(code));
