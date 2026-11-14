@@ -210,7 +210,11 @@ export class CalendarRegisterHandler implements ToolHandler {
           if (visible !== true) return { success: false, error: visible };
         }
         if (movable) {
-          await contacts.setCalendarMailbox(nylasCalendarId, target);
+          // false: the row was gone by the update (unlinked since the lookup), so nothing moved.
+          if (!(await contacts.setCalendarMailbox(nylasCalendarId, target))) {
+            ctx.log.warn({ mailboxId: target }, 'calendar-register: the registration vanished before it could be moved');
+            return { success: false, error: `Calendar ${nylasCalendarId} is no longer registered, so nothing was moved. Register it again.` };
+          }
           ctx.log.info(
             { fromMailboxId: from, mailboxId: target, owner: placement.owner },
             'calendar-register: moved an existing calendar registration to another mailbox',

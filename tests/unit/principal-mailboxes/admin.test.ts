@@ -987,6 +987,15 @@ describe('PrincipalMailboxAdmin calendars (#2475, D7)', () => {
     expect(contacts.setCalendarMailbox).toHaveBeenCalledWith('pat@gmail.com', 'personal');
   });
 
+  it('a home-calendar move that updates no row is a warning, not a reported move', async () => {
+    const contacts = calendarContacts([{ nylasCalendarId: 'pat@gmail.com', principalMailboxId: 'work', isPrimary: true }]);
+    contacts.setCalendarMailbox.mockResolvedValue(false);
+    const { hooks: h } = hooks(contacts, [{ id: 'pat@gmail.com', isPrimary: true }]);
+    const { admin } = setup({ grants: { g: google('pat@gmail.com') }, calendars: h });
+    const out = await admin.add({ id: 'personal', label: 'Personal', grantId: 'g' });
+    expect(out).toMatchObject({ ok: true, warning: HOME_CALENDAR_PENDING_WARNING });
+  });
+
   it('a failed home-calendar registration is a warning, never a failed add', async () => {
     const calendars = { registerHome: vi.fn(async () => { throw Object.assign(new Error('grant g-secret down'), { statusCode: 503 }); }), listForMailbox: vi.fn(async () => []) };
     const { admin, records } = setup({ grants: { g: google('pat@gmail.com') }, calendars });

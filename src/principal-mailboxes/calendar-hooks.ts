@@ -56,7 +56,11 @@ export function createMailboxCalendarHooks(deps: MailboxCalendarHooksDeps): Mail
       }
       if (existing.principalMailboxId === mailboxId) return 'already_registered';
       // Registered through another mailbox it was shared into: the owning grant wins.
-      await deps.contacts.setCalendarMailbox(primary.id, mailboxId);
+      if (!(await deps.contacts.setCalendarMailbox(primary.id, mailboxId))) {
+        // The row was unlinked since the lookup, so nothing moved: an error, which the add turns
+        // into the home-calendar warning, rather than reporting a move that did not happen.
+        throw new Error('the home calendar registration vanished before it could be moved');
+      }
       if (existing.contactId !== deps.principalContactId || !existing.isPrimary) {
         log.warn(
           { mailboxId, principalOwned: existing.contactId === deps.principalContactId, isPrimary: existing.isPrimary },
