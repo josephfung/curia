@@ -49,31 +49,76 @@ function inSentFolder(msg: NylasMessage): boolean {
   return msg.folders.some((f) => f.toUpperCase() === 'SENT');
 }
 
+/** No sender vouched for: an inbound message's To/Cc then count for nothing (the rule before #2589). */
+const NO_KNOWN_SENDERS: ReadonlySet<string> = new Set();
+
+/** How many raw headers of this name the message carries (names are case-insensitive). */
+function headerCount(msg: NylasMessage, name: string): number {
+  return (msg.headers ?? []).filter((h) => h.name.trim().toLowerCase() === name).length;
+}
+
 /**
- * Who a reply on this thread may go to, lowercased (design D4.3): the principal's addresses, the
- * recipients of messages the provider shows the principal sent (From a principal address and in
- * SENT), and the From of inbound messages
- * whose provider authenticated the sender. An inbound message's To/Cc never count: a sender can
- * list anyone there (a forged Cc of the CFO), the same rule as reply-recipient-provenance.ts.
+ * The To/Cc of an inbound message whose sender vouches for them, lowercased (#2589, ADR-062 rule
+ * 3). All of these must hold, or it is empty (fail closed):
+ *  - not a principal-From message (those are vouched for by SENT, in receivedBy);
+ *  - a single From, verified by the provider's own Authentication-Results (SPF, DKIM and DMARC
+ *    pass): the list is then the authenticated sender's own claim, not a third party's forgery;
+ *  - that From is in `knownSenders`: an active, verified address of a contact at tier known or
+ *    above, resolved by the gateway at send time. A stranger's fresh address, however well
+ *    authenticated (`"Jane Smith" <random@gmail.com>`), names no one;
+ *  - at most one To and one Cc header. A header added after signing is a second copy, and
+ *    which one a parser reads is not ours to guess.
+ * Microsoft 365's default DKIM signature covers neither To nor Cc, so coverage is not required:
+ * it would refuse every M365 sender. Requiring SPF to pass too means a replayed message with
+ * edited recipients has to come from the sender's own servers (an accepted risk, ADR-062).
  */
-export function allowedThreadMembers(thread: readonly NylasMessage[], principalAddresses: readonly string[]): Set<string> {
+export function vouchedCopies(msg: NylasMessage, principalAddresses: readonly string[], knownSenders: ReadonlySet<string>): string[] {
+  const isPrincipal = principalMatcher(principalAddresses);
+  if (fromPrincipal(msg, isPrincipal)) return [];
+  if (msg.from.length !== 1 || !parseSenderVerified(msg.headers)) return [];
+  if (!knownSenders.has(lower(msg.from[0]!.email))) return [];
+  if (headerCount(msg, 'to') > 1 || headerCount(msg, 'cc') > 1) return [];
+  return [...new Set([...msg.to, ...msg.cc].map((p) => lower(p.email)).filter((e) => e.length > 0))];
+}
+
+/**
+ * Who a reply on this thread may go to, lowercased (design D4.3, #2589): the principal's
+ * addresses, the recipients of messages the provider shows the principal sent (From a principal
+ * address and in SENT), the From of inbound messages whose provider authenticated the sender,
+ * and the To/Cc of the message being answered (the latest outside message) when its sender
+ * vouches for them (vouchedCopies). Any other inbound To/Cc never counts: an unverified or
+ * unknown sender can list anyone there (a forged Cc of the CFO). Only the answered message's,
+ * as reply-all works: someone the sender has since dropped is not brought back.
+ */
+export function allowedThreadMembers(
+  thread: readonly NylasMessage[],
+  principalAddresses: readonly string[],
+  knownSenders: ReadonlySet<string> = NO_KNOWN_SENDERS,
+): Set<string> {
   const members = new Set(principalAddresses.map(lower));
-  // A member is anyone who demonstrably received a thread message (receivedBy).
+  // Who demonstrably received a thread message, without any inbound copies (receivedBy).
   for (const msg of thread) for (const address of receivedBy(msg, principalAddresses)) members.add(address);
+  const answered = replyTarget(thread, principalAddresses);
+  if (answered) for (const address of vouchedCopies(answered, principalAddresses, knownSenders)) members.add(address);
   return members;
 }
 
 /**
  * Who demonstrably received a thread message, lowercased (#2474 final fixes A2, security review
- * M3), for the quote proof and the off-thread evidence. The same rule as allowedThreadMembers:
+ * M3), for the quote proof and the off-thread evidence:
  *  - a message the principal sent (principal From and in SENT): its To/Cc/Bcc;
- *  - an inbound message: only its single verified From. Its To/Cc are the sender's claim: a
- *    forged `Cc: cfo@…` the envelope never delivered must not read as the CFO having seen it.
+ *  - an inbound message: its single verified From, plus its To/Cc only when the sender vouches
+ *    for them (vouchedCopies, #2589). Otherwise its To/Cc are a claim: a forged `Cc: cfo@…` the
+ *    envelope never delivered must not read as the CFO having seen it.
  * The principal always counts (the mailbox holds the message). Anything else, such as an
  * unverified sender or a principal From outside SENT, is received by the principal alone (fail
- * closed).
+ * closed). Without `knownSenders`, no inbound To/Cc counts.
  */
-export function receivedBy(msg: NylasMessage, principalAddresses: readonly string[]): Set<string> {
+export function receivedBy(
+  msg: NylasMessage,
+  principalAddresses: readonly string[],
+  knownSenders: ReadonlySet<string> = NO_KNOWN_SENDERS,
+): Set<string> {
   const isPrincipal = principalMatcher(principalAddresses);
   const got = new Set(principalAddresses.map(lower));
   if (fromPrincipal(msg, isPrincipal)) {
@@ -85,8 +130,32 @@ export function receivedBy(msg: NylasMessage, principalAddresses: readonly strin
     // DMARC aligns one header.from domain, not every mailbox of a multi-mailbox From, so only
     // a single-address From is vouched for (fail closed).
     got.add(lower(msg.from[0]!.email));
+    for (const address of vouchedCopies(msg, principalAddresses, knownSenders)) got.add(address);
   }
   return got;
+}
+
+/**
+ * The people the message being answered newly copied, lowercased (#2589, ADR-062 rule 12): its
+ * vouched To/Cc that no earlier thread message shows receiving (receivedBy). On a thread's first
+ * message that is everyone the sender copied. "Shows receiving" uses the same vouched rule, so an
+ * earlier unverified message that merely listed an address does not make it old news (fail
+ * closed: more of these reach band review's high-stakes-copy question, never fewer).
+ */
+export function newlyCopied(
+  thread: readonly NylasMessage[],
+  principalAddresses: readonly string[],
+  knownSenders: ReadonlySet<string> = NO_KNOWN_SENDERS,
+): string[] {
+  const answered = replyTarget(thread, principalAddresses);
+  if (!answered) return [];
+  const isPrincipal = principalMatcher(principalAddresses);
+  const seen = new Set<string>();
+  for (const msg of thread) {
+    if (msg.id === answered.id || !(msg.date < answered.date)) continue;
+    for (const address of receivedBy(msg, principalAddresses, knownSenders)) seen.add(address);
+  }
+  return vouchedCopies(answered, principalAddresses, knownSenders).filter((a) => !isPrincipal(a) && !seen.has(a));
 }
 
 /**
@@ -159,8 +228,13 @@ export function checkAutonomousLimits(input: {
   offLimitsRecipients?: readonly string[];
   /** Autonomous sends (`sending` or `sent`) on any thread inside the daily cap's window. */
   autonomousSendsInWindow: number;
+  /**
+   * Lowercased From addresses whose To/Cc a reply may follow (#2589): an active, verified address
+   * of a contact at tier known or above, resolved at send time. Absent: none (fail closed).
+   */
+  knownSenders?: ReadonlySet<string>;
 }): { refusal: AutonomousLimitRefusal; detail: string } | null {
-  const { draft, thread, principalAddresses, curiaWrites, recentThreadEntries, recentConversationEntries, otherPrincipalAddresses, offLimitsRecipients, autonomousSendsInWindow } = input;
+  const { draft, thread, principalAddresses, curiaWrites, recentThreadEntries, recentConversationEntries, otherPrincipalAddresses, offLimitsRecipients, autonomousSendsInWindow, knownSenders } = input;
 
   if (!curiaWrites.created) {
     return { refusal: 'not_curia_draft', detail: 'Curia did not create this draft in this task' };
@@ -200,7 +274,7 @@ export function checkAutonomousLimits(input: {
   }
 
   const isPrincipal = principalMatcher(principalAddresses);
-  const members = allowedThreadMembers(thread, principalAddresses);
+  const members = allowedThreadMembers(thread, principalAddresses, knownSenders);
   const recipients = [...new Set([...draft.to, ...draft.cc, ...draft.bcc].map((p: Party) => lower(p.email)))];
   const stranger = recipients.find((r) => !isPrincipal(r) && !members.has(r));
   if (stranger !== undefined) {
