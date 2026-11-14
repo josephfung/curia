@@ -90,6 +90,72 @@ describe('TaskRepo closes task outreach when a task ends', () => {
     expect(outreach.closeForTask).not.toHaveBeenCalled();
   });
 
+  // #2592: a task-wake ask bound to a finished task must stop matching later principal replies.
+  describe('task-wake reply bindings', () => {
+    const outreach = () => ({ closeForTask: vi.fn(async () => 0), reopenForTask: vi.fn(async () => 0) });
+    const bindings = () => ({
+      releaseTaskWakeBindingsForTask: vi.fn(async () => 1),
+      restoreTaskWakeBindingsForTask: vi.fn(async () => 1),
+    });
+
+    it('completeTask releases the bindings of the task and its reconciled children', async () => {
+      const { pool } = makePool('done', [CHILD_ID]);
+      const b = bindings();
+      const repo = new TaskRepo(pool, bus, logger, 'UTC', undefined, outreach(), b);
+      await repo.completeTask(TASK_ID, 'Booked');
+      expect(b.releaseTaskWakeBindingsForTask).toHaveBeenCalledWith(TASK_ID);
+      expect(b.releaseTaskWakeBindingsForTask).toHaveBeenCalledWith(CHILD_ID);
+    });
+
+    it("updateTask to 'cancelled' releases the task's bindings", async () => {
+      const { pool } = makePool('cancelled');
+      const b = bindings();
+      const repo = new TaskRepo(pool, bus, logger, 'UTC', undefined, outreach(), b);
+      await repo.updateTask(TASK_ID, { status: 'cancelled' });
+      expect(b.releaseTaskWakeBindingsForTask).toHaveBeenCalledWith(TASK_ID);
+    });
+
+    it('releases bindings even when no outreach repo is wired', async () => {
+      const { pool } = makePool('done');
+      const b = bindings();
+      const repo = new TaskRepo(pool, bus, logger, 'UTC', undefined, undefined, b);
+      await repo.completeTask(TASK_ID);
+      expect(b.releaseTaskWakeBindingsForTask).toHaveBeenCalledWith(TASK_ID);
+    });
+
+    it('a non-terminal update releases nothing', async () => {
+      const { pool } = makePool('waiting');
+      const b = bindings();
+      const repo = new TaskRepo(pool, bus, logger, 'UTC', undefined, outreach(), b);
+      await repo.updateTask(TASK_ID, { status: 'waiting' });
+      expect(b.releaseTaskWakeBindingsForTask).not.toHaveBeenCalled();
+    });
+
+    it('a failed release does not fail the completion', async () => {
+      const { pool } = makePool('done');
+      const b = bindings();
+      b.releaseTaskWakeBindingsForTask.mockRejectedValue(new Error('db down'));
+      const repo = new TaskRepo(pool, bus, logger, 'UTC', undefined, outreach(), b);
+      await expect(repo.completeTask(TASK_ID)).resolves.toMatchObject({ id: TASK_ID, status: 'done' });
+    });
+
+    it('reopenTask restores the bindings its end released', async () => {
+      const { pool } = makePool('open', [], 'done');
+      const b = bindings();
+      const repo = new TaskRepo(pool, bus, logger, 'UTC', undefined, outreach(), b);
+      await repo.reopenTask(TASK_ID, 'Undo');
+      expect(b.restoreTaskWakeBindingsForTask).toHaveBeenCalledWith(TASK_ID);
+    });
+
+    it('a failed restore does not fail the reopen', async () => {
+      const { pool } = makePool('open', [], 'done');
+      const b = bindings();
+      b.restoreTaskWakeBindingsForTask.mockRejectedValue(new Error('db down'));
+      const repo = new TaskRepo(pool, bus, logger, 'UTC', undefined, outreach(), b);
+      await expect(repo.reopenTask(TASK_ID, 'Undo')).resolves.toMatchObject({ id: TASK_ID, status: 'open' });
+    });
+  });
+
   it('a failed close does not fail the completion', async () => {
     const { pool } = makePool('done');
     const outreach = { closeForTask: vi.fn(async () => { throw new Error('db down'); }), reopenForTask: vi.fn(async () => 0) };

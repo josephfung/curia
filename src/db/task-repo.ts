@@ -38,6 +38,7 @@ import {
 import { prepareResumableBlockWithSpill } from './resumable-accumulator-spill.js';
 import type { WorkingDocsRepo } from './working-docs-repo.js';
 import type { TaskOutreachRepo } from '../dispatch/task-outreach.js';
+import type { OutboundContextService } from '../dispatch/outbound-context.js';
 import { type ResumableCircuitState } from '../agents/resumable-circuit-breaker.js';
 import { isPgUniqueViolation } from '../agents/resumable-continuation.js';
 import type { PlanAdaptiveState } from '../agents/plan-adaptive-replan.js';
@@ -225,19 +226,37 @@ export class TaskRepo {
      * repo stays free of dispatch wiring; absent in tests and tools that build their own repo.
      */
     private readonly outreach?: Pick<TaskOutreachRepo, 'closeForTask' | 'reopenForTask'>,
+    /**
+     * Releases a finished task's task-wake reply bindings in outbound_context (#2592), and
+     * restores them on reopen. Injected for the same reason as `outreach`; absent, a binding
+     * stays active until its TTL (7 days) and keeps catching the principal's replies.
+     */
+    private readonly taskWakeBindings?: Pick<
+      OutboundContextService,
+      'releaseTaskWakeBindingsForTask' | 'restoreTaskWakeBindingsForTask'
+    >,
   ) {}
 
   /**
-   * Stop waiting on replies to outreach for tasks that just ended. After the commit and
-   * best-effort: the task is already done, and an open row only expires later (30 days).
+   * Stop waiting on replies for tasks that just ended: close their outreach rows and release
+   * their task-wake bindings. After the commit and best-effort: the task is already done, and
+   * an open row or binding only expires later (30 days / 7 days).
    */
   private async closeOutreach(taskIds: readonly string[]): Promise<void> {
-    if (!this.outreach) return;
     for (const taskId of taskIds) {
-      try {
-        await this.outreach.closeForTask(taskId);
-      } catch (err) {
-        this.logger.warn({ err, taskId }, 'task-repo: failed to close task outreach — rows stay open until they expire');
+      if (this.outreach) {
+        try {
+          await this.outreach.closeForTask(taskId);
+        } catch (err) {
+          this.logger.warn({ err, taskId }, 'task-repo: failed to close task outreach — rows stay open until they expire');
+        }
+      }
+      if (this.taskWakeBindings) {
+        try {
+          await this.taskWakeBindings.releaseTaskWakeBindingsForTask(taskId);
+        } catch (err) {
+          this.logger.warn({ err, taskId }, 'task-repo: failed to release task-wake bindings — they stay active until they expire');
+        }
       }
     }
   }
@@ -901,9 +920,10 @@ export class TaskRepo {
     );
     if (!rows[0]) return null;
     const { status } = rows[0] as { status: string };
-    throw new Error(
-      `task-repo: update rejected — task ${taskId} reached terminal state '${status}' concurrently`,
-    );
+    // Typed so callers can tell "the task already ended" from a real failure without
+    // matching the message (#2592). The pre-check above throws the same class.
+    this.logger.info({ taskId, status }, 'task-repo: update rejected — task reached a terminal state concurrently');
+    throw new TaskTerminalStateError(status);
   }
 
   /**
@@ -1115,6 +1135,14 @@ export class TaskRepo {
         await this.outreach.reopenForTask(updated.id);
       } catch (err) {
         this.logger.warn({ err, taskId: updated.id }, 'task-repo: failed to reopen task outreach — replies will not link to the reopened task');
+      }
+    }
+    // Likewise its task-wake asks: only the bindings the task's end released come back (#2592).
+    if (this.taskWakeBindings) {
+      try {
+        await this.taskWakeBindings.restoreTaskWakeBindingsForTask(updated.id);
+      } catch (err) {
+        this.logger.warn({ err, taskId: updated.id }, 'task-repo: failed to restore task-wake bindings — replies to its asks will not bind to the reopened task');
       }
     }
 

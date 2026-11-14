@@ -1932,7 +1932,19 @@ async function main(): Promise<void> {
   const taskOutreachRepo = new TaskOutreachRepo(pool);
   // The principal's own company is never an outreach org domain, on either side (#2312).
   const outreachNonOrgDomains = principalOrgDomainSet(yamlConfig.security?.principal_org_domains ?? []);
-  const taskRepo = new TaskRepo(pool, bus, logger, config.timezone, workingDocsRepo, taskOutreachRepo);
+  // Outbound context bridge — delegation-aware context registry for
+  // specialist-initiated outbound. Requires pool (Postgres).
+  // Constructed before TaskRepo (a finished task releases its task-wake bindings, #2592),
+  // VoiceRuntime (so voice turns can inject active entries — #1594) and Scheduler
+  // (startup + daily cleanup).
+  const outboundContextService = pool
+    ? new OutboundContextService(pool, logger, {
+        defaultExpiryHours: yamlConfig.contextBridge?.defaultExpiryHours,
+        explicitExpiryHours: yamlConfig.contextBridge?.explicitExpiryHours,
+        channelDefaultExpiryHours: yamlConfig.contextBridge?.channelDefaultExpiryHours,
+      })
+    : undefined;
+  const taskRepo = new TaskRepo(pool, bus, logger, config.timezone, workingDocsRepo, taskOutreachRepo, outboundContextService);
   // The principal's yes or no on a personal-data ask, per thread (#2312): approve/deny write
   // it, band review reads it. A yes on a strongly linked thread learns the requester onto the outreach row.
   const disclosureDecisionsRepo = new DisclosureDecisionsRepo(pool);
@@ -2392,17 +2404,6 @@ async function main(): Promise<void> {
     logger.warn('channel sms is enabled + resolvable but its runtime client/credentials are missing (api key, from number, or webhook public key); no SMS adapter constructed — check vault/env credentials and restart');
   }
 
-  // Outbound context bridge — delegation-aware context registry for
-  // specialist-initiated outbound. Requires pool (Postgres).
-  // Constructed before VoiceRuntime (so voice turns can inject active entries —
-  // #1594) and before Scheduler (startup + daily cleanup).
-  const outboundContextService = pool
-    ? new OutboundContextService(pool, logger, {
-        defaultExpiryHours: yamlConfig.contextBridge?.defaultExpiryHours,
-        explicitExpiryHours: yamlConfig.contextBridge?.explicitExpiryHours,
-        channelDefaultExpiryHours: yamlConfig.contextBridge?.channelDefaultExpiryHours,
-      })
-    : undefined;
 
   // Construct the Voice adapter (HTTP session handler installed on start).
   if (
