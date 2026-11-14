@@ -29,6 +29,14 @@ const CONTACT_G = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'; // a second, unrelated
 const USAGE = { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 };
 const PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock' } as const;
 // The tool-error wrapper XML-escapes the apostrophe, so match the part after it.
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve: () => void = () => {};
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 const HOLD_TEXT = 'already acted on the same target';
 
 function text(content: string): LLMResponse {
@@ -100,6 +108,8 @@ const CONTACT_NAMES: Record<string, string> = {
   [CONTACT_G]: 'Grace Hopper',
 };
 
+type ScriptStep = (messages: unknown) => LLMResponse | Promise<LLMResponse>;
+
 function harness(contacts: Record<string, ReturnType<typeof person>>) {
   const logger = createLogger('error');
   const bus = new EventBus(logger);
@@ -145,7 +155,7 @@ function harness(contacts: Record<string, ReturnType<typeof person>>) {
   // The script is per turn, found by the marker in the user's request, so the order in
   // which the two turns' model calls interleave does not matter.
   const chatsByTurn = new Map<string, unknown[][]>();
-  const scripts = new Map<string, Array<(messages: unknown) => LLMResponse>>();
+  const scripts = new Map<string, ScriptStep[]>();
   const provider: LLMProvider = {
     id: 'mock',
     chat: vi.fn(async (params: { messages: unknown[] }) => {
@@ -155,12 +165,13 @@ function harness(contacts: Record<string, ReturnType<typeof person>>) {
       const marker = [...scripts.keys()]
         .filter((key) => dump.includes(key))
         .sort((a, b) => dump.lastIndexOf(b) - dump.lastIndexOf(a))[0];
-      if (!marker) return text('done');
+      if (!marker) throw new Error('scripted provider: no script matches this turn');
       const seen = chatsByTurn.get(marker) ?? [];
       seen.push(params.messages);
       chatsByTurn.set(marker, seen);
       const step = scripts.get(marker)![seen.length - 1];
-      return step ? step(params.messages) : text('done');
+      if (!step) throw new Error(`scripted provider: ${marker} has no step ${seen.length - 1}`);
+      return step(params.messages);
     }),
   };
 
@@ -189,7 +200,7 @@ function harness(contacts: Record<string, ReturnType<typeof person>>) {
     return createInboundMessage({ conversationId, channelId, senderId, content });
   }
 
-  function script(marker: string, steps: Array<(messages: unknown) => LLMResponse>) {
+  function script(marker: string, steps: ScriptStep[]) {
     scripts.set(marker, steps);
   }
 
@@ -208,48 +219,90 @@ const mail = (recipient: string) => () =>
 const say = (content: string) => () => text(content);
 
 describe('cross-conversation backstop (#2588)', () => {
+  /**
+   * Two turns provably in flight at once. The email turn books, then parks on its next model
+   * call until the Signal turn's booking attempt has come back and the Signal turn is on its
+   * second model call; only then is it released. `overlap` records what the Signal turn saw
+   * at that moment: the email turn parked and not finished.
+   */
+  async function runOverlapping(
+    h: ReturnType<typeof harness>,
+    opts: { emailSender: string; signalSender: string; emailTarget: string; signalTarget: string },
+  ) {
+    const release = deferred();
+    const state = { emailParked: false, emailDone: false };
+    const overlap: { emailParked: boolean; emailDone: boolean }[] = [];
+    h.script('EMAIL-REQUEST', [
+      book(opts.emailTarget),
+      async () => {
+        state.emailParked = true;
+        await release.promise;
+        return mail(opts.emailTarget)();
+      },
+      () => {
+        state.emailDone = true;
+        return text('Booked and sent.');
+      },
+    ]);
+    // Signal books. If held it declines in text; if it ran, it emails too.
+    h.script('SIGNAL-REQUEST', [
+      book(opts.signalTarget),
+      (messages) => {
+        overlap.push({ ...state });
+        release.resolve();
+        return JSON.stringify(messages).includes(HOLD_TEXT)
+          ? text('That was already handled, so I stopped.')
+          : mail(opts.signalTarget)();
+      },
+      say('Booked and sent.'),
+    ]);
+
+    const emailTurn = h.bus.publish('channel', h.inbound('EMAIL-REQUEST set up a sync', opts.emailSender, 'email:thread-1', 'email'));
+    await vi.waitFor(() => expect(state.emailParked).toBe(true));
+    const signalTurn = h.bus.publish('channel', h.inbound('SIGNAL-REQUEST set up a sync', opts.signalSender, 'signal:+15550000001', 'signal'));
+    await Promise.all([emailTurn, signalTurn]);
+    // The Signal turn's booking attempt came back while the email turn was still open.
+    expect(overlap).toEqual([{ emailParked: true, emailDone: false }]);
+  }
+
   it('same scheduling request on email and Signal yields one booking and one outbound email', async () => {
     const h = harness({
       'ada@example.com': person(CONTACT_A, 'principal', 'Ada Lovelace'),
       '+15550000001': person(CONTACT_A, 'principal', 'Ada Lovelace'),
     });
-    h.script('EMAIL-REQUEST', [book(CONTACT_B), mail(CONTACT_B), say('Booked and sent.')]);
-    // The Signal turn books. If the call is held it declines in text; if it ran, it emails too.
-    h.script('SIGNAL-REQUEST', [
-      book(CONTACT_B),
-      (messages) => (JSON.stringify(messages).includes(HOLD_TEXT)
-        ? text('That was already handled, so I stopped.')
-        : mail(CONTACT_B)()),
-      say('Booked and sent.'),
-    ]);
+    await runOverlapping(h, { emailSender: 'ada@example.com', signalSender: '+15550000001', emailTarget: CONTACT_B, signalTarget: CONTACT_B });
 
-    const emailTurn = h.bus.publish('channel', h.inbound('EMAIL-REQUEST set up a sync with Barbara', 'ada@example.com', 'email:thread-1', 'email'));
-    await vi.waitFor(() => expect(h.booking.execute).toHaveBeenCalledTimes(1));
-    const signalTurn = h.bus.publish('channel', h.inbound('SIGNAL-REQUEST set up a sync with Barbara', '+15550000001', 'signal:+15550000001', 'signal'));
-    await Promise.all([emailTurn, signalTurn]);
-
+    // soft: when the backstop is off, the RED run reports both counts and the missing hold.
     expect.soft(h.booking.execute).toHaveBeenCalledTimes(1);
     expect.soft(h.email.execute).toHaveBeenCalledTimes(1);
     expect(h.transcript('SIGNAL-REQUEST')).toContain(HOLD_TEXT);
     expect(h.transcript('EMAIL-REQUEST')).not.toContain(HOLD_TEXT);
   });
 
-  it('two unrelated concurrent requests are never held', async () => {
+  it('the same person on two channels acting on different people is never held', async () => {
     const h = harness({
       'ada@example.com': person(CONTACT_A, 'principal', 'Ada Lovelace'),
-      'grace@example.com': person(CONTACT_G, null, 'Grace Hopper'),
+      '+15550000001': person(CONTACT_A, 'principal', 'Ada Lovelace'),
     });
-    h.script('FIRST-REQUEST', [book(CONTACT_B), mail(CONTACT_B), say('done one')]);
-    h.script('SECOND-REQUEST', [book(CONTACT_C), mail(CONTACT_C), say('done two')]);
-
-    const first = h.bus.publish('channel', h.inbound('FIRST-REQUEST sync with Barbara', 'ada@example.com', 'email:thread-1', 'email'));
-    await vi.waitFor(() => expect(h.booking.execute).toHaveBeenCalledTimes(1));
-    const second = h.bus.publish('channel', h.inbound('SECOND-REQUEST sync with Carol', 'grace@example.com', 'email:thread-2', 'email'));
-    await Promise.all([first, second]);
+    await runOverlapping(h, { emailSender: 'ada@example.com', signalSender: '+15550000001', emailTarget: CONTACT_B, signalTarget: CONTACT_C });
 
     expect(h.booking.execute).toHaveBeenCalledTimes(2);
     expect(h.email.execute).toHaveBeenCalledTimes(2);
-    expect(h.transcript('FIRST-REQUEST')).not.toContain(HOLD_TEXT);
-    expect(h.transcript('SECOND-REQUEST')).not.toContain(HOLD_TEXT);
+    expect(h.transcript('EMAIL-REQUEST')).not.toContain(HOLD_TEXT);
+    expect(h.transcript('SIGNAL-REQUEST')).not.toContain(HOLD_TEXT);
+  });
+
+  it('different people acting on the same target: the second is held', async () => {
+    // Behavior as the code stands: the target match does not depend on who is asking, so a
+    // resolved non-principal's turn is held by the principal's earlier action on that contact.
+    const h = harness({
+      'ada@example.com': person(CONTACT_A, 'principal', 'Ada Lovelace'),
+      '+15550000001': person(CONTACT_G, null, 'Grace Hopper'),
+    });
+    await runOverlapping(h, { emailSender: 'ada@example.com', signalSender: '+15550000001', emailTarget: CONTACT_B, signalTarget: CONTACT_B });
+
+    expect(h.booking.execute).toHaveBeenCalledTimes(1);
+    expect(h.email.execute).toHaveBeenCalledTimes(1);
+    expect(h.transcript('SIGNAL-REQUEST')).toContain(HOLD_TEXT);
   });
 });
