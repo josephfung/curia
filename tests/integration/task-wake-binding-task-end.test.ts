@@ -7,14 +7,14 @@
 //   - completing or cancelling a task releases its bindings, and no other task's;
 //   - a send after the task ended (or for a task that does not exist) registers no binding.
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { EventBus } from '../../src/bus/bus.js';
 import { OutboundContextService, ScopedOutboundContext } from '../../src/dispatch/outbound-context.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { TaskRepo } from '../../src/db/task-repo.js';
-import { TASK_WAKE_BIND_REPLY_KEY, TASK_WAKE_TASK_ID_KEY } from '../../src/dispatch/task-wake-reply.js';
+import { TASK_WAKE_BIND_REPLY_KEY, TASK_WAKE_TASK_ID_KEY, recordTaskWakeReply } from '../../src/dispatch/task-wake-reply.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { ContextBridgeReleaseHandler } from '../../skills/context-bridge/tools/context-bridge-release/handler.js';
 import { AgentRegistry } from '../../src/agents/agent-registry.js';
@@ -150,6 +150,38 @@ describeIf('task-wake bindings of finished tasks (#2592)', () => {
 
     await taskRepo.updateTask(taskId, { status: 'cancelled' }, 'coordinator');
 
+    expect((await entryState(entryId)).released).toBe(true);
+  });
+
+  // A task can fail (failResumableTask) after the reply read it as waiting. The reply's write
+  // must not move it back to in_progress: only the UPDATE's own guard can catch that, so both
+  // reads here see the stale `waiting` row while the database says `failed`.
+  it('a reply racing a task failure leaves the task failed and the reply unattached', async () => {
+    const taskId = await insertTask('waiting');
+    const entryId = await bind(taskId);
+    const stale = (await taskRepo.getTask(taskId))!;
+    await pool.query(`UPDATE tasks SET status = 'failed' WHERE id = $1`, [taskId]);
+    const getTask = vi.spyOn(taskRepo, 'getTask').mockResolvedValue(stale);
+    let result: Awaited<ReturnType<typeof recordTaskWakeReply>>;
+    try {
+      result = await recordTaskWakeReply({
+        reply: 'Go ahead with Thursday',
+        entryId,
+        entry: (await outboundContext.getEntry(entryId))!,
+        taskRepo,
+        outboundContext,
+        logger: createSilentLogger(),
+      });
+    } finally {
+      getTask.mockRestore();
+    }
+
+    expect(result).toMatchObject({ persisted: false, released: true, taskId });
+    expect(result.note).toMatch(/^task already failed; reply not attached\./);
+    const after = (await taskRepo.getTask(taskId))!;
+    expect(after.status).toBe('failed');
+    const notes = (after.progress?.notes ?? []) as Array<{ note: string }>;
+    expect(notes.some((n) => n.note.includes('Thursday'))).toBe(false);
     expect((await entryState(entryId)).released).toBe(true);
   });
 

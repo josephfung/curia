@@ -114,6 +114,8 @@ describe('task-wake-reply', () => {
           status: 'in_progress',
         }),
         'coordinator',
+        // The write itself rejects every ended status, failed included (a concurrent fail).
+        { rejectStatuses: expect.arrayContaining(['done', 'cancelled', 'failed']) },
       );
       expect(outboundContext.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
     });
@@ -198,15 +200,15 @@ describe('task-wake-reply', () => {
       expect(result.note).toMatch(/handle it as a new request/);
     });
 
-    it('releases the entry without an error when the task ends between the read and the write', async () => {
-      (taskRepo.updateTask as ReturnType<typeof vi.fn>).mockRejectedValue(new TaskTerminalStateError('done'));
+    it.each(['done', 'failed'])('releases the entry without an error when the task becomes %s between the read and the write', async (status) => {
+      (taskRepo.updateTask as ReturnType<typeof vi.fn>).mockRejectedValue(new TaskTerminalStateError(status));
       const result = await recordTaskWakeReply({
         reply: 'Thursday is better', entryId: ENTRY_ID, entry: makeEntry(), taskRepo, outboundContext, logger,
       });
 
       expect(result).toMatchObject({ persisted: false, released: true, taskId: TASK_ID });
       expect(result.error).toBeUndefined();
-      expect(result.note).toMatch(/^task already done; reply not attached\./);
+      expect(result.note).toMatch(new RegExp(`^task already ${status}; reply not attached\\.`));
       expect(outboundContext.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
     });
 
