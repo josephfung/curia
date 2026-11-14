@@ -49,6 +49,11 @@ import { dueMailboxes } from '../principal-mailboxes/triage-due.js';
 import { makeSystemOriginator } from '../contacts/principal.js';
 import { grantSafeErrorFields, mayCarryGrantId } from '../principal-mailboxes/error-fields.js';
 
+/** An error message with every double-quoted value replaced by "…": keeps the shape, drops the data. */
+export function blankQuotedValues(message: string): string {
+  return message.replace(/"[^"]*"/g, '"…"');
+}
+
 export const INBOX_DRAIN_TAG = 'inbox-drain';
 /** The drain task's intent and description: what the wake tells ceo-inbox to do (R66). */
 export const INBOX_DRAIN_INTENT =
@@ -193,8 +198,9 @@ export class InboxHeartbeat {
         .catch((err) => {
           // The message is logged only for an error that cannot carry a Nylas grant id (R20).
           // Class name alone hid "TriageState: invalid timezone" behind `errName: "Error"`
-          // for every tick of a full day.
-          const message = mayCarryGrantId(err) ? {} : { errMessage: (err as Error).message };
+          // for every tick of a full day. Quoted values are blanked: messages such as
+          // `invalid timezone "<label>"` quote data, and a label can name where someone lives.
+          const message = mayCarryGrantId(err) ? {} : { errMessage: blankQuotedValues((err as Error).message) };
           this.o.logger.error({ ...grantSafeErrorFields(err), ...message }, 'InboxHeartbeat: unhandled error in tick');
         })
         .finally(() => {

@@ -257,9 +257,11 @@ describe('InboxHeartbeat.start', () => {
       t.hb.start();
       await vi.advanceTimersByTimeAsync(61_000);
       expect(t.log.error).toHaveBeenCalledWith(
-        expect.objectContaining({ errName: 'Error', errMessage: expect.stringContaining('invalid timezone') }),
+        expect.objectContaining({ errName: 'Error', errMessage: 'TriageState: invalid timezone "…"' }),
         'InboxHeartbeat: unhandled error in tick',
       );
+      // The quoted label (it names a city) is not logged.
+      expect(JSON.stringify(t.log.error.mock.calls)).not.toContain('Toronto');
 
       const nylas = Object.assign(new Error('GET /v3/grants/grant-abc/messages failed'), { statusCode: 500 });
       spy.mockRejectedValue(nylas);

@@ -3065,16 +3065,20 @@ async function main(): Promise<void> {
   if (!entityMemory) logger.warn('Knowledge graph is off: inbox triage runs on default cadences with in-memory state until it is back');
   // The principal's home timezone, or config.timezone when it is unset or not a usable zone.
   // An invalid stored value made TriageState throw on every heartbeat tick, so triage stopped
-  // silently; now it degrades to the instance zone and says so once per distinct value.
-  // Used by inbox triage and the meeting-minutes pipeline.
-  const warnedPrincipalTz = new Set<string>();
+  // silently; now it degrades to the instance zone and says so, at most hourly while it lasts,
+  // so a long-lived process keeps showing the degradation rather than one line at boot.
+  // Used by inbox triage and the meeting-minutes pipeline. The value is not logged: a
+  // timezone label can name where the principal lives.
+  const PRINCIPAL_TZ_WARN_EVERY_MS = 60 * 60_000;
+  let principalTzWarnedAt = 0;
   const principalHomeTz = (): string => {
     const { zone, rejected } = usableTimezone(principalTimezone.current, config.timezone);
-    if (rejected !== undefined && !warnedPrincipalTz.has(rejected)) {
-      warnedPrincipalTz.add(rejected);
+    const now = Date.now();
+    if (rejected !== undefined && now - principalTzWarnedAt >= PRINCIPAL_TZ_WARN_EVERY_MS) {
+      principalTzWarnedAt = now;
       logger.warn(
-        { fallback: zone },
-        "The principal's stored timezone is not a recognized zone; using the instance timezone. Set an IANA zone (e.g. America/Toronto) on the principal's contact",
+        { contactId: principalContact?.id, fallback: zone },
+        "The principal's stored timezone is not a recognized zone; using the instance timezone. Set an IANA zone (e.g. America/Toronto) on the principal's contact in the console",
       );
     }
     return zone;

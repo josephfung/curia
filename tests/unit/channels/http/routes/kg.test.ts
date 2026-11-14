@@ -262,7 +262,8 @@ describe('PATCH /api/contacts/:id — status field removal', () => {
       method: 'PATCH',
       url: `/api/contacts/${BASE_CONTACT.id}`,
       headers: { ...auth, 'content-type': 'application/json' },
-      body: JSON.stringify({ timezone: 'America/Toronto' }),
+      // organization, not timezone: a timezone edit now refreshes (inbox triage reads it).
+      body: JSON.stringify({ organization: 'Acme' }),
     });
     expect(res.statusCode).toBe(200);
     expect(notePrimaryEmailChanged).not.toHaveBeenCalled();
