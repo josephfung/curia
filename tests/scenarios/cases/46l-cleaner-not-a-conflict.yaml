@@ -59,8 +59,10 @@ tool_stubs:
         blocking:
           - { eventId: evt-cleaner, title: Cleaner, calendar_label: Personal, start: "{{time:next-monday+1 10:00}}", end: "{{time:next-monday+1 12:00}}" }
         treated_as_free: []
+    # Only treating the cleaner's own event as free frees the window; any other exclusion leaves
+    # the cleaner blocking, so the case cannot pass without the right event id.
     - agent: calendar
-      match: {}
+      match: { treat_as_free: [evt-cleaner] }
       return:
         displayTimezone: "{{timezone}}"
         freeWindows:
@@ -68,6 +70,16 @@ tool_stubs:
         blocking: []
         treated_as_free:
           - { eventId: evt-cleaner, title: Cleaner, calendar_label: Personal, start: "{{time:next-monday+1 10:00}}", end: "{{time:next-monday+1 12:00}}" }
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-monday+1 09:00}}", end: "{{time:next-monday+1 10:00}}" }
+          - { start: "{{time:next-monday+1 12:00}}", end: "{{time:next-monday+1 17:00}}" }
+        blocking:
+          - { eventId: evt-cleaner, title: Cleaner, calendar_label: Personal, start: "{{time:next-monday+1 10:00}}", end: "{{time:next-monday+1 12:00}}" }
+        treated_as_free: []
   calendar-list-events:
     - agent: calendar
       match: {}
