@@ -15,6 +15,21 @@ export function isValidTimezone(tz: string): boolean {
   return trimmed !== '' && IANAZone.isValidZone(trimmed);
 }
 
+/**
+ * The zone to compute with: `preferred` when it is valid, else `fallback` (the instance's
+ * validated config.timezone). `rejected` is set when a preferred value was present but
+ * unusable, so the caller can warn: a bad stored value must degrade to the instance zone,
+ * never stop the work that needs a zone (inbox triage did, on every tick).
+ */
+export function usableTimezone(
+  preferred: string | null | undefined,
+  fallback: string,
+): { zone: string; rejected?: string } {
+  if (preferred === null || preferred === undefined) return { zone: fallback };
+  if (isValidTimezone(preferred)) return { zone: preferred.trim() };
+  return { zone: fallback, rejected: preferred };
+}
+
 // Separator between the region and the city in calendar-style labels:
 // "Eastern Time - Toronto" (Google Calendar), with en/em dash variants.
 const LABEL_SEPARATOR = /\s+[-–—]\s+/;
