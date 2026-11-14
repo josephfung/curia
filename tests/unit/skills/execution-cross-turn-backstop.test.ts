@@ -590,3 +590,51 @@ describe('ExecutionLayer cross-turn backstop logging and fallbacks (#2588)', () 
     expect(held.error).toContain('- your other conversation on email already did this: contact-message on "Alice Example" at ');
   });
 });
+
+describe('ExecutionLayer cross-turn backstop extraction failures (#2588)', () => {
+  it('a rejected contact check lets the call proceed and logs the failure by id kind', async () => {
+    const child: Logger = pino({ level: 'silent' });
+    const parent: Logger = pino({ level: 'silent' });
+    vi.spyOn(parent, 'child').mockReturnValue(child as unknown as ReturnType<Logger['child']>);
+    const warn = vi.spyOn(child, 'warn');
+    const { registry, layer, turnActivity } = setup({ logger: parent });
+    const handler = makeHandler();
+    registry.register(makeRiskyManifest('contact-message', 'medium'), handler);
+    startRoot(turnActivity, 'task-a');
+    const contacts = (layer as unknown as { contactService: ContactService }).contactService;
+    vi.mocked(contacts.getContact).mockRejectedValue(new Error('contacts db down'));
+
+    const result = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a'));
+    expect(result.success).toBe(true);
+    expect(handler.execute).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: 'contact-message', idKind: 'uuid' }),
+      expect.stringContaining('contact lookup failed'),
+    );
+    // Not a contact, so the call is recorded against the bare id instead.
+    expect(turnActivity.actionsOf('task-a')[0]!.targets).toEqual([{ kind: 'id', value: ALICE }]);
+  });
+
+  it('a throw in the async half is logged at error and the call runs unchecked', async () => {
+    const child: Logger = pino({ level: 'silent' });
+    const parent: Logger = pino({ level: 'silent' });
+    vi.spyOn(parent, 'child').mockReturnValue(child as unknown as ReturnType<Logger['child']>);
+    const error = vi.spyOn(child, 'error');
+    const { registry, layer, turnActivity } = setup({ logger: parent });
+    const handler = makeHandler();
+    registry.register(makeRiskyManifest('contact-message', 'medium'), handler);
+    startRoot(turnActivity, 'task-a');
+    vi.spyOn(turnActivity, 'rootOf').mockImplementation(() => {
+      throw new Error('registry exploded');
+    });
+
+    const result = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a'));
+    expect(result.success).toBe(true);
+    expect(handler.execute).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: 'contact-message', taskEventId: 'task-a' }),
+      expect.stringContaining('fail-open'),
+    );
+    expect(turnActivity.actionsOf('task-a')).toHaveLength(0);
+  });
+});
