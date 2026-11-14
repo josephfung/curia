@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isValidTimezone, normalizeTimezone } from '../../../src/time/timezone-normalize.js';
+import { isValidTimezone, normalizeTimezone, usableTimezone } from '../../../src/time/timezone-normalize.js';
 
 describe('isValidTimezone', () => {
   it('accepts IANA names and UTC', () => {
@@ -12,6 +12,21 @@ describe('isValidTimezone', () => {
     expect(isValidTimezone('Eastern Time - US & Canada')).toBe(false);
     expect(isValidTimezone('')).toBe(false);
     expect(isValidTimezone('   ')).toBe(false);
+  });
+});
+
+describe('usableTimezone', () => {
+  it('uses the preferred zone when it is valid', () => {
+    expect(usableTimezone('Asia/Tokyo', 'America/Toronto')).toEqual({ zone: 'Asia/Tokyo' });
+  });
+
+  it('falls back when there is no preferred zone', () => {
+    expect(usableTimezone(null, 'America/Toronto')).toEqual({ zone: 'America/Toronto' });
+    expect(usableTimezone(undefined, 'America/Toronto')).toEqual({ zone: 'America/Toronto' });
+  });
+
+  it('falls back, naming the rejected value, when the preferred zone is invalid', () => {
+    expect(usableTimezone('Eastern Time - Toronto', 'UTC')).toEqual({ zone: 'UTC', rejected: 'Eastern Time - Toronto' });
   });
 });
 

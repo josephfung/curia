@@ -169,6 +169,8 @@ import { EntityContextAssembler } from './entity-context/assembler.js';
 import { ConversationEntityState } from './entity-context/conversation-entities.js';
 import { bootstrapAgentIdentity } from './entity-context/bootstrap.js';
 import { repairPrincipalMetadata } from './contacts/ceo-bootstrap.js';
+import { repairStoredTimezones } from './contacts/timezone-repair.js';
+import { usableTimezone } from './time/timezone-normalize.js';
 import { AutonomyService } from './autonomy/autonomy-service.js';
 import { ActionLogRepo } from './autonomy/action-log-repo.js';
 import { TaskRepo } from './db/task-repo.js';
@@ -953,6 +955,9 @@ async function main(): Promise<void> {
   const principalPrimaryEmail: PrincipalPrimaryEmailRef = { current: null };
   // Name, preferred name, title and pronouns, refreshed with the identities (#2226).
   const principalProfile: PrincipalProfileRef = { current: null };
+  // The principal's stored home timezone, refreshed with the identities. Inbox triage reads
+  // it through usableTimezone(); the boot-time principalContact copy went stale on an edit.
+  const principalTimezone: { current: string | null } = { current: null };
 
   // Monotonic guard against overlapping refreshes (#1514). onIdentitiesChanged is
   // fire-and-forget, so two mutations in quick succession (e.g. add + verify, or a
@@ -967,6 +972,7 @@ async function main(): Promise<void> {
       principalEmail.current = '';
       principalPrimaryEmail.current = null;
       principalProfile.current = null;
+      principalTimezone.current = null;
       return;
     }
     const myGeneration = ++refreshGeneration;
@@ -981,6 +987,7 @@ async function main(): Promise<void> {
       principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier ?? '';
     principalPrimaryEmail.current = snapshot.primaryEmail;
     principalProfile.current = snapshot.profile;
+    principalTimezone.current = snapshot.timezone;
     // The prompt builder drops an unmatched primary and an empty identity set quietly
     // (it must never render an unverified address or a complete-set claim over
     // nothing), so every agent's prompt changes with no signal. Say so here instead.
@@ -995,6 +1002,15 @@ async function main(): Promise<void> {
       },
       'Principal identities refreshed',
     );
+  }
+
+  // Map timezone labels stored before writes were normalized ("Eastern Time - Toronto" →
+  // America/Toronto). Before the principal is read, so the copy below is the repaired one.
+  // Not fatal: every consumer of a contact timezone falls back to config.timezone.
+  try {
+    await repairStoredTimezones(pool, logger);
+  } catch (err) {
+    logger.error({ err }, 'Contact timezone repair failed at startup; stored values are unchanged');
   }
 
   try {
@@ -3042,7 +3058,23 @@ async function main(): Promise<void> {
   // each restart, instead of no triage at all (R67). The list tool and the heartbeat share it.
   const triageConfig: Pick<ConfigStore, 'get' | 'set'> = entityMemory ? new ConfigStore(entityMemory, logger) : inMemoryTriageConfig();
   if (!entityMemory) logger.warn('Knowledge graph is off: inbox triage runs on default cadences with in-memory state until it is back');
-  const triageTz = (): string => principalContact?.timezone ?? config.timezone;
+  // The principal's home timezone, or config.timezone when it is unset or not a usable zone.
+  // An invalid stored value made TriageState throw on every heartbeat tick, so triage stopped
+  // silently; now it degrades to the instance zone and says so once per distinct value.
+  // Used by inbox triage and the meeting-minutes pipeline.
+  const warnedPrincipalTz = new Set<string>();
+  const principalHomeTz = (): string => {
+    const { zone, rejected } = usableTimezone(principalTimezone.current, config.timezone);
+    if (rejected !== undefined && !warnedPrincipalTz.has(rejected)) {
+      warnedPrincipalTz.add(rejected);
+      logger.warn(
+        { fallback: zone },
+        "The principal's stored timezone is not a recognized zone; using the instance timezone. Set an IANA zone (e.g. America/Toronto) on the principal's contact",
+      );
+    }
+    return zone;
+  };
+  const triageTz = principalHomeTz;
   const triageState = new TriageState(triageConfig, triageTz, (fields, msg) => logger.warn(fields, msg));
   const triageDedupe = new TriageDedupe(pool, logger);
   const readCadences = async (ids: string[]): Promise<Record<string, Cadence>> =>
@@ -3583,7 +3615,7 @@ async function main(): Promise<void> {
       taskRepo,
       contactService,
       bus,
-      timezone: () => principalContact?.timezone ?? config.timezone,
+      timezone: principalHomeTz,
       hasActiveWake: (taskId) => taskHasPendingWake(pool, taskId),
       logger,
     });

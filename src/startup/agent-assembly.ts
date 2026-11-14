@@ -539,13 +539,16 @@ export function assembleAgents(
 export async function readPrincipalIdentitySnapshot(
   contactService: Pick<ContactService, 'getContactWithIdentities'>,
   principalContactId: string,
-): Promise<{ identities: ChannelIdentity[]; primaryEmail: string | null; profile: PrincipalProfile | null }> {
+): Promise<{ identities: ChannelIdentity[]; primaryEmail: string | null; profile: PrincipalProfile | null; timezone: string | null }> {
   const withIdentities = await contactService.getContactWithIdentities(principalContactId);
   const identities = (withIdentities?.identities ?? []).filter((id) => id.verified && id.status === 'active');
   const contact = withIdentities?.contact;
   return {
     identities,
     primaryEmail: contact?.primaryEmail ?? null,
+    // The principal's home timezone, for inbox triage. Refreshed with the rest so a console
+    // edit reaches triage without a restart. Kept out of `profile`, which feeds the prompt.
+    timezone: contact?.timezone ?? null,
     profile: contact
       ? {
         displayName: contact.displayName,
