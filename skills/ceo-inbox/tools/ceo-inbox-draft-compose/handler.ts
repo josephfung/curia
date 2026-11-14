@@ -171,9 +171,10 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
     const ccRefs = await resolveReferenceRecipients(ctx, lists.cc, CC, NOT_SAVED);
     if (!ccRefs.ok) return { success: false, error: ccRefs.error };
     const toRaw = await checkRawRecipients(ctx, lists.to_addresses, TO, NOT_SAVED);
-    if (!toRaw.ok) return { success: false, error: toRaw.error };
+    // A blocked contact is a policy hold (#2587); a malformed entry or failed lookup is not.
+    if (!toRaw.ok) return { success: false, error: toRaw.error, ...(toRaw.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
     const ccRaw = await checkRawRecipients(ctx, lists.cc_addresses, CC, NOT_SAVED);
-    if (!ccRaw.ok) return { success: false, error: ccRaw.error };
+    if (!ccRaw.ok) return { success: false, error: ccRaw.error, ...(ccRaw.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
     // Every accepted recipient, before the To/Cc dedup collapses duplicates of the principal.
     const rawAddresses = [...toRaw.participants, ...ccRaw.participants].map((participant) => participant.email);
     if (await isPrincipalOnlyDraft(ctx, [...toRefs.contactIds, ...ccRefs.contactIds], rawAddresses)) {

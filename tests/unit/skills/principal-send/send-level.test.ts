@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
-import { parseSendLevel, readSendLevelValue, createSendLevelReader, checkSendLevelWrite } from '../../../../src/skills/principal-send/send-level.js';
+import { parseSendLevel, readSendLevelValue, createSendLevelReader, checkSendLevelWrite, SendLevelDegradedError } from '../../../../src/skills/principal-send/send-level.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -71,12 +71,15 @@ describe('createSendLevelReader', () => {
 
   it('with the mailbox list unreadable, a legacy default applies only where it is stricter', async () => {
     const failing = async () => { throw new Error('registry down'); };
+    // Where the unknown owner could change the answer, the reader says so (#2587): it throws
+    // SendLevelDegradedError carrying the stricter level, so the caller keeps a known "off".
     const off = createSendLevelReader({ get: async () => '{"default":"off"}', logger, liveMailboxes: failing });
-    expect(await off('work')).toBe('off');
+    await expect(off('work')).rejects.toMatchObject({ name: 'SendLevelDegradedError', level: 'off' });
     // A permissive legacy level is not applied without knowing whose it is.
     const all = createSendLevelReader({ get: async () => '{"default":"all"}', logger, liveMailboxes: failing });
-    expect(await all('work')).toBe('on_request');
-    // An own key still wins.
+    await expect(all('work')).rejects.toBeInstanceOf(SendLevelDegradedError);
+    await expect(all('work')).rejects.toMatchObject({ level: 'on_request' });
+    // An own key still wins, and is certain: no degraded signal.
     const own = createSendLevelReader({ get: async () => '{"default":"off","work":"routine"}', logger, liveMailboxes: failing });
     expect(await own('work')).toBe('routine');
   });

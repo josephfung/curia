@@ -441,18 +441,24 @@ describe('CeoInboxDraftComposeHandler', () => {
     });
 
     it("refuses a sourced raw address that belongs to a blocked contact", async () => {
-      const error = refused(await handler.execute(buildCtx({
+      const result = await handler.execute(buildCtx({
         to_addresses: ['blake@example.com'], subject: 'Hello', body: 'Hi.',
-      }, sourcesWith('blake@example.com'))));
+      }, sourcesWith('blake@example.com')));
+      const error = refused(result);
       expect(error).toContain('blocked contact');
       expect(error).not.toContain('blake@example.com');
+      // The check ran and refused by rule: a policy hold (#2587).
+      expect(result).toMatchObject({ errorType: 'POLICY_HOLD' });
     });
 
     it('refuses a raw address when the blocked-contact check cannot run', async () => {
       const ctx = buildCtx({ to_addresses: ['jordan@quillfeather.example'], subject: 'Hello', body: 'Hi.' }, sourcesWith('jordan@quillfeather.example'));
       vi.spyOn(fixture.contacts, 'resolveByChannelIdentity').mockRejectedValue(new Error('db down'));
-      const error = refused(await handler.execute(ctx));
+      const result = await handler.execute(ctx);
+      const error = refused(result);
       expect(error).toContain('could not be checked');
+      // A failed lookup is a failure, not a hold (#2587).
+      expect(result).not.toHaveProperty('errorType');
     });
 
     it('refuses a blocked contact, and saves nothing', async () => {

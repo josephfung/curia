@@ -127,9 +127,11 @@ export class SignalSendHandler implements ToolHandler {
       if (!trust.trusted) {
         // Blocked members: report existence but NOT their phone numbers (privacy).
         if (trust.blockedMembers.length > 0) {
+          // The trust check ran and refused: a policy hold, not a hiccup (#2587).
           return {
             success: false,
             error: `Cannot send to group: ${trust.blockedMembers.length} member(s) are blocked`,
+            errorType: 'POLICY_HOLD',
           };
         }
 
@@ -138,6 +140,7 @@ export class SignalSendHandler implements ToolHandler {
           return {
             success: false,
             error: `Cannot send to group: the following members have not been verified in contacts and must be verified before sending: ${trust.unknownMembers.join(', ')}`,
+            errorType: 'POLICY_HOLD',
           };
         }
       }

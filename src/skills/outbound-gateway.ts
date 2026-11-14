@@ -89,7 +89,7 @@ import type { ErrorType } from '../errors/types.js';
 import { grantSafeErrorFields } from '../principal-mailboxes/error-fields.js';
 import { judgeHolders } from '../principal-mailboxes/locate-holder.js';
 import type { PrincipalMailboxResolver } from '../channels/email/principal-mailbox-resolver.js';
-import { DEFAULT_MAILBOX, type SendLevel, type SendLevelReader } from './principal-send/send-level.js';
+import { DEFAULT_MAILBOX, SendLevelDegradedError, type SendLevel, type SendLevelReader } from './principal-send/send-level.js';
 import { isPrincipalDirectedMailboxSend, type SendAuthorityInput } from './principal-send/authority.js';
 import { dropOwnIdentityItems, quoteHeaderParticipants, splitReplyQuote } from './principal-send/own-text.js';
 import { PROVENANCE_LOOKBACK_DAYS, draftKey, type CuriaDraftWrites, type DraftProvenance } from './principal-send/draft-provenance.js';
@@ -2868,6 +2868,9 @@ export class OutboundGateway {
     // judge failed) holds or bounces by design, yet nothing ruled on the send: a failure (#2587).
     const ruled = decision.kind === 'send' ? [] : [...decision.findings, ...('heldBeside' in decision ? decision.heldBeside ?? [] : [])];
     if (findingsUnjudged(ruled)) reviewFailed = true;
+    // A send carrying a report went out fail-open, without review (BandReviewReport). If a saved
+    // draft then cannot drop its quote and stays a draft, nothing judged it either (#2587).
+    if (decision.kind === 'send' && decision.report !== undefined) reviewFailed = true;
 
     // A principal-mailbox draft stays a draft on a hold, an ask or a block (#2474, design D5): no
     // approval, so nothing can be replayed from a queue, and no digest item, since the agent tells
@@ -4649,7 +4652,9 @@ export class OutboundGateway {
       // The level of the mailbox that holds this draft (#2475, D6), never another's.
       if (this.readSendLevel) level = await this.readSendLevel(mailboxId);
     } catch (err) {
-      // on_request: never widens autonomy, keeps principal-directed sends working.
+      // on_request: never widens autonomy, keeps principal-directed sends working. A degraded
+      // read still knows a level (a stricter legacy one, an "off" kept): use it (#2587).
+      if (err instanceof SendLevelDegradedError) level = err.level;
       levelUnreadable = true;
       this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: send level unreadable — using on_request');
     }
@@ -5467,12 +5472,13 @@ export class OutboundGateway {
       // cannot be. Labels only, never the values.
       const labels = [...new Set(detectedItems.map((d) => d.label))].join(', ');
       this.log.info({ draftId, labels }, 'outbound-gateway: draft send refused — it contains personal data that cannot be redacted in place');
-      return {
-        result: asPolicyHold({
-          success: false,
-          blockedReason: `Not sent: this draft contains ${labels}, which can't be sent to this recipient. Edit the draft to remove them, or ask the principal.`,
-        }),
+      const refused: OutboundSendResult = {
+        success: false,
+        blockedReason: `Not sent: this draft contains ${labels}, which can't be sent to this recipient. Edit the draft to remove them, or ask the principal.`,
       };
+      // Tier gating refusing details it cannot redact is the rule at work (#2587). Band gating
+      // with no review wired means nothing judged them: a failure, not a hold.
+      return { result: gating === 'band' ? refused : asPolicyHold(refused) };
     }
 
     // ------------------------------------------------------------------

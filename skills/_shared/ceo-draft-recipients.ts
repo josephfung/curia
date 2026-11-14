@@ -29,7 +29,11 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export const MAX_DRAFT_RECIPIENTS = 25;
 
 export type RecipientList = { ok: true; entries: string[] } | { ok: false; error: string };
-export type ParticipantList = { ok: true; participants: NylasParticipant[] } | { ok: false; error: string };
+/**
+ * `policyHold` (#2587): the check ran and refused by rule (a blocked contact). Absent on a
+ * malformed entry or a failed lookup, which stay failures on the console.
+ */
+export type ParticipantList = { ok: true; participants: NylasParticipant[] } | { ok: false; error: string; policyHold?: true };
 /** Resolved references: `contactIds[i]` is the contact behind `participants[i]`. */
 export type ReferenceList =
   | { ok: true; participants: NylasParticipant[]; contactIds: string[] }
@@ -166,7 +170,7 @@ export async function checkRawRecipients(
         const known = await ctx.contactService.resolveByChannelIdentity('email', address);
         if (known?.tier === 'blocked') {
           ctx.log.info({ field: fields.raw, position: index + 1 }, 'draft recipients: raw address belongs to a blocked contact — refusing');
-          return { ok: false, error: `${position} belongs to a blocked contact. ${consequence}` };
+          return { ok: false, error: `${position} belongs to a blocked contact. ${consequence}`, policyHold: true };
         }
       } catch (err) {
         ctx.log.warn({ err, field: fields.raw }, 'draft recipients: blocked-contact check failed — refusing (fail-closed)');

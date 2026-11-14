@@ -150,6 +150,19 @@ export function checkSendLevelWrite(
 
 export type SendLevelReader = (mailbox: string) => Promise<SendLevel>;
 
+/**
+ * Thrown by the reader when part of the read failed but a level is still known (#2587): the
+ * live mailbox list could not be read, so the legacy key was applied only where stricter. The
+ * caller uses `level` (a known "off" is never lost) and knows a refusal it causes may come from
+ * the outage, so the console counts it as a failure, not a policy hold.
+ */
+export class SendLevelDegradedError extends Error {
+  constructor(readonly level: SendLevel) {
+    super('send level read degraded: the live mailbox list was unreadable');
+    this.name = 'SendLevelDegradedError';
+  }
+}
+
 export function createSendLevelReader(deps: {
   get(ns: string, key: string): Promise<string | null>;
   logger: Logger;
@@ -195,10 +208,15 @@ export function createSendLevelReader(deps: {
         // Who the legacy `default` belongs to is unknown: it may be this mailbox's. Apply it only
         // where it is stricter (a stored "off" stays off), never where it would widen.
         const legacy = readSendLevelValue(raw, mailbox, true).level;
-        return stricterLevel(level, legacy);
+        // Only when the unknown owner could change the answer (#2587): the legacy key differs from
+        // what the mailbox reads without it. An own key, or no legacy key, is a certain level.
+        if (legacy !== level) throw new SendLevelDegradedError(stricterLevel(level, legacy));
+        return level;
       }
       return level;
     } catch (err) {
+      // Already logged where the mailbox list failed; it carries the level it knows.
+      if (err instanceof SendLevelDegradedError) throw err;
       // Rethrown, not swallowed (#2587): the caller (OutboundGateway.sendPrincipalDraft) falls back
       // to on_request itself, which never widens autonomy, and needs to know the read failed so a
       // refusal it causes counts as a failure on the console, not as a policy hold.

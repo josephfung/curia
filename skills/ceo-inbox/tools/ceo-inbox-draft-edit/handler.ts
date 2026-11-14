@@ -218,7 +218,7 @@ async function editRecipients(
   ctx: ToolContext,
   draft: NylasDraftFull,
   lists: Record<RecipientField, string[]>,
-): Promise<{ ok: true; to: NylasParticipant[]; cc: NylasParticipant[] } | { ok: false; error: string }> {
+): Promise<{ ok: true; to: NylasParticipant[]; cc: NylasParticipant[] } | { ok: false; error: string; policyHold?: true }> {
   const onDraft = new Map<string, NylasParticipant>();
   for (const participant of [...draft.to, ...draft.cc]) {
     if (!onDraft.has(participantKey(participant))) onDraft.set(participantKey(participant), participant);
@@ -392,7 +392,7 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
         return draftCallFailure(ctx, err, draftId, 'Failed to read the draft in principal inbox');
       }
       const edited = await editRecipients(ctx, current, lists);
-      if (!edited.ok) return { success: false, error: edited.error };
+      if (!edited.ok) return { success: false, error: edited.error, ...(edited.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
       updates.to = edited.to;
       updates.cc = edited.cc;
     }
@@ -516,7 +516,7 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
     let cc = current.cc;
     if (args.hasRecipients) {
       const edited = await editRecipients(ctx, current, lists);
-      if (!edited.ok) return { success: false, error: edited.error };
+      if (!edited.ok) return { success: false, error: edited.error, ...(edited.policyHold ? { errorType: 'POLICY_HOLD' as const } : {}) };
       to = edited.to;
       cc = edited.cc;
     }

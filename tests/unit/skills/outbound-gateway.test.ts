@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { OutboundGateway, UnknownEmailAccountError, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL, PRINCIPAL_SEND_DIGEST_REASONS, PRINCIPAL_SEND_REFUSALS, LIMIT_REFUSALS, refusalKindOf, isPolicyHoldRefusal, askPreamble, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
+import { SendLevelDegradedError } from '../../../src/skills/principal-send/send-level.js';
 import { createLogger } from '../../../src/logger.js';
 import type { NylasClient, NylasMessage } from '../../../src/channels/email/nylas-client.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
@@ -5514,6 +5515,16 @@ describe('band review (#2159)', () => {
         expect(review).not.toHaveBeenCalled();
       });
 
+      it('refuses the same draft under band gating with no review wired, as a failure, not a hold (#2587)', async () => {
+        const sendDraft = draftSender();
+        const { gateway } = await makePiiGateway({ review: vi.fn(), gating: 'band', noReview: true });
+        const result = await gateway.sendEmailDraft('d1', 'curia', phoneDraft, { humanApproved: true, taskEventId: 't1' });
+        // Still refused (fail closed), but nothing judged the details.
+        expect(result.success).toBe(false);
+        expect(result.policyHold).toBeUndefined();
+        expect(sendDraft).not.toHaveBeenCalled();
+      });
+
       it('sends a tier draft the principal approved, and one to the principal alone', async () => {
         const sendDraft = draftSender();
         const { gateway } = await makePiiGateway({ review: vi.fn(), gating: 'tier' });
@@ -6226,6 +6237,20 @@ describe('sendPrincipalDraft (#2474)', () => {
     expect(refused.policyHold).toBeUndefined();
   });
 
+  it('2. keeps the level a degraded read still knows, and counts its refusals as failures (#2587)', async () => {
+    const system = { originator: { contactId: 'system', systemRole: 'system', channel: 'scheduler', initiatedAt: '2026-11-07T10:00:00.000Z' } };
+    // A known "off" survives the outage: still off, still the principal's setting.
+    const offRead = make();
+    offRead.readSendLevel.mockRejectedValue(new SendLevelDegradedError('off'));
+    expect(await offRead.gw.sendPrincipalDraft('d1', { ...opts, authority: { taskMetadata: system } })).toMatchObject({ refusal: 'setting_off' });
+    // on_request only because the mailbox list was unreadable: the refusal is a failure.
+    const fallback = make();
+    fallback.readSendLevel.mockRejectedValue(new SendLevelDegradedError('on_request'));
+    const refused = await fallback.gw.sendPrincipalDraft('d1', { ...opts, authority: { taskMetadata: system } });
+    expect(refused).toMatchObject({ refusal: 'not_requested' });
+    expect(refused.policyHold).toBeUndefined();
+  });
+
   it('1. refuses with mailbox_unavailable when the principal mailbox is not connected', async () => {
     const { gw } = make({ client: null });
     const r = await gw.sendPrincipalDraft('d1', opts);
@@ -6577,6 +6602,22 @@ describe('sendPrincipalDraft (#2474)', () => {
     expect(client!.sendDraft).not.toHaveBeenCalled();
     expect(ledger.recordSending).not.toHaveBeenCalled();
     expect(actionLogRepo.insert).not.toHaveBeenCalled();
+    // The review ruled the quote out: a policy hold (#2587).
+    expect(r.policyHold).toBe(true);
+  });
+
+  it('counts the same quote hold as a failure when the review sent fail-open, without reviewing (#2587)', async () => {
+    const piiRedactor = redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]);
+    const body = `<p>Looping in Sam.</p>${GMAIL_QUOTE_FROM_DANA}call me at 416-555-0199</blockquote></div>`;
+    const review = vi.fn().mockResolvedValue({
+      kind: 'send', dropQuote: { labels: ['PHONE_NUMBER'] }, report: { source: 'sent_without_review', summary: 'reviewer unavailable' },
+    });
+    const { gw, client } = make({ piiRedactor, review, client: mailboxClient(draft({ body, cc: [{ email: 'sam@example.org' }] })) });
+    const r = await gw.sendPrincipalDraft('d1', opts);
+    // Same decision as above: left as a draft.
+    expect(r).toMatchObject({ success: false, leftAsDraft: true, refusal: 'review_hold' });
+    expect(r.policyHold).toBeUndefined();
+    expect(client!.sendDraft).not.toHaveBeenCalled();
   });
 
   it('files no digest item on a content-filter block (the curia path still does)', async () => {
