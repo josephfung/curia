@@ -152,7 +152,9 @@ function stripCommentsAndQuotes(value: string): string {
 function authResults(value: string): AuthResult[] {
   const out: AuthResult[] = [];
   for (const part of stripCommentsAndQuotes(value).split(';').slice(1)) {
-    const [head, ...rest] = part.trim().split(/\s+/).filter((t) => t.length > 0);
+    // RFC 7601 allows whitespace (and comments, already blanked) around `=`: `spf = pass` is the
+    // same result as `spf=pass`, so close those gaps before splitting into tokens.
+    const [head, ...rest] = part.replace(/\s*=\s*/g, '=').trim().split(/\s+/).filter((t) => t.length > 0);
     const m = head ? /^([a-z0-9_-]+)(?:\/\d+)?=([a-z0-9_-]+)$/i.exec(head) : null;
     if (!m) continue;
     const props: Record<string, string> = {};

@@ -10,6 +10,14 @@ import type { CuriaDraftWrites } from './draft-provenance.js';
 import type { PrincipalSendEntry } from './send-ledger.js';
 
 export const AUTONOMOUS_MAX_RECIPIENTS = 5;
+/**
+ * The most people the answered message may have newly copied for band review's high-stakes-copy
+ * question to be asked (#2589). AUTONOMOUS_MAX_RECIPIENTS bounds the reply, not the message it
+ * answers, so a sender-only reply to a message copying hundreds would otherwise look each one up
+ * and put them all in the judge's prompt. Past this the reply holds; it never truncates, since the
+ * person left out could be the one that matters.
+ */
+export const AUTONOMOUS_MAX_COPIED_EVIDENCE = 20;
 export const AUTONOMOUS_THREAD_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 /**
  * The most autonomous sends in any rolling AUTONOMOUS_DAILY_CAP_WINDOW_MS, across every thread
@@ -70,7 +78,8 @@ const NOT_ONE_PERSON_LOCAL_RE = new RegExp(
 
 function isOnePersonAddress(email: string): boolean {
   const at = email.lastIndexOf('@');
-  return at > 0 && !NOT_ONE_PERSON_LOCAL_RE.test(email.slice(0, at));
+  // The base local part, before any plus tag: `all-staff+case@` reaches the same group.
+  return at > 0 && !NOT_ONE_PERSON_LOCAL_RE.test(email.slice(0, at).replace(/\+.*$/, ''));
 }
 
 /** How many raw headers of this name the message carries (names are case-insensitive). */
@@ -116,7 +125,10 @@ export function vouchedCopies(
   if (!spfAlignedWithFrom(msg.headers, from)) return [];
   const copies = [...msg.to, ...msg.cc].map((p) => lower(p.email)).filter((e) => e.length > 0);
   if (!copies.some(isPrincipal)) return [];
-  return [...new Set(copies)].filter((e) => isPrincipal(e) || (isOnePersonAddress(e) && !unvouchable.has(e)));
+  // Compared with plus tags stripped, as principal addresses are: `curia+case@` reaches Curia.
+  // The returned addresses keep their original form for delivery.
+  const blocked = new Set([...unvouchable].map((a) => normalizeForComparison(a.trim())));
+  return [...new Set(copies)].filter((e) => isPrincipal(e) || (isOnePersonAddress(e) && !blocked.has(normalizeForComparison(e))));
 }
 
 /**

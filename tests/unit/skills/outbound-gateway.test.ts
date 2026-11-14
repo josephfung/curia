@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { OutboundGateway, UnknownEmailAccountError, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL, PRINCIPAL_SEND_DIGEST_REASONS, PRINCIPAL_SEND_REFUSALS, LIMIT_REFUSALS, refusalKindOf, isPolicyHoldRefusal, askPreamble, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
 import { SendLevelDegradedError } from '../../../src/skills/principal-send/send-level.js';
+import { AUTONOMOUS_MAX_COPIED_EVIDENCE } from '../../../src/skills/principal-send/autonomous-limits.js';
 import { createLogger } from '../../../src/logger.js';
 import type { NylasClient, NylasMessage } from '../../../src/channels/email/nylas-client.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
@@ -7046,17 +7047,37 @@ describe('sendPrincipalDraft (#2474)', () => {
 
       it('refuses with contacts_unreadable when a copied person\'s record cannot be read', async () => {
         contacts('known');
-        (mocks.contactService as unknown as { getContact: ReturnType<typeof vi.fn> }).getContact = vi.fn().mockRejectedValue(new Error('db down'));
+        // Only Sam's record fails: the sender's stays readable, so the refusal is Sam's.
+        (mocks.contactService as unknown as { getContact: ReturnType<typeof vi.fn> }).getContact = vi.fn(async (id: string) => {
+          if (id === 'c-sam') throw new Error('db down');
+          return { title: 'Account Manager', organization: 'Example Org' };
+        });
         const { gw, client } = makeAuto({ client: autoClient(replyAll(), [copying()]) });
         expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'contacts_unreadable' });
+        expect((mocks.contactService as unknown as { getContact: ReturnType<typeof vi.fn> }).getContact).toHaveBeenCalledWith('c-sam');
         expect(client!.sendDraft).not.toHaveBeenCalled();
       });
 
       it('refuses with contacts_unreadable when a copied person resolves but their record is gone', async () => {
         contacts('known');
-        (mocks.contactService as unknown as { getContact: ReturnType<typeof vi.fn> }).getContact = vi.fn().mockResolvedValue(undefined);
+        (mocks.contactService as unknown as { getContact: ReturnType<typeof vi.fn> }).getContact = vi.fn(async (id: string) =>
+          id === 'c-sam' ? undefined : { title: 'Account Manager', organization: 'Example Org' });
         const { gw, client } = makeAuto({ client: autoClient(replyAll(), [copying()]) });
         expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'contacts_unreadable' });
+        expect((mocks.contactService as unknown as { getContact: ReturnType<typeof vi.fn> }).getContact).toHaveBeenCalledWith('c-sam');
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+      });
+
+      // CodeRabbit: the reply cap bounds the draft, not who the answered message copied.
+      it('holds without any lookups when the answered message copied more people than band review can be shown', async () => {
+        contacts('known');
+        const many = Array.from({ length: AUTONOMOUS_MAX_COPIED_EVIDENCE + 1 }, (_, i) => ({ email: `p${i}@example.org` }));
+        const crowd = inbound({ cc: many, headers: [h('Authentication-Results', 'mx.google.com; spf=pass smtp.mailfrom=dana@example.org; dkim=pass; dmarc=pass'), h('From', 'dana@example.org')] });
+        const { gw, client, review } = makeAuto({ client: autoClient(autoDraft(), [crowd]) });
+        const r = await gw.sendPrincipalDraft('d1', auto);
+        expect(r).toMatchObject({ refusal: 'review_hold', blockedReason: expect.stringContaining(`more than ${AUTONOMOUS_MAX_COPIED_EVIDENCE} people`) });
+        expect((mocks.contactService as unknown as { getContact: ReturnType<typeof vi.fn> }).getContact).not.toHaveBeenCalled();
+        expect(review).not.toHaveBeenCalled();
         expect(client!.sendDraft).not.toHaveBeenCalled();
       });
 
