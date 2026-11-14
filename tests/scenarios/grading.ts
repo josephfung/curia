@@ -53,20 +53,20 @@ export function runMessages(scenario: ScenarioCase, run: ScenarioRun): string {
   const who = whoFor(scenario, run);
   const sender = scenario.inbound.from === 'principal' ? 'Avery' : scenario.seed.contacts.find(c => c.key === scenario.inbound.from)?.displayName ?? scenario.inbound.from;
   // What started the turn, so a grader reads the messages in context.
-  const parts: string[] = [`=== What came in (from ${sender})\n${run.inboundContent.trim()}`];
+  const parts: string[] = [`[WHAT CAME IN, from ${sender}]\n${run.inboundContent.trim()}`];
   for (const call of run.toolCalls) {
     const send = SEND_TEXT[call.name];
     const text = send ? call.input[send.arg] : undefined;
     if (!send || typeof text !== 'string' || text.trim() === '') continue;
-    const refused = call.result && !call.result.success ? ' [not sent: the tool refused it]' : '';
-    parts.push(`--- ${send.label(call.input, who)}${refused}\n${text.trim()}`);
+    const refused = call.result && !call.result.success ? ' (not sent: the tool refused it)' : '';
+    parts.push(`[${send.label(call.input, who)}${refused}]\n${text.trim()}`);
   }
   const silent = (r: string | null | undefined): boolean => r === null || r === undefined || r.trim() === '' || r.trim() === 'NO_REPLY';
-  if (!silent(run.reply)) parts.push(`--- Reply to ${sender}\n${run.reply!.trim()}`);
-  if (run.principalNote) parts.push(`--- Note for Avery\n${run.principalNote.trim()}`);
+  if (!silent(run.reply)) parts.push(`[Reply to ${sender}]\n${run.reply!.trim()}`);
+  if (run.principalNote) parts.push(`[Note for Avery]\n${run.principalNote.trim()}`);
   if (scenario.inbound.then) {
-    parts.push(`--- Avery then wrote\n${scenario.inbound.then.content.trim()}`);
-    if (!silent(run.then?.reply)) parts.push(`--- Reply to Avery\n${run.then!.reply!.trim()}`);
+    parts.push(`[AVERY THEN WROTE]\n${scenario.inbound.then.content.trim()}`);
+    if (!silent(run.then?.reply)) parts.push(`[Reply to Avery]\n${run.then!.reply!.trim()}`);
   }
   // Nothing after the inbound: Curia wrote nothing. (With a then-turn, Avery's own words follow,
   // and the labels make plain that none of the rest is Curia's.)
@@ -194,8 +194,16 @@ export function parseCsv(text: string): string[][] {
 export function gradingSheet(items: readonly GradingItem[]): string {
   return toCsv([
     [...SHEET_COLUMNS],
-    ...items.map(i => [i.id, i.task, i.recipient, i.situation, i.whatToGrade, i.messages, '', '']),
+    ...items.map(i => [i.id, i.task, i.recipient, i.situation, i.whatToGrade, i.messages, '', ''].map(asText)),
   ]);
+}
+
+/**
+ * Spreadsheets (Google Sheets, Excel) read a cell starting with =, +, - or @ as a formula,
+ * which errors on prose (#2556). A leading apostrophe makes them keep it as text.
+ */
+export function asText(cell: string): string {
+  return /^[=+\-@\t\r]/.test(cell) ? `'${cell}` : cell;
 }
 
 export interface HumanGrade {

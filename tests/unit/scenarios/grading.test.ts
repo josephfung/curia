@@ -6,6 +6,7 @@ import { scoreCase } from '../../scenarios/gate.js';
 import {
   agreementWith,
   formatAgreementLine,
+  asText,
   gradingSheet,
   parseCsv,
   parseGrades,
@@ -72,10 +73,10 @@ describe('runMessages', () => {
       reply: 'Done.',
     }));
     expect(text).toBe([
-      '=== What came in (from Avery)\nRunning ten minutes late.',
-      '--- Text to Catherine Whitfield\nCatherine, Avery is ten minutes late.',
-      '--- Email to Avery, subject "FYI" [not sent: the tool refused it]\nTold Catherine.',
-      '--- Reply to Avery\nDone.',
+      '[WHAT CAME IN, from Avery]\nRunning ten minutes late.',
+      '[Text to Catherine Whitfield]\nCatherine, Avery is ten minutes late.',
+      '[Email to Avery, subject "FYI" (not sent: the tool refused it)]\nTold Catherine.',
+      '[Reply to Avery]\nDone.',
     ].join('\n\n'));
     expect(runMessages(scenario, run(0, { reply: 'NO_REPLY' }))).toMatch(/\(Curia wrote nothing in this run\)$/);
   });
@@ -109,6 +110,14 @@ describe('the sheet', () => {
     const rows = [['a', 'b, c', 'say "hi"\nthen go'], ['', 'x', '']];
     expect(parseCsv(toCsv(rows))).toEqual([['a', 'b, c', 'say "hi"\nthen go'], ['', 'x', '']]);
     expect(() => parseCsv('"open')).toThrow(/unterminated/);
+  });
+
+  it('keeps every cell as text in a spreadsheet: nothing starts like a formula', () => {
+    expect(asText('=== hi')).toBe("'=== hi");
+    for (const c of ['+1', '-x', '@me']) expect(asText(c)).toBe(`'${c}`);
+    expect(asText('[Reply to Avery]')).toBe('[Reply to Avery]');
+    const sheet = gradingSheet([{ id: 'x#1#voice', caseName: 'x', task: '52', runIndex: 0, behaviorId: 'voice', recipient: '- a friend', situation: 's', whatToGrade: 'w', messages: 'm' }]);
+    expect(parseCsv(sheet)[1]![2]).toBe("'- a friend");
   });
 
   it('reads grades back, skipping blanks and refusing anything else', () => {
