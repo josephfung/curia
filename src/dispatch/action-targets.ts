@@ -76,9 +76,11 @@ export function collectCandidateValues(input: Record<string, unknown>): Candidat
 }
 
 /**
- * Derive the targets of a tool call. Contacts and sites win; only when neither
- * is present do we fall back to raw ids plus the tool name, so a shared
+ * Derive the targets of a tool call. Contacts and sites win, so a shared
  * non-contact UUID (e.g. a mailbox) never links two unrelated contact sends.
+ * With neither, the call's other ids are its targets (two replies on different
+ * threads do not collide). Only a call with no identifiable target at all
+ * targets the tool itself.
  * An `isContact` rejection propagates; the caller fails open.
  */
 export async function extractActionTargets(
@@ -100,9 +102,9 @@ export async function extractActionTargets(
   if (targets.length > 0) return targets;
 
   const contactSet = new Set(contactIds);
-  return [
+  const ids: ActionTarget[] = [
     ...candidates.filter((u) => !contactSet.has(u)).map((value): ActionTarget => ({ kind: 'id', value })),
     ...otherIds.map((value): ActionTarget => ({ kind: 'id', value })),
-    { kind: 'tool', value: toolName },
   ];
+  return ids.length > 0 ? ids : [{ kind: 'tool', value: toolName }];
 }
