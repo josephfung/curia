@@ -4,13 +4,15 @@
 // so later, unrelated principal replies kept matching it, and each context-bridge-release
 // failed with "failed to persist task-wake reply" without releasing it. Now:
 //   - a reply to a binding whose task is done releases it and succeeds (reply not attached);
-//   - completing or cancelling a task releases its bindings, and no other task's.
+//   - completing or cancelling a task releases its bindings, and no other task's;
+//   - a send after the task ended (or for a task that does not exist) registers no binding.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { EventBus } from '../../src/bus/bus.js';
-import { OutboundContextService } from '../../src/dispatch/outbound-context.js';
+import { OutboundContextService, ScopedOutboundContext } from '../../src/dispatch/outbound-context.js';
+import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { TaskRepo } from '../../src/db/task-repo.js';
 import { TASK_WAKE_BIND_REPLY_KEY, TASK_WAKE_TASK_ID_KEY } from '../../src/dispatch/task-wake-reply.js';
 import { createSilentLogger } from '../../src/logger.js';
@@ -151,4 +153,54 @@ describeIf('task-wake bindings of finished tasks (#2592)', () => {
     expect((await entryState(entryId)).released).toBe(true);
   });
 
+  // The task-end release covers bindings that exist when the task ends. A turn can complete its
+  // task and then send (to report it): that send must not register a fresh binding.
+  describe('a send after the task ended registers no binding', () => {
+    async function activeBindingsFor(taskId: string): Promise<number> {
+      const { rows } = await pool.query<{ n: string }>(
+        `SELECT count(*) AS n FROM outbound_context
+          WHERE conversation_id = $1 AND released = false AND expires_at > now()
+            AND metadata ->> $2::text = 'true' AND metadata ->> $3::text = $4`,
+        [convId, TASK_WAKE_BIND_REPLY_KEY, TASK_WAKE_TASK_ID_KEY, taskId],
+      );
+      return Number(rows[0]!.n);
+    }
+    const send = (taskId: string, bridge?: unknown) =>
+      registerOutboundContext(new ScopedOutboundContext(outboundContext, convId), bridge, {
+        channelId: 'signal',
+        content: 'Done: the minutes went out.',
+        agentId: 'coordinator',
+        log: createSilentLogger(),
+        boundTask: { taskId },
+      });
+
+    it('complete, then a task-wake send: no binding', async () => {
+      const taskId = await insertTask('in_progress');
+      await taskRepo.completeTask(taskId, 'Minutes sent');
+      await send(taskId);
+      expect(await activeBindingsFor(taskId)).toBe(0);
+    });
+
+    it('cancel, then a send with an explicit binding in its bridge: the binding is stripped', async () => {
+      const taskId = await insertTask('waiting');
+      await taskRepo.updateTask(taskId, { status: 'cancelled' }, 'coordinator');
+      await send(taskId, JSON.stringify({
+        agent_id: 'coordinator',
+        metadata: { [TASK_WAKE_BIND_REPLY_KEY]: true, [TASK_WAKE_TASK_ID_KEY]: taskId },
+      }));
+      expect(await activeBindingsFor(taskId)).toBe(0);
+    });
+
+    it('a task that does not exist gets no binding', async () => {
+      const taskId = randomUUID();
+      await send(taskId);
+      expect(await activeBindingsFor(taskId)).toBe(0);
+    });
+
+    it('a live task still binds', async () => {
+      const taskId = await insertTask('in_progress');
+      await send(taskId);
+      expect(await activeBindingsFor(taskId)).toBe(1);
+    });
+  });
 });

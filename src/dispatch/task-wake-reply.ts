@@ -51,9 +51,9 @@ export function buildTaskWakeAutoBridge(opts: {
 /**
  * Task statuses a reply can no longer attach to. Matches the statuses whose end releases
  * the task's bindings in TaskRepo: done and cancelled are terminal, and failed is
- * abandoned work (#2312, #2592).
+ * abandoned work (#2312, #2592). A send never binds a reply to such a task either.
  */
-const ENDED_TASK_STATUSES: ReadonlySet<string> = new Set(['done', 'cancelled', 'failed']);
+export const ENDED_TASK_STATUSES: ReadonlySet<string> = new Set(['done', 'cancelled', 'failed']);
 
 export interface TaskWakeReplyPersistResult {
   persisted: boolean;

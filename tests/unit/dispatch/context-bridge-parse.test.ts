@@ -316,7 +316,7 @@ describe('registerOutboundContext task auto-bind suppression (#2017)', () => {
   });
 
   it('ScopedOutboundContext delegates to the injected liveForTask-style lookup', async () => {
-    const service = { defaultExpiryHours: 6, explicitExpiryHours: 24 } as unknown as OutboundContextService;
+    const service = { defaultExpiryHours: 6, explicitExpiryHours: 24, taskEnded: async () => false } as unknown as OutboundContextService;
     const lookup = vi.fn().mockResolvedValue(true);
     const scoped = new ScopedOutboundContext(service, 'conv-1', undefined, lookup);
     await expect(scoped.taskAutoBindSuppressed(taskId)).resolves.toBe(true);
@@ -324,6 +324,55 @@ describe('registerOutboundContext task auto-bind suppression (#2017)', () => {
 
     const bare = new ScopedOutboundContext(service, 'conv-1');
     await expect(bare.taskAutoBindSuppressed(taskId)).resolves.toBe(false);
+  });
+
+  // #2592: a turn can complete its task and then send; the binding must not come back.
+  it('ScopedOutboundContext suppresses binding to an ended task without asking the verification lookup', async () => {
+    const taskEnded = vi.fn().mockResolvedValue(true);
+    const service = { defaultExpiryHours: 6, explicitExpiryHours: 24, taskEnded } as unknown as OutboundContextService;
+    const lookup = vi.fn().mockResolvedValue(false);
+    const scoped = new ScopedOutboundContext(service, 'conv-1', undefined, lookup);
+    await expect(scoped.taskAutoBindSuppressed(taskId)).resolves.toBe(true);
+    expect(taskEnded).toHaveBeenCalledWith(taskId);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it('strips an explicit task-wake binding the agent wrote when its task is suppressed, keeping other metadata', async () => {
+    const explicitTask = 'f9e9a0d9-0000-4000-8000-000000000002';
+    const taskAutoBindSuppressed = vi.fn().mockResolvedValue(true);
+    const cap = makeCap({ taskAutoBindSuppressed });
+    await registerOutboundContext(
+      cap,
+      JSON.stringify({ agent_id: 'coordinator', metadata: { bind_reply: true, task_id: explicitTask, subject: 'minutes' } }),
+      { ...baseOpts, boundTask: { taskId } },
+    );
+    // The task the binding names is the one checked, not the turn's.
+    expect(taskAutoBindSuppressed).toHaveBeenCalledWith(explicitTask);
+    const entry = (cap.register as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(entry.metadata).toEqual({ subject: 'minutes' });
+    expect(entry.ttlSource).toBe('explicit-tier');
+  });
+
+  it('strips an explicit binding with no other metadata down to none, also on a turn with no bound task', async () => {
+    const cap = makeCap({ taskAutoBindSuppressed: vi.fn().mockResolvedValue(true) });
+    await registerOutboundContext(
+      cap,
+      JSON.stringify({ agent_id: 'coordinator', metadata: { bind_reply: true, task_id: taskId } }),
+      baseOpts,
+    );
+    const entry = (cap.register as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(entry.metadata).toBeUndefined();
+  });
+
+  it('keeps an explicit binding whose task can take the reply', async () => {
+    const cap = makeCap({ taskAutoBindSuppressed: vi.fn().mockResolvedValue(false) });
+    await registerOutboundContext(
+      cap,
+      JSON.stringify({ agent_id: 'coordinator', metadata: { bind_reply: true, task_id: taskId } }),
+      baseOpts,
+    );
+    const entry = (cap.register as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(entry.metadata).toEqual({ bind_reply: true, task_id: taskId });
   });
 });
 
