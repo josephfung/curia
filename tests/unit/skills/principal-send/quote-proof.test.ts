@@ -195,7 +195,10 @@ describe('a verified, known sender\'s copies in the quote proof (#2589)', () => 
   const KNOWN = new Set(['dana@example.org']);
   const copying = msg({
     to: [{ email: 'avery@example.com' }], cc: [{ email: 'ea@example.org' }],
-    headers: [...VERIFIED, { name: 'To', value: 'avery@example.com' }, { name: 'Cc', value: 'ea@example.org' }],
+    headers: [
+      { name: 'Authentication-Results', value: 'mx.google.com; spf=pass smtp.mailfrom=dana@example.org; dkim=pass header.d=example.org; dmarc=pass header.from=example.org' },
+      { name: 'From', value: 'dana@example.org' }, { name: 'To', value: 'avery@example.com' }, { name: 'Cc', value: 'ea@example.org' },
+    ],
   });
   const quote = `${HEADER}<blockquote><p>Does Friday work?</p><p>Dana<br>416-555-0199</p></blockquote>`;
   const audience = ['dana@example.org', 'ea@example.org'];

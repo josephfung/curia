@@ -3609,6 +3609,15 @@ export class OutboundGateway {
   }
 
   /**
+   * Curia's own mailbox addresses, lowercased (#2589 security review M1): a sender who copies
+   * Curia never makes it a recipient of the principal's reply, which would hand Curia's inbox a
+   * principal-authored message quoting the sender's text.
+   */
+  private curiaAccountAddresses(): ReadonlySet<string> {
+    return new Set([...this.emailAccountAddresses.values()].map((a) => a.trim().toLowerCase()));
+  }
+
+  /**
    * Someone on the message an autonomous reply answers, as band review's high-stakes-copy
    * question sees them (#2589): the address and what their contact record says. No record is
    * `contact: false`; a lookup that throws propagates (the caller refuses).
@@ -4911,7 +4920,7 @@ export class OutboundGateway {
         this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: thread senders\' contacts unreadable — not sending on its own');
         return stop('contacts_unreadable');
       }
-      const limit = checkAutonomousLimits({ draft, thread, principalAddresses, curiaWrites, recentThreadEntries: recentEntries, recentConversationEntries: conversationEntries, otherPrincipalAddresses, offLimitsRecipients, autonomousSendsInWindow: sendsInWindow, knownSenders });
+      const limit = checkAutonomousLimits({ draft, thread, principalAddresses, curiaWrites, recentThreadEntries: recentEntries, recentConversationEntries: conversationEntries, otherPrincipalAddresses, offLimitsRecipients, autonomousSendsInWindow: sendsInWindow, knownSenders, unvouchable: this.curiaAccountAddresses() });
       if (limit) {
         const blockers = [...recentEntries, ...conversationEntries];
         cooldownHeld = limit.refusal === 'thread_cooldown' && blockers.length > 0 && blockers.every((e) => e.outcome === 'held');
@@ -4933,7 +4942,7 @@ export class OutboundGateway {
       // Who the answered message newly copied (#2589), with their contact facts, for band review's
       // high-stakes-copy question. Not narrowed to this reply's recipients: the sender's
       // escalation is the trigger, and a reply that leaves counsel off is no less escalated.
-      const fresh = newlyCopied(thread, principalAddresses, knownSenders);
+      const fresh = newlyCopied(thread, principalAddresses);
       let copied: DraftSendProfile['copied'];
       if (fresh.length > 0) {
         try {
