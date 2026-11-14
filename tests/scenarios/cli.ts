@@ -27,6 +27,7 @@ import {
 } from './harness.js';
 import { createJudge, judgeRun, type Judge } from './judge.js';
 import { caseJudgeModel } from './judge-models.js';
+import { caseSetupHash } from './setup-hash.js';
 import { loadScenarioCases, resolveRunPlaceholders, selectRunCases } from './loader.js';
 import { describeError, fixtureSignalConversations, seedConflictKeys } from './seed.js';
 import { DEFAULT_CONCURRENCY, parseConcurrency, runConcurrently } from '../shared/case-scope.js';
@@ -548,7 +549,10 @@ async function main(): Promise<void> {
         stopReason ??= `Rating '${scenario.name}' failed: ${describeError(e)}`;
         throw e;
       }
-      const result = scoreCase(scenario.name, scenario.expectedBehaviors, rated.runs, rated.ratings, scenario.knownFailure, scenario.passRate);
+      const result: CaseResult = {
+        ...scoreCase(scenario.name, scenario.expectedBehaviors, rated.runs, rated.ratings, scenario.knownFailure, scenario.passRate),
+        setupHash: caseSetupHash(scenario),
+      };
       // One block per case, printed at once, so concurrent cases do not interleave inside it.
       // Real delegation multiplies model calls (#2027): show whose they were.
       const agents = Object.entries(result.usage.byAgent).sort((a, b) => b[1].estimatedCostUsd - a[1].estimatedCostUsd);
