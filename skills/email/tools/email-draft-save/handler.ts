@@ -18,6 +18,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { buildReplyQuote, quoteParticipants } from '../../../../src/skills/_shared/reply-quote.js';
 import { parseAttachmentInputs } from '../../../_shared/parse-attachments.js';
+import { gatewaySendFailure } from '../../../../src/skills/_shared/policy-hold.js';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -143,7 +144,7 @@ export class EmailDraftSaveHandler implements ToolHandler {
 
     if (!result.success) {
       ctx.log.error({ to: address, accountId, reason: result.blockedReason }, 'email-draft-save: gateway rejected draft');
-      return { success: false, error: result.blockedReason ?? 'Failed to save draft' };
+      return gatewaySendFailure(result, 'Failed to save draft');
     }
 
     // OutboundDraftResult.draftId is typed optional; guard so we never violate the

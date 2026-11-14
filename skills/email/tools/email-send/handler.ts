@@ -27,6 +27,7 @@ import {
   findRetiredRecipientField,
   retiredRecipientFieldError,
 } from '../../../../src/skills/_shared/recipient-reference.js';
+import { gatewaySendFailure } from '../../../../src/skills/_shared/policy-hold.js';
 
 const MAX_TO_LENGTH = 1000;
 const MAX_SUBJECT_LENGTH = 500;
@@ -269,7 +270,7 @@ export class EmailSendHandler implements ToolHandler {
       });
 
       if (!result.success) {
-        return { success: false, error: result.blockedReason ?? 'Email send failed' };
+        return gatewaySendFailure(result, 'Email send failed');
       }
 
       // Register outbound context entry (best-effort).

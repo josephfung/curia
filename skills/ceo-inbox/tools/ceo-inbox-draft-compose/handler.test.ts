@@ -391,6 +391,13 @@ describe('CeoInboxDraftComposeHandler', () => {
       expect(error).toContain('No draft was saved.');
     });
 
+    it('marks the principal-only refusal as a policy hold, not a failure (#2587)', async () => {
+      const result = await handler.execute(buildCtx({ to: ['principal'], subject: 'Refresh done', body: 'Link.' }));
+      expect(result).toMatchObject({ success: false, errorType: 'POLICY_HOLD' });
+      const byId = await handler.execute(buildCtx({ to: [fixture.principalId], subject: 'Refresh done', body: 'Link.' }));
+      expect(byId).toMatchObject({ success: false, errorType: 'POLICY_HOLD' });
+    });
+
     it('refuses a draft to the principal\'s contact ID, not just the alias', async () => {
       const error = refused(await handler.execute(buildCtx({ to: [fixture.principalId], subject: 'Refresh done', body: 'Link.' })));
       expect(error).toMatch(/only to the principal/);

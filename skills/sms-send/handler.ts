@@ -19,6 +19,7 @@ import {
   findRetiredRecipientField,
   retiredRecipientFieldError,
 } from '../../src/skills/_shared/recipient-reference.js';
+import { gatewaySendFailure } from '../../src/skills/_shared/policy-hold.js';
 
 const MAX_MESSAGE_LENGTH = 1600;
 const E164_REGEX = /^\+[1-9]\d{6,14}$/;
@@ -106,10 +107,7 @@ export class SmsSendHandler implements ToolHandler {
       );
 
       if (!result.success) {
-        return {
-          success: false,
-          error: result.blockedReason ?? 'SMS send failed',
-        };
+        return gatewaySendFailure(result, 'SMS send failed');
       }
 
       // A relay held for the digest never reached the principal: nothing for a reply to bind to (#1320).
