@@ -64,6 +64,8 @@ function draftCallFailure(
   err: unknown,
   draftId: string,
   summary: string,
+  /** True for a write: a 5xx or no answer may come after Nylas applied it (the client won't retry a PUT for that reason). */
+  isWrite = false,
 ): { success: false; error: string; errorType: ErrorType } {
   const status = nylasStatus(err);
   ctx.log.error({ ...errorLogFields(err), draftId }, `ceo-inbox-draft-edit: ${summary}`);
@@ -79,7 +81,12 @@ function draftCallFailure(
     // Status 0: no HTTP answer. A timeout when the call ran out of time, else a failed fetch.
     : budgetExpired(ctx) ? 'TIMEOUT'
     : 'PROVIDER_ERROR';
-  return { success: false, error: `${summary}. ${NOT_CHANGED}`, errorType };
+  // A write with no clear answer may have landed: report "unknown", never "not changed". Repeating
+  // the same edit is harmless (a PUT sets the same fields), so these types stay retryable.
+  const outcome = isWrite && status !== undefined && (status === 0 || status >= 500)
+    ? 'The edit may or may not have been applied; ceo-inbox-read with the draft_id shows the draft as it is now.'
+    : NOT_CHANGED;
+  return { success: false, error: `${summary}. ${outcome}`, errorType };
 }
 
 const TO: RecipientFieldPair = { reference: 'add_to', raw: 'add_to_addresses' };
@@ -393,7 +400,7 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
     } catch (err) {
       // The locating GET can still return a draft Nylas no longer lets us write (#2593: a stale
       // read answered 200 and the PUT failed), so a 404 here is a real "gone", not a lookup slip.
-      return draftCallFailure(ctx, err, draftId, 'Failed to update draft in principal inbox');
+      return draftCallFailure(ctx, err, draftId, 'Failed to update draft in principal inbox', true);
     }
 
     try {

@@ -230,7 +230,17 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
       failPut(500);
       const result = await handler.execute(buildCtx({ draft_id: 'draft-1', subject: 'x' }));
       expect(result).toMatchObject({ success: false, errorType: 'PROVIDER_ERROR' });
-      expect((result as { error: string }).error).not.toContain('Do not retry');
+      const error = (result as { error: string }).error;
+      expect(error).not.toContain('Do not retry');
+      // A 5xx on a PUT may come after Nylas applied it: never claim "not changed".
+      expect(error).toContain('may or may not have been applied');
+      expect(error).not.toContain('was not changed');
+    });
+
+    it('a 4xx on the PUT says the draft was not changed', async () => {
+      failPut(422);
+      const result = await handler.execute(buildCtx({ draft_id: 'draft-1', subject: 'x' }));
+      expect((result as { error: string }).error).toContain('The draft was not changed.');
     });
 
     it('any other status still carries an errorType', async () => {
