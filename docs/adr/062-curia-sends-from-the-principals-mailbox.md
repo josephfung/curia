@@ -60,7 +60,7 @@ Missing, unreadable or unknown values read as `on_request`: that never widens au
 
 1. Curia drafted it in the same task (an audit `tool.result` row for `draft-reply` / `draft-compose` with this draft ID, not `already_exists`; never a `draft-edit` result or a voice-learning snapshot).
 2. The draft is unchanged since Curia wrote it.
-3. Recipients are only people genuinely on the thread: the principal's addresses, recipients of messages sent from the principal's mailbox, the `From` of inbound messages whose sender was verified, and the To/Cc of the message being answered when its sender was verified (SPF, DKIM and DMARC pass, one From, one To and one Cc header) and is at tier known or above at send time. No other inbound To/Cc counts: an unverified or unknown sender can list anyone (a forged Cc of the CFO). (#2589)
+3. Recipients are only people genuinely on the thread: the principal's addresses, recipients of messages sent from the principal's mailbox, the `From` of inbound messages whose sender was verified, and the To/Cc of the message being answered when its sender was verified (SPF, DKIM and DMARC pass, one From, one To and one Cc header) and is a person contact at tier known or above at send time. No other inbound To/Cc counts: an unverified or unknown sender can list anyone (a forged Cc of the CFO). (#2589)
 4. At most five recipients, and no mailing lists: a thread message with any list header (List-Id, List-Post, List-Unsubscribe, Precedence list or bulk, a Google Group id) means no reply on its own.
 5. No attachments.
 6. At most one autonomous send per thread per day, and none for a day after a hold or refusal there (read from the send ledger).

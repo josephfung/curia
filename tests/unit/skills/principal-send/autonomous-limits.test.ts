@@ -373,8 +373,16 @@ describe('newlyCopied (#2589)', () => {
     expect(newlyCopied([claimed, from('in1', 200, ['legal@example.org'])], PRINCIPAL, KNOWN)).toEqual(['legal@example.org']);
   });
 
-  it('is empty when the answered message vouches for no one', () => {
-    expect(newlyCopied([from('in1', 100, ['ea@example.org'])], PRINCIPAL)).toEqual([]);
+  // A hold signal, not membership: a forged or unvouched Cc can only add holds, so it counts here.
+  it('names the answered message\'s raw To/Cc even when its sender vouches for no one', () => {
+    expect(newlyCopied([from('in1', 100, ['ea@example.org'])], PRINCIPAL)).toEqual(['ea@example.org']);
+    const unverified = msg({ id: 'in1', date: 100, from: [{ email: 'x@example.net' }], to: [{ email: 'ceo@corp.example' }], cc: [{ email: 'Board@Example.org' }] });
+    expect(newlyCopied([unverified], PRINCIPAL)).toEqual(['board@example.org']);
+  });
+
+  it('leaves out the principal and the sender, and is empty with no outside message', () => {
+    const self = msg({ id: 'in1', date: 100, from: [{ email: 'dana@example.org' }], to: [{ email: 'ceo@corp.example' }], cc: [{ email: 'dana@example.org' }] });
+    expect(newlyCopied([self], PRINCIPAL, KNOWN)).toEqual([]);
     expect(newlyCopied([], PRINCIPAL, KNOWN)).toEqual([]);
   });
 });

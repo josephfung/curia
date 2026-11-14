@@ -6996,9 +6996,9 @@ describe('sendPrincipalDraft (#2474)', () => {
       });
       const replyAll = () => autoDraft({ cc: [{ email: 'sam@example.org' }] });
       /** Dana's contact at `tier`, with a verified identity unless told otherwise; Sam has a record too. */
-      function contacts(tier: string, verified = true) {
+      function contacts(tier: string, verified = true, kind = 'person') {
         (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockImplementation(async (_ch: string, id: string) => {
-          if (id === 'dana@example.org') return { contactId: 'c-dana', displayName: 'Dana Example', role: null, systemRole: null, tier, kind: 'person', kgNodeId: null, verified, contactConfidence: 0.5 };
+          if (id === 'dana@example.org') return { contactId: 'c-dana', displayName: 'Dana Example', role: null, systemRole: null, tier, kind, kgNodeId: null, verified, contactConfidence: 0.5 };
           if (id === 'sam@example.org') return { contactId: 'c-sam', displayName: 'Sam Assistant', role: 'assistant', systemRole: null, tier: 'unknown', kind: 'person', kgNodeId: null, verified: true, contactConfidence: 0.3 };
           return null;
         });
@@ -7017,8 +7017,9 @@ describe('sendPrincipalDraft (#2474)', () => {
         });
       });
 
-      it('refuses them when the sender is below known, has no contact, or only an unverified identity', async () => {
-        for (const setup of [() => contacts('unknown'), () => contacts('known', false), () => contacts('blocked')]) {
+      it('refuses them when the sender is below known, has no contact, only an unverified identity, or is not a person', async () => {
+        // An organization contact reaches known on its first inbound (domain-validated), so it never vouches.
+        for (const setup of [() => contacts('unknown'), () => contacts('known', false), () => contacts('blocked'), () => contacts('known', true, 'organization'), () => contacts('trusted', true, 'automated')]) {
           mocks = createMocks();
           setup();
           const { gw, client } = makeAuto({ client: autoClient(replyAll(), [copying()]) });
@@ -7051,9 +7052,32 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(client!.sendDraft).not.toHaveBeenCalled();
       });
 
-      it('asks band review nothing about copies when the reply goes only to the sender', async () => {
+      it('refuses with contacts_unreadable when a copied person resolves but their record is gone', async () => {
+        contacts('known');
+        (mocks.contactService as unknown as { getContact: ReturnType<typeof vi.fn> }).getContact = vi.fn().mockResolvedValue(undefined);
+        const { gw, client } = makeAuto({ client: autoClient(replyAll(), [copying()]) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'contacts_unreadable' });
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+      });
+
+      // The escalation is the trigger, not who the reply reaches.
+      it('still gives band review the people copied when the reply leaves them off', async () => {
         contacts('known');
         const { gw, review } = makeAuto({ client: autoClient(autoDraft(), [copying()]) });
+        expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
+        expect(review.mock.calls[0]![0].copied.newlyCopied.map((p: { email: string }) => p.email)).toEqual(['sam@example.org']);
+      });
+
+      it('gives band review the people an unvouched sender copied, though they can\'t be recipients', async () => {
+        contacts('unknown');
+        const { gw, review } = makeAuto({ client: autoClient(autoDraft(), [copying()]) });
+        expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
+        expect(review.mock.calls[0]![0].copied.newlyCopied.map((p: { email: string }) => p.email)).toEqual(['sam@example.org']);
+      });
+
+      it('asks band review nothing about copies when the answered message copied no one', async () => {
+        contacts('known');
+        const { gw, review } = makeAuto();
         expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
         expect(review.mock.calls[0]![0]).not.toHaveProperty('copied');
       });
