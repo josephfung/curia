@@ -219,6 +219,14 @@ export interface OutboundSendResult {
   sentSubject?: string;
   /** True when the autonomy gate blocked this send */
   gated?: boolean;
+  /**
+   * Set when a policy guard held or refused the send as designed (#2587): an autonomy or band
+   * hold, a principal-send refusal, a blocked or no-reply recipient, an unresolved identity, the
+   * content filter or export controls. Send skills turn it into `errorType: 'POLICY_HOLD'` so the
+   * console counts the job as "held for you", not as a hiccup. Never set when a guard could not
+   * run (a lookup failed, the review is down, a client error): those are real failures.
+   */
+  policyHold?: true;
   /** Short reference for the action_log row (e.g. 'a3f7c12b'). Present when gated is true. */
   actionRef?: string;
   /**
@@ -668,6 +676,70 @@ const OTHER_REFUSALS: ReadonlySet<PrincipalSendRefusal> = new Set<PrincipalSendR
   'not_found', 'lookup_failed', 'send_unconfirmed', 'no_send_ledger', 'thread_unreadable', 'principal_addresses_unreadable', 'no_band_review',
   'provenance_unreadable',
 ]);
+
+/**
+ * Which principal-send refusals are a policy hold (#2587): the rule worked and left the draft for
+ * the principal, so the console shows "held for you", not a hiccup. `false` is a failure to send
+ * or to check (a mailbox missing, a lookup or ledger unavailable, the review not running, a race)
+ * and still counts as a hiccup. A Record, so a new refusal must be classified to compile.
+ */
+const POLICY_HOLD_REFUSALS: Record<PrincipalSendRefusal, boolean> = {
+  // Operational: something was missing, unreadable or raced.
+  mailbox_unavailable: false,
+  unknown_mailbox: false,
+  ambiguous_mailbox: false,
+  not_found: false,
+  lookup_failed: false,
+  no_recipients: false,
+  draft_changed: false,
+  send_unconfirmed: false,
+  no_band_review: false,
+  no_send_ledger: false,
+  thread_unreadable: false,
+  principal_addresses_unreadable: false,
+  provenance_unreadable: false,
+  // The principal's own settings, and deliberate send rules.
+  setting_off: true,
+  not_requested: true,
+  approval_replay: true,
+  principal_only: true,
+  review_hold: true,
+  outsider_originated: true,
+  origin_unknown: true,
+  not_latest_message: true,
+  financial_details: true,
+  // The autonomous limits (D4): each is a rule that held the reply for the principal.
+  not_curia_draft: true,
+  draft_changed_since_curia: true,
+  not_a_reply: true,
+  principal_address_recipient: true,
+  reply_to_principal_address: true,
+  recipient_not_on_thread: true,
+  too_many_recipients: true,
+  mailing_list: true,
+  has_attachments: true,
+  thread_cooldown: true,
+  daily_cap: true,
+};
+
+/** Whether a principal-send refusal is a policy hold rather than a failure (#2587). */
+export function isPolicyHoldRefusal(refusal: PrincipalSendRefusal): boolean {
+  return POLICY_HOLD_REFUSALS[refusal];
+}
+
+/** `result` marked as a policy hold (#2587). Used at each guard that refuses by design. */
+function asPolicyHold<T extends OutboundSendResult>(result: T): T {
+  return { ...result, policyHold: true };
+}
+
+/**
+ * A content-filter block (#1051, #1158). A policy hold (#2587) unless the filter itself threw:
+ * then nothing judged the message, and the block is a failure that should show as a hiccup.
+ */
+function contentFilterBlock(blockedReason: string, blockedRules: string[]): OutboundSendResult {
+  const result: OutboundSendResult = { success: false, blockedReason, blockedRules };
+  return blockedRules.includes(FILTER_ERROR_RULE) ? result : asPolicyHold(result);
+}
 
 /** limit, other, or judgement (the default for a refusal about the reply itself). */
 export function refusalKindOf(refusal: PrincipalSendRefusal): RefusalKind {
@@ -1323,7 +1395,11 @@ export class OutboundGateway {
           { accountId: request.accountId, unverified: refusal === MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL },
           'outbound-gateway: send refused — account is (or may be) the principal\'s own mailbox (#2474)',
         );
-        return { success: false, blockedReason: refusal };
+        // A verified principal account is the rule working (#2587); an unverifiable one is a
+        // failure to check, so it stays a hiccup.
+        return refusal === MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL
+          ? { success: false, blockedReason: refusal }
+          : asPolicyHold({ success: false, blockedReason: refusal });
       }
     }
 
@@ -1406,21 +1482,21 @@ export class OutboundGateway {
         }
 
         if (raised) {
-          return {
+          return asPolicyHold({
             success: false,
             gated: true,
             actionRef: raised.shortRef,
             blockedReason: `Autonomy score ${autonomyConfig.score} is below send threshold ${sendThreshold}. ${approvalAdvisory(raised.shortRef, undefined, raised.approvalNumber)}`,
-          };
+          });
         }
 
-        return {
+        return asPolicyHold({
           success: false,
           gated: true,
           blockedReason:
             `Autonomy score is ${autonomyConfig.score} — direct sends require a score of at least ${sendThreshold}. ` +
             `Use createEmailDraft() for drafts, or ask the principal to raise the score with set-autonomy.`,
-        };
+        });
       }
     }
 
@@ -1492,7 +1568,7 @@ export class OutboundGateway {
         // Terse, terminal result — no blockedRules (that field is the content filter's
         // "here is what to rewrite" affordance; omitting it signals a non-fixable
         // recipient problem, discouraging retry loops).
-        return { success: false, blockedReason: 'Recipient is a no-reply/automated address; message not deliverable' };
+        return asPolicyHold({ success: false, blockedReason: 'Recipient is a no-reply/automated address; message not deliverable' });
       }
     }
 
@@ -1523,7 +1599,7 @@ export class OutboundGateway {
             { channel: request.channel, recipientId: redactId(recipientId), contactId: contact.contactId },
             'outbound-gateway: send blocked — recipient is blocked',
           );
-          return { success: false, blockedReason: 'Recipient is blocked' };
+          return asPolicyHold({ success: false, blockedReason: 'Recipient is blocked' });
         }
         // Capture tier for the content filter's disclosure gate, and the contact UUID for the
         // audit and delivery events (the PII redactor no longer uses it for a principal bypass).
@@ -1563,7 +1639,7 @@ export class OutboundGateway {
         { channel: request.channel, recipientId: redactId(blockedOther.identifier), contactId: blockedOther.contactId },
         'outbound-gateway: send blocked — a recipient is blocked',
       );
-      return { success: false, blockedReason: 'Recipient is blocked' };
+      return asPolicyHold({ success: false, blockedReason: 'Recipient is blocked' });
     }
 
     // After Step 1 so a blocked recipient is reported as blocked, not as an
@@ -1619,7 +1695,7 @@ export class OutboundGateway {
             'outbound-gateway: export blocked — restricted bulk export',
           );
           return this.withUnmatchedRecipientNote(
-            { success: false, blockedReason: outcome.message },
+            asPolicyHold({ success: false, blockedReason: outcome.message }),
             await this.findUnmatchedRecipients(request.channel, this.personRecipients(request)),
           );
         }
@@ -1675,12 +1751,12 @@ export class OutboundGateway {
             // actionRef is set only after an insert that required taskEventId, so it is present.
             await this.queueApprovalMention(actionRef, options.reExecRecipe.description, options.taskEventId ?? options.parentEventId ?? '', options.conversationId ?? undefined);
           }
-          return {
+          return asPolicyHold({
             success: false,
             gated: true,
             actionRef,
             blockedReason: `${outcome.message}\n\n${itemSummary}${actionRef ? `\n\n${approvalAdvisory(actionRef, undefined, approvalNumber)}` : ''}`,
-          };
+          });
         }
 
         if (outcome.action === 'allow') {
@@ -1928,11 +2004,7 @@ export class OutboundGateway {
       // signal to rewrite the message and retry organically; blockedRules carries
       // the specific rule category (rule names only) so it can fix the root cause.
       return this.withUnmatchedRecipientNote(
-        {
-          success: false,
-          blockedReason: reasonSummary,
-          blockedRules: filterFindings.map((f) => f.rule),
-        },
+        contentFilterBlock(reasonSummary, filterFindings.map((f) => f.rule)),
         unmatched,
       );
     }
@@ -2734,6 +2806,10 @@ export class OutboundGateway {
     const { request, content, recipients, principalRecipients, options } = args;
     const score = this.bandScore(args.autonomy);
     let decision: Awaited<ReturnType<BandSendReview['review']>>;
+    // Every result this returns is the review's call, so a policy hold (#2587), except when the
+    // review threw: then nothing judged the send and the hold is a failure, a hiccup.
+    let reviewFailed = false;
+    const reviewed = (result: OutboundSendResult): OutboundSendResult => (reviewFailed ? result : asPolicyHold(result));
     try {
       decision = await this.bandReview!.review({
         content,
@@ -2762,6 +2838,7 @@ export class OutboundGateway {
       this.log.error({ err, channel: request.channel }, 'outbound-gateway: band review threw — holding the send');
       const reason = 'Held for the principal: the send review failed.';
       decision = { kind: 'hold', reason, findings: [{ rule: BAND_RULES.unreviewed, detail: reason }] };
+      reviewFailed = true;
     }
 
     // A principal-mailbox draft stays a draft on a hold, an ask or a block (#2474, design D5): no
@@ -2774,14 +2851,14 @@ export class OutboundGateway {
         ? decision.reason
         : `Held for the principal: after one rewrite it still has these problems (${rules.join(', ')}).${heldBesideNote(decision.heldBeside)}`;
       this.log.info({ channel: request.channel, kind: decision.kind, rules }, 'outbound-gateway: band review held a principal-mailbox draft — left as a draft');
-      return { held: reason, result: { success: false, blockedReason: reason, blockedRules: rules } };
+      return { held: reason, result: reviewed({ success: false, blockedReason: reason, blockedRules: rules }) };
     }
     // The review would send it without its quote, but a saved draft's quote cannot be cut (#2474
     // final review S2): it stays a draft rather than go out with details not every recipient had.
     if (args.leaveDraftOnHold && decision.kind === 'send' && decision.dropQuote) {
       const reason = `Held for the principal: the quoted message below the reply holds ${describePiiLabels(decision.dropQuote.labels)} that not everyone on this send was on, and a saved draft can't be sent without its quote.`;
       this.log.info({ channel: request.channel, labels: decision.dropQuote.labels }, 'outbound-gateway: band review would drop a principal-mailbox draft\'s quote — left as a draft');
-      return { held: reason, result: { success: false, blockedReason: reason, blockedRules: [BAND_RULES.pii] } };
+      return { held: reason, result: reviewed({ success: false, blockedReason: reason, blockedRules: [BAND_RULES.pii] }) };
     }
 
     // A block asks the drafter to rewrite, so it needs one waiting. A dispatcher relay's
@@ -2810,11 +2887,11 @@ export class OutboundGateway {
         options?.taskEventId ?? options?.parentEventId ?? 'system',
       );
       return {
-        result: {
+        result: reviewed({
           success: false,
           blockedReason: `Not sent: this saved draft shares the principal's ${details} with someone who asked for it, and nothing authorizes that. Save a version without them, or tell the principal.${beside}`,
           blockedRules: [...new Set([...decision.findings, ...(decision.heldBeside ?? [])].map((f) => f.rule))],
-        },
+        }),
       };
     }
 
@@ -2876,11 +2953,11 @@ export class OutboundGateway {
         );
       }
       return {
-        result: {
+        result: reviewed({
           success: false,
           blockedReason: buildBlockReasonSummary(decision.findings),
           blockedRules: decision.findings.map((f) => f.rule),
-        },
+        }),
       };
     }
 
@@ -2897,11 +2974,11 @@ export class OutboundGateway {
         options?.taskEventId ?? options?.parentEventId ?? 'system',
       );
       return {
-        result: {
+        result: reviewed({
           success: false,
           blockedReason: `${decision.reason}\n${buildBlockReasonSummary(decision.findings)}`,
           blockedRules: rules,
-        },
+        }),
       };
     }
 
@@ -2943,19 +3020,19 @@ export class OutboundGateway {
         ? ` This is waiting on the principal. Deliver approval ${raised.approvalNumber ?? raised.shortRef} to them now with deliver-approval on their urgent channel, then send ${normalizeCounterparty(ask.requester)} a short holding reply that doesn't include the requested details.`
         : '';
       return {
-        result: {
+        result: reviewed({
           success: false,
           gated: true,
           ...(raised ? { actionRef: raised.shortRef } : {}),
           blockedReason: raised
             ? `${decision.reason} ${approvalAdvisory(raised.shortRef, undefined, raised.approvalNumber)}${askGuidance}`
             : `${decision.reason} No approval request could be recorded — ask the principal before sending it.`,
-        },
+        }),
       };
     }
     await reportUnapprovedHold(recipe ? 'the send has no task to attach it to' : 'this send has no way to replay it');
     return {
-      result: { success: false, blockedReason: `${decision.reason} Ask the principal before sending it.`, blockedRules: [rule] },
+      result: reviewed({ success: false, blockedReason: `${decision.reason} Ask the principal before sending it.`, blockedRules: [rule] }),
     };
   }
 
@@ -3538,7 +3615,8 @@ export class OutboundGateway {
         'outbound-gateway: failed to publish outbound.blocked event for unresolved identity — message is still blocked',
       );
     }
-    return { success: false, blockedReason: identityReason, blockedRules: ['unresolved-identity'] };
+    // The identity gate working as designed (#2587): the agent resolves the recipient and resends.
+    return asPolicyHold({ success: false, blockedReason: identityReason, blockedRules: ['unresolved-identity'] });
   }
 
   /**
@@ -4140,7 +4218,7 @@ export class OutboundGateway {
           { channel: 'email', recipientId: redactId(recipientId), contactId: contact.contactId },
           'outbound-gateway: draft blocked — recipient is blocked',
         );
-        return { success: false, blockedReason: 'Recipient is blocked' };
+        return asPolicyHold({ success: false, blockedReason: 'Recipient is blocked' });
       }
     } catch (err) {
       // For drafts, fail-closed on contact-resolution errors: a draft created for a
@@ -4164,7 +4242,7 @@ export class OutboundGateway {
         { channel: 'email', recipientId: redactId(blockedOther.identifier), contactId: blockedOther.contactId },
         'outbound-gateway: draft blocked — a recipient is blocked',
       );
-      return { success: false, blockedReason: 'Recipient is blocked' };
+      return asPolicyHold({ success: false, blockedReason: 'Recipient is blocked' });
     }
     if (blockedOther?.kind === 'lookup-failed') {
       return { success: false, blockedReason: 'Contact resolution failed; draft not created' };
@@ -4261,7 +4339,10 @@ export class OutboundGateway {
         { draftId, accountId, unverified: accountRefusal === MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL },
         'outbound-gateway: draft send refused — account is (or may be) the principal\'s own mailbox (#2474)',
       );
-      return { success: false, blockedReason: accountRefusal };
+      // As in send(): only a verified principal account is a policy hold (#2587).
+      return accountRefusal === MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL
+        ? { success: false, blockedReason: accountRefusal }
+        : asPolicyHold({ success: false, blockedReason: accountRefusal });
     }
 
     // ------------------------------------------------------------------
@@ -4313,12 +4394,12 @@ export class OutboundGateway {
             'outbound-gateway: failed to publish autonomy.send_blocked event',
           );
         });
-        return {
+        return asPolicyHold({
           success: false,
           blockedReason:
             `Autonomy score is ${autonomyConfig.score} — direct sends require a score of at least ${sendThreshold}. ` +
             `Use createEmailDraft() for drafts, or ask the principal to raise the score with set-autonomy.`,
-        };
+        });
       }
     }
 
@@ -4500,7 +4581,8 @@ export class OutboundGateway {
   }): Promise<PrincipalDraftSendResult> {
     const refuse = (refusal: PrincipalSendRefusal, blockedReason: string = PRINCIPAL_SEND_REFUSALS[refusal], kind: RefusalKind = refusalKindOf(refusal)): PrincipalDraftSendResult => {
       this.log.info({ draftId, refusal, kind }, 'outbound-gateway: principal-mailbox draft not sent');
-      return { success: false, leftAsDraft: true, refusal, refusalKind: kind, blockedReason };
+      const result: PrincipalDraftSendResult = { success: false, leftAsDraft: true, refusal, refusalKind: kind, blockedReason };
+      return isPolicyHoldRefusal(refusal) ? asPolicyHold(result) : result;
     };
 
     // 1. The mailbox holding the draft, resolved once per call (so a re-sign-in applies at once,
@@ -4735,7 +4817,15 @@ export class OutboundGateway {
       // The marker's code is the band rules that held it (final fixes B2).
       const ruleList = checked.result.blockedRules ?? [];
       const rules = ruleList.length > 0 ? ruleList.join(',') : undefined;
-      if (checked.held !== undefined) return stop('review_hold', `${checked.held}${PRINCIPAL_SEND_REFUSALS.review_hold}`, rules ?? 'review_hold', reviewHoldDigest(ruleList, checked.held));
+      if (checked.held !== undefined) {
+        const stopped = await stop('review_hold', `${checked.held}${PRINCIPAL_SEND_REFUSALS.review_hold}`, rules ?? 'review_hold', reviewHoldDigest(ruleList, checked.held));
+        // review_hold is a policy hold, unless the hold came from a review that could not run
+        // (checkDraftSend leaves policyHold off then): that one stays a hiccup (#2587).
+        if (checked.result.policyHold === true) return stopped;
+        const failure = { ...stopped };
+        delete failure.policyHold;
+        return failure;
+      }
       // Every other stop leaves the draft where it is and returns its reason: a review bounce
       // (on a principal-directed send the drafter edits once and resends), a blocked contact, the
       // identity gate, the content filter or a redactor error.
@@ -5171,7 +5261,7 @@ export class OutboundGateway {
             { draftId, recipientId: redactId(recipientEmail), contactId: contact.contactId },
             'outbound-gateway: draft send blocked — recipient is blocked',
           );
-          return { result: { success: false, blockedReason: 'Recipient is blocked' } };
+          return { result: asPolicyHold({ success: false, blockedReason: 'Recipient is blocked' }) };
         }
         recipientTierForDraft = contact.tier;
         recipientContactIdForDraft = contact.contactId; // hoisted for outbound.delivered audit
@@ -5204,7 +5294,7 @@ export class OutboundGateway {
         { draftId, recipientId: redactId(blockedOther.identifier), contactId: blockedOther.contactId },
         'outbound-gateway: draft send blocked — a recipient is blocked',
       );
-      return { result: { success: false, blockedReason: 'Recipient is blocked' } };
+      return { result: asPolicyHold({ success: false, blockedReason: 'Recipient is blocked' }) };
     }
 
     // After Step 1, same rule as send() (#1818). A draft that leaves the
@@ -5332,10 +5422,10 @@ export class OutboundGateway {
       const labels = [...new Set(detectedItems.map((d) => d.label))].join(', ');
       this.log.info({ draftId, labels }, 'outbound-gateway: draft send refused — it contains personal data that cannot be redacted in place');
       return {
-        result: {
+        result: asPolicyHold({
           success: false,
           blockedReason: `Not sent: this draft contains ${labels}, which can't be sent to this recipient. Edit the draft to remove them, or ask the principal.`,
-        },
+        }),
       };
     }
 
@@ -5430,11 +5520,7 @@ export class OutboundGateway {
       // carries rule names only. Mirrors the send() block path (#1051).
       return {
         result: this.withUnmatchedRecipientNote(
-          {
-            success: false,
-            blockedReason: reasonSummary,
-            blockedRules: filterFindings.map((f) => f.rule),
-          },
+          contentFilterBlock(reasonSummary, filterFindings.map((f) => f.rule)),
           unmatched,
         ),
       };
