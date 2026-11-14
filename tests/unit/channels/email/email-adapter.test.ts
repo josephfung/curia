@@ -174,7 +174,7 @@ describe('EmailAdapter — sendOutboundReply', () => {
   it('passes email_participant when the latest From authenticated and is not Curia (#2071)', async () => {
     const humanMessage = makeMockMessage({
       from: [{ email: CEO_EMAIL, name: 'Pat CEO' }],
-      headers: [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass dkim=pass dmarc=pass' }],
+      headers: [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass; dkim=pass; dmarc=pass' }],
     });
     (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([humanMessage]);
 
@@ -197,7 +197,7 @@ describe('EmailAdapter — sendOutboundReply', () => {
     const curiaMessage = makeMockMessage({
       from: [{ email: SELF_EMAIL, name: 'Curia' }],
       to: [{ email: CEO_EMAIL, name: 'Pat CEO' }],
-      headers: [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass dkim=pass dmarc=pass' }],
+      headers: [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass; dkim=pass; dmarc=pass' }],
     });
     (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([curiaMessage]);
 
