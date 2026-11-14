@@ -1,0 +1,79 @@
+# The writes a finesse case's agents may make on the way (#2556), for cases that run their
+# specialists for real. Use it with human-channels, calendar-office and calendar-specialist.
+# Every write here succeeds, so a case that forbids one still has the wrong path open and
+# tests the model's choice, not a refusal. A case's own stubs for these tools come first:
+# one that scores a write (a contact saved after a lookup, say) stubs it itself.
+#
+# No stub here names a seeded row ({{contact:x}}): a set cannot know which contacts a case
+# seeds. Shapes follow each tool.json's outputs.
+
+# Saving what Curia learned about someone: a new contact, a filled-in title or
+# organization, an identity, a role. The lookup cases (information level 4) score these.
+contact-create:
+  - match: {}
+    return: { contact_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000f1, display_name: (created), role: null, kg_node_id: null, identities_added: 1 }
+contact-update:
+  - match: {}
+    return: { contact_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000f1, updated_fields: [title, organization] }
+contact-link-identity:
+  - match: {}
+    return: { identity_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000f2, verified: false, already_linked: false }
+contact-set-role:
+  - match: {}
+    return: { contact_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000f1, display_name: (updated), role: contact }
+memory-store:
+  - match: {}
+    return: { stored: true, action: created, node_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000f3, sensitivity: internal }
+memory-confirm:
+  - match: {}
+    return: { action: confirmed, nodeId: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000f3, label: (confirmed) }
+# A reminder Curia sets itself ("check again early next week"): the right call in 54a.
+scheduler-create:
+  - match: {}
+    return: { jobId: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000f4 }
+record-outreach:
+  - match: {}
+    return: { recorded: true, outreach_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000f5 }
+calendar-holds-sweep:
+  - agent: calendar
+    match: {}
+    return: { scanned: 0, expired: 0, failed: 0, calendarErrors: 0 }
+# Drafts in the principal's own mailbox: the right call when a message should come from
+# Avery personally (57b, 56c). Composing succeeds in either mailbox; sending one is refused
+# as production refuses a send nobody asked for on a live turn (ceo-inbox-office keeps the
+# same wording, from PRINCIPAL_SEND_REFUSALS.not_requested in src/skills/outbound-gateway.ts).
+ceo-inbox-draft-compose:
+  - match: { mailbox: personal }
+    return: { draft_id: draft-f1n35e02, mailbox: personal, mailbox_label: Personal, evidence: none }
+  - match: {}
+    return: { draft_id: draft-f1n35e01, mailbox: work, mailbox_label: Work, evidence: none }
+ceo-inbox-draft-reply:
+  - match: {}
+    return: { draft_id: draft-f1n35e03, subject: "Re: (thread)", to: [], cc: [], already_exists: false }
+ceo-inbox-draft-edit:
+  - match: {}
+    return: { draft_id: draft-f1n35e01, subject: (draft), to: [], cc: [], mailbox: work, mailbox_label: Work }
+ceo-inbox-send-draft:
+  - match: {}
+    error: "Curia sends from the principal's mailbox only when the principal asks on a live turn. Nothing was sent; the draft is still in their Drafts folder."
+# ceo-inbox's housekeeping on a message it handled.
+ceo-inbox-label:
+  - agent: ceo-inbox
+    match: {}
+    return: { success: true, message_id: scenario-msg, applied: ["✍️ Drafted"], created: [], folders: [INBOX, "✍️ Drafted"] }
+ceo-inbox-update-folders:
+  - agent: ceo-inbox
+    match: {}
+    return: { success: true, message_id: scenario-msg, folders: [INBOX, "✍️ Drafted"], created: [], removed_unresolved: [] }
+ceo-inbox-archive:
+  - agent: ceo-inbox
+    match: {}
+    return: { success: true, message_id: scenario-msg }
+ceo-inbox-mark-read:
+  - agent: ceo-inbox
+    match: {}
+    return: { success: true, message_id: scenario-msg }
+ceo-inbox-mark-starred:
+  - agent: ceo-inbox
+    match: {}
+    return: { success: true, message_id: scenario-msg, starred: true }
