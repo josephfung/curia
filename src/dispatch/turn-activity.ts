@@ -66,16 +66,27 @@ export interface ActionTarget {
   value: string;
 }
 
+/**
+ * What became of a recorded call. `pending`: its handler is running. `succeeded`: it returned
+ * success. `unknown`: it timed out, so it may or may not have taken effect. A failed call is
+ * removed rather than kept: it did nothing another turn should wait on.
+ */
+export type ActionOutcome = 'pending' | 'succeeded' | 'unknown';
+
 export interface RecordedAction {
+  /** Handle for settle(). */
+  actionId: string;
   rootId: string;
   taskEventId: string;
   toolName: string;
   targets: readonly ActionTarget[];
   at: number;
+  outcome: ActionOutcome;
 }
 
 export type BackstopDecision =
-  | { held: false }
+  /** `actionId` is the recorded call's handle for settle(); absent when nothing was recorded. */
+  | { held: false; actionId?: string }
   | { held: true; matches: readonly { action: RecordedAction; other: RootTurn; target: ActionTarget }[] };
 
 export interface TaskStartInput {
@@ -151,6 +162,7 @@ export class TurnActivityRegistry {
   private readonly roots = new Map<string, RootState>();
   private readonly taskToRoot = new Map<string, string>();
   private actions: RecordedAction[] = [];
+  private actionSeq = 0;
   /** rootId -> keys of `${otherRootId}|${kind}:${value}` already shown to that root. */
   private readonly shown = new Map<string, Set<string>>();
 
@@ -272,18 +284,25 @@ export class TurnActivityRegistry {
       return { held: true, matches };
     }
 
-    const at = this.now();
-    this.actions.push({
-      rootId: mine.rootId,
-      taskEventId,
-      toolName,
-      targets: targets.map((t) => ({ ...t })),
-      at,
-    });
-    mine.lastActivityAt = at;
-    this.enforceRootActionCap(mine.rootId);
-    this.enforceActionCap();
-    return { held: false };
+    return { held: false, actionId: this.recordAction(mine, taskEventId, toolName, targets) };
+  }
+
+  /**
+   * Record what became of a call checkAndRecord let through. A failed call is removed: it
+   * did nothing, so it must not hold another turn that still needs to act. An id that is no
+   * longer held (pruned or evicted meanwhile) is ignored.
+   */
+  settle(actionId: string, outcome: 'succeeded' | 'failed' | 'unknown'): void {
+    const index = this.actions.findIndex((a) => a.actionId === actionId);
+    if (index === -1) {
+      this.logger.debug({ actionId, outcome }, 'turn activity: settled an action no longer tracked');
+      return;
+    }
+    if (outcome === 'failed') {
+      this.actions.splice(index, 1);
+      return;
+    }
+    this.actions[index]!.outcome = outcome;
   }
 
   otherRootsInWindow(rootId: string): RootTurn[] {
@@ -297,6 +316,30 @@ export class TurnActivityRegistry {
   }
 
   // ── internals ────────────────────────────────────────────────────────────
+
+  private recordAction(
+    mine: RootState,
+    taskEventId: string,
+    toolName: string,
+    targets: readonly ActionTarget[],
+  ): string {
+    const at = this.now();
+    this.actionSeq += 1;
+    const actionId = `action-${this.actionSeq}`;
+    this.actions.push({
+      actionId,
+      rootId: mine.rootId,
+      taskEventId,
+      toolName,
+      targets: targets.map((t) => ({ ...t })),
+      at,
+      outcome: 'pending',
+    });
+    mine.lastActivityAt = at;
+    this.enforceRootActionCap(mine.rootId);
+    this.enforceActionCap();
+    return actionId;
+  }
 
   private rootStateOf(taskEventId: string): RootState | undefined {
     const rootId = this.taskToRoot.get(taskEventId);

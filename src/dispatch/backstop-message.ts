@@ -7,7 +7,7 @@
 
 import { toLocalIso } from '../time/timestamp.js';
 import { SYSTEM_TURN_CHANNELS } from './turn-activity.js';
-import type { ActionTarget, BackstopDecision, RootTurn } from './turn-activity.js';
+import type { ActionOutcome, ActionTarget, BackstopDecision, RootTurn } from './turn-activity.js';
 
 export type BackstopMatches = Extract<BackstopDecision, { held: true }>['matches'];
 type BackstopMatch = BackstopMatches[number];
@@ -16,6 +16,12 @@ const HEADER = "Not run yet: another conversation's turn already acted on the sa
 const FOOTER = "If your call still applies after this, call it again unchanged; if it would duplicate that work, don't.";
 const GENERIC_LINE = '- Another conversation already acted on this same target recently.';
 const NAME_MAX = 80;
+/** What the other turn's call came to, as far as the registry knows. */
+const OUTCOME_TEXT: Record<ActionOutcome, string> = {
+  pending: 'is doing this right now',
+  succeeded: 'already did this',
+  unknown: 'tried this; the outcome is unknown',
+};
 
 /**
  * Whether the held root (`viewer`) may see the tool, target and time of `other`'s action:
@@ -86,7 +92,8 @@ export function renderBackstopHold(
     }
     const shown = targetDisplay(match.target, opts.contactName);
     const on = shown === null ? '' : ` on ${shown}`;
-    lines.add(`- ${match.action.toolName}${on} at ${localTime(match.action.at, opts.timezone)}`);
+    const state = OUTCOME_TEXT[match.action.outcome];
+    lines.add(`- another conversation ${state}: ${match.action.toolName}${on} at ${localTime(match.action.at, opts.timezone)}`);
   }
   return [HEADER, ...lines, FOOTER].join('\n');
 }

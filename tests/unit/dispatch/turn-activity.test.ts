@@ -176,7 +176,7 @@ describe('TurnActivityRegistry.checkAndRecord', () => {
 
   it('first caller wins on a shared target', () => {
     const { registry } = overlapping();
-    expect(registry.checkAndRecord('A', 'email-send', [X])).toEqual({ held: false });
+    expect(registry.checkAndRecord('A', 'email-send', [X])).toMatchObject({ held: false });
     const decision = registry.checkAndRecord('B', 'email-send', [X]);
     expect(decision.held).toBe(true);
     if (decision.held) {
@@ -192,7 +192,7 @@ describe('TurnActivityRegistry.checkAndRecord', () => {
     const { registry } = overlapping();
     registry.checkAndRecord('A', 'email-send', [X]);
     registry.checkAndRecord('B', 'email-send', [X]);
-    expect(registry.checkAndRecord('B', 'email-send', [X])).toEqual({ held: false });
+    expect(registry.checkAndRecord('B', 'email-send', [X])).toMatchObject({ held: false });
     expect(registry.actionsOf('B')).toHaveLength(1);
   });
 
@@ -201,26 +201,26 @@ describe('TurnActivityRegistry.checkAndRecord', () => {
     registry.checkAndRecord('A', 'email-send', [X]);
     expect(registry.checkAndRecord('B', 'email-send', [X]).held).toBe(true);
     registry.checkAndRecord('A', 'email-send', [X]);
-    expect(registry.checkAndRecord('B', 'email-send', [X])).toEqual({ held: false });
+    expect(registry.checkAndRecord('B', 'email-send', [X])).toMatchObject({ held: false });
   });
 
   it('different targets never hold', () => {
     const { registry } = overlapping();
-    expect(registry.checkAndRecord('A', 'email-send', [X])).toEqual({ held: false });
-    expect(registry.checkAndRecord('B', 'email-send', [Y])).toEqual({ held: false });
+    expect(registry.checkAndRecord('A', 'email-send', [X])).toMatchObject({ held: false });
+    expect(registry.checkAndRecord('B', 'email-send', [Y])).toMatchObject({ held: false });
   });
 
   it('same value with a different kind is a different target', () => {
     const { registry } = overlapping();
     registry.checkAndRecord('A', 'email-send', [{ kind: 'contact', value: 'v' }]);
-    expect(registry.checkAndRecord('B', 'x', [{ kind: 'id', value: 'v' }])).toEqual({ held: false });
+    expect(registry.checkAndRecord('B', 'x', [{ kind: 'id', value: 'v' }])).toMatchObject({ held: false });
   });
 
   it('a task never matches its own root', () => {
     const { registry } = setup();
     start(registry, 'A');
     registry.checkAndRecord('A', 'email-send', [X]);
-    expect(registry.checkAndRecord('A', 'email-send', [X])).toEqual({ held: false });
+    expect(registry.checkAndRecord('A', 'email-send', [X])).toMatchObject({ held: false });
   });
 
   it('finished root within 15 minutes still counts', () => {
@@ -237,7 +237,7 @@ describe('TurnActivityRegistry.checkAndRecord', () => {
 
     set(endedAt + 16 * MIN);
     start(registry, 'C', { startedAt: endedAt + 16 * MIN });
-    expect(registry.checkAndRecord('C', 'email-send', [X])).toEqual({ held: false });
+    expect(registry.checkAndRecord('C', 'email-send', [X])).toMatchObject({ held: false });
   });
 
   it('root that started after mine counts', () => {
@@ -250,7 +250,7 @@ describe('TurnActivityRegistry.checkAndRecord', () => {
 
   it('unknown task id records nothing', () => {
     const { registry } = overlapping();
-    expect(registry.checkAndRecord('nope', 'email-send', [X])).toEqual({ held: false });
+    expect(registry.checkAndRecord('nope', 'email-send', [X])).toMatchObject({ held: false });
     expect(registry.actionsOf('nope')).toHaveLength(0);
     expect(registry.actionsOf('A')).toHaveLength(0);
   });
@@ -333,8 +333,8 @@ describe('TurnActivityRegistry unresolved originators', () => {
     const { registry } = setup();
     start(registry, 'S', { originatorContactId: '+15550001111', originatorResolved: false });
     start(registry, 'P');
-    expect(registry.checkAndRecord('S', 'email-send', [X])).toEqual({ held: false });
-    expect(registry.checkAndRecord('P', 'email-send', [X])).toEqual({ held: false });
+    expect(registry.checkAndRecord('S', 'email-send', [X])).toMatchObject({ held: false });
+    expect(registry.checkAndRecord('P', 'email-send', [X])).toMatchObject({ held: false });
     expect(registry.actionsOf('P')).toHaveLength(1);
   });
 
@@ -359,7 +359,7 @@ describe('TurnActivityRegistry unresolved originators', () => {
     start(registry, 'P');
     registry.ensureRoot('voice-1', { ...VOICE_SEED, conversationId: 'v', originatorContactId: null, originatorResolved: false });
     registry.checkAndRecord('voice-1', 'email-send', [X]);
-    expect(registry.checkAndRecord('P', 'email-send', [X])).toEqual({ held: false });
+    expect(registry.checkAndRecord('P', 'email-send', [X])).toMatchObject({ held: false });
   });
 });
 
@@ -558,5 +558,69 @@ describe('TurnActivityRegistry overlapping coordinator tasks', () => {
     expect(registry.rootOf('coord')!.runningCoordinatorTaskId).toBe('coord');
     registry.taskEnded('coord');
     expect(registry.rootOf('coord')!.runningCoordinatorTaskId).toBeNull();
+  });
+});
+
+describe('TurnActivityRegistry action outcomes', () => {
+  function overlapping() {
+    const ctx = setup();
+    start(ctx.registry, 'A');
+    start(ctx.registry, 'B');
+    return ctx;
+  }
+
+  function recorded(decision: ReturnType<TurnActivityRegistry['checkAndRecord']>): string {
+    if (decision.held || decision.actionId === undefined) throw new Error('expected a recorded call');
+    return decision.actionId;
+  }
+
+  it('a recorded call is pending until settled, and its handle is returned', () => {
+    const { registry } = overlapping();
+    recorded(registry.checkAndRecord('A', 'email-send', [X]));
+    expect(registry.actionsOf('A')[0]!.outcome).toBe('pending');
+    const decision = registry.checkAndRecord('B', 'email-send', [X]);
+    expect(decision.held).toBe(true);
+    if (decision.held) expect(decision.matches[0]!.action.outcome).toBe('pending');
+  });
+
+  it('a failed call is removed and holds no one', () => {
+    const { registry } = overlapping();
+    const id = recorded(registry.checkAndRecord('A', 'email-send', [X]));
+    registry.settle(id, 'failed');
+    expect(registry.actionsOf('A')).toHaveLength(0);
+    expect(registry.checkAndRecord('B', 'email-send', [X])).toMatchObject({ held: false });
+  });
+
+  it('a succeeded call stays and holds as succeeded', () => {
+    const { registry } = overlapping();
+    const id = recorded(registry.checkAndRecord('A', 'email-send', [X]));
+    registry.settle(id, 'succeeded');
+    const decision = registry.checkAndRecord('B', 'email-send', [X]);
+    expect(decision.held).toBe(true);
+    if (decision.held) expect(decision.matches[0]!.action.outcome).toBe('succeeded');
+  });
+
+  it('a timed-out call stays with an unknown outcome', () => {
+    const { registry } = overlapping();
+    const id = recorded(registry.checkAndRecord('A', 'email-send', [X]));
+    registry.settle(id, 'unknown');
+    expect(registry.actionsOf('A')[0]!.outcome).toBe('unknown');
+    expect(registry.checkAndRecord('B', 'email-send', [X]).held).toBe(true);
+  });
+
+  it('settling an id no longer tracked is a no-op', () => {
+    const { registry } = overlapping();
+    const id = recorded(registry.checkAndRecord('A', 'email-send', [X]));
+    registry.settle(id, 'failed');
+    expect(() => registry.settle(id, 'succeeded')).not.toThrow();
+    expect(() => registry.settle('action-unknown', 'failed')).not.toThrow();
+  });
+
+  it('a snapshot of an action does not change when the action is settled', () => {
+    const { registry } = overlapping();
+    const id = recorded(registry.checkAndRecord('A', 'email-send', [X]));
+    const before = registry.actionsOf('A')[0]!;
+    registry.settle(id, 'succeeded');
+    expect(before.outcome).toBe('pending');
   });
 });
