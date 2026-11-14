@@ -3601,8 +3601,9 @@ export class OutboundGateway {
     draftId?: string;
   }): Promise<OutboundSendResult | null> {
     if (this.identityGate === 'off') return null;
-    const identityReason = await this.unresolvedIdentityReason(args.request, args.options);
-    if (!identityReason) return null;
+    const unresolved = await this.unresolvedIdentityReason(args.request, args.options);
+    if (!unresolved) return null;
+    const { reason: identityReason, lookupFailed } = unresolved;
     if (this.identityGate === 'shadow') {
       this.log.warn(
         {
@@ -3647,7 +3648,10 @@ export class OutboundGateway {
       );
     }
     // The identity gate working as designed (#2587): the agent resolves the recipient and resends.
-    return asPolicyHold({ success: false, blockedReason: identityReason, blockedRules: ['unresolved-identity'] });
+    // When a name lookup failed, the gate ran with fewer names than it should have: the block
+    // stands (fail closed) but counts as a failure, since an outage may have caused it.
+    const block: OutboundSendResult = { success: false, blockedReason: identityReason, blockedRules: ['unresolved-identity'] };
+    return lookupFailed ? block : asPolicyHold(block);
   }
 
   /**
@@ -3671,7 +3675,7 @@ export class OutboundGateway {
       isSystemNotification?: boolean;
       taskEventId?: string;
     },
-  ): Promise<string | null> {
+  ): Promise<{ reason: string; lookupFailed: boolean } | null> {
     const state = this.conversationEntities;
     if (!state) return null;
     if (options?.humanApproved || options?.isSystemNotification) return null;
@@ -3685,6 +3689,8 @@ export class OutboundGateway {
       if (card.preferredName) covered.push(card.preferredName);
     }
 
+    // Set when a name lookup below failed, so the block is reported as a failure (#2587).
+    let lookupFailed = false;
     const principalId = this.principalIdentities[0]?.contactId;
     if (principalId) {
       try {
@@ -3694,6 +3700,7 @@ export class OutboundGateway {
           if (principal.preferredName) covered.push(principal.preferredName);
         }
       } catch (err) {
+        lookupFailed = true;
         this.log.warn(
           { err },
           'outbound-gateway: principal name lookup failed — identity gate using startup names only',
@@ -3708,6 +3715,7 @@ export class OutboundGateway {
         if (contact?.displayName) covered.push(contact.displayName);
       }
     } catch (err) {
+      lookupFailed = true;
       this.log.warn(
         { err, channel: request.channel },
         'outbound-gateway: recipient name lookup failed — identity gate continuing without recipient names',
@@ -3719,12 +3727,13 @@ export class OutboundGateway {
     // guest who shares the first name ("Alex"). Live: index.ts updates it on hot-reload.
     const own = this.agentPersona ? [this.agentPersona.displayName, this.agentPersona.title] : [];
     // Subject is hedges-only. A Title Case subject must not block a clean body.
-    return describeUnresolvedIdentity(
+    const reason = describeUnresolvedIdentity(
       request.channel === 'email'
         ? { body: blankExactPhrases(request.body, own), subject: request.subject }
         : { body: blankExactPhrases(request.message, own) },
       covered,
     );
+    return reason ? { reason, lookupFailed } : null;
   }
 
   /**
