@@ -9,6 +9,8 @@ import {
   TurnActivityRegistry,
   TURN_ACTIVITY_WINDOW_MS,
   MAX_TRACKED_ROOTS,
+  MAX_TRACKED_ACTIONS,
+  MAX_ACTIONS_PER_ROOT,
   type ActionTarget,
   type TaskStartInput,
 } from '../../../src/dispatch/turn-activity.js';
@@ -285,5 +287,172 @@ describe('TurnActivityRegistry.checkAndRecord', () => {
     expect(registry.rootOf('extra')).toBeDefined();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]![0]).toMatchObject({ evicted: 1 });
+  });
+
+  it('reports the most recent action per pair in a held decision', () => {
+    const { registry, set } = setup();
+    start(registry, 'A');
+    start(registry, 'B');
+    registry.checkAndRecord('A', 'first-tool', [X]);
+    set(T0 + 1_000);
+    registry.checkAndRecord('A', 'second-tool', [X]);
+    const decision = registry.checkAndRecord('B', 'email-send', [X]);
+    expect(decision.held).toBe(true);
+    if (decision.held) {
+      expect(decision.matches).toHaveLength(1);
+      expect(decision.matches[0]!.action.toolName).toBe('second-tool');
+    }
+  });
+
+  it('warns once when live roots exceed the cap and nothing can be evicted', () => {
+    const warn = vi.fn();
+    const logger = { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() } as unknown as Logger;
+    const { registry } = setup(logger);
+    for (let i = 0; i < MAX_TRACKED_ROOTS; i++) start(registry, `r${i}`);
+    expect(warn).not.toHaveBeenCalled();
+    start(registry, 'extra');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toMatchObject({ size: MAX_TRACKED_ROOTS + 1 });
+    expect(registry.rootOf('r0')).toBeDefined();
+  });
+});
+
+describe('TurnActivityRegistry pruning', () => {
+  it('a live auto root keeps an ended root still inside its window', () => {
+    const { registry, set } = setup();
+    start(registry, 'R');
+    registry.checkAndRecord('R', 'email-send', [X]);
+    set(T0 + 1_000);
+    registry.taskEnded('R');
+    set(T0 + 10 * MIN);
+    registry.ensureRoot('V', {
+      conversationId: 'v', channelId: 'voice', agentId: 'coordinator',
+      originatorContactId: null, originatorResolved: false,
+    });
+    set(T0 + 20 * MIN);
+    start(registry, 'B', { startedAt: T0 + 20 * MIN });
+    expect(registry.rootOf('R')).toBeDefined();
+    expect(registry.checkAndRecord('V', 'email-send', [X]).held).toBe(true);
+  });
+
+  it('the prune cutoff is the oldest running root start, not now', () => {
+    const { registry, set } = setup();
+    start(registry, 'R');
+    registry.checkAndRecord('R', 'email-send', [X]);
+    set(T0 + MIN);
+    registry.taskEnded('R');
+    set(T0 + 10 * MIN);
+    start(registry, 'M', { startedAt: T0 + 10 * MIN });
+    set(T0 + 40 * MIN);
+    start(registry, 'B', { startedAt: T0 + 40 * MIN });
+    expect(registry.checkAndRecord('M', 'email-send', [X]).held).toBe(true);
+  });
+});
+
+describe('TurnActivityRegistry action caps', () => {
+  const noopLogger = () => {
+    const error = vi.fn();
+    const warn = vi.fn();
+    return { error, warn, logger: { warn, error, info: vi.fn(), debug: vi.fn() } as unknown as Logger };
+  };
+
+  it('a root past its per-root cap drops its own oldest action only', () => {
+    const { registry } = setup();
+    start(registry, 'A');
+    start(registry, 'B');
+    registry.checkAndRecord('B', 'b-tool', [{ kind: 'tool', value: 'b-only' }]);
+    for (let i = 0; i <= MAX_ACTIONS_PER_ROOT; i++) {
+      registry.checkAndRecord('A', `tool-${i}`, [{ kind: 'id', value: `a-${i}` }]);
+    }
+    const a = registry.actionsOf('A');
+    expect(a).toHaveLength(MAX_ACTIONS_PER_ROOT);
+    expect(a[0]!.toolName).toBe('tool-1');
+    expect(registry.actionsOf('B')).toHaveLength(1);
+  });
+
+  it('the global cap evicts ended roots first, then logs an error for live ones', () => {
+    const { error, warn, logger } = noopLogger();
+    const { registry } = setup(logger);
+    const rootsNeeded = MAX_TRACKED_ACTIONS / MAX_ACTIONS_PER_ROOT;
+    const fill = (id: string) => {
+      for (let j = 0; j < MAX_ACTIONS_PER_ROOT; j++) {
+        registry.checkAndRecord(id, 't', [{ kind: 'id', value: `${id}-${j}` }]);
+      }
+    };
+    for (let i = 0; i < rootsNeeded; i++) {
+      start(registry, `e${i}`);
+      fill(`e${i}`);
+      registry.taskEnded(`e${i}`);
+    }
+    start(registry, 'live');
+    registry.checkAndRecord('live', 't', [{ kind: 'id', value: 'live-0' }]);
+    expect(registry.actionsOf('live')).toHaveLength(1);
+    expect(registry.actionsOf('e0')).toHaveLength(MAX_ACTIONS_PER_ROOT - 1);
+    expect(error).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
+
+    // Now only live roots hold actions: the oldest overall goes, and it is an error.
+    const live = setup(logger);
+    for (let i = 0; i < rootsNeeded; i++) {
+      start(live.registry, `l${i}`);
+      for (let j = 0; j < MAX_ACTIONS_PER_ROOT; j++) {
+        live.registry.checkAndRecord(`l${i}`, 't', [{ kind: 'id', value: `l${i}-${j}` }]);
+      }
+    }
+    expect(error).not.toHaveBeenCalled();
+    start(live.registry, 'lx');
+    live.registry.checkAndRecord('lx', 't', [{ kind: 'id', value: 'extra' }]);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls[0]![0]).toMatchObject({ evictedFromLive: 1, cap: MAX_TRACKED_ACTIONS });
+  });
+});
+
+describe('TurnActivityRegistry repeated starts', () => {
+  it('a start after ensureRoot for the same id merges instead of overwriting', () => {
+    const { registry, set } = setup();
+    registry.ensureRoot('a', {
+      conversationId: 'conv-a', channelId: 'voice', agentId: 'coordinator',
+      originatorContactId: null, originatorResolved: false,
+    });
+    set(T0 + 5_000);
+    const root = start(registry, 'a', { startedAt: T0 + 5_000, content: 'hello' });
+    expect(root.autoRegistered).toBe(true);
+    expect(root.startedAt).toBe(T0);
+    expect(root.requestText).toBe('hello');
+    expect(root.runningTaskIds.has('a')).toBe(true);
+  });
+
+  it('a repeated start for a root id keeps its running tasks', () => {
+    const { registry } = setup();
+    start(registry, 'coord');
+    start(registry, 'spec', {
+      agentId: 'calendar',
+      parentEventId: 'coord',
+      metadata: { delegationOrigin: { taskEventId: 'coord' } },
+    });
+    const root = start(registry, 'coord');
+    expect(root.runningTaskIds.has('spec')).toBe(true);
+    expect(root.runningTaskIds.has('coord')).toBe(true);
+  });
+});
+
+describe('TurnActivityRegistry overlapping coordinator tasks', () => {
+  it('ending one of two coordinator tasks keeps the slot on the other', () => {
+    const { registry } = setup();
+    start(registry, 'coord');
+    start(registry, 'spec', {
+      agentId: 'calendar',
+      parentEventId: 'coord',
+      metadata: { delegationOrigin: { taskEventId: 'coord' } },
+    });
+    start(registry, 'wake', {
+      parentEventId: 'spec',
+      metadata: { lateDelegation: {} },
+    });
+    expect(registry.rootOf('coord')!.runningCoordinatorTaskId).toBe('wake');
+    registry.taskEnded('wake');
+    expect(registry.rootOf('coord')!.runningCoordinatorTaskId).toBe('coord');
+    registry.taskEnded('coord');
+    expect(registry.rootOf('coord')!.runningCoordinatorTaskId).toBeNull();
   });
 });
