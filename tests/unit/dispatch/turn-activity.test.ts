@@ -11,6 +11,7 @@ import {
   MAX_TRACKED_ROOTS,
   MAX_TRACKED_ACTIONS,
   MAX_ACTIONS_PER_ROOT,
+  MAX_RUNNING_ROOT_AGE_MS,
   type ActionTarget,
   type TaskStartInput,
 } from '../../../src/dispatch/turn-activity.js';
@@ -702,5 +703,148 @@ describe('TurnActivityRegistry voice-originated tasks', () => {
     const { registry } = setup(logger);
     start(registry, 'wake', { parentEventId: 'gone', metadata: { lateDelegation: {} } });
     expect(warn).toHaveBeenCalledWith({ taskEventId: 'wake' }, expect.any(String));
+  });
+});
+
+describe('TurnActivityRegistry silent-failure logging and staleness', () => {
+  function spyLogger() {
+    const warn = vi.fn();
+    const info = vi.fn();
+    const debug = vi.fn();
+    const error = vi.fn();
+    return { warn, info, debug, error, logger: { warn, info, debug, error } as unknown as Logger };
+  }
+
+  it('checkAndRecord for an unknown task warns with the tool and task id', () => {
+    const { warn, logger } = spyLogger();
+    const { registry } = setup(logger);
+    registry.checkAndRecord('nope', 'email-send', [X]);
+    expect(warn).toHaveBeenCalledWith({ toolName: 'email-send', taskEventId: 'nope' }, expect.any(String));
+  });
+
+  it('taskEnded for an unknown task logs at debug', () => {
+    const { debug, warn, logger } = spyLogger();
+    const { registry } = setup(logger);
+    registry.taskEnded('nope');
+    expect(debug).toHaveBeenCalledWith({ taskEventId: 'nope' }, expect.any(String));
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("an unresolved person's recorded action is logged once per root at info", () => {
+    const { info, logger } = spyLogger();
+    const { registry } = setup(logger);
+    start(registry, 'S', { originatorContactId: '+15550001111', originatorResolved: false });
+    start(registry, 'J', { originatorContactId: null, originatorResolved: false, originatorIsSystem: true });
+    registry.checkAndRecord('S', 'email-send', [X]);
+    registry.checkAndRecord('S', 'email-send', [Y]);
+    registry.checkAndRecord('J', 'email-send', [Y]);
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info.mock.calls[0]![0]).toMatchObject({ rootId: 'S' });
+    expect(JSON.stringify(info.mock.calls[0]![0])).not.toContain('+15550001111');
+  });
+
+  it('recordOnly records without checking, and later turns see it', () => {
+    const { registry } = setup();
+    start(registry, 'A');
+    start(registry, 'B');
+    start(registry, 'C');
+    registry.checkAndRecord('A', 'email-send', [X]);
+    const approved = registry.recordOnly('B', 'email-send', [X]);
+    expect(approved.held).toBe(false);
+    expect(approved.actionId).toBeDefined();
+    expect(registry.actionsOf('B')).toHaveLength(1);
+    const decision = registry.checkAndRecord('C', 'email-send', [X]);
+    expect(decision.held).toBe(true);
+    if (decision.held) expect(new Set(decision.matches.map((m) => m.other.rootId))).toEqual(new Set(['A', 'B']));
+  });
+
+  it('recordOnly for an unknown task warns and records nothing', () => {
+    const { warn, logger } = spyLogger();
+    const { registry } = setup(logger);
+    expect(registry.recordOnly('nope', 'email-send', [X])).toEqual({ held: false });
+    expect(warn).toHaveBeenCalledWith({ toolName: 'email-send', taskEventId: 'nope' }, expect.any(String));
+  });
+
+  it('an auto root whose last activity is before my window does not qualify, even unpruned', () => {
+    const { registry, set } = setup();
+    registry.ensureRoot('voice-1', { ...VOICE_SEED, conversationId: 'v' });
+    registry.checkAndRecord('voice-1', 'email-send', [X]);
+    // A running root keeps the old auto root from being pruned by taskStarted: it has a task.
+    start(registry, 'spec', { agentId: 'calendar', metadata: { delegationOrigin: { taskEventId: 'voice-1' } } });
+    set(T0 + TURN_ACTIVITY_WINDOW_MS + 5 * MIN);
+    start(registry, 'B', { startedAt: T0 + TURN_ACTIVITY_WINDOW_MS + 5 * MIN });
+    expect(registry.rootOf('voice-1')).toBeDefined();
+    expect(registry.checkAndRecord('B', 'email-send', [X])).toMatchObject({ held: false });
+  });
+
+  it('checkAndRecord prunes stale roots without a task start, at most every interval', () => {
+    const { registry, set } = setup();
+    start(registry, 'A');
+    registry.checkAndRecord('A', 'email-send', [X]);
+    registry.taskEnded('A');
+    // Long after A ended, a voice call registers (ensureRoot does not prune) and calls a tool:
+    // no task has started since, so only checkAndRecord can prune A.
+    set(T0 + 3 * TURN_ACTIVITY_WINDOW_MS);
+    registry.ensureRoot('voice-1', { ...VOICE_SEED, conversationId: 'v' });
+    expect(registry.rootOf('A')).toBeDefined();
+    registry.checkAndRecord('voice-1', 'email-send', [Y]);
+    expect(registry.rootOf('A')).toBeUndefined();
+    expect(registry.rootOf('voice-1')).toBeDefined();
+  });
+
+  it("checkAndRecord's prune never drops the caller's own root", () => {
+    const { registry, set } = setup();
+    registry.ensureRoot('voice-1', { ...VOICE_SEED, conversationId: 'v' });
+    registry.checkAndRecord('voice-1', 'email-send', [X]);
+    // The call's last activity is now past the window: a prune would drop it, but not its own.
+    set(T0 + 2 * TURN_ACTIVITY_WINDOW_MS);
+    expect(registry.checkAndRecord('voice-1', 'email-send', [Y])).toMatchObject({ held: false });
+    expect(registry.rootOf('voice-1')).toBeDefined();
+    expect(registry.actionsOf('voice-1')).toHaveLength(2);
+  });
+
+  it('a root running past the maximum age is treated as ended, with one warn', () => {
+    const { warn, logger } = spyLogger();
+    const { registry, set } = setup(logger);
+    start(registry, 'stuck');
+    registry.checkAndRecord('stuck', 'email-send', [X]);
+    const late = T0 + MAX_RUNNING_ROOT_AGE_MS + TURN_ACTIVITY_WINDOW_MS + MIN;
+    set(late);
+    start(registry, 'B', { startedAt: late });
+    // Its effective end is start + max age, a window before B: B is not held, and it was pruned.
+    expect(registry.checkAndRecord('B', 'email-send', [X])).toMatchObject({ held: false });
+    expect(registry.rootOf('stuck')).toBeUndefined();
+    const stuckWarns = warn.mock.calls.filter((c) => (c[0] as { rootId?: string }).rootId === 'stuck');
+    expect(stuckWarns).toHaveLength(1);
+  });
+
+  it('a root past its per-root action cap warns once', () => {
+    const { warn, logger } = spyLogger();
+    const { registry } = setup(logger);
+    start(registry, 'A');
+    for (let i = 0; i < MAX_ACTIONS_PER_ROOT + 5; i++) {
+      registry.checkAndRecord('A', 't', [{ kind: 'id', value: `a-${i}` }]);
+    }
+    const capWarns = warn.mock.calls.filter((c) => (c[0] as { cap?: number }).cap === MAX_ACTIONS_PER_ROOT);
+    expect(capWarns).toHaveLength(1);
+    expect(capWarns[0]![0]).toMatchObject({ rootId: 'A' });
+  });
+
+  it('losing a live auto root to the global action cap is an error', () => {
+    const { error, logger } = spyLogger();
+    const { registry } = setup(logger);
+    const rootsNeeded = MAX_TRACKED_ACTIONS / MAX_ACTIONS_PER_ROOT;
+    for (let i = 0; i < rootsNeeded; i++) {
+      // Unresolved, so the fill skips matching and stays fast.
+      registry.ensureRoot(`v${i}`, { ...VOICE_SEED, conversationId: `v${i}`, originatorContactId: null, originatorResolved: false });
+      for (let j = 0; j < MAX_ACTIONS_PER_ROOT; j++) {
+        registry.checkAndRecord(`v${i}`, 't', [{ kind: 'id', value: `v${i}-${j}` }]);
+      }
+    }
+    expect(error).not.toHaveBeenCalled();
+    registry.ensureRoot('vx', { ...VOICE_SEED, conversationId: 'vx', originatorContactId: null, originatorResolved: false });
+    registry.checkAndRecord('vx', 't', [{ kind: 'id', value: 'extra' }]);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls[0]![0]).toMatchObject({ evictedFromLive: 1 });
   });
 });

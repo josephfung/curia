@@ -10,9 +10,9 @@
 // see this one's turns. The registry fails open: an unknown task id, a pruned parent, or an
 // evicted root yields no hold rather than an error.
 //
-// taskStarted, taskEnded, ensureRoot and checkAndRecord are synchronous. There must be no
-// await inside checkAndRecord: the check and the record have to be one atomic step, or two
-// roots could each see an empty registry and both proceed.
+// taskStarted, taskEnded, ensureRoot, checkAndRecord, recordOnly and settle are synchronous.
+// There must be no await inside checkAndRecord: the check and the record have to be one atomic
+// step, or two roots could each see an empty registry and both proceed.
 //
 // Public getters return copies, so a caller cannot mutate registry state.
 
@@ -30,6 +30,15 @@ export const MAX_TRACKED_ROOTS = 1_000;
 export const MAX_TRACKED_ACTIONS = 5_000;
 /** One root cannot crowd out another's actions: past this, its own oldest action is dropped. */
 export const MAX_ACTIONS_PER_ROOT = 200;
+/**
+ * A root still "running" this long after it started (an auto root: after its last activity)
+ * has almost certainly lost its end event. It is treated as ended, for the window and for
+ * pruning, so it cannot pin the registry's memory or hold others forever.
+ */
+export const MAX_RUNNING_ROOT_AGE_MS = 6 * 60 * 60_000;
+/** checkAndRecord prunes at most this often: every N calls, or after this long. */
+const PRUNE_EVERY_CALLS = 50;
+const PRUNE_INTERVAL_MS = 60_000;
 
 const REQUEST_TEXT_MAX_CODE_POINTS = 500;
 const COORDINATOR_AGENT_ID = 'coordinator';
@@ -148,6 +157,10 @@ interface RootState {
    * Production passes no scopeOf, so every root's scope is undefined and all are comparable.
    */
   scope: string | undefined;
+  /** Each logged once per root. */
+  stuckWarned: boolean;
+  rootCapWarned: boolean;
+  invisibleLogged: boolean;
 }
 
 export interface TurnActivityRegistryOptions {
@@ -190,11 +203,15 @@ export class TurnActivityRegistry {
   private readonly shown = new Map<string, Set<string>>();
 
   private readonly scopeOf: ((conversationId: string) => string | undefined) | undefined;
+  /** checkAndRecord calls since the last prune, and when that prune ran. */
+  private callsSincePrune = 0;
+  private lastPruneAt: number;
 
   constructor(opts: TurnActivityRegistryOptions) {
     this.logger = opts.logger;
     this.now = opts.now ?? Date.now;
     this.scopeOf = opts.scopeOf;
+    this.lastPruneAt = this.now();
   }
 
   /** Register a task under its root and return that root. */
@@ -205,6 +222,8 @@ export class TurnActivityRegistry {
     root.runningTaskIds.add(input.taskEventId);
     root.taskIds.add(input.taskEventId);
     root.endedAt = null;
+    // An auto root never ends; a task starting under it is activity that keeps it in the window.
+    if (root.autoRegistered) root.lastActivityAt = Math.max(root.lastActivityAt, this.now());
     this.taskToRoot.set(input.taskEventId, root.rootId);
     if (input.agentId === COORDINATOR_AGENT_ID && !isDelegatedSpecialistTask(input.metadata)) {
       // Delete first so a restarted id moves to the most-recent position.
@@ -218,10 +237,18 @@ export class TurnActivityRegistry {
 
   taskEnded(taskEventId: string): void {
     const root = this.rootStateOf(taskEventId);
-    if (!root) return;
+    if (!root) {
+      // Its root was pruned or evicted, or the start was never recorded.
+      this.logger.debug({ taskEventId }, 'turn activity: end of a task with no known root');
+      return;
+    }
     root.runningTaskIds.delete(taskEventId);
     root.runningCoordinatorTaskIds.delete(taskEventId);
-    if (root.runningTaskIds.size === 0 && !root.autoRegistered) root.endedAt = this.now();
+    if (root.autoRegistered) {
+      root.lastActivityAt = Math.max(root.lastActivityAt, this.now());
+    } else if (root.runningTaskIds.size === 0) {
+      root.endedAt = this.now();
+    }
   }
 
   rootOf(taskEventId: string): RootTurn | undefined {
@@ -260,6 +287,9 @@ export class TurnActivityRegistry {
       taskIds: new Set([rootId]),
       lastActivityAt: now,
       scope: this.scopeFor(seed.conversationId),
+      stuckWarned: false,
+      rootCapWarned: false,
+      invisibleLogged: false,
     };
     this.roots.set(rootId, root);
     this.taskToRoot.set(rootId, rootId);
@@ -279,7 +309,11 @@ export class TurnActivityRegistry {
    */
   checkAndRecord(taskEventId: string, toolName: string, targets: readonly ActionTarget[]): BackstopDecision {
     const mine = this.rootStateOf(taskEventId);
-    if (!mine) return { held: false };
+    if (!mine) {
+      this.logger.warn({ toolName, taskEventId }, 'turn activity: call from a task with no known root — not checked or recorded');
+      return { held: false };
+    }
+    this.maybePrune(mine);
 
     const qualifying = new Map<string, RootState>();
     for (const other of this.qualifyingOthers(mine)) {
@@ -314,6 +348,20 @@ export class TurnActivityRegistry {
       return { held: true, matches };
     }
 
+    return { held: false, actionId: this.recordAction(mine, taskEventId, toolName, targets) };
+  }
+
+  /**
+   * Record a call without checking it: a human-approved replay, which a hold must not stop,
+   * but which later turns must still see. Synchronous, like checkAndRecord.
+   */
+  recordOnly(taskEventId: string, toolName: string, targets: readonly ActionTarget[]): { held: false; actionId?: string } {
+    const mine = this.rootStateOf(taskEventId);
+    if (!mine) {
+      this.logger.warn({ toolName, taskEventId }, 'turn activity: approved call from a task with no known root — not recorded');
+      return { held: false };
+    }
+    this.maybePrune(mine);
     return { held: false, actionId: this.recordAction(mine, taskEventId, toolName, targets) };
   }
 
@@ -353,6 +401,13 @@ export class TurnActivityRegistry {
     toolName: string,
     targets: readonly ActionTarget[],
   ): string {
+    if (!mine.originatorResolved && !mine.originatorIsSystem && !mine.invisibleLogged) {
+      mine.invisibleLogged = true;
+      this.logger.info(
+        { rootId: mine.rootId, taskEventId, toolName },
+        "turn activity: recording an unresolved sender's action; actions not visible to other turns",
+      );
+    }
     const at = this.now();
     this.actionSeq += 1;
     const actionId = `action-${this.actionSeq}`;
@@ -366,7 +421,7 @@ export class TurnActivityRegistry {
       outcome: 'pending',
     });
     mine.lastActivityAt = at;
-    this.enforceRootActionCap(mine.rootId);
+    this.enforceRootActionCap(mine);
     this.enforceActionCap();
     return actionId;
   }
@@ -480,6 +535,9 @@ export class TurnActivityRegistry {
       taskIds: new Set(),
       lastActivityAt: input.startedAt,
       scope: this.scopeFor(input.conversationId),
+      stuckWarned: false,
+      rootCapWarned: false,
+      invisibleLogged: false,
     };
     this.roots.set(root.rootId, root);
     return root;
@@ -496,15 +554,57 @@ export class TurnActivityRegistry {
     }
   }
 
+  /**
+   * Other roots in my scope whose activity reaches into my window. An auto root never ends,
+   * so it counts only while its last activity is inside the window; a running root past
+   * MAX_RUNNING_ROOT_AGE_MS counts as ended at that age.
+   */
   private qualifyingOthers(mine: RootState): RootState[] {
+    const now = this.now();
     const floor = mine.startedAt - TURN_ACTIVITY_WINDOW_MS;
     const result: RootState[] = [];
     for (const other of this.roots.values()) {
       if (other.rootId === mine.rootId) continue;
       if (other.scope !== mine.scope) continue;
-      if (other.endedAt === null || other.endedAt >= floor) result.push(other);
+      if (other.autoRegistered) {
+        if (other.lastActivityAt >= floor) result.push(other);
+        continue;
+      }
+      const ended = this.effectiveEndedAt(other, now);
+      if (ended === null || ended >= floor) result.push(other);
     }
     return result;
+  }
+
+  /** Running past MAX_RUNNING_ROOT_AGE_MS: its end was almost certainly lost. Warned once. */
+  private isStuck(root: RootState, now: number): boolean {
+    const running = root.autoRegistered ? root.runningTaskIds.size > 0 : root.endedAt === null;
+    const since = root.autoRegistered ? root.lastActivityAt : root.startedAt;
+    if (!running || now - since <= MAX_RUNNING_ROOT_AGE_MS) return false;
+    if (!root.stuckWarned) {
+      root.stuckWarned = true;
+      this.logger.warn(
+        { rootId: root.rootId, runningTasks: root.runningTaskIds.size, ageMs: now - since },
+        'turn activity: a root has been running past the maximum age; treating it as ended',
+      );
+    }
+    return true;
+  }
+
+  /** When a non-auto root ended, counting a stuck one as ended at the maximum age. */
+  private effectiveEndedAt(root: RootState, now: number): number | null {
+    if (root.endedAt !== null) return root.endedAt;
+    return this.isStuck(root, now) ? root.startedAt + MAX_RUNNING_ROOT_AGE_MS : null;
+  }
+
+  /**
+   * A live turn: a non-auto root not (effectively) ended, or an auto root with a task running
+   * or activity inside the window. Losing a live root's actions degrades the backstop.
+   */
+  private isLive(root: RootState, now: number): boolean {
+    if (!root.autoRegistered) return this.effectiveEndedAt(root, now) === null;
+    if (this.isStuck(root, now)) return false;
+    return root.runningTaskIds.size > 0 || root.lastActivityAt >= now - TURN_ACTIVITY_WINDOW_MS;
   }
 
   private snapshot(root: RootState): RootTurn {
@@ -532,8 +632,8 @@ export class TurnActivityRegistry {
   }
 
   /** A root that can be dropped without losing a live turn. */
-  private isEvictable(root: RootState): boolean {
-    return root.endedAt !== null || (root.autoRegistered && root.runningTaskIds.size === 0);
+  private isEvictable(root: RootState, now: number): boolean {
+    return !this.isLive(root, now);
   }
 
   private evictionAge(root: RootState): number {
@@ -546,24 +646,38 @@ export class TurnActivityRegistry {
     this.shown.delete(root.rootId);
   }
 
-  /** Drop ended roots older than the window, with their actions and shown sets. */
-  private prune(): void {
+  /** checkAndRecord's cheap prune: every PRUNE_EVERY_CALLS calls or PRUNE_INTERVAL_MS. */
+  private maybePrune(keep: RootState): void {
+    this.callsSincePrune += 1;
+    if (this.callsSincePrune < PRUNE_EVERY_CALLS && this.now() - this.lastPruneAt < PRUNE_INTERVAL_MS) return;
+    this.prune(keep);
+  }
+
+  /**
+   * Drop ended roots older than the window, with their actions and shown sets. `keep` (the
+   * caller's own root) is never dropped, even when its last activity is old.
+   */
+  private prune(keep?: RootState): void {
     const now = this.now();
+    this.lastPruneAt = now;
+    this.callsSincePrune = 0;
     const autoCutoff = now - TURN_ACTIVITY_WINDOW_MS;
     // Stale auto-registered roots go first so they do not hold the cutoff back.
     for (const root of [...this.roots.values()]) {
-      if (root.autoRegistered && root.runningTaskIds.size === 0 && root.lastActivityAt < autoCutoff) {
-        this.dropRoot(root);
-      }
+      if (root === keep || !root.autoRegistered || root.lastActivityAt >= autoCutoff) continue;
+      if (root.runningTaskIds.size === 0 || this.isStuck(root, now)) this.dropRoot(root);
     }
     // A live root (auto-registered or not) still looks back a window from its own start.
     let oldestRunningStart = now;
     for (const root of this.roots.values()) {
-      if (root.endedAt === null && root.startedAt < oldestRunningStart) oldestRunningStart = root.startedAt;
+      const running = root.autoRegistered ? !this.isStuck(root, now) : this.effectiveEndedAt(root, now) === null;
+      if (running && root.startedAt < oldestRunningStart) oldestRunningStart = root.startedAt;
     }
     const endedCutoff = oldestRunningStart - TURN_ACTIVITY_WINDOW_MS;
     for (const root of [...this.roots.values()]) {
-      if (!root.autoRegistered && root.endedAt !== null && root.endedAt < endedCutoff) this.dropRoot(root);
+      if (root === keep || root.autoRegistered) continue;
+      const ended = this.effectiveEndedAt(root, now);
+      if (ended !== null && ended < endedCutoff) this.dropRoot(root);
     }
     this.dropOrphanActions();
   }
@@ -575,8 +689,9 @@ export class TurnActivityRegistry {
   private enforceCaps(): void {
     if (this.roots.size > MAX_TRACKED_ROOTS) {
       let evicted = 0;
+      const now = this.now();
       const candidates = [...this.roots.values()]
-        .filter((r) => this.isEvictable(r))
+        .filter((r) => this.isEvictable(r, now))
         .sort((a, b) => this.evictionAge(a) - this.evictionAge(b));
       for (const root of candidates) {
         if (this.roots.size <= MAX_TRACKED_ROOTS) break;
@@ -598,16 +713,27 @@ export class TurnActivityRegistry {
     this.enforceActionCap();
   }
 
-  /** Past the per-root cap, a root drops its own oldest action. It never evicts another root's. */
-  private enforceRootActionCap(rootId: string): void {
+  /**
+   * Past the per-root cap, a root drops its own oldest action. It never evicts another root's.
+   * The first drop per root is logged: that root's earliest actions no longer hold anyone.
+   */
+  private enforceRootActionCap(root: RootState): void {
     let count = 0;
     let oldest = -1;
     for (let i = 0; i < this.actions.length; i++) {
-      if (this.actions[i]!.rootId !== rootId) continue;
+      if (this.actions[i]!.rootId !== root.rootId) continue;
       if (oldest === -1) oldest = i;
       count++;
     }
-    if (count > MAX_ACTIONS_PER_ROOT) this.actions.splice(oldest, 1);
+    if (count <= MAX_ACTIONS_PER_ROOT) return;
+    this.actions.splice(oldest, 1);
+    if (!root.rootCapWarned) {
+      root.rootCapWarned = true;
+      this.logger.warn(
+        { rootId: root.rootId, cap: MAX_ACTIONS_PER_ROOT },
+        "turn activity: a root passed its action cap; its oldest actions are being dropped",
+      );
+    }
   }
 
   /**
@@ -618,10 +744,11 @@ export class TurnActivityRegistry {
     const excess = this.actions.length - MAX_TRACKED_ACTIONS;
     if (excess <= 0) return;
     const drop = new Set<RecordedAction>();
+    const now = this.now();
     for (const a of this.actions) {
       if (drop.size >= excess) break;
       const root = this.roots.get(a.rootId);
-      if (root && this.isEvictable(root)) drop.add(a);
+      if (root && this.isEvictable(root, now)) drop.add(a);
     }
     const fromEnded = drop.size;
     for (const a of this.actions) {
