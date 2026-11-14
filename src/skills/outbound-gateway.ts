@@ -95,7 +95,7 @@ import { dropOwnIdentityItems, quoteHeaderParticipants, splitReplyQuote } from '
 import { PROVENANCE_LOOKBACK_DAYS, draftKey, type CuriaDraftWrites, type DraftProvenance } from './principal-send/draft-provenance.js';
 import type { LimitStopReason, PrincipalSendEntry, PrincipalSendLedger } from './principal-send/send-ledger.js';
 import {
-  AUTONOMOUS_DAILY_CAP, AUTONOMOUS_DAILY_CAP_WINDOW_MS, AUTONOMOUS_THREAD_COOLDOWN_MS, checkAutonomousLimits, conversationIdsOf, newlyCopied, repliedToLatest,
+  AUTONOMOUS_DAILY_CAP, AUTONOMOUS_DAILY_CAP_WINDOW_MS, AUTONOMOUS_MAX_COPIED_EVIDENCE, AUTONOMOUS_THREAD_COOLDOWN_MS, checkAutonomousLimits, conversationIdsOf, newlyCopied, repliedToLatest,
   type AutonomousLimitRefusal,
 } from './principal-send/autonomous-limits.js';
 import { hasSystemLineage, isOutsiderOriginated } from '../contacts/principal.js';
@@ -576,6 +576,12 @@ export const PRINCIPAL_SEND_DIGEST_REASONS: Record<DigestRefusal, string> = {
 
 /** The "Tried to send" digest item's reason (#2474 final fixes A12): send_unconfirmed, for the principal. */
 const SEND_UNCONFIRMED_DIGEST = "The send didn't confirm, so it may or may not have gone out. Check your Sent folder before sending it again.";
+
+/**
+ * An autonomous reply to a message that copied more people than band review can be shown (#2589):
+ * a large group email is the principal's to answer.
+ */
+const COPIED_TOO_MANY_REASON = `The message it answers copies more than ${AUTONOMOUS_MAX_COPIED_EVIDENCE} people, so Curia left it for the principal.${STILL_A_DRAFT}`;
 
 /** An autonomous reply whose quote is not a thread message every recipient received (final fixes A10). */
 const QUOTE_MISMATCH_REASON = `Its quoted text doesn't match the thread.${STILL_A_DRAFT}`;
@@ -4943,6 +4949,8 @@ export class OutboundGateway {
       // high-stakes-copy question. Not narrowed to this reply's recipients: the sender's
       // escalation is the trigger, and a reply that leaves counsel off is no less escalated.
       const fresh = newlyCopied(thread, principalAddresses);
+      // Bounded before any lookup, and never truncated: the one left out could be the GC.
+      if (fresh.length > AUTONOMOUS_MAX_COPIED_EVIDENCE) return stop('review_hold', COPIED_TOO_MANY_REASON, 'too-many-copied');
       let copied: DraftSendProfile['copied'];
       if (fresh.length > 0) {
         try {

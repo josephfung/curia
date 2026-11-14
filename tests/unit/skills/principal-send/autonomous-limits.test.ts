@@ -330,7 +330,7 @@ describe('inbound To/Cc from a verified, known sender (#2589)', () => {
 
   // Security review M2: one address under the cap can reach a whole company.
   it('never vouches a role, system or group address', () => {
-    for (const group of ['all-staff@example.org', 'everyone@example.org', 'board@example.org', 'legal@example.org', 'info@example.org', 'noreply@example.org']) {
+    for (const group of ['all-staff@example.org', 'everyone@example.org', 'board@example.org', 'legal@example.org', 'info@example.org', 'noreply@example.org', 'all-staff+case@example.org', 'Legal+x@example.org']) {
       const copied = { ...copying, cc: [{ email: group }] };
       expect(refused([copied], { ...draft, cc: [{ email: group }] })).toBe('recipient_not_on_thread');
     }
@@ -340,6 +340,9 @@ describe('inbound To/Cc from a verified, known sender (#2589)', () => {
   it('never vouches an unvouchable address (Curia\'s own mailbox)', () => {
     const copied = { ...copying, cc: [{ email: 'Curia@corp.example' }] };
     expect(refused([copied], { ...draft, cc: [{ email: 'curia@corp.example' }] }, { unvouchable: new Set(['curia@corp.example']) })).toBe('recipient_not_on_thread');
+    // A plus-tagged alias routes to the same mailbox.
+    const tagged = { ...copying, cc: [{ email: 'curia+case@corp.example' }] };
+    expect(refused([tagged], { ...draft, cc: [{ email: 'curia+case@corp.example' }] }, { unvouchable: new Set(['curia@corp.example']) })).toBe('recipient_not_on_thread');
   });
 
   it('counts only the message being answered: an earlier Cc the sender dropped stays off', () => {

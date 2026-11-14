@@ -399,6 +399,11 @@ describe('parseSenderVerified reads each result, not a substring', () => {
     expect(parseSenderVerified(ar('mx.google.com; dkim=pass header.i=@gmail.com header.s=20230601 header.b=abc; spf=pass (google.com: domain of dana@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=dana@gmail.com; dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com'))).toBe(true);
   });
 
+  it('accepts RFC 7601 whitespace and comments around the result separator', () => {
+    expect(parseSenderVerified(ar('mx.example; spf = pass smtp.mailfrom=a@x.example; dkim =pass header.d=x.example; dmarc= (aligned) pass header.from=x.example'))).toBe(true);
+    expect(spfAlignedWithFrom(ar('mx.example; spf = pass smtp.mailfrom = a@x.example; dkim=pass; dmarc=pass'), 'b@x.example')).toBe(true);
+  });
+
   it('needs the authserv-id first: a header with none is not the provider\'s verdict', () => {
     expect(parseSenderVerified(ar('spf=pass; dkim=pass; dmarc=pass'))).toBe(false);
   });
