@@ -18,6 +18,7 @@ import { isLivePrincipalTurn, isPrincipalOriginated } from '../../../../src/cont
 import { isPrincipalDirectedSend } from '../../../../src/skills/_shared/principal-directed.js';
 import { hasTransientErrorSignal } from '../../../../src/skills/outbound-gateway.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
+import { gatewaySendFailure } from '../../../../src/skills/_shared/policy-hold.js';
 
 /** Result of findDraftById — either the draft + owning account, or an agent-facing error. */
 type DraftDiscoveryResult =
@@ -201,7 +202,7 @@ export class SendDraftHandler implements ToolHandler {
         { draftId, account: resolvedAccount, reason: sendResult.blockedReason },
         'send-draft: gateway blocked the send',
       );
-      return { success: false, error: sendResult.blockedReason ?? 'Send blocked by gateway' };
+      return gatewaySendFailure(sendResult, 'Send blocked by gateway');
     }
 
     // ------------------------------------------------------------------

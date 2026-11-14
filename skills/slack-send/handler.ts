@@ -21,6 +21,7 @@ import {
   findRetiredRecipientField,
   retiredRecipientFieldError,
 } from '../../src/skills/_shared/recipient-reference.js';
+import { gatewaySendFailure } from '../../src/skills/_shared/policy-hold.js';
 
 /** Slack chat.postMessage hard limit. */
 const MAX_MESSAGE_LENGTH = 40_000;
@@ -119,10 +120,7 @@ export class SlackSendHandler implements ToolHandler {
       );
 
       if (!result.success) {
-        return {
-          success: false,
-          error: result.blockedReason ?? 'Slack send failed',
-        };
+        return gatewaySendFailure(result, 'Slack send failed');
       }
 
       // A relay held for the digest never reached the principal: nothing for a reply to bind to (#1320).

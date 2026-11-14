@@ -51,7 +51,8 @@ describe('CeoInboxSendDraftHandler', () => {
   it('rejects an approval replay without calling the gateway', async () => {
     const { gateway, sendPrincipalDraft } = gatewayReturning({ success: true });
     const result = await new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway, humanApproved: true }));
-    expect(result).toEqual({ success: false, error: PRINCIPAL_SEND_REFUSALS.approval_replay });
+    // A deliberate rule, so a policy hold (#2587).
+    expect(result).toEqual({ success: false, error: PRINCIPAL_SEND_REFUSALS.approval_replay, errorType: 'POLICY_HOLD' });
     expect(sendPrincipalDraft).not.toHaveBeenCalled();
   });
 
@@ -87,6 +88,23 @@ describe('CeoInboxSendDraftHandler', () => {
     const { gateway } = gatewayReturning({ success: false, leftAsDraft: true, blockedReason: 'Recipient is blocked.' });
     const result = await new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway }));
     expect(result).toEqual({ success: false, error: 'Recipient is blocked.' });
+  });
+
+  // #2587: the console tells a guard's call from a failure by errorType alone.
+  it('carries a policy hold through as errorType POLICY_HOLD', async () => {
+    const { gateway } = gatewayReturning({
+      success: false, leftAsDraft: true, refusal: 'recipient_not_on_thread', blockedReason: PRINCIPAL_SEND_REFUSALS.recipient_not_on_thread, policyHold: true,
+    });
+    const result = await new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway }));
+    expect(result).toEqual({ success: false, error: PRINCIPAL_SEND_REFUSALS.recipient_not_on_thread, errorType: 'POLICY_HOLD' });
+  });
+
+  it('leaves a failure without a policy hold untyped, so it still counts as a hiccup', async () => {
+    const { gateway } = gatewayReturning({
+      success: false, leftAsDraft: true, refusal: 'lookup_failed', blockedReason: PRINCIPAL_SEND_REFUSALS.lookup_failed,
+    });
+    const result = await new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway }));
+    expect(result).toEqual({ success: false, error: PRINCIPAL_SEND_REFUSALS.lookup_failed });
   });
 
   it('reports not_found without retry', async () => {
