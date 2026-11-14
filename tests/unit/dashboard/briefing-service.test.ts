@@ -39,6 +39,8 @@ function pool() {
           saved_calls: [],
           undescribed_by_day: [],
           hiccup_roots: [],
+          // Today and six days back are in the 7-day window; eight days back is not (#2587).
+          held_by_day: [{ day: '2026-11-03', n: 2 }, { day: '2026-10-28', n: 1 }, { day: '2026-10-26', n: 5 }],
         }],
       };
     }
@@ -66,6 +68,14 @@ describe('BriefingService model cache', () => {
     expect(modelReads()).toBe(1);
     expect(stats.openTasks).toEqual({ total: 3, overdue: 1 });
     expect(stats).not.toHaveProperty('contacts');
+  });
+
+  it('sums held-for-you jobs over the 7-day tile window, apart from hiccups (#2587)', async () => {
+    const { query } = pool();
+    const stats = await service(query).stats(NOW);
+    expect(stats.held).toEqual({ current: 3 });
+    // Holds never feed the hiccup number.
+    expect(stats.hiccups.current).toBe(1);
   });
 
   it('reads the model with JIT off, and resets it before the connection goes back', async () => {
