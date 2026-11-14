@@ -7,7 +7,7 @@ import type { BoundTaskContext } from '../agents/resumable-task.js';
 import type { Logger } from '../logger.js';
 import type { OutboundContextCapability } from './outbound-context.js';
 import { recordSendOutreach, type SendOutreach } from './task-outreach-capability.js';
-import { buildTaskWakeAutoBridge, TASK_WAKE_BIND_REPLY_KEY, TASK_WAKE_TASK_ID_KEY, TASK_WAKE_REPLY_TTL_HOURS } from './task-wake-reply.js';
+import { buildTaskWakeAutoBridge, isTaskWakeReplyBinding, TASK_WAKE_BIND_REPLY_KEY, TASK_WAKE_TASK_ID_KEY, TASK_WAKE_REPLY_TTL_HOURS } from './task-wake-reply.js';
 
 export interface ContextBridgeInput {
   agent_id: string;
@@ -135,12 +135,27 @@ export async function registerOutboundContext(
     // one the system supplied, and the log would credit the agent for both.
     const agentChoseTtl = bridge?.expires_in_hours != null;
 
-    // A live sign-in verification for the task (pending, or expired within the recent
-    // window: a late code can still work) skips binding altogether (#2017): the
-    // principal's reply is the code, and it must reach the coordinator, not be persisted
-    // onto the task. Covers both branches below — an explicit bridge would otherwise have
-    // the binding merged into it. A failed lookup falls back to today's behaviour (bind).
-    const skipTaskBind = boundTask ? await taskBindSuppressed(outboundContext, boundTask.taskId, log) : false;
+    // Binding is skipped altogether when the task has ended or is gone (#2592: a turn can
+    // complete its task and then send), or for a live sign-in verification for it (pending,
+    // or expired within the recent window: a late code can still work), whose reply is the
+    // code and must reach the coordinator, not be persisted onto the task (#2017). Checked
+    // for the task the binding would name: the bridge's own when the agent wrote one, else
+    // the turn's. Covers every branch below: an explicit binding is stripped, and none is
+    // merged or auto-built. A failed lookup falls back to today's behaviour (bind).
+    const explicitBindTaskId = bridge?.metadata && isTaskWakeReplyBinding(bridge.metadata)
+      ? bridge.metadata[TASK_WAKE_TASK_ID_KEY] as string
+      : undefined;
+    const bindTaskId = explicitBindTaskId ?? boundTask?.taskId;
+    const skipTaskBind = bindTaskId ? await taskBindSuppressed(outboundContext, bindTaskId, log) : false;
+    if (bridge?.metadata && explicitBindTaskId && skipTaskBind) {
+      const metadata = { ...bridge.metadata };
+      delete metadata[TASK_WAKE_BIND_REPLY_KEY];
+      delete metadata[TASK_WAKE_TASK_ID_KEY];
+      bridge = { ...bridge };
+      if (Object.keys(metadata).length > 0) bridge.metadata = metadata;
+      else delete bridge.metadata;
+      log.info({ taskId: explicitBindTaskId }, 'outbound context: dropped the explicit task-wake binding — its task cannot take the reply');
+    }
 
     if (!bridge && boundTask && !skipTaskBind) {
       // Task-wake send without explicit context_bridge — attach durable task binding.

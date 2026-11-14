@@ -70,6 +70,7 @@ describe('delegate outbound-context injection (#1972)', () => {
       defaultExpiryHours: 6,
       explicitExpiryHours: 24,
       defaultExpiryHoursFor: () => 6,
+      taskEnded: async () => false,
     } as unknown as OutboundContextService;
     const liveForTask = vi.fn(async (taskId: string) => (taskId === 'task-with-code-ask' ? { id: 'ver-1' } : null));
     const verification = { service: { liveForTask }, tracker: { scrubDeep: <T>(v: T) => v } } as unknown as VerificationRuntime;
@@ -85,6 +86,7 @@ describe('delegate outbound-context injection (#1972)', () => {
       defaultExpiryHours: 6,
       explicitExpiryHours: 24,
       defaultExpiryHoursFor: () => 6,
+      taskEnded: async () => false,
     } as unknown as OutboundContextService;
     const { executionLayer, handler } = layer(service);
     await executionLayer.invoke('delegate', { agent: 'ceo-inbox', task: 'go' }, undefined, options);

@@ -11,7 +11,7 @@ import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import { attributeOutboundEntry, type DelegationHintRoster } from './delegation-hint.js';
 import { isUuid } from '../util/uuid.js';
-import { TASK_WAKE_BIND_REPLY_KEY, TASK_WAKE_TASK_ID_KEY, isTaskWakeReplyBinding } from './task-wake-reply.js';
+import { ENDED_TASK_STATUSES, TASK_WAKE_BIND_REPLY_KEY, TASK_WAKE_TASK_ID_KEY, isTaskWakeReplyBinding } from './task-wake-reply.js';
 
 const MAX_PREVIEW_LENGTH = 300;
 // Metadata carries structured delegation context (e.g. resume_tokens for
@@ -183,11 +183,12 @@ export interface OutboundContextCapability {
   /** Release unless the given delegation marked the entry open — the delegate's release (#1972). */
   releaseUnlessKeptOpen(entryId: string, taskEventId: string): Promise<'released' | 'kept_open' | 'not_active'>;
   /**
-   * True when a task-wake send for this task must not bind the principal's reply to it:
-   * a sign-in verification for the task is pending, or expired within the recent window (a
-   * late code can still work), and the principal's reply is the code,
-   * which has to reach the coordinator (and the code tracker), not be persisted onto the
-   * task (#2017). Optional: absent means never suppressed.
+   * True when a send must not bind the principal's reply to this task. Either the task has
+   * ended or does not exist (#2592): a turn can complete its task and then send, and the
+   * binding would only catch later, unrelated replies. Or a sign-in verification for the
+   * task is pending, or expired within the recent window (a late code can still work), and
+   * the principal's reply is the code, which has to reach the coordinator (and the code
+   * tracker), not be persisted onto the task (#2017). Optional: absent means never suppressed.
    */
   taskAutoBindSuppressed?(taskId: string): Promise<boolean>;
 }
@@ -544,6 +545,25 @@ export class OutboundContextService {
   }
 
   /**
+   * Whether a reply binding to this task would be dead on arrival (#2592): the task has
+   * ended (ENDED_TASK_STATUSES) or does not exist. The task-end release above covers only
+   * bindings that exist when the task ends; this stops a send made afterwards (complete,
+   * then report it) from registering a fresh one. A task id that is not a UUID names no task.
+   *
+   * Not atomic with the insert: a task that another turn ends between this check and the
+   * register keeps that one binding. The first reply to it then releases it unattached
+   * (recordTaskWakeReply), and otherwise it expires with its TTL.
+   */
+  async taskEnded(taskId: string): Promise<boolean> {
+    if (!isUuid(taskId)) return true;
+    const { rows } = await this.pool.query<{ status: string }>(
+      `SELECT status FROM tasks WHERE id = $1`,
+      [taskId],
+    );
+    return !rows[0] || ENDED_TASK_STATUSES.has(rows[0].status);
+  }
+
+  /**
    * Record that the specialist handling a delegated reply still expects another
    * answer from the principal on this entry (#1972). Stamped with the delegated
    * task's id so the mark only stops the release that delegation triggers — a
@@ -847,6 +867,7 @@ export class ScopedOutboundContext implements OutboundContextCapability {
   ) {}
 
   async taskAutoBindSuppressed(taskId: string): Promise<boolean> {
+    if (await this.service.taskEnded(taskId)) return true;
     return this.pendingVerificationForTask ? this.pendingVerificationForTask(taskId) : false;
   }
 
