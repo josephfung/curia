@@ -467,6 +467,13 @@ export const NAME_NEAR_MISS_THRESHOLD = 0.95;
 export const PRINCIPAL_PROMPT_FIELDS = ['primaryEmail', 'preferredName', 'title', 'pronouns'] as const;
 
 /**
+ * Canonical fields whose change on the principal triggers the principal refresh: the prompt
+ * fields, plus the home timezone that inbox triage and meeting minutes read from the refreshed
+ * holder. Without timezone here, a console fix of a bad timezone needed a restart to take effect.
+ */
+export const PRINCIPAL_REFRESH_FIELDS = [...PRINCIPAL_PROMPT_FIELDS, 'timezone'] as const;
+
+/**
  * ContactService manages the lifecycle of contacts and their channel identities.
  *
  * Key behaviors:
@@ -1632,7 +1639,7 @@ export class ContactService {
     const stored = await this.updateStoredContact(updated, client);
     // A caller-supplied client has not committed yet; that caller notifies
     // after COMMIT. The pool path commits inside updateStoredContact.
-    if (!client && PRINCIPAL_PROMPT_FIELDS.some((key) => key in definedFields)) {
+    if (!client && PRINCIPAL_REFRESH_FIELDS.some((key) => key in definedFields)) {
       this.notePrimaryEmailChanged(contactId);
     }
     return stored;
