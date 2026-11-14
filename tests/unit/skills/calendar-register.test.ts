@@ -355,6 +355,22 @@ describe('CalendarRegisterHandler', () => {
       expect(result).toMatchObject({ success: true, data: { calendar_id: null, mailbox: 'personal', moved_from_mailbox: 'work', warning: expect.stringContaining('could not be read back') } });
     });
 
+    it('a move that updates no row (the registration vanished) is not reported as moved', async () => {
+      const dup = Object.assign(new Error('duplicate key'), { code: '23505', constraint: 'contact_calendars_nylas_calendar_id_key' });
+      const contactService = {
+        linkCalendar: vi.fn().mockRejectedValue(dup),
+        resolveCalendar: vi.fn().mockResolvedValue({ contactId: 'contact-abc', label: 'Personal', isPrimary: true, readOnly: false, principalMailboxId: 'work' }),
+        setCalendarMailbox: vi.fn().mockResolvedValue(false),
+        getCalendarsForMailbox: vi.fn(),
+      };
+      const result = await handler.execute(makeCtx(
+        { nylas_calendar_id: 'ceo@personal.example.com', label: 'Personal', contact_id: 'contact-abc' },
+        { contactService: contactService as never, calendarRouter: twoMailboxRouter() },
+      ));
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('no longer registered') });
+      expect(contactService.getCalendarsForMailbox).not.toHaveBeenCalled();
+    });
+
     it('refuses an unknown mailbox, never falling back to the default', async () => {
       const contactService = { linkCalendar: vi.fn() };
       const result = await handler.execute(makeCtx(
