@@ -6,8 +6,8 @@ import {
   type MailboxClient,
 } from '../../../_shared/principal-mailbox-client.js';
 import { MissingNylasApiKeyError, RemovedMailboxError, UnknownMailboxError } from '../../../../src/principal-mailboxes/types.js';
-import { grantSafeErrorFields } from '../../../../src/principal-mailboxes/error-fields.js';
-import { nylasStatus } from '../../../../src/channels/email/nylas-message-id.js';
+import { grantSafeErrorFields, mayCarryGrantId } from '../../../../src/principal-mailboxes/error-fields.js';
+import { draftNotFoundError, nylasStatus } from '../../../../src/channels/email/nylas-message-id.js';
 import { budgetExpired, remainingMs } from '../../../../src/util/call-budget.js';
 import type { ErrorType } from '../../../../src/errors/types.js';
 import {
@@ -39,7 +39,20 @@ const NOT_CHANGED = 'The draft was not changed.';
 const MOVE_MIN_REMAINING_MS = 5_000;
 
 /**
+ * Log fields for a failed call. A Nylas error can carry the grant id, so it is logged by class,
+ * status and operation only (#2475, R20); anything else (a plain code error) keeps its message
+ * and stack, which a grant id can't be in.
+ */
+function errorLogFields(err: unknown): Record<string, unknown> {
+  if (!mayCarryGrantId(err)) return { err };
+  // `endpoint` on CeoNylasClient's NylasApiError is the operation name ('updateDraft'), never a URL.
+  const endpoint = (err as { endpoint?: unknown }).endpoint;
+  return { ...grantSafeErrorFields(err), ...(typeof endpoint === 'string' ? { endpoint } : {}) };
+}
+
+/**
  * A failed Nylas call on the draft itself (read or update), classified by HTTP status (#2593).
+ * Only the Nylas call may sit inside the try that feeds this: it reports "not changed".
  *
  * Without an errorType the agent can't tell "this draft no longer exists" from a blip, and it
  * retries the same dead ID. A 404 gets the same "do not retry with this ID" wording the other
@@ -53,24 +66,18 @@ function draftCallFailure(
   summary: string,
 ): { success: false; error: string; errorType: ErrorType } {
   const status = nylasStatus(err);
-  // Class and HTTP status only: a Nylas error can carry the grant id (#2475, R20).
-  ctx.log.error({ ...grantSafeErrorFields(err), draftId }, `ceo-inbox-draft-edit: ${summary}`);
+  ctx.log.error({ ...errorLogFields(err), draftId }, `ceo-inbox-draft-edit: ${summary}`);
   if (status === 404) {
-    return {
-      success: false,
-      error:
-        `Draft not found: the mailbox has no draft with ID "${draftId}". ${NOT_CHANGED} ` +
-        'Do not retry with this ID. List the Drafts folder or search the mailbox to get the current one.',
-      errorType: 'NOT_FOUND',
-    };
+    return { success: false, error: `${draftNotFoundError(draftId)} ${NOT_CHANGED}`, errorType: 'NOT_FOUND' };
   }
   const errorType: ErrorType =
-    status === 429 ? 'RATE_LIMIT'
+    status === undefined ? 'UNKNOWN' // not an HTTP failure at all: never guess it is transient
+    : status === 429 ? 'RATE_LIMIT'
     : status === 401 || status === 403 ? 'AUTH_FAILURE'
-    : status !== undefined && status >= 500 ? 'PROVIDER_ERROR'
-    : status !== undefined && status >= 400 ? 'VALIDATION_ERROR'
+    : status >= 500 ? 'PROVIDER_ERROR'
+    : status >= 400 ? 'VALIDATION_ERROR'
+    // Status 0: no HTTP answer. A timeout when the call ran out of time, else a failed fetch.
     : budgetExpired(ctx) ? 'TIMEOUT'
-    // No status at all (a network failure, or a non-HTTP error): treat as a transient provider fault.
     : 'PROVIDER_ERROR';
   return { success: false, error: `${summary}. ${NOT_CHANGED}`, errorType };
 }
@@ -378,9 +385,18 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
       'ceo-inbox-draft-edit: updating draft',
     );
 
+    // Only the PUT sits in this try: draftCallFailure tells the agent the draft was not changed,
+    // which is false once the PUT has gone through.
+    let draft: NylasDraftFull;
     try {
-      const draft = await client.updateDraft(draftId, updates);
+      draft = await client.updateDraft(draftId, updates);
+    } catch (err) {
+      // The locating GET can still return a draft Nylas no longer lets us write (#2593: a stale
+      // read answered 200 and the PUT failed), so a 404 here is a real "gone", not a lookup slip.
+      return draftCallFailure(ctx, err, draftId, 'Failed to update draft in principal inbox');
+    }
 
+    try {
       // Snapshot the post-edit draft for voice learning. Prefer the markdown body
       // the caller just supplied; fall back to plain text from the stored HTML.
       const snapshotBody =
@@ -415,9 +431,14 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
         },
       };
     } catch (err) {
-      // The locating GET can still return a draft Nylas no longer lets us write (#2593: a stale
-      // read answered 200 and the PUT failed), so a 404 here is a real "gone", not a lookup slip.
-      return draftCallFailure(ctx, err, draftId, 'Failed to update draft in principal inbox');
+      // The update is applied; only building the result failed. Say so, or the agent repeats an
+      // edit that already happened. UNKNOWN is not retryable.
+      ctx.log.error({ ...errorLogFields(err), draftId }, 'ceo-inbox-draft-edit: draft updated, but building the result failed');
+      return {
+        success: false,
+        error: `The draft was updated, but its new state could not be reported. Do not repeat the edit; ceo-inbox-read with the draft_id shows the draft as it now is.`,
+        errorType: 'UNKNOWN',
+      };
     }
   }
 

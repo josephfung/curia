@@ -91,6 +91,14 @@ export function messageNotFoundError(messageId: string): string {
   );
 }
 
+/** Agent-facing error for a draft Nylas does not have (#2593): the same do-not-retry signal as a message. */
+export function draftNotFoundError(draftId: string): string {
+  return (
+    `Draft not found: the mailbox has no draft with ID "${draftId}". ` +
+    'Do not retry with this ID. List the Drafts folder or search the mailbox to get the current one.'
+  );
+}
+
 // Errors from requests that addressed the message itself (read, update, mark).
 // A 404 from one of those means the ID is wrong. A 404 from a folder or draft
 // request in the same tool call does not, so only tagged errors become

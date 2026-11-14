@@ -262,6 +262,27 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
       expect((result as { error: string }).error).toContain('Do not retry with this ID');
     });
 
+    it('a draft no mailbox has (no mailbox input) is NOT_FOUND with the do-not-retry wording', async () => {
+      mockFetch.mockResolvedValue(new Response('{"error":{"message":"not found"}}', { status: 404 }));
+      const result = await handler.execute(buildCtx({ draft_id: 'gone', subject: 'x' }, sourcesWith(), twoMailboxes()));
+      expect(result).toMatchObject({ success: false, errorType: 'NOT_FOUND' });
+      expect((result as { error: string }).error).toContain('Do not retry with this ID');
+      expect(mockFetch.mock.calls.some((c: unknown[]) => (c[1] as RequestInit | undefined)?.method === 'PUT')).toBe(false);
+    });
+
+    it('a failure after the PUT says the draft was updated, is not retryable, and logs the full error', async () => {
+      // A body Nylas should never send (a number) makes building the result throw a TypeError.
+      mockFetch.mockImplementation(async () => new Response(JSON.stringify(draftResponse({ body: 123 })), { status: 200 }));
+      const ctx = buildCtx({ draft_id: 'draft-1', subject: 'x' });
+      const result = await handler.execute(ctx);
+      expect(result).toMatchObject({ success: false, errorType: 'UNKNOWN' });
+      const error = (result as { error: string }).error;
+      expect(error).toContain('The draft was updated');
+      expect(error).not.toContain('was not changed');
+      // A plain TypeError can't carry a grant id, so it is logged whole (message and stack).
+      expect(ctx.log.error).toHaveBeenCalledWith(expect.objectContaining({ err: expect.any(TypeError) }), expect.any(String));
+    });
+
     it('passes on the errorType when the draft is not found in a named mailbox', async () => {
       mockFetch.mockResolvedValue(new Response('{"error":{"message":"not found"}}', { status: 404 }));
       const result = await handler.execute(buildCtx({ draft_id: 'missing', subject: 'x', mailbox: 'work' }, sourcesWith(), twoMailboxes()));
@@ -464,7 +485,7 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
     it('returns an error and changes nothing when the draft cannot be read', async () => {
       mockFetch.mockResolvedValue(new Response('nope', { status: 404 }));
       const error = refusedUnchanged(await handler.execute(buildCtx({ draft_id: 'missing', add_to: [fixture.aliceId] })));
-      expect(error).toContain('No such draft');
+      expect(error).toContain('Draft not found');
     });
   });
 
