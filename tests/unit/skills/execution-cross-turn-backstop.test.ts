@@ -141,7 +141,7 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
     if (held.success) throw new Error('expected a held result');
     expect(held.error).toContain('<skill_error>');
     expect(held.error).toContain("another conversation's turn");
-    expect(held.error).toContain('contact-message on Alice Example at ');
+    expect(held.error).toContain('contact-message on "Alice Example" at ');
     expect(held.error).toContain('call it again unchanged');
     expect(held).not.toHaveProperty('gate');
     expect(handler.execute).toHaveBeenCalledTimes(1);
@@ -191,12 +191,13 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
     expect(turnActivity.actionsOf('task-b')).toHaveLength(0);
   });
 
-  it('human-approved replay is exempt', async () => {
+  it('human-approved replay is never held, but is recorded for later turns', async () => {
     const { registry, layer, turnActivity } = setup();
     const handler = makeHandler();
     registry.register(makeRiskyManifest('contact-message', 'medium'), handler);
     startRoot(turnActivity, 'task-a');
     startRoot(turnActivity, 'task-b');
+    startRoot(turnActivity, 'task-c');
 
     expect((await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a'))).success).toBe(true);
     const approved = await layer.invoke(
@@ -204,7 +205,30 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
     );
     expect(approved.success).toBe(true);
     expect(handler.execute).toHaveBeenCalledTimes(2);
-    expect(turnActivity.actionsOf('task-b')).toHaveLength(0);
+    expect(turnActivity.actionsOf('task-b')).toHaveLength(1);
+    expect(turnActivity.actionsOf('task-b')[0]!.outcome).toBe('succeeded');
+
+    // With the first turn's action gone, the approved send alone still holds a third turn.
+    for (const action of turnActivity.actionsOf('task-a')) turnActivity.settle(action.actionId, 'failed');
+    const held = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-c'));
+    expect(held.success).toBe(false);
+    if (held.success) throw new Error('expected a held result');
+    expect(held.error).toContain('already did this');
+    expect(handler.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('a risky call with no task id is logged at warn and runs unchecked', async () => {
+    const childLogger: Logger = pino({ level: 'silent' });
+    const warnSpy = vi.spyOn(childLogger, 'warn');
+    const parentLogger: Logger = pino({ level: 'silent' });
+    vi.spyOn(parentLogger, 'child').mockReturnValue(childLogger as unknown as ReturnType<Logger['child']>);
+    const { registry, layer } = setup({ logger: parentLogger });
+    const handler = makeHandler();
+    registry.register(makeRiskyManifest('contact-message', 'medium'), handler);
+
+    const result = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, { agentId: 'coordinator' });
+    expect(result.success).toBe(true);
+    expect(warnSpy).toHaveBeenCalledWith(expect.objectContaining({ toolName: 'contact-message' }), expect.stringContaining('no task id'));
   });
 
   it('voice session id is auto-rooted and checked', async () => {
@@ -296,24 +320,24 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
 
     it("the principal sees the details of another person's action", async () => {
       const text = await holdSeenBy(BOB, PRINCIPAL);
-      expect(text).toContain('contact-message on Alice Example at ');
+      expect(text).toContain('contact-message on "Alice Example" at ');
       expect(text).toMatch(ISO_TIME);
       expect(text).not.toContain(GENERIC);
     });
 
     it('the same resolved contact sees the details', async () => {
       const text = await holdSeenBy(BOB, BOB);
-      expect(text).toContain('contact-message on Alice Example at ');
+      expect(text).toContain('contact-message on "Alice Example" at ');
     });
 
     it('a system turn sees the details', async () => {
       const text = await holdSeenBy(BOB, null, 'scheduler');
-      expect(text).toContain('contact-message on Alice Example at ');
+      expect(text).toContain('contact-message on "Alice Example" at ');
     });
 
     it('a turn whose originator has the agent role is system and sees the details', async () => {
       const text = await holdSeenBy(BOB, '00000000-0000-4000-8000-00000000a6e7', 'scheduler', { originatorIsSystem: true });
-      expect(text).toContain('contact-message on Alice Example at ');
+      expect(text).toContain('contact-message on "Alice Example" at ');
     });
 
     it('an internal turn carrying a non-principal contact gets the generic line', async () => {
@@ -468,5 +492,101 @@ describe('ExecutionLayer cross-turn backstop outcomes (#2588)', () => {
       expect.objectContaining({ toolName: 'contact-message', taskEventId: 'task-a', outcome: 'succeeded' }),
       expect.any(String),
     );
+  });
+});
+
+describe('ExecutionLayer cross-turn backstop logging and fallbacks (#2588)', () => {
+  function spiedLoggers() {
+    const child: Logger = pino({ level: 'silent' });
+    const parent: Logger = pino({ level: 'silent' });
+    vi.spyOn(parent, 'child').mockReturnValue(child as unknown as ReturnType<Logger['child']>);
+    return {
+      parent,
+      warn: vi.spyOn(child, 'warn'),
+      error: vi.spyOn(child, 'error'),
+      debug: vi.spyOn(child, 'debug'),
+      parentWarn: vi.spyOn(parent, 'warn'),
+    };
+  }
+
+  it('warns once at construction when the registry has no contact service', () => {
+    const { parent, parentWarn } = spiedLoggers();
+    new ExecutionLayer(new ToolRegistry(), parent, { turnActivity: new TurnActivityRegistry({ logger }) });
+    const backstopWarns = () => parentWarn.mock.calls.filter((c) => String(c[0]).includes('no contact service'));
+    expect(backstopWarns()).toHaveLength(1);
+    parentWarn.mockClear();
+    new ExecutionLayer(new ToolRegistry(), parent, { turnActivity: new TurnActivityRegistry({ logger }), contactService: makeContacts() });
+    expect(backstopWarns()).toHaveLength(0);
+  });
+
+  it('a failure building the hold message still holds, with the generic text and an error log', async () => {
+    const spies = spiedLoggers();
+    const { registry, layer, turnActivity } = setup({ logger: spies.parent });
+    const handler = makeHandler();
+    registry.register(makeRiskyManifest('contact-message', 'medium'), handler);
+    startRoot(turnActivity, 'task-a');
+    startRoot(turnActivity, 'task-b');
+    await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a'));
+
+    const original = turnActivity.rootOf.bind(turnActivity);
+    let calls = 0;
+    vi.spyOn(turnActivity, 'rootOf').mockImplementation((id) => {
+      calls += 1;
+      // The first lookup is the async half's; the second is the hold message's viewer.
+      if (calls === 2) throw new Error('viewer lookup exploded');
+      return original(id);
+    });
+    const held = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-b'));
+    expect(held.success).toBe(false);
+    if (held.success) throw new Error('expected a held result');
+    expect(held.error).toContain('Another conversation already acted on this same target recently.');
+    expect(held.error).not.toContain('Alice Example');
+    expect(handler.execute).toHaveBeenCalledTimes(1);
+    expect(spies.error).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: 'contact-message', taskEventId: 'task-b' }),
+      expect.stringContaining('generic'),
+    );
+  });
+
+  it('a name lookup that finds no contact logs at debug; one that fails warns with the task id', async () => {
+    const spies = spiedLoggers();
+    const { registry, layer, turnActivity } = setup({ logger: spies.parent });
+    registry.register(makeRiskyManifest('contact-message', 'medium'), makeHandler());
+    startRoot(turnActivity, 'task-a', { originatorContactId: BOB });
+    startRoot(turnActivity, 'task-b');
+    await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a'));
+
+    // From here on: Alice's name is gone, Bob's lookup fails. Target extraction still sees Alice.
+    const contacts = (layer as unknown as { contactService: ContactService }).contactService;
+    const getContact = vi.mocked(contacts.getContact);
+    getContact.mockImplementation(async (id: string) => {
+      if (id === BOB) throw new Error('db down');
+      return id === ALICE ? ({ id: ALICE, displayName: 'Alice Example' } as Awaited<ReturnType<ContactService['getContact']>>) : undefined;
+    });
+    getContact.mockImplementationOnce(async () => ({ id: ALICE, displayName: 'Alice Example' } as Awaited<ReturnType<ContactService['getContact']>>));
+    getContact.mockImplementationOnce(async () => undefined);
+
+    const held = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-b'));
+    if (held.success) throw new Error('expected a held result');
+    expect(held.error).toContain('a conversation with another contact already did this: contact-message on a contact at ');
+    expect(spies.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ taskEventId: 'task-b', contactId: ALICE }),
+      expect.stringContaining('no contact'),
+    );
+    expect(spies.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ taskEventId: 'task-b', contactId: BOB }),
+      expect.stringContaining('name lookup failed'),
+    );
+  });
+
+  it('the hold line says whose turn it was', async () => {
+    const { registry, layer, turnActivity } = setup();
+    registry.register(makeRiskyManifest('contact-message', 'medium'), makeHandler());
+    startRoot(turnActivity, 'task-a', { channelId: 'email' });
+    startRoot(turnActivity, 'task-b');
+    await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a', { channelId: 'email' }));
+    const held = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-b'));
+    if (held.success) throw new Error('expected a held result');
+    expect(held.error).toContain('- your other conversation on email already did this: contact-message on "Alice Example" at ');
   });
 });

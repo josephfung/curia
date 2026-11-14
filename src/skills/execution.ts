@@ -169,7 +169,14 @@ import type { VerificationRuntime } from '../verification/index.js';
 import type { ActionTarget, TurnActivityRegistry } from '../dispatch/turn-activity.js';
 import { extractActionTargets } from '../dispatch/action-targets.js';
 import { inferOriginatorResolution, originatorIsSystem } from '../dispatch/turn-lanes.js';
-import { renderBackstopHold, viewerSeesDetail, type BackstopMatches } from '../dispatch/backstop-message.js';
+import {
+  markCrossTurnHold,
+  otherTurnContactId,
+  renderBackstopHold,
+  renderGenericBackstopHold,
+  viewerSeesDetail,
+  type BackstopMatches,
+} from '../dispatch/backstop-message.js';
 import {
   RECIPIENT_REFERENCE_SKILLS,
   addressOrReferenceError,
@@ -253,6 +260,15 @@ const APPROVAL_RESOLUTION_TOOLS: ReadonlySet<string> = new Set(['approve-action'
 
 /** The cross-turn backstop checks calls at action_risk medium (70) and above (#2588). */
 const CROSS_TURN_BACKSTOP_MIN_RISK_SCORE = 70;
+
+/** What the synchronous backstop step needs (#2588): read before it, while awaits are allowed. */
+interface CrossTurnBackstopPlan {
+  turnActivity: TurnActivityRegistry;
+  taskEventId: string;
+  targets: ActionTarget[];
+  /** A human-approved replay: recorded so later turns see it, never held. */
+  recordOnly: boolean;
+}
 
 /** Appended when an object result is too large and collapsed to a string (#1487). */
 const OBJECT_OUTPUT_TRUNCATED_MARKER = '[truncated — output exceeded limit]';
@@ -603,6 +619,11 @@ export class ExecutionLayer {
     this.openDelegationLookup = options?.openDelegationLookup;
     this.verification = options?.verification;
     this.turnActivity = options?.turnActivity;
+    if (this.turnActivity && !this.contactService) {
+      // Without contacts no value resolves to a person: two sends to one contact still match
+      // as ids, but the hold line cannot name anyone and email attendees are ignored.
+      logger.warn('cross-turn backstop: no contact service — contact targets and names are unavailable');
+    }
     this.taskOutreach = options?.taskOutreach;
     this.disclosureDecisions = options?.disclosureDecisions;
     if (!this.actionLogRepo) {
@@ -1556,8 +1577,9 @@ export class ExecutionLayer {
 
   /**
    * Cross-conversation backstop, async half (#2588): decide whether this call is checked and
-   * read its targets. Null means "not checked": no registry, a risk below medium, a
-   * human-approved replay, a send to the principal alone, no task id, or an error.
+   * read its targets. Null means "not checked": no registry, a risk below medium, a send to
+   * the principal alone, no task id, or an error. A human-approved replay is not held but is
+   * still recorded (`recordOnly`), so later turns see the send the principal approved.
    *
    * A task id the registry has never seen (a voice session id, an id lost to a restart) is
    * registered as its own root here, seeded from the call's own context.
@@ -1576,14 +1598,15 @@ export class ExecutionLayer {
       messageId: string,
       accountId?: string,
     ) => ReturnType<OutboundGateway['getEmailMessage']>,
-  ): Promise<{ turnActivity: TurnActivityRegistry; taskEventId: string; targets: ActionTarget[] } | null> {
+  ): Promise<CrossTurnBackstopPlan | null> {
     const turnActivity = this.turnActivity;
-    if (!turnActivity || options?.humanApproved) return null;
+    if (!turnActivity) return null;
     const taskEventId = options?.taskEventId;
+    const recordOnly = options?.humanApproved === true;
     try {
       if (AutonomyService.minScoreForActionRisk(actionRisk) < CROSS_TURN_BACKSTOP_MIN_RISK_SCORE) return null;
       if (taskEventId === undefined) {
-        skillLogger.debug({ toolName }, 'cross-turn backstop: no task id — skipping the check');
+        skillLogger.warn({ toolName, recordOnly }, 'cross-turn backstop: risky call with no task id — not checked or recorded');
         return null;
       }
       if (await this.isPrincipalOnlySend(toolName, input, sendRecipients, skillLogger, fetchMessage)) return null;
@@ -1615,7 +1638,7 @@ export class ExecutionLayer {
         excludedEmails: this.backstopExcludedEmails(),
         logger: skillLogger,
       });
-      return { turnActivity, taskEventId, targets };
+      return { turnActivity, taskEventId, targets, recordOnly };
     } catch (err) {
       skillLogger.error(
         { err, toolName, taskEventId },
@@ -1651,6 +1674,27 @@ export class ExecutionLayer {
     skillLogger: Logger,
   ): Promise<ToolResult> {
     const { taskEventId } = backstop;
+    let text: string;
+    try {
+      text = await this.renderCrossTurnHold(matches, toolName, backstop, skillLogger);
+    } catch (err) {
+      // The call is still held: nothing was recorded for it, and the model is told to re-issue.
+      skillLogger.error(
+        { err, toolName, taskEventId },
+        'cross-turn backstop: could not build the hold message — returning the generic one',
+      );
+      text = renderGenericBackstopHold();
+    }
+    return markCrossTurnHold({ success: false, error: this.wrapSkillError(text) });
+  }
+
+  private async renderCrossTurnHold(
+    matches: BackstopMatches,
+    toolName: string,
+    backstop: { turnActivity: TurnActivityRegistry; taskEventId: string },
+    skillLogger: Logger,
+  ): Promise<string> {
+    const { taskEventId } = backstop;
     const viewer = backstop.turnActivity.rootOf(taskEventId);
     const principalContactId = this.principalIdentities[0]?.contactId;
     const detailed = new Set(matches.filter((m) => viewerSeesDetail(viewer, m.other, principalContactId)));
@@ -1667,29 +1711,34 @@ export class ExecutionLayer {
     const names = new Map<string, string>();
     const contactService = this.contactService;
     if (contactService) {
-      // Names only for lines that will show them.
-      const ids = [...new Set([...detailed].filter((m) => m.target.kind === 'contact').map((m) => m.target.value))];
-      await Promise.all(ids.map(async (id) => {
+      // Names only for lines that will show them: the contacts acted on, and the person
+      // whose turn it was when that is someone other than the viewer.
+      const ids = new Set<string>();
+      for (const m of detailed) {
+        if (m.target.kind === 'contact') ids.add(m.target.value);
+        const owner = otherTurnContactId(viewer, m.other);
+        if (owner !== null) ids.add(owner);
+      }
+      await Promise.all([...ids].map(async (id) => {
         try {
           const contact = await contactService.getContact(id);
           if (contact) names.set(id, contact.displayName);
+          else skillLogger.debug({ toolName, taskEventId, contactId: id }, 'cross-turn backstop: no contact for a name lookup');
         } catch (err) {
           // The line falls back to "a contact"; the hold itself does not depend on the name.
-          skillLogger.warn({ err, toolName, contactId: id }, 'cross-turn backstop: contact name lookup failed');
+          skillLogger.warn({ err, toolName, taskEventId, contactId: id }, 'cross-turn backstop: contact name lookup failed');
         }
       }));
     }
     const contactName = (id: string) => names.get(id);
     const showDetail = (m: BackstopMatches[number]) => detailed.has(m);
-    let text: string;
     try {
-      text = renderBackstopHold(matches, { timezone: this.timezone, contactName, showDetail });
+      return renderBackstopHold(matches, { timezone: this.timezone, contactName, showDetail, viewer });
     } catch (err) {
       // An invalid configured timezone makes toLocalIso throw; show UTC rather than fail.
       skillLogger.error({ err, toolName, taskEventId, timezone: this.timezone }, 'cross-turn backstop: local time render failed — using UTC');
-      text = renderBackstopHold(matches, { timezone: 'UTC', contactName, showDetail });
+      return renderBackstopHold(matches, { timezone: 'UTC', contactName, showDetail, viewer });
     }
-    return { success: false, error: this.wrapSkillError(text) };
   }
 
   /**
@@ -3667,9 +3716,10 @@ export class ExecutionLayer {
     if (crossTurnBackstop) {
       let held: BackstopMatches | null = null;
       try {
-        const decision = crossTurnBackstop.turnActivity.checkAndRecord(
-          crossTurnBackstop.taskEventId, toolName, crossTurnBackstop.targets,
-        );
+        const { turnActivity, taskEventId, targets } = crossTurnBackstop;
+        const decision = crossTurnBackstop.recordOnly
+          ? turnActivity.recordOnly(taskEventId, toolName, targets)
+          : turnActivity.checkAndRecord(taskEventId, toolName, targets);
         if (decision.held) held = decision.matches;
         else backstopActionId = decision.actionId;
       } catch (err) {
