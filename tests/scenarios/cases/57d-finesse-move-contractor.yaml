@@ -1,0 +1,83 @@
+# Finesse 57d (#2556, docs/wip/2026-11-10-finesse-casebook.md): moving the contractor's
+# kitchen walk-through a week. Curia writes to Sam directly and efficiently; a long apology is
+# the miss. The contractor half of a pair with 57c (the teacher): same move, different
+# recipient. Information level 2: Sam's contact record says contractor, Kowalski Renovations.
+#
+# The casebook's "the 14th" and "the 21st" are the coming Thursday and the one after.
+name: finesse 57d move contractor walk-through
+description: >
+  Avery asks Curia to move Sam Kowalski's kitchen walk-through from the coming Thursday to the
+  Thursday after. Sam is the contractor renovating Avery's kitchen. Curia should write to Sam
+  directly and efficiently: the change, a time or two on the new date, done. A long apology is
+  a miss.
+tags: [finesse, finesse-57, family, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: sam
+      display_name: Sam Kowalski
+      tier: known
+      title: Contractor (kitchen renovation)
+      organization: Kowalski Renovations
+      channel: email
+      identifier: sam.kowalski@kowalski-reno.example.test
+inbound:
+  from: principal
+  content: Move Sam's kitchen walk-through from {{day:next-thursday}} to {{day:next-thursday+7}}.
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - { id: evt-57d-walkthrough, title: Kitchen walk-through with Sam, location: Home, startTime: "{{time:next-thursday 08:00}}", endTime: "{{time:next-thursday 08:45}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: sam.kowalski@kowalski-reno.example.test }] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-thursday+7 07:30}}", end: "{{time:next-thursday+7 09:30}}" }
+          - { start: "{{time:next-thursday+7 16:00}}", end: "{{time:next-thursday+7 18:00}}" }
+expected_behaviors:
+  - id: writes_to_sam
+    weight: critical
+    layer: decision
+    description: Curia writes to Sam directly to move the walk-through.
+    check:
+      called: email-send
+      agent: any
+      contains: { to: "{{contact:sam}}" }
+  - id: does_not_ask_avery
+    weight: important
+    layer: decision
+    description: >
+      Curia does not check back with Avery before writing: the instruction is clear. Telling
+      Avery it's done (or asked) is right.
+  - id: sam_brief
+    weight: important
+    layer: voice
+    description: The message to Sam is short.
+    check:
+      text: { tool: email-send, arg: body }
+      max_words: 120
+  - id: sam_voice
+    weight: critical
+    layer: voice
+    description: >
+      Efficient and friendly-professional: the walk-through needs to move to the new date,
+      a time or two that work (or a request for his), thanks. At most a brief "sorry for the
+      change"; no long apology and no explanation of why.
+contrast:
+  group: finesse-57-move-appointment
+  recipient: A contractor renovating their home.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:sam}}" } }
+failure_modes:
+  - A long apology
+  - Explains the reason at length

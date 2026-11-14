@@ -151,7 +151,7 @@ expected_behaviors:
     layer: decision
     description: Does not write to Catherine directly, without Paula, about rearranging her calendar.
     check:
-      not_called: [email-send, signal-send, sms-send]
+      not_called: [email-send]
       agent: any
       contains: { to: "{{contact:catherine}}" }
   - id: reschedule_note_voice

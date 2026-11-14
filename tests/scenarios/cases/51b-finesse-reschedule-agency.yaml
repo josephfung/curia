@@ -1,0 +1,93 @@
+# Finesse 51b (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery asks Curia to move
+# their Thursday 2pm and gives no reason. The meeting is a design review with the project
+# lead at an agency Halcyon has hired. Curia writes to Lina with two or three times and moves
+# the meeting once she picks one: courteous and efficient, neither grovelling (Halcyon is the
+# client) nor curt (Brightline is a partner). Information level 2: Lina's role is on her
+# contact record only.
+name: finesse 51b reschedules an agency
+description: >
+  Avery (the principal) tells Curia "I need to move my Thursday 2pm with Lina. Something
+  came up." The Thursday 2pm is a design review with Lina Ortiz, Project Lead at Brightline
+  Design, an agency Halcyon has hired. Curia should write to Lina proposing two or three new
+  times and move the meeting once she picks one. The message is courteous and efficient: a
+  brief "apologies for the shuffle" at most, no detailed excuse, not grovelling and not curt.
+tags: [finesse, finesse-51, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: lina
+      display_name: Lina Ortiz
+      tier: known
+      title: Project Lead (agency hired by Halcyon)
+      organization: Brightline Design
+      channel: email
+      identifier: lina.ortiz@brightline.example.test
+inbound:
+  from: principal
+  content: I need to move my Thursday 2pm with Lina. Something came up.
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 2
+        events:
+          - { id: evt-51b-design, title: "Design review: Brightline / Halcyon", location: Video call, startTime: "{{time:next-thursday 14:00}}", endTime: "{{time:next-thursday 15:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: lina.ortiz@brightline.example.test }] }
+          - { id: evt-51b-focus, title: "Focus: hiring plan", location: null, startTime: "{{time:next-thursday 10:00}}", endTime: "{{time:next-thursday 11:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-thursday+1 10:00}}", end: "{{time:next-thursday+1 12:00}}" }
+          - { start: "{{time:next-thursday+4 13:00}}", end: "{{time:next-thursday+4 16:00}}" }
+          - { start: "{{time:next-thursday+5 09:00}}", end: "{{time:next-thursday+5 11:00}}" }
+expected_behaviors:
+  - id: writes_to_lina
+    weight: critical
+    layer: decision
+    description: Curia writes to Lina to move the design review.
+    check:
+      called: email-send
+      agent: any
+      contains: { to: "{{contact:lina}}" }
+  - id: proposes_times
+    weight: critical
+    layer: decision
+    description: >
+      The message to Lina proposes two or three specific new times (holds on them are fine),
+      rather than only asking what works for her.
+  - id: waits_for_lina_to_pick
+    weight: important
+    layer: decision
+    description: The meeting is not moved to a time Lina has not agreed to.
+    check:
+      not_called: [calendar-update-event]
+      agent: any
+      with: { eventId: evt-51b-design }
+  - id: does_not_ask_avery
+    weight: important
+    layer: decision
+    description: Does not ask Avery whether or how to move it. Avery said to move it.
+  - id: lina_note_voice
+    weight: critical
+    layer: voice
+    description: >
+      The message to Lina is courteous and efficient, as to a partner Halcyon hired: at most
+      a brief "apologies for the shuffle", no detailed excuse, no grovelling and no
+      over-thanking (Halcyon is the client), and not curt or transactional either.
+contrast:
+  group: finesse-51-reschedule
+  recipient: The project lead at an outside agency the company has hired.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:lina}}" } }
+failure_modes:
+  - Grovels to an agency Halcyon is paying
+  - A curt, transactional note to a partner Halcyon wants doing good work
+  - Gives a detailed excuse
+  - Moves the meeting to a time Lina hasn't agreed to

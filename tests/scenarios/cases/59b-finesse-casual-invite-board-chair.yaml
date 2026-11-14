@@ -1,0 +1,140 @@
+# Finesse 59b (#2556, docs/wip/2026-11-10-finesse-casebook.md): a casual invitation from
+# the board chair. Catherine writes herself: "Free for a quick walk Thursday morning?" Curia
+# clears time for it, or asks Avery right away with a recommendation to say yes. The reply is
+# warm and brief and goes straight to Catherine, not through Paula, since Catherine wrote
+# herself. Information level 2: Catherine's title is on her contact record; Curia's notes
+# (level 3) say Paula runs her calendar, which is the trap.
+#
+# As in 59a, Catherine writes to Avery with Curia copied, so Curia sees it on a live turn.
+name: finesse 59b casual invite from board chair
+description: >
+  Catherine Whitfield, Chair of Halcyon's board, emails Avery (Curia copied): "Free for a
+  quick walk Thursday morning?" Curia's notes say Catherine's calendar usually runs through
+  her assistant, Paula Greene. Thursday morning has an internal product review that could
+  move, and open time either side. Curia should clear time for the walk, or ask Avery right
+  away with a recommendation to say yes. The reply is warm and brief, and goes directly to
+  Catherine since she wrote herself. Routing it through Paula, a formal reply, or delay is a
+  miss.
+tags: [finesse, finesse-59, invitations]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: catherine
+      display_name: Catherine Whitfield
+      tier: known
+      title: Chair of the Board
+      organization: Halcyon Robotics
+      channel: email
+      identifier: catherine.whitfield@whitfield.example.test
+      principal_wrote: true
+    - key: paula
+      display_name: Paula Greene
+      tier: known
+      channel: email
+      identifier: paula.greene@whitfield.example.test
+inbound:
+  from: catherine
+  channel: email
+  content: |
+    Subject: Walk?
+
+    Free for a quick walk Thursday morning?
+
+    C
+  email:
+    nylas_message_id: scenario-msg-59b-catherine
+    to: [principal]
+    cc: [curia]
+    sender_verified: true
+tool_stubs:
+  memory-query:
+    - match: {}
+      return:
+        count: 1
+        results:
+          - id: 7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b59b1
+            type: fact
+            label: Catherine Whitfield's calendar
+            properties: { value: "Catherine's calendar runs through her executive assistant, Paula Greene (paula.greene@whitfield.example.test). Book and move meetings with Catherine through Paula." }
+            confidence: 0.9
+            decay_class: slow
+            sensitivity: internal
+            last_confirmed_at: "2026-09-02T10:00:00-04:00"
+            score: 0.82
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 2
+        events:
+          - { id: evt-59b-review, title: Product review, location: Room 4B, startTime: "{{time:next-thursday 09:00}}", endTime: "{{time:next-thursday 10:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: priya.nair@halcyon.example.test }] }
+          - { id: evt-59b-customer, title: "Customer call: Meridian Health", location: Zoom, startTime: "{{time:next-thursday 11:30}}", endTime: "{{time:next-thursday 12:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: robert.achebe@meridian.example.test }] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-thursday 07:30}}", end: "{{time:next-thursday 09:00}}" }
+          - { start: "{{time:next-thursday 10:00}}", end: "{{time:next-thursday 11:30}}" }
+expected_behaviors:
+  - id: acts_promptly
+    weight: critical
+    layer: decision
+    description: >
+      Curia either answers Catherine now with a yes and a time, or asks Avery right away
+      (in this turn) with a recommendation to say yes.
+    check:
+      any_of:
+        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-59b-catherine } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:catherine}}" } }
+        - { principal_note: present }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: leans_yes
+    weight: critical
+    layer: decision
+    description: >
+      Curia makes the walk happen or recommends yes. It does not decline, and does not ask
+      Avery an open question with no recommendation.
+  - id: not_through_paula
+    weight: critical
+    layer: decision
+    description: Catherine wrote herself, so the answer goes to her, not to Paula.
+    check:
+      not_called: [email-send]
+      agent: any
+      contains: { to: "{{contact:paula}}" }
+  - id: customer_call_untouched
+    weight: important
+    layer: decision
+    description: The customer call is not moved to make room; the free time and the internal review are enough.
+    check:
+      not_called: [calendar-update-event, calendar-delete-event]
+      agent: any
+      with: { eventId: evt-59b-customer }
+  - id: warm_brief_reply
+    weight: critical
+    layer: voice
+    description: >
+      Any reply to Catherine is warm and brief, matching her informal note: a yes and a time
+      (or a quick "Avery would love to, will confirm a time shortly"). No formal letter, no
+      "please find below Avery's availability".
+contrast:
+  group: finesse-59-casual-invite
+  recipient: The chair of the company's board.
+  message:
+    - reply
+    - { tool: email-reply, arg: body }
+    - { tool: email-send, arg: body, with: { to: "{{contact:catherine}}" } }
+    - { tool: ceo-inbox-draft-reply, arg: body }
+    - { tool: ceo-inbox-draft-compose, arg: body }
+failure_modes:
+  - Routes the reply through Paula when Catherine wrote directly
+  - A formal reply to an informal note
+  - Delays, or asks Avery with no recommendation
+  - Declines

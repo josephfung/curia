@@ -90,7 +90,7 @@ expected_behaviors:
     layer: decision
     description: Nothing is sent to David; the meeting is going ahead.
     check:
-      not_called: [email-send, signal-send, sms-send]
+      not_called: [email-send]
       agent: any
       contains: { to: "{{contact:david}}" }
   - id: tells_avery

@@ -1,0 +1,94 @@
+# Finesse 52c (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery is running about ten
+# minutes behind, and the next meeting is a video call with the COO of Halcyon's largest
+# customer. Curia tells Robert before the start, apologetically, and offers to keep the end
+# time or extend. Information level 3: Robert's title is on his contact record; only Curia's
+# notes (memory) say Meridian is Halcyon's largest customer.
+name: finesse 52c late to largest customer
+description: >
+  Avery (the principal) tells Curia "I'm running about ten minutes behind." The next meeting,
+  in five minutes, is a video call with Robert Achebe, COO of Meridian Health. Curia's notes
+  say Meridian is Halcyon's largest customer. Curia should tell Robert before the start,
+  apologetically, and offer to keep the end time or extend: professional, apologetic and
+  short. Treating it like an internal meeting, or not telling him before the start, is the
+  failure.
+tags: [finesse, finesse-52]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: robert
+      display_name: Robert Achebe
+      tier: known
+      title: COO
+      organization: Meridian Health
+      channel: email
+      identifier: robert.achebe@meridian.example.test
+inbound:
+  from: principal
+  content: I'm running about ten minutes behind.
+tool_stubs:
+  # Curia's notes: the only place Meridian's standing is recorded (information level 3).
+  memory-query:
+    - match: {}
+      return:
+        count: 1
+        results:
+          - id: 7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c51
+            type: fact
+            label: Meridian Health
+            properties: { value: "Meridian Health is Halcyon's largest customer. Robert Achebe (COO) is the executive sponsor of the account." }
+            confidence: 0.9
+            decay_class: slow
+            sensitivity: internal
+            last_confirmed_at: "2026-10-05T10:00:00-04:00"
+            score: 0.83
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 3
+        events:
+          - { id: evt-52c-prev, title: "Investor call: pipeline review", location: Video call, startTime: "{{at:now-55m}}", endTime: "{{at:now+5m}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+          - { id: evt-52c-meridian, title: "Meridian / Halcyon: quarterly check-in", location: Video call, startTime: "{{at:now+5m}}", endTime: "{{at:now+50m}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: robert.achebe@meridian.example.test }] }
+          - { id: evt-52c-later, title: "Focus: board prep", location: null, startTime: "{{at:now+3h}}", endTime: "{{at:now+4h}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+expected_behaviors:
+  - id: tells_robert
+    weight: critical
+    layer: decision
+    description: Curia tells Robert now, before the call starts.
+    check:
+      any_of:
+        - { called: email-send, agent: any, contains: { to: "{{contact:robert}}" } }
+        - { called: [sms-send, signal-send], agent: any, contains: { recipient: "{{contact:robert}}" } }
+  - id: does_not_ask_avery
+    weight: important
+    layer: decision
+    description: Does not ask Avery whether or what to tell Robert first; the call starts in five minutes.
+  - id: meeting_left_alone
+    weight: nice-to-have
+    layer: decision
+    description: The call is not moved or cancelled.
+    check:
+      not_called: [calendar-update-event, calendar-delete-event]
+      agent: any
+      with: { eventId: evt-52c-meridian }
+  - id: robert_note_voice
+    weight: critical
+    layer: voice
+    description: >
+      The message is professional, apologetic and short: Avery is running about ten minutes
+      late and apologizes, and offers to keep the original end time or extend, whichever
+      suits Robert. Not the clipped "start without them" of an internal meeting.
+contrast:
+  group: finesse-52-running-late
+  recipient: A senior executive at the company's largest customer.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:robert}}" } }
+    - { tool: sms-send, arg: message, with: { recipient: "{{contact:robert}}" } }
+    - { tool: signal-send, arg: message, with: { recipient: "{{contact:robert}}" } }
+failure_modes:
+  - Treats it like an internal meeting
+  - Doesn't tell him before the start

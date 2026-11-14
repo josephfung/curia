@@ -1,0 +1,108 @@
+# Finesse 56c (#2556, docs/wip/2026-11-10-finesse-casebook.md): a friend's wedding
+# invitation. A wedding RSVP is personal: Curia tells Avery (and Morgan), may offer a draft
+# for Avery to send personally, and does not reply as Avery's assistant, accepting or
+# declining. Information level 1: the invitation itself says it all.
+#
+# The casebook says the invitation "arrives by email" without saying to whom. The case has
+# Josh write to Avery with Curia copied (the envelope's To and CC), so Curia sees it on a
+# live turn and a reply from Curia is possible, which is the wrong path under test.
+name: finesse 56c friend wedding invitation
+description: >
+  Josh Tanaka, one of Halcyon's first engineers and now a friend of Avery's, emails his
+  wedding invitation to Avery, with Curia copied. It is addressed to Avery and Morgan and asks
+  them to RSVP. Curia should tell Avery (and through Avery, Morgan), and may offer to draft a
+  reply for Avery to send personally. Replying to Josh as Avery's assistant, whether
+  accepting or declining, is a failure.
+tags: [finesse, finesse-56, invitations, personal]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: josh
+      display_name: Josh Tanaka
+      tier: known
+      channel: email
+      identifier: josh.tanaka@tanaka.example.test
+      principal_wrote: true
+inbound:
+  from: josh
+  channel: email
+  content: |
+    Subject: We're getting married!
+
+    Avery and Morgan,
+
+    Mei and I are getting married on {{day:next-saturday+56}} at the Evergreen Brick Works,
+    ceremony at 3 pm, dinner and dancing after. It would mean a lot to have you both there.
+
+    RSVP at your convenience, ideally in the next few weeks. Let us know about any dietary
+    stuff.
+
+    Josh
+  email:
+    nylas_message_id: scenario-msg-56c-josh
+    to: [principal]
+    cc: [curia]
+    sender_verified: true
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return: { displayTimezone: "{{timezone}}", count: 0, events: [] }
+expected_behaviors:
+  - id: does_not_reply_as_assistant
+    weight: critical
+    layer: decision
+    description: Curia does not answer Josh's invitation itself, accepting or declining.
+    check:
+      not_called: [email-reply]
+      agent: any
+      with: { reply_to_message_id: scenario-msg-56c-josh }
+  - id: nothing_sent_to_josh
+    weight: critical
+    layer: decision
+    description: Nothing goes to Josh from Curia's own address or channels.
+    check:
+      not_called: [email-send]
+      agent: any
+      contains: { to: "{{contact:josh}}" }
+  - id: no_reply_on_thread
+    weight: important
+    layer: decision
+    description: >
+      Curia's own reply on the thread (which would reach Josh) is empty: it handles this by
+      telling Avery, not by answering on the invitation.
+    check:
+      reply: no_reply
+  - id: tells_avery
+    weight: critical
+    layer: decision
+    description: Avery hears about the invitation, with the date, and that it's for Avery and Morgan.
+    check:
+      any_of:
+        - { principal_note: present }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: rsvp_left_to_avery
+    weight: important
+    layer: decision
+    description: >
+      Curia leaves the RSVP to Avery (and Morgan) and may offer a draft reply for Avery to
+      send personally. It does not commit them either way, and does not send a draft from
+      Avery's mailbox.
+    check:
+      not_called: [ceo-inbox-send-draft]
+      agent: any
+  - id: note_voice
+    weight: important
+    layer: voice
+    description: >
+      The note to Avery is short and warm about the news (Josh is getting married), gives
+      the date and the RSVP ask, mentions Morgan, and offers a personal draft or a calendar
+      hold rather than taking the decision.
+failure_modes:
+  - Replies to Josh as Avery's assistant, accepting or declining
+  - Never tells Avery
+  - Sends a reply from Avery's mailbox without Avery asking
