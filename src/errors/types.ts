@@ -14,6 +14,10 @@ export type ErrorType =
   | 'SKILL_ERROR'            // skill returned { success: false }
   | 'BUDGET_EXCEEDED'        // turn or error budget exhausted
   | 'IDENTITY_MISMATCH'      // calendar (or similar) resolved to the wrong subject — fail closed, never retry (#1854)
+  // A policy guard held or refused the action as designed (a band hold, a principal-send
+  // refusal, a blocked recipient). Not a fault: the console counts it as "held for you",
+  // never as a hiccup (#2587). Not retryable — the same call meets the same rule.
+  | 'POLICY_HOLD'
   | 'UNKNOWN';               // fallback — something unexpected
 
 export interface AgentError {

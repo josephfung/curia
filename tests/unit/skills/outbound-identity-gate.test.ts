@@ -94,6 +94,8 @@ describe('outbound identity gate (#1818)', () => {
     expect(result.success).toBe(false);
     expect(result.blockedReason).toContain('Xiaopu');
     expect(result.blockedRules).toEqual(['unresolved-identity']);
+    // The gate working as designed: the agent resolves and resends, so not a hiccup (#2587).
+    expect(result.policyHold).toBe(true);
     expect(nylasClient.sendMessage).not.toHaveBeenCalled();
   });
 
