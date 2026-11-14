@@ -412,15 +412,22 @@ describe('ExecutionLayer cross-turn backstop outcomes (#2588)', () => {
     expect(handler.execute).toHaveBeenCalledTimes(2);
   });
 
-  it('a thrown handler error drops the call too', async () => {
+  it('a thrown handler error keeps the call with an unknown outcome (the side effect may have happened)', async () => {
     const { registry, layer, turnActivity } = setup();
     const handler = makeHandler();
     handler.execute.mockRejectedValueOnce(new Error('boom'));
     registry.register(makeRiskyManifest('contact-message', 'medium'), handler);
     startRoot(turnActivity, 'task-a');
+    startRoot(turnActivity, 'task-b');
 
     expect((await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a'))).success).toBe(false);
-    expect(turnActivity.actionsOf('task-a')).toHaveLength(0);
+    expect(turnActivity.actionsOf('task-a')).toHaveLength(1);
+    expect(turnActivity.actionsOf('task-a')[0]!.outcome).toBe('unknown');
+    const held = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-b'));
+    expect(held.success).toBe(false);
+    if (held.success) throw new Error('expected a held result');
+    expect(held.error).toContain('outcome is unknown');
+    expect(handler.execute).toHaveBeenCalledTimes(1);
   });
 
   it('a call still running holds the other turn with "right now"', async () => {

@@ -174,11 +174,13 @@ export function inferOriginatorResolution(originator: unknown): { contactId: str
  * Whether a task's copied originator is Curia itself rather than a person (#2588): there is
  * no originator, or its systemRole is `system` or `agent`. Judged by who started the work,
  * not by the channel it runs on: a scheduler wake or an internal task that carries a third
- * party's originator is that person's turn. A malformed originator counts as none.
+ * party's originator is that person's turn. A present but malformed originator fails closed:
+ * it is not system (and inferOriginatorResolution leaves it unresolved).
  */
 export function originatorIsSystem(originator: unknown): boolean {
+  if (originator === undefined || originator === null) return true;
   const parsed = parseTaskOriginator(originator);
-  if (!parsed) return true;
+  if (!parsed) return false;
   return parsed.systemRole === 'system' || parsed.systemRole === 'agent';
 }
 
