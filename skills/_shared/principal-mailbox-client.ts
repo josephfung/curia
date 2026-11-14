@@ -5,7 +5,7 @@
 import type { ToolContext } from '../../src/skills/types.js';
 import type { PrincipalMailboxView, SkillPrincipalMailboxes } from '../../src/principal-mailboxes/service.js';
 import type { ErrorType } from '../../src/errors/types.js';
-import { messageNotFoundError, nylasStatus } from '../../src/channels/email/nylas-message-id.js';
+import { draftNotFoundError, messageNotFoundError, nylasStatus } from '../../src/channels/email/nylas-message-id.js';
 import { CeoNylasClient } from './ceo-nylas-client.js';
 import { judgeHolders } from '../../src/principal-mailboxes/locate-holder.js';
 import { MissingNylasApiKeyError, NO_PRINCIPAL_MAILBOX_MESSAGE, RemovedMailboxError, UnknownMailboxError } from '../../src/principal-mailboxes/types.js';
@@ -248,9 +248,11 @@ export async function locateInMailbox(
       const label = await mailboxLabel(ctx, parsed.mailbox);
       return { ok: false, error: `That ${kind} isn't in the ${label} mailbox; omit mailbox to search every account.`, errorType: 'NOT_FOUND' };
     }
-    // A definite miss for a message everywhere keeps the "do not retry with this ID" wording the model acts on.
-    if (kind === 'message' && found.kind === 'not_found' && found.definitive) {
-      return { ok: false, error: messageNotFoundError(objectId), errorType: 'NOT_FOUND' };
+    // A definite miss everywhere keeps the "do not retry with this ID" wording the model acts on.
+    // Drafts too (#2593): without NOT_FOUND a deleted draft read as an ordinary failure and was retried.
+    if (found.kind === 'not_found' && found.definitive) {
+      const error = kind === 'message' ? messageNotFoundError(objectId) : draftNotFoundError(objectId);
+      return { ok: false, error, errorType: 'NOT_FOUND' };
     }
     const errorType = locateErrorType(found);
     return { ok: false, error: locateError(found, kind), ...(errorType ? { errorType } : {}) };
