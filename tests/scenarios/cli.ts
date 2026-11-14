@@ -27,6 +27,7 @@ import {
 import { createJudge, judgeRun, type Judge } from './judge.js';
 import { caseJudgeModel } from './judge-models.js';
 import { caseSetupHash } from './setup-hash.js';
+import { formatBlindIdLines, runBlindId } from './blind-id.js';
 import { loadScenarioCases, resolveRunPlaceholders, selectRunCases } from './loader.js';
 import { describeError, fixtureSignalConversations, seedConflictKeys } from './seed.js';
 import { DEFAULT_CONCURRENCY, parseConcurrency, runConcurrently } from '../shared/case-scope.js';
@@ -42,6 +43,7 @@ import {
   CRITICAL_PASS_THRESHOLD,
   DEFAULT_RUNS,
   type CaseResult,
+  type ContrastGroupResult,
   type RunRating,
   type ScenarioCase,
   type ScenarioRun,
@@ -173,6 +175,21 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
     const needsStub = (tool: string, agents: string[]): boolean =>
       reachable(tool, agents) && stubsFor(tool, agents).length === 0 && mustStubHere(tool);
 
+    // A contrast message (#2556) read from a tool nobody calls, or an argument it lacks, would
+    // drop the case from every blind-identification trial without a word.
+    for (const source of c.contrast?.message ?? []) {
+      if (source === 'reply') continue;
+      const registered = registry.get(source.tool);
+      if (!registered) {
+        problems.push(`${c.name}: contrast.message names '${source.tool}', which is not a registered tool`);
+        continue;
+      }
+      if (!reachable(source.tool, runAgents)) problems.push(`${c.name}: contrast.message names '${source.tool}', which ${unreachableBy(runAgents)} in this stack`);
+      const inputs = registered.mcpInputSchema ? registered.mcpInputSchema.properties ?? {} : registered.manifest.inputs;
+      for (const key of [source.arg, ...Object.keys(source.with ?? {})].filter(k => inputs && !Object.hasOwn(inputs, k))) {
+        problems.push(`${c.name}: contrast.message: '${key}' is not an input of ${source.tool}`);
+      }
+    }
     for (const b of c.expectedBehaviors) {
       if (!b.check) continue;
       const where = `${c.name}: behavior '${b.id}'`;
@@ -582,6 +599,29 @@ async function main(): Promise<void> {
       : undefined;
     const known = knownFailureLines(results);
     const warnings = staleKnownFailures(results);
+
+    // Blind identification per contrast group (#2556): tracked, not gated. After every case
+    // is scored, since it compares their messages. A failing judge here is a warning, not a
+    // fatal error: the runs are already paid for, and their results must still be written.
+    const contrastUsage = new UsageLedger();
+    const contrastGroups: ContrastGroupResult[] = [];
+    const scenarioOf = new Map(cases.map(c => [c.name, c]));
+    for (const group of [...new Set(cases.flatMap(c => (c.contrast ? [c.contrast.group] : [])))].sort()) {
+      const members = results.flatMap(r => {
+        const scenario = scenarioOf.get(r.name)!;
+        return scenario.contrast?.group === group ? [{ scenario, result: r }] : [];
+      });
+      const missing = loadedCases.filter(c => c.contrast?.group === group && !members.some(m => m.scenario.name === c.name)).map(c => c.name);
+      if (members.length < 2) {
+        warnings.push(`contrast group '${group}' not measured: only ${members.map(m => m.scenario.name).join(', ') || 'none'} of its cases ran`);
+        continue;
+      }
+      try {
+        contrastGroups.push(await runBlindId(group, members, missing, judgeFor(members[0]!.scenario), contrastUsage));
+      } catch (e) {
+        warnings.push(`contrast group '${group}' not measured: ${describeError(e)}`);
+      }
+    }
     const overheadUsage = harness.unattributedUsage();
     const suite: SuiteResult = {
       timestamp: new Date(started).toISOString(),
@@ -603,9 +643,10 @@ async function main(): Promise<void> {
       gateFailures: failures,
       durationMs: Date.now() - started,
       concurrency: args.concurrency,
-      usage: sumBreakdowns([...results.map(r => r.usage), overheadUsage]),
+      usage: sumBreakdowns([...results.map(r => r.usage), overheadUsage, contrastUsage.snapshot()]),
       overheadUsage,
       liveSearch: { ...harness.stubs.liveSearch },
+      ...(contrastGroups.length > 0 ? { contrastGroups, contrastUsage: contrastUsage.snapshot() } : {}),
     };
     mkdirSync(RESULTS_DIR, { recursive: true });
     const resultsFile = path.join(RESULTS_DIR, `${suite.timestamp.replace(/[:.]/g, '-')}.json`);
@@ -628,6 +669,10 @@ async function main(): Promise<void> {
     if (layerLines.length > 0) {
       out('\n   Behavior layers (cases that mark them):');
       for (const line of layerLines) out(`     ${line}`);
+    }
+    if (contrastGroups.length > 0) {
+      out(`\n   Blind identification (tracked, not gated; judge ${formatUsd(contrastUsage.snapshot().judge.estimatedCostUsd)}):`);
+      for (const line of formatBlindIdLines(contrastGroups)) out(`     ${line}`);
     }
     out(`\n   Commit:  ${suite.commit ?? '(unknown)'}`);
     if (suite.overlayCommit) out(`   Overlay: ${suite.overlayCommit}`);

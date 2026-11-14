@@ -25,6 +25,8 @@ import {
   type BehaviorCheck,
   type BehaviorLayer,
   type BehaviorWeight,
+  type ContrastMessageSource,
+  type ContrastSpec,
   type DelegationMode,
   type DeliveryChannel,
   type DeliveryTurn,
@@ -88,7 +90,7 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
   }
 }
 
-const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway', 'gated_tools', 'judge_model'] as const;
+const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway', 'gated_tools', 'judge_model', 'contrast'] as const;
 const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'principal_identities', 'tasks', 'outreach', 'pinned', 'principal_mailbox'] as const;
 const PRINCIPAL_MAILBOX_KEYS = ['send_level', 'drafts', 'threads', 'expect_no_band_review'] as const;
 const PRINCIPAL_DRAFT_KEYS = ['id', 'thread', 'to', 'cc', 'subject', 'body', 'modified', 'by_curia'] as const;
@@ -489,6 +491,30 @@ function parseBehaviors(raw: Raw, file: string): ExpectedBehavior[] {
       ...(layer !== undefined ? { layer: layer as BehaviorLayer } : {}),
     };
   });
+}
+
+const CONTRAST_KEYS = ['group', 'recipient', 'message'] as const;
+const CONTRAST_SOURCE_KEYS = ['tool', 'arg', 'with'] as const;
+
+/** A case's `contrast:` block (#2556): its group, its recipient for the judge, where its message is. */
+function parseContrast(raw: Raw, file: string): ContrastSpec | undefined {
+  const block = raw['contrast'];
+  if (block === undefined) return undefined;
+  if (!isObject(block)) throw new CaseError(file, `'contrast' must be a mapping {group, recipient, message}`);
+  onlyKeys(block, CONTRAST_KEYS, file, 'contrast');
+  const sourcesRaw = block['message'];
+  const list = Array.isArray(sourcesRaw) ? sourcesRaw : [sourcesRaw];
+  if (sourcesRaw === undefined || list.length === 0) throw new CaseError(file, `contrast: 'message' is required (reply, or {tool, arg}, or a list of them)`);
+  const message = list.map((s: unknown, i): ContrastMessageSource => {
+    const where = `contrast.message[${i}]`;
+    if (s === 'reply') return 'reply';
+    if (!isObject(s)) throw new CaseError(file, `${where}: must be reply or {tool, arg, with?}`);
+    onlyKeys(s, CONTRAST_SOURCE_KEYS, file, where);
+    const withRaw = s['with'];
+    if (withRaw !== undefined && !isObject(withRaw)) throw new CaseError(file, `${where}: 'with' must be a mapping`);
+    return { tool: str(s, 'tool', file, where), arg: str(s, 'arg', file, where), ...(withRaw !== undefined ? { with: withRaw } : {}) };
+  });
+  return { group: str(block, 'group', file, 'contrast'), recipient: str(block, 'recipient', file, 'contrast'), message };
 }
 
 /**
@@ -1265,6 +1291,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
   const gatedTools = strList(raw, 'gated_tools', file, 'case');
   const judgeModel = optStr(raw, 'judge_model', file, 'case');
   if (judgeModel !== undefined && judgeModel.trim() === '') throw new CaseError(file, `'judge_model' must name a model`);
+  const contrast = parseContrast(raw, file);
   // The release gate is one unfiltered run on the database's identity. An autonomy fixture
   // is pinned per case (#2312), so a case with one can join it.
   if (identity && releaseGate) {
@@ -1293,6 +1320,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     ...(throughGateway ? { throughGateway: true as const } : {}),
     ...(gatedTools.length > 0 ? { gatedTools } : {}),
     ...(judgeModel !== undefined ? { judgeModel } : {}),
+    ...(contrast ? { contrast } : {}),
     sourceFile: file,
   };
 
@@ -1517,7 +1545,7 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
   let dated: Raw;
   try {
     dated = resolveDatePlaceholders(
-      { seed: scenario.seed, inbound: scenario.inbound, toolStubs: scenario.toolStubs, behaviors: scenario.expectedBehaviors },
+      { seed: scenario.seed, inbound: scenario.inbound, toolStubs: scenario.toolStubs, behaviors: scenario.expectedBehaviors, contrast: scenario.contrast?.message ?? [] },
       'UTC',
       new Date(0),
     );
@@ -1614,7 +1642,29 @@ export function loadScenarioCases(dir: string, options: LoadOptions = {}): Scena
     if (seen.has(key)) throw new Error(`Duplicate scenario name '${c.name}' in ${dir}`);
     seen.add(key);
   }
+  validateContrastGroups(cases, dir);
   return cases;
+}
+
+/**
+ * A contrast group (#2556) compares its cases with each other, so it needs at least two, and
+ * the judge must be able to tell their recipients apart: two identical descriptions would
+ * make a correct match impossible.
+ */
+function validateContrastGroups(cases: readonly ScenarioCase[], dir: string): void {
+  const groups = new Map<string, ScenarioCase[]>();
+  for (const c of cases.filter(x => x.contrast)) groups.set(c.contrast!.group, [...(groups.get(c.contrast!.group) ?? []), c]);
+  for (const [group, members] of groups) {
+    if (members.length < 2) {
+      throw new Error(`Contrast group '${group}' in ${dir} has one case (${members[0]!.name}); a group compares two or more`);
+    }
+    const recipients = new Map<string, string>();
+    for (const m of members) {
+      const r = m.contrast!.recipient.trim().toLowerCase();
+      if (recipients.has(r)) throw new Error(`Contrast group '${group}': ${recipients.get(r)} and ${m.name} describe the same recipient`);
+      recipients.set(r, m.name);
+    }
+  }
 }
 
 /** The cases a `pnpm scenarios` run gets, and the ones it leaves out and why. */

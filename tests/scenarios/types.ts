@@ -649,8 +649,30 @@ export interface ScenarioCase {
    * (judge-models.ts). Absent: the tag's, else the default.
    */
   judgeModel?: string;
+  /** The contrast group this case belongs to, for the blind-identification check (#2556). */
+  contrast?: ContrastSpec;
   /** File the case came from, for messages. */
   sourceFile: string;
+}
+
+/**
+ * Where a case's message for its recipient is (#2556): the reply, or one argument of a tool
+ * call, optionally only calls whose arguments include `with` (a subset match; placeholders
+ * such as {{contact:chair}} resolve per run). The run's last matching call wins.
+ */
+export type ContrastMessageSource = 'reply' | { tool: string; arg: string; with?: Record<string, unknown> };
+
+/** A case's membership of a contrast group (blind-id.ts, #2556). */
+export interface ContrastSpec {
+  /** Cases with the same group are compared with each other. */
+  group: string;
+  /**
+   * Who the recipient is to the principal, as the judge reads it: no name, and nothing about
+   * the situation, which would let the judge match on content instead of voice.
+   */
+  recipient: string;
+  /** Where the message is; any of these. */
+  message: ContrastMessageSource[];
 }
 
 /** A run-level office identity (tests/scenarios/identities/). */
@@ -901,6 +923,30 @@ export interface CaseResult {
   setupHash?: string;
 }
 
+/** One contrast group's blind-identification result (blind-id.ts, #2556), in the results JSON. */
+export interface ContrastGroupResult {
+  group: string;
+  /** The group's cases in this run, by name. A trial letters the ones that wrote a message, in this order. */
+  cases: string[];
+  /** Cases in the group this run did not include (a narrowed selection). */
+  missing: string[];
+  /** Judge calls made: two orders per trial. */
+  judgeCalls: number;
+  /** Assignments the judge got right, of all it was asked to make. */
+  correct: number;
+  total: number;
+  /** correct / total; null when no trial could run. */
+  accuracy: number | null;
+  /** What guessing would score: the mean of 1/n over the trials asked. */
+  chance: number | null;
+  /** Right / asked, per case: which recipients' messages are recognisable. */
+  byCase: Record<string, { correct: number; total: number }>;
+  /** Trials with fewer than two messages (a case decided not to write), which were not asked. */
+  skippedTrials: number;
+  /** Judge calls that failed after retries; their assignments count in neither correct nor total. */
+  judgeErrors: number;
+}
+
 /** One layer's share of a case result (#2556). */
 export interface LayerScore {
   /** Σ(weight × passRate) / Σweight over the layer's behaviors. */
@@ -954,6 +1000,13 @@ export interface SuiteResult {
   overheadUsage: UsageBreakdown;
   /** web-search calls that reached Tavily (#2106). Absent on results saved before it existed. */
   liveSearch?: LiveSearchTally;
+  /**
+   * Blind identification per contrast group with at least two cases in the run (#2556).
+   * Tracked, not gated. Its judge spend is in `usage` (under `contrastUsage` as well).
+   */
+  contrastGroups?: ContrastGroupResult[];
+  /** What the blind-identification judge calls cost. */
+  contrastUsage?: UsageBreakdown;
 }
 
 /**
