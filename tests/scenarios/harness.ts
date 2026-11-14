@@ -68,6 +68,7 @@ import { inboundSenderAuthenticated } from '../../src/dispatch/outbound-entry-ac
 import { formatTaskWakeContent } from '../../src/scheduler/wake-disposition.js';
 import { autonomyFixtureMismatch, createTestModeStack, runWithAutonomyFixture, type AutonomyFixture, type OfficeIdentityFixture, type TestModeStack, type TierReasoningOverride } from '../../src/startup/test-mode-stack.js';
 import {
+  attemptScope,
   closeAttempt,
   createCaseContext,
   guardProvider,
@@ -503,6 +504,9 @@ export async function createScenarioHarness(
     ...(options.mcpSnapshotDirs ? { mcpSnapshotDirs: options.mcpSnapshotDirs } : {}),
     ...(options.officeIdentity ? { officeIdentity: options.officeIdentity } : {}),
     wrapExecutionLayer: (layer, reviewLayer) => controller.wrap(layer, reviewLayer),
+    // One cross-turn backstop scope per run (#2588): concurrent runs, and a scenario's later
+    // runs on the same fixture contacts and draft ids, must not hold each other's calls.
+    turnActivityScope: attemptScope(context.current),
     wrapBullpenService: (bullpen) => scopedBullpen(bullpen, currentScope),
     // Times each model call against its run, and refuses a cancelled run's calls.
     wrapLlmProvider: (provider) => guardProvider(provider, context.current),

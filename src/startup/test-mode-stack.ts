@@ -291,6 +291,13 @@ export interface TestModeStackOptions {
    */
   wrapPinnedContextReader?: (reader: PinnedContextReader) => PinnedContextReader;
   /**
+   * The cross-turn backstop's isolation scope for a new root (#2588), passed to the turn
+   * activity registry as `scopeOf`. The behaviour suites run cases concurrently, and a case's
+   * runs one after another on the same fixtures; without a scope, one run's send would hold
+   * the next run's identical send. Roots in different scopes never hold each other.
+   */
+  turnActivityScope?: (conversationId: string) => string | undefined;
+  /**
    * Wire production's `delegate` dispatch claims (pending_delegations: the in-flight
    * refusal and the running claim, #1858 / #1893), as src/index.ts does when late
    * delivery is enabled. Off by default: the rows name the caller's conversations, and
@@ -1453,7 +1460,10 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     };
     const taskOutreach = new TaskOutreachService(taskOutreachRepo, outreachDeps);
     // One registry shared by every AgentRuntime and both execution layers (#2588).
-    const turnActivity = new TurnActivityRegistry({ logger });
+    const turnActivity = new TurnActivityRegistry({
+      logger,
+      ...(options.turnActivityScope ? { scopeOf: options.turnActivityScope } : {}),
+    });
     const layerOptions: NonNullable<ConstructorParameters<typeof ExecutionLayer>[2]> = {
       bus,
       agentRegistry,

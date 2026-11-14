@@ -122,6 +122,23 @@ interface RootState {
   taskIds: Set<string>;
   /** Last action time; an auto-registered root is pruned a window after it. */
   lastActivityAt: number;
+  /**
+   * Isolation scope (scopeOf at creation). Roots in different scopes never see each other.
+   * Production passes no scopeOf, so every root's scope is undefined and all are comparable.
+   */
+  scope: string | undefined;
+}
+
+export interface TurnActivityRegistryOptions {
+  logger: Logger;
+  now?: () => number;
+  /**
+   * The isolation scope of a new root, from its conversation id. Roots whose scopes differ
+   * never hold each other; undefined equals undefined. The behaviour suites pass one scope
+   * per case attempt, so concurrent cases and a case's successive runs on the same fixtures
+   * stay apart. Production passes none.
+   */
+  scopeOf?: (conversationId: string) => string | undefined;
 }
 
 function targetKey(target: ActionTarget): string {
@@ -137,9 +154,12 @@ export class TurnActivityRegistry {
   /** rootId -> keys of `${otherRootId}|${kind}:${value}` already shown to that root. */
   private readonly shown = new Map<string, Set<string>>();
 
-  constructor(opts: { logger: Logger; now?: () => number }) {
+  private readonly scopeOf: ((conversationId: string) => string | undefined) | undefined;
+
+  constructor(opts: TurnActivityRegistryOptions) {
     this.logger = opts.logger;
     this.now = opts.now ?? Date.now;
+    this.scopeOf = opts.scopeOf;
   }
 
   /** Register a task under its root and return that root. */
@@ -196,6 +216,7 @@ export class TurnActivityRegistry {
       autoRegistered: true,
       taskIds: new Set([taskEventId]),
       lastActivityAt: now,
+      scope: this.scopeFor(seed.conversationId),
     };
     this.roots.set(taskEventId, root);
     this.taskToRoot.set(taskEventId, taskEventId);
@@ -334,9 +355,21 @@ export class TurnActivityRegistry {
       autoRegistered: false,
       taskIds: new Set(),
       lastActivityAt: input.startedAt,
+      scope: this.scopeFor(input.conversationId),
     };
     this.roots.set(root.rootId, root);
     return root;
+  }
+
+  /** The caller's scope function, fail-open: a throw logs and yields the shared (undefined) scope. */
+  private scopeFor(conversationId: string): string | undefined {
+    if (!this.scopeOf) return undefined;
+    try {
+      return this.scopeOf(conversationId);
+    } catch (err) {
+      this.logger.warn({ err }, 'turn activity: scope function threw; the root joins the shared scope');
+      return undefined;
+    }
   }
 
   private qualifyingOthers(mine: RootState): RootState[] {
@@ -344,6 +377,7 @@ export class TurnActivityRegistry {
     const result: RootState[] = [];
     for (const other of this.roots.values()) {
       if (other.rootId === mine.rootId) continue;
+      if (other.scope !== mine.scope) continue;
       if (other.endedAt === null || other.endedAt >= floor) result.push(other);
     }
     return result;

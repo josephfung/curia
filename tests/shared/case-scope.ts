@@ -71,6 +71,30 @@ export function createCaseContext<S extends CaseAttempt>(): CaseContext<S> {
 }
 
 /**
+ * The cross-turn backstop's scope function (#2588) for createTestModeStack's
+ * `turnActivityScope`: one opaque scope per attempt. Every root a case attempt starts (its
+ * turns, the specialists it delegates to, a voice session it opens) runs in the attempt's
+ * context, so it gets that attempt's scope whatever its conversation id. Concurrent cases and
+ * a case's successive runs on the same fixtures therefore never hold each other. Work outside
+ * any attempt gets undefined, the shared scope, as production's roots all do.
+ */
+export function attemptScope<S extends CaseAttempt>(current: () => S | undefined): (conversationId: string) => string | undefined {
+  const ids = new WeakMap<S, string>();
+  let next = 0;
+  return () => {
+    const attempt = current();
+    if (attempt === undefined) return undefined;
+    let id = ids.get(attempt);
+    if (id === undefined) {
+      next += 1;
+      id = `attempt-${next}`;
+      ids.set(attempt, id);
+    }
+    return id;
+  };
+}
+
+/**
  * How long a model call in flight may go without progress before a timeout is blamed on
  * the provider rather than the model. Calls on the production standard tier normally
  * finish in seconds even with the coordinator's full prompt (#1980 saw 180s timeouts that
