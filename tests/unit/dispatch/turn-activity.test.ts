@@ -60,6 +60,7 @@ function startRoot(
     // Resolved by default: an unresolved root's actions hold no one (see the disclosure tests).
     originatorContactId: 'contact-p',
     originatorResolved: true,
+    originatorIsSystem: false,
     ...over,
   });
 }
@@ -70,6 +71,7 @@ const VOICE_SEED = {
   agentId: 'coordinator',
   originatorContactId: 'contact-p',
   originatorResolved: true,
+  originatorIsSystem: false,
 };
 
 describe('TurnActivityRegistry root resolution', () => {
@@ -272,7 +274,7 @@ describe('TurnActivityRegistry.checkAndRecord', () => {
     const { registry, set } = setup();
     registry.ensureRoot('voice-1', {
       conversationId: 'v', channelId: 'voice', agentId: 'coordinator',
-      originatorContactId: null, originatorResolved: false,
+      originatorContactId: null, originatorResolved: false, originatorIsSystem: false,
     });
     registry.checkAndRecord('voice-1', 'email-send', [X]);
     set(T0 + TURN_ACTIVITY_WINDOW_MS + 1);
@@ -338,12 +340,21 @@ describe('TurnActivityRegistry unresolved originators', () => {
     expect(registry.actionsOf('P')).toHaveLength(1);
   });
 
-  it.each(['scheduler', 'internal', 'bullpen'])("a %s root's action holds others whatever its originator", (channelId) => {
+  it.each(['scheduler', 'internal', 'bullpen', 'email'])("a %s root with no originator is system and holds others", (channelId) => {
     const { registry } = setup();
-    start(registry, 'J', { channelId, originatorContactId: null, originatorResolved: false });
+    start(registry, 'J', { channelId, originatorContactId: null, originatorResolved: false, originatorIsSystem: true });
     start(registry, 'P');
     registry.checkAndRecord('J', 'email-send', [X]);
     expect(registry.checkAndRecord('P', 'email-send', [X]).held).toBe(true);
+  });
+
+  it.each(['scheduler', 'internal', 'bullpen'])('a %s root carrying an unresolved person originator holds no one', (channelId) => {
+    // Classified by originator, not channel: a wake carrying a stranger's stamp is the stranger's.
+    const { registry } = setup();
+    start(registry, 'J', { channelId, originatorContactId: '+15550001111', originatorResolved: false });
+    start(registry, 'P');
+    registry.checkAndRecord('J', 'email-send', [X]);
+    expect(registry.checkAndRecord('P', 'email-send', [X])).toMatchObject({ held: false });
   });
 
   it('an unresolved root is still checked against others', () => {
@@ -357,7 +368,7 @@ describe('TurnActivityRegistry unresolved originators', () => {
   it('an unresolved auto root holds no one', () => {
     const { registry } = setup();
     start(registry, 'P');
-    registry.ensureRoot('voice-1', { ...VOICE_SEED, conversationId: 'v', originatorContactId: null, originatorResolved: false });
+    registry.ensureRoot('voice-1', { ...VOICE_SEED, conversationId: 'v', originatorContactId: '+15550001111', originatorResolved: false });
     registry.checkAndRecord('voice-1', 'email-send', [X]);
     expect(registry.checkAndRecord('P', 'email-send', [X])).toMatchObject({ held: false });
   });
@@ -373,7 +384,7 @@ describe('TurnActivityRegistry pruning', () => {
     set(T0 + 10 * MIN);
     registry.ensureRoot('V', {
       conversationId: 'v', channelId: 'voice', agentId: 'coordinator',
-      originatorContactId: null, originatorResolved: false,
+      originatorContactId: null, originatorResolved: false, originatorIsSystem: false,
     });
     set(T0 + 20 * MIN);
     start(registry, 'B', { startedAt: T0 + 20 * MIN });
@@ -462,7 +473,7 @@ describe('TurnActivityRegistry repeated starts', () => {
     const { registry, set } = setup();
     registry.ensureRoot('a', {
       conversationId: 'conv-a', channelId: 'voice', agentId: 'coordinator',
-      originatorContactId: null, originatorResolved: false,
+      originatorContactId: null, originatorResolved: false, originatorIsSystem: false,
     });
     set(T0 + 5_000);
     const root = start(registry, 'a', { startedAt: T0 + 5_000, content: 'hello' });
@@ -622,5 +633,74 @@ describe('TurnActivityRegistry action outcomes', () => {
     const before = registry.actionsOf('A')[0]!;
     registry.settle(id, 'succeeded');
     expect(before.outcome).toBe('pending');
+  });
+});
+
+describe('TurnActivityRegistry voice-originated tasks', () => {
+  const voiceDelegation = (sessionId: string) => ({
+    delegationOrigin: { taskEventId: sessionId, conversationId: 'voice-conv-1', channelId: 'voice', agentId: 'coordinator' },
+  });
+
+  it('specialists delegated from an unregistered voice session share one auto root', () => {
+    const { registry } = setup();
+    start(registry, 'spec-1', { agentId: 'calendar', channelId: 'internal', conversationId: 'delegate-1', metadata: voiceDelegation('session-1') });
+    start(registry, 'spec-2', { agentId: 'email', channelId: 'internal', conversationId: 'delegate-2', metadata: voiceDelegation('session-1') });
+    const root = registry.rootOf('spec-1')!;
+    expect(root.rootId).toBe('session-1');
+    expect(registry.rootOf('spec-2')!.rootId).toBe('session-1');
+    expect(root.autoRegistered).toBe(true);
+    expect(root.channelId).toBe('voice');
+    expect(root.conversationId).toBe('voice-conv-1');
+    expect(root.originatorContactId).toBe('contact-p');
+    expect(root.originatorIsSystem).toBe(false);
+    // The call's own later tool calls land on the same root.
+    expect(registry.rootOf('session-1')!.rootId).toBe('session-1');
+    // Two specialists of one call never hold each other.
+    registry.checkAndRecord('spec-1', 'calendar-create-event', [X]);
+    expect(registry.checkAndRecord('spec-2', 'email-send', [X])).toMatchObject({ held: false });
+  });
+
+  it('a delegation from a session already registered by a tool call joins it', () => {
+    const { registry } = setup();
+    registry.ensureRoot('session-1', { ...VOICE_SEED, conversationId: 'voice-conv-1' });
+    start(registry, 'spec-1', { agentId: 'calendar', metadata: voiceDelegation('session-1') });
+    expect(registry.rootOf('spec-1')!.rootId).toBe('session-1');
+  });
+
+  it('an async-offramp task maps under its voice session, and its forward task follows it', () => {
+    const { registry } = setup();
+    start(registry, 'offramp-1', {
+      channelId: 'internal',
+      conversationId: 'voice-offramp:abc',
+      parentEventId: 'session-1',
+      metadata: { voiceOfframp: true, sourceVoiceSessionId: 'session-1', sourceVoiceConversationId: 'voice-conv-1' },
+    });
+    const root = registry.rootOf('offramp-1')!;
+    expect(root.rootId).toBe('session-1');
+    expect(root.channelId).toBe('voice');
+    expect(root.conversationId).toBe('voice-conv-1');
+    start(registry, 'forward-1', {
+      channelId: 'internal',
+      conversationId: 'voice-offramp-forward:abc',
+      metadata: { voiceOfframp: true, offrampForwardOf: 'offramp-1' },
+    });
+    expect(registry.rootOf('forward-1')!.rootId).toBe('session-1');
+  });
+
+  it('a delegation with no origin task id becomes its own root, with a warn', () => {
+    const warn = vi.fn();
+    const logger = { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() } as unknown as Logger;
+    const { registry } = setup(logger);
+    start(registry, 'spec-1', { agentId: 'calendar', metadata: { delegationOrigin: { conversationId: 'c' } } });
+    expect(registry.rootOf('spec-1')!.rootId).toBe('spec-1');
+    expect(warn).toHaveBeenCalledWith({ taskEventId: 'spec-1' }, expect.any(String));
+  });
+
+  it('a late-delegation wake whose parent is gone warns', () => {
+    const warn = vi.fn();
+    const logger = { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() } as unknown as Logger;
+    const { registry } = setup(logger);
+    start(registry, 'wake', { parentEventId: 'gone', metadata: { lateDelegation: {} } });
+    expect(warn).toHaveBeenCalledWith({ taskEventId: 'wake' }, expect.any(String));
   });
 });

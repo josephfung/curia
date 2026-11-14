@@ -6,7 +6,7 @@ import {
 } from './llm/streaming-turn.js';
 import type { EventBus } from '../bus/bus.js';
 import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, createDelegationTimedOut, createDelegationRequesterContext, createDelegationPrincipalNote, createAgentTaskInputInjected, isInjectionDrainPoint, type AgentResponseFailureReason, type AgentTaskEvent, type InjectionDrainPoint } from '../bus/events.js';
-import { holderFromAgentTask, type TurnLanes } from '../dispatch/turn-lanes.js';
+import { holderFromAgentTask, originatorIsSystem, type TurnLanes } from '../dispatch/turn-lanes.js';
 import type { TurnActivityRegistry } from '../dispatch/turn-activity.js';
 import { frameInjectedInput } from './injected-input.js';
 import type { Tier } from './llm/model-router.js';
@@ -517,6 +517,7 @@ export class AgentRuntime {
         startedAt: taskEvent.timestamp.getTime(),
         originatorContactId: holder.originatorContactId,
         originatorResolved: holder.originatorResolved,
+        originatorIsSystem: originatorIsSystem(payload.metadata?.['originator']),
       });
     } catch (err) {
       this.config.logger.error(

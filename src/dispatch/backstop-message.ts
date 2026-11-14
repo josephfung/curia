@@ -6,7 +6,6 @@
 // gets a generic line, so one person's turn cannot learn what another person's turn did.
 
 import { toLocalIso } from '../time/timestamp.js';
-import { SYSTEM_TURN_CHANNELS } from './turn-activity.js';
 import type { ActionOutcome, ActionTarget, BackstopDecision, RootTurn } from './turn-activity.js';
 
 export type BackstopMatches = Extract<BackstopDecision, { held: true }>['matches'];
@@ -25,8 +24,8 @@ const OUTCOME_TEXT: Record<ActionOutcome, string> = {
 
 /**
  * Whether the held root (`viewer`) may see the tool, target and time of `other`'s action:
- * the principal, a system turn, or the same resolved contact as the other root. Unknown
- * viewer: no.
+ * the principal, a system turn (by originator, not channel), or the same resolved contact as
+ * the other root. Unknown viewer: no.
  */
 export function viewerSeesDetail(
   viewer: RootTurn | undefined,
@@ -34,7 +33,7 @@ export function viewerSeesDetail(
   principalContactId: string | undefined,
 ): boolean {
   if (!viewer) return false;
-  if (SYSTEM_TURN_CHANNELS.has(viewer.channelId)) return true;
+  if (viewer.originatorIsSystem) return true;
   if (!viewer.originatorResolved || viewer.originatorContactId === null) return false;
   if (principalContactId !== undefined && viewer.originatorContactId === principalContactId) return true;
   return other.originatorResolved && other.originatorContactId === viewer.originatorContactId;

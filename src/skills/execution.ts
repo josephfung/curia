@@ -168,7 +168,7 @@ import type { ErrorType } from '../errors/types.js';
 import type { VerificationRuntime } from '../verification/index.js';
 import type { ActionTarget, TurnActivityRegistry } from '../dispatch/turn-activity.js';
 import { extractActionTargets } from '../dispatch/action-targets.js';
-import { inferOriginatorResolution } from '../dispatch/turn-lanes.js';
+import { inferOriginatorResolution, originatorIsSystem } from '../dispatch/turn-lanes.js';
 import { renderBackstopHold, viewerSeesDetail, type BackstopMatches } from '../dispatch/backstop-message.js';
 import {
   RECIPIENT_REFERENCE_SKILLS,
@@ -1589,13 +1589,15 @@ export class ExecutionLayer {
       if (await this.isPrincipalOnlySend(toolName, input, sendRecipients, skillLogger, fetchMessage)) return null;
 
       if (turnActivity.rootOf(taskEventId) === undefined) {
-        const originator = inferOriginatorResolution(options?.taskMetadata?.['originator']);
+        const rawOriginator = options?.taskMetadata?.['originator'];
+        const originator = inferOriginatorResolution(rawOriginator);
         turnActivity.ensureRoot(taskEventId, {
           conversationId: options?.conversationId ?? taskEventId,
           channelId: options?.channelId ?? 'unknown',
           agentId: options?.agentId ?? 'unknown',
           originatorContactId: originator.contactId,
           originatorResolved: originator.resolved,
+          originatorIsSystem: originatorIsSystem(rawOriginator),
         });
       }
 

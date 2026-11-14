@@ -16,7 +16,12 @@
 //
 // Public getters return copies, so a caller cannot mutate registry state.
 
-import { delegationOriginTaskEventId, isDelegatedSpecialistTask } from '../agents/delegated-task-context.js';
+import {
+  delegationOriginAgentId,
+  delegationOriginConversationId,
+  delegationOriginTaskEventId,
+  isDelegatedSpecialistTask,
+} from '../agents/delegated-task-context.js';
 import type { Logger } from '../logger.js';
 import { stripOutboundContextPreamble } from './outbound-context.js';
 
@@ -25,12 +30,6 @@ export const MAX_TRACKED_ROOTS = 1_000;
 export const MAX_TRACKED_ACTIONS = 5_000;
 /** One root cannot crowd out another's actions: past this, its own oldest action is dropped. */
 export const MAX_ACTIONS_PER_ROOT = 200;
-
-/**
- * Channels whose turns are Curia's own work (scheduled jobs, internal tasks, the bullpen).
- * Their actions hold others whatever the originator stamp says, and they see a hold's details.
- */
-export const SYSTEM_TURN_CHANNELS: ReadonlySet<string> = new Set(['scheduler', 'internal', 'bullpen']);
 
 const REQUEST_TEXT_MAX_CODE_POINTS = 500;
 const COORDINATOR_AGENT_ID = 'coordinator';
@@ -44,6 +43,13 @@ export interface RootTurn {
   originatorContactId: string | null;
   /** Same rule as holderFromAgentTask (turn-lanes.ts): the originator is a resolved contact. */
   originatorResolved: boolean;
+  /**
+   * Curia's own work, judged by originator, not channel (turn-lanes.ts originatorIsSystem):
+   * no originator, or a `system` / `agent` role. Such a root holds others even unresolved,
+   * and sees a hold's details. An internal or scheduler task carrying a person's originator
+   * is that person's turn.
+   */
+  originatorIsSystem: boolean;
   /** Filled in by a later task; false until then. */
   audienceOneToOne: boolean;
   /** The person's words, preamble stripped, clipped to 500 code points. */
@@ -100,6 +106,8 @@ export interface TaskStartInput {
   startedAt: number;
   originatorContactId: string | null;
   originatorResolved: boolean;
+  /** turn-lanes.ts originatorIsSystem of the task's copied originator. */
+  originatorIsSystem: boolean;
   /** Finding count for a root's inbound. Defaults to null (unknown). */
   inboundScanFindings?: number | null;
 }
@@ -110,6 +118,7 @@ export interface EnsureRootSeed {
   agentId: string;
   originatorContactId: string | null;
   originatorResolved: boolean;
+  originatorIsSystem: boolean;
 }
 
 /** Mutable internal form of a root. Never handed out. */
@@ -120,6 +129,7 @@ interface RootState {
   agentId: string;
   originatorContactId: string | null;
   originatorResolved: boolean;
+  originatorIsSystem: boolean;
   audienceOneToOne: boolean;
   requestText: string | null;
   inboundScanFindings: number | null;
@@ -154,6 +164,19 @@ export interface TurnActivityRegistryOptions {
 
 function targetKey(target: ActionTarget): string {
   return `${target.kind}:${target.value}`;
+}
+
+/** A non-empty string field of the task metadata. */
+function metadataString(metadata: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = metadata?.[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/** A non-empty string field of metadata.delegationOrigin. */
+function delegationOriginField(metadata: Record<string, unknown> | undefined, key: string): string | undefined {
+  const origin = metadata?.['delegationOrigin'];
+  if (typeof origin !== 'object' || origin === null || Array.isArray(origin)) return undefined;
+  return metadataString(origin as Record<string, unknown>, key);
 }
 
 export class TurnActivityRegistry {
@@ -210,14 +233,22 @@ export class TurnActivityRegistry {
   ensureRoot(taskEventId: string, seed: EnsureRootSeed): RootTurn {
     const existing = this.rootStateOf(taskEventId);
     if (existing) return this.snapshot(existing);
+    const root = this.createAutoRoot(taskEventId, seed);
+    this.enforceCaps();
+    return this.snapshot(root);
+  }
+
+  /** A new auto-registered root keyed by `rootId`, which also maps to itself. */
+  private createAutoRoot(rootId: string, seed: EnsureRootSeed): RootState {
     const now = this.now();
     const root: RootState = {
-      rootId: taskEventId,
+      rootId,
       conversationId: seed.conversationId,
       channelId: seed.channelId,
       agentId: seed.agentId,
       originatorContactId: seed.originatorContactId,
       originatorResolved: seed.originatorResolved,
+      originatorIsSystem: seed.originatorIsSystem,
       audienceOneToOne: false,
       requestText: null,
       inboundScanFindings: null,
@@ -226,14 +257,13 @@ export class TurnActivityRegistry {
       runningTaskIds: new Set(),
       runningCoordinatorTaskIds: new Set(),
       autoRegistered: true,
-      taskIds: new Set([taskEventId]),
+      taskIds: new Set([rootId]),
       lastActivityAt: now,
       scope: this.scopeFor(seed.conversationId),
     };
-    this.roots.set(taskEventId, root);
-    this.taskToRoot.set(taskEventId, taskEventId);
-    this.enforceCaps();
-    return this.snapshot(root);
+    this.roots.set(rootId, root);
+    this.taskToRoot.set(rootId, rootId);
+    return root;
   }
 
   /**
@@ -243,9 +273,9 @@ export class TurnActivityRegistry {
    * target) pair and records nothing; the re-issued call then proceeds and is recorded.
    *
    * An unresolved originator's actions hold no one, so a stranger cannot stall (or probe)
-   * the principal's turns by touching a target first. A system-channel root
-   * (SYSTEM_TURN_CHANNELS) still holds others: scheduled jobs carry no person originator
-   * and must still be caught. Unresolved roots are themselves still checked.
+   * the principal's turns by touching a target first. A system root (originatorIsSystem: no
+   * originator, or a system or agent role) still holds others: scheduled jobs carry no person
+   * originator and must still be caught. Unresolved roots are themselves still checked.
    */
   checkAndRecord(taskEventId: string, toolName: string, targets: readonly ActionTarget[]): BackstopDecision {
     const mine = this.rootStateOf(taskEventId);
@@ -253,7 +283,7 @@ export class TurnActivityRegistry {
 
     const qualifying = new Map<string, RootState>();
     for (const other of this.qualifyingOthers(mine)) {
-      if (!other.originatorResolved && !SYSTEM_TURN_CHANNELS.has(other.channelId)) continue;
+      if (!other.originatorResolved && !other.originatorIsSystem) continue;
       qualifying.set(other.rootId, other);
     }
 
@@ -346,15 +376,61 @@ export class TurnActivityRegistry {
     return rootId === undefined ? undefined : this.roots.get(rootId);
   }
 
-  /** The root an existing task's delegation or wake points to, if that root is still known. */
+  /**
+   * The root a task continues: its delegation origin, its voice session, the hand-off it
+   * forwards, or the task a late-delegation wake resumes.
+   *
+   * Voice never starts a task of its own, so its session id is never a root until a tool call
+   * registers one. A specialist delegated from a call, or an async-offramp task handed off
+   * from one, would otherwise become its own `internal` root. When that origin is unknown, an
+   * auto root is created for it here, seeded from the origin's channel and conversation and
+   * the task's copied originator, so every task of one call shares one root.
+   */
   private resolveExistingRoot(input: TaskStartInput): RootState | undefined {
-    const origin = delegationOriginTaskEventId(input.metadata);
+    const metadata = input.metadata;
+    const seedFrom = (conversationId: string, channelId: string, agentId: string): EnsureRootSeed => ({
+      conversationId,
+      channelId,
+      agentId,
+      originatorContactId: input.originatorContactId,
+      originatorResolved: input.originatorResolved,
+      originatorIsSystem: input.originatorIsSystem,
+    });
+
+    const origin = delegationOriginTaskEventId(metadata);
     if (origin !== undefined) {
-      const root = this.rootStateOf(origin);
+      return this.rootStateOf(origin) ?? this.createAutoRoot(origin, seedFrom(
+        delegationOriginConversationId(metadata) ?? input.conversationId,
+        delegationOriginField(metadata, 'channelId') ?? input.channelId,
+        delegationOriginAgentId(metadata) ?? COORDINATOR_AGENT_ID,
+      ));
+    }
+
+    const voiceSessionId = metadataString(metadata, 'sourceVoiceSessionId');
+    if (voiceSessionId !== undefined) {
+      return this.rootStateOf(voiceSessionId) ?? this.createAutoRoot(voiceSessionId, seedFrom(
+        metadataString(metadata, 'sourceVoiceConversationId') ?? voiceSessionId,
+        'voice',
+        COORDINATOR_AGENT_ID,
+      ));
+    }
+
+    // The coordinator task that sends a hand-off's unheard result continues the hand-off.
+    const forwardOf = metadataString(metadata, 'offrampForwardOf');
+    const forwarded = forwardOf === undefined ? undefined : this.rootStateOf(forwardOf);
+    if (forwarded) return forwarded;
+
+    if (metadata?.['lateDelegation'] !== undefined && input.parentEventId !== undefined) {
+      const root = this.rootStateOf(input.parentEventId);
       if (root) return root;
     }
-    if (input.metadata?.['lateDelegation'] !== undefined && input.parentEventId !== undefined) {
-      return this.rootStateOf(input.parentEventId);
+    if (isDelegatedSpecialistTask(metadata) || metadata?.['lateDelegation'] !== undefined) {
+      // A delegation with no origin task id, or a wake whose parent was pruned: it becomes
+      // its own root and is compared only from here on.
+      this.logger.warn(
+        { taskEventId: input.taskEventId },
+        'turn activity: a delegated or woken task has no known root; it becomes its own',
+      );
     }
     return undefined;
   }
@@ -369,7 +445,11 @@ export class TurnActivityRegistry {
     if (!existing) return this.createRoot(input);
     existing.requestText ??= this.requestTextOf(input.content);
     existing.inboundScanFindings ??= input.inboundScanFindings ?? null;
-    existing.originatorContactId ??= input.originatorContactId;
+    if (existing.originatorContactId === null && input.originatorContactId !== null) {
+      // The entry had no originator, so it was classed as system; take the task's.
+      existing.originatorContactId = input.originatorContactId;
+      existing.originatorIsSystem = input.originatorIsSystem;
+    }
     if (!existing.originatorResolved && input.originatorContactId === existing.originatorContactId) {
       existing.originatorResolved = input.originatorResolved;
     }
@@ -388,6 +468,7 @@ export class TurnActivityRegistry {
       agentId: input.agentId,
       originatorContactId: input.originatorContactId,
       originatorResolved: input.originatorResolved,
+      originatorIsSystem: input.originatorIsSystem,
       audienceOneToOne: false,
       requestText: this.requestTextOf(input.content),
       inboundScanFindings: input.inboundScanFindings ?? null,
@@ -434,6 +515,7 @@ export class TurnActivityRegistry {
       agentId: root.agentId,
       originatorContactId: root.originatorContactId,
       originatorResolved: root.originatorResolved,
+      originatorIsSystem: root.originatorIsSystem,
       audienceOneToOne: root.audienceOneToOne,
       requestText: root.requestText,
       inboundScanFindings: root.inboundScanFindings,
