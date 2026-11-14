@@ -22,6 +22,7 @@ import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
 import { historyForLlm, llmFailurePairing, llmFailureTurnContent, LLM_FAILURE_USER_MESSAGE } from '../memory/llm-failure-turn.js';
 import { renderBudgetExhaustedVerificationReply } from './prompts/verification-block.js';
+import { buildOtherTurnViews, renderOtherTurnsBlock } from './prompts/other-turns-block.js';
 import {
   CONTACT_RECENT_HISTORY_TIER,
   contactRecentHistoryApplies,
@@ -528,6 +529,29 @@ export class AgentRuntime {
     }
   }
 
+  /**
+   * The note of the same person's other turns (#2588): the coordinator's own turns only, not
+   * a delegated specialist's. A late-delegation wake continues its root, so it sees that
+   * root's others. Fail-open: an error is logged and the block omitted.
+   */
+  private otherTurnsBlock(taskEvent: AgentTaskEvent): string {
+    const registry = this.config.turnActivity;
+    if (!registry || this.config.agentId !== 'coordinator') return '';
+    if (isDelegatedSpecialistTask(taskEvent.payload.metadata as Record<string, unknown> | undefined)) return '';
+    try {
+      const mine = registry.rootOf(taskEvent.id);
+      if (!mine) return '';
+      const views = buildOtherTurnViews(registry, mine.rootId);
+      return renderOtherTurnsBlock(views, { timezone: this.config.timezone?.trim() || 'UTC' });
+    } catch (err) {
+      this.config.logger.error(
+        { err, taskEventId: taskEvent.id },
+        "Failed to build the person's other turns block — omitted this turn",
+      );
+      return '';
+    }
+  }
+
   private recordTaskEnded(taskEventId: string): void {
     const registry = this.config.turnActivity;
     if (!registry) return;
@@ -797,6 +821,8 @@ export class AgentRuntime {
     // harness so they send exactly what production sends (#1966). Rebuilt every
     // turn so identity / autonomy / principal-identity changes apply without restart.
     let effectiveSystemPrompt = await buildBaseSystemPrompt(this.config, { now: new Date(), logger });
+    const otherTurns = this.otherTurnsBlock(taskEvent);
+    if (otherTurns) effectiveSystemPrompt += `\n\n${otherTurns}`;
 
     // Initialize the error budget for this task.
     // Config values override defaults; budget tracks runtime counters.

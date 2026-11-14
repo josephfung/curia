@@ -16,7 +16,8 @@ import type { Verification } from '../../verification/types.js';
 /** A verification plus whether its browser session is still live this turn. */
 export type VerificationView = Verification & { sessionAlive: boolean };
 
-function localTime(at: Date, timezone: string): string {
+/** An ISO timestamp in `timezone`, whole seconds. Throws on an invalid timezone. */
+export function localTime(at: Date, timezone: string): string {
   const iso = toLocalIso(Math.floor(at.getTime() / 1000), timezone) ?? at.toISOString();
   // Whole seconds only: the milliseconds are noise in a prompt line.
   return iso.replace(/\.\d{3}(?=[+-]\d{2}:\d{2}$|Z$)/, '');

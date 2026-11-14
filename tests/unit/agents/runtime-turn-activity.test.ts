@@ -105,6 +105,89 @@ describe('runtime turn activity (#2588)', () => {
     expect(registry.rootOf(event.id)?.rootId).toBe(coord.id);
   });
 
+  describe("turn-start note of the person's other turns", () => {
+    const ORIGINATOR = { contactId: CONTACT, channel: 'sms', systemRole: null, tier: 'known' };
+    const HEADING = '## Your other recent turns with this person';
+
+    /** A running root of the same contact, registered as if another conversation's turn were live. */
+    function seedOtherTurn(registry: TurnActivityRegistry): void {
+      registry.taskStarted({
+        taskEventId: 'other-root',
+        agentId: 'coordinator',
+        conversationId: 'conv-other',
+        channelId: 'sms',
+        parentEventId: undefined,
+        metadata: undefined,
+        content: 'book the 9am flight to Montreal',
+        startedAt: Date.now() - 60_000,
+        originatorContactId: CONTACT,
+        originatorResolved: true,
+        originatorIsSystem: false,
+      });
+    }
+
+    function systemPromptOf(chat: ReturnType<typeof vi.fn>): string {
+      const params = chat.mock.calls[0]![0] as { messages: { role: string; content: unknown }[] };
+      const system = params.messages.find((m) => m.role === 'system');
+      return typeof system?.content === 'string' ? system.content : '';
+    }
+
+    it("injects the block into the coordinator's system prompt", async () => {
+      const logger = createLogger('error');
+      const registry = new TurnActivityRegistry({ logger });
+      seedOtherTurn(registry);
+      const chat = vi.fn(() => Promise.resolve(text('ok')));
+      const { bus } = build({ id: 'mock', chat }, registry);
+      await bus.publish('dispatch', task('the 9am flight', { channelId: 'sms', metadata: { originator: ORIGINATOR } }));
+      const system = systemPromptOf(chat);
+      expect(system).toContain(HEADING);
+      expect(system).toContain('turn_id other-root');
+      expect(system).toContain(JSON.stringify('book the 9am flight to Montreal'));
+    });
+
+    it('runtime injects the block only for the coordinator', async () => {
+      const logger = createLogger('error');
+      const registry = new TurnActivityRegistry({ logger });
+      seedOtherTurn(registry);
+      const chat = vi.fn(() => Promise.resolve(text('ok')));
+      const { bus } = build({ id: 'mock', chat }, registry);
+      // A delegated specialist task carrying the same originator.
+      await bus.publish('dispatch', task('delegated', {
+        channelId: 'sms',
+        metadata: { originator: ORIGINATOR, delegationOrigin: { taskEventId: 'origin-x', conversationId: 'conv-1' } },
+      }));
+      expect(systemPromptOf(chat)).not.toContain(HEADING);
+    });
+
+    it('injects nothing when the person has no other turns', async () => {
+      const logger = createLogger('error');
+      const registry = new TurnActivityRegistry({ logger });
+      const chat = vi.fn(() => Promise.resolve(text('ok')));
+      const { bus } = build({ id: 'mock', chat }, registry);
+      await bus.publish('dispatch', task('hello', { channelId: 'sms', metadata: { originator: ORIGINATOR } }));
+      expect(systemPromptOf(chat)).not.toContain(HEADING);
+    });
+
+    it('a block failure logs at error and the turn runs without it', async () => {
+      const logger = createLogger('error');
+      const registry = new TurnActivityRegistry({ logger });
+      seedOtherTurn(registry);
+      vi.spyOn(registry, 'otherRootsInWindow').mockImplementation(() => {
+        throw new Error('registry down');
+      });
+      const chat = vi.fn(() => Promise.resolve(text('ok')));
+      const { bus, errorSpy } = build({ id: 'mock', chat }, registry);
+      const event = task('hello', { channelId: 'sms', metadata: { originator: ORIGINATOR } });
+      await bus.publish('dispatch', event);
+      expect(chat).toHaveBeenCalled();
+      expect(systemPromptOf(chat)).not.toContain(HEADING);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskEventId: event.id }),
+        expect.stringContaining('other turns'),
+      );
+    });
+  });
+
   it('registry error does not fail the turn', async () => {
     const logger = createLogger('error');
     const registry = new TurnActivityRegistry({ logger });
