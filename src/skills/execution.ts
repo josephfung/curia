@@ -166,6 +166,10 @@ import { USER_SECRET_PREFIX } from '../secrets/user-secret-name.js';
 import { splitCommaSeparatedAddresses } from '../contacts/principal-carveout-parse.js';
 import type { ErrorType } from '../errors/types.js';
 import type { VerificationRuntime } from '../verification/index.js';
+import type { ActionTarget, TurnActivityRegistry } from '../dispatch/turn-activity.js';
+import { extractActionTargets } from '../dispatch/action-targets.js';
+import { inferOriginatorResolution } from '../dispatch/turn-lanes.js';
+import { renderBackstopHold, type BackstopMatches } from '../dispatch/backstop-message.js';
 import {
   RECIPIENT_REFERENCE_SKILLS,
   addressOrReferenceError,
@@ -246,6 +250,9 @@ const NO_QUEUED_APPROVAL_TOOLS: ReadonlySet<string> = new Set(['ceo-inbox-send-d
  * request for one of these (#2495): the principal would be approving an approval.
  */
 const APPROVAL_RESOLUTION_TOOLS: ReadonlySet<string> = new Set(['approve-action', 'deny-action', 'dismiss-action']);
+
+/** The cross-turn backstop checks calls at action_risk medium (70) and above (#2588). */
+const CROSS_TURN_BACKSTOP_MIN_RISK_SCORE = 70;
 
 /** Appended when an object result is too large and collapsed to a string (#1487). */
 const OBJECT_OUTPUT_TRUNCATED_MARKER = '[truncated — output exceeded limit]';
@@ -451,6 +458,8 @@ export class ExecutionLayer {
   private openDelegationLookup?: import('../db/queries/pending-delegations.js').OpenDelegationLookup;
   /** Delegated sign-in verification (#2017). When set, every tool input except web-browser's is scrubbed of tracked codes. */
   private verification?: VerificationRuntime;
+  /** Shared turn activity registry for the cross-conversation pre-action backstop (#2588). */
+  private turnActivity?: TurnActivityRegistry;
 
   constructor(registry: ToolRegistry, logger: Logger, options?: {
     bus?: EventBus;
@@ -533,6 +542,8 @@ export class ExecutionLayer {
     openDelegationLookup?: import('../db/queries/pending-delegations.js').OpenDelegationLookup;
     /** Delegated sign-in verification (#2017) — scrubs tracked codes from tool inputs and backs the 'verification' capability. */
     verification?: VerificationRuntime;
+    /** One registry shared with every AgentRuntime: holds a risky call another root already made (#2588). */
+    turnActivity?: TurnActivityRegistry;
   }) {
     this.registry = registry;
     this.skillRegistry = options?.skillRegistry;
@@ -591,6 +602,7 @@ export class ExecutionLayer {
     this.sensitivityClassifier = options?.sensitivityClassifier;
     this.openDelegationLookup = options?.openDelegationLookup;
     this.verification = options?.verification;
+    this.turnActivity = options?.turnActivity;
     this.taskOutreach = options?.taskOutreach;
     this.disclosureDecisions = options?.disclosureDecisions;
     if (!this.actionLogRepo) {
@@ -1540,6 +1552,107 @@ export class ExecutionLayer {
     return resolvePrincipalIsSoleRecipientFromSkillInput(
       toolName, input, this.principalIdentities, normalized.recipients,
     );
+  }
+
+  /**
+   * Cross-conversation backstop, async half (#2588): decide whether this call is checked and
+   * read its targets. Null means "not checked": no registry, a risk below medium, a
+   * human-approved replay, a send to the principal alone, no task id, or an error.
+   *
+   * A task id the registry has never seen (a voice session id, an id lost to a restart) is
+   * registered as its own root here, seeded from the call's own context.
+   *
+   * Deliberately fail-open: this is a duplicate-avoidance aid, not an authorization gate, so
+   * any error logs and lets the call proceed unchecked.
+   */
+  private async prepareCrossTurnBackstop(
+    toolName: string,
+    input: Record<string, unknown>,
+    actionRisk: ActionRisk,
+    options: InvokeOptions | undefined,
+    sendRecipients: ReadonlyMap<string, string> | undefined,
+    skillLogger: Logger,
+    fetchMessage?: (
+      messageId: string,
+      accountId?: string,
+    ) => ReturnType<OutboundGateway['getEmailMessage']>,
+  ): Promise<{ turnActivity: TurnActivityRegistry; taskEventId: string; targets: ActionTarget[] } | null> {
+    const turnActivity = this.turnActivity;
+    if (!turnActivity || options?.humanApproved) return null;
+    const taskEventId = options?.taskEventId;
+    try {
+      if (AutonomyService.minScoreForActionRisk(actionRisk) < CROSS_TURN_BACKSTOP_MIN_RISK_SCORE) return null;
+      if (taskEventId === undefined) {
+        skillLogger.debug({ toolName }, 'cross-turn backstop: no task id — skipping the check');
+        return null;
+      }
+      if (await this.isPrincipalOnlySend(toolName, input, sendRecipients, skillLogger, fetchMessage)) return null;
+
+      if (turnActivity.rootOf(taskEventId) === undefined) {
+        const originator = inferOriginatorResolution(options?.taskMetadata?.['originator']);
+        turnActivity.ensureRoot(taskEventId, {
+          conversationId: options?.conversationId ?? taskEventId,
+          channelId: options?.channelId ?? 'unknown',
+          agentId: options?.agentId ?? 'unknown',
+          originatorContactId: originator.contactId,
+          originatorResolved: originator.resolved,
+        });
+      }
+
+      const contactService = this.contactService;
+      const targets = await extractActionTargets(toolName, input, {
+        principalContactId: this.principalIdentities[0]?.contactId,
+        isContact: async (id) => (contactService ? (await contactService.getContact(id)) !== undefined : false),
+      });
+      return { turnActivity, taskEventId, targets };
+    } catch (err) {
+      skillLogger.error(
+        { err, toolName, taskEventId },
+        'cross-turn backstop: target extraction failed — proceeding unchecked (fail-open)',
+      );
+      return null;
+    }
+  }
+
+  /** The result a held call returns: what the other turn did, never its words (#2588). */
+  private async crossTurnHoldResult(
+    matches: BackstopMatches,
+    toolName: string,
+    taskEventId: string,
+    skillLogger: Logger,
+  ): Promise<ToolResult> {
+    skillLogger.info(
+      {
+        toolName,
+        taskEventId,
+        otherRoots: [...new Set(matches.map((m) => m.other.rootId))],
+        targetKinds: matches.map((m) => m.target.kind),
+      },
+      'cross-turn backstop: held a call another turn already made on the same target',
+    );
+    const names = new Map<string, string>();
+    const contactService = this.contactService;
+    if (contactService) {
+      const ids = [...new Set(matches.filter((m) => m.target.kind === 'contact').map((m) => m.target.value))];
+      await Promise.all(ids.map(async (id) => {
+        try {
+          const contact = await contactService.getContact(id);
+          if (contact) names.set(id, contact.displayName);
+        } catch (err) {
+          // The line falls back to "a contact"; the hold itself does not depend on the name.
+          skillLogger.warn({ err, toolName, contactId: id }, 'cross-turn backstop: contact name lookup failed');
+        }
+      }));
+    }
+    let text: string;
+    try {
+      text = renderBackstopHold(matches, { timezone: this.timezone, contactName: (id) => names.get(id) });
+    } catch (err) {
+      // An invalid configured timezone makes toLocalIso throw; show UTC rather than fail.
+      skillLogger.error({ err, toolName, taskEventId, timezone: this.timezone }, 'cross-turn backstop: local time render failed — using UTC');
+      text = renderBackstopHold(matches, { timezone: 'UTC', contactName: (id) => names.get(id) });
+    }
+    return { success: false, error: this.wrapSkillError(text) };
   }
 
   /**
@@ -2857,6 +2970,12 @@ export class ExecutionLayer {
       }
     }
 
+    // Cross-conversation pre-action backstop, part 1 (#2588): read the call's targets now,
+    // while awaits are allowed. The check itself runs synchronously just before the handler.
+    const crossTurnBackstop = await this.prepareCrossTurnBackstop(
+      toolName, input, manifest.action_risk, options, sendRecipients, skillLogger, fetchMessageForGateC,
+    );
+
     // Build the sandboxed context — secret access is restricted to
     // only the secrets declared in the skill's manifest
     const declaredSecrets = new Set(manifest.secrets);
@@ -3498,6 +3617,29 @@ export class ExecutionLayer {
         error: this.wrapSkillError(`Tool '${toolName}' requires a live principal turn — it can only be invoked directly by the principal, not by a system job, an agent, or a woken/scheduled task`),
         gate: 'live_principal_turn',
       };
+    }
+
+    // Cross-conversation pre-action backstop, part 2 (#2588). checkAndRecord is synchronous,
+    // and NOTHING async may be inserted between it and handler.execute below: a recorded
+    // action must be one whose handler actually starts. An await here would let a later
+    // failure or return leave a phantom action that holds another turn. Deliberately
+    // fail-open: this is a duplicate-avoidance aid, not an authorization gate, so a registry
+    // error logs and lets the call run.
+    if (crossTurnBackstop) {
+      let held: BackstopMatches | null = null;
+      try {
+        const decision = crossTurnBackstop.turnActivity.checkAndRecord(
+          crossTurnBackstop.taskEventId, toolName, crossTurnBackstop.targets,
+        );
+        if (decision.held) held = decision.matches;
+      } catch (err) {
+        skillLogger.error(
+          { err, toolName, taskEventId: crossTurnBackstop.taskEventId },
+          'cross-turn backstop: check failed — proceeding unchecked (fail-open)',
+        );
+      }
+      // Held: nothing was recorded, so awaiting the contact names below is safe.
+      if (held) return this.crossTurnHoldResult(held, toolName, crossTurnBackstop.taskEventId, skillLogger);
     }
 
     skillLogger.info({ input: Object.keys(input) }, 'Invoking skill');
