@@ -70,6 +70,14 @@ describe('CalendarRouter.route', () => {
 
   it('owning grant wins: a mailbox address routes to that mailbox over its registry row and the hint', async () => {
     const { clients, router } = twoMailboxes({ registry: { 'ceo@personal.example.com': { principalMailboxId: 'work' } } });
+    // The same spelling as the registry key, so the row (which names work) is really found and overridden.
+    const r = await router.route('ceo@personal.example.com', 'work');
+    expect(r.mailboxId).toBe('personal');
+    expect(r.client).toBe(clients.personal);
+  });
+
+  it('the owner match ignores case in the address', async () => {
+    const { clients, router } = twoMailboxes();
     const r = await router.route('CEO@Personal.example.com', 'work');
     expect(r.mailboxId).toBe('personal');
     expect(r.client).toBe(clients.personal);

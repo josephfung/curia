@@ -7,7 +7,8 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { NylasCalendarEvent, NylasRsvpStatus } from '../../../../src/channels/calendar/nylas-calendar-client.js';
 import {
-  findHoldsForConversationRelease,
+  findHoldsByConversationRef,
+  recoverConversationRef,
   holdHasAttendees,
   type HoldMatchCriteria,
 } from '../../../../src/channels/calendar/holds.js';
@@ -368,20 +369,24 @@ export class CalendarRespondToInviteHandler implements ToolHandler {
     const matchCriteria = enrichCriteriaWithEventWindow(criteria, event);
     const releasedHolds: string[] = [];
     let matched = 0;
+    // Every calendar is listed first, and one conversation ref is recovered from all of them:
+    // a ref recovered per calendar could anchor on a different overlapping hold on each, and
+    // release holds of more than one conversation.
+    const listed: Array<{ target: (typeof targets)[number]; events: NylasCalendarEvent[] }> = [];
     for (const target of targets) {
-      const { client, calendarId } = target;
-      let events: NylasCalendarEvent[];
       try {
-        events = await client.listEvents(calendarId, window.start, window.end);
+        listed.push({ target, events: await target.client.listEvents(target.calendarId, window.start, window.end) });
       } catch (err) {
         // The upstream reason stays in the warning (R78); the log is grant-safe.
         const message = err instanceof Error ? err.message : String(err);
         ctx.log.warn({ ...grantSafeErrorFields(err), mailboxId: target.mailboxId }, 'calendar-respond-to-invite: failed to list holds for cleanup');
         releaseWarnings.push(`Failed to list holds for cleanup: ${message}`);
-        continue;
       }
-
-      const matches = findHoldsForConversationRelease(events, matchCriteria);
+    }
+    const ref = recoverConversationRef(listed.flatMap((l) => l.events), matchCriteria);
+    for (const { target, events } of listed) {
+      const { client, calendarId } = target;
+      const matches = ref ? findHoldsByConversationRef(events, ref) : [];
       matched += matches.length;
       for (const hold of matches) {
         if (holdHasAttendees(hold)) {
