@@ -2,6 +2,8 @@
 
 Draft for review · Issue #2556 · Started 2026-11-10
 
+Revised 2026-11-14: in task 50, Tomás now writes that he will be out sick tomorrow (it used to say today).
+
 This casebook describes situations an executive assistant handles every week: moving meetings, asking for time, saying no, keeping family happy. For each one it says what we think the right call is, and what a good message sounds like. It is the source of truth for a set of automated tests. When the tests and this document disagree, this document wins, and the tests are changed to match.
 
 ---
