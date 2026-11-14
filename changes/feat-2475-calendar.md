@@ -16,6 +16,8 @@
 - **Availability `calendarIds` (public API)** — `calendar-find-free-time` and `calendar-check-conflicts` refuse more than 20 calendars. (#2475)
 - **Setup wizard** — the principal mailboxes task covers several accounts and points to Email & Calendar. (#2475)
 - **Meeting debrief (spec 17)** — guards key on the meeting, so one meeting on two calendars debriefs once. (#2475)
+- **Meeting debrief key** — iCal UID and occurrence only, so a renamed or moved meeting debriefs once. (#2475)
+- **Meeting debrief scope** — only meetings the principal accepted or organised are judged; declined or tentative never prompt. (#2475)
 - **Calendar agent** — works across the principal's calendars; conflicts are judged against calendaring preferences. (#2475)
 - **Principal's mailboxes moved** — out of the Channels → Email drawer, which now links to Email & Calendar. (#2475)
 - **No-mailbox answers** — every tool needing a principal mailbox names Settings → Personality → Email & Calendar. (#2475)

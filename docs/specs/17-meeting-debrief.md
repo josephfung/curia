@@ -43,9 +43,10 @@ Two-stage pipeline on each detection run (3x/day at `0 7,12,16`):
 ### Stage 1: Calendar scan (deterministic)
 
 1. Call `calendar-list-events` for events scheduled between now and end-of-day (forward scan, not backward)
-2. Skip events already seen: check `config-store` for a `seen:<meetingKey>` key (set by previous detection runs for both YES and NO judgments; the meeting key is below)
-3. Extract attendee context (names, roles, org affiliations via entity context enrichment) and recurrence pattern
-4. Pass candidates to Stage 2 with: title, description, duration, attendee list, recurrence pattern, and enriched entity context for known attendees
+2. Only meetings the principal accepted or organised are listed (R108): for meeting-debrief, `calendar-list-events` drops declined, tentative and unanswered invites in code, so they are never judged or prompted. A meeting accepted through one account keeps its other accounts' copies.
+3. Skip events already seen: check `config-store` for a `seen:<meetingKey>` key (set by previous detection runs for both YES and NO judgments; the meeting key is below)
+4. Extract attendee context (names, roles, org affiliations via entity context enrichment) and recurrence pattern
+5. Pass candidates to Stage 2 with: title, description, duration, attendee list, recurrence pattern, and enriched entity context for known attendees
 
 ### Stage 2: LLM judgment (contextual)
 
@@ -124,17 +125,20 @@ than stored as data:
 With several principal mailboxes, one meeting can sit on two of the principal's
 calendars (an invite to both accounts, or one calendar shared into the other), each
 copy with its own grant-scoped event id. `calendar-list-events` lists such a meeting
-once and gives every event a `meetingKey`: `ical-` plus a hash of the event's iCal UID,
-its occurrence (the original start of a recurring instance), start, end, title, organizer,
-location and conferencing link, or the event id when it has no UID. The UID is set by
-whoever sends the invite, so a spoofed invite reusing a real meeting's UID and time but
-with another title, end, organizer, location or link gets
-its own key and cannot suppress the real meeting's debrief. Every copy of a meeting has the same key, and the
+once and gives every event a `meetingKey`: `ical-` plus a hash of the event's iCal UID
+and its occurrence (the original start of a recurring instance), or the event id when it
+has no UID. Title, start, end, organizer, location and link are not in the key (R108), so a
+renamed or rescheduled meeting, or a moved instance of a series, keeps its key and is not
+judged or prompted twice. The owner accepted the cost: a spoofed invite reusing a real
+meeting's UID shares its key, and could at worst suppress that meeting's debrief (ADR-064).
+The listing's own collapse of copies stays strict (UID, occurrence, times, title, organizer,
+place and link). Every copy of a meeting has the same key, and the
 instances of a recurring series have different ones, so a weekly meeting is still
 debriefed every week. The guards key on it, so a meeting is judged and debriefed
 once, whichever copy a scan sees. The intent anchor carries the key and the copy's
 event id; the prompt wake re-validates by finding the event whose `meetingKey` matches,
-else whose `id` matches (a moved or renamed meeting changes its key but keeps its id).
+else whose `id` matches (a task scheduled under the older key, which changed when a
+meeting moved, still finds it by id).
 A meeting found by id only gets one prompt: if a later scan already set `seen:` for its
 new key (and so scheduled its own task), the old task closes as superseded; otherwise the
 wake sets that guard, valued with its own task id, before prompting, so no later scan

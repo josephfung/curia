@@ -282,6 +282,13 @@ export class CalendarListEventsHandler implements ToolHandler {
         );
       }
 
+      // meeting-debrief sees only meetings the principal accepted or organised (R108).
+      if (ctx.agentId === 'meeting-debrief') {
+        const kept = await keepAttendedMeetings(ctx, filtered);
+        if (!kept.ok) return { success: false, error: kept.error };
+        filtered = kept.events;
+      }
+
       // The same meeting on two of the principal's accounts' calendars is one entry (D7).
       const collapsed = await collapseAcrossMailboxes(ctx, filtered);
       const calendarsOf = collapsed.calendarsOf;
@@ -373,6 +380,47 @@ async function coverEveryAccount(
     added.push({ id: home.routed.calendarId, routed: home.routed });
   }
   return { added, uncovered };
+}
+
+/**
+ * The meetings the principal accepted or organised (R108): meeting-debrief judges no others, so a
+ * declined, tentative or unanswered invite is never debriefed. Enforced here, not in its prompt
+ * (ADR-046). A copy counts when one of the principal's addresses organised it or accepted it
+ * ('yes'); an event listing neither an organizer nor the principal is the principal's own entry.
+ * A meeting attended through one account keeps its other accounts' copies, so they still collapse
+ * into it. The principal's addresses are the live mailboxes'; when they cannot be read, the
+ * listing fails rather than guess.
+ */
+async function keepAttendedMeetings(
+  ctx: ToolContext,
+  sourced: SourcedEvent[],
+): Promise<{ ok: true; events: SourcedEvent[] } | { ok: false; error: string }> {
+  let addresses: Set<string>;
+  try {
+    addresses = new Set(
+      (await ctx.calendarRouter!.liveMailboxes()).map((m) => m.address.trim().toLowerCase()).filter((a) => a !== ''),
+    );
+  } catch (err) {
+    ctx.log.error({ ...grantSafeErrorFields(err) }, "calendar-list-events: could not read the principal's addresses to keep only attended meetings");
+    return { ok: false, error: `Failed to list events: the principal's mailboxes could not be read (${calendarRouteErrorMessage(err)})` };
+  }
+  const attended = ({ evt }: SourcedEvent): boolean => {
+    const organizer = evt.organizerEmail?.trim().toLowerCase();
+    if (organizer && addresses.has(organizer)) return true;
+    const own = evt.participants.filter((p) => addresses.has(p.email.trim().toLowerCase()));
+    if (own.some((p) => p.status === 'yes')) return true;
+    return !organizer && own.length === 0;
+  };
+  const attendedKeys = new Set(sourced.filter(attended).map(({ evt }) => sameMeetingKey(evt)).filter((k) => k !== null));
+  const events = sourced.filter((s) => {
+    if (attended(s)) return true;
+    const key = sameMeetingKey(s.evt);
+    return key !== null && attendedKeys.has(key);
+  });
+  if (events.length < sourced.length) {
+    ctx.log.info({ dropped: sourced.length - events.length }, 'calendar-list-events: left out meetings the principal did not accept or organise');
+  }
+  return { ok: true, events };
 }
 
 /** An event with the mailbox and (routed) calendar it was read through. */
