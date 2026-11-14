@@ -736,6 +736,25 @@ model registry fails the run before any paid call. Results list the cases off th
 under `caseJudges`. The finesse judge is chosen by agreement with human grades on the pilot
 run (#2556); until then the tag has no entry.
 
+**Human grades.** `pnpm grading` measures a judge against people, not against another judge:
+
+```bash
+# Free: a grading sheet (CSV, blind to the judge's rating) and a one-page guide for the grader.
+pnpm grading sample tests/scenarios/results/<run>.json --n 25
+# After grading: agreement for the run's own ratings (free) and each candidate (judge calls only).
+pnpm grading agree tests/scenarios/results/<run>.json <run>.grading.csv --judge <model> --judge <model>
+```
+
+`sample` picks judged voice ratings (`--layer decision|all` for others), one case at a time
+with the tasks interleaved, so a sheet spans the casebook; runs that errored and ratings the
+judge failed to give are left out. Each row shows the situation, the recipient, what to grade,
+and what came in followed by every message Curia wrote, labelled with where it went. The same
+`--seed` rebuilds the same sheet. The grader fills `grade` with PASS, PARTIAL or MISS (blank
+skips a row) and may add `notes`. `agree` re-judges only the graded runs, on all their judged
+behaviors as a live run does, and reports per judge the exact agreement, the pass/fail
+agreement (what the critical gate counts) and Cohen's κ, lists every disagreement with the
+judge's reason and the grader's note, and saves it all to `<sheet>.agreement.json`.
+
 **Blind identification.** A case's `contrast` block puts it in a group with the other cases
 of its task that differ only in the recipient. `recipient` says who the person is to the
 principal, with no name and nothing about the situation (the messages name people, and a
