@@ -70,7 +70,7 @@ Everyone below is fictional.
 
 ## 50 · An attendee drops out
 
-Tomás messages Curia at 9am: *"Woke up sick, can't make the 2pm today. Sorry!"* Tomás has meetings with Avery and others that day. The only thing that changes between these cases is which meeting he was due at.
+Tomás emails Curia: *"Feeling awful. I'll be out sick tomorrow, so I can't make the 2pm. Sorry!"* Tomás has meetings with Avery and others that day. The only thing that changes between these cases is which meeting he was due at.
 
 ### 50a · Board update with the lead investor
 
