@@ -23,6 +23,8 @@ import { stripOutboundContextPreamble } from './outbound-context.js';
 export const TURN_ACTIVITY_WINDOW_MS = 15 * 60_000;
 export const MAX_TRACKED_ROOTS = 1_000;
 export const MAX_TRACKED_ACTIONS = 5_000;
+/** One root cannot crowd out another's actions: past this, its own oldest action is dropped. */
+export const MAX_ACTIONS_PER_ROOT = 200;
 
 const REQUEST_TEXT_MAX_CODE_POINTS = 500;
 const COORDINATOR_AGENT_ID = 'coordinator';
@@ -107,7 +109,8 @@ interface RootState {
   startedAt: number;
   endedAt: number | null;
   runningTaskIds: Set<string>;
-  runningCoordinatorTaskId: string | null;
+  /** Coordinator tasks now running under the root, in start order. */
+  runningCoordinatorTaskIds: Set<string>;
   autoRegistered: boolean;
   /** Every task id mapped to this root, so eviction can drop them. */
   taskIds: Set<string>;
@@ -137,13 +140,15 @@ export class TurnActivityRegistry {
   taskStarted(input: TaskStartInput): RootTurn {
     this.prune();
 
-    const root = this.resolveExistingRoot(input) ?? this.createRoot(input);
+    const root = this.resolveExistingRoot(input) ?? this.mergeOrCreateRoot(input);
     root.runningTaskIds.add(input.taskEventId);
     root.taskIds.add(input.taskEventId);
     root.endedAt = null;
     this.taskToRoot.set(input.taskEventId, root.rootId);
     if (input.agentId === COORDINATOR_AGENT_ID && !isDelegatedSpecialistTask(input.metadata)) {
-      root.runningCoordinatorTaskId = input.taskEventId;
+      // Delete first so a restarted id moves to the most-recent position.
+      root.runningCoordinatorTaskIds.delete(input.taskEventId);
+      root.runningCoordinatorTaskIds.add(input.taskEventId);
     }
 
     this.enforceCaps();
@@ -154,7 +159,7 @@ export class TurnActivityRegistry {
     const root = this.rootStateOf(taskEventId);
     if (!root) return;
     root.runningTaskIds.delete(taskEventId);
-    if (root.runningCoordinatorTaskId === taskEventId) root.runningCoordinatorTaskId = null;
+    root.runningCoordinatorTaskIds.delete(taskEventId);
     if (root.runningTaskIds.size === 0 && !root.autoRegistered) root.endedAt = this.now();
   }
 
@@ -181,7 +186,7 @@ export class TurnActivityRegistry {
       startedAt: now,
       endedAt: null,
       runningTaskIds: new Set(),
-      runningCoordinatorTaskId: null,
+      runningCoordinatorTaskIds: new Set(),
       autoRegistered: true,
       taskIds: new Set([taskEventId]),
       lastActivityAt: now,
@@ -208,7 +213,9 @@ export class TurnActivityRegistry {
     let shown = this.shown.get(mine.rootId);
     const newPairs = new Set<string>();
     const matches: { action: RecordedAction; other: RootTurn; target: ActionTarget }[] = [];
-    for (const action of this.actions) {
+    // Newest first, so a held decision reports the most recent action per (root, target) pair.
+    for (let i = this.actions.length - 1; i >= 0; i--) {
+      const action = this.actions[i]!;
       const other = qualifying.get(action.rootId);
       if (!other) continue;
       for (const target of targets) {
@@ -239,6 +246,8 @@ export class TurnActivityRegistry {
       at,
     });
     mine.lastActivityAt = at;
+    this.enforceRootActionCap(mine.rootId);
+    this.enforceActionCap();
     return { held: false };
   }
 
@@ -272,6 +281,27 @@ export class TurnActivityRegistry {
     return undefined;
   }
 
+  /**
+   * A repeated start for an id that is already a root (or a start after ensureRoot) keeps the
+   * existing entry: startedAt, the auto flag and the running set survive. Only fields the entry
+   * lacks are filled in.
+   */
+  private mergeOrCreateRoot(input: TaskStartInput): RootState {
+    const existing = this.roots.get(input.taskEventId);
+    if (!existing) return this.createRoot(input);
+    existing.requestText ??= this.requestTextOf(input.content);
+    existing.inboundScanFindings ??= input.inboundScanFindings ?? null;
+    existing.originatorContactId ??= input.originatorContactId;
+    if (!existing.originatorResolved && input.originatorContactId === existing.originatorContactId) {
+      existing.originatorResolved = input.originatorResolved;
+    }
+    return existing;
+  }
+
+  private requestTextOf(content: string): string {
+    return Array.from(stripOutboundContextPreamble(content)).slice(0, REQUEST_TEXT_MAX_CODE_POINTS).join('');
+  }
+
   private createRoot(input: TaskStartInput): RootState {
     const root: RootState = {
       rootId: input.taskEventId,
@@ -281,14 +311,12 @@ export class TurnActivityRegistry {
       originatorContactId: input.originatorContactId,
       originatorResolved: input.originatorResolved,
       audienceOneToOne: false,
-      requestText: Array.from(stripOutboundContextPreamble(input.content))
-        .slice(0, REQUEST_TEXT_MAX_CODE_POINTS)
-        .join(''),
+      requestText: this.requestTextOf(input.content),
       inboundScanFindings: input.inboundScanFindings ?? null,
       startedAt: input.startedAt,
       endedAt: null,
       runningTaskIds: new Set(),
-      runningCoordinatorTaskId: null,
+      runningCoordinatorTaskIds: new Set(),
       autoRegistered: false,
       taskIds: new Set(),
       lastActivityAt: input.startedAt,
@@ -321,7 +349,7 @@ export class TurnActivityRegistry {
       startedAt: root.startedAt,
       endedAt: root.endedAt,
       runningTaskIds: new Set(root.runningTaskIds),
-      runningCoordinatorTaskId: root.runningCoordinatorTaskId,
+      runningCoordinatorTaskId: [...root.runningCoordinatorTaskIds].pop() ?? null,
       autoRegistered: root.autoRegistered,
     });
   }
@@ -348,19 +376,21 @@ export class TurnActivityRegistry {
   /** Drop ended roots older than the window, with their actions and shown sets. */
   private prune(): void {
     const now = this.now();
-    let oldestRunningStart = now;
-    for (const root of this.roots.values()) {
-      if (!root.autoRegistered && root.endedAt === null && root.startedAt < oldestRunningStart) {
-        oldestRunningStart = root.startedAt;
+    const autoCutoff = now - TURN_ACTIVITY_WINDOW_MS;
+    // Stale auto-registered roots go first so they do not hold the cutoff back.
+    for (const root of [...this.roots.values()]) {
+      if (root.autoRegistered && root.runningTaskIds.size === 0 && root.lastActivityAt < autoCutoff) {
+        this.dropRoot(root);
       }
     }
+    // A live root (auto-registered or not) still looks back a window from its own start.
+    let oldestRunningStart = now;
+    for (const root of this.roots.values()) {
+      if (root.endedAt === null && root.startedAt < oldestRunningStart) oldestRunningStart = root.startedAt;
+    }
     const endedCutoff = oldestRunningStart - TURN_ACTIVITY_WINDOW_MS;
-    const autoCutoff = now - TURN_ACTIVITY_WINDOW_MS;
     for (const root of [...this.roots.values()]) {
-      const stale = root.autoRegistered
-        ? root.runningTaskIds.size === 0 && root.lastActivityAt < autoCutoff
-        : root.endedAt !== null && root.endedAt < endedCutoff;
-      if (stale) this.dropRoot(root);
+      if (!root.autoRegistered && root.endedAt !== null && root.endedAt < endedCutoff) this.dropRoot(root);
     }
     this.dropOrphanActions();
   }
@@ -370,8 +400,8 @@ export class TurnActivityRegistry {
   }
 
   private enforceCaps(): void {
-    let evicted = 0;
     if (this.roots.size > MAX_TRACKED_ROOTS) {
+      let evicted = 0;
       const candidates = [...this.roots.values()]
         .filter((r) => this.isEvictable(r))
         .sort((a, b) => this.evictionAge(a) - this.evictionAge(b));
@@ -381,26 +411,57 @@ export class TurnActivityRegistry {
         evicted++;
       }
       this.dropOrphanActions();
-    }
-    if (evicted > 0) {
-      this.logger.warn({ evicted, cap: MAX_TRACKED_ROOTS }, 'turn activity: evicted oldest ended roots over the cap');
-    }
-
-    if (this.actions.length > MAX_TRACKED_ACTIONS) {
-      const excess = this.actions.length - MAX_TRACKED_ACTIONS;
-      // Oldest first. Actions of ended roots go before those of running roots.
-      const ended = this.actions.filter((a) => {
-        const root = this.roots.get(a.rootId);
-        return root !== undefined && this.isEvictable(root);
-      });
-      const drop = new Set<RecordedAction>(ended.slice(0, excess));
-      if (drop.size < excess) {
-        for (const a of this.actions) {
-          if (drop.size >= excess) break;
-          drop.add(a);
-        }
+      if (evicted > 0) {
+        this.logger.warn({ evicted, cap: MAX_TRACKED_ROOTS }, 'turn activity: evicted oldest ended roots over the cap');
       }
-      this.actions = this.actions.filter((a) => !drop.has(a));
+      if (this.roots.size > MAX_TRACKED_ROOTS) {
+        // Every remaining root is live. Keep them (dropping one would lose a running turn), but say so.
+        this.logger.warn(
+          { size: this.roots.size, cap: MAX_TRACKED_ROOTS },
+          'turn activity: more live roots than the cap and nothing evictable',
+        );
+      }
+    }
+    this.enforceActionCap();
+  }
+
+  /** Past the per-root cap, a root drops its own oldest action. It never evicts another root's. */
+  private enforceRootActionCap(rootId: string): void {
+    let count = 0;
+    let oldest = -1;
+    for (let i = 0; i < this.actions.length; i++) {
+      if (this.actions[i]!.rootId !== rootId) continue;
+      if (oldest === -1) oldest = i;
+      count++;
+    }
+    if (count > MAX_ACTIONS_PER_ROOT) this.actions.splice(oldest, 1);
+  }
+
+  /**
+   * Global cap. Actions of ended roots go first, oldest first. Only if that is not enough do
+   * live roots lose actions, and that is logged at error: the backstop is degraded.
+   */
+  private enforceActionCap(): void {
+    const excess = this.actions.length - MAX_TRACKED_ACTIONS;
+    if (excess <= 0) return;
+    const drop = new Set<RecordedAction>();
+    for (const a of this.actions) {
+      if (drop.size >= excess) break;
+      const root = this.roots.get(a.rootId);
+      if (root && this.isEvictable(root)) drop.add(a);
+    }
+    const fromEnded = drop.size;
+    for (const a of this.actions) {
+      if (drop.size >= excess) break;
+      drop.add(a);
+    }
+    this.actions = this.actions.filter((a) => !drop.has(a));
+    if (drop.size > fromEnded) {
+      this.logger.error(
+        { evicted: drop.size, evictedFromEnded: fromEnded, evictedFromLive: drop.size - fromEnded, cap: MAX_TRACKED_ACTIONS },
+        'turn activity: evicted actions of live roots over the cap; the backstop is degraded',
+      );
+    } else {
       this.logger.warn({ evicted: drop.size, cap: MAX_TRACKED_ACTIONS }, 'turn activity: evicted oldest actions over the cap');
     }
   }
