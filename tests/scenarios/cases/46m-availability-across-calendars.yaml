@@ -33,7 +33,18 @@ tool_stubs:
         blocking:
           - { eventId: evt-dentist, title: Dentist, calendar_label: Personal, start: "{{time:workday+1 14:00}}", end: "{{time:workday+1 15:00}}" }
         treated_as_free: []
+  # A check that overlaps the dentist (a start at 1:30, 2 or 2:30) reports it; any other check (the
+  # free windows) is clear. The stub never calls the dentist interval clear.
   calendar-check-conflicts:
+    - agent: calendar
+      match: { proposedStart: "{{time:workday+1 13:30}}" }
+      return: &dentist { clear: false, displayTimezone: "{{timezone}}", conflicts: [{ calendarId: ceo@personal.example.test, contactName: null, startTime: "{{time:workday+1 14:00}}", endTime: "{{time:workday+1 15:00}}", status: busy, eventId: evt-dentist, title: Dentist, calendar_label: Personal }] }
+    - agent: calendar
+      match: { proposedStart: "{{time:workday+1 14:00}}" }
+      return: *dentist
+    - agent: calendar
+      match: { proposedStart: "{{time:workday+1 14:30}}" }
+      return: *dentist
     - agent: calendar
       match: {}
       return: { clear: true, conflicts: [], displayTimezone: "{{timezone}}" }
