@@ -202,14 +202,24 @@ export async function contactRoutes(
       return reply.status(400).send({ error: canonicalError });
     }
 
-    const created = await contactService.createContact({
-      displayName: body.displayName,
-      role: typeof body.role === 'string' && body.role.trim().length > 0 ? body.role : undefined,
-      notes: typeof body.notes === 'string' && body.notes.trim().length > 0 ? body.notes : undefined,
-      kgNodeId,
-      source: 'kg_web_ui',
-      ...canonicalFields,
-    });
+    let created;
+    try {
+      created = await contactService.createContact({
+        displayName: body.displayName,
+        role: typeof body.role === 'string' && body.role.trim().length > 0 ? body.role : undefined,
+        notes: typeof body.notes === 'string' && body.notes.trim().length > 0 ? body.notes : undefined,
+        kgNodeId,
+        source: 'kg_web_ui',
+        ...canonicalFields,
+      });
+    } catch (err) {
+      // e.g. an unrecognized timezone typed into the free-text field: the operator's input
+      // to fix, not a server fault. Anything else propagates to the default 500 handler.
+      if (err instanceof ContactValidationError) {
+        return reply.status(400).send({ error: err.message });
+      }
+      throw err;
+    }
 
     // Read back so tier/kind overrides below start from the current contact state.
     let freshCreated = await contactService.getContact(created.id);

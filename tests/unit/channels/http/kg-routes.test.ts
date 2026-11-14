@@ -4,6 +4,7 @@ import rateLimit from '@fastify/rate-limit';
 import type { Pool, PoolClient } from 'pg';
 import type { Logger } from '../../../../src/logger.js';
 import type { ContactService } from '../../../../src/contacts/contact-service.js';
+import { InvalidTimezoneError } from '../../../../src/contacts/contact-service.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { knowledgeGraphRoutes } from '../../../../src/channels/http/routes/kg.js';
 import { taskRoutes } from '../../../../src/channels/http/routes/tasks.js';
@@ -1064,6 +1065,31 @@ describe('console routes (kg / tasks / contacts / chat)', () => {
 
       expect(res.statusCode).toBe(400);
       expect(contactService.createContact).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it('returns 400, not 500, when the service rejects the timezone', async () => {
+      const contactService = createContactService();
+      vi.mocked(contactService.createContact).mockRejectedValue(new InvalidTimezoneError('Eastern Time - US & Canada'));
+      const app = Fastify();
+      await registerConsoleRoutes(app, {
+        pool,
+        logger: createLogger(),
+        webAppBootstrapSecret: 'secret-1',
+        sessions: new Map(),
+        contactService,
+        include: ['contacts'],
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/contacts',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: { displayName: 'Test', timezone: 'Eastern Time - US & Canada' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/not a recognized timezone/);
       await app.close();
     });
   });
