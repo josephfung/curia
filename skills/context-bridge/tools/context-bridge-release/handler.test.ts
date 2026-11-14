@@ -202,7 +202,7 @@ describe('ContextBridgeReleaseHandler', () => {
         released: ENTRY_ID,
         task_id: TASK_ID,
         reply_attached: false,
-        note: 'task already done; reply not attached',
+        note: expect.stringMatching(/^task already done; reply not attached\. .*new request/),
       },
     });
     expect(taskRepo.updateTask).not.toHaveBeenCalled();

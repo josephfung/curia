@@ -48,6 +48,13 @@ export function buildTaskWakeAutoBridge(opts: {
   };
 }
 
+/**
+ * Task statuses a reply can no longer attach to. Matches the statuses whose end releases
+ * the task's bindings in TaskRepo: done and cancelled are terminal, and failed is
+ * abandoned work (#2312, #2592).
+ */
+const ENDED_TASK_STATUSES: ReadonlySet<string> = new Set(['done', 'cancelled', 'failed']);
+
 export interface TaskWakeReplyPersistResult {
   persisted: boolean;
   /**
@@ -94,67 +101,87 @@ export async function recordTaskWakeReply(options: {
 
   const taskId = options.entry.metadata![TASK_WAKE_TASK_ID_KEY] as string;
 
-  // The task is gone or finished, so the reply has nowhere to go. Release the entry and
+  const persistFailed = (err: unknown): TaskWakeReplyPersistResult => {
+    // Leaves the entry active so the reply can be retried (DB unavailable, etc.).
+    options.logger.error({ err, taskId, entryId: options.entryId }, 'task-wake reply persistence failed');
+    return { persisted: false, error: 'failed to persist task-wake reply' };
+  };
+
+  // The task is gone or has ended, so the reply has nowhere to go. Release the entry and
   // report that plainly. Leaving it active is what let one stale ask keep matching (and
-  // failing on) unrelated principal replies for days (#2592).
-  const releaseUnattached = async (note: string): Promise<TaskWakeReplyPersistResult> => {
-    options.logger.info({ taskId, entryId: options.entryId, note }, 'task-wake reply: releasing entry without attaching reply');
-    await options.outboundContext.releaseEntry(options.entryId);
+  // failing on) unrelated principal replies for days (#2592). Never throws: a failed
+  // release gets its own error, so it is not mistaken for a failed write to the task.
+  const releaseUnattached = async (
+    reason: string,
+    level: 'info' | 'warn',
+  ): Promise<TaskWakeReplyPersistResult> => {
+    // The reply is stored nowhere, so the note tells the coordinator what to do with it.
+    const note = `${reason}; reply not attached. If it asks for something new, handle it as a new request.`;
+    options.logger[level]({ taskId, entryId: options.entryId, reason }, 'task-wake reply: releasing entry without attaching reply');
+    try {
+      await options.outboundContext.releaseEntry(options.entryId);
+    } catch (err) {
+      options.logger.error({ err, taskId, entryId: options.entryId, reason }, 'task-wake reply: failed to release entry for an ended task');
+      return { persisted: false, error: `${reason}, but releasing the outbound context entry failed; retry the release` };
+    }
     return { persisted: false, released: true, note, taskId, entryId: options.entryId };
   };
 
+  let task: Awaited<ReturnType<TaskRepo['getTask']>>;
   try {
-    const task = await options.taskRepo.getTask(taskId);
-    if (!task) {
-      return await releaseUnattached('task no longer exists; reply not attached');
-    }
-    // A done or cancelled task cannot take a progress note: updateTask's terminal guard
-    // rejects the write. Check up front rather than leaning on that error.
-    if (task.status === 'done' || task.status === 'cancelled') {
-      return await releaseUnattached(`task already ${task.status}; reply not attached`);
-    }
+    task = await options.taskRepo.getTask(taskId);
+  } catch (err) {
+    return persistFailed(err);
+  }
+  // A binding to a task id that no longer exists is a data problem, not routine: warn.
+  if (!task) return releaseUnattached('task no longer exists', 'warn');
+  // Done and cancelled cannot take a progress note (updateTask's terminal guard rejects
+  // it), and a failed task is abandoned work, as its outreach is (#2312). Check up front
+  // rather than leaning on the guard's error.
+  if (ENDED_TASK_STATUSES.has(task.status)) {
+    return releaseUnattached(`task already ${task.status}`, 'info');
+  }
 
-    const progressNote = `${options.repliedBy ?? 'principal'} replied: ${reply.slice(0, 1500)}`;
-    const updates: Parameters<TaskRepo['updateTask']>[1] = { progressNote };
+  const progressNote = `${options.repliedBy ?? 'principal'} replied: ${reply.slice(0, 1500)}`;
+  const updates: Parameters<TaskRepo['updateTask']>[1] = { progressNote };
 
-    // The principal answering hands their task back to Curia (#1299). A contact's answer
-    // does not (#2261): a task the principal owns stays theirs, in its status, with the
-    // answer noted. Curia's own parked task resumes, since the answer is what it waited on.
-    const byPrincipal = options.repliedBy === undefined;
-    if (byPrincipal && task.owner === 'ceo') {
-      updates.owner = 'curia';
-    }
-    if ((byPrincipal || task.owner !== 'ceo') && (task.status === 'waiting' || task.status === 'blocked')) {
-      updates.status = 'in_progress';
-    }
+  // The principal answering hands their task back to Curia (#1299). A contact's answer
+  // does not (#2261): a task the principal owns stays theirs, in its status, with the
+  // answer noted. Curia's own parked task resumes, since the answer is what it waited on.
+  const byPrincipal = options.repliedBy === undefined;
+  if (byPrincipal && task.owner === 'ceo') {
+    updates.owner = 'curia';
+  }
+  if ((byPrincipal || task.owner !== 'ceo') && (task.status === 'waiting' || task.status === 'blocked')) {
+    updates.status = 'in_progress';
+  }
 
-    await options.taskRepo.updateTask(taskId, updates, 'coordinator');
-    await options.outboundContext.releaseEntry(options.entryId);
-
-    options.logger.info(
-      { taskId, entryId: options.entryId },
-      'task-wake reply recorded on originating task',
-    );
-
-    return { persisted: true, taskId, entryId: options.entryId };
+  let updated: Awaited<ReturnType<TaskRepo['updateTask']>>;
+  try {
+    updated = await options.taskRepo.updateTask(taskId, updates, 'coordinator');
   } catch (err) {
     // The task ended between getTask and updateTask. Same outcome as the up-front check.
     if (err instanceof TaskTerminalStateError) {
-      try {
-        return await releaseUnattached(`task already ${err.status}; reply not attached`);
-      } catch (releaseErr) {
-        options.logger.error(
-          { err: releaseErr, taskId, entryId: options.entryId },
-          'task-wake reply: failed to release entry for a finished task',
-        );
-        return { persisted: false, error: 'failed to persist task-wake reply' };
-      }
+      return releaseUnattached(`task already ${err.status}`, 'info');
     }
-    // Anything else (DB unavailable, etc.) leaves the entry active so the reply can be retried.
-    options.logger.error(
-      { err, taskId, entryId: options.entryId },
-      'task-wake reply persistence failed',
-    );
-    return { persisted: false, error: 'failed to persist task-wake reply' };
+    return persistFailed(err);
   }
+  // updateTask returns null, without throwing, when the task was deleted meanwhile.
+  // Nothing was written, so this must not be reported as recorded.
+  if (!updated) return releaseUnattached('task no longer exists', 'warn');
+
+  try {
+    await options.outboundContext.releaseEntry(options.entryId);
+  } catch (err) {
+    // The note is already on the task. Say so, so the failure is not read as a lost reply.
+    options.logger.error({ err, taskId, entryId: options.entryId }, 'task-wake reply recorded, but releasing the entry failed');
+    return { persisted: false, error: 'reply recorded on the task, but releasing the outbound context entry failed' };
+  }
+
+  options.logger.info(
+    { taskId, entryId: options.entryId },
+    'task-wake reply recorded on originating task',
+  );
+
+  return { persisted: true, taskId, entryId: options.entryId };
 }

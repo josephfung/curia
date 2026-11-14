@@ -1934,7 +1934,7 @@ async function main(): Promise<void> {
   const outreachNonOrgDomains = principalOrgDomainSet(yamlConfig.security?.principal_org_domains ?? []);
   // Outbound context bridge — delegation-aware context registry for
   // specialist-initiated outbound. Requires pool (Postgres).
-  // Constructed before TaskRepo (a finished task releases its task-wake bindings, #2592),
+  // Constructed before TaskRepo (an ended task releases its task-wake bindings, #2592),
   // VoiceRuntime (so voice turns can inject active entries — #1594) and Scheduler
   // (startup + daily cleanup).
   const outboundContextService = pool
@@ -2403,7 +2403,6 @@ async function main(): Promise<void> {
   } else if (outboundGateway && channelShouldStart.has('sms') && !smsClient) {
     logger.warn('channel sms is enabled + resolvable but its runtime client/credentials are missing (api key, from number, or webhook public key); no SMS adapter constructed — check vault/env credentials and restart');
   }
-
 
   // Construct the Voice adapter (HTTP session handler installed on start).
   if (

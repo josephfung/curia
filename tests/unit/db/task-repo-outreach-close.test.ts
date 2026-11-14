@@ -6,7 +6,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import type { Pool } from 'pg';
-import { TaskRepo } from '../../../src/db/task-repo.js';
+import { TaskRepo, TaskTerminalStateError } from '../../../src/db/task-repo.js';
 import type { EventBus } from '../../../src/bus/bus.js';
 
 const logger = pino({ level: 'silent' });
@@ -93,10 +93,7 @@ describe('TaskRepo closes task outreach when a task ends', () => {
   // #2592: a task-wake ask bound to a finished task must stop matching later principal replies.
   describe('task-wake reply bindings', () => {
     const outreach = () => ({ closeForTask: vi.fn(async () => 0), reopenForTask: vi.fn(async () => 0) });
-    const bindings = () => ({
-      releaseTaskWakeBindingsForTask: vi.fn(async () => 1),
-      restoreTaskWakeBindingsForTask: vi.fn(async () => 1),
-    });
+    const bindings = () => ({ releaseTaskWakeBindingsForTask: vi.fn(async () => 1) });
 
     it('completeTask releases the bindings of the task and its reconciled children', async () => {
       const { pool } = makePool('done', [CHILD_ID]);
@@ -139,21 +136,28 @@ describe('TaskRepo closes task outreach when a task ends', () => {
       await expect(repo.completeTask(TASK_ID)).resolves.toMatchObject({ id: TASK_ID, status: 'done' });
     });
 
-    it('reopenTask restores the bindings its end released', async () => {
-      const { pool } = makePool('open', [], 'done');
+    it('failResumableTask releases the bindings of the task and its reconciled children', async () => {
+      const { pool } = makePool('failed', [CHILD_ID]);
       const b = bindings();
       const repo = new TaskRepo(pool, bus, logger, 'UTC', undefined, outreach(), b);
-      await repo.reopenTask(TASK_ID, 'Undo');
-      expect(b.restoreTaskWakeBindingsForTask).toHaveBeenCalledWith(TASK_ID);
+      await repo.failResumableTask(TASK_ID, { progressNote: 'circuit open', circuitState: {} as never, tags: [] });
+      expect(b.releaseTaskWakeBindingsForTask).toHaveBeenCalledWith(TASK_ID);
+      expect(b.releaseTaskWakeBindingsForTask).toHaveBeenCalledWith(CHILD_ID);
     });
+  });
 
-    it('a failed restore does not fail the reopen', async () => {
-      const { pool } = makePool('open', [], 'done');
-      const b = bindings();
-      b.restoreTaskWakeBindingsForTask.mockRejectedValue(new Error('db down'));
-      const repo = new TaskRepo(pool, bus, logger, 'UTC', undefined, outreach(), b);
-      await expect(repo.reopenTask(TASK_ID, 'Undo')).resolves.toMatchObject({ id: TASK_ID, status: 'open' });
+  // #2592: recordTaskWakeReply tells "the task already ended" from a real failure by class.
+  it('a write that loses a race to a terminal transition throws TaskTerminalStateError', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('UPDATE tasks')) return { rows: [] };
+      if (sql.includes('SELECT id, status FROM tasks')) return { rows: [{ id: TASK_ID, status: 'done' }] };
+      return { rows: [taskRow('waiting')] };
     });
+    const pool = { query, connect: vi.fn() } as unknown as Pool;
+    const repo = new TaskRepo(pool, bus, logger, 'UTC');
+    const err = await repo.updateTask(TASK_ID, { progressNote: 'late reply' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TaskTerminalStateError);
+    expect((err as TaskTerminalStateError).status).toBe('done');
   });
 
   it('a failed close does not fail the completion', async () => {

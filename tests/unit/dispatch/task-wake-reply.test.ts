@@ -169,14 +169,14 @@ describe('task-wake-reply', () => {
 
       expect(result).toMatchObject({ persisted: false, released: true, taskId: TASK_ID, entryId: ENTRY_ID });
       expect(result.error).toBeUndefined();
-      expect(result.note).toMatch(/no longer exists/);
+      expect(result.note).toMatch(/^task no longer exists; reply not attached\./);
       expect(taskRepo.updateTask).not.toHaveBeenCalled();
       expect(outboundContext.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
     });
 
-    // #2592: a finished task cannot take a progress note, and the stale entry kept catching
+    // #2592: an ended task cannot take a progress note, and the stale entry kept catching
     // unrelated principal replies. Release it and report a non-error "not attached".
-    it.each(['done', 'cancelled'])('releases the entry without an error when the bound task is %s', async (status) => {
+    it.each(['done', 'cancelled', 'failed'])('releases the entry without an error when the bound task is %s', async (status) => {
       (taskRepo.getTask as ReturnType<typeof vi.fn>).mockResolvedValue({ id: TASK_ID, status, owner: 'curia' });
       const result = await recordTaskWakeReply({
         reply: 'Thx!', entryId: ENTRY_ID, entry: makeEntry(), taskRepo, outboundContext, logger,
@@ -184,9 +184,18 @@ describe('task-wake-reply', () => {
 
       expect(result).toMatchObject({ persisted: false, released: true, taskId: TASK_ID, entryId: ENTRY_ID });
       expect(result.error).toBeUndefined();
-      expect(result.note).toBe(`task already ${status}; reply not attached`);
+      expect(result.note).toMatch(new RegExp(`^task already ${status}; reply not attached\\.`));
       expect(taskRepo.updateTask).not.toHaveBeenCalled();
       expect(outboundContext.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+    });
+
+    it('tells the coordinator what to do with a reply it could not attach', async () => {
+      (taskRepo.getTask as ReturnType<typeof vi.fn>).mockResolvedValue({ id: TASK_ID, status: 'done', owner: 'curia' });
+      const result = await recordTaskWakeReply({
+        reply: 'Also send it to Sam', entryId: ENTRY_ID, entry: makeEntry(), taskRepo, outboundContext, logger,
+      });
+
+      expect(result.note).toMatch(/handle it as a new request/);
     });
 
     it('releases the entry without an error when the task ends between the read and the write', async () => {
@@ -197,8 +206,33 @@ describe('task-wake-reply', () => {
 
       expect(result).toMatchObject({ persisted: false, released: true, taskId: TASK_ID });
       expect(result.error).toBeUndefined();
-      expect(result.note).toBe('task already done; reply not attached');
+      expect(result.note).toMatch(/^task already done; reply not attached\./);
       expect(outboundContext.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+    });
+
+    // updateTask returns null without throwing when the task is deleted mid-write.
+    it('does not report a reply as recorded when the task vanished during the write', async () => {
+      (taskRepo.updateTask as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+      const result = await recordTaskWakeReply({
+        reply: 'Yes', entryId: ENTRY_ID, entry: makeEntry(), taskRepo, outboundContext, logger,
+      });
+
+      expect(result).toMatchObject({ persisted: false, released: true });
+      expect(result.note).toMatch(/^task no longer exists; reply not attached\./);
+      expect(outboundContext.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+    });
+
+    it('names the failed release, not a failed write, when releasing an ended task\'s entry fails', async () => {
+      (taskRepo.getTask as ReturnType<typeof vi.fn>).mockResolvedValue({ id: TASK_ID, status: 'done', owner: 'curia' });
+      (outboundContext.releaseEntry as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db down'));
+      const result = await recordTaskWakeReply({
+        reply: 'Thx!', entryId: ENTRY_ID, entry: makeEntry(), taskRepo, outboundContext, logger,
+      });
+
+      expect(result).toEqual({
+        persisted: false,
+        error: 'task already done, but releasing the outbound context entry failed; retry the release',
+      });
     });
 
     it('fails and keeps the entry when the write fails for any other reason', async () => {
