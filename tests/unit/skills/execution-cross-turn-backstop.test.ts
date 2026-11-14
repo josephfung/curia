@@ -85,7 +85,13 @@ function setup(opts?: { logger?: Logger }) {
 function startRoot(
   turnActivity: TurnActivityRegistry,
   taskEventId: string,
-  extra?: { channelId?: string; content?: string; originatorContactId?: string | null; originatorResolved?: boolean },
+  extra?: {
+    channelId?: string;
+    content?: string;
+    originatorContactId?: string | null;
+    originatorResolved?: boolean;
+    originatorIsSystem?: boolean;
+  },
 ) {
   return turnActivity.taskStarted({
     taskEventId,
@@ -98,6 +104,8 @@ function startRoot(
     startedAt: Date.now(),
     originatorContactId: extra?.originatorContactId === undefined ? PRINCIPAL : extra.originatorContactId,
     originatorResolved: extra?.originatorResolved ?? extra?.originatorContactId !== null,
+    // No originator is Curia's own work, as the runtime classifies it.
+    originatorIsSystem: extra?.originatorIsSystem ?? extra?.originatorContactId === null,
   });
 }
 
@@ -257,12 +265,17 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
     const GENERIC = 'Another conversation already acted on this same target recently.';
     const ISO_TIME = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
 
-    async function holdSeenBy(actor: string | null, viewer: string | null, viewerChannel = 'signal') {
+    async function holdSeenBy(
+      actor: string | null,
+      viewer: string | null,
+      viewerChannel = 'signal',
+      viewerExtra: { originatorIsSystem?: boolean } = {},
+    ) {
       const { registry, layer, turnActivity } = setup();
       const handler = makeHandler();
       registry.register(makeRiskyManifest('contact-message', 'medium'), handler);
       startRoot(turnActivity, 'task-a', { originatorContactId: actor });
-      startRoot(turnActivity, 'task-b', { originatorContactId: viewer, channelId: viewerChannel });
+      startRoot(turnActivity, 'task-b', { originatorContactId: viewer, channelId: viewerChannel, ...viewerExtra });
       expect((await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a'))).success).toBe(true);
       const held = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-b', { channelId: viewerChannel }));
       expect(held.success).toBe(false);
@@ -296,6 +309,18 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
     it('a system turn sees the details', async () => {
       const text = await holdSeenBy(BOB, null, 'scheduler');
       expect(text).toContain('contact-message on Alice Example at ');
+    });
+
+    it('a turn whose originator has the agent role is system and sees the details', async () => {
+      const text = await holdSeenBy(BOB, '00000000-0000-4000-8000-00000000a6e7', 'scheduler', { originatorIsSystem: true });
+      expect(text).toContain('contact-message on Alice Example at ');
+    });
+
+    it('an internal turn carrying a non-principal contact gets the generic line', async () => {
+      // Channel internal used to mean system; it is the originator that decides now.
+      const text = await holdSeenBy(PRINCIPAL, BOB, 'internal');
+      expect(text).toContain(GENERIC);
+      expect(text).not.toContain('Alice Example');
     });
   });
 

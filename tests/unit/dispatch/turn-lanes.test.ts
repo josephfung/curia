@@ -9,6 +9,7 @@ import { createAgentTask, type AgentTaskPayload } from '../../../src/bus/events.
 import {
   TurnLanes,
   holderFromAgentTask,
+  originatorIsSystem,
   type InjectableInput,
   type LaneHolder,
   type TryInjectResult,
@@ -638,5 +639,25 @@ describe('holderFromAgentTask', () => {
     const emailOriginator = { ...principal, contactId: 'person@example.com' };
     const raw = { ...event, id: 'task-raw', payload: { ...event.payload, metadata: { originator: emailOriginator } } };
     expect(holderFromAgentTask(raw, { originatorResolved: true }).originatorResolved).toBe(false);
+  });
+});
+
+describe('originatorIsSystem (#2588)', () => {
+  const PERSON = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+  it('no originator, or a malformed one, is system', () => {
+    expect(originatorIsSystem(undefined)).toBe(true);
+    expect(originatorIsSystem(null)).toBe(true);
+    expect(originatorIsSystem({ contactId: 7 })).toBe(true);
+  });
+
+  it.each(['system', 'agent'])('a %s role is system', (systemRole) => {
+    expect(originatorIsSystem({ contactId: PERSON, channel: 'scheduler', systemRole })).toBe(true);
+  });
+
+  it('a person, resolved or not, is not system whatever the channel', () => {
+    expect(originatorIsSystem({ contactId: PERSON, channel: 'internal', systemRole: 'principal' })).toBe(false);
+    expect(originatorIsSystem({ contactId: PERSON, channel: 'scheduler', systemRole: null, tier: 'known' })).toBe(false);
+    expect(originatorIsSystem({ contactId: '+15550001111', channel: 'signal', systemRole: null, tier: 'unknown' })).toBe(false);
   });
 });

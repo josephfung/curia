@@ -61,6 +61,23 @@ describe('runtime turn activity (#2588)', () => {
     expect(root).toBeDefined();
     expect(root!.endedAt).not.toBeNull();
     expect(root!.originatorContactId).toBe(null);
+    // No originator: Curia's own work.
+    expect(root!.originatorIsSystem).toBe(true);
+  });
+
+  it("an internal task carrying a person's originator is that person's turn, not system", async () => {
+    const logger = createLogger('error');
+    const registry = new TurnActivityRegistry({ logger });
+    const provider: LLMProvider = { id: 'mock', chat: vi.fn(() => Promise.resolve(text('ok'))) };
+    const { bus } = build(provider, registry);
+    const event = task('hello', {
+      channelId: 'internal',
+      metadata: { originator: { contactId: CONTACT, channel: 'email', systemRole: null, tier: 'known' } },
+    });
+    await bus.publish('dispatch', event);
+    const root = registry.rootOf(event.id)!;
+    expect(root.originatorIsSystem).toBe(false);
+    expect(root.originatorResolved).toBe(true);
   });
 
   it('ends the task even when the turn throws', async () => {
