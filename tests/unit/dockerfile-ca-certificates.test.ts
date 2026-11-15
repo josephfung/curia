@@ -34,15 +34,40 @@ function runInstructions(stage: string): string[] {
     .filter((line) => /^RUN\s/.test(line));
 }
 
+/**
+ * Package names passed to each `apt-get install` in a RUN, as whole tokens.
+ * Matching the RUN text instead would be fooled by the bundle path
+ * `/etc/ssl/certs/ca-certificates.crt` in the same chain.
+ */
+function aptInstallPackages(run: string): string[] {
+  const packages: string[] = [];
+  for (const command of run.split(/&&|;|\|\|/)) {
+    const match = /\bapt-get\b.*?\binstall\b(.*)$/.exec(command);
+    if (!match) continue;
+    packages.push(...match[1]!.trim().split(/\s+/).filter((arg) => arg && !arg.startsWith('-')));
+  }
+  return packages;
+}
+
+const BUNDLE_CHECK = 'test -s /etc/ssl/certs/ca-certificates.crt';
+
 describe('runtime image CA bundle', () => {
   const runs = runInstructions(runtimeStage(dockerfile));
 
   it('installs ca-certificates in the runtime stage', () => {
-    const installs = runs.filter((run) => /apt-get\b.*\binstall\b/.test(run));
-    expect(installs.some((run) => /\bca-certificates\b/.test(run))).toBe(true);
+    expect(runs.flatMap(aptInstallPackages)).toContain('ca-certificates');
   });
 
   it('fails the build when the CA bundle is missing', () => {
-    expect(runs.some((run) => /test\s+-s\s+\/etc\/ssl\/certs\/ca-certificates\.crt/.test(run))).toBe(true);
+    // Chained with && and not softened with || or a trailing ;, so a missing
+    // bundle fails the RUN rather than being skipped.
+    const check = runs.find((run) => run.includes(BUNDLE_CHECK));
+    expect(check, `no RUN in the runtime stage runs \`${BUNDLE_CHECK}\``).toBeDefined();
+    expect(check!.replace(/\s+/g, ' ')).toMatch(/&& test -s \/etc\/ssl\/certs\/ca-certificates\.crt\s*$/);
+  });
+
+  // Mutation checks on the helpers, so the guards above cannot pass vacuously.
+  it('does not mistake the bundle path for the package', () => {
+    expect(aptInstallPackages(`apt-get install -y curl && ${BUNDLE_CHECK}`)).toEqual(['curl']);
   });
 });
