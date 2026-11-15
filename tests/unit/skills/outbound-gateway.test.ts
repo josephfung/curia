@@ -7015,9 +7015,13 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(reports()).toHaveLength(0);
       });
 
-      it('uses the fallback text for a hold with no reason code', async () => {
-        const { gw } = makeAuto({ ledger: withHeld(heldEntry({ reasonCode: undefined })) });
-        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'already_held', blockedReason: HELD });
+      it('uses the fallback text for a hold with no reason code, or one with no cause beyond "held"', async () => {
+        for (const reasonCode of [undefined, 'review_hold', 'already_held', 'stakes-commitment']) {
+          mocks = createMocks();
+          const { gw } = makeAuto({ ledger: withHeld(heldEntry({ reasonCode })) });
+          // DeepSeek round 2: never "already held for the principal: Held for the principal."
+          expect(await gw.sendPrincipalDraft('d1', auto), String(reasonCode)).toMatchObject({ refusal: 'already_held', blockedReason: HELD });
+        }
       });
 
       // Review (silent failures): the quiet refusal assumes the first hold reached the principal.
@@ -7045,6 +7049,11 @@ describe('sendPrincipalDraft (#2474)', () => {
         ['too-many-copied', 'The message it answers copies more than 20 people, so Curia left it for you.'],
         ['unresolved-identity', "It names someone Curia couldn't identify."],
         ['check_stop', "Curia's checks stopped it."],
+        // DeepSeek round 2 (finding A): the review rules that had no recovery text.
+        ['redaction-token', 'It contains a redaction placeholder.'],
+        ['steered', "The reviewer judged it steered by someone outside your business."],
+        ['speaks-as-principal', 'It commits you beyond what Curia sends on its own.'],
+        ['review-unavailable', "The send review wasn't available to check it."],
       ])('recovers %s as its plain reason', async (code, said) => {
         const { gw } = makeAuto({ ledger: withHeld(heldEntry({ unreported: true, reasonCode: code })) });
         await gw.sendPrincipalDraft('d1', auto);
@@ -7243,6 +7252,19 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(await secondCall).toMatchObject({ refusal: 'already_held' });
         expect(review).toHaveBeenCalledOnce();
         expect(reports()).toHaveLength(1);
+      });
+
+      // DeepSeek round 2 (finding C): a call that rejects must not wedge the draft's queue.
+      it('runs the next call on a draft after one that rejected, and clears the queue', async () => {
+        const { gw } = makeAuto();
+        const internals = gw as unknown as { sendPrincipalDraftOnce: (...a: unknown[]) => Promise<unknown>; principalDraftCalls: Map<string, unknown> };
+        const once = vi.spyOn(internals, 'sendPrincipalDraftOnce').mockRejectedValueOnce(new Error('boom'));
+        const first = gw.sendPrincipalDraft('d1', auto);
+        const second = gw.sendPrincipalDraft('d1', auto);
+        await expect(first).rejects.toThrow('boom');
+        expect((await second).success).toBe(true);
+        expect(once).toHaveBeenCalledTimes(2);
+        expect(internals.principalDraftCalls.size).toBe(0);
       });
 
       it('does not serialise calls on different drafts', async () => {
