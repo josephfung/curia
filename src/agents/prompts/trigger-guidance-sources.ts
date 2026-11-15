@@ -29,7 +29,7 @@ import {
   AUDIENCE_LEAK_REWRITE_LINES,
   CONTENT_BLOCK_REWRITE_INSTRUCTION_LINES,
 } from '../../dispatch/content-block-relay.js';
-import { PRIOR_TURN_ACTIONS_INTRO, PRIOR_TURN_UNREADABLE_LINE } from './prior-turn-actions.js';
+import { PRIOR_TURN_ACTIONS_INTRO, PRIOR_TURN_NOT_SENT_LINES, PRIOR_TURN_UNREADABLE_LINE } from './prior-turn-actions.js';
 
 /** Newline-joined guidance texts, one marker per line once extracted. */
 export const TRIGGER_GUIDANCE_MARKER_SOURCES: readonly string[] = [
@@ -69,4 +69,5 @@ export const TRIGGER_GUIDANCE_MARKER_SOURCES: readonly string[] = [
   // shorter than the marker floor, and repeating it reveals nothing.
   PRIOR_TURN_ACTIONS_INTRO,
   PRIOR_TURN_UNREADABLE_LINE,
+  ...Object.values(PRIOR_TURN_NOT_SENT_LINES),
 ];

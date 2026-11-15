@@ -28,6 +28,16 @@ describe('parsePriorTurnActions (#2615)', () => {
     expect(parsePriorTurnActions(JSON.parse(JSON.stringify(BOOKED)))).toEqual(BOOKED);
   });
 
+  it('keeps an empty sent list and the not-sent state', () => {
+    const account: PriorTurnActions = {
+      status: 'read',
+      calls: [{ tool: 'delegate', agent: 'calendar', outcome: 'succeeded', sent: [], notSent: 'nothing', excerpt: 'Email sent.' }],
+      earlierLeftOut: 0,
+      moreBeforeLimit: false,
+    };
+    expect(parsePriorTurnActions(JSON.parse(JSON.stringify(account)))).toEqual(account);
+  });
+
   // A partial record shown as complete could read as "nothing was done".
   it.each([
     ['null', null],
@@ -37,6 +47,7 @@ describe('parsePriorTurnActions (#2615)', () => {
     ['a negative count', { status: 'read', calls: [], earlierLeftOut: -1 }],
     ['a call with no tool', { status: 'read', calls: [{ outcome: 'succeeded', excerpt: '' }], earlierLeftOut: 0 }],
     ['a call with an unknown outcome word', { status: 'read', calls: [{ tool: 't', outcome: 'done', excerpt: '' }], earlierLeftOut: 0 }],
+    ['a call with an unknown not-sent word', { status: 'read', calls: [{ tool: 't', outcome: 'succeeded', excerpt: '', notSent: 'maybe' }], earlierLeftOut: 0 }],
     ['too many calls', { status: 'read', calls: Array.from({ length: MAX_PRIOR_TURN_CALLS + 1 }, () => ({ tool: 't', outcome: 'succeeded', excerpt: '' })), earlierLeftOut: 0 }],
   ])('reads %s as unavailable', (_label, raw) => {
     expect(parsePriorTurnActions(raw)).toEqual({ status: 'unavailable' });

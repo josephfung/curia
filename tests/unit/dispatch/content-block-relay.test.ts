@@ -11,7 +11,14 @@ import {
   priorTurnActionsFromRows,
   summarizeBlockFindings,
 } from '../../../src/dispatch/content-block-relay.js';
-import type { PriorTurnActions, PriorTurnCall } from '../../../src/agents/prompts/prior-turn-actions.js';
+import {
+  PRIOR_TURN_NOT_SENT_LINES,
+  parsePriorTurnActions,
+  renderPriorTurnActions,
+  type PriorTurnActions,
+  type PriorTurnCall,
+} from '../../../src/agents/prompts/prior-turn-actions.js';
+import { shapeSpecialistAnswer } from '../../../src/agents/specialist-answer.js';
 
 describe('content-block-relay', () => {
   it('shows the quoted claims of a band bounce to the rewriting agent (#2159)', () => {
@@ -195,6 +202,64 @@ describe('priorTurnActionsFromRows (#2615)', () => {
     expect(call!.excerpt.startsWith('Booked and invite sent.')).toBe(true);
     expect(call!.excerpt.endsWith('Holds released.')).toBe(true);
     expect(Array.from(call!.excerpt).length).toBeLessThanOrEqual(PRIOR_TURN_RESULT_MAX_CHARS);
+  });
+
+  // A specialist's prose can call an email sent when it only composed one (#2055). The rewrite
+  // must see the result's record of that, not the prose alone, through the whole path the
+  // account travels: delegate result → audit row → task payload (JSON) → parser → prompt.
+  describe('a delegate whose prose claims a send that did not happen', () => {
+    /** The rendered prompt line for one delegate call shaped by the real delegate code. */
+    function renderedDelegate(content: string, sends: string[] | undefined, task: string): Record<string, unknown> {
+      const data = { ...shapeSpecialistAnswer(content, sends, task), agent: 'calendar' };
+      const built = priorTurnActionsFromRows([ok('delegate', data, 4)]);
+      const parsed = parsePriorTurnActions(JSON.parse(JSON.stringify(built)));
+      expect(parsed).toEqual(built);
+      const lines = renderPriorTurnActions(parsed!).split('\n');
+      return JSON.parse(lines[lines.length - 1]!) as Record<string, unknown>;
+    }
+
+    it('keeps the empty sent list and says no email went out', () => {
+      const call = renderedDelegate('Email sent to Jordan confirming the booking.', [], 'Send Jordan the confirmation.');
+      expect(call).toEqual({
+        tool: 'delegate',
+        agent: 'calendar',
+        outcome: 'succeeded',
+        sent: [],
+        not_sent: PRIOR_TURN_NOT_SENT_LINES.nothing,
+        result: 'Email sent to Jordan confirming the booking.',
+      });
+    });
+
+    it('says a composed email was not sent', () => {
+      const call = renderedDelegate(
+        'Drafted the confirmation.\n<scheduling_email subject="Confirmed: Tuesday">Hi Jordan, see you Tuesday.</scheduling_email>',
+        ['calendar-create-event'],
+        'Book Tuesday and confirm with Jordan.',
+      );
+      expect(call).toMatchObject({ sent: ['calendar-create-event'], not_sent: PRIOR_TURN_NOT_SENT_LINES.draft });
+    });
+
+    // The delegate result's next_step says to send with email-send; this turn has no tools.
+    it('never passes on the delegate result\'s instruction to send', () => {
+      const data = { ...shapeSpecialistAnswer('Email sent to Jordan.', [], 'Send Jordan the confirmation.'), agent: 'calendar' };
+      expect(data.next_step).toBeDefined();
+      const block = renderPriorTurnActions(priorTurnActionsFromRows([ok('delegate', data, 4)]));
+      expect(block).not.toContain('email-send');
+      expect(block).not.toContain(data.next_step!);
+    });
+
+    it('marks nothing when the email did go out', () => {
+      const call = renderedDelegate('Email sent to Jordan.', ['email-send'], 'Send Jordan the confirmation.');
+      expect(call['sent']).toEqual(['email-send']);
+      expect(call).not.toHaveProperty('not_sent');
+    });
+
+    // Absent and empty are different facts: absent means the runtime did not report sends.
+    it('leaves sent out when the result does not say', () => {
+      const call = renderedDelegate('Email sent to Jordan.', undefined, 'Send Jordan the confirmation.');
+      expect(call).not.toHaveProperty('sent');
+      expect(call).not.toHaveProperty('not_sent');
+    });
   });
 
   it('shows a non-delegate result whole, even when it has a response field', () => {

@@ -265,6 +265,10 @@ anyway. It is also told what the drafting turn already did. The dispatcher reads
 tool results from the audit log, once, for the first rewrite, and carries them to the second.
 They travel on the task's `priorTurnActions` field and are rendered into that turn's prompt
 only, as data, never into the stored brief: tool output is not replayed into later turns.
+A delegated call keeps the delegate result's record of what was delivered: its `sent` list,
+even when empty, and a fixed note when the specialist's prose claims an email or message that
+was only composed or never went out. The result's `next_step` is not carried, since it says to
+send and the rewrite has no tools.
 If the read fails, times out (3 s) or has no repo, the rewrite is told the record could not
 be read and to keep the draft's claims of action as they are.
 
