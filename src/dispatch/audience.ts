@@ -20,6 +20,12 @@ export function isOneToOneAudience(
       return parseSlackConversationId(conversationId)?.isDm === true;
     case 'sms':
       return true;
+    // Principal-only surfaces: the web app needs the principal's bootstrap secret or session
+    // (routes/chat.ts), the CLI is a local shell, and contact-resolver.ts resolves both to the
+    // principal whatever the sender. No one else can be in these conversations.
+    case 'web':
+    case 'cli':
+      return true;
     case 'email':
       // Same strict rule as contact recall: a two-party from/to thread with an owned mailbox.
       return emailReplyAudienceIsPrivate(metadata, selfEmails);

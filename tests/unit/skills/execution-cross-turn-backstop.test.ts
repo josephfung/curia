@@ -344,6 +344,18 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
       expect(dm).not.toContain(GENERIC);
     });
 
+    it('the principal on the web app sees the details', async () => {
+      const text = await holdSeenBy(BOB, PRINCIPAL, 'web', { conversationId: 'web:thread-1' });
+      expect(text).toContain('contact-message on "Alice Example" at ');
+      expect(text).not.toContain(GENERIC);
+    });
+
+    it('the principal on a voice call gets the generic line', async () => {
+      const text = await holdSeenBy(BOB, PRINCIPAL, 'voice', { conversationId: 'voice:call-1' });
+      expect(text).toContain(GENERIC);
+      expect(text).not.toContain('Alice Example');
+    });
+
     it('the same contact in a Signal group gets the generic line', async () => {
       const text = await holdSeenBy(BOB, BOB, 'signal', { conversationId: 'signal:group=team-thread' });
       expect(text).toContain(GENERIC);
