@@ -242,6 +242,14 @@ async function runHandoff(args: PerformHandoffArgs): Promise<HandoffOutcome> {
     logger.info({ ...ids, channelId: mine.channelId }, 'turn-handoff: the handing turn\'s sender was not authenticated');
     return decline('ineligible');
   }
+  // The only handing-side condition that changes during the turn: once a follow-up has been
+  // drained, the person said more than the request text, so it is not the whole request. Checked
+  // before the dedupe below, so a new correction after a hand-off is done here, not dropped as
+  // "already passed on".
+  if (args.drainedFollowUp === true) {
+    logger.info(ids, 'turn-handoff: the turn took a follow-up since its message; its text is not the whole request');
+    return decline('ineligible');
+  }
   // A repeated call for a message already passed on, whatever has become of the target since:
   // its coordinator may have released the lane (forgetting what it drained) and a wake or a
   // later coordinator would take the same message again; or the target may have finished,
@@ -280,10 +288,6 @@ async function runHandoff(args: PerformHandoffArgs): Promise<HandoffOutcome> {
       },
       'turn-handoff: the message has no full trusted text or a non-clean scan; not passed on',
     );
-    return decline('ineligible');
-  }
-  if (args.drainedFollowUp === true) {
-    logger.info(ids, 'turn-handoff: the turn took a follow-up since its message; its text is not the whole request');
     return decline('ineligible');
   }
   if (!lanes.enabled) {
