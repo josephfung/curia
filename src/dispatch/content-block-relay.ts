@@ -146,6 +146,9 @@ export function summarizeBlockFindings(findings: Array<{ rule: string; detail: s
     .map((f) => {
       // A band bounce quotes the agent's own sentences, which it needs to fix the reply (#2159).
       // The PII and placeholder findings name labels only, never values (#2312).
+      // The identity gate names the words from the agent's own draft it could not resolve, and
+      // says to rephrase a product or place name (#2615): a rewrite with no tools can fix the
+      // draft only if it is told which word. The send skills already return this detail.
       const showDetail = (
         f.rule.startsWith('llm-judge-')
         || f.rule === 'disclosure-tier-gate'
@@ -153,6 +156,7 @@ export function summarizeBlockFindings(findings: Array<{ rule: string; detail: s
         || f.rule === 'unneeded-disclosure'
         || f.rule === 'pii-not-authorized'
         || f.rule === 'redaction-token'
+        || f.rule === 'unresolved-identity'
       ) && f.detail;
       return showDetail ? `${f.rule}: ${f.detail}` : f.rule;
     })
