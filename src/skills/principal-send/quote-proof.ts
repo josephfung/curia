@@ -47,8 +47,14 @@ export function comparableText(html: string | undefined | null): string {
  * A thread message as the quote proof needs it. `knownSenders` (#2589): the verified, known senders
  * whose To/Cc count as received (receivedBy); absent, no inbound To/Cc counts.
  */
-export function threadMessageProof(msg: NylasMessage, principalAddresses: readonly string[], knownSenders?: ReadonlySet<string>): ThreadMessageProof {
-  return { text: comparableText(msg.body), receivedBy: receivedBy(msg, principalAddresses, knownSenders) };
+export function threadMessageProof(
+  msg: NylasMessage,
+  principalAddresses: readonly string[],
+  knownSenders?: ReadonlySet<string>,
+  /** Never vouched in as receivers, as for membership: Curia's own mailboxes (#2589). */
+  unvouchable?: ReadonlySet<string>,
+): ThreadMessageProof {
+  return { text: comparableText(msg.body), receivedBy: receivedBy(msg, principalAddresses, knownSenders, unvouchable) };
 }
 
 /**
@@ -131,12 +137,14 @@ export function threadTextSeenByAll(
   principalAddresses: readonly string[],
   /** #2589: the verified, known senders whose To/Cc count as received; absent, none do. */
   knownSenders?: ReadonlySet<string>,
+  /** Never vouched in as receivers, as for membership: Curia's own mailboxes (#2589). */
+  unvouchable?: ReadonlySet<string>,
 ): Array<{ at?: string; text: string }> {
   const recipients = audience.map((a) => a.trim().toLowerCase()).filter((a) => a.length > 0);
   if (recipients.length === 0) return [];
   return thread
     .filter((m) => {
-      const got = receivedBy(m, principalAddresses, knownSenders);
+      const got = receivedBy(m, principalAddresses, knownSenders, unvouchable);
       return recipients.every((r) => got.has(r));
     })
     .map((m) => ({

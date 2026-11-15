@@ -374,6 +374,12 @@ describe('inbound To/Cc from a verified, known sender (#2589)', () => {
     expect(receivedBy(unverified, PRINCIPAL, KNOWN)).toEqual(new Set(['ceo@corp.example']));
   });
 
+  it('receivedBy leaves out unvouchable addresses (Curia\'s mailbox), plus tags included', () => {
+    const toCuria = { ...copying, cc: [{ email: 'Curia+x@corp.example' }] };
+    expect(receivedBy(toCuria, PRINCIPAL, KNOWN, new Set(['curia@corp.example']))).toEqual(new Set(['ceo@corp.example', 'dana@example.org']));
+    expect(receivedBy(toCuria, PRINCIPAL, KNOWN)).toContain('curia+x@corp.example');
+  });
+
   it('vouchedCopies names nothing for a principal-From message (a spoof outside SENT included)', () => {
     const spoofed = msg({ from: [{ email: 'ceo@corp.example' }], folders: ['INBOX'], cc: [{ email: 'cfo@corp.example' }], headers: VERIFIED });
     expect(vouchedCopies(spoofed, PRINCIPAL, new Set(['ceo@corp.example']))).toEqual([]);

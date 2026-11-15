@@ -3632,7 +3632,13 @@ export class OutboundGateway {
    */
   private async copiedParty(address: string): Promise<CopiedParty> {
     const email = address.trim().toLowerCase();
-    const resolved = await this.contactService.resolveByChannelIdentity('email', email);
+    // A plus-tagged alias (sam+case@) reaches the same person as the address on their record, so
+    // fall back to the untagged form for the judge's facts: a General Counsel copied through an
+    // alias must not read as "no record". Facts only; this never verifies or vouches for anyone,
+    // and the address shown stays as written.
+    const base = normalizeForComparison(email);
+    const resolved = await this.contactService.resolveByChannelIdentity('email', email)
+      ?? (base !== email ? await this.contactService.resolveByChannelIdentity('email', base) : null);
     if (resolved === null) return { email, contact: false };
     const record = await this.contactService.getContact(resolved.contactId);
     // A contact that resolved but can't be read (merged or deleted in between) would lose its
@@ -4928,7 +4934,9 @@ export class OutboundGateway {
         this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: thread senders\' contacts unreadable — not sending on its own');
         return stop('contacts_unreadable');
       }
-      const limit = checkAutonomousLimits({ draft, thread, principalAddresses, curiaWrites, recentThreadEntries: recentEntries, recentConversationEntries: conversationEntries, otherPrincipalAddresses, offLimitsRecipients, autonomousSendsInWindow: sendsInWindow, knownSenders, unvouchable: this.curiaAccountAddresses() });
+      // Curia's own mailboxes: never vouched in, for membership or for receipt evidence (#2589).
+      const unvouchable = this.curiaAccountAddresses();
+      const limit = checkAutonomousLimits({ draft, thread, principalAddresses, curiaWrites, recentThreadEntries: recentEntries, recentConversationEntries: conversationEntries, otherPrincipalAddresses, offLimitsRecipients, autonomousSendsInWindow: sendsInWindow, knownSenders, unvouchable });
       if (limit) {
         const blockers = [...recentEntries, ...conversationEntries];
         cooldownHeld = limit.refusal === 'thread_cooldown' && blockers.length > 0 && blockers.every((e) => e.outcome === 'held');
@@ -4942,7 +4950,7 @@ export class OutboundGateway {
       // Bank or card details never go out on Curia's own (#2474 final fixes A3): checked on the
       // whole draft, quote included, whatever the review would rule.
       if (this.hasFinancialDetails(draft, draftId)) return stop('financial_details');
-      const proofs = thread.map((m) => threadMessageProof(m, principalAddresses, knownSenders));
+      const proofs = thread.map((m) => threadMessageProof(m, principalAddresses, knownSenders, unvouchable));
       // A quote must reproduce a message every recipient received (#2474 final fixes A10): a
       // model-written quote block could pass off new information as already on the thread.
       const { quote } = splitReplyQuote(draft.body);
@@ -4975,7 +4983,7 @@ export class OutboundGateway {
         origin: replyOrigin(target),
         threadMessages: proofs,
         // `outside` is every non-principal recipient on To, Cc and Bcc.
-        threadText: threadTextSeenByAll(thread, outside, principalAddresses, knownSenders),
+        threadText: threadTextSeenByAll(thread, outside, principalAddresses, knownSenders, unvouchable),
         ...(copied ? { copied } : {}),
       };
     }
