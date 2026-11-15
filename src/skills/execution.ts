@@ -3734,7 +3734,7 @@ export class ExecutionLayer {
     }
 
     // Settle the recorded backstop action once (#2588): a failed call is dropped so it holds
-    // no one, a timed-out one stays with an unknown outcome. Fail-open like the check.
+    // no one, a timed-out or thrown one stays with an unknown outcome. Fail-open like the check.
     const settleBackstopAction = (outcome: 'succeeded' | 'failed' | 'unknown'): void => {
       const actionId = backstopActionId;
       if (actionId === undefined || !crossTurnBackstop) return;
