@@ -4,22 +4,28 @@
 # src/agents/prompts/other-turns-block.ts) opens its guidance with the default: "Most new
 # messages are unrelated: just do them, without asking." Both are calendar requests, which
 # makes the wrong path (asking whether the lunch is the same thing as the sync) attractive.
-# Curia books the lunch without a clarifying question.
+# Curia books the lunch without a clarifying question. The lunch targets a different
+# contact, so the cross-turn backstop never holds it.
 #
-# The second message is `inbound.then`, its own turn once the email turn has replied; see
-# 47a for why the listed turn is a finished one here.
-#
-# Written and not yet run (#2588): the first run records its stub coverage.
+# The calendar specialist really runs and its writes are gated_tools, so they are recorded
+# under the email turn (see 47a). The second message is `inbound.then`, its own turn once
+# the email turn has replied; see 47a for why the listed turn is a finished one here.
 name: cross-conversation unrelated requests get no clarifying question
 description: >
   The principal emails Curia asking it to book a 30-minute sync with Priya Raman next
   Thursday at 3pm, and Curia books it. Shortly after, the principal asks on Signal for
   lunch with Leo Brandt next Tuesday at noon. Curia has the calendar specialist book the
   lunch and confirms it, without asking whether it is related to the sync with Priya.
-tags: [cross-conversation, turn-awareness, calendar, signal]
+tags: [cross-conversation, turn-awareness, calendar, signal, real-delegation]
+delegation: real
+# On demand: tests/scenarios/README.md, "Which real-delegation cases gate a release".
+release_gate: false
 runs: 3
-timeout_seconds: 300
-stub_sets: [human-channels]
+timeout_seconds: 600
+autonomy: { score: 85, gating: band }
+through_gateway: true
+gated_tools: [calendar-create-event, calendar-create-hold, calendar-update-event]
+stub_sets: [human-channels, calendar-office, calendar-specialist]
 seed:
   contacts:
     - key: priya
@@ -43,42 +49,44 @@ inbound:
     Subject: Sync with Priya
 
     Please book a 30-minute sync with Priya Raman on {{day:next-thursday}} at 3pm and send her the invite.
-  email: { to: [curia] }
+  # Verified (SPF, DKIM, DMARC pass), as the principal's own mail is: the note lists only
+  # authenticated turns, so an unverified From is left out like a forged one.
+  email: { to: [curia], sender_verified: true }
   then:
     channel: signal
     content: Book lunch with Leo Brandt on {{day:next-tuesday}} at noon please.
 tool_stubs:
-  delegate:
-    - match: { agent: calendar }
-      return: &done
-        agent: calendar
-        response: >
-          Done: the event is on the principal's calendar at the time asked, and the other
-          attendee has the invite.
-    - match: { agent: "@calendar" }
-      return: *done
-    - match: {}
-      return:
-        agent: contacts
-        response: |
-          Both are in contacts.
-
-          <resolved_entities>
-            <contact name="Priya Raman" id="{{contact:priya}}"/>
-            <contact name="Leo Brandt" id="{{contact:leo}}"/>
-          </resolved_entities>
+  calendar-holds-sweep:
+    - agent: calendar
+      match: {}
+      return: { scanned: 0, expired: 0, failed: 0, calendarErrors: 0 }
+  # Fair writes the contacts specialist may make on the way.
+  contact-set-role:
+    - agent: contacts
+      match: {}
+      return: { contact_id: "{{contact:leo}}", display_name: Leo Brandt, role: contact }
+  contact-update:
+    - agent: contacts
+      match: {}
+      return: { contact_id: "{{contact:leo}}", updated_fields: [organization] }
   memory-store:
     - match: {}
       return: { stored: true, action: created, node_id: 4c5d6e7f-8a9b-4c0d-9e1f-47d000000001, sensitivity: internal }
 expected_behaviors:
-  - id: books_the_lunch
+  - id: books_both
     weight: critical
-    description: The Signal turn asks the calendar specialist to book the lunch with Leo.
+    description: The calendar specialist books the sync with Priya and the lunch with Leo.
     check:
-      called: delegate
-      with: { agent: calendar }
-      contains: { task: leo }
-      min: 1
+      called: calendar-create-event
+      agent: calendar
+      success: true
+      min: 2
+  - id: briefs_the_lunch
+    weight: important
+    description: The Signal turn briefs the calendar specialist about the lunch with Leo.
+    check:
+      briefed: calendar
+      brief_contains: [leo]
   - id: no_clarifying_question
     weight: critical
     description: >
@@ -87,7 +95,11 @@ expected_behaviors:
       the principal to confirm before booking.
   - id: priya_sync_untouched
     weight: important
-    description: No calendar request from the Signal turn changes or cancels the sync with Priya.
+    description: No calendar write from the Signal turn changes or cancels the sync with Priya.
+    check:
+      not_called: [calendar-update-event, calendar-delete-event]
+      agent: calendar
+      returns: {}
 failure_modes:
   - Asks "Is this related to the sync with Priya?" before booking the lunch
   - Moves the Priya sync to Tuesday, treating the lunch as a correction
