@@ -5334,7 +5334,10 @@ export class OutboundGateway {
         conversationIds: [...held.conversationIds],
         recipients: [...held.recipients],
         mode: 'autonomous',
-        at: new Date().toISOString(),
+        // The first hold's judgement time, not now: recentForThread counts held markers by `at`, so a
+        // recovery-time stamp would restart the thread's 24h cooldown. The marker's new path (which
+        // markerPath stamps with the write time) still makes it the latest for heldForDraft.
+        at: held.at,
         reasonCode: held.reasonCode ?? 'review_hold',
       });
     } catch (err) {
