@@ -93,10 +93,18 @@ COPY --from=ghcr.io/astral-sh/uv:0.6.3 /uv /uvx /usr/local/bin/
 # the npm registry drop that motivated #1699. Without it a single failed fetch fails the
 # whole publish — and for the curia-postgres image this apt call is the ONLY network step,
 # so it gets no benefit from the pnpm retry wrapper.
+# ca-certificates is the system CA bundle. node:26-slim does not ship it, and
+# --no-install-recommends stops curl from pulling it in, so it must be named. Node's own
+# HTTPS never needed it (Node bundles its roots), but native code reads the OS trust
+# store: the LiveKit client (@livekit/rtc-node FFI, 0.13+) found no roots, so every
+# console and PWA call failed to join its room ("no native root CA certificates found").
+# The `test -s` fails the build, not a production call, if the bundle ever goes missing.
+# tests/unit/dockerfile-ca-certificates.test.ts keeps both lines in place.
 RUN apt-get -o Acquire::Retries=3 update \
  && apt-get -o Acquire::Retries=3 upgrade -y \
- && apt-get -o Acquire::Retries=3 install -y --no-install-recommends curl pulseaudio-utils python3 \
- && rm -rf /var/lib/apt/lists/*
+ && apt-get -o Acquire::Retries=3 install -y --no-install-recommends ca-certificates curl pulseaudio-utils python3 \
+ && rm -rf /var/lib/apt/lists/* \
+ && test -s /etc/ssl/certs/ca-certificates.crt
 
 # Create a non-root system user/group for the runtime process.
 # UIDs/GIDs are pinned (not dynamic) so docker-compose tmpfs uid= options
