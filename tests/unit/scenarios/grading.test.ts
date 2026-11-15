@@ -82,6 +82,37 @@ describe('runMessages', () => {
   });
 });
 
+describe('runMessages and the reply lock', () => {
+  it("marks the turn's reply undelivered once Curia replied on the sender's thread, as production drops it", () => {
+    const file = path.join(dir, 'beer.yaml');
+    writeFileSync(file, `
+name: finesse 59a beer
+description: David asks for a beer.
+tags: [finesse]
+seed:
+  contacts:
+    - { key: david, display_name: David Okonkwo, channel: email, identifier: d@example.test }
+inbound:
+  from: david
+  channel: email
+  content: Beer next week?
+  email: { nylas_message_id: msg-59a, to: [principal], cc: [curia] }
+expected_behaviors:
+  - { id: voice, layer: voice, description: matches David }
+`);
+    const scenario = loadScenarioCase(file);
+    const reply = { name: 'email-reply', input: { reply_to_message_id: 'msg-59a', body: 'Hi David, let me check.' }, result: { success: true, data: {} }, disposition: 'stubbed' } as const;
+    const text = runMessages(scenario, run(0, { toolCalls: [reply], reply: 'Hi David, let me check.' }));
+    expect(text).toContain("[Email reply on the sender's thread]\nHi David, let me check.");
+    expect(text).toContain('[Reply to David Okonkwo (not delivered: Curia had already replied on the thread)]');
+    // A reply on another thread, or a refused one, leaves the turn's reply as delivered.
+    const other = runMessages(scenario, run(0, { toolCalls: [{ ...reply, input: { ...reply.input, reply_to_message_id: 'msg-other' } }], reply: 'Hi.' }));
+    expect(other).toContain('[Reply to David Okonkwo]\nHi.');
+    const refused = runMessages(scenario, run(0, { toolCalls: [{ ...reply, result: { success: false, error: 'no' } }], reply: 'Hi.' }));
+    expect(refused).toContain('[Reply to David Okonkwo]\nHi.');
+  });
+});
+
 describe('sampleGradingItems', () => {
   it('samples judged voice ratings only, across tasks, deterministically, skipping judge errors and errored runs', () => {
     const a = caseFile('finesse 52b late chair', 'The board chair.');

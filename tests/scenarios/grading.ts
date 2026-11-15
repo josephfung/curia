@@ -62,7 +62,17 @@ export function runMessages(scenario: ScenarioCase, run: ScenarioRun): string {
     parts.push(`[${send.label(call.input, who)}${refused}]\n${text.trim()}`);
   }
   const silent = (r: string | null | undefined): boolean => r === null || r === undefined || r.trim() === '' || r.trim() === 'NO_REPLY';
-  if (!silent(run.reply)) parts.push(`[Reply to ${sender}]\n${run.reply!.trim()}`);
+  // Production's reply lock (#847, src/dispatch/reply-lock.ts) drops the turn's reply once
+  // Curia has emailed the sender on their thread. The harness relays it anyway (its email-reply
+  // stub reports a placeholder recipient, so the lock never matches), which showed graders the
+  // same reply twice. Say it would not have gone.
+  const threadId = scenario.inbound.email?.nylasMessageId;
+  const repliedOnThread = scenario.inbound.from !== 'principal' && threadId !== undefined && run.toolCalls.some(c =>
+    c.name === 'email-reply' && c.result?.success === true && c.input['reply_to_message_id'] === threadId);
+  if (!silent(run.reply)) {
+    const dropped = repliedOnThread ? ' (not delivered: Curia had already replied on the thread)' : '';
+    parts.push(`[Reply to ${sender}${dropped}]\n${run.reply!.trim()}`);
+  }
   if (run.principalNote) parts.push(`[Note for Avery]\n${run.principalNote.trim()}`);
   if (scenario.inbound.then) {
     parts.push(`[AVERY THEN WROTE]\n${scenario.inbound.then.content.trim()}`);
