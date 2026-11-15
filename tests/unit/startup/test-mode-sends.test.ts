@@ -547,6 +547,20 @@ describe('inMemorySendLedger matches production (#2475 item 12)', () => {
     // The deferred-fallback id matches every mailbox, as in production.
     expect(await ledger.heldForDraft('f', 'personal')).toMatchObject({ draftId: 'f' });
   });
+
+  // PR #2625 review: as production's parseLedgerDoc, `reported: false` reads back as `unreported`.
+  it('recordHeld stores a hold whose digest failed as unreported, and a reported one without the flag', async () => {
+    const store: PrincipalSendEntry[] = [];
+    const ledger = inMemorySendLedger(() => store);
+    const hold = { draftId: 'g', threadId: 't4', mailbox: 'work', conversationIds: [], recipients: [], mode: 'autonomous' as const, at: new Date().toISOString(), reasonCode: 'review_hold' };
+    await ledger.recordHeld({ ...hold, reported: false });
+    expect(await ledger.heldForDraft('g', 'work')).toMatchObject({ unreported: true });
+    expect(store[0]).not.toHaveProperty('reported');
+    await ledger.recordHeld({ ...hold, reported: true });
+    const latest = await ledger.heldForDraft('g', 'work');
+    expect(latest).not.toHaveProperty('unreported');
+    expect(latest).not.toHaveProperty('reported');
+  });
 });
 
 // #2475: the test-mode ExecutionLayer had no principalMailboxes, so every real ceo-inbox-send-draft
