@@ -51,6 +51,12 @@ export interface PrincipalSendEntry {
    * text to the principal. Only on `held` entries.
    */
   reasonCode?: string;
+  /**
+   * Set on a `held` entry whose digest item failed to publish (#2591 review): the principal was
+   * never told. A later attempt on the draft then files the item instead of refusing quietly.
+   * Absent means reported, which every entry written before this field was.
+   */
+  unreported?: true;
 }
 
 const MODES: readonly string[] = ['principal-directed', 'autonomous'];
@@ -82,7 +88,7 @@ export function parseLedgerDoc(doc: WorkingDocRow): PrincipalSendEntry | null {
   if (doc.type !== PRINCIPAL_SEND_DOC_TYPE) return null;
   const f = doc.frontmatter;
   // A held entry written before final fixes B2 carried a free-text `reason`; it is not read.
-  const { draft_id: draftId, thread_id: threadId, recipients, mode, at, message_id: messageId, outcome, reason_code: reasonCode, mailbox, conversation_ids: conversationIds } = f;
+  const { draft_id: draftId, thread_id: threadId, recipients, mode, at, message_id: messageId, outcome, reason_code: reasonCode, mailbox, conversation_ids: conversationIds, reported } = f;
   // A wrong-typed mailbox reads as none, which adds cooldown for every mailbox; wrong-typed
   // conversation ids are flagged, so the entry matches every conversation lookup. An absent field
   // (an older entry) is not wrong-typed: it reads as none and matches no conversation.
@@ -99,6 +105,8 @@ export function parseLedgerDoc(doc: WorkingDocRow): PrincipalSendEntry | null {
     outcome: typeof outcome === 'string' && OUTCOMES.includes(outcome) ? outcome as PrincipalSendEntry['outcome'] : 'sending',
     ...(typeof messageId === 'string' ? { messageId } : {}),
     ...(typeof reasonCode === 'string' ? { reasonCode } : {}),
+    // Only an explicit false: anything else reads as reported, so a broken field never re-files a digest.
+    ...(reported === false ? { unreported: true as const } : {}),
   };
 }
 
@@ -129,7 +137,11 @@ export class PrincipalSendLedger {
    * thread's cooldown (checkAutonomousLimits), so a resampled judge gets one try a day.
    * Create-only like recordSending. Throws on a repo failure.
    */
-  async recordHeld(e: Omit<PrincipalSendEntry, 'outcome' | 'messageId' | 'reasonCode'> & { reasonCode: string; mailbox: string }): Promise<void> {
+  async recordHeld(e: Omit<PrincipalSendEntry, 'outcome' | 'messageId' | 'reasonCode' | 'unreported'> & {
+    reasonCode: string; mailbox: string;
+    /** false: the hold's digest item failed to publish (#2591 review). Absent or true: reported. */
+    reported?: boolean;
+  }): Promise<void> {
     const path = `${draftPrefix(e.draftId)}${Date.now()}.md`;
     await this.docs.create({
       path,
@@ -138,6 +150,7 @@ export class PrincipalSendLedger {
         draft_id: e.draftId, thread_id: e.threadId, mailbox: e.mailbox, conversation_ids: e.conversationIds,
         recipients: e.recipients, mode: e.mode, at: e.at,
         outcome: 'held', reason_code: e.reasonCode,
+        ...(e.reported === false ? { reported: false } : {}),
       },
       body: '',
       taskId: null,
@@ -254,17 +267,21 @@ export class PrincipalSendLedger {
   }
 
   /**
-   * Whether an autonomous send of this draft was already held for the principal (#2591): a `held`
-   * marker on the draft in `mailbox`. A held draft is the principal's to send, so a later wake (a
-   * Bullpen thread closing, a resumed task) must not try it again. A `limited` stop does not count:
-   * a limit only says "not yet". An entry with no mailbox (before the registry) matches any, as in
-   * recentForThread: it can only block. Throws on a repo failure.
+   * The latest `held` marker on this draft in `mailbox` (absent: any mailbox, for a caller that
+   * could not locate the draft), or null (#2591): a held draft is the
+   * principal's to send, so a later wake (a Bullpen thread closing, a resumed task) must not try it
+   * again. Returned whole so the caller can log why and when, and see `unreported`. A `limited` stop
+   * does not count: a limit only says "not yet". An entry with no mailbox (before the registry)
+   * matches any, as in recentForThread: it can only block. Latest by path, which is timestamped
+   * (as recordSent picks). Throws on a repo failure.
    */
-  async heldForDraft(draftId: string, mailbox: string): Promise<boolean> {
-    return (await this.docs.listByPrefix(draftPrefix(draftId)))
-      .map(parseLedgerDoc)
-      .some((e) => e?.draftId === draftId && e.outcome === 'held'
-        && (e.mailbox === undefined || e.mailbox === FALLBACK_MAILBOX_ID || e.mailbox === mailbox));
+  async heldForDraft(draftId: string, mailbox?: string): Promise<PrincipalSendEntry | null> {
+    const held = (await this.docs.listByPrefix(draftPrefix(draftId)))
+      .map((doc) => ({ path: doc.path, entry: parseLedgerDoc(doc) }))
+      .filter((c): c is { path: string; entry: PrincipalSendEntry } => c.entry !== null && c.entry.draftId === draftId && c.entry.outcome === 'held'
+        && (mailbox === undefined || c.entry.mailbox === undefined || c.entry.mailbox === FALLBACK_MAILBOX_ID || c.entry.mailbox === mailbox))
+      .sort((a, b) => a.path.localeCompare(b.path));
+    return held[held.length - 1]?.entry ?? null;
   }
 }
 
