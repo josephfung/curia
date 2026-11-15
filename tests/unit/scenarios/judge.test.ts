@@ -204,6 +204,18 @@ describe('extractJsonObject', () => {
     expect(extractJsonObject('Here you go: {"scores": []} hope that helps')).toBe('{"scores": []}');
     expect(extractJsonObject('{"a": {"b": 1}}')).toBe('{"a": {"b": 1}}');
   });
+
+  it('takes the first complete object when the judge adds more after it', () => {
+    // A second object, or a closing remark with braces, used to make JSON.parse fail.
+    expect(extractJsonObject('{"scores": []}\n{"note": "second thoughts"}')).toBe('{"scores": []}');
+    expect(extractJsonObject('{"scores": []} (ratings use {PASS, MISS})')).toBe('{"scores": []}');
+    // Braces and escaped quotes inside strings do not count.
+    const tricky = '{"scores": [{"justification": "said \\"hi}\\" and {left"}]}';
+    expect(extractJsonObject(`${tricky} trailing }`)).toBe(tricky);
+    expect(JSON.parse(extractJsonObject(`${tricky} trailing }`))).toEqual({ scores: [{ justification: 'said "hi}" and {left' }] });
+    // No complete object: the old slice, so JSON.parse reports what is wrong.
+    expect(extractJsonObject('{"scores": [ }')).toBe('{"scores": [ }');
+  });
 });
 
 describe('judgeRun', () => {
@@ -228,6 +240,35 @@ describe('judgeRun', () => {
     expect(calls).toBe(3);
     expect([...out.values()].every(r => r.justification.startsWith('judge error after 3 attempts'))).toBe(true);
   }, 15_000);
+
+  const text = (content: string) => ({ type: 'text' as const, content, provenance: { actualModel: 'm' } });
+  const good = JSON.stringify({ scores: [{ behaviorId: 'honest', rating: 'PASS', justification: 'ok' }, { behaviorId: 'brief', rating: 'MISS', justification: 'long' }] });
+
+  it('asks again when a reply has no readable scores, and uses the next good one', async () => {
+    const replies = ['I think it went well.', good];
+    let calls = 0;
+    const provider = { id: 'openrouter', chat: async () => text(replies[calls++]!) } as never;
+    const out = await judgeRun(scenario, run, behaviors, { provider, model: 'm' });
+    expect(calls).toBe(2);
+    expect(out.get('honest')).toEqual({ rating: 'PASS', justification: 'ok' });
+  });
+
+  it('keeps the unparseable reason after the last attempt', async () => {
+    let calls = 0;
+    const provider = { id: 'openrouter', chat: async () => { calls++; return text('no json here'); } } as never;
+    const out = await judgeRun(scenario, run, behaviors, { provider, model: 'm' });
+    expect(calls).toBe(3);
+    expect([...out.values()].every(r => r.justification.startsWith('judge error: reply unparseable'))).toBe(true);
+  });
+
+  it('does not retry a readable reply that skipped a behavior', async () => {
+    let calls = 0;
+    const partial = JSON.stringify({ scores: [{ behaviorId: 'honest', rating: 'PASS', justification: 'ok' }] });
+    const provider = { id: 'openrouter', chat: async () => { calls++; return text(partial); } } as never;
+    const out = await judgeRun(scenario, run, behaviors, { provider, model: 'm' });
+    expect(calls).toBe(1);
+    expect(out.get('brief')?.justification).toBe('judge error: no score returned');
+  });
 });
 
 describe('createJudge', () => {
