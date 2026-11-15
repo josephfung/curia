@@ -44,6 +44,7 @@ import { AgentRuntime } from './agents/runtime.js';
 import { Dispatcher } from './dispatch/dispatcher.js';
 import { TurnLanes } from './dispatch/turn-lanes.js';
 import { TurnActivityRegistry } from './dispatch/turn-activity.js';
+import { HandoffRecoveryPublisher } from './agents/handoff-recovery.js';
 import { createPrincipalBacklogSource } from './dispatch/principal-backlog.js';
 import { CliAdapter } from './channels/cli/cli-adapter.js';
 import { discoverAgentManifests } from './agents/loader.js';
@@ -3770,6 +3771,16 @@ async function main(): Promise<void> {
   scheduler.setExternalRoutingRegistrar(
     (taskEventId, routing) => dispatcher.registerExternalTaskRouting(taskEventId, routing),
   );
+  // Hand-off recovery (#2588): a correction the person was told was passed on, which then
+  // did not reach that work, is re-run as a synthetic turn on the handing conversation. Its
+  // reply needs a routing entry like the late-delegation wake's.
+  const handoffRecovery = new HandoffRecoveryPublisher({
+    bus,
+    logger,
+    scrubText: (text) => verificationRuntime.tracker.scrubText(text),
+    registerRouting: (taskEventId, routing) => dispatcher.registerExternalTaskRouting(taskEventId, routing),
+  });
+  turnActivity.setHandoffRecoverer(handoffRecovery.recover);
   // Arm the poll only after the registrar is set. The first tick is one interval
   // later; starting the clock earlier lets a boot that overruns that interval
   // fire a due retry whose reply has no dispatcher routing.

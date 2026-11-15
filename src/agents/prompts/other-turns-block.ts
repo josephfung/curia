@@ -5,10 +5,12 @@
 // under way, ask before repeating it, or hand a correction to the turn still doing it.
 //
 // Per task, never always-on (ADR-046: injection with its trigger). With no such turns nothing
-// is injected. Only the same resolved person's turns are listed: a stranger's, a system job's
-// or another person's request text never appears here.
+// is injected. Only the same resolved person's turns on laned human channels are listed: a
+// stranger's, a system job's, another person's, or a scheduler, internal, bullpen or voice
+// root's request text never appears here. Which turns READ the note is the runtime's call.
 
 import {
+  isPersonTurn,
   MAX_RUNNING_ROOT_AGE_MS,
   TURN_ACTIVITY_WINDOW_MS,
   type ActionOutcome,
@@ -16,7 +18,7 @@ import {
   type RootTurn,
   type TurnActivityRegistry,
 } from '../../dispatch/turn-activity.js';
-import { isUuid } from '../../util/uuid.js';
+import { isLanedChannel } from '../../dispatch/turn-lanes.js';
 import { localTime } from './verification-block.js';
 
 export interface OtherTurnAction {
@@ -70,15 +72,11 @@ const OUTCOME_TEXT: Record<ActionOutcome, string> = {
   unknown: 'outcome unknown',
 };
 
-/** A resolved person's turn: not a stranger's and not Curia's own work. */
-function isPersonTurn(root: RootTurn): boolean {
-  return root.originatorResolved && !root.originatorIsSystem && isUuid(root.originatorContactId);
-}
-
 /**
- * The same resolved person's other turns in the window, in other conversations. Both roots
- * must be resolved, non-system and share the contact UUID. A turn in this same conversation
- * is left out: its exchange is already in this conversation's history.
+ * The same resolved person's other turns in the window, in other conversations, on laned human
+ * channels. Both roots must be resolved, non-system and share the contact UUID. A turn in this
+ * same conversation is left out: its exchange is already in this conversation's history. A
+ * scheduler, internal, bullpen or voice root is left out: it is not a conversation turn.
  */
 export function sameContactTurns(registry: TurnActivityRegistry, myRootId: string): RootTurn[] {
   const mine = registry.rootOf(myRootId);
@@ -86,7 +84,8 @@ export function sameContactTurns(registry: TurnActivityRegistry, myRootId: strin
   return registry.otherRootsInWindow(mine.rootId).filter((other) =>
     isPersonTurn(other)
     && other.originatorContactId === mine.originatorContactId
-    && other.conversationId !== mine.conversationId,
+    && other.conversationId !== mine.conversationId
+    && isLanedChannel(other.channelId),
   );
 }
 
@@ -130,20 +129,29 @@ function handoffOf(root: RootTurn, running: boolean): OtherTurnView['handoff'] {
   return root.runningCoordinatorTaskId !== null ? 'running_turn' : 'held_for_wake';
 }
 
+export interface OtherTurnViews {
+  /** The most recent turns, at most MAX_TURNS_SHOWN, oldest first. */
+  views: OtherTurnView[];
+  /** How many turns qualified, shown or not: the rest are counted as older turns. */
+  total: number;
+}
+
 /**
  * Views of the most recent sameContactTurns (at most MAX_TURNS_SHOWN), oldest first, with
- * each turn's recorded actions. The request text is kept only when the inbound scan ran and
- * found nothing.
+ * each turn's recorded actions, and the count of all that qualified. The request text is kept
+ * only when the inbound scan ran and found nothing, and is run through `scrubText` (the
+ * verification tracker's), which catches a sign-in code registered after it was stamped.
  */
 export function buildOtherTurnViews(
   registry: TurnActivityRegistry,
   myRootId: string,
-  opts: { now?: number } = {},
-): OtherTurnView[] {
+  opts: { now?: number; scrubText?: (text: string) => string } = {},
+): OtherTurnViews {
   const now = opts.now ?? Date.now();
-  return sameContactTurns(registry, myRootId)
-    .sort((a, b) => a.startedAt - b.startedAt)
-    // Cut before reading actions: turns that will not be shown cost nothing.
+  const scrub = opts.scrubText ?? ((text: string) => text);
+  const all = sameContactTurns(registry, myRootId).sort((a, b) => a.startedAt - b.startedAt);
+  // Cut before reading actions: turns that will not be shown cost nothing.
+  const views = all
     .slice(-MAX_TURNS_SHOWN)
     .map((root) => {
       const running = isRunning(root, now);
@@ -153,7 +161,7 @@ export function buildOtherTurnViews(
         running,
         startedAt: new Date(root.startedAt),
         endedAt: root.endedAt === null ? null : new Date(root.endedAt),
-        requestText: root.inboundScanFindings === 0 ? root.requestText : null,
+        requestText: root.inboundScanFindings === 0 && root.requestText !== null ? scrub(root.requestText) : null,
         inboundScanFindings: root.inboundScanFindings,
         actions: registry.actionsOf(root.rootId).map((a) => ({
           toolName: a.toolName,
@@ -164,6 +172,7 @@ export function buildOtherTurnViews(
         handoff: handoffOf(root, running),
       };
     });
+  return { views, total: all.length };
 }
 
 /** One line, bounded: a stored value must not break out of its line. */
@@ -236,12 +245,13 @@ export function showsHandoffGuidance(views: readonly OtherTurnView[], handingEli
 /**
  * The note, or '' with no views. Throws on an invalid timezone; the caller omits the block.
  * The `turn-handoff` guidance line appears only when this turn may hand its message over
- * (`handingEligible`, default false: lanes on, a root inbound turn, its full words scanned
- * clean) and some listed turn can take a hand-off. Each turn's own "hand-off:" line stays.
+ * (`handingEligible`, default false: lanes on, an authenticated root inbound turn, its full
+ * words scanned clean, and the tool in the turn's tools) and some listed turn can take a
+ * hand-off. Each turn's own "hand-off:" line stays. `total` is buildOtherTurnViews' count.
  */
 export function renderOtherTurnsBlock(
   views: readonly OtherTurnView[],
-  opts: { timezone: string; handingEligible?: boolean },
+  opts: { timezone: string; handingEligible?: boolean; total?: number },
 ): string {
   if (views.length === 0) return '';
   const shown = views.slice(-MAX_TURNS_SHOWN);
@@ -250,7 +260,9 @@ export function renderOtherTurnsBlock(
     HEADING,
     `Their turns in other conversations, running now or finished in the last ${windowMinutes} minutes:`,
   ];
-  if (views.length > shown.length) lines.push(`- ${views.length - shown.length} older turns not shown`);
+  // buildOtherTurnViews already cut to the most recent; its total counts the rest.
+  const total = Math.max(opts.total ?? views.length, views.length);
+  if (total > shown.length) lines.push(`- ${total - shown.length} older turns not shown`);
   for (const v of shown) lines.push(...turnLines(v, opts.timezone));
   lines.push(
     // The default first: most messages have nothing to do with a listed turn.

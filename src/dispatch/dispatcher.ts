@@ -34,18 +34,25 @@ import { isTaskWakeReplyBinding } from './task-wake-reply.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import { inboundIsOneToOne, inboundSenderAuthenticated } from './outbound-entry-access.js';
 import type { AcquaintanceEvidence } from '../contacts/principal-acquaintance.js';
-import { hasBookingPageLink, inboundTurnGuidance, looksLikeForward, looksLikeMakeRoom, looksLikeSpotCheckReply, parseSpotCheckVerdicts, spotCheckCandidateText } from './turn-guidance-triggers.js';
+import { cutsQuotedText, hasBookingPageLink, inboundTurnGuidance, looksLikeForward, looksLikeMakeRoom, looksLikeSpotCheckReply, parseSpotCheckVerdicts, spotCheckCandidateText } from './turn-guidance-triggers.js';
 import { hasBacklog, type PrincipalBacklogCounts } from '../agents/prompts/backlog-line.js';
 import type { AwaitingAnswer } from '../agents/prompts/awaiting-answers.js';
 import type { PrincipalBacklogSource } from './principal-backlog.js';
 import {
   clipSenderText,
+  HANDOFF_RECOVERY_KEY,
   INBOUND_SCAN_FINDING_COUNT_KEY,
   INBOUND_SENDER_TEXT_CLIPPED_KEY,
   INBOUND_SENDER_TEXT_KEY,
   senderTextExceedsClip,
 } from './turn-activity.js';
 import { rewriteLlmFailureTurns } from '../memory/llm-failure-turn.js';
+
+/**
+ * Whether an inbound may carry a sign-in code (#2588): `received` (a code registered against
+ * any verification), `none`, or `unknown` (the lookup failed). Only `none` may be shared.
+ */
+type RelayedCodeState = 'received' | 'none' | 'unknown';
 import {
   CONTENT_BLOCK_MAX_RETRIES,
   buildContentBlockRewriteTask,
@@ -135,6 +142,8 @@ function mergeTaskMetadata(
     [INBOUND_SENDER_TEXT_KEY]: undefined,
     [INBOUND_SENDER_TEXT_CLIPPED_KEY]: undefined,
     [INBOUND_SCAN_FINDING_COUNT_KEY]: undefined,
+    // Only the hand-off recovery publisher marks a re-run correction (#2588).
+    [HANDOFF_RECOVERY_KEY]: undefined,
     ...(trustedMeta ?? {}),           // trusted stamp wins last
   };
 }
@@ -1087,8 +1096,13 @@ export class Dispatcher {
     // the code to type it.
     // A registered code also gets this turn the verification-code-received guidance.
     let verificationCodeReceived = false;
+    // Whether this message carried a sign-in code (#2588): any code registered, against any
+    // row, or the lookup failed. Either way its text is not stamped for other turns.
+    let relayedCodes: RelayedCodeState = 'none';
     if (liveTurn) {
-      verificationCodeReceived = await this.trackPrincipalRelayedCodes(taskContent, payload.channelId, payload.conversationId);
+      const tracked = await this.trackPrincipalRelayedCodes(taskContent, payload.channelId, payload.conversationId);
+      verificationCodeReceived = tracked.pendingReceived;
+      relayedCodes = tracked.state;
     }
 
     // Context bridging v2: inject active outbound context entries for principal
@@ -1314,9 +1328,11 @@ export class Dispatcher {
       ? parseSpotCheckVerdicts(spotCheckText)
       : [];
 
-    // The sender's own words for the turn-activity registry (#2588), and whether they had to
-    // be clipped: a hand-off must never pass on a partial message as the whole one.
+    // The sender's own words for the turn-activity registry (#2588), and whether they are
+    // partial: clipped to the limit, or (email) with a quoted or forwarded part cut off. A
+    // hand-off must never pass on a partial message as the whole one.
     const senderText = spotCheckCandidateText(payload.channelId, inboundText);
+    const senderTextPartial = senderTextExceedsClip(senderText) || cutsQuotedText(payload.channelId, inboundText);
 
     // Trusted task metadata: originator + (when suppressing) auto-gen sender block for skills.
     const trustedTaskMeta: Record<string, unknown> = {
@@ -1332,12 +1348,13 @@ export class Dispatcher {
       // For the note other turns of the same person see (#2588): the sender's own words,
       // scanned, before any preamble and (email) without the Subject line or quoted thread.
       // The finding count only when a scan ran: a missing scan is not a clean one. No text
-      // when it relays a sign-in code: the code must not be repeated into other turns (#2017).
-      ...(verificationCodeReceived
+      // when it may carry a sign-in code (any code registered, or the lookup failed): the
+      // code must not be repeated into other turns (#2017). Fails closed.
+      ...(relayedCodes !== 'none'
         ? {}
         : {
           [INBOUND_SENDER_TEXT_KEY]: clipSenderText(senderText),
-          ...(senderTextExceedsClip(senderText) ? { [INBOUND_SENDER_TEXT_CLIPPED_KEY]: true } : {}),
+          ...(senderTextPartial ? { [INBOUND_SENDER_TEXT_CLIPPED_KEY]: true } : {}),
         }),
       ...(scanCompleted ? { [INBOUND_SCAN_FINDING_COUNT_KEY]: scanFindingCount } : {}),
     };
@@ -1836,17 +1853,6 @@ export class Dispatcher {
   }
 
   /**
-   * Track sign-in code candidates in the principal's own new text (6-8 character shapes,
-   * plus a 4-5 character one in a message that is just the code) against every sms/app
-   * verification that is pending, expired or abandoned (#2017; never a satisfied one).
-   * A non-pending row starts its TTL clock as it is registered against. Best-effort: a
-   * failed lookup costs only the tracking, and the log carries no message content.
-   * True when at least one candidate was registered against a *pending* row: what the
-   * verification-code-received guidance keys on. Expired and abandoned rows still take the
-   * value (over-capture only scrubs), but a code-shaped token in a later message, such as a
-   * booking reference or postal code, must not be announced as a code for a dead session.
-   */
-  /**
    * Recipient-matched outbound context (#2261, Fix B of #1848). A non-principal sender
    * sees only the entries sent to them, so a reply to Curia's question arrives with the
    * question; entries sent to anyone else stay withheld, which is what the liveTurn gate
@@ -1998,14 +2004,37 @@ export class Dispatcher {
     return { taskContent: withOutreachLinkBlock(link, taskContent), meta };
   }
 
-  private async trackPrincipalRelayedCodes(content: string, channelId: string, conversationId: string): Promise<boolean> {
+  /**
+   * Track sign-in code candidates in the principal's own new text (6-8 character shapes,
+   * plus a 4-5 character one in a message that is just the code) against every sms/app
+   * verification that is pending, expired or abandoned (#2017; never a satisfied one).
+   * A non-pending row starts its TTL clock as it is registered against. The log carries no
+   * message content.
+   *
+   * `pendingReceived` is true when at least one candidate was registered against a *pending*
+   * row: what the verification-code-received guidance keys on. Expired and abandoned rows
+   * still take the value (over-capture only scrubs), but a code-shaped token in a later
+   * message, such as a booking reference or postal code, must not be announced as a code for
+   * a dead session.
+   *
+   * `state` is whether the text may carry a code, for the sender-text stamp (#2588):
+   * `received` when any candidate registered (any status), `none` when none did or there is
+   * no verification runtime, `unknown` when the lookup failed. Only `none` lets the text be
+   * stamped for other turns.
+   */
+  private async trackPrincipalRelayedCodes(
+    content: string,
+    channelId: string,
+    conversationId: string,
+  ): Promise<{ state: RelayedCodeState; pendingReceived: boolean }> {
+    const none = { state: 'none' as const, pendingReceived: false };
     const verification = this.verification;
-    if (!verification) return false;
+    if (!verification) return none;
     try {
       const open = (await verification.listActive()).filter(
         (v) => (v.delivery === 'sms' || v.delivery === 'app') && acceptsCodes(v),
       );
-      if (open.length === 0) return false;
+      if (open.length === 0) return none;
       const ownText = personTurnSourceText(content);
       // 6-8 character shapes anywhere in the principal's own text; 4-5 character ones only
       // when the message is essentially just the code or names it after a code keyword
@@ -2015,13 +2044,16 @@ export class Dispatcher {
         ...extractShortRelayedCodes(spotCheckCandidateText(channelId, ownText)),
       ];
       const registered = registerCodes(verification, open, candidates);
-      return registered.some((v) => v.status === 'pending');
+      return {
+        state: registered.length > 0 ? 'received' : 'none',
+        pendingReceived: registered.some((v) => v.status === 'pending'),
+      };
     } catch (err) {
       this.logger.warn(
         { err, channelId, conversationId },
-        'Dispatcher: could not read active verifications — sign-in codes in this principal turn are not tracked',
+        'Dispatcher: could not read active verifications — sign-in codes in this principal turn are not tracked, and its text is not shared with other turns',
       );
-      return false;
+      return { state: 'unknown', pendingReceived: false };
     }
   }
 

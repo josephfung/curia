@@ -6,8 +6,13 @@ import {
 } from './llm/streaming-turn.js';
 import type { EventBus } from '../bus/bus.js';
 import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, createDelegationTimedOut, createDelegationRequesterContext, createDelegationPrincipalNote, createAgentTaskInputInjected, isInjectionDrainPoint, type AgentResponseFailureReason, type AgentTaskEvent, type InjectionDrainPoint } from '../bus/events.js';
-import { holderFromAgentTask, originatorIsSystem, type TurnLanes } from '../dispatch/turn-lanes.js';
-import type { TurnActivityRegistry } from '../dispatch/turn-activity.js';
+import { holderFromAgentTask, isLanedTurnShape, originatorIsSystem, type TurnLanes } from '../dispatch/turn-lanes.js';
+import {
+  HANDOFF_RECOVERY_KEY,
+  type HeldCorrection,
+  type RootTurn,
+  type TurnActivityRegistry,
+} from '../dispatch/turn-activity.js';
 import { isCrossTurnHold } from '../dispatch/backstop-message.js';
 import { frameInjectedInput } from './injected-input.js';
 import type { Tier } from './llm/model-router.js';
@@ -22,10 +27,10 @@ import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
 import { historyForLlm, llmFailurePairing, llmFailureTurnContent, LLM_FAILURE_USER_MESSAGE } from '../memory/llm-failure-turn.js';
 import { renderBudgetExhaustedVerificationReply } from './prompts/verification-block.js';
-import { buildOtherTurnViews, renderOtherTurnsBlock, showsHandoffGuidance } from './prompts/other-turns-block.js';
+import { buildOtherTurnViews, renderOtherTurnsBlock, showsHandoffGuidance, type OtherTurnView } from './prompts/other-turns-block.js';
 import {
   TURN_HANDOFF_TOOL_NAME,
-  handingRootEligible,
+  handingIneligibility,
   handoffOutcomeText,
   parseHandoffRequest,
   performHandoff,
@@ -527,6 +532,7 @@ export class AgentRuntime {
         originatorContactId: holder.originatorContactId,
         originatorResolved: holder.originatorResolved,
         originatorIsSystem: originatorIsSystem(payload.metadata?.['originator']),
+        senderId: payload.senderId,
       });
     } catch (err) {
       this.config.logger.error(
@@ -537,27 +543,42 @@ export class AgentRuntime {
   }
 
   /**
-   * The note of the same person's other turns (#2588): the coordinator's own turns only, not
-   * a delegated specialist's. A late-delegation wake continues its root, so it sees that
-   * root's others. Fail-open: an error is logged and the block omitted.
+   * The note of the same person's other turns (#2588). Only a person's own inbound root turn
+   * reads it: the root task itself (not a wake or delegated task under it), not a synthetic
+   * turn (a hand-off recovery turn excepted: it re-runs the person's message), a laned turn
+   * shape on a human channel (so no scheduled job, internal or bullpen task), and a one-to-one
+   * audience (a group, a channel thread or a cc'd email gets no note). Fail-open: an error is
+   * logged and the block omitted.
    *
-   * `handoffAvailable` is true exactly when the block carries the `turn-handoff` guidance line,
-   * from the same views and the same eligibility; the runtime then offers the tool. Both need
-   * lanes on and this task to be a hand-off-eligible root turn (handingRootEligible), plus some
-   * listed turn that can take a hand-off.
+   * `handoffDefs` is non-empty exactly when the block carries the `turn-handoff` guidance line:
+   * the tool's availability (no per-turn allowlist, an execution layer, a registered
+   * definition) is decided first and is part of that eligibility, so the line never shows
+   * while the tool is not offered. The runtime then adds those definitions to the turn.
    */
-  private otherTurnsBlock(taskEvent: AgentTaskEvent): { text: string; handoffAvailable: boolean } {
-    const none = { text: '', handoffAvailable: false };
+  private otherTurnsBlock(taskEvent: AgentTaskEvent): { text: string; handoffDefs: ToolDefinition[] } {
+    const none = { text: '', handoffDefs: [] };
     const registry = this.config.turnActivity;
     if (!registry || this.config.agentId !== 'coordinator') return none;
-    if (isDelegatedSpecialistTask(taskEvent.payload.metadata as Record<string, unknown> | undefined)) return none;
+    const { payload } = taskEvent;
+    const metadata = payload.metadata as Record<string, unknown> | undefined;
+    if (isDelegatedSpecialistTask(metadata)) return none;
     try {
       const mine = registry.rootOf(taskEvent.id);
-      if (!mine) return none;
-      const views = buildOtherTurnViews(registry, mine.rootId);
-      const handingEligible = this.config.turnLanes?.enabled === true && handingRootEligible(mine, taskEvent.id);
-      const text = renderOtherTurnsBlock(views, { timezone: this.config.timezone?.trim() || 'UTC', handingEligible });
-      return { text, handoffAvailable: text !== '' && showsHandoffGuidance(views, handingEligible) };
+      if (!mine || mine.rootId !== taskEvent.id) return none;
+      const isRecovery = metadata?.[HANDOFF_RECOVERY_KEY] !== undefined;
+      if (payload.syntheticTurn === true && !isRecovery) return none;
+      if (!isLanedTurnShape(payload) || !mine.audienceOneToOne) return none;
+
+      const scrubText = this.scrubTextFn();
+      const { views, total } = buildOtherTurnViews(registry, mine.rootId, scrubText ? { scrubText } : {});
+      if (views.length === 0) return none;
+      const handoffDefs = this.handoffToolDefs(taskEvent, mine, views);
+      const text = renderOtherTurnsBlock(views, {
+        timezone: this.config.timezone?.trim() || 'UTC',
+        handingEligible: handoffDefs.length > 0,
+        total,
+      });
+      return { text, handoffDefs: text !== '' ? handoffDefs : [] };
     } catch (err) {
       this.config.logger.error(
         { err, taskEventId: taskEvent.id },
@@ -568,45 +589,113 @@ export class AgentRuntime {
   }
 
   /**
+   * The `turn-handoff` definitions to offer this turn, or none. Offered only when lanes are on,
+   * this task may hand its message over (handingIneligibility), some listed turn can take it,
+   * and the tool can actually be in the turn's tools: no per-turn allowlist (which wins), an
+   * execution layer, and a registered definition. A suppression the turn would otherwise get
+   * is logged at warn; an ineligible turn's reason at debug.
+   */
+  private handoffToolDefs(taskEvent: AgentTaskEvent, mine: RootTurn, views: readonly OtherTurnView[]): ToolDefinition[] {
+    const { logger } = this.config;
+    const ids = { taskEventId: taskEvent.id };
+    if (this.config.turnLanes?.enabled !== true) {
+      logger.debug({ ...ids, reason: 'lanes_off' }, 'turn-handoff: this turn may not hand over');
+      return [];
+    }
+    const ineligible = handingIneligibility(mine, taskEvent.id);
+    if (ineligible !== null) {
+      logger.debug({ ...ids, reason: ineligible }, 'turn-handoff: this turn may not hand over');
+      return [];
+    }
+    if (!showsHandoffGuidance(views, true)) return [];
+    const allowlist = taskEvent.payload.toolAllowlist;
+    if (Array.isArray(allowlist) && allowlist.some((name) => typeof name === 'string' && name.length > 0)) {
+      logger.warn(ids, 'turn-handoff: a per-turn tool allowlist keeps the tool out; no hand-off this turn');
+      return [];
+    }
+    const executionLayer = this.config.executionLayer;
+    if (!executionLayer) {
+      logger.warn(ids, 'turn-handoff: no execution layer; no hand-off this turn');
+      return [];
+    }
+    const defs = executionLayer.getToolDefinitions([TURN_HANDOFF_TOOL_NAME]);
+    if (defs.length === 0) {
+      logger.warn(ids, 'turn-handoff is not registered — a hand-off is available but the tool cannot be offered');
+    }
+    return defs;
+  }
+
+  /** The verification tracker's scrubText, or undefined without a verification runtime. */
+  private scrubTextFn(): ((text: string) => string) | undefined {
+    const tracker = this.config.verification?.tracker;
+    return tracker ? (text: string) => tracker.scrubText(text) : undefined;
+  }
+
+  /**
    * A late-delegation wake drains the hand-off corrections held for its root (#2588): each is
    * queued into this task's lane, and the turn-start drain delivers it. Runs after the lane
-   * acquire and the registry start. A correction this task cannot take is lost, logged at error.
+   * acquire and the registry start. A correction this task cannot take, or does not drain, is
+   * re-run on its handing turn (recoverHandoff). A coordinator task under a root with held
+   * corrections that is not a laned wake passes them over, logged at info.
    */
   private injectHeldCorrections(taskEvent: AgentTaskEvent): void {
     const registry = this.config.turnActivity;
     const lanes = this.config.turnLanes;
     if (!registry || !lanes?.enabled) return;
-    if (this.config.agentId !== 'coordinator' || taskEvent.payload.metadata?.lateDelegation === undefined) return;
-    // Only a laned wake holds a lane the corrections can join; leave them held otherwise.
-    if (!lanes.isLaned(taskEvent.payload)) return;
+    if (this.config.agentId !== 'coordinator') return;
+    if (isDelegatedSpecialistTask(taskEvent.payload.metadata as Record<string, unknown> | undefined)) return;
+    let root: RootTurn | undefined;
     try {
-      const root = registry.rootOf(taskEvent.id);
-      if (!root) return;
-      for (const input of registry.takeHeldForWake(root.rootId)) {
-        const result = lanes.tryInjectIntoTask(taskEvent.id, input);
-        if (result.kind === 'queued') {
-          const ids = { taskEventId: taskEvent.id, rootId: root.rootId, inboundEventId: input.inboundEventId };
-          this.config.logger.info(ids, 'Queued a held hand-off correction into its wake');
-          // The ticket only resolves. A wake that ends before draining hands it back: lost.
-          void result.ticket.then((ticket) => {
-            if (ticket.kind === 'returned') {
-              this.config.logger.error(ids, 'A held hand-off correction was not drained by its wake — the correction is lost');
-            }
-          }).catch((err: unknown) => {
-            this.config.logger.error({ ...ids, err }, 'Failed to settle a held hand-off correction in its wake');
-          });
-          continue;
-        }
-        this.config.logger.error(
-          { taskEventId: taskEvent.id, rootId: root.rootId, inboundEventId: input.inboundEventId, reason: result.reason },
-          'A held hand-off correction could not join its wake — the correction is lost',
+      root = registry.rootOf(taskEvent.id);
+    } catch (err) {
+      this.config.logger.error({ err, taskEventId: taskEvent.id }, 'Failed to look up held hand-off corrections for a task');
+      return;
+    }
+    if (!root) return;
+    const isWake = taskEvent.payload.metadata?.lateDelegation !== undefined;
+    const laned = lanes.isLaned(taskEvent.payload);
+    if (!isWake || !laned) {
+      const held = registry.heldCount(root.rootId);
+      if (held > 0) {
+        this.config.logger.info(
+          { taskEventId: taskEvent.id, rootId: root.rootId, held, kind: !isWake ? 'not_late_delegation' : 'not_laned' },
+          'A task under a root with held hand-off corrections passed them over; they stay held',
         );
       }
+      return;
+    }
+    let held: HeldCorrection[];
+    try {
+      held = registry.takeHeldForWake(root.rootId);
     } catch (err) {
-      this.config.logger.error(
-        { err, taskEventId: taskEvent.id },
-        'Failed to deliver held hand-off corrections to a wake — they are lost',
-      );
+      this.config.logger.error({ err, taskEventId: taskEvent.id }, 'Failed to take held hand-off corrections for a wake');
+      return;
+    }
+    const rootId = root.rootId;
+    for (const h of held) {
+      const ids = { taskEventId: taskEvent.id, rootId, inboundEventId: h.input.inboundEventId };
+      try {
+        const result = lanes.tryInjectIntoTask(taskEvent.id, h.input, taskEvent.payload.conversationId);
+        if (result.kind === 'not_injected') {
+          this.config.logger.warn({ ...ids, reason: result.reason }, 'A held hand-off correction could not join its wake — re-running it on its handing turn');
+          registry.recoverHandoff({ from: h.from, targetRootId: rootId, input: h.input, reason: 'wake_not_injected' });
+          continue;
+        }
+        this.config.logger.info(ids, 'Queued a held hand-off correction into its wake');
+        // The ticket only resolves. A wake that ends before draining it hands it back.
+        void result.ticket.then((ticket) => {
+          if (ticket.kind === 'returned') {
+            this.config.logger.warn(ids, 'A held hand-off correction was not drained by its wake — re-running it on its handing turn');
+            registry.recoverHandoff({ from: h.from, targetRootId: rootId, input: h.input, reason: 'wake_returned' });
+          }
+        }).catch((err: unknown) => {
+          this.config.logger.error({ ...ids, err }, 'Failed to settle a held hand-off correction in its wake');
+          registry.recoverHandoff({ from: h.from, targetRootId: rootId, input: h.input, reason: 'wake_returned' });
+        });
+      } catch (err) {
+        this.config.logger.error({ ...ids, err }, 'Failed to deliver a held hand-off correction to a wake — re-running it on its handing turn');
+        registry.recoverHandoff({ from: h.from, targetRootId: rootId, input: h.input, reason: 'wake_not_injected' });
+      }
     }
   }
 
@@ -880,6 +969,7 @@ export class AgentRuntime {
     // harness so they send exactly what production sends (#1966). Rebuilt every
     // turn so identity / autonomy / principal-identity changes apply without restart.
     let effectiveSystemPrompt = await buildBaseSystemPrompt(this.config, { now: new Date(), logger });
+    // The tool's availability is decided inside, before the note is rendered (#2588).
     const otherTurns = this.otherTurnsBlock(taskEvent);
     if (otherTurns.text) effectiveSystemPrompt += `\n\n${otherTurns.text}`;
 
@@ -1038,19 +1128,12 @@ export class AgentRuntime {
     }
 
     // turn-handoff (#2588): offered exactly when the other-turns note above shows its guidance
-    // line, never always-on and never pinned. A per-turn allowlist (below) wins, so it is not
-    // added then.
-    const hasToolAllowlist = Array.isArray(taskEvent.payload.toolAllowlist)
-      && taskEvent.payload.toolAllowlist.some((name) => typeof name === 'string' && name.length > 0);
-    if (otherTurns.handoffAvailable && !hasToolAllowlist && executionLayer) {
+    // line, never always-on and never pinned. otherTurnsBlock already ruled out a per-turn
+    // allowlist (which wins), a missing execution layer and an unregistered tool.
+    if (otherTurns.handoffDefs.length > 0) {
       if (!workingToolDefs) workingToolDefs = [];
       if (!workingToolDefs.some((t) => t.name === TURN_HANDOFF_TOOL_NAME)) {
-        const handoffDefs = executionLayer.getToolDefinitions([TURN_HANDOFF_TOOL_NAME]);
-        if (handoffDefs.length > 0) {
-          workingToolDefs.push(...handoffDefs);
-        } else {
-          logger.warn({ agentId }, 'turn-handoff is not registered — a hand-off is available but the tool cannot be offered');
-        }
+        workingToolDefs.push(...otherTurns.handoffDefs);
       }
     }
 
@@ -2762,7 +2845,8 @@ export class AgentRuntime {
             // Cross-conversation hand-off (#2588): the tool only marks the request. The runtime
             // passes the person's message to their other turn (or holds it for that turn's
             // wake), and the model sees only what to tell them. Fail-open: anything that goes
-            // wrong tells the model to do the work itself.
+            // wrong tells the model to do the work itself. A failed tool call never reaches
+            // here; the failure path below reports it as `tool_error`.
             if (toolCall.name === TURN_HANDOFF_TOOL_NAME) {
               let outcome: HandoffOutcome = { kind: 'do_it_yourself', reason: 'ineligible' };
               try {
@@ -2777,6 +2861,7 @@ export class AgentRuntime {
                 } else if (!registry || !turnLanes) {
                   logger.warn({ agentId }, 'turn-handoff called without a turn registry or lanes — the turn does the work itself');
                 } else {
+                  const scrubText = this.scrubTextFn();
                   outcome = await performHandoff({
                     registry,
                     lanes: turnLanes,
@@ -2784,11 +2869,14 @@ export class AgentRuntime {
                     fromTaskEventId: taskEvent.id,
                     targetRootId: request.turnId,
                     drainedFollowUp,
+                    handingLiveTurn: taskEvent.payload.liveTurn === true,
+                    ...(scrubText && { scrubText }),
                     ...(senderCtx?.resolved && senderCtx.displayName.length > 0 && { senderLabel: senderCtx.displayName }),
                   });
                 }
               } catch (err) {
                 logger.error({ err, agentId, taskEventId: taskEvent.id }, 'turn-handoff interception failed — the turn does the work itself');
+                outcome = { kind: 'do_it_yourself', reason: 'internal_error' };
               }
               logger.info({ agentId, taskEventId: taskEvent.id, outcome }, 'turn-handoff outcome');
               toolResultOverride = handoffOutcomeText(outcome);
@@ -3096,6 +3184,18 @@ export class AgentRuntime {
               ?? classifySkillError(toolCall.name, result.error);
           if (mismatchFromFailure) {
             pendingIdentityMismatch = mismatchFromFailure;
+          }
+          if (toolCall.name === TURN_HANDOFF_TOOL_NAME) {
+            // The hand-off tool itself failed (a gate, a timeout, a handler error, #2588): the
+            // model is told the hand-off failed and to do the work itself, never that the
+            // message "can't be passed on automatically". The real error is logged here.
+            logger.warn(
+              { agentId, taskEventId: taskEvent.id, errorType: agentErr.type, error: result.error },
+              'turn-handoff tool call failed — the turn does the work itself',
+            );
+            const outcome: HandoffOutcome = { kind: 'do_it_yourself', reason: 'tool_error' };
+            logger.info({ agentId, taskEventId: taskEvent.id, outcome }, 'turn-handoff outcome');
+            return { content: handoffOutcomeText(outcome), is_error: true };
           }
           const formattedError = formatTaskError(
             toolCall.name,
