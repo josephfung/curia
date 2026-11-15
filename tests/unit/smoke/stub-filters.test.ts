@@ -142,6 +142,23 @@ describe('CalendarState', () => {
     expect(listed.count).toBe(1);
   });
 
+  it('keeps every field a listing searches on a replayed event, created or updated (#2588)', () => {
+    const state = new CaseToolState();
+    applyCaseWrites('calendar-create-event', { event: {} }, {
+      title: 'Sync', start: '2026-10-07T15:00:00-04:00', end: '2026-10-07T15:30:00-04:00',
+      location: 'Boardroom', description: 'Quarterly planning',
+    }, state);
+    applyCaseWrites('calendar-create-event', { event: {} }, { title: 'Lunch', start: '2026-10-07T12:00:00-04:00', end: '2026-10-07T13:00:00-04:00' }, state);
+    const search = (input: Record<string, unknown>) =>
+      (applyCaseWrites('calendar-list-events', { events: [], count: 0 }, { ...wed, ...input }, state) as { events: Array<{ title: string }> }).events.map(e => e.title);
+    expect(search({ query: 'boardroom' })).toEqual(['Sync']);
+    expect(search({ query: 'quarterly' })).toEqual(['Sync']);
+    // An update's description and attendees are searchable too.
+    applyCaseWrites('calendar-update-event', { event: {} }, { eventId: 'evt-created-2', description: 'Venue TBD', attendees: [{ email: 'leo@example.test' }] }, state);
+    expect(search({ query: 'venue' })).toEqual(['Lunch']);
+    expect(search({ attendeeEmail: 'leo@example.test' })).toEqual(['Lunch']);
+  });
+
   it('replays only the written events a listing would return: window, query and moves (#2588)', () => {
     const state = new CaseToolState();
     applyCaseWrites('calendar-create-event', { event: {} }, { title: 'Sync with Priya', start: '2026-10-07T15:00:00-04:00', end: '2026-10-07T15:30:00-04:00' }, state);

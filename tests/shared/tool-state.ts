@@ -26,31 +26,19 @@ export class CalendarState {
 
   /**
    * Record a stubbed write; returns the result to hand back (a created event gets its id).
-   * A created event takes the call's title, times, calendar and attendees where the stub's
-   * event leaves them out, as the real tool returns the event it made, so a later listing
-   * shows what was booked (#2588). Fields the stub sets win.
+   * A created event takes the call's fields (`eventFieldsOf`) where the stub's event leaves
+   * them out, as the real tool returns the event it made, so a later listing shows what was
+   * booked and finds it by any field a listing searches (#2588). Fields the stub sets win.
    */
   recordWrite(toolName: string, data: Json, input: Json): Json {
     if (toolName === 'calendar-create-event' && data['event'] && typeof data['event'] === 'object') {
-      const fromCall: Json = {
-        ...(str(input['title']) !== undefined ? { title: input['title'] } : {}),
-        ...(str(input['start']) !== undefined ? { startTime: input['start'] } : {}),
-        ...(str(input['end']) !== undefined ? { endTime: input['end'] } : {}),
-        ...(str(input['calendarId']) !== undefined ? { calendarId: input['calendarId'] } : {}),
-        ...(Array.isArray(input['attendees']) ? { participants: input['attendees'] } : {}),
-      };
-      const event = { ...fromCall, ...(data['event'] as Json), id: `evt-created-${this.created.length + 1}` };
+      const event = { ...eventFieldsOf(input), ...(data['event'] as Json), id: `evt-created-${this.created.length + 1}` };
       this.created.push(event);
       return { ...data, event };
     }
     if (toolName === 'calendar-update-event' && typeof input['eventId'] === 'string') {
       // Only the fields the call set; the rest of the event stays as listed.
-      const changes: Json = {};
-      if (input['title'] !== undefined) changes['title'] = input['title'];
-      if (input['start'] !== undefined) changes['startTime'] = input['start'];
-      if (input['end'] !== undefined) changes['endTime'] = input['end'];
-      if (input['location'] !== undefined) changes['location'] = input['location'];
-      this.updates.set(input['eventId'], { ...(this.updates.get(input['eventId']) ?? {}), ...changes });
+      this.updates.set(input['eventId'], { ...(this.updates.get(input['eventId']) ?? {}), ...eventFieldsOf(input) });
     }
     if (toolName === 'calendar-delete-event' && typeof input['eventId'] === 'string') {
       this.deleted.add(input['eventId']);
@@ -94,6 +82,23 @@ export class CalendarState {
     // one and untouched by writes keeps the shape the case wrote.
     return changed || 'count' in data ? { ...data, events, count: events.length } : { ...data, events };
   }
+}
+
+/**
+ * The listed-event fields a create or update call sets, under the names a listing returns:
+ * every field `eventMatchesListing` reads (times, title, description, location,
+ * participants) plus the calendar. A field the call leaves out is absent, not cleared.
+ */
+function eventFieldsOf(input: Json): Json {
+  return {
+    ...(str(input['title']) !== undefined ? { title: input['title'] } : {}),
+    ...(str(input['start']) !== undefined ? { startTime: input['start'] } : {}),
+    ...(str(input['end']) !== undefined ? { endTime: input['end'] } : {}),
+    ...(str(input['description']) !== undefined ? { description: input['description'] } : {}),
+    ...(str(input['location']) !== undefined ? { location: input['location'] } : {}),
+    ...(str(input['calendarId']) !== undefined ? { calendarId: input['calendarId'] } : {}),
+    ...(Array.isArray(input['attendees']) ? { participants: input['attendees'] } : {}),
+  };
 }
 
 function lowerText(v: unknown): string {
