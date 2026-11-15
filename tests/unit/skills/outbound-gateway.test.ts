@@ -7038,6 +7038,15 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(ledger.recordHeld.mock.calls[0]![0]).not.toHaveProperty('reported');
       });
 
+      // PR #2625 review: the recovered marker keeps the first hold's time. A recovery-time `at`
+      // would restart the thread's 24h cooldown (recentForThread counts held markers by `at`).
+      it('keeps the first hold\'s time on the recovered marker, so the thread cooldown is not extended', async () => {
+        const firstHeldAt = new Date(Date.now() - 23 * 3_600_000).toISOString();
+        const { gw, ledger } = makeAuto({ ledger: withHeld(heldEntry({ unreported: true, at: firstHeldAt })) });
+        await gw.sendPrincipalDraft('d1', auto);
+        expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ at: firstHeldAt }));
+      });
+
       // PR #2625 review: the recovered item keeps the first hold's cause, whatever kind of code it kept.
       it.each([
         ['stakes-commitment', 'Held for you.'],
