@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import {
   PrincipalSendLedger, parseLedgerDoc, PRINCIPAL_SEND_LEDGER_PREFIX, PRINCIPAL_SEND_DOC_TYPE,
@@ -134,6 +134,9 @@ describe('PrincipalSendLedger autonomous lookups (#2474 PR 2)', () => {
 
 // Final fixes A4 (security review M2) and A12 (final review M1).
 describe('PrincipalSendLedger global lookups', () => {
+  // Some tests stamp each write with its own Date.now(); restore it even when an assertion fails.
+  afterEach(() => { vi.restoreAllMocks(); });
+
   it('recentAutonomousSends counts autonomous sending and sent entries on every thread inside the window', async () => {
     const docs = makeDocs();
     const ledger = new PrincipalSendLedger(docs, logger);
@@ -177,13 +180,30 @@ describe('PrincipalSendLedger global lookups', () => {
     await ledger.recordSending({ ...entry, mode: 'autonomous' });
     await ledger.recordLimitStop({ draftId: 'd1', mailbox: 'work', reason: 'daily_cap', at: entry.at });
     // A send attempt or a limit stop is not a hold: a limit only says "not yet".
-    expect(await ledger.heldForDraft('d1', 'work')).toBe(false);
+    expect(await ledger.heldForDraft('d1', 'work')).toBeNull();
     await ledger.recordHeld({ ...entry, mode: 'autonomous', reasonCode: 'review_hold' });
-    expect(await ledger.heldForDraft('d1', 'work')).toBe(true);
+    // The entry, so the gateway can log why and when it was first held.
+    expect(await ledger.heldForDraft('d1', 'work')).toMatchObject({ draftId: 'd1', outcome: 'held', reasonCode: 'review_hold' });
     // Draft ids are per mailbox; a draft whose id shares the prefix is another draft.
-    expect(await ledger.heldForDraft('d1', 'personal')).toBe(false);
-    expect(await ledger.heldForDraft('d', 'work')).toBe(false);
-    vi.restoreAllMocks();
+    expect(await ledger.heldForDraft('d1', 'personal')).toBeNull();
+    expect(await ledger.heldForDraft('d', 'work')).toBeNull();
+  });
+
+  // #2591 review: a hold whose digest item failed to publish must not read as already reported.
+  it('recordHeld marks a hold the principal was not told about, and heldForDraft returns the latest hold', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    let ms = 1_794_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => ms++);
+    await ledger.recordHeld({ ...entry, mode: 'autonomous', reasonCode: 'review_hold', reported: false });
+    expect(docs.create.mock.calls[0]![0].frontmatter).toMatchObject({ reported: false });
+    expect(await ledger.heldForDraft('d1', 'work')).toMatchObject({ unreported: true });
+    // A later hold that did reach the principal supersedes it.
+    await ledger.recordHeld({ ...entry, mode: 'autonomous', reasonCode: 'already_held' });
+    expect(docs.create.mock.calls[1]![0].frontmatter).not.toHaveProperty('reported');
+    const latest = await ledger.heldForDraft('d1', 'work');
+    expect(latest).toMatchObject({ reasonCode: 'already_held' });
+    expect(latest).not.toHaveProperty('unreported');
   });
 
   it('heldForDraft counts a held marker with no mailbox (written before the registry) for any mailbox', async () => {
@@ -194,7 +214,7 @@ describe('PrincipalSendLedger global lookups', () => {
     const legacy = { ...doc.frontmatter };
     delete legacy['mailbox'];
     docs.docs.set(doc.path, { ...doc, frontmatter: legacy });
-    expect(await ledger.heldForDraft('d1', 'personal')).toBe(true);
+    expect(await ledger.heldForDraft('d1', 'personal')).toMatchObject({ draftId: 'd1' });
   });
 
   it('heldForDraft throws on a repo failure (the gateway decides what that means)', async () => {

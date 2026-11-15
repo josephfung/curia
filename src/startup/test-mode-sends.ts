@@ -41,6 +41,7 @@ import type { PrincipalEmailRef } from '../contacts/types.js';
 import type { AgentPersona, ToolManifest } from '../skills/types.js';
 import { REPLY_QUOTE_HTML_OPEN } from '../skills/_shared/reply-quote.js';
 import { DEFAULT_MAILBOX, DEFAULT_SEND_LEVEL, type SendLevel } from '../skills/principal-send/send-level.js';
+import { FALLBACK_MAILBOX_ID } from '../principal-mailboxes/state-keys.js';
 import { PrincipalMailboxes, type MailboxDirectory } from '../principal-mailboxes/service.js';
 import type { PrincipalMailboxStore } from '../principal-mailboxes/store.js';
 import type { PrincipalMailboxRecord } from '../principal-mailboxes/types.js';
@@ -597,8 +598,10 @@ export function inMemorySendLedger(runStore: () => PrincipalSendEntry[] | undefi
       && (e.conversationIdsUnreadable === true || e.conversationIds.some(id => ids.includes(id))) && recent(e, sinceEpochMs))),
     recentAutonomousSends: async (sinceEpochMs, scan) => (scan ?? entries()).filter(e => e.mode === 'autonomous' && e.outcome !== 'held' && e.outcome !== 'limited' && recent(e, sinceEpochMs)),
     sentForDraft: async (draftId) => entries().some(e => e.draftId === draftId && e.outcome === 'sent'),
-    // As production (#2591): a held marker on the draft in this mailbox, or one with no mailbox.
-    heldForDraft: async (draftId, mailbox) => entries().some(e => e.draftId === draftId && e.outcome === 'held' && (e.mailbox === undefined || e.mailbox === mailbox)),
+    // As production (#2591): the latest held marker on the draft in this mailbox (no mailbox asked:
+    // any), or one with no mailbox or the deferred-fallback id.
+    heldForDraft: async (draftId, mailbox) => [...entries()].reverse().find(e => e.draftId === draftId && e.outcome === 'held'
+      && (mailbox === undefined || e.mailbox === undefined || e.mailbox === FALLBACK_MAILBOX_ID || e.mailbox === mailbox)) ?? null,
   };
 }
 

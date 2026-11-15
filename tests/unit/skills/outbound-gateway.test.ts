@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { inMemorySendLedger } from '../../../src/startup/test-mode-sends.js';
 import { OutboundGateway, UnknownEmailAccountError, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL, MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL, PRINCIPAL_SEND_DIGEST_REASONS, PRINCIPAL_SEND_REFUSALS, LIMIT_REFUSALS, refusalKindOf, isPolicyHoldRefusal, askPreamble, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
 import { SendLevelDegradedError } from '../../../src/skills/principal-send/send-level.js';
 import { AUTONOMOUS_MAX_COPIED_EVIDENCE } from '../../../src/skills/principal-send/autonomous-limits.js';
@@ -6967,12 +6968,21 @@ describe('sendPrincipalDraft (#2474)', () => {
     // misleading digest item. A held draft is the principal's: refused quietly, before anything else.
     describe('a draft already held for the principal (#2591)', () => {
       const HELD = "This draft was already held for the principal, so it's theirs to send. Don't send or edit it again." + SUFFIX;
+      const heldEntry = (over: Record<string, unknown> = {}) => ({
+        draftId: 'd1', threadId: 'th1', mailbox: 'default', conversationIds: [], recipients: ['dana@example.org'],
+        mode: 'autonomous', at: new Date().toISOString(), outcome: 'held', reasonCode: 'recipient_not_on_thread', ...over,
+      });
+      const withHeld = (held: unknown) => ({
+        recordSending: vi.fn().mockResolvedValue(undefined), recordSent: vi.fn().mockResolvedValue(undefined),
+        heldForDraft: held instanceof Error ? vi.fn().mockRejectedValue(held) : vi.fn().mockResolvedValue(held),
+      });
+      /** Every principal.report publish fails; anything else goes through. */
+      const failDigests = () => vi.mocked(mocks.bus.publish).mockImplementation(async (_layer, event) => {
+        if ((event as { type: string }).type === 'principal.report') throw new Error('bus down');
+      });
 
       it('refuses it with already_held: no send, no review, no new held marker, no second digest item', async () => {
-        const { gw, client, ledger, review } = makeAuto({ ledger: {
-          recordSending: vi.fn().mockResolvedValue(undefined), recordSent: vi.fn().mockResolvedValue(undefined),
-          heldForDraft: vi.fn().mockResolvedValue(true),
-        } });
+        const { gw, client, ledger, review } = makeAuto({ ledger: withHeld(heldEntry()) });
         expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({
           success: false, leftAsDraft: true, refusal: 'already_held', blockedReason: HELD, policyHold: true,
         });
@@ -6984,23 +6994,86 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(reports()).toHaveLength(0);
       });
 
+      // Review (silent failures): the quiet refusal assumes the first hold reached the principal.
+      // When its digest item failed, the next attempt files it, and marks the hold reported.
+      it('files the digest item the first hold failed to, then records the hold as reported', async () => {
+        const { gw, client, ledger } = makeAuto({ ledger: withHeld(heldEntry({ unreported: true })) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'already_held', blockedReason: HELD, policyHold: true });
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+        // The first hold's reason, as the principal would have read it.
+        expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('recipient_not_on_thread') })]);
+        expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ draftId: 'd1', reasonCode: 'recipient_not_on_thread', reported: true }));
+      });
+
+      it('falls back to "Held for you" for a first hold whose code has no digest text (a band rule id)', async () => {
+        const { gw } = makeAuto({ ledger: withHeld(heldEntry({ unreported: true, reasonCode: 'stakes-commitment' })) });
+        await gw.sendPrincipalDraft('d1', auto);
+        expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('review_hold') })]);
+      });
+
       it('fails closed when the ledger cannot say: no_send_ledger, as for any unreadable send record', async () => {
-        const { gw, client } = makeAuto({ ledger: {
-          recordSending: vi.fn().mockResolvedValue(undefined), recordSent: vi.fn().mockResolvedValue(undefined),
-          heldForDraft: vi.fn().mockRejectedValue(new Error('db down')),
-        } });
+        const { gw, client } = makeAuto({ ledger: withHeld(new Error('db down')) });
         expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'no_send_ledger', refusalKind: 'other' });
         expect(client!.sendDraft).not.toHaveBeenCalled();
       });
 
+      it('comes before the origin checks: a held draft is refused quietly whoever asks', async () => {
+        const outsider = { originator: { contactId: 'c-dana', systemRole: null, channel: 'email', initiatedAt: '2026-11-07T10:00:00.000Z' } };
+        const { gw } = makeAuto({ ledger: withHeld(heldEntry()) });
+        expect(await gw.sendPrincipalDraft('d1', { ...auto, authority: { taskMetadata: outsider } })).toMatchObject({ refusal: 'already_held' });
+        expect(reports()).toHaveLength(0);
+      });
+
       it('does not stop the principal sending it themselves on a live turn', async () => {
-        const { gw, client, ledger } = make({ ledger: {
-          recordSending: vi.fn().mockResolvedValue(undefined), recordSent: vi.fn().mockResolvedValue(undefined),
-          heldForDraft: vi.fn().mockResolvedValue(true),
-        } });
+        const { gw, client, ledger } = make({ ledger: withHeld(heldEntry()) });
         expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
         expect(ledger.heldForDraft).not.toHaveBeenCalled();
         expect(client!.sendDraft).toHaveBeenCalled();
+      });
+
+      // Review (sibling path): a held draft the principal then sent or deleted is gone. A later
+      // attempt finds nothing, and "Not sent: it isn't in your Drafts" would be a second item.
+      it('files nothing for a held draft that is gone, found or not found across mailboxes', async () => {
+        const gone = makeAuto({ client: autoClient(null), ledger: withHeld(heldEntry()) });
+        expect(await gone.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'already_held' });
+        expect(reports()).toHaveLength(0);
+
+        mocks = createMocks();
+        const unlocated = makeAuto({ mailboxIds: async () => ['work', 'personal'], mailboxes: { work: mailboxClient(null), personal: mailboxClient(null) }, ledger: withHeld(heldEntry({ mailbox: 'work' })) });
+        expect(await unlocated.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_found' });
+        // The draft's mailbox is unknown here, so any mailbox's hold counts.
+        expect(unlocated.ledger.heldForDraft).toHaveBeenCalledWith('d1');
+        expect(reports()).toHaveLength(0);
+      });
+
+      it('still reports a gone draft that was never held', async () => {
+        const { gw } = makeAuto({ mailboxIds: async () => ['work', 'personal'], mailboxes: { work: mailboxClient(null), personal: mailboxClient(null) }, ledger: withHeld(null) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_found' });
+        expect(reports()).toHaveLength(1);
+      });
+
+      it('records a hold whose own digest item failed to publish as unreported', async () => {
+        failDigests();
+        const { gw, ledger } = makeAuto({ client: autoClient(autoDraft({ cc: [{ email: 'sam@example.org' }] })) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'recipient_not_on_thread' });
+        expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ reasonCode: 'recipient_not_on_thread', reported: false }));
+      });
+
+      it('records a hold whose digest item went out as reported', async () => {
+        const { gw, ledger } = makeAuto({ client: autoClient(autoDraft({ cc: [{ email: 'sam@example.org' }] })) });
+        await gw.sendPrincipalDraft('d1', auto);
+        expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ reasonCode: 'recipient_not_on_thread', reported: true }));
+      });
+
+      // The prod sequence end to end, through the in-memory ledger rather than a mocked lookup.
+      it('holds once, then refuses a later wake quietly: one digest item in all', async () => {
+        const ledger = inMemorySendLedger(() => undefined);
+        const first = makeAuto({ client: autoClient(autoDraft({ cc: [{ email: 'sam@example.org' }] })), ledger: ledger as never });
+        expect(await first.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'recipient_not_on_thread' });
+        // A later task: Curia did not draft it in this pass, which used to be the refusal (and a second item).
+        const later = makeAuto({ client: autoClient(autoDraft({ cc: [{ email: 'sam@example.org' }] })), ledger: ledger as never, curiaWrites: { created: false, lastWriteAt: null, replyToMessageId: null } });
+        expect(await later.gw.sendPrincipalDraft('d1', { ...auto, taskEventId: 't2' })).toMatchObject({ refusal: 'already_held' });
+        expect(reports()).toHaveLength(1);
       });
     });
 
@@ -7653,8 +7726,10 @@ describe('sendPrincipalDraft (#2474)', () => {
       // Final fixes A10 (security review B4): a quote whose text is on no message every recipient
       // received is held before the review, whatever its personal data or the judge would say.
       const QUOTE_MISMATCH = "Its quoted text doesn't match the thread." + SUFFIX;
-      // #2590: the text matches, but a recipient never received the quoted message. Named, not "doesn't match".
-      const QUOTE_NOT_RECEIVED = (who: string) => `It quotes a message that ${who} didn't receive.${SUFFIX}`;
+      // #2590: the text matches, but nothing shows a recipient received the quoted message. Named,
+      // not "doesn't match"; and "couldn't confirm", since receipt the mailbox can't vouch for may still be real.
+      const NOT_CONFIRMED = (who: string) => `Curia couldn't confirm that ${who} received the message it quotes.`;
+      const QUOTE_NOT_RECEIVED = (who: string) => `${NOT_CONFIRMED(who)}${SUFFIX}`;
 
       it('holds a fake quote marker whose text is on no thread message, without asking the judge', async () => {
         const body = `<p>Got it.</p>${REPLY_QUOTE_HTML_OPEN}<p><strong>From:</strong> dana@example.org</p></div><blockquote>Sam's cell is 416-555-0199</blockquote>`;
@@ -7721,7 +7796,17 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(review).not.toHaveBeenCalled();
         // The held marker keeps the check's code; only the wording names the cause (#2590).
         expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ reasonCode: 'quote-mismatch' }));
-        expect(reports()).toEqual([expect.objectContaining({ summary: expect.stringContaining(`It quotes a message that bob@example.org didn't receive.${IN_DRAFTS}`) })]);
+        expect(reports()).toEqual([expect.objectContaining({ summary: expect.stringContaining(`${NOT_CONFIRMED('bob@example.org')}${IN_DRAFTS}`) })]);
+      });
+
+      it('names at most three people it couldn\'t confirm, then counts the rest', async () => {
+        const others = ['a', 'b', 'c', 'e'].map((n) => ({ email: `${n}@example.org` }));
+        const body = `<p>Got it, thanks.</p>${buildReplyQuote(SIGNED, 'UTC', { format: 'html' })}`;
+        const sent = inbound({ id: 'm0', from: [{ email: PRINCIPAL }], to: [{ email: 'dana@example.org' }, ...others], folders: ['SENT'], headers: [], body: '<p>Hi all</p>', date: nowSec() - 9000 });
+        const { gw } = makeAuto({ client: autoClient(autoDraft({ body, cc: others }), [sent, SIGNED]) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({
+          refusal: 'review_hold', blockedReason: QUOTE_NOT_RECEIVED('a@example.org, b@example.org, c@example.org and 1 other'),
+        });
       });
 
       // Final fixes A2: a principal SENT message counts as received by each of its recipients.

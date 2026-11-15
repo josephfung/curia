@@ -36,6 +36,7 @@ import type { AutonomyService } from '../../../src/autonomy/autonomy-service.js'
 import type { ContactService } from '../../../src/contacts/contact-service.js';
 import type { ChannelIdentity } from '../../../src/contacts/types.js';
 import type { PrincipalSendEntry } from '../../../src/skills/principal-send/send-ledger.js';
+import { FALLBACK_MAILBOX_ID } from '../../../src/principal-mailboxes/state-keys.js';
 import { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js';
 import { createLogger } from '../../../src/logger.js';
 import type { OutboundGateway } from '../../../src/skills/outbound-gateway.js';
@@ -534,12 +535,17 @@ describe('inMemorySendLedger matches production (#2475 item 12)', () => {
       { draftId: 'c', threadId: '', mailbox: 'work', conversationIds: [], recipients: [], mode: 'autonomous', at, outcome: 'limited', reasonCode: 'daily_cap' },
       { draftId: 'd', threadId: 't2', conversationIds: [], recipients: [], mode: 'autonomous', at, outcome: 'held', reasonCode: 'review_hold' },
     ];
+    store.push({ draftId: 'f', threadId: 't3', mailbox: FALLBACK_MAILBOX_ID, conversationIds: [], recipients: [], mode: 'autonomous', at, outcome: 'held', reasonCode: 'review_hold' });
     const ledger = inMemorySendLedger(() => store);
-    expect(await ledger.heldForDraft('a', 'work')).toBe(true);
-    expect(await ledger.heldForDraft('a', 'personal')).toBe(false);
-    expect(await ledger.heldForDraft('b', 'work')).toBe(false);
-    expect(await ledger.heldForDraft('c', 'work')).toBe(false);
-    expect(await ledger.heldForDraft('d', 'personal')).toBe(true);
+    expect(await ledger.heldForDraft('a', 'work')).toMatchObject({ draftId: 'a', reasonCode: 'review_hold' });
+    expect(await ledger.heldForDraft('a', 'personal')).toBeNull();
+    // No mailbox asked (the draft could not be located): any mailbox's hold counts.
+    expect(await ledger.heldForDraft('a')).toMatchObject({ draftId: 'a' });
+    expect(await ledger.heldForDraft('b', 'work')).toBeNull();
+    expect(await ledger.heldForDraft('c', 'work')).toBeNull();
+    expect(await ledger.heldForDraft('d', 'personal')).toMatchObject({ draftId: 'd' });
+    // The deferred-fallback id matches every mailbox, as in production.
+    expect(await ledger.heldForDraft('f', 'personal')).toMatchObject({ draftId: 'f' });
   });
 });
 

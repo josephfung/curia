@@ -1,4 +1,4 @@
 ### Fixed
 
-- **`ceo-inbox-send-draft`** — a quote failing because a recipient never received it now names them. (#2590)
-- **`ceo-inbox-send-draft`** — a draft already held for the principal is never retried, and files no second digest. (#2591)
+- **`ceo-inbox-send-draft`** — a quote held because receipt couldn't be confirmed now names who. (#2590)
+- **`ceo-inbox-send-draft`** — later attempts on a draft held for the principal are refused without a second digest. (#2591)

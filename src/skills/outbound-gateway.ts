@@ -593,15 +593,24 @@ const COPIED_TOO_MANY_REASON = `The message it answers copies more than ${AUTONO
 /** An autonomous reply whose quote is not a thread message every recipient received (final fixes A10). */
 const QUOTE_MISMATCH_REASON = `Its quoted text doesn't match the thread.${STILL_A_DRAFT}`;
 
+/** The most people a quote refusal names before counting the rest: the text stays short. */
+const QUOTE_MAX_NAMED = 3;
+
 /**
  * Why a quote failed its proof, as the agent is told (#2590). The quoted text being on the thread
  * but not on a message every recipient received is a different cause from text found nowhere, and
- * naming who is missing points the principal at the real reason.
+ * naming who points the principal at the real reason. "Couldn't confirm", not "didn't receive":
+ * receivedBy counts only receipt the mailbox can vouch for, so a real Cc from an unknown sender
+ * reads as unconfirmed (#2591 review).
  */
 function quoteProblemReason(problem: QuoteProblem): string {
-  return problem.kind === 'not-received'
-    ? `It quotes a message that ${problem.missing.join(' and ')} didn't receive.${STILL_A_DRAFT}`
-    : QUOTE_MISMATCH_REASON;
+  if (problem.kind !== 'not-received') return QUOTE_MISMATCH_REASON;
+  const named = problem.missing.slice(0, QUOTE_MAX_NAMED);
+  const rest = problem.missing.length - named.length;
+  const who = rest > 0
+    ? `${named.join(', ')} and ${rest} other${rest === 1 ? '' : 's'}`
+    : named.length > 1 ? `${named.slice(0, -1).join(', ')} and ${named[named.length - 1]}` : named[0]!;
+  return `Curia couldn't confirm that ${who} received the message it quotes.${STILL_A_DRAFT}`;
 }
 
 /**
@@ -627,6 +636,16 @@ function principalFacing(reason: string): string {
     .replace(/\bThe principal's\b/g, 'Your').replace(/\bthe principal's\b/g, 'your')
     .replace(/\bThe principal\b/g, 'You').replace(/\bthe principal\b/g, 'you');
   return `${/[.!?…]$/.test(voiced) ? voiced : `${voiced}.`} ${IN_YOUR_DRAFTS}`;
+}
+
+/**
+ * The digest reason for a hold whose own item never went out (#2591 review), from the code its
+ * marker kept: the fixed text for a refusal code, else (a band rule id) review_hold's "Held for you".
+ */
+function heldDigest(reasonCode: string | undefined): string {
+  return reasonCode !== undefined && Object.prototype.hasOwnProperty.call(PRINCIPAL_SEND_DIGEST_REASONS, reasonCode)
+    ? PRINCIPAL_SEND_DIGEST_REASONS[reasonCode as DigestRefusal]
+    : PRINCIPAL_SEND_DIGEST_REASONS.review_hold;
 }
 
 /** A bounced autonomous reply's digest reason: plain words, never the finding detail (#2474 addendum R3). */
@@ -4813,15 +4832,23 @@ export class OutboundGateway {
       // thread closing, a resumed task) must not try it again. First, and quietly: no new marker
       // and no digest item, since the hold that came first already told the principal why. An
       // unreadable ledger fails closed, as every other ledger read here does.
+      // A ledger outage on a held draft files one "couldn't check" item: fail closed over quiet.
       if (this.sendLedger) {
-        let held: boolean;
+        let held: PrincipalSendEntry | null;
         try {
           held = await this.sendLedger.heldForDraft(draftId, mailboxId);
         } catch (err) {
           this.log.warn({ ...grantSafeErrorFields(err), draftId, mailboxId }, 'outbound-gateway: send ledger unreadable — cannot rule out an earlier hold, not sending on its own');
           return stop('no_send_ledger');
         }
-        if (held) return refuse('already_held');
+        if (held) {
+          // Why and when it was first held, for whoever reads the log; the code never reaches the agent.
+          this.log.info({ draftId, mailboxId, heldReasonCode: held.reasonCode, heldAt: held.at, unreported: held.unreported === true }, 'outbound-gateway: draft already held for the principal');
+          // The first hold's digest item failed (#2591 review): file it now, which records the hold
+          // again as reported, rather than leave the principal never told.
+          if (held.unreported) return stop('already_held', PRINCIPAL_SEND_REFUSALS.already_held, held.reasonCode ?? 'already_held', heldDigest(held.reasonCode));
+          return refuse('already_held');
+        }
       }
       // An outsider writing to Curia's own address does not start a send from the principal's (D4.7).
       if (isOutsiderOriginated(options.authority.taskMetadata)) return stop('outsider_originated');
@@ -5255,6 +5282,10 @@ export class OutboundGateway {
       }
     }
     const isPrincipal = (email: string) => this.isPrincipalOnChannel('email', email);
+    // The held marker, written after the digest item below so it can say whether the principal
+    // was told (#2591 review): a later attempt refuses quietly only when they were. Only the
+    // judgement path reaches that write; the limit and gone-draft branches return first.
+    let heldMarker: ((reported: boolean) => Promise<void>) | null = null;
     if (args.kind !== 'judgement' || refusal === 'outsider_originated' || refusal === 'origin_unknown') {
       // No marker: only a judgement hold starts the thread's 24h cooldown. A limit stop is
       // recorded as `limited` by its own report, and an operational stop (no_send_ledger,
@@ -5265,21 +5296,29 @@ export class OutboundGateway {
       // No thread (the draft is gone or unreadable): there is no cooldown to start.
       this.log.info({ draftId, refusal }, 'outbound-gateway: autonomous stop on a draft with no known thread — no held marker');
     } else {
-      try {
-        await this.sendLedger?.recordHeld({
-          draftId,
-          threadId: draft.threadId,
-          mailbox: args.mailboxId,
-          conversationIds: [...args.conversationIds],
-          recipients: [...new Set([...draft.to, ...draft.cc, ...draft.bcc].map((r) => r.email.trim().toLowerCase()))].filter((r) => r && !isPrincipal(r)),
-          mode: 'autonomous',
-          at: new Date().toISOString(),
-          reasonCode,
-        });
-      } catch (err) {
-        // The refusal stands; only this thread's cooldown is lost.
-        this.log.error({ ...grantSafeErrorFields(err), draftId, refusal }, 'outbound-gateway: held marker not written — the thread\'s cooldown is not started');
-      }
+      const threadId = draft.threadId;
+      const recipients = [...new Set([...draft.to, ...draft.cc, ...draft.bcc].map((r) => r.email.trim().toLowerCase()))].filter((r) => r && !isPrincipal(r));
+      heldMarker = async (reported: boolean) => {
+        try {
+          await this.sendLedger?.recordHeld({
+            draftId,
+            threadId,
+            mailbox: args.mailboxId,
+            conversationIds: [...args.conversationIds],
+            recipients,
+            mode: 'autonomous',
+            at: new Date().toISOString(),
+            reasonCode,
+            reported,
+          });
+        } catch (err) {
+          // The refusal stands; only this thread's cooldown is lost.
+          this.log.error({ ...grantSafeErrorFields(err), draftId, refusal }, 'outbound-gateway: held marker not written — the thread\'s cooldown is not started');
+        }
+        if (!reported) {
+          this.log.error({ draftId, refusal }, 'outbound-gateway: a held draft\'s digest item failed — marked unreported, so the next attempt files it');
+        }
+      };
     }
     const what = draft ? mailboxDraftLabel(draft, isPrincipal) : 'a reply Curia drafted';
     // Held only by a limit (#2475, D6): reported as the limit, not as a judgement.
@@ -5301,7 +5340,8 @@ export class OutboundGateway {
       : principalFacing(reason));
     // An operational stop (a failure to check) was not a decision about the reply (R44).
     const heading = args.kind === 'other' ? 'Not sent from your mailbox' : 'Left as a draft in your mailbox';
-    await this.publishMailboxDigest(`${heading}: ${what}. ${said}`, options);
+    const reported = await this.publishMailboxDigest(`${heading}: ${what}. ${said}`, options);
+    await heldMarker?.(reported);
   }
 
   /**
@@ -5401,6 +5441,14 @@ export class OutboundGateway {
     if (refusal === 'not_found' && this.sendLedger) {
       try {
         if (await this.sendLedger.sentForDraft(draftId)) return;
+        // Held earlier and then sent or deleted by the principal (#2591 review): "Not sent" would
+        // be a second, misleading item. The mailbox is unknown here, so any mailbox's hold counts.
+        // An unreported hold still files: the principal was never told about the draft.
+        const held = await this.sendLedger.heldForDraft(draftId);
+        if (held && !held.unreported) {
+          this.log.info({ draftId, heldReasonCode: held.reasonCode }, 'outbound-gateway: gone draft was already held for the principal — nothing to report');
+          return;
+        }
       } catch (err) {
         this.log.warn({ ...grantSafeErrorFields(err), draftId }, 'outbound-gateway: send ledger unreadable — reporting the gone draft');
       }
