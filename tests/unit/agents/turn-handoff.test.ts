@@ -123,6 +123,8 @@ function targetHolder(over: Partial<LaneHolder> = {}): LaneHolder {
     originatorIsPrincipal: false,
     liveTurn: true,
     synthetic: false,
+    // A full tool set: a tool-limited holder (a content-block rewrite) is never injectable (#2615).
+    toolLimited: false,
     ...over,
   };
 }
@@ -654,6 +656,16 @@ describe('performHandoff', () => {
     startMine(registry);
     await lanes.acquire(targetHolder({ originatorContactId: STRANGER }));
     expect(await run()).toEqual({ kind: 'do_it_yourself', reason: 'not_same_person' });
+  });
+
+  // A content-block rewrite holds the lane with no tools, so it cannot act on a request (#2615).
+  it('does not deliver into a tool-limited target', async () => {
+    const { registry, lanes, run } = setup();
+    startTarget(registry);
+    startMine(registry);
+    await lanes.acquire(targetHolder({ toolLimited: true }));
+    expect(await run()).toEqual({ kind: 'do_it_yourself', reason: 'ineligible' });
+    expect(lanes.takeQueued('other-root')).toEqual([]);
   });
 
   it("refuses a system target (Curia's own work)", async () => {
