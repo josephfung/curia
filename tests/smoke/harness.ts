@@ -32,6 +32,7 @@ import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import { createAgentDiscuss, createInboundMessage, type ModelFallbackEngagedEvent } from '../../src/bus/events.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import type { Logger } from '../../src/logger.js';
+import { AuditLogRepo } from '../../src/audit/audit-log-repo.js';
 import type { BullpenService } from '../../src/memory/bullpen.js';
 import { createTestModeStack, type TestModeStack, type TierReasoningOverride } from '../../src/startup/test-mode-stack.js';
 import { attemptScope, closeAttempt, createCaseContext, guardProvider, meterAgentCalls, type TurnErrorKind } from '../shared/case-scope.js';
@@ -245,6 +246,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
     // The lane is on in the shipped config. Without the stack's scanner every
     // follow-up is refused, because a missing scan is not a clean one (#2018).
     injectionScanner: stack.injectionScanner,
+    // As production wires it: a content-block rewrite is shown what its turn did (#2615).
+    auditLogRepo: new AuditLogRepo(stack.pool, logger),
   });
   dispatcher.register();
 
