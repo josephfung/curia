@@ -111,8 +111,9 @@ function whoseTurn(
   contactName: (id: string) => string | undefined,
 ): string {
   if (other.originatorIsSystem) return 'a scheduled task';
-  // Only a root still running gets here from the viewer's own conversation (turn-activity.ts
-  // qualifyingOthers), e.g. an earlier turn's detached specialist.
+  // From the viewer's own conversation only a root still running, or one that ended after the
+  // viewer started, gets here (turn-activity.ts qualifyingOthers): e.g. an earlier turn's
+  // detached specialist.
   const sameConversation = viewer !== undefined && viewer.conversationId === other.conversationId;
   if (sameResolvedContact(viewer, other)) {
     if (sameConversation) return 'your earlier turn in this conversation';

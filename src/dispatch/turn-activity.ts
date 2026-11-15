@@ -5,8 +5,9 @@
 // late-delegation wake that continues it. Two roots that act on the same target (a contact, a
 // site, an id, a tool) within the window are worth a pause: the second caller is held once and
 // told what the first did, then may re-issue. The roots are usually in different
-// conversations. In the same conversation, only a root still running counts (an earlier turn
-// whose detached specialist is still working); an ended one is already in that history.
+// conversations. In the same conversation, a root counts while still running (an earlier turn
+// whose detached specialist is still working) or when it ended after the caller started; one
+// that ended before then is already in the history the caller read.
 //
 // Single process (ADR-053 section 7). The maps live in this process; a second Curia would not
 // see this one's turns. The registry fails open: an unknown task id, a pruned parent, or an
@@ -567,10 +568,12 @@ export class TurnActivityRegistry {
    * so it counts only while its last activity is inside the window; a running root past
    * MAX_RUNNING_ROOT_AGE_MS counts as ended at that age.
    *
-   * An ended root in my own conversation does not count: its work is in this conversation's
-   * history already, so a follow-up there is not held by it. One still running does count,
-   * e.g. an earlier turn whose detached specialist is still booking. Auto roots never end
-   * (no task marks them done), so they count by activity whatever their conversation.
+   * A root in my own conversation that ended before I started does not count: its work was
+   * in this conversation's history when I read it, so a follow-up there is not held by it.
+   * One still running counts (an earlier turn whose detached specialist is still booking), and
+   * so does one that ended after I started: it may have finished while my model call was in
+   * flight, so my model never saw it. Auto roots never end (no task marks them done), so they
+   * count by activity whatever their conversation.
    */
   private qualifyingOthers(mine: RootState): RootState[] {
     const now = this.now();
@@ -584,7 +587,7 @@ export class TurnActivityRegistry {
         continue;
       }
       const ended = this.effectiveEndedAt(other, now);
-      if (ended !== null && other.conversationId === mine.conversationId) continue;
+      if (ended !== null && ended < mine.startedAt && other.conversationId === mine.conversationId) continue;
       if (ended === null || ended >= floor) result.push(other);
     }
     return result;
