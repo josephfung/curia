@@ -14,7 +14,9 @@ import type { AuditLogRow } from '../audit/audit-log-repo.js';
 import { redactSecrets, renderResult } from '../autonomy/send-evidence.js';
 import {
   MAX_PRIOR_TURN_CALLS,
-  PRIOR_TURN_NOT_SENT_LINES,
+  MAX_PRIOR_TURN_FIELD,
+  MAX_PRIOR_TURN_SENT,
+  renderPriorTurnCall,
   type PriorTurnActions,
   type PriorTurnCall,
   type PriorTurnNotSent,
@@ -31,7 +33,10 @@ export const CONTENT_BLOCK_MAX_RETRIES = 2;
 export const PRIOR_TURN_RESULTS_LIMIT = MAX_PRIOR_TURN_CALLS;
 /** Per result, in code points, like the send review's evidence but tighter: it goes in every rewrite. */
 export const PRIOR_TURN_RESULT_MAX_CHARS = 1_500;
-/** All results together, in code points. The calls closest to the draft are kept. */
+/**
+ * All calls' rendered lines together, in code points, escaping included. The calls closest to
+ * the draft are kept.
+ */
 export const PRIOR_TURN_TOTAL_MAX_CHARS = 8_000;
 
 /** Rules that indicate a recipient/config problem — rewriting the body cannot fix these. */
@@ -90,19 +95,33 @@ export function clipMiddleCodePoints(text: string, max: number): string {
  * result records that beside the prose (shapeSpecialistAnswer): an empty `sent` list, the
  * composed drafts, and a next_step. The list is kept even when empty, and the drafts or the
  * nothing-sent next_step become `notSent`, so the rewrite never has only the prose to go on.
- * The next_step itself is not carried: it says to send with email-send, and this turn has no
- * tools.
+ * No delegate result's next_step is carried, whatever its shape: those say what the calling
+ * agent should do next (send with email-send, try the step itself), and this turn has no tools.
+ *
+ * A delegation that did not finish still reports `success: true`, so the skill's flag is not the
+ * outcome. Its data says what happened: `failed` (a decline, a blocked re-delegation, a
+ * structured failure) is failed; a timeout that may have gone through, a paused task, a
+ * question back, and work still running or interrupted are unknown, never claimed as done.
  */
 function priorTurnCall(row: AuditLogRow): PriorTurnCall {
-  const tool = String(row.payload['toolName'] ?? row.payload['skillName'] ?? 'unknown');
+  const tool = clipMiddleCodePoints(String(row.payload['toolName'] ?? row.payload['skillName'] ?? 'unknown'), MAX_PRIOR_TURN_FIELD);
   const result = asRecord(row.payload['result']);
+  const data = asRecord(result?.['data']);
+  const isDelegate = tool === 'delegate';
   const outcome: PriorTurnCall['outcome'] = row.outcome === 'failure' || result?.['success'] === false
     ? 'failed'
+    : isDelegate && delegateUnfinished(data) ? 'unknown'
+    : isDelegate && (data?.['failed'] === true || data?.['declined'] === true) ? 'failed'
     : row.outcome === 'success' || result?.['success'] === true ? 'succeeded' : 'unknown';
-  const data = asRecord(result?.['data']);
-  const agent = typeof data?.['agent'] === 'string' && data['agent'] !== '' ? data['agent'] : undefined;
+  const agent = typeof data?.['agent'] === 'string' && data['agent'] !== ''
+    ? clipMiddleCodePoints(data['agent'], MAX_PRIOR_TURN_FIELD)
+    : undefined;
+  // Capped at what the parser accepts; past that, the account would be refused whole.
   const sent = Array.isArray(data?.['sent'])
-    ? (data['sent'] as unknown[]).filter((s): s is string => typeof s === 'string' && s !== '')
+    ? (data['sent'] as unknown[])
+      .filter((s): s is string => typeof s === 'string' && s !== '')
+      .slice(0, MAX_PRIOR_TURN_SENT)
+      .map((s) => clipMiddleCodePoints(s, MAX_PRIOR_TURN_FIELD))
     : undefined;
   const notSent: PriorTurnNotSent | undefined = tool !== 'delegate' ? undefined
     : Array.isArray(data?.['draft_emails']) && data['draft_emails'].length > 0 ? 'draft'
@@ -111,10 +130,11 @@ function priorTurnCall(row: AuditLogRow): PriorTurnCall {
   // A specialist's answer is prose: show it as text rather than escaped inside JSON. Only for
   // delegate, whose other fields are lifted above; another tool's `response` field is one field
   // among others (an event id, say), so its whole result is shown.
-  const response = tool === 'delegate' && typeof data?.['response'] === 'string' ? data['response'] : undefined;
+  const response = isDelegate && typeof data?.['response'] === 'string' ? data['response'] : undefined;
   const error = typeof result?.['error'] === 'string' ? result['error'] : undefined;
   const raw = response !== undefined ? redactSecrets(response)
     : error !== undefined ? redactSecrets(error)
+    : isDelegate && data !== undefined ? redactSecrets(JSON.stringify(delegateFacts(data)))
     : renderResult(row.payload);
   return {
     tool,
@@ -124,6 +144,36 @@ function priorTurnCall(row: AuditLogRow): PriorTurnCall {
     ...(notSent ? { notSent } : {}),
     excerpt: clipMiddleCodePoints(raw, PRIOR_TURN_RESULT_MAX_CHARS),
   };
+}
+
+/** A delegation whose work may or may not have happened: never claimed as done or as failed. */
+function delegateUnfinished(data: Record<string, unknown> | undefined): boolean {
+  return data?.['possibly_succeeded'] === true
+    || data?.['in_flight'] === true
+    || data?.['in_progress'] === true
+    || data?.['paused'] === true
+    || data?.['needs_clarification'] === true;
+}
+
+/**
+ * What a delegate result with no answer text says happened, as the rewrite reads it: a decline,
+ * a blocked or failed delegation, a pause, a question back, work still running. Listed field by
+ * field, so a field that tells the calling agent what to do (next_step) or carries something
+ * to send (draft_emails) or resume (resume_token) is never passed on, nor is a new one added
+ * later. `agent` and `sent` are lifted onto the call.
+ */
+const DELEGATE_FACT_KEYS = [
+  'declined', 'failed', 'blocked', 'possibly_succeeded', 'in_flight', 'in_progress', 'paused',
+  'needs_clarification', 'reason', 'cause', 'message', 'question', 'done', 'total', 'next',
+  'work_product',
+] as const;
+
+function delegateFacts(data: Record<string, unknown>): Record<string, unknown> {
+  const facts: Record<string, unknown> = {};
+  for (const key of DELEGATE_FACT_KEYS) {
+    if (data[key] !== undefined) facts[key] = data[key];
+  }
+  return facts;
 }
 
 /**
@@ -139,8 +189,9 @@ export function priorTurnActionsFromRows(rows: readonly AuditLogRow[]): PriorTur
   let total = 0;
   for (const row of considered) {
     const call = priorTurnCall(row);
-    const size = Array.from(call.excerpt).length + call.tool.length + 40
-      + (call.notSent ? PRIOR_TURN_NOT_SENT_LINES[call.notSent].length : 0);
+    // The rendered line, so JSON escaping (a result that is itself JSON doubles its quotes)
+    // and every lifted field count against the budget, plus its line break.
+    const size = Array.from(renderPriorTurnCall(call)).length + 1;
     if (total + size > PRIOR_TURN_TOTAL_MAX_CHARS) break;
     total += size;
     kept.push(call);

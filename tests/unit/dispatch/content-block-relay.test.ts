@@ -19,6 +19,11 @@ import {
   type PriorTurnCall,
 } from '../../../src/agents/prompts/prior-turn-actions.js';
 import { shapeSpecialistAnswer } from '../../../src/agents/specialist-answer.js';
+import {
+  CLARIFICATION_NEXT_STEP,
+  PAUSED_NEXT_STEP,
+  declineNextStep,
+} from '../../../src/agents/prompts/delegate-result-guidance.js';
 
 describe('content-block-relay', () => {
   it('shows the quoted claims of a band bounce to the rewriting agent (#2159)', () => {
@@ -262,6 +267,61 @@ describe('priorTurnActionsFromRows (#2615)', () => {
     });
   });
 
+  // A delegation that did not finish still reports success: true (skills/delegate/handler.ts),
+  // so its data decides the outcome, and only its facts are shown: never a next_step, which
+  // tells the calling agent to act (send with email-send, try the step itself).
+  describe('a delegate result with no answer text', () => {
+    const DECLINE = {
+      agent: 'calendar',
+      declined: true,
+      failed: true,
+      reason: 'specialist_declined',
+      retryable: false,
+      message: 'I cannot book this: the calendar is read-only for me.',
+      sent: [],
+      next_step: declineNextStep(undefined, false),
+    };
+
+    function rendered(data: Record<string, unknown>): { call: PriorTurnCall; block: string } {
+      const actions = priorTurnActionsFromRows([ok('delegate', data, 4)]);
+      return { call: calls(actions)[0]!, block: renderPriorTurnActions(actions) };
+    }
+
+    it('reads a decline as failed and shows what the specialist said, without its next step', () => {
+      const { call, block } = rendered(DECLINE);
+      expect(call).toMatchObject({ tool: 'delegate', agent: 'calendar', outcome: 'failed', sent: [] });
+      expect(JSON.parse(call.excerpt)).toEqual({
+        declined: true, failed: true, reason: 'specialist_declined', message: DECLINE.message,
+      });
+      expect(DECLINE.next_step).toContain('email-send');
+      expect(block).not.toContain('email-send');
+      expect(block).not.toContain('next_step');
+    });
+
+    it.each([
+      ['a blocked re-delegation', { agent: 'calendar', failed: true, blocked: true, reason: 'blocked', retryable: false, message: 'Re-delegation is blocked.', next_step: declineNextStep(undefined, false) }],
+      ['a structured failure', { agent: 'calendar', failed: true, reason: 'error', retryable: false, message: 'The calendar specialist failed.' }],
+    ])('reads %s as failed', (_label, data) => {
+      const { call, block } = rendered(data);
+      expect(call.outcome).toBe('failed');
+      expect(block).not.toContain('next_step');
+    });
+
+    // Work that may yet happen, or may have: neither done nor failed.
+    it.each([
+      ['a timeout that may have gone through', { agent: 'calendar', failed: true, reason: 'timeout', retryable: true, possibly_succeeded: true, message: 'Timed out.' }],
+      ['work already in flight', { agent: 'calendar', in_flight: true, reason: 'already_in_flight', message: 'Already working on it.', next_step: 'Wait for it.' }],
+      ['an interrupted wait', { agent: 'calendar', in_progress: true, reason: 'interrupted', message: 'Still running.' }],
+      ['a paused task', { agent: 'calendar', paused: true, done: 1, total: 3, next: 'Create the second event.', message: 'Paused.', next_step: PAUSED_NEXT_STEP }],
+      ['a question back', { agent: 'calendar', needs_clarification: true, question: 'Which Tuesday?', resume_token: 'tok-1', next_step: CLARIFICATION_NEXT_STEP }],
+    ])('reads %s as unknown', (_label, data) => {
+      const { call, block } = rendered(data);
+      expect(call.outcome).toBe('unknown');
+      expect(block).not.toContain('next_step');
+      expect(block).not.toContain('resume_token');
+    });
+  });
+
   it('shows a non-delegate result whole, even when it has a response field', () => {
     const [call] = calls(priorTurnActionsFromRows([ok('calendar-create-event', { response: 'created', eventId: 'evt-42' }, 1)]));
     expect(call!.excerpt).toContain('evt-42');
@@ -277,6 +337,17 @@ describe('priorTurnActionsFromRows (#2615)', () => {
     const total = list.reduce((n, c) => n + Array.from(c.excerpt).length, 0);
     expect(total).toBeLessThanOrEqual(PRIOR_TURN_TOTAL_MAX_CHARS);
     expect(actions).toMatchObject({ earlierLeftOut: 30 - list.length, moreBeforeLimit: false });
+  });
+
+  // The budget bounds the rendered lines, escaping included: a result that is itself JSON has
+  // its quotes escaped again, and a control character costs six.
+  it('keeps the rendered calls within the budget when escaping inflates them', () => {
+    const noisy = '"\\\n\u0001'.repeat(400);
+    const actions = priorTurnActionsFromRows(Array.from({ length: 30 }, (_, i) => ok(`tool-${i}`, { body: noisy }, 50 - i)));
+    const rendered = renderPriorTurnActions(actions).split('\n').filter((l) => l.startsWith('{'));
+    expect(rendered.length).toBe(calls(actions).length);
+    const total = rendered.reduce((n, l) => n + Array.from(l).length + 1, 0);
+    expect(total).toBeLessThanOrEqual(PRIOR_TURN_TOTAL_MAX_CHARS);
   });
 
   // The dispatcher reads one more than the limit: a full read means older calls exist.

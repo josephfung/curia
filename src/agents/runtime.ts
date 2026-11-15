@@ -623,8 +623,9 @@ export class AgentRuntime {
       return [];
     }
     if (!showsHandoffGuidance(views, true)) return [];
-    const allowlist = taskEvent.payload.toolAllowlist;
-    if (Array.isArray(allowlist) && allowlist.some((name) => typeof name === 'string' && name.length > 0)) {
+    // Any allowlist value keeps the tool out, an empty list included: [] means no tools, and a
+    // malformed value leaves fewer tools, never the whole set (#2615), as the runtime reads it.
+    if (taskEvent.payload.toolAllowlist !== undefined) {
       logger.warn(ids, 'turn-handoff: a per-turn tool allowlist keeps the tool out; no hand-off this turn');
       return [];
     }

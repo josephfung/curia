@@ -73,8 +73,18 @@ export const PRIOR_TURN_UNREADABLE_LINE =
 
 /** The most calls carried on a task: the renderer and the parser agree on it. */
 export const MAX_PRIOR_TURN_CALLS = 40;
+/** The most entries in one call's `sent` list, and the longest tool, agent or entry name. */
+export const MAX_PRIOR_TURN_SENT = 40;
+export const MAX_PRIOR_TURN_FIELD = 120;
 const MAX_EXCERPT = 2_000;
-const MAX_FIELD = 120;
+const MAX_FIELD = MAX_PRIOR_TURN_FIELD;
+
+/**
+ * JSON leaves U+2028 and U+2029 raw, and they read as line breaks: text after one inside a
+ * result would look like a new call line in the account (other-turns-block.ts escapes them for
+ * the same reason).
+ */
+const LINE_SEPARATORS = /[\u2028\u2029]/g;
 
 function str(v: unknown, max: number): string | undefined {
   return typeof v === 'string' && v.length > 0 ? Array.from(v).slice(0, max).join('') : undefined;
@@ -104,10 +114,17 @@ export function parsePriorTurnActions(raw: unknown): PriorTurnActions | undefine
       return { status: 'unavailable' };
     }
     const agent = str(c['agent'], MAX_FIELD);
-    // An empty list stays: "sent nothing" and "did not say" are different facts.
-    const sent = Array.isArray(c['sent'])
-      ? c['sent'].map((s) => str(s, MAX_FIELD)).filter((s): s is string => s !== undefined)
-      : undefined;
+    // An empty list stays: "sent nothing" and "did not say" are different facts. So a list with
+    // a bad entry is not filtered down to a shorter one, which could read as "delivered
+    // nothing"; any malformed `sent` makes the whole record unavailable.
+    let sent: string[] | undefined;
+    if (c['sent'] !== undefined) {
+      const raw = c['sent'];
+      if (!Array.isArray(raw) || raw.length > MAX_PRIOR_TURN_SENT) return { status: 'unavailable' };
+      const entries = raw.map((s) => str(s, MAX_FIELD));
+      if (entries.some((s) => s === undefined)) return { status: 'unavailable' };
+      sent = entries as string[];
+    }
     const notSent = c['notSent'];
     if (notSent !== undefined && notSent !== 'draft' && notSent !== 'nothing') return { status: 'unavailable' };
     out.push({
@@ -122,9 +139,33 @@ export function parsePriorTurnActions(raw: unknown): PriorTurnActions | undefine
   return { status: 'read', calls: out, earlierLeftOut, moreBeforeLimit: moreBeforeLimit === true };
 }
 
+/**
+ * One call's line in the account. JSON-encoded, with angle brackets and line separators
+ * escaped, so no excerpt can close a quote or a tag or start what looks like another call.
+ * The account builder measures calls with this, so its budget bounds what is rendered.
+ */
+export function renderPriorTurnCall(c: PriorTurnCall): string {
+  return JSON.stringify({
+    tool: c.tool,
+    ...(c.agent ? { agent: c.agent } : {}),
+    outcome: c.outcome,
+    ...(c.sent ? { sent: c.sent } : {}),
+    ...(c.notSent ? { not_sent: PRIOR_TURN_NOT_SENT_LINES[c.notSent] } : {}),
+    result: c.excerpt,
+  })
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(LINE_SEPARATORS, (ch) => (ch === '\u2028' ? '\\u2028' : '\\u2029'));
+}
+
 /** The block for the rewrite's prompt. */
 export function renderPriorTurnActions(actions: PriorTurnActions): string {
   if (actions.status === 'unavailable') return PRIOR_TURN_UNREADABLE_LINE;
+  // Calls were left out but none is shown: "no tool calls" would be false, and nothing here
+  // says what was done, so it reads as a record that could not be read.
+  if (actions.calls.length === 0 && (actions.earlierLeftOut > 0 || actions.moreBeforeLimit)) {
+    return PRIOR_TURN_UNREADABLE_LINE;
+  }
   if (actions.calls.length === 0) return PRIOR_TURN_NO_CALLS_LINE;
   const lines = [PRIOR_TURN_ACTIONS_INTRO];
   if (actions.earlierLeftOut > 0 || actions.moreBeforeLimit) {
@@ -133,16 +174,6 @@ export function renderPriorTurnActions(actions: PriorTurnActions): string {
       ? `(${n > 0 ? `${n} or more` : 'Some'} earlier calls left out.)`
       : `(${n} earlier ${n === 1 ? 'call' : 'calls'} left out.)`);
   }
-  for (const c of actions.calls) {
-    // JSON-encoded, with angle brackets escaped, so no excerpt can close a quote or a tag.
-    lines.push(JSON.stringify({
-      tool: c.tool,
-      ...(c.agent ? { agent: c.agent } : {}),
-      outcome: c.outcome,
-      ...(c.sent ? { sent: c.sent } : {}),
-      ...(c.notSent ? { not_sent: PRIOR_TURN_NOT_SENT_LINES[c.notSent] } : {}),
-      result: c.excerpt,
-    }).replace(/</g, '\\u003c').replace(/>/g, '\\u003e'));
-  }
+  for (const c of actions.calls) lines.push(renderPriorTurnCall(c));
   return lines.join('\n');
 }
