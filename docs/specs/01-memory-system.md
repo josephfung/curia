@@ -83,6 +83,16 @@ Stored as nodes + edges in Postgres:
 
 Queried via recursive CTEs for traversal (e.g., "all decisions about Project X involving Person Y"). For launch, depth-limited to 3 hops. If graph traversal performance becomes an issue, introduce materialized views or caching as a future optimization.
 
+The `decision` node type and `decided` edge type record decisions Curia *learned about* ("the board decided to raise in Q3"), written by LLM extraction like any other entity. Decisions Curia makes or must enforce are relational state, not graph knowledge ([ADR-039](../adr/039-decisions-in-the-ledger-not-the-knowledge-graph.md)).
+
+### Deferred
+
+Considered and deliberately not built. Each has a trigger: revisit when it fires, not before.
+
+- **Validity intervals.** Nodes and edges record when Curia learned or last confirmed something (`created_at`, `last_confirmed_at`), not when it was true in the world (e.g. employment from 2019 to 2022). Freshness is folded into `confidence` by decay, and reconfirmation restores it. Superseded fact values survive in `properties.previous_values`. *Revisit when* an agent acts on a fact or relationship that was once true and no longer is, and decay did not catch it.
+- **Edge sensitivity.** `sensitivity` lives on nodes only. An edge has none of its own. *Revisit when* a relationship itself (e.g. `invested_in`, `spouse`) needs protection its endpoints do not carry, in an export or outbound path.
+- **Subtypes and participation roles.** The node and edge vocabularies are flat: no event subtypes such as meeting vs deadline, and no invited vs attended distinction. Nothing reads the graph for those distinctions today. *Revisit when* a skill must answer a question that depends on them from the graph.
+
 ---
 
 ## Temporal Metadata
@@ -143,6 +153,8 @@ Before writing a fact that updates an entity attribute (e.g., "the CEO lives in 
 - If contradicting fact exists with higher confidence: reject the write, log the conflict
 - If contradicting fact exists with lower confidence: update the existing fact, preserve the old value in `properties.previous_values` for audit
 - If contradicting fact exists with equal confidence: flag for human review via the alert channel
+
+Known gaps, under investigation in #2626: resolution ignores recency apart from decay, so a genuine update can lose to an older fact for a few weeks; attribute keys are LLM-chosen, so synonymous keys (`job_title` / `title`) are never compared; and an equal-confidence conflict from `extract-facts` is only logged, not sent to the alert channel. `memory-store` returns the conflict to the calling agent.
 
 ### Rate Limiting
 - Max 50 memory writes per agent per task execution (prevents runaway memory pollution)
