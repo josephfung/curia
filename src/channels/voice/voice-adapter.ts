@@ -136,11 +136,30 @@ export class VoiceAdapter implements Channel {
       throw err;
     }
 
-    await this.config.bus.publish('channel', createVoiceSessionStarted({
-      sessionId: session.id,
-      conversationId: session.conversationId,
-      livekitRoom: session.livekitRoom,
-    }));
+    try {
+      await this.config.bus.publish('channel', createVoiceSessionStarted({
+        sessionId: session.id,
+        conversationId: session.conversationId,
+        livekitRoom: session.livekitRoom,
+      }));
+    } catch (err) {
+      // The row exists but nothing will end it, and with a preload locked the
+      // principal's agenda would stay in_call (hidden from every later call)
+      // until a restart. Release the lock directly first: the bus just failed,
+      // so the ended event runtime.endSession publishes may never reach the
+      // minutes pipeline. Then end the row, matching the agent-token path below.
+      this.log.error({ err, sessionId: session.id }, 'Failed to publish voice.session.started; ending voice session');
+      await releaseUnstartedPreload(this.config.agendaStore, prepared, session.id, this.log);
+      try {
+        await runtime.endSession(session.id, 'runtime_start_failed');
+      } catch (cleanupErr) {
+        this.log.error(
+          { err: cleanupErr, sessionId: session.id },
+          'Voice session teardown after started-publish failure also failed',
+        );
+      }
+      return { status: 500, body: { error: 'Failed to start voice session' } };
+    }
 
     // Kick off the server-side duplex loop. Mint a separate agent token and start
     // the runtime WITHOUT awaiting its full lifetime — the HTTP response only needs

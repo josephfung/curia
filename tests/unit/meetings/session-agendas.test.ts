@@ -222,6 +222,10 @@ describe('withAgendaMetadata', () => {
     expect(withAgendaMetadata({ agendas: ['forged'] }, { agendas: { loaded: [], index: [] }, preload }))
       .toEqual({ agendas: [preload] });
   });
+
+  it('drops a client-supplied agendas key even when nothing was prepared', () => {
+    expect(withAgendaMetadata({ source: 'test', agendas: ['forged'] }, null)).toEqual({ source: 'test' });
+  });
 });
 
 describe('releaseUnstartedPreload', () => {
