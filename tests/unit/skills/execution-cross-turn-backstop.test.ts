@@ -13,6 +13,7 @@ import type { ContactService } from '../../../src/contacts/contact-service.js';
 import type { ChannelIdentity } from '../../../src/contacts/types.js';
 import { TurnActivityRegistry } from '../../../src/dispatch/turn-activity.js';
 import type { Logger } from '../../../src/logger.js';
+import type { OutboundGateway } from '../../../src/skills/outbound-gateway.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -662,5 +663,70 @@ describe('ExecutionLayer cross-turn backstop extraction failures (#2588)', () =>
       expect.stringContaining('fail-open'),
     );
     expect(turnActivity.actionsOf('task-a')).toHaveLength(0);
+  });
+});
+
+describe('ExecutionLayer cross-turn backstop email-reply recipients (#2588)', () => {
+  const ALICE_EMAIL = 'alice@example.com';
+  const CURIA_EMAIL = 'curia@example.com';
+
+  function replySetup() {
+    const registry = new ToolRegistry();
+    const turnActivity = new TurnActivityRegistry({ logger });
+    const contacts = makeContacts();
+    (contacts as unknown as { resolveByChannelIdentity: unknown }).resolveByChannelIdentity = vi.fn(
+      async (channel: string, identifier: string) =>
+        (channel === 'email' && identifier.toLowerCase() === ALICE_EMAIL ? { contactId: ALICE, displayName: 'Alice Example' } : null),
+    );
+    // Each message is from Alice to Curia's mailbox: a reply to either goes to Alice.
+    const getEmailMessage = vi.fn(async (messageId: string) => ({
+      id: messageId,
+      from: [{ email: ALICE_EMAIL, name: 'Alice Example' }],
+      to: [{ email: CURIA_EMAIL }],
+      cc: [],
+    }));
+    const outboundGateway = { getEmailMessage } as unknown as OutboundGateway;
+    const layer = new ExecutionLayer(registry, logger, {
+      contactService: contacts,
+      principalIdentities: PRINCIPAL_IDENTITIES,
+      timezone: 'America/Toronto',
+      turnActivity,
+      outboundGateway,
+      selfEmails: [CURIA_EMAIL],
+    });
+    const handler = makeHandler();
+    registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+    registry.register(makeRiskyManifest('contact-message', 'medium'), handler);
+    return { layer, turnActivity, handler, getEmailMessage };
+  }
+
+  it('a reply to a different message from the same contact is held by that contact', async () => {
+    const { layer, turnActivity, handler, getEmailMessage } = replySetup();
+    startRoot(turnActivity, 'task-a');
+    startRoot(turnActivity, 'task-b');
+
+    const first = await layer.invoke('email-reply', { reply_to_message_id: 'msg-0001-abcdef', body: 'Yes.' }, undefined, opts('task-a'));
+    expect(first.success).toBe(true);
+    expect(turnActivity.actionsOf('task-a')[0]!.targets).toEqual([{ kind: 'contact', value: ALICE }]);
+
+    const held = await layer.invoke('email-reply', { reply_to_message_id: 'msg-0002-abcdef', body: 'Yes.' }, undefined, opts('task-b'));
+    expect(held.success).toBe(false);
+    if (held.success) throw new Error('expected a held result');
+    expect(held.error).toContain('email-reply on "Alice Example" at ');
+    expect(handler.execute).toHaveBeenCalledTimes(1);
+    // One provider read per message: the backstop reads the reply's recipients through the
+    // per-invoke cache, not a fetch of its own.
+    expect(getEmailMessage.mock.calls.map((c) => c[0])).toEqual(['msg-0001-abcdef', 'msg-0002-abcdef']);
+  });
+
+  it("a send to the contact holds a later reply to that contact's message", async () => {
+    const { layer, turnActivity, handler } = replySetup();
+    startRoot(turnActivity, 'task-a');
+    startRoot(turnActivity, 'task-b');
+
+    expect((await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a'))).success).toBe(true);
+    const held = await layer.invoke('email-reply', { reply_to_message_id: 'msg-0003-abcdef', body: 'Yes.' }, undefined, opts('task-b'));
+    expect(held.success).toBe(false);
+    expect(handler.execute).toHaveBeenCalledTimes(1);
   });
 });

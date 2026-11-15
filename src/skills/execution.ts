@@ -1567,6 +1567,17 @@ export class ExecutionLayer {
   ): Promise<boolean> {
     if (this.principalIdentities.length === 0) return false;
     const resolved = await this.resolveGateCRecipients(toolName, input, skillLogger, fetchMessage);
+    return this.principalIsSoleResolvedRecipient(toolName, input, sendRecipients, resolved);
+  }
+
+  /** isPrincipalOnlySend's judgement of recipients resolveGateCRecipients already read. */
+  private principalIsSoleResolvedRecipient(
+    toolName: string,
+    input: Record<string, unknown>,
+    sendRecipients: ReadonlyMap<string, string> | undefined,
+    resolved: { recipients: string[] | null; resolutionFailed: boolean },
+  ): boolean {
+    if (this.principalIdentities.length === 0) return false;
     if (resolved.resolutionFailed || resolved.recipients === null) return false;
     const normalized = this.substituteResolvedRecipients(resolved.recipients, sendRecipients);
     if (!normalized.ok) return false;
@@ -1609,7 +1620,15 @@ export class ExecutionLayer {
         skillLogger.warn({ toolName, recordOnly }, 'cross-turn backstop: risky call with no task id — not checked or recorded');
         return null;
       }
-      if (await this.isPrincipalOnlySend(toolName, input, sendRecipients, skillLogger, fetchMessage)) return null;
+      // One recipient read serves both checks below. For email-reply it fetches the original
+      // message only through the per-invoke cache Gate C and the handler share (fetchMessage),
+      // so it adds no provider call. Without that cache nothing is fetched: not principal-only
+      // (the gates' rule for an unread reply), and no recipient targets.
+      const resolvesByFetch = findCarveoutSkill(toolName)?.carveout.resolveRecipients !== undefined;
+      const gateCRecipients = resolvesByFetch && !fetchMessage
+        ? { recipients: null, resolutionFailed: true }
+        : await this.resolveGateCRecipients(toolName, input, skillLogger, fetchMessage);
+      if (this.principalIsSoleResolvedRecipient(toolName, input, sendRecipients, gateCRecipients)) return null;
 
       if (turnActivity.rootOf(taskEventId) === undefined) {
         const rawOriginator = options?.taskMetadata?.['originator'];
@@ -1637,6 +1656,10 @@ export class ExecutionLayer {
             }
           : {}),
         excludedEmails: this.backstopExcludedEmails(),
+        // A reply's recipients live on the original message, not in its input (which names only
+        // that message): the sender and reply-all list, as the handler will send. The literal
+        // addresses only; a reference in its cc is in the input and read from there.
+        recipientEmails: resolvesByFetch ? (gateCRecipients.recipients ?? []) : [],
         logger: skillLogger,
       });
       return { turnActivity, taskEventId, targets, recordOnly };

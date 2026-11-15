@@ -121,6 +121,13 @@ export interface ActionTargetDeps {
   contactIdForEmail?: (email: string) => Promise<string | undefined>;
   /** Addresses never resolved: the principal's and Curia's own. Compared lowercased. */
   excludedEmails?: ReadonlySet<string>;
+  /**
+   * Addresses the call sends to that its input does not carry: an email-reply goes to the
+   * original message's sender and reply-all list, and its input names only that message.
+   * Resolved like the input's addresses (needs contactIdForEmail), and before them. A value
+   * that is not a bare address (a contact reference) is skipped: it is in the input.
+   */
+  recipientEmails?: readonly string[];
   /** For lookup failures (warn, id kind only) and truncation (debug, counts only). */
   logger?: Logger;
 }
@@ -142,8 +149,9 @@ type Lookup =
  * targets the tool itself.
  *
  * A contact can be named by UUID or by email address (a calendar attendee is
- * `{ email, name }`). Both are looked up, at most MAX_CONTACT_LOOKUPS together,
- * UUIDs first. A rejected lookup is logged with its id kind only and counts as
+ * `{ email, name }`; a reply's recipients come in as recipientEmails). Both are
+ * looked up, at most MAX_CONTACT_LOOKUPS together, UUIDs first. A rejected
+ * lookup is logged with its id kind and error class only and counts as
  * not-a-contact; an address that resolves to no contact is ignored.
  */
 export async function extractActionTargets(
@@ -157,8 +165,12 @@ export async function extractActionTargets(
   const agent = deps.agentContactId?.toLowerCase();
   const candidates = uuids.filter((u) => u !== principal && u !== agent);
   const excluded = deps.excludedEmails;
+  const recipientEmails = (deps.recipientEmails ?? [])
+    .map((e) => e.trim())
+    .filter((e) => e.length <= EMAIL_MAX && EMAIL_RE.test(e))
+    .map((e) => e.toLowerCase());
   const emails = deps.contactIdForEmail
-    ? collected.emails.filter((e) => !(excluded?.has(e) ?? false))
+    ? [...new Set([...recipientEmails, ...collected.emails])].filter((e) => !(excluded?.has(e) ?? false))
     : [];
 
   const lookups: Lookup[] = [];
