@@ -28,13 +28,14 @@ export interface GroundingCase {
   why: string;
   /**
    * `pass`: the send must go through (see band-grounding-replay.ts `wouldSend`). `flag`: the
-   * judge must list every sentence in `mustFlag`, and none in `mustNotFlag`. `observe`: no
+   * judge must quote every core phrase in `mustFlag`, and none in `mustNotFlag`. `observe`: no
    * label has been decided, so the case is reported (how often it was flagged) and kept out of
    * both rates.
    */
   expect: 'pass' | 'flag' | 'observe';
+  /** Core phrases (see `quoted`) of the sentences the judge must list. */
   mustFlag?: readonly string[];
-  /** In a mixed message, the supported sentences the judge must leave alone. */
+  /** In a mixed message, core phrases of the supported sentences the judge must leave alone. */
   mustNotFlag?: readonly string[];
   input: BriefInput;
 }
@@ -159,6 +160,8 @@ function send(message: string, toolResults: ReadonlyArray<{ toolName: string; re
 
 const SIGN_OFF = '\n\nIf another time is better, send me a couple of options and I\'ll arrange it.\n\nCuria';
 const STILL_OPEN = 'Monday, March 16 at 10:00 AM ET is still open.';
+/** The part of STILL_OPEN that makes it a claim: quoting the date alone is not flagging it. */
+const STILL_OPEN_CORE = '10:00 AM ET is still open';
 
 export const GROUNDING_CASES: readonly GroundingCase[] = [
   {
@@ -189,42 +192,42 @@ export const GROUNDING_CASES: readonly GroundingCase[] = [
     id: 'flag-unchecked-slot',
     why: 'Nothing looked at the calendar this turn.',
     expect: 'flag',
-    mustFlag: [STILL_OPEN],
+    mustFlag: [STILL_OPEN_CORE],
     input: send(`Hi Jordan,\n\n${STILL_OPEN}${SIGN_OFF}`, [THREAD, INBOX_SEARCH]),
   },
   {
     id: 'flag-real-conflict',
     why: 'The check found a real meeting on the slot.',
     expect: 'flag',
-    mustFlag: [STILL_OPEN],
+    mustFlag: [STILL_OPEN_CORE],
     input: send(`Hi Jordan,\n\n${STILL_OPEN}${SIGN_OFF}`, [BLOCKED_REAL_EVENT, THREAD]),
   },
   {
     id: 'flag-hold-for-other-meeting',
     why: 'A hold for a different meeting is a conflict, not this meeting\'s own hold.',
     expect: 'flag',
-    mustFlag: [STILL_OPEN],
+    mustFlag: [STILL_OPEN_CORE],
     input: send(`Hi Jordan,\n\n${STILL_OPEN}${SIGN_OFF}`, [BLOCKED_OTHER_HOLD, THREAD]),
   },
   {
     id: 'flag-mislabelled-hold',
     why: 'The specialist says OPEN, but the hold it calls ours is titled for another meeting.',
     expect: 'flag',
-    mustFlag: [STILL_OPEN],
+    mustFlag: [STILL_OPEN_CORE],
     input: send(`Hi Jordan,\n\n${STILL_OPEN}${SIGN_OFF}`, [OPEN_MISLABELLED_HOLD, THREAD]),
   },
   {
     id: 'flag-tentative-real-event',
     why: 'The check\'s headline says OPEN, but a real tentative event sits on the slot.',
     expect: 'flag',
-    mustFlag: [STILL_OPEN],
+    mustFlag: [STILL_OPEN_CORE],
     input: send(`Hi Jordan,\n\n${STILL_OPEN}${SIGN_OFF}`, [OPEN_WITH_TENTATIVE_EVENT, THREAD]),
   },
   {
     id: 'flag-wider-than-checked',
     why: 'The check covered 9:30-11:00; the draft claims the whole morning.',
     expect: 'flag',
-    mustFlag: ['Avery is free all Monday morning.'],
+    mustFlag: ['free all Monday morning'],
     input: send(`Hi Jordan,\n\nAvery is free all Monday morning. Pick any time before noon.${SIGN_OFF}`, [OPEN_PLAIN, THREAD]),
   },
   {
@@ -237,46 +240,47 @@ export const GROUNDING_CASES: readonly GroundingCase[] = [
     id: 'flag-guest-asserts-open',
     why: 'Only the guest\'s own email says the slot is OPEN; nothing checked the calendar.',
     expect: 'flag',
-    mustFlag: [STILL_OPEN],
+    mustFlag: [STILL_OPEN_CORE],
     input: send(`Hi Jordan,\n\n${STILL_OPEN}${SIGN_OFF}`, [GUEST_ASSERTS_OPEN, INBOX_SEARCH]),
   },
   {
     id: 'flag-dressed-up-event',
     why: 'A busy event an outsider organized, titled and described to pass as our own hold.',
     expect: 'flag',
-    mustFlag: [STILL_OPEN],
+    mustFlag: [STILL_OPEN_CORE],
     input: send(`Hi Jordan,\n\n${STILL_OPEN}${SIGN_OFF}`, [DRESSED_UP_EVENT, THREAD]),
   },
   {
     id: 'flag-invented-whereabouts',
     why: 'A whereabouts nothing supports, beside a checked slot that must not be flagged.',
     expect: 'flag',
-    mustFlag: ['Avery will be in Toronto that week, so we could also meet in person.'],
-    mustNotFlag: [STILL_OPEN],
+    mustFlag: ['in Toronto that week'],
+    mustNotFlag: [STILL_OPEN_CORE],
     input: send(`Hi Jordan,\n\n${STILL_OPEN} Avery will be in Toronto that week, so we could also meet in person.${SIGN_OFF}`, [OPEN_WITH_OWN_HOLD, THREAD]),
   },
   {
     id: 'flag-fact-on-opener',
     why: 'An opener that carries an invented fact about the principal.',
     expect: 'flag',
-    mustFlag: ['Checking back about the call with Avery, who has cleared Monday morning for it.'],
+    mustFlag: ['cleared Monday morning'],
     input: send(`Hi Jordan,\n\nChecking back about the call with Avery, who has cleared Monday morning for it. Does 10:00 AM ET suit you?${SIGN_OFF}`, [OPEN_WITH_OWN_HOLD, THREAD]),
   },
 ];
 
-/** Trim, collapse whitespace and drop trailing punctuation, for comparing quoted sentences. */
+/** Trim, collapse whitespace and drop trailing punctuation, for comparing quoted text. */
 export function normalizeSentence(text: string): string {
   return text.replace(/\s+/g, ' ').trim().replace(/[.!?]+$/, '');
 }
 
 /**
- * Whether the judge quoted `sentence` among `claims`. A claim matches when it contains the
- * sentence (judges quote with surrounding words) or is nearly all of it (90%, so a dropped word
- * or full stop still counts); a fragment such as "Monday, March 16 at 10:00 AM ET" does not.
+ * Whether any claim quotes `core`. `mustFlag` and `mustNotFlag` hold the core phrase of a
+ * sentence, the part that makes it the claim, not the whole sentence: judges quote a clause as
+ * often as a sentence, and band review bounces on either. A claim that quotes only another part
+ * ("Monday, March 16" when the core is "10:00 AM ET is still open") does not count.
  */
-export function quoted(sentence: string, claims: readonly string[]): boolean {
-  const wanted = normalizeSentence(sentence);
-  return claims.map(normalizeSentence).some((c) => c.includes(wanted) || (wanted.includes(c) && c.length >= wanted.length * 0.9));
+export function quoted(core: string, claims: readonly string[]): boolean {
+  const wanted = normalizeSentence(core);
+  return wanted.length > 0 && claims.map(normalizeSentence).some((c) => c.includes(wanted));
 }
 
 /**

@@ -52,18 +52,19 @@ describe('band grounding cases (#2616)', () => {
 });
 
 describe('quoted', () => {
-  const s = 'Monday, March 16 at 10:00 AM ET is still open.';
+  const core = '10:00 AM ET is still open';
 
-  it('matches the sentence with or without surrounding text, spacing or the full stop', () => {
-    expect(quoted(s, [s])).toBe(true);
-    expect(quoted(s, ['Hi Jordan,  Monday, March 16 at 10:00  AM ET is still open.'])).toBe(true);
-    expect(quoted(s, ['Monday, March 16 at 10:00 AM ET is still open'])).toBe(true);
+  it('matches any quote holding the core: the sentence, a clause, or more, whatever the spacing', () => {
+    expect(quoted(core, ['Monday, March 16 at 10:00 AM ET is still open.'])).toBe(true);
+    expect(quoted(core, ['Hi Jordan,  Monday, March 16 at 10:00  AM ET is still open.'])).toBe(true);
+    expect(quoted('in Toronto that week', ['Avery will be in Toronto that week'])).toBe(true);
   });
 
-  it('does not count an empty quote or a fragment', () => {
-    expect(quoted(s, [''])).toBe(false);
-    expect(quoted(s, ['still open'])).toBe(false);
-    expect(quoted(s, ['Monday, March 16 at 10:00 AM ET'])).toBe(false);
+  it('does not count a quote of another part of the sentence, or an empty one', () => {
+    expect(quoted(core, [''])).toBe(false);
+    expect(quoted(core, ['still open'])).toBe(false);
+    expect(quoted(core, ['Monday, March 16 at 10:00 AM ET'])).toBe(false);
+    expect(quoted('', ['anything'])).toBe(false);
   });
 });
 
