@@ -206,16 +206,148 @@ describe('HandoffRecoveryPublisher', () => {
     expect(registerRouting).not.toHaveBeenCalled();
   });
 
-  it('a failing publish is logged at error, never thrown', async () => {
+  it('a publish that keeps failing is retried a bounded number of times, then logged at error, never thrown', async () => {
     const error = vi.fn();
-    const logger = { error, warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as unknown as typeof quiet;
+    const warn = vi.fn();
+    const logger = { error, warn, info: vi.fn(), debug: vi.fn() } as unknown as typeof quiet;
     const bus = new EventBus(quiet);
-    vi.spyOn(bus, 'publish').mockRejectedValue(new Error('bus down'));
-    const publisher = new HandoffRecoveryPublisher({ bus, logger, registerRouting: vi.fn() });
+    const publish = vi.spyOn(bus, 'publish').mockRejectedValue(new Error('bus down'));
+    const publisher = new HandoffRecoveryPublisher({ bus, logger, registerRouting: vi.fn(), retryDelaysMs: [0, 0] });
     const registry = new TurnActivityRegistry({ logger: quiet });
     const from = startHanding(registry);
     publisher.recover({ from, targetRootId: 'other-root', input: input(), reason: 'returned' });
-    await vi.waitFor(() => expect(error).toHaveBeenCalledWith(expect.objectContaining({ reason: 'returned' }), expect.stringContaining('lost')));
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'returned', attempts: 3 }),
+      expect.stringContaining('lost'),
+    ));
+    expect(publish).toHaveBeenCalledTimes(3);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(error).toHaveBeenCalledTimes(1);
+    // Never more than the bound.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(publish).toHaveBeenCalledTimes(3);
+    // The id was released: a later trigger for the same correction may try again.
+    publish.mockReset();
+    publisher.recover({ from, targetRootId: 'other-root', input: input(), reason: 'unresolved' });
+    await vi.waitFor(() => expect(publish).toHaveBeenCalled());
+  });
+
+  it('a transient publish failure is retried and the correction is re-run once', async () => {
+    const { bus, tasks, publish } = capture();
+    const warn = vi.fn();
+    const error = vi.fn();
+    const logger = { error, warn, info: vi.fn(), debug: vi.fn() } as unknown as typeof quiet;
+    const publisher = new HandoffRecoveryPublisher({ bus, logger, scrubText: scrub, registerRouting: vi.fn(), retryDelaysMs: [0, 0] });
+    publish.mockRejectedValueOnce(new Error('audit write failed'));
+    const registry = new TurnActivityRegistry({ logger: quiet });
+    const from = startHanding(registry);
+    publisher.recover({ from, targetRootId: 'other-root', input: input(), reason: 'returned' });
+    await vi.waitFor(() => expect(tasks).toHaveLength(1));
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ attempt: 1, retryInMs: 0 }), expect.stringContaining('retrying'));
+    expect(error).not.toHaveBeenCalled();
+    expectRecoveryTask(tasks[0]!, 'returned');
+  });
+
+  it('a second trigger while a retry is pending does not publish again', async () => {
+    const { bus, tasks, publish } = capture();
+    const publisher = new HandoffRecoveryPublisher({ bus, logger: quiet, scrubText: scrub, registerRouting: vi.fn(), retryDelaysMs: [200] });
+    publish.mockRejectedValueOnce(new Error('audit write failed'));
+    const registry = new TurnActivityRegistry({ logger: quiet });
+    const from = startHanding(registry);
+    publisher.recover({ from, targetRootId: 'other-root', input: input(), reason: 'unresolved' });
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(1), { interval: 5 });
+    publisher.recover({ from, targetRootId: 'other-root', input: input(), reason: 'returned' });
+    await vi.waitFor(() => expect(tasks).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(tasks).toHaveLength(1);
+  });
+
+  it('an email handing turn: the reply leaves from its account, and its audience is judged the same', async () => {
+    const { tasks, registerRouting, publisher } = capture();
+    const selfEmails = ['curia@example.com'];
+    const registry = new TurnActivityRegistry({ logger: quiet, selfEmails });
+    const emailOriginator = { ...ORIGINATOR, channel: 'email' };
+    startTask(registry, {
+      taskEventId: 'mine-email',
+      channelId: 'email',
+      conversationId: 'email:thread-1',
+      senderId: 'ada@example.com',
+      accountId: 'assistant-2',
+      metadata: {
+        originator: emailOriginator,
+        inboundSenderText: REQUEST,
+        inboundScanFindingCount: 0,
+        curiaRole: 'to',
+        primaryRecipientEmails: [],
+        participants: [
+          { email: 'ada@example.com', role: 'from', name: 'Ada' },
+          { email: 'curia@example.com', role: 'to' },
+        ],
+        // Not an audience input: it must not ride along.
+        nylasThreadId: 'thread-1',
+      },
+    });
+    const from = registry.rootOf('mine-email')!;
+    expect(from.audienceOneToOne).toBe(true);
+    expect(from.accountId).toBe('assistant-2');
+    publisher.recover({ from, targetRootId: 'other-root', input: input(), reason: 'returned' });
+    await vi.waitFor(() => expect(tasks).toHaveLength(1));
+    const task = tasks[0]!;
+    expect(task.payload.accountId).toBe('assistant-2');
+    expect(registerRouting).toHaveBeenCalledWith(task.id, expect.objectContaining({
+      channelId: 'email', conversationId: 'email:thread-1', senderId: 'ada@example.com', accountId: 'assistant-2',
+    }));
+    const metadata = task.payload.metadata as Record<string, unknown>;
+    expect(metadata['nylasThreadId']).toBeUndefined();
+    expect(metadata['participants']).toEqual([
+      { email: 'ada@example.com', role: 'from' },
+      { email: 'curia@example.com', role: 'to' },
+    ]);
+    // Registered the way the runtime registers every task: the same audience, by the same rule.
+    startTask(registry, {
+      taskEventId: task.id,
+      channelId: task.payload.channelId,
+      conversationId: task.payload.conversationId,
+      parentEventId: task.parentEventId,
+      metadata,
+      senderId: task.payload.senderId,
+    });
+    expect(registry.rootOf(task.id)!.audienceOneToOne).toBe(true);
+  });
+
+  it("a cc'd email handing turn's recovery is not one-to-one either", async () => {
+    const { tasks, publisher } = capture();
+    const selfEmails = ['curia@example.com'];
+    const registry = new TurnActivityRegistry({ logger: quiet, selfEmails });
+    startTask(registry, {
+      taskEventId: 'mine-cc',
+      channelId: 'email',
+      conversationId: 'email:thread-2',
+      senderId: 'ada@example.com',
+      metadata: {
+        originator: { ...ORIGINATOR, channel: 'email' },
+        curiaRole: 'cc',
+        primaryRecipientEmails: ['bob@example.com'],
+        participants: [{ email: 'ada@example.com', role: 'from' }, { email: 'curia@example.com', role: 'cc' }],
+      },
+    });
+    const from = registry.rootOf('mine-cc')!;
+    expect(from.audienceOneToOne).toBe(false);
+    expect(from.accountId).toBeNull();
+    publisher.recover({ from, targetRootId: 'other-root', input: input(), reason: 'returned' });
+    await vi.waitFor(() => expect(tasks).toHaveLength(1));
+    const task = tasks[0]!;
+    expect(task.payload.accountId).toBeUndefined();
+    startTask(registry, {
+      taskEventId: task.id,
+      channelId: 'email',
+      conversationId: 'email:thread-2',
+      parentEventId: task.parentEventId,
+      metadata: task.payload.metadata as Record<string, unknown>,
+    });
+    expect(registry.rootOf(task.id)!.audienceOneToOne).toBe(false);
   });
 
   it('content is the preamble, then the text', () => {

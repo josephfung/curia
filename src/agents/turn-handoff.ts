@@ -22,7 +22,15 @@
 // conversation (src/agents/handoff-recovery.ts). A restart still loses it (ADR-053 section 7).
 
 import { createHash } from 'node:crypto';
-import { isAuthenticatedRoot, isPersonTurn, type RootTurn, type TurnActivityRegistry } from '../dispatch/turn-activity.js';
+import {
+  isAuthenticatedRoot,
+  isPersonTurn,
+  type HandoffRecoveryReason,
+  type HandoffRecoveryRequest,
+  type HeldCorrection,
+  type RootTurn,
+  type TurnActivityRegistry,
+} from '../dispatch/turn-activity.js';
 import type { InjectableInput, TicketResult, TurnLanes } from '../dispatch/turn-lanes.js';
 import type { Logger } from '../logger.js';
 
@@ -55,6 +63,8 @@ export type HandoffOutcome =
   | { kind: 'delivered' }
   | { kind: 'queued' }
   | { kind: 'held_for_wake' }
+  /** This turn already passed its message to that turn (registry.wasHandedOff). */
+  | { kind: 'already_handed_over' }
   | { kind: 'do_it_yourself'; reason: HandoffDeclineReason };
 
 /** A short human phrase per reason, filled into the do-it-yourself copy. */
@@ -88,6 +98,7 @@ function conversationLabel(channelId: string): string {
 
 const PASSED_ON = "Passed on to the turn already doing that work. Tell them briefly you've passed it on; don't do the work here.";
 const HELD = "That work is still finishing in the background; the change will be applied when it lands, or picked up here if it can't be. Tell them so briefly; don't do the work here.";
+const ALREADY = "This message was already passed on to that turn; don't pass it again or do the work here. Tell them briefly it's in hand.";
 
 export function handoffOutcomeText(outcome: HandoffOutcome): string {
   switch (outcome.kind) {
@@ -96,6 +107,8 @@ export function handoffOutcomeText(outcome: HandoffOutcome): string {
       return PASSED_ON;
     case 'held_for_wake':
       return HELD;
+    case 'already_handed_over':
+      return ALREADY;
     case 'do_it_yourself':
       return `Couldn't hand this over (${REASON_TEXT[outcome.reason]}). Do the work here yourself; the other turn's actions are listed above, so adjust them rather than repeat them.`;
   }
@@ -191,7 +204,12 @@ function samePerson(mine: RootTurn, other: RootTurn): boolean {
 export async function performHandoff(args: PerformHandoffArgs): Promise<HandoffOutcome> {
   const { logger, fromTaskEventId, targetRootId } = args;
   try {
-    return await runHandoff(args);
+    const outcome = await runHandoff(args);
+    if (outcome.kind === 'delivered' || outcome.kind === 'queued' || outcome.kind === 'held_for_wake') {
+      // Only the root task hands over (runHandoff), so its id is the handing root's.
+      args.registry.markHandedOff(fromTaskEventId, targetRootId);
+    }
+    return outcome;
   } catch (err) {
     logger.error({ err, fromTaskEventId, targetRootId }, 'turn-handoff: hand-off failed; the turn does the work itself');
     return decline('internal_error');
@@ -223,6 +241,14 @@ async function runHandoff(args: PerformHandoffArgs): Promise<HandoffOutcome> {
   if (!isAuthenticatedRoot(mine)) {
     logger.info({ ...ids, channelId: mine.channelId }, 'turn-handoff: the handing turn\'s sender was not authenticated');
     return decline('ineligible');
+  }
+  // A repeated call for a message already passed on, whatever has become of the target since:
+  // its coordinator may have released the lane (forgetting what it drained) and a wake or a
+  // later coordinator would take the same message again; or the target may have finished,
+  // and the model would be told to do the work a second time.
+  if (registry.wasHandedOff(mine.rootId, targetRootId)) {
+    logger.info(ids, 'turn-handoff: this message was already passed on to that turn; not passing it again');
+    return { kind: 'already_handed_over' };
   }
 
   // Window, scope and staleness all come from the registry's own view of my other turns.
@@ -349,34 +375,20 @@ async function awaitTicket(
 ): Promise<HandoffOutcome> {
   const { registry, logger, targetRootId } = args;
   let waitOver = false;
-  let ticketSettled = false;
-  let recovered = false;
-  const recover = (reason: 'returned' | 'unresolved'): void => {
-    if (recovered) return;
-    recovered = true;
-    registry.recoverHandoff({ from: mine, targetRootId, input, reason });
-  };
-
-  const lostTimer = setTimeout(() => {
-    if (ticketSettled) return;
-    logger.warn(logIds, 'turn-handoff: a passed-on message was not taken in time; re-running it on the handing turn');
-    recover('unresolved');
-  }, HANDOFF_LOST_AFTER_MS);
-  // Never keeps the process alive on its own.
-  lostTimer.unref?.();
+  const watch = watchForLoss(registry, logger, { from: mine, targetRootId, input }, logIds);
+  const recover = watch.recover;
 
   const settled = ticket.then((result): HandoffOutcome => {
-    ticketSettled = true;
-    clearTimeout(lostTimer);
+    watch.settled();
     if (result.kind === 'drained') {
-      if (recovered) {
+      if (watch.recovered) {
         logger.warn(logIds, 'turn-handoff: the running turn took the message after it was re-run on the handing turn');
       } else {
         logger.info(logIds, 'turn-handoff: the running turn took the message');
       }
       return { kind: 'delivered' };
     }
-    if (recovered) return decline('finished');
+    if (watch.recovered) return decline('finished');
     const detached = registry.hasDetachedWork(targetRootId);
     if (detached && registry.holdForWake(targetRootId, forWake(input), mine)) {
       logger.info(logIds, 'turn-handoff: the turn ended without the message; held for its wake');
@@ -390,8 +402,7 @@ async function awaitTicket(
     // A specialist runs but the hold was full, or nothing under the root will wake.
     return decline(detached ? 'cap' : 'finished');
   }).catch((err: unknown): HandoffOutcome => {
-    ticketSettled = true;
-    clearTimeout(lostTimer);
+    watch.settled();
     logger.error({ ...logIds, err }, 'turn-handoff: failed to settle a passed-on message');
     if (waitOver) recover('returned');
     return decline('internal_error');
@@ -410,4 +421,89 @@ async function awaitTicket(
   } finally {
     clearTimeout(timer);
   }
+}
+
+interface LossWatch {
+  /** Re-run the correction on its handing turn with this reason; once, across every trigger. */
+  recover(reason: HandoffRecoveryReason): void;
+  /** Whether a recovery has been requested. */
+  readonly recovered: boolean;
+  /** The ticket settled: the lost-message timer stops. */
+  settled(): void;
+}
+
+/**
+ * The lost-message timer every queued correction gets (#2588): a ticket neither drained nor
+ * returned HANDOFF_LOST_AFTER_MS after it was queued (a retained follow-up whose audit never
+ * flushed, a hung turn) is re-run on the handing turn as 'unresolved'. One `recovered` flag
+ * covers the timer and the caller's own triggers, so a late result never recovers twice.
+ */
+function watchForLoss(
+  registry: TurnActivityRegistry,
+  logger: Logger,
+  request: Omit<HandoffRecoveryRequest, 'reason'>,
+  logIds: Record<string, string>,
+): LossWatch {
+  let recovered = false;
+  let settled = false;
+  const recover = (reason: HandoffRecoveryReason): void => {
+    if (recovered) return;
+    recovered = true;
+    registry.recoverHandoff({ ...request, reason });
+  };
+  const timer = setTimeout(() => {
+    if (settled) return;
+    logger.warn(logIds, 'turn-handoff: a passed-on message was not taken in time; re-running it on the handing turn');
+    recover('unresolved');
+  }, HANDOFF_LOST_AFTER_MS);
+  // Never keeps the process alive on its own.
+  timer.unref?.();
+  return {
+    recover,
+    get recovered() {
+      return recovered;
+    },
+    settled() {
+      settled = true;
+      clearTimeout(timer);
+    },
+  };
+}
+
+/**
+ * Watch a held correction's ticket once it is queued into its late-delegation wake (#2588).
+ * The ticket only resolves; a wake that ends without draining it returns it, which re-runs
+ * it on its handing turn ('wake_returned'). A ticket that stays pending (a retained follow-up
+ * whose audit never flushes, a wake that never reaches a drain point) is re-run after
+ * HANDOFF_LOST_AFTER_MS ('unresolved'), like a direct hand-off. A drain after that recovery is
+ * logged and not undone: both turns act on it, and the backstop holds the second's repeat of
+ * a target the first already touched (the owner's 10-minute trigger decision, ADR-053).
+ */
+export function watchHeldCorrectionTicket(args: {
+  registry: TurnActivityRegistry;
+  logger: Logger;
+  ticket: Promise<TicketResult>;
+  held: HeldCorrection;
+  /** The root whose wake took it. */
+  targetRootId: string;
+  logIds: Record<string, string>;
+}): void {
+  const { registry, logger, ticket, held, targetRootId, logIds } = args;
+  const watch = watchForLoss(registry, logger, { from: held.from, targetRootId, input: held.input }, logIds);
+  void ticket.then((result) => {
+    watch.settled();
+    if (result.kind === 'drained') {
+      if (watch.recovered) {
+        logger.warn(logIds, 'A held hand-off correction was drained by its wake after it was re-run on its handing turn');
+      }
+      return;
+    }
+    if (watch.recovered) return;
+    logger.warn(logIds, 'A held hand-off correction was not drained by its wake — re-running it on its handing turn');
+    watch.recover('wake_returned');
+  }).catch((err: unknown) => {
+    watch.settled();
+    logger.error({ ...logIds, err }, 'Failed to settle a held hand-off correction in its wake');
+    watch.recover('wake_returned');
+  });
 }

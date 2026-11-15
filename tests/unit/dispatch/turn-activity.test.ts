@@ -1203,6 +1203,43 @@ describe('TurnActivityRegistry held corrections for a wake (#2588)', () => {
     expect(registry.hasDetachedWork('B')).toBe(false);
   });
 
+  it('remembers a hand-off per (handing root, target) for the handing root\'s life; a dropped target is forgotten', () => {
+    const { registry, set } = setup();
+    startRoot(registry, 'H');
+    startRoot(registry, 'A');
+    startRoot(registry, 'B');
+    expect(registry.wasHandedOff('H', 'A')).toBe(false);
+    registry.markHandedOff('H', 'A');
+    registry.markHandedOff('H', 'unknown-root');
+    expect(registry.wasHandedOff('H', 'A')).toBe(true);
+    expect(registry.wasHandedOff('H', 'B')).toBe(false);
+    expect(registry.wasHandedOff('H', 'unknown-root')).toBe(false);
+    // The target's coordinator ending does not forget it.
+    registry.taskEnded('A');
+    expect(registry.wasHandedOff('H', 'A')).toBe(true);
+    // Once A is evicted (H is live, so the window prune keeps it), H no longer carries its id.
+    for (let i = 0; i < MAX_TRACKED_ROOTS; i++) {
+      set(T0 + i + 1);
+      startRoot(registry, `f${i}`, { startedAt: T0 + i + 1 });
+      registry.taskEnded(`f${i}`);
+    }
+    expect(registry.rootOf('A')).toBeUndefined();
+    expect(registry.rootOf('H')).toBeDefined();
+    expect(registry.wasHandedOff('H', 'A')).toBe(false);
+  });
+
+  it('records the root task\'s account id and audience inputs', () => {
+    const { registry } = setup();
+    const root = start(registry, 'mail', {
+      accountId: 'assistant-2',
+      metadata: { curiaRole: 'to', primaryRecipientEmails: [], participants: [{ email: 'a@example.com', role: 'from', name: 'A' }], nylasThreadId: 't' },
+    });
+    expect(root.accountId).toBe('assistant-2');
+    expect(root.audienceMetadata).toEqual({ curiaRole: 'to', primaryRecipientEmails: [], participants: [{ email: 'a@example.com', role: 'from' }] });
+    expect(start(registry, 'bare').accountId).toBeNull();
+    expect(registry.rootOf('bare')!.audienceMetadata).toBeNull();
+  });
+
   it('records whether the request text was clipped', () => {
     const { registry } = setup();
     expect(start(registry, 'short', { metadata: { [INBOUND_SENDER_TEXT_KEY]: 'hi' } }).requestTextClipped).toBe(false);

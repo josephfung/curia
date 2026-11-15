@@ -31,6 +31,8 @@ function root(over: Partial<RootTurn> = {}): RootTurn {
     originatorResolved: true,
     originatorIsSystem: false,
     audienceOneToOne: false,
+    audienceMetadata: null,
+    accountId: null,
     requestText: null,
     requestTextClipped: false,
     inboundScanFindings: null,

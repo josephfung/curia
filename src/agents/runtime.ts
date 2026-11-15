@@ -35,6 +35,7 @@ import {
   handoffOutcomeText,
   parseHandoffRequest,
   performHandoff,
+  watchHeldCorrectionTicket,
   type HandoffOutcome,
 } from './turn-handoff.js';
 import {
@@ -534,6 +535,7 @@ export class AgentRuntime {
         originatorResolved: holder.originatorResolved,
         originatorIsSystem: originatorIsSystem(payload.metadata?.['originator']),
         senderId: payload.senderId,
+        ...(payload.accountId !== undefined && { accountId: payload.accountId }),
       });
     } catch (err) {
       this.config.logger.error(
@@ -705,15 +707,15 @@ export class AgentRuntime {
           continue;
         }
         this.config.logger.info(ids, 'Queued a held hand-off correction into its wake');
-        // The ticket only resolves. A wake that ends before draining it hands it back.
-        void result.ticket.then((ticket) => {
-          if (ticket.kind === 'returned') {
-            this.config.logger.warn(ids, 'A held hand-off correction was not drained by its wake — re-running it on its handing turn');
-            registry.recoverHandoff({ from: h.from, targetRootId: rootId, input: h.input, reason: 'wake_returned' });
-          }
-        }).catch((err: unknown) => {
-          this.config.logger.error({ ...ids, err }, 'Failed to settle a held hand-off correction in its wake');
-          registry.recoverHandoff({ from: h.from, targetRootId: rootId, input: h.input, reason: 'wake_returned' });
+        // A return, or a ticket still pending after HANDOFF_LOST_AFTER_MS, re-runs it on its
+        // handing turn, once (the same loss watch as a direct hand-off).
+        watchHeldCorrectionTicket({
+          registry,
+          logger: this.config.logger,
+          ticket: result.ticket,
+          held: h,
+          targetRootId: rootId,
+          logIds: ids,
         });
       } catch (err) {
         this.config.logger.error({ ...ids, err }, 'Failed to deliver a held hand-off correction to a wake — re-running it on its handing turn');

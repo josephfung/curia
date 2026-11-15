@@ -29,7 +29,7 @@ import {
 import type { TaskOriginator } from '../contacts/types.js';
 import type { Logger } from '../logger.js';
 import { isUuid } from '../util/uuid.js';
-import { isOneToOneAudience } from './audience.js';
+import { frozenAudienceMetadataOf, isOneToOneAudience } from './audience.js';
 import type { InjectableInput } from './turn-lanes.js';
 
 export const TURN_ACTIVITY_WINDOW_MS = 15 * 60_000;
@@ -169,6 +169,13 @@ export interface RootTurn {
   /** The root's conversation is one-to-one (audience.ts); false for an auto root or unknown audience. */
   audienceOneToOne: boolean;
   /**
+   * The root task's metadata fields audienceOneToOne was judged from (audienceMetadataOf), so a
+   * task re-run for this root judges its audience the same way; null when it had none (or auto).
+   */
+  audienceMetadata: Readonly<Record<string, unknown>> | null;
+  /** The root task's `payload.accountId` (which mailbox received it); null when it had none. */
+  accountId: string | null;
+  /**
    * The sender's own words, from the dispatcher's trusted INBOUND_SENDER_TEXT_KEY, clipped to
    * 500 code points. Null for a root with no such stamp (scheduler, internal, voice): task
    * content can carry dispatcher preamble and other people's words, so it is never used.
@@ -243,6 +250,8 @@ export interface TaskStartInput {
   originatorIsSystem: boolean;
   /** The task's channel sender id (payload.senderId). */
   senderId?: string;
+  /** The task's `payload.accountId`: the account that received it (email). */
+  accountId?: string;
 }
 
 export interface EnsureRootSeed {
@@ -266,6 +275,8 @@ interface RootState {
   originatorResolved: boolean;
   originatorIsSystem: boolean;
   audienceOneToOne: boolean;
+  audienceMetadata: Readonly<Record<string, unknown>> | null;
+  accountId: string | null;
   requestText: string | null;
   requestTextClipped: boolean;
   inboundScanFindings: number | null;
@@ -280,6 +291,11 @@ interface RootState {
   autoRegistered: boolean;
   /** Every task id mapped to this root, so eviction can drop them. */
   taskIds: Set<string>;
+  /**
+   * Root ids this root has passed its message to (markHandedOff). Only tracked roots are
+   * added and a dropped root is removed (dropRoot), so it is bounded by MAX_TRACKED_ROOTS.
+   */
+  handedTo: Set<string>;
   /** Last action time; an auto-registered root is pruned a window after it. */
   lastActivityAt: number;
   /**
@@ -491,6 +507,8 @@ export class TurnActivityRegistry {
       originatorResolved: seed.originatorResolved,
       originatorIsSystem: seed.originatorIsSystem,
       audienceOneToOne: false,
+      audienceMetadata: null,
+      accountId: null,
       requestText: null,
       requestTextClipped: false,
       inboundScanFindings: null,
@@ -503,6 +521,7 @@ export class TurnActivityRegistry {
       runningCoordinatorTaskIds: new Set(),
       autoRegistered: true,
       taskIds: new Set([rootId]),
+      handedTo: new Set(),
       lastActivityAt: now,
       scope: this.scopeFor(seed.conversationId),
       stuckWarned: false,
@@ -667,6 +686,24 @@ export class TurnActivityRegistry {
     return this.held.get(rootId)?.length ?? 0;
   }
 
+  /**
+   * Record that the root of `fromTaskEventId` passed its message to `targetRootId` (delivered,
+   * queued or held). Kept for the handing root's life, across every coordinator and wake of
+   * the target: a lane forgets what it drained when it is released, so a repeated hand-off
+   * would otherwise reach the target's next coordinator or wake a second time. An unknown
+   * handing task or target is ignored.
+   */
+  markHandedOff(fromTaskEventId: string, targetRootId: string): void {
+    const from = this.rootStateOf(fromTaskEventId);
+    if (!from || !this.roots.has(targetRootId)) return;
+    from.handedTo.add(targetRootId);
+  }
+
+  /** Whether the root of `fromTaskEventId` already passed its message to `targetRootId`. */
+  wasHandedOff(fromTaskEventId: string, targetRootId: string): boolean {
+    return this.rootStateOf(fromTaskEventId)?.handedTo.has(targetRootId) ?? false;
+  }
+
   // ── internals ────────────────────────────────────────────────────────────
 
   private recordAction(
@@ -787,6 +824,7 @@ export class TurnActivityRegistry {
     }
     existing.originator ??= originatorOf(input.metadata);
     existing.senderId ??= nonEmpty(input.senderId);
+    existing.accountId ??= nonEmpty(input.accountId);
     if (!existing.originatorResolved && input.originatorContactId === existing.originatorContactId) {
       existing.originatorResolved = input.originatorResolved;
     }
@@ -808,6 +846,8 @@ export class TurnActivityRegistry {
       originatorResolved: input.originatorResolved,
       originatorIsSystem: input.originatorIsSystem,
       audienceOneToOne: isOneToOneAudience(input.channelId, input.conversationId, input.metadata, this.selfEmails),
+      audienceMetadata: frozenAudienceMetadataOf(input.metadata),
+      accountId: nonEmpty(input.accountId),
       requestText: senderTextOf(input.metadata),
       requestTextClipped: senderTextClippedOf(input.metadata),
       inboundScanFindings: scanFindingsOf(input.metadata),
@@ -820,6 +860,7 @@ export class TurnActivityRegistry {
       runningCoordinatorTaskIds: new Set(),
       autoRegistered: false,
       taskIds: new Set(),
+      handedTo: new Set(),
       lastActivityAt: input.startedAt,
       scope: this.scopeFor(input.conversationId),
       stuckWarned: false,
@@ -916,6 +957,8 @@ export class TurnActivityRegistry {
       originatorResolved: root.originatorResolved,
       originatorIsSystem: root.originatorIsSystem,
       audienceOneToOne: root.audienceOneToOne,
+      audienceMetadata: root.audienceMetadata,
+      accountId: root.accountId,
       requestText: root.requestText,
       requestTextClipped: root.requestTextClipped,
       inboundScanFindings: root.inboundScanFindings,
@@ -947,6 +990,7 @@ export class TurnActivityRegistry {
     this.roots.delete(root.rootId);
     for (const id of root.taskIds) this.taskToRoot.delete(id);
     this.shown.delete(root.rootId);
+    for (const other of this.roots.values()) other.handedTo.delete(root.rootId);
     const held = this.held.get(root.rootId);
     if (held) {
       this.held.delete(root.rootId);
