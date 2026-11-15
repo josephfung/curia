@@ -285,6 +285,22 @@ describe('performHandoff', () => {
     expect(lanes.takeQueued('wake-1')).toEqual([]);
   });
 
+  it('a follow-up drained after a hand-off is done here, not answered "already passed on"', async () => {
+    const { registry, lanes, run } = setup();
+    startTarget(registry);
+    startMine(registry);
+    await lanes.acquire(targetHolder());
+    const first = run();
+    const [queued] = lanes.takeQueued('other-root');
+    lanes.confirmDrained('other-root', [queued!.inboundEventId]);
+    expect(await first).toEqual({ kind: 'delivered' });
+    // The person then says more on this turn ("actually, make it Wednesday").
+    expect(await run({ drainedFollowUp: true })).toEqual({ kind: 'do_it_yourself', reason: 'ineligible' });
+    // Nothing more was passed on, and the original stays deduped.
+    expect(lanes.takeQueued('other-root')).toEqual([]);
+    expect(await run()).toEqual({ kind: 'already_handed_over' });
+  });
+
   it('a declined hand-off is not remembered: the turn may try again', async () => {
     const { registry, lanes, run } = setup();
     startTarget(registry);
