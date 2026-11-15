@@ -9,9 +9,11 @@
 //   - anything else → the model is told to do the work itself.
 //
 // The person's words come only from the handing root's trusted dispatcher stamp
-// (requestText), never from the model's tool input, and only after a clean inbound scan and
-// an authenticated sender (a forged email From must not ride into another turn). Fail-open:
-// any error logs and tells the model to do the work itself.
+// (requestText), never from the model's tool input, and only after a clean inbound scan.
+// Both ends must have an authenticated sender (handingRootAuthenticated, SMS excepted): a
+// forged email From must not ride into another turn, and a person's real words must not
+// reach a turn a forged From started. Fail-open: any error logs and tells the model to do
+// the work itself.
 //
 // Once the person has been told a message was passed on or held, losing it in this process
 // is never silent: the registry's recoverHandoff re-runs it as a fresh turn on the handing
@@ -39,6 +41,7 @@ export type HandoffDeclineReason =
   | 'inactive'
   | 'unreachable'
   | 'not_same_person'
+  | 'unauthenticated'
   | 'not_one_to_one'
   | 'cap'
   | 'closing'
@@ -58,6 +61,7 @@ const REASON_TEXT: Record<HandoffDeclineReason, string> = {
   inactive: 'that turn is no longer active',
   unreachable: "that turn is busy and can't take messages right now",
   not_same_person: 'that turn is not with this person',
+  unauthenticated: "that turn's sender wasn't verified by its channel",
   not_one_to_one: 'that conversation includes other people',
   cap: 'that turn has taken all the follow-ups it can',
   closing: 'that turn is just wrapping up',
@@ -137,9 +141,14 @@ const decline = (reason: HandoffDeclineReason): HandoffOutcome => ({ kind: 'do_i
  * originator.authenticated stamp). SMS is the one exception: like
  * isPrincipalDirectedMailboxSend (src/skills/principal-send/authority.ts), SMS sender spoofing
  * is an accepted risk, and SMS is never stamped authenticated.
+ *
+ * The one rule for every root the hand-off and the other-turns note treat as "the same
+ * person" (#2588): the handing turn, the hand-off's target, the note's reader and every turn
+ * it lists, a held correction's wake, and a recovery's handing turn. A forged email From can
+ * resolve to a contact with this false; such a root is never that person here.
  */
-export function handingRootAuthenticated(mine: RootTurn): boolean {
-  return mine.originatorAuthenticated || mine.channelId === 'sms';
+export function handingRootAuthenticated(root: RootTurn): boolean {
+  return root.originatorAuthenticated || root.channelId === 'sms';
 }
 
 /**
@@ -236,6 +245,12 @@ async function runHandoff(args: PerformHandoffArgs): Promise<HandoffOutcome> {
     return decline(sameRoot && !samePerson(mine, known) ? 'not_same_person' : 'inactive');
   }
   if (!samePerson(mine, target)) return decline('not_same_person');
+  // The reverse of the handing check: a forged From can start a turn resolved to this person,
+  // and their real words must not reach it, live or held for its wake (#2588 SEC HIGH).
+  if (!handingRootAuthenticated(target)) {
+    logger.info({ ...ids, targetChannelId: target.channelId }, "turn-handoff: the target turn's sender was not authenticated");
+    return decline('unauthenticated');
+  }
   // A turn in this same conversation already gets the message as an ordinary follow-up.
   if (target.conversationId === mine.conversationId) return decline('ineligible');
   if (!target.audienceOneToOne) return decline('not_one_to_one');
@@ -273,7 +288,9 @@ async function runHandoff(args: PerformHandoffArgs): Promise<HandoffOutcome> {
     injectionFindingCount: 0,
     channelId: mine.channelId,
     // The handing task's own live signal (#1126), never more. A held one is set to false below.
-    liveTurn: args.handingLiveTurn === true,
+    // Never into a target whose sender is not authenticated, even if a later path skips the
+    // check above.
+    liveTurn: args.handingLiveTurn === true && handingRootAuthenticated(target),
     content: text,
     originalContent: text,
     // When the person sent it, not when it was handed over.

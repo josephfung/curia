@@ -178,6 +178,33 @@ describe('HandoffRecoveryPublisher', () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
+  it('a handing turn whose sender was not authenticated is never re-run (defence in depth)', async () => {
+    const error = vi.fn();
+    const logger = { error, warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as unknown as typeof quiet;
+    const bus = new EventBus(quiet);
+    const publish = vi.spyOn(bus, 'publish');
+    const registerRouting = vi.fn();
+    const publisher = new HandoffRecoveryPublisher({ bus, logger, registerRouting });
+    const registry = new TurnActivityRegistry({ logger: quiet });
+    // A forged email From resolved to the principal: performHandoff never hands from it.
+    startTask(registry, {
+      taskEventId: 'forged',
+      channelId: 'email',
+      conversationId: 'email:thread-1',
+      senderId: 'ceo@example.com',
+      metadata: { originator: { ...ORIGINATOR, channel: 'email', authenticated: false }, inboundSenderText: REQUEST, inboundScanFindingCount: 0 },
+    });
+    const from = registry.rootOf('forged')!;
+    expect(handingRootAuthenticated(from)).toBe(false);
+    publisher.recover({ from, targetRootId: 'other-root', input: input(), reason: 'returned' });
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ fromRootId: 'forged' }),
+      expect.stringContaining('not authenticated'),
+    ));
+    expect(publish).not.toHaveBeenCalled();
+    expect(registerRouting).not.toHaveBeenCalled();
+  });
+
   it('a failing publish is logged at error, never thrown', async () => {
     const error = vi.fn();
     const logger = { error, warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as unknown as typeof quiet;
