@@ -191,6 +191,39 @@ describe('extractActionTargets email addresses (#2588)', () => {
     expect(JSON.stringify(warn.mock.calls)).not.toMatch(/barbara|carol/);
   });
 
+  it("a reply's recipients outside its input resolve to contact targets, before the input's", async () => {
+    const lookup = vi.fn(async (email: string) => byEmail[email]);
+    const t = await extractActionTargets(
+      'email-reply',
+      { reply_to_message_id: 'msg-0001-abcdef', body: 'Thanks' },
+      emailDeps({
+        contactIdForEmail: lookup,
+        // The original sender, Curia's own mailbox, the principal, and a cc reference.
+        recipientEmails: [' Barbara@Example.com ', 'curia@office.example.com', 'principal@example.com', 'principal'],
+      }),
+    );
+    expect(t).toEqual([{ kind: 'contact', value: B }]);
+    expect(lookup.mock.calls.map((c) => c[0])).toEqual(['barbara@example.com']);
+  });
+
+  it("two replies to different messages from the same contact share that contact's target", async () => {
+    const reply = (messageId: string) => extractActionTargets(
+      'email-reply',
+      { reply_to_message_id: messageId, body: 'Thanks' },
+      emailDeps({ recipientEmails: ['barbara@example.com'] }),
+    );
+    expect(await reply('msg-0001-abcdef')).toEqual(await reply('msg-0002-abcdef'));
+  });
+
+  it("a reply whose recipient is no contact keeps its message id target", async () => {
+    const t = await extractActionTargets(
+      'email-reply',
+      { reply_to_message_id: 'msg-0001-abcdef', body: 'Thanks' },
+      emailDeps({ recipientEmails: ['stranger@example.org'] }),
+    );
+    expect(t).toEqual([{ kind: 'id', value: 'msg-0001-abcdef' }]);
+  });
+
   it('without an email lookup, addresses are ignored', async () => {
     const t = await extractActionTargets('t', { to: 'barbara@example.com' }, deps);
     expect(t).toEqual([{ kind: 'tool', value: 't' }]);
