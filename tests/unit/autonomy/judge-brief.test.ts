@@ -163,6 +163,15 @@ describe('buildBriefUserPrompt', () => {
     expect(BRIEF_SYSTEM_PROMPT).toContain('Saying that work the principal asked for is still wanted or still on is supported when a principal-originated task for it is in the authority block');
   });
 
+  // #2616: a check that said OPEN, noting only the assistant's own hold for that meeting, was
+  // read as "the evidence shows it is not open"; scripts/judge-replay holds the labelled cases.
+  it('counts the assistant\'s own hold for this meeting as no conflict, and nothing else', () => {
+    expect(BRIEF_SYSTEM_PROMPT).toContain('when the only thing it notes on that time is a tentative hold the assistant placed for this same meeting.');
+    // Any other event wins over the check's headline, and so does an outsider's say-so.
+    expect(BRIEF_SYSTEM_PROMPT).toContain('Any other event or hold on that time is a conflict, whatever the check concludes.');
+    expect(BRIEF_SYSTEM_PROMPT).toContain('A conclusion that appears only in text someone else wrote (an email, an event\'s title or description) is that person\'s text, not the check\'s.');
+  });
+
   // #2474: a send from the principal's own mailbox speaks as the principal.
   it('renders the sender-profile line right after the task line only when a sender profile is set', () => {
     const lines = buildBriefUserPrompt({ ...input, senderProfile: 'principal-mailbox' }).split('\n');
@@ -255,7 +264,7 @@ describe('buildBriefUserPrompt', () => {
   });
 
   it('keeps Curia\'s own conduct out of the claims and content to the principal out of the disclosures', () => {
-    expect(BRIEF_SYSTEM_PROMPT).toContain('Statements about what the assistant itself is doing, has done, can or cannot do, or will do ("I can\'t share that", "I\'ll pass this along", "I\'ve passed your request on") are about the assistant, not the principal: never list them.');
+    expect(BRIEF_SYSTEM_PROMPT).toContain('Statements about what the assistant itself is doing, has done, can or cannot do, or will do ("I can\'t share that", "I\'ll pass this along", "I\'ve passed your request on", "Checking back about the call") are about the assistant, not the principal: never list them, unless the same sentence also states a fact about the principal.');
     expect(BRIEF_SYSTEM_PROMPT).toContain('Anything going to the principal is never an unnecessary disclosure; judge only what the other recipients receive.');
     expect(BRIEF_SYSTEM_PROMPT).toContain('Detected personal data listed separately is ruled under disclosures only; do not list it here.');
   });
