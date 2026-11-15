@@ -977,11 +977,12 @@ describe('runtime turn lanes (#2018)', () => {
       content: 'make it Tuesday',
       originalContent: 'make it Tuesday',
       receivedAt: '2026-10-24T15:17:00.000Z',
+      senderLabel: 'Ada',
       handedOverFrom: { channelId: 'slack', conversationLabel: 'Slack DM' },
     }).kind).toBe('queued');
     releasePersist();
     await running;
-    expect(prompts[0]).toContain('Handed over from');
+    expect(prompts[0]).toContain("Handed over from Ada's slack conversation");
     expect(prompts[0]).toContain('Slack DM');
     expect(prompts[0]).toContain('make it Tuesday');
     expect(prompts[0]).not.toContain('[New message from');

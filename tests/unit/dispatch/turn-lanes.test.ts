@@ -282,6 +282,14 @@ describe('TurnLanes', () => {
       });
     });
 
+    it('drops a malformed handedOverFrom', async () => {
+      const gate = lanes();
+      await gate.acquire(holder('h', { conversationId: 'email:t1' }));
+      const bad = { channelId: 'slack' } as unknown as InjectableInput['handedOverFrom'];
+      gate.tryInjectIntoTask('task-h', input({ handedOverFrom: bad }));
+      expect(gate.takeQueued('task-h')[0]!.handedOverFrom).toBeUndefined();
+    });
+
     it('single-lines and caps handedOverFrom in the stored copy', async () => {
       const gate = lanes();
       await gate.acquire(holder('h', { conversationId: 'email:t1' }));
