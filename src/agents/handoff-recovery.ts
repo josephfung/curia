@@ -19,11 +19,15 @@ import type { EventBus } from '../bus/bus.js';
 import { createAgentTask } from '../bus/events.js';
 import { makeWakeContext } from '../autonomy/effective-standing.js';
 import type { TaskOriginator } from '../contacts/types.js';
-import { HANDOFF_RECOVERY_KEY, type HandoffRecoveryReason, type HandoffRecoveryRequest } from '../dispatch/turn-activity.js';
+import {
+  HANDOFF_RECOVERY_KEY,
+  isAuthenticatedRoot,
+  type HandoffRecoveryReason,
+  type HandoffRecoveryRequest,
+} from '../dispatch/turn-activity.js';
 import type { Logger } from '../logger.js';
 import type { LateWakeRoutingRegistrar } from './late-delegation.js';
 import { isPgUniqueViolation } from './resumable-continuation.js';
-import { handingRootAuthenticated } from './turn-handoff.js';
 
 const RECOVERY_EVENT_ID_NAMESPACE = 'curia:turn-handoff-recovery';
 /** Recovered inbound ids remembered in-process, so two triggers for one correction publish once. */
@@ -129,9 +133,9 @@ export class HandoffRecoveryPublisher {
       );
       return;
     }
-    // performHandoff hands over only from an authenticated sender (SMS excepted). A recovery
+    // performHandoff hands over only from an authenticated root (isAuthenticatedRoot). A recovery
     // re-runs the text as that sender, so a root that fails the rule is never re-run (#2588).
-    if (!handingRootAuthenticated(from)) {
+    if (!isAuthenticatedRoot(from)) {
       this.logger.error(
         { ...ids, channelId: from.channelId },
         "turn-handoff recovery: the handing turn's sender was not authenticated; not re-running it",

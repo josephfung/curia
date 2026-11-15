@@ -59,22 +59,26 @@ From rulings during the build:
 - **Email one-to-one** reuses `contact-recent-history`'s private-audience rule.
 - **Hand-off eligibility:** the note's hand-off line and the tool appear only with lanes on, an
   eligible handing turn (the root inbound, full unclipped text, no follow-up drained since,
-  clean scan, a sender the channel authenticated, SMS excepted as in `authority.ts`), and the
-  tool actually in the turn's tools (no allowlist, registered). An email with a quoted or
+  clean scan, an authenticated root by `isAuthenticatedRoot`), and the tool actually in the turn's tools (no allowlist, registered). An email with a quoted or
   forwarded part cut off counts as clipped. Otherwise the turn does the work itself.
-- **Both ends of a hand-off are authenticated.** The target turn passes the same sender rule
-  as the handing turn (SMS excepted), or the hand-off is refused with its own reason
+- **Both ends of a hand-off are authenticated.** The target turn passes the same rule as the
+  handing turn, or the hand-off is refused with its own reason
   (`unauthenticated`): a forged email From resolved to the person must not receive their real
   words, live or held for its wake. Defence in depth: the handed input's `liveTurn` is false
   for such a target, a wake drains no correction held for such a root (it is re-run on its
-  handing turn), and no recovery is published for a handing root that fails the rule. One
-  predicate, `handingRootAuthenticated`, is used at every end.
+  handing turn), and no recovery is published for a handing root that fails the rule.
+- **One authentication rule, `isAuthenticatedRoot`** (`turn-activity.ts`), shared by the
+  backstop's hold details, the note's reader and listing, both ends of a hand-off, the held
+  wake and recovery: the dispatcher's `originator.authenticated` stamp, or a root on SMS (the
+  accepted risk in `authority.ts`), the web app or the CLI. Web and CLI are principal-only
+  surfaces (the bootstrap secret or session; a local shell) that the dispatcher does not stamp,
+  so they count by channel and are readers, listed turns, and hand-off sources and targets.
+  Voice never counts: a call's auto root is seeded unauthenticated.
 - **Who reads the note:** a person's inbound root turn only (not a wake, a delegated task or a
   synthetic turn other than a hand-off recovery), on a laned human channel, with a one-to-one
-  audience, from a sender the channel authenticated (the hand-off's rule, SMS excepted; a
-  recovery turn carries its handing root's originator). Groups, channel threads and cc'd email get none; scheduled jobs and wakes get none.
-  Listed turns are laned human-channel roots only, from a sender the channel authenticated
-  (the same rule, SMS excepted): an unauthenticated turn claiming to be the same person is not
+  audience, from an authenticated root (`isAuthenticatedRoot`; a recovery turn carries its handing root's originator). Groups, channel threads and cc'd email get none; scheduled jobs and wakes get none.
+  Listed turns are laned human-channel roots only, authenticated by the same rule: an
+  unauthenticated turn claiming to be the same person is not
   listed at all, so its words never read as the person's own.
 - **Sign-in codes:** no sender text is stamped when any code registered (any verification
   status) or the lookup failed; the note and the hand-off scrub tracked codes again at use.
