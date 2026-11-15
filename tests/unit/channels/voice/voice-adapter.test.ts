@@ -303,9 +303,8 @@ describe('VoiceAdapter', () => {
       };
     }
 
-    async function startedAdapter(agendaStore: AgendaStore, store = fakeStore().store) {
+    async function startedAdapter(agendaStore: AgendaStore, store = fakeStore().store, bus = fakeBus().bus) {
       const bridge = new VoiceSessionBridge();
-      const { bus } = fakeBus();
       const runtime = fakeRuntime();
       const adapter = new VoiceAdapter({
         bus,
@@ -366,6 +365,34 @@ describe('VoiceAdapter', () => {
       const sessionId = create.mock.calls[0]![0].id;
       expect(agendas.settle).toHaveBeenCalledWith(agendaId, sessionId, { kind: 'return' });
       expect(runtime.startSession).not.toHaveBeenCalled();
+    });
+
+    it('releases the lock and ends the row when voice.session.started cannot be published', async () => {
+      // A failed publish means the bus is down, so the ended event that would
+      // normally let the minutes pipeline settle the lock may never arrive.
+      const agendas = fakeAgendaStore();
+      const { store, create } = fakeStore();
+      const { bus, publish } = fakeBus();
+      publish.mockRejectedValueOnce(new Error('audit write failed'));
+      const { handler, runtime } = await startedAdapter(agendas.store, store, bus);
+
+      const result = await handler.createSession({ caller: principalCaller() });
+
+      expect(result.status).toBe(500);
+      const sessionId = create.mock.calls[0]![0].id;
+      expect(agendas.settle).toHaveBeenCalledWith(agendaId, sessionId, { kind: 'return' });
+      expect(runtime.endSession).toHaveBeenCalledWith(sessionId, 'runtime_start_failed');
+      expect(runtime.startSession).not.toHaveBeenCalled();
+    });
+
+    it('drops a client-supplied agendas key from a non-principal row', async () => {
+      const agendas = fakeAgendaStore();
+      const { store, create } = fakeStore();
+      const { handler } = await startedAdapter(agendas.store, store);
+
+      await handler.createSession({ caller: partnerCaller(), metadata: { source: 'test', agendas: ['forged'] } });
+
+      expect(create.mock.calls[0]![0].metadata).toEqual({ source: 'test' });
     });
   });
 });

@@ -89,23 +89,35 @@ export async function prepareCallAgendas(
 /**
  * Session-row metadata with the prepared agenda load recorded under `agendas`,
  * which the minutes pipeline and startup recovery read back. With nothing
- * prepared the metadata is returned untouched, so a non-principal row looks
- * exactly as it did before agendas existed. The server's value overrides any
- * `agendas` key a client sent: the row must only ever name locks this session holds.
+ * prepared there is no `agendas` key, so a non-principal row looks exactly as
+ * it did before agendas existed.
+ *
+ * The server owns `agendas`: any value a client sent (the console route passes
+ * request-body metadata through) is dropped, prepared or not. The minutes
+ * pipeline builds minutes from these snapshots, so the row must only ever name
+ * loads this session actually made.
  */
 export function withAgendaMetadata(
   metadata: Record<string, unknown> | undefined,
   prepared: PreparedSessionAgendas | null,
 ): Record<string, unknown> | undefined {
-  if (!prepared) return metadata;
+  if (!prepared) {
+    if (!metadata || !('agendas' in metadata)) return metadata;
+    const rest = { ...metadata };
+    delete rest.agendas;
+    return rest;
+  }
   return { ...metadata, agendas: prepared.preload ? [prepared.preload] : [] };
 }
 
 /**
- * Release a preload when the session row was never created. No session-ended
- * event will settle that lock, so without this the agenda would sit in_call
- * until the startup recovery sweep. A failure here is logged, not thrown, so
- * it never masks the error that stopped the session.
+ * Release a preload that no session-ended event will reliably settle: the
+ * session row was never created, or the bus failed while the session was
+ * starting (so the ended event the minutes pipeline listens for may never
+ * arrive). Without this the agenda sits in_call, hidden from every later call,
+ * until the next restart's recovery sweep. Settling an already-released lock
+ * returns 'not_held', so racing the pipeline is harmless. A failure here is
+ * logged, not thrown, so it never masks the error that stopped the session.
  */
 export async function releaseUnstartedPreload(
   store: AgendaStore | undefined,
