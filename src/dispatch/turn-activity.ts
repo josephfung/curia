@@ -24,6 +24,7 @@ import {
   delegationOriginConversationId,
   delegationOriginTaskEventId,
   isDelegatedSpecialistTask,
+  parseTaskOriginator,
 } from '../agents/delegated-task-context.js';
 import type { Logger } from '../logger.js';
 import { stripOutboundContextPreamble } from './outbound-context.js';
@@ -69,6 +70,12 @@ export interface RootTurn {
   requestText: string | null;
   /** Injection-scan finding count of the root's inbound; null = unknown. */
   inboundScanFindings: number | null;
+  /**
+   * The dispatcher-stamped `metadata.originator.authenticated === true` of the root's task:
+   * the channel authenticated the sender (Signal, Slack, a verified email). Fails closed: a
+   * missing stamp is false. An auto root takes its seed's (voice: false).
+   */
+  originatorAuthenticated: boolean;
   /** Epoch ms. */
   startedAt: number;
   /** Set when no task under the root is running. */
@@ -133,6 +140,8 @@ export interface EnsureRootSeed {
   originatorContactId: string | null;
   originatorResolved: boolean;
   originatorIsSystem: boolean;
+  /** The task's stamped `originator.authenticated === true`; false when unstamped. */
+  originatorAuthenticated: boolean;
 }
 
 /** Mutable internal form of a root. Never handed out. */
@@ -147,6 +156,7 @@ interface RootState {
   audienceOneToOne: boolean;
   requestText: string | null;
   inboundScanFindings: number | null;
+  originatorAuthenticated: boolean;
   startedAt: number;
   endedAt: number | null;
   runningTaskIds: Set<string>;
@@ -180,6 +190,31 @@ export interface TurnActivityRegistryOptions {
   scopeOf?: (conversationId: string) => string | undefined;
   /** Curia's own mailboxes, excluded when judging whether an email thread is one-to-one. */
   selfEmails?: readonly string[];
+}
+
+/** The task's stamped `originator.authenticated === true`. Fails closed: absent or malformed is false. */
+function originatorAuthenticatedOf(metadata: Record<string, unknown> | undefined): boolean {
+  return parseTaskOriginator(metadata?.['originator'])?.authenticated === true;
+}
+
+/**
+ * Whether the root's sender is known to be who the root says (#2588): the channel
+ * authenticated the message (originatorAuthenticated), or it arrived on a surface counted as
+ * authenticated by where it came from. Hold details and the "your other conversation" label
+ * go only to authenticated roots, so a forged-From email resolved to the principal neither
+ * sees the principal's actions nor has its own shown to the principal as theirs.
+ *
+ * - SMS: caller ids are spoofable, but SMS counts as the principal's for sending from the
+ *   principal's mailbox (principal-send/authority.ts); this mirrors that accepted risk.
+ * - web: every message needs the principal's bootstrap secret or session
+ *   (channels/http/routes/chat.ts assertSecret).
+ * - cli: a local shell's stdin.
+ *
+ * Web and CLI are principal-only surfaces (audience.ts); the dispatcher does not stamp them
+ * authenticated, so they are named here.
+ */
+export function isAuthenticatedRoot(root: RootTurn): boolean {
+  return root.originatorAuthenticated || root.channelId === 'sms' || root.channelId === 'web' || root.channelId === 'cli';
 }
 
 function targetKey(target: ActionTarget): string {
@@ -288,6 +323,7 @@ export class TurnActivityRegistry {
       audienceOneToOne: false,
       requestText: null,
       inboundScanFindings: null,
+      originatorAuthenticated: seed.originatorAuthenticated,
       startedAt: now,
       endedAt: null,
       runningTaskIds: new Set(),
@@ -459,6 +495,7 @@ export class TurnActivityRegistry {
       originatorContactId: input.originatorContactId,
       originatorResolved: input.originatorResolved,
       originatorIsSystem: input.originatorIsSystem,
+      originatorAuthenticated: originatorAuthenticatedOf(metadata),
     });
 
     const origin = delegationOriginTaskEventId(metadata);
@@ -513,9 +550,14 @@ export class TurnActivityRegistry {
       // The entry had no originator, so it was classed as system; take the task's.
       existing.originatorContactId = input.originatorContactId;
       existing.originatorIsSystem = input.originatorIsSystem;
+      existing.originatorAuthenticated = originatorAuthenticatedOf(input.metadata);
     }
     if (!existing.originatorResolved && input.originatorContactId === existing.originatorContactId) {
       existing.originatorResolved = input.originatorResolved;
+    }
+    if (!existing.originatorAuthenticated && input.originatorContactId === existing.originatorContactId) {
+      // The root task's own stamp: an entry seeded earlier (ensureRoot) may not have carried it.
+      existing.originatorAuthenticated = originatorAuthenticatedOf(input.metadata);
     }
     return existing;
   }
@@ -536,6 +578,7 @@ export class TurnActivityRegistry {
       audienceOneToOne: isOneToOneAudience(input.channelId, input.conversationId, input.metadata, this.selfEmails),
       requestText: this.requestTextOf(input.content),
       inboundScanFindings: input.inboundScanFindings ?? null,
+      originatorAuthenticated: originatorAuthenticatedOf(input.metadata),
       startedAt: input.startedAt,
       endedAt: null,
       runningTaskIds: new Set(),
@@ -640,6 +683,7 @@ export class TurnActivityRegistry {
       audienceOneToOne: root.audienceOneToOne,
       requestText: root.requestText,
       inboundScanFindings: root.inboundScanFindings,
+      originatorAuthenticated: root.originatorAuthenticated,
       startedAt: root.startedAt,
       endedAt: root.endedAt,
       runningTaskIds: new Set(root.runningTaskIds),
