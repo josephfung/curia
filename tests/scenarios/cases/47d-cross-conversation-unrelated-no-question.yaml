@@ -1,0 +1,93 @@
+# Case 47d (#2588): two unrelated requests on two channels. The principal asks by email
+# for a sync with Priya, then asks on Signal for a lunch with Leo Brandt. The Signal turn's
+# note of the email turn ("## Your other recent turns with this person",
+# src/agents/prompts/other-turns-block.ts) opens its guidance with the default: "Most new
+# messages are unrelated: just do them, without asking." Both are calendar requests, which
+# makes the wrong path (asking whether the lunch is the same thing as the sync) attractive.
+# Curia books the lunch without a clarifying question.
+#
+# The second message is `inbound.then`, its own turn once the email turn has replied; see
+# 47a for why the listed turn is a finished one here.
+#
+# Written and not yet run (#2588): the first run records its stub coverage.
+name: cross-conversation unrelated requests get no clarifying question
+description: >
+  The principal emails Curia asking it to book a 30-minute sync with Priya Raman next
+  Thursday at 3pm, and Curia books it. Shortly after, the principal asks on Signal for
+  lunch with Leo Brandt next Tuesday at noon. Curia has the calendar specialist book the
+  lunch and confirms it, without asking whether it is related to the sync with Priya.
+tags: [cross-conversation, turn-awareness, calendar, signal]
+runs: 3
+timeout_seconds: 300
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: priya
+      display_name: Priya Raman
+      tier: known
+      kind: person
+      channel: email
+      identifier: priya@raman.example.test
+    - key: leo
+      display_name: Leo Brandt
+      tier: known
+      kind: person
+      channel: email
+      identifier: leo@brandt.example.test
+  principal_identities:
+    - { channel: signal, identifier: "+15555550147" }
+inbound:
+  from: principal
+  channel: email
+  content: |
+    Subject: Sync with Priya
+
+    Please book a 30-minute sync with Priya Raman on {{day:next-thursday}} at 3pm and send her the invite.
+  email: { to: [curia] }
+  then:
+    channel: signal
+    content: Book lunch with Leo Brandt on {{day:next-tuesday}} at noon please.
+tool_stubs:
+  delegate:
+    - match: { agent: calendar }
+      return: &done
+        agent: calendar
+        response: >
+          Done: the event is on the principal's calendar at the time asked, and the other
+          attendee has the invite.
+    - match: { agent: "@calendar" }
+      return: *done
+    - match: {}
+      return:
+        agent: contacts
+        response: |
+          Both are in contacts.
+
+          <resolved_entities>
+            <contact name="Priya Raman" id="{{contact:priya}}"/>
+            <contact name="Leo Brandt" id="{{contact:leo}}"/>
+          </resolved_entities>
+  memory-store:
+    - match: {}
+      return: { stored: true, action: created, node_id: 4c5d6e7f-8a9b-4c0d-9e1f-47d000000001, sensitivity: internal }
+expected_behaviors:
+  - id: books_the_lunch
+    weight: critical
+    description: The Signal turn asks the calendar specialist to book the lunch with Leo.
+    check:
+      called: delegate
+      with: { agent: calendar }
+      contains: { task: leo }
+      min: 1
+  - id: no_clarifying_question
+    weight: critical
+    description: >
+      The reply to the Signal message confirms the lunch with Leo. It does not ask whether
+      the lunch is related to, replaces or duplicates the sync with Priya, and does not ask
+      the principal to confirm before booking.
+  - id: priya_sync_untouched
+    weight: important
+    description: No calendar request from the Signal turn changes or cancels the sync with Priya.
+failure_modes:
+  - Asks "Is this related to the sync with Priya?" before booking the lunch
+  - Moves the Priya sync to Tuesday, treating the lunch as a correction

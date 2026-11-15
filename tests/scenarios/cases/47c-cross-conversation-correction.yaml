@@ -1,0 +1,111 @@
+# Case 47c (#2588): a correction on another channel. The principal asks by email for a sync
+# with Priya on Thursday; then, on Signal, says to make it Friday instead. The Signal
+# conversation has no history of the request: the only context is the note of the email
+# turn ("## Your other recent turns with this person", src/agents/prompts/other-turns-block.ts),
+# with the request and its booking. The email turn has finished, so the hand-off is not
+# available and the Signal turn does the work itself. The note's do-it-yourself copy (and
+# turn-handoff's) is "adjust them rather than repeat them": the Thursday booking is moved,
+# not joined by a second one, and only one meeting results, on Friday.
+#
+# The second message is `inbound.then`, its own turn once the email turn has replied; see
+# 47a. A correction handed into a still-running turn (turn-handoff) is covered by
+# tests/integration/cross-conversation-handoff.test.ts; a scenario for it needs the harness
+# to start `then` during the first turn.
+#
+# Written and not yet run (#2588): the first run records its stub coverage.
+name: cross-conversation correction moves the booking
+description: >
+  The principal emails Curia asking it to book a 30-minute sync with Priya Raman next
+  Thursday at 3pm, and Curia books it. Shortly after, the principal writes on Signal:
+  actually, make the sync with Priya Friday instead, same time. Curia has the calendar
+  specialist move the Thursday sync to Friday at 3pm rather than book a second meeting, and
+  the Signal reply confirms the sync is now on Friday.
+tags: [cross-conversation, turn-awareness, calendar, signal]
+runs: 3
+timeout_seconds: 300
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: priya
+      display_name: Priya Raman
+      tier: known
+      kind: person
+      channel: email
+      identifier: priya@raman.example.test
+  principal_identities:
+    - { channel: signal, identifier: "+15555550147" }
+inbound:
+  from: principal
+  channel: email
+  content: |
+    Subject: Sync with Priya
+
+    Please book a 30-minute sync with Priya Raman on {{day:next-thursday}} at 3pm and send her the invite.
+  email: { to: [curia] }
+  then:
+    channel: signal
+    content: Actually, make the sync with Priya Friday instead, same time.
+tool_stubs:
+  # One answer for every calendar request: it reads as done whether the brief books or moves.
+  delegate:
+    - match: { agent: calendar }
+      return: &done
+        agent: calendar
+        response: >
+          Done. The sync with Priya Raman is on the principal's calendar as asked, 3:00 to
+          3:30 PM, and Priya Raman (priya@raman.example.test) has the updated invite. There
+          is one event for it.
+    - match: { agent: "@calendar" }
+      return: *done
+    - match: {}
+      return:
+        agent: contacts
+        response: |
+          Priya Raman is in contacts.
+
+          <resolved_entities>
+            <contact name="Priya Raman" id="{{contact:priya}}"/>
+          </resolved_entities>
+  memory-store:
+    - match: {}
+      return: { stored: true, action: created, node_id: 4c5d6e7f-8a9b-4c0d-9e1f-47c000000001, sensitivity: internal }
+expected_behaviors:
+  - id: asks_calendar_for_friday
+    weight: critical
+    description: >
+      The Signal turn asks the calendar specialist for the sync on Friday, the day after
+      the booked Thursday, by weekday or by date.
+    check:
+      any_of:
+        - called: delegate
+          with: { agent: calendar }
+          contains: { task: friday }
+          min: 1
+        - called: delegate
+          with: { agent: calendar }
+          contains: { task: "{{date:next-thursday+1}}" }
+          min: 1
+  - id: at_most_two_calendar_requests
+    weight: critical
+    description: >
+      Two calendar requests at most: the email turn's booking and the Signal turn's change.
+      A third is a repeated booking.
+    check:
+      called: delegate
+      with: { agent: calendar }
+      max: 2
+  - id: moves_not_rebooks
+    weight: critical
+    description: >
+      The Signal turn's calendar request moves (reschedules or updates) the existing
+      Thursday sync to Friday, or cancels it and books Friday. It does not book a Friday
+      sync while leaving the Thursday one in place. One sync results, on Friday.
+  - id: confirms_friday
+    weight: important
+    description: >
+      The reply to the Signal message confirms the sync with Priya is now on Friday at 3pm,
+      without asking which meeting they meant.
+failure_modes:
+  - Books a second sync on Friday and leaves Thursday's in place
+  - Asks the principal which sync they mean, though the note lists it
+  - Says it does not know of any sync with Priya

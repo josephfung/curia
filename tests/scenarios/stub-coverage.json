@@ -297,6 +297,22 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-14T20:17:18.967Z"
     },
+    "cross-conversation correction moves the booking": {
+      "unstubbed": null,
+      "reason": "New in #2588; not yet run (paid suite). The first run records coverage."
+    },
+    "cross-conversation duplicate request asks before acting": {
+      "unstubbed": null,
+      "reason": "New in #2588; not yet run (paid suite). The first run records coverage."
+    },
+    "cross-conversation heads-up is acknowledged, not rebooked": {
+      "unstubbed": null,
+      "reason": "New in #2588; not yet run (paid suite). The first run records coverage."
+    },
+    "cross-conversation unrelated requests get no clarifying question": {
+      "unstubbed": null,
+      "reason": "New in #2588; not yet run (paid suite). The first run records coverage."
+    },
     "debrief detection schedules external meetings only": {
       "unstubbed": 0,
       "runs": 5,

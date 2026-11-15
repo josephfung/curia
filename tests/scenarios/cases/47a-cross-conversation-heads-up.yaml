@@ -1,0 +1,93 @@
+# Case 47a (#2588): the principal asks for a booking by email, then tells Curia on Signal
+# that they emailed about it. The Signal turn starts with the note of the email turn
+# ("## Your other recent turns with this person", src/agents/prompts/other-turns-block.ts),
+# whose closing lines say: "If it refers to the work in a listed turn, acknowledge it's in
+# progress (or done); don't redo it." The Signal message is a heads-up, not a new request,
+# so the reply acknowledges the booking and nothing is booked twice.
+#
+# The second message is `inbound.then`: its own turn on Signal once the email turn has
+# replied, inside the note's window. The harness cannot yet start it while the email turn is
+# still running, so this case covers a finished listed turn. The running-turn path, and the
+# hand-off, are covered by tests/integration/cross-conversation-handoff.test.ts.
+#
+# Written and not yet run (#2588): the first run records its stub coverage.
+name: cross-conversation heads-up is acknowledged, not rebooked
+description: >
+  The principal emails Curia asking it to book a 30-minute sync with Priya Raman next
+  Thursday at 3pm. Curia has the calendar specialist book it and replies. A minute later
+  the principal writes on Signal: a heads-up that they just emailed about the sync with
+  Priya. The Signal reply acknowledges that the sync is already booked, and Curia does not
+  book it again or ask whether to.
+tags: [cross-conversation, turn-awareness, calendar, signal]
+runs: 3
+timeout_seconds: 300
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: priya
+      display_name: Priya Raman
+      tier: known
+      kind: person
+      channel: email
+      identifier: priya@raman.example.test
+  principal_identities:
+    - { channel: signal, identifier: "+15555550147" }
+inbound:
+  from: principal
+  channel: email
+  content: |
+    Subject: Sync with Priya
+
+    Please book a 30-minute sync with Priya Raman on {{day:next-thursday}} at 3pm and send her the invite.
+  email: { to: [curia] }
+  then:
+    channel: signal
+    content: Heads up, I just emailed you about setting up the sync with Priya.
+tool_stubs:
+  delegate:
+    - match: { agent: calendar }
+      return: &booked
+        agent: calendar
+        response: >
+          Booked "Sync with Priya Raman" on {{day:next-thursday}} from 3:00 to 3:30 PM on the
+          principal's calendar and sent Priya Raman (priya@raman.example.test) the invite.
+    - match: { agent: "@calendar" }
+      return: *booked
+    - match: {}
+      return:
+        agent: contacts
+        response: |
+          Priya Raman is in contacts.
+
+          <resolved_entities>
+            <contact name="Priya Raman" id="{{contact:priya}}"/>
+          </resolved_entities>
+  memory-store:
+    - match: {}
+      return: { stored: true, action: created, node_id: 4c5d6e7f-8a9b-4c0d-9e1f-47a000000001, sensitivity: internal }
+expected_behaviors:
+  - id: books_once
+    weight: critical
+    description: >
+      The calendar specialist is asked to book the sync once, on the email turn. The Signal
+      heads-up does not send it a second booking.
+    check:
+      called: delegate
+      with: { agent: calendar }
+      min: 1
+      max: 1
+  - id: acknowledges_the_booking
+    weight: critical
+    description: >
+      The reply to the Signal message acknowledges that the sync with Priya is already
+      booked (or in hand) from the email, for example "Got it, that's booked for Thursday at
+      3pm." It does not offer to book it again or ask whether to.
+  - id: no_clarifying_question
+    weight: important
+    description: >
+      The reply to the Signal message does not ask whether the principal wants the sync
+      booked, or whether the email and the Signal message are about the same thing.
+failure_modes:
+  - Books the sync with Priya a second time from the Signal message
+  - Asks "Do you want me to set up the sync with Priya?" as if it had not been done
+  - Treats the Signal heads-up as a new request it knows nothing about
