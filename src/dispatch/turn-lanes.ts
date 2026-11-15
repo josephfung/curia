@@ -33,6 +33,25 @@ const UNLANED_CHANNELS: ReadonlySet<string> = new Set(['scheduler', 'internal', 
 
 const COORDINATOR_AGENT_ID = 'coordinator';
 
+/**
+ * Whether a channel carries conversation turns a lane would hold: a human channel, not
+ * scheduler, internal, bullpen or voice. Independent of whether lanes are enabled (#2588).
+ */
+export function isLanedChannel(channelId: string): boolean {
+  return !UNLANED_CHANNELS.has(channelId);
+}
+
+/**
+ * The shape of a laned turn, whether or not lanes are enabled: a coordinator task that is not
+ * delegated specialist work, on a laned channel, with a conversation id (#2588).
+ */
+export function isLanedTurnShape(task: AgentTaskPayload): boolean {
+  if (task.agentId !== COORDINATOR_AGENT_ID) return false;
+  if (typeof task.conversationId !== 'string' || task.conversationId.length === 0) return false;
+  if (!isLanedChannel(task.channelId)) return false;
+  return !isDelegatedSpecialistTask(task.metadata);
+}
+
 /** How much of a display field may be stored. The message body is not passed through this. */
 const LABEL_MAX = 80;
 const CHANNEL_MAX = 64;
@@ -359,11 +378,7 @@ export class TurnLanes {
    */
   isLaned(task: AgentTaskPayload): boolean {
     if (!this.enabled) return false;
-    if (task.agentId !== COORDINATOR_AGENT_ID) return false;
-    if (typeof task.conversationId !== 'string' || task.conversationId.length === 0) return false;
-    if (UNLANED_CHANNELS.has(task.channelId)) return false;
-    if (isDelegatedSpecialistTask(task.metadata)) return false;
-    return true;
+    return isLanedTurnShape(task);
   }
 
   /**
@@ -400,12 +415,24 @@ export class TurnLanes {
    * Hand a same-contact message to the turn held by `taskEventId`, whichever
    * conversation its lane belongs to (#2588). Same eligibility, cap and dedupe
    * as `tryInject`. The caller sets `handedOverFrom` so the frame says where it came from.
+   *
+   * `expectedConversationId`, when given, is the conversation the caller believes that task
+   * holds: a lane held on any other conversation is refused as `ineligible` (defence in depth).
+   *
+   * Callers MUST check the target conversation is one-to-one with the sender: this does not
+   * check the audience (the hand-off in src/agents/turn-handoff.ts does).
    */
-  // Callers MUST check the target conversation is one-to-one with the sender: this does not check the audience (the Task 9 hand-off does).
-  tryInjectIntoTask(taskEventId: string, input: InjectableInput): TryInjectResult {
+  tryInjectIntoTask(taskEventId: string, input: InjectableInput, expectedConversationId?: string): TryInjectResult {
     if (!this.enabled) return { kind: 'not_injected', reason: 'disabled' };
     const found = this.findHeld(taskEventId);
     if (!found) return { kind: 'not_injected', reason: 'no_holder' };
+    if (expectedConversationId !== undefined && found.conversationId !== expectedConversationId) {
+      this.logger.warn(
+        { taskEventId, inboundEventId: input.inboundEventId },
+        'turn-lanes: the task holds a lane on another conversation than expected; not injecting',
+      );
+      return { kind: 'not_injected', reason: 'ineligible' };
+    }
     return this.enqueue(found.conversationId, input);
   }
 
