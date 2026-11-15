@@ -28,8 +28,8 @@ import { CONTENT_LINE, LENGTH_EXCEPTION, TURN_LENGTH_REMINDER_TEXTS } from '../.
 import {
   AUDIENCE_LEAK_REWRITE_LINES,
   CONTENT_BLOCK_REWRITE_INSTRUCTION_LINES,
-  PRIOR_TURN_ACTIONS_INTRO,
 } from '../../dispatch/content-block-relay.js';
+import { PRIOR_TURN_ACTIONS_INTRO, PRIOR_TURN_UNREADABLE_LINE } from './prior-turn-actions.js';
 
 /** Newline-joined guidance texts, one marker per line once extracted. */
 export const TRIGGER_GUIDANCE_MARKER_SOURCES: readonly string[] = [
@@ -64,6 +64,9 @@ export const TRIGGER_GUIDANCE_MARKER_SOURCES: readonly string[] = [
   // The content-block rewrite brief (#2615). A rewrite turn's answer is the reply itself, so
   // an echo of its instructions would reach the recipient directly.
   CONTENT_BLOCK_REWRITE_INSTRUCTION_LINES.join('\n'),
-  PRIOR_TURN_ACTIONS_INTRO,
   AUDIENCE_LEAK_REWRITE_LINES.join('\n'),
+  // The prior-turn account's fixed lines. PRIOR_TURN_NO_CALLS_LINE is not a source: it is
+  // shorter than the marker floor, and repeating it reveals nothing.
+  PRIOR_TURN_ACTIONS_INTRO,
+  PRIOR_TURN_UNREADABLE_LINE,
 ];

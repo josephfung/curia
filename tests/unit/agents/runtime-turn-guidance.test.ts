@@ -5,6 +5,7 @@
 // memory (a long conversation would hold one copy per earlier turn).
 
 import { renderAwaitingAnswers } from '../../../src/agents/prompts/awaiting-answers.js';
+import { PRIOR_TURN_UNREADABLE_LINE, renderPriorTurnActions, type PriorTurnActions } from '../../../src/agents/prompts/prior-turn-actions.js';
 import { describe, expect, it, vi } from 'vitest';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
 import type { LLMProvider, Message } from '../../../src/agents/llm/provider.js';
@@ -39,6 +40,7 @@ async function runTurn(payload: {
   turnGuidance?: unknown;
   principalBacklog?: unknown;
   awaitingAnswers?: unknown;
+  priorTurnActions?: unknown;
   channelId?: string;
   toolAllowlist?: string[];
   /** The office identity's Detail setting; absent means the agent has no identity service. */
@@ -81,6 +83,9 @@ async function runTurn(payload: {
     }),
     ...(payload.awaitingAnswers !== undefined && {
       awaitingAnswers: payload.awaitingAnswers as Parameters<typeof createAgentTask>[0]['awaitingAnswers'],
+    }),
+    ...(payload.priorTurnActions !== undefined && {
+      priorTurnActions: payload.priorTurnActions as Parameters<typeof createAgentTask>[0]['priorTurnActions'],
     }),
     parentEventId: 'parent-guidance',
   }));
@@ -135,6 +140,24 @@ describe('AgentRuntime turn guidance (#1959)', () => {
     expect(messages[messages.length - 1]!.content)
       .toBe(`${renderTurnGuidance([], `${renderAwaitingAnswers(awaiting)}\n\n${renderBacklogLine(counts)}`)}\n\nYes, share it.`);
     expect(history[0]).toEqual({ role: 'user', content: 'Yes, share it.' });
+  });
+
+  // #2615: tool output must not land in working memory, which replays into later turns.
+  it('renders a rewrite\'s prior-turn account into the prompt only, kept out of working memory', async () => {
+    const actions = {
+      status: 'read',
+      calls: [{ tool: 'delegate', agent: 'calendar', outcome: 'succeeded', sent: ['calendar-create-event'], excerpt: 'Booked Tue 2:00 PM.' }],
+      earlierLeftOut: 0,
+      moreBeforeLimit: false,
+    };
+    const { messages, history } = await runTurn({ content: 'Rewrite the draft.', priorTurnActions: actions });
+    expect(messages[messages.length - 1]!.content).toBe(`Rewrite the draft.\n\n${renderPriorTurnActions(actions as PriorTurnActions)}`);
+    expect(history[0]).toEqual({ role: 'user', content: 'Rewrite the draft.' });
+  });
+
+  it('tells the turn the record is unavailable when the account crossed the bus malformed', async () => {
+    const { messages } = await runTurn({ content: 'Rewrite the draft.', priorTurnActions: { status: 'read', calls: 'nope' } });
+    expect(messages[messages.length - 1]!.content).toBe(`Rewrite the draft.\n\n${PRIOR_TURN_UNREADABLE_LINE}`);
   });
 
   it('drops a malformed or empty awaiting-answers list', async () => {

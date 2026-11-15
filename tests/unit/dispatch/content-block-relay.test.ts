@@ -2,14 +2,16 @@ import { describe, it, expect } from 'vitest';
 import type { AuditLogRow } from '../../../src/audit/audit-log-repo.js';
 import {
   CONTENT_BLOCK_MAX_RETRIES,
-  PRIOR_TURN_ACTIONS_HEADING,
+  PRIOR_TURN_RESULTS_LIMIT,
   PRIOR_TURN_RESULT_MAX_CHARS,
   PRIOR_TURN_TOTAL_MAX_CHARS,
   buildContentBlockRewriteTask,
+  clipMiddleCodePoints,
   isContentFilterRewriteable,
-  renderPriorTurnActions,
+  priorTurnActionsFromRows,
   summarizeBlockFindings,
 } from '../../../src/dispatch/content-block-relay.js';
+import type { PriorTurnActions, PriorTurnCall } from '../../../src/agents/prompts/prior-turn-actions.js';
 
 describe('content-block-relay', () => {
   it('shows the quoted claims of a band bounce to the rewriting agent (#2159)', () => {
@@ -98,33 +100,13 @@ describe('content-block-relay', () => {
     ]);
     expect(task).toContain('no tools');
   });
-
-  it('buildContentBlockRewriteTask leaves the previous-turn section out when there is nothing to show', () => {
-    const task = buildContentBlockRewriteTask('Thanks for the note.', [
-      { rule: 'llm-judge-over-disclosure', detail: 'shared principal availability' },
-    ]);
-    expect(task).not.toContain(PRIOR_TURN_ACTIONS_HEADING);
-  });
-
-  // #2615: a rewrite that cannot see the booking its own turn made re-plans and contradicts it.
-  it('buildContentBlockRewriteTask shows what the previous turn already did, ahead of the blocked draft', () => {
-    const actions = renderPriorTurnActions([
-      toolResultRow('delegate', true, { sent: ['calendar-create-event'], response: 'Booked Tue 2:00 PM and sent the invite.' }, 2),
-    ]);
-    const task = buildContentBlockRewriteTask('Invite is sent, with a Google Meet link.', [
-      { rule: 'unresolved-identity', detail: 'Unresolved identity: "Google Meet"' },
-    ], actions ?? undefined);
-    expect(task).toContain(PRIOR_TURN_ACTIONS_HEADING);
-    expect(task).toContain('Booked Tue 2:00 PM and sent the invite.');
-    expect(task.indexOf(PRIOR_TURN_ACTIONS_HEADING)).toBeLessThan(task.indexOf('Blocked draft:'));
-  });
 });
 
 /** A tool.result audit row as AuditLogRepo.findToolResultsForTasks returns it. */
-function toolResultRow(
+function row(
   toolName: string,
-  success: boolean,
-  dataOrError: unknown,
+  result: unknown,
+  outcome: string | null,
   secondsAfterStart: number,
 ): AuditLogRow {
   return {
@@ -136,12 +118,9 @@ function toolResultRow(
     conversationId: 'email:thread-1',
     taskId: null,
     parentEventId: 'invoke-1',
-    payload: {
-      toolName,
-      result: success ? { success: true, data: dataOrError } : { success: false, error: dataOrError },
-    },
+    payload: { toolName, ...(result === undefined ? {} : { result }) },
     action: null,
-    outcome: success ? 'success' : 'failure',
+    outcome,
     targetType: null,
     targetId: null,
     initiatorType: null,
@@ -150,54 +129,107 @@ function toolResultRow(
   };
 }
 
-describe('renderPriorTurnActions (#2615)', () => {
-  it('returns null when the previous turn called no tools', () => {
-    expect(renderPriorTurnActions([])).toBeNull();
+function ok(toolName: string, data: unknown, s: number): AuditLogRow {
+  return row(toolName, { success: true, data }, 'success', s);
+}
+
+function calls(actions: PriorTurnActions): PriorTurnCall[] {
+  if (actions.status !== 'read') throw new Error('expected a read account');
+  return actions.calls;
+}
+
+describe('priorTurnActionsFromRows (#2615)', () => {
+  it('reads a turn with no tool calls as an empty account', () => {
+    expect(priorTurnActionsFromRows([])).toEqual({ status: 'read', calls: [], earlierLeftOut: 0, moreBeforeLimit: false });
   });
 
   it('lists the calls oldest first, although the repo returns them newest first', () => {
-    // findToolResultsForTasks orders newest first.
-    const rendered = renderPriorTurnActions([
-      toolResultRow('delegate', true, { response: 'Booked it.' }, 9),
-      toolResultRow('date-resolve', true, { formatted: 'Tuesday, November 17, 2026' }, 1),
-    ])!;
-    expect(rendered.indexOf('date-resolve')).toBeLessThan(rendered.indexOf('delegate'));
-    expect(rendered).toContain('Tuesday, November 17, 2026');
-    expect(rendered).toContain('Booked it.');
+    const list = calls(priorTurnActionsFromRows([
+      ok('delegate', { agent: 'calendar', response: 'Booked it.' }, 9),
+      ok('date-resolve', { formatted: 'Tuesday, November 17, 2026' }, 1),
+    ]));
+    expect(list.map((c) => c.tool)).toEqual(['date-resolve', 'delegate']);
+    expect(list[0]!.excerpt).toContain('Tuesday, November 17, 2026');
   });
 
-  it('marks a call that failed, so the rewrite does not treat it as done', () => {
-    const rendered = renderPriorTurnActions([
-      toolResultRow('email-send', false, 'Not sent: recipient blocked', 3),
-    ])!;
-    expect(rendered).toMatch(/email-send.*failed/);
-    expect(rendered).toContain('Not sent: recipient blocked');
+  it('marks a failed call with its error', () => {
+    const [call] = calls(priorTurnActionsFromRows([row('email-send', { success: false, error: 'Not sent: recipient blocked' }, 'failure', 3)]));
+    expect(call).toMatchObject({ tool: 'email-send', outcome: 'failed', excerpt: 'Not sent: recipient blocked' });
   });
 
-  it('clips a long result', () => {
-    const long = 'x'.repeat(PRIOR_TURN_RESULT_MAX_CHARS * 3);
-    const rendered = renderPriorTurnActions([toolResultRow('email-get-thread', true, { body: long }, 1)])!;
-    expect(rendered.length).toBeLessThan(PRIOR_TURN_RESULT_MAX_CHARS + 200);
+  // Claimed only on positive evidence: a rewrite must not tell a recipient something was done
+  // when nobody knows.
+  it.each([
+    ['a legacy row with no outcome and no flag', row('calendar-create-event', { data: { id: 'e1' } }, null, 1)],
+    ['a row with no result at all', row('calendar-create-event', undefined, null, 1)],
+    ['a row whose outcome could not be extracted', row('calendar-create-event', { success: 'maybe' }, '[EXTRACTION_FAILED]', 1)],
+  ])('reads %s as outcome unknown', (_label, r) => {
+    const [call] = calls(priorTurnActionsFromRows([r]));
+    expect(call!.outcome).toBe('unknown');
   });
 
-  it('keeps the calls closest to the draft when the total would run over, and says how many were left out', () => {
+  it('trusts the result flag on a legacy row with no outcome column', () => {
+    const [call] = calls(priorTurnActionsFromRows([row('date-resolve', { success: true, data: {} }, null, 1)]));
+    expect(call!.outcome).toBe('succeeded');
+  });
+
+  // The specialist's answer comes first in a real delegate result, so a long one used to push
+  // `sent` out of a head clip. It is lifted out of the excerpt instead.
+  it('lifts a delegated call\'s specialist and sends out of a long answer', () => {
+    const response = `Booked and invite sent.\n${'Notes on the week. '.repeat(200)}\nHolds released.`;
+    const [call] = calls(priorTurnActionsFromRows([
+      ok('delegate', { response, sent: ['calendar-create-event'], agent: 'calendar', next_step: 'x' }, 2),
+    ]));
+    expect(call).toMatchObject({ tool: 'delegate', agent: 'calendar', sent: ['calendar-create-event'], outcome: 'succeeded' });
+    // Both ends survive the trim: the headline and the conclusion.
+    expect(call!.excerpt.startsWith('Booked and invite sent.')).toBe(true);
+    expect(call!.excerpt.endsWith('Holds released.')).toBe(true);
+    expect(Array.from(call!.excerpt).length).toBeLessThanOrEqual(PRIOR_TURN_RESULT_MAX_CHARS);
+  });
+
+  it('keeps the calls closest to the draft when the total runs over, and counts the rest', () => {
     const big = 'y'.repeat(PRIOR_TURN_RESULT_MAX_CHARS);
-    // Newest first, as the repo returns them: second 50 is the latest call.
-    const rows = Array.from({ length: 30 }, (_, i) => toolResultRow(`tool-${i}`, true, { body: big }, 50 - i));
-    const rendered = renderPriorTurnActions(rows)!;
-    expect(rendered.length).toBeLessThanOrEqual(PRIOR_TURN_TOTAL_MAX_CHARS + 200);
-    expect(rendered).toContain('tool-0');
-    expect(rendered).not.toContain('tool-29');
-    expect(rendered).toMatch(/\d+ earlier calls? left out/);
+    // Newest first: tool-0 is the latest call.
+    const actions = priorTurnActionsFromRows(Array.from({ length: 30 }, (_, i) => ok(`tool-${i}`, { body: big }, 50 - i)));
+    const list = calls(actions);
+    expect(list.map((c) => c.tool)).toContain('tool-0');
+    expect(list.map((c) => c.tool)).not.toContain('tool-29');
+    const total = list.reduce((n, c) => n + Array.from(c.excerpt).length, 0);
+    expect(total).toBeLessThanOrEqual(PRIOR_TURN_TOTAL_MAX_CHARS);
+    expect(actions).toMatchObject({ earlierLeftOut: 30 - list.length, moreBeforeLimit: false });
   });
 
-  // The brief is stored in working memory and audit_log; a credential a tool returned
-  // must not be copied there (same redaction as the send review's evidence).
-  it('redacts credential-shaped values', () => {
-    const rendered = renderPriorTurnActions([
-      toolResultRow('vault-read', true, { value: 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCD' }, 1),
-    ])!;
-    expect(rendered).not.toContain('abcdefghijklmnopqrstuvwxyz0123456789');
-    expect(rendered).toContain('[REDACTED]');
+  // The dispatcher reads one more than the limit: a full read means older calls exist.
+  it('says more calls exist when the read came back over the limit', () => {
+    const rows = Array.from({ length: PRIOR_TURN_RESULTS_LIMIT + 1 }, (_, i) => ok(`tool-${i}`, {}, 100 - i));
+    const actions = priorTurnActionsFromRows(rows);
+    expect(actions).toMatchObject({ status: 'read', moreBeforeLimit: true });
+    expect(calls(actions).map((c) => c.tool)).not.toContain(`tool-${PRIOR_TURN_RESULTS_LIMIT}`);
+  });
+
+  it('redacts credential-shaped values, in prose answers as in JSON results', () => {
+    const key = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCD';
+    const list = calls(priorTurnActionsFromRows([
+      ok('vault-read', { value: key }, 1),
+      ok('delegate', { agent: 'research', response: `The key is ${key}.` }, 2),
+    ]));
+    for (const c of list) {
+      expect(c.excerpt).not.toContain('abcdefghijklmnopqrstuvwxyz0123456789');
+      expect(c.excerpt).toContain('[REDACTED]');
+    }
+  });
+});
+
+describe('clipMiddleCodePoints (#2615)', () => {
+  it('returns short text unchanged', () => {
+    expect(clipMiddleCodePoints('short', 100)).toBe('short');
+  });
+
+  // A lone surrogate in the task payload fails its jsonb audit write, losing the reply.
+  it('never splits a surrogate pair', () => {
+    const text = '😀'.repeat(2_000);
+    const clipped = clipMiddleCodePoints(text, 101);
+    expect(clipped).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    expect(Array.from(clipped).length).toBeLessThanOrEqual(101);
   });
 });

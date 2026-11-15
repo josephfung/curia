@@ -33,8 +33,11 @@ import { TRIGGER_GUIDANCE_MARKER_SOURCES } from '../../../../src/agents/prompts/
 import {
   AUDIENCE_LEAK_REWRITE_LINES,
   CONTENT_BLOCK_REWRITE_INSTRUCTION_LINES,
-  PRIOR_TURN_ACTIONS_INTRO,
 } from '../../../../src/dispatch/content-block-relay.js';
+import {
+  PRIOR_TURN_ACTIONS_INTRO,
+  PRIOR_TURN_UNREADABLE_LINE,
+} from '../../../../src/agents/prompts/prior-turn-actions.js';
 import { HONESTY_LINE, REGISTER_LINE, WRITES_AS_SCOPE_LINES } from '../../../../src/identity/service.js';
 import { CONTENT_LINE, LENGTH_EXCEPTION, turnLengthReminder } from '../../../../src/identity/length.js';
 import {
@@ -243,6 +246,7 @@ describe('prompt-exfiltration markers cover the moved guidance', () => {
     ['length reminder, Signal brief (#2143)', turnLengthReminder('signal', 15)!],
     ['content-block rewrite instructions (#2615)', CONTENT_BLOCK_REWRITE_INSTRUCTION_LINES.join('\n')],
     ['content-block rewrite prior-turn intro (#2615)', PRIOR_TURN_ACTIONS_INTRO],
+    ['content-block rewrite prior record unreadable (#2615)', PRIOR_TURN_UNREADABLE_LINE],
     ['content-block rewrite audience-leak lines (#2615)', AUDIENCE_LEAK_REWRITE_LINES.join('\n')],
   ];
 

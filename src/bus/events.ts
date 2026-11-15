@@ -143,6 +143,13 @@ export interface AgentTaskPayload {
    * (src/agents/prompts/awaiting-answers.ts); never part of `content`.
    */
   awaitingAnswers?: import('../agents/prompts/awaiting-answers.js').AwaitingAnswer[];
+  /**
+   * What a blocked reply's drafting turn already did (#2615): set by the dispatcher on its
+   * content-block rewrite, from that turn's tool results. The runtime renders it into the
+   * turn's prompt (src/agents/prompts/prior-turn-actions.ts); never part of `content`, so the
+   * tool output is not stored in working memory and replayed into later turns.
+   */
+  priorTurnActions?: import('../agents/prompts/prior-turn-actions.js').PriorTurnActions;
 }
 
 /** Coarse failure reason propagated on agent.response when isError is true.
