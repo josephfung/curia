@@ -19,6 +19,8 @@ export interface FrameInjectedInput {
   /** Task content after the dispatcher's preambles. Working memory stores the raw text separately. */
   content: string;
   turnGuidance?: readonly string[];
+  /** Set when the message was sent on another conversation and handed to this turn (#2588). */
+  handedOverFrom?: { channelId: string; conversationLabel: string };
 }
 
 function unixSeconds(value: string): number | null {
@@ -41,6 +43,25 @@ function receivedLocal(receivedAt: string, timezone: string | undefined): string
   return local ?? receivedAt;
 }
 
+// Defence in depth: the lane already single-lines these, but a caller of the
+// framer may not have gone through it.
+function oneLine(value: string, max: number): string {
+  return value
+    .replace(/[\r\n\u2028\u2029]+/g, ' ')
+    .replace(/[\u0000-\u001F\u007F]/g, '')
+    .trim()
+    .slice(0, max);
+}
+
+function confirmationGuidance(channel: string): string {
+  return [
+    'Give them exactly one confirmation of the outcome.',
+    `By default send it on ${channel}: for the principal use the send tool with recipient "principal"; for anyone else, use the send tool to their contact on ${channel}. Then end this conversation's turn with NO_REPLY.`,
+    `If the outcome has a lot of detail, you may confirm here instead and not on ${channel}.`,
+    'If that send is refused or needs approval, reply here instead.',
+  ].join(' ');
+}
+
 /**
  * The user message appended when a follow-up is drained. `exitDrain` is the
  * case where the model had already written a reply that was not sent.
@@ -52,10 +73,13 @@ export function frameInjectedInput(
   const label = input.senderLabel && input.senderLabel.length > 0 ? input.senderLabel : 'the sender';
   const channel = input.channelId.length > 0 ? input.channelId : 'unknown channel';
   const when = receivedLocal(input.receivedAt, options.timezone);
-  const header =
-    `[New message from ${label} via ${channel}, received ${when} — it arrived while you were working on this conversation and may change what you are doing.]`;
+  const handed = input.handedOverFrom;
+  const header = handed
+    ? `[Handed over from ${JSON.stringify(oneLine(handed.conversationLabel, 60))}'s ${oneLine(handed.channelId, 64) || 'unknown channel'} conversation, received ${when}: they sent this there while you were working on this. It may change what you are doing.]`
+    : `[New message from ${label} via ${channel}, received ${when} — it arrived while you were working on this conversation and may change what you are doing.]`;
   const guidance = renderTurnGuidance(parseTurnGuidanceKeys(input.turnGuidance));
   const parts = [header];
+  if (handed) parts.push(confirmationGuidance(oneLine(handed.channelId, 64) || 'unknown channel'));
   if (options.exitDrain) parts.push('Your reply draft above was **not** sent.');
   if (guidance) parts.push(guidance);
   parts.push(input.content);

@@ -234,6 +234,67 @@ describe('TurnLanes', () => {
     });
   });
 
+  describe('tryInjectIntoTask', () => {
+    it('injects into a holder on another conversation', async () => {
+      const gate = lanes();
+      await gate.acquire(holder('h', { conversationId: 'email:t1' }));
+      const result = gate.tryInjectIntoTask('task-h', input({
+        handedOverFrom: { channelId: 'slack', conversationLabel: 'Slack DM' },
+      }));
+      expect(result.kind).toBe('queued');
+      const taken = gate.takeQueued('task-h');
+      expect(taken).toHaveLength(1);
+      expect(taken[0]!.handedOverFrom).toEqual({ channelId: 'slack', conversationLabel: 'Slack DM' });
+    });
+
+    it('refuses a different contact', async () => {
+      const gate = lanes();
+      await gate.acquire(holder('h', { conversationId: 'email:t1' }));
+      expect(gate.tryInjectIntoTask('task-h', input({ senderContactId: CONTACT_B }))).toEqual({
+        kind: 'not_injected',
+        reason: 'ineligible',
+      });
+    });
+
+    it('returns no_holder when no lane holds the task', () => {
+      const gate = lanes();
+      expect(gate.tryInjectIntoTask('task-missing', input())).toEqual({
+        kind: 'not_injected',
+        reason: 'no_holder',
+      });
+    });
+
+    it('returns disabled when lanes are off', () => {
+      const gate = lanes({ enabled: false });
+      expect(gate.tryInjectIntoTask('task-h', input())).toEqual({
+        kind: 'not_injected',
+        reason: 'disabled',
+      });
+    });
+
+    it('respects the cap', async () => {
+      const gate = lanes({ max: 1 });
+      await gate.acquire(holder('h', { conversationId: 'email:t1' }));
+      expect(gate.tryInjectIntoTask('task-h', input({ inboundEventId: 'i1' })).kind).toBe('queued');
+      expect(gate.tryInjectIntoTask('task-h', input({ inboundEventId: 'i2' }))).toEqual({
+        kind: 'not_injected',
+        reason: 'cap',
+      });
+    });
+
+    it('single-lines and caps handedOverFrom in the stored copy', async () => {
+      const gate = lanes();
+      await gate.acquire(holder('h', { conversationId: 'email:t1' }));
+      gate.tryInjectIntoTask('task-h', input({
+        handedOverFrom: { channelId: 'slack\nX', conversationLabel: `a\nb${'z'.repeat(100)}` },
+      }));
+      const from = gate.takeQueued('task-h')[0]!.handedOverFrom!;
+      expect(from.channelId).toBe('slack X');
+      expect(from.conversationLabel).not.toContain('\n');
+      expect(from.conversationLabel.length).toBe(60);
+    });
+  });
+
   describe('tryInject eligibility', () => {
     it('queues the same resolved contact and refuses everyone else', async () => {
       const gate = lanes();

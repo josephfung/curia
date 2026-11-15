@@ -36,6 +36,7 @@ const COORDINATOR_AGENT_ID = 'coordinator';
 /** How much of a display field may be stored. The message body is not passed through this. */
 const LABEL_MAX = 80;
 const CHANNEL_MAX = 64;
+const CONVERSATION_LABEL_MAX = 60;
 const RECEIVED_AT_MAX = 40;
 
 export interface LaneHolder {
@@ -78,6 +79,11 @@ export interface InjectableInput {
   originalContent: string;
   turnGuidance?: AgentTaskPayload['turnGuidance'];
   receivedAt: string;
+  /**
+   * Set when the message was sent on another conversation and handed to this
+   * turn (#2588). The frame says so and tells the model how to confirm once.
+   */
+  handedOverFrom?: { channelId: string; conversationLabel: string };
 }
 
 export type TicketResult =
@@ -254,6 +260,18 @@ function copyInput(input: InjectableInput): InjectableInput {
   if (typeof input.senderLabel === 'string') {
     copy.senderLabel = singleLine(input.senderLabel, LABEL_MAX);
   }
+  if (input.handedOverFrom && typeof input.handedOverFrom === 'object') {
+    copy.handedOverFrom = Object.freeze({
+      channelId: singleLine(
+        typeof input.handedOverFrom.channelId === 'string' ? input.handedOverFrom.channelId : '',
+        CHANNEL_MAX,
+      ),
+      conversationLabel: singleLine(
+        typeof input.handedOverFrom.conversationLabel === 'string' ? input.handedOverFrom.conversationLabel : '',
+        CONVERSATION_LABEL_MAX,
+      ),
+    });
+  }
   // A new array, not the caller's. Not frozen: the field type is a mutable list
   // of string keys, and the copy no longer aliases the input.
   if (Array.isArray(input.turnGuidance)) {
@@ -376,6 +394,18 @@ export class TurnLanes {
   tryInject(conversationId: string, input: InjectableInput): TryInjectResult {
     if (!this.enabled) return { kind: 'not_injected', reason: 'disabled' };
     return this.enqueue(conversationId, input);
+  }
+
+  /**
+   * Hand a same-contact message to the turn held by `taskEventId`, whichever
+   * conversation its lane belongs to (#2588). Same eligibility, cap and dedupe
+   * as `tryInject`. The caller sets `handedOverFrom` so the frame says where it came from.
+   */
+  tryInjectIntoTask(taskEventId: string, input: InjectableInput): TryInjectResult {
+    if (!this.enabled) return { kind: 'not_injected', reason: 'disabled' };
+    const found = this.findHeld(taskEventId);
+    if (!found) return { kind: 'not_injected', reason: 'no_holder' };
+    return this.enqueue(found.conversationId, input);
   }
 
   private enqueue(conversationId: string, input: InjectableInput): TryInjectResult {
