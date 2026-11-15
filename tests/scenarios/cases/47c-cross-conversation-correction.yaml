@@ -85,21 +85,15 @@ expected_behaviors:
           with: { agent: calendar }
           contains: { task: "{{date:next-thursday+1}}" }
           min: 1
-  - id: at_most_two_calendar_requests
-    weight: critical
-    description: >
-      Two calendar requests at most: the email turn's booking and the Signal turn's change.
-      A third is a repeated booking.
-    check:
-      called: delegate
-      with: { agent: calendar }
-      max: 2
+  # No count of calendar delegations: it cannot tell a booking or a move from an
+  # availability check (see 47a). The judge scores the second booking.
   - id: moves_not_rebooks
     weight: critical
     description: >
-      The Signal turn's calendar request moves (reschedules or updates) the existing
-      Thursday sync to Friday, or cancels it and books Friday. It does not book a Friday
-      sync while leaving the Thursday one in place. One sync results, on Friday.
+      No second booking: the Signal turn's calendar request moves (reschedules or updates)
+      the existing Thursday sync to Friday, or cancels it and books Friday. It does not book
+      a Friday sync while leaving the Thursday one in place. One sync results, on Friday.
+      Checking availability first is fine.
   - id: confirms_friday
     weight: important
     description: >
