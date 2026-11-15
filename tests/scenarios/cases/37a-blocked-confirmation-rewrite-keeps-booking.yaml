@@ -19,7 +19,9 @@ description: >
   not ask the principal to approve a slot that is already booked.
 tags: [content-block-rewrite, email, calendar]
 release_gate: true
-autonomy: { score: 85, gating: band }
+# 92: a confirmation that a booking is made commits the principal, which band review sends
+# only at 90+ (STAKES_MIN_SCORE). Below that it is held by design, which this case is not about.
+autonomy: { score: 92, gating: band }
 through_gateway: true
 seed:
   contacts:
