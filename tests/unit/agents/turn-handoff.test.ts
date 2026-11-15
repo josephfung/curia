@@ -763,7 +763,7 @@ describe('runtime turn-handoff wiring', () => {
       expect(call.system).not.toContain(GUIDANCE);
     });
 
-    it('an unauthenticated principal email root: no tool and no guidance line', async () => {
+    it('an unauthenticated principal email root: no note, no tool and no guidance line', async () => {
       const email = myTask({
         channelId: 'email',
         conversationId: 'email:thread-1',
@@ -774,8 +774,9 @@ describe('runtime turn-handoff wiring', () => {
         },
       });
       const call = await firstCall(email, { selfEmails: ['curia@example.com'], emailOneToOne: true });
-      // The note is there (a one-to-one thread), but this turn may not hand over.
-      expect(call.system).toContain('## Your other recent turns with this person');
+      // A one-to-one thread, but a forged From could resolve to the principal: the reader must
+      // pass the hand-off's sender rule, so the other turns' words and actions are not shown.
+      expect(call.system).not.toContain('## Your other recent turns with this person');
       expect(call.tools).not.toContain('turn-handoff');
       expect(call.system).not.toContain(GUIDANCE);
 
@@ -788,6 +789,7 @@ describe('runtime turn-handoff wiring', () => {
           inboundScanFindingCount: 0,
         },
       }), { selfEmails: ['curia@example.com'], emailOneToOne: true });
+      expect(verified.system).toContain('## Your other recent turns with this person');
       expect(verified.tools).toContain('turn-handoff');
       expect(verified.system).toContain(GUIDANCE);
     });
@@ -843,6 +845,25 @@ describe('runtime turn-handoff wiring', () => {
       expect(await system(myTask({
         syntheticTurn: true,
         metadata: { originator: ORIGINATOR, handoffRecovery: { targetRootId: 'other-root', reason: 'returned' } },
+      }))).toContain(HEADING);
+      // It reads the note on its copied originator's authentication, like any other reader.
+      expect(await system(myTask({
+        syntheticTurn: true,
+        metadata: {
+          originator: { ...ORIGINATOR, authenticated: false },
+          handoffRecovery: { targetRootId: 'other-root', reason: 'returned' },
+        },
+      }))).not.toContain(HEADING);
+    });
+
+    it('a sender its channel did not authenticate gets no note; SMS is the exception', async () => {
+      const unstamped = { contactId: CONTACT, channel: 'signal', systemRole: null, tier: 'known', initiatedAt: INITIATED_AT };
+      expect(await system(myTask({ metadata: { originator: unstamped } }))).not.toContain(HEADING);
+      expect(await system(myTask({ metadata: { originator: { ...ORIGINATOR, authenticated: false } } }))).not.toContain(HEADING);
+      expect(await system(myTask({
+        channelId: 'sms',
+        conversationId: 'sms:+15550002',
+        metadata: { originator: { ...unstamped, channel: 'sms' } },
       }))).toContain(HEADING);
     });
   });

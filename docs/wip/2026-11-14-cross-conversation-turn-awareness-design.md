@@ -64,7 +64,8 @@ From rulings during the build:
   forwarded part cut off counts as clipped. Otherwise the turn does the work itself.
 - **Who reads the note:** a person's inbound root turn only (not a wake, a delegated task or a
   synthetic turn other than a hand-off recovery), on a laned human channel, with a one-to-one
-  audience. Groups, channel threads and cc'd email get none; scheduled jobs and wakes get none.
+  audience, from a sender the channel authenticated (the hand-off's rule, SMS excepted; a
+  recovery turn carries its handing root's originator). Groups, channel threads and cc'd email get none; scheduled jobs and wakes get none.
   Listed turns are laned human-channel roots only.
 - **Sign-in codes:** no sender text is stamped when any code registered (any verification
   status) or the lookup failed; the note and the hand-off scrub tracked codes again at use.
