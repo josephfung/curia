@@ -107,7 +107,7 @@ Every fact and relationship carries:
   - `fast_decay`: coffee preference, current focus — unreliable after weeks
 - `source` TEXT — which agent/channel/interaction created it
 
-**For launch:** `decay_class` is stored but not acted on. A decay engine can be added later to reduce confidence over time based on class.
+**Decay.** The DreamEngine (`src/memory/dream-engine.ts`) runs a daily pass that halves `confidence` per half-life since the node or edge was last confirmed or decayed: 180 days for `slow_decay`, 21 for `fast_decay`, never for `permanent` (`dreaming.decay` in `config/default.yaml`). Nodes and edges at or below `archiveThreshold` (0.05) are archived, as are edges whose endpoint was archived. An important node (high sensitivity or high connectivity) is warned first and held for `warnHoldBackDays` (7) before archiving. Contact-anchored nodes are never decayed or archived ([ADR-040](../adr/040-contact-anchored-kg-node-identity.md)). Reconfirmation raises `confidence` back to at least the incoming value.
 
 ---
 
