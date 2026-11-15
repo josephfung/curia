@@ -1320,11 +1320,9 @@ function validateThroughGateway(scenario: ScenarioCase, file: string): void {
       throw new CaseError(file, `seed.principal_mailbox.send_level (${gatewayLevel}) and seed.pinned.configs ${SENDING_CONFIG} (${agentLevel}) disagree: set both to the same level`);
     }
   }
-  // approve-action replays a held call outside the gated call it came from, so it would reach
-  // the real handler, which test mode cannot serve. Not supported yet.
-  if (scenario.gatedTools && scenario.inbound.then) {
-    throw new CaseError(file, `'gated_tools' cannot be combined with inbound.then: approving a gated hold replays the real handler`);
-  }
+  // gated_tools may be combined with inbound.then (#2588). approve-action replays a held call
+  // outside the gated call it came from, so it would reach the real handler, which test mode
+  // cannot serve: the stub layer refuses approve-action in any run with gated tools.
   for (const tool of scenario.gatedTools ?? []) {
     if (THROUGH_GATEWAY_TOOLS.has(tool)) {
       throw new CaseError(file, `gated_tools.${tool}: through_gateway already runs ${tool} for real`);

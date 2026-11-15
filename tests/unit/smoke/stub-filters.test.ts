@@ -2,7 +2,7 @@
 import { CronExpressionParser } from 'cron-parser';
 import { describe, expect, it } from 'vitest';
 import { toLocalIso } from '../../../src/time/timestamp.js';
-import { CaseToolState, recordedJobRead } from '../../shared/tool-state.js';
+import { CaseToolState, applyCaseWrites, recordedJobRead } from '../../shared/tool-state.js';
 import { fillInputPlaceholders, matchesMailQuery, shapeStubResult } from '../../smoke/stub-filters.js';
 import { declineNextStep } from '../../../src/agents/prompts/delegate-result-guidance.js';
 
@@ -117,6 +117,28 @@ describe('CalendarState', () => {
     shapeStubResult('calendar-delete-event', { deleted: true }, { eventId: 'a' }, state);
     const listed = shapeStubResult('calendar-list-events', base, wed, state) as { events: Array<{ id: string; startTime: string }> };
     expect(listed.events).toEqual([expect.objectContaining({ id: 'b', startTime: '2026-10-07T15:00:00-04:00' })]);
+  });
+
+  it('fills a minimal stub event from the call, and the stub\'s own fields win (#2588)', () => {
+    const state = new CaseToolState();
+    const input = {
+      calendarId: 'cal-work', title: 'Sync with Priya', start: '2026-10-07T15:00:00-04:00', end: '2026-10-07T15:30:00-04:00',
+      attendees: [{ email: 'priya@example.test' }],
+    };
+    const made = shapeStubResult('calendar-create-event', { event: { id: 'evt-stub', status: 'confirmed' } }, input, state) as { event: Record<string, unknown> };
+    expect(made.event).toEqual({
+      id: 'evt-created-1', status: 'confirmed', calendarId: 'cal-work', title: 'Sync with Priya',
+      startTime: '2026-10-07T15:00:00-04:00', endTime: '2026-10-07T15:30:00-04:00', participants: [{ email: 'priya@example.test' }],
+    });
+    const scripted = shapeStubResult('calendar-create-event', { event: { title: 'Scripted' } }, input, state) as { event: Record<string, unknown> };
+    expect(scripted.event['title']).toBe('Scripted');
+  });
+
+  it('replays through applyCaseWrites alone, as the scenario layer calls it (#2588)', () => {
+    const state = new CaseToolState();
+    applyCaseWrites('calendar-create-event', { event: { status: 'confirmed' } }, { title: 'Sync', start: '2026-10-07T15:00:00-04:00', end: '2026-10-07T15:30:00-04:00' }, state);
+    const listed = applyCaseWrites('calendar-list-events', { events: [], count: 0 }, wed, state) as { events: Array<{ title: string; startTime: string }> };
+    expect(listed.events).toEqual([expect.objectContaining({ title: 'Sync', startTime: '2026-10-07T15:00:00-04:00' })]);
   });
 
   it('keeps nothing without a state (stateless use)', () => {

@@ -960,9 +960,14 @@ export async function createScenarioHarness(
     if (typeof sender !== 'object' || !('channelId' in sender)) throw new Error('unreachable: inbound.then sender is not a channel sender');
     // A reply on the approval email's thread (#2333) joins that thread, as Nylas threads it.
     const approvalThread = turn.replyToApproval ? await approvalEmailThread(scope) : undefined;
+    // A Signal DM's conversation id is `signal:<target>` in production, and the one-to-one
+    // audience rule (audience.ts, contact recall) reads that prefix (#2588). The target is a
+    // per-run id, not the principal's number, which every case shares and runs at once.
     const conversationId = sender.channelId === 'email'
       ? `email:${approvalThread ?? `scenario-then-${randomUUID()}`}`
-      : `scenario-then-${randomUUID()}`;
+      : sender.channelId === 'signal'
+        ? `signal:scenario-then-${randomUUID()}`
+        : `scenario-then-${randomUUID()}`;
     scope.followOnConversations.add(conversationId);
     // The turn boundary (#2333): a delivery before it went out before the principal answered.
     scope.thenStartsAt = scope.deliveries.length;

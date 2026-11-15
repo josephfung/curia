@@ -695,6 +695,16 @@ describe('through-gateway runs (#2312)', () => {
     expect(executed).toEqual([{ name: 'approve-action', liveTurn, layer: 'review' }]);
     controller.endRun('scenario-1');
   });
+
+  it('refuses approve-action in a run with gated tools: its replay would reach the real handler (#2588)', async () => {
+    const { layer, controller, executed, stubs } = gatewaySetup();
+    controller.beginRun(stubs, 'scenario-1', { throughGateway: true, gatedTools: ['calendar-create-event'] });
+    const result = await layer.invoke('approve-action', { short_ref: '3' }, undefined, { ...coordinatorCall, liveTurn: true });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/not supported in a scenario with gated_tools/);
+    expect(executed).toEqual([]);
+    expect(controller.endRun('scenario-1').map(c => [c.toolName, c.disposition])).toEqual([['approve-action', 'refused']]);
+  });
 });
 
 // #2499: a gated_tools stub is answered behind the review layer's gates, so band Gate C (the
@@ -747,7 +757,8 @@ describe('gated stubs (#2499)', () => {
     controller.beginRun(stubs, 'scenario-1', { throughGateway: true, gatedTools: ['calendar-create-event'] });
     const result = await layer.invoke('calendar-create-event', {}, undefined, outsiderCall);
     expect(result.success).toBe(true);
-    if (result.success) expect(result.data).toEqual({ event: { id: 'evt-stub' } });
+    // The run's calendar state names each created event, so a later listing shows it (#2588).
+    if (result.success) expect(result.data).toEqual({ event: { id: 'evt-created-1' } });
     expect(executed).toEqual([]);
     controller.endRun('scenario-1');
   });
@@ -766,7 +777,7 @@ describe('gated stubs (#2499)', () => {
     expect(await layer.invoke('calendar-list-events', {}, undefined, outsiderCall)).toEqual({ success: true, data: { events: [] } });
     controller.endRun('scenario-1');
     controller.beginRun(stubs, 'scenario-1', { throughGateway: true });
-    expect(await layer.invoke('calendar-create-event', {}, undefined, outsiderCall)).toEqual({ success: true, data: { event: { id: 'evt-stub' } } });
+    expect(await layer.invoke('calendar-create-event', {}, undefined, outsiderCall)).toEqual({ success: true, data: { event: { id: 'evt-created-1' } } });
     controller.endRun('scenario-1');
     expect(review).not.toHaveBeenCalled();
   });

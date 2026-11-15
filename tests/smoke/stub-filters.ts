@@ -150,8 +150,6 @@ function filterMail(data: Json, input: Json, search: boolean): Json {
   };
 }
 
-const CALENDAR_WRITES: ReadonlySet<string> = new Set(['calendar-create-event', 'calendar-update-event', 'calendar-delete-event']);
-
 const FILTERS: Partial<Record<string, (data: Json, input: Json) => Json>> = {
   'calendar-list-events': filterEvents,
   'calendar-find-free-time': filterFreeWindows,
@@ -168,11 +166,7 @@ export function shapeStubResult(toolName: string, data: unknown, input: Json, st
   const filled = fillInputPlaceholders(data, input);
   if (filled === null || typeof filled !== 'object' || Array.isArray(filled)) return filled;
   let shaped = filled as Json;
-  if (state) {
-    if (CALENDAR_WRITES.has(toolName)) shaped = state.calendar.recordWrite(toolName, shaped, input);
-    shaped = applyCaseWrites(toolName, shaped, input, state);
-    if (toolName === 'calendar-list-events') shaped = state.calendar.replayOnto(shaped);
-  }
+  if (state) shaped = applyCaseWrites(toolName, shaped, input, state);
   if (toolName === 'delegate') shaped = withDeclineNextStep(shaped);
   const filter = FILTERS[toolName];
   return filter ? filter(shaped, input) : shaped;
