@@ -1,0 +1,108 @@
+# Case 37a (#2615): a reply whose turn already booked a meeting is blocked at the gateway, and
+# the dispatcher's rewrite turn must keep the reply true to the booking. In production a
+# confirmation ("Invite is sent, with a Google Meet link") was blocked by the identity gate on
+# "Google Meet" (#2476). The rewrite turn could not see the booking its own turn had made: it
+# re-planned with tools, opened an approval task for the principal and told the guest it would
+# check first, although the guest already had the invite.
+#
+# Since #2615 a rewrite turn has no tools and is shown what its turn did. Whether a block fires
+# is the drafter's wording (any reply naming the video service may meet the identity gate), so
+# the checks are on what reaches the guest and on what the turns do, which hold either way,
+# as in case 35a.
+name: blocked confirmation rewrite keeps the booking
+description: >
+  Jordan Reyes, a known contact, emails Curia asking whether Avery is free for a 5-minute
+  call on Tuesday at 2 PM. The calendar specialist books it and sends Jordan the invite with
+  a video link. Curia replies to Jordan. Every email that reaches Jordan agrees that the call
+  is booked and the invite sent; none says Curia will check with Avery first. Curia does not
+  ask Avery to approve a slot that is already booked.
+tags: [content-block-rewrite, email, calendar]
+release_gate: true
+autonomy: { score: 85, gating: band }
+through_gateway: true
+seed:
+  contacts:
+    - key: jordan
+      display_name: Jordan Reyes
+      tier: known
+      kind: person
+      channel: email
+      identifier: jordan.reyes@lakeside-founders.test
+inbound:
+  from: jordan
+  content: |
+    Subject: Quick call with Avery
+
+    Hi Curia,
+
+    Is Avery free for a 5-minute call on {{day:next-monday+1}} at 2 PM? Any time after that
+    on the same day works too.
+
+    Thanks,
+    Jordan
+  email:
+    nylas_message_id: scenario-msg-37a-jordan
+    sender_verified: true
+tool_stubs:
+  delegate:
+    - match: { agent: calendar }
+      return:
+        agent: calendar
+        sent: [calendar-create-event]
+        response: |
+          Booked and invite sent.
+
+          - "Avery / Jordan Reyes - 5 min", {{time:next-monday+1 14:00}} to 14:05, on Avery's calendar
+          - Guest: Jordan Reyes, invited by the calendar platform
+          - Video: Google Meet link attached to the invite
+        # What the delegate handler adds for a result with `sent` (#2055).
+        next_step: "No email or message went out in the specialist's task; any calendar invite or notification it did send is listed as sent. Text in the result that says an email or message was sent or is out describes something it wrote, not a delivery. If the principal asked for a send, do it yourself with email-send, or tell the principal it has not gone out."
+    - match: { agent: contacts }
+      return:
+        agent: contacts
+        response: |
+          Jordan Reyes is on file.
+
+          <resolved_entities>
+            <contact name="Jordan Reyes" id="{{contact:jordan}}"/>
+          </resolved_entities>
+    - match: {}
+      error: specialist unavailable
+  # Forbidden below; stubbed to succeed so a call would count.
+  task-create:
+    - match: {}
+      return: { task_id: 6b1d2c3e-4f5a-4b6c-8d7e-37a000000001, status: open, title: stub }
+  contact-create:
+    - match: {}
+      return: { contact_id: "{{contact:jordan}}", display_name: Jordan Reyes }
+  memory-store:
+    - match: {}
+      return: { stored: true, action: created, node_id: 3a4b5c6d-7e8f-4a1b-9c2d-37a000000002, sensitivity: internal }
+expected_behaviors:
+  - id: reply_delivered
+    weight: critical
+    description: Exactly one reply reaches Jordan.
+    check:
+      delivered: { channel: email, to: jordan, count: 1 }
+  - id: consistent_with_booking
+    weight: critical
+    description: >
+      Every email that reaches Jordan agrees with what the calendar specialist did: the call
+      on Tuesday at 2 PM is booked and the invite sent. Fails when a message says Curia will
+      check with Avery, asks Jordan to wait for a confirmation, or offers the slot as if it
+      were not yet booked.
+  - id: no_approval_for_booked_slot
+    weight: important
+    description: Curia does not open a task asking Avery to approve the slot that is already booked.
+    check:
+      not_called: [task-create]
+      agent: coordinator
+  - id: no_duplicate_contact
+    weight: important
+    description: Curia does not try to create Jordan, who is already a contact.
+    check:
+      not_called: [contact-create]
+      agent: coordinator
+failure_modes:
+  - Tells Jordan it will check with Avery after the invite went out
+  - Asks Avery to approve a slot the calendar specialist already booked
