@@ -501,6 +501,32 @@ describe('TurnActivityRegistry pruning', () => {
     start(registry, 'B', { startedAt: T0 + 40 * MIN });
     expect(registry.checkAndRecord('M', 'email-send', [X]).held).toBe(true);
   });
+
+  it("an idle auto root inside a running turn's window is kept, not pruned a window after its last action", () => {
+    // Voice root V acts on X at minute 0; B starts at minute 10 and calls X at minute 20.
+    const { registry, set } = setup();
+    registry.ensureRoot('V', { ...VOICE_SEED, conversationId: 'v' });
+    registry.checkAndRecord('V', 'email-send', [X]);
+    set(T0 + 10 * MIN);
+    start(registry, 'B', { startedAt: T0 + 10 * MIN });
+    set(T0 + 20 * MIN);
+    // A start runs a full prune: minute 20 is past V's last action plus a window.
+    start(registry, 'other', { startedAt: T0 + 20 * MIN });
+    expect(registry.rootOf('V')).toBeDefined();
+    const decision = registry.checkAndRecord('B', 'email-send', [X]);
+    expect(decision.held).toBe(true);
+    if (decision.held) expect(decision.matches[0]!.other.rootId).toBe('V');
+  });
+
+  it('an idle auto root outside every live window is pruned', () => {
+    const { registry, set } = setup();
+    registry.ensureRoot('V', { ...VOICE_SEED, conversationId: 'v' });
+    registry.checkAndRecord('V', 'email-send', [X]);
+    set(T0 + 20 * MIN);
+    start(registry, 'B', { startedAt: T0 + 20 * MIN });
+    expect(registry.rootOf('V')).toBeUndefined();
+    expect(registry.checkAndRecord('B', 'email-send', [X]).held).toBe(false);
+  });
 });
 
 describe('TurnActivityRegistry action caps', () => {
