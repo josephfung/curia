@@ -1240,6 +1240,10 @@
       "recordedAt": "2026-11-14T21:48:42.519Z"
     },
     "finesse 54b nudge investor with deadline": {
+      "allowUnstubbed": {
+        "count": 1,
+        "reason": "Refused side-task call(s) after the case's main behavior (contact-merge). Stubs wait for the post-feedback re-run, so the 2026-11-14 baseline can still be re-scored with rejudge --from-cases (#2556). Remove this allowance when they land."
+      },
       "unstubbed": 1,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
@@ -1252,12 +1256,20 @@
       "recordedAt": "2026-11-14T21:48:42.519Z"
     },
     "finesse 54d nudge late direct report": {
+      "allowUnstubbed": {
+        "count": 2,
+        "reason": "Refused side-task call(s) after the case's main behavior (two calls the bus capture missed). Stubs wait for the post-feedback re-run, so the 2026-11-14 baseline can still be re-scored with rejudge --from-cases (#2556). Remove this allowance when they land."
+      },
       "unstubbed": 2,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-11-14T21:48:42.519Z"
     },
     "finesse 54e nudge prospective investor": {
+      "allowUnstubbed": {
+        "count": 1,
+        "reason": "Refused side-task call(s) after the case's main behavior (ceo-inbox-sent-observe). Stubs wait for the post-feedback re-run, so the 2026-11-14 baseline can still be re-scored with rejudge --from-cases (#2556). Remove this allowance when they land."
+      },
       "unstubbed": 1,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
@@ -1294,6 +1306,10 @@
       "recordedAt": "2026-11-14T21:48:42.519Z"
     },
     "finesse 56b decline board chair gala": {
+      "allowUnstubbed": {
+        "count": 1,
+        "reason": "Refused side-task call(s) after the case's main behavior (contact-rename). Stubs wait for the post-feedback re-run, so the 2026-11-14 baseline can still be re-scored with rejudge --from-cases (#2556). Remove this allowance when they land."
+      },
       "unstubbed": 1,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
@@ -1312,6 +1328,10 @@
       "recordedAt": "2026-11-14T21:48:42.519Z"
     },
     "finesse 57b move ruth's visit": {
+      "allowUnstubbed": {
+        "count": 1,
+        "reason": "Refused side-task call(s) after the case's main behavior (bullpen-post). Stubs wait for the post-feedback re-run, so the 2026-11-14 baseline can still be re-scored with rejudge --from-cases (#2556). Remove this allowance when they land."
+      },
       "unstubbed": 1,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
@@ -1336,12 +1356,20 @@
       "recordedAt": "2026-11-14T21:48:42.519Z"
     },
     "finesse 58a board agenda with staff copied": {
+      "allowUnstubbed": {
+        "count": 3,
+        "reason": "Refused side-task call(s) after the case's main behavior (send-draft). Stubs wait for the post-feedback re-run, so the 2026-11-14 baseline can still be re-scored with rejudge --from-cases (#2556). Remove this allowance when they land."
+      },
       "unstubbed": 3,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-11-14T21:48:42.519Z"
     },
     "finesse 58b customer follow-up with sales copied": {
+      "allowUnstubbed": {
+        "count": 1,
+        "reason": "Refused side-task call(s) after the case's main behavior (send-draft). Stubs wait for the post-feedback re-run, so the 2026-11-14 baseline can still be re-scored with rejudge --from-cases (#2556). Remove this allowance when they land."
+      },
       "unstubbed": 1,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
