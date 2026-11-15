@@ -5464,9 +5464,12 @@ export class OutboundGateway {
     const unrecorded = marker !== null && !markerWritten;
     // An operational stop (a failure to check) was not a decision about the reply (R44).
     const heading = args.kind === 'other' || unrecorded ? 'Not sent from your mailbox' : 'Left as a draft in your mailbox';
-    // A reason saying Curia "left it for you" would contradict that too (CodeRabbit round 3).
+    // A reason claiming the hold would contradict that too (CodeRabbit rounds 3 and 4): "so Curia
+    // left it for you" (the fixed limit texts) and "Held for you" (a review hold's own reason, and
+    // the bare fallback) both turn neutral.
     const told = unrecorded
       ? said.replace(/, so Curia left it for you\./g, ", so Curia didn't send it on its own.")
+        .replace(/\bHeld for you([:.])/g, "Curia didn't send it on its own$1")
         .replace(IN_YOUR_DRAFTS, `Curia couldn't record that it held it, so it may look at it again. ${IN_YOUR_DRAFTS}`)
       : said;
     const reported = await this.publishMailboxDigest(`${heading}: ${what}. ${told}`, options);
