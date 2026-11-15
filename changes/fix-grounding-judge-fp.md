@@ -4,7 +4,7 @@
 
 ### Changed
 
-- **Band grounding review** — the principal's availability is a fact needing a calendar check this turn. (#2616)
+- **Band grounding review** — the principal's availability is a fact, supported by a calendar check or their own word. (#2616)
 
 ### Added
 
