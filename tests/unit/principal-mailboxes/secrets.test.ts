@@ -43,5 +43,11 @@ describe('mailbox refusal messages', () => {
   it.each([FLAT_KEYS_MANAGED_MESSAGE, PER_MAILBOX_GRANT_MANAGED_MESSAGE])('message %# names Settings → Behaviour → Email & Calendar', (message) => {
     expect(message).toContain('Settings → Behaviour → Email & Calendar');
     expect(message).not.toContain('Channels → Email');
+    // #2600: the console's Edit replaced the Replace grant control.
+    expect(message).not.toContain('Replace grant');
+  });
+
+  it('the per-mailbox grant message names the console Edit control', () => {
+    expect(PER_MAILBOX_GRANT_MANAGED_MESSAGE).toContain('Add, or Edit on the mailbox');
   });
 });

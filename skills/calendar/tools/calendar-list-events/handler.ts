@@ -247,7 +247,7 @@ export class CalendarListEventsHandler implements ToolHandler {
             error:
               `Calendar authorization failed for all calendars (${failedCalendarIds.join(', ')}): ` +
               "the principal mailbox's Nylas grant was rejected by Google/Nylas " +
-              "(401/403). Reconnect it in the Nylas dashboard, use Replace grant on the mailbox in the console, then retry.",
+              "(401/403). Reconnect it in the Nylas dashboard, use Edit on the mailbox in the console to paste its new grant ID, then retry.",
           };
         }
         return {

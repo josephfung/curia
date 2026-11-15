@@ -10,7 +10,7 @@ import { MAILBOX_ID_RE, RESERVED_MAILBOX_IDS } from '../../../../src/principal-m
 // readOnly (no Nylas API key yet) lists the mailboxes and turns every change control off.
 // A grant ID is typed once, tested (shows the address and provider the grant belongs to)
 // and then sent to the add route; it is never returned by the server and is dropped from
-// state after a successful add. "Replace grant" sends a new grant for the same account (after
+// state after a successful add. "Edit" can send a new grant for the same account (after
 // a reconnect in Nylas) the same way, and drops it from state after a successful save.
 
 interface Mailbox {

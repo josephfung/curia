@@ -440,7 +440,7 @@ describe('CalendarListEventsHandler — failure reasons reach the caller', () =>
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.errorType).toBe('AUTH_FAILURE');
-      expect(result.error).toMatch(/Replace grant/);
+      expect(result.error).toMatch(/use Edit on the mailbox in the console to paste its new grant ID/);
     }
   });
 
