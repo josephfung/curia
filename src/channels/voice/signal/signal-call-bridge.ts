@@ -37,7 +37,12 @@ import type { ResolveSignalVoiceCallerResult } from '../caller-context.js';
 import type { VoiceSessionStore } from '../session-store.js';
 import type { VoiceRuntime } from '../voice-runtime.js';
 import type { AgendaStore } from '../../../meetings/agenda-store.js';
-import { prepareSessionAgendas } from '../../../meetings/session-agendas.js';
+import {
+  prepareCallAgendas,
+  releaseUnstartedPreload,
+  withAgendaMetadata,
+  type PreparedSessionAgendas,
+} from '../../../meetings/session-agendas.js';
 import { SignalAudioTransport } from './signal-audio-transport.js';
 import type { SignalAudioTransportOpts } from './signal-audio-transport.js';
 
@@ -442,32 +447,31 @@ export class SignalCallBridge {
     this.connecting.add(ev.callId);
     let rowCreated = false;
     // Hoisted so a create failure can release a lock taken before the row exists.
-    let prepared: Awaited<ReturnType<typeof prepareSessionAgendas>> | null = null;
+    let prepared: PreparedSessionAgendas | null = null;
     try {
       // Prepare before the row exists so the lock records this session id.
       // A failure returns empty agendas and the call still starts free-form.
       // Non-principal callers and a bridge with no store skip this entirely,
       // so their metadata stays exactly as it was before agendas existed.
-      prepared = this.config.agendaStore && caller.systemRole === 'principal'
-        ? await prepareSessionAgendas(this.config.agendaStore, {
-            sessionId,
-            now: new Date(),
-            logger: this.log,
-          })
-        : null;
+      // Shared with the console/PWA route (#2359).
+      prepared = await prepareCallAgendas(this.config.agendaStore, {
+        callerSystemRole: caller.systemRole,
+        sessionId,
+        now: new Date(),
+        logger: this.log,
+      });
 
       const session = await this.config.sessionStore.create({
         id: sessionId,
         conversationId,
         livekitRoom: roomName,
         callerContactId: persistableCallerContactId(caller.contactId),
-        metadata: {
+        metadata: withAgendaMetadata({
           channel: 'signal',
           callerNumber: ev.number,
           callId: ev.callId.toString(),
           tier: caller.tier,
-          ...(prepared ? { agendas: prepared.preload ? [prepared.preload] : [] } : {}),
-        },
+        }, prepared),
       });
       rowCreated = true;
 
@@ -573,17 +577,10 @@ export class SignalCallBridge {
         } catch (endErr) {
           this.log.error({ err: endErr, sessionId }, 'endSession failed after session start failure');
         }
-      } else if (prepared?.preload && this.config.agendaStore) {
+      } else {
         // The lock happened before the row existed, so no session-ended event
         // will settle it. Release it now or the next call cannot see it.
-        try {
-          await this.config.agendaStore.settle(prepared.preload.agendaId, sessionId, { kind: 'return' });
-        } catch (settleErr) {
-          this.log.error(
-            { err: settleErr, sessionId, agendaId: prepared.preload.agendaId },
-            'meeting agenda: failed to release preload after session setup failed',
-          );
-        }
+        await releaseUnstartedPreload(this.config.agendaStore, prepared, sessionId, this.log);
       }
     } finally {
       // The setup window is over — whichever way it exited (active set, error
