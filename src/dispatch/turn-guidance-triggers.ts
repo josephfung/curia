@@ -253,10 +253,28 @@ export function ownEmailSubject(channelId: string, content: string): string {
  * out: neither is the sender's own words.
  */
 export function senderOwnText(channelId: string, content: string): string {
-  const body = spotCheckCandidateText(channelId, content);
-  const subject = ownEmailSubject(channelId, content);
-  if (subject === '') return body;
-  return body === '' ? `Subject: ${subject}` : `Subject: ${subject}\n\n${body}`;
+  return formatSenderOwnText(senderOwnParts(channelId, content));
+}
+
+/** The two parts senderOwnText joins: the email's own subject ('' when none) and the body. */
+export interface SenderOwnParts {
+  subject: string;
+  body: string;
+}
+
+/**
+ * senderOwnText's parts, derived once. The dispatcher reads them both for the sender-text stamp
+ * and for the sign-in-code check that decides whether the stamp may be made, so the two always
+ * read the same text (#2588).
+ */
+export function senderOwnParts(channelId: string, content: string): SenderOwnParts {
+  return { subject: ownEmailSubject(channelId, content), body: spotCheckCandidateText(channelId, content) };
+}
+
+/** The stamped text for senderOwnParts: "Subject: <subject>" first when there is one. */
+export function formatSenderOwnText(parts: SenderOwnParts): string {
+  if (parts.subject === '') return parts.body;
+  return parts.body === '' ? `Subject: ${parts.subject}` : `Subject: ${parts.subject}\n\n${parts.body}`;
 }
 
 /**
