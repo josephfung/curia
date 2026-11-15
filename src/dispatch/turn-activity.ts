@@ -558,7 +558,11 @@ export class TurnActivityRegistry {
     try {
       return this.scopeOf(conversationId);
     } catch (err) {
-      this.logger.warn({ err }, 'turn activity: scope function threw; the root joins the shared scope');
+      // The class only: the message could quote the conversation id (a phone number on Signal).
+      this.logger.warn(
+        { errName: err instanceof Error ? err.name : typeof err },
+        'turn activity: scope function threw; the root joins the shared scope',
+      );
       return undefined;
     }
   }
