@@ -125,7 +125,7 @@ import {
   type SeededRun,
 } from './seed.js';
 import { createStubController, type StubController, type StubbedCall } from './stub-layer.js';
-import { COORDINATOR, type CapturedToolCall, type ScenarioCase, type ScenarioRun, type ScenarioWakeTask } from './types.js';
+import { COORDINATOR, type CapturedToolCall, type ScenarioCase, type ScenarioRun, type ScenarioWakeTask, type UncapturedHole } from './types.js';
 import type { AutonomyService } from '../../src/autonomy/autonomy-service.js';
 
 /**
@@ -1447,6 +1447,7 @@ export async function createScenarioHarness(
         ? `${outcome.error} — a specialist was still working (${[...new Set(stillWorking)].join(', ')}): the run's wait ran out before the delegate wait did`
         : outcome.error ?? (thenOutcome?.error ? `inbound.then turn: ${thenOutcome.error}` : undefined)
           ?? (wakeError ? `approval wake turn: ${wakeError}` : undefined) ?? premiseError ?? reviewerError ?? gateReviewerError;
+      const uncaptured = uncapturedHoles(merged, stubbedCalls);
       result = {
         runIndex,
         inboundContent,
@@ -1458,6 +1459,7 @@ export async function createScenarioHarness(
         ...(outcome.noReplyReason ? { noReplyReason: outcome.noReplyReason } : {}),
         durationMs: Date.now() - started,
         unstubbedCalls: countRunHoles(merged, stubbedCalls),
+        ...(uncaptured.length > 0 ? { uncapturedHoles: uncaptured } : {}),
         ...(error ? { error } : {}),
         ...(timeoutKind ? { timeoutKind } : {}),
         ...(injectionDrainPoints !== undefined ? { injectionDrainPoints: [...injectionDrainPoints] } : {}),
@@ -1597,10 +1599,16 @@ export function countHoles(calls: CapturedToolCall[]): number {
  * outcome has calls: []), so its holes exist only in the stub layer's record (#2192).
  */
 export function countRunHoles(merged: CapturedToolCall[], stubbed: readonly StubbedCall[]): number {
+  return countHoles(merged) + uncapturedHoles(merged, stubbed).length;
+}
+
+/** The stub layer's refusals and canned answers that no captured call matches. */
+export function uncapturedHoles(merged: CapturedToolCall[], stubbed: readonly StubbedCall[]): UncapturedHole[] {
   const observed = new Set(merged.map(c => c.invokeEventId).filter((id): id is string => !!id));
-  const unobserved = stubbed.filter(s =>
-    (s.disposition === 'refused' || s.disposition === 'canned') && !(s.invokeEventId && observed.has(s.invokeEventId)));
-  return countHoles(merged) + unobserved.length;
+  return stubbed.flatMap(s =>
+    (s.disposition === 'refused' || s.disposition === 'canned') && !(s.invokeEventId && observed.has(s.invokeEventId))
+      ? [{ name: s.toolName, ...(s.agentId !== undefined ? { agentId: s.agentId } : {}), disposition: s.disposition }]
+      : []);
 }
 
 /** The metadata the email adapter attaches, minus anything a scenario cannot know. */

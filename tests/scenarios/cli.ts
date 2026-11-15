@@ -556,8 +556,12 @@ async function main(): Promise<void> {
               : c.disposition === 'passthrough' && c.result?.success === false ? `${name}?`
                 : name;
         }).join(', ') || 'no tools';
+        // Holes the bus capture never saw, so they are not in toolCalls (#2192): named here, or the
+        // gate's refused count has nothing to point at.
+        const uncaptured = (run.uncapturedHoles ?? []).map(h => `${h.agentId ? `${h.agentId}:` : ''}${h.name}${h.disposition === 'refused' ? '!' : '~'}`);
+        const holes = uncaptured.length > 0 ? `; not captured: ${uncaptured.join(', ')}` : '';
         const failed = run.timeoutKind === 'delegate_wait' ? 'SLOW SPECIALIST' : 'ERROR';
-        out(`   ${scenario.name} [${i + 1}/${n}] ${run.error ? `${failed} ${run.error}` : `${Math.round(run.durationMs / 1000)}s — ${calls}`}`);
+        out(`   ${scenario.name} [${i + 1}/${n}] ${run.error ? `${failed} ${run.error}` : `${Math.round(run.durationMs / 1000)}s — ${calls}${holes}`}`);
       }
       let rated: Awaited<ReturnType<typeof rateRuns>>;
       try {
