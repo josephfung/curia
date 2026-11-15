@@ -34,7 +34,7 @@ import { isTaskWakeReplyBinding } from './task-wake-reply.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import { inboundIsOneToOne, inboundSenderAuthenticated } from './outbound-entry-access.js';
 import type { AcquaintanceEvidence } from '../contacts/principal-acquaintance.js';
-import { cutsQuotedText, hasBookingPageLink, inboundTurnGuidance, looksLikeForward, looksLikeMakeRoom, looksLikeSpotCheckReply, parseSpotCheckVerdicts, spotCheckCandidateText } from './turn-guidance-triggers.js';
+import { cutsQuotedText, hasBookingPageLink, inboundTurnGuidance, looksLikeForward, looksLikeMakeRoom, looksLikeSpotCheckReply, ownEmailSubject, parseSpotCheckVerdicts, senderOwnText, spotCheckCandidateText } from './turn-guidance-triggers.js';
 import { hasBacklog, type PrincipalBacklogCounts } from '../agents/prompts/backlog-line.js';
 import type { AwaitingAnswer } from '../agents/prompts/awaiting-answers.js';
 import type { PrincipalBacklogSource } from './principal-backlog.js';
@@ -1330,8 +1330,9 @@ export class Dispatcher {
 
     // The sender's own words for the turn-activity registry (#2588), and whether they are
     // partial: clipped to the limit, or (email) with a quoted or forwarded part cut off. A
-    // hand-off must never pass on a partial message as the whole one.
-    const senderText = spotCheckCandidateText(payload.channelId, inboundText);
+    // hand-off must never pass on a partial message as the whole one. An email's own Subject
+    // leads (senderOwnText): it can carry the request on its own. The clip counts it too.
+    const senderText = senderOwnText(payload.channelId, inboundText);
     const senderTextPartial = senderTextExceedsClip(senderText) || cutsQuotedText(payload.channelId, inboundText);
 
     // Trusted task metadata: originator + (when suppressing) auto-gen sender block for skills.
@@ -1346,7 +1347,8 @@ export class Dispatcher {
       // A channel-supplied linkedTask is stripped in mergeTaskMetadata; this one is ours.
       ...(linkedTask ? { linkedTask } : {}),
       // For the note other turns of the same person see (#2588): the sender's own words,
-      // scanned, before any preamble and (email) without the Subject line or quoted thread.
+      // scanned, before any preamble and (email) with its own Subject but no reply or forward
+      // subject and no quoted thread.
       // The finding count only when a scan ran: a missing scan is not a clean one. No text
       // when it may carry a sign-in code (any code registered, or the lookup failed): the
       // code must not be repeated into other turns (#2017). Fails closed.
@@ -2038,10 +2040,13 @@ export class Dispatcher {
       const ownText = personTurnSourceText(content);
       // 6-8 character shapes anywhere in the principal's own text; 4-5 character ones only
       // when the message is essentially just the code or names it after a code keyword
-      // (extractShortRelayedCodes), judged below an email's Subject line.
+      // (extractShortRelayedCodes), judged below an email's Subject line, and in its own
+      // Subject on its own: the sender-text stamp carries that subject (senderOwnText), so a
+      // short code there must block the stamp too.
       const candidates = [
         ...extractCodeCandidates(ownText),
         ...extractShortRelayedCodes(spotCheckCandidateText(channelId, ownText)),
+        ...extractShortRelayedCodes(ownEmailSubject(channelId, ownText)),
       ];
       const registered = registerCodes(verification, open, candidates);
       return {

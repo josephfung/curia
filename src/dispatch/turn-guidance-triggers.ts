@@ -229,6 +229,36 @@ export function spotCheckCandidateText(channelId: string, content: string): stri
   return (quoteAt === -1 ? lines : lines.slice(0, quoteAt)).join('\n').trim();
 }
 
+// A reply's or forward's subject: the text after the prefix is the earlier message's subject.
+const REPLY_OR_FORWARD_SUBJECT = /^(re|fwd?|fw)\s*:/i;
+const EMAIL_SUBJECT_LINE = /^Subject:([^\n]*)/;
+
+/**
+ * The email's own Subject (#2588): the text after "Subject:" on the channel's first line,
+ * trimmed. Empty off email, with no Subject line, or for a reply or forward subject ("Re:",
+ * "Fwd:", "Fw:"), whose text is the earlier message's subject, not the sender's own words.
+ */
+export function ownEmailSubject(channelId: string, content: string): string {
+  if (channelId !== 'email') return '';
+  const subject = EMAIL_SUBJECT_LINE.exec(content)?.[1]?.trim() ?? '';
+  return REPLY_OR_FORWARD_SUBJECT.test(subject) ? '' : subject;
+}
+
+/**
+ * The sender's own words, as the dispatcher stamps them for the turn-activity registry
+ * (#2588): spotCheckCandidateText, with an email's own Subject (ownEmailSubject) first as
+ * "Subject: <subject>". A new email can carry its whole request in the subject ("Change the
+ * booking to 11am" over "Please make this change."), so the note and a hand-off need it. Quoted
+ * and forwarded text stays cut (cutsQuotedText), and a reply's or forward's subject is left
+ * out: neither is the sender's own words.
+ */
+export function senderOwnText(channelId: string, content: string): string {
+  const body = spotCheckCandidateText(channelId, content);
+  const subject = ownEmailSubject(channelId, content);
+  if (subject === '') return body;
+  return body === '' ? `Subject: ${subject}` : `Subject: ${subject}\n\n${body}`;
+}
+
 /**
  * Whether spotCheckCandidateText cuts any content from this email: a quoted or forwarded part
  * below the first quote marker, with something in it (#2588). The Subject line does not
