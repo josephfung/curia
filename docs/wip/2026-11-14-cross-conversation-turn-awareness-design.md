@@ -10,7 +10,7 @@ What was built differs from the design below in these places. ADR-053's "Cross-c
 awareness (#2588)" section describes the built behaviour.
 
 **Narrows a decision made with the principal (decision 2, §3).** A held call shows the
-other turn's tool, target and time only when the held turn is the principal's, Curia's own
+other turn's tool, target and time only when the turn whose call is held is the principal's, Curia's own
 work, or the same resolved contact's. Any other person's turn gets one generic line
 ("another conversation already acted on this same target"), not tool, target and time. This
 came from the security review: detail let a stranger learn, and steer, the principal's
@@ -54,12 +54,28 @@ From rulings during the build:
   withheld when the inbound's scan count is not a known zero. The note stays in the system
   string, JSON-quoted.
 - **Email one-to-one** reuses `contact-recent-history`'s private-audience rule.
-- **Hand-off eligibility:** the note's hand-off line and the tool appear only with lanes on and
-  an eligible handing turn (the root inbound, full unclipped text, no follow-up drained since,
-  clean scan). Otherwise the turn does the work itself.
-- **Held corrections carry `liveTurn: false`** (#1126); a direct inject stays live.
+- **Hand-off eligibility:** the note's hand-off line and the tool appear only with lanes on, an
+  eligible handing turn (the root inbound, full unclipped text, no follow-up drained since,
+  clean scan, a sender the channel authenticated, SMS excepted as in `authority.ts`), and the
+  tool actually in the turn's tools (no allowlist, registered). An email with a quoted or
+  forwarded part cut off counts as clipped. Otherwise the turn does the work itself.
+- **Who reads the note:** a person's inbound root turn only (not a wake, a delegated task or a
+  synthetic turn other than a hand-off recovery), on a laned human channel, with a one-to-one
+  audience. Groups, channel threads and cc'd email get none; scheduled jobs and wakes get none.
+  Listed turns are laned human-channel roots only.
+- **Sign-in codes:** no sender text is stamped when any code registered (any verification
+  status) or the lookup failed; the note and the hand-off scrub tracked codes again at use.
+- **Held corrections carry `liveTurn: false`** (#1126); a direct inject copies the handing
+  task's own `liveTurn`.
 - **The handing turn waits up to 30 s** for the target to drain the message, then reports it
-  as passed on.
+  as passed on. `tryInjectIntoTask` is given the target's conversation and refuses a lane
+  held elsewhere.
+- **Recovery:** a correction the person was told was passed on or held, then lost in process
+  (late return, not taken within 10 minutes, root ended or dropped with it held, a wake that
+  cannot take it), is re-run as a synthetic coordinator turn on the handing conversation,
+  modelled on the late-delegation wake. A restart still loses it.
+- **Decline reasons** each have their own phrase: finished, no longer active, busy (no lane),
+  not the same person, not one-to-one, cap, closing, ineligible, tool error, internal error.
 - **Testing:** the scenario harness can't run two turns at once, so scenarios cover the
   finished-turn path and the live hand-off is integration-tested only.
 
