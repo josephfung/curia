@@ -5440,9 +5440,13 @@ export class OutboundGateway {
     const said = args.digest ?? (refusal !== undefined && isDigestRefusal(refusal) && reason === PRINCIPAL_SEND_REFUSALS[refusal]
       ? PRINCIPAL_SEND_DIGEST_REASONS[refusal]
       : principalFacing(reason));
+    // A hold whose marker couldn't be written is not durable (PR #2625 review): nothing stops a later
+    // attempt looking at the draft again, so the item mustn't say Curia left it for the principal.
+    const unrecorded = marker !== null && !markerWritten;
     // An operational stop (a failure to check) was not a decision about the reply (R44).
-    const heading = args.kind === 'other' ? 'Not sent from your mailbox' : 'Left as a draft in your mailbox';
-    const reported = await this.publishMailboxDigest(`${heading}: ${what}. ${said}`, options);
+    const heading = args.kind === 'other' || unrecorded ? 'Not sent from your mailbox' : 'Left as a draft in your mailbox';
+    const told = unrecorded ? said.replace(IN_YOUR_DRAFTS, `Curia couldn't record that it held it, so it may look at it again. ${IN_YOUR_DRAFTS}`) : said;
+    const reported = await this.publishMailboxDigest(`${heading}: ${what}. ${told}`, options);
     if (!reported && markerWritten && marker) {
       this.log.error({ draftId, refusal }, 'outbound-gateway: a held draft\'s digest item failed — marking it unreported, so the next attempt files it');
       await marker(false);

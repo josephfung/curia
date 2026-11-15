@@ -70,6 +70,21 @@ function draftPrefix(draftId: string): string {
   return `${PRINCIPAL_SEND_LEDGER_PREFIX}/${encodeURIComponent(draftId)}-`;
 }
 
+/** Marker writes in this process, for markerPath's tiebreak. */
+let markerSeq = 0;
+
+/**
+ * A new marker's path: the draft's prefix, the time, and a per-process sequence (PR #2625 review).
+ * Paths are unique among live working docs, and two markers for one draft can land in the same
+ * millisecond (a hold, then its `reported: false` follow-up): with the time alone the second
+ * create fails and its marker is lost. Both parts are fixed-width, so paths still sort in write
+ * order, which "latest" (recordSent, heldForDraft) relies on. Across a restart the time moves on.
+ */
+function markerPath(draftId: string): string {
+  markerSeq = (markerSeq + 1) % 1_000_000;
+  return `${draftPrefix(draftId)}${Date.now()}-${String(markerSeq).padStart(6, '0')}.md`;
+}
+
 function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === 'string');
 }
@@ -118,7 +133,7 @@ export class PrincipalSendLedger {
 
   /** Writes the marker before the send. Create-only, at a timestamped path. Throws on a repo failure. */
   async recordSending(e: Omit<PrincipalSendEntry, 'outcome' | 'messageId'> & { mailbox: string }): Promise<void> {
-    const path = `${draftPrefix(e.draftId)}${Date.now()}.md`;
+    const path = markerPath(e.draftId);
     await this.docs.create({
       path,
       type: PRINCIPAL_SEND_DOC_TYPE,
@@ -142,7 +157,7 @@ export class PrincipalSendLedger {
     /** false: the hold's digest item failed to publish (#2591 review). Absent or true: reported. */
     reported?: boolean;
   }): Promise<void> {
-    const path = `${draftPrefix(e.draftId)}${Date.now()}.md`;
+    const path = markerPath(e.draftId);
     await this.docs.create({
       path,
       type: PRINCIPAL_SEND_DOC_TYPE,
@@ -164,7 +179,7 @@ export class PrincipalSendLedger {
    * Create-only like recordSending. Throws on a repo failure.
    */
   async recordLimitStop(e: { draftId: string; mailbox: string; reason: LimitStopReason; at: string }): Promise<void> {
-    const path = `${draftPrefix(e.draftId)}${Date.now()}.md`;
+    const path = markerPath(e.draftId);
     await this.docs.create({
       path,
       type: PRINCIPAL_SEND_DOC_TYPE,
