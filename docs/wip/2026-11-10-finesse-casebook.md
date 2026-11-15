@@ -1,12 +1,6 @@
 # Finesse casebook
 
-Draft for review · Issue #2556 · Started 2026-11-10
-
-Revised 2026-11-14: in task 50, Tomás now writes that he will be out sick tomorrow (it used to say today).
-
-Also revised 2026-11-14: added **Who writes** (below), and a "Who writes" line to every case. It settles when a message comes from Curia (signed Alex) and when it is a draft for Avery to send. The biggest change: emails to customers and investors now come from Avery. Cases 51d, 53b, 54b, 54e, 58b, 58c and 59a changed with it, and the voice notes in 52d, 55a, 55c, 56b, 57b and 59d were corrected after a first round of grading.
-
-Corrected 2026-11-14: Curia can send from Avery's own mailbox when Avery asks it to on the spot (the first version said it never could). **Who writes**, 58b and an open question changed with it. 57c and 57d now say the teacher and the contractor organized those events.
+Draft for review · Issue #2556 · Started 2026-11-10 · Last revised 2026-11-14 (see **Revision history** at the end)
 
 This casebook describes situations an executive assistant handles every week: moving meetings, asking for time, saying no, keeping family happy. For each one it says what we think the right call is, and what a good message sounds like. It is the source of truth for a set of automated tests. When the tests and this document disagree, this document wins, and the tests are changed to match.
 
@@ -781,3 +775,11 @@ Someone writes to Avery informally, copying Curia, asking to get together. Curia
 **Open questions for reviewers**
 - In 59b, would you reply to Catherine as the assistant, or draft for Avery?
 - In 59e, Kevin wrote to Avery. Is a decline from Alex right, or should it be a draft for Avery, or no reply at all?
+
+---
+
+## Revision history
+
+- **2026-11-14, task 50.** Tomás now writes that he will be out sick tomorrow (it used to say today).
+- **2026-11-14, who writes.** Added **Who writes** (under For reviewers), and a "Who writes" line to every case. It settles when a message comes from Curia (signed Alex) and when it is a draft for Avery to send. The biggest change: emails to customers and investors now come from Avery. Cases 51d, 53b, 54b, 54e, 58b, 58c and 59a changed with it, and the voice notes in 52d, 55a, 55c, 56b, 57b and 59d were corrected after a first round of grading.
+- **2026-11-14, correction.** Curia can send from Avery's own mailbox when Avery asks it to on the spot (the first version said it never could). **Who writes**, 58b and an open question changed with it. 57c and 57d now say the teacher and the contractor organized those events.
