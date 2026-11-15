@@ -129,7 +129,9 @@ async function agree(argv: string[]): Promise<number> {
   let spend = 0;
   if (candidates.length > 0) {
     // Only for the vault's OpenRouter key: the judge goes through the stack's provider (#911).
-    const stack = await createTestModeStack({});
+    // No agent runs here, so every tier is routed to a candidate (an OpenRouter model): the
+    // configured routing could name a provider the vault has no key for, and fail the boot.
+    const stack = await createTestModeStack({ model: candidates[0]! });
     try {
       const principal = stack.principalContactId ? await stack.contactService.getContact(stack.principalContactId) : undefined;
       // Every candidate first: an unpriced model fails here, before any paid call.

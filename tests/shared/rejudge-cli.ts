@@ -288,7 +288,9 @@ async function main(): Promise<void> {
   }
 
   // Only for the vault's OpenRouter key: the judge goes through the stack's provider (#911).
-  const stack = await createTestModeStack({});
+  // No agent runs here, so every tier is routed to the default judge (an OpenRouter model):
+  // the configured routing could name a provider the vault has no key for, and fail the boot.
+  const stack = await createTestModeStack({ model: JUDGE_MODEL });
   let exitCode = 0;
   try {
     const principal = stack.principalContactId ? await stack.contactService.getContact(stack.principalContactId) : undefined;
