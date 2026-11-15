@@ -93,15 +93,17 @@ describe('extractActionTargets', () => {
     const t = await extractActionTargets('t', { r: X, s: Y }, {
       principalContactId: undefined,
       isContact: async (id) => {
-        if (id === X) throw new Error('db');
+        // The rejection quotes the id it was given, as a driver error can.
+        if (id === X) throw new TypeError(`no row for ${id}`);
         return true;
       },
       logger,
     });
     expect(t).toEqual([{ kind: 'contact', value: Y }]);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]![0]).toMatchObject({ idKind: 'uuid' });
-    expect(JSON.stringify(warn.mock.calls[0]![0])).not.toContain(X);
+    const fields = warn.mock.calls[0]![0] as Record<string, unknown>;
+    expect(fields).toEqual({ errName: 'TypeError', toolName: 't', idKind: 'uuid' });
+    expect(JSON.stringify(fields)).not.toContain(X);
   });
 });
 
@@ -170,18 +172,23 @@ describe('extractActionTargets email addresses (#2588)', () => {
     expect(debug).toHaveBeenCalledWith(expect.objectContaining({ lookups: 10, lookupCandidates: 11 }), expect.any(String));
   });
 
-  it('a rejected email lookup is logged without the address', async () => {
+  it('a rejected email lookup is logged without the address, even when its error quotes it', async () => {
     const warn = vi.fn();
     const logger = { warn, debug: vi.fn(), info: vi.fn(), error: vi.fn() } as unknown as Logger;
-    const t = await extractActionTargets('t', { to: 'barbara@example.com' }, emailDeps({
-      contactIdForEmail: async () => {
-        throw new Error('db down');
+    const t = await extractActionTargets('t', { to: 'barbara@example.com', cc: 'carol@example.com' }, emailDeps({
+      contactIdForEmail: async (email) => {
+        if (email === 'carol@example.com') throw `lookup failed for ${email}`;
+        throw new Error(`no identity for ${email}`);
       },
       logger,
     }));
     expect(t).toEqual([{ kind: 'tool', value: 't' }]);
-    expect(warn.mock.calls[0]![0]).toMatchObject({ idKind: 'email' });
-    expect(JSON.stringify(warn.mock.calls[0]![0])).not.toContain('barbara');
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls.map((c) => c[0])).toEqual([
+      { errName: 'Error', toolName: 't', idKind: 'email' },
+      { errName: 'string', toolName: 't', idKind: 'email' },
+    ]);
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/barbara|carol/);
   });
 
   it('without an email lookup, addresses are ignored', async () => {

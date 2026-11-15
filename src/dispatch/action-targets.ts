@@ -125,6 +125,11 @@ export interface ActionTargetDeps {
   logger?: Logger;
 }
 
+/** An error's class name, never its message: safe for identifier-free logs. */
+export function errorName(err: unknown): string {
+  return err instanceof Error ? err.name : typeof err;
+}
+
 type Lookup =
   | { kind: 'uuid'; id: string; run: () => Promise<boolean> }
   | { kind: 'email'; run: () => Promise<string | undefined> };
@@ -197,8 +202,10 @@ export async function extractActionTargets(
   settled.forEach((outcome, i) => {
     const lookup = lookups[i]!;
     if (outcome.status === 'rejected') {
+      // The error's class only: a lookup error's message or stack can quote the address or
+      // id it was given, and this log carries no identifiers.
       deps.logger?.warn(
-        { err: outcome.reason, toolName, idKind: lookup.kind },
+        { errName: errorName(outcome.reason), toolName, idKind: lookup.kind },
         'cross-turn backstop: contact lookup failed — treating the value as not a contact',
       );
       return;

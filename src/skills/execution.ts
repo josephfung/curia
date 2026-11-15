@@ -167,7 +167,7 @@ import { splitCommaSeparatedAddresses } from '../contacts/principal-carveout-par
 import type { ErrorType } from '../errors/types.js';
 import type { VerificationRuntime } from '../verification/index.js';
 import type { ActionTarget, TurnActivityRegistry } from '../dispatch/turn-activity.js';
-import { extractActionTargets } from '../dispatch/action-targets.js';
+import { errorName, extractActionTargets } from '../dispatch/action-targets.js';
 import { inferOriginatorResolution, originatorIsSystem } from '../dispatch/turn-lanes.js';
 import {
   markCrossTurnHold,
@@ -1641,8 +1641,9 @@ export class ExecutionLayer {
       });
       return { turnActivity, taskEventId, targets, recordOnly };
     } catch (err) {
+      // The error's class only: recipient and contact lookups can quote an address or a name.
       skillLogger.error(
-        { err, toolName, taskEventId },
+        { errName: errorName(err), toolName, taskEventId },
         'cross-turn backstop: target extraction failed — proceeding unchecked (fail-open)',
       );
       return null;
@@ -1681,8 +1682,9 @@ export class ExecutionLayer {
       text = await this.renderCrossTurnHold(matches, toolName, backstop, skillLogger);
     } catch (err) {
       // The call is still held: nothing was recorded for it, and the model is told to re-issue.
+      // The error's class only: the message could quote a contact's name.
       skillLogger.error(
-        { err, toolName, taskEventId },
+        { errName: errorName(err), toolName, taskEventId },
         'cross-turn backstop: could not build the hold message — returning the generic one',
       );
       text = renderGenericBackstopHold();
@@ -1728,7 +1730,11 @@ export class ExecutionLayer {
           else skillLogger.debug({ toolName, taskEventId, contactId: id }, 'cross-turn backstop: no contact for a name lookup');
         } catch (err) {
           // The line falls back to "a contact"; the hold itself does not depend on the name.
-          skillLogger.warn({ err, toolName, taskEventId, contactId: id }, 'cross-turn backstop: contact name lookup failed');
+          // The error's class only: a lookup error could quote the contact's details.
+          skillLogger.warn(
+            { errName: errorName(err), toolName, taskEventId, contactId: id },
+            'cross-turn backstop: contact name lookup failed',
+          );
         }
       }));
     }
