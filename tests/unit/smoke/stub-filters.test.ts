@@ -159,6 +159,37 @@ describe('CalendarState', () => {
     expect(search({ attendeeEmail: 'leo@example.test' })).toEqual(['Lunch']);
   });
 
+  it('shows a seen fixture event in a later listing it was moved into, whose fixture leaves it out (#2588)', () => {
+    const state = new CaseToolState();
+    const wedFixture = { events: [{ id: 'x', title: 'Review', startTime: '2026-10-07T13:00:00-04:00', endTime: '2026-10-07T14:00:00-04:00' }], count: 1 };
+    const thuFixture = { events: [], count: 0 };
+    const thu = { timeMin: '2026-10-08T00:00:00-04:00', timeMax: '2026-10-09T00:00:00-04:00' };
+    const list = (fixture: Record<string, unknown>, input: Record<string, unknown>) =>
+      applyCaseWrites('calendar-list-events', structuredClone(fixture), input, state) as { events: Array<{ id: string; startTime: string }>; count: number };
+    expect(list(wedFixture, wed).events.map(e => e.id)).toEqual(['x']);
+    applyCaseWrites('calendar-update-event', { event: {} }, { eventId: 'x', start: '2026-10-08T13:00:00-04:00', end: '2026-10-08T14:00:00-04:00' }, state);
+    const moved = list(thuFixture, thu);
+    expect(moved.events).toEqual([expect.objectContaining({ id: 'x', startTime: '2026-10-08T13:00:00-04:00' })]);
+    expect(moved.count).toBe(1);
+    // Wednesday's own fixture still lists it, but it now matches only Thursday.
+    expect(list(wedFixture, wed).events).toEqual([]);
+    // Deleted after the move: gone from Thursday too.
+    applyCaseWrites('calendar-delete-event', { deleted: true }, { eventId: 'x' }, state);
+    expect(list(thuFixture, thu).events).toEqual([]);
+  });
+
+  it('replays a cleared free-text field, so the old value stops matching (#2588)', () => {
+    const state = new CaseToolState();
+    applyCaseWrites('calendar-create-event', { event: {} }, { title: 'Sync', start: '2026-10-07T15:00:00-04:00', end: '2026-10-07T15:30:00-04:00', location: 'Boardroom' }, state);
+    const search = (query: string) =>
+      (applyCaseWrites('calendar-list-events', { events: [], count: 0 }, { ...wed, query }, state) as { events: unknown[] }).events.length;
+    expect(search('boardroom')).toBe(1);
+    applyCaseWrites('calendar-update-event', { event: {} }, { eventId: 'evt-created-1', location: '' }, state);
+    expect(search('boardroom')).toBe(0);
+    // A field the update leaves out is kept.
+    expect(search('sync')).toBe(1);
+  });
+
   it('replays only the written events a listing would return: window, query and moves (#2588)', () => {
     const state = new CaseToolState();
     applyCaseWrites('calendar-create-event', { event: {} }, { title: 'Sync with Priya', start: '2026-10-07T15:00:00-04:00', end: '2026-10-07T15:30:00-04:00' }, state);
