@@ -5,7 +5,7 @@ import { SettingsLayout } from './SettingsPage';
 import { errorMessage } from '../components/settings/ConfigHistory';
 import { PrincipalMailboxesSection } from '../components/PrincipalMailboxesSection';
 
-// Settings → Personality → Email & Calendar (#2475): the principal's own mailboxes and the
+// Settings → Behaviour → Email & Calendar (#2475): the principal's own mailboxes and the
 // calendars read through them. Curia's own email accounts stay under Channels → Email.
 //
 // Every mailbox call goes through the email channel's Nylas API key, so without it the page

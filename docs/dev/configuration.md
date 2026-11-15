@@ -666,7 +666,7 @@ there you can **Set**, **Replace** or **Remove** a secret; an optional tool secr
 tool, MCP server, channel or email account requires asks for confirmation first and names what will stop
 working: tool secrets on their next call, and channel credentials, MCP keys and email account grants after the
 next restart (they are read at boot). The principal's own mailboxes are not on this page: their grants are
-managed under **Settings → Personality → Email & Calendar** (the retired flat keys show here only while a
+managed under **Settings → Behaviour → Email & Calendar** (the retired flat keys show here only while a
 deferred migration still serves them, and a grant served that way is read on its next call). Removal deletes the vault row only; an
 environment fallback (`TAVILY_API_KEY`, a channel's `envFallback`) keeps supplying the value,
 and the page marks such a row **from environment**. The same operations are `PUT` and
