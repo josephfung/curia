@@ -182,6 +182,8 @@ export const CONTENT_BLOCK_REWRITE_INSTRUCTION_LINES: readonly string[] = [
   // #2615: the dispatcher sends this turn with an empty tool allowlist. What the turn already
   // did reaches the prompt separately (agents/prompts/prior-turn-actions.ts), never this brief.
   'This turn edits the draft only, so it has no tools.',
+  // The identity gate's detail suggests the contacts specialist, which this turn cannot reach.
+  'Where a finding says to look something up or resolve someone, rephrase or leave that part out.',
 ];
 
 /** Added to the brief for an audience-leak finding. A marker source too. */

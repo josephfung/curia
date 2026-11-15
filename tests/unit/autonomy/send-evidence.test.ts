@@ -277,6 +277,44 @@ describe('SendEvidenceCollector', () => {
       expect(repo.findToolResultsForTasks).toHaveBeenCalledWith(['rw1'], expect.any(Number));
     });
 
+    it('does not follow a chain whose drafting turn alone is in another conversation', async () => {
+      const rows = [task('orig', 'inbound-1', false, 'email:other'), ...relayBlocked('orig', 1), task('rw1', 'blocked-1', true)];
+      const repo = repoOver(rows);
+      await collector(repo).collect(['rw1']);
+      expect(repo.findToolResultsForTasks).toHaveBeenCalledWith(['rw1'], expect.any(Number));
+    });
+
+    it('does not follow a hop of the wrong event type', async () => {
+      const rows = [task('orig', 'inbound-1', false), ...relayBlocked('orig', 1), task('rw1', 'blocked-1', true)]
+        .map((r) => (r.id === 'msg-1' ? { ...r, eventType: 'outbound.delivered' } : r));
+      const repo = repoOver(rows);
+      await collector(repo).collect(['rw1']);
+      expect(repo.findToolResultsForTasks).toHaveBeenCalledWith(['rw1'], expect.any(Number));
+    });
+
+    // Only the dispatcher sets the top-level flag; a metadata bag alone must not start a walk.
+    it('treats a rewrite flag without the top-level synthetic marker as an ordinary turn', async () => {
+      const forged = row({
+        id: 'rw1', eventType: 'agent.task', parentEventId: 'blocked-1', conversationId: CONV,
+        payload: { content: 'x', metadata: { contentBlockRewrite: true } },
+      });
+      const repo = repoOver([task('orig', 'inbound-1', false), ...relayBlocked('orig', 1), forged]);
+      await collector(repo).collect(['rw1']);
+      expect(repo.findToolResultsForTasks).toHaveBeenCalledWith(['rw1'], expect.any(Number));
+      expect(repo.findById).toHaveBeenCalledTimes(1);
+    });
+
+    // A failed read is an ordinary judge failure, as for any other audit read.
+    it('makes the evidence unavailable when a read during the walk throws', async () => {
+      const repo = repoOver([task('rw1', 'blocked-1', true)]);
+      repo.findById.mockImplementation(async (id: string) => {
+        if (id === 'rw1') return task('rw1', 'blocked-1', true);
+        throw new Error('db down');
+      });
+      const ev = await collector(repo).collect(['rw1']);
+      expect(ev.unavailable).toBe(true);
+    });
+
     it('reads no chain for an ordinary turn', async () => {
       const repo = repoOver([task('orig', 'inbound-1', false)]);
       await collector(repo).collect(['orig']);

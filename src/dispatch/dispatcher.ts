@@ -148,6 +148,10 @@ function mergeTaskMetadata(
     [INBOUND_SCAN_FINDING_COUNT_KEY]: undefined,
     // Only the hand-off recovery publisher marks a re-run correction (#2588).
     [HANDOFF_RECOVERY_KEY]: undefined,
+    // Only the dispatcher's rewrite scheduling stamps these; the send review follows a rewrite's
+    // audit chain for evidence on the first (#2615, alongside the top-level syntheticTurn).
+    contentBlockRewrite: undefined,
+    contentBlockRetryAttempt: undefined,
     ...(trustedMeta ?? {}),           // trusted stamp wins last
   };
 }
