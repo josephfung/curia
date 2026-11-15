@@ -76,10 +76,15 @@ function quoteSource(quote: string, thread: readonly ThreadMessageProof[], audie
  * Why a reply's quote fails the proof (#2590), so the refusal can say which:
  *  - `not-in-thread`: no thread message holds the quoted text (or there is no quoted body, or no
  *    audience to prove it for). The quote may carry text from elsewhere.
- *  - `not-received`: a thread message holds the text, but `missing` (lowercased) never received
- *    it. Where several messages hold the text, the one missing the fewest is named.
+ *  - `not-received`: thread messages hold the text, but `missing` (lowercased) received none of
+ *    them, as far as the mailbox can vouch.
+ *  - `not-received-together`: every recipient received the text on some message, but no single
+ *    message reached them all (PR #2625 review). Naming anyone would name someone who got it.
  */
-export type QuoteProblem = { kind: 'not-in-thread' } | { kind: 'not-received'; missing: string[] };
+export type QuoteProblem =
+  | { kind: 'not-in-thread' }
+  | { kind: 'not-received'; missing: string[] }
+  | { kind: 'not-received-together' };
 
 /**
  * What is wrong with a reply's quote, or null when it shows only what a thread message every
@@ -93,14 +98,11 @@ export function quoteProblem(quote: string, thread: readonly ThreadMessageProof[
   const recipients = audience.map((a) => a.trim().toLowerCase());
   // No quoted body or no audience: nothing to name, so keep the general reason (fail closed).
   if (!quoted || recipients.length === 0) return { kind: 'not-in-thread' };
-  let missing: string[] | null = null;
-  for (const m of thread) {
-    if (!m.text.includes(quoted)) continue;
-    const absent = recipients.filter((r) => !m.receivedBy.has(r));
-    if (missing === null || absent.length < missing.length) missing = absent;
-  }
-  // quoteSource found no source, so a text match always leaves someone missing here.
-  return missing === null || missing.length === 0 ? { kind: 'not-in-thread' } : { kind: 'not-received', missing };
+  const matching = thread.filter((m) => m.text.includes(quoted));
+  if (matching.length === 0) return { kind: 'not-in-thread' };
+  // Named only when absent from every message holding the text: one who got it anywhere isn't missing.
+  const missing = recipients.filter((r) => matching.every((m) => !m.receivedBy.has(r)));
+  return missing.length > 0 ? { kind: 'not-received', missing } : { kind: 'not-received-together' };
 }
 
 /**

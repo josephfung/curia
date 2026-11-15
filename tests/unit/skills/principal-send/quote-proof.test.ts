@@ -178,7 +178,18 @@ describe('quoteProblem', () => {
     expect(quoteProblem(genuine, thread, ['dana@example.org', 'Bob@Example.org'])).toEqual({ kind: 'not-received', missing: ['bob@example.org'] });
   });
 
-  it('names the fewest missing recipients when several messages hold the text', () => {
+  // PR #2625 review: Bob got the text in one message, Cy in another. Neither is "missing"; no
+  // single message reached both, so the reason names no one rather than an arbitrary message's absentee.
+  it('is not-received-together when each recipient got the text, but on different messages', () => {
+    const sent = (id: string, to: string) => threadMessageProof(msg({
+      id, from: [{ email: 'avery@example.com' }], to: [{ email: to }], folders: ['SENT'], body: '<p>hello there</p>',
+    }), PRINCIPAL);
+    const quote = `${HEADER}<blockquote><p>hello there</p></blockquote>`;
+    expect(quoteProblem(quote, [sent('a', 'bob@x.org'), sent('b', 'cy@x.org')], ['bob@x.org', 'cy@x.org']))
+      .toEqual({ kind: 'not-received-together' });
+  });
+
+  it('names only recipients absent from every message holding the text', () => {
     const toBoth = threadMessageProof(msg({
       id: 'm0', from: [{ email: 'avery@example.com' }], to: [{ email: 'dana@example.org' }, { email: 'bob@example.org' }],
       folders: ['SENT'], body: '<p>Does Friday work?</p><p>Dana<br>416-555-0199</p><p>(fwd)</p>',
