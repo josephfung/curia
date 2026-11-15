@@ -166,6 +166,41 @@ describe('PrincipalSendLedger global lookups', () => {
     // A draft whose id shares the prefix is another draft.
     expect(await ledger.sentForDraft('d')).toBe(false);
   });
+
+  // #2591: a draft already held for the principal is theirs; a later wake must not try it again.
+  it('heldForDraft is true only for a held marker on that draft in that mailbox', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    // Marker paths are stamped with Date.now(): give each write of the same draft its own millisecond.
+    let ms = 1_794_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => ms++);
+    await ledger.recordSending({ ...entry, mode: 'autonomous' });
+    await ledger.recordLimitStop({ draftId: 'd1', mailbox: 'work', reason: 'daily_cap', at: entry.at });
+    // A send attempt or a limit stop is not a hold: a limit only says "not yet".
+    expect(await ledger.heldForDraft('d1', 'work')).toBe(false);
+    await ledger.recordHeld({ ...entry, mode: 'autonomous', reasonCode: 'review_hold' });
+    expect(await ledger.heldForDraft('d1', 'work')).toBe(true);
+    // Draft ids are per mailbox; a draft whose id shares the prefix is another draft.
+    expect(await ledger.heldForDraft('d1', 'personal')).toBe(false);
+    expect(await ledger.heldForDraft('d', 'work')).toBe(false);
+    vi.restoreAllMocks();
+  });
+
+  it('heldForDraft counts a held marker with no mailbox (written before the registry) for any mailbox', async () => {
+    const docs = makeDocs();
+    const ledger = new PrincipalSendLedger(docs, logger);
+    await ledger.recordHeld({ ...entry, mode: 'autonomous', reasonCode: 'review_hold' });
+    const doc = [...docs.docs.values()][0]!;
+    const { mailbox: _dropped, ...legacy } = doc.frontmatter;
+    docs.docs.set(doc.path, { ...doc, frontmatter: legacy });
+    expect(await ledger.heldForDraft('d1', 'personal')).toBe(true);
+  });
+
+  it('heldForDraft throws on a repo failure (the gateway decides what that means)', async () => {
+    const docs = makeDocs();
+    docs.listByPrefix.mockRejectedValue(new Error('db down'));
+    await expect(new PrincipalSendLedger(docs, logger).heldForDraft('d1', 'work')).rejects.toThrow('db down');
+  });
 });
 
 // #2475 Task 18: the ledger spans mailboxes.

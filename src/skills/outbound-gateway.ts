@@ -453,7 +453,7 @@ export interface OutboundGatewayConfig {
    * and the daily cap (final fixes A4). Absent: no markers, and an autonomous send is refused
    * (no_send_ledger).
    */
-  sendLedger?: Pick<PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentForConversation' | 'recentAutonomousSends' | 'sentForDraft' | 'list' | 'recordLimitStop' | 'limitStopsSince'>;
+  sendLedger?: Pick<PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentForConversation' | 'recentAutonomousSends' | 'sentForDraft' | 'heldForDraft' | 'list' | 'recordLimitStop' | 'limitStopsSince'>;
   /**
    * Every address that is the principal's: live mailbox addresses plus verified, active email
    * identities, lowercase (PrincipalMailboxes.principalEmailAddresses, #2475). Absent: the
@@ -485,7 +485,9 @@ export type PrincipalSendRefusal =
   // The task's draft writes could not be read (#2475 SF3): a failure to check, not not_curia_draft.
   | 'provenance_unreadable'
   // The contacts behind the thread's senders or the copied recipients could not be read (#2589).
-  | 'contacts_unreadable';
+  | 'contacts_unreadable'
+  // An earlier autonomous send of this draft was held for the principal (#2591): it is theirs now.
+  | 'already_held';
 
 /** How a limit refusal's agent-facing text starts (R47): the cue ceo-inbox's triage summary lists apart. */
 export const LIMIT_CUE = 'Waiting (limit): ';
@@ -531,14 +533,19 @@ export const PRINCIPAL_SEND_REFUSALS: Record<PrincipalSendRefusal, string> = {
   origin_unknown: `Curia couldn't confirm this work came from its own inbox check, so it didn't send on its own.${STILL_A_DRAFT}`,
   not_latest_message: `The reply doesn't answer the latest message on its thread, so Curia didn't send it on its own.${STILL_A_DRAFT}`,
   financial_details: `It contains bank or card details, which Curia never sends on its own.${STILL_A_DRAFT}`,
+  already_held: `This draft was already held for the principal, so it's theirs to send. Don't send or edit it again.${STILL_A_DRAFT}`,
 };
 
 /** How every principal-facing digest reason ends (#2474 final fixes A12). */
 const IN_YOUR_DRAFTS = "It's in your Drafts.";
 
-/** Refusals whose stop files a "Left as a draft" digest item (not_found and lookup_failed lead differently). */
+/**
+ * Refusals whose stop files a "Left as a draft" digest item (not_found and lookup_failed lead
+ * differently). already_held files none: the hold that came first already told the principal (#2591).
+ */
 type DigestRefusal = Exclude<PrincipalSendRefusal,
-  'mailbox_unavailable' | 'unknown_mailbox' | 'ambiguous_mailbox' | 'setting_off' | 'not_requested' | 'approval_replay' | 'send_unconfirmed' | 'not_found' | 'lookup_failed'>;
+  'mailbox_unavailable' | 'unknown_mailbox' | 'ambiguous_mailbox' | 'setting_off' | 'not_requested' | 'approval_replay' | 'send_unconfirmed' | 'not_found' | 'lookup_failed'
+  | 'already_held'>;
 
 /**
  * What the principal's digest item says for each refusal (#2474 final fixes A12, final review
@@ -744,6 +751,8 @@ const POLICY_HOLD_REFUSALS: Record<PrincipalSendRefusal, boolean> = {
   has_attachments: true,
   thread_cooldown: true,
   daily_cap: true,
+  // #2591: the earlier hold stands; refusing a repeat attempt is the rule working.
+  already_held: true,
 };
 
 /** Whether a principal-send refusal is a policy hold rather than a failure (#2587). */
@@ -4800,6 +4809,20 @@ export class OutboundGateway {
 
     let autonomy: AutonomyRead | undefined;
     if (autonomous) {
+      // A draft already held for the principal is theirs to send (#2591): a later wake (a Bullpen
+      // thread closing, a resumed task) must not try it again. First, and quietly: no new marker
+      // and no digest item, since the hold that came first already told the principal why. An
+      // unreadable ledger fails closed, as every other ledger read here does.
+      if (this.sendLedger) {
+        let held: boolean;
+        try {
+          held = await this.sendLedger.heldForDraft(draftId, mailboxId);
+        } catch (err) {
+          this.log.warn({ ...grantSafeErrorFields(err), draftId, mailboxId }, 'outbound-gateway: send ledger unreadable — cannot rule out an earlier hold, not sending on its own');
+          return stop('no_send_ledger');
+        }
+        if (held) return refuse('already_held');
+      }
       // An outsider writing to Curia's own address does not start a send from the principal's (D4.7).
       if (isOutsiderOriginated(options.authority.taskMetadata)) return stop('outsider_originated');
       // Only the inbox check's own lineage sends on Curia's own (#2474 final fixes A9, security

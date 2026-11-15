@@ -597,6 +597,8 @@ export function inMemorySendLedger(runStore: () => PrincipalSendEntry[] | undefi
       && (e.conversationIdsUnreadable === true || e.conversationIds.some(id => ids.includes(id))) && recent(e, sinceEpochMs))),
     recentAutonomousSends: async (sinceEpochMs, scan) => (scan ?? entries()).filter(e => e.mode === 'autonomous' && e.outcome !== 'held' && e.outcome !== 'limited' && recent(e, sinceEpochMs)),
     sentForDraft: async (draftId) => entries().some(e => e.draftId === draftId && e.outcome === 'sent'),
+    // As production (#2591): a held marker on the draft in this mailbox, or one with no mailbox.
+    heldForDraft: async (draftId, mailbox) => entries().some(e => e.draftId === draftId && e.outcome === 'held' && (e.mailbox === undefined || e.mailbox === mailbox)),
   };
 }
 
