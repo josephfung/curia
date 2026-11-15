@@ -7207,6 +7207,27 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(await ledger.heldForDraft('d1', 'default')).toBeNull();
       });
 
+      // CodeRabbit (PR #2625, round 3): with an unrecorded hold, a reason that says Curia "left it for
+      // you" would contradict "couldn't record that it held it". The wording turns neutral.
+      it('with the real ledger, an unrecorded hold\'s reason never says Curia left it for you', async () => {
+        const ledger = realLedger({ failCreate: true });
+        const withFile = autoDraft({ attachments: [{ id: 'a1', filename: 'deck.pdf', contentType: 'application/pdf', size: 10 }] as never });
+        const { gw } = makeAuto({ client: autoClient(withFile), ledger: ledger as never });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'has_attachments' });
+        const summary = String(reports()[0]!['summary']);
+        expect(summary).toBe(`${NOT_SENT} The reply has attachments, so Curia didn't send it on its own. Curia couldn't record that it held it, so it may look at it again.${IN_DRAFTS}`);
+      });
+
+      // CodeRabbit (PR #2625, round 3): a stop reached before the ledger check (no task) with no
+      // ledger wired writes no marker, so it is an unrecorded hold, not "Left as a draft".
+      it('treats a hold with no ledger wired as unrecorded', async () => {
+        const { gw } = makeAuto({ withoutLedger: true });
+        expect(await gw.sendPrincipalDraft('d1', { authority: auto.authority })).toMatchObject({ refusal: 'not_curia_draft' });
+        const summary = String(reports()[0]!['summary']);
+        expect(summary.startsWith(NOT_SENT)).toBe(true);
+        expect(summary).toContain("Curia couldn't record that it held it, so it may look at it again.");
+      });
+
       // The prod sequence end to end, through the in-memory ledger rather than a mocked lookup.
       it('holds once, then refuses a later wake quietly: one digest item in all', async () => {
         const ledger = inMemorySendLedger(() => undefined);

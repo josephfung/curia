@@ -5417,6 +5417,9 @@ export class OutboundGateway {
       const threadId = draft.threadId;
       const recipients = [...new Set([...draft.to, ...draft.cc, ...draft.bcc].map((r) => r.email.trim().toLowerCase()))].filter((r) => r && !isPrincipal(r));
       marker = async (reported?: false) => {
+        // No ledger wired (a stop that runs before the ledger check, CodeRabbit round 3): nothing is
+        // written, so the hold is unrecorded, not "written".
+        if (!this.sendLedger) return false;
         try {
           await this.sendLedger?.recordHeld({
             draftId,
@@ -5461,7 +5464,11 @@ export class OutboundGateway {
     const unrecorded = marker !== null && !markerWritten;
     // An operational stop (a failure to check) was not a decision about the reply (R44).
     const heading = args.kind === 'other' || unrecorded ? 'Not sent from your mailbox' : 'Left as a draft in your mailbox';
-    const told = unrecorded ? said.replace(IN_YOUR_DRAFTS, `Curia couldn't record that it held it, so it may look at it again. ${IN_YOUR_DRAFTS}`) : said;
+    // A reason saying Curia "left it for you" would contradict that too (CodeRabbit round 3).
+    const told = unrecorded
+      ? said.replace(/, so Curia left it for you\./g, ", so Curia didn't send it on its own.")
+        .replace(IN_YOUR_DRAFTS, `Curia couldn't record that it held it, so it may look at it again. ${IN_YOUR_DRAFTS}`)
+      : said;
     const reported = await this.publishMailboxDigest(`${heading}: ${what}. ${told}`, options);
     if (!reported && markerWritten && marker) {
       this.log.error({ draftId, refusal }, 'outbound-gateway: a held draft\'s digest item failed — marking it unreported, so the next attempt files it');
