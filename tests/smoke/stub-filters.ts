@@ -14,7 +14,7 @@
 // (#2494), so a case replays what the coordinator sees in production. The case writes only
 // the facts: `cause`, `message`, `work_product`.
 
-import { applyCaseWrites, type CaseToolState } from '../shared/tool-state.js';
+import { applyCaseWrites, eventMatchesListing, type CaseToolState } from '../shared/tool-state.js';
 import { declineNextStep } from '../../src/agents/prompts/delegate-result-guidance.js';
 import { isDeclineCause } from '../../src/agents/specialist-decline.js';
 
@@ -58,19 +58,7 @@ function time(v: unknown): number | undefined {
 /** calendar-list-events: events overlapping [timeMin, timeMax), matching query and attendee. */
 function filterEvents(data: Json, input: Json): Json {
   if (!Array.isArray(data['events'])) return data;
-  const min = time(input['timeMin']);
-  const max = time(input['timeMax']);
-  const query = typeof input['query'] === 'string' ? input['query'].toLowerCase() : '';
-  const attendee = typeof input['attendeeEmail'] === 'string' ? input['attendeeEmail'].toLowerCase() : '';
-  const events = (data['events'] as Json[]).filter((e) => {
-    const start = time(e['startTime']);
-    const end = time(e['endTime']) ?? start;
-    if (min !== undefined && end !== undefined && end <= min) return false;
-    if (max !== undefined && start !== undefined && start >= max) return false;
-    if (query && !`${text(e['title'])} ${text(e['description'])} ${text(e['location'])}`.includes(query)) return false;
-    if (attendee && !text(e['participants']).includes(attendee)) return false;
-    return true;
-  });
+  const events = (data['events'] as Json[]).filter((e) => eventMatchesListing(e, input));
   const limit = typeof input['maxResults'] === 'number' ? input['maxResults'] : undefined;
   const kept = limit !== undefined ? events.slice(0, limit) : events;
   return { ...data, events: kept, count: kept.length };
