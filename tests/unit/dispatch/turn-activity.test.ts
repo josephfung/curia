@@ -12,6 +12,7 @@ import {
   MAX_TRACKED_ACTIONS,
   MAX_ACTIONS_PER_ROOT,
   MAX_RUNNING_ROOT_AGE_MS,
+  isAuthenticatedRoot,
   type ActionTarget,
   type TaskStartInput,
 } from '../../../src/dispatch/turn-activity.js';
@@ -73,6 +74,8 @@ const VOICE_SEED = {
   originatorContactId: 'contact-p',
   originatorResolved: true,
   originatorIsSystem: false,
+  // Voice stamps every originator unauthenticated (stamp-originator.ts).
+  originatorAuthenticated: false,
 };
 
 describe('TurnActivityRegistry audience flag', () => {
@@ -82,6 +85,40 @@ describe('TurnActivityRegistry audience flag', () => {
     const group = start(registry, 'grp', { channelId: 'signal', conversationId: 'signal:group=abc' });
     expect(dm.audienceOneToOne).toBe(true);
     expect(group.audienceOneToOne).toBe(false);
+  });
+});
+
+describe('TurnActivityRegistry originator authentication', () => {
+  const originator = (authenticated: unknown) => ({
+    originator: { contactId: 'contact-p', channel: 'email', systemRole: 'principal', initiatedAt: null, authenticated },
+  });
+
+  it('is read from the root task\'s stamped originator, fail-closed', () => {
+    const { registry } = setup();
+    expect(start(registry, 'yes', { metadata: originator(true) }).originatorAuthenticated).toBe(true);
+    expect(start(registry, 'no', { metadata: originator(false) }).originatorAuthenticated).toBe(false);
+    // Only exactly true counts: a truthy non-boolean, a missing flag or no originator is false.
+    expect(start(registry, 'str', { metadata: originator('true') }).originatorAuthenticated).toBe(false);
+    expect(start(registry, 'none', { metadata: undefined }).originatorAuthenticated).toBe(false);
+  });
+
+  it('an auto root takes its seed\'s flag, and the root task\'s own stamp fills it in later', () => {
+    const { registry } = setup();
+    expect(registry.ensureRoot('v', { ...VOICE_SEED, conversationId: 'call-v' }).originatorAuthenticated).toBe(false);
+    expect(registry.ensureRoot('a', { ...VOICE_SEED, conversationId: 'call-a', originatorAuthenticated: true }).originatorAuthenticated).toBe(true);
+    // ensureRoot first, then the same id starts as a task carrying an authenticated stamp.
+    registry.ensureRoot('m', { ...VOICE_SEED, conversationId: 'conv-m' });
+    expect(start(registry, 'm', { metadata: originator(true) }).originatorAuthenticated).toBe(true);
+  });
+
+  it('isAuthenticatedRoot counts an authenticated stamp, and SMS, web and CLI by channel', () => {
+    const { registry } = setup();
+    expect(isAuthenticatedRoot(start(registry, 'sig', { channelId: 'signal', metadata: originator(true) }))).toBe(true);
+    expect(isAuthenticatedRoot(start(registry, 'forged', { channelId: 'email', metadata: originator(false) }))).toBe(false);
+    for (const channelId of ['sms', 'web', 'cli']) {
+      expect(isAuthenticatedRoot(start(registry, `c-${channelId}`, { channelId, metadata: originator(false) }))).toBe(true);
+    }
+    expect(isAuthenticatedRoot(registry.ensureRoot('voice', { ...VOICE_SEED, conversationId: 'call-x' }))).toBe(false);
   });
 });
 
@@ -371,7 +408,7 @@ describe('TurnActivityRegistry.checkAndRecord', () => {
     const { registry, set } = setup();
     registry.ensureRoot('voice-1', {
       conversationId: 'v', channelId: 'voice', agentId: 'coordinator',
-      originatorContactId: null, originatorResolved: false, originatorIsSystem: false,
+      originatorContactId: null, originatorResolved: false, originatorIsSystem: false, originatorAuthenticated: false,
     });
     registry.checkAndRecord('voice-1', 'email-send', [X]);
     set(T0 + TURN_ACTIVITY_WINDOW_MS + 1);
@@ -481,7 +518,7 @@ describe('TurnActivityRegistry pruning', () => {
     set(T0 + 10 * MIN);
     registry.ensureRoot('V', {
       conversationId: 'v', channelId: 'voice', agentId: 'coordinator',
-      originatorContactId: null, originatorResolved: false, originatorIsSystem: false,
+      originatorContactId: null, originatorResolved: false, originatorIsSystem: false, originatorAuthenticated: false,
     });
     set(T0 + 20 * MIN);
     start(registry, 'B', { startedAt: T0 + 20 * MIN });
@@ -596,7 +633,7 @@ describe('TurnActivityRegistry repeated starts', () => {
     const { registry, set } = setup();
     registry.ensureRoot('a', {
       conversationId: 'conv-a', channelId: 'voice', agentId: 'coordinator',
-      originatorContactId: null, originatorResolved: false, originatorIsSystem: false,
+      originatorContactId: null, originatorResolved: false, originatorIsSystem: false, originatorAuthenticated: false,
     });
     set(T0 + 5_000);
     const root = start(registry, 'a', { startedAt: T0 + 5_000, content: 'hello' });

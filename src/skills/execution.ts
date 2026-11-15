@@ -61,6 +61,7 @@ import { createSecretAccessed, createAutonomySkillBlocked, createAuthorizationDe
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
+import { parseTaskOriginator } from '../agents/delegated-task-context.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import { UnknownEmailAccountError, type OutboundGateway } from './outbound-gateway.js';
 
@@ -1640,6 +1641,8 @@ export class ExecutionLayer {
           originatorContactId: originator.contactId,
           originatorResolved: originator.resolved,
           originatorIsSystem: originatorIsSystem(rawOriginator),
+          // Fail-closed: only a dispatcher stamp of exactly true counts (voice stamps false).
+          originatorAuthenticated: parseTaskOriginator(rawOriginator)?.authenticated === true,
         });
       }
 
@@ -1689,7 +1692,8 @@ export class ExecutionLayer {
   /**
    * The result a held call returns: what the other turn did, never its words (#2588). The
    * tool, target and time are shown only to a viewer entitled to them (viewerSeesDetail: a
-   * system turn, or in a one-to-one conversation the principal or the same resolved contact);
+   * system turn, or an authenticated sender in a one-to-one conversation who is the principal
+   * or the same resolved contact);
    * anyone else gets a generic line, so one person's turn cannot learn what another person's
    * turn did, and a group cannot hear it from the model.
    */

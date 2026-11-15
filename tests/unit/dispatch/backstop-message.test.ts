@@ -33,6 +33,8 @@ function root(over: Partial<RootTurn> = {}): RootTurn {
     audienceOneToOne: false,
     requestText: null,
     inboundScanFindings: null,
+    // Authenticated by default (a verified sender); the authentication tests turn it off.
+    originatorAuthenticated: true,
     startedAt: AT,
     endedAt: null,
     runningTaskIds: new Set(),
@@ -119,11 +121,60 @@ describe('viewerSeesDetail', () => {
   it('a system turn sees details whatever its audience', () => {
     expect(viewerSeesDetail(root({ originatorContactId: null, originatorResolved: false, originatorIsSystem: true, audienceOneToOne: false }), other, PRINCIPAL)).toBe(true);
   });
+
+  describe('only an authenticated sender sees details (#2588)', () => {
+    it('an unauthenticated email root resolved to the principal (a forged From) gets the generic line', () => {
+      const forged = dm({ channelId: 'email', originatorContactId: PRINCIPAL, originatorAuthenticated: false });
+      expect(viewerSeesDetail(forged, other, PRINCIPAL)).toBe(false);
+      const text = renderBackstopHold([match(other)], {
+        timezone: 'UTC', contactName, viewer: forged, showDetail: (m) => viewerSeesDetail(forged, m.other, PRINCIPAL),
+      });
+      expect(text).toBe(renderGenericBackstopHold());
+    });
+
+    it('an unauthenticated same-contact viewer sees nothing either', () => {
+      expect(viewerSeesDetail(dm({ originatorContactId: BOB, originatorAuthenticated: false }), other, PRINCIPAL)).toBe(false);
+    });
+
+    it('an authenticated Signal principal sees details', () => {
+      expect(viewerSeesDetail(dm({ channelId: 'signal', originatorContactId: PRINCIPAL, originatorAuthenticated: true }), other, PRINCIPAL)).toBe(true);
+    });
+
+    it('a web principal sees details though the dispatcher does not stamp web authenticated', () => {
+      expect(viewerSeesDetail(dm({ channelId: 'web', originatorContactId: PRINCIPAL, originatorAuthenticated: false }), other, PRINCIPAL)).toBe(true);
+    });
+
+    it('CLI and SMS principals see details unstamped', () => {
+      expect(viewerSeesDetail(dm({ channelId: 'cli', originatorContactId: PRINCIPAL, originatorAuthenticated: false }), other, PRINCIPAL)).toBe(true);
+      expect(viewerSeesDetail(dm({ channelId: 'sms', originatorContactId: PRINCIPAL, originatorAuthenticated: false }), other, PRINCIPAL)).toBe(true);
+    });
+
+    it('an unauthenticated other root of the same contact is a different person', () => {
+      const forgedBob = root({ rootId: 'other', channelId: 'email', originatorContactId: BOB, originatorAuthenticated: false });
+      // Bob's own turn learns nothing of what a sender claiming to be Bob did.
+      expect(viewerSeesDetail(dm({ originatorContactId: BOB }), forgedBob, PRINCIPAL)).toBe(false);
+      // The principal still sees it, but as someone else's conversation.
+      expect(viewerSeesDetail(dm({ originatorContactId: PRINCIPAL }), forgedBob, PRINCIPAL)).toBe(true);
+    });
+  });
 });
 
 describe('renderBackstopHold', () => {
   const render = (matches: BackstopMatches, viewer: RootTurn | undefined, names = contactName) =>
     renderBackstopHold(matches, { timezone: 'America/Toronto', contactName: names, viewer });
+
+  it('an unauthenticated other root of the principal is not "your other conversation"', () => {
+    const forged = root({ rootId: 'o', channelId: 'email', originatorContactId: PRINCIPAL, originatorAuthenticated: false });
+    const text = render([match(forged)], root({ channelId: 'signal', originatorContactId: PRINCIPAL }));
+    expect(text).not.toContain('your other conversation');
+    expect(text).toContain('- a conversation with "The Principal" already did this: email-send on "Alice Example"');
+  });
+
+  it('an unauthenticated web other root of the same contact still is "your other conversation"', () => {
+    const web = root({ rootId: 'o', channelId: 'web', originatorContactId: PRINCIPAL, originatorAuthenticated: false });
+    const text = render([match(web)], root({ channelId: 'signal', originatorContactId: PRINCIPAL }));
+    expect(text).toContain('- your other conversation on web already did this:');
+  });
 
   it('the same contact sees "your other conversation on <channel>"', () => {
     const text = render([match(root({ rootId: 'o', channelId: 'signal', originatorContactId: BOB }))], root({ originatorContactId: BOB }));
@@ -205,6 +256,11 @@ describe('otherTurnContactId', () => {
     expect(otherTurnContactId(viewer, root({ originatorContactId: PRINCIPAL }))).toBeNull();
     expect(otherTurnContactId(viewer, root({ originatorContactId: null, originatorIsSystem: true }))).toBeNull();
     expect(otherTurnContactId(viewer, root({ originatorContactId: BOB, originatorResolved: false }))).toBeNull();
+  });
+
+  it('names the viewer\'s own contact when the other root is unauthenticated (#2588)', () => {
+    const viewer = root({ originatorContactId: PRINCIPAL });
+    expect(otherTurnContactId(viewer, root({ originatorContactId: PRINCIPAL, originatorAuthenticated: false }))).toBe(PRINCIPAL);
   });
 });
 

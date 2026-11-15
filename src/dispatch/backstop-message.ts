@@ -3,12 +3,13 @@
 // It names what the other turn did (whose turn, tool, target, local time, and what came of
 // it) and nothing else: never the other turn's request text or any message body, which may
 // belong to another conversation. Even those details go only to a viewer entitled to them
-// (viewerSeesDetail), and for a person's turn only in a one-to-one conversation; anyone else
-// gets a generic line, so one person's turn cannot learn what another person's turn did.
+// (viewerSeesDetail), and for a person's turn only to an authenticated sender in a one-to-one
+// conversation; anyone else gets a generic line, so one person's turn cannot learn what
+// another person's turn did, nor a forged sender what the person it claims to be did.
 
 import type { ToolResult } from '../skills/types.js';
 import { toLocalIso } from '../time/timestamp.js';
-import type { ActionOutcome, ActionTarget, BackstopDecision, RootTurn } from './turn-activity.js';
+import { isAuthenticatedRoot, type ActionOutcome, type ActionTarget, type BackstopDecision, type RootTurn } from './turn-activity.js';
 
 export type BackstopMatches = Extract<BackstopDecision, { held: true }>['matches'];
 type BackstopMatch = BackstopMatches[number];
@@ -29,10 +30,12 @@ const OUTCOME_TEXT: Record<ActionOutcome, string> = {
 
 /**
  * Whether the held root (`viewer`) may see the tool, target and time of `other`'s action:
- * a system turn (by originator, not channel), or, in a one-to-one conversation only, the
- * principal or the same resolved contact as the other root. In a group, a cc'd thread or an
- * unknown audience the model could repeat the details to the others there, so a person's
- * turn gets the generic line. Unknown viewer: no.
+ * a system turn (by originator, not channel), or an authenticated sender (isAuthenticatedRoot:
+ * web, CLI and SMS count) in a one-to-one conversation who is the principal or the same
+ * resolved contact as the other root. In a group, a cc'd thread or an unknown audience the
+ * model could repeat the details to the others there, so a person's turn gets the generic
+ * line. An unauthenticated sender (a forged From resolves to whoever it names) gets it too.
+ * Unknown viewer: no.
  */
 export function viewerSeesDetail(
   viewer: RootTurn | undefined,
@@ -42,18 +45,24 @@ export function viewerSeesDetail(
   if (!viewer) return false;
   if (viewer.originatorIsSystem) return true;
   if (!viewer.audienceOneToOne) return false;
+  if (!isAuthenticatedRoot(viewer)) return false;
   if (!viewer.originatorResolved || viewer.originatorContactId === null) return false;
   if (principalContactId !== undefined && viewer.originatorContactId === principalContactId) return true;
-  return other.originatorResolved && other.originatorContactId === viewer.originatorContactId;
+  return sameResolvedContact(viewer, other);
 }
 
-/** Both roots belong to the same resolved contact. */
+/**
+ * Both roots belong to the same resolved contact, and the other root's sender is
+ * authenticated. An unauthenticated other root (a forged From names whom it likes) is a
+ * different person here: it is never "your other conversation".
+ */
 function sameResolvedContact(viewer: RootTurn | undefined, other: RootTurn): boolean {
   return viewer !== undefined
     && viewer.originatorResolved
     && other.originatorResolved
     && viewer.originatorContactId !== null
-    && viewer.originatorContactId === other.originatorContactId;
+    && viewer.originatorContactId === other.originatorContactId
+    && isAuthenticatedRoot(other);
 }
 
 /**

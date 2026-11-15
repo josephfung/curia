@@ -227,7 +227,11 @@ window. A process restart empties the registry, which is accepted (single proces
   even for same-person turns. The person's own words reach the coordinator through the §2
   note, not through a specialist's tool result.
 - **Different-person turns** see actions only: tool, target display name and time. They
-  never see request text, message bodies or secret values.
+  never see request text, message bodies or secret values. Even those hold details go only
+  to a system turn, or to an authenticated sender (web, CLI and SMS count) in a one-to-one
+  conversation who is the principal or the same person; anyone else gets a generic line. A
+  turn whose sender is not authenticated is never labelled "your other conversation" (plan
+  deviation 6).
 
 The check **fails open**. If the registry or audit read errors, log at error level and let
 the call proceed. This is a duplicate-avoidance aid, not an authorisation gate. Blocking every

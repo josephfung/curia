@@ -71,9 +71,12 @@ function makeContacts(): ContactService {
   } as unknown as ContactService;
 }
 
+/** Curia's own mailbox, so a two-party email thread can be one-to-one (audience.ts). */
+const OFFICE_EMAIL = 'office@example.com';
+
 function setup(opts?: { logger?: Logger }) {
   const registry = new ToolRegistry();
-  const turnActivity = new TurnActivityRegistry({ logger });
+  const turnActivity = new TurnActivityRegistry({ logger, selfEmails: [OFFICE_EMAIL] });
   const layer = new ExecutionLayer(registry, opts?.logger ?? logger, {
     contactService: makeContacts(),
     principalIdentities: PRINCIPAL_IDENTITIES,
@@ -94,15 +97,31 @@ function startRoot(
     originatorContactId?: string | null;
     originatorResolved?: boolean;
     originatorIsSystem?: boolean;
+    /**
+     * The originator's `authenticated` stamp. Defaults as the dispatcher stamps it
+     * (inboundSenderAuthenticated): true on Signal and Slack, false elsewhere, web included.
+     */
+    authenticated?: boolean;
+    /** Extra task metadata, e.g. an email thread's participants. */
+    metadata?: Record<string, unknown>;
   },
 ) {
+  const channelId = extra?.channelId ?? 'signal';
+  const contactId = extra?.originatorContactId === undefined ? PRINCIPAL : extra.originatorContactId;
+  const originator = contactId === null ? undefined : {
+    contactId,
+    systemRole: contactId === PRINCIPAL ? 'principal' : null,
+    channel: channelId,
+    initiatedAt: new Date().toISOString(),
+    authenticated: extra?.authenticated ?? (channelId === 'signal' || channelId === 'slack'),
+  };
   return turnActivity.taskStarted({
     taskEventId,
     agentId: 'coordinator',
     conversationId: extra?.conversationId ?? `signal:conv-${taskEventId}`,
-    channelId: extra?.channelId ?? 'signal',
+    channelId,
     parentEventId: undefined,
-    metadata: undefined,
+    metadata: { ...(originator ? { originator } : {}), ...extra?.metadata },
     content: extra?.content ?? 'please do the thing',
     startedAt: Date.now(),
     originatorContactId: extra?.originatorContactId === undefined ? PRINCIPAL : extra.originatorContactId,
@@ -296,7 +315,12 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
       actor: string | null,
       viewer: string | null,
       viewerChannel = 'signal',
-      viewerExtra: { originatorIsSystem?: boolean; conversationId?: string } = {},
+      viewerExtra: {
+        originatorIsSystem?: boolean;
+        conversationId?: string;
+        authenticated?: boolean;
+        metadata?: Record<string, unknown>;
+      } = {},
     ) {
       const { registry, layer, turnActivity } = setup();
       const handler = makeHandler();
@@ -348,6 +372,48 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
       const text = await holdSeenBy(BOB, PRINCIPAL, 'web', { conversationId: 'web:thread-1' });
       expect(text).toContain('contact-message on "Alice Example" at ');
       expect(text).not.toContain(GENERIC);
+    });
+
+    describe('a forged sender (#2588)', () => {
+      /** A two-party email thread between the principal and Curia's mailbox: one-to-one. */
+      const privateThread = {
+        curiaRole: 'to',
+        primaryRecipientEmails: [],
+        participants: [
+          { email: 'ceo@example.com', role: 'from' },
+          { email: OFFICE_EMAIL, role: 'to' },
+        ],
+      };
+
+      it('an unauthenticated email turn resolved to the principal gets the generic line', async () => {
+        const text = await holdSeenBy(BOB, PRINCIPAL, 'email', { conversationId: 'email:thread-1', authenticated: false, metadata: privateThread });
+        expect(text).toContain(GENERIC);
+        expect(text).not.toContain('contact-message');
+        expect(text).not.toContain('Alice Example');
+        expect(text).not.toMatch(ISO_TIME);
+      });
+
+      it('the same thread from a verified sender sees the details', async () => {
+        const text = await holdSeenBy(BOB, PRINCIPAL, 'email', { conversationId: 'email:thread-1', authenticated: true, metadata: privateThread });
+        expect(text).toContain('contact-message on "Alice Example" at ');
+      });
+
+      it('the principal on SMS sees the details unstamped', async () => {
+        const text = await holdSeenBy(BOB, PRINCIPAL, 'sms', { conversationId: 'sms:+15551234567' });
+        expect(text).toContain('contact-message on "Alice Example" at ');
+      });
+
+      it("the principal's turn sees a forged principal turn's action as someone else's", async () => {
+        const { registry, layer, turnActivity } = setup();
+        registry.register(makeRiskyManifest('contact-message', 'medium'), makeHandler());
+        startRoot(turnActivity, 'forged', { channelId: 'email', conversationId: 'email:thread-2', authenticated: false });
+        startRoot(turnActivity, 'real');
+        expect((await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('forged', { channelId: 'email' }))).success).toBe(true);
+        const held = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('real'));
+        if (held.success) throw new Error('expected a held result');
+        expect(held.error).not.toContain('your other conversation');
+        expect(held.error).toContain('- a conversation with "Principal" already did this: contact-message on "Alice Example"');
+      });
     });
 
     it('the principal on a voice call gets the generic line', async () => {
@@ -621,7 +687,8 @@ describe('ExecutionLayer cross-turn backstop logging and fallbacks (#2588)', () 
   it('the hold line says whose turn it was', async () => {
     const { registry, layer, turnActivity } = setup();
     registry.register(makeRiskyManifest('contact-message', 'medium'), makeHandler());
-    startRoot(turnActivity, 'task-a', { channelId: 'email' });
+    // A verified email sender: an unverified one is never "your other conversation".
+    startRoot(turnActivity, 'task-a', { channelId: 'email', authenticated: true });
     startRoot(turnActivity, 'task-b');
     await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-a', { channelId: 'email' }));
     const held = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-b'));
