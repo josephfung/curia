@@ -42,6 +42,18 @@ export function contrastMessage(sources: readonly ContrastMessageSource[], run: 
   return resolved.includes('reply') && !silent ? run.reply! : undefined;
 }
 
+/**
+ * Whether a run that wrote no message called a source's tool anyway (with a non-empty text arg)
+ * but outside its `with`: it may have written to someone else, or the `with` may be wrong.
+ */
+export function calledSourceToolUnmatched(sources: readonly ContrastMessageSource[], run: ScenarioRun): boolean {
+  if (run.error || contrastMessage(sources, run) !== undefined) return false;
+  return sources.some(s => s !== 'reply' && run.toolCalls.some(c => {
+    const value = c.input[s.arg];
+    return c.name === s.tool && typeof value === 'string' && value.trim() !== '';
+  }));
+}
+
 /** A deterministic shuffle (mulberry32 seeded from `seed`), so a group's trials repeat exactly. */
 export function seededShuffle<T>(items: readonly T[], seed: string): T[] {
   let h = 1779033703 ^ seed.length;
@@ -175,7 +187,17 @@ export async function runBlindId(
 ): Promise<ContrastGroupResult> {
   const ordered = [...members].sort((a, b) => a.scenario.name.localeCompare(b.scenario.name));
   const { trials, skipped } = collectTrials(ordered);
-  const byCase: Record<string, { correct: number; total: number }> = Object.fromEntries(ordered.map(m => [m.scenario.name, { correct: 0, total: 0 }]));
+  // How often each case wrote, and missed its source, over every run: what tells a recipient
+  // Curia chose not to write to apart from a source that matches nothing.
+  const byCase: ContrastGroupResult['byCase'] = Object.fromEntries(ordered.map(({ scenario, result }) => {
+    const sources = scenario.contrast!.message;
+    return [scenario.name, {
+      correct: 0,
+      total: 0,
+      written: result.runs.filter(run => contrastMessage(sources, run) !== undefined).length,
+      unmatched: result.runs.filter(run => calledSourceToolUnmatched(sources, run)).length,
+    }];
+  }));
   let correct = 0;
   let total = 0;
   let calls = 0;
@@ -238,9 +260,19 @@ export async function runBlindId(
 
 /**
  * "finesse-51-reschedule: 7/12 matched (58%; chance 33%)", then each case's hits. A case with
- * no message in any trial is named: its source may match nothing, and the group's chance figure
- * is then over fewer recipients than it has.
+ * no message in any trial says why: it wrote none (a decision, not a fault), its runs called the
+ * source's tool without matching it (check the source), or no run had a second message to
+ * compare with. The group's chance figure is then over fewer recipients than it has.
  */
+/** Why a case is in no judged trial. */
+function untested(c: ContrastGroupResult['byCase'][string]): string {
+  // Saved before the counts existed: say only what is known.
+  if (c.written === undefined) return 'no message in any trial (it wrote none, or its contrast.message source matches nothing)';
+  if (c.written > 0) return `not compared: wrote in ${c.written} run(s), but no other case wrote in the same run`;
+  if (c.unmatched! > 0) return `no message: ${c.unmatched} run(s) used the source's tool outside its \`with\` (to someone else, or the source is wrong)`;
+  return 'wrote this recipient nothing in any run (the agent\'s decision, not a harness fault)';
+}
+
 export function formatBlindIdLines(results: readonly ContrastGroupResult[]): string[] {
   const pct = (v: number): string => `${Math.round(v * 100)}%`;
   return results.flatMap(r => {
@@ -254,7 +286,7 @@ export function formatBlindIdLines(results: readonly ContrastGroupResult[]): str
       : `${r.group}: ${r.correct}/${r.total} matched (${pct(r.accuracy)}; chance ${pct(r.chance!)})`;
     const lines = [`${head}${notes.length > 0 ? `; ${notes.join('; ')}` : ''}`];
     for (const [name, c] of Object.entries(r.byCase)) {
-      lines.push(c.total > 0 ? `  ${name}: ${c.correct}/${c.total}` : `  ${name}: no message in any trial (check its contrast.message source)`);
+      lines.push(`  ${name}: ${c.total > 0 ? `${c.correct}/${c.total}` : untested(c)}`);
     }
     return lines;
   });

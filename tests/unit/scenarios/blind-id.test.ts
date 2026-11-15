@@ -141,7 +141,11 @@ describe('runBlindId (#2556)', () => {
     expect(judge.calls[0]).not.toBe(judge.calls[1]);
     expect(r).toMatchObject({ correct: 10, total: 10, accuracy: 1, skippedTrials: 0, judgeErrors: 0 });
     expect(r.chance).toBeCloseTo((1 / 3 + 1 / 3 + 1 / 2 + 1 / 2) / 4);
-    expect(r.byCase).toEqual({ chair: { correct: 4, total: 4 }, friend: { correct: 4, total: 4 }, report: { correct: 2, total: 2 } });
+    expect(r.byCase).toEqual({
+      chair: { correct: 4, total: 4, written: 2, unmatched: 0 },
+      friend: { correct: 4, total: 4, written: 2, unmatched: 0 },
+      report: { correct: 2, total: 2, written: 1, unmatched: 0 },
+    });
     expect(formatBlindIdLines([r])[0]).toBe('late: 10/10 matched (100%; chance 42%)');
   });
 
@@ -169,14 +173,41 @@ describe('runBlindId (#2556)', () => {
     expect(partial).toMatchObject({ judgeErrors: 1, firstJudgeError: 'content filter', correct: 7, total: 7 });
   });
 
-  it('names a case that never produced a message', async () => {
-    const all = members();
-    // The report's runs all wrote nothing: its source matched nothing in any trial.
-    const silent = all.map(m => (m.scenario.name === 'report'
-      ? { ...m, result: { ...m.result, runs: m.result.runs.map(r => ({ ...r, toolCalls: [], reply: 'NO_REPLY' })) } }
+  describe('a case in no judged trial says why', () => {
+    const anyJudge = fakeJudge((_r, messages) => JSON.stringify({ matches: messages.map((_m, i) => ({ message: i + 1, recipient: String.fromCharCode(65 + i) })) }));
+    const withReport = (runs: (r: ScenarioRun) => ScenarioRun): ReturnType<typeof members> => members().map(m => (m.scenario.name === 'report'
+      ? { ...m, result: { ...m.result, runs: m.result.runs.map(runs) } }
       : m));
-    const r = await runBlindId('late', silent, [], fakeJudge((_r, messages) => JSON.stringify({ matches: messages.map((_m, i) => ({ message: i + 1, recipient: String.fromCharCode(65 + i) })) })));
-    expect(formatBlindIdLines([r])).toContain('  report: no message in any trial (check its contrast.message source)');
+
+    it('wrote nothing: the agent decided, not a harness fault', async () => {
+      const r = await runBlindId('late', withReport(x => ({ ...x, toolCalls: [], reply: 'NO_REPLY' })), [], anyJudge);
+      expect(formatBlindIdLines([r])).toContain("  report: wrote this recipient nothing in any run (the agent's decision, not a harness fault)");
+    });
+
+    it("used the source's tool for someone else: points at the source", async () => {
+      const elsewhere = withReport(x => ({
+        ...x, reply: 'NO_REPLY',
+        toolCalls: [{ name: 'email-send', input: { contact_id: 'principal', body: 'Told them' }, result: { success: true, data: {} }, disposition: 'stubbed' }],
+      }));
+      const r = await runBlindId('late', elsewhere, [], anyJudge);
+      expect(r.byCase['report']).toMatchObject({ written: 0, unmatched: 2 });
+      expect(formatBlindIdLines([r])).toContain("  report: no message: 2 run(s) used the source's tool outside its `with` (to someone else, or the source is wrong)");
+    });
+
+    it('wrote, but never alongside another case', async () => {
+      // Only the report writes, so no run index has two messages.
+      const alone = members().map(m => (m.scenario.name === 'report'
+        ? m
+        : { ...m, result: { ...m.result, runs: m.result.runs.map(x => ({ ...x, toolCalls: [], reply: 'NO_REPLY' })) } }));
+      const r = await runBlindId('late', alone, [], anyJudge);
+      expect(r.skippedTrials).toBe(2);
+      expect(formatBlindIdLines([r])).toContain('  report: not compared: wrote in 1 run(s), but no other case wrote in the same run');
+    });
+
+    it('results saved before the counts existed keep a neutral note', () => {
+      const old = { group: 'late', cases: ['report'], missing: [], judgeCalls: 0, correct: 0, total: 0, accuracy: null, chance: null, byCase: { report: { correct: 0, total: 0 } }, skippedTrials: 2, judgeErrors: 0 };
+      expect(formatBlindIdLines([old])).toContain('  report: no message in any trial (it wrote none, or its contrast.message source matches nothing)');
+    });
   });
 });
 

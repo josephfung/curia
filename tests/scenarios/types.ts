@@ -725,6 +725,13 @@ export interface CapturedToolCall extends ObservedToolCall {
   disposition: 'stubbed' | 'passthrough' | 'canned' | 'refused' | 'runtime';
 }
 
+/** A stub-layer refusal or canned answer with no matching captured call. */
+export interface UncapturedHole {
+  name: string;
+  agentId?: string;
+  disposition: 'refused' | 'canned';
+}
+
 export interface ScenarioRun {
   runIndex: number;
   /** The inbound content after placeholder resolution. */
@@ -752,6 +759,12 @@ export interface ScenarioRun {
   durationMs: number;
   /** Calls the harness answered badly: refused by the stub layer, or a failed passthrough read. */
   unstubbedCalls: number;
+  /**
+   * The holes among `unstubbedCalls` that are not in `toolCalls`: stub-layer refusals and canned
+   * answers the bus capture never saw (a bounced relay's rewrite turn, #2192). Without this they
+   * were counted but nowhere named. Absent when there were none.
+   */
+  uncapturedHoles?: UncapturedHole[];
   /** Set when the run could not complete (timeout, boot error, agent.error). */
   error?: string;
   /**
@@ -962,8 +975,13 @@ export interface ContrastGroupResult {
   accuracy: number | null;
   /** What guessing would score: the mean of 1/n over the trials asked. */
   chance: number | null;
-  /** Right / asked, per case: which recipients' messages are recognisable. */
-  byCase: Record<string, { correct: number; total: number }>;
+  /**
+   * Right / asked, per case: which recipients' messages are recognisable. `written` is the runs
+   * that wrote this recipient a message; `unmatched` the runs that called a source's tool without
+   * matching its `with` (a hint the source is wrong). Both absent in results saved before #2556's
+   * baseline.
+   */
+  byCase: Record<string, { correct: number; total: number; written?: number; unmatched?: number }>;
   /** Trials with fewer than two messages (a case decided not to write), which were not asked. */
   skippedTrials: number;
   /**

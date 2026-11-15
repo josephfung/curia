@@ -772,8 +772,10 @@ the case's message is: `reply`, or `{ tool, arg, with? }`, the run's last matchi
 `with` placeholders resolve per run). After every case is scored, `blind-id.ts` takes one
 run's message from each case in the group, and the judge matches messages to recipient
 descriptions: once in a seeded shuffle, once reversed, to cancel position bias. A run that
-wrote no message (a case whose right call is not to write) sits that trial out, and a case
-with no message in any trial is named in the report. Only a complete one-to-one answer is
+wrote no message (a case whose right call is not to write) sits that trial out. A case in no
+judged trial is named in the report with the reason: it wrote this recipient nothing (the
+agent's choice), its runs used the source's tool outside its `with` (to someone else, or the
+source is wrong), or it wrote but never in the same run as another case. Only a complete one-to-one answer is
 scored; anything else, or a failed call, is a judge error that counts in neither the hits nor
 the total. Results carry `contrastGroups` (accuracy, chance, per-case hits, judge errors) and
 its judge spend; the console prints a line per group. It is tracked, not gated: if the judge cannot tell which message went to whom,
