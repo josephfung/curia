@@ -405,6 +405,38 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
     // Not a reasoning model: the capability tag is the loose ADR-014 one.
     thinksByDefault: false,
   },
+  // Candidate judges for the finesse scenario cases (#2556), priced so the scenario judge
+  // can meter them (createJudge refuses an unpriced model). Not routed to by any tier.
+  // OpenRouter list prices, 2026-11-14; the long-prompt surcharges (over 200k/272k tokens)
+  // are not modelled, since judge inputs are a few thousand tokens.
+  'anthropic/claude-opus-5.5': {
+    provider: 'openrouter',
+    contextWindow: 1_000_000,
+    pricing: { inputPerMToken: 4.00, outputPerMToken: 20.00, cacheCreationPerMToken: 5.00, cacheReadPerMToken: 0.20 },
+    capabilities: ['vision', 'coding', 'reasoning', 'streaming', 'tools'],
+    maxOutputTokens: 128_000,
+  },
+  'anthropic/claude-sonnet-5.5': {
+    provider: 'openrouter',
+    contextWindow: 1_000_000,
+    pricing: { inputPerMToken: 2.00, outputPerMToken: 10.00, cacheCreationPerMToken: 2.50, cacheReadPerMToken: 0.10 },
+    capabilities: ['vision', 'coding', 'reasoning', 'streaming', 'tools'],
+    maxOutputTokens: 128_000,
+  },
+  'openai/gpt-5.5': {
+    provider: 'openrouter',
+    contextWindow: 1_050_000,
+    pricing: { inputPerMToken: 5.00, outputPerMToken: 30.00, cacheReadPerMToken: 0.50 },
+    capabilities: ['vision', 'coding', 'reasoning', 'streaming', 'tools'],
+    maxOutputTokens: 128_000,
+  },
+  'google/gemini-3.1-pro-preview': {
+    provider: 'openrouter',
+    contextWindow: 1_048_576,
+    pricing: { inputPerMToken: 2.00, outputPerMToken: 12.00, cacheCreationPerMToken: 0.375, cacheReadPerMToken: 0.20 },
+    capabilities: ['vision', 'coding', 'reasoning', 'streaming', 'tools'],
+    maxOutputTokens: 65_536,
+  },
 
   ...bedrockClaudeEntries(),
 
