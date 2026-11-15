@@ -137,8 +137,31 @@ describe('CalendarState', () => {
   it('replays through applyCaseWrites alone, as the scenario layer calls it (#2588)', () => {
     const state = new CaseToolState();
     applyCaseWrites('calendar-create-event', { event: { status: 'confirmed' } }, { title: 'Sync', start: '2026-10-07T15:00:00-04:00', end: '2026-10-07T15:30:00-04:00' }, state);
-    const listed = applyCaseWrites('calendar-list-events', { events: [], count: 0 }, wed, state) as { events: Array<{ title: string; startTime: string }> };
+    const listed = applyCaseWrites('calendar-list-events', { events: [], count: 0 }, wed, state) as { events: Array<{ title: string; startTime: string }>; count: number };
     expect(listed.events).toEqual([expect.objectContaining({ title: 'Sync', startTime: '2026-10-07T15:00:00-04:00' })]);
+    expect(listed.count).toBe(1);
+  });
+
+  it('replays only the written events a listing would return: window, query and moves (#2588)', () => {
+    const state = new CaseToolState();
+    applyCaseWrites('calendar-create-event', { event: {} }, { title: 'Sync with Priya', start: '2026-10-07T15:00:00-04:00', end: '2026-10-07T15:30:00-04:00' }, state);
+    applyCaseWrites('calendar-create-event', { event: {} }, { title: 'Lunch with Leo', start: '2026-10-07T12:00:00-04:00', end: '2026-10-07T13:00:00-04:00' }, state);
+    // The case's own fixture event is left as written, whatever the window.
+    const fixture = { events: [{ id: 'fixture', title: 'Fixture', startTime: '2026-10-20T09:00:00-04:00', endTime: '2026-10-20T10:00:00-04:00' }], count: 1 };
+    const thu = { timeMin: '2026-10-08T00:00:00-04:00', timeMax: '2026-10-09T00:00:00-04:00' };
+    const titles = (input: Record<string, unknown>) =>
+      (applyCaseWrites('calendar-list-events', structuredClone(fixture), input, state) as { events: Array<{ title: string }>; count: number });
+    expect(titles(thu).events.map(e => e.title)).toEqual(['Fixture']);
+    expect(titles(thu).count).toBe(1);
+    expect(titles({ ...wed, query: 'priya' }).events.map(e => e.title)).toEqual(['Fixture', 'Sync with Priya']);
+    // Moving the sync to Thursday takes it out of Wednesday's listing and into Thursday's.
+    applyCaseWrites('calendar-update-event', { event: {} }, { eventId: 'evt-created-1', start: '2026-10-08T15:00:00-04:00', end: '2026-10-08T15:30:00-04:00' }, state);
+    expect(titles(wed).events.map(e => e.title)).toEqual(['Fixture', 'Lunch with Leo']);
+    expect(titles(thu).events.map(e => e.title)).toEqual(['Fixture', 'Sync with Priya']);
+    // A fixture event the case moved is filtered like a created one.
+    applyCaseWrites('calendar-update-event', { event: {} }, { eventId: 'fixture', start: '2026-10-07T09:00:00-04:00', end: '2026-10-07T10:00:00-04:00' }, state);
+    expect(titles(thu).events.map(e => e.title)).toEqual(['Sync with Priya']);
+    expect(titles(thu).count).toBe(1);
   });
 
   it('keeps nothing without a state (stateless use)', () => {

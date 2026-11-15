@@ -58,15 +58,73 @@ export class CalendarState {
     return data;
   }
 
-  /** A listing as it stands after this case's writes. */
-  replayOnto(data: Json): Json {
+  /**
+   * A listing as it stands after this case's writes, recounted. An event a write touched
+   * (created, or updated) shows only if it matches the call's window, query and attendee
+   * (`eventMatchesListing`), so a listing for another day does not pick it up (#2588). The
+   * stub's own events are left as the case wrote them: smoke filters them afterwards, and a
+   * scenario's fixture is what the case means that listing to return.
+   */
+  replayOnto(data: Json, input: Json = {}): Json {
     if (!Array.isArray(data['events'])) return data;
+    let changed = false;
     // A listing entry that is not an event object (a test's placeholder) is left as it is.
-    const events = [...(data['events'] as unknown[]), ...this.created]
-      .filter(e => !isRecord(e) || !this.deleted.has(String(e['id'])))
-      .map(e => (isRecord(e) ? { ...e, ...(this.updates.get(String(e['id'])) ?? {}) } : e));
-    return { ...data, events };
+    const listed = (data['events'] as unknown[])
+      .filter(e => {
+        const gone = isRecord(e) && this.deleted.has(String(e['id']));
+        if (gone) changed = true;
+        return !gone;
+      })
+      .map(e => {
+        if (!isRecord(e)) return e;
+        const update = this.updates.get(String(e['id']));
+        if (update === undefined) return e;
+        changed = true;
+        const moved = { ...e, ...update };
+        return eventMatchesListing(moved, input) ? moved : null;
+      })
+      .filter(e => e !== null);
+    const created = this.created
+      .filter(e => !this.deleted.has(String(e['id'])))
+      .map(e => ({ ...e, ...(this.updates.get(String(e['id'])) ?? {}) }))
+      .filter(e => eventMatchesListing(e, input));
+    if (created.length > 0) changed = true;
+    const events = [...listed, ...created];
+    // Recount when the stub gave a count or the replay changed the list; a stub without
+    // one and untouched by writes keeps the shape the case wrote.
+    return changed || 'count' in data ? { ...data, events, count: events.length } : { ...data, events };
   }
+}
+
+function lowerText(v: unknown): string {
+  if (v === undefined || v === null) return '';
+  return (typeof v === 'string' ? v : JSON.stringify(v)).toLowerCase();
+}
+
+function parseTime(v: unknown): number | undefined {
+  if (typeof v !== 'string') return undefined;
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? undefined : t;
+}
+
+/**
+ * Whether a calendar-list-events call would return this event: it overlaps
+ * [timeMin, timeMax), and matches the call's query (title, description, location) and
+ * attendee. A bound the event or the call lacks does not exclude it. Smoke's listing filter
+ * and the replay of a case's own writes share it.
+ */
+export function eventMatchesListing(event: Json, input: Json): boolean {
+  const min = parseTime(input['timeMin']);
+  const max = parseTime(input['timeMax']);
+  const query = typeof input['query'] === 'string' ? input['query'].toLowerCase() : '';
+  const attendee = typeof input['attendeeEmail'] === 'string' ? input['attendeeEmail'].toLowerCase() : '';
+  const start = parseTime(event['startTime']);
+  const end = parseTime(event['endTime']) ?? start;
+  if (min !== undefined && end !== undefined && end <= min) return false;
+  if (max !== undefined && start !== undefined && start >= max) return false;
+  if (query && !`${lowerText(event['title'])} ${lowerText(event['description'])} ${lowerText(event['location'])}`.includes(query)) return false;
+  if (attendee && !lowerText(event['participants']).includes(attendee)) return false;
+  return true;
 }
 
 function isRecord(v: unknown): v is Json {
@@ -833,7 +891,7 @@ export function applyCaseWrites(toolName: string, data: Json, input: Json, state
   }
   if (toolName === 'scheduler-get') shaped = state.scheduler.replayOntoGet(shaped, input);
   if (toolName === 'task-list') shaped = state.tasks.replayOnto(shaped, input);
-  if (toolName === 'calendar-list-events') shaped = state.calendar.replayOnto(shaped);
+  if (toolName === 'calendar-list-events') shaped = state.calendar.replayOnto(shaped, input);
   return shaped;
 }
 
