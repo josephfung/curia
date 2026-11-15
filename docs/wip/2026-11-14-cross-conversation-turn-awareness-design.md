@@ -89,8 +89,11 @@ From rulings during the build:
   held elsewhere.
 - **Recovery:** a correction the person was told was passed on or held, then lost in process
   (late return, not taken within 10 minutes, root ended or dropped with it held, a wake that
-  cannot take it), is re-run as a synthetic coordinator turn on the handing conversation,
-  modelled on the late-delegation wake. A restart still loses it.
+  cannot take it or has not drained it within 10 minutes), is re-run as a synthetic coordinator
+  turn on the handing conversation, modelled on the late-delegation wake, with the handing
+  task's email account and audience inputs. A failed publish is retried twice, then logged as
+  lost. A restart still loses it. A repeated hand-off of the same message to the same turn is
+  answered "already passed on".
 - **Decline reasons** each have their own phrase: finished, no longer active, busy (no lane),
   not the same person, the target's sender not authenticated, not one-to-one, cap, closing,
   ineligible, tool error, internal error.

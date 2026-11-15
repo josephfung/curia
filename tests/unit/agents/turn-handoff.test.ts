@@ -10,15 +10,17 @@ import {
   handoffInboundEventId,
   handoffOutcomeText,
   performHandoff,
+  watchHeldCorrectionTicket,
   type HandoffOutcome,
 } from '../../../src/agents/turn-handoff.js';
 import { isUuid } from '../../../src/util/uuid.js';
 import {
   TurnActivityRegistry,
   type HandoffRecoveryRequest,
+  type HeldCorrection,
   type TaskStartInput,
 } from '../../../src/dispatch/turn-activity.js';
-import { TurnLanes, type LaneHolder } from '../../../src/dispatch/turn-lanes.js';
+import { TurnLanes, type LaneHolder, type TicketResult } from '../../../src/dispatch/turn-lanes.js';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { createAgentTask, type AgentTaskEvent } from '../../../src/bus/events.js';
@@ -233,11 +235,69 @@ describe('performHandoff', () => {
     lanes.confirmDrained('other-root', [queued[0]!.inboundEventId]);
     expect(await first).toEqual({ kind: 'delivered' });
     expect(await second).toEqual({ kind: 'delivered' });
-    // After the drain, a third call is answered from the lane's drained set, not re-queued.
-    expect(await run()).toEqual({ kind: 'delivered' });
+    // After the drain, a third call is answered from the registry, not re-queued.
+    expect(await run()).toEqual({ kind: 'already_handed_over' });
     expect(lanes.takeQueued('other-root')).toEqual([]);
     // Ids differ per pair.
     expect(handoffInboundEventId('mine', 'x')).not.toBe(handoffInboundEventId('mine', 'other-root'));
+  });
+
+  it('a repeat after the target coordinator released its lane is not held for its wake again', async () => {
+    const { registry, lanes, run } = setup();
+    startTarget(registry);
+    startMine(registry);
+    await lanes.acquire(targetHolder());
+    const first = run();
+    const [queued] = lanes.takeQueued('other-root');
+    lanes.confirmDrained('other-root', [queued!.inboundEventId]);
+    expect(await first).toEqual({ kind: 'delivered' });
+    // The coordinator ends while a specialist still runs: the lane (and its drained set) is gone.
+    startSpecialist(registry);
+    finishTarget(registry, lanes);
+    expect(registry.hasDetachedWork('other-root')).toBe(true);
+
+    const repeat = await run();
+    expect(repeat).toEqual({ kind: 'already_handed_over' });
+    expect(handoffOutcomeText(repeat)).toContain("don't pass it again or do the work here");
+    expect(registry.heldCount('other-root')).toBe(0);
+  });
+
+  it('a repeat into a later coordinator of the target is not queued again', async () => {
+    const { registry, lanes, run } = setup();
+    startTarget(registry);
+    startMine(registry);
+    await lanes.acquire(targetHolder());
+    const first = run();
+    const [queued] = lanes.takeQueued('other-root');
+    lanes.confirmDrained('other-root', [queued!.inboundEventId]);
+    await first;
+    // A wake coordinator under the same root now holds the target conversation's lane.
+    startSpecialist(registry);
+    finishTarget(registry, lanes);
+    startTask(registry, {
+      taskEventId: 'wake-1',
+      conversationId: TARGET_CONVERSATION,
+      parentEventId: 'other-root',
+      metadata: { lateDelegation: { agent: 'research', task: 't' } },
+    });
+    await lanes.acquire(targetHolder({ taskEventId: 'wake-1', synthetic: true, liveTurn: false }));
+    expect(await run()).toEqual({ kind: 'already_handed_over' });
+    expect(lanes.takeQueued('wake-1')).toEqual([]);
+  });
+
+  it('a declined hand-off is not remembered: the turn may try again', async () => {
+    const { registry, lanes, run } = setup();
+    startTarget(registry);
+    startMine(registry);
+    // No lane holder yet: unreachable.
+    expect(await run()).toMatchObject({ kind: 'do_it_yourself' });
+    expect(registry.wasHandedOff('mine', 'other-root')).toBe(false);
+    await lanes.acquire(targetHolder());
+    const again = run();
+    const [queued] = lanes.takeQueued('other-root');
+    expect(queued).toBeDefined();
+    lanes.confirmDrained('other-root', [queued!.inboundEventId]);
+    expect(await again).toEqual({ kind: 'delivered' });
   });
 
   it('a drain past the wait is queued, and a later return is held for the wake', async () => {
@@ -717,6 +777,9 @@ describe('handoffOutcomeText', () => {
     expect(handoffOutcomeText({ kind: 'queued' })).toBe(passed);
     expect(handoffOutcomeText({ kind: 'held_for_wake' })).toBe(
       "That work is still finishing in the background; the change will be applied when it lands, or picked up here if it can't be. Tell them so briefly; don't do the work here.",
+    );
+    expect(handoffOutcomeText({ kind: 'already_handed_over' })).toBe(
+      "This message was already passed on to that turn; don't pass it again or do the work here. Tell them briefly it's in hand.",
     );
     const reasons: Extract<HandoffOutcome, { kind: 'do_it_yourself' }>['reason'][] = [
       'finished', 'inactive', 'unreachable', 'not_same_person', 'unauthenticated', 'not_one_to_one', 'cap', 'closing', 'ineligible',
@@ -1247,5 +1310,97 @@ describe('runtime turn-handoff wiring', () => {
       });
       expect(recovered.map((r) => r.reason)).toEqual(['wake_not_injected']);
     });
+
+    it('queued, then never settled: re-run once after HANDOFF_LOST_AFTER_MS', async () => {
+      vi.useFakeTimers();
+      const quiet = pino({ level: 'silent' });
+      const recovered: HandoffRecoveryRequest[] = [];
+      const registry = new TurnActivityRegistry({ logger: quiet, recoverHandoff: (r) => { recovered.push(r); } });
+      const lanes = newLanes(quiet);
+      startTarget(registry);
+      detachSpecialist(registry);
+      startMine(registry);
+      expect(await performHandoff({ registry, lanes, logger: quiet, fromTaskEventId: 'mine', targetRootId: 'other-root' }))
+        .toEqual({ kind: 'held_for_wake' });
+      // A retained follow-up whose audit never flushes: the ticket stays pending.
+      vi.spyOn(lanes, 'tryInjectIntoTask').mockReturnValue({ kind: 'queued', ticket: new Promise(() => {}) });
+      const { bus } = buildRuntime({ registry, lanes, chat: vi.fn(async () => textResponse('ok')) });
+      const published = bus.publish('system', createAgentTask({
+        agentId: 'coordinator',
+        conversationId: TARGET_CONVERSATION,
+        channelId: 'sms',
+        senderId: CONTACT,
+        content: 'The research came back late.',
+        syntheticTurn: true,
+        parentEventId: 'spec-1',
+        metadata: {
+          originator: { contactId: CONTACT, channel: 'sms', systemRole: null, tier: 'known' },
+          wakeContext: { derived: true },
+          lateDelegation: { agent: 'research', task: 'find flights' },
+        },
+      }));
+      await vi.advanceTimersByTimeAsync(HANDOFF_LOST_AFTER_MS - 1_000);
+      await published;
+      expect(recovered).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(recovered.map((r) => r.reason)).toEqual(['unresolved']);
+      expect(recovered[0]!.from.rootId).toBe('mine');
+      await vi.advanceTimersByTimeAsync(HANDOFF_LOST_AFTER_MS);
+      expect(recovered).toHaveLength(1);
+    });
+  });
+});
+
+describe('watchHeldCorrectionTicket (#2588)', () => {
+  function watched() {
+    const spy = spyLogger();
+    const recovered: HandoffRecoveryRequest[] = [];
+    const registry = new TurnActivityRegistry({ logger: spy.logger, recoverHandoff: (r) => { recovered.push(r); } });
+    startMine(registry);
+    let settle!: (result: TicketResult) => void;
+    const ticket = new Promise<TicketResult>((resolve) => { settle = resolve; });
+    const held: HeldCorrection = {
+      from: registry.rootOf('mine')!,
+      input: {
+        inboundEventId: handoffInboundEventId('mine', 'other-root'), senderContactId: CONTACT, senderResolved: true,
+        autoGenerated: false, injectionFindingCount: 0, channelId: 'signal', liveTurn: false,
+        content: REQUEST, originalContent: REQUEST, receivedAt: INITIATED_AT,
+      },
+    };
+    watchHeldCorrectionTicket({ registry, logger: spy.logger, ticket, held, targetRootId: 'other-root', logIds: {} });
+    return { ...spy, recovered, settle };
+  }
+
+  it('a drain in time recovers nothing, and the timer is cleared', async () => {
+    vi.useFakeTimers();
+    const { recovered, settle } = watched();
+    settle({ kind: 'drained', hostTaskEventId: 'wake-1' });
+    await vi.advanceTimersByTimeAsync(2 * HANDOFF_LOST_AFTER_MS);
+    expect(recovered).toEqual([]);
+  });
+
+  it('a return re-runs it once, and the timer never fires a second', async () => {
+    vi.useFakeTimers();
+    const { recovered, settle } = watched();
+    settle({ kind: 'returned', reason: 'holder_ended' });
+    await vi.advanceTimersByTimeAsync(2 * HANDOFF_LOST_AFTER_MS);
+    expect(recovered.map((r) => r.reason)).toEqual(['wake_returned']);
+  });
+
+  it('after the timer recovers, a late return does not recover again and a late drain is logged', async () => {
+    vi.useFakeTimers();
+    const first = watched();
+    await vi.advanceTimersByTimeAsync(HANDOFF_LOST_AFTER_MS);
+    expect(first.recovered.map((r) => r.reason)).toEqual(['unresolved']);
+    first.settle({ kind: 'returned', reason: 'holder_ended' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first.recovered).toHaveLength(1);
+
+    const second = watched();
+    await vi.advanceTimersByTimeAsync(HANDOFF_LOST_AFTER_MS);
+    second.settle({ kind: 'drained', hostTaskEventId: 'wake-1' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(second.recovered).toHaveLength(1);
+    expect(second.warn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('drained by its wake after it was re-run'));
   });
 });

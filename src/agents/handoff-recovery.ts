@@ -7,9 +7,16 @@
 // Modelled on the late-delegation wake (late-delegation.ts publishLateWake): a `system`-layer
 // publish, routing registered first so the reply reaches the person, a deterministic event id
 // (audit_log's primary key fences a duplicate), `liveTurn` absent and `wakeContext` derived (an
-// async boundary, #1126). The task goes through the turn lanes like every other synthetic turn
-// (ADR-053 section 4), so it waits its turn on that conversation; the other-turns note and the
-// backstop keep it from repeating what the other turn did.
+// async boundary, #1126). Unlike the wake it also carries the handing task's account (the reply
+// leaves from the mailbox the message reached) and the metadata its audience was judged from
+// (audienceMetadataOf), so the re-run turn's audience matches the handing turn's. The task goes
+// through the turn lanes like every other synthetic turn (ADR-053 section 4), so it waits its
+// turn on that conversation; the other-turns note and the backstop keep it from repeating what
+// the other turn did.
+//
+// A failed publish is retried a bounded number of times (RECOVERY_RETRY_DELAYS_MS). bus.publish
+// rejects only before any subscriber runs (authorisation or the audit write-ahead), so a retry
+// never starts a second turn, and the deterministic id fences one whose write did land.
 //
 // Fail-open: an error is logged and never thrown. A restart still loses the correction: the
 // registry is in-process (ADR-053 section 7). Logs carry ids and the reason only.
@@ -19,6 +26,7 @@ import type { EventBus } from '../bus/bus.js';
 import { createAgentTask } from '../bus/events.js';
 import { makeWakeContext } from '../autonomy/effective-standing.js';
 import type { TaskOriginator } from '../contacts/types.js';
+import { audienceMetadataOf } from '../dispatch/audience.js';
 import {
   HANDOFF_RECOVERY_KEY,
   isAuthenticatedRoot,
@@ -33,6 +41,14 @@ const RECOVERY_EVENT_ID_NAMESPACE = 'curia:turn-handoff-recovery';
 /** Recovered inbound ids remembered in-process, so two triggers for one correction publish once. */
 const MAX_REMEMBERED = 1_000;
 const COORDINATOR_AGENT_ID = 'coordinator';
+/** Delays before each retry of a failed publish; then the correction is logged as lost. */
+export const RECOVERY_RETRY_DELAYS_MS: readonly number[] = [5_000, 30_000];
+
+/** Dispatcher.registerExternalTaskRouting's shape: the late wake's routing, plus the account. */
+export type HandoffRecoveryRoutingRegistrar = (
+  taskEventId: string,
+  routing: Parameters<LateWakeRoutingRegistrar>[1] & { accountId?: string },
+) => void;
 
 /** A short phrase per reason for the preamble: what became of the passed-on message. */
 const REASON_TEXT: Record<HandoffRecoveryReason, string> = {
@@ -72,14 +88,18 @@ export interface HandoffRecoveryPublisherOptions {
   /** Verification tracker scrubText: a sign-in code is never re-sent. Absent: text unchanged. */
   scrubText?: (text: string) => string;
   /** Dispatcher.registerExternalTaskRouting; may also be set later with setRoutingRegistrar. */
-  registerRouting?: LateWakeRoutingRegistrar;
+  registerRouting?: HandoffRecoveryRoutingRegistrar;
+  /** Retry delays for a failed publish; defaults to RECOVERY_RETRY_DELAYS_MS. Tests shorten them. */
+  retryDelaysMs?: readonly number[];
 }
 
 export class HandoffRecoveryPublisher {
   private readonly bus: EventBus;
   private readonly logger: Logger;
   private readonly scrubText: ((text: string) => string) | undefined;
-  private registerRouting: LateWakeRoutingRegistrar | undefined;
+  private registerRouting: HandoffRecoveryRoutingRegistrar | undefined;
+  private readonly retryDelaysMs: readonly number[];
+  /** Inbound ids published or being published (retries included): one recovery per correction. */
   private readonly remembered = new Set<string>();
 
   constructor(opts: HandoffRecoveryPublisherOptions) {
@@ -87,9 +107,10 @@ export class HandoffRecoveryPublisher {
     this.logger = opts.logger;
     this.scrubText = opts.scrubText;
     this.registerRouting = opts.registerRouting;
+    this.retryDelaysMs = opts.retryDelaysMs ?? RECOVERY_RETRY_DELAYS_MS;
   }
 
-  setRoutingRegistrar(registerRouting: LateWakeRoutingRegistrar): void {
+  setRoutingRegistrar(registerRouting: HandoffRecoveryRoutingRegistrar): void {
     this.registerRouting = registerRouting;
   }
 
@@ -109,12 +130,42 @@ export class HandoffRecoveryPublisher {
       return;
     }
     this.remember(request.input.inboundEventId);
+    this.attempt(request, 0);
+  };
+
+  /**
+   * One detached publish attempt. A failure schedules the next retry, at most
+   * retryDelaysMs.length of them; after the last the correction is logged as lost and its id
+   * forgotten, so a later trigger for it may try again.
+   */
+  private attempt(request: HandoffRecoveryRequest, failures: number): void {
+    const ids = {
+      fromRootId: request.from.rootId,
+      targetRootId: request.targetRootId,
+      inboundEventId: request.input.inboundEventId,
+      reason: request.reason,
+    };
     void Promise.resolve()
       .then(() => this.publish(request))
       .catch((err: unknown) => {
-        this.logger.error({ ...ids, err }, 'turn-handoff recovery: failed to re-run a passed-on correction; it is lost');
+        const delay = this.retryDelaysMs[failures];
+        if (delay === undefined) {
+          this.remembered.delete(request.input.inboundEventId);
+          this.logger.error(
+            { ...ids, err, attempts: failures + 1 },
+            'turn-handoff recovery: failed to re-run a passed-on correction; it is lost',
+          );
+          return;
+        }
+        this.logger.warn(
+          { ...ids, err, attempt: failures + 1, retryInMs: delay },
+          'turn-handoff recovery: failed to re-run a passed-on correction; retrying',
+        );
+        const timer = setTimeout(() => this.attempt(request, failures + 1), delay);
+        // Never keeps the process alive on its own; a shutdown loses it, like a restart.
+        timer.unref?.();
       });
-  };
+  }
 
   private remember(inboundEventId: string): void {
     this.remembered.add(inboundEventId);
@@ -149,11 +200,16 @@ export class HandoffRecoveryPublisher {
       agentId: COORDINATOR_AGENT_ID,
       conversationId: from.conversationId,
       channelId: from.channelId,
+      // The mailbox the handing message reached, so the reply leaves from it.
+      ...(from.accountId !== null && { accountId: from.accountId }),
       senderId: from.senderId,
       content: handoffRecoveryContent(reason, text),
       // Curia re-running a message, not the person saying it now (#1892).
       syntheticTurn: true,
       metadata: {
+        // What the handing root's audience was judged from: the registry and contact recall
+        // judge this turn's the same way. First, so nothing below can be overwritten by it.
+        ...audienceMetadataOf(from.audienceMetadata),
         originator,
         // An async boundary: the ladder may only downgrade this lineage's authority.
         wakeContext: makeWakeContext(true),
@@ -170,6 +226,7 @@ export class HandoffRecoveryPublisher {
         conversationId: from.conversationId,
         senderId: from.senderId,
         originator,
+        ...(from.accountId !== null && { accountId: from.accountId }),
       });
     } else {
       this.logger.warn(ids, 'turn-handoff recovery: no routing registrar; the re-run turn\'s reply will not be relayed');
