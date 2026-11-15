@@ -128,7 +128,43 @@ function register(registry: TurnActivityRegistry, task: AgentTaskEvent): void {
 }
 
 describe('dispatcher stamps the sender text and scan count (#2588)', () => {
-  it("stamps the sender's own words, without Subject, quoted thread or any preamble", async () => {
+  it("stamps a new email's own Subject first: it can carry the whole request", async () => {
+    const { bus, tasks } = harness();
+    await bus.publish('channel', emailInbound('Subject: Change the booking to 11am\n\nPlease make this change.'));
+    const meta = tasks[0]!.payload.metadata!;
+    expect(meta[INBOUND_SENDER_TEXT_KEY]).toBe('Subject: Change the booking to 11am\n\nPlease make this change.');
+    expect(meta[INBOUND_SENDER_TEXT_CLIPPED_KEY]).toBeUndefined();
+    const registry = new TurnActivityRegistry({ logger: createLogger('error') });
+    register(registry, tasks[0]!);
+    // What a hand-off passes on and the note shows.
+    expect(registry.rootOf(tasks[0]!.id)!.requestText).toContain('Change the booking to 11am');
+    // A subject alone, with an empty body.
+    await bus.publish('channel', emailInbound('Subject: Move dinner to 8\n\n'));
+    expect(tasks[1]!.payload.metadata![INBOUND_SENDER_TEXT_KEY]).toBe('Subject: Move dinner to 8');
+  });
+
+  it("leaves out a reply's or forward's subject: it is the earlier message's, not the sender's", async () => {
+    const { bus, tasks } = harness({ scanner: false });
+    for (const subject of ['Re: travel', 'RE:travel', 'Fwd: travel', 'FW: travel', 'Fw: travel']) {
+      await bus.publish('channel', emailInbound(`Subject: ${subject}\n\nBook the 9am flight.`));
+    }
+    expect(tasks.map((t) => t.payload.metadata![INBOUND_SENDER_TEXT_KEY])).toEqual(Array(5).fill('Book the 9am flight.'));
+    // No Subject line, or an empty one: just the body.
+    await bus.publish('channel', emailInbound('Subject: \n\nBook the 9am flight.'));
+    expect(tasks[5]!.payload.metadata![INBOUND_SENDER_TEXT_KEY]).toBe('Book the 9am flight.');
+  });
+
+  it('the subject counts toward the clip: a long subject with a long body is partial', async () => {
+    const { bus, tasks } = harness({ scanner: false });
+    const body = 'x'.repeat(480);
+    await bus.publish('channel', emailInbound(`Subject: ${'Change the booking '.repeat(3)}\n\n${body}`));
+    const meta = tasks[0]!.payload.metadata!;
+    expect(Array.from(meta[INBOUND_SENDER_TEXT_KEY] as string)).toHaveLength(500);
+    expect((meta[INBOUND_SENDER_TEXT_KEY] as string).startsWith('Subject: Change the booking')).toBe(true);
+    expect(meta[INBOUND_SENDER_TEXT_CLIPPED_KEY]).toBe(true);
+  });
+
+  it("stamps the sender's own words, without a reply's Subject, quoted thread or any preamble", async () => {
     const { bus, tasks } = harness();
     await bus.publish('channel', emailInbound(EMAIL_CONTENT));
     expect(tasks).toHaveLength(1);

@@ -353,4 +353,17 @@ describe('Dispatcher — sender text withheld when a code may be in it (#2588)',
     await send('book the 9am flight');
     expect(tasks[0]!.payload.metadata!['inboundSenderText']).toBe('book the 9am flight');
   });
+
+  it("withholds the text when a short code sits in an email's own Subject, which the stamp carries", async () => {
+    const { send, tasks, tracker } = buildHarness({ active: [verificationRow('v-1', 'app')] });
+    await send('Subject: code 4821\n\nHere you go.', 'email', 'joseph@example.com');
+    expect(tracker.scrubText('4821')).toBe('[sign-in code]');
+    expect(tasks[0]!.payload.metadata!['inboundSenderText']).toBeUndefined();
+  });
+
+  it("stamps an email's own Subject with its body when nothing registered", async () => {
+    const { send, tasks } = buildHarness({ active: [verificationRow('v-1', 'app')] });
+    await send('Subject: Change the booking to 11am\n\nPlease make this change.', 'email', 'joseph@example.com');
+    expect(tasks[0]!.payload.metadata!['inboundSenderText']).toBe('Subject: Change the booking to 11am\n\nPlease make this change.');
+  });
 });

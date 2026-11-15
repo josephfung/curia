@@ -55,7 +55,9 @@ From rulings during the build:
 - **The note's request text is the sender's own text**, stamped by the dispatcher into trusted
   task metadata, not task content (which can carry preamble and other people's words). It is
   withheld when the inbound's scan count is not a known zero. The note stays in the system
-  string, JSON-quoted.
+  string, JSON-quoted. For email it is the body above any quote marker, led by the email's own
+  Subject (not a reply's or forward's), which can carry the whole request; the subject counts
+  toward the 500-character clip and is checked for short sign-in codes.
 - **Email one-to-one** reuses `contact-recent-history`'s private-audience rule.
 - **Hand-off eligibility:** the note's hand-off line and the tool appear only with lanes on, an
   eligible handing turn (the root inbound, full unclipped text, no follow-up drained since,
