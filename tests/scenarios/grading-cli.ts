@@ -1,12 +1,15 @@
 // tests/scenarios/grading-cli.ts — `pnpm grading`: human grades for choosing a judge (#2556 §4).
 //
 //   pnpm grading sample tests/scenarios/results/<run>.json [--n 25] [--seed s] [--layer voice|decision|all] [--out sheet.csv]
-//   pnpm grading agree tests/scenarios/results/<run>.json graded.csv [--judge <model>]... [--out agreement.json]
+//   pnpm grading agree tests/scenarios/results/<run>.json graded.csv [--judge <model>]... [--current-cases] [--out agreement.json]
 //
 // `sample` is free: it writes a grading sheet (CSV, blind to the judge's rating) and a short
 // guide for the grader. `agree` reads the filled sheet and reports how far each judge agrees
 // with it: the run's own judge (free, from its saved ratings) and each --judge candidate,
-// which re-judges only the graded runs (judge calls only; no agent runs).
+// which re-judges only the graded runs (judge calls only; no agent runs). Candidates judge
+// against the behaviors as the run saved them (what the sheet showed), or, with
+// --current-cases, as the case files describe them now: for checking a criteria edit
+// against grades already given.
 import { readFileSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { createTestModeStack } from '../../src/startup/test-mode-stack.js';
@@ -39,9 +42,15 @@ function flags(argv: string[], name: string): string[] {
   return argv.flatMap((a, i) => (a === name ? [argv[i + 1] ?? ''] : [])).filter(v => v !== '' && !v.startsWith('--'));
 }
 
+/** Flags that take no value, so the argument after one is not its value. */
+const BOOLEAN_FLAGS = new Set(['--current-cases']);
+
 /** Positional arguments: everything that is not a flag or a flag's value. */
 function positionals(argv: string[]): string[] {
-  return argv.filter((a, i) => !a.startsWith('--') && !(i > 0 && argv[i - 1]!.startsWith('--')));
+  return argv.filter((a, i) => {
+    const prev = i > 0 ? argv[i - 1]! : '';
+    return !a.startsWith('--') && !(prev.startsWith('--') && !BOOLEAN_FLAGS.has(prev));
+  });
 }
 
 const resolvePath = (p: string): string => path.resolve(process.env['INIT_CWD'] ?? process.cwd(), p);
@@ -98,7 +107,7 @@ async function sample(argv: string[]): Promise<void> {
 
 async function agree(argv: string[]): Promise<number> {
   const [file, gradesFile] = positionals(argv);
-  if (!file || !gradesFile) throw new Error('usage: pnpm grading agree <results.json> <graded.csv> [--judge <model>]... [--out agreement.json]');
+  if (!file || !gradesFile) throw new Error('usage: pnpm grading agree <results.json> <graded.csv> [--judge <model>]... [--current-cases] [--out agreement.json]');
   const suite = JSON.parse(readFileSync(resolvePath(file), 'utf-8')) as SuiteResult;
   const human = parseGrades(readFileSync(resolvePath(gradesFile), 'utf-8'));
   if (human.size === 0) throw new Error(`${gradesFile} has no grades yet`);
@@ -127,6 +136,7 @@ async function agree(argv: string[]): Promise<number> {
   const results: Agreement[] = [agreementWith(`${[...savedJudges].join(' / ')} (the run's own ratings)`, human, savedRatings)];
 
   const candidates = flags(argv, '--judge');
+  const currentCases = argv.includes('--current-cases');
   let spend = 0;
   if (candidates.length > 0) {
     // Only for the vault's OpenRouter key: the judge goes through the stack's provider (#911).
@@ -148,8 +158,10 @@ async function agree(argv: string[]): Promise<number> {
           if (!scenario) throw new Error(`${at.caseName}: no such case in ${CASES_DIR} any more`);
           const result = suite.cases.find(c => c.name === at.caseName)!;
           const run = { ...result.runs[at.runIndex]!, providerRetries: result.runs[at.runIndex]!.providerRetries ?? [] };
-          // The behaviors as the run saved them, which is what the sheet showed the grader.
-          const behaviors = resolveRunPlaceholders(result.behaviors.map(b => b.behavior), run).filter(b => !b.check);
+          // The behaviors as the run saved them, which is what the sheet showed the grader, or
+          // the case file's current ones. Ids carry over, so the grades still line up.
+          const source = currentCases ? scenario.expectedBehaviors : result.behaviors.map(b => b.behavior);
+          const behaviors = resolveRunPlaceholders(source, run).filter(b => !b.check);
           const rated = await judgeRun(scenario, run, behaviors, judge, usage);
           for (const [behaviorId, rating] of rated) ratings.set(`${at.caseName}#${at.runIndex + 1}#${behaviorId}`, rating);
         }
