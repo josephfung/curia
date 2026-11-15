@@ -169,7 +169,9 @@ describe('buildBriefUserPrompt', () => {
   // assistant logistics; the principal decided an unchecked time counts as unsupported.
   it('counts the principal\'s availability as a fact, offering a time included', () => {
     expect(BRIEF_SYSTEM_PROMPT).toContain('(their plans, whereabouts, schedule and availability, history, preferences, commitments, relationships)');
-    expect(BRIEF_SYSTEM_PROMPT).toContain('Saying a time is open, or offering one, states the principal\'s availability: it needs a calendar check this turn that covers that time.');
+    // The principal's own word counts too: scenario 35a's RSVP the principal dictated was held
+    // when the rule read "needs a calendar check".
+    expect(BRIEF_SYSTEM_PROMPT).toContain('Saying a time is open, or offering one, states the principal\'s availability: a calendar check this turn that covers that time supports it, and so does the principal saying so themselves.');
   });
 
   it('counts the assistant\'s own hold for this meeting as no conflict, and nothing else', () => {
