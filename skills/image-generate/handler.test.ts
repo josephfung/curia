@@ -2,7 +2,9 @@
 //
 // All tests mock global fetch() so no real API calls are made.
 // The handler reads the API key via ctx.secret(), which we provide
-// as a simple function returning a fixed test key.
+// as a simple function returning a fixed test key. GPT Image models
+// return base64 image data, so ctx.writeTempFile is mocked to return
+// a file:// URL for the stored bytes.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageGenerateHandler } from './handler.js';
@@ -10,27 +12,33 @@ import type { ToolContext } from '../../src/skills/types.js';
 import pino from 'pino';
 
 // A minimal ToolContext factory. image-generate needs:
-//   ctx.input    — the skill inputs
-//   ctx.secret() — returns the API key, or throws when secretThrows is true
-//   ctx.log      — pino logger (silenced)
+//   ctx.input         — the skill inputs
+//   ctx.secret()      — returns the API key, or throws when secretThrows is true
+//   ctx.writeTempFile — stores image bytes, returns a file:// URL;
+//                       omitted when tempStore is false
+//   ctx.log           — pino logger (silenced)
 function makeCtx(
   input: Record<string, unknown>,
-  { secretThrows = false } = {},
+  { secretThrows = false, tempStore = true } = {},
 ): ToolContext {
   return {
     input,
-    secret: (_name: string) => {
+    secret: (name: string) => {
       if (secretThrows) {
-        throw new Error("Secret 'openai_api_key' is declared but not set in the environment");
+        throw new Error(`Secret '${name}' is declared but not set in the environment`);
       }
       return 'test-api-key';
     },
+    ...(tempStore && {
+      writeTempFile: vi.fn(async (_buffer: Buffer, filename: string) =>
+        `file:///tmp/curia-temp/${filename}`),
+    }),
     log: pino({ level: 'silent' }),
   } as unknown as ToolContext;
 }
 
-// Minimal OpenAI Images API response shape.
-function makeOpenAIResponse(url: string, revisedPrompt?: string) {
+// Minimal OpenAI Images API response shapes.
+function makeUrlResponse(url: string, revisedPrompt?: string) {
   return {
     data: [
       {
@@ -39,6 +47,27 @@ function makeOpenAIResponse(url: string, revisedPrompt?: string) {
       },
     ],
   };
+}
+
+const PNG_BYTES = Buffer.from('fake-png-bytes');
+const PNG_B64 = PNG_BYTES.toString('base64');
+
+function makeB64Response(revisedPrompt?: string) {
+  return {
+    data: [
+      {
+        b64_json: PNG_B64,
+        ...(revisedPrompt !== undefined && { revised_prompt: revisedPrompt }),
+      },
+    ],
+  };
+}
+
+function okJson(body: unknown) {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 describe('ImageGenerateHandler', () => {
@@ -76,10 +105,7 @@ describe('ImageGenerateHandler', () => {
 
   it('calls OpenAI with correct defaults when optional inputs are omitted', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      new Response(
-        JSON.stringify(makeOpenAIResponse('https://example.com/image.png')),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
+      okJson(makeB64Response()),
     );
 
     const ctx = makeCtx({ prompt: 'a mountain at sunset' });
@@ -90,20 +116,18 @@ describe('ImageGenerateHandler', () => {
     expect(url).toBe('https://api.openai.com/v1/images/generations');
 
     const body = JSON.parse(init.body as string);
-    expect(body.model).toBe('dall-e-3');
+    expect(body.model).toBe('gpt-image-2');
     expect(body.prompt).toBe('a mountain at sunset');
-    expect(body.size).toBe('1792x1024');
-    expect(body.quality).toBe('hd');
-    expect(body.style).toBe('vivid');
+    expect(body.size).toBe('1536x1024');
+    expect(body.quality).toBe('high');
+    // GPT Image models reject `style` outright (#2326) — it must not be sent.
+    expect(body).not.toHaveProperty('style');
     expect(body.n).toBe(1);
   });
 
   it('trims whitespace from prompt before sending to OpenAI', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      new Response(
-        JSON.stringify(makeOpenAIResponse('https://example.com/image.png')),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
+      okJson(makeB64Response()),
     );
 
     const ctx = makeCtx({ prompt: '  a mountain at sunset  ' });
@@ -113,60 +137,98 @@ describe('ImageGenerateHandler', () => {
     expect(body.prompt).toBe('a mountain at sunset');
   });
 
-  it('respects size, quality, and style overrides', async () => {
+  it('respects size and quality overrides and never forwards style', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      new Response(
-        JSON.stringify(makeOpenAIResponse('https://example.com/image.png')),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
+      okJson(makeB64Response()),
     );
 
+    // `style` is a DALL-E-era input the manifest no longer advertises; a
+    // caller still passing it must not put it back on the wire.
     const ctx = makeCtx({
       prompt: 'abstract art',
       size: '1024x1024',
-      quality: 'standard',
+      quality: 'low',
       style: 'natural',
     });
     await handler.execute(ctx);
 
     const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
     expect(body.size).toBe('1024x1024');
-    expect(body.quality).toBe('standard');
-    expect(body.style).toBe('natural');
+    expect(body.quality).toBe('low');
+    expect(body).not.toHaveProperty('style');
   });
 
-  it('passes arbitrary size and style values through to the API without validation', async () => {
-    // size/quality/style are not validated against an allowlist — the API decides.
+  it('maps legacy DALL-E quality values to the GPT Image vocabulary', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(okJson(makeB64Response()))
+      .mockResolvedValueOnce(okJson(makeB64Response()));
+
+    await handler.execute(makeCtx({ prompt: 'one', quality: 'hd' }));
+    await handler.execute(makeCtx({ prompt: 'two', quality: 'standard' }));
+
+    const first = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    const second = JSON.parse((fetchSpy.mock.calls[1]![1] as RequestInit).body as string);
+    expect(first.quality).toBe('high');
+    expect(second.quality).toBe('medium');
+  });
+
+  it('passes arbitrary size and quality values through without validation', async () => {
+    // size/quality are not validated against an allowlist — the API decides.
     // This allows future model swaps without changing the skill.
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      new Response(
-        JSON.stringify(makeOpenAIResponse('https://example.com/image.png')),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
+      okJson(makeB64Response()),
     );
 
-    const ctx = makeCtx({ prompt: 'a red fox', size: '1200x628', style: 'watercolour', quality: 'ultra' });
+    const ctx = makeCtx({ prompt: 'a red fox', size: '1536x864', quality: 'auto' });
     const result = await handler.execute(ctx);
 
-    // The skill forwarded the call — result depends on the (mocked) API, not our validation
     expect(fetchSpy).toHaveBeenCalledOnce();
     const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
-    expect(body.size).toBe('1200x628');
-    expect(body.style).toBe('watercolour');
-    expect(body.quality).toBe('ultra');
-    // Mock returned success — confirm it came through
+    expect(body.size).toBe('1536x864');
+    expect(body.quality).toBe('auto');
     expect(result.success).toBe(true);
+  });
+
+  it('stores a b64_json response in the temp file store and returns its file URL', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      okJson(makeB64Response('A warm golden mountain at dusk')),
+    );
+
+    const ctx = makeCtx({ prompt: 'mountain at sunset' });
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    const writeTempFile = ctx.writeTempFile as unknown as ReturnType<typeof vi.fn>;
+    expect(writeTempFile).toHaveBeenCalledOnce();
+    const [bytes, filename] = writeTempFile.mock.calls[0] as [Buffer, string];
+    expect(bytes.equals(PNG_BYTES)).toBe(true);
+    expect(filename).toBe('generated-image.png');
+
+    if (result.success) {
+      const data = result.data as { url: string; revised_prompt?: string };
+      expect(data.url).toBe('file:///tmp/curia-temp/generated-image.png');
+      expect(data.revised_prompt).toBe('A warm golden mountain at dusk');
+    }
+  });
+
+  it('returns error when a b64_json response arrives without the temp file store', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      okJson(makeB64Response()),
+    );
+
+    const ctx = makeCtx({ prompt: 'mountain at sunset' }, { tempStore: false });
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/tempFileStore/);
   });
 
   it('returns url and revised_prompt on success', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      new Response(
-        JSON.stringify(makeOpenAIResponse(
-          'https://oai.cdn.example.com/abc123.png',
-          'A warm golden mountain at dusk',
-        )),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
+      okJson(makeUrlResponse(
+        'https://oai.cdn.example.com/abc123.png',
+        'A warm golden mountain at dusk',
+      )),
     );
 
     const ctx = makeCtx({ prompt: 'mountain at sunset' });
@@ -182,10 +244,7 @@ describe('ImageGenerateHandler', () => {
 
   it('returns url without revised_prompt when OpenAI omits it', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({ data: [{ url: 'https://oai.cdn.example.com/xyz.png' }] }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
+      okJson({ data: [{ url: 'https://oai.cdn.example.com/xyz.png' }] }),
     );
 
     const ctx = makeCtx({ prompt: 'a simple shape' });
@@ -255,10 +314,19 @@ describe('ImageGenerateHandler', () => {
 
   it('returns error when response data array is empty', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({ data: [] }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
+      okJson({ data: [] }),
+    );
+
+    const ctx = makeCtx({ prompt: 'anything' });
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/no image/i);
+  });
+
+  it('returns error when the image item carries neither b64_json nor url', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      okJson({ data: [{}] }),
     );
 
     const ctx = makeCtx({ prompt: 'anything' });

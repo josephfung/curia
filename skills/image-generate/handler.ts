@@ -1,17 +1,27 @@
 // handler.ts — image-generate skill implementation.
 //
-// Wraps the OpenAI Images API (DALL-E 3) to generate a single image from a text
-// prompt. Returns a temporary CDN URL — callers must download and persist the
-// image immediately; OpenAI expires the URL after approximately one hour.
+// Wraps the OpenAI Images API (GPT Image) to generate a single image from a
+// text prompt. GPT Image models return the image as base64 (`b64_json`) —
+// there is no URL response — so the bytes are written to the temp file store
+// and the returned `url` is the store's file:// URL. Callers must persist the
+// image promptly; the temp store is not durable storage.
 //
-// Defaults tuned for essay cover art (widescreen, high quality, vivid style).
-// All three are overridable so the skill is useful for other agents too.
+// Defaults tuned for essay cover art (widescreen, high quality). Both are
+// overridable so the skill is useful for other agents too.
+//
+// History: this skill originally called DALL-E 3, which OpenAI retired on
+// 2026-05-12; every production call has failed since (#2326). DALL-E-era
+// parameters do not carry over: GPT Image models reject `style` outright
+// (the parameter that broke every call) and use different quality/size
+// vocabularies, so legacy caller values are mapped below.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
 const OPENAI_API_URL = 'https://api.openai.com/v1/images/generations';
+const MODEL = 'gpt-image-2';
 
 interface OpenAIImageItem {
+  b64_json?: string;
   url?: string;
   revised_prompt?: string;
 }
@@ -20,13 +30,20 @@ interface OpenAIImagesResponse {
   data?: OpenAIImageItem[];
 }
 
+// DALL-E 3 quality values callers may still pass, mapped to the GPT Image
+// vocabulary (low / medium / high / auto). Anything else passes through —
+// validation is the API's responsibility.
+const LEGACY_QUALITY_MAP: Record<string, string> = {
+  hd: 'high',
+  standard: 'medium',
+};
+
 export class ImageGenerateHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const { prompt, size, quality, style } = ctx.input as {
+    const { prompt, size, quality } = ctx.input as {
       prompt?: string;
       size?: string;
       quality?: string;
-      style?: string;
     };
 
     // Validate required input
@@ -44,13 +61,14 @@ export class ImageGenerateHandler implements ToolHandler {
       return { success: false, error: 'OpenAI API key not configured — set OPENAI_API_KEY in the environment' };
     }
 
-    // Apply defaults; all three are passed through to the API as-is — validation
-    // is the API's responsibility (allows future model swaps without skill changes)
-    const resolvedSize = size ?? '1792x1024';
-    const resolvedQuality = quality ?? 'hd';
-    const resolvedStyle = style ?? 'vivid';
+    // Apply defaults in the GPT Image vocabulary. The old DALL-E 3 defaults
+    // (size 1792x1024, quality 'hd') map to 1536x1024 and 'high'. No `style`
+    // is sent: GPT Image models reject the parameter — describe the desired
+    // style in the prompt instead.
+    const resolvedSize = size ?? '1536x1024';
+    const resolvedQuality = LEGACY_QUALITY_MAP[quality ?? ''] ?? quality ?? 'high';
 
-    ctx.log.info({ promptLength: prompt.length, size: resolvedSize, quality: resolvedQuality }, 'Generating image via DALL-E 3');
+    ctx.log.info({ promptLength: prompt.length, size: resolvedSize, quality: resolvedQuality }, 'Generating image via GPT Image');
 
     let response: Response;
     try {
@@ -58,16 +76,15 @@ export class ImageGenerateHandler implements ToolHandler {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // Bearer token — never logged, never passed through LLM context
+          // Bearer <redacted> — never logged, never passed through LLM context
           'Authorization': `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: 'dall-e-3',
+          model: MODEL,
           prompt: prompt.trim(),
           n: 1,
           size: resolvedSize,
           quality: resolvedQuality,
-          style: resolvedStyle,
         }),
         // 55s hard timeout — shorter than the manifest's 60s so we have
         // time to surface a clean error before the execution layer kills us
@@ -102,9 +119,31 @@ export class ImageGenerateHandler implements ToolHandler {
     }
 
     const item = body.data?.[0];
-    if (!item?.url) {
-      ctx.log.error({ body }, 'OpenAI response missing image URL');
-      return { success: false, error: 'No image URL in OpenAI response — unexpected response shape' };
+    if (!item?.b64_json && !item?.url) {
+      ctx.log.error({ body }, 'OpenAI response missing image data');
+      return { success: false, error: 'No image data in OpenAI response — unexpected response shape' };
+    }
+
+    // GPT Image models return base64 bytes, not a URL. Write them to the
+    // temp file store and hand back its file:// URL, keeping the `url`
+    // output callers already consume.
+    let url = item.url;
+    if (item.b64_json) {
+      if (!ctx.writeTempFile) {
+        ctx.log.error('image-generate: tempFileStore capability missing — execution layer misconfigured');
+        return { success: false, error: 'image-generate requires tempFileStore capability' };
+      }
+      const bytes = Buffer.from(item.b64_json, 'base64');
+      if (bytes.length === 0) {
+        ctx.log.error('OpenAI returned empty b64_json image data');
+        return { success: false, error: 'No image data in OpenAI response — unexpected response shape' };
+      }
+      try {
+        url = await ctx.writeTempFile(bytes, 'generated-image.png');
+      } catch (err) {
+        ctx.log.error({ err }, 'Failed to write generated image to temp file store');
+        return { success: false, error: 'Failed to store generated image' };
+      }
     }
 
     ctx.log.info('Image generated successfully');
@@ -112,9 +151,10 @@ export class ImageGenerateHandler implements ToolHandler {
     return {
       success: true,
       data: {
-        url: item.url,
-        // revised_prompt is set when DALL-E 3 rewrites the prompt for safety/quality;
-        // pass it through so callers can log or display what was actually used
+        url,
+        // revised_prompt is set when the model rewrites the prompt for
+        // safety/quality; pass it through so callers can log or display
+        // what was actually used
         ...(item.revised_prompt !== undefined && { revised_prompt: item.revised_prompt }),
       },
     };
