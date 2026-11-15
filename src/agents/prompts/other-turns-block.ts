@@ -77,7 +77,7 @@ const OUTCOME_TEXT: Record<ActionOutcome, string> = {
 /**
  * The same resolved person's other turns in the window, in other conversations, on laned human
  * channels. Both roots must be resolved, non-system, share the contact UUID and have a sender
- * their channel authenticated or on SMS, web or CLI (isAuthenticatedRoot): a forged email From
+ * that passes isAuthenticatedRoot (its doc says which channels count): a forged email From
  * resolved to this person is not them, and its words must not show here as their own. A turn
  * in this same conversation is left out: its exchange is already in this conversation's
  * history. A scheduler, internal, bullpen or voice root is left out: it is not a conversation
