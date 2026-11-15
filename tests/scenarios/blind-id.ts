@@ -196,6 +196,8 @@ export async function runBlindId(
       total: 0,
       written: result.runs.filter(run => contrastMessage(sources, run) !== undefined).length,
       unmatched: result.runs.filter(run => calledSourceToolUnmatched(sources, run)).length,
+      // An errored run measured nothing: it must not read as a choice not to write.
+      errored: result.runs.filter(run => run.error).length,
     }];
   }));
   let correct = 0;
@@ -259,20 +261,23 @@ export async function runBlindId(
 }
 
 /**
- * "finesse-51-reschedule: 7/12 matched (58%; chance 33%)", then each case's hits. A case with
- * no message in any trial says why: it wrote none (a decision, not a fault), its runs called the
- * source's tool without matching it (check the source), or no run had a second message to
- * compare with. The group's chance figure is then over fewer recipients than it has.
- */
 /** Why a case is in no judged trial. */
 function untested(c: ContrastGroupResult['byCase'][string]): string {
   // Saved before the counts existed: say only what is known.
   if (c.written === undefined) return 'no message in any trial (it wrote none, or its contrast.message source matches nothing)';
   if (c.written > 0) return `not compared: wrote in ${c.written} run(s), but no other case wrote in the same run`;
   if (c.unmatched! > 0) return `no message: ${c.unmatched} run(s) used the source's tool outside its \`with\` (to someone else, or the source is wrong)`;
+  // Any errored run: the silence is not all the agent's (#2556 review).
+  if ((c.errored ?? 0) > 0) return `no message: ${c.errored} run(s) errored, and the rest wrote this recipient nothing`;
   return 'wrote this recipient nothing in any run (the agent\'s decision, not a harness fault)';
 }
 
+/**
+ * "finesse-51-reschedule: 7/12 matched (58%; chance 33%)", then each case's hits. A case with
+ * no message in any trial says why: it wrote none (a decision, not a fault), its runs called the
+ * source's tool without matching it (check the source), runs errored, or no run had a second
+ * message to compare with. The group's chance figure is then over fewer recipients than it has.
+ */
 export function formatBlindIdLines(results: readonly ContrastGroupResult[]): string[] {
   const pct = (v: number): string => `${Math.round(v * 100)}%`;
   return results.flatMap(r => {
