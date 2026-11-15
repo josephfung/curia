@@ -671,30 +671,33 @@ export class TurnActivityRegistry {
   }
 
   /**
-   * Drop ended roots older than the window, with their actions and shown sets. `keep` (the
+   * Drop roots no live turn can still see, with their actions and shown sets. `keep` (the
    * caller's own root) is never dropped, even when its last activity is old.
+   *
+   * A live turn looks back a window from its own start (qualifyingOthers), so one cutoff
+   * serves both kinds of root: the oldest live start, less a window. An ended root is kept
+   * while it ended after that cutoff; an auto root (which never ends) while its last activity
+   * is after it, or while it still has a task running and is not stuck. An expired auto root
+   * (not live: idle a window, or stuck) does not hold the cutoff back.
    */
   private prune(keep?: RootState): void {
     const now = this.now();
     this.lastPruneAt = now;
     this.callsSincePrune = 0;
-    const autoCutoff = now - TURN_ACTIVITY_WINDOW_MS;
-    // Stale auto-registered roots go first so they do not hold the cutoff back.
-    for (const root of [...this.roots.values()]) {
-      if (root === keep || !root.autoRegistered || root.lastActivityAt >= autoCutoff) continue;
-      if (root.runningTaskIds.size === 0 || this.isStuck(root, now)) this.dropRoot(root);
-    }
-    // A live root (auto-registered or not) still looks back a window from its own start.
-    let oldestRunningStart = now;
+    let oldestLiveStart = now;
     for (const root of this.roots.values()) {
-      const running = root.autoRegistered ? !this.isStuck(root, now) : this.effectiveEndedAt(root, now) === null;
-      if (running && root.startedAt < oldestRunningStart) oldestRunningStart = root.startedAt;
+      if ((root === keep || this.isLive(root, now)) && root.startedAt < oldestLiveStart) oldestLiveStart = root.startedAt;
     }
-    const endedCutoff = oldestRunningStart - TURN_ACTIVITY_WINDOW_MS;
+    const cutoff = oldestLiveStart - TURN_ACTIVITY_WINDOW_MS;
     for (const root of [...this.roots.values()]) {
-      if (root === keep || root.autoRegistered) continue;
+      if (root === keep) continue;
+      if (root.autoRegistered) {
+        if (root.lastActivityAt >= cutoff) continue;
+        if (root.runningTaskIds.size === 0 || this.isStuck(root, now)) this.dropRoot(root);
+        continue;
+      }
       const ended = this.effectiveEndedAt(root, now);
-      if (ended !== null && ended < endedCutoff) this.dropRoot(root);
+      if (ended !== null && ended < cutoff) this.dropRoot(root);
     }
     this.dropOrphanActions();
   }
