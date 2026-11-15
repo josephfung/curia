@@ -92,7 +92,7 @@ describe('EmailCalendarPage', () => {
     await mount();
     expect(container.querySelector('[role="alert"]')).toBeNull();
     expect((container.querySelector('[aria-label="Grant ID"]') as HTMLInputElement).disabled).toBe(false);
-    expect(button('Rename')!.disabled).toBe(false);
+    expect(button('Edit')!.disabled).toBe(false);
     expect(container.textContent).toContain('Changes apply at once');
   });
 
@@ -114,11 +114,11 @@ describe('EmailCalendarPage', () => {
     expect(container.textContent).toContain('boss@acme-example.com');
     expect(container.querySelector('[role="alert"]')).toBeNull();
     expect((container.querySelector('[aria-label="Grant ID"]') as HTMLInputElement).disabled).toBe(true);
-    expect(button('Rename')!.disabled).toBe(true);
+    expect(button('Edit')!.disabled).toBe(true);
     await act(async () => { answer(json(channels(true))); });
     await act(async () => { await new Promise(r => setTimeout(r, 20)); });
     expect((container.querySelector('[aria-label="Grant ID"]') as HTMLInputElement).disabled).toBe(false);
-    expect(button('Rename')!.disabled).toBe(false);
+    expect(button('Edit')!.disabled).toBe(false);
   });
 
   it('without the key: alerts, links to the email channel, lists mailboxes read-only', async () => {
@@ -135,7 +135,7 @@ describe('EmailCalendarPage', () => {
     for (const label of ['Mailbox id', 'Label', 'Grant ID']) {
       expect((container.querySelector(`[aria-label="${label}"]`) as HTMLInputElement).disabled).toBe(true);
     }
-    for (const text of ['Test', 'Add mailbox', 'Replace grant', 'Rename', 'Remove']) {
+    for (const text of ['Test', 'Add mailbox', 'Edit', 'Remove']) {
       expect(button(text)!.disabled).toBe(true);
     }
     // No "changes apply at once" beside a form that is off.
