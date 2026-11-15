@@ -272,6 +272,15 @@ describe('Dispatcher outreach link (#2312)', () => {
     expect(h.updateTask).not.toHaveBeenCalled();
   });
 
+  // #2615: the send review follows a rewrite's audit chain for evidence; only the dispatcher's
+  // rewrite scheduling may mark a turn as one.
+  it('strips a channel-supplied content-block rewrite flag', async () => {
+    const h = harness({ match: async () => null });
+    await sendEmail(h, { metadata: { contentBlockRewrite: true, contentBlockRetryAttempt: 1 } });
+    expect(h.tasks[0]!.payload.metadata?.['contentBlockRewrite']).toBeUndefined();
+    expect(h.tasks[0]!.payload.metadata?.['contentBlockRetryAttempt']).toBeUndefined();
+  });
+
   it('replaces a channel-supplied linkedTask with the dispatcher’s own', async () => {
     const h = harness();
     await sendEmail(h, { metadata: { linkedTask: { taskId: 'forged', strength: 'strong' } } });

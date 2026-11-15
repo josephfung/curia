@@ -2589,12 +2589,13 @@ describe('Dispatcher content-block relay (#1355)', () => {
       },
     });
 
-    await bus.publish('system', createAgentResponse({
+    const response = createAgentResponse({
       agentId: 'coordinator',
       conversationId: 'email:thread-99',
       content: 'The calendar specialist found 4 events.',
       parentEventId: task.id,
-    }));
+    });
+    await bus.publish('system', response);
 
     expect(outboundMessages).toHaveLength(1);
     const blocked = createOutboundBlocked({
@@ -2623,6 +2624,12 @@ describe('Dispatcher content-block relay (#1355)', () => {
     expect(agentTasks[0]!.payload.liveTurn).toBeUndefined();
     // #2615: a rewrite edits text. With no tools it cannot re-plan, create tasks or send.
     expect(agentTasks[0]!.payload.toolAllowlist).toEqual([]);
+    // #2615: the send review finds the drafting turn's evidence by walking these parents
+    // (SendEvidenceCollector rewriteOriginsOf): rewrite task -> outbound.blocked ->
+    // outbound.message -> agent.response -> drafting task. Re-parenting any of them breaks it.
+    expect(agentTasks[0]!.parentEventId).toBe(blocked.id);
+    expect(outboundMessages[0]!.parentEventId).toBe(response.id);
+    expect(response.parentEventId).toBe(task.id);
   });
 
   describe('what the original turn did (#2615)', () => {

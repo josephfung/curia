@@ -378,7 +378,7 @@ export class SendEvidenceCollector {
 
       const results = await this.deps.auditLogRepo.findToolResultsForTasks(drafting, RESULTS_LIMIT);
       if (results.length === RESULTS_LIMIT) {
-        this.deps.logger.info({ taskEventIds, limit: RESULTS_LIMIT }, 'send-evidence: result limit reached — older lookups left out');
+        this.deps.logger.info({ taskEventIds: drafting, limit: RESULTS_LIMIT }, 'send-evidence: result limit reached — older lookups left out');
       }
 
       const toolResults: Array<{ toolName: string; result: string }> = [];
@@ -438,9 +438,10 @@ export class SendEvidenceCollector {
    * first, each once (#2615). A rewrite's audit chain is written by code: its task is parented on
    * the outbound.blocked event, which is parented on the relayed outbound.message, then the
    * agent.response, then the turn that drafted it (itself a rewrite on a second attempt). Each hop
-   * must be that event type in the rewrite's own conversation. A chain that cannot be followed
-   * adds nothing: less evidence makes the review stricter, never looser, so it is logged and the
-   * review goes on.
+   * must be that event type in the rewrite's own conversation. A chain that cannot be followed (a
+   * missing row, another type or conversation) adds nothing: less evidence makes the review
+   * stricter, never looser, so it is logged and the review goes on. A read that throws is a
+   * failed audit read like any other: it reaches collect()'s catch and the evidence is unavailable.
    */
   private async withRewriteOrigins(taskEventIds: readonly string[], latest: AuditLogRow): Promise<readonly string[]> {
     const origins: string[] = [];
@@ -478,6 +479,13 @@ export class SendEvidenceCollector {
       }
       found.push(drafting.id);
       current = drafting;
+    }
+    if (isContentBlockRewrite(current) && found.length === REWRITE_MAX_HOPS) {
+      // More rewrites than the dispatcher allows: the oldest drafting turn is not reached.
+      this.deps.logger.warn(
+        { rewriteTaskEventId: rewrite.id, maxHops: REWRITE_MAX_HOPS },
+        'send-evidence: a content-block rewrite chain ran past its hop bound — older lookups left out',
+      );
     }
     return found.reverse();
   }
