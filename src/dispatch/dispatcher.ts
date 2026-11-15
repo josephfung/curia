@@ -38,7 +38,13 @@ import { hasBookingPageLink, inboundTurnGuidance, looksLikeForward, looksLikeMak
 import { hasBacklog, type PrincipalBacklogCounts } from '../agents/prompts/backlog-line.js';
 import type { AwaitingAnswer } from '../agents/prompts/awaiting-answers.js';
 import type { PrincipalBacklogSource } from './principal-backlog.js';
-import { clipSenderText, INBOUND_SCAN_FINDING_COUNT_KEY, INBOUND_SENDER_TEXT_KEY } from './turn-activity.js';
+import {
+  clipSenderText,
+  INBOUND_SCAN_FINDING_COUNT_KEY,
+  INBOUND_SENDER_TEXT_CLIPPED_KEY,
+  INBOUND_SENDER_TEXT_KEY,
+  senderTextExceedsClip,
+} from './turn-activity.js';
 import { rewriteLlmFailureTurns } from '../memory/llm-failure-turn.js';
 import {
   CONTENT_BLOCK_MAX_RETRIES,
@@ -127,6 +133,7 @@ function mergeTaskMetadata(
     // The sender's own text and scan count the turn-activity registry shows other turns of
     // the same person; a forged copy could put words in their mouth or hide a flag (#2588).
     [INBOUND_SENDER_TEXT_KEY]: undefined,
+    [INBOUND_SENDER_TEXT_CLIPPED_KEY]: undefined,
     [INBOUND_SCAN_FINDING_COUNT_KEY]: undefined,
     ...(trustedMeta ?? {}),           // trusted stamp wins last
   };
@@ -1307,6 +1314,10 @@ export class Dispatcher {
       ? parseSpotCheckVerdicts(spotCheckText)
       : [];
 
+    // The sender's own words for the turn-activity registry (#2588), and whether they had to
+    // be clipped: a hand-off must never pass on a partial message as the whole one.
+    const senderText = spotCheckCandidateText(payload.channelId, inboundText);
+
     // Trusted task metadata: originator + (when suppressing) auto-gen sender block for skills.
     const trustedTaskMeta: Record<string, unknown> = {
       ...originatorMeta,
@@ -1324,7 +1335,10 @@ export class Dispatcher {
       // when it relays a sign-in code: the code must not be repeated into other turns (#2017).
       ...(verificationCodeReceived
         ? {}
-        : { [INBOUND_SENDER_TEXT_KEY]: clipSenderText(spotCheckCandidateText(payload.channelId, inboundText)) }),
+        : {
+          [INBOUND_SENDER_TEXT_KEY]: clipSenderText(senderText),
+          ...(senderTextExceedsClip(senderText) ? { [INBOUND_SENDER_TEXT_CLIPPED_KEY]: true } : {}),
+        }),
       ...(scanCompleted ? { [INBOUND_SCAN_FINDING_COUNT_KEY]: scanFindingCount } : {}),
     };
 

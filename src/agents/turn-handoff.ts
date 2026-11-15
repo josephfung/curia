@@ -12,7 +12,7 @@
 // (requestText), never from the model's tool input, and only after a clean inbound scan.
 // Fail-open: any error logs and tells the model to do the work itself.
 
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type { RootTurn, TurnActivityRegistry } from '../dispatch/turn-activity.js';
 import type { InjectableInput, TicketResult, TurnLanes } from '../dispatch/turn-lanes.js';
 import type { Logger } from '../logger.js';
@@ -90,6 +90,11 @@ export interface PerformHandoffArgs {
   targetRootId: string;
   /** The handing turn's sender display name, for the frame; it falls back to "the sender". */
   senderLabel?: string;
+  /**
+   * True once the handing task has drained a follow-up into itself: the person said more than
+   * the root's request text, so that text is no longer what they are asking for.
+   */
+  drainedFollowUp?: boolean;
 }
 
 const decline = (reason: HandoffDeclineReason): HandoffOutcome => ({ kind: 'do_it_yourself', reason });
@@ -97,6 +102,36 @@ const decline = (reason: HandoffDeclineReason): HandoffOutcome => ({ kind: 'do_i
 /** A resolved person's turn, not Curia's own work. */
 function isPersonTurn(root: RootTurn): boolean {
   return root.originatorResolved && !root.originatorIsSystem && isUuid(root.originatorContactId);
+}
+
+/**
+ * Whether the task `taskEventId`, under root `mine`, may hand its message to another turn:
+ * a resolved person's root inbound turn (not a wake or a delegated task under it) whose own
+ * words are known in full and scanned clean. The other-turns note shows its hand-off line,
+ * and the runtime offers the tool, only when this holds (and lanes are on).
+ */
+export function handingRootEligible(mine: RootTurn, taskEventId: string): boolean {
+  return isPersonTurn(mine)
+    && mine.rootId === taskEventId
+    && mine.requestText !== null
+    && !mine.requestTextClipped
+    && mine.inboundScanFindings === 0;
+}
+
+/**
+ * A stable id per (handing root, target root), UUIDv5-shaped from a SHA-1 of the pair. A
+ * repeated call is then the same inbound to the lane (deduped) and to the wake hold.
+ */
+export function handoffInboundEventId(fromRootId: string, targetRootId: string): string {
+  const hex = createHash('sha1').update(`curia:turn-handoff:${fromRootId}\u0000${targetRootId}`).digest('hex');
+  const variant = ((parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, '0');
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    `5${hex.slice(13, 16)}`,
+    `${variant}${hex.slice(18, 20)}`,
+    hex.slice(20, 32),
+  ].join('-');
 }
 
 function samePerson(mine: RootTurn, other: RootTurn): boolean {
@@ -151,11 +186,20 @@ async function runHandoff(args: PerformHandoffArgs): Promise<HandoffOutcome> {
   if (target.conversationId === mine.conversationId) return decline('ineligible');
   if (!target.audienceOneToOne) return decline('not_one_to_one');
 
-  if (mine.requestText === null || mine.inboundScanFindings !== 0) {
+  if (mine.requestText === null || mine.requestTextClipped || mine.inboundScanFindings !== 0) {
     logger.info(
-      { ...ids, hasRequestText: mine.requestText !== null, inboundScanFindings: mine.inboundScanFindings },
-      'turn-handoff: the message has no trusted text or a non-clean scan; not passed on',
+      {
+        ...ids,
+        hasRequestText: mine.requestText !== null,
+        requestTextClipped: mine.requestTextClipped,
+        inboundScanFindings: mine.inboundScanFindings,
+      },
+      'turn-handoff: the message has no full trusted text or a non-clean scan; not passed on',
     );
+    return decline('ineligible');
+  }
+  if (args.drainedFollowUp === true) {
+    logger.info(ids, 'turn-handoff: the turn took a follow-up since its message; its text is not the whole request');
     return decline('ineligible');
   }
   if (!lanes.enabled) {
@@ -164,7 +208,7 @@ async function runHandoff(args: PerformHandoffArgs): Promise<HandoffOutcome> {
   }
 
   const input: InjectableInput = {
-    inboundEventId: randomUUID(),
+    inboundEventId: handoffInboundEventId(mine.rootId, target.rootId),
     // isPersonTurn checked it is a UUID.
     senderContactId: mine.originatorContactId as string,
     senderResolved: true,
@@ -172,10 +216,12 @@ async function runHandoff(args: PerformHandoffArgs): Promise<HandoffOutcome> {
     // Checked above: the handing root's inbound scan ran and found nothing.
     injectionFindingCount: 0,
     channelId: mine.channelId,
+    // A direct inject joins a live turn as a live follow-up. A held one is set to false below.
     liveTurn: true,
     content: mine.requestText,
     originalContent: mine.requestText,
-    receivedAt: new Date().toISOString(),
+    // When the person sent it, not when it was handed over.
+    receivedAt: new Date(mine.startedAt).toISOString(),
     ...(args.senderLabel !== undefined && args.senderLabel.length > 0 && { senderLabel: args.senderLabel }),
     handedOverFrom: { channelId: mine.channelId, conversationLabel: conversationLabel(mine.channelId) },
   };
@@ -202,20 +248,30 @@ async function runHandoff(args: PerformHandoffArgs): Promise<HandoffOutcome> {
     return awaitTicket(args, result.ticket, input, { ...logIds, hostTaskEventId });
   }
 
-  if (registry.isRootRunning(target.rootId)) {
+  if (registry.hasDetachedWork(target.rootId)) {
     // Only a detached specialist is working; its wake drains the hold at turn start.
-    if (!registry.holdForWake(target.rootId, input)) return decline('cap');
+    if (!registry.holdForWake(target.rootId, forWake(input))) return decline('cap');
     logger.info(logIds, 'turn-handoff: held the message for the running turn\'s wake');
     return { kind: 'held_for_wake' };
   }
   return decline('finished');
 }
 
+/**
+ * A held input reaches a late-delegation wake, which never carries liveTurn (#1126): the
+ * elevated self-approval signal must not come back minutes later through a hand-off.
+ */
+function forWake(input: InjectableInput): InjectableInput {
+  return { ...input, liveTurn: false };
+}
+
 const TIMED_OUT = Symbol('timed out');
 
 /**
  * Wait up to HANDOFF_DRAIN_WAIT_MS for the target turn to drain the message. A return (the
- * turn ended without draining it) holds it for the root's wake while the root still runs.
+ * turn ended without draining it) holds it for the root's wake only while a detached
+ * specialist still runs under the root: the returning coordinator itself is still listed as
+ * running (its lane is released before its end is recorded) and will not wake anything.
  * After the wait the outcome is `queued`, and a later return is still held, or logged at
  * error when nothing can take it: the correction is then lost.
  */
@@ -232,8 +288,8 @@ async function awaitTicket(
       logger.info(logIds, 'turn-handoff: the running turn took the message');
       return { kind: 'delivered' };
     }
-    const running = registry.isRootRunning(targetRootId);
-    if (running && registry.holdForWake(targetRootId, input)) {
+    const detached = registry.hasDetachedWork(targetRootId);
+    if (detached && registry.holdForWake(targetRootId, forWake(input))) {
       logger.info(logIds, 'turn-handoff: the turn ended without the message; held for its wake');
       return { kind: 'held_for_wake' };
     }
@@ -241,8 +297,8 @@ async function awaitTicket(
       // The handing turn already told the person it was passed on.
       logger.error(logIds, 'turn-handoff: a passed-on message came back with nothing to take it; the correction is lost');
     }
-    // Still running but the hold was full, or the whole turn has ended.
-    return decline(running ? 'cap' : 'finished');
+    // A specialist runs but the hold was full, or nothing under the root will wake.
+    return decline(detached ? 'cap' : 'finished');
   }).catch((err: unknown): HandoffOutcome => {
     logger.error({ ...logIds, err }, 'turn-handoff: failed to settle a passed-on message');
     return decline('ineligible');

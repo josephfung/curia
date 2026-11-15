@@ -14,6 +14,7 @@ import {
   MAX_RUNNING_ROOT_AGE_MS,
   isAuthenticatedRoot,
   INBOUND_SENDER_TEXT_KEY,
+  INBOUND_SENDER_TEXT_CLIPPED_KEY,
   INBOUND_SCAN_FINDING_COUNT_KEY,
   type ActionTarget,
   type TaskStartInput,
@@ -1076,31 +1077,75 @@ describe('TurnActivityRegistry held corrections for a wake (#2588)', () => {
     expect(registry.takeHeldForWake('nope')).toEqual([]);
   });
 
-  it('drops held inputs with their root and logs the loss', () => {
+  it('does not hold the same inbound twice', () => {
+    const { registry } = setup();
+    startRoot(registry, 'A');
+    expect(registry.holdForWake('A', held('1'))).toBe(true);
+    expect(registry.holdForWake('A', held('1'))).toBe(true);
+    expect(registry.takeHeldForWake('A')).toHaveLength(1);
+  });
+
+  it('logs at error as soon as a root ends with corrections still held, and again when dropped', () => {
     const { error, logger } = spyLogger();
     const { registry, set } = setup(logger);
     startRoot(registry, 'A');
     registry.holdForWake('A', held('1'));
     registry.taskEnded('A');
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ rootId: 'A', held: 1, inboundEventIds: ['1'] }),
+      expect.stringContaining('ended'),
+    );
     set(T0 + 3 * TURN_ACTIVITY_WINDOW_MS);
     // Any start prunes; A ended long ago.
     startRoot(registry, 'B', { startedAt: T0 + 3 * TURN_ACTIVITY_WINDOW_MS });
     expect(registry.rootOf('A')).toBeUndefined();
     expect(registry.takeHeldForWake('A')).toEqual([]);
-    expect(error).toHaveBeenCalledWith(expect.objectContaining({ rootId: 'A', held: 1 }), expect.any(String));
+    expect(error).toHaveBeenCalledTimes(2);
+    expect(error).toHaveBeenLastCalledWith(expect.objectContaining({ rootId: 'A', held: 1 }), expect.stringContaining('lost'));
   });
 
-  it('isRootRunning: running, ended, stuck, auto', () => {
+  it('a root that ends with nothing held logs nothing', () => {
+    const { error, logger } = spyLogger();
+    const { registry } = setup(logger);
+    startRoot(registry, 'A');
+    registry.taskEnded('A');
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('hasDetachedWork counts running non-coordinator tasks only', () => {
     const { registry, set } = setup();
     startRoot(registry, 'A');
-    expect(registry.isRootRunning('A')).toBe(true);
+    // Only its coordinator: a lane release before its end is recorded must not look detached.
+    expect(registry.hasDetachedWork('A')).toBe(false);
+    start(registry, 'spec', {
+      agentId: 'research',
+      metadata: { delegationOrigin: { taskEventId: 'A', conversationId: 'conv-A' } },
+    });
+    expect(registry.hasDetachedWork('A')).toBe(true);
     registry.taskEnded('A');
-    expect(registry.isRootRunning('A')).toBe(false);
+    expect(registry.hasDetachedWork('A')).toBe(true);
+    registry.taskEnded('spec');
+    expect(registry.hasDetachedWork('A')).toBe(false);
+    expect(registry.hasDetachedWork('nope')).toBe(false);
+
+    // A stuck root counts as ended.
     startRoot(registry, 'B');
+    start(registry, 'spec-b', {
+      agentId: 'research',
+      metadata: { delegationOrigin: { taskEventId: 'B', conversationId: 'conv-B' } },
+    });
     set(T0 + MAX_RUNNING_ROOT_AGE_MS + 1);
-    expect(registry.isRootRunning('B')).toBe(false);
-    expect(registry.isRootRunning('nope')).toBe(false);
-    registry.ensureRoot('V', { ...VOICE_SEED, conversationId: 'V' });
-    expect(registry.isRootRunning('V')).toBe(false);
+    expect(registry.hasDetachedWork('B')).toBe(false);
+  });
+
+  it('records whether the request text was clipped', () => {
+    const { registry } = setup();
+    expect(start(registry, 'short', { metadata: { [INBOUND_SENDER_TEXT_KEY]: 'hi' } }).requestTextClipped).toBe(false);
+    expect(start(registry, 'long', { metadata: { [INBOUND_SENDER_TEXT_KEY]: 'x'.repeat(501) } }).requestTextClipped).toBe(true);
+    expect(start(registry, 'flagged', {
+      metadata: { [INBOUND_SENDER_TEXT_KEY]: 'hi', [INBOUND_SENDER_TEXT_CLIPPED_KEY]: true },
+    }).requestTextClipped).toBe(true);
+    expect(start(registry, 'none', { metadata: { [INBOUND_SENDER_TEXT_CLIPPED_KEY]: true } }).requestTextClipped).toBe(false);
   });
 });

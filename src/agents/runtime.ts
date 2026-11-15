@@ -22,9 +22,10 @@ import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
 import { historyForLlm, llmFailurePairing, llmFailureTurnContent, LLM_FAILURE_USER_MESSAGE } from '../memory/llm-failure-turn.js';
 import { renderBudgetExhaustedVerificationReply } from './prompts/verification-block.js';
-import { buildOtherTurnViews, renderOtherTurnsBlock } from './prompts/other-turns-block.js';
+import { buildOtherTurnViews, renderOtherTurnsBlock, showsHandoffGuidance } from './prompts/other-turns-block.js';
 import {
   TURN_HANDOFF_TOOL_NAME,
+  handingRootEligible,
   handoffOutcomeText,
   parseHandoffRequest,
   performHandoff,
@@ -540,8 +541,10 @@ export class AgentRuntime {
    * a delegated specialist's. A late-delegation wake continues its root, so it sees that
    * root's others. Fail-open: an error is logged and the block omitted.
    *
-   * `handoffAvailable` is true exactly when the block carries the `turn-handoff` guidance line
-   * (some listed turn can take a hand-off), from the same views; the runtime then offers the tool.
+   * `handoffAvailable` is true exactly when the block carries the `turn-handoff` guidance line,
+   * from the same views and the same eligibility; the runtime then offers the tool. Both need
+   * lanes on and this task to be a hand-off-eligible root turn (handingRootEligible), plus some
+   * listed turn that can take a hand-off.
    */
   private otherTurnsBlock(taskEvent: AgentTaskEvent): { text: string; handoffAvailable: boolean } {
     const none = { text: '', handoffAvailable: false };
@@ -552,8 +555,9 @@ export class AgentRuntime {
       const mine = registry.rootOf(taskEvent.id);
       if (!mine) return none;
       const views = buildOtherTurnViews(registry, mine.rootId);
-      const text = renderOtherTurnsBlock(views, { timezone: this.config.timezone?.trim() || 'UTC' });
-      return { text, handoffAvailable: text !== '' && views.some((v) => v.handoff !== 'not_available') };
+      const handingEligible = this.config.turnLanes?.enabled === true && handingRootEligible(mine, taskEvent.id);
+      const text = renderOtherTurnsBlock(views, { timezone: this.config.timezone?.trim() || 'UTC', handingEligible });
+      return { text, handoffAvailable: text !== '' && showsHandoffGuidance(views, handingEligible) };
     } catch (err) {
       this.config.logger.error(
         { err, taskEventId: taskEvent.id },
@@ -572,7 +576,9 @@ export class AgentRuntime {
     const registry = this.config.turnActivity;
     const lanes = this.config.turnLanes;
     if (!registry || !lanes?.enabled) return;
-    if (taskEvent.payload.metadata?.lateDelegation === undefined) return;
+    if (this.config.agentId !== 'coordinator' || taskEvent.payload.metadata?.lateDelegation === undefined) return;
+    // Only a laned wake holds a lane the corrections can join; leave them held otherwise.
+    if (!lanes.isLaned(taskEvent.payload)) return;
     try {
       const root = registry.rootOf(taskEvent.id);
       if (!root) return;
@@ -586,6 +592,8 @@ export class AgentRuntime {
             if (ticket.kind === 'returned') {
               this.config.logger.error(ids, 'A held hand-off correction was not drained by its wake — the correction is lost');
             }
+          }).catch((err: unknown) => {
+            this.config.logger.error({ ...ids, err }, 'Failed to settle a held hand-off correction in its wake');
           });
           continue;
         }
@@ -1929,10 +1937,14 @@ export class AgentRuntime {
         liveTurnGrantId: taskEvent.payload.liveTurnGrantId,
       };
       const hostIsPrincipal = laned && holderFromAgentTask(taskEvent).originatorIsPrincipal === true;
+      // Set once any follow-up joins this turn: its root request text is then not the whole of
+      // what the person asked, so turn-handoff must not pass that text on (#2588).
+      let drainedFollowUp = false;
       const drainInjected = async (drainPoint: InjectionDrainPoint): Promise<Message[]> => {
         if (!laned || !lanes) return [];
         const inputs = lanes.takeQueued(taskEvent.id);
         if (inputs.length === 0) return [];
+        drainedFollowUp = true;
         const framed: Message[] = [];
         for (const input of inputs) {
           if (memory) {
@@ -2771,6 +2783,7 @@ export class AgentRuntime {
                     logger,
                     fromTaskEventId: taskEvent.id,
                     targetRootId: request.turnId,
+                    drainedFollowUp,
                     ...(senderCtx?.resolved && senderCtx.displayName.length > 0 && { senderLabel: senderCtx.displayName }),
                   });
                 }

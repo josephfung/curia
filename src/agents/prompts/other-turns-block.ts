@@ -228,11 +228,21 @@ function turnLines(v: OtherTurnView, timezone: string): string[] {
   ];
 }
 
+/** Whether the rendered note carries the `turn-handoff` guidance line. */
+export function showsHandoffGuidance(views: readonly OtherTurnView[], handingEligible: boolean): boolean {
+  return handingEligible && views.slice(-MAX_TURNS_SHOWN).some((v) => v.handoff !== 'not_available');
+}
+
 /**
  * The note, or '' with no views. Throws on an invalid timezone; the caller omits the block.
- * The `turn-handoff` guidance line appears only when some listed turn can take a hand-off.
+ * The `turn-handoff` guidance line appears only when this turn may hand its message over
+ * (`handingEligible`, default false: lanes on, a root inbound turn, its full words scanned
+ * clean) and some listed turn can take a hand-off. Each turn's own "hand-off:" line stays.
  */
-export function renderOtherTurnsBlock(views: readonly OtherTurnView[], opts: { timezone: string }): string {
+export function renderOtherTurnsBlock(
+  views: readonly OtherTurnView[],
+  opts: { timezone: string; handingEligible?: boolean },
+): string {
   if (views.length === 0) return '';
   const shown = views.slice(-MAX_TURNS_SHOWN);
   const windowMinutes = Math.round(TURN_ACTIVITY_WINDOW_MS / 60_000);
@@ -249,7 +259,7 @@ export function renderOtherTurnsBlock(views: readonly OtherTurnView[], opts: { t
     // "Or done": a listed turn may have finished, and calling it in progress would mislead.
     "If it refers to the work in a listed turn, acknowledge it's in progress (or done); don't redo it.",
   );
-  if (shown.some((v) => v.handoff !== 'not_available')) {
+  if (showsHandoffGuidance(views, opts.handingEligible === true)) {
     lines.push(
       "If it corrects or adds to the work in a listed turn that is still running with a hand-off available, use `turn-handoff` with that turn_id, then reply briefly that you've passed it on.",
     );

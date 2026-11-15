@@ -58,10 +58,19 @@ const COORDINATOR_AGENT_ID = 'coordinator';
  */
 export const INBOUND_SENDER_TEXT_KEY = 'inboundSenderText';
 export const INBOUND_SCAN_FINDING_COUNT_KEY = 'inboundScanFindingCount';
+/** Trusted flag, stamped `true` when the dispatcher clipped the sender's text (it is partial). */
+export const INBOUND_SENDER_TEXT_CLIPPED_KEY = 'inboundSenderTextClipped';
 
 /** The sender's text clipped to the registry's limit, by code points. */
 export function clipSenderText(text: string): string {
   return Array.from(text).slice(0, REQUEST_TEXT_MAX_CODE_POINTS).join('');
+}
+
+/** Whether clipSenderText would cut this text. */
+export function senderTextExceedsClip(text: string): boolean {
+  // Code points are at most two UTF-16 units: a short string cannot exceed the limit.
+  if (text.length <= REQUEST_TEXT_MAX_CODE_POINTS) return false;
+  return Array.from(text).length > REQUEST_TEXT_MAX_CODE_POINTS;
 }
 
 /** The trusted sender text of a task, clipped; null when absent or empty. */
@@ -69,6 +78,16 @@ function senderTextOf(metadata: Record<string, unknown> | undefined): string | n
   const value = metadata?.[INBOUND_SENDER_TEXT_KEY];
   if (typeof value !== 'string' || value.trim() === '') return null;
   return clipSenderText(value);
+}
+
+/**
+ * Whether the task's sender text is partial: the dispatcher stamped it clipped, or the
+ * stamped text is itself past the limit (clipped here). False when there is no text.
+ */
+function senderTextClippedOf(metadata: Record<string, unknown> | undefined): boolean {
+  const value = metadata?.[INBOUND_SENDER_TEXT_KEY];
+  if (typeof value !== 'string' || value.trim() === '') return false;
+  return metadata?.[INBOUND_SENDER_TEXT_CLIPPED_KEY] === true || senderTextExceedsClip(value);
 }
 
 /** The trusted finding count of a task: a non-negative integer, else null (unknown). */
@@ -101,6 +120,8 @@ export interface RootTurn {
    * content can carry dispatcher preamble and other people's words, so it is never used.
    */
   requestText: string | null;
+  /** True when requestText is only the start of the sender's message (clipped). */
+  requestTextClipped: boolean;
   /** Injection-scan finding count of the root's inbound (trusted stamp); null = unknown. */
   inboundScanFindings: number | null;
   /**
@@ -186,6 +207,7 @@ interface RootState {
   originatorIsSystem: boolean;
   audienceOneToOne: boolean;
   requestText: string | null;
+  requestTextClipped: boolean;
   inboundScanFindings: number | null;
   originatorAuthenticated: boolean;
   startedAt: number;
@@ -325,6 +347,15 @@ export class TurnActivityRegistry {
       root.lastActivityAt = Math.max(root.lastActivityAt, this.now());
     } else if (root.runningTaskIds.size === 0) {
       root.endedAt = this.now();
+      const held = this.held.get(root.rootId);
+      if (held && held.length > 0) {
+        // The wake normally runs before its specialist's end is recorded, so this hold is
+        // likely stranded: only a late-delivery sweep wake can still take it.
+        this.logger.error(
+          { rootId: root.rootId, held: held.length, inboundEventIds: held.map((i) => i.inboundEventId) },
+          'turn activity: a root ended with hand-off corrections still held for its wake',
+        );
+      }
     }
   }
 
@@ -355,6 +386,7 @@ export class TurnActivityRegistry {
       originatorIsSystem: seed.originatorIsSystem,
       audienceOneToOne: false,
       requestText: null,
+      requestTextClipped: false,
       inboundScanFindings: null,
       originatorAuthenticated: seed.originatorAuthenticated,
       startedAt: now,
@@ -472,21 +504,28 @@ export class TurnActivityRegistry {
   }
 
   /**
-   * Whether a root is still running: a non-auto root not (effectively) ended, or an auto root
-   * with a task running. A root past MAX_RUNNING_ROOT_AGE_MS counts as ended. Unknown: false.
+   * Whether the root has running work other than its coordinator tasks: a detached specialist
+   * whose late result wakes the root. A coordinator task still listed (it releases its lane
+   * before its end is recorded) does not count; nor does a root past MAX_RUNNING_ROOT_AGE_MS.
+   * Unknown root: false.
    */
-  isRootRunning(rootId: string): boolean {
+  hasDetachedWork(rootId: string): boolean {
     const root = this.roots.get(rootId);
     if (!root) return false;
     const now = this.now();
-    if (root.autoRegistered) return root.runningTaskIds.size > 0 && !this.isStuck(root, now);
-    return this.effectiveEndedAt(root, now) === null;
+    const stillRunning = root.autoRegistered ? !this.isStuck(root, now) : this.effectiveEndedAt(root, now) === null;
+    if (!stillRunning) return false;
+    for (const id of root.runningTaskIds) {
+      if (!root.runningCoordinatorTaskIds.has(id)) return true;
+    }
+    return false;
   }
 
   /**
    * Hold a hand-off correction for the root's next late-delegation wake, which drains it at
    * turn start (turn-handoff, #2588). At most MAX_HELD_PER_ROOT per root: past that, or for an
-   * unknown root, the input is not held, a warning is logged, and false is returned.
+   * unknown root, the input is not held, a warning is logged, and false is returned. An input
+   * already held (same inboundEventId) is not held twice; that returns true.
    */
   holdForWake(rootId: string, input: InjectableInput): boolean {
     if (!this.roots.has(rootId)) {
@@ -494,6 +533,7 @@ export class TurnActivityRegistry {
       return false;
     }
     const list = this.held.get(rootId) ?? [];
+    if (list.some((held) => held.inboundEventId === input.inboundEventId)) return true;
     if (list.length >= MAX_HELD_PER_ROOT) {
       this.logger.warn(
         { rootId, inboundEventId: input.inboundEventId, cap: MAX_HELD_PER_ROOT },
@@ -620,7 +660,11 @@ export class TurnActivityRegistry {
   private mergeOrCreateRoot(input: TaskStartInput): RootState {
     const existing = this.roots.get(input.taskEventId);
     if (!existing) return this.createRoot(input);
-    existing.requestText ??= senderTextOf(input.metadata);
+    if (existing.requestText === null) {
+      // The text and its clipped flag come from the same stamp.
+      existing.requestText = senderTextOf(input.metadata);
+      existing.requestTextClipped = senderTextClippedOf(input.metadata);
+    }
     existing.inboundScanFindings ??= scanFindingsOf(input.metadata);
     if (existing.originatorContactId === null && input.originatorContactId !== null) {
       // The entry had no originator, so it was classed as system; take the task's.
@@ -649,6 +693,7 @@ export class TurnActivityRegistry {
       originatorIsSystem: input.originatorIsSystem,
       audienceOneToOne: isOneToOneAudience(input.channelId, input.conversationId, input.metadata, this.selfEmails),
       requestText: senderTextOf(input.metadata),
+      requestTextClipped: senderTextClippedOf(input.metadata),
       inboundScanFindings: scanFindingsOf(input.metadata),
       originatorAuthenticated: originatorAuthenticatedOf(input.metadata),
       startedAt: input.startedAt,
@@ -754,6 +799,7 @@ export class TurnActivityRegistry {
       originatorIsSystem: root.originatorIsSystem,
       audienceOneToOne: root.audienceOneToOne,
       requestText: root.requestText,
+      requestTextClipped: root.requestTextClipped,
       inboundScanFindings: root.inboundScanFindings,
       originatorAuthenticated: root.originatorAuthenticated,
       startedAt: root.startedAt,

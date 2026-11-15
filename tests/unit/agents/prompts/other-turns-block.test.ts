@@ -4,6 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   buildOtherTurnViews,
   renderOtherTurnsBlock,
+  showsHandoffGuidance,
   sameContactTurns,
   type OtherTurnView,
 } from '../../../../src/agents/prompts/other-turns-block.js';
@@ -276,7 +277,7 @@ describe('renderOtherTurnsBlock (#2588)', () => {
   });
 
   it('puts the default first: most messages are unrelated', () => {
-    const out = renderOtherTurnsBlock([view({ handoff: 'running_turn' })], { timezone: 'UTC' });
+    const out = renderOtherTurnsBlock([view({ handoff: 'running_turn' })], { timezone: 'UTC', handingEligible: true });
     const guidance = out.split('\n').slice(-4);
     expect(guidance[0]).toMatch(/^Most new messages are unrelated/);
     expect(guidance[1]).toMatch(/^Ask whether/);
@@ -285,12 +286,24 @@ describe('renderOtherTurnsBlock (#2588)', () => {
   });
 
   it('shows the hand-off guidance only when a hand-off is available', () => {
-    const without = renderOtherTurnsBlock([view()], { timezone: 'UTC' });
+    const without = renderOtherTurnsBlock([view()], { timezone: 'UTC', handingEligible: true });
     expect(without).not.toContain('turn-handoff');
     expect(without).toContain('hand-off: not available');
-    const withIt = renderOtherTurnsBlock([view({ handoff: 'running_turn' })], { timezone: 'UTC' });
+    const withIt = renderOtherTurnsBlock([view({ handoff: 'running_turn' })], { timezone: 'UTC', handingEligible: true });
     expect(withIt).toContain('`turn-handoff`');
     expect(withIt).toContain('hand-off: available');
+  });
+
+  it('shows the hand-off guidance only when this turn may hand over (default: not)', () => {
+    for (const opts of [{ timezone: 'UTC' }, { timezone: 'UTC', handingEligible: false }]) {
+      const out = renderOtherTurnsBlock([view({ handoff: 'running_turn' })], opts);
+      expect(out).not.toContain('turn-handoff');
+      // The per-turn line still says what that turn could take.
+      expect(out).toContain('hand-off: available');
+    }
+    expect(showsHandoffGuidance([view({ handoff: 'held_for_wake' })], true)).toBe(true);
+    expect(showsHandoffGuidance([view({ handoff: 'held_for_wake' })], false)).toBe(false);
+    expect(showsHandoffGuidance([view()], true)).toBe(false);
   });
 
   it('keeps a stored value from breaking out of its line', () => {

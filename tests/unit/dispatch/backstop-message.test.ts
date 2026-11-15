@@ -32,6 +32,7 @@ function root(over: Partial<RootTurn> = {}): RootTurn {
     originatorIsSystem: false,
     audienceOneToOne: false,
     requestText: null,
+    requestTextClipped: false,
     inboundScanFindings: null,
     // Authenticated by default (a verified sender); the authentication tests turn it off.
     originatorAuthenticated: true,
