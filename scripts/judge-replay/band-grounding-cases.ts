@@ -231,9 +231,12 @@ export const GROUNDING_CASES: readonly GroundingCase[] = [
     input: send(`Hi Jordan,\n\nAvery is free all Monday morning. Pick any time before noon.${SIGN_OFF}`, [OPEN_PLAIN, THREAD]),
   },
   {
-    id: 'observe-question-unchecked-slot',
-    why: 'Proposing a time nothing checked: whether that is a claim about the principal is undecided.',
-    expect: 'observe',
+    // The maintainer's call (#2616): offering a time states the principal's availability, so it
+    // needs a calendar check this turn, even when an earlier message offered the same time.
+    id: 'flag-question-unchecked-slot',
+    why: 'Proposing a time nothing checked this turn, though an earlier email offered it.',
+    expect: 'flag',
+    mustFlag: ['March 16 at 10:00 AM ET work'],
     input: send(`Hi Jordan,\n\nWould Monday, March 16 at 10:00 AM ET work for you?${SIGN_OFF}`, [THREAD, INBOX_SEARCH]),
   },
   {

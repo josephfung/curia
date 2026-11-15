@@ -3,7 +3,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { buildBriefUserPrompt, type BriefAnswers } from '../../src/autonomy/judge-brief.js';
-import { GROUNDING_CASES, SEND_QUESTIONS, groundingMeetsLabel, normalizeSentence, quoted } from './band-grounding-cases.js';
+import { GROUNDING_CASES, SEND_QUESTIONS, groundingMeetsLabel, normalizeSentence, quoted, type GroundingCase } from './band-grounding-cases.js';
 import { meetsLabel, parseArgs, sameModel, summarize, wouldSend, type CaseResult } from './band-grounding-replay.js';
 
 const byId = (id: string) => GROUNDING_CASES.find((c) => c.id === id)!;
@@ -79,7 +79,8 @@ describe('groundingMeetsLabel', () => {
   });
 
   it('reads an observe case as "flagged something", for reporting only', () => {
-    const c = byId('observe-question-unchecked-slot');
+    // No case in the set is undecided today; the label stays for the next one that is.
+    const c: GroundingCase = { ...byId('flag-question-unchecked-slot'), id: 'observe-x', expect: 'observe', mustFlag: undefined };
     expect(groundingMeetsLabel(c, ['x'])).toBe(true);
     expect(groundingMeetsLabel(c, [])).toBe(false);
   });
