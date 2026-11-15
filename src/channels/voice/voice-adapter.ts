@@ -3,6 +3,12 @@ import type { EventBus } from '../../bus/bus.js';
 import type { OutboundMessageEvent } from '../../bus/events.js';
 import { createVoiceSessionEnded, createVoiceSessionStarted } from '../../bus/events.js';
 import type { Logger } from '../../logger.js';
+import type { AgendaStore } from '../../meetings/agenda-store.js';
+import {
+  prepareCallAgendas,
+  releaseUnstartedPreload,
+  withAgendaMetadata,
+} from '../../meetings/session-agendas.js';
 import type { Channel } from '../channel.js';
 import { persistableCallerContactId } from './caller-contact-id.js';
 import { mintVoiceParticipantToken } from './livekit/token.js';
@@ -24,6 +30,12 @@ export interface VoiceAdapterConfig {
   voiceModel?: string;
   /** Live duplex runtime. Required for usable sessions; createSession fails closed without it. */
   voiceRuntime?: VoiceRuntime;
+  /**
+   * Parked agendas (#2322). With a store, a principal call starts from its due
+   * agenda exactly like a Signal call (#2359). Without one, sessions start
+   * free-form and the row metadata is untouched.
+   */
+  agendaStore?: AgendaStore;
 }
 
 export class VoiceAdapter implements Channel {
@@ -96,13 +108,33 @@ export class VoiceAdapter implements Channel {
       },
     );
 
-    const session = await this.config.sessionStore.create({
-      id: sessionId,
-      conversationId,
-      livekitRoom: roomName,
-      callerContactId: persistableCallerContactId(caller.contactId),
-      metadata: req.metadata,
+    // Prepare before the row exists so the lock records this session id; the
+    // same shared path the Signal bridge uses (#2359). Non-principal callers get
+    // null and the store is never touched. A store failure yields empty agendas
+    // and the call still starts free-form.
+    const prepared = await prepareCallAgendas(this.config.agendaStore, {
+      callerSystemRole: caller.systemRole,
+      sessionId,
+      now: new Date(),
+      logger: this.log,
     });
+
+    let session: Awaited<ReturnType<VoiceSessionStore['create']>>;
+    try {
+      session = await this.config.sessionStore.create({
+        id: sessionId,
+        conversationId,
+        livekitRoom: roomName,
+        callerContactId: persistableCallerContactId(caller.contactId),
+        metadata: withAgendaMetadata(req.metadata, prepared),
+      });
+    } catch (err) {
+      // No row means no session-ended event to settle the lock; release it so
+      // the principal's next call can still see the agenda. Then let the route
+      // answer 500 as before.
+      await releaseUnstartedPreload(this.config.agendaStore, prepared, sessionId, this.log);
+      throw err;
+    }
 
     await this.config.bus.publish('channel', createVoiceSessionStarted({
       sessionId: session.id,
@@ -149,6 +181,7 @@ export class VoiceAdapter implements Channel {
         // A future Curia-initiated outbound path must pass openingGreeting: false
         // so Curia does not talk over the principal answering (#1596).
         openingGreeting: true,
+        ...(prepared ? { agendas: prepared.agendas } : {}),
       })
       .catch(async err => {
         this.log.error({ err, sessionId: session.id }, 'Voice runtime failed to start session');

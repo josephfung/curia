@@ -8,6 +8,8 @@ import { VoiceSessionBridge } from '../../../../src/channels/voice/session-bridg
 import { VoiceAdapter } from '../../../../src/channels/voice/voice-adapter.js';
 import { mintVoiceParticipantToken } from '../../../../src/channels/voice/livekit/token.js';
 import { partnerCaller, principalCaller } from '../../../../src/channels/voice/test-fixtures.js';
+import type { AgendaStore } from '../../../../src/meetings/agenda-store.js';
+import type { AgendaDoc } from '../../../../src/meetings/types.js';
 
 // Mock JWT minting so tests don't need real keys and can simulate a signing
 // failure on the agent token (the second mint) independently of the principal.
@@ -260,5 +262,110 @@ describe('VoiceAdapter', () => {
     // Teardown is delegated to the runtime (which owns store.endSession + the
     // ended event), so the adapter does not call the store directly here.
     expect(endSession).not.toHaveBeenCalled();
+  });
+
+  // #2359: console and PWA calls start from a parked agenda the same way a
+  // Signal call does, through the shared helpers in session-agendas.ts.
+  describe('parked agendas', () => {
+    const agendaId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+
+    function parkedAgenda(): AgendaDoc {
+      return {
+        path: `/meetings/agendas/${agendaId}.md`,
+        version: 1,
+        agendaId,
+        title: 'Board prep',
+        topics: ['runway'],
+        role: null,
+        context: 'Cover the runway.',
+        source: 'principal',
+        sensitivity: 'internal',
+        scheduledFor: null,
+        history: [],
+        status: 'pending',
+        expiresAt: '2099-11-04T16:00:00.000Z',
+        inCallSession: null,
+      };
+    }
+
+    function fakeAgendaStore() {
+      const doc = parkedAgenda();
+      const cullExpired = vi.fn(async () => 0);
+      const listPending = vi.fn(async () => [doc]);
+      const lock = vi.fn(async () => ({ ok: true as const, agenda: doc }));
+      const settle = vi.fn(async () => 'settled' as const);
+      return {
+        store: { cullExpired, listPending, lock, settle } as unknown as AgendaStore,
+        cullExpired,
+        listPending,
+        lock,
+        settle,
+      };
+    }
+
+    async function startedAdapter(agendaStore: AgendaStore, store = fakeStore().store) {
+      const bridge = new VoiceSessionBridge();
+      const { bus } = fakeBus();
+      const runtime = fakeRuntime();
+      const adapter = new VoiceAdapter({
+        bus,
+        logger,
+        sessionBridge: bridge,
+        sessionStore: store,
+        livekitUrl: 'wss://voice.example.test',
+        livekitApiKey: 'devkey',
+        livekitApiSecret: 'devsecret',
+        voiceRuntime: runtime,
+        agendaStore,
+      });
+      await adapter.start();
+      return { handler: bridge.getHandler()!, runtime };
+    }
+
+    it('a principal call locks the due agenda, records the preload and starts from it', async () => {
+      const agendas = fakeAgendaStore();
+      const { store, create } = fakeStore();
+      const { handler, runtime } = await startedAdapter(agendas.store, store);
+
+      const result = await handler.createSession({ caller: principalCaller() });
+
+      expect(result.status).toBe(201);
+      const sessionId = create.mock.calls[0]![0].id;
+      // The lock records this session, so session-ended settles it (pending → in_call → done).
+      expect(agendas.lock).toHaveBeenCalledWith(agendaId, sessionId, expect.any(Date));
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({
+        metadata: { agendas: [expect.objectContaining({ agendaId })] },
+      }));
+      const start = vi.mocked(runtime.startSession).mock.calls[0]![0];
+      expect(start.agendas?.loaded).toEqual([expect.objectContaining({ agendaId, title: 'Board prep' })]);
+      expect(start.agendas?.index).toEqual([]);
+    });
+
+    it('a non-principal caller never loads principal agendas', async () => {
+      const agendas = fakeAgendaStore();
+      const { store, create } = fakeStore();
+      const { handler, runtime } = await startedAdapter(agendas.store, store);
+
+      await handler.createSession({ caller: partnerCaller(), metadata: { source: 'test' } });
+
+      expect(agendas.cullExpired).not.toHaveBeenCalled();
+      expect(agendas.listPending).not.toHaveBeenCalled();
+      expect(agendas.lock).not.toHaveBeenCalled();
+      expect(create.mock.calls[0]![0].metadata).toEqual({ source: 'test' });
+      expect(vi.mocked(runtime.startSession).mock.calls[0]![0].agendas).toBeUndefined();
+    });
+
+    it('releases the lock when the session row cannot be created', async () => {
+      const agendas = fakeAgendaStore();
+      const { store, create } = fakeStore();
+      create.mockRejectedValueOnce(new Error('insert failed'));
+      const { handler, runtime } = await startedAdapter(agendas.store, store);
+
+      await expect(handler.createSession({ caller: principalCaller() })).rejects.toThrow('insert failed');
+
+      const sessionId = create.mock.calls[0]![0].id;
+      expect(agendas.settle).toHaveBeenCalledWith(agendaId, sessionId, { kind: 'return' });
+      expect(runtime.startSession).not.toHaveBeenCalled();
+    });
   });
 });

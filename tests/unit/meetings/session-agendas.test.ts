@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgendaStore } from '../../../src/meetings/agenda-store.js';
-import { prepareSessionAgendas } from '../../../src/meetings/session-agendas.js';
+import {
+  prepareCallAgendas,
+  prepareSessionAgendas,
+  releaseUnstartedPreload,
+  withAgendaMetadata,
+} from '../../../src/meetings/session-agendas.js';
 import type { AgendaDoc } from '../../../src/meetings/types.js';
 import { createSilentLogger } from '../../../src/logger.js';
 import type { Logger } from '../../../src/logger.js';
@@ -135,6 +140,126 @@ describe('prepareSessionAgendas', () => {
     const result = await prepareSessionAgendas(store, { sessionId: SESSION, now: NOW, logger });
 
     expect(result).toEqual({ agendas: { loaded: [], index: [] }, preload: null });
+    expect(error).toHaveBeenCalled();
+  });
+});
+
+// #2359: every call route (Signal, console, PWA) goes through these, so the
+// principal gate and the metadata shape cannot drift between routes.
+describe('prepareCallAgendas', () => {
+  it('prepares agendas for the principal', async () => {
+    const doc = agenda({ agendaId: '11111111-1111-1111-1111-111111111111' });
+    const { store, lock } = fakeStore({
+      listPending: async () => [doc],
+      lock: async () => ({ ok: true, agenda: doc }),
+    });
+
+    const result = await prepareCallAgendas(store, {
+      callerSystemRole: 'principal',
+      sessionId: SESSION,
+      now: NOW,
+      logger: createSilentLogger(),
+    });
+
+    expect(lock).toHaveBeenCalledWith(doc.agendaId, SESSION, NOW);
+    expect(result?.preload).toMatchObject({ agendaId: doc.agendaId });
+    expect(result?.agendas.loaded).toEqual([expect.objectContaining({ agendaId: doc.agendaId })]);
+  });
+
+  it('never touches the store for anyone other than the principal', async () => {
+    const doc = agenda({ agendaId: '11111111-1111-1111-1111-111111111111' });
+    const { store, cullExpired, listPending, lock } = fakeStore({
+      listPending: async () => [doc],
+      lock: async () => ({ ok: true, agenda: doc }),
+    });
+
+    const result = await prepareCallAgendas(store, {
+      callerSystemRole: null,
+      sessionId: SESSION,
+      now: NOW,
+      logger: createSilentLogger(),
+    });
+
+    expect(result).toBeNull();
+    expect(cullExpired).not.toHaveBeenCalled();
+    expect(listPending).not.toHaveBeenCalled();
+    expect(lock).not.toHaveBeenCalled();
+  });
+
+  it('returns null with no store', async () => {
+    const result = await prepareCallAgendas(undefined, {
+      callerSystemRole: 'principal',
+      sessionId: SESSION,
+      now: NOW,
+      logger: createSilentLogger(),
+    });
+
+    expect(result).toBeNull();
+  });
+});
+
+describe('withAgendaMetadata', () => {
+  const preload = {
+    agendaId: '11111111-1111-1111-1111-111111111111',
+    loadedAt: NOW.toISOString(),
+    snapshot: {} as never,
+  };
+
+  it('leaves metadata exactly as given when nothing was prepared', () => {
+    const metadata = { channel: 'signal' };
+    expect(withAgendaMetadata(metadata, null)).toBe(metadata);
+    expect(withAgendaMetadata(undefined, null)).toBeUndefined();
+  });
+
+  it('records the preload, or an empty list when nothing was preloaded', () => {
+    expect(withAgendaMetadata({ channel: 'signal' }, { agendas: { loaded: [], index: [] }, preload }))
+      .toEqual({ channel: 'signal', agendas: [preload] });
+    expect(withAgendaMetadata(undefined, { agendas: { loaded: [], index: [] }, preload: null }))
+      .toEqual({ agendas: [] });
+  });
+
+  it('the server-prepared agendas win over a client-supplied agendas key', () => {
+    expect(withAgendaMetadata({ agendas: ['forged'] }, { agendas: { loaded: [], index: [] }, preload }))
+      .toEqual({ agendas: [preload] });
+  });
+});
+
+describe('releaseUnstartedPreload', () => {
+  const preload = {
+    agendaId: '11111111-1111-1111-1111-111111111111',
+    loadedAt: NOW.toISOString(),
+    snapshot: {} as never,
+  };
+
+  function settleStore(settle: ReturnType<typeof vi.fn>): AgendaStore {
+    return { settle } as unknown as AgendaStore;
+  }
+
+  it('returns the locked agenda to pending', async () => {
+    const settle = vi.fn(async () => 'settled' as const);
+
+    await releaseUnstartedPreload(settleStore(settle), { agendas: { loaded: [], index: [] }, preload }, SESSION, createSilentLogger());
+
+    expect(settle).toHaveBeenCalledWith(preload.agendaId, SESSION, { kind: 'return' });
+  });
+
+  it('does nothing when nothing was locked', async () => {
+    const settle = vi.fn(async () => 'settled' as const);
+
+    await releaseUnstartedPreload(settleStore(settle), null, SESSION, createSilentLogger());
+    await releaseUnstartedPreload(settleStore(settle), { agendas: { loaded: [], index: [] }, preload: null }, SESSION, createSilentLogger());
+
+    expect(settle).not.toHaveBeenCalled();
+  });
+
+  it('logs a settle failure instead of masking the original error', async () => {
+    const settle = vi.fn(async () => {
+      throw new Error('db down');
+    });
+    const { logger, error } = spyLogger();
+
+    await releaseUnstartedPreload(settleStore(settle), { agendas: { loaded: [], index: [] }, preload }, SESSION, logger);
+
     expect(error).toHaveBeenCalled();
   });
 });

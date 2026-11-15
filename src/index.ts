@@ -2533,6 +2533,8 @@ async function main(): Promise<void> {
         livekitApiSecret: config.voiceLivekitApiSecret,
         voiceModel: config.voiceModel,
         voiceRuntime,
+        // #2359: console and PWA calls load the parked agenda like Signal calls.
+        agendaStore,
       });
       }
     }
