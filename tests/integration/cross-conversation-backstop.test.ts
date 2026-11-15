@@ -283,11 +283,17 @@ describe('cross-conversation backstop (#2588)', () => {
     const emailTurn = h.bus.publish('channel', h.inbound('EMAIL-REQUEST set up a sync', opts.emailSender, 'email:thread-1', 'email'));
     try {
       await vi.waitFor(() => expect(state.emailParked).toBe(true));
-      const signalTurn = h.bus.publish('channel', h.inbound('SIGNAL-REQUEST set up a sync', opts.signalSender, 'signal:+15550000001', 'signal'));
+      // Release the email turn however the Signal turn ends: one that finishes or fails before
+      // its second model call never reaches release.resolve(), and Promise.all would then wait
+      // on the parked email turn until the test timed out. The overlap check below still fails
+      // such a run.
+      const signalTurn = h.bus
+        .publish('channel', h.inbound('SIGNAL-REQUEST set up a sync', opts.signalSender, 'signal:+15550000001', 'signal'))
+        .finally(() => release.resolve());
       await Promise.all([emailTurn, signalTurn]);
     } finally {
-      // Never leave the email turn parked: a failed wait, or a Signal turn that throws before
-      // its second model call, would otherwise strand it on `release` past the test.
+      // Never leave the email turn parked: a failed wait would otherwise strand it on `release`
+      // past the test.
       release.resolve();
       await Promise.allSettled([emailTurn]);
     }
