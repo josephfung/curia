@@ -93,3 +93,36 @@ ceo-inbox-mark-starred:
   - agent: ceo-inbox
     match: {}
     return: { success: true, message_id: scenario-msg, starred: true }
+# Sending a draft from Curia's own mailbox. Production refuses a draft ID from the principal's
+# mailbox (the ceo-inbox drafts above) with this message, pointing at ceo-inbox, which sends
+# those (skills/email/tools/send-draft/handler.ts draftNotFoundError). A draft of Curia's own
+# sends: the from-Alex path stays open for a case to score.
+send-draft:
+  - match: { draft_id: draft-f1n35e01 }
+    error: "Draft not found: draft-f1n35e01. Searched Curia's email accounts: curia. Drafts in the principal's own mailbox aren't in Curia's accounts; the ceo-inbox specialist sends those: pass this draft ID to it. Do not retry this draft ID with this tool."
+  - match: { draft_id: draft-f1n35e02 }
+    error: "Draft not found: draft-f1n35e02. Searched Curia's email accounts: curia. Drafts in the principal's own mailbox aren't in Curia's accounts; the ceo-inbox specialist sends those: pass this draft ID to it. Do not retry this draft ID with this tool."
+  - match: { draft_id: draft-f1n35e03 }
+    error: "Draft not found: draft-f1n35e03. Searched Curia's email accounts: curia. Drafts in the principal's own mailbox aren't in Curia's accounts; the ceo-inbox specialist sends those: pass this draft ID to it. Do not retry this draft ID with this tool."
+  - match: {}
+    return: { message_id: scenario-out-draft-1, to: recipient@example.test, subject: (sent) }
+# Tidying the contact book on the way (54b merged a duplicate it had just created; 56b renamed
+# one). Fair writes; a dry run reports itself as one.
+contact-merge:
+  - match: { dry_run: true }
+    return: { primary_contact_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000f1, secondary_contact_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000f6, golden_record: {}, dry_run: true }
+  - match: {}
+    return: { primary_contact_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000f1, secondary_contact_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000f6, golden_record: {}, dry_run: false, merged_at: "{{at:now}}", review_tasks_closed: 0 }
+contact-rename:
+  - match: {}
+    return: { contact_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000f1, display_name: (renamed), role: null }
+# ceo-inbox's Sent-folder check (54e called it to see whether a reply had come): a quiet
+# mailbox, nothing new.
+ceo-inbox-sent-observe:
+  - agent: ceo-inbox
+    match: {}
+    return: { messages_scanned: 0, draft_matches: 0, task_candidates: 0, shadow_reconciled: 0, shadow_judge_failed: 0, shadow_deferred: 0, shadow_fetch_failed: 0, shadow_record_failed: 0, watermark_advanced_to: null, watermark_held: false, backfill_active: false }
+# A specialist asking another for help (57b: ceo-inbox asked contacts for Ruth's address).
+bullpen-post:
+  - match: {}
+    return: { thread_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000f7, message_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000f8, deduplicated: false }

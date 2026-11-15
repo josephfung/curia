@@ -46,6 +46,11 @@ inbound:
     - Robert wants a monthly exec check-in going forward
     - We can go to 15% off if they push
 tool_stubs:
+  # Avery asked Curia to send this on a live turn, so production lets ceo-inbox send a draft
+  # from Avery's mailbox (finesse-office refuses one nobody asked for).
+  ceo-inbox-send-draft:
+    - match: {}
+      return: { message_id: scenario-sent-draft-1, to: [], subject: (sent) }
   calendar-list-events:
     - match: {}
       return: { displayTimezone: "{{timezone}}", count: 0, events: [] }

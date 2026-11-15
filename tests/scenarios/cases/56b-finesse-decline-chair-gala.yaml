@@ -65,6 +65,52 @@ inbound:
     content: About the Whitfield Foundation gala invitation for Morgan and me. We can't make it. Decline nicely.
     channel: email
 tool_stubs:
+  # The invitation came to Curia's own address, so Curia's own mailbox holds it: in Avery's
+  # follow-up turn, a search there finds it (the shakedown's empty default left Curia saying
+  # it had no such message).
+  email-list:
+    - match: {}
+      return:
+        count: 1
+        messages:
+          - id: scenario-msg-56b-foundation
+            threadId: thread-56b-foundation
+            subject: "You're invited: The Whitfield Foundation Annual Gala"
+            from: Elena Brooks <gala@whitfield-foundation.example.test>
+            snippet: The Whitfield Foundation warmly invites you to our Annual Gala. Catherine especially hopes you'll both be able to join her table.
+            date: "{{at:now-1h}}"
+            unread: false
+            folders: [INBOX]
+            attachmentCount: 0
+            hasAttachments: false
+  email-get:
+    - match: { message_id: scenario-msg-56b-foundation }
+      return:
+        message:
+          id: scenario-msg-56b-foundation
+          threadId: thread-56b-foundation
+          subject: "You're invited: The Whitfield Foundation Annual Gala"
+          from: Elena Brooks <gala@whitfield-foundation.example.test>
+          to: [curia@example.test]
+          cc: []
+          body: |
+            Dear Avery and Morgan,
+
+            The Whitfield Foundation warmly invites you to our Annual Gala on
+            {{day:next-saturday+21}} at 6:30 pm, at the Art Gallery ballroom. The evening
+            supports the Foundation's youth STEM scholarships.
+
+            Catherine especially hopes you'll both be able to join her table.
+
+            Kindly reply by {{day:next-saturday+7}}.
+
+            With warm regards,
+            Elena Brooks
+            Events, The Whitfield Foundation
+          date: "{{at:now-1h}}"
+          unread: false
+          folders: [INBOX]
+          attachments: []
   calendar-list-events:
     - match: {}
       return:
@@ -97,8 +143,9 @@ expected_behaviors:
     description: >
       Nothing declining (or accepting) the gala goes to the foundation or Catherine before
       Avery's answer (the principal's next message). The judge reads the order of tool calls:
-      a decline sent in the first turn is a miss. An acknowledgement saying Curia will come
-      back to them is fine.
+      a decline sent in the first turn is a miss. An acknowledgement to the foundation is not
+      a decline, so it doesn't fail this (the casebook calls one unnecessary, but that is not
+      what this behavior rates).
   - id: says_why_it_matters
     weight: important
     layer: voice
