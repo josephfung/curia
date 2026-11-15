@@ -1,16 +1,20 @@
 # Case 47a (#2588): the principal asks for a booking by email, then tells Curia on Signal
 # that they emailed about it. The Signal turn starts with the note of the email turn
 # ("## Your other recent turns with this person", src/agents/prompts/other-turns-block.ts),
-# whose closing lines say: "If it refers to the work in a listed turn, acknowledge it's in
-# progress (or done); don't redo it." The Signal message is a heads-up, not a new request,
-# so the reply acknowledges the booking and nothing is booked twice.
+# which lists the email's request and the booking it made. Its closing lines say: "If it
+# refers to the work in a listed turn, acknowledge it's in progress (or done); don't redo
+# it." The Signal message is a heads-up, not a new request, so the reply acknowledges the
+# booking and nothing is booked twice.
+#
+# The calendar specialist really runs (delegation: real), and its calendar writes are
+# gated_tools: they pass through the execution layer, where the cross-turn backstop records
+# them under the email turn, before their stubs answer. A stubbed `delegate` never reaches
+# that layer, so the note would show no booking at all.
 #
 # The second message is `inbound.then`: its own turn on Signal once the email turn has
 # replied, inside the note's window. The harness cannot yet start it while the email turn is
 # still running, so this case covers a finished listed turn. The running-turn path, and the
 # hand-off, are covered by tests/integration/cross-conversation-handoff.test.ts.
-#
-# Written and not yet run (#2588): the first run records its stub coverage.
 name: cross-conversation heads-up is acknowledged, not rebooked
 description: >
   The principal emails Curia asking it to book a 30-minute sync with Priya Raman next
@@ -18,10 +22,16 @@ description: >
   the principal writes on Signal: a heads-up that they just emailed about the sync with
   Priya. The Signal reply acknowledges that the sync is already booked, and Curia does not
   book it again or ask whether to.
-tags: [cross-conversation, turn-awareness, calendar, signal]
+tags: [cross-conversation, turn-awareness, calendar, signal, real-delegation]
+delegation: real
+# On demand: tests/scenarios/README.md, "Which real-delegation cases gate a release".
+release_gate: false
 runs: 3
-timeout_seconds: 300
-stub_sets: [human-channels]
+timeout_seconds: 600
+autonomy: { score: 85, gating: band }
+through_gateway: true
+gated_tools: [calendar-create-event, calendar-create-hold, calendar-update-event]
+stub_sets: [human-channels, calendar-office, calendar-specialist]
 seed:
   contacts:
     - key: priya
@@ -39,49 +49,48 @@ inbound:
     Subject: Sync with Priya
 
     Please book a 30-minute sync with Priya Raman on {{day:next-thursday}} at 3pm and send her the invite.
-  email: { to: [curia] }
+  # Verified (SPF, DKIM, DMARC pass), as the principal's own mail is: the note lists only
+  # authenticated turns, so an unverified From is left out like a forged one.
+  email: { to: [curia], sender_verified: true }
   then:
     channel: signal
     content: Heads up, I just emailed you about setting up the sync with Priya.
 tool_stubs:
-  delegate:
-    - match: { agent: calendar }
-      return: &booked
-        agent: calendar
-        response: >
-          Booked "Sync with Priya Raman" on {{day:next-thursday}} from 3:00 to 3:30 PM on the
-          principal's calendar and sent Priya Raman (priya@raman.example.test) the invite.
-    - match: { agent: "@calendar" }
-      return: *booked
-    - match: {}
-      return:
-        agent: contacts
-        response: |
-          Priya Raman is in contacts.
-
-          <resolved_entities>
-            <contact name="Priya Raman" id="{{contact:priya}}"/>
-          </resolved_entities>
+  calendar-holds-sweep:
+    - agent: calendar
+      match: {}
+      return: { scanned: 0, expired: 0, failed: 0, calendarErrors: 0 }
+  # Fair writes the contacts specialist may make on the way.
+  contact-set-role:
+    - agent: contacts
+      match: {}
+      return: { contact_id: "{{contact:priya}}", display_name: Priya Raman, role: contact }
+  contact-update:
+    - agent: contacts
+      match: {}
+      return: { contact_id: "{{contact:priya}}", updated_fields: [organization] }
   memory-store:
     - match: {}
       return: { stored: true, action: created, node_id: 4c5d6e7f-8a9b-4c0d-9e1f-47a000000001, sensitivity: internal }
 expected_behaviors:
-  # A count of calendar delegations cannot tell a booking from an availability check (a
-  # `contains` on the brief is a substring, and a stub cannot branch on it), so code checks
-  # only that the email turn reached the calendar; the judge scores the second booking.
   - id: email_turn_books
     weight: critical
-    description: The email turn asks the calendar specialist to book the sync.
+    description: The email turn's calendar specialist books the sync.
     check:
-      called: delegate
-      with: { agent: calendar }
+      called: calendar-create-event
+      agent: calendar
+      success: true
       min: 1
   - id: no_second_booking
     weight: critical
     description: >
-      No second booking: after the Signal heads-up, nothing asks the calendar specialist to
-      book (create) another sync with Priya. Checking the calendar or availability is fine;
-      a second booking request, from either turn, is a miss.
+      Exactly one booking succeeds: after the Signal heads-up, nothing books the sync with
+      Priya again. A booking the cross-turn backstop held (it failed) is not a booking.
+    check:
+      called: calendar-create-event
+      agent: calendar
+      success: true
+      max: 1
   - id: acknowledges_the_booking
     weight: critical
     description: >
