@@ -955,6 +955,15 @@ a.dash-num-link:focus-visible, .dash-num-link:has(.dash-num-open:focus-visible) 
 /* The row's buttons wrap too: four of them overflow a phone-width row. */
 .mailbox-row-actions { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .mailbox-id-help { font-size: 12px; margin: 0; }
+/* The inline Edit form takes its own full-width line under the row's label and address. */
+.mailbox-edit-form {
+  flex-basis: 100%;
+  display: flex; flex-direction: column; gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--app-border);
+}
+.mailbox-edit-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; }
+.mailbox-edit-field input { font-weight: 400; }
 
 .settings-section {
   max-width: 720px;

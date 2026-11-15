@@ -341,7 +341,7 @@ describe('PrincipalMailboxesSection', () => {
     expect(container.textContent).toContain('check the Nylas API key and the grant');
     const buttons = [...container.querySelectorAll('button')].map(b => b.textContent);
     expect(buttons).not.toContain('Remove');
-    expect(buttons).not.toContain('Replace grant');
+    expect(buttons).not.toContain('Edit');
     expect(buttons).not.toContain('Add mailbox');
     expect(byLabel('Grant ID')).toBeNull();
   });
@@ -352,28 +352,112 @@ describe('PrincipalMailboxesSection', () => {
     expect(container.textContent).toContain('it has not finished because: The flat grant is not a Google account.');
   });
 
-  it('replaces a mailbox grant with PATCH { grant_id } and drops it from the page after', async () => {
+  // One Edit button per row replaces the separate Replace grant and Rename (#2600 follow-up).
+  const patches = () => mocks.calls.filter(c => c.init?.method === 'PATCH')
+    .map(c => ({ path: c.path, body: JSON.parse(c.init!.body as string) as unknown }));
+  const clickIn = async (rowText: string, text: string) => {
+    const row = [...container.querySelectorAll('.mailbox-row')].find(r => r.textContent?.includes(rowText))!;
+    const btn = [...row.querySelectorAll('button')].find(b => b.textContent === text)!;
+    await act(async () => { btn.click(); });
+    await settle();
+  };
+
+  it('offers one Edit button per row, not Replace grant or Rename', async () => {
     await mount();
-    await click('Replace grant');
+    const buttons = [...container.querySelectorAll('button')].map(b => b.textContent);
+    expect(buttons.filter(t => t === 'Edit')).toHaveLength(2);
+    expect(buttons).not.toContain('Replace grant');
+    expect(buttons).not.toContain('Rename');
+  });
+
+  it('opens a form with the label filled in and the grant blank', async () => {
+    await mount();
+    await clickIn('boss@acme-example.com', 'Edit');
+    expect((byLabel('Label for Work') as HTMLInputElement).value).toBe('Work');
+    expect((byLabel('New grant ID for Work') as HTMLInputElement).value).toBe('');
+    expect(container.textContent).toContain('Leave blank to keep the current grant');
+    // Nothing changed yet, so there is nothing to save.
+    const save = [...container.querySelectorAll('button')].find(b => b.textContent === 'Save')!;
+    expect(save.disabled).toBe(true);
+  });
+
+  it('saves only the label when only the label changed', async () => {
+    await mount();
+    await clickIn('boss@acme-example.com', 'Edit');
+    await type('Label for Work', 'Office');
+    await click('Save');
+    expect(patches()).toEqual([{ path: '/api/registry/principal-mailboxes/work', body: { label: 'Office' } }]);
+    expect(byLabel('Label for Work')).toBeNull();
+  });
+
+  it('saves only the grant when only the grant changed, and drops it from the page after', async () => {
+    await mount();
+    await clickIn('boss@acme-example.com', 'Edit');
     await type('New grant ID for Work', 'g-new');
-    await click('Save grant');
-    const p = mocks.calls.find(c => c.init?.method === 'PATCH')!;
-    expect(p.path).toBe('/api/registry/principal-mailboxes/work');
-    expect(JSON.parse(p.init!.body as string)).toEqual({ grant_id: 'g-new' });
+    await click('Save');
+    expect(patches()).toEqual([{ path: '/api/registry/principal-mailboxes/work', body: { grant_id: 'g-new' } }]);
     expect(byLabel('New grant ID for Work')).toBeNull();
     expect(container.innerHTML).not.toContain('g-new');
   });
 
-  it('shows the refusal when a replacement grant is for another address', async () => {
+  it('saves the grant first, then the label, when both changed', async () => {
+    await mount();
+    await clickIn('boss@acme-example.com', 'Edit');
+    await type('Label for Work', 'Office');
+    await type('New grant ID for Work', 'g-new');
+    await click('Save');
+    expect(patches().map(p => p.body)).toEqual([{ grant_id: 'g-new' }, { label: 'Office' }]);
+  });
+
+  it('keeps the label unchanged when the grant is refused', async () => {
     const base = mocks.respond;
     mocks.respond = (path, init) => init?.method === 'PATCH'
       ? json({ refusal: 'address_mismatch', detail: 'That grant is for other@example.com, not boss@acme-example.com' }, 422)
       : base(path, init);
     await mount();
-    await click('Replace grant');
+    await clickIn('boss@acme-example.com', 'Edit');
+    await type('Label for Work', 'Office');
     await type('New grant ID for Work', 'g-other');
-    await click('Save grant');
+    await click('Save');
     expect(container.textContent).toContain('That grant is for other@example.com');
+    // The refused grant stops the save: the label is never sent, and the form stays open.
+    expect(patches().map(p => p.body)).toEqual([{ grant_id: 'g-other' }]);
+    expect(byLabel('Label for Work')).not.toBeNull();
+  });
+
+  it('says the grant was saved when only the label then fails, and keeps the form for a retry', async () => {
+    const base = mocks.respond;
+    mocks.respond = (path, init) => {
+      if (init?.method === 'PATCH' && (init.body as string).includes('label')) return json({ error: 'database unavailable' }, 500);
+      return base(path, init);
+    };
+    await mount();
+    await clickIn('boss@acme-example.com', 'Edit');
+    await type('Label for Work', 'Office');
+    await type('New grant ID for Work', 'g-new');
+    await click('Save');
+    expect(container.textContent).toContain('The new grant was saved, but the label was not: database unavailable');
+    // The grant went through, so it's cleared; the label edit stays for a retry.
+    expect((byLabel('New grant ID for Work') as HTMLInputElement).value).toBe('');
+    expect((byLabel('Label for Work') as HTMLInputElement).value).toBe('Office');
+  });
+
+  it('does not save an empty label', async () => {
+    await mount();
+    await clickIn('boss@acme-example.com', 'Edit');
+    await type('Label for Work', '   ');
+    const save = [...container.querySelectorAll('button')].find(b => b.textContent === 'Save')!;
+    expect(save.disabled).toBe(true);
+    expect(container.textContent).toContain('Enter a label.');
+  });
+
+  it('Cancel closes the form without saving', async () => {
+    await mount();
+    await clickIn('boss@acme-example.com', 'Edit');
+    await type('New grant ID for Work', 'g-new');
+    await click('Cancel');
+    expect(patches()).toEqual([]);
+    expect(byLabel('New grant ID for Work')).toBeNull();
   });
 
   it('says changes need no restart', async () => {
@@ -416,7 +500,7 @@ describe('PrincipalMailboxesSection', () => {
     await mount({ readOnly: true });
     expect(container.textContent).toContain('boss@acme-example.com');
     for (const label of ['Mailbox id', 'Label', 'Grant ID']) expect(byLabel(label).disabled).toBe(true);
-    for (const text of ['Test', 'Add mailbox', 'Replace grant', 'Rename', 'Make default', 'Remove']) {
+    for (const text of ['Test', 'Add mailbox', 'Edit', 'Make default', 'Remove']) {
       const btn = [...container.querySelectorAll('button')].find(b => b.textContent === text)!;
       expect(btn.disabled).toBe(true);
     }

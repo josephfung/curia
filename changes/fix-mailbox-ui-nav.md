@@ -4,4 +4,4 @@
 
 ### Fixed
 
-- **Console mailboxes** — mailbox id explained and validated inline; rows drop the stray bullet and capitalization. (#2600)
+- **Console mailboxes** — one Edit replaces Rename and Replace grant; id explained; no stray bullets or capitals. (#2600)

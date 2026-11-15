@@ -228,14 +228,59 @@ function RemovePanel({ preview, onDone, onCancel }: {
   );
 }
 
+// The server's label limit (MAX_LABEL in routes/principal-mailboxes.ts).
+const MAX_LABEL = 80;
+
+type MailboxEdit = { id: string; label: string; grantId: string };
+
+/** The inline Edit form for one mailbox row: its label and, optionally, a new grant. */
+function EditMailboxForm({ mailbox, edit, locked, busy, onChange, onSave, onCancel }: {
+  mailbox: Mailbox;
+  edit: MailboxEdit;
+  locked: boolean;
+  busy: boolean;
+  onChange: (edit: MailboxEdit) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const labelBlank = edit.label.trim() === '';
+  const changed = edit.grantId.trim() !== '' || edit.label.trim() !== mailbox.label;
+  const helpId = `mailbox-edit-grant-help-${mailbox.id}`;
+  return (
+    <div className="mailbox-edit-form">
+      <label className="mailbox-edit-field">
+        <span>Label</span>
+        <input type="text" aria-label={`Label for ${mailbox.label}`} value={edit.label} maxLength={MAX_LABEL}
+          onChange={e => onChange({ ...edit, label: e.target.value })} />
+      </label>
+      {labelBlank && <p className="autonomy-error mailbox-id-help" role="alert">Enter a label.</p>}
+      <label className="mailbox-edit-field">
+        <span>Nylas grant ID</span>
+        <input type="password" autoComplete="off" placeholder="Paste a new grant ID"
+          aria-label={`New grant ID for ${mailbox.label}`} aria-describedby={helpId} value={edit.grantId}
+          onChange={e => onChange({ ...edit, grantId: e.target.value })} />
+      </label>
+      <p id={helpId} className="settings-page-sub mailbox-id-help">
+        Leave blank to keep the current grant. Paste a new one after reconnecting this account in Nylas.
+      </p>
+      <span className="mailbox-row-actions">
+        <button type="button" className="btn btn-primary btn-sm" disabled={locked || labelBlank || !changed}
+          onClick={onSave}>Save</button>
+        <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={onCancel}>Cancel</button>
+      </span>
+    </div>
+  );
+}
+
 export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boolean } = {}) {
   const [mailboxes, setMailboxes] = useState<Mailbox[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState<RemovalPreview | null>(null);
-  const [renaming, setRenaming] = useState<{ id: string; label: string } | null>(null);
-  const [replacing, setReplacing] = useState<{ id: string; grantId: string } | null>(null);
+  // The row being edited: its label (pre-filled) and an optional replacement grant
+  // (blank keeps the current one). One form for both, instead of Rename + Replace grant.
+  const [editing, setEditing] = useState<{ id: string; label: string; grantId: string } | null>(null);
 
   const [id, setId] = useState('');
   const [label, setLabel] = useState('');
@@ -290,14 +335,47 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
     setNotice(added);
   }, 'Failed to add mailbox');
 
-  const patch = (mid: string, body: Record<string, unknown>) => run(async () => {
+  // One PATCH; returns the success notice (a committed change with follow-up work), if any.
+  const sendPatch = async (mid: string, body: Record<string, unknown>): Promise<string | null> => {
     const res = await apiFetch(`${BASE}/${encodeURIComponent(mid)}`, jsonInit('PATCH', body));
     if (!res.ok) throw new Error(await errorMessage(res));
-    const updated = await successNotice(res);
-    setRenaming(null);
-    setReplacing(null); // drop any replacement grant from state
+    return successNotice(res);
+  };
+
+  const makeDefaultMailbox = (mid: string) => run(async () => {
+    const updated = await sendPatch(mid, { make_default: true });
     await load();
     setNotice(updated);
+  }, 'Failed to update mailbox');
+
+  // The server takes one change per PATCH (so a failure never leaves half a change behind
+  // an error), so an edit of both fields is two requests. The grant goes first: it is the
+  // one Nylas can refuse, and if it is refused nothing has changed. A label failure after
+  // a saved grant says so, clears the grant (it's applied) and keeps the form for a retry.
+  const saveEdit = (m: Mailbox, edit: { label: string; grantId: string }) => run(async () => {
+    const newGrant = edit.grantId.trim();
+    const newLabel = edit.label.trim();
+    const notices: string[] = [];
+    if (newGrant !== '') {
+      const n = await sendPatch(m.id, { grant_id: newGrant });
+      if (n) notices.push(n);
+      // Applied: drop the grant from state now, whatever happens to the label.
+      setEditing(cur => cur && cur.id === m.id ? { ...cur, grantId: '' } : cur);
+    }
+    if (newLabel !== m.label) {
+      try {
+        const n = await sendPatch(m.id, { label: newLabel });
+        if (n) notices.push(n);
+      } catch (e) {
+        if (newGrant === '') throw e;
+        await load(); // show the saved grant's effects before reporting the label failure
+        const why = e instanceof Error ? e.message : 'unknown error';
+        throw new Error(`The new grant was saved, but the label was not: ${why}`);
+      }
+    }
+    setEditing(null);
+    await load();
+    setNotice(notices.length > 0 ? notices.join(' ') : null);
   }, 'Failed to update mailbox');
 
   const startRemove = (mid: string) => run(async () => {
@@ -340,12 +418,7 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
           // Own class, not status-pill: that one adds a status dot and capitalizes text (#2600).
           <div key={m.id} className="mailbox-row">
             <span>
-              {renaming?.id === m.id ? (
-                <input type="text" aria-label="New label" value={renaming.label}
-                  onChange={e => setRenaming({ id: m.id, label: e.target.value })} />
-              ) : (
-                <strong>{m.label}</strong>
-              )}
+              <strong>{m.label}</strong>
               {' — '}{m.address || 'address not read yet'}
               {m.isDefault && <span className="badge-default" style={{ marginLeft: 6, fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>Default</span>}
             </span>
@@ -356,34 +429,23 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
                   ? <>it has not finished because: {m.pending_migration_reason}.</>
                   : "if it doesn't finish, check the Nylas API key and the grant."}
               </span>
+            ) : editing?.id === m.id ? (
+              <EditMailboxForm
+                mailbox={m}
+                edit={editing}
+                locked={locked}
+                busy={busy}
+                onChange={setEditing}
+                onSave={() => void saveEdit(m, editing)}
+                onCancel={() => setEditing(null)}
+              />
             ) : (
             <span className="mailbox-row-actions">
-              {replacing?.id === m.id ? (
-                <>
-                  <input type="password" autoComplete="off" placeholder="New Nylas grant ID"
-                    aria-label={`New grant ID for ${m.label}`} value={replacing.grantId}
-                    onChange={e => setReplacing({ id: m.id, grantId: e.target.value })} />
-                  <button type="button" className="btn btn-secondary btn-sm"
-                    disabled={locked || replacing.grantId.trim() === ''}
-                    onClick={() => void patch(m.id, { grant_id: replacing.grantId.trim() })}>Save grant</button>
-                  <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                    onClick={() => setReplacing(null)}>Cancel</button>
-                </>
-              ) : (
-                <button type="button" className="btn btn-secondary btn-sm" disabled={locked}
-                  onClick={() => setReplacing({ id: m.id, grantId: '' })}>Replace grant</button>
-              )}
-              {renaming?.id === m.id ? (
-                <button type="button" className="btn btn-secondary btn-sm"
-                  disabled={locked || renaming.label.trim() === ''}
-                  onClick={() => void patch(m.id, { label: renaming.label.trim() })}>Save label</button>
-              ) : (
-                <button type="button" className="btn btn-secondary btn-sm" disabled={locked}
-                  onClick={() => setRenaming({ id: m.id, label: m.label })}>Rename</button>
-              )}
+              <button type="button" className="btn btn-secondary btn-sm" disabled={locked}
+                onClick={() => setEditing({ id: m.id, label: m.label, grantId: '' })}>Edit</button>
               {!m.isDefault && (
                 <button type="button" className="btn btn-secondary btn-sm" disabled={locked}
-                  onClick={() => void patch(m.id, { make_default: true })}>Make default</button>
+                  onClick={() => void makeDefaultMailbox(m.id)}>Make default</button>
               )}
               <button type="button" className="btn btn-danger btn-sm" disabled={locked}
                 onClick={() => void startRemove(m.id)}>Remove</button>
@@ -407,8 +469,8 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
       {/* Read-only (no API key yet): the page says why; nothing here can change. */}
       {!readOnly && (
         <p className="settings-page-sub" style={{ margin: '12px 0 0' }}>
-          Changes apply at once, no restart needed. Use Replace grant after reconnecting a
-          mailbox's account in Nylas.
+          Changes apply at once, no restart needed. After reconnecting a mailbox's account in
+          Nylas, use Edit to paste its new grant ID.
         </p>
       )}
 
@@ -418,7 +480,7 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
           aria-describedby={idError ? 'mailbox-id-help mailbox-id-error' : 'mailbox-id-help'}
           aria-invalid={idError !== null}
           onChange={e => setId(e.target.value)} />
-        {/* The id is ours, not Nylas's, and permanent: rows only offer Rename (the label),
+        {/* The id is ours, not Nylas's, and permanent: Edit changes only the label and grant,
             and a used id is never reused even after removal (id_taken in admin.ts). */}
         <p id="mailbox-id-help" className="settings-page-sub mailbox-id-help">
           A short name you choose, like <code>work</code>. Lowercase letters, numbers and
