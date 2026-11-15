@@ -7263,6 +7263,29 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(reports()).toHaveLength(1);
       });
 
+      // #2591's own sequence (CodeRabbit, PR #2625): the review holds a reply as a commitment, the
+      // Bullpen thread closes, and ceo-inbox wakes in a new task and calls send on the held draft.
+      it('commitment hold → Bullpen close wake: refused with the commitment reason, no second review or digest item', async () => {
+        const ledger = inMemorySendLedger(() => undefined);
+        const review = vi.fn().mockResolvedValue({
+          kind: 'hold',
+          reason: 'Held for the principal: this message commits the principal. Stakes: commitment.',
+          findings: [{ rule: 'speaks-as-principal', detail: 'x' }],
+        });
+        const first = makeAuto({ review, ledger: ledger as never });
+        expect(await first.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'review_hold' });
+        expect(reports()).toHaveLength(1);
+        // The close-out wake: a new task, and Curia didn't draft it in this pass.
+        const wake = makeAuto({ review, ledger: ledger as never, curiaWrites: { created: false, lastWriteAt: null, replyToMessageId: null } });
+        expect(await wake.gw.sendPrincipalDraft('d1', { ...auto, taskEventId: 't-bullpen-close' })).toMatchObject({
+          success: false, refusal: 'already_held', policyHold: true,
+          blockedReason: HELD_BECAUSE('It commits the principal beyond what Curia sends on its own.'),
+        });
+        expect(wake.client!.sendDraft).not.toHaveBeenCalled();
+        expect(review).toHaveBeenCalledOnce();
+        expect(reports()).toHaveLength(1);
+      });
+
       it('end to end, a failed item is filed once by the next wake and then never again', async () => {
         const ledger = inMemorySendLedger(() => undefined);
         const draftWithSam = () => autoClient(autoDraft({ cc: [{ email: 'sam@example.org' }] }));
