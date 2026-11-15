@@ -109,7 +109,8 @@ const ALL_QUESTIONS: readonly BriefQuestion[] = ['purpose', 'speaks-as-principal
  * The score a send that speaks for the principal needs to go out without asking, by its stakes
  * (#2473). Null: never, at any band. Routine is the spot-check line (isSpotCheckOrAbove).
  */
-const STAKES_MIN_SCORE: Record<SendStakes, number | null> = { routine: 80, commitment: 90, financial_or_legal: null };
+// Exported for scripts/judge-replay, which scores a verdict by whether the send would go through.
+export const STAKES_MIN_SCORE: Record<SendStakes, number | null> = { routine: 80, commitment: 90, financial_or_legal: null };
 /** Orders the stakes ratings for a sending setting's ceiling (#2474). */
 const STAKES_RANK: Record<SendStakes, number> = { routine: 0, commitment: 1, financial_or_legal: 2 };
 const STAKES_LABEL: Record<SendStakes, string> = { routine: 'routine', commitment: 'commitment', financial_or_legal: 'financial or legal' };
