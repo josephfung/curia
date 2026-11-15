@@ -10,7 +10,7 @@ import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import { TurnLanes } from '../../src/dispatch/turn-lanes.js';
 import { TurnActivityRegistry } from '../../src/dispatch/turn-activity.js';
 import { EventBus } from '../../src/bus/bus.js';
-import { createInboundMessage } from '../../src/bus/events.js';
+import { createInboundMessage, type AgentResponseEvent } from '../../src/bus/events.js';
 import type { LLMProvider, LLMResponse } from '../../src/agents/llm/provider.js';
 import { ExecutionLayer } from '../../src/skills/execution.js';
 import { ToolRegistry } from '../../src/skills/registry.js';
@@ -207,6 +207,12 @@ function harness(contacts: Record<string, ReturnType<typeof person>>) {
     turnActivity,
   }).register();
 
+  // Each turn's agent.response, by conversation: what the scheduler and diagnostics read.
+  const responses = new Map<string, AgentResponseEvent['payload']>();
+  bus.subscribe('agent.response', 'system', async (event) => {
+    if (event.type === 'agent.response') responses.set(event.payload.conversationId, event.payload);
+  });
+
   function inbound(content: string, senderId: string, conversationId: string, channelId: string) {
     return createInboundMessage({ conversationId, channelId, senderId, content });
   }
@@ -220,7 +226,7 @@ function harness(contacts: Record<string, ReturnType<typeof person>>) {
     return JSON.stringify(chatsByTurn.get(marker) ?? []);
   }
 
-  return { bus, booking, email, inbound, script, transcript };
+  return { bus, booking, email, inbound, script, transcript, responses };
 }
 
 // The real tool's attendee shape (parseWritableAttendees): { email, name? }, so the booking
@@ -304,6 +310,11 @@ describe('cross-conversation backstop (#2588)', () => {
     // The hold was the Signal turn's first tool result, and it did not count as an error
     // against the turn's consecutive-error budget.
     expect(h.transcript('SIGNAL-REQUEST')).toMatch(/<attempt>0 of \d+<\/attempt>/);
+    // Nor is it reported as a failed skill: a re-issued call may well run, and the run's
+    // failedSkills (scheduler last_run_context, diagnostics) must not say it failed.
+    const signalResponse = h.responses.get('signal:+15550000001');
+    expect(signalResponse).toBeDefined();
+    expect(signalResponse!.failedSkills).toBeUndefined();
   });
 
   it('the same person on two channels acting on different people is never held', async () => {

@@ -2913,7 +2913,11 @@ export class AgentRuntime {
           // the reconnect action rather than a generic SKILL_ERROR.
           // Record for scheduler visibility (#1830) — distinct-skill cap + sanitised
           // error text (third-party bodies must not land unsanitised in last_run_context).
-          recordFailedSkill(toolCall.name, result.error);
+          // A cross-turn hold (#2588) is a pause the model is told to weigh and may re-issue,
+          // not a tool error: it is not a failed skill, and it must not push the turn toward
+          // the abort budget.
+          const isHold = isCrossTurnHold(result);
+          if (!isHold) recordFailedSkill(toolCall.name, result.error);
           if (
             result.gate === 'live_principal_turn'
             && !gateRefusals.includes(toolCall.name)
@@ -2926,9 +2930,7 @@ export class AgentRuntime {
           const mismatchFromFailure = identityMismatchFromToolResult(toolCall.name, result);
           if (isDbFailure) {
             budget.dbFailures++;
-          } else if (!isCrossTurnHold(result)) {
-            // A cross-turn hold (#2588) is a pause the model is told to weigh and may re-issue,
-            // not a tool error: it must not push the turn toward the abort budget.
+          } else if (!isHold) {
             budget.consecutiveErrors++;
           }
           const agentErr = isDbFailure

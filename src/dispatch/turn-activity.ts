@@ -83,8 +83,9 @@ export interface ActionTarget {
 
 /**
  * What became of a recorded call. `pending`: its handler is running. `succeeded`: it returned
- * success. `unknown`: it timed out, so it may or may not have taken effect. A failed call is
- * removed rather than kept: it did nothing another turn should wait on.
+ * success. `unknown`: it timed out or threw, so it may or may not have taken effect. A failed
+ * call (one that returned success: false) is removed rather than kept: it did nothing another
+ * turn should wait on.
  */
 export type ActionOutcome = 'pending' | 'succeeded' | 'unknown';
 
