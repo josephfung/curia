@@ -53,6 +53,7 @@ function oneLine(value: string, max: number): string {
     .slice(0, max);
 }
 
+// `channel` arrives already JSON-quoted.
 function confirmationGuidance(channel: string): string {
   return [
     'Give them exactly one confirmation of the outcome.',
@@ -75,11 +76,11 @@ export function frameInjectedInput(
   const when = receivedLocal(input.receivedAt, options.timezone);
   const handed = input.handedOverFrom;
   const header = handed
-    ? `[Handed over from ${JSON.stringify(oneLine(handed.conversationLabel, 60))}'s ${oneLine(handed.channelId, 64) || 'unknown channel'} conversation, received ${when}: they sent this there while you were working on this. It may change what you are doing.]`
+    ? `[Handed over from ${oneLine(label, 80)}'s ${oneLine(handed.channelId, 64) || 'unknown channel'} conversation (${JSON.stringify(oneLine(handed.conversationLabel, 60))}), received ${when}: they sent this there while you were working on this. It may change what you are doing.]`
     : `[New message from ${label} via ${channel}, received ${when} — it arrived while you were working on this conversation and may change what you are doing.]`;
   const guidance = renderTurnGuidance(parseTurnGuidanceKeys(input.turnGuidance));
   const parts = [header];
-  if (handed) parts.push(confirmationGuidance(oneLine(handed.channelId, 64) || 'unknown channel'));
+  if (handed) parts.push(confirmationGuidance(JSON.stringify(oneLine(handed.channelId, 64) || 'unknown channel')));
   if (options.exitDrain) parts.push('Your reply draft above was **not** sent.');
   if (guidance) parts.push(guidance);
   parts.push(input.content);

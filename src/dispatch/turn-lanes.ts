@@ -260,17 +260,17 @@ function copyInput(input: InjectableInput): InjectableInput {
   if (typeof input.senderLabel === 'string') {
     copy.senderLabel = singleLine(input.senderLabel, LABEL_MAX);
   }
-  if (input.handedOverFrom && typeof input.handedOverFrom === 'object') {
-    copy.handedOverFrom = Object.freeze({
-      channelId: singleLine(
-        typeof input.handedOverFrom.channelId === 'string' ? input.handedOverFrom.channelId : '',
-        CHANNEL_MAX,
-      ),
-      conversationLabel: singleLine(
-        typeof input.handedOverFrom.conversationLabel === 'string' ? input.handedOverFrom.conversationLabel : '',
-        CONVERSATION_LABEL_MAX,
-      ),
-    });
+  // Accept only a plain object with two string fields. Anything else is dropped,
+  // so a malformed value never turns into an empty-but-present hand-off.
+  const from: unknown = input.handedOverFrom;
+  if (typeof from === 'object' && from !== null && !Array.isArray(from)) {
+    const { channelId, conversationLabel } = from as Record<string, unknown>;
+    if (typeof channelId === 'string' && typeof conversationLabel === 'string') {
+      copy.handedOverFrom = Object.freeze({
+        channelId: singleLine(channelId, CHANNEL_MAX),
+        conversationLabel: singleLine(conversationLabel, CONVERSATION_LABEL_MAX),
+      });
+    }
   }
   // A new array, not the caller's. Not frozen: the field type is a mutable list
   // of string keys, and the copy no longer aliases the input.
@@ -401,6 +401,7 @@ export class TurnLanes {
    * conversation its lane belongs to (#2588). Same eligibility, cap and dedupe
    * as `tryInject`. The caller sets `handedOverFrom` so the frame says where it came from.
    */
+  // Callers MUST check the target conversation is one-to-one with the sender: this does not check the audience (the Task 9 hand-off does).
   tryInjectIntoTask(taskEventId: string, input: InjectableInput): TryInjectResult {
     if (!this.enabled) return { kind: 'not_injected', reason: 'disabled' };
     const found = this.findHeld(taskEventId);
