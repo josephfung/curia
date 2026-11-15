@@ -65,10 +65,11 @@ function asRecord(v: unknown): Record<string, unknown> | undefined {
 export function clipMiddleCodePoints(text: string, max: number): string {
   const points = Array.from(text);
   if (points.length <= max) return text;
-  const marker = `\n[… ${points.length - max} characters left out …]\n`;
-  const keep = Math.max(0, max - Array.from(marker).length);
+  const marker = (n: number): string => `\n[… ${n} characters left out …]\n`;
+  // Sized for the worst-case count, so the result fits `max`; then the true count is written.
+  const keep = Math.max(0, max - Array.from(marker(points.length)).length);
   const head = Math.ceil(keep / 2);
-  return `${points.slice(0, head).join('')}${marker}${points.slice(points.length - (keep - head)).join('')}`;
+  return `${points.slice(0, head).join('')}${marker(points.length - keep)}${points.slice(points.length - (keep - head)).join('')}`;
 }
 
 /**
@@ -89,8 +90,10 @@ function priorTurnCall(row: AuditLogRow): PriorTurnCall {
   const sent = Array.isArray(data?.['sent'])
     ? (data['sent'] as unknown[]).filter((s): s is string => typeof s === 'string' && s !== '')
     : [];
-  // A specialist's answer is prose: show it as text rather than escaped inside JSON.
-  const response = typeof data?.['response'] === 'string' ? data['response'] : undefined;
+  // A specialist's answer is prose: show it as text rather than escaped inside JSON. Only for
+  // delegate, whose other fields are lifted above; another tool's `response` field is one field
+  // among others (an event id, say), so its whole result is shown.
+  const response = tool === 'delegate' && typeof data?.['response'] === 'string' ? data['response'] : undefined;
   const error = typeof result?.['error'] === 'string' ? result['error'] : undefined;
   const raw = response !== undefined ? redactSecrets(response)
     : error !== undefined ? redactSecrets(error)

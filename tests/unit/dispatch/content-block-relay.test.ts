@@ -187,6 +187,11 @@ describe('priorTurnActionsFromRows (#2615)', () => {
     expect(Array.from(call!.excerpt).length).toBeLessThanOrEqual(PRIOR_TURN_RESULT_MAX_CHARS);
   });
 
+  it('shows a non-delegate result whole, even when it has a response field', () => {
+    const [call] = calls(priorTurnActionsFromRows([ok('calendar-create-event', { response: 'created', eventId: 'evt-42' }, 1)]));
+    expect(call!.excerpt).toContain('evt-42');
+  });
+
   it('keeps the calls closest to the draft when the total runs over, and counts the rest', () => {
     const big = 'y'.repeat(PRIOR_TURN_RESULT_MAX_CHARS);
     // Newest first: tool-0 is the latest call.
@@ -223,6 +228,14 @@ describe('priorTurnActionsFromRows (#2615)', () => {
 describe('clipMiddleCodePoints (#2615)', () => {
   it('returns short text unchanged', () => {
     expect(clipMiddleCodePoints('short', 100)).toBe('short');
+  });
+
+  it('says exactly how many characters it left out', () => {
+    const text = 'a'.repeat(1_000);
+    const clipped = clipMiddleCodePoints(text, 200);
+    const left = Number(/\[… (\d+) characters left out …\]/.exec(clipped)![1]);
+    expect(Array.from(clipped.replace(/\n\[… \d+ characters left out …\]\n/, '')).length + left).toBe(1_000);
+    expect(Array.from(clipped).length).toBeLessThanOrEqual(200);
   });
 
   // A lone surrogate in the task payload fails its jsonb audit write, losing the reply.
