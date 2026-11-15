@@ -6032,7 +6032,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       recordSending: ReturnType<typeof vi.fn>; recordSent: ReturnType<typeof vi.fn>;
       recordHeld?: ReturnType<typeof vi.fn>; recentForThread?: ReturnType<typeof vi.fn>; recentForConversation?: ReturnType<typeof vi.fn>;
       recentAutonomousSends?: ReturnType<typeof vi.fn>; sentForDraft?: ReturnType<typeof vi.fn>;
-      recordLimitStop?: ReturnType<typeof vi.fn>; limitStopsSince?: ReturnType<typeof vi.fn>;
+      recordLimitStop?: ReturnType<typeof vi.fn>; limitStopsSince?: ReturnType<typeof vi.fn>; heldForDraft?: ReturnType<typeof vi.fn>;
     };
     /** What curiaWritesInTask returns (PR 2), or an error it throws. */
     curiaWrites?: { created: boolean; lastWriteAt: Date | null; replyToMessageId: string | null } | Error;
@@ -6077,6 +6077,7 @@ describe('sendPrincipalDraft (#2474)', () => {
       recentForConversation: vi.fn().mockResolvedValue([]),
       recentAutonomousSends: vi.fn().mockResolvedValue([]),
       sentForDraft: vi.fn().mockResolvedValue(false),
+      heldForDraft: vi.fn().mockResolvedValue(false),
       recordLimitStop: vi.fn().mockResolvedValue(undefined),
       limitStopsSince: vi.fn().mockResolvedValue([]),
       ...(o.ledger ?? { recordSending: vi.fn().mockResolvedValue(undefined), recordSent: vi.fn().mockResolvedValue(undefined) }),
@@ -6111,7 +6112,7 @@ describe('sendPrincipalDraft (#2474)', () => {
         mailboxAddress: async (id: string) => o.mailboxAddresses?.[id],
       } : {}),
       ...(o.withoutProvenance ? {} : { draftProvenance: { createdByCuria, editedByCuria, curiaWritesInTask } }),
-      ...(o.withoutLedger ? {} : { sendLedger: ledger as unknown as Pick<import('../../../src/skills/principal-send/send-ledger.js').PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentForConversation' | 'recentAutonomousSends' | 'sentForDraft' | 'list' | 'recordLimitStop' | 'limitStopsSince'> }),
+      ...(o.withoutLedger ? {} : { sendLedger: ledger as unknown as Pick<import('../../../src/skills/principal-send/send-ledger.js').PrincipalSendLedger, 'recordSending' | 'recordSent' | 'recordHeld' | 'recentForThread' | 'recentForConversation' | 'recentAutonomousSends' | 'sentForDraft' | 'heldForDraft' | 'list' | 'recordLimitStop' | 'limitStopsSince'> }),
     });
     return { gw, client, review, createdByCuria, editedByCuria, curiaWritesInTask, ledger, readSendLevel, actionLogRepo, resolveMailbox };
   }
@@ -6961,6 +6962,48 @@ describe('sendPrincipalDraft (#2474)', () => {
       expect(reports()).toEqual([expect.objectContaining({ summary: `${NOT_SENT} Curia couldn't check who wrote the draft.${IN_DRAFTS}` })]);
     });
 
+    // #2591 (prod 2026-11-13): a reply held as a commitment was tried again by a later wake (a
+    // Bullpen thread closing), refused for another reason, and the principal got a second,
+    // misleading digest item. A held draft is the principal's: refused quietly, before anything else.
+    describe('a draft already held for the principal (#2591)', () => {
+      const HELD = "This draft was already held for the principal, so it's theirs to send. Don't send or edit it again." + SUFFIX;
+
+      it('refuses it with already_held: no send, no review, no new held marker, no second digest item', async () => {
+        const { gw, client, ledger, review } = makeAuto({ ledger: {
+          recordSending: vi.fn().mockResolvedValue(undefined), recordSent: vi.fn().mockResolvedValue(undefined),
+          heldForDraft: vi.fn().mockResolvedValue(true),
+        } });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({
+          success: false, leftAsDraft: true, refusal: 'already_held', blockedReason: HELD, policyHold: true,
+        });
+        expect(PRINCIPAL_SEND_REFUSALS.already_held).toBe(HELD);
+        expect(ledger.heldForDraft).toHaveBeenCalledWith('d1', 'default');
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+        expect(review).not.toHaveBeenCalled();
+        expect(ledger.recordHeld).not.toHaveBeenCalled();
+        expect(reports()).toHaveLength(0);
+      });
+
+      it('fails closed when the ledger cannot say: no_send_ledger, as for any unreadable send record', async () => {
+        const { gw, client } = makeAuto({ ledger: {
+          recordSending: vi.fn().mockResolvedValue(undefined), recordSent: vi.fn().mockResolvedValue(undefined),
+          heldForDraft: vi.fn().mockRejectedValue(new Error('db down')),
+        } });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'no_send_ledger', refusalKind: 'other' });
+        expect(client!.sendDraft).not.toHaveBeenCalled();
+      });
+
+      it('does not stop the principal sending it themselves on a live turn', async () => {
+        const { gw, client, ledger } = make({ ledger: {
+          recordSending: vi.fn().mockResolvedValue(undefined), recordSent: vi.fn().mockResolvedValue(undefined),
+          heldForDraft: vi.fn().mockResolvedValue(true),
+        } });
+        expect((await gw.sendPrincipalDraft('d1', opts)).success).toBe(true);
+        expect(ledger.heldForDraft).not.toHaveBeenCalled();
+        expect(client!.sendDraft).toHaveBeenCalled();
+      });
+    });
+
     it('7. refuses with not_curia_draft when Curia did not create the draft in this task', async () => {
       const { gw, client } = makeAuto({ curiaWrites: { created: false, lastWriteAt: null, replyToMessageId: null } });
       expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_curia_draft', policyHold: true });
@@ -7233,6 +7276,8 @@ describe('sendPrincipalDraft (#2474)', () => {
           not_a_reply: 'judgement', mailing_list: 'judgement', principal_address_recipient: 'judgement', reply_to_principal_address: 'judgement',
           recipient_not_on_thread: 'judgement', too_many_recipients: 'judgement', has_attachments: 'judgement', not_latest_message: 'judgement',
           financial_details: 'judgement',
+          // #2591: the earlier hold's judgement, repeated; it files no digest item of its own.
+          already_held: 'judgement',
         };
         const codes = Object.keys(PRINCIPAL_SEND_REFUSALS) as Array<keyof typeof PRINCIPAL_SEND_REFUSALS>;
         expect(Object.keys(kinds).sort()).toEqual([...codes].sort());

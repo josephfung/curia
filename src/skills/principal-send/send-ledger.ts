@@ -252,6 +252,20 @@ export class PrincipalSendLedger {
       .map(parseLedgerDoc)
       .some((e) => e?.draftId === draftId && e.outcome === 'sent');
   }
+
+  /**
+   * Whether an autonomous send of this draft was already held for the principal (#2591): a `held`
+   * marker on the draft in `mailbox`. A held draft is the principal's to send, so a later wake (a
+   * Bullpen thread closing, a resumed task) must not try it again. A `limited` stop does not count:
+   * a limit only says "not yet". An entry with no mailbox (before the registry) matches any, as in
+   * recentForThread: it can only block. Throws on a repo failure.
+   */
+  async heldForDraft(draftId: string, mailbox: string): Promise<boolean> {
+    return (await this.docs.listByPrefix(draftPrefix(draftId)))
+      .map(parseLedgerDoc)
+      .some((e) => e?.draftId === draftId && e.outcome === 'held'
+        && (e.mailbox === undefined || e.mailbox === FALLBACK_MAILBOX_ID || e.mailbox === mailbox));
+  }
 }
 
 /** The entry is at or after the cutoff; an unreadable `at` counts as recent (fail closed). */

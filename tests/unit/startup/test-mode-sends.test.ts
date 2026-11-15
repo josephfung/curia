@@ -524,6 +524,23 @@ describe('inMemorySendLedger matches production (#2475 item 12)', () => {
     expect((await ledger.recentForConversation(['<x@example.com>'], 0)).map((e) => e.draftId)).toEqual(['a', 'b']);
     expect(await ledger.recentForConversation([], 0)).toEqual([]);
   });
+
+  // #2591: as production, only a held marker on that draft in that mailbox (or one with none) counts.
+  it('heldForDraft counts a held marker on the draft in that mailbox, never a send or a limit stop', async () => {
+    const at = new Date().toISOString();
+    const store: PrincipalSendEntry[] = [
+      { draftId: 'a', threadId: 't1', mailbox: 'work', conversationIds: [], recipients: [], mode: 'autonomous', at, outcome: 'held', reasonCode: 'review_hold' },
+      { draftId: 'b', threadId: 't1', mailbox: 'work', conversationIds: [], recipients: [], mode: 'autonomous', at, outcome: 'sending' },
+      { draftId: 'c', threadId: '', mailbox: 'work', conversationIds: [], recipients: [], mode: 'autonomous', at, outcome: 'limited', reasonCode: 'daily_cap' },
+      { draftId: 'd', threadId: 't2', conversationIds: [], recipients: [], mode: 'autonomous', at, outcome: 'held', reasonCode: 'review_hold' },
+    ];
+    const ledger = inMemorySendLedger(() => store);
+    expect(await ledger.heldForDraft('a', 'work')).toBe(true);
+    expect(await ledger.heldForDraft('a', 'personal')).toBe(false);
+    expect(await ledger.heldForDraft('b', 'work')).toBe(false);
+    expect(await ledger.heldForDraft('c', 'work')).toBe(false);
+    expect(await ledger.heldForDraft('d', 'personal')).toBe(true);
+  });
 });
 
 // #2475: the test-mode ExecutionLayer had no principalMailboxes, so every real ceo-inbox-send-draft
