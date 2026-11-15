@@ -2,9 +2,11 @@
 // recently finished, and which risky actions (with targets) each has taken".
 //
 // A "root" is the turn a person started: the root task, plus every delegated specialist and
-// late-delegation wake that continues it. Two roots in different conversations that act on
-// the same target (a contact, a site, an id, a tool) within the window are worth a pause: the
-// second caller is held once and told what the first did, then may re-issue.
+// late-delegation wake that continues it. Two roots that act on the same target (a contact, a
+// site, an id, a tool) within the window are worth a pause: the second caller is held once and
+// told what the first did, then may re-issue. The roots are usually in different
+// conversations. In the same conversation, only a root still running counts (an earlier turn
+// whose detached specialist is still working); an ended one is already in that history.
 //
 // Single process (ADR-053 section 7). The maps live in this process; a second Curia would not
 // see this one's turns. The registry fails open: an unknown task id, a pruned parent, or an
@@ -559,6 +561,11 @@ export class TurnActivityRegistry {
    * Other roots in my scope whose activity reaches into my window. An auto root never ends,
    * so it counts only while its last activity is inside the window; a running root past
    * MAX_RUNNING_ROOT_AGE_MS counts as ended at that age.
+   *
+   * An ended root in my own conversation does not count: its work is in this conversation's
+   * history already, so a follow-up there is not held by it. One still running does count,
+   * e.g. an earlier turn whose detached specialist is still booking. Auto roots never end
+   * (no task marks them done), so they count by activity whatever their conversation.
    */
   private qualifyingOthers(mine: RootState): RootState[] {
     const now = this.now();
@@ -572,6 +579,7 @@ export class TurnActivityRegistry {
         continue;
       }
       const ended = this.effectiveEndedAt(other, now);
+      if (ended !== null && other.conversationId === mine.conversationId) continue;
       if (ended === null || ended >= floor) result.push(other);
     }
     return result;

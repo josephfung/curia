@@ -13,9 +13,11 @@ import type { ActionOutcome, ActionTarget, BackstopDecision, RootTurn } from './
 export type BackstopMatches = Extract<BackstopDecision, { held: true }>['matches'];
 type BackstopMatch = BackstopMatches[number];
 
-const HEADER = "Not run yet: another conversation's turn already acted on the same target.";
+// "Another turn", not "another conversation": a root still running in the viewer's own
+// conversation (a detached specialist of an earlier turn there) holds too.
+const HEADER = 'Not run yet: another turn already acted on the same target.';
 const FOOTER = "If your call still applies after this, call it again unchanged; if it would duplicate that work, don't.";
-const GENERIC_LINE = '- Another conversation already acted on this same target recently.';
+const GENERIC_LINE = '- Another turn already acted on this same target recently.';
 const NAME_MAX = 80;
 const CHANNEL_MAX = 32;
 /** What the other turn's call came to, as far as the registry knows. */
@@ -106,19 +108,23 @@ function whoseTurn(
   contactName: (id: string) => string | undefined,
 ): string {
   if (other.originatorIsSystem) return 'a scheduled task';
+  // Only a root still running gets here from the viewer's own conversation (turn-activity.ts
+  // qualifyingOthers), e.g. an earlier turn's detached specialist.
+  const sameConversation = viewer !== undefined && viewer.conversationId === other.conversationId;
   if (sameResolvedContact(viewer, other)) {
+    if (sameConversation) return 'your earlier turn in this conversation';
     const channel = singleLine(other.channelId, CHANNEL_MAX);
     return channel === '' ? 'your other conversation' : `your other conversation on ${channel}`;
   }
   const owner = otherTurnContactId(viewer, other);
-  const name = owner === null ? undefined : quotedName(contactName(owner));
-  return `a conversation with ${name ?? 'another contact'}`;
+  const name = quotedName(owner === null ? undefined : contactName(owner)) ?? 'another contact';
+  return sameConversation ? `an earlier turn with ${name} in this conversation` : `a conversation with ${name}`;
 }
 
 /**
  * `showDetail` decides per match whether the line names whose turn it was, the tool, target,
  * time and outcome; it defaults to yes. Matches without detail share one generic line.
- * `viewer` is the held root, for "your other conversation".
+ * `viewer` is the held root, for "your other conversation" or "in this conversation".
  */
 export function renderBackstopHold(
   matches: BackstopMatches,
