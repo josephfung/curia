@@ -105,7 +105,8 @@ expected_behaviors:
     layer: voice
     description: >
       If Josh (or Greg) gets an invitation of his own, it is friendly rather than stiff; the
-      note to Josh about the rematch sounds like it's between friends.
+      note to Josh about the rematch sounds like it's between friends. One invitation to all
+      three is acceptable, and then only the rematch note is rated here.
 failure_modes:
   - In-jokes or overly casual language on an email Hannah reads
   - The rematch line on the group invitation

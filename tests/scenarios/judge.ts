@@ -55,6 +55,20 @@ Respond with ONLY a JSON object:
 {"scores": [{"behaviorId": "<id>", "rating": "PASS|PARTIAL|MISS", "justification": "<one sentence>"}]}`;
 }
 
+/**
+ * How to rate a voice behavior whose message was never written (#2556). Without it the judge
+ * passed "any message to Kevin is courteous" when nothing went to Kevin, which the human
+ * graders' guide (grading-cli.ts) scores MISS. Only behaviors marked with a layer carry it, so
+ * the rest of the suite is judged as before.
+ */
+export const VOICE_RULE = [
+  'Behaviors marked [voice] rate the wording of a message. If the message a [voice] behavior',
+  'describes was never written (nothing sent, drafted or replied to that person), rate it MISS:',
+  'there is no wording to get right. The exception is a behavior that says outright that writing',
+  'nothing is acceptable in what happened; then follow what it says. Phrasing such as "any',
+  'message to X" does not by itself make writing nothing acceptable.',
+].join(' ');
+
 /** The judge's system prompt for this case. */
 export function judgeSystemPrompt(scenario: Pick<ScenarioCase, 'agent'>): string {
   return scenario.agent === COORDINATOR ? SYSTEM_PROMPT : specialistSystemPrompt(scenario.agent);
@@ -162,7 +176,8 @@ export function formatJudgeInput(
       : []),
     ``,
     `## Expected behaviors`,
-    behaviors.map(b => `- ${b.id}: ${b.description.trim()}`).join('\n'),
+    behaviors.map(b => `- ${b.id}${b.layer === 'voice' ? ' [voice]' : ''}: ${b.description.trim()}`).join('\n'),
+    ...(behaviors.some(b => b.layer === 'voice') ? [``, VOICE_RULE] : []),
     ...(scenario.failureModes.length > 0
       ? [``, `## Known failure modes`, scenario.failureModes.map(f => `- ${f}`).join('\n')]
       : []),

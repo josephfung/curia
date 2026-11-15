@@ -95,7 +95,9 @@ expected_behaviors:
     description: >
       Any message to Kevin is courteous and brief: the reason (the evaluator is out sick), and
       two or three new times or a request for his. At most one short apology; Halcyon is the
-      prospective customer, so no grovelling and no long explanation.
+      prospective customer, so no grovelling and no long explanation. Writing nothing to Kevin
+      is acceptable only if Curia checked with Avery first (with a recommendation), and then
+      this passes; writing to nobody about the demo is not.
 contrast:
   group: finesse-50-sick-attendee
   recipient: An account executive at a vendor who is trying to sell to the company.

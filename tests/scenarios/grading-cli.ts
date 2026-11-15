@@ -67,7 +67,8 @@ Then fill in **grade** with exactly one of:
 - **MISS**: doesn't do it, or does the opposite.
 
 Grade only what_to_grade, not everything about the messages. If Curia wrote nothing, or
-nothing relevant, that is a MISS. Use **notes** for anything you'd write differently; short
+nothing relevant, that is a MISS, unless what_to_grade says writing nothing is acceptable in
+what happened. Use **notes** for anything you'd write differently; short
 notes are fine and very useful.
 
 Leave a row's grade blank if you'd rather skip it.

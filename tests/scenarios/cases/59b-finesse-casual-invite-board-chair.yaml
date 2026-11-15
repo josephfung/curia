@@ -123,7 +123,8 @@ expected_behaviors:
     description: >
       Any reply to Catherine is warm and brief, matching her informal note: a yes and a time
       (or a quick "Avery would love to, will confirm a time shortly"). No formal letter, no
-      "please find below Avery's availability".
+      "please find below Avery's availability". Writing nothing to Catherine is acceptable if
+      Curia asked Avery right away with a recommendation to say yes, and then this passes.
 contrast:
   group: finesse-59-casual-invite
   recipient: The chair of the company's board.
