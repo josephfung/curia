@@ -89,7 +89,7 @@ The `decision` node type and `decided` edge type record decisions Curia *learned
 
 Considered and deliberately not built. Each has a trigger: revisit when it fires, not before.
 
-- **Validity intervals.** Nodes and edges record when Curia learned or last confirmed something (`created_at`, `last_confirmed_at`), not when it was true in the world (e.g. employment from 2019 to 2022). Freshness is folded into `confidence` by decay, and reconfirmation restores it. Superseded fact values survive in `properties.previous_values`. *Revisit when* an agent acts on a fact or relationship that was once true and no longer is, and decay did not catch it.
+- **Validity intervals.** Nodes and edges record when Curia learned or last confirmed something (`created_at`, `last_confirmed_at`), not when it was true in the world (e.g. employment from 2019 to 2022). Freshness is folded into `confidence` by decay (see Temporal Metadata). Superseded fact values survive in `properties.previous_values`. *Revisit when* an agent acts on a fact or relationship that was once true and no longer is, and decay did not catch it.
 - **Edge sensitivity.** `sensitivity` lives on nodes only. An edge has none of its own. *Revisit when* a relationship itself (e.g. `invested_in`, `spouse`) needs protection its endpoints do not carry, in an export or outbound path.
 - **Subtypes and participation roles.** The node and edge vocabularies are flat: no event subtypes such as meeting vs deadline, and no invited vs attended distinction. Nothing reads the graph for those distinctions today. *Revisit when* a skill must answer a question that depends on them from the graph.
 
@@ -107,7 +107,7 @@ Every fact and relationship carries:
   - `fast_decay`: coffee preference, current focus — unreliable after weeks
 - `source` TEXT — which agent/channel/interaction created it
 
-**Decay.** The DreamEngine (`src/memory/dream-engine.ts`) runs a daily pass that halves `confidence` per half-life since the node or edge was last confirmed or decayed: 180 days for `slow_decay`, 21 for `fast_decay`, never for `permanent` (`dreaming.decay` in `config/default.yaml`). Nodes and edges at or below `archiveThreshold` (0.05) are archived, as are edges whose endpoint was archived. An important node (high sensitivity or high connectivity) is warned first and held for `warnHoldBackDays` (7) before archiving. Contact-anchored nodes are never decayed or archived ([ADR-040](../adr/040-contact-anchored-kg-node-identity.md)). Reconfirmation raises `confidence` back to at least the incoming value.
+**Decay.** The DreamEngine (`src/memory/dream-engine.ts`) runs a daily pass that halves `confidence` per half-life since the node or edge was last confirmed or decayed: 180 days for `slow_decay`, 21 for `fast_decay`, never for `permanent` (`dreaming.decay` in `config/default.yaml`). Nodes and edges at or below `archiveThreshold` (0.05) are archived, as are edges whose endpoint was archived. An important node (high sensitivity or high connectivity) is warned first and held for `warnHoldBackDays` (7) before archiving. Contact-anchored nodes are never decayed or archived ([ADR-040](../adr/040-contact-anchored-kg-node-identity.md)). Re-asserting an edge or entity node raises its `confidence` to at least the incoming value. Re-asserting an identical fact only merges its properties, so its confidence keeps decaying (#2626).
 
 ---
 
@@ -154,7 +154,11 @@ Before writing a fact that updates an entity attribute (e.g., "the CEO lives in 
 - If contradicting fact exists with lower confidence: update the existing fact, preserve the old value in `properties.previous_values` for audit
 - If contradicting fact exists with equal confidence: flag for human review via the alert channel
 
-Known gaps, under investigation in #2626: resolution ignores recency apart from decay, so a genuine update can lose to an older fact for a few weeks; attribute keys are LLM-chosen, so synonymous keys (`job_title` / `title`) are never compared; and an equal-confidence conflict from `extract-facts` is only logged, not sent to the alert channel. `memory-store` returns the conflict to the calling agent.
+Known gaps, under investigation in #2626:
+- Resolution compares confidence only. A genuine update is discarded, not retried, while an older fact still holds higher confidence, which can last months for `slow_decay` facts.
+- Attribute keys are LLM-chosen. Keys in the contact canonical-field map (`src/contacts/canonical-attribute-guard.ts`) go to the contact record, but synonyms outside it (e.g. `role` / `position`), or on entities with no contact, are never compared.
+- Re-asserting an identical fact does not refresh its confidence, so a repeatedly confirmed fact still decays to archive.
+- An equal-confidence conflict from `extract-facts` is only logged, not sent to the alert channel. `memory-store` returns the conflict to the calling agent.
 
 ### Rate Limiting
 - Max 50 memory writes per agent per task execution (prevents runaway memory pollution)
