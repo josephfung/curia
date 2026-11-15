@@ -115,6 +115,8 @@ export interface AgentTaskPayload {
    * field, like `syntheticTurn`, so a skill that forwards the metadata bag
    * cannot set or drop it. The scheduler's task-wake disposition follow-up
    * sets it to the task tools so that turn cannot repeat the wake's sends.
+   * An empty list means no tools at all (#2615): the dispatcher's content-block
+   * rewrite turn edits its blocked draft and must not act again.
    * Absent means the agent's normal tool set.
    */
   toolAllowlist?: string[];

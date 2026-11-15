@@ -108,6 +108,73 @@ describe('AgentRuntime toolAllowlist (#1951)', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  // #2615: the content-block rewrite turn edits text and must not act. An empty list means
+  // no tools at all; before, an empty list fell back to the agent's whole tool set.
+  it('offers no tools and refuses every call when the allowlist is empty', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+
+    const toolsSeen: Array<ToolDefinition[] | undefined> = [];
+    let call = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: async (params) => {
+        call += 1;
+        toolsSeen.push(params.tools);
+        if (call === 1) {
+          // A model can still emit a call it was not offered; the runtime must refuse it.
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{ id: 'call-task', name: 'task-create', input: { title: 'Approve the slot' } }],
+            usage: { inputTokens: 10, outputTokens: 10, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'Tuesday at 2:00 PM works. The invite is on its way.',
+          usage: { inputTokens: 10, outputTokens: 10, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      },
+    };
+
+    const invoke = vi.fn();
+    const execution = {
+      invoke,
+      getToolDefinitions: vi.fn((names: string[]) => ALL_TOOLS.filter((item) => names.includes(item.name))),
+    } as unknown as ExecutionLayer;
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: execution,
+      skillToolDefs: [...ALL_TOOLS, tool('task-create')],
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-1',
+      channelId: 'email',
+      senderId: 'guest@example.com',
+      content: '[OUTBOUND CONTENT FILTER — REWRITE REQUIRED]\n\nRewrite the draft.',
+      syntheticTurn: true,
+      toolAllowlist: [],
+      senderContext: CONFIRMED_SENDER_CONTEXT,
+      parentEventId: 'parent-rewrite',
+    }));
+
+    expect(toolsSeen.length).toBeGreaterThan(0);
+    for (const tools of toolsSeen) expect(tools ?? []).toEqual([]);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('does not expand the tool list when skill-activate is called on an allowlisted turn', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
