@@ -43,6 +43,7 @@ function holder(id: string, overrides: Partial<LaneHolder> = {}): LaneHolder {
     originatorIsPrincipal: true,
     liveTurn: true,
     synthetic: false,
+    toolLimited: false,
     ...overrides,
   };
 }
@@ -368,6 +369,14 @@ describe('TurnLanes', () => {
         senderContactId: CONTACT_B,
         liveTurn: true,
       }))).toEqual({ kind: 'not_injected', reason: 'ineligible' });
+    });
+
+    // #2615: a turn limited to some tools (a content-block rewrite has none) cannot serve a
+    // new request, so the follow-up waits for its own turn.
+    it('refuses a follow-up into a tool-limited turn', async () => {
+      const gate = lanes();
+      await gate.acquire(holder('a', { toolLimited: true }));
+      expect(gate.tryInject('conv-1', input())).toEqual({ kind: 'not_injected', reason: 'ineligible' });
     });
 
     it('accepts a follow-up while the holder is only reserved', () => {
@@ -704,6 +713,18 @@ describe('holderFromAgentTask', () => {
       initiatedAt: 't',
       tier: 'trusted',
     }).originatorIsPrincipal).toBe(false);
+  });
+
+  it('marks a turn tool-limited whenever it carries an allowlist, an empty one included (#2615)', () => {
+    const base = createAgentTask({
+      agentId: 'coordinator', conversationId: 'conv-1', channelId: 'email', senderId: 'sender',
+      content: 'hi', metadata: { originator: principal }, parentEventId: 'parent',
+    });
+    expect(holderFromAgentTask(base).toolLimited).toBe(false);
+    const none = { ...base, payload: { ...base.payload, toolAllowlist: [] } };
+    expect(holderFromAgentTask(none).toolLimited).toBe(true);
+    const some = { ...base, payload: { ...base.payload, toolAllowlist: ['task-update'] } };
+    expect(holderFromAgentTask(some).toolLimited).toBe(true);
   });
 
   it('uses the dispatcher admission and does not infer past it', () => {

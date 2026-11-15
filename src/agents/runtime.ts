@@ -884,8 +884,9 @@ export class AgentRuntime {
     // by trigger. The keys are re-validated: the payload crossed the bus.
     const turnGuidanceKeys = parseTurnGuidanceKeys(taskEvent.payload.turnGuidance);
     // Scheduler tasks skip the dispatcher, so this trigger is detected here (#2091). A
-    // tool-allowlisted turn is excluded: it may not hold a send skill.
-    if (taskEvent.payload.channelId === 'scheduler' && !taskEvent.payload.toolAllowlist?.length) {
+    // tool-allowlisted turn is excluded: it may not hold a send skill. An empty list holds
+    // none at all (#2615).
+    if (taskEvent.payload.channelId === 'scheduler' && !Array.isArray(taskEvent.payload.toolAllowlist)) {
       turnGuidanceKeys.push('scheduler-delivery');
     }
     // The backlog line (prompt trim PR 7) follows the guidance; re-validated like the keys.
@@ -1165,10 +1166,13 @@ export class AgentRuntime {
     // Per-turn allowlist (#1951). Applied after pin / discovery / checkpoint
     // expansion so those paths cannot put a side-effect tool back on the list.
     // Mid-turn discovery below is skipped while this is set.
+    // Any array sets it, an empty one included: [] means no tools at all, which is how a
+    // content-block rewrite edits its draft without acting again (#2615). A list whose
+    // entries are all malformed therefore also leaves no tools (fail closed).
     const allowlistNames = Array.isArray(taskEvent.payload.toolAllowlist)
       ? taskEvent.payload.toolAllowlist.filter((name): name is string => typeof name === 'string' && name.length > 0)
       : [];
-    const toolAllowlist = allowlistNames.length > 0 ? new Set(allowlistNames) : undefined;
+    const toolAllowlist = Array.isArray(taskEvent.payload.toolAllowlist) ? new Set(allowlistNames) : undefined;
     if (toolAllowlist) {
       workingToolDefs = executionLayer
         ? executionLayer.getToolDefinitions(allowlistNames)
