@@ -1035,6 +1035,20 @@ describe('runtime turn-handoff wiring', () => {
       expect(warn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('turn-handoff is not registered'));
     });
 
+    // [] means no tools, and a malformed list leaves fewer tools (#2615): neither offers the
+    // hand-off, so the guidance line must not say it is there.
+    it.each([
+      ['an empty allowlist', [] as string[]],
+      ['a malformed allowlist', [null] as unknown as string[]],
+    ])('%s: no guidance line, no tool, and a warning', async (_label, toolAllowlist) => {
+      const warn = vi.fn();
+      const logger = { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn(), child: () => logger } as unknown as Logger;
+      const call = await firstCall(myTask({ toolAllowlist }), { logger });
+      expect(call.system).not.toContain(GUIDANCE);
+      expect(call.tools ?? []).not.toContain('turn-handoff');
+      expect(warn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('allowlist'));
+    });
+
     it('a per-turn allowlist: no guidance line either, and a warning', async () => {
       const warn = vi.fn();
       const logger = { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn(), child: () => logger } as unknown as Logger;

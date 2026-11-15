@@ -267,8 +267,11 @@ They travel on the task's `priorTurnActions` field and are rendered into that tu
 only, as data, never into the stored brief: tool output is not replayed into later turns.
 A delegated call keeps the delegate result's record of what was delivered: its `sent` list,
 even when empty, and a fixed note when the specialist's prose claims an email or message that
-was only composed or never went out. The result's `next_step` is not carried, since it says to
-send and the rewrite has no tools.
+was only composed or never went out. A delegation that did not finish still reports success, so
+its data sets the outcome: a decline, a blocked re-delegation or a structured failure is failed,
+and a timeout that may have gone through, a pause, a question back or work still running is
+unknown. Without answer text, only the result's facts are shown (field by field). No `next_step`
+is ever carried, since each tells the calling agent to act and the rewrite has no tools.
 If the read fails, times out (3 s) or has no repo, the rewrite is told the record could not
 be read and to keep the draft's claims of action as they are.
 
