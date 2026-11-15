@@ -3,7 +3,7 @@ import type { NylasMessage } from '../../../../src/channels/email/nylas-client.j
 import { buildReplyQuote } from '../../../../src/skills/_shared/reply-quote.js';
 import type { DetectedPii } from '../../../../src/dispatch/pii-redactor.js';
 import {
-  comparableText, mailboxDraftLabel, quoteItemsToReview, quoteMatchesThread, replyOrigin, threadMessageProof, threadTextSeenByAll,
+  comparableText, mailboxDraftLabel, quoteItemsToReview, quoteMatchesThread, quoteProblem, replyOrigin, threadMessageProof, threadTextSeenByAll,
 } from '../../../../src/skills/principal-send/quote-proof.js';
 
 const PRINCIPAL = ['avery@example.com'];
@@ -152,6 +152,44 @@ describe('quoteMatchesThread', () => {
     expect(quoteMatchesThread(`${HEADER}Does Friday work?`, thread, ['dana@example.org'])).toBe(false);
     expect(quoteMatchesThread(`${HEADER}<blockquote> </blockquote>`, thread, ['dana@example.org'])).toBe(false);
     expect(quoteMatchesThread(`${HEADER}<blockquote><p>Does Friday work?</p></blockquote>`, thread, ['dana@example.org', 'bob@example.org'])).toBe(false);
+  });
+});
+
+// #2590: a failed quote proof says which of its two reasons it was, so the refusal names the right one.
+describe('quoteProblem', () => {
+  const thread = [threadMessageProof(msg(), PRINCIPAL)];
+  const genuine = `${HEADER}<blockquote><p>Does Friday work?</p><p>Dana<br>416-555-0199</p></blockquote>`;
+
+  it('is null for a genuine quote of a message every recipient received', () => {
+    expect(quoteProblem(genuine, thread, ['dana@example.org'])).toBeNull();
+  });
+
+  it('is not-in-thread when no thread message holds the quoted text', () => {
+    expect(quoteProblem(`${HEADER}<blockquote>The multiple is 4.2x.</blockquote>`, thread, ['dana@example.org'])).toEqual({ kind: 'not-in-thread' });
+  });
+
+  it('is not-in-thread with no quoted body, an empty one, or no audience (fail closed, as before)', () => {
+    expect(quoteProblem(`${HEADER}Does Friday work?`, thread, ['dana@example.org'])).toEqual({ kind: 'not-in-thread' });
+    expect(quoteProblem(`${HEADER}<blockquote> </blockquote>`, thread, ['dana@example.org'])).toEqual({ kind: 'not-in-thread' });
+    expect(quoteProblem(genuine, thread, [])).toEqual({ kind: 'not-in-thread' });
+  });
+
+  it('is not-received, naming who, when the text matches but a recipient never got that message', () => {
+    expect(quoteProblem(genuine, thread, ['dana@example.org', 'Bob@Example.org'])).toEqual({ kind: 'not-received', missing: ['bob@example.org'] });
+  });
+
+  it('names the fewest missing recipients when several messages hold the text', () => {
+    const toBoth = threadMessageProof(msg({
+      id: 'm0', from: [{ email: 'avery@example.com' }], to: [{ email: 'dana@example.org' }, { email: 'bob@example.org' }],
+      folders: ['SENT'], body: '<p>Does Friday work?</p><p>Dana<br>416-555-0199</p><p>(fwd)</p>',
+    }), PRINCIPAL);
+    expect(quoteProblem(genuine, [...thread, toBoth], ['dana@example.org', 'bob@example.org', 'cy@example.org']))
+      .toEqual({ kind: 'not-received', missing: ['cy@example.org'] });
+  });
+
+  it('agrees with quoteMatchesThread', () => {
+    expect(quoteMatchesThread(genuine, thread, ['dana@example.org'])).toBe(true);
+    expect(quoteMatchesThread(genuine, thread, ['dana@example.org', 'bob@example.org'])).toBe(false);
   });
 });
 

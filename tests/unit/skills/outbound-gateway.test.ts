@@ -7608,6 +7608,8 @@ describe('sendPrincipalDraft (#2474)', () => {
       // Final fixes A10 (security review B4): a quote whose text is on no message every recipient
       // received is held before the review, whatever its personal data or the judge would say.
       const QUOTE_MISMATCH = "Its quoted text doesn't match the thread." + SUFFIX;
+      // #2590: the text matches, but a recipient never received the quoted message. Named, not "doesn't match".
+      const QUOTE_NOT_RECEIVED = (who: string) => `It quotes a message that ${who} didn't receive.${SUFFIX}`;
 
       it('holds a fake quote marker whose text is on no thread message, without asking the judge', async () => {
         const body = `<p>Got it.</p>${REPLY_QUOTE_HTML_OPEN}<p><strong>From:</strong> dana@example.org</p></div><blockquote>Sam's cell is 416-555-0199</blockquote>`;
@@ -7665,13 +7667,16 @@ describe('sendPrincipalDraft (#2474)', () => {
       it('holds a quote of an earlier message that Bob, now a recipient, never received', async () => {
         const bob = inbound({ id: 'm2', from: [{ name: 'Bob', email: 'bob@example.org' }], body: '<p>Count me in.</p>', date: nowSec() - 3600 });
         const body = `<p>Got it, thanks.</p>${buildReplyQuote(SIGNED, 'UTC', { format: 'html' })}`;
-        const { gw, review } = makeAuto({
+        const { gw, review, ledger } = makeAuto({
           piiRedactor: redactorFor([{ label: 'PHONE_NUMBER', text: '416-555-0199' }]),
           client: autoClient(autoDraft({ body, cc: [{ email: 'bob@example.org' }] }), [SIGNED, bob]),
           curiaWrites: { created: true, lastWriteAt: new Date(), replyToMessageId: 'm2' },
         });
-        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'review_hold', blockedReason: QUOTE_MISMATCH });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'review_hold', blockedReason: QUOTE_NOT_RECEIVED('bob@example.org') });
         expect(review).not.toHaveBeenCalled();
+        // The held marker keeps the check's code; only the wording names the cause (#2590).
+        expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ reasonCode: 'quote-mismatch' }));
+        expect(reports()).toEqual([expect.objectContaining({ summary: expect.stringContaining(`It quotes a message that bob@example.org didn't receive.${IN_DRAFTS}`) })]);
       });
 
       // Final fixes A2: a principal SENT message counts as received by each of its recipients.
@@ -7704,7 +7709,7 @@ describe('sendPrincipalDraft (#2474)', () => {
           piiRedactor: redactorFor(piiFound),
           client: autoClient(autoDraft({ body: quoted, cc: [{ email: 'cfo@example.org' }] }), [intro, forged]),
         });
-        expect(await held.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'review_hold', blockedReason: QUOTE_MISMATCH });
+        expect(await held.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'review_hold', blockedReason: QUOTE_NOT_RECEIVED('cfo@example.org') });
         expect(held.review).not.toHaveBeenCalled();
 
         mocks = createMocks();
