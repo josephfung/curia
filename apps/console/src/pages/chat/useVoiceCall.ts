@@ -295,12 +295,18 @@ export function useVoiceCall(): UseVoiceCallResult {
           setCallState('error');
           setError(AGENT_JOIN_FAILED_MESSAGE);
         }
+        console.error('[useVoiceCall] Curia never joined the call; ending it:', failedSessionId);
         // The server has usually ended the session already, so a 404 is expected.
+        // Anything else may mean it is still open, so log it.
         if (failedSessionId) {
           void apiFetch(`/api/voice/sessions/${encodeURIComponent(failedSessionId)}`, {
             method: 'DELETE',
+          }).then((res) => {
+            if (!res.ok && res.status !== 404) {
+              console.error('[useVoiceCall] could not end voice session Curia never joined:', failedSessionId, res.status);
+            }
           }).catch((cleanupErr) => {
-            console.error('[useVoiceCall] failed to end voice session Curia never joined:', cleanupErr);
+            console.error('[useVoiceCall] failed to end voice session Curia never joined:', failedSessionId, cleanupErr);
           });
         }
       }, AGENT_JOIN_TIMEOUT_MS);
