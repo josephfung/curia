@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { emptyBreakdown, UsageLedger } from '../../shared/usage.js';
-import { createJudge, extractJsonObject, formatJudgeInput, formatRunClock, judgeRun, meterJudgeResponse, parseJudgeResponse } from '../../scenarios/judge.js';
+import { createJudge, extractJsonObject, formatJudgeInput, VOICE_RULE, formatRunClock, judgeRun, meterJudgeResponse, parseJudgeResponse } from '../../scenarios/judge.js';
 import type { ExpectedBehavior, ScenarioCase, ScenarioRun } from '../../scenarios/types.js';
 
 const behaviors: ExpectedBehavior[] = [
@@ -32,6 +32,34 @@ describe('parseJudgeResponse', () => {
   it('rejects an invalid rating', () => {
     const out = parseJudgeResponse(JSON.stringify({ scores: [{ behaviorId: 'honest', rating: 'GREAT' }] }), behaviors);
     expect(out.get('honest')?.rating).toBe('MISS');
+  });
+});
+
+describe('formatJudgeInput with voice behaviors (#2556)', () => {
+  const base = {
+    name: 'late', description: '', tags: ['finesse'], agent: 'coordinator', delegation: 'stubbed', releaseGate: false, sourceFile: 'x.yaml',
+    seed: { contacts: [], outboundContext: [], bullpen: [], verifications: [], principalIdentities: [], tasks: [], outreach: [] },
+    inbound: { from: 'principal', content: 'Running late.' },
+    toolStubs: {}, explicitStubTools: [], ownStubTools: [], failureModes: [],
+  };
+  const run: ScenarioRun = { runIndex: 0, inboundContent: 'Running late.', refs: {}, toolCalls: [], reply: 'ok', durationMs: 1, unstubbedCalls: 0, usage: emptyBreakdown(), providerRetries: [] };
+
+  it('marks voice behaviors and adds the rule for a message never written', () => {
+    const layered: ExpectedBehavior[] = [
+      { id: 'tells', description: 'Tells the group', weight: 'critical', layer: 'decision' },
+      { id: 'group_voice', description: 'Any note to the group is one line', weight: 'critical', layer: 'voice' },
+    ];
+    const input = formatJudgeInput({ ...base, expectedBehaviors: layered } as ScenarioCase, run, layered);
+    expect(input).toContain('- tells: Tells the group');
+    expect(input).toContain('- group_voice [voice]: Any note to the group is one line');
+    expect(input).toContain(VOICE_RULE);
+    expect(VOICE_RULE).toMatch(/never written.*rate it MISS/);
+  });
+
+  it('leaves cases without voice behaviors as they were', () => {
+    const input = formatJudgeInput({ ...base, tags: [], expectedBehaviors: behaviors } as ScenarioCase, run, behaviors);
+    expect(input).not.toContain('[voice]');
+    expect(input).not.toContain(VOICE_RULE);
   });
 });
 

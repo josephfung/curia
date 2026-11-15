@@ -123,7 +123,8 @@ expected_behaviors:
     layer: voice
     description: >
       Anything said to Avery is one or two calm lines: no reply yet, which is normal, and
-      Curia will follow up early next week if nothing comes. No alarm.
+      Curia will follow up early next week if nothing comes. No alarm. Saying nothing to Avery
+      is acceptable, and then this passes.
 failure_modes:
   - Nudges David after two days
   - Ends the wake without a later check

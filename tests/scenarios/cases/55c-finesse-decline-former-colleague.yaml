@@ -117,7 +117,7 @@ expected_behaviors:
   - id: marcus_note_clear
     weight: nice-to-have
     layer: voice
-    description: Any note to Marcus says in a line or two who Nadia is, what she's after and that Avery's office pointed her his way.
+    description: The note to Marcus says in a line or two who Nadia is, what she's after and that Avery's office pointed her his way.
 contrast:
   group: finesse-55-decline
   recipient: A former colleague of the executive's, now a founder, whom the executive likes.

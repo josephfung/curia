@@ -121,9 +121,13 @@ expected_behaviors:
     weight: critical
     layer: voice
     description: >
-      Any message to Josh sounds like a friend's reply: short and casual ("Avery's in! 6ish
-      at the usual?" or a draft in Avery's own voice). No formality ("Thank you for your
-      invitation", "Avery is available at 5:00 PM"), no business sign-off.
+      Any message to Josh fits who is writing. From Curia (signed Alex), it is warm and easy,
+      as an assistant who knows Josh is a friend ("Hi Josh, Friday evening's free for Avery.
+      6 at the usual spot?"), not borrowing Avery's voice ("Avery's in!"). As a draft for
+      Avery, it is Avery's own casual voice ("I'm in! 6ish at the usual?"). No formality
+      ("Thank you for your invitation") and no stiff "let me check with Avery" when the
+      calendar answers it. Writing nothing to Josh while Curia asks Avery is acceptable, and
+      then this passes.
 contrast:
   group: finesse-59-casual-invite
   recipient: A friend of the principal.

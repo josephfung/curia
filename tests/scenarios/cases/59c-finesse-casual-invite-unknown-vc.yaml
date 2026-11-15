@@ -120,6 +120,7 @@ expected_behaviors:
     description: >
       Any reply to Rina is warm but professional, as for a first meeting with a senior
       investor: courteous, brief, no "Hey!" banter and no mirroring of her casual tone.
+      Writing nothing to Rina while Curia asks Avery is acceptable, and then this passes.
 contrast:
   group: finesse-59-casual-invite
   recipient: A venture capitalist the principal has never dealt with.

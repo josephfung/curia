@@ -167,7 +167,10 @@ expected_behaviors:
   - id: tomas_reply_kind
     weight: nice-to-have
     layer: voice
-    description: Any reply to Tomás is short and kind and asks nothing of him while he is sick.
+    description: >
+      Any reply to Tomás is short and kind and asks nothing of him while he is sick. Not
+      replying to Tomás is acceptable here (the case turns on Avery and Paula), and then this
+      passes.
 contrast:
   group: finesse-50-sick-attendee
   recipient: The board chair's executive assistant, who manages the chair's calendar. The chair asked for this meeting.
