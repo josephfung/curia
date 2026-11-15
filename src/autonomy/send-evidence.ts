@@ -79,6 +79,19 @@ export const FOLLOW_UP_SEPARATOR = '\n\n[Follow-up the sender sent while the ass
  * a real chain is one hop; the bound stops a malformed or cyclic chain. Longer is a failure.
  */
 export const DELEGATION_MAX_HOPS = 4;
+/**
+ * Content-block rewrites followed back to the drafting turn (#2615). The dispatcher allows two
+ * rewrites after the first block (CONTENT_BLOCK_MAX_RETRIES); the bound stops a malformed chain.
+ */
+export const REWRITE_MAX_HOPS = 4;
+
+/** A content-block rewrite turn: Curia's brief to itself, marked by the dispatcher (#1355). */
+function isContentBlockRewrite(row: AuditLogRow): boolean {
+  const metadata = row.payload['metadata'];
+  return row.eventType === 'agent.task'
+    && row.payload['syntheticTurn'] === true
+    && isRecord(metadata) && metadata['contentBlockRewrite'] === true;
+}
 // A turn rarely makes more than a few dozen calls; the repo returns the newest first, so a
 // cut keeps the lookups closest to the send.
 const RESULTS_LIMIT = 60;
@@ -336,10 +349,17 @@ export class SendEvidenceCollector {
       const boundTaskId = isRecord(boundTask) && typeof boundTask['taskId'] === 'string' ? boundTask['taskId'] : undefined;
       const link = readLink(isRecord(metadata) ? metadata['linkedTask'] : undefined);
 
+      // A content-block rewrite has no tools (#2615), so its own turn looked nothing up: the
+      // facts in its reply come from the turn that drafted the blocked one. The band ledger
+      // links the two only after a band bounce; after any other block (the identity gate, the
+      // leak judge) the rewrite would be judged with no evidence at all, and every true
+      // statement about the principal would read as unsupported.
+      const drafting = await this.withRewriteOrigins(taskEventIds, task);
+
       // A delegated turn: what started the chain, in its sender's words (#2499).
       // Across every drafting turn the ledger passed: a rewrite after a bounce is a new turn in
       // the coordinator's conversation, but the bounced draft's turn still carries the origin.
-      const delegation = await this.readDelegationRootOf(taskEventIds, task);
+      const delegation = await this.readDelegationRootOf(drafting, task);
       const origin: OriginRead | null = !delegation.ok
         ? delegation
         : delegation.root === null ? null : await this.readOrigin(delegation.root);
@@ -356,7 +376,7 @@ export class SendEvidenceCollector {
       // what is left of the budget.
       const resultsBudget = EVIDENCE_TOTAL_MAX_CHARS - (originContent?.length ?? 0) - historyChars;
 
-      const results = await this.deps.auditLogRepo.findToolResultsForTasks(taskEventIds, RESULTS_LIMIT);
+      const results = await this.deps.auditLogRepo.findToolResultsForTasks(drafting, RESULTS_LIMIT);
       if (results.length === RESULTS_LIMIT) {
         this.deps.logger.info({ taskEventIds, limit: RESULTS_LIMIT }, 'send-evidence: result limit reached — older lookups left out');
       }
@@ -374,7 +394,7 @@ export class SendEvidenceCollector {
 
       // What the turn told the principal supports "I've passed that on" (#2312). A throw here
       // lands in the catch below: the same unavailable evidence as a failed tool-result read.
-      const reportRows = await this.deps.auditLogRepo.findPrincipalReportsForTasks(taskEventIds, REPORTS_LIMIT);
+      const reportRows = await this.deps.auditLogRepo.findPrincipalReportsForTasks(drafting, REPORTS_LIMIT);
       const reportsToPrincipal = reportRows
         .map((r) => r.payload['summary'])
         .filter((s): s is string => typeof s === 'string' && s.length > 0)
@@ -411,6 +431,55 @@ export class SendEvidenceCollector {
       this.deps.logger.error({ err, taskEventIds }, 'send-evidence: audit lookup failed — grounding cannot be judged');
       return { unavailable: true, toolResults: [], principalBlock, authority: NO_AUTHORITY };
     }
+  }
+
+  /**
+   * The ids with the drafting turns of any content-block rewrite among them put first, oldest
+   * first, each once (#2615). A rewrite's audit chain is written by code: its task is parented on
+   * the outbound.blocked event, which is parented on the relayed outbound.message, then the
+   * agent.response, then the turn that drafted it (itself a rewrite on a second attempt). Each hop
+   * must be that event type in the rewrite's own conversation. A chain that cannot be followed
+   * adds nothing: less evidence makes the review stricter, never looser, so it is logged and the
+   * review goes on.
+   */
+  private async withRewriteOrigins(taskEventIds: readonly string[], latest: AuditLogRow): Promise<readonly string[]> {
+    const origins: string[] = [];
+    for (const id of taskEventIds) {
+      const row = id === latest.id ? latest : await this.deps.auditLogRepo.findById(id);
+      if (row === null || !isContentBlockRewrite(row)) continue;
+      for (const origin of await this.rewriteOriginsOf(row)) {
+        if (!origins.includes(origin)) origins.push(origin);
+      }
+    }
+    if (origins.length === 0) return taskEventIds;
+    return [...new Set([...origins, ...taskEventIds])];
+  }
+
+  /** The drafting turns behind one rewrite, oldest first. */
+  private async rewriteOriginsOf(rewrite: AuditLogRow): Promise<string[]> {
+    const read = async (id: string | null, eventType: string): Promise<AuditLogRow | null> => {
+      if (id === null) return null;
+      const row = await this.deps.auditLogRepo.findById(id);
+      return row !== null && row.eventType === eventType && row.conversationId === rewrite.conversationId ? row : null;
+    };
+    const found: string[] = [];
+    let current = rewrite;
+    for (let hop = 0; hop < REWRITE_MAX_HOPS && isContentBlockRewrite(current); hop++) {
+      const blocked = await read(current.parentEventId, 'outbound.blocked');
+      const message = blocked && await read(blocked.parentEventId, 'outbound.message');
+      const response = message && await read(message.parentEventId, 'agent.response');
+      const drafting = response && await read(response.parentEventId, 'agent.task');
+      if (!drafting) {
+        this.deps.logger.warn(
+          { rewriteTaskEventId: rewrite.id, at: current.id },
+          'send-evidence: a content-block rewrite\'s drafting turn cannot be followed — judging without its lookups',
+        );
+        break;
+      }
+      found.push(drafting.id);
+      current = drafting;
+    }
+    return found.reverse();
   }
 
   /** The first (oldest) turn's delegation root among the ids; any turn whose chain fails fails all. */
