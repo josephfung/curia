@@ -299,18 +299,8 @@ export function createJudge(
   };
 }
 
-/**
- * A JSON object out of a model reply that may wrap it in a code fence or prose: the first
- * complete object, matched brace by brace (braces inside strings do not count). A judge that
- * adds a remark or a second object after its answer (#2556: 'Unexpected non-whitespace
- * character after JSON') is read for the answer it gave first. With no complete object, the
- * text from the first '{' to the last '}' goes to JSON.parse, which says what is wrong.
- */
-export function extractJsonObject(text: string): string {
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text);
-  const body = (fenced ? fenced[1]! : text).trim();
-  const start = body.indexOf('{');
-  if (start === -1) return body;
+/** Where the complete JSON object starting at `start` ends (its closing brace), or -1. */
+function objectEnd(body: string, start: number): number {
   let depth = 0;
   let inString = false;
   for (let i = start; i < body.length; i++) {
@@ -320,10 +310,51 @@ export function extractJsonObject(text: string): string {
       else if (ch === '"') inString = false;
     } else if (ch === '"') inString = true;
     else if (ch === '{') depth++;
-    else if (ch === '}' && --depth === 0) return body.slice(start, i + 1);
+    else if (ch === '}' && --depth === 0) return i;
   }
-  const end = body.lastIndexOf('}');
-  return end > start ? body.slice(start, end + 1) : body;
+  return -1;
+}
+
+/** The top-level keys of a JSON object text, or none when it doesn't parse as one. */
+function topKeys(text: string): string[] {
+  try {
+    const v: unknown = JSON.parse(text);
+    return typeof v === 'object' && v !== null && !Array.isArray(v) ? Object.keys(v) : [];
+  } catch {
+    // Not an answer-shaped object: a stray brace pair in prose, say. Nothing to compare.
+    return [];
+  }
+}
+
+/**
+ * A JSON object out of a model reply that may wrap it in a code fence or prose: the first
+ * complete object, matched brace by brace (braces inside strings do not count). A judge that
+ * adds a remark after its answer (#2556: 'Unexpected non-whitespace character after JSON') is
+ * read for the answer it gave. A judge that gives a second answer of the same shape ('On
+ * reflection: {"scores": …}') has revised itself, and which one it meant is unknowable: the
+ * whole text goes to JSON.parse, which fails, so the caller retries or reports a judge error.
+ * With no complete object, the text from the first '{' to the last '}' goes to JSON.parse,
+ * which says what is wrong.
+ */
+export function extractJsonObject(text: string): string {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text);
+  const body = (fenced ? fenced[1]! : text).trim();
+  const start = body.indexOf('{');
+  if (start === -1) return body;
+  const end = objectEnd(body, start);
+  if (end === -1) {
+    const last = body.lastIndexOf('}');
+    return last > start ? body.slice(start, last + 1) : body;
+  }
+  const first = body.slice(start, end + 1);
+  const keys = topKeys(first);
+  for (let next = body.indexOf('{', end + 1); next !== -1 && keys.length > 0;) {
+    const nextEnd = objectEnd(body, next);
+    if (nextEnd === -1) break;
+    if (topKeys(body.slice(next, nextEnd + 1)).some(k => keys.includes(k))) return body;
+    next = body.indexOf('{', nextEnd + 1);
+  }
+  return first;
 }
 
 const JUDGE_ATTEMPTS = 3;

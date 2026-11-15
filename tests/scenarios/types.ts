@@ -958,10 +958,10 @@ export interface ContrastGroupResult {
   /**
    * Right / asked, per case: which recipients' messages are recognisable. `written` is the runs
    * that wrote this recipient a message; `unmatched` the runs that called a source's tool without
-   * matching its `with` (a hint the source is wrong). Both absent in results saved before #2556's
-   * baseline.
+   * matching its `with` (a hint the source is wrong); `errored` the runs that errored. All
+   * absent in results saved before #2556's baseline.
    */
-  byCase: Record<string, { correct: number; total: number; written?: number; unmatched?: number }>;
+  byCase: Record<string, { correct: number; total: number; written?: number; unmatched?: number; errored?: number }>;
   /** Trials with fewer than two messages (a case decided not to write), which were not asked. */
   skippedTrials: number;
   /**

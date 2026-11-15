@@ -241,6 +241,9 @@ describe('extractJsonObject', () => {
     const tricky = '{"scores": [{"justification": "said \\"hi}\\" and {left"}]}';
     expect(extractJsonObject(`${tricky} trailing }`)).toBe(tricky);
     expect(JSON.parse(extractJsonObject(`${tricky} trailing }`))).toEqual({ scores: [{ justification: 'said "hi}" and {left' }] });
+    // A second answer of the same shape is a revision: unknowable which is meant, so unparseable.
+    const revised = '{"scores": [{"rating": "PASS"}]} On reflection: {"scores": [{"rating": "PARTIAL"}]}';
+    expect(() => JSON.parse(extractJsonObject(revised))).toThrow();
     // No complete object: the old slice, so JSON.parse reports what is wrong.
     expect(extractJsonObject('{"scores": [ }')).toBe('{"scores": [ }');
   });

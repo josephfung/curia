@@ -238,7 +238,9 @@ export function parseGrades(csv: string): Map<string, HumanGrade> {
   rows.slice(1).forEach((r, i) => {
     const id = r[idCol]?.trim() ?? '';
     const raw = (r[gradeCol] ?? '').trim().toUpperCase();
-    if (id === '' || raw === '') return;
+    if (raw === '') return;
+    // A grade with no id (the cell lost while editing) is a grade we can't place: say so.
+    if (id === '') throw new Error(`row ${i + 2}: graded '${r[gradeCol]}' but its item_id is empty`);
     const rating = GRADES[raw];
     if (!rating) throw new Error(`row ${i + 2} (${id}): grade '${r[gradeCol]}' is not PASS, PARTIAL or MISS`);
     if (grades.has(id)) throw new Error(`row ${i + 2}: ${id} is graded twice`);
@@ -261,6 +263,8 @@ export interface Agreement {
   kappa: number | null;
   /** Items the judge failed to rate; left out of every figure above. */
   judgeErrors: number;
+  /** Graded items the judge has no rating for at all; left out, and named. */
+  unrated: string[];
   disagreements: Array<{ id: string; human: BehaviorRating; judge: BehaviorRating; justification: string }>;
 }
 
@@ -269,11 +273,12 @@ const LEVELS: readonly BehaviorRating[] = ['PASS', 'PARTIAL', 'MISS'];
 /** How far `judged` agrees with `human`, over the items both rated. */
 export function agreementWith(judge: string, human: ReadonlyMap<string, HumanGrade>, judged: ReadonlyMap<string, RunRating>): Agreement {
   let n = 0, exact = 0, passFail = 0, judgeErrors = 0;
+  const unrated: string[] = [];
   const disagreements: Agreement['disagreements'] = [];
   const counts = new Map<string, number>();
   for (const [id, h] of human) {
     const j = judged.get(id);
-    if (!j) continue;
+    if (!j) { unrated.push(id); continue; }
     if (j.justification.startsWith(JUDGE_ERROR_PREFIX)) { judgeErrors++; continue; }
     n++;
     if (j.rating === h.rating) exact++;
@@ -291,12 +296,13 @@ export function agreementWith(judge: string, human: ReadonlyMap<string, HumanGra
     }, 0);
     kappa = pe === 1 ? null : (po - pe) / (1 - pe);
   }
-  return { judge, n, exact, passFail, kappa, judgeErrors, disagreements };
+  return { judge, n, exact, passFail, kappa, judgeErrors, unrated, disagreements };
 }
 
 /** "openai/gpt-4o: 18/24 exact (75%), 21/24 pass/fail (88%), κ 0.61" */
 export function formatAgreementLine(a: Agreement): string {
   const pct = (x: number): string => (a.n === 0 ? 'n/a' : `${Math.round((x / a.n) * 100)}%`);
   return `${a.judge}: ${a.exact}/${a.n} exact (${pct(a.exact)}), ${a.passFail}/${a.n} pass/fail (${pct(a.passFail)}), κ ${a.kappa === null ? 'n/a' : a.kappa.toFixed(2)}` +
-    `${a.judgeErrors > 0 ? `; ${a.judgeErrors} judge error(s) left out` : ''}`;
+    `${a.judgeErrors > 0 ? `; ${a.judgeErrors} judge error(s) left out` : ''}` +
+    `${a.unrated.length > 0 ? `; ${a.unrated.length} graded item(s) unrated: ${a.unrated.join(', ')}` : ''}`;
 }

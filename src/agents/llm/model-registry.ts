@@ -408,7 +408,9 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
   // Candidate judges for the finesse scenario cases (#2556), priced so the scenario judge
   // can meter them (createJudge refuses an unpriced model). Not routed to by any tier.
   // OpenRouter list prices, 2026-11-14; the long-prompt surcharges (over 200k/272k tokens)
-  // are not modelled, since judge inputs are a few thousand tokens.
+  // are not modelled, since judge inputs are a few thousand tokens. getModel() matches by
+  // prefix, so a sibling id ('openai/gpt-5.5-pro', a dated snapshot) would be priced as these:
+  // give it an entry of its own. createJudge itself requires an exact key.
   'anthropic/claude-opus-5.5': {
     provider: 'openrouter',
     contextWindow: 1_000_000,

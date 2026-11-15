@@ -38,12 +38,27 @@ function flag(argv: string[], name: string): string | undefined {
   return v;
 }
 
+/** Every value of a repeatable flag; one with no value is an error, not a silent drop. */
 function flags(argv: string[], name: string): string[] {
-  return argv.flatMap((a, i) => (a === name ? [argv[i + 1] ?? ''] : [])).filter(v => v !== '' && !v.startsWith('--'));
+  return argv.flatMap((a, i) => {
+    if (a !== name) return [];
+    const v = argv[i + 1];
+    if (v === undefined || v.startsWith('--')) throw new Error(`${name} needs a value`);
+    return [v];
+  });
 }
 
 /** Flags that take no value, so the argument after one is not its value. */
 const BOOLEAN_FLAGS = new Set(['--current-cases']);
+
+/**
+ * Refuse a flag the command doesn't know ('--judge=m', a typo like '--curent-cases'): ignored,
+ * it would leave a paid comparison quietly not run as asked.
+ */
+function checkFlags(argv: string[], known: readonly string[]): void {
+  const unknown = argv.filter(a => a.startsWith('--') && !known.includes(a));
+  if (unknown.length > 0) throw new Error(`unknown option(s): ${unknown.join(', ')} (known: ${known.join(', ')})`);
+}
 
 /** Positional arguments: everything that is not a flag or a flag's value. */
 function positionals(argv: string[]): string[] {
@@ -84,6 +99,7 @@ Leave a row's grade blank if you'd rather skip it.
 `;
 
 async function sample(argv: string[]): Promise<void> {
+  checkFlags(argv, ['--n', '--seed', '--layer', '--out']);
   const [file] = positionals(argv);
   if (!file) throw new Error('usage: pnpm grading sample <results.json> [--n 25] [--seed s] [--layer voice|decision|all] [--out sheet.csv]');
   const suite = JSON.parse(readFileSync(resolvePath(file), 'utf-8')) as SuiteResult;
@@ -92,7 +108,13 @@ async function sample(argv: string[]): Promise<void> {
   const layer = (flag(argv, '--layer') ?? 'voice') as 'voice' | 'decision' | 'all';
   if (!['voice', 'decision', 'all'].includes(layer)) throw new Error('--layer must be voice, decision or all');
   const seed = flag(argv, '--seed') ?? suite.timestamp;
-  const items = sampleGradingItems(suite, loadScenarioCases(CASES_DIR), { n, seed, layer });
+  const cases = loadScenarioCases(CASES_DIR);
+  // A results case no longer in cases/ (renamed or deleted) can't be sampled: say which, or a
+  // whole task could drop off the sheet unnoticed.
+  const known = new Set(cases.map(c => c.name));
+  const gone = suite.cases.map(c => c.name).filter(name => !known.has(name));
+  if (gone.length > 0) err(`grading: not sampled, no longer in ${CASES_DIR}: ${gone.join(', ')}`);
+  const items = sampleGradingItems(suite, cases, { n, seed, layer });
   if (items.length === 0) throw new Error(`no judged ${layer} ratings to grade in ${file}`);
   const sheet = resolvePath(flag(argv, '--out') ?? file.replace(/\.json$/, '') + '.grading.csv');
   writeFileSync(sheet, gradingSheet(items));
@@ -106,6 +128,7 @@ async function sample(argv: string[]): Promise<void> {
 }
 
 async function agree(argv: string[]): Promise<number> {
+  checkFlags(argv, ['--judge', '--current-cases', '--out']);
   const [file, gradesFile] = positionals(argv);
   if (!file || !gradesFile) throw new Error('usage: pnpm grading agree <results.json> <graded.csv> [--judge <model>]... [--current-cases] [--out agreement.json]');
   const suite = JSON.parse(readFileSync(resolvePath(file), 'utf-8')) as SuiteResult;
@@ -137,6 +160,22 @@ async function agree(argv: string[]): Promise<number> {
 
   const candidates = flags(argv, '--judge');
   const currentCases = argv.includes('--current-cases');
+  // Before any paid call: every graded case must still exist, and under --current-cases every
+  // graded behavior must still be a judged one there. Otherwise a candidate would rate fewer
+  // items than the run's own judge, and the lines would read as comparable.
+  if (candidates.length > 0) {
+    for (const [id, at] of located) {
+      const scenario = byName.get(at.caseName);
+      if (!scenario) throw new Error(`${at.caseName}: no such case in ${CASES_DIR} any more, so '${id}' can't be re-judged`);
+      if (currentCases && !scenario.expectedBehaviors.some(b => b.id === at.behaviorId && !b.check)) {
+        throw new Error(`'${id}': the case file no longer has a judged behavior '${at.behaviorId}' (renamed, removed or now a check), so --current-cases can't rate it`);
+      }
+    }
+  }
+  const outFile = resolvePath(flag(argv, '--out') ?? gradesFile.replace(/\.csv$/, '') + '.agreement.json');
+  const save = (extra: Record<string, unknown> = {}): void => {
+    writeFileSync(outFile, JSON.stringify({ results: file, grades: gradesFile, graded: human.size, currentCases, agreements: results, judgeSpendUsd: spend, ...extra }, null, 2));
+  };
   let spend = 0;
   if (candidates.length > 0) {
     // Only for the vault's OpenRouter key: the judge goes through the stack's provider (#911).
@@ -153,22 +192,30 @@ async function agree(argv: string[]): Promise<number> {
       for (const judge of judges) {
         const usage = new UsageLedger();
         const ratings = new Map<string, RunRating>();
-        for (const at of runs.values()) {
-          const scenario = byName.get(at.caseName);
-          if (!scenario) throw new Error(`${at.caseName}: no such case in ${CASES_DIR} any more`);
-          const result = suite.cases.find(c => c.name === at.caseName)!;
-          const run = { ...result.runs[at.runIndex]!, providerRetries: result.runs[at.runIndex]!.providerRetries ?? [] };
-          // The behaviors as the run saved them, which is what the sheet showed the grader, or
-          // the case file's current ones. Ids carry over, so the grades still line up.
-          const source = currentCases ? scenario.expectedBehaviors : result.behaviors.map(b => b.behavior);
-          const behaviors = resolveRunPlaceholders(source, run).filter(b => !b.check);
-          const rated = await judgeRun(scenario, run, behaviors, judge, usage);
-          for (const [behaviorId, rating] of rated) ratings.set(`${at.caseName}#${at.runIndex + 1}#${behaviorId}`, rating);
+        try {
+          for (const at of runs.values()) {
+            const scenario = byName.get(at.caseName)!;
+            const result = suite.cases.find(c => c.name === at.caseName)!;
+            const run = { ...result.runs[at.runIndex]!, providerRetries: result.runs[at.runIndex]!.providerRetries ?? [] };
+            // The behaviors as the run saved them, which is what the sheet showed the grader, or
+            // the case file's current ones. Ids carry over, so the grades still line up.
+            const source = currentCases ? scenario.expectedBehaviors : result.behaviors.map(b => b.behavior);
+            const behaviors = resolveRunPlaceholders(source, run).filter(b => !b.check);
+            const rated = await judgeRun(scenario, run, behaviors, judge, usage);
+            for (const [behaviorId, rating] of rated) ratings.set(`${at.caseName}#${at.runIndex + 1}#${behaviorId}`, rating);
+          }
+          results.push(agreementWith(judge.model, human, ratings));
+        } finally {
+          // Paid calls count even when a later one throws partway through this candidate.
+          spend += usage.snapshot().judge.estimatedCostUsd;
+          out(`   ${judge.model}: ${formatUsd(usage.snapshot().judge.estimatedCostUsd)}`);
         }
-        results.push(agreementWith(judge.model, human, ratings));
-        spend += usage.snapshot().judge.estimatedCostUsd;
-        out(`   ${judge.model}: judged ${runs.size} run(s), ${formatUsd(usage.snapshot().judge.estimatedCostUsd)}`);
       }
+    } catch (e) {
+      // Keep what finished and what it cost, then fail.
+      save({ error: e instanceof Error ? e.message : String(e) });
+      err(`grading: stopped after ${formatUsd(spend)} of judge calls; finished candidates saved to ${outFile}`);
+      throw e;
     } finally {
       await stack.shutdown();
     }
@@ -185,8 +232,7 @@ async function agree(argv: string[]): Promise<number> {
       out(`   - ${d.id}: grader ${d.human}, judge ${d.judge}. Judge: ${d.justification}${note ? `\n     Grader's note: ${note}` : ''}`);
     }
   }
-  const outFile = resolvePath(flag(argv, '--out') ?? gradesFile.replace(/\.csv$/, '') + '.agreement.json');
-  writeFileSync(outFile, JSON.stringify({ results: file, grades: gradesFile, graded: human.size, agreements: results, judgeSpendUsd: spend }, null, 2));
+  save();
   out('');
   if (candidates.length > 0) out(`Candidate judge spend: ${formatUsd(spend)}`);
   out(`Saved: ${outFile}`);

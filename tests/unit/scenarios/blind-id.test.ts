@@ -142,9 +142,9 @@ describe('runBlindId (#2556)', () => {
     expect(r).toMatchObject({ correct: 10, total: 10, accuracy: 1, skippedTrials: 0, judgeErrors: 0 });
     expect(r.chance).toBeCloseTo((1 / 3 + 1 / 3 + 1 / 2 + 1 / 2) / 4);
     expect(r.byCase).toEqual({
-      chair: { correct: 4, total: 4, written: 2, unmatched: 0 },
-      friend: { correct: 4, total: 4, written: 2, unmatched: 0 },
-      report: { correct: 2, total: 2, written: 1, unmatched: 0 },
+      chair: { correct: 4, total: 4, written: 2, unmatched: 0, errored: 0 },
+      friend: { correct: 4, total: 4, written: 2, unmatched: 0, errored: 0 },
+      report: { correct: 2, total: 2, written: 1, unmatched: 0, errored: 0 },
     });
     expect(formatBlindIdLines([r])[0]).toBe('late: 10/10 matched (100%; chance 42%)');
   });
@@ -202,6 +202,11 @@ describe('runBlindId (#2556)', () => {
       const r = await runBlindId('late', alone, [], anyJudge);
       expect(r.skippedTrials).toBe(2);
       expect(formatBlindIdLines([r])).toContain('  report: not compared: wrote in 1 run(s), but no other case wrote in the same run');
+    });
+
+    it('errored runs are not read as a choice not to write', async () => {
+      const r = await runBlindId('late', withReport(x => ({ ...x, error: 'timed out' })), [], anyJudge);
+      expect(formatBlindIdLines([r])).toContain('  report: no message: 2 run(s) errored, and the rest wrote this recipient nothing');
     });
 
     it('results saved before the counts existed keep a neutral note', () => {

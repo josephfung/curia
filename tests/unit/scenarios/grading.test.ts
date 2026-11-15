@@ -159,6 +159,8 @@ describe('the sheet', () => {
     expect([...parseGrades(filled)]).toEqual([['x#1#voice', { rating: 'PARTIAL', notes: 'too long' }]]);
     expect(() => parseGrades(toCsv([rows[0]!, ['x#1#voice', '', '', '', '', '', 'good', '']]))).toThrow(/row 2 \(x#1#voice\): grade 'good'/);
     expect(() => parseGrades(toCsv([['id', 'grade']]))).toThrow(/needs item_id and grade/);
+    // A grade whose id cell was lost can't be placed: an error, not a silent skip.
+    expect(() => parseGrades(toCsv([rows[0]!, ['', '', '', '', '', '', 'PASS', '']]))).toThrow(/row 2: graded 'PASS' but its item_id is empty/);
   });
 });
 
@@ -181,9 +183,15 @@ describe('agreementWith', () => {
     expect(formatAgreementLine(a)).toBe('j: 3/4 exact (75%), 4/4 pass/fail (100%), κ 0.60; 1 judge error(s) left out');
   });
 
+  it('names graded items the judge has no rating for, rather than dropping them', () => {
+    const a = agreementWith('j', human, new Map([['a', P], ['b', { rating: 'MISS', justification: '' }]]));
+    expect(a).toMatchObject({ n: 2, unrated: ['c', 'd', 'e'] });
+    expect(formatAgreementLine(a)).toMatch(/; 3 graded item\(s\) unrated: c, d, e$/);
+  });
+
   it('has no kappa when every rating is the same and no figures without overlap', () => {
     const allPass = new Map<string, HumanGrade>([['a', { rating: 'PASS', notes: '' }]]);
     expect(agreementWith('j', allPass, new Map([['a', P]])).kappa).toBeNull();
-    expect(formatAgreementLine(agreementWith('j', allPass, new Map()))).toBe('j: 0/0 exact (n/a), 0/0 pass/fail (n/a), κ n/a');
+    expect(formatAgreementLine(agreementWith('j', allPass, new Map()))).toBe('j: 0/0 exact (n/a), 0/0 pass/fail (n/a), κ n/a; 1 graded item(s) unrated: a');
   });
 });
