@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Writable } from 'node:stream';
 import pino from 'pino';
-import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
+import { Dispatcher, PRIOR_TURN_READ_TIMEOUT_MS } from '../../../src/dispatch/dispatcher.js';
 import type { ApprovalTriggerService } from '../../../src/autonomy/approval-trigger.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
 import { createInboundMessage, createAgentError, createAgentTask, createAgentResponse, createOutboundBlocked, createAutonomySendBlocked, createToolResult, type OutboundMessageEvent, type OutboundNoReplyEvent, type MessageRejectedEvent, type AgentTaskEvent, type ContactUnknownEvent, type BusEvent } from '../../../src/bus/events.js';
-import { CONTENT_BLOCK_MAX_RETRIES, PRIOR_TURN_ACTIONS_HEADING } from '../../../src/dispatch/content-block-relay.js';
+import { CONTENT_BLOCK_MAX_RETRIES, PRIOR_TURN_RESULTS_LIMIT } from '../../../src/dispatch/content-block-relay.js';
 import type { AuditLogRow } from '../../../src/audit/audit-log-repo.js';
 import { NO_REPLY_SENTINEL } from '../../../src/dispatch/no-reply.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
@@ -2638,7 +2638,8 @@ describe('Dispatcher content-block relay (#1355)', () => {
         parentEventId: 'invoke-1',
         payload: {
           toolName: 'delegate',
-          result: { success: true, data: { sent: ['calendar-create-event'], response: 'Booked Tue 2:00 PM; invite sent to the guest.' } },
+          // In a real delegate result's key order: the specialist's answer first.
+          result: { success: true, data: { response: 'Booked Tue 2:00 PM; invite sent to the guest.', sent: ['calendar-create-event'], agent: 'calendar' } },
         },
         action: null,
         outcome: 'success',
@@ -2652,12 +2653,17 @@ describe('Dispatcher content-block relay (#1355)', () => {
 
     type FindToolResults = (taskEventIds: readonly string[], limit: number) => Promise<AuditLogRow[]>;
 
-    async function relayAndBlock(findToolResultsForTasks: FindToolResults) {
+    /** With no reader, the dispatcher has no audit log repo wired. */
+    async function relayAndBlock(findToolResultsForTasks?: FindToolResults) {
       const logger = createLogger('error');
       const bus = new EventBus(logger);
       const outboundMessages: OutboundMessageEvent[] = [];
       const agentTasks: AgentTaskEvent[] = [];
-      const dispatcher = new Dispatcher({ bus, logger, auditLogRepo: { findToolResultsForTasks } });
+      const dispatcher = new Dispatcher({
+        bus,
+        logger,
+        ...(findToolResultsForTasks ? { auditLogRepo: { findToolResultsForTasks } } : {}),
+      });
       dispatcher.register();
       bus.subscribe('outbound.message', 'channel', (event) => { outboundMessages.push(event as OutboundMessageEvent); });
       bus.subscribe('agent.task', 'system', (event) => { agentTasks.push(event as AgentTaskEvent); });
@@ -2690,17 +2696,27 @@ describe('Dispatcher content-block relay (#1355)', () => {
       return { bus, task, outboundMessages, agentTasks, block };
     }
 
-    it('shows the rewrite the original turn\'s tool results, read for that turn', async () => {
+    it('gives the rewrite the original turn\'s tool calls on their own field, never in the stored brief', async () => {
       const findToolResultsForTasks = vi.fn<FindToolResults>().mockResolvedValue([bookingRow()]);
       const { task, agentTasks } = await relayAndBlock(findToolResultsForTasks);
 
-      expect(findToolResultsForTasks).toHaveBeenCalledWith([task.id], expect.any(Number));
+      // One more than the limit, so the account can say older calls exist.
+      expect(findToolResultsForTasks).toHaveBeenCalledWith([task.id], PRIOR_TURN_RESULTS_LIMIT + 1);
       expect(agentTasks).toHaveLength(1);
-      expect(agentTasks[0]!.payload.content).toContain(PRIOR_TURN_ACTIONS_HEADING);
-      expect(agentTasks[0]!.payload.content).toContain('Booked Tue 2:00 PM; invite sent to the guest.');
+      expect(agentTasks[0]!.payload.priorTurnActions).toEqual({
+        status: 'read',
+        calls: [{
+          tool: 'delegate', agent: 'calendar', outcome: 'succeeded', sent: ['calendar-create-event'],
+          excerpt: 'Booked Tue 2:00 PM; invite sent to the guest.',
+        }],
+        earlierLeftOut: 0,
+        moreBeforeLimit: false,
+      });
+      // `content` is stored in working memory and replayed into later turns: no tool output.
+      expect(agentTasks[0]!.payload.content).not.toContain('invite sent to the guest');
     });
 
-    it('keeps showing the original turn\'s actions on the second rewrite', async () => {
+    it('keeps the original turn\'s account on the second rewrite', async () => {
       const findToolResultsForTasks = vi.fn<FindToolResults>().mockResolvedValue([bookingRow()]);
       const { bus, task, outboundMessages, agentTasks, block } = await relayAndBlock(findToolResultsForTasks);
 
@@ -2712,21 +2728,41 @@ describe('Dispatcher content-block relay (#1355)', () => {
       await block(outboundMessages[outboundMessages.length - 1]!, 1);
 
       expect(agentTasks).toHaveLength(2);
-      expect(agentTasks[1]!.payload.content).toContain('Booked Tue 2:00 PM; invite sent to the guest.');
+      expect(agentTasks[1]!.payload.priorTurnActions).toEqual(agentTasks[0]!.payload.priorTurnActions);
       expect(agentTasks[1]!.payload.toolAllowlist).toEqual([]);
       // Read once, for the original turn: the rewrite turn itself had no tools to call.
       expect(findToolResultsForTasks).toHaveBeenCalledTimes(1);
-      expect(findToolResultsForTasks).toHaveBeenCalledWith([task.id], expect.any(Number));
+      expect(findToolResultsForTasks).toHaveBeenCalledWith([task.id], PRIOR_TURN_RESULTS_LIMIT + 1);
     });
 
-    it('still schedules the rewrite, without the section, when the read fails', async () => {
+    it('still schedules the rewrite, told the record is unavailable, when the read fails', async () => {
       const findToolResultsForTasks = vi.fn<FindToolResults>().mockRejectedValue(new Error('db down'));
       const { agentTasks } = await relayAndBlock(findToolResultsForTasks);
 
       expect(agentTasks).toHaveLength(1);
       expect(agentTasks[0]!.payload.content).toContain('[OUTBOUND CONTENT FILTER — REWRITE REQUIRED]');
-      expect(agentTasks[0]!.payload.content).not.toContain(PRIOR_TURN_ACTIONS_HEADING);
+      expect(agentTasks[0]!.payload.priorTurnActions).toEqual({ status: 'unavailable' });
       expect(agentTasks[0]!.payload.toolAllowlist).toEqual([]);
+    });
+
+    it('tells the rewrite the record is unavailable when no audit log repo is wired', async () => {
+      const { agentTasks } = await relayAndBlock();
+      expect(agentTasks[0]!.payload.priorTurnActions).toEqual({ status: 'unavailable' });
+    });
+
+    // The pool has no statement timeout, and this path holds a reply to someone.
+    it('goes on without the record when the read is slow', async () => {
+      vi.useFakeTimers();
+      try {
+        const findToolResultsForTasks = vi.fn<FindToolResults>().mockReturnValue(new Promise<AuditLogRow[]>(() => {}));
+        const pending = relayAndBlock(findToolResultsForTasks);
+        await vi.advanceTimersByTimeAsync(PRIOR_TURN_READ_TIMEOUT_MS + 10);
+        const { agentTasks } = await pending;
+        expect(agentTasks).toHaveLength(1);
+        expect(agentTasks[0]!.payload.priorTurnActions).toEqual({ status: 'unavailable' });
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

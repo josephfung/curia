@@ -240,8 +240,9 @@ export function holderFromAgentTask(
     originatorIsPrincipal: role === 'principal',
     liveTurn: task.payload.liveTurn === true,
     synthetic: task.payload.syntheticTurn === true,
-    // Any array counts, an empty one included: the runtime reads [] as "no tools" (#2615).
-    toolLimited: Array.isArray(task.payload.toolAllowlist),
+    // Any value counts, an empty list included, as the runtime reads it: [] is "no tools", and
+    // a malformed value leaves fewer tools, never the whole set (#2615).
+    toolLimited: task.payload.toolAllowlist !== undefined,
   };
 }
 

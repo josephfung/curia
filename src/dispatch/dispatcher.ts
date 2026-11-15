@@ -17,6 +17,7 @@ import type { InboundScanner } from './inbound-scanner.js';
 import type { RateLimiter } from './rate-limiter.js';
 import type { DbPool } from '../db/connection.js';
 import type { AuditLogRepo } from '../audit/audit-log-repo.js';
+import type { PriorTurnActions } from '../agents/prompts/prior-turn-actions.js';
 import { computeTrustScore, DEFAULT_TRUST_WEIGHTS } from './trust-scorer.js';
 import type { TrustScorerWeights } from './trust-scorer.js';
 import { parseEmailMetadata, sanitizeNylasMessageId, buildCcPreamble, buildInboundEmailIdentifierBlock, preambleAccountLabel, buildThreadParticipantsBlock } from './email-metadata.js';
@@ -59,7 +60,7 @@ import {
   PRIOR_TURN_RESULTS_LIMIT,
   buildContentBlockRewriteTask,
   isContentFilterRewriteable,
-  renderPriorTurnActions,
+  priorTurnActionsFromRows,
   type RelayOutboundContext,
 } from './content-block-relay.js';
 import { classifyNoReply, containsStandaloneNoReplyToken } from './no-reply.js';
@@ -273,6 +274,9 @@ export interface LinkedTaskMeta {
 /** How much of the sender's own text the linked reply's progress note keeps (#2312). */
 const LINKED_REPLY_NOTE_CHARS = 300;
 
+/** How long a content-block rewrite waits for its turn's tool results before going without (#2615). */
+export const PRIOR_TURN_READ_TIMEOUT_MS = 3_000;
+
 /**
  * The sender address outreach matching uses, and whether the message's authentication
  * verdict covers it (#2312). The email adapter's header-parsed From (the `from` participant,
@@ -409,7 +413,7 @@ export class Dispatcher {
       /** The inbound reply's outreach link (#2312); a rewrite keeps it for its review (#2192). */
       linkedTask?: LinkedTaskMeta;
       /** A rewrite's account of what the first drafting turn did, kept for the next rewrite (#2615). */
-      priorTurnActions?: string;
+      priorTurnActions?: PriorTurnActions;
     }
   >();
   /**
@@ -2608,9 +2612,10 @@ export class Dispatcher {
       );
 
       // What the drafting turn already did (#2615). Read only for the first rewrite: later
-      // rewrites inherit it, and a rewrite turn has no tool calls of its own to read.
-      const priorTurnActions = ctx.priorTurnActions
-        ?? (ctx.contentBlockRetryAttempt === 0 ? await this.readPriorTurnActions(ctx) : undefined);
+      // rewrites inherit it, and a rewrite turn has no tool calls of its own to read. A later
+      // rewrite that somehow inherited none is told the record is unavailable, never shown none.
+      const priorTurnActions: PriorTurnActions = ctx.priorTurnActions
+        ?? (ctx.contentBlockRetryAttempt === 0 ? await this.readPriorTurnActions(ctx) : { status: 'unavailable' });
 
       const taskEvent = createAgentTask({
         agentId: ctx.agentId,
@@ -2618,7 +2623,10 @@ export class Dispatcher {
         channelId: ctx.channelId,
         senderId: ctx.senderId,
         accountId: ctx.accountId,
-        content: buildContentBlockRewriteTask(ctx.content, findings, priorTurnActions),
+        content: buildContentBlockRewriteTask(ctx.content, findings),
+        // A field of its own, rendered into the prompt only: the brief above is stored in
+        // working memory and replayed into later turns, and tool output must not be.
+        priorTurnActions,
         // Curia's brief to itself, not a message from the person on this thread (#1892).
         syntheticTurn: true,
         // No tools (#2615): the rewrite edits the draft. With tools, a rewrite re-planned a
@@ -2650,7 +2658,7 @@ export class Dispatcher {
         blockedDraft: ctx.content,
         ...(ctx.reportedToPrincipal && { reportedToPrincipal: ctx.reportedToPrincipal }),
         ...(ctx.linkedTask && { linkedTask: ctx.linkedTask }),
-        ...(priorTurnActions && { priorTurnActions }),
+        priorTurnActions,
       });
       await this.bus.publish('dispatch', taskEvent);
       return;
@@ -2705,24 +2713,46 @@ export class Dispatcher {
   }
 
   /**
-   * The blocked reply's drafting turn's tool calls, rendered for its rewrite (#2615).
+   * The blocked reply's drafting turn's tool calls, for its rewrite (#2615).
    *
-   * Fail open, deliberately: on a missing repo or a failed read the rewrite runs without this
-   * account. The rewrite still has no tools, so it cannot act on a wrong picture of what was
-   * done; at worst it words the reply less precisely, and the send review still checks it
-   * against the first turn's evidence. Holding the reply instead would lose it.
+   * Fail open, deliberately: with no repo, a failed read or a slow one, the rewrite still runs,
+   * told that the record could not be read (so it keeps the draft's claims of action as they
+   * are and adds none). It has no tools, so it cannot act on a wrong picture, and the send
+   * review still checks it against the first turn's evidence. Holding the reply would lose it.
+   * The read is bounded: the pool has no statement timeout, and this path holds a reply.
    */
-  private async readPriorTurnActions(ctx: RelayOutboundContext): Promise<string | undefined> {
-    if (!this.auditLogRepo) return undefined;
+  private async readPriorTurnActions(ctx: RelayOutboundContext): Promise<PriorTurnActions> {
+    const where = { agentId: ctx.agentId, conversationId: ctx.conversationId, taskEventId: ctx.taskEventId };
+    if (!this.auditLogRepo) {
+      this.logger.warn(where, 'Dispatcher content-block relay: no audit log repo wired — the rewrite is told its turn\'s record is unavailable');
+      return { status: 'unavailable' };
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const rows = await this.auditLogRepo.findToolResultsForTasks([ctx.taskEventId], PRIOR_TURN_RESULTS_LIMIT);
-      return renderPriorTurnActions(rows) ?? undefined;
+      // One more than the limit, so the account can say that older calls exist.
+      const read = this.auditLogRepo.findToolResultsForTasks([ctx.taskEventId], PRIOR_TURN_RESULTS_LIMIT + 1);
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`read timed out after ${PRIOR_TURN_READ_TIMEOUT_MS}ms`)), PRIOR_TURN_READ_TIMEOUT_MS);
+      });
+      // A read that rejects after the timeout must not surface as an unhandled rejection. One
+      // that rejects in time is also handled (and logged) by the catch below.
+      read.catch((err: unknown) => {
+        this.logger.debug({ err, ...where }, 'Dispatcher content-block relay: tool-result read rejected');
+      });
+      const actions = priorTurnActionsFromRows(await Promise.race([read, timeout]));
+      this.logger.info(
+        { ...where, calls: actions.status === 'read' ? actions.calls.length : 0 },
+        'Dispatcher content-block relay: the rewrite is shown its turn\'s tool calls',
+      );
+      return actions;
     } catch (err) {
       this.logger.warn(
-        { err, agentId: ctx.agentId, conversationId: ctx.conversationId, taskEventId: ctx.taskEventId },
-        'Dispatcher content-block relay: could not read the drafting turn\'s tool results — rewriting without them',
+        { err, ...where },
+        'Dispatcher content-block relay: could not read the drafting turn\'s tool results — the rewrite is told its record is unavailable',
       );
-      return undefined;
+      return { status: 'unavailable' };
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

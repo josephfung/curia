@@ -11,23 +11,20 @@ import { CONTENT_BLOCK_REWRITE_MARKER } from '../memory/synthetic-user-turn.js';
 import type { TaskOriginator } from '../contacts/types.js';
 import type { LinkedTaskMeta } from './dispatcher.js';
 import type { AuditLogRow } from '../audit/audit-log-repo.js';
-import { renderResult } from '../autonomy/send-evidence.js';
+import { redactSecrets, renderResult } from '../autonomy/send-evidence.js';
+import { MAX_PRIOR_TURN_CALLS, type PriorTurnActions, type PriorTurnCall } from '../agents/prompts/prior-turn-actions.js';
 
 /** Maximum rewrite retries after the first content-filter block (2 retries → 3 send attempts). */
 export const CONTENT_BLOCK_MAX_RETRIES = 2;
 
 /**
- * What the blocked reply's turn already did (#2615). The rewrite turn has no tools and no
- * other record of that turn's tool calls: working memory keeps message text only. Without
- * this section a rewrite re-planned a reply whose turn had already booked a meeting, and
- * told the guest it would check first.
+ * Tool results read for the drafting turn (#2615). The read asks for one more, so it can tell
+ * the rewrite that older calls exist beyond this limit. The repo returns the newest first.
  */
-export const PRIOR_TURN_ACTIONS_HEADING = 'What your previous turn already did';
-/** Tool results read for that turn. The repo returns the newest first. */
-export const PRIOR_TURN_RESULTS_LIMIT = 40;
-/** Per result, like the send review's evidence (EVIDENCE_RESULT_MAX_CHARS) but tighter: this goes in every rewrite. */
+export const PRIOR_TURN_RESULTS_LIMIT = MAX_PRIOR_TURN_CALLS;
+/** Per result, in code points, like the send review's evidence but tighter: it goes in every rewrite. */
 export const PRIOR_TURN_RESULT_MAX_CHARS = 1_500;
-/** All results together. The calls closest to the draft are kept. */
+/** All results together, in code points. The calls closest to the draft are kept. */
 export const PRIOR_TURN_TOTAL_MAX_CHARS = 8_000;
 
 /** Rules that indicate a recipient/config problem — rewriting the body cannot fix these. */
@@ -50,46 +47,87 @@ export interface RelayOutboundContext {
   /** The reply's outreach link, so the rewrite's review sees the same authority as the first (#2192). */
   linkedTask?: LinkedTaskMeta;
   /**
-   * What the first drafting turn did, rendered once by {@link renderPriorTurnActions} and
-   * carried to later rewrites (#2615). Rewrite turns have no tools, so the first turn is
-   * the only one with anything to show.
+   * What the first drafting turn did, read once and carried to later rewrites (#2615).
+   * Rewrite turns have no tools, so the first turn is the only one with anything to show.
    */
-  priorTurnActions?: string;
+  priorTurnActions?: PriorTurnActions;
+}
+
+function asRecord(v: unknown): Record<string, unknown> | undefined {
+  return typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : undefined;
 }
 
 /**
- * The drafting turn's tool calls as the rewrite reads them (#2615), oldest first, each marked
- * succeeded or failed. `rows` are tool.result audit rows, newest first as
- * `AuditLogRepo.findToolResultsForTasks` returns them. The calls closest to the draft are
- * kept when the total runs over. Credentials are redacted: the brief is stored in working
- * memory and the audit log. Null when the turn called no tools.
+ * Trim from the middle, by code point, so both ends survive and no surrogate pair is split:
+ * a lone surrogate in the task payload would fail its jsonb audit write and lose the reply.
+ * A specialist's conclusion is usually at the end of its answer, its headline at the start.
  */
-export function renderPriorTurnActions(rows: readonly AuditLogRow[]): string | null {
-  if (rows.length === 0) return null;
-  const kept: string[] = [];
-  let total = 0;
-  for (const row of rows) {
-    const toolName = String(row.payload['toolName'] ?? row.payload['skillName'] ?? 'unknown');
-    const result = row.payload['result'];
-    // The outcome column is null on legacy rows; the result's own flag then decides.
-    const failed = row.outcome === 'failure'
-      || (typeof result === 'object' && result !== null && (result as Record<string, unknown>)['success'] === false);
-    const text = clip(renderResult(row.payload), PRIOR_TURN_RESULT_MAX_CHARS);
-    const line = `- ${toolName} (${failed ? 'failed' : 'succeeded'}): ${text}`;
-    if (total + line.length > PRIOR_TURN_TOTAL_MAX_CHARS) break;
-    total += line.length;
-    kept.push(line);
-  }
-  const leftOut = rows.length - kept.length;
-  const lines = kept.reverse();
-  if (leftOut > 0) {
-    lines.unshift(`(${leftOut} earlier ${leftOut === 1 ? 'call' : 'calls'} left out)`);
-  }
-  return lines.join('\n');
+export function clipMiddleCodePoints(text: string, max: number): string {
+  const points = Array.from(text);
+  if (points.length <= max) return text;
+  const marker = `\n[… ${points.length - max} characters left out …]\n`;
+  const keep = Math.max(0, max - Array.from(marker).length);
+  const head = Math.ceil(keep / 2);
+  return `${points.slice(0, head).join('')}${marker}${points.slice(points.length - (keep - head)).join('')}`;
 }
 
-function clip(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text;
+/**
+ * One tool.result audit row as the rewrite reads it. The outcome is claimed only on positive
+ * evidence: a row that records neither (a legacy row, or one whose outcome could not be
+ * extracted) is `unknown`, so the rewrite never tells a recipient something was done when
+ * nobody knows. A delegated call shows the specialist and what it sent ahead of the excerpt,
+ * so trimming a long answer cannot drop them.
+ */
+function priorTurnCall(row: AuditLogRow): PriorTurnCall {
+  const tool = String(row.payload['toolName'] ?? row.payload['skillName'] ?? 'unknown');
+  const result = asRecord(row.payload['result']);
+  const outcome: PriorTurnCall['outcome'] = row.outcome === 'failure' || result?.['success'] === false
+    ? 'failed'
+    : row.outcome === 'success' || result?.['success'] === true ? 'succeeded' : 'unknown';
+  const data = asRecord(result?.['data']);
+  const agent = typeof data?.['agent'] === 'string' && data['agent'] !== '' ? data['agent'] : undefined;
+  const sent = Array.isArray(data?.['sent'])
+    ? (data['sent'] as unknown[]).filter((s): s is string => typeof s === 'string' && s !== '')
+    : [];
+  // A specialist's answer is prose: show it as text rather than escaped inside JSON.
+  const response = typeof data?.['response'] === 'string' ? data['response'] : undefined;
+  const error = typeof result?.['error'] === 'string' ? result['error'] : undefined;
+  const raw = response !== undefined ? redactSecrets(response)
+    : error !== undefined ? redactSecrets(error)
+    : renderResult(row.payload);
+  return {
+    tool,
+    outcome,
+    ...(agent ? { agent } : {}),
+    ...(sent.length > 0 ? { sent } : {}),
+    excerpt: clipMiddleCodePoints(raw, PRIOR_TURN_RESULT_MAX_CHARS),
+  };
+}
+
+/**
+ * The drafting turn's tool calls as the rewrite reads them (#2615), oldest first. `rows` are
+ * tool.result audit rows, newest first as `AuditLogRepo.findToolResultsForTasks` returns them,
+ * read with a limit of PRIOR_TURN_RESULTS_LIMIT + 1: a full read means older calls exist. The
+ * calls closest to the draft are kept when the total runs over, and the rest are counted.
+ */
+export function priorTurnActionsFromRows(rows: readonly AuditLogRow[]): PriorTurnActions {
+  const moreBeforeLimit = rows.length > PRIOR_TURN_RESULTS_LIMIT;
+  const considered = rows.slice(0, PRIOR_TURN_RESULTS_LIMIT);
+  const kept: PriorTurnCall[] = [];
+  let total = 0;
+  for (const row of considered) {
+    const call = priorTurnCall(row);
+    const size = Array.from(call.excerpt).length + call.tool.length + 40;
+    if (total + size > PRIOR_TURN_TOTAL_MAX_CHARS) break;
+    total += size;
+    kept.push(call);
+  }
+  return {
+    status: 'read',
+    calls: kept.reverse(),
+    earlierLeftOut: considered.length - kept.length,
+    moreBeforeLimit,
+  };
 }
 
 /** Whether the block reason is fixable by rewriting the message body. */
@@ -134,12 +172,10 @@ export const CONTENT_BLOCK_REWRITE_INSTRUCTION_LINES: readonly string[] = [
   '   notification that needs no acknowledgement, or anything whose correct outcome is silence.',
   `   ${NO_REPLY_SENTINEL} abandons delivery: no send, no salvage draft, no further retry.`,
   '',
-  // #2615: the dispatcher sends this turn with an empty tool allowlist.
+  // #2615: the dispatcher sends this turn with an empty tool allowlist. What the turn already
+  // did reaches the prompt separately (agents/prompts/prior-turn-actions.ts), never this brief.
   'This turn edits the draft only, so it has no tools.',
 ];
-
-/** Heads {@link renderPriorTurnActions}'s list in the brief (#2615). A marker source too. */
-export const PRIOR_TURN_ACTIONS_INTRO = `${PRIOR_TURN_ACTIONS_HEADING} (its tool calls, oldest first). Keep the reply true to them:`;
 
 /** Added to the brief for an audience-leak finding. A marker source too. */
 export const AUDIENCE_LEAK_REWRITE_LINES: readonly string[] = [
@@ -149,12 +185,12 @@ export const AUDIENCE_LEAK_REWRITE_LINES: readonly string[] = [
 
 /**
  * Task body instructing the agent to rewrite a blocked dispatcher-relayed reply, or abandon send.
- * `priorTurnActions` is {@link renderPriorTurnActions}'s account of the drafting turn (#2615).
+ * It is stored in working memory, so it carries no tool output: the drafting turn's account
+ * travels on the task's `priorTurnActions` field and is rendered into this turn's prompt only.
  */
 export function buildContentBlockRewriteTask(
   blockedContent: string,
   findings: Array<{ rule: string; detail: string }>,
-  priorTurnActions?: string,
 ): string {
   const reasonSummary = summarizeBlockFindings(findings);
   const ruleNames = findings.map((f) => f.rule).join(', ');
@@ -167,9 +203,6 @@ export function buildContentBlockRewriteTask(
     ...CONTENT_BLOCK_REWRITE_INSTRUCTION_LINES,
     '',
   ];
-  if (priorTurnActions) {
-    lines.push(PRIOR_TURN_ACTIONS_INTRO, priorTurnActions, '');
-  }
   if (audienceLeak) {
     lines.push(...AUDIENCE_LEAK_REWRITE_LINES, '');
   }

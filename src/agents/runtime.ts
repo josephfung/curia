@@ -59,6 +59,7 @@ import { parseTurnGuidanceKeys, renderTurnGuidance, verificationCodeReceivedLine
 import { turnLengthReminder } from '../identity/length.js';
 import { parsePrincipalBacklog, renderBacklogLine } from './prompts/backlog-line.js';
 import { parseAwaitingAnswers, renderAwaitingAnswers } from './prompts/awaiting-answers.js';
+import { parsePriorTurnActions, renderPriorTurnActions } from './prompts/prior-turn-actions.js';
 import { renderSenderFacts, renderSenderLine, UNRESOLVED_SENDER_HEAD } from './prompts/sender-line.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
@@ -885,8 +886,8 @@ export class AgentRuntime {
     const turnGuidanceKeys = parseTurnGuidanceKeys(taskEvent.payload.turnGuidance);
     // Scheduler tasks skip the dispatcher, so this trigger is detected here (#2091). A
     // tool-allowlisted turn is excluded: it may not hold a send skill. An empty list holds
-    // none at all (#2615).
-    if (taskEvent.payload.channelId === 'scheduler' && !Array.isArray(taskEvent.payload.toolAllowlist)) {
+    // none at all (#2615), and any value counts as a list, as the allowlist below reads it.
+    if (taskEvent.payload.channelId === 'scheduler' && taskEvent.payload.toolAllowlist === undefined) {
       turnGuidanceKeys.push('scheduler-delivery');
     }
     // The backlog line (prompt trim PR 7) follows the guidance; re-validated like the keys.
@@ -904,6 +905,13 @@ export class AgentRuntime {
       named,
     );
     let promptContent = turnGuidance ? `${turnGuidance}\n\n${originalContent}` : originalContent;
+    // A content-block rewrite's account of what its turn already did (#2615). Prompt only, like
+    // the turn guidance: working memory stores originalContent, so this tool output is never
+    // replayed into later turns. Re-validated: the payload crossed the bus.
+    const priorTurnActions = parsePriorTurnActions(taskEvent.payload.priorTurnActions);
+    if (priorTurnActions) {
+      promptContent = `${promptContent}\n\n${renderPriorTurnActions(priorTurnActions)}`;
+    }
     const { conversationId } = taskEvent.payload;
 
     // Manifest-only workspace injection at the message tail — keeps document bodies out
@@ -1166,17 +1174,30 @@ export class AgentRuntime {
     // Per-turn allowlist (#1951). Applied after pin / discovery / checkpoint
     // expansion so those paths cannot put a side-effect tool back on the list.
     // Mid-turn discovery below is skipped while this is set.
-    // Any array sets it, an empty one included: [] means no tools at all, which is how a
-    // content-block rewrite edits its draft without acting again (#2615). A list whose
-    // entries are all malformed therefore also leaves no tools (fail closed).
-    const allowlistNames = Array.isArray(taskEvent.payload.toolAllowlist)
-      ? taskEvent.payload.toolAllowlist.filter((name): name is string => typeof name === 'string' && name.length > 0)
+    // Any value sets it, an empty list included: [] means no tools at all, which is how a
+    // content-block rewrite edits its draft without acting again (#2615). It is a restriction,
+    // so it fails closed: a value that is not a list, or entries that are not names, leave
+    // fewer tools, never the agent's whole set.
+    const rawAllowlist: unknown = taskEvent.payload.toolAllowlist;
+    const allowlistNames = Array.isArray(rawAllowlist)
+      ? rawAllowlist.filter((name): name is string => typeof name === 'string' && name.length > 0)
       : [];
-    const toolAllowlist = Array.isArray(taskEvent.payload.toolAllowlist) ? new Set(allowlistNames) : undefined;
+    const toolAllowlist = rawAllowlist !== undefined ? new Set(allowlistNames) : undefined;
     if (toolAllowlist) {
       workingToolDefs = executionLayer
         ? executionLayer.getToolDefinitions(allowlistNames)
         : [];
+      // A dropped entry or an unregistered name leaves the turn without a tool it was meant
+      // to have; say so rather than let the model's confusion be the only sign.
+      const offered = new Set(workingToolDefs.map((t) => t.name));
+      const unavailable = allowlistNames.filter((name) => !offered.has(name));
+      const malformed = Array.isArray(rawAllowlist) ? rawAllowlist.length - allowlistNames.length : 0;
+      if (!Array.isArray(rawAllowlist) || malformed > 0 || unavailable.length > 0) {
+        logger.warn(
+          { agentId, taskEventId: taskEvent.id, notAList: !Array.isArray(rawAllowlist), malformed, unavailable },
+          'Tool allowlist: entries dropped — this turn has fewer tools than its allowlist names',
+        );
+      }
     }
 
     let checkpointBudgetNudgeSent = false;

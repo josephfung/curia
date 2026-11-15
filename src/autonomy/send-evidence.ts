@@ -143,8 +143,11 @@ export function clipMiddle(text: string, max: number): string {
   return `${text.slice(0, head)}${marker(text.length - keep)}${text.slice(text.length - tail)}`;
 }
 
-/** Replace credential-shaped substrings (API keys, bearer tokens, long hex) with [REDACTED]. */
-function redactSecrets(text: string): string {
+/**
+ * Replace credential-shaped substrings (API keys, bearer tokens, long hex) with [REDACTED].
+ * Also used for the content-block rewrite's account of its turn's tool calls (#2615).
+ */
+export function redactSecrets(text: string): string {
   let out = text;
   for (const pattern of createSecretPatterns()) {
     out = out.replace(pattern, '[REDACTED]');
