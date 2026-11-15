@@ -115,6 +115,8 @@ describe('PrincipalMailboxesSection', () => {
     ['work_1', 'Use only lowercase letters, numbers and hyphens.'],
     ['primary', '"primary" is reserved. Choose another name.'],
     ['default', '"default" is reserved. Choose another name.'],
+    // The server's fallback-mailbox id: reserved there, so it must be explained here too.
+    ['mailbox', '"mailbox" is reserved. Choose another name.'],
     ['a'.repeat(33), 'Use at most 32 characters.'],
   ])('says why the id %s is refused', async (value, message) => {
     await mount();
@@ -129,6 +131,30 @@ describe('PrincipalMailboxesSection', () => {
     expect(container.querySelector('#mailbox-id-error')).toBeNull();
     await type('Mailbox id', 'side-gig2');
     expect(container.querySelector('#mailbox-id-error')).toBeNull();
+  });
+
+  it('says what is still missing while Add mailbox is disabled', async () => {
+    const blocker = () => container.querySelector('#mailbox-add-blocker')?.textContent ?? null;
+    await mount();
+    expect(blocker()).toBe('Enter a mailbox id.');
+    await type('Mailbox id', 'side');
+    expect(blocker()).toBe('Enter a label.');
+    await type('Label', 'Side');
+    expect(blocker()).toBe('Enter the Nylas grant ID.');
+    await type('Grant ID', 'g-1');
+    expect(blocker()).toBe('Test the grant ID first.');
+    await click('Test');
+    expect(blocker()).toBeNull();
+    // Editing the grant after a test drops the tested address and asks for a test again.
+    await type('Grant ID', 'g-2');
+    expect(blocker()).toBe('Test the grant ID first.');
+  });
+
+  it('leaves the add blocker to the id error when the id itself is invalid', async () => {
+    await mount();
+    await type('Mailbox id', 'Bad');
+    expect(container.querySelector('#mailbox-id-error')).not.toBeNull();
+    expect(container.querySelector('#mailbox-add-blocker')).toBeNull();
   });
 
   it('uses a full-size primary Add mailbox button that does not stretch', async () => {

@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '../api.js';
+// Dependency-free server module (only imports state-keys.ts), safe in the browser bundle.
+import { MAILBOX_ID_RE, RESERVED_MAILBOX_IDS } from '../../../../src/principal-mailboxes/types.js';
 
 // ── Principal mailboxes section ──────────────────────────────────────────────
 //
@@ -37,18 +39,15 @@ interface RemovalPreview {
 }
 
 const BASE = '/api/registry/principal-mailboxes';
-// Mirrors MAILBOX_ID_RE and the reserved ids in src/principal-mailboxes/types.ts; the
-// server enforces them too, this only explains a bad id before the add is tried.
-const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
-const RESERVED_IDS = new Set(['primary', 'default']);
-
-/** Why a mailbox id would be refused, or null when it is fine. */
+/** Why a mailbox id would be refused, or null when it is fine. Uses the server's own
+ *  rule (imported, not copied, so a newly reserved id can't drift); the server still
+ *  enforces it, this only explains a bad id before the add is tried. */
 function idProblem(value: string): string | null {
   if (value === '') return 'Enter a mailbox id.';
-  if (RESERVED_IDS.has(value)) return `"${value}" is reserved. Choose another name.`;
+  if (RESERVED_MAILBOX_IDS.has(value)) return `"${value}" is reserved. Choose another name.`;
   if (value.length > 32) return 'Use at most 32 characters.';
   if (!/^[a-z]/.test(value)) return 'Start with a lowercase letter.';
-  if (!ID_RE.test(value)) return 'Use only lowercase letters, numbers and hyphens.';
+  if (!MAILBOX_ID_RE.test(value)) return 'Use only lowercase letters, numbers and hyphens.';
   return null;
 }
 
@@ -312,6 +311,15 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
   const idError = id.trim() === '' ? null : idProblem(id.trim());
   // Add sends the grant in the input, so the tested address must be that grant's.
   const testedCurrent = tested !== null && tested.grantId === grantId.trim();
+  // The first thing still missing before Add can run, shown under the button so a
+  // disabled Add always says why. The id's own problem is already shown under its field.
+  const addBlocker =
+    !idOk ? (idError ? null : 'Enter a mailbox id.')
+    : !label.trim() ? 'Enter a label.'
+    : !grantId.trim() ? 'Enter the Nylas grant ID.'
+    // Editing the grant clears `tested`, so this also covers "changed since the last test".
+    : !testedCurrent ? 'Test the grant ID first.'
+    : null;
   // While the deferred-migration fallback is served, adding is refused until that mailbox has
   // moved into the list (an added row would hide it).
   const migrating = mailboxes.some(m => m.pending_migration);
@@ -437,7 +445,11 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
         {/* alignSelf: the column container would otherwise stretch it to full width. */}
         <button type="button" className="btn btn-primary" style={{ alignSelf: 'flex-start' }}
           disabled={locked || !testedCurrent || !label.trim() || !idOk}
+          aria-describedby={addBlocker ? 'mailbox-add-blocker' : undefined}
           onClick={() => void add()}>Add mailbox</button>
+        {addBlocker && (
+          <p id="mailbox-add-blocker" className="settings-page-sub mailbox-id-help">{addBlocker}</p>
+        )}
       </div>
       )}
     </div>
