@@ -1,6 +1,6 @@
 // Turn activity registry (#2588). The registry answers "which other turns touched the same
-// target recently" (in my own conversation, only those still running), so these tests pin
-// root resolution, the window, and the one-pause-per-pair rule.
+// target recently" (in my own conversation, only those not ended when I started), so these
+// tests pin root resolution, the window, and the one-pause-per-pair rule.
 
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
@@ -306,6 +306,28 @@ describe('TurnActivityRegistry.checkAndRecord', () => {
       expect(registry.rootOf('A')!.endedAt).toBeNull();
       start(registry, 'B', { conversationId: 'conv', startedAt: T0 + 5 * MIN });
       const decision = registry.checkAndRecord('B', 'email-send', [X]);
+      expect(decision.held).toBe(true);
+      if (decision.held) expect(decision.matches[0]!.other.rootId).toBe('A');
+    });
+
+    it('a root in my conversation that ends after I started still holds me: my model never saw it', () => {
+      // A's detached specialist acts and finishes while B's first model call is in flight.
+      const ctx = setup();
+      start(ctx.registry, 'A', { conversationId: 'conv' });
+      start(ctx.registry, 'spec', {
+        agentId: 'calendar',
+        conversationId: 'delegate-1',
+        metadata: { delegationOrigin: { taskEventId: 'A' } },
+      });
+      ctx.registry.taskEnded('A');
+      ctx.set(T0 + 2 * MIN);
+      start(ctx.registry, 'B', { conversationId: 'conv', startedAt: T0 + 2 * MIN });
+      ctx.set(T0 + 3 * MIN);
+      ctx.registry.checkAndRecord('spec', 'email-send', [X]);
+      ctx.registry.taskEnded('spec');
+      expect(ctx.registry.rootOf('A')!.endedAt).toBe(T0 + 3 * MIN);
+      ctx.set(T0 + 4 * MIN);
+      const decision = ctx.registry.checkAndRecord('B', 'email-send', [X]);
       expect(decision.held).toBe(true);
       if (decision.held) expect(decision.matches[0]!.other.rootId).toBe('A');
     });
