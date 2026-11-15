@@ -16,8 +16,8 @@ Nothing covers overlap *across* conversations.
 The issue frames 2026-11-11 as "the same request on two channels". The principal's account
 shows otherwise.
 
-1. They forwarded a work email to Curia: "pick a time on Alan's calendar, add him as a
-   contact". That started Turn 1.
+1. They forwarded a work email to Curia: "pick a time on the contact's booking link, add
+   them as a contact". That started Turn 1.
 2. On Signal they asked whether their work address was on file. Curia answered yes.
 3. On Signal they then wrote "I've just sent you two items, both scheduling related. Let me
    know if you have any hiccups." That started Turn 2.
@@ -70,11 +70,11 @@ The principal's words describe the target behaviour:
    turn, meaning what was asked and what was done, only when both turns serve the same
    resolved contact. This is the contact boundary ADR-053 §2 already draws for injection,
    extended across conversations. It covers the principal on email plus Signal, and equally a
-   third party (Alan) who confirms by email and then corrects by text.
+   third party who confirms by email and then corrects by text.
 2. **Every turn gets the actions-only backstop.** Every turn, including other people's mail
    and scheduled or synthetic turns, sees *what other turns did* before it takes a risky
-   action. It never sees what a different person asked. This catches the case where Alan
-   replies "Tuesday works" while the principal's turn is booking him, and a scheduled drafts
+   action. It never sees what a different person asked. This catches the case where a contact
+   replies "Tuesday works" while the principal's turn is booking them, and a scheduled drafts
    run racing the principal's "send the first draft".
 3. **See and decide, no hard block.** At the backstop, the turn is shown the other turns'
    actions and the model decides.
@@ -199,8 +199,8 @@ a common site). That costs one pause with a note, then the model carries on, and
 principal accepted that trade.
 
 **At most one pause per (other root, target) pair.** Once a root has been shown "that turn is
-working with Alan / on `cal.com`", further actions by that turn on that target don't pause it
-again. In the incident this pause lands when Turn 2 *opens* Alan's Cal.com link, before any
+working with that contact / on `cal.com`", further actions by that turn on that target don't pause it
+again. In the incident this pause lands when Turn 2 *opens* the contact's booking link, before any
 booking step.
 
 **Recording** *(my call)*. A risky call that passes the backstop is recorded, synchronously,
@@ -246,7 +246,7 @@ without doing the work.
   is looked up by task across conversations, not by this conversation's lane.
 - **Audience guard** (enforced in code): hand off only into a turn whose conversation is
   one-to-one with that same person. If the target conversation has other participants (e.g.
-  the principal cc'd Alan on the mail to Curia), the hand-off is refused. Otherwise text the
+  the principal cc'd a third party on the mail to Curia), the hand-off is refused. Otherwise text the
   person sent privately on Slack could end up quoted in a reply to a thread with others.
   *(My call)* When the hand-off is refused, the new turn makes the correction itself. Its own
   risky calls go through the backstop, and so do the other turn's. When the other turn reaches

@@ -178,7 +178,7 @@ export async function extractActionTargets(
   - `send to a contact targets the contact only`: input `{recipient: X, account_id: M}` where X is a contact and M is a non-contact UUID → `[{contact, X}]`.
   - `shared mailbox uuid does not leak into contact sends` (Review Focus 1): two inputs `{recipient: X, mailbox: M}` and `{recipient: Y, mailbox: M}` → their target sets are disjoint.
   - `principal contact id is excluded`.
-  - `url becomes its host without www`: `https://www.cal.com/alan/30min` → `{site:'cal.com'}`.
+  - `url becomes its host without www`: `https://www.cal.com/example/30min` → `{site:'cal.com'}`.
   - `no contact or site falls back to ids plus tool name`: `{draft_id: 'r-12ab34'}` → `[{id:'r-12ab34'}, {tool:'email-draft-send'}]`.
   - `empty input falls back to tool name only`.
   - `email addresses are not ids`.
