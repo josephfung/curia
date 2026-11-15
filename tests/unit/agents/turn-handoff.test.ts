@@ -80,6 +80,26 @@ function startMine(registry: TurnActivityRegistry, metadata: Record<string, unkn
   });
 }
 
+/** A target's stamp on a channel that authenticates its sender (Signal). */
+const SIGNAL_TARGET_METADATA = {
+  inboundSenderText: 'book the 9am flight',
+  inboundScanFindingCount: 0,
+  originator: { ...MY_ORIGINATOR, channel: 'signal', authenticated: true },
+};
+
+/** A two-party email thread with Curia's own mailbox: the email audience rule's shape. */
+const EMAIL_TARGET_CONVERSATION = 'email:thread-target';
+function emailTargetMetadata(authenticated: boolean): Record<string, unknown> {
+  return {
+    inboundSenderText: 'book the 9am flight',
+    inboundScanFindingCount: 0,
+    originator: { ...MY_ORIGINATOR, channel: 'email', systemRole: 'principal', tier: 'principal', authenticated },
+    curiaRole: 'to',
+    primaryRecipientEmails: [],
+    participants: [{ email: 'ada@example.com', role: 'from' }, { email: 'curia@example.com', role: 'to' }],
+  };
+}
+
 /** The target: the same person's coordinator turn on a one-to-one SMS conversation. */
 function startTarget(registry: TurnActivityRegistry, over: Partial<TaskStartInput> = {}): void {
   startTask(registry, {
@@ -105,10 +125,14 @@ function targetHolder(over: Partial<LaneHolder> = {}): LaneHolder {
   };
 }
 
-function setup() {
+function setup(opts: { selfEmails?: string[] } = {}) {
   const spy = spyLogger();
   const recovered: HandoffRecoveryRequest[] = [];
-  const registry = new TurnActivityRegistry({ logger: spy.logger, recoverHandoff: (r) => { recovered.push(r); } });
+  const registry = new TurnActivityRegistry({
+    logger: spy.logger,
+    recoverHandoff: (r) => { recovered.push(r); },
+    ...(opts.selfEmails && { selfEmails: opts.selfEmails }),
+  });
   const lanes = newLanes(spy.logger);
   const run = (over: {
     targetRootId?: string;
@@ -374,13 +398,75 @@ describe('performHandoff', () => {
 
   it('an SMS handing root is the accepted-risk exception (as in authority.ts)', async () => {
     const { registry, lanes, run } = setup();
-    startTarget(registry, { channelId: 'signal', conversationId: 'signal:+15550001' });
+    startTarget(registry, { channelId: 'signal', conversationId: 'signal:+15550001', metadata: SIGNAL_TARGET_METADATA });
     startMine(registry, { originator: { ...MY_ORIGINATOR, channel: 'sms', authenticated: false } }, {
       channelId: 'sms', conversationId: 'sms:+15550009',
     });
     await lanes.acquire(targetHolder({ conversationId: 'signal:+15550001' }));
     void run();
     expect(lanes.takeQueued('other-root')).toHaveLength(1);
+  });
+
+  describe('the target must be authenticated too (#2588 SEC HIGH)', () => {
+    const SELF = ['curia@example.com'];
+
+    it('an unauthenticated email target (a forged From) is refused, and nothing is injected', async () => {
+      const { registry, lanes, run, recovered } = setup({ selfEmails: SELF });
+      startTarget(registry, { channelId: 'email', conversationId: EMAIL_TARGET_CONVERSATION, metadata: emailTargetMetadata(false) });
+      // Everything else would pass: one-to-one, same person, a lane held by its coordinator.
+      expect(registry.rootOf('other-root')!.audienceOneToOne).toBe(true);
+      startMine(registry);
+      await lanes.acquire(targetHolder({ conversationId: EMAIL_TARGET_CONVERSATION }));
+      const outcome = await run({ handingLiveTurn: true });
+      expect(outcome).toEqual({ kind: 'do_it_yourself', reason: 'unauthenticated' });
+      expect(handoffOutcomeText(outcome)).toContain("that turn's sender wasn't verified by its channel");
+      expect(lanes.takeQueued('other-root')).toEqual([]);
+      expect(recovered).toEqual([]);
+    });
+
+    it('nor is a correction held for an unauthenticated target\'s wake', async () => {
+      const { registry, run } = setup({ selfEmails: SELF });
+      startTarget(registry, { channelId: 'email', conversationId: EMAIL_TARGET_CONVERSATION, metadata: emailTargetMetadata(false) });
+      detachSpecialist(registry);
+      startMine(registry);
+      expect(await run()).toEqual({ kind: 'do_it_yourself', reason: 'unauthenticated' });
+      expect(registry.takeHeldForWake('other-root')).toEqual([]);
+    });
+
+    it('a missing stamp on a Signal target fails closed', async () => {
+      const { registry, lanes, run } = setup();
+      startTarget(registry, { channelId: 'signal', conversationId: 'signal:+15550002' });
+      startMine(registry);
+      await lanes.acquire(targetHolder({ conversationId: 'signal:+15550002' }));
+      expect(await run()).toEqual({ kind: 'do_it_yourself', reason: 'unauthenticated' });
+      expect(lanes.takeQueued('other-root')).toEqual([]);
+    });
+
+    it('an authenticated email target takes the hand-off, live signal and all', async () => {
+      const { registry, lanes, run } = setup({ selfEmails: SELF });
+      startTarget(registry, { channelId: 'email', conversationId: EMAIL_TARGET_CONVERSATION, metadata: emailTargetMetadata(true) });
+      startMine(registry);
+      await lanes.acquire(targetHolder({ conversationId: EMAIL_TARGET_CONVERSATION }));
+      const pending = run({ handingLiveTurn: true });
+      const [input] = lanes.takeQueued('other-root');
+      expect(input).toMatchObject({ content: REQUEST, liveTurn: true });
+      lanes.confirmDrained('other-root', [input!.inboundEventId]);
+      expect(await pending).toEqual({ kind: 'delivered' });
+    });
+
+    it('an SMS target with no authenticated stamp still takes it (the accepted-risk exception)', async () => {
+      const { registry, lanes, run } = setup();
+      // startTarget's default: SMS, no originator stamp at all.
+      startTarget(registry);
+      expect(registry.rootOf('other-root')!.originatorAuthenticated).toBe(false);
+      startMine(registry);
+      await lanes.acquire(targetHolder());
+      const pending = run({ handingLiveTurn: true });
+      const [input] = lanes.takeQueued('other-root');
+      expect(input).toMatchObject({ content: REQUEST, liveTurn: true });
+      lanes.confirmDrained('other-root', [input!.inboundEventId]);
+      expect(await pending).toEqual({ kind: 'delivered' });
+    });
   });
 
   it('refuses when the target task holds a lane on another conversation (defence in depth)', async () => {
@@ -425,7 +511,7 @@ describe('performHandoff', () => {
   it('refuses a multi-participant target', async () => {
     const { registry, lanes, run } = setup();
     // A Signal group is not one-to-one.
-    startTarget(registry, { channelId: 'signal', conversationId: 'signal:group=abc' });
+    startTarget(registry, { channelId: 'signal', conversationId: 'signal:group=abc', metadata: SIGNAL_TARGET_METADATA });
     startMine(registry);
     await lanes.acquire(targetHolder({ conversationId: 'signal:group=abc' }));
     expect(await run()).toEqual({ kind: 'do_it_yourself', reason: 'not_one_to_one' });
@@ -579,7 +665,7 @@ describe('handoffOutcomeText', () => {
       "That work is still finishing in the background; the change will be applied when it lands, or picked up here if it can't be. Tell them so briefly; don't do the work here.",
     );
     const reasons: Extract<HandoffOutcome, { kind: 'do_it_yourself' }>['reason'][] = [
-      'finished', 'inactive', 'unreachable', 'not_same_person', 'not_one_to_one', 'cap', 'closing', 'ineligible',
+      'finished', 'inactive', 'unreachable', 'not_same_person', 'unauthenticated', 'not_one_to_one', 'cap', 'closing', 'ineligible',
       'tool_error', 'internal_error',
     ];
     const phrases = new Set<string>();
@@ -1047,6 +1133,43 @@ describe('runtime turn-handoff wiring', () => {
         });
       });
       expect(recovered.map((r) => r.reason)).toEqual(['wake_returned']);
+    });
+
+    it('a correction held for an unauthenticated root never reaches its wake (defence in depth)', async () => {
+      const quiet = pino({ level: 'silent' });
+      const recovered: HandoffRecoveryRequest[] = [];
+      const registry = new TurnActivityRegistry({ logger: quiet, recoverHandoff: (r) => { recovered.push(r); } });
+      const lanes = newLanes(quiet);
+      startTarget(registry, { channelId: 'signal', conversationId: 'signal:+15550002' });
+      detachSpecialist(registry);
+      startMine(registry);
+      // performHandoff refuses this target; hold directly, as a future path skipping the check would.
+      expect(registry.rootOf('other-root')!.originatorAuthenticated).toBe(false);
+      expect(registry.holdForWake('other-root', {
+        inboundEventId: handoffInboundEventId('mine', 'other-root'), senderContactId: CONTACT, senderResolved: true,
+        autoGenerated: false, injectionFindingCount: 0, channelId: 'signal', liveTurn: false,
+        content: REQUEST, originalContent: REQUEST, receivedAt: INITIATED_AT,
+      }, registry.rootOf('mine')!)).toBe(true);
+      const inject = vi.spyOn(lanes, 'tryInjectIntoTask');
+      const { bus } = buildRuntime({ registry, lanes, chat: vi.fn(async () => textResponse('ok')) });
+      await bus.publish('system', createAgentTask({
+        agentId: 'coordinator',
+        conversationId: 'signal:+15550002',
+        channelId: 'signal',
+        senderId: CONTACT,
+        content: 'The research came back late.',
+        syntheticTurn: true,
+        parentEventId: 'spec-1',
+        metadata: {
+          originator: { contactId: CONTACT, channel: 'signal', systemRole: null, tier: 'known' },
+          wakeContext: { derived: true },
+          lateDelegation: { agent: 'research', task: 'find flights' },
+        },
+      }));
+      expect(inject).not.toHaveBeenCalled();
+      expect(recovered.map((r) => r.reason)).toEqual(['wake_not_injected']);
+      expect(recovered[0]!.from.rootId).toBe('mine');
+      expect(registry.takeHeldForWake('other-root')).toEqual([]);
     });
 
     it('a throw on one item is caught per item', async () => {

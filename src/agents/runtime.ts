@@ -684,8 +684,19 @@ export class AgentRuntime {
       return;
     }
     const rootId = root.rootId;
+    // performHandoff refuses an unauthenticated target, so nothing should be held for one. If
+    // something is, it must not reach a wake running under a forged sender's originator.
+    const rootAuthenticated = handingRootAuthenticated(root);
     for (const h of held) {
       const ids = { taskEventId: taskEvent.id, rootId, inboundEventId: h.input.inboundEventId };
+      if (!rootAuthenticated) {
+        this.config.logger.error(
+          { ...ids, channelId: root.channelId },
+          "A hand-off correction was held for a root whose sender was not authenticated — not delivered; re-running it on its handing turn",
+        );
+        registry.recoverHandoff({ from: h.from, targetRootId: rootId, input: h.input, reason: 'wake_not_injected' });
+        continue;
+      }
       try {
         const result = lanes.tryInjectIntoTask(taskEvent.id, h.input, taskEvent.payload.conversationId);
         if (result.kind === 'not_injected') {

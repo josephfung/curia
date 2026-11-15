@@ -62,11 +62,20 @@ From rulings during the build:
   clean scan, a sender the channel authenticated, SMS excepted as in `authority.ts`), and the
   tool actually in the turn's tools (no allowlist, registered). An email with a quoted or
   forwarded part cut off counts as clipped. Otherwise the turn does the work itself.
+- **Both ends of a hand-off are authenticated.** The target turn passes the same sender rule
+  as the handing turn (SMS excepted), or the hand-off is refused with its own reason
+  (`unauthenticated`): a forged email From resolved to the person must not receive their real
+  words, live or held for its wake. Defence in depth: the handed input's `liveTurn` is false
+  for such a target, a wake drains no correction held for such a root (it is re-run on its
+  handing turn), and no recovery is published for a handing root that fails the rule. One
+  predicate, `handingRootAuthenticated`, is used at every end.
 - **Who reads the note:** a person's inbound root turn only (not a wake, a delegated task or a
   synthetic turn other than a hand-off recovery), on a laned human channel, with a one-to-one
   audience, from a sender the channel authenticated (the hand-off's rule, SMS excepted; a
   recovery turn carries its handing root's originator). Groups, channel threads and cc'd email get none; scheduled jobs and wakes get none.
-  Listed turns are laned human-channel roots only.
+  Listed turns are laned human-channel roots only, from a sender the channel authenticated
+  (the same rule, SMS excepted): an unauthenticated turn claiming to be the same person is not
+  listed at all, so its words never read as the person's own.
 - **Sign-in codes:** no sender text is stamped when any code registered (any verification
   status) or the lookup failed; the note and the hand-off scrub tracked codes again at use.
 - **Held corrections carry `liveTurn: false`** (#1126); a direct inject copies the handing
@@ -79,7 +88,8 @@ From rulings during the build:
   cannot take it), is re-run as a synthetic coordinator turn on the handing conversation,
   modelled on the late-delegation wake. A restart still loses it.
 - **Decline reasons** each have their own phrase: finished, no longer active, busy (no lane),
-  not the same person, not one-to-one, cap, closing, ineligible, tool error, internal error.
+  not the same person, the target's sender not authenticated, not one-to-one, cap, closing,
+  ineligible, tool error, internal error.
 - **Testing:** the scenario harness can't run two turns at once, so scenarios cover the
   finished-turn path and the live hand-off is integration-tested only.
 

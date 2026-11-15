@@ -5,9 +5,10 @@
 // under way, ask before repeating it, or hand a correction to the turn still doing it.
 //
 // Per task, never always-on (ADR-046: injection with its trigger). With no such turns nothing
-// is injected. Only the same resolved person's turns on laned human channels are listed: a
-// stranger's, a system job's, another person's, or a scheduler, internal, bullpen or voice
-// root's request text never appears here. Which turns READ the note is the runtime's call.
+// is injected. Only the same resolved, authenticated person's turns on laned human channels are
+// listed: a stranger's, a system job's, another person's, a forged sender's, or a scheduler,
+// internal, bullpen or voice root's request text never appears here. Which turns READ the note
+// is the runtime's call (it applies the same authentication rule).
 
 import {
   isPersonTurn,
@@ -19,6 +20,7 @@ import {
   type TurnActivityRegistry,
 } from '../../dispatch/turn-activity.js';
 import { isLanedChannel } from '../../dispatch/turn-lanes.js';
+import { handingRootAuthenticated } from '../turn-handoff.js';
 import { localTime } from './verification-block.js';
 
 export interface OtherTurnAction {
@@ -74,15 +76,19 @@ const OUTCOME_TEXT: Record<ActionOutcome, string> = {
 
 /**
  * The same resolved person's other turns in the window, in other conversations, on laned human
- * channels. Both roots must be resolved, non-system and share the contact UUID. A turn in this
- * same conversation is left out: its exchange is already in this conversation's history. A
- * scheduler, internal, bullpen or voice root is left out: it is not a conversation turn.
+ * channels. Both roots must be resolved, non-system, share the contact UUID and have a sender
+ * their channel authenticated (handingRootAuthenticated, SMS excepted): a forged email From
+ * resolved to this person is not them, and its words must not show here as their own. A turn
+ * in this same conversation is left out: its exchange is already in this conversation's
+ * history. A scheduler, internal, bullpen or voice root is left out: it is not a conversation
+ * turn.
  */
 export function sameContactTurns(registry: TurnActivityRegistry, myRootId: string): RootTurn[] {
   const mine = registry.rootOf(myRootId);
-  if (!mine || !isPersonTurn(mine)) return [];
+  if (!mine || !isPersonTurn(mine) || !handingRootAuthenticated(mine)) return [];
   return registry.otherRootsInWindow(mine.rootId).filter((other) =>
     isPersonTurn(other)
+    && handingRootAuthenticated(other)
     && other.originatorContactId === mine.originatorContactId
     && other.conversationId !== mine.conversationId
     && isLanedChannel(other.channelId),
@@ -124,8 +130,9 @@ function isRunning(root: RootTurn, now: number): boolean {
   return root.endedAt === null && now - root.startedAt <= MAX_RUNNING_ROOT_AGE_MS;
 }
 
+/** sameContactTurns already drops an unauthenticated root; checked again so it never shows available. */
 function handoffOf(root: RootTurn, running: boolean): OtherTurnView['handoff'] {
-  if (!root.audienceOneToOne || !running) return 'not_available';
+  if (!handingRootAuthenticated(root) || !root.audienceOneToOne || !running) return 'not_available';
   return root.runningCoordinatorTaskId !== null ? 'running_turn' : 'held_for_wake';
 }
 

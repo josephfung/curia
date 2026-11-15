@@ -14,7 +14,7 @@ import pino from 'pino';
 import { AgentRuntime } from '../../src/agents/runtime.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import { TurnLanes } from '../../src/dispatch/turn-lanes.js';
-import { TurnActivityRegistry } from '../../src/dispatch/turn-activity.js';
+import { TurnActivityRegistry, type RootTurn } from '../../src/dispatch/turn-activity.js';
 import { EventBus } from '../../src/bus/bus.js';
 import { createInboundMessage } from '../../src/bus/events.js';
 import type { LLMProvider, LLMResponse, Message, ToolDefinition, ToolResultContent } from '../../src/agents/llm/provider.js';
@@ -47,6 +47,7 @@ const HANDOFF_LINE = 'use `turn-handoff` with that turn_id';
 // wrapper may XML-escape.
 const PASSED_ON = 'Passed on to the turn already doing that work';
 const NOT_ONE_TO_ONE = 'hand this over (that conversation includes other people)';
+const NOT_VERIFIED = "hand this over (that turn's sender wasn't verified by its channel)";
 
 const THURSDAY = '2026-11-19T15:00:00-05:00';
 const FRIDAY = '2026-11-20T15:00:00-05:00';
@@ -151,8 +152,12 @@ const CONTACT_EMAILS: Record<string, string> = {
   [CONTACT_B]: 'barbara@example.com',
 };
 
-/** A two-party email to Curia, as the email adapter describes it: one-to-one. */
+/**
+ * A two-party email to Curia, as the email adapter describes it: one-to-one, from a sender
+ * the adapter verified (only an authenticated turn is listed or takes a hand-off).
+ */
 const ONE_TO_ONE_EMAIL = {
+  senderVerified: true,
   curiaRole: 'to',
   primaryRecipientEmails: [],
   participants: [
@@ -161,8 +166,12 @@ const ONE_TO_ONE_EMAIL = {
   ],
 };
 
+/** The same email from a sender the adapter could not verify: a From anyone could forge. */
+const UNVERIFIED_EMAIL = { ...ONE_TO_ONE_EMAIL, senderVerified: false };
+
 /** The same email with a third party cc'd: not one-to-one. */
 const CC_EMAIL = {
+  senderVerified: true,
   curiaRole: 'to',
   primaryRecipientEmails: [],
   participants: [
@@ -329,7 +338,7 @@ function harness() {
       .map((block) => block.content);
   }
 
-  return { lanes, booking, email, signal, script, transcript, systemPrompt, toolsOffered, toolResults };
+  return { lanes, turnActivity, booking, email, signal, script, transcript, systemPrompt, toolsOffered, toolResults };
 }
 
 /** The email turn's turn_id, read from the note the way the model reads it. */
@@ -487,6 +496,52 @@ describe('cross-conversation hand-off (#2588)', () => {
     expect(h.toolsOffered('SIGNAL-REQUEST')).not.toContain('turn-handoff');
     // Called anyway: the runtime refuses it, and nothing reaches the email turn.
     expect(h.toolResults('SIGNAL-REQUEST').some((r) => r.includes(NOT_ONE_TO_ONE))).toBe(true);
+    expect(h.transcript('EMAIL-REQUEST')).not.toContain(HANDED_OVER);
+  });
+
+  it("an unverified email turn (a forgeable From) is not in the Signal turn's note and refuses a hand-off", async () => {
+    const h = harness();
+    const release = deferred();
+    const state = { emailParked: false };
+    h.script('EMAIL-REQUEST', [
+      async () => {
+        state.emailParked = true;
+        await release.promise;
+        return text('Booked.');
+      },
+    ]);
+    let namedTurnId = '';
+    h.script('SIGNAL-REQUEST', [
+      // The note does not list it, so the id comes from elsewhere (a guess, or discovery).
+      () => toolUse('turn-handoff', { turn_id: namedTurnId }),
+      () => {
+        release.resolve();
+        return text("I'll handle the change here.");
+      },
+    ]);
+    const started = vi.spyOn(h.turnActivity, 'taskStarted');
+
+    const emailTurn = h.email(EMAIL_TEXT, UNVERIFIED_EMAIL);
+    try {
+      await vi.waitFor(() => expect(state.emailParked).toBe(true));
+      const emailRoot = started.mock.results.map((r) => r.value as RootTurn).find((r) => r.channelId === 'email');
+      // Resolved to the principal, but the adapter did not verify the sender.
+      expect(emailRoot?.originatorContactId).toBe(CONTACT_A);
+      expect(emailRoot?.originatorAuthenticated).toBe(false);
+      namedTurnId = emailRoot!.rootId;
+      await h.signal('SIGNAL-REQUEST actually, make the sync with Barbara Friday instead');
+      await emailTurn;
+    } finally {
+      release.resolve();
+      await Promise.allSettled([emailTurn]);
+    }
+
+    const note = h.systemPrompt('SIGNAL-REQUEST');
+    expect(note).not.toContain(HEADING);
+    expect(note).not.toContain('asked (their own words');
+    expect(note).not.toContain(namedTurnId);
+    expect(h.toolsOffered('SIGNAL-REQUEST')).not.toContain('turn-handoff');
+    expect(h.toolResults('SIGNAL-REQUEST').some((r) => r.includes(NOT_VERIFIED))).toBe(true);
     expect(h.transcript('EMAIL-REQUEST')).not.toContain(HANDED_OVER);
   });
 
