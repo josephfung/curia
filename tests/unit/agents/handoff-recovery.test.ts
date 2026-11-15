@@ -10,11 +10,12 @@ import {
   deterministicRecoveryEventId,
   handoffRecoveryContent,
 } from '../../../src/agents/handoff-recovery.js';
-import { handingIneligibility, handingRootAuthenticated, handoffInboundEventId } from '../../../src/agents/turn-handoff.js';
+import { handingIneligibility, handoffInboundEventId } from '../../../src/agents/turn-handoff.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import type { AgentTaskEvent } from '../../../src/bus/events.js';
 import {
   TurnActivityRegistry,
+  isAuthenticatedRoot,
   TURN_ACTIVITY_WINDOW_MS,
   MAX_RUNNING_ROOT_AGE_MS,
   type HandoffRecoveryRequest,
@@ -133,7 +134,7 @@ describe('HandoffRecoveryPublisher', () => {
     const { tasks, publisher } = capture();
     const registry = new TurnActivityRegistry({ logger: quiet });
     const from = startHanding(registry);
-    expect(handingRootAuthenticated(from)).toBe(true);
+    expect(isAuthenticatedRoot(from)).toBe(true);
     publisher.recover({ from, targetRootId: 'other-root', input: input(), reason: 'returned' });
     await vi.waitFor(() => expect(tasks).toHaveLength(1));
     const task = tasks[0]!;
@@ -150,7 +151,7 @@ describe('HandoffRecoveryPublisher', () => {
     expect(root.rootId).toBe(task.id);
     expect(root.originatorAuthenticated).toBe(true);
     // So it reads the other-turns note, but still cannot hand off: it has no stamped text.
-    expect(handingRootAuthenticated(root)).toBe(true);
+    expect(isAuthenticatedRoot(root)).toBe(true);
     expect(handingIneligibility(root, task.id)).toBe('no_request_text');
   });
 
@@ -195,7 +196,7 @@ describe('HandoffRecoveryPublisher', () => {
       metadata: { originator: { ...ORIGINATOR, channel: 'email', authenticated: false }, inboundSenderText: REQUEST, inboundScanFindingCount: 0 },
     });
     const from = registry.rootOf('forged')!;
-    expect(handingRootAuthenticated(from)).toBe(false);
+    expect(isAuthenticatedRoot(from)).toBe(false);
     publisher.recover({ from, targetRootId: 'other-root', input: input(), reason: 'returned' });
     await vi.waitFor(() => expect(error).toHaveBeenCalledWith(
       expect.objectContaining({ fromRootId: 'forged' }),

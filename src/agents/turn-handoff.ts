@@ -10,17 +10,19 @@
 //
 // The person's words come only from the handing root's trusted dispatcher stamp
 // (requestText), never from the model's tool input, and only after a clean inbound scan.
-// Both ends must have an authenticated sender (handingRootAuthenticated, SMS excepted): a
-// forged email From must not ride into another turn, and a person's real words must not
-// reach a turn a forged From started. Fail-open: any error logs and tells the model to do
-// the work itself.
+// Both ends must pass the backstop's authenticated-root rule (isAuthenticatedRoot in
+// turn-activity.ts: the channel authenticated the sender, or the root is on SMS, web or CLI):
+// a forged email From must not ride into another turn, and a person's real words must not
+// reach a turn a forged From started. The same rule picks the other-turns note's reader and
+// the turns it lists, a held correction's wake and a recovery's handing turn. Fail-open: any
+// error logs and tells the model to do the work itself.
 //
 // Once the person has been told a message was passed on or held, losing it in this process
 // is never silent: the registry's recoverHandoff re-runs it as a fresh turn on the handing
 // conversation (src/agents/handoff-recovery.ts). A restart still loses it (ADR-053 section 7).
 
 import { createHash } from 'node:crypto';
-import { isPersonTurn, type RootTurn, type TurnActivityRegistry } from '../dispatch/turn-activity.js';
+import { isAuthenticatedRoot, isPersonTurn, type RootTurn, type TurnActivityRegistry } from '../dispatch/turn-activity.js';
 import type { InjectableInput, TicketResult, TurnLanes } from '../dispatch/turn-lanes.js';
 import type { Logger } from '../logger.js';
 
@@ -76,6 +78,8 @@ const CONVERSATION_LABELS: Record<string, string> = {
   slack: 'Slack DM',
   sms: 'SMS',
   email: 'email thread',
+  web: 'web app',
+  cli: 'CLI',
 };
 
 function conversationLabel(channelId: string): string {
@@ -137,21 +141,6 @@ export interface PerformHandoffArgs {
 const decline = (reason: HandoffDeclineReason): HandoffOutcome => ({ kind: 'do_it_yourself', reason });
 
 /**
- * Whether the root's sender was authenticated by its channel (the dispatcher's
- * originator.authenticated stamp). SMS is the one exception: like
- * isPrincipalDirectedMailboxSend (src/skills/principal-send/authority.ts), SMS sender spoofing
- * is an accepted risk, and SMS is never stamped authenticated.
- *
- * The one rule for every root the hand-off and the other-turns note treat as "the same
- * person" (#2588): the handing turn, the hand-off's target, the note's reader and every turn
- * it lists, a held correction's wake, and a recovery's handing turn. A forged email From can
- * resolve to a contact with this false; such a root is never that person here.
- */
-export function handingRootAuthenticated(root: RootTurn): boolean {
-  return root.originatorAuthenticated || root.channelId === 'sms';
-}
-
-/**
  * Why the task `taskEventId`, under root `mine`, may not hand its message to another turn,
  * or null when it may: a resolved, authenticated person's root inbound turn (not a wake or a
  * delegated task under it) whose own words are known in full and scanned clean.
@@ -159,7 +148,7 @@ export function handingRootAuthenticated(root: RootTurn): boolean {
 export function handingIneligibility(mine: RootTurn, taskEventId: string): string | null {
   if (!isPersonTurn(mine)) return 'not_person_turn';
   if (mine.rootId !== taskEventId) return 'not_root_task';
-  if (!handingRootAuthenticated(mine)) return 'unauthenticated';
+  if (!isAuthenticatedRoot(mine)) return 'unauthenticated';
   if (mine.requestText === null) return 'no_request_text';
   if (mine.requestTextClipped) return 'request_text_clipped';
   if (mine.inboundScanFindings !== 0) return 'scan_not_clean';
@@ -231,7 +220,7 @@ async function runHandoff(args: PerformHandoffArgs): Promise<HandoffOutcome> {
   }
   // A forged From can start an email turn resolved to the principal; its text must not reach
   // an authenticated turn as a live follow-up (#2588 SEC HIGH-1).
-  if (!handingRootAuthenticated(mine)) {
+  if (!isAuthenticatedRoot(mine)) {
     logger.info({ ...ids, channelId: mine.channelId }, 'turn-handoff: the handing turn\'s sender was not authenticated');
     return decline('ineligible');
   }
@@ -247,7 +236,7 @@ async function runHandoff(args: PerformHandoffArgs): Promise<HandoffOutcome> {
   if (!samePerson(mine, target)) return decline('not_same_person');
   // The reverse of the handing check: a forged From can start a turn resolved to this person,
   // and their real words must not reach it, live or held for its wake (#2588 SEC HIGH).
-  if (!handingRootAuthenticated(target)) {
+  if (!isAuthenticatedRoot(target)) {
     logger.info({ ...ids, targetChannelId: target.channelId }, "turn-handoff: the target turn's sender was not authenticated");
     return decline('unauthenticated');
   }
@@ -290,7 +279,7 @@ async function runHandoff(args: PerformHandoffArgs): Promise<HandoffOutcome> {
     // The handing task's own live signal (#1126), never more. A held one is set to false below.
     // Never into a target whose sender is not authenticated, even if a later path skips the
     // check above.
-    liveTurn: args.handingLiveTurn === true && handingRootAuthenticated(target),
+    liveTurn: args.handingLiveTurn === true && isAuthenticatedRoot(target),
     content: text,
     originalContent: text,
     // When the person sent it, not when it was handed over.

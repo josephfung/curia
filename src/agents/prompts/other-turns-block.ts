@@ -11,6 +11,7 @@
 // is the runtime's call (it applies the same authentication rule).
 
 import {
+  isAuthenticatedRoot,
   isPersonTurn,
   MAX_RUNNING_ROOT_AGE_MS,
   TURN_ACTIVITY_WINDOW_MS,
@@ -20,7 +21,6 @@ import {
   type TurnActivityRegistry,
 } from '../../dispatch/turn-activity.js';
 import { isLanedChannel } from '../../dispatch/turn-lanes.js';
-import { handingRootAuthenticated } from '../turn-handoff.js';
 import { localTime } from './verification-block.js';
 
 export interface OtherTurnAction {
@@ -77,7 +77,7 @@ const OUTCOME_TEXT: Record<ActionOutcome, string> = {
 /**
  * The same resolved person's other turns in the window, in other conversations, on laned human
  * channels. Both roots must be resolved, non-system, share the contact UUID and have a sender
- * their channel authenticated (handingRootAuthenticated, SMS excepted): a forged email From
+ * their channel authenticated or on SMS, web or CLI (isAuthenticatedRoot): a forged email From
  * resolved to this person is not them, and its words must not show here as their own. A turn
  * in this same conversation is left out: its exchange is already in this conversation's
  * history. A scheduler, internal, bullpen or voice root is left out: it is not a conversation
@@ -85,10 +85,10 @@ const OUTCOME_TEXT: Record<ActionOutcome, string> = {
  */
 export function sameContactTurns(registry: TurnActivityRegistry, myRootId: string): RootTurn[] {
   const mine = registry.rootOf(myRootId);
-  if (!mine || !isPersonTurn(mine) || !handingRootAuthenticated(mine)) return [];
+  if (!mine || !isPersonTurn(mine) || !isAuthenticatedRoot(mine)) return [];
   return registry.otherRootsInWindow(mine.rootId).filter((other) =>
     isPersonTurn(other)
-    && handingRootAuthenticated(other)
+    && isAuthenticatedRoot(other)
     && other.originatorContactId === mine.originatorContactId
     && other.conversationId !== mine.conversationId
     && isLanedChannel(other.channelId),
@@ -132,7 +132,7 @@ function isRunning(root: RootTurn, now: number): boolean {
 
 /** sameContactTurns already drops an unauthenticated root; checked again so it never shows available. */
 function handoffOf(root: RootTurn, running: boolean): OtherTurnView['handoff'] {
-  if (!handingRootAuthenticated(root) || !root.audienceOneToOne || !running) return 'not_available';
+  if (!isAuthenticatedRoot(root) || !root.audienceOneToOne || !running) return 'not_available';
   return root.runningCoordinatorTaskId !== null ? 'running_turn' : 'held_for_wake';
 }
 

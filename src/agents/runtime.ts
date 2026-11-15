@@ -9,6 +9,7 @@ import { createAgentResponse, createAgentError, createToolInvoke, createToolResu
 import { holderFromAgentTask, isLanedTurnShape, originatorIsSystem, type TurnLanes } from '../dispatch/turn-lanes.js';
 import {
   HANDOFF_RECOVERY_KEY,
+  isAuthenticatedRoot,
   type HeldCorrection,
   type RootTurn,
   type TurnActivityRegistry,
@@ -31,7 +32,6 @@ import { buildOtherTurnViews, renderOtherTurnsBlock, showsHandoffGuidance, type 
 import {
   TURN_HANDOFF_TOOL_NAME,
   handingIneligibility,
-  handingRootAuthenticated,
   handoffOutcomeText,
   parseHandoffRequest,
   performHandoff,
@@ -549,7 +549,7 @@ export class AgentRuntime {
    * turn (a hand-off recovery turn excepted: it re-runs the person's message), a laned turn
    * shape on a human channel (so no scheduled job, internal or bullpen task), and a one-to-one
    * audience (a group, a channel thread or a cc'd email gets no note), from a sender its
-   * channel authenticated (handingRootAuthenticated: SMS excepted). Fail-open: an error is
+   * channel authenticated or on SMS, web or CLI (isAuthenticatedRoot). Fail-open: an error is
    * logged and the block omitted.
    *
    * `handoffDefs` is non-empty exactly when the block carries the `turn-handoff` guidance line:
@@ -573,7 +573,7 @@ export class AgentRuntime {
       // The reader passes the hand-off's own sender rule (#2588): a forged email From that
       // resolves to the principal must not read their other turns' words and actions. A
       // recovery turn carries its handing root's originator, which had to pass this rule.
-      if (!handingRootAuthenticated(mine)) {
+      if (!isAuthenticatedRoot(mine)) {
         this.config.logger.debug(
           { taskEventId: taskEvent.id, channelId: mine.channelId },
           "Other turns block: this turn's sender was not authenticated by its channel; no note",
@@ -686,7 +686,7 @@ export class AgentRuntime {
     const rootId = root.rootId;
     // performHandoff refuses an unauthenticated target, so nothing should be held for one. If
     // something is, it must not reach a wake running under a forged sender's originator.
-    const rootAuthenticated = handingRootAuthenticated(root);
+    const rootAuthenticated = isAuthenticatedRoot(root);
     for (const h of held) {
       const ids = { taskEventId: taskEvent.id, rootId, inboundEventId: h.input.inboundEventId };
       if (!rootAuthenticated) {

@@ -467,6 +467,60 @@ describe('performHandoff', () => {
       lanes.confirmDrained('other-root', [input!.inboundEventId]);
       expect(await pending).toEqual({ kind: 'delivered' });
     });
+
+    it('a running web turn takes a hand-off from Signal: the web app is principal-only and one-to-one', async () => {
+      const { registry, lanes, run } = setup();
+      const WEB_CONVERSATION = 'web:session-1';
+      startTarget(registry, {
+        channelId: 'web',
+        conversationId: WEB_CONVERSATION,
+        metadata: {
+          inboundSenderText: 'book the 9am flight',
+          inboundScanFindingCount: 0,
+          // As the dispatcher stamps the web app: never authenticated by the channel.
+          originator: { ...MY_ORIGINATOR, channel: 'web', authenticated: false },
+        },
+      });
+      const target = registry.rootOf('other-root')!;
+      expect(target.originatorAuthenticated).toBe(false);
+      expect(target.audienceOneToOne).toBe(true);
+      startMine(registry);
+      await lanes.acquire(targetHolder({ conversationId: WEB_CONVERSATION }));
+      const pending = run({ handingLiveTurn: true });
+      const [input] = lanes.takeQueued('other-root');
+      expect(input).toMatchObject({
+        content: REQUEST,
+        liveTurn: true,
+        handedOverFrom: { channelId: 'signal', conversationLabel: 'Signal' },
+      });
+      lanes.confirmDrained('other-root', [input!.inboundEventId]);
+      expect(await pending).toEqual({ kind: 'delivered' });
+    });
+
+    it('a CLI turn may hand off, labelled as the CLI', async () => {
+      const { registry, lanes, run } = setup();
+      startTarget(registry, { channelId: 'signal', conversationId: 'signal:+15550001', metadata: SIGNAL_TARGET_METADATA });
+      startMine(registry, { originator: { ...MY_ORIGINATOR, channel: 'cli', authenticated: false } }, {
+        channelId: 'cli', conversationId: 'cli:local',
+      });
+      await lanes.acquire(targetHolder({ conversationId: 'signal:+15550001' }));
+      void run();
+      const [input] = lanes.takeQueued('other-root');
+      expect(input).toMatchObject({ content: REQUEST, handedOverFrom: { channelId: 'cli', conversationLabel: 'CLI' } });
+    });
+
+    it('a voice root is still never a target, even carrying the same person', async () => {
+      const { registry, lanes, run } = setup();
+      // A call's root is an auto root seeded unauthenticated, and voice is not counted by channel.
+      registry.ensureRoot('voice-1', {
+        conversationId: 'voice-conv-1', channelId: 'voice', agentId: 'coordinator',
+        originatorContactId: CONTACT, originatorResolved: true, originatorIsSystem: false, originatorAuthenticated: false,
+      });
+      startMine(registry);
+      expect(await run({ targetRootId: 'voice-1' })).toEqual({ kind: 'do_it_yourself', reason: 'unauthenticated' });
+      expect(lanes.takeQueued('voice-1')).toEqual([]);
+      expect(registry.takeHeldForWake('voice-1')).toEqual([]);
+    });
   });
 
   it('refuses when the target task holds a lane on another conversation (defence in depth)', async () => {
@@ -951,6 +1005,19 @@ describe('runtime turn-handoff wiring', () => {
         conversationId: 'sms:+15550002',
         metadata: { originator: { ...unstamped, channel: 'sms' } },
       }))).toContain(HEADING);
+    });
+
+    it('the principal on the web app or the CLI gets the note: both are principal-only, never stamped', async () => {
+      // The dispatcher stamps web and CLI authenticated: false; isAuthenticatedRoot counts them
+      // by channel, as the backstop's hold details do.
+      const principal = { ...ORIGINATOR, systemRole: 'principal', tier: 'principal', authenticated: false };
+      for (const channelId of ['web', 'cli']) {
+        expect(await system(myTask({
+          channelId,
+          conversationId: `${channelId}:session-1`,
+          metadata: { originator: { ...principal, channel: channelId }, inboundSenderText: REQUEST, inboundScanFindingCount: 0 },
+        }))).toContain(HEADING);
+      }
     });
   });
 

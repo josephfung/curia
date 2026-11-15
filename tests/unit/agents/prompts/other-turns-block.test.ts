@@ -155,6 +155,31 @@ describe('sameContactTurns (#2588)', () => {
     expect(sameContactTurns(registry, 'mine').map((r) => r.rootId)).toEqual(['sms']);
   });
 
+  it('web and CLI roots are listed, and a web reader lists them: both are principal-only surfaces', () => {
+    const now = { t: T0 };
+    const registry = registryAt(now);
+    // As the dispatcher stamps them: never authenticated by the channel.
+    for (const channelId of ['web', 'cli']) {
+      start(registry, channelId, {
+        channelId,
+        conversationId: `${channelId}:session-1`,
+        metadata: { inboundSenderText: `by ${channelId}`, inboundScanFindingCount: 0, originator: originator(channelId, false) },
+      });
+    }
+    start(registry, 'mine', { channelId: 'signal', conversationId: 'signal:+15551234567' });
+    expect(sameContactTurns(registry, 'mine').map((r) => r.rootId)).toEqual(['web', 'cli']);
+    const { views } = buildOtherTurnViews(registry, 'mine', { now: now.t });
+    // Running and one-to-one, so a hand-off into either is available.
+    expect(views.map((v) => v.handoff)).toEqual(['running_turn', 'running_turn']);
+
+    start(registry, 'web-reader', {
+      channelId: 'web',
+      conversationId: 'web:session-2',
+      metadata: { inboundSenderText: 'from the app', inboundScanFindingCount: 0, originator: originator('web', false) },
+    });
+    expect(sameContactTurns(registry, 'web-reader').map((r) => r.rootId)).toEqual(['web', 'cli', 'mine']);
+  });
+
   it('an unauthenticated reader lists nothing (the runtime also withholds the note)', () => {
     const now = { t: T0 };
     const registry = registryAt(now);
