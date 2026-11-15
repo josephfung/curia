@@ -178,6 +178,20 @@ describe('CalendarState', () => {
     expect(list(thuFixture, thu).events).toEqual([]);
   });
 
+  it('keeps fields a later fixture adds to a seen event once it is moved out of view (#2588)', () => {
+    const state = new CaseToolState();
+    const slot = { id: 'x', title: 'Review', startTime: '2026-10-07T13:00:00-04:00', endTime: '2026-10-07T14:00:00-04:00' };
+    const thu = { timeMin: '2026-10-08T00:00:00-04:00', timeMax: '2026-10-09T00:00:00-04:00' };
+    const list = (fixture: Record<string, unknown>, input: Record<string, unknown>) =>
+      applyCaseWrites('calendar-list-events', fixture, input, state) as { events: Array<{ id: string; description?: string }> };
+    list({ events: [{ ...slot }] }, wed);
+    // A second listing's fixture adds the description.
+    list({ events: [{ ...slot, description: 'Client review' }] }, wed);
+    applyCaseWrites('calendar-update-event', { event: {} }, { eventId: 'x', start: '2026-10-08T13:00:00-04:00', end: '2026-10-08T14:00:00-04:00' }, state);
+    const found = list({ events: [] }, { ...thu, query: 'client' });
+    expect(found.events).toEqual([expect.objectContaining({ id: 'x', description: 'Client review', startTime: '2026-10-08T13:00:00-04:00' })]);
+  });
+
   it('replays a cleared free-text field, so the old value stops matching (#2588)', () => {
     const state = new CaseToolState();
     applyCaseWrites('calendar-create-event', { event: {} }, { title: 'Sync', start: '2026-10-07T15:00:00-04:00', end: '2026-10-07T15:30:00-04:00', location: 'Boardroom' }, state);
