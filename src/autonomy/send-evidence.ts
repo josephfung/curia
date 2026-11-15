@@ -152,7 +152,11 @@ function redactSecrets(text: string): string {
   return out;
 }
 
-function renderResult(payload: Record<string, unknown>): string {
+/**
+ * A tool.result row's result as text, credentials redacted. Also used for the content-block
+ * rewrite's account of what its turn already did (#2615).
+ */
+export function renderResult(payload: Record<string, unknown>): string {
   try {
     return redactSecrets(JSON.stringify(payload['result']) ?? '');
   } catch (err) {

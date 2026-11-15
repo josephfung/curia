@@ -16,6 +16,7 @@ import type { InboundMessageRecord } from '../contacts/confidence-pipeline.js';
 import type { InboundScanner } from './inbound-scanner.js';
 import type { RateLimiter } from './rate-limiter.js';
 import type { DbPool } from '../db/connection.js';
+import type { AuditLogRepo } from '../audit/audit-log-repo.js';
 import { computeTrustScore, DEFAULT_TRUST_WEIGHTS } from './trust-scorer.js';
 import type { TrustScorerWeights } from './trust-scorer.js';
 import { parseEmailMetadata, sanitizeNylasMessageId, buildCcPreamble, buildInboundEmailIdentifierBlock, preambleAccountLabel, buildThreadParticipantsBlock } from './email-metadata.js';
@@ -55,8 +56,10 @@ import { rewriteLlmFailureTurns } from '../memory/llm-failure-turn.js';
 type RelayedCodeState = 'received' | 'none' | 'unknown';
 import {
   CONTENT_BLOCK_MAX_RETRIES,
+  PRIOR_TURN_RESULTS_LIMIT,
   buildContentBlockRewriteTask,
   isContentFilterRewriteable,
+  renderPriorTurnActions,
   type RelayOutboundContext,
 } from './content-block-relay.js';
 import { classifyNoReply, containsStandaloneNoReplyToken } from './no-reply.js';
@@ -164,6 +167,11 @@ export interface DispatcherConfig {
   injectionScanner?: InboundScanner;
   /** Postgres pool — used to query working_memory for checkpoint turns. */
   pool?: DbPool;
+  /**
+   * Reads a blocked reply's drafting turn's tool results for its content-block rewrite (#2615).
+   * When absent the rewrite runs without that account; it still has no tools.
+   */
+  auditLogRepo?: Pick<AuditLogRepo, 'findToolResultsForTasks'>;
   /** Milliseconds of inactivity before conversation.checkpoint fires. Default: 600000. */
   conversationCheckpointDebounceMs?: number;
   /** Weights for messageTrustScore computation. Defaults to DEFAULT_TRUST_WEIGHTS if omitted. */
@@ -400,6 +408,8 @@ export class Dispatcher {
       reportedToPrincipal?: string;
       /** The inbound reply's outreach link (#2312); a rewrite keeps it for its review (#2192). */
       linkedTask?: LinkedTaskMeta;
+      /** A rewrite's account of what the first drafting turn did, kept for the next rewrite (#2615). */
+      priorTurnActions?: string;
     }
   >();
   /**
@@ -410,6 +420,7 @@ export class Dispatcher {
   /** Key: `${conversationId}:${agentId}` — reset on every agent.response */
   private checkpointTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private pool: DbPool | undefined;
+  private auditLogRepo: DispatcherConfig['auditLogRepo'];
   private conversationCheckpointDebounceMs: number;
   private maxMessageBytes: number;
   private confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
@@ -440,6 +451,7 @@ export class Dispatcher {
     this.injectionScanner = config.injectionScanner;
     this.rateLimiter = config.rateLimiter;
     this.pool = config.pool;
+    this.auditLogRepo = config.auditLogRepo;
     this.conversationCheckpointDebounceMs = config.conversationCheckpointDebounceMs ?? 600_000;
     this.trustScorerWeights = config.trustScorerWeights ?? DEFAULT_TRUST_WEIGHTS;
     this.maxMessageBytes = config.maxMessageBytes ?? 102_400;
@@ -2364,6 +2376,7 @@ export class Dispatcher {
         originator: routing.originator,
         ...(reportedToPrincipal && { reportedToPrincipal }),
         ...(routing.linkedTask && { linkedTask: routing.linkedTask }),
+        ...(routing.priorTurnActions && { priorTurnActions: routing.priorTurnActions }),
       });
     }
 
@@ -2594,15 +2607,25 @@ export class Dispatcher {
         'Dispatcher content-block relay: scheduling bounded rewrite retry',
       );
 
+      // What the drafting turn already did (#2615). Read only for the first rewrite: later
+      // rewrites inherit it, and a rewrite turn has no tool calls of its own to read.
+      const priorTurnActions = ctx.priorTurnActions
+        ?? (ctx.contentBlockRetryAttempt === 0 ? await this.readPriorTurnActions(ctx) : undefined);
+
       const taskEvent = createAgentTask({
         agentId: ctx.agentId,
         conversationId: ctx.conversationId,
         channelId: ctx.channelId,
         senderId: ctx.senderId,
         accountId: ctx.accountId,
-        content: buildContentBlockRewriteTask(ctx.content, findings),
+        content: buildContentBlockRewriteTask(ctx.content, findings, priorTurnActions),
         // Curia's brief to itself, not a message from the person on this thread (#1892).
         syntheticTurn: true,
+        // No tools (#2615): the rewrite edits the draft. With tools, a rewrite re-planned a
+        // reply whose turn had already booked a meeting, opened an approval task for it and
+        // told the guest it would check first. A top-level field, so nothing forwarding the
+        // metadata can set or drop it; the runtime refuses any call it is not offered.
+        toolAllowlist: [],
         // The first turn's originator and outreach link, so the rewrite's send review weighs the
         // same authority (#2192): without them a bounced reply's rewrite was judged with none.
         // Not liveTurn: a rewrite is Curia's own turn, never a live principal one.
@@ -2627,6 +2650,7 @@ export class Dispatcher {
         blockedDraft: ctx.content,
         ...(ctx.reportedToPrincipal && { reportedToPrincipal: ctx.reportedToPrincipal }),
         ...(ctx.linkedTask && { linkedTask: ctx.linkedTask }),
+        ...(priorTurnActions && { priorTurnActions }),
       });
       await this.bus.publish('dispatch', taskEvent);
       return;
@@ -2678,6 +2702,28 @@ export class Dispatcher {
       'Dispatcher content-block relay: retries exhausted or block not rewriteable — salvaging draft',
     );
     await this.publishContentBlockSalvage(ctx, event.id);
+  }
+
+  /**
+   * The blocked reply's drafting turn's tool calls, rendered for its rewrite (#2615).
+   *
+   * Fail open, deliberately: on a missing repo or a failed read the rewrite runs without this
+   * account. The rewrite still has no tools, so it cannot act on a wrong picture of what was
+   * done; at worst it words the reply less precisely, and the send review still checks it
+   * against the first turn's evidence. Holding the reply instead would lose it.
+   */
+  private async readPriorTurnActions(ctx: RelayOutboundContext): Promise<string | undefined> {
+    if (!this.auditLogRepo) return undefined;
+    try {
+      const rows = await this.auditLogRepo.findToolResultsForTasks([ctx.taskEventId], PRIOR_TURN_RESULTS_LIMIT);
+      return renderPriorTurnActions(rows) ?? undefined;
+    } catch (err) {
+      this.logger.warn(
+        { err, agentId: ctx.agentId, conversationId: ctx.conversationId, taskEventId: ctx.taskEventId },
+        'Dispatcher content-block relay: could not read the drafting turn\'s tool results — rewriting without them',
+      );
+      return undefined;
+    }
   }
 
   /**

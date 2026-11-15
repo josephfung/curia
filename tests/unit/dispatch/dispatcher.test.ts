@@ -6,7 +6,8 @@ import type { ApprovalTriggerService } from '../../../src/autonomy/approval-trig
 import { EventBus } from '../../../src/bus/bus.js';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
 import { createInboundMessage, createAgentError, createAgentTask, createAgentResponse, createOutboundBlocked, createAutonomySendBlocked, createToolResult, type OutboundMessageEvent, type OutboundNoReplyEvent, type MessageRejectedEvent, type AgentTaskEvent, type ContactUnknownEvent, type BusEvent } from '../../../src/bus/events.js';
-import { CONTENT_BLOCK_MAX_RETRIES } from '../../../src/dispatch/content-block-relay.js';
+import { CONTENT_BLOCK_MAX_RETRIES, PRIOR_TURN_ACTIONS_HEADING } from '../../../src/dispatch/content-block-relay.js';
+import type { AuditLogRow } from '../../../src/audit/audit-log-repo.js';
 import { NO_REPLY_SENTINEL } from '../../../src/dispatch/no-reply.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { ContactResolver } from '../../../src/contacts/contact-resolver.js';
@@ -2620,6 +2621,113 @@ describe('Dispatcher content-block relay (#1355)', () => {
     // #2192: the rewrite's send review weighs the first turn's authority, but it is never live.
     expect(agentTasks[0]!.payload.metadata?.originator).toMatchObject({ systemRole: 'principal', contactId: 'principal-1' });
     expect(agentTasks[0]!.payload.liveTurn).toBeUndefined();
+    // #2615: a rewrite edits text. With no tools it cannot re-plan, create tasks or send.
+    expect(agentTasks[0]!.payload.toolAllowlist).toEqual([]);
+  });
+
+  describe('what the original turn did (#2615)', () => {
+    function bookingRow(): AuditLogRow {
+      return {
+        id: 'result-1',
+        timestamp: new Date(),
+        eventType: 'tool.result',
+        sourceLayer: 'execution',
+        sourceId: 'coordinator',
+        conversationId: 'email:thread-booked',
+        taskId: null,
+        parentEventId: 'invoke-1',
+        payload: {
+          toolName: 'delegate',
+          result: { success: true, data: { sent: ['calendar-create-event'], response: 'Booked Tue 2:00 PM; invite sent to the guest.' } },
+        },
+        action: null,
+        outcome: 'success',
+        targetType: null,
+        targetId: null,
+        initiatorType: null,
+        initiatorId: null,
+        entryHash: null,
+      };
+    }
+
+    type FindToolResults = (taskEventIds: readonly string[], limit: number) => Promise<AuditLogRow[]>;
+
+    async function relayAndBlock(findToolResultsForTasks: FindToolResults) {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+      const outboundMessages: OutboundMessageEvent[] = [];
+      const agentTasks: AgentTaskEvent[] = [];
+      const dispatcher = new Dispatcher({ bus, logger, auditLogRepo: { findToolResultsForTasks } });
+      dispatcher.register();
+      bus.subscribe('outbound.message', 'channel', (event) => { outboundMessages.push(event as OutboundMessageEvent); });
+      bus.subscribe('agent.task', 'system', (event) => { agentTasks.push(event as AgentTaskEvent); });
+
+      const task = createAgentTask({
+        agentId: 'coordinator', conversationId: 'email:thread-booked', channelId: 'email',
+        senderId: 'guest@example.com', content: 'Is Tuesday at 2 free?', parentEventId: 'inbound-booked',
+      });
+      dispatcher.registerExternalTaskRouting(task.id, {
+        channelId: 'email', conversationId: 'email:thread-booked', senderId: 'guest@example.com',
+        // Gate C is not under test here; a principal originator lets the relay through, as in
+        // the tests above.
+        originator: {
+          contactId: 'principal-1', systemRole: 'principal', channel: 'email',
+          initiatedAt: new Date().toISOString(), tier: 'principal',
+        },
+      });
+      await bus.publish('system', createAgentResponse({
+        agentId: 'coordinator', conversationId: 'email:thread-booked',
+        content: 'Tuesday at 2:00 PM works. Invite is sent, with a Google Meet link.', parentEventId: task.id,
+      }));
+      const block = async (outbound: OutboundMessageEvent, n: number) => bus.publish('dispatch', createOutboundBlocked({
+        blockId: `block_booked_${n}`, conversationId: 'email:thread-booked', channelId: 'email',
+        content: outbound.payload.content, recipientId: 'guest@example.com',
+        reason: 'unresolved_identity',
+        findings: [{ rule: 'unresolved-identity', detail: 'Unresolved identity: "Google Meet"' }],
+        parentEventId: outbound.id,
+      }));
+      await block(outboundMessages[0]!, 0);
+      return { bus, task, outboundMessages, agentTasks, block };
+    }
+
+    it('shows the rewrite the original turn\'s tool results, read for that turn', async () => {
+      const findToolResultsForTasks = vi.fn<FindToolResults>().mockResolvedValue([bookingRow()]);
+      const { task, agentTasks } = await relayAndBlock(findToolResultsForTasks);
+
+      expect(findToolResultsForTasks).toHaveBeenCalledWith([task.id], expect.any(Number));
+      expect(agentTasks).toHaveLength(1);
+      expect(agentTasks[0]!.payload.content).toContain(PRIOR_TURN_ACTIONS_HEADING);
+      expect(agentTasks[0]!.payload.content).toContain('Booked Tue 2:00 PM; invite sent to the guest.');
+    });
+
+    it('keeps showing the original turn\'s actions on the second rewrite', async () => {
+      const findToolResultsForTasks = vi.fn<FindToolResults>().mockResolvedValue([bookingRow()]);
+      const { bus, task, outboundMessages, agentTasks, block } = await relayAndBlock(findToolResultsForTasks);
+
+      // The first rewrite is blocked again.
+      await bus.publish('system', createAgentResponse({
+        agentId: 'coordinator', conversationId: 'email:thread-booked',
+        content: 'Tuesday at 2:00 PM works. Invite is sent, with a Meet link.', parentEventId: agentTasks[0]!.id,
+      }));
+      await block(outboundMessages[outboundMessages.length - 1]!, 1);
+
+      expect(agentTasks).toHaveLength(2);
+      expect(agentTasks[1]!.payload.content).toContain('Booked Tue 2:00 PM; invite sent to the guest.');
+      expect(agentTasks[1]!.payload.toolAllowlist).toEqual([]);
+      // Read once, for the original turn: the rewrite turn itself had no tools to call.
+      expect(findToolResultsForTasks).toHaveBeenCalledTimes(1);
+      expect(findToolResultsForTasks).toHaveBeenCalledWith([task.id], expect.any(Number));
+    });
+
+    it('still schedules the rewrite, without the section, when the read fails', async () => {
+      const findToolResultsForTasks = vi.fn<FindToolResults>().mockRejectedValue(new Error('db down'));
+      const { agentTasks } = await relayAndBlock(findToolResultsForTasks);
+
+      expect(agentTasks).toHaveLength(1);
+      expect(agentTasks[0]!.payload.content).toContain('[OUTBOUND CONTENT FILTER — REWRITE REQUIRED]');
+      expect(agentTasks[0]!.payload.content).not.toContain(PRIOR_TURN_ACTIONS_HEADING);
+      expect(agentTasks[0]!.payload.toolAllowlist).toEqual([]);
+    });
   });
 
   it('publishes a salvage outbound after retries are exhausted', async () => {
@@ -3255,6 +3363,7 @@ describe('a failed task publish releases the lane (#2018)', () => {
       originatorIsPrincipal: false,
       liveTurn: false,
       synthetic: false,
+      toolLimited: false,
     });
     await expect(Promise.race([
       grant,
@@ -3318,6 +3427,7 @@ describe('a failed task publish releases the lane (#2018)', () => {
       originatorIsPrincipal: false,
       liveTurn: false,
       synthetic: false,
+      toolLimited: false,
     });
     await expect(Promise.race([
       grant,

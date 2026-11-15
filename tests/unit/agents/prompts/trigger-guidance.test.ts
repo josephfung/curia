@@ -30,6 +30,11 @@ import {
 } from '../../../../src/agents/prompts/debrief-recap-instruction.js';
 import { NO_MATCHING_TOOL_NEXT_STEP_LINES, WEB_FETCH_NOT_FOUND_LINES } from '../../../../src/agents/prompts/dead-end-guidance.js';
 import { TRIGGER_GUIDANCE_MARKER_SOURCES } from '../../../../src/agents/prompts/trigger-guidance-sources.js';
+import {
+  AUDIENCE_LEAK_REWRITE_LINES,
+  CONTENT_BLOCK_REWRITE_INSTRUCTION_LINES,
+  PRIOR_TURN_ACTIONS_INTRO,
+} from '../../../../src/dispatch/content-block-relay.js';
 import { HONESTY_LINE, REGISTER_LINE, WRITES_AS_SCOPE_LINES } from '../../../../src/identity/service.js';
 import { CONTENT_LINE, LENGTH_EXCEPTION, turnLengthReminder } from '../../../../src/identity/length.js';
 import {
@@ -236,6 +241,9 @@ describe('prompt-exfiltration markers cover the moved guidance', () => {
     ['web-fetch 404', WEB_FETCH_NOT_FOUND_LINES.join('\n')],
     ['identity block fixed lines (#2143)', [REGISTER_LINE, HONESTY_LINE, LENGTH_EXCEPTION, CONTENT_LINE, ...WRITES_AS_SCOPE_LINES].join('\n')],
     ['length reminder, Signal brief (#2143)', turnLengthReminder('signal', 15)!],
+    ['content-block rewrite instructions (#2615)', CONTENT_BLOCK_REWRITE_INSTRUCTION_LINES.join('\n')],
+    ['content-block rewrite prior-turn intro (#2615)', PRIOR_TURN_ACTIONS_INTRO],
+    ['content-block rewrite audience-leak lines (#2615)', AUDIENCE_LEAK_REWRITE_LINES.join('\n')],
   ];
 
   it.each(sources)('%s is a marker source', (_name, text) => {

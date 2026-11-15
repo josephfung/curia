@@ -3721,6 +3721,8 @@ async function main(): Promise<void> {
     injectionScanner,
     rateLimiter,
     pool,
+    // A content-block rewrite is told what its drafting turn already did (#2615).
+    auditLogRepo,
     conversationCheckpointDebounceMs: yamlConfig.dispatch?.conversationCheckpointDebounceMs,
     trustScorerWeights,
     maxMessageBytes: yamlConfig.channels?.max_message_bytes ?? 102_400,

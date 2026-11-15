@@ -25,6 +25,11 @@ import {
 import { TURN_GUIDANCE_TEXTS } from './turn-guidance.js';
 import { HONESTY_LINE, REGISTER_LINE, WRITES_AS_SCOPE_LINES } from '../../identity/service.js';
 import { CONTENT_LINE, LENGTH_EXCEPTION, TURN_LENGTH_REMINDER_TEXTS } from '../../identity/length.js';
+import {
+  AUDIENCE_LEAK_REWRITE_LINES,
+  CONTENT_BLOCK_REWRITE_INSTRUCTION_LINES,
+  PRIOR_TURN_ACTIONS_INTRO,
+} from '../../dispatch/content-block-relay.js';
 
 /** Newline-joined guidance texts, one marker per line once extracted. */
 export const TRIGGER_GUIDANCE_MARKER_SOURCES: readonly string[] = [
@@ -56,4 +61,9 @@ export const TRIGGER_GUIDANCE_MARKER_SOURCES: readonly string[] = [
   // meant to imitate. Band texts shorter than the marker floor are skipped by extraction.
   [REGISTER_LINE, HONESTY_LINE, LENGTH_EXCEPTION, CONTENT_LINE, ...WRITES_AS_SCOPE_LINES].join('\n'),
   ...TURN_LENGTH_REMINDER_TEXTS,
+  // The content-block rewrite brief (#2615). A rewrite turn's answer is the reply itself, so
+  // an echo of its instructions would reach the recipient directly.
+  CONTENT_BLOCK_REWRITE_INSTRUCTION_LINES.join('\n'),
+  PRIOR_TURN_ACTIONS_INTRO,
+  AUDIENCE_LEAK_REWRITE_LINES.join('\n'),
 ];
