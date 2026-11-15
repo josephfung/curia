@@ -208,6 +208,18 @@ describe('a verified, known sender\'s copies in the quote proof (#2589)', () => 
     expect(quoteItemsToReview(found(quote, ['416-555-0199']), quote, [threadMessageProof(copying, PRINCIPAL, KNOWN)], audience)).toEqual([]);
   });
 
+  // CodeRabbit: receipt evidence follows the membership rule, so Curia's mailbox is never vouched in.
+  it('does not count a copy to an unvouchable address (Curia\'s mailbox) as received', () => {
+    const toCuria = msg({
+      to: [{ email: 'avery@example.com' }], cc: [{ email: 'curia@example.org' }],
+      headers: [...copying.headers!.slice(0, 3), { name: 'Cc', value: 'curia@example.org' }],
+    });
+    const UNVOUCHABLE = new Set(['curia@example.org']);
+    expect(quoteMatchesThread(quote, [threadMessageProof(toCuria, PRINCIPAL, KNOWN, UNVOUCHABLE)], ['dana@example.org', 'curia@example.org'])).toBe(false);
+    expect(threadTextSeenByAll([toCuria], ['dana@example.org', 'curia@example.org'], PRINCIPAL, KNOWN, UNVOUCHABLE)).toEqual([]);
+    expect(quoteMatchesThread(quote, [threadMessageProof(toCuria, PRINCIPAL, KNOWN)], ['dana@example.org', 'curia@example.org'])).toBe(true);
+  });
+
   it('still refuses it when the sender is not known', () => {
     expect(quoteMatchesThread(quote, [threadMessageProof(copying, PRINCIPAL)], audience)).toBe(false);
   });

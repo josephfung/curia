@@ -7096,6 +7096,19 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(review.mock.calls[0]![0].copied.newlyCopied.map((p: { email: string }) => p.email)).toEqual(['sam@example.org']);
       });
 
+      // CodeRabbit: a plus-tagged alias of a known contact keeps that contact's facts for the judge.
+      it('gives band review a plus-tagged copy\'s contact facts, keeping the address as written', async () => {
+        contacts('known');
+        const { gw, review } = makeAuto({ client: autoClient(autoDraft(), [inbound({
+          cc: [{ email: 'sam+case@example.org' }],
+          headers: [h('Authentication-Results', 'mx.google.com; spf=pass smtp.mailfrom=dana@example.org; dkim=pass; dmarc=pass'), h('From', 'dana@example.org'), h('To', PRINCIPAL), h('Cc', 'sam+case@example.org')],
+        })]) });
+        expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
+        expect(review.mock.calls[0]![0].copied.newlyCopied).toEqual([
+          { email: 'sam+case@example.org', contact: true, name: 'Sam Assistant', title: 'Executive Assistant', organization: 'Example Org', role: 'assistant' },
+        ]);
+      });
+
       it('asks band review nothing about copies when the answered message copied no one', async () => {
         contacts('known');
         const { gw, review } = makeAuto();

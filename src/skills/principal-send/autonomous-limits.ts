@@ -170,6 +170,8 @@ export function receivedBy(
   msg: NylasMessage,
   principalAddresses: readonly string[],
   knownSenders: ReadonlySet<string> = NO_KNOWN_SENDERS,
+  /** Addresses never vouched in, as for membership (Curia's own mailboxes): receipt evidence follows the same rule. */
+  unvouchable: ReadonlySet<string> = NO_KNOWN_SENDERS,
 ): Set<string> {
   const isPrincipal = principalMatcher(principalAddresses);
   const got = new Set(principalAddresses.map(lower));
@@ -182,7 +184,7 @@ export function receivedBy(
     // DMARC aligns one header.from domain, not every mailbox of a multi-mailbox From, so only
     // a single-address From is vouched for (fail closed).
     got.add(lower(msg.from[0]!.email));
-    for (const address of vouchedCopies(msg, principalAddresses, knownSenders)) got.add(address);
+    for (const address of vouchedCopies(msg, principalAddresses, knownSenders, unvouchable)) got.add(address);
   }
   return got;
 }
