@@ -3,7 +3,7 @@ import { apiFetch } from '../api.js';
 
 // ── Principal mailboxes section ──────────────────────────────────────────────
 //
-// Rendered on Settings → Personality → Email & Calendar (EmailCalendarSettingsPage.tsx, #2475).
+// Rendered on Settings → Behaviour → Email & Calendar (EmailCalendarSettingsPage.tsx, #2475).
 // The principal's OWN Gmail mailboxes, separate from Curia's email accounts (Channels → Email).
 // readOnly (no Nylas API key yet) lists the mailboxes and turns every change control off.
 // A grant ID is typed once, tested (shows the address and provider the grant belongs to)
@@ -37,7 +37,20 @@ interface RemovalPreview {
 }
 
 const BASE = '/api/registry/principal-mailboxes';
+// Mirrors MAILBOX_ID_RE and the reserved ids in src/principal-mailboxes/types.ts; the
+// server enforces them too, this only explains a bad id before the add is tried.
 const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
+const RESERVED_IDS = new Set(['primary', 'default']);
+
+/** Why a mailbox id would be refused, or null when it is fine. */
+function idProblem(value: string): string | null {
+  if (value === '') return 'Enter a mailbox id.';
+  if (RESERVED_IDS.has(value)) return `"${value}" is reserved. Choose another name.`;
+  if (value.length > 32) return 'Use at most 32 characters.';
+  if (!/^[a-z]/.test(value)) return 'Start with a lowercase letter.';
+  if (!ID_RE.test(value)) return 'Use only lowercase letters, numbers and hyphens.';
+  return null;
+}
 
 // Refusals answer 422 { refusal, detail }; other failures { error }.
 async function errorMessage(res: Response): Promise<string> {
@@ -294,7 +307,9 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
     setRemoving(await res.json() as RemovalPreview);
   }, 'Failed to load the removal preview');
 
-  const idOk = ID_RE.test(id.trim()) && id.trim() !== 'primary' && id.trim() !== 'default';
+  const idOk = idProblem(id.trim()) === null;
+  // Only explain once something is typed: an empty field isn't an error yet.
+  const idError = id.trim() === '' ? null : idProblem(id.trim());
   // Add sends the grant in the input, so the tested address must be that grant's.
   const testedCurrent = tested !== null && tested.grantId === grantId.trim();
   // While the deferred-migration fallback is served, adding is refused until that mailbox has
@@ -314,8 +329,8 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {mailboxes.map(m => (
-          <div key={m.id} className="status-pill"
-            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+          // Own class, not status-pill: that one adds a status dot and capitalizes text (#2600).
+          <div key={m.id} className="mailbox-row">
             <span>
               {renaming?.id === m.id ? (
                 <input type="text" aria-label="New label" value={renaming.label}
@@ -392,7 +407,18 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
       {!migrating && (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
         <input type="text" placeholder="mailbox id (e.g. work)" value={id} aria-label="Mailbox id" disabled={readOnly}
+          aria-describedby={idError ? 'mailbox-id-help mailbox-id-error' : 'mailbox-id-help'}
+          aria-invalid={idError !== null}
           onChange={e => setId(e.target.value)} />
+        {/* The id is ours, not Nylas's, and permanent: rows only offer Rename (the label),
+            and a used id is never reused even after removal (id_taken in admin.ts). */}
+        <p id="mailbox-id-help" className="settings-page-sub mailbox-id-help">
+          A short name you choose, like <code>work</code>. Lowercase letters, numbers and
+          hyphens. It can't be changed later.
+        </p>
+        {idError && (
+          <p id="mailbox-id-error" className="autonomy-error mailbox-id-help" role="alert">{idError}</p>
+        )}
         <input type="text" placeholder="label (e.g. Work)" value={label} aria-label="Label" disabled={readOnly}
           onChange={e => setLabel(e.target.value)} />
         <input type="password" autoComplete="off" placeholder="Nylas grant ID (from the Nylas dashboard)"
@@ -408,8 +434,9 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
             <input type="checkbox" checked={makeDefault} disabled={readOnly} onChange={e => setMakeDefault(e.target.checked)} /> Make this the default
           </label>
         )}
-        <button type="button" className="btn btn-primary btn-sm"
-          disabled={locked || !testedCurrent || !label.trim() || !id.trim() || (!idOk)}
+        {/* alignSelf: the column container would otherwise stretch it to full width. */}
+        <button type="button" className="btn btn-primary" style={{ alignSelf: 'flex-start' }}
+          disabled={locked || !testedCurrent || !label.trim() || !idOk}
           onClick={() => void add()}>Add mailbox</button>
       </div>
       )}
