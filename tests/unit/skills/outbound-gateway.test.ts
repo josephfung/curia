@@ -7096,16 +7096,19 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(review.mock.calls[0]![0].copied.newlyCopied.map((p: { email: string }) => p.email)).toEqual(['sam@example.org']);
       });
 
-      // CodeRabbit: a plus-tagged alias of a known contact keeps that contact's facts for the judge.
-      it('gives band review a plus-tagged copy\'s contact facts, keeping the address as written', async () => {
+      // CodeRabbit: a General Counsel copied through a plus-tagged alias keeps that title for the
+      // judge, so the escalation still reads as one; the address shown stays as written.
+      it('gives band review a plus-tagged copy\'s contact facts (a General Counsel), keeping the address as written', async () => {
         contacts('known');
+        (mocks.contactService as unknown as { getContact: ReturnType<typeof vi.fn> }).getContact = vi.fn(async (id: string) =>
+          id === 'c-sam' ? { title: 'General Counsel', organization: 'Example Org' } : { title: 'Account Manager', organization: 'Example Org' });
         const { gw, review } = makeAuto({ client: autoClient(autoDraft(), [inbound({
           cc: [{ email: 'sam+case@example.org' }],
           headers: [h('Authentication-Results', 'mx.google.com; spf=pass smtp.mailfrom=dana@example.org; dkim=pass; dmarc=pass'), h('From', 'dana@example.org'), h('To', PRINCIPAL), h('Cc', 'sam+case@example.org')],
         })]) });
         expect((await gw.sendPrincipalDraft('d1', auto)).success).toBe(true);
         expect(review.mock.calls[0]![0].copied.newlyCopied).toEqual([
-          { email: 'sam+case@example.org', contact: true, name: 'Sam Assistant', title: 'Executive Assistant', organization: 'Example Org', role: 'assistant' },
+          { email: 'sam+case@example.org', contact: true, name: 'Sam Assistant', title: 'General Counsel', organization: 'Example Org', role: 'assistant' },
         ]);
       });
 
