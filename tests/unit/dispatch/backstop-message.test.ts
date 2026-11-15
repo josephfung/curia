@@ -64,49 +64,60 @@ const contactName = (id: string): string | undefined => NAMES[id];
 
 describe('viewerSeesDetail', () => {
   const other = root({ rootId: 'other', originatorContactId: BOB });
+  /** A viewer root in a one-to-one conversation, where a person may see details. */
+  const dm = (over: Partial<RootTurn> = {}): RootTurn => root({ audienceOneToOne: true, ...over });
 
   it('an unknown viewer sees nothing', () => {
     expect(viewerSeesDetail(undefined, other, PRINCIPAL)).toBe(false);
   });
 
   it('an unresolved viewer sees nothing, even with the same sender id', () => {
-    expect(viewerSeesDetail(root({ originatorContactId: BOB, originatorResolved: false }), other, PRINCIPAL)).toBe(false);
+    expect(viewerSeesDetail(dm({ originatorContactId: BOB, originatorResolved: false }), other, PRINCIPAL)).toBe(false);
   });
 
   it('a viewer with a null contact id sees nothing', () => {
-    expect(viewerSeesDetail(root({ originatorContactId: null, originatorResolved: true }), other, PRINCIPAL)).toBe(false);
+    expect(viewerSeesDetail(dm({ originatorContactId: null, originatorResolved: true }), other, PRINCIPAL)).toBe(false);
   });
 
   it('with no principal id configured, only the same contact sees details', () => {
-    expect(viewerSeesDetail(root({ originatorContactId: PRINCIPAL }), other, undefined)).toBe(false);
-    expect(viewerSeesDetail(root({ originatorContactId: BOB }), other, undefined)).toBe(true);
+    expect(viewerSeesDetail(dm({ originatorContactId: PRINCIPAL }), other, undefined)).toBe(false);
+    expect(viewerSeesDetail(dm({ originatorContactId: BOB }), other, undefined)).toBe(true);
   });
 
   it("an unresolved viewer whose raw id is UUID-shaped like the principal's sees nothing", () => {
     // A Signal ACI is a UUID: an unresolved stamp carrying one must not pass as the principal.
-    expect(viewerSeesDetail(root({ originatorContactId: PRINCIPAL, originatorResolved: false }), other, PRINCIPAL)).toBe(false);
+    expect(viewerSeesDetail(dm({ originatorContactId: PRINCIPAL, originatorResolved: false }), other, PRINCIPAL)).toBe(false);
   });
 
   it('the principal sees details of anyone', () => {
-    expect(viewerSeesDetail(root({ originatorContactId: PRINCIPAL }), other, PRINCIPAL)).toBe(true);
+    expect(viewerSeesDetail(dm({ originatorContactId: PRINCIPAL }), other, PRINCIPAL)).toBe(true);
   });
 
   it('the same resolved contact sees details; a different one does not', () => {
-    expect(viewerSeesDetail(root({ originatorContactId: BOB }), other, PRINCIPAL)).toBe(true);
-    expect(viewerSeesDetail(root({ originatorContactId: CAROL }), other, PRINCIPAL)).toBe(false);
+    expect(viewerSeesDetail(dm({ originatorContactId: BOB }), other, PRINCIPAL)).toBe(true);
+    expect(viewerSeesDetail(dm({ originatorContactId: CAROL }), other, PRINCIPAL)).toBe(false);
   });
 
   it('the same contact id on an unresolved other root is not the same person', () => {
     const unresolvedOther = root({ rootId: 'other', originatorContactId: BOB, originatorResolved: false });
-    expect(viewerSeesDetail(root({ originatorContactId: BOB }), unresolvedOther, PRINCIPAL)).toBe(false);
+    expect(viewerSeesDetail(dm({ originatorContactId: BOB }), unresolvedOther, PRINCIPAL)).toBe(false);
   });
 
   it('a system originator sees details, whatever its channel', () => {
-    expect(viewerSeesDetail(root({ originatorContactId: null, originatorResolved: false, originatorIsSystem: true, channelId: 'email' }), other, PRINCIPAL)).toBe(true);
+    expect(viewerSeesDetail(dm({ originatorContactId: null, originatorResolved: false, originatorIsSystem: true, channelId: 'email' }), other, PRINCIPAL)).toBe(true);
   });
 
   it('an internal-channel viewer with a person originator is that person, not system', () => {
-    expect(viewerSeesDetail(root({ channelId: 'internal', originatorContactId: CAROL }), other, PRINCIPAL)).toBe(false);
+    expect(viewerSeesDetail(dm({ channelId: 'internal', originatorContactId: CAROL }), other, PRINCIPAL)).toBe(false);
+  });
+
+  it('in a group or other non-one-to-one conversation, a person sees no details (#2588)', () => {
+    expect(viewerSeesDetail(root({ originatorContactId: PRINCIPAL, audienceOneToOne: false }), other, PRINCIPAL)).toBe(false);
+    expect(viewerSeesDetail(root({ originatorContactId: BOB, audienceOneToOne: false }), other, PRINCIPAL)).toBe(false);
+  });
+
+  it('a system turn sees details whatever its audience', () => {
+    expect(viewerSeesDetail(root({ originatorContactId: null, originatorResolved: false, originatorIsSystem: true, audienceOneToOne: false }), other, PRINCIPAL)).toBe(true);
   });
 });
 

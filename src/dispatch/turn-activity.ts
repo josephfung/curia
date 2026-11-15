@@ -26,6 +26,7 @@ import {
 } from '../agents/delegated-task-context.js';
 import type { Logger } from '../logger.js';
 import { stripOutboundContextPreamble } from './outbound-context.js';
+import { isOneToOneAudience } from './audience.js';
 
 export const TURN_ACTIVITY_WINDOW_MS = 15 * 60_000;
 export const MAX_TRACKED_ROOTS = 1_000;
@@ -61,7 +62,7 @@ export interface RootTurn {
    * is that person's turn.
    */
   originatorIsSystem: boolean;
-  /** Filled in by a later task; false until then. */
+  /** The root's conversation is one-to-one (audience.ts); false for an auto root or unknown audience. */
   audienceOneToOne: boolean;
   /** The person's words, preamble stripped, clipped to 500 code points. */
   requestText: string | null;
@@ -176,6 +177,8 @@ export interface TurnActivityRegistryOptions {
    * stay apart. Production passes none.
    */
   scopeOf?: (conversationId: string) => string | undefined;
+  /** Curia's own mailboxes, excluded when judging whether an email thread is one-to-one. */
+  selfEmails?: readonly string[];
 }
 
 function targetKey(target: ActionTarget): string {
@@ -206,6 +209,7 @@ export class TurnActivityRegistry {
   private readonly shown = new Map<string, Set<string>>();
 
   private readonly scopeOf: ((conversationId: string) => string | undefined) | undefined;
+  private readonly selfEmails: readonly string[];
   /** checkAndRecord calls since the last prune, and when that prune ran. */
   private callsSincePrune = 0;
   private lastPruneAt: number;
@@ -214,6 +218,7 @@ export class TurnActivityRegistry {
     this.logger = opts.logger;
     this.now = opts.now ?? Date.now;
     this.scopeOf = opts.scopeOf;
+    this.selfEmails = opts.selfEmails ?? [];
     this.lastPruneAt = this.now();
   }
 
@@ -527,7 +532,7 @@ export class TurnActivityRegistry {
       originatorContactId: input.originatorContactId,
       originatorResolved: input.originatorResolved,
       originatorIsSystem: input.originatorIsSystem,
-      audienceOneToOne: false,
+      audienceOneToOne: isOneToOneAudience(input.channelId, input.conversationId, input.metadata, this.selfEmails),
       requestText: this.requestTextOf(input.content),
       inboundScanFindings: input.inboundScanFindings ?? null,
       startedAt: input.startedAt,

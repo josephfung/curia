@@ -2307,7 +2307,7 @@ async function main(): Promise<void> {
   });
   logger.info({ enabled: turnInjection.enabled }, 'Turn lanes initialized');
   // One registry shared by every AgentRuntime (#2588).
-  const turnActivity = new TurnActivityRegistry({ logger });
+  const turnActivity = new TurnActivityRegistry({ logger, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail) });
 
   // Construct one EmailAdapter per resolved account (but don't start any yet —
   // adapters must not poll until the dispatcher is registered, otherwise inbound.message

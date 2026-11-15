@@ -119,7 +119,7 @@ export function contactRecentHistoryAudienceIsPrivate(args: {
  * permissive converter default (`curiaRole: 'to'`, empty primary recipients)
  * are not a private audience.
  */
-function emailReplyAudienceIsPrivate(
+export function emailReplyAudienceIsPrivate(
   metadata: Record<string, unknown> | undefined,
   selfEmails: readonly string[] | undefined,
 ): boolean {
