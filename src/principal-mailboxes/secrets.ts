@@ -53,4 +53,4 @@ export async function capturedFlatKeyRefusal(
 // A per-mailbox grant is written only by the principal-mailboxes routes, which validate it.
 export const PER_MAILBOX_GRANT_MANAGED_MESSAGE =
   "A principal mailbox's grant is set in the console: Settings → Behaviour → Email & Calendar " +
-  '(Add, or Replace grant on the mailbox), which checks the grant belongs to that mailbox.';
+  '(Add, or Edit on the mailbox), which checks the grant belongs to that mailbox.';

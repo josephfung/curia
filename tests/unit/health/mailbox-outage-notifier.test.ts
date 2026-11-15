@@ -39,16 +39,17 @@ describe('MailboxOutageNotifier', () => {
     expect(payload.ceoEmail).toBe('owner@example.com');
     expect(payload.body).toContain('Work');
     expect(payload.body.toLowerCase()).toContain('remove');
-    // No address; the only "grant" is the console control's name, never an id.
+    // No address; the only "grant" is the instruction to paste a new one, never an id.
     expect(payload.body).not.toMatch(/@/);
-    expect(payload.body.replace(/Replace grant/g, '')).not.toMatch(/grant/i);
+    expect(payload.body.replace(/its new grant ID/g, '')).not.toMatch(/grant/i);
   });
 
-  it("names the console's Replace grant control, matching the console wording (R29)", async () => {
+  it("names the console's Edit control, matching the console wording (R29, #2600)", async () => {
     const { n, sendNotification } = make();
     await n.record('work', 'Work', false, { authFailure: true });
     const body = sendNotification.mock.calls[0]![0].body as string;
-    expect(body).toContain('Replace grant');
+    expect(body).toContain('use Edit on the mailbox to paste its new grant ID');
+    expect(body).not.toContain('Replace grant');
     expect(body).toContain('Settings → Behaviour → Email & Calendar');
   });
 
@@ -57,7 +58,7 @@ describe('MailboxOutageNotifier', () => {
     await n.record('work', 'Work', false, { authFailure: false });
     const body = sendNotification.mock.calls[0]![0].body as string;
     expect(body).toContain('Work');
-    expect(body).not.toContain('Replace grant');
+    expect(body).not.toContain('use Edit');
     expect(body).not.toMatch(/reconnect/i);
     expect(body).toContain('Nylas status');
     expect(body).not.toMatch(/@/);

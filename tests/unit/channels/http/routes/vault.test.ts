@@ -487,6 +487,9 @@ describe('vault routes', () => {
       const res = await app.inject({ method: 'DELETE', url: `/api/vault/secrets/${name}`, headers: auth });
       expect(res.statusCode).toBe(409);
       expect(res.json().error).toContain('Remove the mailbox');
+      // Names the console's current control (#2600: Edit replaced Replace grant).
+      expect(res.json().error).toContain('use Edit on it to paste a new grant ID');
+      expect(res.json().error).not.toContain('Replace grant');
     }
     expect(secrets.deletes).toEqual([]);
   });

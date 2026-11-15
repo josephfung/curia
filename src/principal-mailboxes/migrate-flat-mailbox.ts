@@ -187,7 +187,7 @@ export async function retireFlatMailboxKeys(
       logger.error(
         { keys: present, ...(def ? { mailboxId: def.id } : {}) },
         def
-          ? 'Kept the flat mailbox keys: the default mailbox has no grant in the vault yet (use Replace grant on it in the console)'
+          ? 'Kept the flat mailbox keys: the default mailbox has no grant in the vault yet (use Edit on it in the console to paste its grant ID)'
           : 'Kept the flat mailbox keys: every principal mailbox was removed, so nothing reads them; delete them on the Secrets page',
       );
       return 'kept';
