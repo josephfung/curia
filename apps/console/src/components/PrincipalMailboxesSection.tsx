@@ -357,7 +357,7 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
                   : "if it doesn't finish, check the Nylas API key and the grant."}
               </span>
             ) : (
-            <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+            <span className="mailbox-row-actions">
               {replacing?.id === m.id ? (
                 <>
                   <input type="password" autoComplete="off" placeholder="New Nylas grant ID"

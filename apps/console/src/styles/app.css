@@ -952,6 +952,8 @@ a.dash-num-link:focus-visible, .dash-num-link:has(.dash-num-open:focus-visible) 
   color: var(--app-fg);
   overflow-wrap: anywhere;
 }
+/* The row's buttons wrap too: four of them overflow a phone-width row. */
+.mailbox-row-actions { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .mailbox-id-help { font-size: 12px; margin: 0; }
 
 .settings-section {
