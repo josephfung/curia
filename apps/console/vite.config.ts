@@ -88,6 +88,8 @@ export default defineConfig({
         path.resolve(import.meta.dirname, '../../src/contacts'),
         // The console imports the phone-docs URL constant from here.
         path.resolve(import.meta.dirname, '../../src/phone'),
+        // The mailbox id rule (MAILBOX_ID_RE, RESERVED_MAILBOX_IDS) comes from here (#2600).
+        path.resolve(import.meta.dirname, '../../src/principal-mailboxes'),
       ],
     },
     // In dev, proxy backend-served paths to the Fastify server on :3000.
