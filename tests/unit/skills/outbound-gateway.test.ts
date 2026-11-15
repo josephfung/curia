@@ -4,6 +4,8 @@ import { OutboundGateway, UnknownEmailAccountError, PRINCIPAL_MAILBOX_ACCOUNT_RE
 import { SendLevelDegradedError } from '../../../src/skills/principal-send/send-level.js';
 import { AUTONOMOUS_MAX_COPIED_EVIDENCE } from '../../../src/skills/principal-send/autonomous-limits.js';
 import { createLogger } from '../../../src/logger.js';
+import { PrincipalSendLedger } from '../../../src/skills/principal-send/send-ledger.js';
+import type { CreateWorkingDocParams, WorkingDocRow } from '../../../src/db/working-docs-repo.js';
 import type { NylasClient, NylasMessage } from '../../../src/channels/email/nylas-client.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
 import type { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js';
@@ -7130,6 +7132,70 @@ describe('sendPrincipalDraft (#2474)', () => {
         await gw.sendPrincipalDraft('d1', auto);
         expect(ledger.recordHeld).toHaveBeenCalledOnce();
         expect(ledger.recordHeld.mock.calls[0]![0]).not.toHaveProperty('reported');
+      });
+
+      /**
+       * The production ledger over a working-docs stand-in that, like the table's unique index,
+       * refuses a second live doc at one path (PR #2625 review, CodeRabbit: test with the real ledger).
+       */
+      function realLedger(o: { failCreate?: boolean } = {}) {
+        const docs = new Map<string, WorkingDocRow>();
+        const repo = {
+          create: vi.fn(async (c: CreateWorkingDocParams) => {
+            if (o.failCreate) throw new Error('db down');
+            if (docs.has(c.path)) throw new Error('duplicate key value violates unique constraint "idx_working_documents_path_live"');
+            const row = {
+              id: `id-${docs.size}`, path: c.path, type: c.type, frontmatter: c.frontmatter ?? {}, body: c.body ?? '',
+              version: 1, sectionVersions: {}, byteSize: 0, taskId: null, conversationId: null, agentId: null,
+              createdAt: '2026-11-15T12:00:00.000Z', updatedAt: '2026-11-15T12:00:00.000Z', archivedAt: null,
+            } as WorkingDocRow;
+            docs.set(c.path, row);
+            return row;
+          }),
+          read: vi.fn(async (path: string) => docs.get(path) ?? null),
+          update: vi.fn(async () => ({ ok: true as const, document: undefined as unknown as WorkingDocRow })),
+          listByPrefix: vi.fn(async (prefix: string) => [...docs.values()].filter((d) => d.path.startsWith(prefix))),
+        };
+        const ledger = new PrincipalSendLedger(repo, createLogger('error'));
+        // makeAuto spreads its ledger over default mocks, and a spread copies no prototype methods:
+        // hand it every method, bound, so the real ones run.
+        const methods = ['recordSending', 'recordSent', 'recordHeld', 'recordLimitStop', 'limitStopsSince', 'list',
+          'recentForThread', 'recentForConversation', 'recentAutonomousSends', 'sentForDraft', 'heldForDraft'] as const;
+        return Object.fromEntries(methods.map((m) => [m, ledger[m].bind(ledger)])) as unknown as PrincipalSendLedger;
+      }
+
+      // PR #2625 review (CodeRabbit): the hold and its `reported: false` follow-up can share a
+      // millisecond. Both must land, or the failed item is never filed.
+      it('with the real ledger, a failed item is filed by the next wake even when both markers share a millisecond', async () => {
+        vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-15T12:00:00.000Z'));
+        try {
+          const ledger = realLedger();
+          const draftWithSam = () => autoClient(autoDraft({ cc: [{ email: 'sam@example.org' }] }));
+          failDigests();
+          expect(await makeAuto({ client: draftWithSam(), ledger: ledger as never }).gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'recipient_not_on_thread' });
+          expect(await ledger.heldForDraft('d1', 'default')).toMatchObject({ unreported: true });
+          vi.mocked(mocks.bus.publish).mockResolvedValue(undefined);
+          const later = { curiaWrites: { created: false, lastWriteAt: null, replyToMessageId: null } };
+          await makeAuto({ client: draftWithSam(), ledger: ledger as never, ...later }).gw.sendPrincipalDraft('d1', { ...auto, taskEventId: 't2' });
+          expect(reports()).toHaveLength(2);
+          expect(await ledger.heldForDraft('d1', 'default')).not.toHaveProperty('unreported');
+        } finally {
+          vi.mocked(Date.now).mockRestore();
+        }
+      });
+
+      // PR #2625 review (CodeRabbit): with no marker written, nothing durable holds the draft, so
+      // the item must not say Curia left it for the principal.
+      it('with the real ledger, a hold whose marker can\'t be written is reported as not sent, not as left as a draft', async () => {
+        const ledger = realLedger({ failCreate: true });
+        const { gw } = makeAuto({ client: autoClient(autoDraft({ cc: [{ email: 'sam@example.org' }] })), ledger: ledger as never });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'recipient_not_on_thread' });
+        expect(reports()).toHaveLength(1);
+        const summary = String(reports()[0]!['summary']);
+        expect(summary.startsWith('Not sent from your mailbox: "Re: Friday"')).toBe(true);
+        expect(summary).toContain("isn't genuinely on the thread");
+        expect(summary.endsWith(`Curia couldn't record that it held it, so it may look at it again.${IN_DRAFTS}`)).toBe(true);
+        expect(await ledger.heldForDraft('d1', 'default')).toBeNull();
       });
 
       // The prod sequence end to end, through the in-memory ledger rather than a mocked lookup.
