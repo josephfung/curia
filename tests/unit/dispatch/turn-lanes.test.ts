@@ -11,6 +11,8 @@ import {
   holderFromAgentTask,
   originatorIsSystem,
   inferOriginatorResolution,
+  isLanedChannel,
+  isLanedTurnShape,
   type InjectableInput,
   type LaneHolder,
   type TryInjectResult,
@@ -254,6 +256,17 @@ describe('TurnLanes', () => {
         kind: 'not_injected',
         reason: 'ineligible',
       });
+    });
+
+    it('with an expected conversation, refuses a lane held on another one (#2588)', async () => {
+      const gate = lanes();
+      await gate.acquire(holder('h', { conversationId: 'email:t1' }));
+      expect(gate.tryInjectIntoTask('task-h', input(), 'sms:+15550001')).toEqual({
+        kind: 'not_injected',
+        reason: 'ineligible',
+      });
+      expect(gate.takeQueued('task-h')).toEqual([]);
+      expect(gate.tryInjectIntoTask('task-h', input(), 'email:t1').kind).toBe('queued');
     });
 
     it('returns no_holder when no lane holds the task', () => {
@@ -734,5 +747,22 @@ describe('originatorIsSystem (#2588)', () => {
     expect(originatorIsSystem({ contactId: PERSON, channel: 'internal', systemRole: 'principal' })).toBe(false);
     expect(originatorIsSystem({ contactId: PERSON, channel: 'scheduler', systemRole: null, tier: 'known' })).toBe(false);
     expect(originatorIsSystem({ contactId: '+15550001111', channel: 'signal', systemRole: null, tier: 'unknown' })).toBe(false);
+  });
+});
+
+describe('isLanedChannel / isLanedTurnShape (#2588)', () => {
+  it('human channels are laned; scheduler, internal, bullpen and voice are not', () => {
+    for (const c of ['signal', 'email', 'sms', 'slack']) expect(isLanedChannel(c)).toBe(true);
+    for (const c of ['scheduler', 'internal', 'bullpen', 'voice']) expect(isLanedChannel(c)).toBe(false);
+  });
+
+  it('the turn shape does not depend on whether lanes are enabled', () => {
+    const payload = createAgentTask({
+      agentId: 'coordinator', conversationId: 'signal:+1', channelId: 'signal', senderId: 's', content: 'x', parentEventId: 'p',
+    }).payload;
+    expect(isLanedTurnShape(payload)).toBe(true);
+    expect(lanes({ enabled: false }).isLaned(payload)).toBe(false);
+    expect(isLanedTurnShape({ ...payload, agentId: 'research' })).toBe(false);
+    expect(isLanedTurnShape({ ...payload, channelId: 'scheduler' })).toBe(false);
   });
 });
