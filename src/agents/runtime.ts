@@ -31,6 +31,7 @@ import { buildOtherTurnViews, renderOtherTurnsBlock, showsHandoffGuidance, type 
 import {
   TURN_HANDOFF_TOOL_NAME,
   handingIneligibility,
+  handingRootAuthenticated,
   handoffOutcomeText,
   parseHandoffRequest,
   performHandoff,
@@ -547,7 +548,8 @@ export class AgentRuntime {
    * reads it: the root task itself (not a wake or delegated task under it), not a synthetic
    * turn (a hand-off recovery turn excepted: it re-runs the person's message), a laned turn
    * shape on a human channel (so no scheduled job, internal or bullpen task), and a one-to-one
-   * audience (a group, a channel thread or a cc'd email gets no note). Fail-open: an error is
+   * audience (a group, a channel thread or a cc'd email gets no note), from a sender its
+   * channel authenticated (handingRootAuthenticated: SMS excepted). Fail-open: an error is
    * logged and the block omitted.
    *
    * `handoffDefs` is non-empty exactly when the block carries the `turn-handoff` guidance line:
@@ -568,6 +570,16 @@ export class AgentRuntime {
       const isRecovery = metadata?.[HANDOFF_RECOVERY_KEY] !== undefined;
       if (payload.syntheticTurn === true && !isRecovery) return none;
       if (!isLanedTurnShape(payload) || !mine.audienceOneToOne) return none;
+      // The reader passes the hand-off's own sender rule (#2588): a forged email From that
+      // resolves to the principal must not read their other turns' words and actions. A
+      // recovery turn carries its handing root's originator, which had to pass this rule.
+      if (!handingRootAuthenticated(mine)) {
+        this.config.logger.debug(
+          { taskEventId: taskEvent.id, channelId: mine.channelId },
+          "Other turns block: this turn's sender was not authenticated by its channel; no note",
+        );
+        return none;
+      }
 
       const scrubText = this.scrubTextFn();
       const { views, total } = buildOtherTurnViews(registry, mine.rootId, scrubText ? { scrubText } : {});

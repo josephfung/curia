@@ -10,7 +10,7 @@ import {
   deterministicRecoveryEventId,
   handoffRecoveryContent,
 } from '../../../src/agents/handoff-recovery.js';
-import { handoffInboundEventId } from '../../../src/agents/turn-handoff.js';
+import { handingIneligibility, handingRootAuthenticated, handoffInboundEventId } from '../../../src/agents/turn-handoff.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import type { AgentTaskEvent } from '../../../src/bus/events.js';
 import {
@@ -127,6 +127,31 @@ describe('HandoffRecoveryPublisher', () => {
     // It goes through the lanes like every synthetic turn.
     const lanes = new TurnLanes({ enabled: true, maxInjectionsPerTurn: 2, extraRoundsPerInjection: 2, laneWaitTimeoutMs: 1_000, logger: quiet });
     expect(lanes.isLaned(task.payload)).toBe(true);
+  });
+
+  it("the recovery turn's root carries the handing root's channel authentication", async () => {
+    const { tasks, publisher } = capture();
+    const registry = new TurnActivityRegistry({ logger: quiet });
+    const from = startHanding(registry);
+    expect(handingRootAuthenticated(from)).toBe(true);
+    publisher.recover({ from, targetRootId: 'other-root', input: input(), reason: 'returned' });
+    await vi.waitFor(() => expect(tasks).toHaveLength(1));
+    const task = tasks[0]!;
+    // Registered the way the runtime registers every task: from the task's own metadata.
+    startTask(registry, {
+      taskEventId: task.id,
+      channelId: task.payload.channelId,
+      conversationId: task.payload.conversationId,
+      parentEventId: task.parentEventId,
+      metadata: task.payload.metadata as Record<string, unknown>,
+      senderId: task.payload.senderId,
+    });
+    const root = registry.rootOf(task.id)!;
+    expect(root.rootId).toBe(task.id);
+    expect(root.originatorAuthenticated).toBe(true);
+    // So it reads the other-turns note, but still cannot hand off: it has no stamped text.
+    expect(handingRootAuthenticated(root)).toBe(true);
+    expect(handingIneligibility(root, task.id)).toBe('no_request_text');
   });
 
   it('publishes one recovery per correction, however many triggers fire', async () => {
