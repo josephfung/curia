@@ -65,7 +65,9 @@ export class CalendarState {
       if (!isRecord(e) || e['id'] === undefined) continue;
       const id = String(e['id']);
       inFixture.add(id);
-      if (!this.seen.has(id)) this.seen.set(id, e);
+      // A later listing's fixture refreshes what was seen; its fields win, and ones it
+      // leaves out keep their earlier value. Recorded updates stay separate and win over both.
+      this.seen.set(id, { ...(this.seen.get(id) ?? {}), ...e });
     }
     // A listing entry that is not an event object (a test's placeholder) is left as it is.
     const listed = (data['events'] as unknown[])
