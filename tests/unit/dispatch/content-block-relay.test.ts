@@ -35,6 +35,16 @@ describe('content-block-relay', () => {
     expect(summary).not.toContain('sk-live-123');
   });
 
+  // #2615: with no tools, a rewrite told only "unresolved-identity" kept "Google Meet" three
+  // times running and the reply ended as a draft. It needs the word and the rephrase hint.
+  it('shows the identity gate\'s detail to the rewriting agent', () => {
+    const summary = summarizeBlockFindings([
+      { rule: 'unresolved-identity', detail: 'Unresolved identity: "Google Meet" is not resolved to a contact ID in this turn. If the word is a product, place, or title, rephrase the sentence.' },
+    ]);
+    expect(summary).toContain('"Google Meet"');
+    expect(summary).toContain('rephrase the sentence');
+  });
+
   it('treats content-filter findings as rewriteable', () => {
     expect(isContentFilterRewriteable([{ rule: 'llm-judge-audience-leak', detail: 'named internal agent' }])).toBe(true);
   });
