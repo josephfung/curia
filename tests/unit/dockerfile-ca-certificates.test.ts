@@ -9,8 +9,9 @@
 //
 // node:26-slim does not include ca-certificates, and `--no-install-recommends`
 // stops curl from pulling it in, so it has to be named. The build also asserts the
-// bundle exists, so a regression fails `docker build` (CI's Trivy job builds this
-// Dockerfile on every PR) instead of a production call.
+// bundle exists, so a regression fails `docker build` instead of a production call.
+// No CI job builds the image on a PR, though: the first build is after merge
+// (trivy-image on push to main, docker-publish). This test is the PR-time guard.
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
