@@ -61,7 +61,7 @@ tasks:
     handoff_path: /settings/email-calendar
     completion_check:
       type: principal_mailbox_ready
-    credential_how_to: "In Nylas, connect each Gmail account and copy its grant ID. In the console under Settings → Personality → Email & Calendar, add each mailbox (a short id, a label, the grant ID), use Test to confirm the address, and pick the default. Changes apply without a restart."
+    credential_how_to: "In Nylas, connect each Gmail account and copy its grant ID. In the console under Settings → Behaviour → Email & Calendar, add each mailbox (a short id, a label, the grant ID), use Test to confirm the address, and pick the default. Changes apply without a restart."
     docs_url: /get-started/principal-email-calendar
 
   - id: signal

@@ -40,8 +40,8 @@ describe('capturedFlatKeyRefusal', () => {
 
 // Both messages send the operator to the console page that manages the mailboxes (#2475, R79).
 describe('mailbox refusal messages', () => {
-  it.each([FLAT_KEYS_MANAGED_MESSAGE, PER_MAILBOX_GRANT_MANAGED_MESSAGE])('message %# names Settings → Personality → Email & Calendar', (message) => {
-    expect(message).toContain('Settings → Personality → Email & Calendar');
+  it.each([FLAT_KEYS_MANAGED_MESSAGE, PER_MAILBOX_GRANT_MANAGED_MESSAGE])('message %# names Settings → Behaviour → Email & Calendar', (message) => {
+    expect(message).toContain('Settings → Behaviour → Email & Calendar');
     expect(message).not.toContain('Channels → Email');
   });
 });
