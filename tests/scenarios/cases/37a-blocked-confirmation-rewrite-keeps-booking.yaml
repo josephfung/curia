@@ -8,14 +8,15 @@
 # Since #2615 a rewrite turn has no tools and is shown what its turn did. Whether a block fires
 # is the drafter's wording (any reply naming the video service may meet the identity gate), so
 # the checks are on what reaches the guest and on what the turns do, which hold either way,
-# as in case 35a.
+# as in case 35a. Nothing here names the principal: the suite runs on whatever principal the
+# database holds, and a name it does not know made the coordinator ask who that was.
 name: blocked confirmation rewrite keeps the booking
 description: >
-  Jordan Reyes, a known contact, emails Curia asking whether Avery is free for a 5-minute
-  call on Tuesday at 2 PM. The calendar specialist books it and sends Jordan the invite with
+  Jordan Reyes, a known contact, emails Curia asking for a 5-minute call with the
+  principal on Tuesday at 2 PM. The calendar specialist books it and sends Jordan the invite with
   a video link. Curia replies to Jordan. Every email that reaches Jordan agrees that the call
-  is booked and the invite sent; none says Curia will check with Avery first. Curia does not
-  ask Avery to approve a slot that is already booked.
+  is booked and the invite sent; none says Curia will check with the principal first. Curia does
+  not ask the principal to approve a slot that is already booked.
 tags: [content-block-rewrite, email, calendar]
 release_gate: true
 autonomy: { score: 85, gating: band }
@@ -31,12 +32,12 @@ seed:
 inbound:
   from: jordan
   content: |
-    Subject: Quick call with Avery
+    Subject: Quick call
 
     Hi Curia,
 
-    Is Avery free for a 5-minute call on {{day:next-monday+1}} at 2 PM? Any time after that
-    on the same day works too.
+    Could I get 5 minutes with your principal on {{day:next-monday+1}} at 2 PM? Any time
+    after that on the same day works too.
 
     Thanks,
     Jordan
@@ -52,7 +53,7 @@ tool_stubs:
         response: |
           Booked and invite sent.
 
-          - "Avery / Jordan Reyes - 5 min", {{time:next-monday+1 14:00}} to 14:05, on Avery's calendar
+          - "Call with Jordan Reyes - 5 min", {{time:next-monday+1 14:00}} to 14:05, on the principal's calendar
           - Guest: Jordan Reyes, invited by the calendar platform
           - Video: Google Meet link attached to the invite
         # What the delegate handler adds for a result with `sent` (#2055).
@@ -89,11 +90,11 @@ expected_behaviors:
     description: >
       Every email that reaches Jordan agrees with what the calendar specialist did: the call
       on Tuesday at 2 PM is booked and the invite sent. Fails when a message says Curia will
-      check with Avery, asks Jordan to wait for a confirmation, or offers the slot as if it
+      check with the principal, asks Jordan to wait for a confirmation, or offers the slot as if it
       were not yet booked.
   - id: no_approval_for_booked_slot
     weight: important
-    description: Curia does not open a task asking Avery to approve the slot that is already booked.
+    description: Curia does not open a task asking the principal to approve the slot that is already booked.
     check:
       not_called: [task-create]
       agent: coordinator
@@ -104,5 +105,5 @@ expected_behaviors:
       not_called: [contact-create]
       agent: coordinator
 failure_modes:
-  - Tells Jordan it will check with Avery after the invite went out
-  - Asks Avery to approve a slot the calendar specialist already booked
+  - Tells Jordan it will check with the principal after the invite went out
+  - Asks the principal to approve a slot the calendar specialist already booked
