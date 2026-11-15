@@ -191,7 +191,8 @@ describe('PrincipalSendLedger global lookups', () => {
     const ledger = new PrincipalSendLedger(docs, logger);
     await ledger.recordHeld({ ...entry, mode: 'autonomous', reasonCode: 'review_hold' });
     const doc = [...docs.docs.values()][0]!;
-    const { mailbox: _dropped, ...legacy } = doc.frontmatter;
+    const legacy = { ...doc.frontmatter };
+    delete legacy['mailbox'];
     docs.docs.set(doc.path, { ...doc, frontmatter: legacy });
     expect(await ledger.heldForDraft('d1', 'personal')).toBe(true);
   });
