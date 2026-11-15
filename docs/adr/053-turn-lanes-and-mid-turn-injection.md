@@ -3,6 +3,7 @@
 Date: 2026-10-24
 Status: Accepted
 Amended: 2026-10-26 — the shipped flag is on, resting on the passing case 26 run on the release-gate model and judge (#2018)
+Amended: 2026-11-14 — cross-conversation awareness (#2588)
 
 ## Context
 
@@ -54,3 +55,57 @@ Alternatives considered and rejected:
 - History keeps an injected row with the message it followed. The same-role collapse treats that pair as one group, so an injected row cannot erase the original.
 - Voice is unchanged. It does not publish `agent.task` and does not use the exit hook.
 - Turning the lane on without the injection path would make a live message wait behind a long synthetic turn. Injection is required whenever the lane is on.
+
+## Cross-conversation awareness (#2588)
+
+### Context
+
+Lanes serialise turns within one conversation. Nothing covered two conversations. On 2026-11-11 the principal forwarded an email to Curia asking it to book time with an external contact through a booking link and add the contact. About two minutes later, on Signal, they sent a heads-up that two scheduling items were on their way. A second coordinator turn read the heads-up as a request, found the forwarded email and started the same work. Neither turn could see the other. Turn lanes already knew a turn for the principal was running on another conversation, but nothing told the second turn.
+
+### Decision
+
+1. **Turn activity registry.** An in-process `TurnActivityRegistry` (`src/dispatch/turn-activity.ts`) records root turns and the risky actions they take. A root is the turn a person started, plus every delegated specialist, late-delegation wake and voice-session task that continues it. The runtime reports task starts and ends. A root is running while any task under it runs, so a detached specialist under late delivery (§9) keeps its root running. "Other turns" means roots that overlap mine, or that ended at most 15 minutes before mine started (`TURN_ACTIVITY_WINDOW_MS`, a constant). Roots and actions are capped, and a root still running after six hours is treated as ended. There is no new table and no new config key.
+
+2. **Pre-action backstop, every turn.** Just before a call at `action_risk` medium or above runs, `ExecutionLayer.invoke` reads the call's targets from its input (`src/dispatch/action-targets.ts`). No manifest declares them.
+   - Contacts: contact UUIDs, and email addresses that resolve to a contact.
+   - Sites: URL hosts.
+   - Only when there is neither a contact nor a site: other id-shaped values, and with none of those, the tool name.
+   - The principal's contact, Curia's own contact, the principal's addresses and Curia's mailboxes are never targets. A send to the principal alone is not checked.
+
+   The check and the record are one synchronous step, with no `await` between them, so of two near-simultaneous turns the first proceeds and the second is held. A held call does not run and is not recorded. Its result tells the model what the other turn did, and that it may call again unchanged if the call still applies. Each root is held at most once per (other root, target) pair. A human-approved replay is recorded but never held. Every error fails open: it is logged and the call proceeds.
+
+3. **Outcomes.** A recorded action is `pending` while its handler runs, then `succeeded`. A call that returns failure is removed: it did nothing to wait on. A timeout, or a thrown error that may have followed a side effect, leaves it `unknown`. A detailed hold line says which.
+
+4. **Disclosure.** The hold names whose turn it was, the tool, the target and the local time only when the held turn is the principal's, Curia's own work (no originator, or a `system` or `agent` role), or the same resolved contact's. Any other viewer gets one generic line, "another conversation already acted on this same target". Request text and message bodies never appear in a hold. Actions recorded by a root whose originator is unresolved never hold another root; its own calls are still checked.
+
+5. **Same-person note at turn start.** When the person who started a coordinator turn has other roots in the window, in other conversations, the runtime injects a note (`src/agents/prompts/other-turns-block.ts`). It lists each turn's channel, whether it is running, its times, what the person asked and the actions taken so far, with guidance for four moves: acknowledge a heads-up, ask about an apparent duplicate, hand over a correction, and simply do unrelated work. What the person asked is the sender's own text that the dispatcher stamps into trusted task metadata. It is JSON-quoted, labelled as data, and withheld when that inbound's injection-scan finding count is anything but a known zero. Both roots must carry the same resolved contact UUID. A stranger, an unresolved sender and a scheduled job get no note.
+
+6. **One-to-one audience guard.** A hand-off goes only into a conversation that is one-to-one with the same person (`src/dispatch/audience.ts`): a Signal chat that is not a group, a Slack DM, SMS, or an email thread that passes the private-audience rule `contact-recent-history` already uses. Any other conversation fails closed.
+
+7. **Hand-off.** The coordinator gets `turn-handoff` only when the note shows hand-off guidance. That requires lanes to be on and the handing turn to be eligible: the person's root inbound turn, with their full text (not clipped, no follow-up drained since) and a clean scan. The runtime pushes the tool definition into that turn's tool list and intercepts the call (`src/agents/turn-handoff.ts`). The tool is not pinned, so the coordinator's prompt and tool-definition budgets are unchanged. The model passes only the target turn's id. The text handed over is the stamped sender text, never the model's input. Delivery uses `TurnLanes.tryInjectIntoTask`, which is §2's injection with the host found by task id instead of by this conversation's lane, under the same checks. The receiving turn sees the message framed as handed over from the named channel. If the target has finished, is at its cap, is closing, or fails the audience guard, the tool tells the model to do the work itself.
+
+8. **Held corrections for detached specialists.** When only a detached specialist is still working under the target root, the correction is held in the registry (at most five per root) and drained at turn start into that root's late-delegation wake. A held input carries `liveTurn: false`, because a wake never carries the live-turn signal across an async boundary (#1126).
+
+9. **Holds are not tool errors.** A held result is `success: false`, so the model re-issues rather than assuming the work ran. A marker keeps it out of the runtime's `maxConsecutiveErrors` count. `ToolResult` is unchanged.
+
+10. **Voice gets the backstop only.** A call session is its own root, registered on its first risky tool call. Specialists delegated from a call and async-offramp tasks join that session's root. Voice gets no note and no hand-off.
+
+11. **Test scope isolation.** The registry takes an optional scope function. The smoke and scenario harnesses pass one scope per case attempt, so concurrent cases never hold each other. Production passes none.
+
+### Rejected options
+
+- **Per-action claims or locks before external side effects.** They need a claim key per kind of action: booking, email, SMS, purchase, queue item and more. That list never closes. The principal preferred model judgment to hard-coded permutations. Claims also do nothing for a heads-up or a correction.
+- **A principal-scoped lane.** It serialises unrelated requests, so latency falls on normal use. Intake cannot tell related from unrelated; only the model can, after reading the message. It also covers only the principal, not another person on two channels.
+- **Awareness at turn start only.** It misses turns that start within seconds of each other, and side effects that land after the other turn started. The pre-action backstop covers those.
+- **A new `tool.json` target field.** It adds public API surface. Custom and MCP tools would get no coverage until someone authored the field for each of them.
+- **A hand-maintained list of risky tools.** It goes stale. `action_risk` already ranks every tool.
+- **Audit-log queries as the source of truth.** They cannot give a synchronous first-wins check, and they cost N+1 reads per risky call. The registry keeps what the runtime and execution layer already see.
+
+### Consequences
+
+- A restart empties the registry. Turns that were running before it are invisible afterwards. This fails open, like the lane (§7).
+- Single-channel use waits for nothing new. The check is in memory. With no other root in the window, no note is injected and no call is held. Unrelated concurrent work touches different targets and is not held.
+- A correction held for a wake is lost if the process restarts first, or if no wake comes. Inbound replay does not cover it. Both cases are logged.
+- The scenario harness cannot run two turns at once. Scenarios cover the finished-turn path. The live hand-off into a running turn is covered by integration tests only.
+- The generic hold line still tells another person's turn that something acted on the same target recently. That one bit is accepted.
+- A pair that collides on a shared site or id when the work is unrelated costs one pause with a note, then the model carries on.
