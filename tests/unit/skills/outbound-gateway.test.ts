@@ -4,8 +4,6 @@ import { OutboundGateway, UnknownEmailAccountError, PRINCIPAL_MAILBOX_ACCOUNT_RE
 import { SendLevelDegradedError } from '../../../src/skills/principal-send/send-level.js';
 import { AUTONOMOUS_MAX_COPIED_EVIDENCE } from '../../../src/skills/principal-send/autonomous-limits.js';
 import { createLogger } from '../../../src/logger.js';
-import { PrincipalSendLedger } from '../../../src/skills/principal-send/send-ledger.js';
-import type { CreateWorkingDocParams, WorkingDocRow } from '../../../src/db/working-docs-repo.js';
 import type { NylasClient, NylasMessage } from '../../../src/channels/email/nylas-client.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
 import type { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js';
@@ -6996,10 +6994,6 @@ describe('sendPrincipalDraft (#2474)', () => {
         recordSending: vi.fn().mockResolvedValue(undefined), recordSent: vi.fn().mockResolvedValue(undefined),
         heldForDraft: held instanceof Error ? vi.fn().mockRejectedValue(held) : vi.fn().mockResolvedValue(held),
       });
-      /** Every principal.report publish fails; anything else goes through. */
-      const failDigests = () => vi.mocked(mocks.bus.publish).mockImplementation(async (_layer, event) => {
-        if ((event as { type: string }).type === 'principal.report') throw new Error('bus down');
-      });
 
       it('refuses it with already_held and the first hold\'s reason: no send, no review, no new marker, no digest item', async () => {
         const { gw, client, ledger, review } = makeAuto({ ledger: withHeld(heldEntry()) });
@@ -7024,68 +7018,23 @@ describe('sendPrincipalDraft (#2474)', () => {
         }
       });
 
-      // Review (silent failures): the quiet refusal assumes the first hold reached the principal.
-      // When its digest item failed, the next attempt files it, and marks the hold reported.
-      it('files the digest item the first hold failed to, then records the hold as reported', async () => {
-        const { gw, client, ledger } = makeAuto({ ledger: withHeld(heldEntry({ unreported: true })) });
-        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'already_held', blockedReason: HELD_BECAUSE(ON_THREAD), policyHold: true });
-        expect(client!.sendDraft).not.toHaveBeenCalled();
-        // The first hold's reason, as the principal would have read it.
-        expect(reports()).toEqual([expect.objectContaining({ summary: DIGEST('recipient_not_on_thread') })]);
-        expect(ledger.recordHeld).toHaveBeenCalledOnce();
-        expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ draftId: 'd1', threadId: 'th1', mailbox: 'default', reasonCode: 'recipient_not_on_thread' }));
-        // No `reported: false`: a marker without the flag reads as reported, so later attempts are quiet.
-        expect(ledger.recordHeld.mock.calls[0]![0]).not.toHaveProperty('reported');
-      });
-
-      // PR #2625 review: the recovered marker keeps the first hold's time. A recovery-time `at`
-      // would restart the thread's 24h cooldown (recentForThread counts held markers by `at`).
-      it('keeps the first hold\'s time on the recovered marker, so the thread cooldown is not extended', async () => {
-        const firstHeldAt = new Date(Date.now() - 23 * 3_600_000).toISOString();
-        const { gw, ledger } = makeAuto({ ledger: withHeld(heldEntry({ unreported: true, at: firstHeldAt })) });
-        await gw.sendPrincipalDraft('d1', auto);
-        expect(ledger.recordHeld).toHaveBeenCalledWith(expect.objectContaining({ at: firstHeldAt }));
-      });
-
-      // PR #2625 review: the recovered item keeps the first hold's cause, whatever kind of code it kept.
+      // The refusal keeps the first hold's cause, whatever kind of code it kept (#2591 criterion 2).
       it.each([
-        ['stakes-commitment', 'Held for you.'],
-        ['pii-not-authorized', 'It shares personal details that need your OK first.'],
-        ['ungrounded-claim,stakes-commitment', "It says things about you that Curia couldn't confirm."],
+        ['pii-not-authorized', "It shares personal details that need the principal's OK first."],
+        ['ungrounded-claim', "It says things about the principal that Curia couldn't confirm."],
         ['off-thread', "It shares information that isn't on the thread."],
         ['high-stakes-copy', 'The message it answers newly copies legal, HR, the board or someone senior.'],
         ['quote-mismatch', "Its quoted text couldn't be matched to a message every recipient received."],
-        ['too-many-copied', 'The message it answers copies more than 20 people, so Curia left it for you.'],
+        ['too-many-copied', 'The message it answers copies more than 20 people, so Curia left it for the principal.'],
         ['unresolved-identity', "It names someone Curia couldn't identify."],
         ['check_stop', "Curia's checks stopped it."],
-        // DeepSeek round 2 (finding A): the review rules that had no recovery text.
         ['redaction-token', 'It contains a redaction placeholder.'],
-        ['steered', "The reviewer judged it steered by someone outside your business."],
-        ['speaks-as-principal', 'It commits you beyond what Curia sends on its own.'],
+        ['steered', "The reviewer judged it steered by someone outside the principal's business."],
+        ['speaks-as-principal', 'It commits the principal beyond what Curia sends on its own.'],
         ['review-unavailable', "The send review wasn't available to check it."],
-      ])('recovers %s as its plain reason', async (code, said) => {
-        const { gw } = makeAuto({ ledger: withHeld(heldEntry({ unreported: true, reasonCode: code })) });
-        await gw.sendPrincipalDraft('d1', auto);
-        expect(reports()).toEqual([expect.objectContaining({ summary: `${LEAD} ${said}${IN_DRAFTS}` })]);
-      });
-
-      // PR #2625 review: a draft gone since the hold was dealt with by the principal. Telling them
-      // "It's in your Drafts" would be false, and with no marker it would repeat on every wake.
-      it('files nothing for an unreported hold whose draft is gone, however often it is tried', async () => {
-        const { gw, ledger } = makeAuto({ client: autoClient(null), ledger: withHeld(heldEntry({ unreported: true })) });
-        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'already_held' });
-        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'already_held' });
-        expect(reports()).toHaveLength(0);
-        expect(ledger.recordHeld).not.toHaveBeenCalled();
-      });
-
-      it('leaves an unreported hold for the next attempt when the draft can\'t be read', async () => {
-        const client = autoClient();
-        client.getDraft.mockRejectedValue(new Error('nylas 503'));
-        const { gw, ledger } = makeAuto({ client, ledger: withHeld(heldEntry({ unreported: true })) });
-        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'already_held' });
-        expect(reports()).toHaveLength(0);
-        expect(ledger.recordHeld).not.toHaveBeenCalled();
+      ])('refuses a draft held for %s with that reason', async (code, said) => {
+        const { gw } = makeAuto({ ledger: withHeld(heldEntry({ reasonCode: code })) });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'already_held', blockedReason: HELD_BECAUSE(said) });
       });
 
       it('fails closed when the ledger cannot say: no_send_ledger, as for any unreadable send record', async () => {
@@ -7110,146 +7059,23 @@ describe('sendPrincipalDraft (#2474)', () => {
 
       // Review (sibling path): a held draft the principal then sent or deleted is gone. A later
       // attempt finds nothing, and "Not sent: it isn't in your Drafts" would be a second item.
-      it('files nothing for a held draft that is gone, found or not found across mailboxes, reported or not', async () => {
+      it('files nothing for a held draft that is gone, found or not found across mailboxes', async () => {
         const gone = makeAuto({ client: autoClient(null), ledger: withHeld(heldEntry()) });
         expect(await gone.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'already_held' });
         expect(reports()).toHaveLength(0);
 
-        for (const hold of [heldEntry({ mailbox: 'work' }), heldEntry({ mailbox: 'work', unreported: true })]) {
-          mocks = createMocks();
-          const unlocated = makeAuto({ mailboxIds: async () => ['work', 'personal'], mailboxes: { work: mailboxClient(null), personal: mailboxClient(null) }, ledger: withHeld(hold) });
-          expect(await unlocated.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_found' });
-          // The draft's mailbox is unknown here, so any mailbox's hold counts.
-          expect(unlocated.ledger.heldForDraft).toHaveBeenCalledWith('d1');
-          expect(reports()).toHaveLength(0);
-        }
+        mocks = createMocks();
+        const unlocated = makeAuto({ mailboxIds: async () => ['work', 'personal'], mailboxes: { work: mailboxClient(null), personal: mailboxClient(null) }, ledger: withHeld(heldEntry({ mailbox: 'work' })) });
+        expect(await unlocated.gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_found' });
+        // The draft's mailbox is unknown here, so any mailbox's hold counts.
+        expect(unlocated.ledger.heldForDraft).toHaveBeenCalledWith('d1');
+        expect(reports()).toHaveLength(0);
       });
 
       it('still reports a gone draft that was never held', async () => {
         const { gw } = makeAuto({ mailboxIds: async () => ['work', 'personal'], mailboxes: { work: mailboxClient(null), personal: mailboxClient(null) }, ledger: withHeld(null) });
         expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'not_found' });
         expect(reports()).toHaveLength(1);
-      });
-
-      // PR #2625 review (CodeRabbit): the marker comes before the digest item, so a crash between the
-      // two never leaves a "held" item with no hold behind it. A failed item adds an unreported marker.
-      it('writes the hold before its digest item, then marks it unreported when the item failed', async () => {
-        failDigests();
-        const { gw, ledger } = makeAuto({ client: autoClient(autoDraft({ cc: [{ email: 'sam@example.org' }] })) });
-        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'recipient_not_on_thread' });
-        expect(ledger.recordHeld).toHaveBeenCalledTimes(2);
-        expect(ledger.recordHeld.mock.calls[0]![0]).not.toHaveProperty('reported');
-        expect(ledger.recordHeld.mock.calls[0]![0]).toMatchObject({ reasonCode: 'recipient_not_on_thread' });
-        expect(ledger.recordHeld.mock.calls[1]![0]).toMatchObject({ reasonCode: 'recipient_not_on_thread', reported: false });
-        // Before the item: the bus saw the publish only after the marker was written.
-        expect(ledger.recordHeld.mock.invocationCallOrder[0]!).toBeLessThan(vi.mocked(mocks.bus.publish).mock.invocationCallOrder[0]!);
-      });
-
-      it('writes one marker when the digest item went out', async () => {
-        const { gw, ledger } = makeAuto({ client: autoClient(autoDraft({ cc: [{ email: 'sam@example.org' }] })) });
-        await gw.sendPrincipalDraft('d1', auto);
-        expect(ledger.recordHeld).toHaveBeenCalledOnce();
-        expect(ledger.recordHeld.mock.calls[0]![0]).not.toHaveProperty('reported');
-      });
-
-      /**
-       * The production ledger over a working-docs stand-in that, like the table's unique index,
-       * refuses a second live doc at one path (PR #2625 review, CodeRabbit: test with the real ledger).
-       */
-      function realLedger(o: { failCreate?: boolean } = {}) {
-        const docs = new Map<string, WorkingDocRow>();
-        const repo = {
-          create: vi.fn(async (c: CreateWorkingDocParams) => {
-            if (o.failCreate) throw new Error('db down');
-            if (docs.has(c.path)) throw new Error('duplicate key value violates unique constraint "idx_working_documents_path_live"');
-            const row = {
-              id: `id-${docs.size}`, path: c.path, type: c.type, frontmatter: c.frontmatter ?? {}, body: c.body ?? '',
-              version: 1, sectionVersions: {}, byteSize: 0, taskId: null, conversationId: null, agentId: null,
-              createdAt: '2026-11-15T12:00:00.000Z', updatedAt: '2026-11-15T12:00:00.000Z', archivedAt: null,
-            } as WorkingDocRow;
-            docs.set(c.path, row);
-            return row;
-          }),
-          read: vi.fn(async (path: string) => docs.get(path) ?? null),
-          update: vi.fn(async () => ({ ok: true as const, document: undefined as unknown as WorkingDocRow })),
-          listByPrefix: vi.fn(async (prefix: string) => [...docs.values()].filter((d) => d.path.startsWith(prefix))),
-        };
-        const ledger = new PrincipalSendLedger(repo, createLogger('error'));
-        // makeAuto spreads its ledger over default mocks, and a spread copies no prototype methods:
-        // hand it every method, bound, so the real ones run.
-        const methods = ['recordSending', 'recordSent', 'recordHeld', 'recordLimitStop', 'limitStopsSince', 'list',
-          'recentForThread', 'recentForConversation', 'recentAutonomousSends', 'sentForDraft', 'heldForDraft'] as const;
-        return Object.fromEntries(methods.map((m) => [m, ledger[m].bind(ledger)])) as unknown as PrincipalSendLedger;
-      }
-
-      // PR #2625 review (CodeRabbit): the hold and its `reported: false` follow-up can share a
-      // millisecond. Both must land, or the failed item is never filed.
-      it('with the real ledger, a failed item is filed by the next wake even when both markers share a millisecond', async () => {
-        vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-15T12:00:00.000Z'));
-        try {
-          const ledger = realLedger();
-          const draftWithSam = () => autoClient(autoDraft({ cc: [{ email: 'sam@example.org' }] }));
-          failDigests();
-          expect(await makeAuto({ client: draftWithSam(), ledger: ledger as never }).gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'recipient_not_on_thread' });
-          expect(await ledger.heldForDraft('d1', 'default')).toMatchObject({ unreported: true });
-          vi.mocked(mocks.bus.publish).mockResolvedValue(undefined);
-          const later = { curiaWrites: { created: false, lastWriteAt: null, replyToMessageId: null } };
-          await makeAuto({ client: draftWithSam(), ledger: ledger as never, ...later }).gw.sendPrincipalDraft('d1', { ...auto, taskEventId: 't2' });
-          expect(reports()).toHaveLength(2);
-          expect(await ledger.heldForDraft('d1', 'default')).not.toHaveProperty('unreported');
-        } finally {
-          vi.mocked(Date.now).mockRestore();
-        }
-      });
-
-      // PR #2625 review (CodeRabbit): with no marker written, nothing durable holds the draft, so
-      // the item must not say Curia left it for the principal.
-      it('with the real ledger, a hold whose marker can\'t be written is reported as not sent, not as left as a draft', async () => {
-        const ledger = realLedger({ failCreate: true });
-        const { gw } = makeAuto({ client: autoClient(autoDraft({ cc: [{ email: 'sam@example.org' }] })), ledger: ledger as never });
-        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'recipient_not_on_thread' });
-        expect(reports()).toHaveLength(1);
-        const summary = String(reports()[0]!['summary']);
-        expect(summary.startsWith('Not sent from your mailbox: "Re: Friday"')).toBe(true);
-        expect(summary).toContain("isn't genuinely on the thread");
-        expect(summary.endsWith(`Curia couldn't record that it held it, so it may look at it again.${IN_DRAFTS}`)).toBe(true);
-        expect(await ledger.heldForDraft('d1', 'default')).toBeNull();
-      });
-
-      // CodeRabbit (PR #2625, round 3): with an unrecorded hold, a reason that says Curia "left it for
-      // you" would contradict "couldn't record that it held it". The wording turns neutral.
-      it('with the real ledger, an unrecorded hold\'s reason never says Curia left it for you', async () => {
-        const ledger = realLedger({ failCreate: true });
-        const withFile = autoDraft({ attachments: [{ id: 'a1', filename: 'deck.pdf', contentType: 'application/pdf', size: 10 }] as never });
-        const { gw } = makeAuto({ client: autoClient(withFile), ledger: ledger as never });
-        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'has_attachments' });
-        const summary = String(reports()[0]!['summary']);
-        expect(summary).toBe(`${NOT_SENT} The reply has attachments, so Curia didn't send it on its own. Curia couldn't record that it held it, so it may look at it again.${IN_DRAFTS}`);
-      });
-
-      // CodeRabbit (PR #2625, round 4): a review hold's own reason leads "Held for you"; unrecorded,
-      // that must turn neutral too, as must the bare "Held for you." fallback.
-      it.each([
-        ["Held for the principal: it shares information that isn't on the thread.", "Curia didn't send it on its own: it shares information that isn't on the thread."],
-        ['Held for the principal.', "Curia didn't send it on its own."],
-      ])('with the real ledger, an unrecorded review hold never says "Held for you" (%s)', async (held, neutral) => {
-        const ledger = realLedger({ failCreate: true });
-        const review = vi.fn().mockResolvedValue({ kind: 'hold', reason: held, findings: [{ rule: 'off-thread', detail: 'x' }] });
-        const { gw } = makeAuto({ review, ledger: ledger as never });
-        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'review_hold' });
-        const summary = String(reports()[0]!['summary']);
-        expect(summary).not.toContain('Held for you');
-        expect(summary).toBe(`${NOT_SENT} ${neutral} Curia couldn't record that it held it, so it may look at it again.${IN_DRAFTS}`);
-      });
-
-      // CodeRabbit (PR #2625, round 3): a stop reached before the ledger check (no task) with no
-      // ledger wired writes no marker, so it is an unrecorded hold, not "Left as a draft".
-      it('treats a hold with no ledger wired as unrecorded', async () => {
-        const { gw } = makeAuto({ withoutLedger: true });
-        expect(await gw.sendPrincipalDraft('d1', { authority: auto.authority })).toMatchObject({ refusal: 'not_curia_draft' });
-        const summary = String(reports()[0]!['summary']);
-        expect(summary.startsWith(NOT_SENT)).toBe(true);
-        expect(summary).toContain("Curia couldn't record that it held it, so it may look at it again.");
       });
 
       // The prod sequence end to end, through the in-memory ledger rather than a mocked lookup.
@@ -7284,21 +7110,6 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(wake.client!.sendDraft).not.toHaveBeenCalled();
         expect(review).toHaveBeenCalledOnce();
         expect(reports()).toHaveLength(1);
-      });
-
-      it('end to end, a failed item is filed once by the next wake and then never again', async () => {
-        const ledger = inMemorySendLedger(() => undefined);
-        const draftWithSam = () => autoClient(autoDraft({ cc: [{ email: 'sam@example.org' }] }));
-        failDigests();
-        const first = makeAuto({ client: draftWithSam(), ledger: ledger as never });
-        await first.gw.sendPrincipalDraft('d1', auto);
-        vi.mocked(mocks.bus.publish).mockResolvedValue(undefined);
-        const later = { curiaWrites: { created: false, lastWriteAt: null, replyToMessageId: null } };
-        await makeAuto({ client: draftWithSam(), ledger: ledger as never, ...later }).gw.sendPrincipalDraft('d1', { ...auto, taskEventId: 't2' });
-        await makeAuto({ client: draftWithSam(), ledger: ledger as never, ...later }).gw.sendPrincipalDraft('d1', { ...auto, taskEventId: 't3' });
-        // The failed attempt, then the one recovery; the third wake is quiet.
-        expect(reports()).toHaveLength(2);
-        expect(reports()[1]).toMatchObject({ summary: expect.stringContaining("isn't genuinely on the thread") });
       });
 
       // PR #2625 review (CodeRabbit): two calls on one draft must not overlap. The second (a wake

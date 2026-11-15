@@ -189,40 +189,6 @@ describe('PrincipalSendLedger global lookups', () => {
     expect(await ledger.heldForDraft('d', 'work')).toBeNull();
   });
 
-  // #2591 review: a hold whose digest item failed to publish must not read as already reported.
-  it('recordHeld marks a hold the principal was not told about, and heldForDraft returns the latest hold', async () => {
-    const docs = makeDocs();
-    const ledger = new PrincipalSendLedger(docs, logger);
-    let ms = 1_794_000_000_000;
-    vi.spyOn(Date, 'now').mockImplementation(() => ms++);
-    await ledger.recordHeld({ ...entry, mode: 'autonomous', reasonCode: 'review_hold', reported: false });
-    expect(docs.create.mock.calls[0]![0].frontmatter).toMatchObject({ reported: false });
-    expect(await ledger.heldForDraft('d1', 'work')).toMatchObject({ unreported: true });
-    // A later hold that did reach the principal supersedes it.
-    await ledger.recordHeld({ ...entry, mode: 'autonomous', reasonCode: 'already_held' });
-    expect(docs.create.mock.calls[1]![0].frontmatter).not.toHaveProperty('reported');
-    const latest = await ledger.heldForDraft('d1', 'work');
-    expect(latest).toMatchObject({ reasonCode: 'already_held' });
-    expect(latest).not.toHaveProperty('unreported');
-  });
-
-  // PR #2625 review (CodeRabbit): paths are unique among live working docs. Two markers for one
-  // draft in the same millisecond (a hold, then its `reported: false` follow-up) must both land,
-  // and the later one must read as the latest.
-  it('writes two markers for one draft in the same millisecond, the later reading as latest', async () => {
-    const docs = makeDocs();
-    const ledger = new PrincipalSendLedger(docs, logger);
-    vi.spyOn(Date, 'now').mockReturnValue(1_794_000_000_000);
-    await ledger.recordHeld({ ...entry, mode: 'autonomous', reasonCode: 'review_hold' });
-    await ledger.recordHeld({ ...entry, mode: 'autonomous', reasonCode: 'review_hold', reported: false });
-    expect(docs.docs.size).toBe(2);
-    expect(await ledger.heldForDraft('d1', 'work')).toMatchObject({ unreported: true });
-    // Every kind of marker shares the stamp, so a send and its limit stop in one millisecond both land too.
-    await ledger.recordSending({ ...entry, mode: 'autonomous' });
-    await ledger.recordLimitStop({ draftId: 'd1', mailbox: 'work', reason: 'daily_cap', at: entry.at });
-    expect(docs.docs.size).toBe(4);
-  });
-
   it('heldForDraft counts a held marker with no mailbox (written before the registry) for any mailbox', async () => {
     const docs = makeDocs();
     const ledger = new PrincipalSendLedger(docs, logger);

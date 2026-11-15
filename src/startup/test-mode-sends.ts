@@ -586,11 +586,7 @@ export function inMemorySendLedger(runStore: () => PrincipalSendEntry[] | undefi
       const latest = [...entries()].reverse().find(e => e.draftId === draftId && e.outcome === 'sending');
       if (latest) Object.assign(latest, { outcome: 'sent', messageId });
     },
-    // As production's parseLedgerDoc (#2591): an explicit `reported: false` reads back as `unreported`.
-    recordHeld: async (e) => {
-      const { reported, ...rest } = e;
-      entries().push({ ...rest, outcome: 'held', ...(reported === false ? { unreported: true as const } : {}) });
-    },
+    recordHeld: async (e) => { entries().push({ ...e, outcome: 'held' }); },
     // As production counts (#2474 final fixes A13): an unreadable `at` is recent (fail closed).
     list: async () => [...entries()],
     recordLimitStop: async (e) => { entries().push({ draftId: e.draftId, threadId: '', mailbox: e.mailbox, conversationIds: [], recipients: [], mode: 'autonomous', at: e.at, outcome: 'limited', reasonCode: e.reason }); },
