@@ -93,6 +93,51 @@ describe('PrincipalMailboxesSection', () => {
     expect(container.querySelectorAll('.badge-default')).toHaveLength(1);
   });
 
+  // #2600: rows have their own class (no status-pill dot or text-transform).
+  it('renders mailbox rows without the status-pill class', async () => {
+    await mount();
+    expect(container.querySelectorAll('.mailbox-row')).toHaveLength(2);
+    expect(container.querySelector('.status-pill')).toBeNull();
+  });
+
+  // #2600: the id is chosen by the user, has a format, and is permanent.
+  it('explains the mailbox id under the field', async () => {
+    await mount();
+    const help = container.querySelector('#mailbox-id-help')!;
+    expect(help.textContent).toContain('A short name you choose');
+    expect(help.textContent).toContain('Lowercase letters, numbers and hyphens');
+    expect(help.textContent).toContain("can't be changed later");
+    expect(byLabel('Mailbox id').getAttribute('aria-describedby')).toBe('mailbox-id-help');
+  });
+
+  it.each([
+    ['Work', 'Start with a lowercase letter.'],
+    ['work_1', 'Use only lowercase letters, numbers and hyphens.'],
+    ['primary', '"primary" is reserved. Choose another name.'],
+    ['default', '"default" is reserved. Choose another name.'],
+    ['a'.repeat(33), 'Use at most 32 characters.'],
+  ])('says why the id %s is refused', async (value, message) => {
+    await mount();
+    await type('Mailbox id', value);
+    const error = container.querySelector('#mailbox-id-error');
+    expect(error?.textContent).toBe(message);
+    expect(byLabel('Mailbox id').getAttribute('aria-invalid')).toBe('true');
+  });
+
+  it('shows no id error while the field is empty or valid', async () => {
+    await mount();
+    expect(container.querySelector('#mailbox-id-error')).toBeNull();
+    await type('Mailbox id', 'side-gig2');
+    expect(container.querySelector('#mailbox-id-error')).toBeNull();
+  });
+
+  it('uses a full-size primary Add mailbox button that does not stretch', async () => {
+    await mount();
+    const add = [...container.querySelectorAll('button')].find(b => b.textContent === 'Add mailbox')!;
+    expect(add.className).toBe('btn btn-primary');
+    expect(add.style.alignSelf).toBe('flex-start');
+  });
+
   it("shows the grant's address after Test", async () => {
     await mount();
     await type('Grant ID', 'g-123');

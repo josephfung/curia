@@ -938,6 +938,22 @@ a.dash-num-link:focus-visible, .dash-num-link:has(.dash-num-open:focus-visible) 
   max-width: 600px;
 }
 
+/* One principal mailbox in Settings → Behaviour → Email & Calendar (#2600).
+   Same muted background as .status-pill but without its status dot or
+   text-transform: addresses and labels must show exactly as stored. Wraps on
+   narrow screens, so a smaller radius than the pill's 999px. */
+.mailbox-row {
+  display: flex; flex-wrap: wrap;
+  justify-content: space-between; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  background: var(--app-muted);
+  color: var(--app-fg);
+  overflow-wrap: anywhere;
+}
+.mailbox-id-help { font-size: 12px; margin: 0; }
+
 .settings-section {
   max-width: 720px;
   margin-bottom: 28px;
