@@ -55,6 +55,11 @@ inbound:
     they're presenting. Priya's slides are running late, they need to be in by
     {{day:next-monday+2}}.
 tool_stubs:
+  # Avery asked Curia to send this on a live turn, so production lets ceo-inbox send a draft
+  # from Avery's mailbox (finesse-office refuses one nobody asked for).
+  ceo-inbox-send-draft:
+    - match: {}
+      return: { message_id: scenario-sent-draft-1, to: [], subject: (sent) }
   # Curia's notes: Paula handles Catherine's calendar; Catherine reads her own email.
   memory-query:
     - match: {}

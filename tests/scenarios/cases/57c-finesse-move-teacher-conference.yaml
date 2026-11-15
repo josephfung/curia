@@ -36,7 +36,7 @@ tool_stubs:
         displayTimezone: "{{timezone}}"
         count: 1
         events:
-          - { id: evt-57c-ptc, title: Parent-teacher conference (Ms. Alvarez), location: Maplewood School, startTime: "{{time:next-tuesday 16:00}}", endTime: "{{time:next-tuesday 16:20}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: m.alvarez@maplewood-school.example.test }] }
+          - { id: evt-57c-ptc, title: Parent-teacher conference (Ms. Alvarez), location: Maplewood School, startTime: "{{time:next-tuesday 16:00}}", endTime: "{{time:next-tuesday 16:20}}", status: confirmed, busy: true, calendarId: cal-principal-work, organizerEmail: m.alvarez@maplewood-school.example.test, participants: [{ email: m.alvarez@maplewood-school.example.test }] }
   calendar-find-free-time:
     - agent: calendar
       match: {}

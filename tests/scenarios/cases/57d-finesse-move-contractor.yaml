@@ -35,7 +35,7 @@ tool_stubs:
         displayTimezone: "{{timezone}}"
         count: 1
         events:
-          - { id: evt-57d-walkthrough, title: Kitchen walk-through with Sam, location: Home, startTime: "{{time:next-thursday 08:00}}", endTime: "{{time:next-thursday 08:45}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: sam.kowalski@kowalski-reno.example.test }] }
+          - { id: evt-57d-walkthrough, title: Kitchen walk-through with Sam, location: Home, startTime: "{{time:next-thursday 08:00}}", endTime: "{{time:next-thursday 08:45}}", status: confirmed, busy: true, calendarId: cal-principal-work, organizerEmail: sam.kowalski@kowalski-reno.example.test, participants: [{ email: sam.kowalski@kowalski-reno.example.test }] }
   calendar-find-free-time:
     - agent: calendar
       match: {}
