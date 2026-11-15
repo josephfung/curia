@@ -23,6 +23,8 @@ export class CalendarState {
   private created: Json[] = [];
   private updates = new Map<string, Json>();
   private deleted = new Set<string>();
+  /** Fixture events a listing has returned, by id, as the stub gave them (#2588). */
+  private seen = new Map<string, Json>();
 
   /**
    * Record a stubbed write; returns the result to hand back (a created event gets its id).
@@ -49,13 +51,22 @@ export class CalendarState {
   /**
    * A listing as it stands after this case's writes, recounted. An event a write touched
    * (created, or updated) shows only if it matches the call's window, query and attendee
-   * (`eventMatchesListing`), so a listing for another day does not pick it up (#2588). The
-   * stub's own events are left as the case wrote them: smoke filters them afterwards, and a
-   * scenario's fixture is what the case means that listing to return.
+   * (`eventMatchesListing`), so a listing for another day does not pick it up (#2588). A
+   * fixture event an earlier listing returned and an update then moved shows in any later
+   * listing it now matches, even one whose fixture leaves it out. The stub's untouched events
+   * are left as the case wrote them: smoke filters them afterwards, and a scenario's fixture
+   * is what the case means that listing to return.
    */
   replayOnto(data: Json, input: Json = {}): Json {
     if (!Array.isArray(data['events'])) return data;
     let changed = false;
+    const inFixture = new Set<string>();
+    for (const e of data['events'] as unknown[]) {
+      if (!isRecord(e) || e['id'] === undefined) continue;
+      const id = String(e['id']);
+      inFixture.add(id);
+      if (!this.seen.has(id)) this.seen.set(id, e);
+    }
     // A listing entry that is not an event object (a test's placeholder) is left as it is.
     const listed = (data['events'] as unknown[])
       .filter(e => {
@@ -72,12 +83,17 @@ export class CalendarState {
         return eventMatchesListing(moved, input) ? moved : null;
       })
       .filter(e => e !== null);
+    // Seen fixture events an update moved, which this listing's fixture leaves out.
+    const movedIn = [...this.updates.entries()]
+      .filter(([id]) => !inFixture.has(id) && !this.deleted.has(id) && this.seen.has(id))
+      .map(([id, update]) => ({ ...this.seen.get(id)!, ...update }))
+      .filter(e => eventMatchesListing(e, input));
     const created = this.created
       .filter(e => !this.deleted.has(String(e['id'])))
       .map(e => ({ ...e, ...(this.updates.get(String(e['id'])) ?? {}) }))
       .filter(e => eventMatchesListing(e, input));
-    if (created.length > 0) changed = true;
-    const events = [...listed, ...created];
+    if (movedIn.length > 0 || created.length > 0) changed = true;
+    const events = [...listed, ...movedIn, ...created];
     // Recount when the stub gave a count or the replay changed the list; a stub without
     // one and untouched by writes keeps the shape the case wrote.
     return changed || 'count' in data ? { ...data, events, count: events.length } : { ...data, events };
@@ -90,12 +106,14 @@ export class CalendarState {
  * participants) plus the calendar. A field the call leaves out is absent, not cleared.
  */
 function eventFieldsOf(input: Json): Json {
+  // The free-text fields keep an explicit '' (calendar-update-event forwards it, clearing
+  // the field), so a cleared value stops matching a search; an omitted one stays absent.
   return {
-    ...(str(input['title']) !== undefined ? { title: input['title'] } : {}),
+    ...(typeof input['title'] === 'string' ? { title: input['title'] } : {}),
     ...(str(input['start']) !== undefined ? { startTime: input['start'] } : {}),
     ...(str(input['end']) !== undefined ? { endTime: input['end'] } : {}),
-    ...(str(input['description']) !== undefined ? { description: input['description'] } : {}),
-    ...(str(input['location']) !== undefined ? { location: input['location'] } : {}),
+    ...(typeof input['description'] === 'string' ? { description: input['description'] } : {}),
+    ...(typeof input['location'] === 'string' ? { location: input['location'] } : {}),
     ...(str(input['calendarId']) !== undefined ? { calendarId: input['calendarId'] } : {}),
     ...(Array.isArray(input['attendees']) ? { participants: input['attendees'] } : {}),
   };
