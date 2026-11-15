@@ -24,6 +24,13 @@ import { historyForLlm, llmFailurePairing, llmFailureTurnContent, LLM_FAILURE_US
 import { renderBudgetExhaustedVerificationReply } from './prompts/verification-block.js';
 import { buildOtherTurnViews, renderOtherTurnsBlock } from './prompts/other-turns-block.js';
 import {
+  TURN_HANDOFF_TOOL_NAME,
+  handoffOutcomeText,
+  parseHandoffRequest,
+  performHandoff,
+  type HandoffOutcome,
+} from './turn-handoff.js';
+import {
   CONTACT_RECENT_HISTORY_TIER,
   contactRecentHistoryApplies,
   contactRecentHistoryAudienceIsPrivate,
@@ -532,22 +539,66 @@ export class AgentRuntime {
    * The note of the same person's other turns (#2588): the coordinator's own turns only, not
    * a delegated specialist's. A late-delegation wake continues its root, so it sees that
    * root's others. Fail-open: an error is logged and the block omitted.
+   *
+   * `handoffAvailable` is true exactly when the block carries the `turn-handoff` guidance line
+   * (some listed turn can take a hand-off), from the same views; the runtime then offers the tool.
    */
-  private otherTurnsBlock(taskEvent: AgentTaskEvent): string {
+  private otherTurnsBlock(taskEvent: AgentTaskEvent): { text: string; handoffAvailable: boolean } {
+    const none = { text: '', handoffAvailable: false };
     const registry = this.config.turnActivity;
-    if (!registry || this.config.agentId !== 'coordinator') return '';
-    if (isDelegatedSpecialistTask(taskEvent.payload.metadata as Record<string, unknown> | undefined)) return '';
+    if (!registry || this.config.agentId !== 'coordinator') return none;
+    if (isDelegatedSpecialistTask(taskEvent.payload.metadata as Record<string, unknown> | undefined)) return none;
     try {
       const mine = registry.rootOf(taskEvent.id);
-      if (!mine) return '';
+      if (!mine) return none;
       const views = buildOtherTurnViews(registry, mine.rootId);
-      return renderOtherTurnsBlock(views, { timezone: this.config.timezone?.trim() || 'UTC' });
+      const text = renderOtherTurnsBlock(views, { timezone: this.config.timezone?.trim() || 'UTC' });
+      return { text, handoffAvailable: text !== '' && views.some((v) => v.handoff !== 'not_available') };
     } catch (err) {
       this.config.logger.error(
         { err, taskEventId: taskEvent.id },
         "Failed to build the person's other turns block — omitted this turn",
       );
-      return '';
+      return none;
+    }
+  }
+
+  /**
+   * A late-delegation wake drains the hand-off corrections held for its root (#2588): each is
+   * queued into this task's lane, and the turn-start drain delivers it. Runs after the lane
+   * acquire and the registry start. A correction this task cannot take is lost, logged at error.
+   */
+  private injectHeldCorrections(taskEvent: AgentTaskEvent): void {
+    const registry = this.config.turnActivity;
+    const lanes = this.config.turnLanes;
+    if (!registry || !lanes?.enabled) return;
+    if (taskEvent.payload.metadata?.lateDelegation === undefined) return;
+    try {
+      const root = registry.rootOf(taskEvent.id);
+      if (!root) return;
+      for (const input of registry.takeHeldForWake(root.rootId)) {
+        const result = lanes.tryInjectIntoTask(taskEvent.id, input);
+        if (result.kind === 'queued') {
+          const ids = { taskEventId: taskEvent.id, rootId: root.rootId, inboundEventId: input.inboundEventId };
+          this.config.logger.info(ids, 'Queued a held hand-off correction into its wake');
+          // The ticket only resolves. A wake that ends before draining hands it back: lost.
+          void result.ticket.then((ticket) => {
+            if (ticket.kind === 'returned') {
+              this.config.logger.error(ids, 'A held hand-off correction was not drained by its wake — the correction is lost');
+            }
+          });
+          continue;
+        }
+        this.config.logger.error(
+          { taskEventId: taskEvent.id, rootId: root.rootId, inboundEventId: input.inboundEventId, reason: result.reason },
+          'A held hand-off correction could not join its wake — the correction is lost',
+        );
+      }
+    } catch (err) {
+      this.config.logger.error(
+        { err, taskEventId: taskEvent.id },
+        'Failed to deliver held hand-off corrections to a wake — they are lost',
+      );
     }
   }
 
@@ -571,6 +622,7 @@ export class AgentRuntime {
    */
   private async handleTask(taskEvent: AgentTaskEvent): Promise<void> {
     this.recordTaskStarted(taskEvent);
+    this.injectHeldCorrections(taskEvent);
     try {
       await this.processTask(taskEvent);
     } catch (err) {
@@ -821,7 +873,7 @@ export class AgentRuntime {
     // turn so identity / autonomy / principal-identity changes apply without restart.
     let effectiveSystemPrompt = await buildBaseSystemPrompt(this.config, { now: new Date(), logger });
     const otherTurns = this.otherTurnsBlock(taskEvent);
-    if (otherTurns) effectiveSystemPrompt += `\n\n${otherTurns}`;
+    if (otherTurns.text) effectiveSystemPrompt += `\n\n${otherTurns.text}`;
 
     // Initialize the error budget for this task.
     // Config values override defaults; budget tracks runtime counters.
@@ -973,6 +1025,23 @@ export class AgentRuntime {
         const checkpointDefs = executionLayer.getToolDefinitions([CHECKPOINT_SKILL_NAME]);
         if (checkpointDefs.length > 0) {
           workingToolDefs.push(...checkpointDefs);
+        }
+      }
+    }
+
+    // turn-handoff (#2588): offered exactly when the other-turns note above shows its guidance
+    // line, never always-on and never pinned. A per-turn allowlist (below) wins, so it is not
+    // added then.
+    const hasToolAllowlist = Array.isArray(taskEvent.payload.toolAllowlist)
+      && taskEvent.payload.toolAllowlist.some((name) => typeof name === 'string' && name.length > 0);
+    if (otherTurns.handoffAvailable && !hasToolAllowlist && executionLayer) {
+      if (!workingToolDefs) workingToolDefs = [];
+      if (!workingToolDefs.some((t) => t.name === TURN_HANDOFF_TOOL_NAME)) {
+        const handoffDefs = executionLayer.getToolDefinitions([TURN_HANDOFF_TOOL_NAME]);
+        if (handoffDefs.length > 0) {
+          workingToolDefs.push(...handoffDefs);
+        } else {
+          logger.warn({ agentId }, 'turn-handoff is not registered — a hand-off is available but the tool cannot be offered');
         }
       }
     }
@@ -2676,6 +2745,40 @@ export class AgentRuntime {
               } catch (err) {
                 logger.warn({ err, agentId }, 'Failed to apply skill-activate result to working tool list');
               }
+            }
+
+            // Cross-conversation hand-off (#2588): the tool only marks the request. The runtime
+            // passes the person's message to their other turn (or holds it for that turn's
+            // wake), and the model sees only what to tell them. Fail-open: anything that goes
+            // wrong tells the model to do the work itself.
+            if (toolCall.name === TURN_HANDOFF_TOOL_NAME) {
+              let outcome: HandoffOutcome = { kind: 'do_it_yourself', reason: 'ineligible' };
+              try {
+                const data = typeof result.data === 'string'
+                  ? JSON.parse(result.data) as unknown
+                  : result.data;
+                const request = parseHandoffRequest(data);
+                const registry = this.config.turnActivity;
+                const turnLanes = this.config.turnLanes;
+                if (!request) {
+                  logger.warn({ agentId }, 'turn-handoff result carried no hand-off request — the turn does the work itself');
+                } else if (!registry || !turnLanes) {
+                  logger.warn({ agentId }, 'turn-handoff called without a turn registry or lanes — the turn does the work itself');
+                } else {
+                  outcome = await performHandoff({
+                    registry,
+                    lanes: turnLanes,
+                    logger,
+                    fromTaskEventId: taskEvent.id,
+                    targetRootId: request.turnId,
+                    ...(senderCtx?.resolved && senderCtx.displayName.length > 0 && { senderLabel: senderCtx.displayName }),
+                  });
+                }
+              } catch (err) {
+                logger.error({ err, agentId, taskEventId: taskEvent.id }, 'turn-handoff interception failed — the turn does the work itself');
+              }
+              logger.info({ agentId, taskEventId: taskEvent.id, outcome }, 'turn-handoff outcome');
+              toolResultOverride = handoffOutcomeText(outcome);
             }
 
             // Clarification protocol detection: when request-clarification returns
