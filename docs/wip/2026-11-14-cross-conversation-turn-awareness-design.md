@@ -12,7 +12,7 @@ awareness (#2588)" section describes the built behaviour.
 **Narrows a decision made with the principal (decision 2, §3).** A held call shows the
 other turn's tool, target and time only when the turn whose call is held is the principal's, Curia's own
 work, or the same resolved contact's. Any other person's turn gets one generic line
-("another conversation already acted on this same target"), not tool, target and time. This
+("Another turn already acted on this same target recently."), not tool, target and time. This
 came from the security review: detail let a stranger learn, and steer, the principal's
 activity. Revert to detailed lines if the principal prefers them.
 
@@ -44,7 +44,10 @@ From rulings during the build:
   `agent` role, is Curia's own work. A malformed originator is an unresolved person.
   Voice-session delegations and async-offramp tasks join the call's root.
 - **A human-approved replay is recorded, never held.**
-- **Holds don't count toward `maxConsecutiveErrors`** (a marker, no `ToolResult` change).
+- **Holds don't count toward `maxConsecutiveErrors` or `failedSkills`** (a marker, no
+  `ToolResult` change).
+- **An ended root in the caller's own conversation does not hold it**; one still running
+  there does (plan deviation 5).
 - **Caps:** 200 actions per root, global caps on roots and actions; a root running past six
   hours is treated as ended.
 - **Scope hook for the suites:** smoke and scenario runs pass one registry scope per attempt.
