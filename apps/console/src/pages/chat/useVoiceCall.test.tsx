@@ -3,10 +3,12 @@ import { act, type ReactElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { USER_MUTE_VALUE } from './mic-pause.js';
-import { useVoiceCall } from './useVoiceCall.js';
+import { AGENT_JOIN_FAILED_MESSAGE, AGENT_JOIN_TIMEOUT_MS, useVoiceCall } from './useVoiceCall.js';
 
-const { apiFetch, mic } = vi.hoisted(() => ({
+const { apiFetch, mic, agent } = vi.hoisted(() => ({
   apiFetch: vi.fn(),
+  // Whether Curia's side is in the room by the time the join timeout fires.
+  agent: { joins: false },
   mic: {
     order: [] as string[],
     on: true,
@@ -44,7 +46,9 @@ vi.mock('livekit-client', () => {
     on(): this {
       return this;
     }
-    async connect(): Promise<void> {}
+    async connect(): Promise<void> {
+      if (agent.joins) this.remoteParticipants.set('curia-agent', { audioTrackPublications: new Map() });
+    }
     removeAllListeners(): void {}
     disconnect(): void {}
   }
@@ -120,6 +124,7 @@ async function click(label: string): Promise<void> {
 }
 
 beforeEach(() => {
+  agent.joins = false;
   mic.order = [];
   mic.on = true;
   mic.fail = null;
@@ -218,5 +223,38 @@ describe('useVoiceCall toggleMute', () => {
     expect(mic.order).toEqual(['attr:', 'mic-on', `attr:${USER_MUTE_VALUE}`]);
     expect(text('muted')).toBe('yes');
     expect(mic.on).toBe(false);
+  });
+});
+
+describe('useVoiceCall when Curia never joins', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function startAndWaitOutTheTimeout(): Promise<void> {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    await mount();
+    await click('start');
+    expect(text('state')).toBe('connected');
+    await act(async () => {
+      vi.advanceTimersByTime(AGENT_JOIN_TIMEOUT_MS);
+    });
+    await flush();
+  }
+
+  it('shows an error and ends the session instead of waiting on "Greeting..."', async () => {
+    await startAndWaitOutTheTimeout();
+
+    expect(text('state')).toBe('error');
+    expect(text('error')).toBe(AGENT_JOIN_FAILED_MESSAGE);
+    expect(apiFetch).toHaveBeenCalledWith('/api/voice/sessions/s1', { method: 'DELETE' });
+  });
+
+  it('leaves a call alone once Curia is in the room', async () => {
+    agent.joins = true;
+    await startAndWaitOutTheTimeout();
+
+    expect(text('state')).toBe('connected');
+    expect(text('error')).toBe('');
   });
 });

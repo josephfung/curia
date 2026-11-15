@@ -6,6 +6,15 @@ import { bindMicPause, isMicPaused, USER_MUTE_ATTRIBUTE, USER_MUTE_VALUE } from 
 
 export type VoiceCallState = 'idle' | 'connecting' | 'connected' | 'error';
 
+/**
+ * How long Curia's side has to join the room after the console does. It
+ * normally joins within a couple of seconds. The server answers before its
+ * side has started, so if that start fails the console would otherwise sit in
+ * an empty room on "Greeting..." with no error.
+ */
+export const AGENT_JOIN_TIMEOUT_MS = 15_000;
+export const AGENT_JOIN_FAILED_MESSAGE = "Curia couldn't join the call. Please try again.";
+
 interface VoiceStatusResponse {
   enabled: boolean;
 }
@@ -86,6 +95,7 @@ export function useVoiceCall(): UseVoiceCallResult {
   const sessionIdRef = useRef<string | null>(null);
   const audioElementsRef = useRef<HTMLMediaElement[]>([]);
   const startAbortRef = useRef<AbortController | null>(null);
+  const agentJoinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const detachAllAudio = useCallback(() => {
     for (const element of audioElementsRef.current) {
@@ -121,6 +131,8 @@ export function useVoiceCall(): UseVoiceCallResult {
   }, []);
 
   const resetLocalCall = useCallback((room?: Room | null) => {
+    if (agentJoinTimerRef.current) clearTimeout(agentJoinTimerRef.current);
+    agentJoinTimerRef.current = null;
     unbindMicRef.current?.();
     unbindMicRef.current = null;
     userMuteRef.current = false;
@@ -273,6 +285,25 @@ export function useVoiceCall(): UseVoiceCallResult {
         setMuted(false);
         setCallState('connected');
       }
+      // The only remote participant in a console call is Curia's side.
+      agentJoinTimerRef.current = setTimeout(() => {
+        agentJoinTimerRef.current = null;
+        if (roomRef.current !== callRoom || callRoom.remoteParticipants.size > 0) return;
+        const failedSessionId = sessionIdRef.current;
+        resetLocalCall(callRoom);
+        if (mountedRef.current) {
+          setCallState('error');
+          setError(AGENT_JOIN_FAILED_MESSAGE);
+        }
+        // The server has usually ended the session already, so a 404 is expected.
+        if (failedSessionId) {
+          void apiFetch(`/api/voice/sessions/${encodeURIComponent(failedSessionId)}`, {
+            method: 'DELETE',
+          }).catch((cleanupErr) => {
+            console.error('[useVoiceCall] failed to end voice session Curia never joined:', cleanupErr);
+          });
+        }
+      }, AGENT_JOIN_TIMEOUT_MS);
     } catch (err) {
       // Always disconnect / DELETE even when hangUp aborted startCall — otherwise
       // a session minted before abort would stay active on the server.
