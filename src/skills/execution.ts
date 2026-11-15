@@ -1664,9 +1664,10 @@ export class ExecutionLayer {
 
   /**
    * The result a held call returns: what the other turn did, never its words (#2588). The
-   * tool, target and time are shown only to a viewer entitled to them (viewerSeesDetail:
-   * the principal, a system turn, or the same resolved contact); anyone else gets a generic
-   * line, so one person's turn cannot learn what another person's turn did.
+   * tool, target and time are shown only to a viewer entitled to them (viewerSeesDetail: a
+   * system turn, or in a one-to-one conversation the principal or the same resolved contact);
+   * anyone else gets a generic line, so one person's turn cannot learn what another person's
+   * turn did, and a group cannot hear it from the model.
    */
   private async crossTurnHoldResult(
     matches: BackstopMatches,

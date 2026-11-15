@@ -75,6 +75,38 @@ const VOICE_SEED = {
   originatorIsSystem: false,
 };
 
+describe('TurnActivityRegistry audience flag', () => {
+  it('a root started from a one-to-one Signal DM has audienceOneToOne true', () => {
+    const { registry } = setup();
+    const dm = start(registry, 'dm', { channelId: 'signal', conversationId: 'signal:+15551234567' });
+    const group = start(registry, 'grp', { channelId: 'signal', conversationId: 'signal:group=abc' });
+    expect(dm.audienceOneToOne).toBe(true);
+    expect(group.audienceOneToOne).toBe(false);
+  });
+});
+
+describe('TurnActivityRegistry email audience flag', () => {
+  it('a one-to-one email root gets the flag when selfEmails is passed', () => {
+    const registry = new TurnActivityRegistry({
+      logger: pino({ level: 'silent' }),
+      now: () => T0,
+      selfEmails: ['curia@example.com'],
+    });
+    const metadata = {
+      curiaRole: 'to',
+      primaryRecipientEmails: [],
+      participants: [
+        { email: 'boss@example.com', role: 'from' },
+        { email: 'curia@example.com', role: 'to' },
+      ],
+    };
+    const root = start(registry, 'em', { channelId: 'email', conversationId: 'email:t1', metadata });
+    expect(root.audienceOneToOne).toBe(true);
+    const bare = new TurnActivityRegistry({ logger: pino({ level: 'silent' }), now: () => T0 });
+    expect(start(bare, 'em2', { channelId: 'email', conversationId: 'email:t1', metadata }).audienceOneToOne).toBe(false);
+  });
+});
+
 describe('TurnActivityRegistry root resolution', () => {
   it('delegated specialist maps to its coordinator root', () => {
     const { registry } = setup();

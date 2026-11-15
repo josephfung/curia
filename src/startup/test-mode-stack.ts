@@ -1462,6 +1462,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     // One registry shared by every AgentRuntime and both execution layers (#2588).
     const turnActivity = new TurnActivityRegistry({
       logger,
+      selfEmails,
       ...(options.turnActivityScope ? { scopeOf: options.turnActivityScope } : {}),
     });
     const layerOptions: NonNullable<ConstructorParameters<typeof ExecutionLayer>[2]> = {

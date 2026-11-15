@@ -3,8 +3,8 @@
 // It names what the other turn did (whose turn, tool, target, local time, and what came of
 // it) and nothing else: never the other turn's request text or any message body, which may
 // belong to another conversation. Even those details go only to a viewer entitled to them
-// (viewerSeesDetail); anyone else gets a generic line, so one person's turn cannot learn
-// what another person's turn did.
+// (viewerSeesDetail), and for a person's turn only in a one-to-one conversation; anyone else
+// gets a generic line, so one person's turn cannot learn what another person's turn did.
 
 import type { ToolResult } from '../skills/types.js';
 import { toLocalIso } from '../time/timestamp.js';
@@ -29,8 +29,10 @@ const OUTCOME_TEXT: Record<ActionOutcome, string> = {
 
 /**
  * Whether the held root (`viewer`) may see the tool, target and time of `other`'s action:
- * the principal, a system turn (by originator, not channel), or the same resolved contact as
- * the other root. Unknown viewer: no.
+ * a system turn (by originator, not channel), or, in a one-to-one conversation only, the
+ * principal or the same resolved contact as the other root. In a group, a cc'd thread or an
+ * unknown audience the model could repeat the details to the others there, so a person's
+ * turn gets the generic line. Unknown viewer: no.
  */
 export function viewerSeesDetail(
   viewer: RootTurn | undefined,
@@ -39,6 +41,7 @@ export function viewerSeesDetail(
 ): boolean {
   if (!viewer) return false;
   if (viewer.originatorIsSystem) return true;
+  if (!viewer.audienceOneToOne) return false;
   if (!viewer.originatorResolved || viewer.originatorContactId === null) return false;
   if (principalContactId !== undefined && viewer.originatorContactId === principalContactId) return true;
   return other.originatorResolved && other.originatorContactId === viewer.originatorContactId;

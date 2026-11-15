@@ -87,6 +87,8 @@ function startRoot(
   taskEventId: string,
   extra?: {
     channelId?: string;
+    /** Defaults to a one-to-one Signal conversation, where a person may see hold details. */
+    conversationId?: string;
     content?: string;
     originatorContactId?: string | null;
     originatorResolved?: boolean;
@@ -96,7 +98,7 @@ function startRoot(
   return turnActivity.taskStarted({
     taskEventId,
     agentId: 'coordinator',
-    conversationId: `conv-${taskEventId}`,
+    conversationId: extra?.conversationId ?? `signal:conv-${taskEventId}`,
     channelId: extra?.channelId ?? 'signal',
     parentEventId: undefined,
     metadata: undefined,
@@ -293,7 +295,7 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
       actor: string | null,
       viewer: string | null,
       viewerChannel = 'signal',
-      viewerExtra: { originatorIsSystem?: boolean } = {},
+      viewerExtra: { originatorIsSystem?: boolean; conversationId?: string } = {},
     ) {
       const { registry, layer, turnActivity } = setup();
       const handler = makeHandler();
@@ -328,6 +330,23 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
     it('the same resolved contact sees the details', async () => {
       const text = await holdSeenBy(BOB, BOB);
       expect(text).toContain('contact-message on "Alice Example" at ');
+    });
+
+    it('the principal in a Signal group gets the generic line; in a Signal DM, the details', async () => {
+      const group = await holdSeenBy(BOB, PRINCIPAL, 'signal', { conversationId: 'signal:group=team-thread' });
+      expect(group).toContain(GENERIC);
+      expect(group).not.toContain('contact-message');
+      expect(group).not.toContain('Alice Example');
+      expect(group).not.toMatch(ISO_TIME);
+      const dm = await holdSeenBy(BOB, PRINCIPAL, 'signal', { conversationId: 'signal:+15551234567' });
+      expect(dm).toContain('contact-message on "Alice Example" at ');
+      expect(dm).not.toContain(GENERIC);
+    });
+
+    it('the same contact in a Signal group gets the generic line', async () => {
+      const text = await holdSeenBy(BOB, BOB, 'signal', { conversationId: 'signal:group=team-thread' });
+      expect(text).toContain(GENERIC);
+      expect(text).not.toContain('Alice Example');
     });
 
     it('a system turn sees the details', async () => {
