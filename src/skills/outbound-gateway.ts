@@ -649,6 +649,8 @@ function principalFacing(reason: string): string {
  * content-filter rules. Anything unrecognised reads "Held for the principal."
  */
 function heldReasonText(reasonCode: string): string {
+  // A re-recorded hold may carry already_held itself; its table text would echo the refusal.
+  if (reasonCode === 'already_held') return HELD_NO_CAUSE;
   if (Object.prototype.hasOwnProperty.call(PRINCIPAL_SEND_REFUSALS, reasonCode)) {
     const text = PRINCIPAL_SEND_REFUSALS[reasonCode as PrincipalSendRefusal];
     const own = (text.endsWith(STILL_A_DRAFT) ? text.slice(0, -STILL_A_DRAFT.length) : text).trim();
@@ -665,13 +667,23 @@ function heldReasonText(reasonCode: string): string {
   if (rules.includes(BAND_RULES.offThread)) return "It shares information that isn't on the thread.";
   const plain = rules.filter((r) => r === BAND_RULES.ungrounded || r === BAND_RULES.unneeded || r === BAND_RULES.highStakesCopy);
   if (plain.length > 0) return plainReviewReasons(plain).join(' ');
-  return 'Held for the principal.';
+  // The review rules with no plain-reason entry (PR #2625 review, round 2), in the reviewer's own terms.
+  if (rules.includes(BAND_RULES.steered)) return "The reviewer judged it steered by someone outside the principal's business.";
+  if (rules.includes(BAND_RULES.speaksAsPrincipal)) return 'It commits the principal beyond what Curia sends on its own.';
+  if (rules.includes(BAND_RULES.unreviewed)) return "The send review wasn't available to check it.";
+  if (rules.includes(BAND_RULES.token)) return 'It contains a redaction placeholder.';
+  return HELD_NO_CAUSE;
 }
+
+/** heldReasonText's fallback: a hold whose code says nothing more than that it was held. */
+const HELD_NO_CAUSE = 'Held for the principal.';
 
 /** The agent's text for already_held (#2591): the first hold's reason when its marker kept a code. */
 function alreadyHeldReason(reasonCode: string | undefined): string {
-  if (reasonCode === undefined) return PRINCIPAL_SEND_REFUSALS.already_held;
-  return `This draft was already held for the principal: ${heldReasonText(reasonCode)} It's theirs to send. Don't send or edit it again.${STILL_A_DRAFT}`;
+  const reason = reasonCode === undefined ? HELD_NO_CAUSE : heldReasonText(reasonCode);
+  // No cause to add: the plain text, not "already held for the principal: Held for the principal."
+  if (reason === HELD_NO_CAUSE) return PRINCIPAL_SEND_REFUSALS.already_held;
+  return `This draft was already held for the principal: ${reason} It's theirs to send. Don't send or edit it again.${STILL_A_DRAFT}`;
 }
 
 /** A bounced autonomous reply's digest reason: plain words, never the finding detail (#2474 addendum R3). */
@@ -4793,7 +4805,11 @@ export class OutboundGateway {
     // the `sent` marker or a gone draft. In memory: Curia runs one process, and the claim lasts
     // exactly as long as the first call, timed out at the caller or not. Keyed by draft ID alone,
     // so the same ID in two mailboxes is also serialised, which only ever waits.
-    const previous = this.principalDraftCalls.get(draftId) ?? Promise.resolve();
+    const inFlight = this.principalDraftCalls.get(draftId);
+    // Visible when calls queue (PR #2625 review, round 2): the wait has no cap of its own. The
+    // calls it waits on are bounded by the Nylas client's and the LLM providers' timeouts.
+    if (inFlight) this.log.warn({ draftId }, 'outbound-gateway: another send of this draft is in flight — waiting for it');
+    const previous = inFlight ?? Promise.resolve();
     const run = previous.then(() => this.sendPrincipalDraftOnce(draftId, options));
     // The chain must survive a call that rejects; the caller still sees the rejection on `run`.
     const tail = run.then(() => undefined, () => undefined);
