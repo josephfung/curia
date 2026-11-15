@@ -72,7 +72,12 @@ describe('isOneToOneAudience', () => {
     expect(isOneToOneAudience('email', 'email:t1', { participants: [null, 'x', { role: 'to' }] }, SELF)).toBe(false);
   });
 
-  it('unknown channel is not', () => {
+  it('web and cli, principal-only surfaces, are one-to-one', () => {
+    expect(isOneToOneAudience('web', 'web:thread-1', undefined, SELF)).toBe(true);
+    expect(isOneToOneAudience('cli', 'cli:local:default', undefined, SELF)).toBe(true);
+  });
+
+  it('voice and unknown channels are not', () => {
     expect(isOneToOneAudience('voice', 'voice:1', undefined, SELF)).toBe(false);
     expect(isOneToOneAudience('http', 'http:1', undefined, SELF)).toBe(false);
   });
