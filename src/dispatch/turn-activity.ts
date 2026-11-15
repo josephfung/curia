@@ -28,6 +28,7 @@ import {
 } from '../agents/delegated-task-context.js';
 import type { Logger } from '../logger.js';
 import { isOneToOneAudience } from './audience.js';
+import type { InjectableInput } from './turn-lanes.js';
 
 export const TURN_ACTIVITY_WINDOW_MS = 15 * 60_000;
 export const MAX_TRACKED_ROOTS = 1_000;
@@ -40,6 +41,8 @@ export const MAX_ACTIONS_PER_ROOT = 200;
  * pruning, so it cannot pin the registry's memory or hold others forever.
  */
 export const MAX_RUNNING_ROOT_AGE_MS = 6 * 60 * 60_000;
+/** Hand-off corrections held for one root's next wake (turn-handoff, #2588). */
+export const MAX_HELD_PER_ROOT = 5;
 /** checkAndRecord prunes at most this often: every N calls, or after this long. */
 const PRUNE_EVERY_CALLS = 50;
 const PRUNE_INTERVAL_MS = 60_000;
@@ -271,6 +274,8 @@ export class TurnActivityRegistry {
   private actionSeq = 0;
   /** rootId -> keys of `${otherRootId}|${kind}:${value}` already shown to that root. */
   private readonly shown = new Map<string, Set<string>>();
+  /** rootId -> hand-off corrections waiting for that root's late-delegation wake, oldest first. */
+  private readonly held = new Map<string, InjectableInput[]>();
 
   private readonly scopeOf: ((conversationId: string) => string | undefined) | undefined;
   private readonly selfEmails: readonly string[];
@@ -464,6 +469,49 @@ export class TurnActivityRegistry {
 
   actionsOf(rootId: string): readonly RecordedAction[] {
     return this.actions.filter((a) => a.rootId === rootId).map((a) => this.copyAction(a));
+  }
+
+  /**
+   * Whether a root is still running: a non-auto root not (effectively) ended, or an auto root
+   * with a task running. A root past MAX_RUNNING_ROOT_AGE_MS counts as ended. Unknown: false.
+   */
+  isRootRunning(rootId: string): boolean {
+    const root = this.roots.get(rootId);
+    if (!root) return false;
+    const now = this.now();
+    if (root.autoRegistered) return root.runningTaskIds.size > 0 && !this.isStuck(root, now);
+    return this.effectiveEndedAt(root, now) === null;
+  }
+
+  /**
+   * Hold a hand-off correction for the root's next late-delegation wake, which drains it at
+   * turn start (turn-handoff, #2588). At most MAX_HELD_PER_ROOT per root: past that, or for an
+   * unknown root, the input is not held, a warning is logged, and false is returned.
+   */
+  holdForWake(rootId: string, input: InjectableInput): boolean {
+    if (!this.roots.has(rootId)) {
+      this.logger.warn({ rootId, inboundEventId: input.inboundEventId }, 'turn activity: no such root to hold a correction for');
+      return false;
+    }
+    const list = this.held.get(rootId) ?? [];
+    if (list.length >= MAX_HELD_PER_ROOT) {
+      this.logger.warn(
+        { rootId, inboundEventId: input.inboundEventId, cap: MAX_HELD_PER_ROOT },
+        'turn activity: held corrections for this root are at the cap; this one is not held',
+      );
+      return false;
+    }
+    list.push(input);
+    this.held.set(rootId, list);
+    return true;
+  }
+
+  /** Every correction held for the root, oldest first; the root's hold is then empty. */
+  takeHeldForWake(rootId: string): InjectableInput[] {
+    const list = this.held.get(rootId);
+    if (!list) return [];
+    this.held.delete(rootId);
+    return list;
   }
 
   // ── internals ────────────────────────────────────────────────────────────
@@ -733,6 +781,15 @@ export class TurnActivityRegistry {
     this.roots.delete(root.rootId);
     for (const id of root.taskIds) this.taskToRoot.delete(id);
     this.shown.delete(root.rootId);
+    const held = this.held.get(root.rootId);
+    if (held) {
+      this.held.delete(root.rootId);
+      // No wake came for them: the person's corrections are lost.
+      this.logger.error(
+        { rootId: root.rootId, held: held.length, inboundEventIds: held.map((i) => i.inboundEventId) },
+        'turn activity: dropped a root with hand-off corrections still held for its wake; they are lost',
+      );
+    }
   }
 
   /** checkAndRecord's cheap prune: every PRUNE_EVERY_CALLS calls or PRUNE_INTERVAL_MS. */

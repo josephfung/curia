@@ -63,6 +63,9 @@ tools:
   - file-parse
   - archive-extract
   - request-clarification
+  # Cross-conversation hand-off (#2588): coordinator-only. Not pinned; the runtime offers
+  # it on a turn whose other-turns note lists a turn that can take a hand-off.
+  - turn-handoff
   # Delegated sign-in verification (#2017): coordinator-only code-screen tracking.
   - verification
   # Task outreach (#2312): coordinator-only record of web forms and calls made for a task.

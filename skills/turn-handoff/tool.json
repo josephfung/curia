@@ -1,0 +1,20 @@
+{
+  "name": "turn-handoff",
+  "description": "Pass this message to the same person's turn still running in another conversation, when it corrects or adds to that turn's work. Use the turn_id from \"Your other recent turns with this person\". The result says whether it was passed on; follow it.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "turn_id": "string (the turn_id from \"Your other recent turns with this person\")"
+  },
+  "outputs": {
+    "handoff_requested": "boolean",
+    "turn_id": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 5000,
+  "allowed_callers": [
+    "coordinator"
+  ]
+}
