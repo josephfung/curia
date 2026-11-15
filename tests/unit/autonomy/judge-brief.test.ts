@@ -165,6 +165,13 @@ describe('buildBriefUserPrompt', () => {
 
   // #2616: a check that said OPEN, noting only the assistant's own hold for that meeting, was
   // read as "the evidence shows it is not open"; scripts/judge-replay holds the labelled cases.
+  // #2616: every judge passed "the slot is open" with no calendar check behind it, rating it
+  // assistant logistics; the principal decided an unchecked time counts as unsupported.
+  it('counts the principal\'s availability as a fact, offering a time included', () => {
+    expect(BRIEF_SYSTEM_PROMPT).toContain('(their plans, whereabouts, schedule and availability, history, preferences, commitments, relationships)');
+    expect(BRIEF_SYSTEM_PROMPT).toContain('Saying a time is open, or offering one, states the principal\'s availability: it needs a calendar check this turn that covers that time.');
+  });
+
   it('counts the assistant\'s own hold for this meeting as no conflict, and nothing else', () => {
     expect(BRIEF_SYSTEM_PROMPT).toContain('when the only thing it notes on that time is a tentative hold the assistant placed for this same meeting.');
     // Any other event wins over the check's headline, and so does an outsider's say-so.
