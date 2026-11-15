@@ -17,7 +17,7 @@ import { TurnLanes } from '../../src/dispatch/turn-lanes.js';
 import { TurnActivityRegistry } from '../../src/dispatch/turn-activity.js';
 import { EventBus } from '../../src/bus/bus.js';
 import { createInboundMessage } from '../../src/bus/events.js';
-import type { LLMProvider, LLMResponse, Message, ToolDefinition } from '../../src/agents/llm/provider.js';
+import type { LLMProvider, LLMResponse, Message, ToolDefinition, ToolResultContent } from '../../src/agents/llm/provider.js';
 import { ExecutionLayer } from '../../src/skills/execution.js';
 import { ToolRegistry } from '../../src/skills/registry.js';
 import type { ToolHandler, ToolManifest } from '../../src/skills/types.js';
@@ -319,7 +319,17 @@ function harness() {
     return chatsByTurn.get(marker)?.[0]?.tools ?? [];
   }
 
-  return { lanes, booking, email, signal, script, transcript, systemPrompt, toolsOffered };
+  /** The content of every tool_result block the turn's last model call was shown. */
+  function toolResults(marker: string): string[] {
+    const calls = chatsByTurn.get(marker) ?? [];
+    const last = calls[calls.length - 1];
+    if (!last) return [];
+    return last.messages.flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+      .filter((block): block is ToolResultContent => block.type === 'tool_result')
+      .map((block) => block.content);
+  }
+
+  return { lanes, booking, email, signal, script, transcript, systemPrompt, toolsOffered, toolResults };
 }
 
 /** The email turn's turn_id, read from the note the way the model reads it. */
@@ -340,7 +350,9 @@ const book = (start: string) => () =>
 describe('cross-conversation hand-off (#2588)', () => {
   const EMAIL_TEXT = 'EMAIL-REQUEST please book a sync with Barbara on Thursday at 3pm';
 
-  it('heads-up on Signal while the email turn works: the note shows the email turn, one booking', async () => {
+  // The one-booking count follows from the scripted text-only Signal reply; what this proves
+  // is the note's content.
+  it("a Signal turn started while the email turn works gets a note of the email turn's request, actions and hand-off", async () => {
     const h = harness();
     const release = deferred();
     const state = { emailParked: false };
@@ -435,7 +447,7 @@ describe('cross-conversation hand-off (#2588)', () => {
     const bookedInput = (h.booking.execute.mock.calls[0]?.[0] as { input?: Record<string, unknown> } | undefined)?.input;
     expect.soft(bookedInput?.['start']).toBe(FRIDAY);
     // The Signal turn was told it was passed on, not to do the work itself.
-    expect(h.transcript('SIGNAL-REQUEST')).toContain(PASSED_ON);
+    expect(h.toolResults('SIGNAL-REQUEST').some((r) => r.includes(PASSED_ON))).toBe(true);
   });
 
   it('a multi-participant email thread refuses the hand-off', async () => {
@@ -474,7 +486,7 @@ describe('cross-conversation hand-off (#2588)', () => {
     expect(note).not.toContain(HANDOFF_LINE);
     expect(h.toolsOffered('SIGNAL-REQUEST')).not.toContain('turn-handoff');
     // Called anyway: the runtime refuses it, and nothing reaches the email turn.
-    expect(h.transcript('SIGNAL-REQUEST')).toContain(NOT_ONE_TO_ONE);
+    expect(h.toolResults('SIGNAL-REQUEST').some((r) => r.includes(NOT_ONE_TO_ONE))).toBe(true);
     expect(h.transcript('EMAIL-REQUEST')).not.toContain(HANDED_OVER);
   });
 

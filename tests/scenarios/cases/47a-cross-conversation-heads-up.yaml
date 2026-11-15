@@ -66,16 +66,22 @@ tool_stubs:
     - match: {}
       return: { stored: true, action: created, node_id: 4c5d6e7f-8a9b-4c0d-9e1f-47a000000001, sensitivity: internal }
 expected_behaviors:
-  - id: books_once
+  # A count of calendar delegations cannot tell a booking from an availability check (a
+  # `contains` on the brief is a substring, and a stub cannot branch on it), so code checks
+  # only that the email turn reached the calendar; the judge scores the second booking.
+  - id: email_turn_books
     weight: critical
-    description: >
-      The calendar specialist is asked to book the sync once, on the email turn. The Signal
-      heads-up does not send it a second booking.
+    description: The email turn asks the calendar specialist to book the sync.
     check:
       called: delegate
       with: { agent: calendar }
       min: 1
-      max: 1
+  - id: no_second_booking
+    weight: critical
+    description: >
+      No second booking: after the Signal heads-up, nothing asks the calendar specialist to
+      book (create) another sync with Priya. Checking the calendar or availability is fine;
+      a second booking request, from either turn, is a miss.
   - id: acknowledges_the_booking
     weight: critical
     description: >
