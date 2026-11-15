@@ -7,9 +7,10 @@
 //      for the same meeting, read as "the evidence shows it is not open";
 //   2. a question proposing that same slot, read as a claim made "without verification";
 //   3. an opener that only names what the thread is about ("Checking back about the call").
-// Three more must-pass cases keep the conflict rule to events that take the principal's time:
-// an OPEN beside an event shown as free, a cancelled one, or one the principal declined, which
-// the calendar tools do not count as busy (blocksTime in skills/_shared/calendar-availability.ts).
+// Three more must-pass cases guard the brief's conflict rule ("any other event … is a conflict"),
+// which read literally also covers events the calendar tools do not count as busy (blocksTime in
+// skills/_shared/calendar-availability.ts): an OPEN beside an event shown as free, a cancelled
+// one, or one the principal declined must still go out.
 // The must-flag cases are controls: a fix that stops those false positives must still catch a
 // slot nothing checked, a slot with a real conflict, a slot held for a different meeting, a hold
 // whose title names another meeting although the specialist calls it ours, an "OPEN" that only a
