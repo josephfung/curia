@@ -43,6 +43,10 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-11-05T19:12:35.220Z"
     },
+    "blocked confirmation rewrite keeps the booking": {
+      "unstubbed": null,
+      "reason": "New in #2615; not yet run (paid suite). The first run records coverage."
+    },
     "booking link on a cc thread books through it": {
       "unstubbed": 0,
       "runs": 5,
