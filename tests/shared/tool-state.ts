@@ -24,10 +24,22 @@ export class CalendarState {
   private updates = new Map<string, Json>();
   private deleted = new Set<string>();
 
-  /** Record a stubbed write; returns the result to hand back (a created event gets its id). */
+  /**
+   * Record a stubbed write; returns the result to hand back (a created event gets its id).
+   * A created event takes the call's title, times, calendar and attendees where the stub's
+   * event leaves them out, as the real tool returns the event it made, so a later listing
+   * shows what was booked (#2588). Fields the stub sets win.
+   */
   recordWrite(toolName: string, data: Json, input: Json): Json {
     if (toolName === 'calendar-create-event' && data['event'] && typeof data['event'] === 'object') {
-      const event = { ...(data['event'] as Json), id: `evt-created-${this.created.length + 1}` };
+      const fromCall: Json = {
+        ...(str(input['title']) !== undefined ? { title: input['title'] } : {}),
+        ...(str(input['start']) !== undefined ? { startTime: input['start'] } : {}),
+        ...(str(input['end']) !== undefined ? { endTime: input['end'] } : {}),
+        ...(str(input['calendarId']) !== undefined ? { calendarId: input['calendarId'] } : {}),
+        ...(Array.isArray(input['attendees']) ? { participants: input['attendees'] } : {}),
+      };
+      const event = { ...fromCall, ...(data['event'] as Json), id: `evt-created-${this.created.length + 1}` };
       this.created.push(event);
       return { ...data, event };
     }
@@ -49,9 +61,10 @@ export class CalendarState {
   /** A listing as it stands after this case's writes. */
   replayOnto(data: Json): Json {
     if (!Array.isArray(data['events'])) return data;
-    const events = [...(data['events'] as Json[]), ...this.created]
-      .filter(e => !this.deleted.has(String(e['id'])))
-      .map(e => ({ ...e, ...(this.updates.get(String(e['id'])) ?? {}) }));
+    // A listing entry that is not an event object (a test's placeholder) is left as it is.
+    const events = [...(data['events'] as unknown[]), ...this.created]
+      .filter(e => !isRecord(e) || !this.deleted.has(String(e['id'])))
+      .map(e => (isRecord(e) ? { ...e, ...(this.updates.get(String(e['id'])) ?? {}) } : e));
     return { ...data, events };
   }
 }
@@ -800,13 +813,17 @@ const DRAFT_WRITES: ReadonlySet<string> = new Set([
 ]);
 const TASK_WRITES: ReadonlySet<string> = new Set(['task-create', 'task-update', 'task-complete']);
 
+const CALENDAR_WRITES: ReadonlySet<string> = new Set(['calendar-create-event', 'calendar-update-event', 'calendar-delete-event']);
+
 /**
- * Record a stubbed scheduler, draft or task write and replay it onto a later list.
- * Placeholders and the calendar/mail query filters stay in `shapeStubResult`: the
- * scenario layer calls this on data that is already resolved.
+ * Record a stubbed calendar, scheduler, draft or task write and replay it onto a later list.
+ * Smoke and the scenario layer both call it, so a scenario's later calendar-list-events
+ * shows an event the run created (#2588). Placeholders and the calendar/mail query filters
+ * stay in `shapeStubResult`: the scenario layer calls this on data that is already resolved.
  */
 export function applyCaseWrites(toolName: string, data: Json, input: Json, state: CaseToolState): Json {
   let shaped = data;
+  if (CALENDAR_WRITES.has(toolName)) shaped = state.calendar.recordWrite(toolName, shaped, input);
   if (SCHEDULER_WRITES.has(toolName)) shaped = state.scheduler.recordWrite(toolName, shaped, input);
   if (DRAFT_WRITES.has(toolName)) shaped = state.drafts.recordWrite(toolName, shaped, input);
   if (TASK_WRITES.has(toolName)) shaped = state.tasks.recordWrite(toolName, shaped, input);
@@ -816,6 +833,7 @@ export function applyCaseWrites(toolName: string, data: Json, input: Json, state
   }
   if (toolName === 'scheduler-get') shaped = state.scheduler.replayOntoGet(shaped, input);
   if (toolName === 'task-list') shaped = state.tasks.replayOnto(shaped, input);
+  if (toolName === 'calendar-list-events') shaped = state.calendar.replayOnto(shaped);
   return shaped;
 }
 

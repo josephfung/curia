@@ -369,6 +369,18 @@ export function createStubController(
     // A through-gateway send skips the stub table (#2312): production's handler and review
     // decide, and the recording transports keep what passes.
     const realSend = run?.throughGateway === true && THROUGH_GATEWAY_TOOLS.has(toolName);
+    // approve-action replays a held call on the unwrapped layer, outside the gated call that
+    // lets a stub answer, so a gated tool's replay would reach its real handler, which test
+    // mode cannot serve. Refused in any run with gated tools (#2588).
+    if (realSend && toolName === 'approve-action' && run && run.gatedTools.size > 0) {
+      await note('refused');
+      return {
+        success: false,
+        error: skillError(
+          "approve-action is not supported in a scenario with gated_tools: its replay would reach the gated tool's real handler.",
+        ),
+      };
+    }
     const stub = stubs && !realSend ? matchToolStub(toolName, input, stubs, options?.agentId) : undefined;
     // Same write-then-read replay as smoke (#2074, #2399). A stub that names draft_id
     // (or job_id) still answers that ceo-inbox-read (or scheduler-get) itself.

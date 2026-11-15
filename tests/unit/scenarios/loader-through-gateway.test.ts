@@ -245,13 +245,15 @@ describe('gated_tools', () => {
   });
 });
 
-describe('gated_tools with an approval turn', () => {
-  it('refuses inbound.then: approving a gated hold would replay the real handler', () => {
+describe('gated_tools with a later principal turn (#2588)', () => {
+  it('accepts inbound.then: the stub layer refuses approve-action in a gated run instead', () => {
     const body = CASE
       .replace('through_gateway: true\n', 'through_gateway: true\ngated_tools: [calendar-create-event]\n')
       .replace('expected_behaviors:', 'tool_stubs:\n  calendar-create-event:\n    - match: {}\n      return: { event: { id: e1 } }\nexpected_behaviors:')
       .replace('  email:\n    sender_verified: true\n', '  email:\n    sender_verified: true\n  then:\n    content: approve\n');
-    expect(() => load(body)).toThrow(/cannot be combined with inbound.then/);
+    const scenario = load(body);
+    expect(scenario.gatedTools).toEqual(['calendar-create-event']);
+    expect(scenario.inbound.then?.content).toBe('approve');
   });
 });
 

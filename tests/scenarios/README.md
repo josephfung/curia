@@ -706,7 +706,11 @@ call fails, as in production, and raises production's approval, which a `held` c
 Check the effect with `not_called` and `returns: {}`: only a call that succeeded counts. Each
 gated tool needs a stub, and the loader refuses one through_gateway already runs for real.
 Other stubs, and every case without `gated_tools`, are answered before the gates as before.
-The judge needs its provider key, like band review (see Prerequisites).
+The judge needs its provider key, like band review (see Prerequisites). Because a gated call
+runs the whole execution layer, it is also recorded by the cross-turn backstop (#2588), so a
+later turn's note and hold see it. A case may pair `gated_tools` with `inbound.then`, but
+approve-action is refused in such a run: its replay of a held call would reach the gated
+tool's real handler.
 
 **Nothing can send.** The stack builds this review on a second ExecutionLayer
 (`recordSends`, `src/startup/test-mode-sends.ts`) that only these calls reach. Its gateway
@@ -1009,7 +1013,7 @@ to a release gate run.
 
 ### Which real-delegation cases gate a release
 
-The release gate runs three of them (`release_gate` left at its default): the paths no
+The release gate runs four of them (`release_gate` left at its default): the paths no
 stubbed case can reach, behind bugs that took the coordinator down or lost the principal's
 answer.
 
@@ -1023,6 +1027,8 @@ answer.
 | 16e email identifiers | on demand | The stamping is deterministic and unit-tested (`delegate.test.ts`); this checks it end to end. |
 | 16g one message per item | on demand | Duplicate sends (#1860, #1917); the stubbed cases cover the coordinator's own sends. |
 | 17a scheduled job tells principal | on demand | A scheduler turn's reply reaches no one (#2091). The dispatcher audits a reply that skipped the send, so a miss is visible in production. |
+| 47b cross-conversation duplicate asks | yes | The 2026-11-11 double booking (#2588): only a specialist's gated write is recorded under its turn, so the other turn's note and the backstop see it. |
+| 47a heads-up, 47c correction, 47d unrelated | on demand | The same path as 47b for the other answers the note steers: acknowledge, adjust, or just do it. |
 
 Run them all with `pnpm scenarios --on-demand`, or one with `--case`. Before changing a
 specialist prompt or the delegate handler, run `--tags real-delegation`.
