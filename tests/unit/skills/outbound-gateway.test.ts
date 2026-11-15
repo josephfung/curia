@@ -7218,6 +7218,21 @@ describe('sendPrincipalDraft (#2474)', () => {
         expect(summary).toBe(`${NOT_SENT} The reply has attachments, so Curia didn't send it on its own. Curia couldn't record that it held it, so it may look at it again.${IN_DRAFTS}`);
       });
 
+      // CodeRabbit (PR #2625, round 4): a review hold's own reason leads "Held for you"; unrecorded,
+      // that must turn neutral too, as must the bare "Held for you." fallback.
+      it.each([
+        ["Held for the principal: it shares information that isn't on the thread.", "Curia didn't send it on its own: it shares information that isn't on the thread."],
+        ['Held for the principal.', "Curia didn't send it on its own."],
+      ])('with the real ledger, an unrecorded review hold never says "Held for you" (%s)', async (held, neutral) => {
+        const ledger = realLedger({ failCreate: true });
+        const review = vi.fn().mockResolvedValue({ kind: 'hold', reason: held, findings: [{ rule: 'off-thread', detail: 'x' }] });
+        const { gw } = makeAuto({ review, ledger: ledger as never });
+        expect(await gw.sendPrincipalDraft('d1', auto)).toMatchObject({ refusal: 'review_hold' });
+        const summary = String(reports()[0]!['summary']);
+        expect(summary).not.toContain('Held for you');
+        expect(summary).toBe(`${NOT_SENT} ${neutral} Curia couldn't record that it held it, so it may look at it again.${IN_DRAFTS}`);
+      });
+
       // CodeRabbit (PR #2625, round 3): a stop reached before the ledger check (no task) with no
       // ledger wired writes no marker, so it is an unrecorded hold, not "Left as a draft".
       it('treats a hold with no ledger wired as unrecorded', async () => {
