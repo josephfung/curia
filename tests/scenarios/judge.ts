@@ -284,13 +284,31 @@ export function createJudge(
   };
 }
 
-/** A JSON object out of a model reply that may wrap it in a code fence or prose. */
+/**
+ * A JSON object out of a model reply that may wrap it in a code fence or prose: the first
+ * complete object, matched brace by brace (braces inside strings do not count). A judge that
+ * adds a remark or a second object after its answer (#2556: 'Unexpected non-whitespace
+ * character after JSON') is read for the answer it gave first. With no complete object, the
+ * text from the first '{' to the last '}' goes to JSON.parse, which says what is wrong.
+ */
 export function extractJsonObject(text: string): string {
   const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text);
   const body = (fenced ? fenced[1]! : text).trim();
   const start = body.indexOf('{');
+  if (start === -1) return body;
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < body.length; i++) {
+    const ch = body[i];
+    if (inString) {
+      if (ch === '\\') i++;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) return body.slice(start, i + 1);
+  }
   const end = body.lastIndexOf('}');
-  return start !== -1 && end > start ? body.slice(start, end + 1) : body;
+  return end > start ? body.slice(start, end + 1) : body;
 }
 
 const JUDGE_ATTEMPTS = 3;
@@ -327,7 +345,13 @@ export async function judgeRun(
     meterJudgeResponse(judge, response, usage);
 
     if (response.type === 'text') {
-      return parseJudgeResponse(extractJsonObject(response.content), behaviors);
+      const ratings = parseJudgeResponse(extractJsonObject(response.content), behaviors);
+      // A reply with no readable scores is the judge fumbling the format, which another
+      // attempt usually fixes; the last attempt's ratings say why if it does not.
+      const unreadable = [...ratings.values()].find(r => r.justification.startsWith(`${JUDGE_ERROR_PREFIX}: reply unparseable`));
+      if (!unreadable || attempt === JUDGE_ATTEMPTS) return ratings;
+      lastError = unreadable.justification;
+      continue;
     }
     if (response.type === 'tool_use') {
       lastError = 'answered with a tool call, not JSON';
