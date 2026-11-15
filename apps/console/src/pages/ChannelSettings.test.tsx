@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 // Channels → Email drawer (#2475, R79): the principal's mailboxes moved to Settings →
-// Personality → Email & Calendar, so the drawer holds only Curia's own accounts and a pointer.
+// Behaviour → Email & Calendar, so the drawer holds only Curia's own accounts and a pointer.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -75,7 +75,7 @@ describe('Channels → Email drawer', () => {
     expect(mocks.calls).not.toContain('/api/registry/principal-mailboxes');
     expect(drawer.textContent).not.toContain('Replace grant');
     const link = [...drawer.querySelectorAll('a')].find(a => a.getAttribute('href') === '/settings/email-calendar')!;
-    expect(link.textContent).toBe('Settings → Personality → Email & Calendar');
+    expect(link.textContent).toBe('Settings → Behaviour → Email & Calendar');
   });
 
   it('other channels show no pointer', async () => {

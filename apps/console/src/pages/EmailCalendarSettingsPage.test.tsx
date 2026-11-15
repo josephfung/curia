@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-// Settings → Personality → Email & Calendar (#2475, R79): the principal's mailboxes page, its
-// place in the Personality nav, and the alert + read-only list when the Nylas API key is missing.
+// Settings → Behaviour → Email & Calendar (#2475, R79): the principal's mailboxes page, its
+// place in the Behaviour nav, and the alert + read-only list when the Nylas API key is missing.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -70,13 +70,13 @@ afterEach(() => {
 });
 
 describe('EmailCalendarPage', () => {
-  it('sits in the Personality nav and lists the mailboxes', async () => {
+  it('sits in the Behaviour nav and lists the mailboxes', async () => {
     await mount();
     const nav = container.querySelector('nav.settings-nav')!;
     const item = [...nav.querySelectorAll('a')].find(a => a.textContent === 'Email & Calendar')!;
     expect(item.getAttribute('href')).toBe('/settings/email-calendar');
     expect(item.className).toContain('active');
-    expect(nav.querySelector('.settings-nav-title')?.textContent).toBe('Personality');
+    expect(nav.querySelector('.settings-nav-title')?.textContent).toBe('Behaviour');
     expect(container.querySelector('h2')?.textContent).toBe('Email & Calendar');
     expect(container.textContent).toContain('boss@acme-example.com');
   });

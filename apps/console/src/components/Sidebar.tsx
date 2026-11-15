@@ -21,7 +21,8 @@ import {
   IconPlug,
   IconChevron,
   IconServer,
-  IconBrain,
+  IconBot,
+  IconWrench,
 } from './Icons';
 
 
@@ -224,11 +225,20 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
           </button>
           {settingsOpen && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 }}>
+              {/* Behaviour leads the group: it's how Curia behaves, the page most
+                  principals open first. Its first sub-section is still "Personality". */}
+              <button
+                className={`nav-sub-item${activeView === 'settings' ? ' active' : ''}`}
+                onClick={() => go('settings')}
+              >
+                <IconBot />
+                Behaviour
+              </button>
               <button
                 className={`nav-sub-item${activeView === 'tools' ? ' active' : ''}`}
                 onClick={() => go('tools')}
               >
-                <IconWand />
+                <IconWrench />
                 Tools
               </button>
               <button
@@ -251,13 +261,6 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
               >
                 <IconPlug />
                 MCP Skills
-              </button>
-              <button
-                className={`nav-sub-item${activeView === 'settings' ? ' active' : ''}`}
-                onClick={() => go('settings')}
-              >
-                <IconBrain />
-                Personality
               </button>
               <button
                 className={`nav-sub-item${activeView === 'system' ? ' active' : ''}`}

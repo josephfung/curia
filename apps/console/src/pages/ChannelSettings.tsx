@@ -260,7 +260,7 @@ function ChannelDrawer({ entry, onClose, onChanged }: {
           {entry.name === 'email' && (
             <p className="settings-page-sub" style={{ margin: 0 }}>
               Your own email and calendars, which Curia monitors, are under{' '}
-              <Link to="/settings/email-calendar">Settings → Personality → Email &amp; Calendar</Link>.
+              <Link to="/settings/email-calendar">Settings → Behaviour → Email &amp; Calendar</Link>.
             </p>
           )}
 

@@ -274,12 +274,14 @@ function AutonomySection() {
 
 // ── Settings layout ───────────────────────────────────────────────────────────
 
-// In-page settings navs (#1376). Settings → Personality is how Curia behaves;
+// In-page settings navs (#1376). Settings → Behaviour is how Curia behaves;
 // Settings → System is this install: what's running, what's signed in, and
 // the retention config. Each group gets its own sub-nav in the same shell.
+// The group key stays `personality` (routes and callers use it); only the
+// displayed title is "Behaviour", so it doesn't repeat its first section's name.
 const SECTION_GROUPS = {
   personality: {
-    title: 'Personality',
+    title: 'Behaviour',
     sidebarView: 'settings',
     sections: [
       { id: 'personality',  label: 'Personality',  href: '/settings/personality' },
