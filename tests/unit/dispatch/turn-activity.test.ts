@@ -17,6 +17,8 @@ import {
   INBOUND_SENDER_TEXT_CLIPPED_KEY,
   INBOUND_SCAN_FINDING_COUNT_KEY,
   type ActionTarget,
+  type HandoffRecoveryRequest,
+  type RootTurn,
   type TaskStartInput,
 } from '../../../src/dispatch/turn-activity.js';
 
@@ -1052,57 +1054,119 @@ describe('TurnActivityRegistry held corrections for a wake (#2588)', () => {
     return { warn, error, logger: { warn, info, debug, error } as unknown as Logger };
   }
 
-  it('holds inputs for a root and hands them over once, in order', () => {
+  /** The handing root a held correction came from. */
+  function handing(registry: TurnActivityRegistry): RootTurn {
+    startRoot(registry, 'H', { channelId: 'signal', conversationId: 'signal:+15550001' });
+    return registry.rootOf('H')!;
+  }
+
+  function withRecovery(logger?: Logger) {
+    let t = T0;
+    const recovered: HandoffRecoveryRequest[] = [];
+    const registry = new TurnActivityRegistry({
+      logger: logger ?? pino({ level: 'silent' }),
+      now: () => t,
+      recoverHandoff: (r) => { recovered.push(r); },
+    });
+    return { registry, recovered, set: (v: number) => { t = v; } };
+  }
+
+  it('holds inputs for a root and hands them over once, in order, with their handing turn', () => {
     const { registry } = setup();
+    const from = handing(registry);
     startRoot(registry, 'A');
-    expect(registry.holdForWake('A', held('1'))).toBe(true);
-    expect(registry.holdForWake('A', held('2'))).toBe(true);
-    expect(registry.takeHeldForWake('A').map((i) => i.inboundEventId)).toEqual(['1', '2']);
+    expect(registry.holdForWake('A', held('1'), from)).toBe(true);
+    expect(registry.holdForWake('A', held('2'), from)).toBe(true);
+    expect(registry.heldCount('A')).toBe(2);
+    const taken = registry.takeHeldForWake('A');
+    expect(taken.map((h) => h.input.inboundEventId)).toEqual(['1', '2']);
+    expect(taken[0]!.from.rootId).toBe('H');
     expect(registry.takeHeldForWake('A')).toEqual([]);
+    expect(registry.heldCount('A')).toBe(0);
   });
 
   it('keeps at most five per root and warns on the drop', () => {
     const { warn, logger } = spyLogger();
     const { registry } = setup(logger);
+    const from = handing(registry);
     startRoot(registry, 'A');
-    for (let i = 0; i < 5; i++) expect(registry.holdForWake('A', held(`${i}`))).toBe(true);
-    expect(registry.holdForWake('A', held('5'))).toBe(false);
+    for (let i = 0; i < 5; i++) expect(registry.holdForWake('A', held(`${i}`), from)).toBe(true);
+    expect(registry.holdForWake('A', held('5'), from)).toBe(false);
     expect(warn).toHaveBeenCalledWith(expect.objectContaining({ rootId: 'A', inboundEventId: '5' }), expect.any(String));
     expect(registry.takeHeldForWake('A')).toHaveLength(5);
   });
 
   it('refuses to hold for an unknown root', () => {
     const { registry } = setup();
-    expect(registry.holdForWake('nope', held('1'))).toBe(false);
+    const from = handing(registry);
+    expect(registry.holdForWake('nope', held('1'), from)).toBe(false);
     expect(registry.takeHeldForWake('nope')).toEqual([]);
   });
 
   it('does not hold the same inbound twice', () => {
     const { registry } = setup();
+    const from = handing(registry);
     startRoot(registry, 'A');
-    expect(registry.holdForWake('A', held('1'))).toBe(true);
-    expect(registry.holdForWake('A', held('1'))).toBe(true);
+    expect(registry.holdForWake('A', held('1'), from)).toBe(true);
+    expect(registry.holdForWake('A', held('1'), from)).toBe(true);
     expect(registry.takeHeldForWake('A')).toHaveLength(1);
   });
 
-  it('logs at error as soon as a root ends with corrections still held, and again when dropped', () => {
+  it('(c) a root that ends with corrections held re-runs each on its handing turn, logged at info', () => {
     const { error, logger } = spyLogger();
-    const { registry, set } = setup(logger);
+    const { registry, recovered } = withRecovery(logger);
+    const from = handing(registry);
     startRoot(registry, 'A');
-    registry.holdForWake('A', held('1'));
+    registry.holdForWake('A', held('1'), from);
+    registry.holdForWake('A', held('2'), from);
     registry.taskEnded('A');
-    expect(error).toHaveBeenCalledTimes(1);
-    expect(error).toHaveBeenCalledWith(
-      expect.objectContaining({ rootId: 'A', held: 1, inboundEventIds: ['1'] }),
-      expect.stringContaining('ended'),
-    );
-    set(T0 + 3 * TURN_ACTIVITY_WINDOW_MS);
-    // Any start prunes; A ended long ago.
-    startRoot(registry, 'B', { startedAt: T0 + 3 * TURN_ACTIVITY_WINDOW_MS });
-    expect(registry.rootOf('A')).toBeUndefined();
+    expect(recovered.map((r) => [r.reason, r.targetRootId, r.input.inboundEventId, r.from.rootId])).toEqual([
+      ['root_ended', 'A', '1', 'H'],
+      ['root_ended', 'A', '2', 'H'],
+    ]);
     expect(registry.takeHeldForWake('A')).toEqual([]);
-    expect(error).toHaveBeenCalledTimes(2);
-    expect(error).toHaveBeenLastCalledWith(expect.objectContaining({ rootId: 'A', held: 1 }), expect.stringContaining('lost'));
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('(d) a root dropped with corrections held re-runs each on its handing turn', () => {
+    const { registry, recovered, set } = withRecovery();
+    const from = handing(registry);
+    startRoot(registry, 'A');
+    registry.holdForWake('A', held('1'), from);
+    // A never records its end: past the maximum age it counts as ended, and is pruned.
+    const later = T0 + MAX_RUNNING_ROOT_AGE_MS + 3 * TURN_ACTIVITY_WINDOW_MS;
+    set(later);
+    startRoot(registry, 'B', { startedAt: later });
+    expect(registry.rootOf('A')).toBeUndefined();
+    expect(recovered.map((r) => [r.reason, r.targetRootId, r.input.inboundEventId])).toEqual([['root_dropped', 'A', '1']]);
+  });
+
+  it('with no recovery publisher, a lost correction is logged at error, never thrown', () => {
+    const { error, logger } = spyLogger();
+    const { registry } = setup(logger);
+    const from = handing(registry);
+    startRoot(registry, 'A');
+    registry.holdForWake('A', held('1'), from);
+    expect(() => registry.taskEnded('A')).not.toThrow();
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ fromRootId: 'H', targetRootId: 'A', inboundEventId: '1', reason: 'root_ended' }),
+      expect.stringContaining('lost'),
+    );
+  });
+
+  it('a recovery publisher that throws is logged at error, never thrown', () => {
+    const { error, logger } = spyLogger();
+    const registry = new TurnActivityRegistry({
+      logger,
+      recoverHandoff: () => {
+        throw new Error('bus down');
+      },
+    });
+    const from = handing(registry);
+    startRoot(registry, 'A');
+    registry.holdForWake('A', held('1'), from);
+    expect(() => registry.taskEnded('A')).not.toThrow();
+    expect(error).toHaveBeenCalledWith(expect.objectContaining({ reason: 'root_ended' }), expect.stringContaining('failed'));
   });
 
   it('a root that ends with nothing held logs nothing', () => {
@@ -1147,5 +1211,27 @@ describe('TurnActivityRegistry held corrections for a wake (#2588)', () => {
       metadata: { [INBOUND_SENDER_TEXT_KEY]: 'hi', [INBOUND_SENDER_TEXT_CLIPPED_KEY]: true },
     }).requestTextClipped).toBe(true);
     expect(start(registry, 'none', { metadata: { [INBOUND_SENDER_TEXT_CLIPPED_KEY]: true } }).requestTextClipped).toBe(false);
+  });
+});
+
+describe('TurnActivityRegistry originator stamp (#2588)', () => {
+  it('records the stamped originator, its authenticated flag (fail closed) and the sender id', () => {
+    const { registry } = setup();
+    const originator = { contactId: 'contact-p', channel: 'email', systemRole: 'principal', initiatedAt: 'x', tier: 'principal', authenticated: true };
+    startRoot(registry, 'A', { metadata: { originator }, senderId: 'ada@example.com' });
+    const a = registry.rootOf('A')!;
+    expect(a.originatorAuthenticated).toBe(true);
+    expect(a.originator).toEqual(originator);
+    expect(a.senderId).toBe('ada@example.com');
+    // A copy: the caller's object cannot change it.
+    originator.authenticated = false;
+    expect(registry.rootOf('A')!.originator?.authenticated).toBe(true);
+
+    startRoot(registry, 'B', { metadata: { originator: { ...originator, authenticated: false } } });
+    expect(registry.rootOf('B')!.originatorAuthenticated).toBe(false);
+    startRoot(registry, 'C', { metadata: { originator: { ...originator, authenticated: undefined } } });
+    expect(registry.rootOf('C')!.originatorAuthenticated).toBe(false);
+    startRoot(registry, 'D');
+    expect(registry.rootOf('D')!).toMatchObject({ originatorAuthenticated: false, originator: null, senderId: null });
   });
 });

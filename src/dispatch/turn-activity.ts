@@ -26,7 +26,9 @@ import {
   isDelegatedSpecialistTask,
   parseTaskOriginator,
 } from '../agents/delegated-task-context.js';
+import type { TaskOriginator } from '../contacts/types.js';
 import type { Logger } from '../logger.js';
+import { isUuid } from '../util/uuid.js';
 import { isOneToOneAudience } from './audience.js';
 import type { InjectableInput } from './turn-lanes.js';
 
@@ -60,6 +62,11 @@ export const INBOUND_SENDER_TEXT_KEY = 'inboundSenderText';
 export const INBOUND_SCAN_FINDING_COUNT_KEY = 'inboundScanFindingCount';
 /** Trusted flag, stamped `true` when the dispatcher clipped the sender's text (it is partial). */
 export const INBOUND_SENDER_TEXT_CLIPPED_KEY = 'inboundSenderTextClipped';
+/**
+ * Trusted task-metadata key on a hand-off recovery task (src/agents/handoff-recovery.ts):
+ * `{ targetRootId, reason }`. Only that system publisher stamps it; mergeTaskMetadata strips it.
+ */
+export const HANDOFF_RECOVERY_KEY = 'handoffRecovery';
 
 /** The sender's text clipped to the registry's limit, by code points. */
 export function clipSenderText(text: string): string {
@@ -96,6 +103,53 @@ function scanFindingsOf(metadata: Record<string, unknown> | undefined): number |
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
+/** A frozen copy of the task's stamped originator, or null when it has none. */
+function originatorOf(metadata: Record<string, unknown> | undefined): Readonly<TaskOriginator> | null {
+  const parsed = parseTaskOriginator(metadata?.['originator']);
+  return parsed ? Object.freeze({ ...parsed }) : null;
+}
+
+/** A resolved person's turn: not a stranger's (unresolved) and not Curia's own work (#2588). */
+export function isPersonTurn(root: RootTurn): boolean {
+  return root.originatorResolved && !root.originatorIsSystem && isUuid(root.originatorContactId);
+}
+
+/**
+ * A hand-off correction held for a root's next late-delegation wake, with the handing turn it
+ * came from: a lost one is re-run there (recoverHandoff).
+ */
+export interface HeldCorrection {
+  input: InjectableInput;
+  /** The handing root, as it was when the correction was held. */
+  from: RootTurn;
+}
+
+/** Why a passed-on or held correction did not reach the work it was handed to. */
+export type HandoffRecoveryReason =
+  /** The target turn ended without draining it, after the handing turn reported it passed on. */
+  | 'returned'
+  /** Still not drained HANDOFF_LOST_AFTER_MS after it was queued. */
+  | 'unresolved'
+  /** The target root ended with it still held for a wake. */
+  | 'root_ended'
+  /** The target root was pruned or evicted with it still held. */
+  | 'root_dropped'
+  /** The target's wake could not take it into its lane. */
+  | 'wake_not_injected'
+  /** The target's wake ended without draining it. */
+  | 'wake_returned';
+
+export interface HandoffRecoveryRequest {
+  /** The handing root: the recovery turn runs on its conversation and channel. */
+  from: RootTurn;
+  targetRootId: string;
+  input: InjectableInput;
+  reason: HandoffRecoveryReason;
+}
+
+/** Publishes the recovery turn. Must not throw and must not re-enter the registry synchronously. */
+export type HandoffRecoverer = (request: HandoffRecoveryRequest) => void;
+
 export interface RootTurn {
   /** Root task event id (or voice session id). */
   rootId: string;
@@ -130,6 +184,10 @@ export interface RootTurn {
    * missing stamp is false. An auto root takes its seed's (voice: false).
    */
   originatorAuthenticated: boolean;
+  /** A frozen copy of the root task's stamped originator; null when it had none (or auto). */
+  originator: Readonly<TaskOriginator> | null;
+  /** The root task's channel sender id, for routing a reply; null when unknown (auto roots). */
+  senderId: string | null;
   /** Epoch ms. */
   startedAt: number;
   /** Set when no task under the root is running. */
@@ -183,6 +241,8 @@ export interface TaskStartInput {
   originatorResolved: boolean;
   /** turn-lanes.ts originatorIsSystem of the task's copied originator. */
   originatorIsSystem: boolean;
+  /** The task's channel sender id (payload.senderId). */
+  senderId?: string;
 }
 
 export interface EnsureRootSeed {
@@ -210,6 +270,8 @@ interface RootState {
   requestTextClipped: boolean;
   inboundScanFindings: number | null;
   originatorAuthenticated: boolean;
+  originator: Readonly<TaskOriginator> | null;
+  senderId: string | null;
   startedAt: number;
   endedAt: number | null;
   runningTaskIds: Set<string>;
@@ -243,6 +305,12 @@ export interface TurnActivityRegistryOptions {
   scopeOf?: (conversationId: string) => string | undefined;
   /** Curia's own mailboxes, excluded when judging whether an email thread is one-to-one. */
   selfEmails?: readonly string[];
+  /** The hand-off recovery publisher; may also be set later with setHandoffRecoverer. */
+  recoverHandoff?: HandoffRecoverer;
+}
+
+function nonEmpty(value: string | undefined): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 /** The task's stamped `originator.authenticated === true`. Fails closed: absent or malformed is false. */
@@ -297,7 +365,9 @@ export class TurnActivityRegistry {
   /** rootId -> keys of `${otherRootId}|${kind}:${value}` already shown to that root. */
   private readonly shown = new Map<string, Set<string>>();
   /** rootId -> hand-off corrections waiting for that root's late-delegation wake, oldest first. */
-  private readonly held = new Map<string, InjectableInput[]>();
+  private readonly held = new Map<string, HeldCorrection[]>();
+  /** Re-runs a lost correction on its handing turn's conversation (setHandoffRecoverer). */
+  private recoverer: HandoffRecoverer | undefined;
 
   private readonly scopeOf: ((conversationId: string) => string | undefined) | undefined;
   private readonly selfEmails: readonly string[];
@@ -311,6 +381,38 @@ export class TurnActivityRegistry {
     this.scopeOf = opts.scopeOf;
     this.selfEmails = opts.selfEmails ?? [];
     this.lastPruneAt = this.now();
+    this.recoverer = opts.recoverHandoff;
+  }
+
+  /**
+   * Set the recovery publisher. Bootstrap builds it after the dispatcher (whose routing it
+   * registers), which comes after this registry.
+   */
+  setHandoffRecoverer(recoverer: HandoffRecoverer): void {
+    this.recoverer = recoverer;
+  }
+
+  /**
+   * Re-run a correction the person was told was passed on or held, on its handing turn's
+   * conversation, because it did not reach the work (#2588). Fail-open: with no publisher, or
+   * a publisher that throws, it logs at error and returns.
+   */
+  recoverHandoff(request: HandoffRecoveryRequest): void {
+    const ids = {
+      fromRootId: request.from.rootId,
+      targetRootId: request.targetRootId,
+      inboundEventId: request.input.inboundEventId,
+      reason: request.reason,
+    };
+    if (!this.recoverer) {
+      this.logger.error(ids, 'turn activity: no hand-off recovery publisher; a passed-on correction is lost');
+      return;
+    }
+    try {
+      this.recoverer(request);
+    } catch (err) {
+      this.logger.error({ ...ids, err }, 'turn activity: hand-off recovery failed; a passed-on correction is lost');
+    }
   }
 
   /** Register a task under its root and return that root. */
@@ -349,12 +451,16 @@ export class TurnActivityRegistry {
       root.endedAt = this.now();
       const held = this.held.get(root.rootId);
       if (held && held.length > 0) {
-        // The wake normally runs before its specialist's end is recorded, so this hold is
-        // likely stranded: only a late-delivery sweep wake can still take it.
-        this.logger.error(
-          { rootId: root.rootId, held: held.length, inboundEventIds: held.map((i) => i.inboundEventId) },
-          'turn activity: a root ended with hand-off corrections still held for its wake',
+        // The wake normally runs before its specialist's end is recorded, so a hold still here
+        // has no detached work left to wake it: re-run each correction on its handing turn.
+        this.held.delete(root.rootId);
+        this.logger.info(
+          { rootId: root.rootId, held: held.length, inboundEventIds: held.map((h) => h.input.inboundEventId) },
+          'turn activity: a root ended with hand-off corrections still held; re-running them on their handing turns',
         );
+        for (const h of held) {
+          this.recoverHandoff({ from: h.from, targetRootId: root.rootId, input: h.input, reason: 'root_ended' });
+        }
       }
     }
   }
@@ -389,6 +495,8 @@ export class TurnActivityRegistry {
       requestTextClipped: false,
       inboundScanFindings: null,
       originatorAuthenticated: seed.originatorAuthenticated,
+      originator: null,
+      senderId: null,
       startedAt: now,
       endedAt: null,
       runningTaskIds: new Set(),
@@ -527,13 +635,13 @@ export class TurnActivityRegistry {
    * unknown root, the input is not held, a warning is logged, and false is returned. An input
    * already held (same inboundEventId) is not held twice; that returns true.
    */
-  holdForWake(rootId: string, input: InjectableInput): boolean {
+  holdForWake(rootId: string, input: InjectableInput, from: RootTurn): boolean {
     if (!this.roots.has(rootId)) {
       this.logger.warn({ rootId, inboundEventId: input.inboundEventId }, 'turn activity: no such root to hold a correction for');
       return false;
     }
     const list = this.held.get(rootId) ?? [];
-    if (list.some((held) => held.inboundEventId === input.inboundEventId)) return true;
+    if (list.some((held) => held.input.inboundEventId === input.inboundEventId)) return true;
     if (list.length >= MAX_HELD_PER_ROOT) {
       this.logger.warn(
         { rootId, inboundEventId: input.inboundEventId, cap: MAX_HELD_PER_ROOT },
@@ -541,17 +649,22 @@ export class TurnActivityRegistry {
       );
       return false;
     }
-    list.push(input);
+    list.push({ input, from });
     this.held.set(rootId, list);
     return true;
   }
 
   /** Every correction held for the root, oldest first; the root's hold is then empty. */
-  takeHeldForWake(rootId: string): InjectableInput[] {
+  takeHeldForWake(rootId: string): HeldCorrection[] {
     const list = this.held.get(rootId);
     if (!list) return [];
     this.held.delete(rootId);
     return list;
+  }
+
+  /** How many corrections are held for the root's wake. */
+  heldCount(rootId: string): number {
+    return this.held.get(rootId)?.length ?? 0;
   }
 
   // ── internals ────────────────────────────────────────────────────────────
@@ -672,6 +785,8 @@ export class TurnActivityRegistry {
       existing.originatorIsSystem = input.originatorIsSystem;
       existing.originatorAuthenticated = originatorAuthenticatedOf(input.metadata);
     }
+    existing.originator ??= originatorOf(input.metadata);
+    existing.senderId ??= nonEmpty(input.senderId);
     if (!existing.originatorResolved && input.originatorContactId === existing.originatorContactId) {
       existing.originatorResolved = input.originatorResolved;
     }
@@ -683,6 +798,7 @@ export class TurnActivityRegistry {
   }
 
   private createRoot(input: TaskStartInput): RootState {
+    const originator = originatorOf(input.metadata);
     const root: RootState = {
       rootId: input.taskEventId,
       conversationId: input.conversationId,
@@ -696,6 +812,8 @@ export class TurnActivityRegistry {
       requestTextClipped: senderTextClippedOf(input.metadata),
       inboundScanFindings: scanFindingsOf(input.metadata),
       originatorAuthenticated: originatorAuthenticatedOf(input.metadata),
+      originator,
+      senderId: nonEmpty(input.senderId),
       startedAt: input.startedAt,
       endedAt: null,
       runningTaskIds: new Set(),
@@ -802,6 +920,8 @@ export class TurnActivityRegistry {
       requestTextClipped: root.requestTextClipped,
       inboundScanFindings: root.inboundScanFindings,
       originatorAuthenticated: root.originatorAuthenticated,
+      originator: root.originator,
+      senderId: root.senderId,
       startedAt: root.startedAt,
       endedAt: root.endedAt,
       runningTaskIds: new Set(root.runningTaskIds),
@@ -830,11 +950,14 @@ export class TurnActivityRegistry {
     const held = this.held.get(root.rootId);
     if (held) {
       this.held.delete(root.rootId);
-      // No wake came for them: the person's corrections are lost.
-      this.logger.error(
-        { rootId: root.rootId, held: held.length, inboundEventIds: held.map((i) => i.inboundEventId) },
-        'turn activity: dropped a root with hand-off corrections still held for its wake; they are lost',
+      // No wake came for them: re-run each on its handing turn.
+      this.logger.warn(
+        { rootId: root.rootId, held: held.length, inboundEventIds: held.map((h) => h.input.inboundEventId) },
+        'turn activity: dropped a root with hand-off corrections still held; re-running them on their handing turns',
       );
+      for (const h of held) {
+        this.recoverHandoff({ from: h.from, targetRootId: root.rootId, input: h.input, reason: 'root_dropped' });
+      }
     }
   }
 

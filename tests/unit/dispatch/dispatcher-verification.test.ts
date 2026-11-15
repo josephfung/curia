@@ -326,3 +326,31 @@ describe('Dispatcher — reply scrub (#2017)', () => {
     expect(outbound[0]!.payload.content).toBe('Hi, order 482913 shipped.');
   });
 });
+
+describe('Dispatcher — sender text withheld when a code may be in it (#2588)', () => {
+  it('withholds the text when a code registers against an expired verification', async () => {
+    const { send, tasks, registerSpy } = buildHarness({ active: [verificationRow('v-1', 'sms', 'expired')] });
+    await send("it's 482 913");
+    expect(registerSpy).toHaveBeenCalled();
+    expect(tasks[0]!.payload.metadata!['inboundSenderText']).toBeUndefined();
+    // Not a pending row: the code-received guidance is not announced.
+    expect(tasks[0]!.payload.turnGuidance ?? []).not.toContain('verification-code-received');
+  });
+
+  it('withholds the text, and warns, when the verification lookup throws', async () => {
+    const { send, tasks, warnSpy } = buildHarness({
+      listActive: async () => {
+        throw new Error('db down');
+      },
+    });
+    await send('book the 9am flight');
+    expect(tasks[0]!.payload.metadata!['inboundSenderText']).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(expect.objectContaining({ channelId: 'signal' }), expect.stringContaining('not shared'));
+  });
+
+  it('stamps the text when nothing registered', async () => {
+    const { send, tasks } = buildHarness({ active: [verificationRow('v-1', 'sms')] });
+    await send('book the 9am flight');
+    expect(tasks[0]!.payload.metadata!['inboundSenderText']).toBe('book the 9am flight');
+  });
+});

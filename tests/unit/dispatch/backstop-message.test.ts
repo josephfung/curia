@@ -36,6 +36,8 @@ function root(over: Partial<RootTurn> = {}): RootTurn {
     inboundScanFindings: null,
     // Authenticated by default (a verified sender); the authentication tests turn it off.
     originatorAuthenticated: true,
+    originator: null,
+    senderId: null,
     startedAt: AT,
     endedAt: null,
     runningTaskIds: new Set(),

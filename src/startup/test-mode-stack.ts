@@ -133,6 +133,7 @@ import { TaskOutreachService, taskLookupFrom } from '../dispatch/task-outreach-c
 import { OutboundContentFilter } from '../dispatch/outbound-filter.js';
 import { TurnLanes } from '../dispatch/turn-lanes.js';
 import { TurnActivityRegistry } from '../dispatch/turn-activity.js';
+import { HandoffRecoveryPublisher } from '../agents/handoff-recovery.js';
 import { createInboundScanner } from '../dispatch/security-config-loader.js';
 import type { InboundScanner } from '../dispatch/inbound-scanner.js';
 import {
@@ -1464,6 +1465,13 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       logger,
       selfEmails,
       ...(options.turnActivityScope ? { scopeOf: options.turnActivityScope } : {}),
+      // A lost hand-off is re-run like production (#2588). No dispatcher runs here, so no
+      // routing registrar: the harness reads the re-run turn's agent.response directly.
+      recoverHandoff: new HandoffRecoveryPublisher({
+        bus,
+        logger,
+        scrubText: (text) => verification.tracker.scrubText(text),
+      }).recover,
     });
     const layerOptions: NonNullable<ConstructorParameters<typeof ExecutionLayer>[2]> = {
       bus,

@@ -229,6 +229,19 @@ export function spotCheckCandidateText(channelId: string, content: string): stri
   return (quoteAt === -1 ? lines : lines.slice(0, quoteAt)).join('\n').trim();
 }
 
+/**
+ * Whether spotCheckCandidateText cuts any content from this email: a quoted or forwarded part
+ * below the first quote marker, with something in it (#2588). The Subject line does not
+ * count. Always false off email. The sender's text is then only part of the message, so it
+ * is stamped as clipped and never handed over as the whole message.
+ */
+export function cutsQuotedText(channelId: string, content: string): boolean {
+  if (channelId !== 'email') return false;
+  const lines = content.replace(EMAIL_SUBJECT_PREFIX, '').split('\n');
+  const quoteAt = firstQuoteLine(lines);
+  return quoteAt !== -1 && lines.slice(quoteAt).join('\n').trim() !== '';
+}
+
 // A forward's subject prefix: "Fwd:" (Gmail, Apple Mail), "FW:" (Outlook), "Fw:".
 const FORWARD_SUBJECT = /^Subject:\s*(fwd?|fw)\s*:/i;
 

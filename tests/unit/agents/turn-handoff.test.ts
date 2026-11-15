@@ -6,13 +6,18 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import pino from 'pino';
 import {
   HANDOFF_DRAIN_WAIT_MS,
+  HANDOFF_LOST_AFTER_MS,
   handoffInboundEventId,
   handoffOutcomeText,
   performHandoff,
   type HandoffOutcome,
 } from '../../../src/agents/turn-handoff.js';
 import { isUuid } from '../../../src/util/uuid.js';
-import { TurnActivityRegistry, type TaskStartInput } from '../../../src/dispatch/turn-activity.js';
+import {
+  TurnActivityRegistry,
+  type HandoffRecoveryRequest,
+  type TaskStartInput,
+} from '../../../src/dispatch/turn-activity.js';
 import { TurnLanes, type LaneHolder } from '../../../src/dispatch/turn-lanes.js';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
 import { EventBus } from '../../../src/bus/bus.js';
@@ -27,6 +32,11 @@ const STRANGER = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const MY_CONVERSATION = 'signal:+15550001';
 const TARGET_CONVERSATION = 'sms:+15550001';
 const REQUEST = 'actually make it Tuesday';
+const INITIATED_AT = '2026-11-14T15:00:00.000Z';
+/** The dispatcher's stamp for the handing turn: a Signal sender, authenticated by the channel. */
+const MY_ORIGINATOR = {
+  contactId: CONTACT, channel: 'signal', systemRole: null, tier: 'known', initiatedAt: INITIATED_AT, authenticated: true,
+};
 
 const USAGE = { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 };
 const PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock_000' } as const;
@@ -64,7 +74,8 @@ function startMine(registry: TurnActivityRegistry, metadata: Record<string, unkn
     taskEventId: 'mine',
     channelId: 'signal',
     conversationId: MY_CONVERSATION,
-    metadata: { inboundSenderText: REQUEST, inboundScanFindingCount: 0, ...metadata },
+    senderId: '+15550001',
+    metadata: { originator: MY_ORIGINATOR, inboundSenderText: REQUEST, inboundScanFindingCount: 0, ...metadata },
     ...over,
   });
 }
@@ -96,9 +107,16 @@ function targetHolder(over: Partial<LaneHolder> = {}): LaneHolder {
 
 function setup() {
   const spy = spyLogger();
-  const registry = new TurnActivityRegistry({ logger: spy.logger });
+  const recovered: HandoffRecoveryRequest[] = [];
+  const registry = new TurnActivityRegistry({ logger: spy.logger, recoverHandoff: (r) => { recovered.push(r); } });
   const lanes = newLanes(spy.logger);
-  const run = (over: { targetRootId?: string; senderLabel?: string; drainedFollowUp?: boolean } = {}) => performHandoff({
+  const run = (over: {
+    targetRootId?: string;
+    senderLabel?: string;
+    drainedFollowUp?: boolean;
+    handingLiveTurn?: boolean;
+    scrubText?: (text: string) => string;
+  } = {}) => performHandoff({
     registry,
     lanes,
     logger: spy.logger,
@@ -106,8 +124,10 @@ function setup() {
     targetRootId: over.targetRootId ?? 'other-root',
     ...(over.senderLabel !== undefined && { senderLabel: over.senderLabel }),
     ...(over.drainedFollowUp !== undefined && { drainedFollowUp: over.drainedFollowUp }),
+    ...(over.handingLiveTurn !== undefined && { handingLiveTurn: over.handingLiveTurn }),
+    ...(over.scrubText !== undefined && { scrubText: over.scrubText }),
   });
-  return { ...spy, registry, lanes, run };
+  return { ...spy, registry, lanes, run, recovered };
 }
 
 /** A specialist delegated from the target, still running. */
@@ -147,7 +167,7 @@ describe('performHandoff', () => {
     startMine(registry);
     await lanes.acquire(targetHolder());
 
-    const pending = run({ senderLabel: 'Ada' });
+    const pending = run({ senderLabel: 'Ada', handingLiveTurn: true });
     const [input] = lanes.takeQueued('other-root');
     expect(input).toMatchObject({
       senderContactId: CONTACT,
@@ -212,14 +232,16 @@ describe('performHandoff', () => {
     finishTarget(registry, lanes);
     await vi.runAllTimersAsync();
     const held = registry.takeHeldForWake('other-root');
-    expect(held.map((i) => i.content)).toEqual([REQUEST]);
+    expect(held.map((h) => h.input.content)).toEqual([REQUEST]);
     // A wake is never live (#1126).
-    expect(held[0]!.liveTurn).toBe(false);
+    expect(held[0]!.input.liveTurn).toBe(false);
+    // The handing turn travels with it, for a recovery.
+    expect(held[0]!.from.rootId).toBe('mine');
   });
 
-  it('a late return with nothing left running logs the lost correction at error', async () => {
+  it('(a) a late return with nothing left running re-runs the correction on the handing turn', async () => {
     vi.useFakeTimers();
-    const { registry, lanes, run, error } = setup();
+    const { registry, lanes, run, recovered } = setup();
     startTarget(registry);
     startMine(registry);
     await lanes.acquire(targetHolder());
@@ -229,11 +251,39 @@ describe('performHandoff', () => {
     expect(await pending).toEqual({ kind: 'queued' });
     finishTarget(registry, lanes);
     await vi.runAllTimersAsync();
-    expect(error).toHaveBeenCalledWith(
-      expect.objectContaining({ targetRootId: 'other-root', fromTaskEventId: 'mine' }),
-      expect.any(String),
-    );
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toMatchObject({ targetRootId: 'other-root', reason: 'returned', input: { content: REQUEST } });
+    expect(recovered[0]!.from).toMatchObject({ rootId: 'mine', conversationId: MY_CONVERSATION, channelId: 'signal' });
     expect(registry.takeHeldForWake('other-root')).toEqual([]);
+  });
+
+  it('(b) a passed-on message neither drained nor returned in time is re-run once', async () => {
+    vi.useFakeTimers();
+    const { registry, lanes, run, recovered } = setup();
+    startTarget(registry);
+    startMine(registry);
+    await lanes.acquire(targetHolder());
+
+    const pending = run();
+    await vi.advanceTimersByTimeAsync(HANDOFF_DRAIN_WAIT_MS);
+    expect(await pending).toEqual({ kind: 'queued' });
+    await vi.advanceTimersByTimeAsync(HANDOFF_LOST_AFTER_MS);
+    expect(recovered.map((r) => r.reason)).toEqual(['unresolved']);
+    // A later return does not re-run it a second time.
+    finishTarget(registry, lanes);
+    await vi.runAllTimersAsync();
+    expect(recovered).toHaveLength(1);
+  });
+
+  it('a return inside the wait is told to the model, not re-run', async () => {
+    const { registry, lanes, run, recovered } = setup();
+    startTarget(registry);
+    startMine(registry);
+    await lanes.acquire(targetHolder());
+    const pending = run();
+    lanes.release('other-root');
+    expect(await pending).toEqual({ kind: 'do_it_yourself', reason: 'finished' });
+    expect(recovered).toEqual([]);
   });
 
   it('a return inside the wait is held while a specialist runs', async () => {
@@ -266,14 +316,92 @@ describe('performHandoff', () => {
     startTarget(registry);
     detachSpecialist(registry);
     startMine(registry);
-    expect(await run()).toEqual({ kind: 'held_for_wake' });
+    expect(await run({ handingLiveTurn: true })).toEqual({ kind: 'held_for_wake' });
     const held = registry.takeHeldForWake('other-root');
     expect(held).toHaveLength(1);
-    expect(held[0]).toMatchObject({
+    expect(held[0]!.input).toMatchObject({
       content: REQUEST,
       liveTurn: false,
       handedOverFrom: { channelId: 'signal', conversationLabel: 'Signal' },
     });
+  });
+
+  it("the handed input's liveTurn copies the handing task's, and is false when absent", async () => {
+    const { registry, lanes, run } = setup();
+    startTarget(registry);
+    startMine(registry);
+    await lanes.acquire(targetHolder());
+    void run();
+    expect(lanes.takeQueued('other-root')[0]!.liveTurn).toBe(false);
+  });
+
+  it('scrubs a sign-in code the tracker learned after the text was stamped', async () => {
+    const { registry, lanes, run } = setup();
+    startTarget(registry);
+    startMine(registry, { inboundSenderText: 'use 482913 and make it Tuesday' });
+    await lanes.acquire(targetHolder());
+    void run({ scrubText: (t) => t.replace('482913', '[sign-in code]') });
+    const [input] = lanes.takeQueued('other-root');
+    expect(input!.content).toBe('use [sign-in code] and make it Tuesday');
+    expect(input!.originalContent).toBe('use [sign-in code] and make it Tuesday');
+  });
+
+  it('an unauthenticated principal email root is refused (a forged From), an authenticated one is not', async () => {
+    const forged = setup();
+    startTarget(forged.registry);
+    startMine(forged.registry, {
+      originator: { ...MY_ORIGINATOR, channel: 'email', systemRole: 'principal', tier: 'principal', authenticated: false },
+    }, { channelId: 'email', conversationId: 'email:thread-1' });
+    await forged.lanes.acquire(targetHolder());
+    expect(await forged.run()).toEqual({ kind: 'do_it_yourself', reason: 'ineligible' });
+    expect(forged.lanes.takeQueued('other-root')).toEqual([]);
+
+    // A missing stamp fails closed too.
+    const unstamped = setup();
+    startTarget(unstamped.registry);
+    startMine(unstamped.registry, { originator: { ...MY_ORIGINATOR, authenticated: undefined } });
+    expect(await unstamped.run()).toEqual({ kind: 'do_it_yourself', reason: 'ineligible' });
+
+    const verified = setup();
+    startTarget(verified.registry);
+    startMine(verified.registry, {
+      originator: { ...MY_ORIGINATOR, channel: 'email', systemRole: 'principal', tier: 'principal', authenticated: true },
+    }, { channelId: 'email', conversationId: 'email:thread-1' });
+    await verified.lanes.acquire(targetHolder());
+    void verified.run();
+    expect(verified.lanes.takeQueued('other-root')).toHaveLength(1);
+  });
+
+  it('an SMS handing root is the accepted-risk exception (as in authority.ts)', async () => {
+    const { registry, lanes, run } = setup();
+    startTarget(registry, { channelId: 'signal', conversationId: 'signal:+15550001' });
+    startMine(registry, { originator: { ...MY_ORIGINATOR, channel: 'sms', authenticated: false } }, {
+      channelId: 'sms', conversationId: 'sms:+15550009',
+    });
+    await lanes.acquire(targetHolder({ conversationId: 'signal:+15550001' }));
+    void run();
+    expect(lanes.takeQueued('other-root')).toHaveLength(1);
+  });
+
+  it('refuses when the target task holds a lane on another conversation (defence in depth)', async () => {
+    const { registry, lanes, run } = setup();
+    startTarget(registry);
+    startMine(registry);
+    // The registry says the target runs on SMS; its task id holds a lane elsewhere.
+    await lanes.acquire(targetHolder({ conversationId: 'sms:+15559999' }));
+    expect(await run()).toEqual({ kind: 'do_it_yourself', reason: 'ineligible' });
+    expect(lanes.takeQueued('other-root')).toEqual([]);
+  });
+
+  it('a running coordinator with no lane holder is unreachable, not finished', async () => {
+    const { registry, run } = setup();
+    startTarget(registry);
+    startMine(registry);
+    // No lanes.acquire: the target's coordinator runs but holds no lane.
+    const outcome = await run();
+    expect(outcome).toEqual({ kind: 'do_it_yourself', reason: 'unreachable' });
+    expect(handoffOutcomeText(outcome)).toContain("that turn is busy and can't take messages right now");
+    expect(handoffOutcomeText(outcome)).not.toContain('finished');
   });
 
   it('a clipped request text is ineligible', async () => {
@@ -329,20 +457,22 @@ describe('performHandoff', () => {
     expect(handoffOutcomeText(outcome)).toContain('Do the work here yourself');
   });
 
-  it('an unknown turn id is finished', async () => {
+  it('an unknown turn id is no longer active', async () => {
     const { registry, run } = setup();
     startMine(registry);
-    expect(await run({ targetRootId: 'no-such-turn' })).toEqual({ kind: 'do_it_yourself', reason: 'finished' });
+    const outcome = await run({ targetRootId: 'no-such-turn' });
+    expect(outcome).toEqual({ kind: 'do_it_yourself', reason: 'inactive' });
+    expect(handoffOutcomeText(outcome)).toContain('that turn is no longer active');
   });
 
-  it('a target outside the window is finished, or not the same person', async () => {
+  it('a target outside the window is no longer active, or not the same person', async () => {
     const { registry, run } = setup();
     // Started and ended well before my window opened.
     startTarget(registry, { startedAt: Date.now() - 60 * 60_000 });
     registry.taskEnded('other-root');
     // Ended now, but my turn's window looks back from my own start: start mine far later.
     startMine(registry, {}, { startedAt: Date.now() + 60 * 60_000 });
-    expect(await run()).toEqual({ kind: 'do_it_yourself', reason: 'finished' });
+    expect(await run()).toEqual({ kind: 'do_it_yourself', reason: 'inactive' });
 
     const other = setup();
     other.registry.taskStarted({
@@ -426,14 +556,16 @@ describe('performHandoff', () => {
     })).toEqual({ kind: 'do_it_yourself', reason: 'ineligible' });
   });
 
-  it('an exception fails open to do_it_yourself and logs at error', async () => {
+  it('an exception fails open to do_it_yourself (internal_error) and logs at error', async () => {
     const { registry, run, error } = setup();
     startTarget(registry);
     startMine(registry);
     vi.spyOn(registry, 'otherRootsInWindow').mockImplementation(() => {
       throw new Error('registry down');
     });
-    expect(await run()).toEqual({ kind: 'do_it_yourself', reason: 'ineligible' });
+    const outcome = await run();
+    expect(outcome).toEqual({ kind: 'do_it_yourself', reason: 'internal_error' });
+    expect(handoffOutcomeText(outcome)).toContain('something went wrong passing it on');
     expect(error).toHaveBeenCalled();
   });
 });
@@ -444,15 +576,20 @@ describe('handoffOutcomeText', () => {
     expect(handoffOutcomeText({ kind: 'delivered' })).toBe(passed);
     expect(handoffOutcomeText({ kind: 'queued' })).toBe(passed);
     expect(handoffOutcomeText({ kind: 'held_for_wake' })).toBe(
-      "That work is still finishing in the background; the change will be applied when it lands. Tell them so briefly; don't do the work here.",
+      "That work is still finishing in the background; the change will be applied when it lands, or picked up here if it can't be. Tell them so briefly; don't do the work here.",
     );
     const reasons: Extract<HandoffOutcome, { kind: 'do_it_yourself' }>['reason'][] = [
-      'finished', 'not_same_person', 'not_one_to_one', 'cap', 'closing', 'ineligible',
+      'finished', 'inactive', 'unreachable', 'not_same_person', 'not_one_to_one', 'cap', 'closing', 'ineligible',
+      'tool_error', 'internal_error',
     ];
+    const phrases = new Set<string>();
     for (const reason of reasons) {
       const textOut = handoffOutcomeText({ kind: 'do_it_yourself', reason });
       expect(textOut).toMatch(/^Couldn't hand this over \([^)]+\)\. Do the work here yourself; the other turn's actions are listed above, so adjust them rather than repeat them\.$/);
+      phrases.add(textOut);
     }
+    // Each reason has its own phrase.
+    expect(phrases.size).toBe(reasons.length);
   });
 });
 
@@ -470,7 +607,7 @@ function toolDef(name: string): ToolDefinition {
   return { name, description: name, input_schema: { type: 'object', properties: {}, required: [] } };
 }
 
-const ORIGINATOR = { contactId: CONTACT, channel: 'signal', systemRole: null, tier: 'known' };
+const ORIGINATOR = MY_ORIGINATOR;
 
 function myTask(over: Partial<Parameters<typeof createAgentTask>[0]> = {}): AgentTaskEvent {
   return createAgentTask({
@@ -490,11 +627,13 @@ function buildRuntime(opts: {
   lanes: TurnLanes;
   chat: LLMProvider['chat'];
   invoke?: ReturnType<typeof vi.fn>;
+  tools?: string[];
+  logger?: Logger;
 }) {
-  const logger = createLogger('error');
+  const logger = opts.logger ?? createLogger('error');
   const bus = new EventBus(logger);
   bus.subscribe('agent.response', 'dispatch', () => {});
-  const tools = ['signal-send', 'turn-handoff'].map(toolDef);
+  const tools = (opts.tools ?? ['signal-send', 'turn-handoff']).map(toolDef);
   const execution = {
     invoke: opts.invoke ?? vi.fn(),
     getToolDefinitions: vi.fn((names: string[]) => tools.filter((t) => names.includes(t.name))),
@@ -546,10 +685,26 @@ describe('runtime turn-handoff wiring', () => {
   describe('the guidance line and the tool need a turn that may hand over', () => {
     const GUIDANCE = 'use `turn-handoff`';
 
-    async function firstCall(task: AgentTaskEvent, opts: { lanesOn?: boolean; seed?: (r: TurnActivityRegistry) => void } = {}) {
+    async function firstCall(task: AgentTaskEvent, opts: {
+      lanesOn?: boolean;
+      seed?: (r: TurnActivityRegistry) => void;
+      tools?: string[];
+      logger?: Logger;
+      selfEmails?: string[];
+      emailOneToOne?: boolean;
+    } = {}) {
       const quiet = pino({ level: 'silent' });
-      const registry = new TurnActivityRegistry({ logger: quiet });
+      const registry = new TurnActivityRegistry({ logger: quiet, ...(opts.selfEmails && { selfEmails: opts.selfEmails }) });
       startTarget(registry);
+      if (opts.emailOneToOne) {
+        // A two-party thread with Curia's own mailbox: the email audience rule's shape.
+        task.payload.metadata = {
+          ...task.payload.metadata,
+          curiaRole: 'to',
+          primaryRecipientEmails: [],
+          participants: [{ email: 'ada@example.com', role: 'from' }, { email: 'curia@example.com', role: 'to' }],
+        };
+      }
       opts.seed?.(registry);
       const lanes = new TurnLanes({
         enabled: opts.lanesOn ?? true, maxInjectionsPerTurn: 2, extraRoundsPerInjection: 2, laneWaitTimeoutMs: 60_000, logger: quiet,
@@ -563,7 +718,9 @@ describe('runtime turn-handoff wiring', () => {
         });
         return textResponse('ok');
       });
-      await buildRuntime({ registry, lanes, chat }).bus.publish('dispatch', task);
+      await buildRuntime({
+        registry, lanes, chat, ...(opts.tools && { tools: opts.tools }), ...(opts.logger && { logger: opts.logger }),
+      }).bus.publish('dispatch', task);
       return calls[0]!;
     }
 
@@ -594,16 +751,99 @@ describe('runtime turn-handoff wiring', () => {
       }
     });
 
-    it('a wake under the root: neither', async () => {
+    it('a wake under the root: no note at all, so no hand-off', async () => {
       const wake = myTask({
         syntheticTurn: true,
         parentEventId: 'mine',
         metadata: { originator: ORIGINATOR, wakeContext: { derived: true }, lateDelegation: { agent: 'research', task: 't' } },
       });
       const call = await firstCall(wake, { seed: (r) => startMine(r, {}, { originatorContactId: CONTACT }) });
+      expect(call.system).not.toContain('## Your other recent turns with this person');
+      expect(call.tools).not.toContain('turn-handoff');
+      expect(call.system).not.toContain(GUIDANCE);
+    });
+
+    it('an unauthenticated principal email root: no tool and no guidance line', async () => {
+      const email = myTask({
+        channelId: 'email',
+        conversationId: 'email:thread-1',
+        metadata: {
+          originator: { ...ORIGINATOR, channel: 'email', systemRole: 'principal', tier: 'principal', authenticated: false },
+          inboundSenderText: REQUEST,
+          inboundScanFindingCount: 0,
+        },
+      });
+      const call = await firstCall(email, { selfEmails: ['curia@example.com'], emailOneToOne: true });
+      // The note is there (a one-to-one thread), but this turn may not hand over.
       expect(call.system).toContain('## Your other recent turns with this person');
       expect(call.tools).not.toContain('turn-handoff');
       expect(call.system).not.toContain(GUIDANCE);
+
+      const verified = await firstCall(myTask({
+        channelId: 'email',
+        conversationId: 'email:thread-1',
+        metadata: {
+          originator: { ...ORIGINATOR, channel: 'email', systemRole: 'principal', tier: 'principal', authenticated: true },
+          inboundSenderText: REQUEST,
+          inboundScanFindingCount: 0,
+        },
+      }), { selfEmails: ['curia@example.com'], emailOneToOne: true });
+      expect(verified.tools).toContain('turn-handoff');
+      expect(verified.system).toContain(GUIDANCE);
+    });
+
+    it('the tool not registered: no guidance line either, and a warning', async () => {
+      const warn = vi.fn();
+      const logger = { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn(), child: () => logger } as unknown as Logger;
+      const call = await firstCall(myTask(), { tools: ['signal-send'], logger });
+      expect(call.system).toContain('## Your other recent turns with this person');
+      expect(call.system).not.toContain(GUIDANCE);
+      expect(call.tools).not.toContain('turn-handoff');
+      expect(warn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('turn-handoff is not registered'));
+    });
+
+    it('a per-turn allowlist: no guidance line either, and a warning', async () => {
+      const warn = vi.fn();
+      const logger = { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn(), child: () => logger } as unknown as Logger;
+      const call = await firstCall(myTask({ toolAllowlist: ['signal-send'] }), { logger });
+      expect(call.system).not.toContain(GUIDANCE);
+      expect(call.tools).toEqual(['signal-send']);
+      expect(warn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('allowlist'));
+    });
+  });
+
+  describe('who reads the note (#2588 SEC MEDIUM-1, I4)', () => {
+    const HEADING = '## Your other recent turns with this person';
+
+    async function system(task: AgentTaskEvent): Promise<string> {
+      const quiet = pino({ level: 'silent' });
+      const registry = new TurnActivityRegistry({ logger: quiet });
+      startTarget(registry);
+      let seen = '';
+      const chat = vi.fn(async (params: { messages: Array<{ role: string; content: unknown }> }) => {
+        const sys = params.messages.find((m) => m.role === 'system');
+        if (seen === '') seen = typeof sys?.content === 'string' ? sys.content : '';
+        return textResponse('ok');
+      });
+      await buildRuntime({ registry, lanes: newLanes(quiet), chat }).bus.publish('dispatch', task);
+      return seen;
+    }
+
+    it('the same person in a Signal DM gets the note; in a Signal group, none', async () => {
+      expect(await system(myTask())).toContain(HEADING);
+      expect(await system(myTask({ conversationId: 'signal:group=abc' }))).not.toContain(HEADING);
+    });
+
+    it('a scheduled job carrying the principal\'s originator gets no note', async () => {
+      expect(await system(myTask({ channelId: 'scheduler', conversationId: 'scheduler:job-1' }))).not.toContain(HEADING);
+    });
+
+    it('a synthetic turn gets no note; a hand-off recovery turn does', async () => {
+      expect(await system(myTask({ syntheticTurn: true }))).not.toContain(HEADING);
+      expect(await system(myTask({
+        syntheticTurn: true,
+        metadata: { originator: ORIGINATOR, handoffRecovery: { targetRootId: 'other-root', reason: 'returned' } },
+      }))).toContain(HEADING);
     });
   });
 
@@ -683,7 +923,7 @@ describe('runtime turn-handoff wiring', () => {
     });
     await bus.publish('system', wake);
 
-    expect(inject).toHaveBeenCalledWith(wake.id, expect.objectContaining({ content: REQUEST, liveTurn: false }));
+    expect(inject).toHaveBeenCalledWith(wake.id, expect.objectContaining({ content: REQUEST, liveTurn: false }), TARGET_CONVERSATION);
     expect(prompts[0]).toContain(REQUEST);
     expect(prompts[0]).toContain('Handed over from');
     expect(registry.takeHeldForWake('other-root')).toEqual([]);
@@ -714,5 +954,87 @@ describe('runtime turn-handoff wiring', () => {
     }));
     expect(inject).not.toHaveBeenCalled();
     expect(registry.takeHeldForWake('other-root')).toHaveLength(1);
+  });
+
+  it('a failed tool call is reported as a tool error, not as "can\'t be passed on"', async () => {
+    const quiet = pino({ level: 'silent' });
+    const registry = new TurnActivityRegistry({ logger: quiet });
+    const lanes = newLanes(quiet);
+    startTarget(registry);
+    await lanes.acquire(targetHolder());
+    const toolResults: string[] = [];
+    let call = 0;
+    const chat = vi.fn(async (params: { messages: Array<{ role: string; content: unknown }> }) => {
+      call += 1;
+      if (call === 1) return toolUse('turn-handoff', { turn_id: 'other-root' });
+      toolResults.push(JSON.stringify(params.messages));
+      return textResponse('doing it here');
+    });
+    const invoke = vi.fn().mockResolvedValue({ success: false, error: 'skill timed out' });
+    const { bus } = buildRuntime({ registry, lanes, chat, invoke });
+    await bus.publish('dispatch', myTask());
+    expect(toolResults[0]).toContain('the hand-off tool failed');
+    expect(toolResults[0]).not.toContain("can't be passed on automatically");
+    expect(lanes.takeQueued('other-root')).toEqual([]);
+  });
+
+  describe('(e) a wake that cannot take a held correction re-runs it on the handing turn', () => {
+    async function wakeWith(inject: (lanes: TurnLanes) => void) {
+      const quiet = pino({ level: 'silent' });
+      const recovered: HandoffRecoveryRequest[] = [];
+      const registry = new TurnActivityRegistry({ logger: quiet, recoverHandoff: (r) => { recovered.push(r); } });
+      const lanes = newLanes(quiet);
+      startTarget(registry);
+      detachSpecialist(registry);
+      startMine(registry);
+      expect(await performHandoff({ registry, lanes, logger: quiet, fromTaskEventId: 'mine', targetRootId: 'other-root' }))
+        .toEqual({ kind: 'held_for_wake' });
+      inject(lanes);
+      const { bus } = buildRuntime({ registry, lanes, chat: vi.fn(async () => textResponse('ok')) });
+      await bus.publish('system', createAgentTask({
+        agentId: 'coordinator',
+        conversationId: TARGET_CONVERSATION,
+        channelId: 'sms',
+        senderId: CONTACT,
+        content: 'The research came back late.',
+        syntheticTurn: true,
+        parentEventId: 'spec-1',
+        metadata: {
+          originator: { contactId: CONTACT, channel: 'sms', systemRole: null, tier: 'known' },
+          wakeContext: { derived: true },
+          lateDelegation: { agent: 'research', task: 'find flights' },
+        },
+      }));
+      await vi.waitFor(() => expect(recovered.length).toBeGreaterThan(0));
+      return { recovered, registry };
+    }
+
+    it('not injected', async () => {
+      const { recovered, registry } = await wakeWith((lanes) => {
+        vi.spyOn(lanes, 'tryInjectIntoTask').mockReturnValue({ kind: 'not_injected', reason: 'cap' });
+      });
+      expect(recovered).toHaveLength(1);
+      expect(recovered[0]).toMatchObject({ reason: 'wake_not_injected', targetRootId: 'other-root', input: { content: REQUEST } });
+      expect(recovered[0]!.from.rootId).toBe('mine');
+      expect(registry.takeHeldForWake('other-root')).toEqual([]);
+    });
+
+    it('queued, then returned undrained', async () => {
+      const { recovered } = await wakeWith((lanes) => {
+        vi.spyOn(lanes, 'tryInjectIntoTask').mockReturnValue({
+          kind: 'queued', ticket: Promise.resolve({ kind: 'returned', reason: 'holder_ended' }),
+        });
+      });
+      expect(recovered.map((r) => r.reason)).toEqual(['wake_returned']);
+    });
+
+    it('a throw on one item is caught per item', async () => {
+      const { recovered } = await wakeWith((lanes) => {
+        vi.spyOn(lanes, 'tryInjectIntoTask').mockImplementation(() => {
+          throw new Error('lane broke');
+        });
+      });
+      expect(recovered.map((r) => r.reason)).toEqual(['wake_not_injected']);
+    });
   });
 });
