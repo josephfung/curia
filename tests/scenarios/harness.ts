@@ -34,6 +34,7 @@
 // acts only on the run's own. readGatewayOutcome reads all of it before cleanup removes it.
 import { randomUUID } from 'node:crypto';
 import { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
+import { AuditLogRepo } from '../../src/audit/audit-log-repo.js';
 import { BAND_GATE_C_UNREVIEWED_REASON } from '../../src/skills/execution.js';
 import { createAgentDiscuss, createAgentTask, createInboundMessage, type AgentErrorEvent, type AgentResponseEvent, type AgentTaskEvent, type InjectionDrainPoint, type PrincipalReportEvent } from '../../src/bus/events.js';
 import { stampOriginator } from '../../src/contacts/stamp-originator.js';
@@ -669,6 +670,8 @@ export async function createScenarioHarness(
     confidencePipeline: stack.trustScoring.confidencePipeline,
     outboundContextService: scopedOutbound,
     principalBacklog: scopedPrincipalBacklog(currentScope, new ActionLogRepo(stack.pool, logger)),
+    // As production wires it: a content-block rewrite is shown what its turn did (#2615).
+    auditLogRepo: new AuditLogRepo(stack.pool, logger),
     verification: stack.verification,
     turnLanes: stack.turnLanes,
     selfEmail: SCENARIO_CURIA_EMAIL,

@@ -259,6 +259,15 @@ not exist. The blocked body is copied into `outbound.no_reply.abandonedContent` 
 recoverable from the audit row without a log dig. The `outbound.blocked` CEO notification
 at block time remains the human-visible signal.
 
+The rewrite turn edits the draft and does nothing else (#2615): it runs with an empty
+`toolAllowlist`, which means no tools, and the runtime refuses any call the model makes
+anyway. It is also told what the drafting turn already did. The dispatcher reads that turn's
+tool results from the audit log, once, for the first rewrite, and carries them to the second.
+They travel on the task's `priorTurnActions` field and are rendered into that turn's prompt
+only, as data, never into the stored brief: tool output is not replayed into later turns.
+If the read fails, times out (3 s) or has no repo, the rewrite is told the record could not
+be read and to keep the draft's claims of action as they are.
+
 The sentinel is interpreted by the agent runtime (to set `suppressDelivery` and blank
 content) and by dispatch (to skip the send). Other `agent.response` subscribers must not
 parse `content` for the token.
