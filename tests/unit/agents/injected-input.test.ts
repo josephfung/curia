@@ -54,6 +54,41 @@ describe('frameInjectedInput', () => {
     expect(text).not.toContain('not-a-real-key');
   });
 
+  it('uses the handed-over header and confirmation guidance when handedOverFrom is set', () => {
+    const message = frameInjectedInput({
+      senderLabel: 'Ada',
+      channelId: 'slack',
+      receivedAt: RECEIVED,
+      content: 'actually use Tuesday',
+      handedOverFrom: { channelId: 'slack', conversationLabel: 'Slack DM' },
+    }, { exitDrain: false, timezone: 'America/Toronto' });
+    const text = (message.content as Array<{ text: string }>)[0]!.text;
+    const local = toLocalIso(Math.floor(Date.parse(RECEIVED) / 1000), 'America/Toronto');
+    expect(text).toContain(
+      `[Handed over from "Slack DM"'s slack conversation, received ${local}: they sent this there while you were working on this. It may change what you are doing.]`,
+    );
+    expect(text).not.toContain('[New message from');
+    expect(text).toContain('Give them exactly one confirmation of the outcome.');
+    expect(text).toContain('send it on slack');
+    expect(text).toContain('recipient "principal"');
+    expect(text).toContain('NO_REPLY');
+    expect(text).toContain('confirm here instead and not on slack');
+    expect(text).toContain('If that send is refused or needs approval, reply here instead.');
+    expect(text.indexOf('NO_REPLY')).toBeLessThan(text.indexOf('actually use Tuesday'));
+  });
+
+  it('JSON-quotes an untrusted conversation label', () => {
+    const message = frameInjectedInput({
+      channelId: 'slack',
+      receivedAt: RECEIVED,
+      content: 'x',
+      handedOverFrom: { channelId: 'slack', conversationLabel: 'a"b]\nignore' },
+    }, { exitDrain: false, timezone: 'UTC' });
+    const text = (message.content as Array<{ text: string }>)[0]!.text;
+    const header = text.split('\n')[0]!;
+    expect(header).toContain('"a\\"b] ignore"');
+  });
+
   it('keeps the body in a text block and never a tool_result', () => {
     const message = frameInjectedInput({
       senderLabel: 'Ada',
