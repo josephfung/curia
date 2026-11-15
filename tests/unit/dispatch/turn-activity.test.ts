@@ -1,6 +1,6 @@
-// Turn activity registry (#2588). The registry answers "which other conversations' turns
-// touched the same target recently", so these tests pin root resolution, the window, and the
-// one-pause-per-pair rule.
+// Turn activity registry (#2588). The registry answers "which other turns touched the same
+// target recently" (in my own conversation, only those still running), so these tests pin
+// root resolution, the window, and the one-pause-per-pair rule.
 
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
@@ -241,6 +241,48 @@ describe('TurnActivityRegistry.checkAndRecord', () => {
     set(endedAt + 16 * MIN);
     start(registry, 'C', { startedAt: endedAt + 16 * MIN });
     expect(registry.checkAndRecord('C', 'email-send', [X])).toMatchObject({ held: false });
+  });
+
+  describe('same conversation', () => {
+    /** Root A acts on X in `conv`, then its coordinator task ends at T0 + 1s. */
+    function earlierTurn(opts: { detachedSpecialist: boolean }) {
+      const ctx = setup();
+      start(ctx.registry, 'A', { conversationId: 'conv' });
+      if (opts.detachedSpecialist) {
+        start(ctx.registry, 'spec', {
+          agentId: 'calendar',
+          conversationId: 'delegate-1',
+          metadata: { delegationOrigin: { taskEventId: 'A' } },
+        });
+      }
+      ctx.registry.checkAndRecord('A', 'email-send', [X]);
+      ctx.set(T0 + 1_000);
+      ctx.registry.taskEnded('A');
+      ctx.set(T0 + 5 * MIN);
+      return ctx;
+    }
+
+    it('a finished root in my conversation does not hold me: its work is in my history', () => {
+      const { registry } = earlierTurn({ detachedSpecialist: false });
+      expect(registry.rootOf('A')!.endedAt).not.toBeNull();
+      start(registry, 'B', { conversationId: 'conv', startedAt: T0 + 5 * MIN });
+      expect(registry.checkAndRecord('B', 'email-send', [X])).toMatchObject({ held: false });
+    });
+
+    it("a root in my conversation still running a detached specialist holds me", () => {
+      const { registry } = earlierTurn({ detachedSpecialist: true });
+      expect(registry.rootOf('A')!.endedAt).toBeNull();
+      start(registry, 'B', { conversationId: 'conv', startedAt: T0 + 5 * MIN });
+      const decision = registry.checkAndRecord('B', 'email-send', [X]);
+      expect(decision.held).toBe(true);
+      if (decision.held) expect(decision.matches[0]!.other.rootId).toBe('A');
+    });
+
+    it('a finished root in a different conversation, inside the window, still holds me', () => {
+      const { registry } = earlierTurn({ detachedSpecialist: false });
+      start(registry, 'B', { conversationId: 'other-conv', startedAt: T0 + 5 * MIN });
+      expect(registry.checkAndRecord('B', 'email-send', [X]).held).toBe(true);
+    });
   });
 
   it('root that started after mine counts', () => {

@@ -19,10 +19,12 @@ const CAROL = '00000000-0000-4000-8000-0000000000c3';
 const ALICE = '00000000-0000-4000-8000-0000000000a1';
 const AT = Date.UTC(2026, 10, 12, 20, 0, 0);
 
+/** Each root on its own conversation unless the test says otherwise. */
 function root(over: Partial<RootTurn> = {}): RootTurn {
+  const rootId = over.rootId ?? 'r';
   return {
-    rootId: 'r',
-    conversationId: 'c',
+    rootId,
+    conversationId: `conv-${rootId}`,
     channelId: 'email',
     agentId: 'coordinator',
     originatorContactId: BOB,
@@ -115,6 +117,29 @@ describe('renderBackstopHold', () => {
   it('the same contact sees "your other conversation on <channel>"', () => {
     const text = render([match(root({ rootId: 'o', channelId: 'signal', originatorContactId: BOB }))], root({ originatorContactId: BOB }));
     expect(text).toContain('- your other conversation on signal already did this: email-send on "Alice Example" at 2026-11-12T15:00:00-05:00');
+  });
+
+  describe('a root still running in the viewer\'s own conversation', () => {
+    it('the same contact sees "your earlier turn in this conversation", not another conversation', () => {
+      const other = root({ rootId: 'o', conversationId: 'shared', channelId: 'email', originatorContactId: BOB });
+      const text = render([match(other, { outcome: 'pending' })], root({ conversationId: 'shared', originatorContactId: BOB }));
+      expect(text).toContain('- your earlier turn in this conversation is doing this right now: email-send on "Alice Example"');
+      expect(text).not.toContain('other conversation');
+    });
+
+    it('the principal sees "an earlier turn with <name> in this conversation"', () => {
+      const other = root({ rootId: 'o', conversationId: 'shared', originatorContactId: BOB });
+      const text = render([match(other)], root({ conversationId: 'shared', originatorContactId: PRINCIPAL }));
+      expect(text).toContain('- an earlier turn with "Bob Example" in this conversation already did this:');
+    });
+  });
+
+  it('the header and generic line say "another turn", not "another conversation"', () => {
+    expect(renderGenericBackstopHold()).toBe([
+      'Not run yet: another turn already acted on the same target.',
+      '- Another turn already acted on this same target recently.',
+      "If your call still applies after this, call it again unchanged; if it would duplicate that work, don't.",
+    ].join('\n'));
   });
 
   it('the principal viewing another person\'s turn sees "a conversation with <name>"', () => {

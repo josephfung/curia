@@ -140,7 +140,7 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
     expect(held.success).toBe(false);
     if (held.success) throw new Error('expected a held result');
     expect(held.error).toContain('<skill_error>');
-    expect(held.error).toContain("another conversation's turn");
+    expect(held.error).toContain('another turn already acted');
     expect(held.error).toContain('contact-message on "Alice Example" at ');
     expect(held.error).toContain('call it again unchanged');
     expect(held).not.toHaveProperty('gate');
@@ -266,7 +266,7 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
     );
     expect(held.success).toBe(false);
     if (held.success) throw new Error('expected a held result');
-    expect(held.error).toContain("another conversation's turn");
+    expect(held.error).toContain('another turn already acted');
     expect(handler.execute).toHaveBeenCalledTimes(1);
   });
 
@@ -286,7 +286,7 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
   });
 
   describe('hold disclosure', () => {
-    const GENERIC = 'Another conversation already acted on this same target recently.';
+    const GENERIC = 'Another turn already acted on this same target recently.';
     const ISO_TIME = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
 
     async function holdSeenBy(
@@ -305,7 +305,7 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
       expect(held.success).toBe(false);
       if (held.success) throw new Error('expected a held result');
       expect(handler.execute).toHaveBeenCalledTimes(1);
-      expect(held.error).toContain("Not run yet: another conversation's turn already acted on the same target.");
+      expect(held.error).toContain('Not run yet: another turn already acted on the same target.');
       expect(held.error).toContain('call it again unchanged');
       return held.error;
     }
@@ -546,7 +546,7 @@ describe('ExecutionLayer cross-turn backstop logging and fallbacks (#2588)', () 
     const held = await layer.invoke('contact-message', { contact_id: ALICE }, undefined, opts('task-b'));
     expect(held.success).toBe(false);
     if (held.success) throw new Error('expected a held result');
-    expect(held.error).toContain('Another conversation already acted on this same target recently.');
+    expect(held.error).toContain('Another turn already acted on this same target recently.');
     expect(held.error).not.toContain('Alice Example');
     expect(handler.execute).toHaveBeenCalledTimes(1);
     expect(spies.error).toHaveBeenCalledWith(

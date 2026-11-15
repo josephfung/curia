@@ -16,11 +16,11 @@ Nothing covers overlap *across* conversations.
 The issue frames 2026-11-11 as "the same request on two channels". The principal's account
 shows otherwise.
 
-1. They forwarded a work email to Curia: "pick a time on the contact's booking link, add
-   them as a contact". That started Turn 1.
+1. They forwarded a work email to Curia, asking it to pick a time on the contact's booking
+   link and add the contact. That started Turn 1.
 2. On Signal they asked whether their work address was on file. Curia answered yes.
-3. On Signal they then wrote "I've just sent you two items, both scheduling related. Let me
-   know if you have any hiccups." That started Turn 2.
+3. On Signal they then sent a heads-up saying they had just sent two scheduling items and to
+   flag any problems. That started Turn 2.
 
 Message 3 was a **heads-up, not a request**. Turn 2 read it as "go do those two things",
 found the forwarded mail, and redid the work Turn 1 was already doing. When Turn 2 started

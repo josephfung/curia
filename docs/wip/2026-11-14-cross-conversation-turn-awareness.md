@@ -22,6 +22,7 @@
 2. **The backstop result is actions only for every caller.** The person's words reach the coordinator only through the turn-start note (spec §3 already did this for specialists).
 3. **Target precedence:** contacts and site hosts first. Other ids and the tool name are used only when the call has neither. This stops shared infrastructure ids, such as a principal mailbox UUID present in every send, from making unrelated sends collide.
 4. **The hand-off tool is exposed by pushing its definition into the turn's tool list in code** (the precedent is the checkpoint auto-pin at `runtime.ts:892-903`), and its call is intercepted in the runtime (the precedent is `skill-activate` at `runtime.ts:2545`). It is not packaged as a skill bundle. Either way it is not pinned, so the coordinator's `localToolDefinitionBytes` is unchanged, and no `ToolContext` field is added (that would be public API).
+5. **An ended root in the caller's own conversation does not hold it** (owner ruling, PR #2606 review). Its work is already in that conversation's history, so a follow-up there is not paused. A root still running there does hold (an earlier turn whose detached specialist is still booking), so the hold text says "another turn", not "another conversation's turn".
 
 ## Global Constraints
 
@@ -240,11 +241,11 @@ export function renderBackstopHold(
   - the call is a principal-only send (the sync resolver returns true).
 - **Root:** `rootOf(options.taskEventId)`. When it is unknown, call `ensureRoot(taskEventId, {conversationId, channelId, agentId, originatorContactId: taskMetadata.originator.contactId, originatorResolved: <same inferred rule>})`. This covers voice, which passes `taskEventId = sessionId` (`src/index.ts:3433-3448`), and ids lost to a restart.
 - **Held result:** `{ success: false, error: this.wrapSkillError(renderBackstopHold(...)) }`, with no `gate` (see the woken-task literal at ~2803).
-- **Text:** "Not run yet: another conversation's turn already acted on the same target." Then one line per match: tool, target display (contact name or "a contact", site host, or id), and local time. Then: "If your call still applies after this, call it again unchanged; if it would duplicate that work, don't." It never includes request text or message bodies.
+- **Text:** "Not run yet: another turn already acted on the same target." Then one line per match: tool, target display (contact name or "a contact", site host, or id), and local time. Then: "If your call still applies after this, call it again unchanged; if it would duplicate that work, don't." It never includes request text or message bodies.
 - **Failures:** if extraction or `checkAndRecord` throws, log `error` with `{toolName, taskEventId}` and proceed (fail-open, commented as such).
 
 - [ ] **Step 1: Write the failing tests:**
-  - `second turn's send to the same contact is held once, then runs`: two task ids under different roots. The first invoke runs. The second returns `success:false` with `<skill_error>` containing "another conversation's turn", and the handler is not called. Re-invoke → the handler is called.
+  - `second turn's send to the same contact is held once, then runs`: two task ids under different roots. The first invoke runs. The second returns `success:false` with `<skill_error>` containing "another turn already acted", and the handler is not called. Re-invoke → the handler is called.
   - `unrelated sends are never held` (different contacts).
   - `low-risk tool is not checked` (`action_risk: 'low'`).
   - `principal-only send is exempt`.
