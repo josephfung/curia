@@ -340,7 +340,7 @@ describe('setup-status', () => {
       expect(task.label).toBe('Principal mailboxes and calendars');
       expect(text).toMatch(/accounts/);
       expect(text).toMatch(/default/);
-      expect(text).toContain('Settings → Personality → Email & Calendar');
+      expect(text).toContain('Settings → Behaviour → Email & Calendar');
       expect(text).toContain('without a restart');
       expect(text).not.toMatch(/Calendar changes take effect after a restart|one mailbox|Channels → Email/);
     });

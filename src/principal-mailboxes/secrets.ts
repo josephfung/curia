@@ -19,7 +19,7 @@ export const FLAT_EMAIL_KEY = 'ceo_self_email';
 export const FLAT_PRINCIPAL_MAILBOX_KEYS: ReadonlySet<string> = new Set([FLAT_GRANT_KEY, FLAT_EMAIL_KEY]);
 
 export const FLAT_KEYS_MANAGED_MESSAGE =
-  "This setting is retired: the principal's mailboxes are managed in the console, Settings → Personality → Email & Calendar. " +
+  "This setting is retired: the principal's mailboxes are managed in the console, Settings → Behaviour → Email & Calendar. " +
   'Add, replace or remove a mailbox there.';
 
 /**
@@ -52,5 +52,5 @@ export async function capturedFlatKeyRefusal(
 
 // A per-mailbox grant is written only by the principal-mailboxes routes, which validate it.
 export const PER_MAILBOX_GRANT_MANAGED_MESSAGE =
-  "A principal mailbox's grant is set in the console: Settings → Personality → Email & Calendar " +
+  "A principal mailbox's grant is set in the console: Settings → Behaviour → Email & Calendar " +
   '(Add, or Replace grant on the mailbox), which checks the grant belongs to that mailbox.';

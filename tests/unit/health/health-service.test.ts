@@ -300,7 +300,7 @@ describe('HealthService.getStatus()', () => {
       expect(failed?.detail).toMatch(/reconnect/i);
       // Names the console control that does it (R29).
       expect(failed?.detail).toContain('Replace grant');
-      expect(failed?.detail).toContain('Settings → Personality → Email & Calendar');
+      expect(failed?.detail).toContain('Settings → Behaviour → Email & Calendar');
       expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledWith('work', 'Work', true, { authFailure: false });
       expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledWith('personal', 'Personal', false, { authFailure: true });
     });
