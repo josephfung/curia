@@ -1,3 +1,3 @@
 ### Changed
 
-- **Spec 01 knowledge graph** — records deferred designs with revisit triggers and known contradiction-handling gaps. (#2626)
+- **Spec 01 knowledge graph** — documents current decay behaviour, deferred designs with revisit triggers, and known contradiction gaps. (#2626)
