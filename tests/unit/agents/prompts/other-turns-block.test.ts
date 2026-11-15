@@ -284,6 +284,9 @@ describe('renderOtherTurnsBlock (#2588)', () => {
     expect(guidance[1]).toMatch(/^Ask whether/);
     expect(guidance[2]).toContain('the work in a listed turn');
     expect(guidance[3]).toContain('`turn-handoff`');
+    // The result decides what to tell them: the hand-off may be declined.
+    expect(guidance[3]).toContain('do what its result says');
+    expect(guidance[3]).not.toContain("you've passed it on");
   });
 
   it('shows the hand-off guidance only when a hand-off is available', () => {

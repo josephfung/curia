@@ -273,7 +273,7 @@ export function renderOtherTurnsBlock(
   );
   if (showsHandoffGuidance(views, opts.handingEligible === true)) {
     lines.push(
-      "If it corrects or adds to the work in a listed turn that is still running with a hand-off available, use `turn-handoff` with that turn_id, then reply briefly that you've passed it on.",
+      "If it corrects or adds to the work in a listed turn that is still running with a hand-off available, use `turn-handoff` with that turn_id and do what its result says: it may not be passed on.",
     );
   }
   return lines.join('\n');
