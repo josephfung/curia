@@ -12,7 +12,14 @@ import type { TaskOriginator } from '../contacts/types.js';
 import type { LinkedTaskMeta } from './dispatcher.js';
 import type { AuditLogRow } from '../audit/audit-log-repo.js';
 import { redactSecrets, renderResult } from '../autonomy/send-evidence.js';
-import { MAX_PRIOR_TURN_CALLS, type PriorTurnActions, type PriorTurnCall } from '../agents/prompts/prior-turn-actions.js';
+import {
+  MAX_PRIOR_TURN_CALLS,
+  PRIOR_TURN_NOT_SENT_LINES,
+  type PriorTurnActions,
+  type PriorTurnCall,
+  type PriorTurnNotSent,
+} from '../agents/prompts/prior-turn-actions.js';
+import { NOTHING_SENT_NEXT_STEP } from '../agents/prompts/delegate-result-guidance.js';
 
 /** Maximum rewrite retries after the first content-filter block (2 retries → 3 send attempts). */
 export const CONTENT_BLOCK_MAX_RETRIES = 2;
@@ -78,6 +85,13 @@ export function clipMiddleCodePoints(text: string, max: number): string {
  * extracted) is `unknown`, so the rewrite never tells a recipient something was done when
  * nobody knows. A delegated call shows the specialist and what it sent ahead of the excerpt,
  * so trimming a long answer cannot drop them.
+ *
+ * A specialist's prose can call an email sent when it only composed one (#2055). The delegate
+ * result records that beside the prose (shapeSpecialistAnswer): an empty `sent` list, the
+ * composed drafts, and a next_step. The list is kept even when empty, and the drafts or the
+ * nothing-sent next_step become `notSent`, so the rewrite never has only the prose to go on.
+ * The next_step itself is not carried: it says to send with email-send, and this turn has no
+ * tools.
  */
 function priorTurnCall(row: AuditLogRow): PriorTurnCall {
   const tool = String(row.payload['toolName'] ?? row.payload['skillName'] ?? 'unknown');
@@ -89,7 +103,11 @@ function priorTurnCall(row: AuditLogRow): PriorTurnCall {
   const agent = typeof data?.['agent'] === 'string' && data['agent'] !== '' ? data['agent'] : undefined;
   const sent = Array.isArray(data?.['sent'])
     ? (data['sent'] as unknown[]).filter((s): s is string => typeof s === 'string' && s !== '')
-    : [];
+    : undefined;
+  const notSent: PriorTurnNotSent | undefined = tool !== 'delegate' ? undefined
+    : Array.isArray(data?.['draft_emails']) && data['draft_emails'].length > 0 ? 'draft'
+    : data?.['next_step'] === NOTHING_SENT_NEXT_STEP ? 'nothing'
+    : undefined;
   // A specialist's answer is prose: show it as text rather than escaped inside JSON. Only for
   // delegate, whose other fields are lifted above; another tool's `response` field is one field
   // among others (an event id, say), so its whole result is shown.
@@ -102,7 +120,8 @@ function priorTurnCall(row: AuditLogRow): PriorTurnCall {
     tool,
     outcome,
     ...(agent ? { agent } : {}),
-    ...(sent.length > 0 ? { sent } : {}),
+    ...(sent ? { sent } : {}),
+    ...(notSent ? { notSent } : {}),
     excerpt: clipMiddleCodePoints(raw, PRIOR_TURN_RESULT_MAX_CHARS),
   };
 }
@@ -120,7 +139,8 @@ export function priorTurnActionsFromRows(rows: readonly AuditLogRow[]): PriorTur
   let total = 0;
   for (const row of considered) {
     const call = priorTurnCall(row);
-    const size = Array.from(call.excerpt).length + call.tool.length + 40;
+    const size = Array.from(call.excerpt).length + call.tool.length + 40
+      + (call.notSent ? PRIOR_TURN_NOT_SENT_LINES[call.notSent].length : 0);
     if (total + size > PRIOR_TURN_TOTAL_MAX_CHARS) break;
     total += size;
     kept.push(call);
