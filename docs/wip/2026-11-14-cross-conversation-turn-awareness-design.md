@@ -4,6 +4,65 @@ Date: 2026-11-14
 Issue: [#2588](https://github.com/josephfung/curia/issues/2588)
 Extends: [ADR-053](../adr/053-turn-lanes-and-mid-turn-injection.md) (turn lanes, #2018), [ADR-019](../adr/019-delegation-aware-outbound-context.md) (outbound-context bridge)
 
+## Implementation notes (deviations, 2026-11-14)
+
+What was built differs from the design below in these places. ADR-053's "Cross-conversation
+awareness (#2588)" section describes the built behaviour.
+
+**Narrows a decision made with the principal (decision 2, §3).** A held call shows the
+other turn's tool, target and time only when the held turn is the principal's, Curia's own
+work, or the same resolved contact's. Any other person's turn gets one generic line
+("another conversation already acted on this same target"), not tool, target and time. This
+came from the security review: detail let a stranger learn, and steer, the principal's
+activity. Revert to detailed lines if the principal prefers them.
+
+From the plan:
+
+1. **State is an in-memory registry, not audit-log queries** (§1). It gives the synchronous
+   first-wins check, avoids N+1 reads, and makes "running, including detached specialists"
+   a property of the registry. A restart empties it (fail-open).
+2. **The backstop result is actions only for every caller.** The person's words reach the
+   coordinator only through the turn-start note.
+3. **Target precedence** (§3). Contacts and site hosts first. Other ids, and failing those
+   the tool name, only when a call has neither. A shared mailbox id no longer makes
+   unrelated sends collide.
+4. **The hand-off tool is pushed into the turn's tool list by code and intercepted in the
+   runtime**, not packaged as an activated skill (Constraints). It is not pinned; the
+   coordinator's budgets are unchanged and no `ToolContext` field was added.
+
+From rulings during the build:
+
+- **Fallback target** is other ids if any, else the tool name, never both (§3).
+- **Email addresses resolve to contact targets.** Calendar attendees carry addresses, not
+  UUIDs, so the §3 premise was wrong. The principal's and Curia's own addresses and Curia's
+  own contact are excluded too. Sites are URL hosts (`www.` stripped), not registrable domains.
+- **Unresolved actors don't hold.** Actions by a root whose originator is unresolved hold no
+  one; its own calls are still checked.
+- **Outcomes** (§3 "outcome when known"): `pending`, `succeeded`, `unknown`. A failed call is
+  removed. A timeout or a thrown error is `unknown`, since a throw can follow a side effect.
+- **System vs person is judged by originator, not channel.** No originator, or a `system` or
+  `agent` role, is Curia's own work. A malformed originator is an unresolved person.
+  Voice-session delegations and async-offramp tasks join the call's root.
+- **A human-approved replay is recorded, never held.**
+- **Holds don't count toward `maxConsecutiveErrors`** (a marker, no `ToolResult` change).
+- **Caps:** 200 actions per root, global caps on roots and actions; a root running past six
+  hours is treated as ended.
+- **Scope hook for the suites:** smoke and scenario runs pass one registry scope per attempt.
+- **The note leaves out turns in the same conversation** (lanes already serialise them).
+- **The note's request text is the sender's own text**, stamped by the dispatcher into trusted
+  task metadata, not task content (which can carry preamble and other people's words). It is
+  withheld when the inbound's scan count is not a known zero. The note stays in the system
+  string, JSON-quoted.
+- **Email one-to-one** reuses `contact-recent-history`'s private-audience rule.
+- **Hand-off eligibility:** the note's hand-off line and the tool appear only with lanes on and
+  an eligible handing turn (the root inbound, full unclipped text, no follow-up drained since,
+  clean scan). Otherwise the turn does the work itself.
+- **Held corrections carry `liveTurn: false`** (#1126); a direct inject stays live.
+- **The handing turn waits up to 30 s** for the target to drain the message, then reports it
+  as passed on.
+- **Testing:** the scenario harness can't run two turns at once, so scenarios cover the
+  finished-turn path and the live hand-off is integration-tested only.
+
 ## Why
 
 Curia should behave like one assistant, even when the same person reaches it on several
