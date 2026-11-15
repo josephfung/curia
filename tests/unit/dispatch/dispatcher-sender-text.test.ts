@@ -13,6 +13,7 @@ import type { ContactResolver } from '../../../src/contacts/contact-resolver.js'
 import { createLogger } from '../../../src/logger.js';
 import {
   INBOUND_SCAN_FINDING_COUNT_KEY,
+  INBOUND_SENDER_TEXT_CLIPPED_KEY,
   INBOUND_SENDER_TEXT_KEY,
   TurnActivityRegistry,
 } from '../../../src/dispatch/turn-activity.js';
@@ -149,6 +150,21 @@ describe('dispatcher stamps the sender text and scan count (#2588)', () => {
     expect(meta[INBOUND_SENDER_TEXT_KEY]).toBe('Hello there');
     // No scanner ran, so there is no count, and the forged 0 did not survive.
     expect(meta[INBOUND_SCAN_FINDING_COUNT_KEY]).toBeUndefined();
+  });
+
+  it('stamps the clipped flag only when the text was cut, and strips a forged one', async () => {
+    const { bus, tasks } = harness({ scanner: false });
+    await bus.publish('channel', emailInbound('word '.repeat(150)));
+    const long = tasks[0]!.payload.metadata!;
+    expect(Array.from(long[INBOUND_SENDER_TEXT_KEY] as string)).toHaveLength(500);
+    expect(long[INBOUND_SENDER_TEXT_CLIPPED_KEY]).toBe(true);
+
+    await bus.publish('channel', emailInbound('short', { [INBOUND_SENDER_TEXT_CLIPPED_KEY]: false }));
+    expect(tasks[1]!.payload.metadata![INBOUND_SENDER_TEXT_CLIPPED_KEY]).toBeUndefined();
+
+    const registry = new TurnActivityRegistry({ logger: createLogger('error') });
+    register(registry, tasks[0]!);
+    expect(registry.rootOf(tasks[0]!.id)!.requestTextClipped).toBe(true);
   });
 
   it('stamps a non-zero count for a flagged inbound', async () => {
