@@ -34,7 +34,7 @@ import { isTaskWakeReplyBinding } from './task-wake-reply.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import { inboundIsOneToOne, inboundSenderAuthenticated } from './outbound-entry-access.js';
 import type { AcquaintanceEvidence } from '../contacts/principal-acquaintance.js';
-import { cutsQuotedText, hasBookingPageLink, inboundTurnGuidance, looksLikeForward, looksLikeMakeRoom, looksLikeSpotCheckReply, ownEmailSubject, parseSpotCheckVerdicts, senderOwnText, spotCheckCandidateText } from './turn-guidance-triggers.js';
+import { cutsQuotedText, formatSenderOwnText, hasBookingPageLink, inboundTurnGuidance, looksLikeForward, looksLikeMakeRoom, looksLikeSpotCheckReply, parseSpotCheckVerdicts, senderOwnParts, spotCheckCandidateText, type SenderOwnParts } from './turn-guidance-triggers.js';
 import { hasBacklog, type PrincipalBacklogCounts } from '../agents/prompts/backlog-line.js';
 import type { AwaitingAnswer } from '../agents/prompts/awaiting-answers.js';
 import type { PrincipalBacklogSource } from './principal-backlog.js';
@@ -1099,8 +1099,11 @@ export class Dispatcher {
     // Whether this message carried a sign-in code (#2588): any code registered, against any
     // row, or the lookup failed. Either way its text is not stamped for other turns.
     let relayedCodes: RelayedCodeState = 'none';
+    // The sender's own words as the turn-activity stamp will carry them (#2588), derived once:
+    // the code check below reads exactly what the stamp would share.
+    const senderOwn = senderOwnParts(payload.channelId, taskContent);
     if (liveTurn) {
-      const tracked = await this.trackPrincipalRelayedCodes(taskContent, payload.channelId, payload.conversationId);
+      const tracked = await this.trackPrincipalRelayedCodes(taskContent, senderOwn, payload.channelId, payload.conversationId);
       verificationCodeReceived = tracked.pendingReceived;
       relayedCodes = tracked.state;
     }
@@ -1331,8 +1334,10 @@ export class Dispatcher {
     // The sender's own words for the turn-activity registry (#2588), and whether they are
     // partial: clipped to the limit, or (email) with a quoted or forwarded part cut off. A
     // hand-off must never pass on a partial message as the whole one. An email's own Subject
-    // leads (senderOwnText): it can carry the request on its own. The clip counts it too.
-    const senderText = senderOwnText(payload.channelId, inboundText);
+    // leads (senderOwnText): it can carry the request on its own. The clip counts it too. The
+    // parts were derived above from the same text (inboundText is taskContent there), so the
+    // relayed-code check read exactly this.
+    const senderText = formatSenderOwnText(senderOwn);
     const senderTextPartial = senderTextExceedsClip(senderText) || cutsQuotedText(payload.channelId, inboundText);
 
     // Trusted task metadata: originator + (when suppressing) auto-gen sender block for skills.
@@ -2026,6 +2031,7 @@ export class Dispatcher {
    */
   private async trackPrincipalRelayedCodes(
     content: string,
+    senderOwn: SenderOwnParts,
     channelId: string,
     conversationId: string,
   ): Promise<{ state: RelayedCodeState; pendingReceived: boolean }> {
@@ -2040,14 +2046,17 @@ export class Dispatcher {
       const ownText = personTurnSourceText(content);
       // 6-8 character shapes anywhere in the principal's own text; 4-5 character ones only
       // when the message is essentially just the code or names it after a code keyword
-      // (extractShortRelayedCodes), judged below an email's Subject line, and in its own
-      // Subject on its own: the sender-text stamp carries that subject (senderOwnText), so a
-      // short code there must block the stamp too.
-      const candidates = [
+      // (extractShortRelayedCodes), judged below an email's Subject line. The same again on
+      // the exact text the sender-text stamp would carry (senderOwn, #2588), whole and by part,
+      // so nothing the stamp could share escapes this check, whatever ownText cut from it.
+      const stampText = formatSenderOwnText(senderOwn);
+      const candidates = [...new Set([
         ...extractCodeCandidates(ownText),
         ...extractShortRelayedCodes(spotCheckCandidateText(channelId, ownText)),
-        ...extractShortRelayedCodes(ownEmailSubject(channelId, ownText)),
-      ];
+        ...extractCodeCandidates(stampText),
+        ...extractShortRelayedCodes(senderOwn.body),
+        ...extractShortRelayedCodes(senderOwn.subject),
+      ])];
       const registered = registerCodes(verification, open, candidates);
       return {
         state: registered.length > 0 ? 'received' : 'none',

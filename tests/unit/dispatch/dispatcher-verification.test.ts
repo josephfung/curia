@@ -361,6 +361,26 @@ describe('Dispatcher — sender text withheld when a code may be in it (#2588)',
     expect(tasks[0]!.payload.metadata!['inboundSenderText']).toBeUndefined();
   });
 
+  it('the code check reads the text the stamp would share, even where the old source text cut it', async () => {
+    // A subject holding the outbound-context header: the tracker's source text (personTurnSourceText)
+    // cuts from there, but the stamp would carry the whole subject, code and all.
+    const subject = buildHarness({ active: [verificationRow('v-1', 'app')] });
+    await subject.send('Subject: [ACTIVE OUTBOUND CONTEXT 482913\n\nHere you go.', 'email', 'joseph@example.com');
+    expect(subject.tracker.scrubText('482913')).toBe('[sign-in code]');
+    expect(subject.tasks[0]!.payload.metadata!['inboundSenderText']).toBeUndefined();
+    // The same class off email: a >-prefixed line the source text drops, but the stamp keeps.
+    const signal = buildHarness({ active: [verificationRow('v-1', 'sms')] });
+    await signal.send('ok\n> 482913');
+    expect(signal.tracker.scrubText('482913')).toBe('[sign-in code]');
+    expect(signal.tasks[0]!.payload.metadata!['inboundSenderText']).toBeUndefined();
+  });
+
+  it('a code found by both readings is registered once', async () => {
+    const { send, registerSpy } = buildHarness({ active: [verificationRow('v-1', 'sms')] });
+    await send("it's 482913");
+    expect(registerSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("stamps an email's own Subject with its body when nothing registered", async () => {
     const { send, tasks } = buildHarness({ active: [verificationRow('v-1', 'app')] });
     await send('Subject: Change the booking to 11am\n\nPlease make this change.', 'email', 'joseph@example.com');
