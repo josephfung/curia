@@ -100,8 +100,8 @@ import {
 } from './principal-send/autonomous-limits.js';
 import { hasSystemLineage, isOutsiderOriginated } from '../contacts/principal.js';
 import {
-  mailboxDraftLabel, quoteItemsToReview, quoteMatchesThread, replyOrigin, threadMessageProof, threadTextSeenByAll,
-  type ThreadMessageProof,
+  mailboxDraftLabel, quoteItemsToReview, quoteProblem, replyOrigin, threadMessageProof, threadTextSeenByAll,
+  type QuoteProblem, type ThreadMessageProof,
 } from './principal-send/quote-proof.js';
 import { hasFinancialDetails } from './principal-send/financial-details.js';
 import { htmlToText } from '../channels/email/html-to-text.js';
@@ -585,6 +585,17 @@ const COPIED_TOO_MANY_REASON = `The message it answers copies more than ${AUTONO
 
 /** An autonomous reply whose quote is not a thread message every recipient received (final fixes A10). */
 const QUOTE_MISMATCH_REASON = `Its quoted text doesn't match the thread.${STILL_A_DRAFT}`;
+
+/**
+ * Why a quote failed its proof, as the agent is told (#2590). The quoted text being on the thread
+ * but not on a message every recipient received is a different cause from text found nowhere, and
+ * naming who is missing points the principal at the real reason.
+ */
+function quoteProblemReason(problem: QuoteProblem): string {
+  return problem.kind === 'not-received'
+    ? `It quotes a message that ${problem.missing.join(' and ')} didn't receive.${STILL_A_DRAFT}`
+    : QUOTE_MISMATCH_REASON;
+}
 
 /**
  * What the agent is told when the review bounced an autonomous reply (#2474 addendum R3): the
@@ -4954,7 +4965,9 @@ export class OutboundGateway {
       // A quote must reproduce a message every recipient received (#2474 final fixes A10): a
       // model-written quote block could pass off new information as already on the thread.
       const { quote } = splitReplyQuote(draft.body);
-      if (quote && !quoteMatchesThread(quote, proofs, outside)) return stop('review_hold', QUOTE_MISMATCH_REASON, 'quote-mismatch');
+      // The held marker keeps one code for both causes; the reason names which (#2590).
+      const problem = quote ? quoteProblem(quote, proofs, outside) : null;
+      if (problem) return stop('review_hold', quoteProblemReason(problem), 'quote-mismatch');
       // Who the answered message newly copied (#2589), with their contact facts, for band review's
       // high-stakes-copy question. Not narrowed to this reply's recipients: the sender's
       // escalation is the trigger, and a reply that leaves counsel off is no less escalated.

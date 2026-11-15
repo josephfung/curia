@@ -73,13 +73,44 @@ function quoteSource(quote: string, thread: readonly ThreadMessageProof[], audie
 }
 
 /**
+ * Why a reply's quote fails the proof (#2590), so the refusal can say which:
+ *  - `not-in-thread`: no thread message holds the quoted text (or there is no quoted body, or no
+ *    audience to prove it for). The quote may carry text from elsewhere.
+ *  - `not-received`: a thread message holds the text, but `missing` (lowercased) never received
+ *    it. Where several messages hold the text, the one missing the fewest is named.
+ */
+export type QuoteProblem = { kind: 'not-in-thread' } | { kind: 'not-received'; missing: string[] };
+
+/**
+ * What is wrong with a reply's quote, or null when it shows only what a thread message every
+ * recipient received said (#2474 final fixes A10, security review B4). The same rule as
+ * quoteSource, so it never passes a quote quoteSource refuses; it only adds the reason.
+ */
+export function quoteProblem(quote: string, thread: readonly ThreadMessageProof[], audience: readonly string[]): QuoteProblem | null {
+  if (quoteSource(quote, thread, audience)) return null;
+  const bodyAt = quote.search(/<blockquote\b/i);
+  const quoted = bodyAt < 0 ? '' : comparableText(quote.slice(bodyAt));
+  const recipients = audience.map((a) => a.trim().toLowerCase());
+  // No quoted body or no audience: nothing to name, so keep the general reason (fail closed).
+  if (!quoted || recipients.length === 0) return { kind: 'not-in-thread' };
+  let missing: string[] | null = null;
+  for (const m of thread) {
+    if (!m.text.includes(quoted)) continue;
+    const absent = recipients.filter((r) => !m.receivedBy.has(r));
+    if (missing === null || absent.length < missing.length) missing = absent;
+  }
+  // quoteSource found no source, so a text match always leaves someone missing here.
+  return missing === null || missing.length === 0 ? { kind: 'not-in-thread' } : { kind: 'not-received', missing };
+}
+
+/**
  * Whether a reply's quote shows only what a thread message every recipient received said
  * (#2474 final fixes A10, security review B4). A model-written quote block holding anything
  * else (a figure from memory, another thread's text) could read to the judge as "already on the
- * thread"; the gateway holds such a reply before the review.
+ * thread"; the gateway holds such a reply before the review. quoteProblem says why it fails.
  */
 export function quoteMatchesThread(quote: string, thread: readonly ThreadMessageProof[], audience: readonly string[]): boolean {
-  return quoteSource(quote, thread, audience) !== null;
+  return quoteProblem(quote, thread, audience) === null;
 }
 
 /**
