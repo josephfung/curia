@@ -238,7 +238,10 @@ export class SignalSendHandler implements ToolHandler {
         // An approve-action replay: the principal approved this exact send (#2159).
         humanApproved: ctx.humanApproved,
         // Used only if band review holds this send (#2159): approval replays this skill with this input.
-        holdRecipe: { toolName: 'signal-send', partialPayload: ctx.input, description: `Signal message to ${identityName ?? destination}` },
+        // Named by the contact, not the identity label: "Signal message to unlabelled" gave the
+        // agent nothing to match "share it with Dana" to (scenario 34k). The label, then the
+        // number, are fallbacks for a contact with no usable name.
+        holdRecipe: { toolName: 'signal-send', partialPayload: ctx.input, description: `Signal message to ${resolved.displayName?.trim() || identityName || destination}` },
       });
 
       if (!result.success) {

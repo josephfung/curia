@@ -1597,10 +1597,20 @@ describe('BandSendReview', () => {
         if (d.kind === 'hold') expect(d.findings.map((f) => f.rule)).toEqual(expect.arrayContaining(['speaks-as-principal', 'pii-not-authorized']));
       });
 
-      it('does not ask when anything but a requester\'s data, or speaking as the principal, holds the send', async () => {
+      // Scenario 34k: dropping the ask beside a steered hold lost the question, so the approval
+      // read as a plain send and no disclosure decision was recorded. Steering holds for the
+      // principal anyway; the ask leads and the steering warning rides beside it.
+      it('keeps the ask beside a hold for steering, with the steering finding on the hold', async () => {
+        for (const speaksAsPrincipal of [false, true]) {
+          const { svc } = make([{ ...withRulings(ruling('unsupported', true)), purpose: 'steered', speaksAsPrincipal }], { evidence: { authority: fromOutsider } });
+          const d = await svc.review({ ...pii, recipientTier: 'known', score: speaksAsPrincipal ? 74 : 84 });
+          expect(d).toMatchObject({ kind: 'hold', ask: { labels: ['sin_ca'], requester: 'joel@example.com' }, reason: expect.stringContaining('the recipient asked') });
+          if (d.kind === 'hold') expect(d.findings.map((f) => f.rule)).toEqual(expect.arrayContaining(['steered', 'pii-not-authorized']));
+        }
+      });
+
+      it('does not ask when anything but a requester\'s data, speaking as the principal, or steering holds the send', async () => {
         const cases: Array<{ verdict: BriefVerdict; input: BandReviewInput; authority: SendAuthority }> = [
-          // A steered hold beside the ask.
-          { verdict: { ...withRulings(ruling('unsupported', true)), purpose: 'steered' }, input: { ...pii, recipientTier: 'known' }, authority: fromOutsider },
           // A second item held below 80 that nobody asked for.
           { verdict: withRulings(ruling('inferred', true), ruling('inferred', false, 'P2')), input: { ...pii, score: 74, detectedItems: [P1, P2] }, authority: linked('strong') },
           // Held below 80 under the principal's task, but not requested.
