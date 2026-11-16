@@ -108,17 +108,19 @@ async function runAttempt(
     // judge both see. Dates resolve against the moment the case starts. Resolved inside
     // the try below, so a bad placeholder fails this case, not the whole run.
     let target: CaseTarget | undefined;
-    // What the judge rates against, on the same clock as the target. Stays the raw case if
-    // resolving throws, so the case still fails with that error rather than vanishing.
-    let judged: TestCase = tc;
+    const caseStart = new Date();
+    // The clock the first turn's message and fixtures resolved on. The judge's expectations
+    // resolve on it too, so they name the same day as the message even when the first
+    // turn's delay crosses local midnight. Unset if no turn started (the case then failed).
+    let firstTurnClock: Date | undefined;
 
     try {
-      const caseStart = new Date();
       target = tc.target
         ? withPrincipalOf(options.principal)(resolveDatePlaceholders(tc.target, harness.stack.config.timezone, caseStart))
         : undefined;
-      judged = resolveJudgedText(tc, harness.stack.config.timezone, caseStart, withPrincipalOf(options.principal));
-      await runSingleCase(harness, tc, target, responses, options.defaultStubs ?? {}, options.principal);
+      await runSingleCase(harness, tc, target, responses, options.defaultStubs ?? {}, options.principal, (index, now) => {
+        if (index === 0) firstTurnClock = now;
+      });
     } catch (err) {
       // Case-level failure (a turn timed out or errored). Turns that did complete are
       // kept for the report.
@@ -151,6 +153,15 @@ async function runAttempt(
     const usage = state.usage.snapshot();
     state.closed = true;
 
+    // What the judge rates against. The loader has already checked these placeholders, so a
+    // throw here is unexpected: the case then fails with that error and keeps its raw text.
+    let judged: TestCase = tc;
+    try {
+      judged = resolveJudgedText(tc, harness.stack.config.timezone, firstTurnClock ?? caseStart, withPrincipalOf(options.principal));
+    } catch (err) {
+      error ??= `could not resolve the judge's expectations: ${err instanceof Error ? err.message : String(err)}`;
+    }
+
     const execution: CaseExecution = {
       testCase: judged,
       responses,
@@ -179,6 +190,7 @@ async function runSingleCase(
   responses: CapturedResponse[],
   defaultStubs: Record<string, ToolStub[]>,
   principal: PrincipalRef | undefined,
+  onTurnClock: (index: number, now: Date) => void,
 ): Promise<void> {
   const withPrincipal = withPrincipalOf(principal);
   // A targeted case talks on its own bullpen thread; the thread id is the conversation.
@@ -186,7 +198,7 @@ async function runSingleCase(
   if (target) thread = await harness.openTargetThread(target);
   let turnError: unknown;
   try {
-    await runTurns(harness, tc, responses, defaultStubs, withPrincipal, target && thread ? { spec: target, thread } : undefined);
+    await runTurns(harness, tc, responses, defaultStubs, withPrincipal, target && thread ? { spec: target, thread } : undefined, onTurnClock);
   } catch (err) {
     turnError = err;
   }
@@ -212,9 +224,11 @@ async function runTurns(
   defaultStubs: Record<string, ToolStub[]>,
   withPrincipal: <T>(v: T) => T,
   target: Parameters<CuriaHarness['sendMessage']>[0]['target'],
+  /** Told each turn's resolution clock, so the caller can resolve other text on the same one. */
+  onTurnClock: (index: number, now: Date) => void,
 ): Promise<void> {
   const conversationId = target ? target.thread.threadId : conversationIdFor(tc.sender);
-  for (const turn of tc.turns) {
+  for (const [index, turn] of tc.turns.entries()) {
     // Delay between turns for multi-turn cases
     if (turn.delayMs) {
       await new Promise(resolve => setTimeout(resolve, turn.delayMs));
@@ -225,6 +239,7 @@ async function runTurns(
     // One "now" for the turn, so {{at:now+60m}} agrees between the message and the fixtures.
     const timezone = harness.stack.config.timezone;
     const now = new Date();
+    onTurnClock(index, now);
     harness.stubs.set(withPrincipal(resolveDatePlaceholders(mergeStubs(turn.toolStubs, tc.toolStubs, officeFor(tc, defaultStubs)), timezone, now)));
     const prompt = withPrincipal(resolveDatePlaceholders(turn.content, timezone, now));
     const response = await harness.sendMessage({
