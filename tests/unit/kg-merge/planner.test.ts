@@ -257,6 +257,25 @@ describe('planNodeMerge — facts', () => {
     expect(plan.facts.moves.map(m => m.fact.id).sort()).toEqual([uid(103), uid(104)]);
   });
 
+  it('never pairs near-duplicate facts whose labels carry different identifiers (#2023 guard)', () => {
+    const { survivor, absorbed } = basicPair();
+    // Near-identical vectors, as two order numbers embed, but different identifiers.
+    const s = makeFact(uid(100), 'Placed order 48213907', {}, { embedding: [1, 0, 0] });
+    const a = makeFact(uid(102), 'Placed order 48213966', {}, { embedding: [0.999, 0.04, 0] });
+    const plan = planNodeMerge(makeSnapshot(makeSide(survivor, { facts: [s] }), makeSide(absorbed, { facts: [a] })), FACT_SIMILARITY);
+    expect(plan.preview.conflicts.nearDuplicateFacts).toEqual([]);
+    // The absorbed fact moves across unchanged instead.
+    expect(plan.facts.moves.map(m => m.fact.id)).toEqual([uid(102)]);
+  });
+
+  it('still pairs facts whose identifiers are a subset of the other side', () => {
+    const { survivor, absorbed } = basicPair();
+    const s = makeFact(uid(100), 'Placed order 48213907', {}, { embedding: [1, 0, 0] });
+    const a = makeFact(uid(102), 'Placed order 48213907 online', {}, { embedding: [0.999, 0.04, 0] });
+    const plan = planNodeMerge(makeSnapshot(makeSide(survivor, { facts: [s] }), makeSide(absorbed, { facts: [a] })), FACT_SIMILARITY);
+    expect(plan.preview.conflicts.nearDuplicateFacts.map(n => n.id)).toEqual([nearDuplicateId(uid(100), uid(102))]);
+  });
+
   describe('scores only vectors from the live embedding model (ADR-051)', () => {
     function sailingSnapshot(absorbedModel: string) {
       const { survivor, absorbed } = basicPair();

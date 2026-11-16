@@ -3,6 +3,7 @@ import type { KnowledgeGraphStore } from './knowledge-graph.js';
 // EmbeddingService.cosineSimilarity() at runtime.
 import { EmbeddingService } from './embedding.js';
 import { embeddingStamp } from './embedding-profiles.js';
+import { hasConflictingIdentifiers } from './identifier-guard.js';
 import type { StoreFactOptions, ValidationResult } from './types.js';
 // Value import — config-store only type-imports EntityMemory, so no runtime cycle.
 import { SYSTEM_CONFIG_SOURCE } from './config-store.js';
@@ -195,6 +196,12 @@ export class MemoryValidator {
         // Exact-key facts (config-store) must not be merged by label similarity —
         // a write without exactKey (e.g. mergeEntities) would otherwise recreate #2252.
         if (isExactKeyProtected(options, existingProps)) {
+          continue;
+        }
+
+        // Different order numbers / ids embed near-identically but are different
+        // facts — never merge them on similarity alone (#2023).
+        if (hasConflictingIdentifiers(options.label, targetNode.label)) {
           continue;
         }
 
