@@ -310,8 +310,8 @@ Effective standing is also what handlers see: `ctx.taskMetadata` carries the pos
 
 | Stakes | Examples | Sends without asking at |
 |---|---|---|
-| `routine` | Acknowledgements, thanks, scheduling logistics, "got it" | 80+ |
-| `commitment` | Agreeing to dates, deliverables, terms or introductions; anything the principal would have to walk back | 90+ |
+| `routine` | Acknowledgements, thanks, scheduling logistics (re-confirming a time the thread already agreed, offering open times), "got it" | 80+ |
+| `commitment` | Agreeing to new dates, deliverables, terms or introductions; the principal's own promise or deliverable, even repeated; anything the principal would have to walk back | 90+ |
 | `financial_or_legal` | Payments, purchase orders, pricing, contracts, signatures, legal positions | Never: always held for approval |
 
 Principal-directed sends (a live principal turn, or a replay of what the principal approved) are not stakes-gated: the principal decided.
