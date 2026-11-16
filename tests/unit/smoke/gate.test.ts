@@ -1,7 +1,7 @@
 // tests/unit/smoke/gate.test.ts — smoke's pass/fail gate (#1956).
 import { describe, it, expect } from 'vitest';
 import { emptyBreakdown, UsageLedger, type UsageBreakdown } from '../../shared/usage.js';
-import { caseFailures, gatingFailures, mergeRetries, staleKnownFailures, type GateInput } from '../../smoke/gate.js';
+import { caseFailures, gatingFailures, mergeRetries, retryTemplates, staleKnownFailures, type GateInput } from '../../smoke/gate.js';
 import type { BehaviorRating, BehaviorWeight, TestCase } from '../../smoke/types.js';
 
 function gateInput(
@@ -134,5 +134,25 @@ describe('mergeRetries', () => {
     const merged = mergeRetries([named('B', 0.4, ['x'])], [named('B', 0.5, ['y'])]);
     expect(merged[0]!.passed).toBe(false);
     expect(merged[0]!.failures).toEqual(['y']);
+  });
+});
+
+describe('retryTemplates', () => {
+  // A result's testCase holds the judge text resolved on the first attempt's clock. A retry
+  // must start from the loaded template so it resolves afresh, also past local midnight.
+  const template = (name: string, description: string): TestCase => ({
+    ...gateInput([['b', 'critical', 'PASS']], 1).testCase, name,
+    expectedBehaviors: [{ id: 'b', description, weight: 'critical' }],
+  });
+
+  it('returns the loaded templates, not the resolved cases, in result order', () => {
+    const loaded = [template('A', 'due {{day:today}}'), template('B', 'due {{day:today+1}}')];
+    const results = [{ testCase: template('B', 'due Monday, November 16') }, { testCase: template('A', 'due Sunday, November 15') }];
+    expect(retryTemplates(results, loaded).map(c => c.expectedBehaviors[0]!.description))
+      .toEqual(['due {{day:today+1}}', 'due {{day:today}}']);
+  });
+
+  it('throws for a result with no loaded template rather than retrying stale text', () => {
+    expect(() => retryTemplates([{ testCase: template('Gone', 'x') }], [template('A', 'y')])).toThrow(/Gone/);
   });
 });

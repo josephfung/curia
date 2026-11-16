@@ -23,7 +23,7 @@ import { loadDefaultStubs, loadTestCases, targetProblems } from './loader.js';
 import { createHarness, RESPONSE_TIMEOUT_MS, turnTimeoutMs, type CuriaHarness } from './harness.js';
 import { runTestCases } from './runner.js';
 import { evaluateCases } from './evaluator.js';
-import { formatPct, gatingFailures, mergeRetries, staleKnownFailures } from './gate.js';
+import { formatPct, gatingFailures, mergeRetries, retryTemplates, staleKnownFailures } from './gate.js';
 import { generateReport } from './report.js';
 import { liveSearchLines } from '../shared/live-search.js';
 import { emptyBreakdown, formatUsageLines, formatUsd, sumBreakdowns } from '../shared/usage.js';
@@ -272,7 +272,7 @@ async function main(): Promise<void> {
     const toRetry = gatingFailures(caseResults);
     if (toRetry.length > 0) {
       out(`\n-- Retrying ${toRetry.length} failing case(s) once --\n`);
-      const { executions: retryExecutions } = await runTestCases(harness, toRetry.map(c => c.testCase), {
+      const { executions: retryExecutions } = await runTestCases(harness, retryTemplates(toRetry, cases), {
         defaultStubs,
         principal: principalRef,
         concurrency,

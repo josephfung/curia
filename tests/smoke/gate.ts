@@ -53,6 +53,21 @@ export function gatingFailures<T extends { passed: boolean; error?: string; judg
   return cases.filter(c => !c.passed && (!c.testCase.knownFailure || c.error !== undefined || c.judgeError !== undefined));
 }
 
+/**
+ * The loaded case templates to retry, in the order of `results`. A result's testCase carries
+ * judge text already resolved on the first attempt's clock (resolveJudgedText), so retrying
+ * it would keep those dates while the retry's messages resolve afresh, e.g. past midnight.
+ * Throws when a result has no template: retrying stale text would be worse than stopping.
+ */
+export function retryTemplates(results: Array<{ testCase: TestCase }>, loaded: TestCase[]): TestCase[] {
+  const byName = new Map(loaded.map(c => [c.name, c]));
+  return results.map(r => {
+    const template = byName.get(r.testCase.name);
+    if (!template) throw new Error(`No loaded case named '${r.testCase.name}' to retry`);
+    return template;
+  });
+}
+
 /** known_failure cases that passed: the bug may be fixed, so the marker may be stale. */
 export function staleKnownFailures<T extends { passed: boolean; testCase: TestCase }>(cases: T[]): T[] {
   return cases.filter(c => c.passed && c.testCase.knownFailure);
