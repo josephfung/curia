@@ -138,6 +138,21 @@ Intro text.
     expect(joinSections(preamble, sections).trim()).toBe(body.trim());
   });
 
+  it('reads headings as before, with trailing space trimmed and a bare "## " as text', () => {
+    const { preamble, sections } = splitSections('## Spaced out   \nbody\n##\tTabbed\n## \n##  \n');
+    expect(sections.map((s: { heading: string }) => s.heading)).toEqual(['Spaced out', 'Tabbed', '']);
+    // "## " has no heading text, so it stays a body line, as the old pattern had it.
+    expect(sections[1]!.content).toBe('## ');
+    expect(preamble).toBe('');
+  });
+
+  it('splits a long run of spaces after ## in linear time (CodeQL 373)', () => {
+    const line = `##${' '.repeat(50_000)}x${' '.repeat(50_000)}!`;
+    const started = performance.now();
+    splitSections(line);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
   it('replaces a section by heading', () => {
     const edited = editSectionBody(body, 'Progress', '500 / 1300 reviewed.\n');
     expect(edited).toContain('500 / 1300 reviewed');
