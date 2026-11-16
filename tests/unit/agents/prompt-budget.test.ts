@@ -127,8 +127,11 @@ interface AgentBudget {
 // secret-capture-request takes the card templates and the card details_only fields (#1358):
 // one description sentence and six inputs, +742 bytes, 86,280 over 77 local tools. The budget
 // rises by exactly that delta. +20 for #1358 final-review fixes (billing_zip clear hint, card-use-request risk).
+// card-use-request back in the web bundle: a "revert version bumps" commit in #1358 dropped it
+// from web/SKILL.md, so main measured 86,125 over 76 tools and later PRs grew 950 bytes into the
+// 1,125 it had freed. Restored: 87,250 over 77 local tools. The budget is set to that measurement.
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 86_300, allowMcpPins: false, rosterTokens: 500 },
+  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 87_250, allowMcpPins: false, rosterTokens: 500 },
   // Specialists, trimmed per ADR-046 in #2025 (baseline log, final phase).
   // calendar: YAML 28,727 → 23,897 chars (~7,187 → ~5,984 tokens always-on); 24,370 bytes over 19 local tools.
   // Standing rules moved to a pinned document (#2339): the config-store JSON-array steps came

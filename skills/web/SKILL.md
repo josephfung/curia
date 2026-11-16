@@ -7,4 +7,6 @@ tools:
   - web-fetch
   - web-search
   - web-browser
+  - card-use-request
+  - card-use-confirm
 ---
