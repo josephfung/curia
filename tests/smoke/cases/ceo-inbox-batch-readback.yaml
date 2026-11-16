@@ -88,7 +88,8 @@ turns:
 expected_behaviors:
   - id: turn1-reads-back-no-send
     description: >
-      After turn 1 no ceo-inbox-send-draft call has been made. The reply names the drafts
+      After turn 1 no draft has been sent: either no ceo-inbox-send-draft call was made, or
+      every call was refused with the batch read-back refusal (nothing sent). The reply names the drafts
       from yesterday morning with each recipient and subject (Jo Park, Sam Kerr) and asks the
       principal to confirm, send all or one by one
     weight: critical
