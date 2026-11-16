@@ -128,6 +128,12 @@ export interface CaseExecution {
    * and run again, one reason each. They do not use the case's gated retry (#1980).
    */
   providerRetries: string[];
+  /**
+   * "Today" on this attempt's clock, e.g. "Monday, November 16, 2026 (America/Toronto)":
+   * the date its messages and judge text resolved on. The judge reads this rather than the
+   * run's start date, which a retry or a long run can leave behind at midnight.
+   */
+  today?: string;
 }
 
 // -- Evaluation results --

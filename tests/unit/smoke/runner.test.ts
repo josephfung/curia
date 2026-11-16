@@ -47,6 +47,8 @@ describe('judge text clock', () => {
     expect(exec!.responses[0]!.prompt).toBe('Due Monday, November 16');
     expect(exec!.testCase.expectedBehaviors[0]!.description).toBe('Names Monday, November 16');
     expect(exec!.testCase.failureModes[0]).toBe('Names a day other than Monday, November 16');
+    // The judge's "## Today" line comes from the same clock.
+    expect(exec!.today).toBe('Monday, November 16, 2026 (America/Toronto)');
   });
 
   it('puts a targeted case\'s opening on that same clock', async () => {
