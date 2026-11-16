@@ -100,11 +100,12 @@ describe('cardUse capability allowlist', () => {
 });
 
 describe('approval tools that settle a card request', () => {
-  // approve-action declines a card request whose replay failed and deny-action declines
-  // a denied one, both through ctx.cardUse. The execution layer injects only declared
-  // capabilities, so without the declaration ctx.cardUse is always undefined and the
-  // request is left open ("cardUse not wired"). A version-bump revert once dropped it.
-  it.each(['approve-action', 'deny-action'])('%s declares cardUse as an optional capability', (tool) => {
+  // approve-action declines a card request whose replay failed, and deny-action and
+  // dismiss-action decline a denied or dismissed one, all through ctx.cardUse. The execution
+  // layer injects only declared capabilities, so without the declaration ctx.cardUse is
+  // always undefined and the request is left open ("cardUse not wired"). A version-bump
+  // revert once dropped it from all three.
+  it.each(['approve-action', 'deny-action', 'dismiss-action'])('%s declares cardUse as an optional capability', (tool) => {
     const path = resolve(import.meta.dirname, `../../../skills/autonomy/tools/${tool}/tool.json`);
     const m = JSON.parse(readFileSync(path, 'utf-8')) as ToolManifest;
     expect(m.optional_capabilities ?? []).toContain('cardUse');
