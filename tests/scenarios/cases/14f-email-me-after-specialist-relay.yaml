@@ -51,6 +51,11 @@ tool_stubs:
   send-draft:
     - match: {}
       return: { message_id: scenario-out-2, to: principal, subject: "(sent)" }
+  # The principal-mailbox variant of that wrong turn (#2474). The coordinator can reach it,
+  # so it is stubbed to succeed too.
+  ceo-inbox-send-draft:
+    - match: {}
+      return: { message_id: scenario-out-3, to: [], subject: "(sent)" }
   email-send:
     - match: {}
       return: { message_id: scenario-out-1, to: principal, subject: "The Room Full of Money - refresh done" }
