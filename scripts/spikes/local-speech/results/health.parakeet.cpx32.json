@@ -1,0 +1,6 @@
+{
+ "engines": ["parakeet"],
+ "load_seconds": {"parakeet": 2.364, "_total": 2.364},
+ "rss_mb": 976.4,
+ "peak_rss_mb": 976.4
+}
