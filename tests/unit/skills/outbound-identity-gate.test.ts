@@ -9,6 +9,7 @@ import type { ResolvedEntityCard } from '../../../src/agents/resolved-entities.j
 import type { IdentityGateMode } from '../../../src/config.js';
 import type { Logger } from '../../../src/logger.js';
 import type { AgentPersona } from '../../../src/skills/types.js';
+import type { SignalRpcClient } from '../../../src/channels/signal/signal-rpc-client.js';
 
 const XIAOPU = '11111111-1111-4111-8111-111111111111';
 const TASK = 'task-turn-3';
@@ -55,8 +56,16 @@ function gateway(
     fatal: vi.fn(),
     trace: vi.fn(),
   } as unknown as Logger;
+  const signalClient = {
+    send: vi.fn().mockResolvedValue(undefined),
+    sendReadReceipt: vi.fn().mockResolvedValue(undefined),
+    listGroups: vi.fn().mockResolvedValue([]),
+    isConnected: vi.fn().mockReturnValue(true),
+  };
   const gw = new OutboundGateway({
     nylasClients: new Map([['curia', nylasClient]]),
+    signalClient: signalClient as unknown as SignalRpcClient,
+    signalPhoneNumber: '+15555550000',
     contactService,
     contentFilter,
     bus,
@@ -72,13 +81,25 @@ function gateway(
       status: 'active',
       createdAt: new Date(),
       updatedAt: new Date(),
+    }, {
+      id: 'pi-2',
+      contactId: 'principal',
+      channel: 'signal',
+      channelIdentifier: '+15555551111',
+      label: null,
+      verified: true,
+      verifiedAt: null,
+      source: 'ceo_stated',
+      status: 'active',
+      createdAt: new Date(),
+      updatedAt: new Date(),
     }],
     conversationEntities: entities,
     identityGate: options?.identityGate,
     ...(options?.agentPersona ? { agentPersona: options.agentPersona } : {}),
     logger,
   });
-  return { gw, nylasClient, bus, warn };
+  return { gw, nylasClient, signalClient, bus, warn };
 }
 
 describe('outbound identity gate (#1818)', () => {
@@ -325,5 +346,59 @@ describe('outbound identity gate (#1818)', () => {
       expect.anything(),
       expect.stringContaining('unresolved identity'),
     );
+  });
+
+  // Scenario 47b: a relayed Signal reply to the principal naming a contact the turn never
+  // resolved. Only a send whose every recipient is a verified principal identity skips the gate.
+  describe('audience on a relayed reply', () => {
+    const relay = { taskEventId: TASK, conversationId: 'signal:+15555551111', postTurn: true } as const;
+    // The draft the 47b gate run blocked.
+    const REPLY = 'Already handled — that\'s the same sync I booked a few minutes ago: 30 minutes with Priya Raman '
+      + 'on Thursday, November 19 at 3pm, invite sent.';
+
+    it('passes a Signal reply whose only recipient is the principal', async () => {
+      const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Joseph Fung']);
+      entities.turnIdentities.begin(TASK);
+      const { gw, signalClient } = gateway(entities);
+
+      const result = await gw.send({
+        channel: 'signal', recipient: '+15555551111', message: REPLY,
+      }, relay);
+
+      expect(result.success).toBe(true);
+      expect(signalClient.send).toHaveBeenCalledOnce();
+    });
+
+    it('still blocks the same Signal reply to anyone else', async () => {
+      const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Joseph Fung']);
+      entities.turnIdentities.begin(TASK);
+      const { gw, signalClient } = gateway(entities);
+
+      const result = await gw.send({
+        channel: 'signal', recipient: '+15555552222', message: REPLY,
+      }, { ...relay, conversationId: 'signal:+15555552222' });
+
+      expect(result.success).toBe(false);
+      expect(result.blockedRules).toEqual(['unresolved-identity']);
+      expect(signalClient.send).not.toHaveBeenCalled();
+    });
+
+    it('still blocks an email to the principal with someone else on CC', async () => {
+      const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Joseph Fung']);
+      entities.turnIdentities.begin(TASK);
+      const { gw, nylasClient } = gateway(entities);
+
+      const result = await gw.send({
+        channel: 'email',
+        to: 'joseph@example.com',
+        cc: ['dani@wrcf.ca'],
+        subject: 'Sync',
+        body: REPLY,
+      }, { taskEventId: TASK, conversationId: 'conv-1' });
+
+      expect(result.success).toBe(false);
+      expect(result.blockedRules).toEqual(['unresolved-identity']);
+      expect(nylasClient.sendMessage).not.toHaveBeenCalled();
+    });
   });
 });
