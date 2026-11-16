@@ -13,8 +13,10 @@ function fakeHarness(timezone: string): CuriaHarness {
     settle: async () => true,
     stubs: { set: () => undefined, clear: () => [] },
     sendMessage: async () => ({ content: 'ok', durationMs: 1, toolCalls: [] }),
+    openTargetThread: async () => ({ threadId: 'thread-1', topic: 'Plan', participants: [] }),
+    closeTargetThread: async () => undefined,
   };
-  // A partial harness: runTestCases (warm-up off, no target) touches only these members.
+  // A partial harness: runTestCases with warm-up off touches only these members.
   return harness as unknown as CuriaHarness;
 }
 
@@ -45,5 +47,22 @@ describe('judge text clock', () => {
     expect(exec!.responses[0]!.prompt).toBe('Due Monday, November 16');
     expect(exec!.testCase.expectedBehaviors[0]!.description).toBe('Names Monday, November 16');
     expect(exec!.testCase.failureModes[0]).toBe('Names a day other than Monday, November 16');
+  });
+
+  it('puts a targeted case\'s opening on that same clock', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout'] });
+    vi.setSystemTime(new Date('2026-11-16T04:59:59Z'));
+    const targeted: TestCase = {
+      ...caseWith(2_000),
+      target: { agent: 'calendar', via: 'bullpen', from: 'coordinator', topic: 'Plan', opening: 'Opened {{day:today}}' },
+    };
+
+    const run = runTestCases(fakeHarness('America/Toronto'), [targeted], { warmUp: false });
+    await vi.advanceTimersByTimeAsync(2_000);
+    const [exec] = (await run).executions;
+
+    expect(exec!.target?.opening).toBe('Opened Monday, November 16');
+    expect(exec!.responses[0]!.prompt).toBe('Due Monday, November 16');
+    expect(exec!.testCase.expectedBehaviors[0]!.description).toBe('Names Monday, November 16');
   });
 });
