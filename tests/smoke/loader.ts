@@ -220,7 +220,10 @@ export function loadTestCase(filePath: string): TestCase {
 
   // Catch a malformed or misspelt placeholder at load time, not mid-run.
   try {
-    assertResolvable([raw.tool_stubs, raw.turns.map(t => [t.content, t.tool_stubs]), target?.topic, target?.opening]);
+    assertResolvable([
+      raw.tool_stubs, raw.turns.map(t => [t.content, t.tool_stubs]), target?.topic, target?.opening,
+      expectedBehaviors.map(b => b.description), raw.failure_modes,
+    ]);
   } catch (err) {
     throw new Error(`Bad placeholder in ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -240,6 +243,25 @@ export function loadTestCase(filePath: string): TestCase {
     turns,
     expectedBehaviors,
     failureModes: raw.failure_modes ?? [],
+  };
+}
+
+/**
+ * The case as the judge should read it: date placeholders in behavior descriptions and
+ * failure modes resolved against the case's clock, so a description can name the exact
+ * date it expects ("Due {{day:next-friday}}") instead of asking the judge to work it out.
+ * `withPrincipal` resolves {{principal:…}} the same way the runner does for messages.
+ */
+export function resolveJudgedText(
+  tc: TestCase,
+  timezone: string,
+  now: Date,
+  withPrincipal: <T>(v: T) => T,
+): TestCase {
+  return {
+    ...tc,
+    expectedBehaviors: withPrincipal(resolveDatePlaceholders(tc.expectedBehaviors, timezone, now)),
+    failureModes: withPrincipal(resolveDatePlaceholders(tc.failureModes, timezone, now)),
   };
 }
 
