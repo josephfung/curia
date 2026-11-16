@@ -22,7 +22,9 @@ tags: [cross-conversation, turn-awareness, calendar, signal, real-delegation]
 delegation: real
 # In the release gate: the incident path, which no stubbed case can reach (README, "Which
 # real-delegation cases gate a release").
-runs: 3
+# 5 runs: its critical behavior split across runs on the 2026-11-16 gate, so one run cannot
+# tell a flake from a regression. The default is 1 (tests/scenarios/README.md, "The gate").
+runs: 5
 timeout_seconds: 600
 autonomy: { score: 85, gating: band }
 through_gateway: true

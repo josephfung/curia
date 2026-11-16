@@ -17,7 +17,6 @@ description: >
   and the office will fit one around Avery's calendar. The email speaks about Avery, so it
   has to name them or say "they", whatever the name suggests.
 tags: [email, identity, pronouns]
-runs: 5
 stub_sets: [human-channels]
 seed:
   contacts:

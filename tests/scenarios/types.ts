@@ -919,5 +919,10 @@ export interface SuiteResult {
  */
 export const CRITICAL_PASS_THRESHOLD = 0.8;
 
-/** Default runs per case. See CRITICAL_PASS_THRESHOLD for why not 3. */
-export const DEFAULT_RUNS = 5;
+/**
+ * Default runs per case: one, like any other test. Most cases are deterministic (124 of 155
+ * gave the same verdict on all five runs of the 2026-11-16 gate), so repeats only cost time
+ * and money. A case whose critical behavior is genuinely nondeterministic sets `runs: 5` in
+ * its file; see CRITICAL_PASS_THRESHOLD for why 5 and not 3.
+ */
+export const DEFAULT_RUNS = 1;
