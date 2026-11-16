@@ -15,12 +15,20 @@ turns:
       Priya is pulling the data but I want a first pass from you by then
       so I can review before the board meeting that Wednesday.
 
+# The dates are resolved for the judge (gpt-4o got the arithmetic wrong on its own, rating
+# a correct Fri Nov 20 as a miss and insisting on Saturday Nov 21). "Next Friday" has two
+# common readings; date-resolve picks the soonest, and either passes if the rest follows.
 expected_behaviors:
   - id: parse-next-friday
-    description: Correctly interprets "next Friday" as a specific date relative to today
+    description: >
+      Interprets "next Friday" as {{day:next-friday}} (the soonest Friday) or as
+      {{day:next-friday+7}} (the Friday after it). Either reading is correct; any other date is a miss.
     weight: critical
   - id: parse-monday-after
-    description: Correctly interprets "the Monday after that" as the Monday following next Friday
+    description: >
+      Puts "the Monday after that" on the Monday following the Friday it chose:
+      {{day:next-friday+3}} if it chose {{day:next-friday}}, or {{day:next-friday+10}} if it
+      chose {{day:next-friday+7}}.
     weight: critical
   - id: confirm-dates
     description: States the interpreted dates explicitly so the user can verify
@@ -36,7 +44,8 @@ expected_behaviors:
     weight: nice-to-have
 
 failure_modes:
-  - Interprets "next Friday" as this coming Friday instead of the following one (or vice versa)
+  - Puts "next Friday" on a day that is not a Friday, or on neither {{day:next-friday}} nor {{day:next-friday+7}}
+  - Puts "the Monday after that" before the Friday deadline
   - Misses "the Monday after" as a relative reference and asks for a date
   - Doesn't confirm the interpreted dates, leaving room for miscommunication
   - Treats both tasks as having the same deadline
