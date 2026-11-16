@@ -286,10 +286,13 @@ container startup; operators enable the profile only when Voice is configured.
     "voice": "skipped",
     "signal_voice": "skipped",
     "scheduler": "ok",
-    "principal_mailbox_triage": "ok"
+    "principal_mailbox_triage": "ok",
+    "knowledge_graph": "ok"
   }
 }
 ```
+
+An optional top-level `details` object carries machine-readable reasons beside `checks`. Today only `knowledge_graph` uses it: `checks.knowledge_graph` is `fail` when entity memory is off, and `details.knowledge_graph` says why (`reembed_in_progress`, `model_mismatch`, `bundled_weights_missing`, `weights_changed` and others). A few reasons accompany an `ok` check: `implicit_openai_deprecated`, `weights_shifted` and `drift_unchecked`. Both fields are additive ([ADR-065](../adr/065-bundled-in-process-embedding-model.md)). The console renders the `knowledge_graph` pill but not the reason text. The full reason list is in [../dev/health-monitoring.md](../dev/health-monitoring.md#knowledge_graph-reasons).
 
 `status` is one of:
 - `ok` (HTTP 200) — all enabled checks pass.

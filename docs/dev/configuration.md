@@ -449,6 +449,50 @@ audit:
 
 ---
 
+### Embedding source
+
+Entity memory (the knowledge graph) needs an embedding model. Which one is used is decided
+at boot by `resolveEmbedding()` in `src/memory/embedding.ts`, from two `.env` variables and
+what the graph already holds ([ADR-065](../adr/065-bundled-in-process-embedding-model.md)):
+
+1. **`EMBEDDING_BASE_URL` set:** that OpenAI-compatible `/embeddings` server, with
+   `EMBEDDING_MODEL`'s profile and the vault's `embedding_api_key` when the server checks a
+   key. `EMBEDDING_MODEL` is required. OpenAI is configured this way like any other server:
+   `EMBEDDING_BASE_URL=https://api.openai.com/v1`, `EMBEDDING_MODEL=text-embedding-3-small`.
+2. **No base URL:** the bundled `all-MiniLM-L6-v2`, run in-process from
+   `EMBEDDING_MODEL_DIR` (default `models/embedding/all-MiniLM-L6-v2`, relative to the
+   working directory; `/app/models/...` in the image). No key, no network call. Exceptions:
+   - The graph holds another model's vectors (or an unfinished `pnpm reembed:kg` run targets
+     one) and `EMBEDDING_MODEL` doesn't name `all-MiniLM-L6-v2`: Curia does not switch. A
+     non-OpenAI stored model leaves entity memory off, and the log names the two ways out.
+   - **Deprecated (#2628):** the graph holds `text-embedding-3-small` vectors and
+     `EMBEDDING_MODEL` is unset or `text-embedding-3-small`: OpenAI at its standard URL with
+     the vault's `openai_api_key`, as before this release. Boot logs a deprecation warning,
+     and health carries `implicit_openai_deprecated`. A later release removes this rule;
+     configure OpenAI explicitly (step 1, no re-embed needed) or switch to the bundled model.
+   - `EMBEDDING_MODEL=all-MiniLM-L6-v2` is the switch signal toward the bundled model: the
+     boot gate then holds entity memory off until `pnpm reembed:kg` has run.
+   - Any other `EMBEDDING_MODEL` without a base URL leaves entity memory off.
+
+**Weights.** The image carries the pinned weights (`models/embedding/manifest.json`), fetched
+and checksum-verified at build time. A source checkout fetches them once with
+`pnpm fetch:embedder` (into the gitignored `models/embedding/`). Missing weights keep entity
+memory off with a reason naming that command; nothing is downloaded at runtime. The stamp on
+each stored vector carries a short hash of the weight file actually loaded
+(`all-MiniLM-L6-v2#weights:afdb6f1a0e45` for the shipped file), so other weights under the
+same name read as a model change.
+
+**Switching models.** Change the variables (and the key, if the server needs one), stop
+Curia, run `pnpm reembed:kg`, start Curia. `--dry-run` reports what would change.
+`pnpm reembed:kg --force` re-embeds every row even when its stamp already matches: the
+recovery when an endpoint starts serving other weights under the same model name.
+
+**Health.** `/api/health` reports `checks.knowledge_graph` (`ok`, `fail` when entity memory
+is off, `skipped` in setup mode) and the reason code in `details.knowledge_graph`. For an
+endpoint source, boot re-embeds 5 stored labels and compares them with their stored vectors;
+a shift reports `weights_shifted`, a change keeps entity memory off with `weights_changed`
+until `pnpm reembed:kg --force`. See [health-monitoring.md](health-monitoring.md#knowledge_graph-reasons).
+
 ### `embedding.profiles`
 
 A profile tells Curia how to use one embedding model: the vector width to store, a text
@@ -456,9 +500,12 @@ prefix for each purpose, and the three similarity thresholds (ADR-051). The endp
 itself is set in `.env` (`EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`), so embedding
 configuration spans both files.
 
-`text-embedding-3-small` and `Qwen3-Embedding-4B` are built in
-(`src/memory/embedding-profiles.ts`). Add a profile in `config/local.yaml`, keyed by the
-exact `EMBEDDING_MODEL` value:
+`text-embedding-3-small`, `Qwen3-Embedding-4B` and the bundled `all-MiniLM-L6-v2` are built
+in (`src/memory/embedding-profiles.ts`). The bundled profile is 384 wide, with thresholds
+0.95 (fact dedup), 0.92 (auto-resolve) and 0.61 (ambiguity floor), calibrated in ADR-065.
+An override with `base: all-MiniLM-L6-v2` may retune its thresholds; it keeps the base's
+width and pooling, so the stamp doesn't change. Add a profile in `config/local.yaml`, keyed
+by the exact `EMBEDDING_MODEL` value:
 
 ```yaml
 embedding:
@@ -755,10 +802,11 @@ from `.env`.
 | `ANTHROPIC_API_KEY` | Yes¹ | vault | Powers the agents on the default tiers. ¹ No provider is mandatory: boot requires a credential only for each provider a tier is actually mapped to, and fails naming the tier, model and provider if one is missing. |
 | `API_TOKEN` | Yes | vault | Authenticates HTTP API requests |
 | `WEB_APP_BOOTSTRAP_SECRET` | Yes | vault | Web app login secret |
-| `OPENAI_API_KEY` | Tier 2 | vault | Enables entity memory and semantic search through OpenAI embeddings when `EMBEDDING_BASE_URL` is unset. Also used by `image-generate`. |
-| `EMBEDDING_BASE_URL` | Optional | `.env` | Base URL of an OpenAI-compatible `/embeddings` server (llama.cpp, Ollama, vLLM), e.g. `http://localhost:8080/v1`. Replaces OpenAI as the embedding source for entity memory (ADR-051). |
-| `EMBEDDING_MODEL` | With `EMBEDDING_BASE_URL` | `.env` | Model name sent to the embedding server, and the key of its profile. Required when `EMBEDDING_BASE_URL` is set: without it entity memory stays off. With no base URL it defaults to `text-embedding-3-small`. A model with no profile leaves entity memory off; see [`embedding.profiles`](#embeddingprofiles). |
-| `EMBEDDING_API_KEY` | Optional | vault | Vault key `embedding_api_key`. Sent as a Bearer token to `EMBEDDING_BASE_URL` when the server checks one. |
+| `OPENAI_API_KEY` | Optional | vault | Used by `image-generate`. For embeddings it is read only by the deprecated compatibility rule (#2628): no `EMBEDDING_BASE_URL` and a graph that already holds `text-embedding-3-small` vectors. See [Embedding source](#embedding-source). |
+| `EMBEDDING_BASE_URL` | Optional | `.env` | Base URL of an OpenAI-compatible `/embeddings` server (llama.cpp, Ollama, vLLM, OpenAI at `https://api.openai.com/v1`), e.g. `http://localhost:8080/v1`. Unset means the bundled in-process model (ADR-065). |
+| `EMBEDDING_MODEL` | With `EMBEDDING_BASE_URL` | `.env` | Model name sent to the embedding server, and the key of its profile. Required when `EMBEDDING_BASE_URL` is set: without it entity memory stays off. With no base URL, leave it unset (the bundled model) or set `all-MiniLM-L6-v2` to switch a graph holding another model's vectors to the bundled model. A model with no profile leaves entity memory off; see [`embedding.profiles`](#embeddingprofiles). |
+| `EMBEDDING_API_KEY` | Optional | vault | Vault key `embedding_api_key`. Sent as a Bearer token to `EMBEDDING_BASE_URL` when the server checks one, OpenAI included. |
+| `EMBEDDING_MODEL_DIR` | Optional | `.env` | Directory holding the bundled model's files. Default `models/embedding/all-MiniLM-L6-v2`, relative to the working directory (`pnpm fetch:embedder` fills it). Must be readable at boot; nothing is fetched. |
 | `OPENROUTER_API_KEY` | Optional | vault | Enables multi-model routing via OpenRouter (Gemini Flash, DeepSeek V3, GPT-4o). When set, tiers can map to OpenRouter-hosted models. |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Optional | vault | Vault keys `aws_access_key_id` / `aws_secret_access_key`. With `AWS_REGION`, registers the Bedrock provider so tiers can map to Bedrock-hosted Claude models. A partial set logs a warning and leaves Bedrock off. |
 | `AWS_REGION` | Optional | `.env` | Bedrock region (e.g. `ca-central-1`). Required for Bedrock to register. |

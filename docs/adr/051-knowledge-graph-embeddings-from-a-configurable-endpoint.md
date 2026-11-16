@@ -5,6 +5,8 @@ Status: Accepted
 
 Supersedes [ADR-008](008-openai-embeddings-for-knowledge-graph.md).
 
+**Amended by [ADR-065](065-bundled-in-process-embedding-model.md) (#2023):** with no `EMBEDDING_BASE_URL`, embeddings now come from a model bundled in the image and run in-process (`all-MiniLM-L6-v2`), not from OpenAI. That implements alternative 1 below. An install whose graph already holds `text-embedding-3-small` vectors keeps OpenAI through a deprecated compatibility rule (removal tracked in #2628); configured explicitly, OpenAI is an ordinary endpoint keyed by `embedding_api_key`. The rest of this decision stands.
+
 ## Context
 
 ADR-008 chose OpenAI `text-embedding-3-small` for every knowledge graph vector, and three things hardened around that choice. The column is `vector(1536)` and the width is a constant in the code. The three cosine thresholds for fact dedup, entity auto-resolution and the ambiguity floor are constants tuned to that model's score distribution. Entity memory, the sensitivity classifier and two memory tools are switched off unless the vault holds an OpenAI key.
