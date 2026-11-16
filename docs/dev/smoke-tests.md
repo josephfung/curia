@@ -272,7 +272,7 @@ Placeholders work in `expected_behaviors` descriptions and `failure_modes` too, 
 
 By default the judge sees each turn's message and Curia's reply. Set `judge_tool_calls: true` when the behavior is an action rather than a reply, such as "looks the contact up before answering" or "does not send anything". The judge then also sees each tool call, its arguments, and its result (a failed call is marked `FAILED`), plus the calls of every specialist the coordinator delegated to, so "created the event on the principal's calendar" is judged on what was done, not on what the reply says.
 
-For coordinator decisions that must be checked exactly, across several runs with a pass rate, use the scenario suite (`tests/scenarios/README.md`). It asserts tool calls in code and refuses any unstubbed write.
+For coordinator decisions that must be checked exactly, with a pass-rate gate for the nondeterministic ones, use the scenario suite (`tests/scenarios/README.md`). It asserts tool calls in code and refuses any unstubbed write.
 
 ### Behavior weights
 
