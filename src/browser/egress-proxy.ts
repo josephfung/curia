@@ -416,7 +416,9 @@ export function createEgressProxy(options: EgressProxyOptions): http.Server {
       }
       socket.setTimeout(TUNNEL_IDLE_MS, () => socket.destroy());
       res.on('close', () => socket.destroy());
-      const headers: http.OutgoingHttpHeaders = {};
+      // Null-prototype objects: a header named `__proto__` from the client (or, below, the
+      // upstream) must land as an own property, never on Object.prototype (CodeQL 376/377).
+      const headers = Object.create(null) as http.OutgoingHttpHeaders;
       for (const [name, value] of Object.entries(req.headers)) {
         if (!HOP_BY_HOP.has(name) && value !== undefined) headers[name] = value;
       }
@@ -427,7 +429,7 @@ export function createEgressProxy(options: EgressProxyOptions): http.Server {
         createConnection: () => socket,
       });
       outbound.on('response', (upstreamRes) => {
-        const out: http.OutgoingHttpHeaders = {};
+        const out = Object.create(null) as http.OutgoingHttpHeaders;
         for (const [name, value] of Object.entries(upstreamRes.headers)) {
           if (!HOP_BY_HOP.has(name) && value !== undefined) out[name] = value;
         }
