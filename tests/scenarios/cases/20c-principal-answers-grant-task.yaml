@@ -14,7 +14,7 @@ description: >
   specialist with that task's id, then confirm. It must not touch Dana's task, close
   either task itself, or change Omar's permissions some other way.
 tags: [proactive, backlog, routing, contacts]
-# On demand since the 2026-11-16 gate prune: backlog task-answer routing; 20 gates it.
+# On demand since the 2026-11-16 gate prune: the same backlog task-answer route as 20b, which gates it.
 release_gate: false
 seed:
   backlog:

@@ -25,7 +25,7 @@ description: >
   reaches Owen.
 tags: [specialist-ceo-inbox, ceo-inbox, triage, send, principal-mailbox, autonomous-send, band-gating, band-stakes]
 agent: ceo-inbox
-# On demand since the 2026-11-16 gate prune: same stakes threshold as 45b/45c; ceiling unit-tested (band-send-review.test.ts).
+# On demand since the 2026-11-16 gate prune: same stakes threshold as 45b and 45d; ceiling unit-tested (band-send-review.test.ts).
 release_gate: false
 timeout_seconds: 420
 through_gateway: true
