@@ -32,7 +32,7 @@ pnpm scenarios --model deepseek/deepseek-v4.1-flash
 pnpm scenarios --case "sweep-on-close" --model deepseek/deepseek-v4.1-flash
 ```
 
-**Every run costs money:** each case runs once by default (a case can set `runs:`), and the judge is billed too. The unfiltered suite is the release gate. While developing, run only the cases your change touches, once each (no `--runs`), and compare against saved transcripts rather than re-running `main`.
+**Every run costs money:** each case runs once by default (a case can set `runs:`), and the judge is billed too. The unfiltered suite is the release gate. While developing, run only the cases your change touches, with no `--runs`: each runs once, except a case marked `runs: 5`, which repeats because one run of it is a coin flip. Compare against saved transcripts rather than re-running `main`.
 
 | Flag | Meaning |
 |---|---|
@@ -182,7 +182,7 @@ so a new case is `release_gate: false` unless it guards something no other gate 
 unit test does: a distinct invariant, a production incident with no code-level test, or a
 coordinator route that rests on prompt or roster text (prompt trims break those quietly).
 A case whose behavior is enforced in code and unit-tested, or that varies one parameter of a
-gate sibling, runs on demand. On 2026-11-16 the gate was pruned from 155 cases to 88 on these
+gate sibling, runs on demand. On 2026-11-16 the gate was pruned from 155 cases to 90 on these
 lines; each moved case says why in a comment beside its `release_gate: false`.
 
 **Known failures.** A case can carry `known_failure: { issue: "#1234", reason: … }` for a
@@ -561,7 +561,7 @@ The harness Dispatcher scores senders as production does: channel trust from
 The stack's resolver evaluates production's permission model. So the coordinator sees the
 same trust score and AUTHORIZATION section that production would show it.
 
-After adding a case, run it once (`--case`, no `--runs`) so the CLI records its stub coverage,
+After adding a case, run it (`--case`, no `--runs`: once, unless it sets `runs:`) so the CLI records its stub coverage,
 and commit the updated `stub-coverage.json`.
 
 ## Cases for a specialist
