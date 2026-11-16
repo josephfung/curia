@@ -815,6 +815,19 @@ describe('Stage 2 judge delegation', () => {
     expect(judge.review).toHaveBeenCalledTimes(1);
   });
 
+  it('passes principalDirected to the judge only when the sender set it true (scenario 34d)', async () => {
+    const judge: OutboundJudge = { review: vi.fn(async () => []) };
+    const filter = filterWithJudge(judge);
+    const send = { ...BASE_INPUT, content: 'Health card number below, as requested.', recipients: [armin, principalRcpt], principalIncluded: true, principalIsSoleRecipient: false };
+    await filter.check({ ...send, principalDirected: true });
+    await filter.check({ ...send, principalDirected: false });
+    await filter.check(send); // omitted: fail-closed
+    const calls = vi.mocked(judge.review).mock.calls;
+    expect(calls[0]![0].principalDirected).toBe(true);
+    expect(calls[1]![0].principalDirected).toBe(false);
+    expect(calls[2]![0].principalDirected).toBe(false);
+  });
+
   it('Stage 2 is a no-op pass when no judge is configured (back-compat)', async () => {
     const filter = createTestFilter(); // no judge
     const result = await filter.check({

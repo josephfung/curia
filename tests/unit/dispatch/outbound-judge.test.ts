@@ -93,6 +93,27 @@ describe('OutboundLlmJudge', () => {
     expect(provider.chat).not.toHaveBeenCalled();
   });
 
+  it('sends the principal-direction section only when principalDirected is true (scenario 34d)', async () => {
+    const userPrompt = (p: LLMProvider): string => {
+      const call = (p.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { messages: Array<{ role: string; content: string }> };
+      return call.messages.find((m) => m.role === 'user')!.content;
+    };
+    const directed = providerReturning(textResponse('{"leak": false, "reason": ""}'));
+    await makeJudge(directed).judge.review({ ...MIXED_INPUT, principalDirected: true });
+    expect(userPrompt(directed)).toContain('PRINCIPAL DIRECTION');
+
+    // Absent: fail-closed, undirected prompt.
+    const absent = providerReturning(textResponse('{"leak": false, "reason": ""}'));
+    await makeJudge(absent).judge.review(MIXED_INPUT);
+    expect(userPrompt(absent)).not.toContain('PRINCIPAL DIRECTION');
+  });
+
+  it('a directed send is still blocked when the judge flags it (e.g. a password)', async () => {
+    const { judge } = makeJudge(providerReturning(textResponse('{"leak": true, "reason": "exposes a password/credential"}')));
+    const findings = await judge.review({ ...MIXED_INPUT, principalDirected: true });
+    expect(findings[0]?.rule).toBe('llm-judge-audience-leak');
+  });
+
   it('runs the judge when the principal is included but third parties are too', async () => {
     const provider = providerReturning(textResponse('{"leak": false, "reason": ""}'));
     const { judge } = makeJudge(provider);
