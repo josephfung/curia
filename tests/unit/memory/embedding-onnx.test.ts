@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { appendFile, copyFile, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { appendFile, copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import ort from 'onnxruntime-node';
@@ -16,6 +16,7 @@ import { EmbeddingService } from '../../../src/memory/embedding.js';
 import {
   BUNDLED_WEIGHTS_FILE,
   BUNDLED_MAX_TOKENS,
+  BundledModelFileMissingError,
   OnnxEmbeddingBackend,
   hashBundledWeights,
   type OnnxRunner,
@@ -50,6 +51,11 @@ describe.skipIf(!weightsPresent && !process.env.CI)('OnnxEmbeddingBackend (real 
     }
     bus = mockBus();
     service = await EmbeddingService.createBundled(MODEL_DIR, BUNDLED_PROFILE, createSilentLogger(), bus);
+  });
+
+  // Release the native session, as every process that loads the model must before exit.
+  afterAll(async () => {
+    await service?.close();
   });
 
   it('embeds a name as 384 numbers of unit length', async () => {
@@ -152,6 +158,48 @@ describe('bundled embedder without weights', () => {
   });
 });
 
+// A tokenizer file that is there but will not load: the error names the file and is a
+// plain Error, which the boot gate classifies as bundled_load_failed (not weights missing).
+describe('bundled embedder with an unloadable tokenizer file', () => {
+  let tmp: string;
+
+  beforeAll(async () => {
+    tmp = await mkdtemp(path.join(os.tmpdir(), 'curia-embedder-tok-'));
+  });
+
+  afterAll(async () => {
+    await rm(tmp, { recursive: true, force: true });
+  });
+
+  async function loadError(tokenizerJson: string, configJson = '{}'): Promise<Error> {
+    await writeFile(path.join(tmp, 'tokenizer.json'), tokenizerJson);
+    await writeFile(path.join(tmp, 'tokenizer_config.json'), configJson);
+    return OnnxEmbeddingBackend.load(tmp, BUNDLED_PROFILE, createSilentLogger()).then(
+      () => { throw new Error('expected load() to reject'); },
+      (err: unknown) => err as Error,
+    );
+  }
+
+  it('names tokenizer.json when it is not valid JSON', async () => {
+    const err = await loadError('{ not json');
+    expect(err).not.toBeInstanceOf(BundledModelFileMissingError);
+    expect(err.message).toContain(path.join(tmp, 'tokenizer.json'));
+    expect(err.cause).toBeInstanceOf(SyntaxError);
+  });
+
+  it('names tokenizer_config.json when it is not valid JSON', async () => {
+    const err = await loadError('{}', '{ not json');
+    expect(err).not.toBeInstanceOf(BundledModelFileMissingError);
+    expect(err.message).toContain(path.join(tmp, 'tokenizer_config.json'));
+  });
+
+  it('names tokenizer.json when the tokenizer rejects valid JSON', async () => {
+    const err = await loadError('{"model": 42}');
+    expect(err).not.toBeInstanceOf(BundledModelFileMissingError);
+    expect(err.message).toContain(path.join(tmp, 'tokenizer.json'));
+  });
+});
+
 // The backend's arithmetic and failure handling, with a stub session and tokenizer so the
 // exact inputs and outputs are known.
 describe('OnnxEmbeddingBackend with a stub session', () => {
@@ -225,5 +273,66 @@ describe('OnnxEmbeddingBackend with a stub session', () => {
     const run = vi.fn().mockResolvedValue({ last_hidden_state: tensorOf([1, 2, 3], [1, 1, 3]) });
     await expect(backend({ run }, stubTokenizer([101]), bus).embed('x')).rejects.toThrow(/dimensions/);
     expect(bus.publish.mock.calls.some(([, e]) => (e as { type: string }).type === 'embedding.error')).toBe(true);
+  });
+
+  it('reports an output of the wrong dtype by its type, not as a dimension problem', async () => {
+    const bus = mockBus();
+    const int32 = new ort.Tensor('int32', Int32Array.from([1, 2]), [1, 1, 2]);
+    const run = vi.fn().mockResolvedValue({ last_hidden_state: int32 });
+    const err = await backend({ run }, stubTokenizer([101]), bus).embed('x').catch((e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/type: int32/);
+    expect((err as Error).message).not.toMatch(/dimensions/);
+    expect(bus.publish.mock.calls.some(([, e]) => (e as { type: string }).type === 'embedding.error')).toBe(true);
+  });
+
+  describe('close()', () => {
+    const ok = () => ({ last_hidden_state: tensorOf([3, 4], [1, 1, 2]) });
+
+    it('releases the session once, however often it is called', async () => {
+      const release = vi.fn().mockResolvedValue(undefined);
+      const b = backend({ run: vi.fn().mockResolvedValue(ok()), release }, stubTokenizer([101]));
+      await Promise.all([b.close(), b.close()]);
+      await b.close();
+      expect(release).toHaveBeenCalledOnce();
+    });
+
+    it('waits for an in-flight embed before releasing', async () => {
+      const order: string[] = [];
+      let finish!: () => void;
+      const run = vi.fn(() => new Promise<Record<string, ort.Tensor>>((resolve) => {
+        finish = () => { order.push('run done'); resolve(ok()); };
+      }));
+      const release = vi.fn(async () => { order.push('released'); });
+      const b = backend({ run, release }, stubTokenizer([101]));
+      const embedding = b.embed('x');
+      await vi.waitFor(() => expect(run).toHaveBeenCalled());
+      const closed = b.close();
+      finish();
+      await Promise.all([embedding, closed]);
+      expect(order).toEqual(['run done', 'released']);
+    });
+
+    it('logs a failed release instead of throwing', async () => {
+      const logger = createSilentLogger();
+      const error = vi.spyOn(logger, 'error');
+      const release = vi.fn().mockRejectedValue(new Error('release exploded'));
+      const b = new OnnxEmbeddingBackend({
+        session: { run: vi.fn(), release }, tokenizer: stubTokenizer([101]), model: 'stub-model',
+        dimensions: 2, pooling: 'mean', logger,
+      });
+      await expect(b.close()).resolves.toBeUndefined();
+      expect(error).toHaveBeenCalledOnce();
+    });
+
+    it('rejects embed() after close', async () => {
+      const b = backend({ run: vi.fn().mockResolvedValue(ok()), release: vi.fn() }, stubTokenizer([101]));
+      await b.close();
+      await expect(b.embed('x')).rejects.toThrow(/closed/);
+    });
+
+    it('is a no-op on a service without native resources', async () => {
+      await expect(EmbeddingService.createForTesting().close()).resolves.toBeUndefined();
+    });
   });
 });

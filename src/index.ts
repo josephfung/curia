@@ -4291,6 +4291,11 @@ async function main(): Promise<void> {
     } catch (err) {
       logger.error({ err }, 'Error draining working-memory summarization during shutdown');
     }
+    // Release the bundled model's ONNX session before process.exit(): exiting with a live
+    // onnxruntime-node session can abort in its native teardown (exit 134), turning a clean
+    // shutdown into a crash. Placed after the summarization drain so nothing that may still
+    // embed is cut off. A no-op for an endpoint; close() logs its own errors, never throws.
+    await embeddingService?.close();
     try {
       await pool.end();
     } catch (err) {

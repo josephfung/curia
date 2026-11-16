@@ -19,6 +19,7 @@ import pino from 'pino';
 import { loadConfig, loadYamlConfig } from '../src/config.js';
 import { createPool } from '../src/db/connection.js';
 import { resolveKnowledgeGraphEmbedding } from '../src/memory/embedding-schema.js';
+import type { EmbeddingService } from '../src/memory/embedding.js';
 import { embeddingStamp } from '../src/memory/embedding-profiles.js';
 import { KnowledgeGraphStore } from '../src/memory/knowledge-graph.js';
 import { MemoryValidator } from '../src/memory/validation.js';
@@ -33,6 +34,8 @@ async function main(): Promise<number> {
   const config = loadConfig();
   const yamlConfig = loadYamlConfig(path.resolve(import.meta.dirname, '../config'));
   const pool = createPool(config.databaseUrl, logger);
+  // Hoisted so the finally can release the ONNX session before the pool ends.
+  let service: EmbeddingService | undefined;
   try {
     const embedding = await resolveKnowledgeGraphEmbedding(pool, config, yamlConfig.embedding?.profiles, logger);
     if (!embedding.ok) {
@@ -42,6 +45,7 @@ async function main(): Promise<number> {
       );
       return 1;
     }
+    service = embedding.service;
 
     // Same wiring as src/index.ts (no sensitivity classifier: EntityMemory then defaults
     // every node to 'internal', which is all a round-trip needs).
@@ -95,15 +99,21 @@ async function main(): Promise<number> {
       await entityMemory.archiveEntity(entity.id);
     }
   } finally {
+    // Release the native session first: a live onnxruntime-node session at exit can abort
+    // the process (exit 134). close() never throws.
+    await service?.close();
     await pool.end();
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  // exitCode, not process.exit(), as reembed-kg.ts does: main() releases the ONNX session
+  // and ends the pool in its finally, so nothing holds the event loop and the process exits
+  // on its own once stdout (the result line the egress test parses) has drained.
   main()
-    .then((code) => process.exit(code))
+    .then((code) => { process.exitCode = code; })
     .catch((err: unknown) => {
       logger.error({ err }, 'bundled-embedder-smoke: failed');
-      process.exit(1);
+      process.exitCode = 1;
     });
 }
