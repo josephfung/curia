@@ -9,6 +9,7 @@ import type { Logger } from '../logger.js';
 import type { EmbeddingService } from './embedding.js';
 import { tryAcquireInstanceLock, type InstanceLockHolder } from '../db/instance-lock.js';
 import { embeddingStamp } from './embedding-profiles.js';
+import { REEMBED_FORCE_COMMAND } from './embedding-drift.js';
 import { readEmbeddingSchema, resizeEmbeddingColumn, type EmbeddingSchemaSnapshot } from './embedding-schema.js';
 
 export const DEFAULT_REEMBED_BATCH_SIZE = 50;
@@ -19,12 +20,17 @@ export interface ReembedOptions {
   logger: Logger;
   /** Report what a run would do, and change nothing. */
   dryRun: boolean;
+  /**
+   * Re-embed every row even when its stamp matches: the recovery path when an endpoint's
+   * weights changed under the same model name. Clears through the same path a width change uses.
+   */
+  force?: boolean;
   batchSize?: number;
 }
 
 export type ReembedResult =
   | { status: 'locked'; holder: InstanceLockHolder | undefined }
-  | { status: 'dry_run'; before: EmbeddingSchemaSnapshot; widthChanges: boolean; rowsToEmbed: number }
+  | { status: 'dry_run'; before: EmbeddingSchemaSnapshot; widthChanges: boolean; rowsToEmbed: number; force: boolean }
   | { status: 'done'; before: EmbeddingSchemaSnapshot; runId: number; rowsEmbedded: number };
 
 /**
@@ -35,6 +41,7 @@ export type ReembedResult =
  */
 export async function reembedKnowledgeGraph(options: ReembedOptions): Promise<ReembedResult> {
   const { pool, embeddingService, logger, dryRun } = options;
+  const force = options.force ?? false;
   const batchSize = options.batchSize ?? DEFAULT_REEMBED_BATCH_SIZE;
   const profile = embeddingService.profile;
   const stamp = embeddingStamp(profile);
@@ -56,17 +63,36 @@ export async function reembedKnowledgeGraph(options: ReembedOptions): Promise<Re
       'reembed-kg: current state',
     );
 
-    if (dryRun) {
-      const { rows } = await pool.query<{ count: number }>(
-        widthChanges
-          ? 'SELECT count(*)::int AS count FROM kg_nodes'
-          : 'SELECT count(*)::int AS count FROM kg_nodes WHERE embedding_model IS DISTINCT FROM $1',
-        widthChanges ? [] : [stamp],
+    // A forced run that is already open for this target has done its clearing; clearing again
+    // would throw away the rows it re-embedded before being interrupted.
+    const resumes = resumesOpenRun(before, stamp, profile.dimensions);
+    const clearAll = widthChanges || (force && !resumes);
+    if (force && resumes && !widthChanges) {
+      // The run record does not say whether the open run was itself forced, so --force cannot
+      // tell "my own interrupted forced run" (resume is right) from an interrupted plain run
+      // toward the same model (whose stamped rows a force should have re-embedded). Resuming
+      // is the safe choice for the first; for the second, say so, so the next boot reading
+      // `weights_changed` again is not a surprise.
+      logger.warn(
+        { openRunId: before.openRun?.id, targetModel: stamp },
+        `reembed-kg: an unfinished run toward ${stamp} is open, so --force resumes it and keeps the rows it already ` +
+        're-embedded instead of clearing every vector again. If that run was not itself started with --force, ' +
+        `the rows it kept still hold vectors from the old weights: once this run completes, run ${REEMBED_FORCE_COMMAND} ` +
+        'again to re-embed everything.',
       );
-      return { status: 'dry_run', before, widthChanges, rowsToEmbed: rows[0]?.count ?? 0 };
     }
 
-    const runId = await openRunAndClear(pool, embeddingService, before, widthChanges, logger);
+    if (dryRun) {
+      const { rows } = await pool.query<{ count: number }>(
+        clearAll
+          ? 'SELECT count(*)::int AS count FROM kg_nodes'
+          : 'SELECT count(*)::int AS count FROM kg_nodes WHERE embedding_model IS DISTINCT FROM $1',
+        clearAll ? [] : [stamp],
+      );
+      return { status: 'dry_run', before, widthChanges, rowsToEmbed: rows[0]?.count ?? 0, force: clearAll && !widthChanges };
+    }
+
+    const runId = await openRunAndClear(pool, embeddingService, before, widthChanges, clearAll, logger);
     const rowsEmbedded = await embedMissingVectors(pool, embeddingService, runId, batchSize, logger);
 
     const closed = await pool.query(
@@ -85,6 +111,12 @@ export async function reembedKnowledgeGraph(options: ReembedOptions): Promise<Re
   }
 }
 
+/** True when an unfinished run already targets this stamp and width, so a rerun continues it. */
+function resumesOpenRun(before: EmbeddingSchemaSnapshot, stamp: string, dimensions: number): boolean {
+  const open = before.openRun;
+  return open !== undefined && open.targetModel === stamp && open.targetDimensions === dimensions;
+}
+
 /**
  * In one transaction: records the run (or takes over the open one), clears every vector
  * whose stamp is not the configured profile's, and resizes the column when the width changes.
@@ -94,6 +126,7 @@ async function openRunAndClear(
   embeddingService: EmbeddingService,
   before: EmbeddingSchemaSnapshot,
   widthChanges: boolean,
+  clearAll: boolean,
   logger: Logger,
 ): Promise<number> {
   const profile = embeddingService.profile;
@@ -102,9 +135,9 @@ async function openRunAndClear(
   try {
     await client.query('BEGIN');
 
-    if (widthChanges) {
+    if (clearAll) {
       await client.query('UPDATE kg_nodes SET embedding = NULL, embedding_model = NULL WHERE embedding IS NOT NULL');
-      await resizeEmbeddingColumn(client, profile.dimensions);
+      if (widthChanges) await resizeEmbeddingColumn(client, profile.dimensions);
     } else {
       await client.query(
         `UPDATE kg_nodes SET embedding = NULL, embedding_model = NULL

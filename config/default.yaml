@@ -440,16 +440,24 @@ dreaming:
     errorRateWindowDays: 90       # that rate covers the last 30 competence rows, none older than this
     unparseableAfterDays: 3       # parse failures retry this many days, then dead-letter
 
-# Embedding profiles (ADR-051). The endpoint is set in .env (EMBEDDING_BASE_URL,
-# EMBEDDING_MODEL). The profile for that model gives its vector width, the text put in
+# Embedding profiles (ADR-051, ADR-065). With no EMBEDDING_BASE_URL in .env, Curia runs
+# the bundled all-MiniLM-L6-v2 in-process and needs no profile here. With a base URL,
+# EMBEDDING_MODEL names the model, and its profile gives the vector width, the text put in
 # front of each kind of input, and the three similarity thresholds. Built-in profiles
-# live in src/memory/embedding-profiles.ts. A model with no profile leaves the knowledge
-# graph off. To enable one, add it in config/local.yaml, keyed by the exact
-# EMBEDDING_MODEL value. Thresholds must be calibrated for the model: values copied from
-# another model can merge distinct people and facts.
+# (text-embedding-3-small, Qwen3-Embedding-4B, all-MiniLM-L6-v2) live in
+# src/memory/embedding-profiles.ts. A model with no profile leaves the knowledge graph
+# off. To enable one, add it in config/local.yaml, keyed by the exact EMBEDDING_MODEL
+# value. Thresholds must be calibrated for the model (pnpm embedding-eval): values copied
+# from another model can merge distinct people and facts.
 #
 # embedding:
 #   profiles:
+#     # Retune the bundled model: `base` keeps its width and pooling (so the stored
+#     # vectors' stamp is unchanged); only the fields given here change.
+#     all-MiniLM-L6-v2:
+#       base: all-MiniLM-L6-v2
+#       thresholds:
+#         fact_dedup: 0.95
 #     # Same model under another server's id: `base` copies a built-in profile, and any
 #     # field given beside it overrides that field. Ollama names Qwen3-Embedding-4B this way.
 #     "qwen3-embedding:4b":

@@ -12,6 +12,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import pg from 'pg';
 import type { OfficeIdentity } from '../../src/identity/types.js';
 import { AutonomyService } from '../../src/autonomy/autonomy-service.js';
@@ -20,11 +21,19 @@ import { formatWhoYouServeBlock } from '../../src/agents/principal-contact-block
 import { compileSecurityContextBlock, resolveSecurityThresholds } from '../../src/security/security-context.js';
 import { createTestModeStack, TEST_MODE_ABSENT_CAPABILITIES, type TestModeStack } from '../../src/startup/test-mode-stack.js';
 import { NO_MAIL_CLIENT } from '../../src/startup/test-mode-sends.js';
+import { loadConfig } from '../../src/config.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
 const { Pool } = pg;
+
+// Entity memory stays off in this suite, as it was when the stack needed an embedding key.
+// The bundled model is the default now, and on a moment when the shared curia_test table
+// holds no vectors its schema check would resize kg_nodes.embedding to 384 for every other
+// file writing 1536-wide vectors, and leave it so. A model directory that does not exist
+// stops the gate before the schema check (gate 'bundled'), so the column is never touched.
+const NO_BUNDLED_EMBEDDER = { embeddingModelDir: path.resolve(import.meta.dirname, 'no-bundled-embedder') };
 
 describeIf('test-mode stack', () => {
   let stack: TestModeStack;
@@ -55,7 +64,7 @@ describeIf('test-mode stack', () => {
     }
     // Offline providers: rendering and invoking tools need no API key. 'all' so the
     // result does not depend on whatever another suite left in the registry tables.
-    stack = await createTestModeStack({ llm: 'offline', enablement: 'all' });
+    stack = await createTestModeStack({ llm: 'offline', enablement: 'all', config: { ...loadConfig(), ...NO_BUNDLED_EMBEDDER } });
     rendered = await stack.renderSystemPrompt('coordinator');
   }, 120_000);
 
@@ -226,8 +235,7 @@ describeIf('test-mode stack', () => {
       expect(tools.length).toBeGreaterThan(20);
       const undocumented = tools.flatMap(m => stack.executionLayer.unavailableCapabilities(m.name)
         .filter(cap => !Object.hasOwn(TEST_MODE_ABSENT_CAPABILITIES, cap))
-        // Production wires entity memory only with an embedding key, and so does this stack:
-        // absent here when the test database's vault has none.
+        // Entity memory is off in this suite (NO_BUNDLED_EMBEDDER above).
         .filter(cap => cap !== 'entityMemory')
         .map(cap => `${m.name}: ${cap}`));
       expect(undocumented).toEqual([]);
@@ -273,7 +281,9 @@ describeIf('test-mode stack', () => {
       // Reconcile enrols as 'reconciliation'. Scope to rows written during this boot,
       // so another suite using the shared database cannot make this flake.
       const { rows: [{ now: startedAt }] } = await stack.pool.query<{ now: Date }>('SELECT now()');
-      const registryStack = await createTestModeStack({ llm: 'offline', enablement: 'registry' });
+      const registryStack = await createTestModeStack({
+        llm: 'offline', enablement: 'registry', config: { ...loadConfig(), ...NO_BUNDLED_EMBEDDER },
+      });
       try {
         // Production's reconcile, dry-run: the coordinator is a core default, so it
         // loads even on a database Curia never booted against.

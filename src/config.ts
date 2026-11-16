@@ -10,6 +10,9 @@ import { registrableDomain } from './verification/domain.js';
 import type { TierConfig } from './agents/llm/model-router.js';
 import { FALLBACK_CHANNELS, REACH_CHANNELS, type ReachChannel } from './agents/principal-reach.js';
 
+/** Where the bundled embedding model's files live, relative to the working directory. */
+export const DEFAULT_EMBEDDING_MODEL_DIR = 'models/embedding/all-MiniLM-L6-v2';
+
 // ---------------------------------------------------------------------------
 // Multi-account email config types
 // ---------------------------------------------------------------------------
@@ -37,11 +40,16 @@ export interface Config {
   awsSecretAccessKey: string | undefined;
   awsRegion: string | undefined;
   awsBedrockTimeoutMs: number;
-  // OpenAI-compatible embeddings endpoint (EMBEDDING_BASE_URL, e.g. a local llama.cpp
-  // server). Unset means OpenAI with openaiApiKey. embeddingApiKey comes from the vault.
+  // OpenAI-compatible embeddings endpoint (EMBEDDING_BASE_URL: OpenAI, a local llama.cpp
+  // server, Ollama...). Unset means the bundled model, run in-process from
+  // embeddingModelDir; resolveEmbedding() decides, including the deprecated OpenAI
+  // compatibility rule. embeddingApiKey comes from the vault.
   embeddingBaseUrl: string | undefined;
   embeddingModel: string | undefined;
   embeddingApiKey: string | undefined;
+  // The bundled model's files (EMBEDDING_MODEL_DIR). Defaults to where `pnpm fetch:embedder`
+  // and the image put them, relative to the working directory like the manifest (R3).
+  embeddingModelDir: string;
   logLevel: string;
   httpPort: number;
   apiToken: string | undefined;
@@ -2117,6 +2125,7 @@ export function loadConfig(): Config {
     embeddingBaseUrl: process.env.EMBEDDING_BASE_URL || undefined,
     embeddingModel: process.env.EMBEDDING_MODEL || undefined,
     embeddingApiKey: undefined,
+    embeddingModelDir: path.resolve(process.cwd(), process.env.EMBEDDING_MODEL_DIR?.trim() || DEFAULT_EMBEDDING_MODEL_DIR),
     logLevel: process.env.LOG_LEVEL ?? 'info',
     httpPort,
     apiToken: undefined,

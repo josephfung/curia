@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import * as path from 'node:path';
-import { loadYamlConfig } from '../../src/config.js';
+import { loadConfig, loadYamlConfig } from '../../src/config.js';
 import { createOutboundMessage } from '../../src/bus/events.js';
 import { EscalationJudge } from '../../src/autonomy/escalation-judge.js';
 import { SendEvidenceCollector } from '../../src/autonomy/send-evidence.js';
@@ -24,6 +24,13 @@ import { requireCuriaTestDatabase } from './require-test-db.js';
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
 const { Pool } = pg;
+
+// Entity memory stays off in this suite, as it was when the stack needed an embedding key.
+// The bundled model is the default now, and on a moment when the shared curia_test table
+// holds no vectors its schema check would resize kg_nodes.embedding to 384 for every other
+// file writing 1536-wide vectors, and leave it so. A model directory that does not exist
+// stops the gate before the schema check (gate 'bundled'), so the column is never touched.
+const NO_BUNDLED_EMBEDDER = { embeddingModelDir: path.resolve(import.meta.dirname, 'no-bundled-embedder') };
 
 describeIf('test-mode stack with recordSends', () => {
   let stack: TestModeStack | undefined;
@@ -58,6 +65,7 @@ describeIf('test-mode stack with recordSends', () => {
     stack = await createTestModeStack({
       llm: 'offline',
       enablement: 'all',
+      config: { ...loadConfig(), ...NO_BUNDLED_EMBEDDER },
       yamlConfig,
       // A fixed score and gating, not the database's: a fresh database seeds 75, where band
       // gating (the default since #2192) holds the principal's sends these tests expect to

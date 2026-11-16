@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import path from 'node:path';
 import { loadConfig } from '../../src/config.js';
 
 describe('loadConfig', () => {
@@ -37,6 +38,18 @@ describe('loadConfig', () => {
     const config = loadConfig();
     expect(config.embeddingBaseUrl).toBe('http://embed.local/v1');
     expect(config.embeddingModel).toBe('Qwen3-Embedding-4B');
+  });
+
+  it('defaults the bundled model directory to models/embedding/all-MiniLM-L6-v2 under the working directory', () => {
+    process.env.DATABASE_URL = 'postgres://test:test@localhost:5432/test';
+    delete process.env.EMBEDDING_MODEL_DIR;
+    expect(loadConfig().embeddingModelDir).toBe(path.resolve(process.cwd(), 'models/embedding/all-MiniLM-L6-v2'));
+  });
+
+  it('reads the bundled model directory from EMBEDDING_MODEL_DIR', () => {
+    process.env.DATABASE_URL = 'postgres://test:test@localhost:5432/test';
+    process.env.EMBEDDING_MODEL_DIR = '/srv/embedder/minilm';
+    expect(loadConfig().embeddingModelDir).toBe('/srv/embedder/minilm');
   });
 
   it('defaults LOG_LEVEL to info', () => {

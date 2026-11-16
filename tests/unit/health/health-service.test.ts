@@ -49,6 +49,31 @@ describe('HealthService.getStatus()', () => {
     expect((await check(() => { throw new Error('boom'); })).checks.principal_mailbox_triage).toBe('fail');
   });
 
+  it('knowledge_graph: skipped without a holder; fail degrades (never down) and carries details', async () => {
+    const { KnowledgeGraphHealth } = await import('../../../src/memory/kg-health.js');
+    const none = await new HealthService(makeDeps() as never).getStatus();
+    expect(none.checks.knowledge_graph).toBe('skipped');
+    expect(none.details).toBeUndefined();
+
+    const kg = new KnowledgeGraphHealth();
+    kg.set('fail', 'bundled_weights_missing');
+    const failed = await new HealthService(makeDeps({ knowledgeGraphHealth: kg }) as never).getStatus();
+    expect(failed.checks.knowledge_graph).toBe('fail');
+    expect(failed.status).toBe('degraded');
+    expect(failed.details).toEqual({ knowledge_graph: 'bundled_weights_missing' });
+
+    // ok with a reason keeps the status ok but still reports the reason.
+    kg.set('ok', 'implicit_openai_deprecated');
+    const okWithReason = await new HealthService(makeDeps({ knowledgeGraphHealth: kg }) as never).getStatus();
+    expect(okWithReason.checks.knowledge_graph).toBe('ok');
+    expect(okWithReason.status).toBe('ok');
+    expect(okWithReason.details).toEqual({ knowledge_graph: 'implicit_openai_deprecated' });
+
+    kg.set('ok');
+    const clean = await new HealthService(makeDeps({ knowledgeGraphHealth: kg }) as never).getStatus();
+    expect(clean.details).toBeUndefined();
+  });
+
   it('returns down when db fails', async () => {
     const svc = new HealthService(makeDeps({
       db: { query: vi.fn().mockRejectedValue(new Error('connection lost')) },
@@ -768,5 +793,59 @@ describe('HealthService embeddings canary', () => {
     const results = await svc.runCanaries();
     expect(results.find((r) => r.name === 'embeddings')?.status).toBe('skipped');
     expect(results.find((r) => r.name === 'image_gen')?.status).not.toBe('skipped');
+  });
+});
+
+describe('HealthService embeddings canary: endpoint weight drift (#2023)', () => {
+  async function canary(outcome: string | Error, before?: [ 'ok' | 'fail', string? ]) {
+    const { KnowledgeGraphHealth } = await import('../../../src/memory/kg-health.js');
+    const kg = new KnowledgeGraphHealth();
+    if (before) kg.set(before[0], before[1] as never);
+    const driftCheck = vi.fn(() => (outcome instanceof Error ? Promise.reject(outcome) : Promise.resolve(outcome)));
+    const deps = makeDeps({ embeddingsEnabled: true, knowledgeGraphHealth: kg, driftCheck });
+    const results = await new HealthService(deps as never).runCanaries();
+    return { kg, driftCheck, logger: deps.logger, result: results.find((r) => r.name === 'embeddings')! };
+  }
+
+  it('re-runs the check: changed fails the canary and the knowledge_graph check, and logs the recovery command', async () => {
+    const { kg, driftCheck, logger, result } = await canary('changed');
+    expect(driftCheck).toHaveBeenCalledOnce();
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('pnpm reembed:kg --force');
+    expect(kg.get()).toEqual({ result: 'fail', reason: 'weights_changed' });
+    const logged = logger.error.mock.calls.map((c: unknown[]) => String(c.at(-1)));
+    expect(logged.some((m: string) => m.includes('pnpm reembed:kg --force'))).toBe(true);
+  });
+
+  it('shifted and unchecked keep the canary ok and set the matching ok reason', async () => {
+    const shifted = await canary('shifted');
+    expect(shifted.result.status).toBe('ok');
+    expect(shifted.kg.get()).toEqual({ result: 'ok', reason: 'weights_shifted' });
+
+    const unchecked = await canary('unchecked');
+    expect(unchecked.result.status).toBe('ok');
+    expect(unchecked.kg.get()).toEqual({ result: 'ok', reason: 'drift_unchecked' });
+  });
+
+  it('same clears a drift_unchecked left by boot', async () => {
+    const { kg, result } = await canary('same', ['ok', 'drift_unchecked']);
+    expect(result.status).toBe('ok');
+    expect(kg.get()).toEqual({ result: 'ok' });
+  });
+
+  it('a check that throws reads as unchecked, not as a failed canary', async () => {
+    const { kg, result } = await canary(new Error('boom'));
+    expect(result.status).toBe('ok');
+    expect(kg.get()).toEqual({ result: 'ok', reason: 'drift_unchecked' });
+  });
+
+  it('does not run without a drift check (bundled source) or with entity memory off', async () => {
+    const driftCheck = vi.fn();
+    const off = new HealthService(makeDeps({ embeddingsEnabled: false, driftCheck }) as never);
+    await off.runCanaries();
+    expect(driftCheck).not.toHaveBeenCalled();
+
+    const bundled = await new HealthService(makeDeps({ embeddingsEnabled: true }) as never).runCanaries();
+    expect(bundled.find((r) => r.name === 'embeddings')?.status).toBe('ok');
   });
 });

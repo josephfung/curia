@@ -68,8 +68,11 @@ import { WorkingMemory } from './memory/working-memory.js';
 import { sharedIdentifierSourceIndex } from './agents/identifier-source-index.js';
 import { recordAgentInputBeforeCall, recordSourceAfterCall, type ProvenanceRecording } from './agents/provenance-recording.js';
 import { createIdentifierSources } from './agents/identifier-sources.js';
-import { EmbeddingService, redactUrlUserinfo } from './memory/embedding.js';
+import { redactUrlUserinfo, type EmbeddingService } from './memory/embedding.js';
+import { embeddingStamp } from './memory/embedding-profiles.js';
 import { resolveKnowledgeGraphEmbedding } from './memory/embedding-schema.js';
+import { KnowledgeGraphHealth, knowledgeGraphReasonFrom } from './memory/kg-health.js';
+import { REEMBED_FORCE_COMMAND, checkEmbeddingDrift, type DriftOutcome } from './memory/embedding-drift.js';
 import { KnowledgeGraphStore } from './memory/knowledge-graph.js';
 import { MemoryValidator } from './memory/validation.js';
 import { EntityMemory } from './memory/entity-memory.js';
@@ -703,22 +706,41 @@ async function main(): Promise<void> {
     workingMemoryTtlDays,
   );
 
-  // Entity memory — optional, requires an embedding endpoint and a profile for its model.
-  // If not configured, agents still work — they just don't have KG access.
+  // Entity memory — on by default, embedding with the bundled in-process model; an
+  // EMBEDDING_BASE_URL points it at a server instead. If the knowledge graph is off (see
+  // the gate below), agents still work — they just don't have KG access.
   let entityMemory: EntityMemory | undefined;
   // Sensitivity classifier — declared outside the if-block (like entityMemory above) so it
   // stays in scope for the ExecutionLayer construction further down (#1419), which exposes
   // it to skills as the 'sensitivityClassifier' capability. Same availability as entityMemory:
-  // both require an embedding endpoint (the vault's openai_api_key or EMBEDDING_BASE_URL)
-  // and a profile for its model, because the classifier is currently only built inside this
-  // branch — see the sensitivity_rules guard below for why it can't be built earlier.
+  // both need a usable embedding source (the bundled model by default, or a configured
+  // endpoint) with a profile for its model, because the classifier is currently only built
+  // inside this branch — see the sensitivity_rules guard below for why it can't be built earlier.
   let sensitivityClassifier: SensitivityClassifier | undefined;
   // Hoisted for the KG node merge (#2233), which re-embeds a renamed survivor. Same
   // availability as entityMemory; without it the merge keeps the old embedding.
   let embeddingService: EmbeddingService | undefined;
+  // For an endpoint source, the embeddings canary re-runs the weight drift check (design §7).
+  // Unset for the bundled model, whose stamp carries the weights hash.
+  let embeddingDriftCheck: (() => Promise<DriftOutcome>) | undefined;
   // The schema gate (ADR-051): a width or model the stored vectors do not match, or an
   // unfinished re-embed, keeps the knowledge graph off until a person runs the command.
-  const embedding = await resolveKnowledgeGraphEmbedding(pool, config, yamlConfig.embedding?.profiles, logger);
+  // The gate also builds the embedding service, loading the bundled model when that is the
+  // source, so a missing or corrupt weight file turns the knowledge graph off here.
+  const embedding = await resolveKnowledgeGraphEmbedding(
+    pool,
+    config,
+    yamlConfig.embedding?.profiles,
+    logger,
+    { bus, modelRegistry }, // embedding.call / embedding.error telemetry
+  );
+  // /api/health reports whether entity memory is on and why not (design §7). One holder,
+  // set here from the boot verdict; a later runtime check may set it again.
+  const knowledgeGraphHealth = new KnowledgeGraphHealth();
+  {
+    const verdict = knowledgeGraphReasonFrom(embedding);
+    knowledgeGraphHealth.set(verdict.result, verdict.reason);
+  }
   if (embedding.ok) {
     // Sensitivity classifier — built from the already-merged config (default.yaml +
     // local.yaml, see loadYamlConfig()) so operator overrides in local.yaml actually
@@ -736,26 +758,41 @@ async function main(): Promise<void> {
     sensitivityClassifier = SensitivityClassifier.fromRules(yamlConfig.sensitivity_rules);
     logger.info({ ruleCount: yamlConfig.sensitivity_rules.length }, 'Sensitivity classifier loaded');
 
-    embeddingService = EmbeddingService.createWithEndpoint(
-      embedding.endpoint,
-      embedding.profile,
-      logger,
-      bus,           // EventBus — wired at line 234
-      modelRegistry, // ModelRegistry — wired at line 281
-    );
+    embeddingService = embedding.service;
+    if (embedding.source.kind === 'endpoint') {
+      const service = embedding.service;
+      embeddingDriftCheck = () => checkEmbeddingDrift(pool, service, logger);
+    }
+    if (embedding.drift === 'shifted') {
+      logger.warn(
+        `The embedding endpoint's weights shifted (e.g. re-quantised) under the model name ${embeddingStamp(embedding.profile)}. ` +
+        'Entity memory stays on; health reports ok with the reason weights_shifted. ' +
+        `To re-embed with the current weights: stop Curia, run ${REEMBED_FORCE_COMMAND}, then start Curia.`,
+      );
+    }
     const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
     const validator = new MemoryValidator(kgStore, embeddingService);
     entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger, sensitivityClassifier);
     logger.info(
       {
-        embeddingBaseUrl: redactUrlUserinfo(embedding.endpoint.baseUrl),
-        embeddingModel: embedding.endpoint.model,
+        embeddingSource: embedding.source.kind,
+        ...(embedding.source.kind === 'endpoint'
+          ? { embeddingBaseUrl: redactUrlUserinfo(embedding.source.endpoint.baseUrl) }
+          : { embeddingModelDir: embedding.source.modelDir }),
+        embeddingModel: embeddingStamp(embedding.profile),
         embeddingDimensions: embedding.profile.dimensions,
       },
       'Entity memory initialized with knowledge graph',
     );
   } else if (embedding.gate === 'config') {
     logger.warn(`${embedding.message} Entity memory is disabled (knowledge graph unavailable).`);
+  } else if (embedding.gate === 'bundled') {
+    logger.error(
+      { err: embedding.err, reason: embedding.reason },
+      `${embedding.message} Entity memory is disabled (knowledge graph unavailable).`,
+    );
+  } else if (embedding.gate === 'drift') {
+    logger.error({ reason: embedding.reason }, `${embedding.message} Until then entity memory is disabled (knowledge graph unavailable).`);
   } else if (embedding.err) {
     logger.error({ err: embedding.err }, `${embedding.message} Entity memory is disabled (knowledge graph unavailable).`);
   } else {
@@ -2868,6 +2905,8 @@ async function main(): Promise<void> {
   // The inbox heartbeat is built after the health service; its verdict is read through this.
   const inboxTriageHealthRef: { current: (() => InboxTriageHealth) | null } = { current: null };
   const healthService = new HealthService({
+    knowledgeGraphHealth,
+    driftCheck: embeddingDriftCheck,
     db: pool,
     bus,
     logger,

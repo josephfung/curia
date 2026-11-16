@@ -6,8 +6,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   EmbeddingService,
-  DEFAULT_EMBEDDING_BASE_URL,
-  DEFAULT_EMBEDDING_MODEL,
+  OPENAI_EMBEDDING_BASE_URL,
 } from '../../../src/memory/embedding.js';
 import type { EventBus } from '../../../src/bus/bus.js';
 import { ModelRegistry } from '../../../src/agents/llm/model-registry.js';
@@ -20,7 +19,7 @@ const modelRegistry = new ModelRegistry(logger);
 // A valid embedding of the correct dimension — used as the mock API response payload.
 const DIMENSIONS = OPENAI_TEXT_EMBEDDING_3_SMALL.dimensions;
 const FAKE_EMBEDDING = Array.from({ length: DIMENSIONS }, (_, i) => i / DIMENSIONS);
-const OPENAI_ENDPOINT = { baseUrl: DEFAULT_EMBEDDING_BASE_URL, model: DEFAULT_EMBEDDING_MODEL, apiKey: 'test-key' };
+const OPENAI_ENDPOINT = { baseUrl: OPENAI_EMBEDDING_BASE_URL, model: OPENAI_TEXT_EMBEDDING_3_SMALL.model, apiKey: 'test-key' };
 
 // Builds a minimal OpenAI embeddings API response.
 const makeEmbeddingResponse = (promptTokens = 8) => ({

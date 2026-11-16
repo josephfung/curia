@@ -1,5 +1,7 @@
 // types.ts — shared types for the health observability module.
 
+import type { KnowledgeGraphReason } from '../memory/kg-health.js';
+
 export type CheckResult = 'ok' | 'fail' | 'skipped';
 
 export type HealthStatus = 'ok' | 'degraded' | 'down';
@@ -40,7 +42,24 @@ export interface HealthResponse {
     /** Inbox triage heartbeat (#2475, R67): ticks, unread probes, stuck mailboxes, a suspended
      *  drain. Skipped when the heartbeat is not running (no ceo-inbox, setup mode). */
     principal_mailbox_triage: CheckResult;
+    /**
+     * Whether entity memory (the knowledge graph) is running. Skipped in setup-mode
+     * boots, where it is not evaluated. `fail` means it is off; `details.knowledge_graph`
+     * says why.
+     *
+     * Additive to a public surface (`checks` and the top level are read by the console
+     * and by external monitoring): a new check key and an optional `details` object,
+     * nothing renamed or retyped. `fail` only ever degrades the status, never `down`.
+     */
+    knowledge_graph: CheckResult;
   };
+  /**
+   * Machine-readable reasons behind a check, keyed by check name. Optional and absent
+   * when there is nothing to say. Kept out of `checks` so consumers that iterate
+   * `Object.entries(checks)` as pass/fail pills never see it. A reason can accompany an
+   * `ok` check (a deprecation notice).
+   */
+  details?: { knowledge_graph?: KnowledgeGraphReason };
 }
 
 export interface CanaryResult {

@@ -23,6 +23,18 @@ export interface EmbeddingProfile {
     /** Cosine score below which a fuzzy candidate is not surfaced as ambiguous. */
     fuzzyAmbiguityFloor: number;
   };
+  /**
+   * How token vectors become one sentence vector, for a model Curia runs in-process. Only
+   * the bundled backend reads it; an endpoint pools on its own side. Never set from YAML:
+   * an override carries its base's value, because pooling belongs to the weights.
+   */
+  pooling?: 'mean' | 'cls' | 'last_token';
+  /**
+   * sha256 (hex) of the weight file the bundled backend loaded, computed at boot by
+   * `hashBundledWeights()`. Set only on the bundled path: an endpoint's weights are
+   * unknown. Part of the stamp, so a weights change reads as a model mismatch.
+   */
+  weightsSha256?: string;
 }
 
 /** pgvector's HNSW index refuses a `vector` column wider than this (pgvector 0.8.7, HNSW_MAX_DIM). */
@@ -57,9 +69,38 @@ export const QWEN3_EMBEDDING_4B: EmbeddingProfile = {
   thresholds: { factDedup: 0.94, fuzzyResolve: 0.99, fuzzyAmbiguityFloor: 0.70 },
 };
 
+/**
+ * all-MiniLM-L6-v2 (Xenova's q8 ONNX export), run in-process by the bundled backend. It
+ * has no task prompts, and its sentence vector is the attention-masked mean of the token
+ * vectors, L2-normalised.
+ *
+ * Thresholds calibrated 2026-11-15 with `pnpm embedding-eval --bundled --identifier-guard`
+ * on the maintainer's private labelled set (kept outside git), by ADR-051's policy:
+ * `factDedup` and `fuzzyResolve` are the lowest values with no wrong merge, and the floor
+ * keeps 95% of true matches at or above it.
+ * - Entity resolution: 89 match / 51 distinct name pairs; the identifier guard dropped
+ *   0 / 7. ROC-AUC 0.878. At 0.92, 15 of 89 true matches (0.169) auto-resolve; at the
+ *   0.61 floor, 85 of 89 stay at or above it (70 in the ask band).
+ * - Fact dedup: 62 merge / 63 distinct fact pairs; the guard dropped 0 / 11.
+ *   ROC-AUC 0.847. At 0.95, 7 of 62 duplicates (0.113) merge.
+ * Without the guard no entity threshold on the grid avoids a wrong merge, so these values
+ * hold only with it on, as it is in production (identifier-guard.ts).
+ */
+export const ALL_MINILM_L6_V2: EmbeddingProfile = {
+  model: 'all-MiniLM-L6-v2',
+  dimensions: 384,
+  prefixes: { query: '', document: '', similarity: '' },
+  pooling: 'mean',
+  thresholds: { factDedup: 0.95, fuzzyResolve: 0.92, fuzzyAmbiguityFloor: 0.61 },
+};
+
+/** The model Curia ships in its image and runs in-process when no endpoint is configured. */
+export const BUNDLED_EMBEDDING_MODEL = ALL_MINILM_L6_V2.model;
+
 export const BUILTIN_EMBEDDING_PROFILES: Readonly<Record<string, EmbeddingProfile>> = {
   [OPENAI_TEXT_EMBEDDING_3_SMALL.model]: OPENAI_TEXT_EMBEDDING_3_SMALL,
   [QWEN3_EMBEDDING_4B.model]: QWEN3_EMBEDDING_4B,
+  [ALL_MINILM_L6_V2.model]: ALL_MINILM_L6_V2,
 };
 
 /**
@@ -80,11 +121,21 @@ export function lookupEmbeddingProfile(
  * were made with, so a non-empty one is part of the stamp. A changed prefix under the
  * same model name then reads as a model mismatch to the boot gate and `pnpm reembed:kg`.
  * An empty prefix leaves the stamp as the model name, which migration 103's backfill wrote.
+ *
+ * A bundled profile also carries the hash of the weight file it loaded, so a later image
+ * shipping other weights under the same model name reads as a model mismatch too, never
+ * as silent drift. Profiles without `weightsSha256` keep their existing stamp.
  */
-export function embeddingStamp(profile: Pick<EmbeddingProfile, 'model' | 'prefixes'>): string {
+export function embeddingStamp(profile: Pick<EmbeddingProfile, 'model' | 'prefixes' | 'weightsSha256'>): string {
+  let stamp = profile.model;
   const prefix = profile.prefixes.document;
-  if (prefix === '') return profile.model;
-  return `${profile.model}#document:${createHash('sha256').update(prefix).digest('hex').slice(0, 12)}`;
+  if (prefix !== '') {
+    stamp += `#document:${createHash('sha256').update(prefix).digest('hex').slice(0, 12)}`;
+  }
+  if (profile.weightsSha256) {
+    stamp += `#weights:${profile.weightsSha256.slice(0, 12)}`;
+  }
+  return stamp;
 }
 
 const PURPOSES: readonly EmbeddingPurpose[] = ['query', 'document', 'similarity'];
@@ -164,7 +215,15 @@ export function parseEmbeddingProfiles(raw: unknown, source: string): Record<str
       throw new Error(`${at}.thresholds.fuzzy_ambiguity_floor must be below fuzzy_resolve (in ${source})`);
     }
 
-    profiles[model] = { model, dimensions, prefixes, thresholds };
+    // Pooling comes only from the base: it belongs to the weights, so YAML cannot set it
+    // (the unknown-key check above rejects it), and an override must not drop it.
+    profiles[model] = {
+      model,
+      dimensions,
+      prefixes,
+      thresholds,
+      ...(base?.pooling ? { pooling: base.pooling } : {}),
+    };
   }
   return profiles;
 }

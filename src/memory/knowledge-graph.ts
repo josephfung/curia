@@ -1294,8 +1294,8 @@ function embeddingModelFor(node: KgNode): string | null {
   return node.embedding ? (node.embeddingModel ?? null) : null;
 }
 
-/** Parse a pgvector string like "[0.1,0.2,0.3]" into a number array */
-function parseVector(vectorStr: string): number[] {
+/** Parse a pgvector string like "[0.1,0.2,0.3]" into a number array. Exported for the drift check. */
+export function parseVector(vectorStr: string): number[] {
   // pgvector returns strings like "[0.1,0.2,0.3]"
   const values = vectorStr
     .replace(/^\[/, '')
