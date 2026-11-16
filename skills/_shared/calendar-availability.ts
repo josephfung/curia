@@ -595,7 +595,9 @@ async function chooseFreeBusyMailbox(
 ): Promise<{ mailbox: PrincipalMailboxView; by: 'domain' | 'history' | 'default' }> {
   const address = lower(id);
   // A Google group or resource calendar id is not a person's address: no mail history to read.
-  if (address.includes('@') && !address.endsWith('calendar.google.com')) {
+  // Those ids end in `@group.calendar.google.com`, `@resource.calendar.google.com`, etc. Match on
+  // the leading dot so a look-alike domain such as `evilcalendar.google.com` is not skipped.
+  if (address.includes('@') && !address.endsWith('.calendar.google.com')) {
     const byDomain = live.filter((m) => domainMatches(m.address, [address]));
     if (byDomain.length === 1) return { mailbox: byDomain[0]!, by: 'domain' };
     // What is left of the call's shared deadline and lookup allowance. Once either is spent no
