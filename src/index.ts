@@ -72,7 +72,7 @@ import { redactUrlUserinfo, type EmbeddingService } from './memory/embedding.js'
 import { embeddingStamp } from './memory/embedding-profiles.js';
 import { resolveKnowledgeGraphEmbedding } from './memory/embedding-schema.js';
 import { KnowledgeGraphHealth, knowledgeGraphReasonFrom } from './memory/kg-health.js';
-import { REEMBED_FORCE_COMMAND, checkEmbeddingDrift, type DriftOutcome } from './memory/embedding-drift.js';
+import { checkEmbeddingDrift, type DriftOutcome } from './memory/embedding-drift.js';
 import { KnowledgeGraphStore } from './memory/knowledge-graph.js';
 import { MemoryValidator } from './memory/validation.js';
 import { EntityMemory } from './memory/entity-memory.js';
@@ -762,13 +762,8 @@ async function main(): Promise<void> {
       const service = embedding.service;
       embeddingDriftCheck = () => checkEmbeddingDrift(pool, service, logger);
     }
-    if (embedding.drift === 'shifted') {
-      logger.warn(
-        `The embedding endpoint's weights shifted (e.g. re-quantised) under the model name ${embeddingStamp(embedding.profile)}. ` +
-        'Entity memory stays on; health reports ok with the reason weights_shifted. ' +
-        `To re-embed with the current weights: stop Curia, run ${REEMBED_FORCE_COMMAND}, then start Curia.`,
-      );
-    }
+    // A boot drift finding of `shifted` is logged (warn) by resolveKnowledgeGraphEmbedding
+    // itself, so every caller (scripts, test-mode) reports it, not only this boot path.
     const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
     const validator = new MemoryValidator(kgStore, embeddingService);
     entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger, sensitivityClassifier);
@@ -784,7 +779,9 @@ async function main(): Promise<void> {
       'Entity memory initialized with knowledge graph',
     );
   } else if (embedding.gate === 'config') {
-    logger.warn(`${embedding.message} Entity memory is disabled (knowledge graph unavailable).`);
+    // error, like the bundled gate: the default resolves to the bundled model, so reaching
+    // the config gate always means an operator misconfiguration, not an opted-out install.
+    logger.error({ reason: embedding.reason }, `${embedding.message} Entity memory is disabled (knowledge graph unavailable).`);
   } else if (embedding.gate === 'bundled') {
     logger.error(
       { err: embedding.err, reason: embedding.reason },

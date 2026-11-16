@@ -1296,9 +1296,11 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     const embedding = await resolveKnowledgeGraphEmbedding(
       pool, { ...config, openaiApiKey, embeddingApiKey }, yamlConfig.embedding?.profiles, logger, { bus, modelRegistry },
     );
-    // A schema gate, an unusable bundled model or changed endpoint weights go in the run
-    // summary. A config gate is left out, as it was before the bundled model became the default.
-    if (!embedding.ok && (embedding.gate === 'schema' || embedding.gate === 'bundled' || embedding.gate === 'drift')) {
+    // Every gate goes in the run summary. A config gate included: the default now resolves
+    // to the bundled model, so a config failure is always an operator misconfiguration (an
+    // unknown model, a stored model with no endpoint, a missing key), never "no embeddings
+    // configured", and a suite run without entity memory should say so.
+    if (!embedding.ok) {
       warnings.push(`Entity memory is off: ${embedding.message}`);
     }
     if (embedding.ok) {

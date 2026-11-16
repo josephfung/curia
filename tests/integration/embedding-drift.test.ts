@@ -3,7 +3,7 @@
 // there is no baseline step: after `reembed:kg --force` the next resolution passes on its own.
 // Runs in a scratch database because the gate may resize kg_nodes.embedding. Skips without
 // DATABASE_URL. No endpoint is called: the createService seam hands the gate a fake service.
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import pg from 'pg';
 import { createScratchDatabase, type ScratchDatabase } from './scratch-database.js';
 import { createSilentLogger } from '../../src/logger.js';
@@ -44,6 +44,23 @@ function perturbed(): EmbeddingService {
   return {
     profile: PROFILE,
     embed: async (text: string, purpose: EmbeddingPurpose) => (await base.embed(text, purpose)).reverse(),
+  } as unknown as EmbeddingService;
+}
+
+/**
+ * The same weights, re-quantised: the matching vector plus a quarter of its (near-orthogonal)
+ * reverse, so every cosine with the stored vector is about 0.97, between DRIFT_SHIFT_FLOOR
+ * and DRIFT_SAME_MIN.
+ */
+function shifted(): EmbeddingService {
+  const base = matching();
+  return {
+    profile: PROFILE,
+    embed: async (text: string, purpose: EmbeddingPurpose) => {
+      const v = await base.embed(text, purpose);
+      const r = [...v].reverse();
+      return v.map((x, i) => x + 0.25 * r[i]!);
+    },
   } as unknown as EmbeddingService;
 }
 
@@ -122,6 +139,22 @@ describeIf('endpoint weight drift check (stored vectors as the baseline)', () =>
 
     expect(result).toMatchObject({ ok: true, drift: 'unchecked' });
     expect(knowledgeGraphReasonFrom(result)).toEqual({ result: 'ok', reason: 'drift_unchecked' });
+  });
+
+  it('keeps the graph on with weights_shifted, and warns from the shared gate itself', async () => {
+    serving = shifted();
+    // The warn is the gate's own (not only src/index.ts's), so scripts and test-mode get it.
+    const warn = vi.spyOn(logger, 'warn');
+    try {
+      const result = await resolve();
+
+      expect(result).toMatchObject({ ok: true, drift: 'shifted' });
+      expect(knowledgeGraphReasonFrom(result)).toEqual({ result: 'ok', reason: 'weights_shifted' });
+      const messages = warn.mock.calls.map((c) => String(c.at(-1)));
+      expect(messages.some((m) => m.includes('weights shifted') && m.includes('pnpm reembed:kg --force'))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('reports same for an endpoint graph with no stored vectors yet', async () => {
