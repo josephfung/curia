@@ -9,6 +9,8 @@ description: >
   chat. Nothing involves a Google file, so the coordinator does not activate its Google
   Workspace tools.
 tags: [google-workspace, skill-activation]
+# On demand since the 2026-11-16 gate prune: over-activation costs tokens only.
+release_gate: false
 inbound:
   from: principal
   content: Draft me two sentences I can use to politely decline a podcast invite. Just paste them here.

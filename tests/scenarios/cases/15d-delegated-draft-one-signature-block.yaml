@@ -13,6 +13,8 @@ description: >
   composes it and ends it with a full name and title. The coordinator sends it without that
   block; a closing and first name may stay.
 tags: [delegation, calendar, email, signature]
+# On demand since the 2026-11-16 gate prune: cosmetic (double signature), not a production incident.
+release_gate: false
 stub_sets: [human-channels]
 seed:
   contacts:

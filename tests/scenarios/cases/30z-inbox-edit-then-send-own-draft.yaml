@@ -8,7 +8,8 @@ description: >
   The principal asks ceo-inbox to fill in the venue on the Acme draft (to Jo Park): it is the Harbour Room. The draft has a "[venue TBD]" placeholder. ceo-inbox edits that draft in place with the venue, then sends it. The delivered email names the Harbour Room. Curia is at autonomy 85 (band gating).
 tags: [specialist-ceo-inbox, ceo-inbox, delegated-mode, drafts, send, principal-mailbox, band-gating]
 agent: ceo-inbox
-release_gate: true
+# On demand since the 2026-11-16 gate prune: draft editing, low risk; 30w gates the send.
+release_gate: false
 through_gateway: true
 autonomy: { score: 85, gating: band }
 stub_sets: [ceo-inbox-mailroom]

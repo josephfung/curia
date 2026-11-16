@@ -10,6 +10,8 @@ description: >
   call calendar-holds-sweep with the principal's contact id, call scheduler-report once with
   the counts, and do nothing else: no bullpen post, no holds, no event changes.
 tags: [specialist-calendar, scheduler]
+# On demand since the 2026-11-16 gate prune: narrow job-only case.
+release_gate: false
 agent: calendar
 stub_sets: [calendar-specialist, calendar-office]
 inbound:

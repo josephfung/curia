@@ -10,6 +10,8 @@ description: >
   complete the debrief task with a note that the meeting did not happen, and stop: no
   bullpen post, no prompted guard, no hand-off to the principal.
 tags: [specialist-meeting-debrief, meeting-debrief, task-wake]
+# On demand since the 2026-11-16 gate prune: another debrief wake phase; 32d gates it.
+release_gate: false
 agent: meeting-debrief
 stub_sets: [meeting-debrief-office]
 inbound:

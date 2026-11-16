@@ -11,6 +11,8 @@ description: >
   is retried on the next run, and not start merging or excluding pairs, even though the
   review tasks are visible in its backlog.
 tags: [specialist-contacts, contacts, dedup, scheduler]
+# On demand since the 2026-11-16 gate prune: narrow scan job.
+release_gate: false
 agent: contacts
 inbound:
   from: scheduler

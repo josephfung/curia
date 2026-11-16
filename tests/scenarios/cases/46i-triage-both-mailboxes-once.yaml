@@ -10,6 +10,8 @@ description: >
   logistics question that triage answers with a short drafted reply. ceo-inbox reads and answers that one
   message with a single draft, and does not go looking for the second copy to answer it too.
 tags: [specialist-ceo-inbox, ceo-inbox, triage, multi-mailbox, dedupe]
+# On demand since the 2026-11-16 gate prune: dedupe is code (Message-ID claim, R54).
+release_gate: false
 agent: ceo-inbox
 timeout_seconds: 420
 stub_sets: [ceo-inbox-office]

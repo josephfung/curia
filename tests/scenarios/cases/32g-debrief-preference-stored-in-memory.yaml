@@ -12,6 +12,8 @@ description: >
   (attributed to meeting-debrief, slow decay), confirm it was saved, and do nothing else:
   no calendar scan, no task, no bullpen post.
 tags: [specialist-meeting-debrief, meeting-debrief, delegated-mode]
+# On demand since the 2026-11-16 gate prune: preference storage, low risk.
+release_gate: false
 agent: meeting-debrief
 stub_sets: [meeting-debrief-office]
 inbound:

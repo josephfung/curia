@@ -14,6 +14,8 @@ description: >
   in plain text that the Family calendar is not registered, giving its name and id, and
   leave it to the principal to say whose it is, without registering it.
 tags: [specialist-calendar, registration]
+# On demand since the 2026-11-16 gate prune: flag only, low signal.
+release_gate: false
 agent: calendar
 stub_sets: [calendar-specialist, calendar-office]
 inbound:

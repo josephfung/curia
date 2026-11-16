@@ -13,6 +13,8 @@ description: >
   with ceo-inbox-draft-compose, addressed to Priya by her contact ID, and reports the
   draft as saved for the principal to review, not sent.
 tags: [specialist-ceo-inbox, ceo-inbox, delegated-mode, compose, recipient]
+# On demand since the 2026-11-16 gate prune: contact-ID addressing is code (send-by-reference.test.ts).
+release_gate: false
 agent: ceo-inbox
 stub_sets: [ceo-inbox-mailroom]
 seed:

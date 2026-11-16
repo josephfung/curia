@@ -10,6 +10,8 @@ description: >
   cancel the debrief task as expired (implicitly declined) and send nothing more: no
   further reminder through the bullpen.
 tags: [specialist-meeting-debrief, meeting-debrief, task-wake]
+# On demand since the 2026-11-16 gate prune: another debrief wake phase; 32d gates it.
+release_gate: false
 agent: meeting-debrief
 stub_sets: [meeting-debrief-office]
 inbound:

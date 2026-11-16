@@ -14,6 +14,8 @@ description: >
   only active entry. The coordinator must hand the answer to ceo-inbox with the entry
   id, not reply to Dana or touch the calendar itself.
 tags: [outbound-context, routing, transfer-ownership]
+# On demand since the 2026-11-16 gate prune: attribution is code (#1972); 01c and 16a cover routing.
+release_gate: false
 stub_sets: [human-channels]
 seed:
   outbound_context:

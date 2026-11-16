@@ -6,6 +6,8 @@ description: >
   audit) and one in the personal account (to Tim, beers), and nothing in the request or
   conversation picks one. ceo-inbox should ask which, naming both drafts, and send nothing.
 tags: [ceo-inbox, delegated-mode, specialist, specialist-ceo-inbox, send, multi-mailbox]
+# On demand since the 2026-11-16 gate prune: send-my-draft variant; 46d gates it.
+release_gate: false
 agent: ceo-inbox
 stub_sets: [ceo-inbox-office]
 seed:

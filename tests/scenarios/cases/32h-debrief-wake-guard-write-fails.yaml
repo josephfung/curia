@@ -12,6 +12,8 @@ description: >
   principal (owner ceo) with a progress note warning that the guard write failed, without
   setting a wake_at, so no reminder wake re-runs the prompt.
 tags: [specialist-meeting-debrief, meeting-debrief, task-wake]
+# On demand since the 2026-11-16 gate prune: another debrief wake phase; 32d gates it.
+release_gate: false
 agent: meeting-debrief
 stub_sets: [meeting-debrief-office]
 inbound:

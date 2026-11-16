@@ -15,6 +15,8 @@ description: >
   does not report that no draft exists, does not describe a draft it never read, and
   does not write a new one.
 tags: [specialist-ceo-inbox, ceo-inbox, delegated-mode, drafts, error-path]
+# On demand since the 2026-11-16 gate prune: read-failure honesty; 31k and 19a gate it.
+release_gate: false
 agent: ceo-inbox
 stub_sets: [ceo-inbox-mailroom]
 inbound:

@@ -6,6 +6,8 @@ description: >
   An external attendee declines a meeting invitation the coordinator sent on the
   principal's behalf. No acknowledgement is needed; the correct outcome is silence.
 tags: [no-reply, email, calendar]
+# On demand since the 2026-11-16 gate prune: same NO_REPLY rule as 03a.
+release_gate: false
 stub_sets: [human-channels]
 seed:
   contacts:

@@ -25,7 +25,8 @@ description: >
   out without asking, to Owen alone.
 tags: [specialist-ceo-inbox, ceo-inbox, triage, send, principal-mailbox, autonomous-send, band-gating, band-stakes]
 agent: ceo-inbox
-release_gate: true
+# On demand since the 2026-11-16 gate prune: same boundary as 45d.
+release_gate: false
 timeout_seconds: 420
 through_gateway: true
 autonomy: { score: 92, gating: band }

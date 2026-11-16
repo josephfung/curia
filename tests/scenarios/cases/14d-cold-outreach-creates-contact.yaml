@@ -11,6 +11,8 @@ description: >
   the address. The coordinator sends from its own account with email-send, which takes
   only a contact ID.
 tags: [email, recipient, contacts]
+# On demand since the 2026-11-16 gate prune: no raw-address path in code (ADR-047, send-by-reference.test.ts).
+release_gate: false
 stub_sets: [human-channels]
 inbound:
   from: principal

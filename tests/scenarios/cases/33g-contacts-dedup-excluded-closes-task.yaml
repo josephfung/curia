@@ -11,6 +11,8 @@ description: >
   review task (task-list with tag dedup) and complete it with a short note, and must not
   merge. No [ACTIVE OUTBOUND CONTEXT] block is present, so there is nothing to release.
 tags: [specialist-contacts, contacts, dedup]
+# On demand since the 2026-11-16 gate prune: exclude and close; 33k gates it.
+release_gate: false
 agent: contacts
 seed:
   contacts:

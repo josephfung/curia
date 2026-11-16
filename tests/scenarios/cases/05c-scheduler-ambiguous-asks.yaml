@@ -6,6 +6,8 @@ description: >
   principal asks to move "the pipeline review" to 10am. The coordinator should ask which
   one, not guess.
 tags: [scheduler]
+# On demand since the 2026-11-16 gate prune: other half of the scheduler rule; 05a gates it.
+release_gate: false
 inbound:
   from: principal
   content: Move the pipeline review summary you send me to 10am.

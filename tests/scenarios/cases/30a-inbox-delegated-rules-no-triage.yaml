@@ -10,6 +10,8 @@ description: >
   should report the rules and the tagging setting from its pinned context, and do nothing
   else: no triage of the unread mail.
 tags: [ceo-inbox, delegated-mode, specialist, specialist-ceo-inbox]
+# On demand since the 2026-11-16 gate prune: delegated mode runs no triage; 30l gates it.
+release_gate: false
 agent: ceo-inbox
 stub_sets: [ceo-inbox-office]
 seed:

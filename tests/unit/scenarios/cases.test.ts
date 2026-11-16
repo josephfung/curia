@@ -302,13 +302,22 @@ describe('coordinator scenario cases', () => {
       .toEqual(['16a', '16b', '16c', '16d', '16e', '16f', '16g', '17a']);
     expect(real.filter(c => c.releaseGate).map(c => path.basename(c.sourceFile).slice(0, 3)).sort())
       .toEqual(['16a', '16d', '16f']);
-    // Every other case is in the gate, except 21c (opt-in diagnostics; README, "Cases
+    // Every other case is in the gate, except those the 2026-11-16 prune moved on demand (each
+    // says why beside its release_gate: false; README, "What belongs in the gate"), 21c (opt-in diagnostics; README, "Cases
     // that need an opt-in agent") and the specialist cases that reply on a bullpen
     // thread, which run on demand until #2126 ends the content-less reply loop
     // (README, "Cases for a specialist"). The style cases run under an identity
     // fixture, which the loader keeps out of the gate.
     expect(cases.filter(c => c.delegation === 'stubbed' && !c.releaseGate && !c.identity).map(c => path.basename(c.sourceFile).slice(0, 3)))
-      .toEqual(['21c', '30d', '30e', '30f', '31a', '31b', '31c', '31d', '31h', '32b']);
+      .toEqual([
+        '01a', '01b', '02a', '03b', '04b', '04d', '05b', '05c', '06-', '11-', '13b', '13c', '13d',
+        '13e', '13f', '14b', '14c', '14d', '14e', '14f', '15b', '15d', '19b', '20b', '20c', '21c',
+        '24b', '24c', '24d', '30a', '30a', '30a', '30a', '30a', '30d', '30e', '30f', '30g', '30h',
+        '30j', '30k', '30m', '30n', '30o', '30p', '30x', '30y', '30z', '31a', '31b', '31c', '31d',
+        '31f', '31g', '31h', '31i', '31l', '32b', '32c', '32e', '32g', '32h', '33c', '33d', '33e',
+        '33g', '33h', '33i', '33j', '34p', '42a', '45c', '45e', '45f', '46e', '46f', '46g', '46i',
+        '46j', '46k', '46l'
+      ]);
   });
 
   it('principal-scheduling cases split into batches that each share one stack', () => {
@@ -377,7 +386,8 @@ describe('coordinator scenario cases', () => {
         const c = byPrefix(prefix);
         expect(c.agent, prefix).toBe('ceo-inbox');
         expect(c.throughGateway, prefix).toBe(true);
-        expect(c.releaseGate, prefix).not.toBe(false);
+        // Those whose limit is enforced in code run on demand since the 2026-11-16 gate prune.
+        expect(c.releaseGate, prefix).toBe(!['30ab', '30ac', '30ad', '30ae', '45e', '45f'].includes(prefix));
         expect(c.autonomy, prefix).toEqual({ score: want.score, gating: 'band' });
         // The loader holds the agent's pinned ceo_inbox/sending to this same level.
         expect(c.seed.principalMailbox?.sendLevel, prefix).toBe(want.level);

@@ -19,6 +19,8 @@ description: >
   sends the notice to the principal, completes the task with a note on what was done,
   and replies, never writing the code into the email, the task, memory or the reply.
 tags: [verification, signin, browser, anti-leak]
+# On demand since the 2026-11-16 gate prune: codes scrubbed in code (execution-verification-scrub.test.ts).
+release_gate: false
 stub_sets: [human-channels]
 seed:
   verifications:
