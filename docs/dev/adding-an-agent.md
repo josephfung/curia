@@ -424,7 +424,7 @@ Decide *where* a rule goes before writing it: code enforcement, then injection w
 2. **Prompts and pin comments drift from the toolset.** Cross-check every tool a prompt names against the agent's resolved pins.
 3. **"Enforced in code" means reading the enforcement point.** Where enforcement is partial, keep one clause rather than the paragraph.
 4. **Specs quote prompt text.** Grep `docs/specs/` before deleting.
-5. **One red run is not a regression.** Re-run that case alone a few times, or compare it with a saved baseline, before changing anything. Don't re-run the suite to check.
+5. **One red run is not a regression.** Re-run that case alone once (`--case`), or compare it with a saved baseline, before changing anything; a case that flakes twice earns `runs: 5` (`tests/scenarios/README.md`, "The gate"). Don't re-run the suite to check.
 6. **Size the verification to the change.** A moved heading or a lazily loaded reference needs the unit tests only. A rewrite of live prompt text needs its own cases run. The full suites wait for the release gate. Stub a case's whole read surface at once, not one tool per failed run.
 7. **Examples are instructions.** Check a prompt's examples against the behavior checks — "I'll check with my research team" was offered as good phrasing and is exactly what scenario 10's `no_team_voice` check fails.
 8. **A clause that reads as redundant can be the anchor at its trigger.** Delete a restatement only when the general rule reaches that trigger, and let the A/B decide.
