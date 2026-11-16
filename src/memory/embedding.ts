@@ -2,22 +2,27 @@ import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import type { ModelRegistry } from '../agents/llm/model-registry.js';
 import { createEmbeddingCall, createEmbeddingError } from '../bus/events.js';
+import { hashBundledWeights, OnnxEmbeddingBackend } from './embedding-onnx.js';
 import {
+  BUNDLED_EMBEDDING_MODEL,
   lookupEmbeddingProfile,
   OPENAI_TEXT_EMBEDDING_3_SMALL,
   type EmbeddingProfile,
   type EmbeddingPurpose,
 } from './embedding-profiles.js';
 
-export const DEFAULT_EMBEDDING_BASE_URL = 'https://api.openai.com/v1';
-export const DEFAULT_EMBEDDING_MODEL = OPENAI_TEXT_EMBEDDING_3_SMALL.model;
+/**
+ * OpenAI's API, used without configuration only by the deprecated compatibility rule in
+ * `resolveEmbedding()`. Configured explicitly, OpenAI is an ordinary endpoint.
+ */
+export const OPENAI_EMBEDDING_BASE_URL = 'https://api.openai.com/v1';
 // A local server that is busy or still loading its model can hold a request open, and a
 // knowledge-graph write waits on this call.
 export const EMBEDDING_FETCH_TIMEOUT_MS = 30_000;
 
 /**
- * Where embeddings come from. OpenAI by default; any server that speaks OpenAI's
- * /embeddings API (llama.cpp, Ollama, vLLM, text-embeddings-inference) otherwise.
+ * An OpenAI-compatible /embeddings endpoint: OpenAI itself, llama.cpp, Ollama, vLLM,
+ * text-embeddings-inference or anything else that speaks the API.
  */
 export interface EmbeddingEndpoint {
   baseUrl: string;
@@ -26,72 +31,174 @@ export interface EmbeddingEndpoint {
   apiKey: string | undefined;
 }
 
-/**
- * Picks the embedding endpoint from config, or returns undefined when none is configured
- * and entity memory should stay off. A custom base URL uses `embedding_api_key`, which may
- * be absent, and needs `EMBEDDING_MODEL`; the default OpenAI URL needs `openai_api_key`.
- */
-export function resolveEmbeddingEndpoint(config: {
-  embeddingBaseUrl: string | undefined;
-  embeddingModel: string | undefined;
-  embeddingApiKey: string | undefined;
-  openaiApiKey: string | undefined;
-}): EmbeddingEndpoint | undefined {
-  if (config.embeddingBaseUrl) {
-    // No default model here: a server that ignores the model field (llama.cpp does) would
-    // answer under OpenAI's name, and its vectors would pass as OpenAI's.
-    if (!config.embeddingModel) return undefined;
-    return {
-      baseUrl: config.embeddingBaseUrl.replace(/\/+$/, ''),
-      model: config.embeddingModel,
-      apiKey: config.embeddingApiKey,
-    };
-  }
-  if (!config.openaiApiKey) return undefined;
-  return {
-    baseUrl: DEFAULT_EMBEDDING_BASE_URL,
-    model: config.embeddingModel ?? DEFAULT_EMBEDDING_MODEL,
-    apiKey: config.openaiApiKey,
-  };
-}
-
 /** `url` without any `user:password@` part, for a log line. */
 export function redactUrlUserinfo(url: string): string {
   return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/i, '$1');
 }
 
-export type EmbeddingResolution =
-  | { ok: true; endpoint: EmbeddingEndpoint; profile: EmbeddingProfile }
-  | { ok: false; reason: 'no_endpoint' }
-  | { ok: false; reason: 'no_model' }
-  | { ok: false; reason: 'no_profile'; model: string };
-
-/**
- * The one place that decides whether entity memory has an embedding source: the endpoint
- * and the profile for its model, or the reason the knowledge graph stays off. Every
- * construction site uses it, so a custom endpoint reaches all of them.
- */
-export function resolveEmbedding(
-  config: Parameters<typeof resolveEmbeddingEndpoint>[0],
-  profileOverrides: Readonly<Record<string, EmbeddingProfile>> | undefined,
-): EmbeddingResolution {
-  if (config.embeddingBaseUrl && !config.embeddingModel) return { ok: false, reason: 'no_model' };
-  const endpoint = resolveEmbeddingEndpoint(config);
-  if (!endpoint) return { ok: false, reason: 'no_endpoint' };
-  const profile = lookupEmbeddingProfile(endpoint.model, profileOverrides);
-  if (!profile) return { ok: false, reason: 'no_profile', model: endpoint.model };
-  return { ok: true, endpoint, profile };
+/** The settings resolution reads. A subset of `Config`, so tests can pass just these. */
+export interface EmbeddingConfig {
+  embeddingBaseUrl: string | undefined;
+  embeddingModel: string | undefined;
+  /** Vault `embedding_api_key`: the key for a configured endpoint, OpenAI included. */
+  embeddingApiKey: string | undefined;
+  /** Vault `openai_api_key`: read for embeddings only by the deprecated compatibility rule. */
+  openaiApiKey: string | undefined;
+  /** Where the bundled model's files are (`EMBEDDING_MODEL_DIR`). */
+  embeddingModelDir: string;
 }
 
-/** One log line explaining why the knowledge graph is off, for a failed resolution. */
-export function describeEmbeddingUnavailable(resolution: Exclude<EmbeddingResolution, { ok: true }>): string {
-  if (resolution.reason === 'no_endpoint') {
-    return 'No embedding endpoint: set EMBEDDING_BASE_URL and EMBEDDING_MODEL, or seed openai_api_key in the vault';
+/**
+ * What the knowledge graph already holds, which decides whether resolution may pick the
+ * bundled model (design §1). Built from the boot gate's snapshot (`storedStateFromSnapshot`)
+ * so resolution and the gate read the table once.
+ */
+export interface StoredEmbeddingState {
+  /** The stamps of the stored vectors (`embeddingStamp()` of the profile that made each). */
+  stamps: string[];
+  /** The target stamp of an unfinished `pnpm reembed:kg` run, if one is recorded. */
+  openRunTarget?: string;
+}
+
+/** The model a stamp names: the part before the first `#` (`embeddingStamp()` appends the rest). */
+export function stampModel(stamp: string): string {
+  const hash = stamp.indexOf('#');
+  return hash === -1 ? stamp : stamp.slice(0, hash);
+}
+
+export type EmbeddingResolution =
+  | { ok: true; source: EmbeddingSource; profile: EmbeddingProfile; deprecation?: 'implicit_openai' }
+  | { ok: false; reason: 'no_model' }
+  | { ok: false; reason: 'no_profile'; model: string }
+  | { ok: false; reason: 'non_bundled_model_without_base_url'; model: string }
+  | { ok: false; reason: 'stored_model_without_endpoint'; storedModel: string }
+  | { ok: false; reason: 'implicit_openai_without_key' };
+
+export type EmbeddingResolutionFailure = Exclude<EmbeddingResolution, { ok: true }>;
+
+/**
+ * The one place that decides where embeddings come from (design §1): no
+ * `EMBEDDING_BASE_URL` means the bundled in-process model, a base URL means that server,
+ * OpenAI included. Pure over `stored`, so every construction site resolves the same way.
+ *
+ * An install whose graph holds another model's vectors (or whose unfinished re-embed
+ * targets one) is never switched to the bundled model unless `EMBEDDING_MODEL` names it:
+ * that is the operator's switch signal, and the boot gate then holds the knowledge graph
+ * off until `pnpm reembed:kg` runs.
+ */
+export function resolveEmbedding(
+  config: EmbeddingConfig,
+  profileOverrides: Readonly<Record<string, EmbeddingProfile>> | undefined,
+  stored: StoredEmbeddingState,
+): EmbeddingResolution {
+  // 1. A base URL: that server and EMBEDDING_MODEL's profile, whoever runs it. There is no
+  // default model: a server that ignores the model field (llama.cpp does) would answer
+  // under another model's name, and its vectors would pass as that model's.
+  if (config.embeddingBaseUrl) {
+    const model = config.embeddingModel;
+    if (!model) return { ok: false, reason: 'no_model' };
+    // A built-in or YAML profile never carries weightsSha256 (only the bundled path sets
+    // it, after hashing), so a model served by an endpoint stamps as its bare name (§3).
+    const profile = lookupEmbeddingProfile(model, profileOverrides);
+    if (!profile) return { ok: false, reason: 'no_profile', model };
+    return {
+      ok: true,
+      source: {
+        kind: 'endpoint',
+        endpoint: { baseUrl: config.embeddingBaseUrl.replace(/\/+$/, ''), model, apiKey: config.embeddingApiKey },
+      },
+      profile,
+    };
   }
-  if (resolution.reason === 'no_model') {
-    return 'EMBEDDING_BASE_URL is set but EMBEDDING_MODEL is not. Set EMBEDDING_MODEL to the model the server runs, which must have an embedding profile';
+
+  // 2. No base URL: the bundled model, unless the graph already belongs to another model.
+  const explicit = config.embeddingModel;
+  if (explicit === BUNDLED_EMBEDDING_MODEL) return bundled(config, profileOverrides);
+  // #2225 allowed naming OpenAI's model without a base URL, so that name alone still
+  // reaches the compatibility rule below; any other non-bundled name needs a base URL.
+  if (explicit !== undefined && explicit !== OPENAI_TEXT_EMBEDDING_3_SMALL.model) {
+    return { ok: false, reason: 'non_bundled_model_without_base_url', model: explicit };
   }
-  return `No embedding profile for model "${resolution.model}". Add one under embedding.profiles in config/local.yaml (dimensions, prefixes, thresholds) to enable it`;
+
+  // An unfinished run's target counts too: a re-embed that stopped after clearing
+  // vectors must not leave the install looking fresh and switch it silently.
+  const storedModels = new Set(
+    [...stored.stamps, ...(stored.openRunTarget !== undefined ? [stored.openRunTarget] : [])].map(stampModel),
+  );
+  storedModels.delete(BUNDLED_EMBEDDING_MODEL);
+  if (storedModels.size === 0) {
+    // A fresh install or empty graph gets OpenAI only through step 1, key or no key.
+    if (explicit !== undefined) return { ok: false, reason: 'non_bundled_model_without_base_url', model: explicit };
+    return bundled(config, profileOverrides);
+  }
+
+  // The graph holds a model other than OpenAI's (alone or beside OpenAI's): its endpoint
+  // settings are gone. Sorted, so a mixed graph names the same model on every boot.
+  const notOpenAI = [...storedModels].filter(m => m !== OPENAI_TEXT_EMBEDDING_3_SMALL.model).sort();
+  if (notOpenAI.length > 0) return { ok: false, reason: 'stored_model_without_endpoint', storedModel: notOpenAI[0]! };
+
+  // TODO(#2628): remove the implicit OpenAI compatibility rule (phase-out after #2023)
+  // Before the bundled model, no base URL plus an openai_api_key meant OpenAI. An install
+  // whose graph holds OpenAI vectors keeps that, deprecated, so nobody's model changes
+  // under them on upgrade. The only place openai_api_key is read for embeddings.
+  if (!config.openaiApiKey) return { ok: false, reason: 'implicit_openai_without_key' };
+  const profile = lookupEmbeddingProfile(OPENAI_TEXT_EMBEDDING_3_SMALL.model, profileOverrides);
+  if (!profile) return { ok: false, reason: 'no_profile', model: OPENAI_TEXT_EMBEDDING_3_SMALL.model };
+  return {
+    ok: true,
+    source: {
+      kind: 'endpoint',
+      endpoint: { baseUrl: OPENAI_EMBEDDING_BASE_URL, model: OPENAI_TEXT_EMBEDDING_3_SMALL.model, apiKey: config.openaiApiKey },
+    },
+    profile,
+    deprecation: 'implicit_openai',
+  };
+}
+
+/** The bundled model's resolution. Its profile gains `weightsSha256` once the weights are hashed. */
+function bundled(
+  config: EmbeddingConfig,
+  profileOverrides: Readonly<Record<string, EmbeddingProfile>> | undefined,
+): EmbeddingResolution {
+  const profile = lookupEmbeddingProfile(BUNDLED_EMBEDDING_MODEL, profileOverrides);
+  if (!profile) return { ok: false, reason: 'no_profile', model: BUNDLED_EMBEDDING_MODEL };
+  return { ok: true, source: { kind: 'bundled', modelDir: config.embeddingModelDir }, profile };
+}
+
+const SWITCH_TO_BUNDLED = `set EMBEDDING_MODEL=${BUNDLED_EMBEDDING_MODEL} and run pnpm reembed:kg`;
+const EXPLICIT_OPENAI =
+  `EMBEDDING_BASE_URL=${OPENAI_EMBEDDING_BASE_URL}, EMBEDDING_MODEL=${OPENAI_TEXT_EMBEDDING_3_SMALL.model} ` +
+  'and the key in the vault as embedding_api_key';
+
+/** One log line explaining why the knowledge graph is off, for a failed resolution. Each names the fix. */
+export function describeEmbeddingUnavailable(resolution: EmbeddingResolutionFailure): string {
+  switch (resolution.reason) {
+    case 'no_model':
+      return 'EMBEDDING_BASE_URL is set but EMBEDDING_MODEL is not. Set EMBEDDING_MODEL to the model the server runs, which must have an embedding profile';
+    case 'no_profile':
+      return `No embedding profile for model "${resolution.model}". Add one under embedding.profiles in config/local.yaml (dimensions, prefixes, thresholds) to enable it`;
+    case 'non_bundled_model_without_base_url':
+      return `EMBEDDING_MODEL is "${resolution.model}" but EMBEDDING_BASE_URL is not set, and a non-bundled model needs EMBEDDING_BASE_URL. ` +
+        `Set EMBEDDING_BASE_URL to the server that runs it, or unset EMBEDDING_MODEL to use the bundled model (${BUNDLED_EMBEDDING_MODEL})`;
+    case 'stored_model_without_endpoint':
+      return `The knowledge graph holds vectors made by ${resolution.storedModel}, and no endpoint is configured for it. ` +
+        `To keep it, restore EMBEDDING_BASE_URL/EMBEDDING_MODEL for ${resolution.storedModel}, or ${SWITCH_TO_BUNDLED}`;
+    case 'implicit_openai_without_key':
+      return `The knowledge graph holds ${OPENAI_TEXT_EMBEDDING_3_SMALL.model} vectors from the old implicit OpenAI default, ` +
+        'but the vault has no openai_api_key. Seed openai_api_key in the vault, or configure OpenAI explicitly ' +
+        `(${EXPLICIT_OPENAI}), or ${SWITCH_TO_BUNDLED}`;
+  }
+}
+
+/**
+ * The warn line boot logs each time the compatibility rule applies (design §1). It names
+ * both ways forward, since the rule goes away in a later release (#2628).
+ */
+export function describeImplicitOpenAIDeprecation(): string {
+  return 'Embeddings use OpenAI through the implicit default (no EMBEDDING_BASE_URL, openai_api_key in the vault, ' +
+    `and ${OPENAI_TEXT_EMBEDDING_3_SMALL.model} vectors in the knowledge graph). This default is deprecated and goes away in a later release. ` +
+    `To keep OpenAI, configure it explicitly: ${EXPLICIT_OPENAI} (no re-embed needed). ` +
+    `Or switch to the bundled model: ${SWITCH_TO_BUNDLED}`;
 }
 
 // Internal interface separating the transport/mock concern from the service API.
@@ -99,6 +206,14 @@ export function describeEmbeddingUnavailable(resolution: Exclude<EmbeddingResolu
 interface EmbeddingBackend {
   embed(text: string): Promise<number[]>;
 }
+
+/**
+ * Where an EmbeddingService gets its vectors: an OpenAI-compatible endpoint, or the model
+ * bundled in the image, run in-process from a local directory.
+ */
+export type EmbeddingSource =
+  | { kind: 'endpoint'; endpoint: EmbeddingEndpoint }
+  | { kind: 'bundled'; modelDir: string };
 
 export class EmbeddingService {
   private constructor(
@@ -118,6 +233,52 @@ export class EmbeddingService {
     modelRegistry?: ModelRegistry,
   ): EmbeddingService {
     return new EmbeddingService(new HttpEmbeddingBackend(endpoint, profile.dimensions, logger, bus, modelRegistry), profile);
+  }
+
+  /**
+   * Production factory for the bundled model, run in-process from `modelDir`. The profile
+   * must carry the weights hash its stamp uses (`hashBundledWeights()`), and this checks
+   * it against the file again: vectors stamped with one hash must come from those
+   * weights. Loads the session and tokenizer eagerly, so a bad file fails here, at boot.
+   *
+   * `modelRegistry` is accepted so both factories share a shape for `create()`, and is
+   * unused: in-process inference has no price to look up.
+   */
+  static async createBundled(
+    modelDir: string,
+    profile: EmbeddingProfile,
+    logger: Logger,
+    bus?: EventBus,
+    _modelRegistry?: ModelRegistry,
+  ): Promise<EmbeddingService> {
+    if (!profile.weightsSha256) {
+      throw new Error(
+        `Embedding profile "${profile.model}" has no weightsSha256; the bundled backend needs the hash of the weights it loads (hashBundledWeights())`,
+      );
+    }
+    const actual = await hashBundledWeights(modelDir, logger);
+    if (actual !== profile.weightsSha256) {
+      throw new Error(
+        `Bundled embedding weights in ${modelDir} hash to ${actual}, but the profile's weightsSha256 is ${profile.weightsSha256}. ` +
+        'Vectors would be stamped as weights that did not make them',
+      );
+    }
+    const backend = await OnnxEmbeddingBackend.load(modelDir, profile, logger, bus);
+    return new EmbeddingService(backend, profile);
+  }
+
+  /** Builds the service for either embedding source. */
+  static async create(
+    source: EmbeddingSource,
+    profile: EmbeddingProfile,
+    logger: Logger,
+    bus?: EventBus,
+    modelRegistry?: ModelRegistry,
+  ): Promise<EmbeddingService> {
+    if (source.kind === 'bundled') {
+      return EmbeddingService.createBundled(source.modelDir, profile, logger, bus, modelRegistry);
+    }
+    return EmbeddingService.createWithEndpoint(source.endpoint, profile, logger, bus, modelRegistry);
   }
 
   // Test factory — produces deterministic vectors without any network calls.
@@ -155,6 +316,19 @@ export class EmbeddingService {
     // Guard against division by zero when a vector is all zeros.
     if (denominator === 0) return 0;
     return dotProduct / denominator;
+  }
+}
+
+/**
+ * An embedding endpoint returned a vector whose width is not the profile's (and could not be
+ * cut to it: only a wider vector can be). Its own class so the drift check (#2023, design §7)
+ * can tell "the endpoint now serves another model under this name" from a network failure or
+ * timeout, without matching message text.
+ */
+export class EmbeddingDimensionError extends Error {
+  constructor(readonly expected: number, readonly actual: number) {
+    super(`Unexpected embedding dimensions: ${actual} (the profile expects ${expected})`);
+    this.name = 'EmbeddingDimensionError';
   }
 }
 
@@ -268,7 +442,12 @@ class HttpEmbeddingBackend implements EmbeddingBackend {
           this.logger.warn({ publishErr }, 'Failed to publish embedding.error event');
         });
       }
-      throw new Error(`Unexpected embedding dimensions: ${embedding?.length}`);
+      // A vector of the wrong width means the endpoint serves a different model under the
+      // configured name (a wider one was cut above, so only a narrower one lands here). Typed,
+      // so the drift check can read it as changed weights rather than an unreachable
+      // endpoint. A response with no vector at all is malformed, not another model.
+      if (embedding) throw new EmbeddingDimensionError(this.dimensions, embedding.length);
+      throw new Error('Unexpected embedding dimensions: the response held no vector');
     }
     // Telemetry — fire-and-forget; must not block or break the caller.
     // void: don't await so embed() latency isn't coupled to bus/audit throughput.

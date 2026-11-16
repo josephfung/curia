@@ -3,8 +3,11 @@ import {
   lookupEmbeddingProfile,
   parseEmbeddingProfiles,
   BUILTIN_EMBEDDING_PROFILES,
+  BUNDLED_EMBEDDING_MODEL,
+  ALL_MINILM_L6_V2,
   OPENAI_TEXT_EMBEDDING_3_SMALL,
   QWEN3_EMBEDDING_4B,
+  embeddingStamp,
 } from '../../../src/memory/embedding-profiles.js';
 
 const SOURCE = 'test';
@@ -97,6 +100,48 @@ describe('parseEmbeddingProfiles', () => {
   it('rejects a section that is not a mapping', () => {
     expect(() => parseEmbeddingProfiles(['custom'], SOURCE)).toThrow(/must be a mapping/);
   });
+
+  // An override of the bundled profile changes thresholds only. Dropping the base's pooling
+  // would leave the backend without a pooling strategy for the same weights.
+  it('carries the bundled base\'s pooling through a thresholds-only override', () => {
+    const profiles = parseEmbeddingProfiles(
+      { 'all-MiniLM-L6-v2': { base: 'all-MiniLM-L6-v2', thresholds: { fact_dedup: 0.9 } } },
+      SOURCE,
+    );
+    expect(profiles['all-MiniLM-L6-v2']?.pooling).toBe('mean');
+    expect(profiles['all-MiniLM-L6-v2']?.thresholds.factDedup).toBe(0.9);
+  });
+
+  // Pooling is a property of the weights, and the weights hash is computed from the file
+  // loaded at boot. Neither is the operator's to set in YAML.
+  it('rejects a pooling key from YAML', () => {
+    expect(() => parseEmbeddingProfiles(
+      { 'all-MiniLM-L6-v2': { base: 'all-MiniLM-L6-v2', pooling: 'cls' } },
+      SOURCE,
+    )).toThrow(/unknown key\(s\) pooling/);
+  });
+
+  it('rejects a weightsSha256 key from YAML', () => {
+    expect(() => parseEmbeddingProfiles(
+      { 'all-MiniLM-L6-v2': { base: 'all-MiniLM-L6-v2', weightsSha256: 'afdb6f1a0e45' } },
+      SOURCE,
+    )).toThrow(/unknown key\(s\) weightsSha256/);
+  });
+});
+
+describe('embeddingStamp with a weights hash', () => {
+  it('appends the first 12 hex of the weights hash for the bundled backend', () => {
+    expect(embeddingStamp({
+      ...ALL_MINILM_L6_V2,
+      weightsSha256: 'afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1',
+    })).toBe('all-MiniLM-L6-v2#weights:afdb6f1a0e45');
+  });
+
+  it('leaves a stamp without a weights hash unchanged', () => {
+    expect(embeddingStamp(OPENAI_TEXT_EMBEDDING_3_SMALL)).toBe('text-embedding-3-small');
+    // The same model served through an endpoint carries no weights hash (design §3).
+    expect(embeddingStamp(ALL_MINILM_L6_V2)).toBe('all-MiniLM-L6-v2');
+  });
 });
 
 // Drift checks: these values are decisions recorded outside the code. OpenAI's are the
@@ -121,6 +166,18 @@ describe('built-in profile values', () => {
         similarity: '',
       },
       thresholds: { factDedup: 0.94, fuzzyResolve: 0.99, fuzzyAmbiguityFloor: 0.70 },
+    });
+  });
+
+  it('ships the bundled MiniLM profile as a built-in', () => {
+    expect(BUNDLED_EMBEDDING_MODEL).toBe('all-MiniLM-L6-v2');
+    expect(BUILTIN_EMBEDDING_PROFILES[BUNDLED_EMBEDDING_MODEL]).toBe(ALL_MINILM_L6_V2);
+    expect(ALL_MINILM_L6_V2).toEqual({
+      model: 'all-MiniLM-L6-v2',
+      dimensions: 384,
+      prefixes: { query: '', document: '', similarity: '' },
+      pooling: 'mean',
+      thresholds: { factDedup: 0.95, fuzzyResolve: 0.92, fuzzyAmbiguityFloor: 0.61 },
     });
   });
 });

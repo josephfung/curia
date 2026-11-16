@@ -7,8 +7,21 @@
 import type { DbPool, DbPoolClient } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import { HNSW_MAX_DIMENSIONS, embeddingStamp, type EmbeddingProfile } from './embedding-profiles.js';
-import { describeEmbeddingUnavailable, resolveEmbedding, type EmbeddingEndpoint } from './embedding.js';
+import type { EventBus } from '../bus/bus.js';
+import type { ModelRegistry } from '../agents/llm/model-registry.js';
+import {
+  EmbeddingService,
+  describeEmbeddingUnavailable,
+  describeImplicitOpenAIDeprecation,
+  resolveEmbedding,
+  type EmbeddingConfig,
+  type EmbeddingResolutionFailure,
+  type EmbeddingSource,
+  type StoredEmbeddingState,
+} from './embedding.js';
+import { BundledModelFileMissingError, hashBundledWeights } from './embedding-onnx.js';
 import { REEMBED_APPLICATION_NAME, describeInstanceLockHolder, findInstanceLockHolder } from '../db/instance-lock.js';
+import { REEMBED_FORCE_COMMAND, checkEmbeddingDrift, type DriftOutcome } from './embedding-drift.js';
 
 export const REEMBED_COMMAND = 'pnpm reembed:kg';
 const REEMBED_DOCS_URL = 'https://docs.meetcuria.com/integrations/embeddings-endpoint';
@@ -196,24 +209,110 @@ export function describeEmbeddingSchemaOff(state: Extract<EmbeddingSchemaState, 
   }
 }
 
+/** What resolution needs from a snapshot: the stored stamps and an unfinished run's target. */
+export function storedStateFromSnapshot(snapshot: EmbeddingSchemaSnapshot): StoredEmbeddingState {
+  return {
+    stamps: Object.keys(snapshot.vectorsByModel),
+    ...(snapshot.openRun ? { openRunTarget: snapshot.openRun.targetModel } : {}),
+  };
+}
+
+/** Why the bundled model is unusable: its files are not there, or they are and will not load. */
+export type BundledFailureReason = 'bundled_weights_missing' | 'bundled_load_failed';
+
 export type KnowledgeGraphEmbedding =
-  | { ok: true; endpoint: EmbeddingEndpoint; profile: EmbeddingProfile }
-  | { ok: false; gate: 'config'; message: string }
-  | { ok: false; gate: 'schema'; message: string; state?: Extract<EmbeddingSchemaState, { status: 'off' }>; err?: unknown };
+  | {
+    ok: true;
+    source: EmbeddingSource;
+    /** For a bundled source, carries the weightsSha256 of the file actually loaded. */
+    profile: EmbeddingProfile;
+    /** Built and, for the bundled model, loaded: the bundled load is where a bad file shows up. */
+    service: EmbeddingService;
+    deprecation?: 'implicit_openai';
+    /**
+     * Endpoint sources only: what the boot drift check found when it was not `same`. The
+     * knowledge graph runs either way; health reports the reason.
+     */
+    drift?: Extract<DriftOutcome, 'shifted' | 'unchecked'>;
+  }
+  // The resolution's own reason and fields (model, storedModel), so health maps by code.
+  | (EmbeddingResolutionFailure & { gate: 'config'; message: string })
+  | { ok: false; gate: 'bundled'; message: string; reason: BundledFailureReason; err: unknown }
+  | {
+    ok: false;
+    gate: 'schema';
+    message: string;
+    state?: Extract<EmbeddingSchemaState, { status: 'off' }>;
+    err?: unknown;
+    /** Set when `pnpm reembed:kg` holds the instance lock (there is then no `state`). */
+    reason?: 'reembed_in_progress';
+  }
+  // The endpoint serves other weights than made the stored vectors (design §7).
+  | { ok: false; gate: 'drift'; message: string; reason: 'weights_changed' };
+
+export interface KnowledgeGraphEmbeddingDeps {
+  /** Test seam: builds the service. Production uses `EmbeddingService.create`. */
+  createService?: typeof EmbeddingService.create;
+}
+
+function bundledFailure(err: unknown): Extract<KnowledgeGraphEmbedding, { gate: 'bundled' }> {
+  const reason: BundledFailureReason = err instanceof BundledModelFileMissingError ? 'bundled_weights_missing' : 'bundled_load_failed';
+  return { ok: false, gate: 'bundled', reason, err, message: `The bundled embedding model is unusable: ${(err as Error).message}.` };
+}
 
 /**
- * Whether entity memory may run: resolves the endpoint and profile, then runs the schema
- * check. A running `pnpm reembed:kg` turns it off even when the table looks ready, because
- * the command takes the instance lock before it clears vectors.
+ * Whether entity memory may run, and the service it runs on. In order:
+ * 1. reads the stored state (the same snapshot the schema check reads) and resolves the
+ *    source from it (design §1), logging the deprecation when the OpenAI compatibility
+ *    rule applied;
+ * 2. for the bundled model, hashes the weight file it will load into the profile, so the
+ *    stamp the schema check compares names those weights;
+ * 3. refuses while `pnpm reembed:kg` holds the instance lock, since the command takes it
+ *    before it clears vectors;
+ * 4. runs the schema check, which may resize an empty table;
+ * 5. builds the service. The bundled model loads here, eagerly, after the gate passes (so a
+ *    graph that is off anyway never loads the native runtime);
+ * 6. for an endpoint (OpenAI included), re-embeds a few stored labels and compares them with
+ *    the stored vectors (`checkEmbeddingDrift`, design §7). Other weights under the same model
+ *    name turn the graph off with `gate: 'drift'`; a shift or an unreachable endpoint leaves it
+ *    on with `drift` set. Bounded by DRIFT_TIMEOUT_MS, so it never holds boot for long.
+ *
+ * A bundled model that cannot be hashed or loaded (missing or corrupt files, a profile with
+ * no pooling, a native runtime that will not load) turns the knowledge graph off with
+ * `gate: 'bundled'`. It never throws for that: boot carries on without entity memory.
  */
 export async function resolveKnowledgeGraphEmbedding(
   pool: DbPool,
-  config: Parameters<typeof resolveEmbedding>[0],
-  profileOverrides: Parameters<typeof resolveEmbedding>[1],
+  config: EmbeddingConfig,
+  profileOverrides: Readonly<Record<string, EmbeddingProfile>> | undefined,
   logger: Logger,
+  telemetry: { bus?: EventBus; modelRegistry?: ModelRegistry } = {},
+  deps: KnowledgeGraphEmbeddingDeps = {},
 ): Promise<KnowledgeGraphEmbedding> {
-  const embedding = resolveEmbedding(config, profileOverrides);
-  if (!embedding.ok) return { ok: false, gate: 'config', message: `${describeEmbeddingUnavailable(embedding)}.` };
+  const createService = deps.createService ?? EmbeddingService.create;
+
+  // The snapshot is read before resolution: an install whose graph holds another model's
+  // vectors must not be switched to the bundled model. A failure here is the schema gate's.
+  let snapshot: EmbeddingSchemaSnapshot;
+  try {
+    snapshot = await readEmbeddingSchema(pool);
+  } catch (err) {
+    return { ok: false, gate: 'schema', message: 'The embedding schema check failed.', err };
+  }
+
+  const embedding = resolveEmbedding(config, profileOverrides, storedStateFromSnapshot(snapshot));
+  if (!embedding.ok) return { ...embedding, gate: 'config', message: `${describeEmbeddingUnavailable(embedding)}.` };
+  if (embedding.deprecation === 'implicit_openai') logger.warn(describeImplicitOpenAIDeprecation());
+
+  let profile = embedding.profile;
+  if (embedding.source.kind === 'bundled') {
+    try {
+      profile = { ...profile, weightsSha256: await hashBundledWeights(embedding.source.modelDir, logger) };
+    } catch (err) {
+      return bundledFailure(err);
+    }
+  }
+
   let state: EmbeddingSchemaState;
   try {
     const holder = await findInstanceLockHolder(pool);
@@ -221,14 +320,45 @@ export async function resolveKnowledgeGraphEmbedding(
       return {
         ok: false,
         gate: 'schema',
+        reason: 'reembed_in_progress',
         message: `${REEMBED_COMMAND} is running against this database (it holds the instance lock: ` +
           `${describeInstanceLockHolder(holder)}). Restart Curia when it finishes.`,
       };
     }
-    state = await checkEmbeddingSchema(pool, embedding.profile, logger);
+    state = await checkEmbeddingSchema(pool, profile, logger);
   } catch (err) {
     return { ok: false, gate: 'schema', message: 'The embedding schema check failed.', err };
   }
   if (state.status === 'off') return { ok: false, gate: 'schema', message: describeEmbeddingSchemaOff(state), state };
-  return { ok: true, endpoint: embedding.endpoint, profile: embedding.profile };
+
+  let service: EmbeddingService;
+  try {
+    service = await createService(embedding.source, profile, logger, telemetry.bus, telemetry.modelRegistry);
+  } catch (err) {
+    // Building an endpoint service only constructs a client, so a throw there is a bug,
+    // not a configuration problem: let it surface.
+    if (embedding.source.kind !== 'bundled') throw err;
+    return bundledFailure(err);
+  }
+
+  // The bundled stamp carries the weights hash, so only an endpoint needs the drift check.
+  const drift = embedding.source.kind === 'endpoint' ? await checkEmbeddingDrift(pool, service, logger) : 'same';
+  if (drift === 'changed') {
+    return {
+      ok: false,
+      gate: 'drift',
+      reason: 'weights_changed',
+      message: `The embedding endpoint now serves different weights under the model name ${embeddingStamp(profile)} ` +
+        'from those that made the stored knowledge-graph vectors. To re-embed every row with the current weights: ' +
+        `stop Curia, run ${REEMBED_FORCE_COMMAND}, then start Curia. ${REEMBED_DOCKER_NOTE}`,
+    };
+  }
+  return {
+    ok: true,
+    source: embedding.source,
+    profile,
+    service,
+    ...(embedding.deprecation ? { deprecation: embedding.deprecation } : {}),
+    ...(drift === 'same' ? {} : { drift }),
+  };
 }

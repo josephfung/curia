@@ -705,11 +705,22 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
       //     transaction.
       //   - createTask: uses TaskRepo.createTask(), which publishes task.created events.
       //   - listExclusionPairKeys: reads contact_dedup_exclusions via ContactService.
+      const auditLogger = new AuditLogger(pool, logger);
+      // EventBus with write-ahead audit hook — every published event (incl. contact.merged)
+      // is persisted to audit_log before delivery, satisfying the acceptance criterion.
+      const bus = new EventBus(
+        logger,
+        (e) => auditLogger.log(e),
+        (id) => auditLogger.markAcknowledged(id),
+      );
+      const modelRegistry = new ModelRegistry(logger);
+
       // A real sweep merges KG entity nodes (entityMemory.mergeEntities), which embeds fact
-      // labels and therefore needs entity memory as boot would build it: an endpoint, a
-      // profile, and a table the schema check accepts. A dry-run never embeds, so it skips
-      // that check and runs with a fake embedding backend, keeping the preview usable in
-      // CI / minimal environments. Fail fast only for a real run.
+      // labels and therefore needs entity memory as boot would build it: the embedding
+      // source boot would resolve (the bundled model by default), a profile, and a table the
+      // schema check accepts. A dry-run never embeds, so it skips that check and runs with a
+      // fake embedding backend, keeping the preview usable in CI / minimal environments.
+      // Fail fast only for a real run.
       // A real run reads the embedding keys from the vault, as boot and reembed-kg.ts do.
       let embedding: KnowledgeGraphEmbedding | undefined;
       if (!dryRun) {
@@ -720,31 +731,20 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
           config,
           loadYamlConfig(path.resolve(import.meta.dirname, '../config')).embedding?.profiles,
           logger,
+          { bus, modelRegistry },
         );
       }
       if (embedding && !embedding.ok) {
         logger.error(
-          { err: embedding.gate === 'schema' ? embedding.err : undefined },
+          { err: embedding.gate === 'schema' || embedding.gate === 'bundled' ? embedding.err : undefined },
           `dedup-contacts: ${embedding.message} A real sweep needs entity memory (KG entity merge embeds fact labels). Re-run with --dry-run to preview without it.`,
         );
         process.exit(1);
       }
 
-      const auditLogger = new AuditLogger(pool, logger);
-      // EventBus with write-ahead audit hook — every published event (incl. contact.merged)
-      // is persisted to audit_log before delivery, satisfying the acceptance criterion.
-      const bus = new EventBus(
-        logger,
-        (e) => auditLogger.log(e),
-        (id) => auditLogger.markAcknowledged(id),
-      );
-
-      const modelRegistry = new ModelRegistry(logger);
       // A real run uses real embeddings (the check above exits one that lacks them). A
       // dry-run uses the fake backend; it never embeds, so its results are unaffected.
-      const embeddingService = embedding?.ok
-        ? EmbeddingService.createWithEndpoint(embedding.endpoint, embedding.profile, logger, bus, modelRegistry)
-        : EmbeddingService.createForTesting();
+      const embeddingService = embedding?.ok ? embedding.service : EmbeddingService.createForTesting();
       const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
       const validator = new MemoryValidator(kgStore, embeddingService);
       const entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger);

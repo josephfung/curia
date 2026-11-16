@@ -1,13 +1,11 @@
-// embedding.endpoint.test.ts — unit tests for OpenAI-compatible embedding endpoints:
-// endpoint and profile resolution from config, the request the backend sends, and how it
-// fits a wider vector to the profile's width.
+// embedding.endpoint.test.ts — unit tests for OpenAI-compatible embedding endpoints: the
+// request the backend sends, and how it fits a wider vector to the profile's width.
+// Resolution from config (which source, which profile) is in embedding.test.ts.
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
+  EmbeddingDimensionError,
   EmbeddingService,
-  resolveEmbeddingEndpoint,
-  resolveEmbedding,
-  describeEmbeddingUnavailable,
   redactUrlUserinfo,
   EMBEDDING_FETCH_TIMEOUT_MS,
 } from '../../../src/memory/embedding.js';
@@ -19,13 +17,6 @@ const logger = createSilentLogger();
 const EMBEDDING_DIMENSIONS = OPENAI_TEXT_EMBEDDING_3_SMALL.dimensions;
 const profile: EmbeddingProfile = { ...OPENAI_TEXT_EMBEDDING_3_SMALL, model: 'm' };
 
-const noEmbeddingConfig = {
-  embeddingBaseUrl: undefined,
-  embeddingModel: undefined,
-  embeddingApiKey: undefined,
-  openaiApiKey: undefined,
-};
-
 function stubFetch(embedding: number[]) {
   const fetchMock = vi.fn().mockResolvedValue({
     ok: true,
@@ -34,74 +25,6 @@ function stubFetch(embedding: number[]) {
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
-
-describe('resolveEmbeddingEndpoint', () => {
-  it('returns undefined when neither a base URL nor an OpenAI key is set', () => {
-    expect(resolveEmbeddingEndpoint(noEmbeddingConfig)).toBeUndefined();
-  });
-
-  it('defaults to OpenAI with the OpenAI key', () => {
-    expect(resolveEmbeddingEndpoint({ ...noEmbeddingConfig, openaiApiKey: 'sk-test' })).toEqual({
-      baseUrl: 'https://api.openai.com/v1',
-      model: 'text-embedding-3-small',
-      apiKey: 'sk-test',
-    });
-  });
-
-  it('uses the custom base URL with the embedding key, never the OpenAI key', () => {
-    expect(resolveEmbeddingEndpoint({
-      embeddingBaseUrl: 'http://embed.local/v1/',
-      embeddingModel: 'qwen3-embedding-4b',
-      embeddingApiKey: undefined,
-      openaiApiKey: 'sk-test',
-    })).toEqual({
-      baseUrl: 'http://embed.local/v1',
-      model: 'qwen3-embedding-4b',
-      apiKey: undefined,
-    });
-  });
-
-  it('returns undefined for a custom base URL with no model, rather than assuming OpenAI\'s', () => {
-    expect(resolveEmbeddingEndpoint({ ...noEmbeddingConfig, embeddingBaseUrl: 'http://embed.local/v1' })).toBeUndefined();
-  });
-});
-
-describe('resolveEmbedding', () => {
-  it('reports no endpoint when nothing is configured', () => {
-    expect(resolveEmbedding(noEmbeddingConfig, undefined)).toEqual({ ok: false, reason: 'no_endpoint' });
-  });
-
-  it('pairs the OpenAI default with its built-in profile', () => {
-    const resolution = resolveEmbedding({ ...noEmbeddingConfig, openaiApiKey: 'sk-test' }, undefined);
-    expect(resolution.ok && resolution.profile).toBe(OPENAI_TEXT_EMBEDDING_3_SMALL);
-  });
-
-  it('turns the knowledge graph off for a custom base URL with no model, naming EMBEDDING_MODEL', () => {
-    const resolution = resolveEmbedding(
-      { ...noEmbeddingConfig, embeddingBaseUrl: 'http://embed.local/v1', openaiApiKey: 'sk-test' },
-      undefined,
-    );
-    expect(resolution).toEqual({ ok: false, reason: 'no_model' });
-    if (resolution.ok) throw new Error('expected the knowledge graph off');
-    expect(describeEmbeddingUnavailable(resolution)).toContain('EMBEDDING_MODEL');
-  });
-
-  it('turns the knowledge graph off for a model with no profile, naming the model', () => {
-    expect(resolveEmbedding(
-      { ...noEmbeddingConfig, embeddingBaseUrl: 'http://embed.local/v1', embeddingModel: 'unprofiled' },
-      undefined,
-    )).toEqual({ ok: false, reason: 'no_profile', model: 'unprofiled' });
-  });
-
-  it('uses an operator profile for a model the built-in table lacks', () => {
-    const custom: EmbeddingProfile = { ...OPENAI_TEXT_EMBEDDING_3_SMALL, model: 'custom', dimensions: 1024 };
-    const resolution = resolveEmbedding(
-      { ...noEmbeddingConfig, embeddingBaseUrl: 'http://embed.local/v1', embeddingModel: 'custom' },
-      { custom },
-    );
-    expect(resolution.ok && resolution.profile).toBe(custom);
-  });
-});
 
 describe('EmbeddingService — custom endpoint', () => {
   afterEach(() => {
@@ -198,7 +121,25 @@ describe('EmbeddingService — custom endpoint', () => {
       logger,
     );
 
-    await expect(service.embed('hello', 'document')).rejects.toThrow('Unexpected embedding dimensions: 1024');
+    const err = await service.embed('hello', 'document').catch((e: unknown) => e);
+    // Typed, so the drift check reads a narrower model as changed weights (#2023).
+    expect(err).toBeInstanceOf(EmbeddingDimensionError);
+    expect(err).toMatchObject({ expected: EMBEDDING_DIMENSIONS, actual: 1024 });
+    expect((err as Error).message).toContain('Unexpected embedding dimensions: 1024');
+  });
+
+  it('rejects a response with no vector with a plain error, not a dimension error', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ data: [] }) });
+    vi.stubGlobal('fetch', fetchMock);
+    const service = EmbeddingService.createWithEndpoint(
+      { baseUrl: 'http://embed.local/v1', model: 'm', apiKey: undefined },
+      profile,
+      logger,
+    );
+
+    const err = await service.embed('hello', 'document').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(EmbeddingDimensionError);
   });
 
   it('asks the server for the profile width and cuts to it', async () => {

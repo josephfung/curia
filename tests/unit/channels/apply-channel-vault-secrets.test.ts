@@ -20,6 +20,7 @@ function baseConfig(): Config {
     embeddingBaseUrl: undefined,
     embeddingModel: undefined,
     embeddingApiKey: undefined,
+    embeddingModelDir: '/srv/curia/models/embedding/all-MiniLM-L6-v2',
     logLevel: 'info',
     httpPort: 3000,
     apiToken: undefined,

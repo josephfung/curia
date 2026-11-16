@@ -197,6 +197,19 @@ run_infra() {
         pnpm --prefix "$REPO_ROOT" install --frozen-lockfile
     fi
 
+    # Bundled embedding model weights (#2023) for source runs (`pnpm local`, `pnpm dev`)
+    # and the integration tests that load the model. Idempotent: the fetch exits early
+    # when the files already verify, so re-runs cost nothing. Not fatal: the stack this
+    # script starts builds its own image, which downloads and verifies the weights itself,
+    # so a failure here only affects source runs and is worth a warning, not an abort.
+    info "Fetching the bundled embedding model weights..."
+    if pnpm --prefix "$REPO_ROOT" run fetch:embedder --dir "$REPO_ROOT/models/embedding"; then
+        success "Embedding model weights verified"
+    else
+        warn "Could not fetch the bundled embedding model weights. The Docker stack is unaffected."
+        hint "Before running Curia from source, run: pnpm fetch:embedder"
+    fi
+
     info "Running migrations..."
     if ! pnpm --prefix "$REPO_ROOT" run migrate; then
         error "Migrations failed. See the output above."

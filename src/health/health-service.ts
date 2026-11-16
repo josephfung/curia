@@ -32,6 +32,8 @@ import { grantSafeErrorFields, mayCarryGrantId } from '../principal-mailboxes/er
 import { migrationFailureReason, type FlatMailboxMigrationOutcome } from '../principal-mailboxes/migrate-flat-mailbox.js';
 import type { PrincipalMailboxReadiness } from '../skills/types.js';
 import type { MailboxOutageNotifier } from './mailbox-outage-notifier.js';
+import type { KnowledgeGraphHealth } from '../memory/kg-health.js';
+import { REEMBED_FORCE_COMMAND, type DriftOutcome } from '../memory/embedding-drift.js';
 
 export interface HealthServiceDeps {
   db: Pool;
@@ -120,6 +122,15 @@ export interface HealthServiceDeps {
   /** The inbox triage heartbeat's health (R67), read on every request. Absent, or null (the
    *  heartbeat is not running): skipped. */
   inboxTriageHealth?: () => { ok: boolean; detail?: string } | null;
+  /** Whether entity memory is running and why not (design §7). Absent (setup-mode boots):
+   *  the `knowledge_graph` check is skipped. */
+  knowledgeGraphHealth?: KnowledgeGraphHealth;
+  /**
+   * Re-runs the endpoint weight drift check (design §7) on the embeddings canary. Set only
+   * when entity memory runs on an endpoint source; the bundled stamp carries its weights
+   * hash. A narrow callback, so this service needs neither the pool nor the embedding service.
+   */
+  driftCheck?: () => Promise<DriftOutcome>;
 }
 
 /** Tavily usage endpoint: validates the key without spending search credits. */
@@ -264,6 +275,7 @@ export class HealthService {
     const sms_check = checkSms(smsHealth);
     const scheduler_check = checkScheduler(scheduler, liveness.schedulerMaxTickS, this.startedAt);
 
+    const kg = this.deps.knowledgeGraphHealth?.get();
     const checks: HealthResponse['checks'] = {
       db: db_check,
       bus: bus_check,
@@ -278,12 +290,18 @@ export class HealthService {
       signal_voice: signal_voice_check,
       scheduler: scheduler_check,
       principal_mailbox_triage: this.inboxTriageCheck(),
+      knowledge_graph: kg?.result ?? 'skipped',
     };
 
     const status = this.aggregateStatus(checks);
     const uptime_s = Math.floor((Date.now() - this.startedAt.getTime()) / 1_000);
 
-    return { status, uptime_s, checks };
+    return {
+      status,
+      uptime_s,
+      checks,
+      ...(kg?.reason ? { details: { knowledge_graph: kg.reason } } : {}),
+    };
   }
 
   /**
@@ -329,7 +347,17 @@ export class HealthService {
     // endpoint (OpenAI or the operator's own) would serve it.
     await run('embeddings', async () => {
       if (!embeddingsEnabled) return { name: 'embeddings', status: 'skipped' };
-      return this.canaryOutcome('embeddings', 'embeddings');
+      const calls = this.canaryOutcome('embeddings', 'embeddings');
+      if (!this.deps.driftCheck) return calls;
+      const drift = await this.canaryDrift(this.deps.driftCheck);
+      if (drift === 'changed') {
+        return {
+          name: 'embeddings',
+          status: 'fail',
+          detail: `the endpoint serves other weights than made the stored vectors; run ${REEMBED_FORCE_COMMAND}`,
+        };
+      }
+      return calls;
     });
 
     // Image generation canary — skipped when OpenAI is not configured.
@@ -633,6 +661,7 @@ export class HealthService {
       checks.signal_voice,
       checks.scheduler,
       checks.principal_mailbox_triage,
+      checks.knowledge_graph,
     ];
     if (nonCritical.some(c => c === 'fail')) return 'degraded';
 
@@ -655,6 +684,38 @@ export class HealthService {
     if (!model) return { name, status: 'skipped' };
 
     return this.canaryOutcome(tier, name);
+  }
+
+  /**
+   * Re-runs the endpoint drift check and records its outcome on the knowledge_graph check.
+   * Never switches the knowledge graph off: there is no runtime toggle, so a change found
+   * here fails health and logs the recovery command until an operator re-embeds.
+   */
+  private async canaryDrift(driftCheck: () => Promise<DriftOutcome>): Promise<DriftOutcome> {
+    const { logger, knowledgeGraphHealth } = this.deps;
+    let drift: DriftOutcome;
+    try {
+      drift = await driftCheck();
+    } catch (err) {
+      // checkEmbeddingDrift does not throw; a throw here is a wiring bug. Report it as
+      // unchecked rather than failing a canary that is about the endpoint.
+      logger.error({ err }, 'Embedding weight drift check threw; reporting it as unchecked');
+      drift = 'unchecked';
+    }
+    knowledgeGraphHealth?.recordDrift(drift);
+    if (drift === 'changed') {
+      logger.error(
+        `The embedding endpoint now serves other weights than made the stored knowledge-graph vectors. ` +
+        `Entity memory keeps running, but new vectors are not comparable with stored ones. ` +
+        `Stop Curia, run ${REEMBED_FORCE_COMMAND}, then start Curia.`,
+      );
+    } else if (drift === 'shifted') {
+      logger.warn(
+        `The embedding endpoint's weights shifted (e.g. re-quantised) under the same model name. ` +
+        `To re-embed with the current weights: stop Curia, run ${REEMBED_FORCE_COMMAND}, then start Curia.`,
+      );
+    }
+    return drift;
   }
 
   /**

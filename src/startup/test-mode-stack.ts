@@ -148,7 +148,6 @@ import { ConversationEntityState } from '../entity-context/conversation-entities
 import { OfficeIdentityService } from '../identity/service.js';
 import type { OfficeIdentity } from '../identity/types.js';
 import { BullpenService } from '../memory/bullpen.js';
-import { EmbeddingService } from '../memory/embedding.js';
 import { resolveKnowledgeGraphEmbedding } from '../memory/embedding-schema.js';
 import { EntityMemory } from '../memory/entity-memory.js';
 import { KnowledgeGraphStore } from '../memory/knowledge-graph.js';
@@ -1295,13 +1294,15 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     // The same gate as production boot, so the suites never run the knowledge graph on a
     // database production would refuse.
     const embedding = await resolveKnowledgeGraphEmbedding(
-      pool, { ...config, openaiApiKey, embeddingApiKey }, yamlConfig.embedding?.profiles, logger,
+      pool, { ...config, openaiApiKey, embeddingApiKey }, yamlConfig.embedding?.profiles, logger, { bus, modelRegistry },
     );
-    if (!embedding.ok && embedding.gate === 'schema') {
+    // A schema gate, an unusable bundled model or changed endpoint weights go in the run
+    // summary. A config gate is left out, as it was before the bundled model became the default.
+    if (!embedding.ok && (embedding.gate === 'schema' || embedding.gate === 'bundled' || embedding.gate === 'drift')) {
       warnings.push(`Entity memory is off: ${embedding.message}`);
     }
     if (embedding.ok) {
-      const embeddingService = EmbeddingService.createWithEndpoint(embedding.endpoint, embedding.profile, logger, bus, modelRegistry);
+      const embeddingService = embedding.service;
       const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
       entityMemory = new EntityMemory(kgStore, new MemoryValidator(kgStore, embeddingService), embeddingService, logger);
     }

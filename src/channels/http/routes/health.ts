@@ -48,6 +48,7 @@ export async function healthRoutes(
           signal_voice: 'skipped' as const,
           scheduler: 'fail' as const,
           principal_mailbox_triage: 'skipped' as const,
+          knowledge_graph: 'skipped' as const,
         },
       });
     }
