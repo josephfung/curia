@@ -39,11 +39,11 @@ tool_stubs:
   context-bridge-release:
     - match: {}
       return: { released: "{{entry:lunch_ask}}" }
-  # Mei is a contact already: creating her is answered with the existing record, as the
-  # handler's duplicate check would find it (refused unstubbed on the 2026-11-16 gate).
+  # Mei is a contact already: the handler refuses, naming her record (takenError in
+  # duplicate-refusal.ts). Refused as unstubbed on the 2026-11-16 gate.
   contact-create:
-    - match: { name: Mei Chen }
-      return: { contact_id: "{{contact:mei}}", display_name: Mei Chen, role: null, kg_node_id: null, identities_added: 0 }
+    - match: {}
+      error: 'That signal address is already on "Mei Chen" ({{contact:mei}}). No contact was created. Use that contact''s ID; contact-link-identity adds another address to it.'
 expected_behaviors:
   - id: leaves_the_question_open
     weight: critical
