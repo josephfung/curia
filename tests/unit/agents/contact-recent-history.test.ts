@@ -505,4 +505,50 @@ describe('AgentRuntime contact recent history (#1599)', () => {
     expect(block).toContain('no, you have the investor call then');
     expect(block).not.toContain(VOICE_GREETING_USER_MESSAGE);
   });
+
+  // Scenario 47b: a content-block rewrite now carries the drafting turn's sender context, so
+  // it is told who it writes to (the principal here, not the unresolved-sender LOW-TRUST
+  // rules). Its brief is still Curia's own text: it is not stored as the principal's words.
+  it('tells a rewrite who it writes to, without storing its brief as that person\'s words', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const llm = provider();
+    const memory = WorkingMemory.createInMemory();
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider: llm,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      memory,
+      timezone: 'America/Toronto',
+    });
+    runtime.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'signal:rewrite-47b',
+      channelId: 'signal',
+      senderId: '+15555550147',
+      content: '[OUTBOUND CONTENT FILTER — REWRITE REQUIRED] rewrite the blocked draft',
+      senderContext: { ...ALICE_SENDER, displayName: 'Avery', systemRole: 'principal', tier: 'principal', kind: 'principal' },
+      syntheticTurn: true,
+      toolAllowlist: [],
+      parentEventId: 'blocked-1',
+    }));
+
+    const system = messagesOf(llm.chat).filter(m => m.role === 'system').map(m => String(m.content)).join('\n');
+    expect(system).toContain('Current sender: Avery (principal)');
+    expect(system).not.toContain('LOW-TRUST');
+
+    const recalled = await memory.getContactRecentHistory({
+      contactId: ALICE,
+      agentId: 'coordinator',
+      excludeConversationId: 'signal:elsewhere',
+      since: new Date(Date.now() - 60 * 60 * 1000),
+    });
+    expect(recalled.some(t => t.content.includes('REWRITE REQUIRED'))).toBe(false);
+  });
 });
