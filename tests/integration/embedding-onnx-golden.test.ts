@@ -4,7 +4,13 @@
 // tests/fixtures/embedding-golden/minilm-l6.json was made once, outside the repo, with
 // @huggingface/transformers 4.3.2: pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2',
 // { dtype: 'q8' }), pooling 'mean', normalize true, from weights whose sha256 matches the
-// manifest. Regenerate it only when the pinned weights change.
+// manifest, on arm64 macOS. Regenerate it only when the pinned weights change.
+//
+// The tolerance is DRIFT_SAME_MIN, the cutoff the drift check uses for "same weights", not
+// an exact match: the q8 model's int8 kernels differ by CPU architecture, so the same
+// weights and code give slightly different vectors on x86_64 (CI measured a minimum cosine
+// of 0.9973 against this arm64-made fixture). A real backend fault (wrong pooling, a
+// tokenizer mismatch) lands far below that.
 //
 // No database: this lives under integration because it loads the real model. Locally it
 // skips without the weights; in CI, which runs `pnpm fetch:embedder` first, it never skips.
@@ -16,6 +22,7 @@ import { EmbeddingService } from '../../src/memory/embedding.js';
 import { BUNDLED_WEIGHTS_FILE, hashBundledWeights } from '../../src/memory/embedding-onnx.js';
 import { loadEmbedderManifest, verifyEmbedderFiles } from '../../src/memory/embedder-manifest.js';
 import { ALL_MINILM_L6_V2 } from '../../src/memory/embedding-profiles.js';
+import { DRIFT_SAME_MIN } from '../../src/memory/embedding-drift.js';
 import { createSilentLogger } from '../../src/logger.js';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
@@ -54,7 +61,7 @@ describe.skipIf(!weightsPresent && !process.env.CI)('bundled embedder golden vec
     async (text, expected) => {
       const actual = await service.embed(text, 'similarity');
       expect(actual).toHaveLength(expected.length);
-      expect(EmbeddingService.cosineSimilarity(actual, expected)).toBeGreaterThanOrEqual(0.9999);
+      expect(EmbeddingService.cosineSimilarity(actual, expected)).toBeGreaterThanOrEqual(DRIFT_SAME_MIN);
     },
   );
 });
