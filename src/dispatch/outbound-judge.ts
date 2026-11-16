@@ -60,13 +60,13 @@ export interface JudgeInput {
   principalIncluded: boolean;
   principalIsSoleRecipient: boolean;
   /**
-   * The principal directed this send (FilterCheckInput.principalDirected: a live principal
-   * turn or an approval of this exact action, computed by code from the task's verified
-   * originator, never from message text). When true the judge does not flag personal
-   * identifiers or financial details the principal chose to share; it still flags secrets
-   * and categories (a)-(c). Absent or false: the undirected prompt (fail-closed).
+   * The principal's own message that directed this send (FilterCheckInput.principalDirective):
+   * set only for a principal-directed send whose directing message the gateway read from the
+   * audit log, never from outbound text. The judge then releases personal identifiers and
+   * financial details that message asks to send; secrets and categories (a)-(c) are still
+   * flagged. Absent: the undirected prompt (fail-closed).
    */
-  principalDirected?: boolean;
+  principalDirective?: string;
   /** Telemetry correlation. */
   conversationId: string;
   channelId: string;
@@ -118,9 +118,7 @@ export class OutboundLlmJudge implements OutboundJudge {
       input.content,
       input.recipients,
       input.principalIncluded,
-      // Strict === true: only the gateway's boolean counts, so a missing or odd value
-      // keeps the undirected prompt.
-      input.principalDirected === true,
+      input.principalDirective,
     );
 
     const start = Date.now();

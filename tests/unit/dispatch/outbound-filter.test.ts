@@ -815,17 +815,19 @@ describe('Stage 2 judge delegation', () => {
     expect(judge.review).toHaveBeenCalledTimes(1);
   });
 
-  it('passes principalDirected to the judge only when the sender set it true (scenario 34d)', async () => {
+  it('passes the principal directive to the judge only on a principal-directed send (scenario 34d)', async () => {
     const judge: OutboundJudge = { review: vi.fn(async () => []) };
     const filter = filterWithJudge(judge);
     const send = { ...BASE_INPUT, content: 'Health card number below, as requested.', recipients: [armin, principalRcpt], principalIncluded: true, principalIsSoleRecipient: false };
-    await filter.check({ ...send, principalDirected: true });
-    await filter.check({ ...send, principalDirected: false });
-    await filter.check(send); // omitted: fail-closed
+    const principalDirective = 'Email Armin my health card number.';
+    await filter.check({ ...send, principalDirected: true, principalDirective });
+    // A directive without the directed flag releases nothing: both must agree.
+    await filter.check({ ...send, principalDirected: false, principalDirective });
+    await filter.check({ ...send, principalDirected: true }); // directed but the read failed
     const calls = vi.mocked(judge.review).mock.calls;
-    expect(calls[0]![0].principalDirected).toBe(true);
-    expect(calls[1]![0].principalDirected).toBe(false);
-    expect(calls[2]![0].principalDirected).toBe(false);
+    expect(calls[0]![0].principalDirective).toBe(principalDirective);
+    expect(calls[1]![0]).not.toHaveProperty('principalDirective');
+    expect(calls[2]![0]).not.toHaveProperty('principalDirective');
   });
 
   it('Stage 2 is a no-op pass when no judge is configured (back-compat)', async () => {
