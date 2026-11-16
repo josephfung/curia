@@ -48,7 +48,10 @@ export async function evaluateCases(
   judge: Judge,
   options?: {
     onCaseEval?: (name: string, index: number, total: number) => void;
-    /** "Today" as the agents saw it, so the judge can check relative dates. */
+    /**
+     * Fallback "today" for an execution without its own (CaseExecution.today), e.g. one
+     * rebuilt from older results. Live runs always carry the attempt's date.
+     */
     today?: string;
     concurrency?: number;
   },
@@ -90,6 +93,7 @@ export async function evaluateCases(
       failures,
       usage: sumBreakdowns([exec.usage, judgeUsage.snapshot()]),
       providerRetries: exec.providerRetries,
+      ...(exec.today ? { today: exec.today } : {}),
     };
     return result;
   });

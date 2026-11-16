@@ -255,6 +255,15 @@ Cases and fixtures name dates relative to the day the suite runs, in the princip
 
 A day is `today`, `today±N` or `next-<weekday>` (strictly after today), optionally `+N` days. A malformed placeholder fails when the case loads.
 
+Placeholders work in `expected_behaviors` descriptions and `failure_modes` too, so a date case can tell the judge the exact date it expects instead of leaving the arithmetic to the judge model, which gets weekdays wrong:
+
+```yaml
+- id: parse-next-friday
+  description: Interprets "next Friday" as {{day:next-friday}} or {{day:next-friday+7}}
+```
+
+**Which clock.** Each attempt reads one clock when its first turn is due, after that turn's `delay_ms`. Every day-based placeholder in the attempt resolves on it: the target, every turn's messages and stubs, the judge's expectations, and the judge's `## Today` line. So a case that crosses local midnight still names the same days throughout. Only `{{at:now…}}` follows each turn's own send time. A retry, gated or after a provider failure, starts again from the case file on a fresh clock.
+
 ### Known failures
 
 `known_failure: { issue: "#N" }` marks a case that catches a tracked bug. It still runs and is reported (`KNOWN`), but it doesn't fail the gate. A case that errors or isn't judged still fails, because that says nothing about the bug. When a marked case passes, the run warns that the marker may be stale. Remove it once the issue is fixed.

@@ -83,6 +83,8 @@ async function rejudgeSmoke(run: RunResult, judge: Judge, concurrency: number): 
       agentCalls: c.agentCalls,
       usage: emptyBreakdown(),
       providerRetries: [],
+      // The date this case's judge read; older files have only the run's, used below.
+      ...(c.today ? { today: c.today } : {}),
     })),
     judge,
     { ...(run.today ? { today: run.today } : {}), concurrency },
