@@ -348,6 +348,28 @@ describe('OutboundGateway', () => {
     ]);
   });
 
+  it('hands the filter principalDirected only when the sender set it (scenario 34d, Stage 2 judge)', async () => {
+    // Stage 2 relaxes identifier/financial flags on this boolean, so the gateway must pass
+    // exactly the send skill's verified value and default to false when it is omitted.
+    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+    });
+    const request = { channel: 'email' as const, to: 'armin@external.com', cc: ['ceo@example.com'], subject: 's', body: 'hello' };
+
+    await gateway.send(request, { principalDirected: true });
+    await gateway.send(request);
+
+    const checkSpy = mocks.contentFilter.check as ReturnType<typeof vi.fn>;
+    expect(checkSpy.mock.calls[0]![0].principalDirected).toBe(true);
+    expect(checkSpy.mock.calls[1]![0].principalDirected).toBe(false);
+  });
+
   it('deduplicates the principal repeated across To+CC so it counts as the sole recipient', async () => {
     // The principal appears in both To and CC (here with differing case). After
     // case-insensitive dedup this is an effectively single-recipient principal-only

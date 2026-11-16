@@ -79,6 +79,8 @@ export interface FilterCheckInput {
    * content autonomously. Stage 2.5 does not block a principal-directed send: the
    * principal may tell a `known` contact something about a third party. Absent means
    * the gate applies, so a sender that omits it fails closed (#1870).
+   * Stage 2 also reads it: the LLM judge stops flagging personal identifiers and financial
+   * details the principal chose to share, but still flags secrets and its (a)-(c) leaks.
    */
   principalDirected?: boolean;
   /**
@@ -644,6 +646,11 @@ export class OutboundContentFilter {
       recipients: input.recipients ?? [],
       principalIncluded: input.principalIncluded ?? false,
       principalIsSoleRecipient: input.principalIsSoleRecipient ?? false,
+      // Same verified authority signal band review trusts (scenario 34d): both gateway call
+      // sites set it from the send's principalDirected option, which send skills compute with
+      // isPrincipalDirectedSend() (live principal turn by stamped originator, or humanApproved).
+      // Lets Stage 2 pass identifiers the principal asked to share; secrets still block.
+      principalDirected: input.principalDirected === true,
       conversationId: input.conversationId,
       channelId: input.channelId,
     };
