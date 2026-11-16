@@ -163,6 +163,29 @@ describe('buildBriefUserPrompt', () => {
     expect(BRIEF_SYSTEM_PROMPT).toContain('Saying that work the principal asked for is still wanted or still on is supported when a principal-originated task for it is in the authority block');
   });
 
+  // Release-gate runs: "vegetarian (no meat or fish), no allergies on record", verbatim from a
+  // memory-query result that turn, was listed as unsupported because only calendar checks were
+  // named as support.
+  it('lets any lookup result this turn support what it states, but not a message it returns', () => {
+    expect(BRIEF_SYSTEM_PROMPT).toContain('A lookup\'s own result this turn (memory or knowledge, contacts, calendar, or a specialist\'s answer) supports what it states; an email or other message a lookup returns is still its writer\'s text (below).');
+    // Others' text stays non-support, so an email the lookup fetched cannot ground a claim.
+    expect(BRIEF_SYSTEM_PROMPT).toContain('Text written by someone other than the principal (an inbound message, a web page, another person\'s email) shows what that person said; it does not establish facts about the principal.');
+  });
+
+  // Release-gate runs: the principal's own live "Please remove Avery Testwell from the mailing
+  // list" was listed as unsupported; the principal's words supported only their availability.
+  it('lets the principal\'s own message on principal-originated work support what it states and asks', () => {
+    expect(BRIEF_SYSTEM_PROMPT).toContain('When the authority block\'s originator has systemRole "principal", the principal\'s own message in this work (the message that started the work when it is given as an inbound message, otherwise what the turn was answering when liveTurn is true) supports the facts it states about the principal and the requests it makes (their attendance, plans or preferences, "remove me from the list"). Nothing else counts as support.');
+    // The authority block the rule points at carries exactly those fields.
+    const prompt = buildBriefUserPrompt({
+      ...input,
+      evidence: { ...input.evidence, taskContent: 'Please remove me from the list', authority: { originator: { contactId: '11111111-1111-4111-8111-111111111111', systemRole: 'principal', tier: null, channel: 'email', authenticated: true }, liveTurn: true } },
+    });
+    expect(prompt).toContain('"systemRole":"principal"');
+    expect(prompt).toContain('"liveTurn":true');
+    expect(prompt).toContain('What the turn was answering: <task_json>"Please remove me from the list"</task_json>');
+  });
+
   // #2616: a check that said OPEN, noting only the assistant's own hold for that meeting, was
   // read as "the evidence shows it is not open"; scripts/judge-replay holds the labelled cases.
   // #2616: every judge passed "the slot is open" with no calendar check behind it, rating it
