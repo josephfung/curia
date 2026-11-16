@@ -61,6 +61,8 @@ CURIA_RELEASE_GATE=1 pnpm smoke --model <standard-tier model>        # terminal 
 CURIA_RELEASE_GATE=1 pnpm scenarios --model <standard-tier model>    # terminal 2, once smoke prints "Database: throwaway copy"; tests/scenarios/README.md
 ```
 
+Scenarios needs a database whose principal is Avery Testwell, the principal its cases are written for. It refuses one that is not and prints how to make a copy (tests/scenarios/README.md, "The scenario principal"); point its `DATABASE_URL` at that copy.
+
 `CURIA_RELEASE_GATE=1` marks the run as the release gate. The suites ignore it, but the maintainer's local guard refuses an unfiltered run without it (see Testing in CLAUDE.md).
 
 Run them side by side, smoke first: smoke copies the dev database, and Postgres copies a database only while nothing else is connected to it, so scenarios must start after the copy. Each suite runs 4 cases at a time (`--concurrency`) and prints its own spend by agent and judge. The gate is meant to be a quick regression sweep, not a slog: each case runs **once** (a few nondeterministic ones run 5 times; `tests/scenarios/README.md`, "The gate"). The last five-run gate (2026-11-16, 155 cases) took 107 minutes and about $7.50 estimated for scenarios alone; one run per case should take roughly a quarter of that. Record the actual time and spend with the results, and if the gate creeps back toward an hour, prune cases (`release_gate: false`) rather than accept it.

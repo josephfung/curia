@@ -66,8 +66,26 @@ out the cases marked `release_gate: false` and says how many it left out
 
 ### What it needs
 
-- `DATABASE_URL` pointing at a **migrated** database with a principal. The suite is meant
-  for the local dev database, the same one smoke uses.
+- `DATABASE_URL` pointing at a **migrated** database whose principal is the scenario
+  principal (below).
+
+#### The scenario principal
+
+The cases are written for **Avery Testwell** (`avery.testwell@example.test`); about 50 of
+them name Avery. A database whose principal is someone else, such as a dev database
+mirrored from a real deployment, makes the coordinator treat Avery as a stranger, and the
+principal-ask cases fail for the environment rather than the code (13 cases on the
+2026-11-16 gate). So an unfiltered run refuses to start unless the principal's name is
+Avery Testwell and they have that verified email; a `--case` / `--tags` / `--runs` run
+only warns. To set one up, copy the dev database and rename the copy's principal:
+
+```bash
+docker exec curia-postgres-1 psql -U curia -d postgres -c "CREATE DATABASE curia_scenarios TEMPLATE curia"
+docker exec curia-postgres-1 psql -U curia -d curia_scenarios -c "UPDATE contacts SET display_name='Avery Testwell', preferred_name='Avery' WHERE system_role='principal'; UPDATE contact_channel_identities SET channel_identifier='avery.testwell@example.test' WHERE channel='email' AND contact_id=(SELECT id FROM contacts WHERE system_role='principal');"
+export DATABASE_URL=postgres://curia:<password>@localhost:5432/curia_scenarios   # --env-file does not override it
+```
+
+Migrate the copy if the dev database is behind `main`. The refusal prints the same commands.
 - `SECRET_ENCRYPTION_KEY`. LLM keys come from the vault only (#911). The vault needs:
   - `openrouter_api_key`, for the judge (`openai/gpt-4o` through OpenRouter) and for
     OpenRouter models such as the production standard tier;
