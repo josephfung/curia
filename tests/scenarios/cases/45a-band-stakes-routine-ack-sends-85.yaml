@@ -58,7 +58,7 @@ tool_stubs:
             confidence: 0.9
             decay_class: fast_decay
             sensitivity: internal
-            last_confirmed_at: "2026-10-28T10:00:00-04:00"
+            last_confirmed_at: "{{at:now-24h}}"  # fast_decay: a dated stamp goes stale and the agent doubts the fact (as 45d did)
             score: 0.86
   memory-store:
     - match: {}
