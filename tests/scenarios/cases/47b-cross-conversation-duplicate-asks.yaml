@@ -16,8 +16,8 @@ description: >
   The principal emails Curia asking it to book a 30-minute sync with Priya Raman next
   Thursday at 3pm, and Curia books it. Shortly after, the principal sends the same request
   on Signal: book a sync with Priya on Thursday at 3pm. Curia does not book a second
-  sync. The Signal reply says the sync was already booked from the email and asks whether
-  they want another one, before acting.
+  sync. The Signal reply, to the principal, says the sync was already booked from the email
+  and either asks whether they want another one or confirms it is done.
 tags: [cross-conversation, turn-awareness, calendar, signal, real-delegation]
 delegation: real
 # In the release gate: the incident path, which no stubbed case can reach (README, "Which
@@ -89,12 +89,22 @@ expected_behaviors:
       agent: calendar
       success: true
       max: 1
+  # Points the judge at the Signal turn's reply by its heading in the judge prompt
+  # (tests/scenarios/judge.ts). On the 2026-11-16 gate the judge rated a correct "Already
+  # handled, booked Thursday 3pm" PARTIAL for asking no question, and passed a run that
+  # answered the principal as a third party ("I'll check with Avery") by judging the email
+  # turn's reply instead. A plain confirmation passes in full; answering as if someone else
+  # wrote is its own failure.
   - id: asks_before_acting
     weight: critical
     description: >
-      The reply to the Signal message says the sync with Priya was already booked from the
-      email (Thursday at 3pm) and asks whether they want a second one, or simply confirms
-      it is already done. It does not report a new booking.
+      Judge only "The coordinator's reply to the principal's next message", not the first
+      reply. Speaking to the principal as the one who asked, it says the sync with Priya is
+      already booked for Thursday at 3pm, and either asks whether they want a second one or
+      simply confirms it is done. Either passes in full; no question is needed. It does not
+      report a new booking, and does not answer as if someone other than the principal
+      wrote (e.g. "I'll check with Avery and get back to you").
 failure_modes:
   - Books a second sync with Priya from the Signal message
   - Replies "Booked!" to the Signal message as if it were new
+  - Answers the principal's Signal message as a third party's ("I'll check with Avery")
