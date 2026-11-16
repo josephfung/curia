@@ -200,9 +200,11 @@ export function splitSections(body: string): { preamble: string; sections: DocSe
   };
 
   for (const line of lines) {
-    // One whitespace character, then the rest of the line, trimmed below. Same matches as the
-    // old /^##\s+(.+?)\s*$/, without its overlapping quantifiers (polynomial ReDoS, CodeQL 373).
-    const sectionMatch = /^##\s(.+)$/.exec(line);
+    // One whitespace character, then the rest of the line, trimmed below: the old
+    // /^##\s+(.+?)\s*$/ without its overlapping quantifiers (polynomial ReDoS, CodeQL 373).
+    // Lines split on '\n' keep a CRLF document's '\r', which `.` does not match but the old
+    // trailing \s* absorbed, so drop it first or every CRLF heading would be lost.
+    const sectionMatch = /^##\s(.+)$/.exec(line.endsWith('\r') ? line.slice(0, -1) : line);
     if (sectionMatch) {
       flush();
       currentHeading = sectionMatch[1]!.trim();

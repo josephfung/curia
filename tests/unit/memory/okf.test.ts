@@ -146,6 +146,11 @@ Intro text.
     expect(preamble).toBe('');
   });
 
+  it('reads headings in a CRLF document', () => {
+    const { sections } = splitSections('intro\r\n## First\r\nbody\r\n## Second \r\n');
+    expect(sections.map((s: { heading: string }) => s.heading)).toEqual(['First', 'Second']);
+  });
+
   it('splits a long run of spaces after ## in linear time (CodeQL 373)', () => {
     const line = `##${' '.repeat(50_000)}x${' '.repeat(50_000)}!`;
     const started = performance.now();
