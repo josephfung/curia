@@ -17,6 +17,14 @@ describe('resolveDatePlaceholders', () => {
     expect(resolveDatePlaceholders('{{date:today}}', TZ, new Date('2026-10-03T02:00:00Z'))).toBe('2026-10-02');
   });
 
+  it('takes "today" from dayClock when given, keeping now for {{at:…}}', () => {
+    // The turn runs just past midnight; the case's day began on the 2nd.
+    const turn = new Date('2026-10-03T04:00:30Z'); // 00:00:30 on the 3rd in Toronto
+    const dayClock = new Date('2026-10-03T03:59:59Z'); // 23:59:59 on the 2nd
+    expect(resolveDatePlaceholders('{{date:today}} {{at:now}}', TZ, turn, dayClock))
+      .toBe('2026-10-02 2026-10-03T00:00:00.000-04:00');
+  });
+
   it('takes next-<weekday> as strictly after today', () => {
     expect(resolveDatePlaceholders('{{date:next-wednesday}}', TZ, NOW)).toBe('2026-10-07');
     expect(resolveDatePlaceholders('{{date:next-friday}}', TZ, NOW)).toBe('2026-10-09');
