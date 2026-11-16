@@ -5,6 +5,8 @@ description: >
   A weekly Monday 9am pipeline-review job exists. The principal asks to also run it on
   Fridays at 4pm. That is a new job (scheduler-create); the Monday job is left alone.
 tags: [scheduler]
+# On demand since the 2026-11-16 gate prune: other half of the scheduler rule; 05a gates it.
+release_gate: false
 inbound:
   from: principal
   content: Also run the pipeline review on Fridays at 4pm.

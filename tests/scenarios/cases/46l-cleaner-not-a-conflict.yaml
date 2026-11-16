@@ -14,6 +14,8 @@ description: >
   that the principal is free, and may say the cleaner is there, which they've said doesn't block
   them. It should not report a conflict, suggest another time, or book anything.
 tags: [specialist-calendar, calendar, availability, standing-rules, multi-mailbox]
+# On demand since the 2026-11-16 gate prune: low-risk calendar choice; 46m gates it.
+release_gate: false
 agent: calendar
 stub_sets: [calendar-specialist, calendar-office]
 seed:

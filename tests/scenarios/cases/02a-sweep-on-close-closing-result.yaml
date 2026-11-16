@@ -11,6 +11,8 @@ description: >
   the specialist reports the shortlist is final. Releasing the entry is the platform's
   job, so the coordinator does not release it.
 tags: [outbound-context, lifecycle]
+# On demand since the 2026-11-16 gate prune: release rule unit-tested (skills/delegate/outbound-entry.test.ts); 02b covers routing.
+release_gate: false
 seed:
   outbound_context:
     - key: vendor

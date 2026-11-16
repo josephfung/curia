@@ -9,6 +9,8 @@ description: >
   bare "Yes". The matching entry has delegation_hint ceo-inbox, so the coordinator must
   hand the reply to ceo-inbox with the entry id rather than act on it or answer it.
 tags: [outbound-context, routing, transfer-ownership]
+# On demand since the 2026-11-16 gate prune: same transfer-ownership rule as 01c and 16a.
+release_gate: false
 stub_sets: [human-channels]
 seed:
   outbound_context:

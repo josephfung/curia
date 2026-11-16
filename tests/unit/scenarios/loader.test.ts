@@ -935,7 +935,8 @@ describe('the authority-aware PII cases (#2312)', () => {
     for (const c of pii) {
       expect(c.throughGateway, c.name).toBe(true);
       expect(c.autonomy?.gating, c.name).toBe('band');
-      expect(c.releaseGate, c.name).toBe(true);
+      // 34p runs on demand since the 2026-11-16 gate prune (34k and 34n gate the ask).
+      expect(c.releaseGate, c.name).toBe(!c.sourceFile.includes('/34p-'));
     }
     expect(ids(pii.filter(c => c.autonomy?.score === 74))).toEqual(['34c', '34f', '34k', '34n', '34o', '34p', '34q']);
     expect(ids(pii.filter(c => c.autonomy?.score === 84))).toEqual(['34a', '34b', '34d', '34e', '34g', '34h', '34i', '34j', '34l', '34m']);
@@ -987,7 +988,7 @@ describe('the authority-aware PII cases (#2312)', () => {
   it('are in the release gate, which still leaves out the on-demand cases', () => {
     const gate = selectRunCases(committed, {});
     const gated = new Set(gate.cases.map(c => c.name));
-    for (const c of pii) expect(gated.has(c.name), c.name).toBe(true);
+    for (const c of pii) expect(gated.has(c.name), c.name).toBe(c.releaseGate);
     const onDemand = committed.filter(c => !c.releaseGate);
     expect(onDemand.length).toBeGreaterThan(0);
     for (const c of onDemand) expect(gated.has(c.name), c.name).toBe(false);

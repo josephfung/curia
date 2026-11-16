@@ -13,6 +13,8 @@ description: >
   is on file and what it did. Recording the new address is fine, since the principal
   stated it.
 tags: [specialist-contacts, contacts, conflict]
+# On demand since the 2026-11-16 gate prune: flag-not-overwrite rule; 33b gates it.
+release_gate: false
 agent: contacts
 timeout_seconds: 300
 seed:

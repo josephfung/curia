@@ -13,6 +13,8 @@ description: >
   the principal hears about the recommendations through those tasks. It must not approve or
   decline a recommendation, or file its own task for one.
 tags: [specialist-contacts, contacts, grants, scheduler]
+# On demand since the 2026-11-16 gate prune: narrow scan job.
+release_gate: false
 agent: contacts
 inbound:
   from: scheduler

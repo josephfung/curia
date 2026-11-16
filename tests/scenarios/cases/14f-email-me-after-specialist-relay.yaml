@@ -13,6 +13,8 @@ description: >
   for it by email instead. Whether or not it routes the reply to ceo-inbox, the email goes
   out from Curia's own account with email-send to the principal, never as a send-draft.
 tags: [email, routing, outbound-context, recipient]
+# On demand since the 2026-11-16 gate prune: incident fixed in code (draft-compose refuses principal-only drafts); 15 covers nothing-sent.
+release_gate: false
 stub_sets: [human-channels]
 seed:
   outbound_context:

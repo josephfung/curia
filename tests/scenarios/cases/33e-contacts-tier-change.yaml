@@ -9,6 +9,8 @@ description: >
   tier to trusted with contact-set-tier (not grant individual permissions), and confirm,
   with a <resolved_entities> block carrying her contact ID.
 tags: [specialist-contacts, contacts, tiers]
+# On demand since the 2026-11-16 gate prune: tier change, low signal.
+release_gate: false
 agent: contacts
 seed:
   contacts:

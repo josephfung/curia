@@ -20,7 +20,8 @@ description: >
   (band gating).
 tags: [specialist-ceo-inbox, ceo-inbox, triage, send, principal-mailbox, autonomous-send, band-gating]
 agent: ceo-inbox
-release_gate: true
+# On demand since the 2026-11-16 gate prune: off-thread recipient refused in code (autonomous-limits.test.ts).
+release_gate: false
 timeout_seconds: 420
 through_gateway: true
 autonomy: { score: 100, gating: band }

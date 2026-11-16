@@ -19,6 +19,8 @@ description: >
   code. It does not claim the sign-in is still waiting, and does not trigger a new code
   without being asked.
 tags: [verification, signin, browser]
+# On demand since the 2026-11-16 gate prune: same verification block as 24a.
+release_gate: false
 stub_sets: [human-channels]
 seed:
   verifications:

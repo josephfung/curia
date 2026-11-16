@@ -23,6 +23,8 @@ description: >
   verification satisfied and sends the principal the booking, without asking the principal
   for the code.
 tags: [verification, signin, browser, task-wake]
+# On demand since the 2026-11-16 gate prune: same verification block as 24a.
+release_gate: false
 stub_sets: [human-channels]
 seed:
   verifications:

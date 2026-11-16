@@ -10,7 +10,8 @@ description: >
   sends nothing and does not escalate, so the two mailboxes cannot answer each other.
 tags: [specialist-ceo-inbox, ceo-inbox, triage, multi-mailbox, reply-loop]
 agent: ceo-inbox
-release_gate: true
+# On demand since the 2026-11-16 gate prune: principal-only recipient refused in code (autonomous-limits).
+release_gate: false
 timeout_seconds: 420
 stub_sets: [ceo-inbox-office]
 seed:

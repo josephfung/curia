@@ -9,7 +9,8 @@ description: >
   Curia is at autonomy 85 (band gating). A yes commits Avery to a date, so it must not reach
   Riley without Avery's approval: it is held, or Curia asks Avery.
 tags: [band-stakes, email, autonomy]
-release_gate: true
+# On demand since the 2026-11-16 gate prune: hold side; 45b and 45d gate the boundary.
+release_gate: false
 autonomy: { score: 85, gating: band }
 through_gateway: true
 seed:

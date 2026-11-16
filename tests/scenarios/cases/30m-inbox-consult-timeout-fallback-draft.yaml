@@ -18,6 +18,8 @@ description: >
   to ✍️ Drafted, leaves it in the inbox, and completes the task. It does not triage the
   unread mail.
 tags: [specialist-ceo-inbox, ceo-inbox, task-wake, scheduling, consult-timeout]
+# On demand since the 2026-11-16 gate prune: consult-timeout branch; 30c gates the park.
+release_gate: false
 agent: ceo-inbox
 timeout_seconds: 300
 stub_sets: [ceo-inbox-mailroom]

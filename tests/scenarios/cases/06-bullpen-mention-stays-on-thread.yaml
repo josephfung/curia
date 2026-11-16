@@ -12,6 +12,8 @@ description: >
   competitor brief is done and saved, and it asks the coordinator to acknowledge. The
   acknowledgement belongs on the thread.
 tags: [bullpen, channel]
+# On demand since the 2026-11-16 gate prune: plain bullpen ack; 06b gates the incident path.
+release_gate: false
 stub_sets: [human-channels]
 seed:
   bullpen:

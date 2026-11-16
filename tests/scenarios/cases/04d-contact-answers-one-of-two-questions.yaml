@@ -9,6 +9,8 @@ description: >
   photos came through. She replies "Thur Nov 5 works for me". The coordinator closes the
   lunch question and leaves the photos question open.
 tags: [reply-shaped, audience, outbound-context]
+# On demand since the 2026-11-16 gate prune: variant of 04c/04e.
+release_gate: false
 stub_sets: [human-channels]
 timeout_seconds: 240
 seed:

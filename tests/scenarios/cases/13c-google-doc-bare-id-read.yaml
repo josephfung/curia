@@ -8,6 +8,8 @@ description: >
   gives. The coordinator activates its Google Workspace tools, reads that Doc, and
   answers from it.
 tags: [google-workspace, skill-activation]
+# On demand since the 2026-11-16 gate prune: activation variant; 13a gates it.
+release_gate: false
 inbound:
   from: principal
   content: What launch date does doc 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge give for the Atlas release?

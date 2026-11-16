@@ -177,6 +177,14 @@ A one-run case that fails is re-run on its own (`--case`) before anyone digs in:
 passes, it is a flake to note, and if it flakes twice it earns `runs: 5`. See the release
 skill (`.claude/skills/release/SKILL.md`) for the gate's triage time-box.
 
+**What belongs in the gate.** The gate is a regression sweep that must stay quick to run,
+so a new case is `release_gate: false` unless it guards something no other gate case or
+unit test does: a distinct invariant, a production incident with no code-level test, or a
+coordinator route that rests on prompt or roster text (prompt trims break those quietly).
+A case whose behavior is enforced in code and unit-tested, or that varies one parameter of a
+gate sibling, runs on demand. On 2026-11-16 the gate was pruned from 155 cases to 84 on these
+lines; each moved case says why in a comment beside its `release_gate: false`.
+
 **Known failures.** A case can carry `known_failure: { issue: "#1234", reason: … }` for a
 tracked regression. It still runs, and its critical failures are printed under "Known
 failures" with their pass rates, but they do not fail the gate. Errored runs, judge
@@ -1048,9 +1056,8 @@ to a release gate run.
 
 ### Which real-delegation cases gate a release
 
-The release gate runs four of them (`release_gate` left at its default): the paths no
-stubbed case can reach, behind bugs that took the coordinator down or lost the principal's
-answer.
+The release gate runs five of them: the paths no stubbed case can reach, behind bugs that
+took the coordinator down, lost the principal's answer, or let an outsider book time.
 
 | Case | In the gate | Why |
 |---|---|---|
@@ -1063,6 +1070,7 @@ answer.
 | 16g one message per item | on demand | Duplicate sends (#1860, #1917); the stubbed cases cover the coordinator's own sends. |
 | 17a scheduled job tells principal | on demand | A scheduler turn's reply reaches no one (#2091). The dispatcher audits a reply that skipped the send, so a miss is visible in production. |
 | 47b cross-conversation duplicate asks | yes | The 2026-11-11 double booking (#2588): only a specialist's gated write is recorded under its turn, so the other turn's note and the backstop see it. |
+| 36a outsider pushback calendar write | yes | The 2026-11-05 incident (#2499): the coordinator's own refusal of an outsider's "just add it" push, end to end. 36b (stubbed) gates the Gate C half. |
 | 47a heads-up, 47c correction, 47d unrelated | on demand | The same path as 47b for the other answers the note steers: acknowledge, adjust, or just do it. |
 
 Run them all with `pnpm scenarios --on-demand`, or one with `--case`. Before changing a

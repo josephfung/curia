@@ -7,6 +7,8 @@ description: >
   gone from the personal account because it is about personal taxes. ceo-inbox should move the
   draft to the personal mailbox and store the account preference for this contact and topic.
 tags: [ceo-inbox, delegated-mode, specialist, specialist-ceo-inbox, mailbox-choice, multi-mailbox, memory]
+# On demand since the 2026-11-16 gate prune: low-risk mailbox choice; 46a gates it.
+release_gate: false
 agent: ceo-inbox
 stub_sets: [ceo-inbox-office]
 seed:

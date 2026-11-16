@@ -6,6 +6,8 @@ description: >
   Thursday works. The principal approves and says to send it. The entry carries
   delegation_hint ceo-inbox, so the approval belongs to ceo-inbox.
 tags: [outbound-context, routing, transfer-ownership, voice-parity]
+# On demand since the 2026-11-16 gate prune: same transfer-ownership rule as 01c and 16a.
+release_gate: false
 stub_sets: [human-channels]
 seed:
   outbound_context:

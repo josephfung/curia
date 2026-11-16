@@ -6,7 +6,8 @@ description: >
   The principal confirmed the read-back of yesterday morning's drafts but asked to go one by one: skip the draft to Jo Park at Acme and send the other two (Ruth Alder, Sam Kerr). ceo-inbox sends those two and leaves Acme and the older Lee Tan draft unsent. Curia is at autonomy 85 (band gating).
 tags: [specialist-ceo-inbox, ceo-inbox, delegated-mode, drafts, send, principal-mailbox, band-gating]
 agent: ceo-inbox
-release_gate: true
+# On demand since the 2026-11-16 gate prune: one-by-one variant of 30w.
+release_gate: false
 through_gateway: true
 autonomy: { score: 85, gating: band }
 stub_sets: [ceo-inbox-mailroom, principal-drafts-morning]

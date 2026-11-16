@@ -10,6 +10,8 @@ description: >
   with Dana went through work and she is on the work domain. calendar should book it on the
   work calendar and say nothing about which account it used.
 tags: [specialist-calendar, calendar, mailbox-choice, multi-mailbox]
+# On demand since the 2026-11-16 gate prune: low-risk calendar choice; 46m gates it.
+release_gate: false
 agent: calendar
 stub_sets: [calendar-specialist, calendar-office]
 seed:

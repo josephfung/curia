@@ -17,6 +17,8 @@ description: >
   them (no "pending your calendar" qualifier, since holds are placed), moves the email to
   ✍️ Drafted, archives it, and completes the task.
 tags: [specialist-ceo-inbox, ceo-inbox, task-wake, scheduling, consult-timeout, resume-mode]
+# On demand since the 2026-11-16 gate prune: consult-timeout branch; 30c gates the park.
+release_gate: false
 agent: ceo-inbox
 timeout_seconds: 300
 stub_sets: [ceo-inbox-mailroom]

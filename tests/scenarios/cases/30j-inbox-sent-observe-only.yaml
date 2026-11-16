@@ -12,6 +12,8 @@ description: >
   task-completion-from-sent, reports both results with scheduler-report, and does nothing
   else: it does not list or triage the unread mail.
 tags: [specialist-ceo-inbox, ceo-inbox, scheduler, sent-observe]
+# On demand since the 2026-11-16 gate prune: narrow job-only case.
+release_gate: false
 agent: ceo-inbox
 stub_sets: [ceo-inbox-mailroom]
 inbound:

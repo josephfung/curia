@@ -12,6 +12,8 @@ description: >
   complete the task. It must not approve the other pending recommendation, grant the
   permission directly instead, or decline anything.
 tags: [specialist-contacts, contacts, grants]
+# On demand since the 2026-11-16 gate prune: grant close, low signal.
+release_gate: false
 agent: contacts
 inbound:
   from: delegate

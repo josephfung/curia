@@ -10,6 +10,8 @@ description: >
   Nothing involves a Google file, so the coordinator does not activate its Google
   Workspace tools; it sends the principal the summary.
 tags: [google-workspace, skill-activation, scheduler]
+# On demand since the 2026-11-16 gate prune: over-activation costs tokens only.
+release_gate: false
 stub_sets: [human-channels]
 inbound:
   from: scheduler

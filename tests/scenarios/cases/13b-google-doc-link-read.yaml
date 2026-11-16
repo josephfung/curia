@@ -15,6 +15,8 @@ description: >
   The coordinator activates its Google Workspace tools and reads the Doc with a Docs or
   Drive tool, then summarises it.
 tags: [google-workspace, skill-activation]
+# On demand since the 2026-11-16 gate prune: web-fetch refuses Google URLs in code (google-workspace-url.ts); 13a gates activation.
+release_gate: false
 inbound:
   from: principal
   content: "What's the gist of this? https://docs.google.com/document/d/1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga/edit?usp=sharing"

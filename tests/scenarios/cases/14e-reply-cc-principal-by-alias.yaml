@@ -13,6 +13,8 @@ description: >
   The coordinator replies with email-reply on that message and copies the principal by
   passing "principal" in cc.
 tags: [email, recipient]
+# On demand since the 2026-11-16 gate prune: raw addresses refused in code (send-by-reference.test.ts); 14a gates the alias.
+release_gate: false
 stub_sets: [human-channels]
 seed:
   contacts:

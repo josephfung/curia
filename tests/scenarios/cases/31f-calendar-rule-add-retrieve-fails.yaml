@@ -11,6 +11,8 @@ description: >
   calendar's pinned context shows it as unavailable. calendar should write nothing and report
   that the rule could not be added because the existing rules could not be read.
 tags: [specialist-calendar, rules]
+# On demand since the 2026-11-16 gate prune: rules-doc management, low risk.
+release_gate: false
 agent: calendar
 stub_sets: [calendar-specialist, calendar-office]
 seed:

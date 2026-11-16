@@ -12,6 +12,8 @@ description: >
   rule's section to 30 minutes, keeping its Applies to line and active status, leave the
   other two rules alone, and confirm the change. It should not schedule anything.
 tags: [specialist-calendar, rules]
+# On demand since the 2026-11-16 gate prune: rules-doc management, low risk.
+release_gate: false
 agent: calendar
 stub_sets: [calendar-specialist, calendar-office]
 seed:

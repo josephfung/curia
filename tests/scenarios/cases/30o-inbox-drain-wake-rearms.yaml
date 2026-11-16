@@ -13,6 +13,8 @@ description: >
   re-arms the same drain task with task-update and a new wake_at. It creates no second
   drain task and does not complete this one.
 tags: [specialist-ceo-inbox, ceo-inbox, task-wake, triage, inbox-drain]
+# On demand since the 2026-11-16 gate prune: drain-wake bookkeeping, low signal.
+release_gate: false
 agent: ceo-inbox
 timeout_seconds: 300
 stub_sets: [ceo-inbox-mailroom, deferred-work]

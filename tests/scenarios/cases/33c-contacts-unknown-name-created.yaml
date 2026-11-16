@@ -10,6 +10,8 @@ description: >
   briefing that says she was newly created from a name only, followed by a
   <resolved_entities> block carrying the new contact ID.
 tags: [specialist-contacts, contacts, briefing]
+# On demand since the 2026-11-16 gate prune: briefing variant; 33a gates it.
+release_gate: false
 agent: contacts
 inbound:
   from: delegate
