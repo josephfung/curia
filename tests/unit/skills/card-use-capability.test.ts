@@ -6,7 +6,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import pino from 'pino';
 import { ToolRegistry } from '../../../src/skills/registry.js';
-import { ExecutionLayer } from '../../../src/skills/execution.js';
+import { ExecutionLayer, CARD_USE_ALLOWED_TOOLS } from '../../../src/skills/execution.js';
+import { discoverToolManifests } from '../../../src/skills/loader.js';
 import type { CardUseCapability } from '../../../src/secrets/card-use-service.js';
 import type { ToolManifest } from '../../../src/skills/types.js';
 import { CardUseConfirmHandler, CARD_USE_CONFIRM_REFUSAL } from '../../../skills/web/tools/card-use-confirm/handler.js';
@@ -99,15 +100,21 @@ describe('cardUse capability allowlist', () => {
   });
 });
 
-describe('approval tools that settle a card request', () => {
+describe('every card-use allowlisted tool declares cardUse', () => {
   // approve-action declines a card request whose replay failed, and deny-action and
   // dismiss-action decline a denied or dismissed one, all through ctx.cardUse. The execution
   // layer injects only declared capabilities, so without the declaration ctx.cardUse is
   // always undefined and the request is left open ("cardUse not wired"). A version-bump
-  // revert once dropped it from all three.
-  it.each(['approve-action', 'deny-action', 'dismiss-action'])('%s declares cardUse as an optional capability', (tool) => {
-    const path = resolve(import.meta.dirname, `../../../skills/autonomy/tools/${tool}/tool.json`);
-    const m = JSON.parse(readFileSync(path, 'utf-8')) as ToolManifest;
-    expect(m.optional_capabilities ?? []).toContain('cardUse');
+  // revert once dropped it from all three. The list comes from the allowlist itself, so a
+  // tool added there without a manifest declaration fails here.
+  const manifests = new Map(
+    discoverToolManifests(resolve(import.meta.dirname, '../../../skills'))
+      .filter(t => t.manifest !== undefined)
+      .map(t => [t.name, t.manifest!] as const),
+  );
+  it.each([...CARD_USE_ALLOWED_TOOLS])('%s', (tool) => {
+    const m = manifests.get(tool);
+    expect(m, `${tool} has no manifest on disk`).toBeDefined();
+    expect([...(m!.capabilities ?? []), ...(m!.optional_capabilities ?? [])]).toContain('cardUse');
   });
 });

@@ -37,25 +37,40 @@ describe('bundle tool membership', () => {
     }
 
     const unlisted: string[] = [];
-    for (const t of discoverToolManifests(SKILLS_DIR)) {
-      // Only nested tools belong to a bundle: skills/<bundle>/tools/<name>.
-      const rel = path.relative(SKILLS_DIR, t.dir).split(path.sep);
-      if (rel.length !== 3 || rel[1] !== 'tools') continue;
-      const [bundle, , dirName] = rel as [string, string, string];
-      const key = `${bundle}/${dirName}`;
+    for (const [key, toolName] of nestedTools()) {
       if (key in NOT_BUNDLE_MEMBERS) continue;
-      if (!listed.get(bundle)?.has(t.metadata?.name ?? dirName)) unlisted.push(key);
+      const [bundle] = key.split('/') as [string];
+      if (!listed.get(bundle)?.has(toolName)) unlisted.push(key);
     }
 
     expect(unlisted).toEqual([]);
   });
 
-  it('keeps every exception pointing at a tool that is still unlisted', () => {
+  it('finds nested bundle tools at all', () => {
+    // Without this, a layout change that matched nothing would leave the check above vacuous.
+    expect(nestedTools().has('web/card-use-request')).toBe(true);
+  });
+
+  it('keeps every exception pointing at a tool that exists and is still unlisted', () => {
     // A stale exception would quietly exempt a future tool reusing the name.
     for (const key of Object.keys(NOT_BUNDLE_MEMBERS)) {
       const [bundle, tool] = key.split('/') as [string, string];
+      expect(nestedTools().has(key), `${key} is not a tool directory`).toBe(true);
       const skill = discoverSkillManifests(SKILLS_DIR).find(s => s.name === bundle);
-      expect(skill?.metadata?.tools ?? [], key).not.toContain(tool);
+      expect(skill?.metadata, `${bundle} SKILL.md did not parse`).toBeTruthy();
+      expect(skill!.metadata!.tools, key).not.toContain(tool);
     }
   });
 });
+
+/** Nested bundle tools, `<bundle>/<dir>` → tool name. Only skills/<bundle>/tools/<dir> belongs to a bundle. */
+function nestedTools(): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const t of discoverToolManifests(SKILLS_DIR)) {
+    const rel = path.relative(SKILLS_DIR, t.dir).split(path.sep);
+    if (rel.length !== 3 || rel[1] !== 'tools') continue;
+    const [bundle, , dirName] = rel as [string, string, string];
+    out.set(`${bundle}/${dirName}`, t.metadata?.name ?? dirName);
+  }
+  return out;
+}
