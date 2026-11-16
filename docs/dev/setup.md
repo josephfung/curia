@@ -61,8 +61,8 @@ This guide is organized into three tiers. Start with the minimum and add service
 
 | Tier | Services | What you get |
 |---|---|---|
-| **1 - Minimum** | Anthropic + Postgres | Agents running, CLI and web app working, web research (keyless) |
-| **2 - Recommended** | + Nylas + embeddings (OpenAI or your own endpoint) | Email channel active, entity memory and semantic search working |
+| **1 - Minimum** | Anthropic + Postgres | Agents running, CLI and web app working, web research (keyless), entity memory on the bundled embedding model |
+| **2 - Recommended** | + Nylas, optionally another embedding model | Email channel active |
 | **3 - Full** | + Signal | Encrypted Signal messaging |
 
 Complete each tier before moving to the next. Web search needs no key; a Tavily key is
@@ -113,7 +113,18 @@ for you:
    the documented env-fallback exception), so this runs before first boot to
    avoid an empty-vault failure.
 7. Runs `pnpm install --frozen-lockfile` if `node_modules/` is missing
-   (skipped on re-runs).
+   (skipped on re-runs), then `pnpm fetch:embedder`.
+
+   The stack this script starts builds the image locally from your checkout
+   (`docker-compose.dev.yml`), and that build downloads and verifies the bundled
+   embedding model itself. `pnpm fetch:embedder` is for running Curia from source
+   (`pnpm local`, `pnpm dev`) and for the integration tests that load the model: it
+   downloads the pinned `all-MiniLM-L6-v2` files into `models/embedding/` (gitignored,
+   about 24 MB) and verifies their checksums. It returns at once when the files already
+   verify, so re-runs cost nothing. If it fails (for example, Hugging Face is
+   unreachable), setup warns and carries on, since the Docker stack does not need these
+   files; run `pnpm fetch:embedder` yourself before a source run. Without them a source
+   run boots with entity memory off, and the log names this command.
 8. Brings up the full stack (`docker compose up -d`) and polls Curia's
    healthcheck so the success banner only fires once the app is actually
    responding.
@@ -179,13 +190,13 @@ full design is documented in
 
 > **Checkpoint:** Curia is running, your identity is configured, and the
 > coordinator is personalized. Stop here or continue to Tier 2 for email
-> and embeddings.
+> and, optionally, a different embedding model.
 
 ---
 
 ## Adding secrets after setup
 
-Tiers 2 and 3 add credentials (Nylas, embeddings, Signal), and the optional
+Tiers 2 and 3 add credentials (Nylas, an embedding server's key, Signal), and the optional
 Tavily key raises web search limits. These are
 **secrets**, and most of them resolve from the encrypted vault only (see
 [ADR-021](../adr/021-vault-only-secret-resolution.md)) — setting the key in
@@ -232,7 +243,7 @@ Two things to know before relying on a removal:
 
 ## Tier 2 - Recommended
 
-Adds the email channel and knowledge graph embeddings. This gives you a realistic development environment close to how Curia is actually used.
+Adds the email channel, and optionally another embedding model. This gives you a realistic development environment close to how Curia is actually used.
 
 ### Nylas (Email)
 
@@ -271,15 +282,20 @@ Calendar and the `ceo-inbox` tools work in the principal's own mailbox, through 
 
 ### Embeddings
 
-An embedding model powers entity memory and semantic search in the knowledge graph. Without an embedding source, entity memory is off, and the knowledge graph, the sensitivity classifier and the setup wizard with it. The scenario suite (`pnpm scenarios`) needs `openrouter_api_key` in the vault for its judge, and a working embedding source, either route below (see [behavior-tests.md](behavior-tests.md) and `tests/scenarios/README.md`).
+An embedding model powers entity memory and semantic search in the knowledge graph. Curia
+ships one: with no embedding variables set, it runs the bundled `all-MiniLM-L6-v2`
+in-process, with no key and no network call ([ADR-065](../adr/065-bundled-in-process-embedding-model.md)).
+A source run needs its weights (`pnpm fetch:embedder`, Tier 1). If entity memory is off,
+the knowledge graph, the sensitivity classifier and the setup wizard are off with it, and
+`/api/health` says why in `details.knowledge_graph`. The scenario suite (`pnpm scenarios`)
+needs `openrouter_api_key` in the vault for its judge, and a working embedding source (see
+[behavior-tests.md](behavior-tests.md) and `tests/scenarios/README.md`).
 
-To use OpenAI, get an API key from [platform.openai.com](https://platform.openai.com) and seed it into the vault:
-
-```bash
-OPENAI_API_KEY=sk-... pnpm run seed-vault
-```
-
-**Or use your own embedding server.** Any server that speaks OpenAI's `/embeddings` API works (llama.cpp, Ollama, vLLM), on the same machine or elsewhere. Curia sends every knowledge-graph label to this server, sensitive facts included, so use HTTPS for a server on another machine. Set the endpoint in `.env`, and seed its key only if the server checks one:
+The bundled model is English-only. **To use another model, point Curia at an embedding
+server.** Any server that speaks OpenAI's `/embeddings` API works (llama.cpp, Ollama, vLLM,
+OpenAI), on the same machine or elsewhere. Curia sends every knowledge-graph label to this
+server, sensitive facts included, so use HTTPS for a server on another machine. Set the
+endpoint in `.env`, and seed its key only if the server checks one:
 
 ```bash
 EMBEDDING_BASE_URL=http://localhost:8080/v1
@@ -290,7 +306,13 @@ EMBEDDING_MODEL=Qwen3-Embedding-4B
 SEED_VAULT_ONLY=embedding_api_key EMBEDDING_API_KEY=... pnpm run seed-vault
 ```
 
-Set `EMBEDDING_MODEL` even when the server ignores the field, because Curia picks the profile by that name. The model needs a profile: `text-embedding-3-small` and `Qwen3-Embedding-4B` are built in, and [`embedding.profiles`](configuration.md#embeddingprofiles) adds others. Restart Curia after either route. On a fresh database the first boot sizes the vector column to the profile. To switch models later on a graph that already holds vectors, stop Curia and run `pnpm reembed:kg` once (ADR-051).
+For OpenAI, use `EMBEDDING_BASE_URL=https://api.openai.com/v1`,
+`EMBEDDING_MODEL=text-embedding-3-small`, and the OpenAI key as `embedding_api_key`. A
+database whose graph already holds `text-embedding-3-small` vectors keeps using OpenAI with
+`openai_api_key` and no variables, but that path is deprecated (#2628); see
+[configuration.md](configuration.md#embedding-source).
+
+Set `EMBEDDING_MODEL` even when the server ignores the field, because Curia picks the profile by that name. The model needs a profile: `text-embedding-3-small`, `Qwen3-Embedding-4B` and `all-MiniLM-L6-v2` are built in, and [`embedding.profiles`](configuration.md#embeddingprofiles) adds others. Restart Curia after a change. On a fresh database the first boot sizes the vector column to the profile. To switch models later on a graph that already holds vectors, stop Curia and run `pnpm reembed:kg` once (ADR-051). To switch back to the bundled model, unset `EMBEDDING_BASE_URL` and set `EMBEDDING_MODEL=all-MiniLM-L6-v2` before re-embedding; the explicit name is the switch signal.
 
 In a Docker Compose install, stop Curia and run the command in a one-off container:
 
@@ -300,9 +322,9 @@ docker compose run --rm curia ./node_modules/.bin/tsx scripts/reembed-kg.ts
 
 An install with its own compose file or service name runs the command through that file and service.
 
-The command refuses to run beside a live Curia, and names the process that holds the lock. An interrupted run stays recorded as open, and the knowledge graph stays off until you run the command again to finish it.
+The command refuses to run beside a live Curia, and names the process that holds the lock. An interrupted run stays recorded as open, and the knowledge graph stays off until you run the command again to finish it. `--force` re-embeds every row even when its stamp matches, for an endpoint that started serving other weights under the same model name (`weights_changed` or `weights_shifted` in health).
 
-> **Checkpoint:** Email channel active, knowledge graph fully functional with semantic search. This is the recommended baseline for most development work.
+> **Checkpoint:** Email channel active, knowledge graph working with semantic search. This is the recommended baseline for most development work.
 
 ---
 

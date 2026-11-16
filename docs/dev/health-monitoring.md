@@ -25,10 +25,16 @@ Curia exposes a three-state health endpoint and a daily credential canary that f
     "voice":     "ok | fail | skipped",
     "signal_voice": "ok | fail | skipped",
     "scheduler": "ok | fail",
-    "principal_mailbox_triage": "ok | fail | skipped"
-  }
+    "principal_mailbox_triage": "ok | fail | skipped",
+    "knowledge_graph": "ok | fail | skipped"
+  },
+  "details": { "knowledge_graph": "<reason code>" }
 }
 ```
+
+`details` is optional and appears only when a check has a reason to report. Today only
+`knowledge_graph` uses it ([below](#knowledge_graph-reasons)). It sits outside `checks` so
+consumers that render every `checks` entry as a pass/fail pill never see it.
 
 ### Status values
 
@@ -54,6 +60,7 @@ Curia exposes a three-state health endpoint and a daily credential canary that f
 | `mcp.<server>` | `ping()` per enabled server (3s budget each, run concurrently) | Server disabled, so never attempted at boot |
 | `nylas_calendar` | `listCalendars()` via the principal calendar grant | Calendar not configured |
 | `scheduler` | Watchdog: last tick within `schedulerMaxTickS`, with a boot grace window | Never skipped |
+| `knowledge_graph` | Whether entity memory (the knowledge graph) is running, as decided at boot, plus the embeddings canary's later drift findings. Not a live probe: there is no runtime toggle, so it changes only at boot or on a canary run | Setup-required mode, where entity memory is not evaluated |
 | `principal_mailbox_triage` | The inbox heartbeat's own verdict: a successful tick within 45 min, no mailbox whose unread check failed 4 ticks running or whose triage made no progress 4 calls running, and no drain wake suspended by the circuit breaker. The 45 min counts from startup until the first tick succeeds, so for up to 45 min after a restart the check reads `ok` before any tick has run | The heartbeat is not running (no ceo-inbox agent, or setup-required mode) |
 
 **Three separate voice-adjacent probes, deliberately.** `signal` covers Signal *messaging*
@@ -77,9 +84,41 @@ belongs in a periodic canary instead. A health check must never cost money or em
 ### Which checks are critical vs. non-critical
 
 **Critical (down → 503):** `db`, `bus`
-**Non-critical (degraded → 200):** `signal`, `email`, `browser`, `mcp.*`, `nylas_calendar`, `slack`, `sms`, `voice`, `signal_voice`, `scheduler`, `principal_mailbox_triage`
+**Non-critical (degraded → 200):** `signal`, `email`, `browser`, `mcp.*`, `nylas_calendar`, `slack`, `sms`, `voice`, `signal_voice`, `scheduler`, `principal_mailbox_triage`, `knowledge_graph`
 
 Rationale: a dead Signal socket should not page as a full outage when email still works.
+
+### `knowledge_graph` reasons
+
+With a bundled embedding model as the default ([ADR-065](../adr/065-bundled-in-process-embedding-model.md)),
+entity memory being off always means something is wrong or a model switch is in progress,
+so `fail` degrades the status, including during an operator's own `pnpm reembed:kg` window.
+`details.knowledge_graph` carries the reason (type `KnowledgeGraphReason`,
+`src/memory/kg-health.ts`). The boot log has the same reason in words, with the fix.
+
+| Reason | Check | Meaning and fix |
+|---|---|---|
+| `no_model` | `fail` | `EMBEDDING_BASE_URL` is set but `EMBEDDING_MODEL` is not. Set it. |
+| `no_profile` | `fail` | The model has no embedding profile. Add one under `embedding.profiles`. |
+| `non_bundled_model_without_base_url` | `fail` | `EMBEDDING_MODEL` names a model other than the bundled one, with no `EMBEDDING_BASE_URL`. Set the base URL, or unset the model. |
+| `stored_model_without_endpoint` | `fail` | The graph holds another model's vectors and no endpoint is configured for it. Restore its endpoint settings, or set `EMBEDDING_MODEL=all-MiniLM-L6-v2` and run `pnpm reembed:kg`. |
+| `implicit_openai_without_key` | `fail` | The graph holds `text-embedding-3-small` vectors from the old implicit default, and the vault has no `openai_api_key`. Configure OpenAI explicitly, or switch to the bundled model. |
+| `bundled_weights_missing` | `fail` | The bundled model's files are not in `EMBEDDING_MODEL_DIR`. Run `pnpm fetch:embedder` (source checkout). |
+| `bundled_load_failed` | `fail` | The files are there but would not load (corrupt file, native runtime failure). |
+| `width_mismatch` | `fail` | The column width differs from the profile and the table holds vectors. Run `pnpm reembed:kg`. |
+| `model_mismatch` | `fail` | Stored vectors carry another stamp (model, `document` prefix or bundled weights). Run `pnpm reembed:kg`. |
+| `reembed_in_progress` | `fail` | `pnpm reembed:kg` holds the instance lock, or an interrupted run is still open. Finish the run, then restart Curia. |
+| `schema_check_failed` | `fail` | The boot schema check itself errored. See the boot log. |
+| `weights_changed` | `fail` | An endpoint now serves different weights under the same model name (the median sampled cosine is below 0.9, or the vectors have another width). Run `pnpm reembed:kg --force`. Found at boot it keeps entity memory off; found by a later canary, entity memory keeps running but health fails. |
+| `implicit_openai_deprecated` | `ok` | Embeddings use OpenAI through the deprecated implicit default (#2628). Configure OpenAI explicitly (no re-embed) or switch to the bundled model. |
+| `weights_shifted` | `ok` | An endpoint's weights shifted under the same name, e.g. re-quantised (a sampled cosine below 0.995 with the median at or above 0.9). Entity memory stays on. A sampled row below 0.9 is logged at warn by id: usually a row whose vector no longer matches its label. Re-embed with `pnpm reembed:kg --force`; it is never cleared silently. |
+| `drift_unchecked` | `ok` | The drift check could not reach the endpoint. It retries on the canary schedule. |
+
+The drift reasons apply only to endpoint sources (OpenAI included): the bundled model's
+stamp carries its weights hash, so changed weights read as `model_mismatch` instead.
+
+The console shows the `knowledge_graph` pill (it renders every `checks` entry), but not the
+reason text. Read the reason from `/api/health` or the boot log.
 
 ## Setting up an uptime monitor (Better Stack / Healthchecks.io / etc.)
 
@@ -117,7 +156,7 @@ The heartbeat key identifies the capability tier, not the vendor. If you remap `
 | Key | Probe | Skipped when |
 |---|---|---|
 | `llm_fast/standard/powerful` | Last recorded call outcome for that tier (no billed probe call) | No model configured for that tier in `modelRoutingConfig.tiers` |
-| `embeddings` | Last recorded embedding call outcome, from OpenAI or the server at `EMBEDDING_BASE_URL` | Entity memory is off (no embedding endpoint, no profile for the model, or the boot schema check turned it off) |
+| `embeddings` | Last recorded embedding call outcome, from the bundled model or the server at `EMBEDDING_BASE_URL`. For an endpoint source it also re-runs the weight drift check: a change fails the canary and sets `knowledge_graph` to `fail`/`weights_changed`; a shift sets `weights_shifted` | Entity memory is off (see `details.knowledge_graph` for why) |
 | `image_gen` | Last `image-generate` skill outcome | No `OPENAI_API_KEY` |
 | `nylas` | `listMessages(limit=1)` via the injected Nylas client | Email not configured (no `NylasClient` provided) |
 | `nylas_calendar` | `listCalendars()` of the default principal mailbox, through the calendar router | No calendar router (no Nylas key or no principal contact), or no principal mailbox connected yet |
