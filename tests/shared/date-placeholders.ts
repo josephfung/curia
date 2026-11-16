@@ -80,12 +80,14 @@ export function hasDatePlaceholders(value: unknown): boolean {
 
 /**
  * Replace every date placeholder in `value` (strings at any depth). `now` and
- * `timezone` fix "today"; throws on a malformed placeholder.
+ * `timezone` fix "today"; throws on a malformed placeholder. `dayClock`, when given,
+ * fixes "today" instead, while `{{at:…}}` still follows `now`: a multi-turn case keeps
+ * one day across its turns (even past local midnight) but each turn its own moment.
  */
-export function resolveDatePlaceholders<T>(value: T, timezone: string, now: Date = new Date()): T {
+export function resolveDatePlaceholders<T>(value: T, timezone: string, now: Date = new Date(), dayClock?: Date): T {
   const local = DateTime.fromJSDate(now, { zone: timezone });
   if (!local.isValid) throw new Error(`invalid timezone '${timezone}'`);
-  const today = local.startOf('day');
+  const today = (dayClock ? DateTime.fromJSDate(dayClock, { zone: timezone }) : local).startOf('day');
   const walk = (v: unknown): unknown => {
     if (typeof v === 'string') {
       return v

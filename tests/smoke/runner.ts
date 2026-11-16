@@ -111,7 +111,8 @@ async function runAttempt(
     // One clock for everything the judge reads beside the first message: the target, the
     // first turn's message and fixtures, and the judge's expectations. The first turn's delay
     // is waited out before it is read, so all four name the same day even when that delay
-    // crosses local midnight. Later turns keep their own clocks ({{at:now…}} is per turn).
+    // crosses local midnight. Later turns name days on this clock too; only their
+    // {{at:now…}} moments follow the turn's own time.
     const firstDelayMs = tc.turns[0]?.delayMs;
     if (firstDelayMs) await new Promise(resolve => setTimeout(resolve, firstDelayMs));
     const caseClock = new Date();
@@ -247,10 +248,12 @@ async function runTurns(
     // Dates in fixtures and messages are relative to today in the principal's timezone,
     // as the agents see it, so a case never drifts into the past.
     // One "now" for the turn, so {{at:now+60m}} agrees between the message and the fixtures.
+    // The day is the case clock's for every turn, so a later turn past local midnight
+    // still names the days turn 1 and the judge did; only {{at:…}} moves with the turn.
     const timezone = harness.stack.config.timezone;
     const now = index === 0 ? caseClock : new Date();
-    harness.stubs.set(withPrincipal(resolveDatePlaceholders(mergeStubs(turn.toolStubs, tc.toolStubs, officeFor(tc, defaultStubs)), timezone, now)));
-    const prompt = withPrincipal(resolveDatePlaceholders(turn.content, timezone, now));
+    harness.stubs.set(withPrincipal(resolveDatePlaceholders(mergeStubs(turn.toolStubs, tc.toolStubs, officeFor(tc, defaultStubs)), timezone, now, caseClock)));
+    const prompt = withPrincipal(resolveDatePlaceholders(turn.content, timezone, now, caseClock));
     const response = await harness.sendMessage({
       conversationId,
       content: prompt,

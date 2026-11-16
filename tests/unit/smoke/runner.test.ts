@@ -51,6 +51,28 @@ describe('judge text clock', () => {
     expect(exec!.today).toBe('Monday, November 16, 2026 (America/Toronto)');
   });
 
+  it('keeps a later turn on the case\'s day across midnight, while {{at:now}} moves with it', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout'] });
+    // Turn 1 at 23:59:50 Sunday in Toronto; turn 2 waits 20s and sends at 00:00:10 Monday.
+    vi.setSystemTime(new Date('2026-11-16T04:59:50Z'));
+    const twoTurns: TestCase = {
+      ...caseWith(0),
+      turns: [
+        { role: 'user', content: 'Drafts from {{day:today-1}}' },
+        { role: 'user', content: 'Send them. Day {{day:today}}, at {{at:now}}', delayMs: 20_000 },
+      ],
+    };
+
+    const run = runTestCases(fakeHarness('America/Toronto'), [twoTurns], { warmUp: false });
+    await vi.advanceTimersByTimeAsync(20_000);
+    const [exec] = (await run).executions;
+
+    expect(exec!.responses[0]!.prompt).toBe('Drafts from Saturday, November 14');
+    // Same day as turn 1 and the judge, but the moment is the turn's own.
+    expect(exec!.responses[1]!.prompt).toBe('Send them. Day Sunday, November 15, at 2026-11-16T00:00:00.000-05:00');
+    expect(exec!.today).toBe('Sunday, November 15, 2026 (America/Toronto)');
+  });
+
   it('puts a targeted case\'s opening on that same clock', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout'] });
     vi.setSystemTime(new Date('2026-11-16T04:59:59Z'));
