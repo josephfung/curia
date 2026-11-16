@@ -29,7 +29,7 @@ does with it, and what the coordinator makes of the result. See
 pnpm scenarios --model deepseek/deepseek-v4.1-flash
 
 # Iterate on one case
-pnpm scenarios --case "sweep-on-close" --runs 2 --model deepseek/deepseek-v4.1-flash
+pnpm scenarios --case "sweep-on-close" --model deepseek/deepseek-v4.1-flash
 ```
 
 **Every run costs money:** each case runs once by default (a case can set `runs:`), and the judge is billed too. The unfiltered suite is the release gate. While developing, run only the cases your change touches, with few runs, and compare against saved transcripts rather than re-running `main`.
@@ -40,7 +40,7 @@ pnpm scenarios --case "sweep-on-close" --runs 2 --model deepseek/deepseek-v4.1-f
 | `--reasoning-effort <e>` | Reasoning effort for agent turns (ADR-048): `low` sets every tier; `fast=none,standard=low` sets only the tiers named. Boot fails if a tier's model does not list the effort. The run header and results record the arm. |
 | `--case <text>` | Only cases whose name contains this text (case-insensitive). |
 | `--tags a,b` | Only cases with one of these tags. |
-| `--runs <n>` | Runs per case, overriding the case's `runs` and the default of 5. |
+| `--runs <n>` | Runs per case, overriding the case's `runs` and the default of 1. Rarely needed: see [The gate](#the-gate). |
 | `--concurrency <n>` | Cases run at once (default 4). A case's own runs are always one at a time. |
 | `--allow-other-connections` | Run even though another client is connected to the database (see below). |
 | `--on-demand` | Also run the cases marked `release_gate: false`. `--case` and `--tags` select them without it. |
@@ -334,7 +334,7 @@ description: >                            # shown to the judge
 tags: [outbound-context, routing]
 delegation: stubbed                       # stubbed (default) | real — see Real delegation
 release_gate: true                        # optional; false = only on demand
-runs: 5                                   # optional; CLI --runs overrides
+runs: 5                                   # optional; default 1. Only for a nondeterministic critical behavior (The gate)
 timeout_seconds: 300                      # optional
 known_failure: { issue: "#1234", reason: … }   # optional; reported, not gated
 stub_sets: [human-channels]               # optional; `defaults` always applies
@@ -589,9 +589,13 @@ prompt on this branch's harness, which is the main arm of an A/B:
 ```bash
 mkdir -p /tmp/main-arm/agents
 git show origin/main:agents/calendar.yaml > /tmp/main-arm/agents/calendar.yaml
-pnpm scenarios --tags specialist-calendar --runs 5 --overlay /tmp/main-arm --coverage /tmp/ab.json --model …
-pnpm scenarios --tags specialist-calendar --runs 5 --coverage /tmp/ab.json --model …
+pnpm scenarios --tags specialist-calendar --overlay /tmp/main-arm --coverage /tmp/ab.json --model …
+pnpm scenarios --tags specialist-calendar --coverage /tmp/ab.json --model …
 ```
+
+One run per case per arm, as in the gate; a case that sets `runs: 5` repeats on its own.
+Don't add `--runs` to an A/B by habit: it multiplies every case's cost to settle the few
+that are nondeterministic, which already repeat.
 
 Pass a scratch `--coverage` for A/B runs, so only a clean run of the branch writes the
 committed record.
