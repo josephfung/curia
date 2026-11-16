@@ -32,7 +32,7 @@ pnpm scenarios --model deepseek/deepseek-v4.1-flash
 pnpm scenarios --case "sweep-on-close" --model deepseek/deepseek-v4.1-flash
 ```
 
-**Every run costs money:** each case runs once by default (a case can set `runs:`), and the judge is billed too. The unfiltered suite is the release gate. While developing, run only the cases your change touches, with few runs, and compare against saved transcripts rather than re-running `main`.
+**Every run costs money:** each case runs once by default (a case can set `runs:`), and the judge is billed too. The unfiltered suite is the release gate. While developing, run only the cases your change touches, once each (no `--runs`), and compare against saved transcripts rather than re-running `main`.
 
 | Flag | Meaning |
 |---|---|
@@ -561,7 +561,7 @@ The harness Dispatcher scores senders as production does: channel trust from
 The stack's resolver evaluates production's permission model. So the coordinator sees the
 same trust score and AUTHORIZATION section that production would show it.
 
-After adding a case, run it (`--case`, a few runs) so the CLI records its stub coverage,
+After adding a case, run it once (`--case`, no `--runs`) so the CLI records its stub coverage,
 and commit the updated `stub-coverage.json`.
 
 ## Cases for a specialist
@@ -711,8 +711,8 @@ pnpm scenarios --tags ps-prefs --model …   # autonomy 84 + identity scheduling
 ```
 
 **Why they stay out of the release gate (#2227).** They are the suite's most expensive
-cases: real delegation, and about $0.05–0.10 a run. All 14 at five runs adds roughly $4 and
-45 minutes to a gate. ps-prefs also needs an office identity, which applies to a whole run,
+cases: real delegation, and about $0.05–0.10 a run. In the old five-run gate, all 14
+added roughly $4 and 45 minutes. ps-prefs also needs an office identity, which applies to a whole run,
 so the loader requires `release_gate: false` on it. (Their autonomy fixtures no longer keep
 them out: since #2312 those are per case, so `--tags ps-core,ps-ask` can run as one batch.)
 
