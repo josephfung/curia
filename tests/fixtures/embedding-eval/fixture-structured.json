@@ -1,0 +1,236 @@
+{
+  "description": "Structured calibration set for embedding profiles (design 2026-11-15 §6, #2023). It reproduces the shapes a real graph holds that fixture.json does not: `attribute: value` facts, the same value under a different attribute (current_/former_, known_email_1/_2, start/end times, tax vs total), ID-like labels that differ by a character or two, name variants (initials, dropped middle names, `Last, First`, a bare first name) and keyword-style search queries. Every name, company, address, number and identifier is invented; phone numbers use the fictional 555-01xx range and domains are example.* or .test. entities: label pairs that fuzzy entity resolution should auto-resolve (match) or must keep apart (distinct). facts: fact labels that fact dedup should merge (merge) or must keep apart (distinct). search: queries against a corpus of stored labels, each with the labels it should return.",
+  "entities": {
+    "match": [
+      ["Dana Whitfield", "D. Whitfield"],
+      ["Marguerite Ilse Solberg", "Marguerite Solberg"],
+      ["Solberg, Marguerite", "Marguerite Solberg"],
+      ["Ignatius Okonkwo-Baptiste", "Iggy Okonkwo-Baptiste"],
+      ["Whitfield, Dana J.", "Dana Whitfield"],
+      ["Ines", "Ines Valcourt"],
+      ["Ines Valcourt", "ines valcourt"],
+      ["Rafael T. Marchetti", "Rafael Marchetti"],
+      ["R. T. Marchetti", "Rafael T. Marchetti"],
+      ["Kofi Mensah-Ardayfio", "Kofi Mensah Ardayfio"],
+      ["Halvorsen Freight Ltd.", "Halvorsen Freight"],
+      ["Brightwater Analytics Inc", "Brightwater Analytics"],
+      ["Corvane Labs (Peterborough office)", "Corvane Labs"],
+      ["Priyanka", "Priyanka Nadkarni-Lindgren"],
+      ["Nadkarni-Lindgren, Priyanka", "Priyanka Nadkarni-Lindgren"],
+      ["Elspeth M. Varga", "Elspeth Varga"],
+      ["Dr. Elspeth Varga", "Elspeth Varga"],
+      ["Order 112-4409-7731", "order #11244097731"],
+      ["Invoice INV-20418", "invoice inv 20418"],
+      ["Tomasz", "Tomasz Brandvold"],
+      ["Brandvold, Tomasz K.", "Tomasz Brandvold"],
+      ["Quillfeather Partners LLP", "Quillfeather Partners"]
+    ],
+    "distinct": [
+      ["Order 112-4409-7731", "Order 112-4409-7781"],
+      ["Order 305-1182-6604", "Order 305-1182-6640"],
+      ["Order #88213-0457", "Order #88213-0475"],
+      ["Invoice INV-20418", "Invoice INV-20419"],
+      ["Invoice INV-31007", "Invoice INV-31070"],
+      ["Message <msg-7f3a9c21e4@mail.example.com>", "Message <msg-7f3a9c21e5@mail.example.com>"],
+      ["Message <a19c44b02d7e@mx.example.org>", "Message <a19c44b02d8e@mx.example.org>"],
+      ["Tracking 1Z84X2950371644218", "Tracking 1Z84X2950371644281"],
+      ["Booking ref QX4417HB", "Booking ref QX4471HB"],
+      ["Ticket SUP-58823", "Ticket SUP-58832"],
+      ["Account ending 4417", "Account ending 4471"],
+      ["Policy HFL-0099172", "Policy HFL-0099127"],
+      ["Dana Whitfield", "Dana Whitcombe"],
+      ["Marguerite Solberg", "Margit Solberg"],
+      ["Rafael Marchetti", "Raffaele Marchetti"],
+      ["Iggy Okonkwo-Baptiste", "Iggy Okonkwo"],
+      ["Halvorsen Freight", "Halvorsen Freight Insurance"],
+      ["Brightwater Analytics", "Brightwater Capital"],
+      ["Corvane Labs", "Corvane Health"],
+      ["Elspeth Varga", "Elspeth Vargas"],
+      ["Priyanka Nadkarni-Lindgren", "Priyanka Lindgren"],
+      ["Tomasz Brandvold", "Tomasz Brandt"],
+      ["Quillfeather Partners", "Quillfeather Partners Foundation"],
+      ["Ines Valcourt", "Inez Valcourt-Brun"]
+    ]
+  },
+  "facts": {
+    "merge": [
+      ["current_employer: Brightwater Analytics", "employer: Brightwater Analytics"],
+      ["job_title: VP of Operations", "current_title: VP of Operations"],
+      ["phone: (519) 555-0142", "mobile_phone: 519-555-0142"],
+      ["work_phone: 226.555.0187", "office_phone: (226) 555-0187"],
+      ["known_email_1: dana.whitfield@example.org", "email: dana.whitfield@example.org"],
+      ["primary_email: tbrandvold@halvorsen.test", "email_address: tbrandvold@halvorsen.test"],
+      ["birthday: 1984-07-19", "date_of_birth: 1984-07-19"],
+      ["home_city: Fergus", "lives_in: Fergus"],
+      ["assistant: Kofi Mensah-Ardayfio", "executive_assistant: Kofi Mensah-Ardayfio"],
+      ["spouse: Rafael Marchetti", "partner: Rafael Marchetti"],
+      ["preferred_name: Iggy", "nickname: Iggy"],
+      ["dietary_restriction: vegetarian", "diet: vegetarian"],
+      ["linkedin: linkedin.example.com/in/elspethvarga", "linkedin_url: linkedin.example.com/in/elspethvarga"],
+      ["timezone: America/Toronto", "time_zone: America/Toronto"],
+      ["preferred_airline: Northgate Air", "airline_preference: Northgate Air"],
+      ["seat_preference: aisle", "preferred_seat: aisle"],
+      ["frequent_flyer_number: NG 40921177", "loyalty_number: NG40921177"],
+      ["invoice_tax: $1,382.40", "tax: $1,382.40 (unchanged from last quarter)"],
+      ["mailing_address: 41 Larkspur Crescent, Fergus", "address: 41 Larkspur Crescent, Fergus, ON"],
+      ["company_website: brightwater.test", "website: brightwater.test"],
+      ["reports_to: Marguerite Solberg", "manager: Marguerite Solberg"],
+      ["board_role: treasurer", "board_position: treasurer"],
+      ["coffee_order: oat flat white", "preferred_coffee: oat flat white"],
+      ["meeting_start: 2031-05-14T09:30:00", "start_time: 2031-05-14T09:30:00 EDT"]
+    ],
+    "distinct": [
+      ["current_employer: Brightwater Analytics", "former_employer: Brightwater Analytics"],
+      ["current_title: VP of Operations", "former_title: VP of Operations"],
+      ["current_city: Fergus", "previous_city: Fergus"],
+      ["known_email_1: dana.whitfield@example.org", "known_email_2: dwhitfield@brightwater.test"],
+      ["known_email_1: tbrandvold@halvorsen.test", "known_email_2: tomasz.b@example.net"],
+      ["start_time: 2031-05-14T09:30:00", "end_time: 2031-05-14T10:45:00"],
+      ["flight_departure: 2031-06-02T07:15:00", "flight_arrival: 2031-06-02T09:40:00"],
+      ["check_in: 3:00 PM", "check_out: 11:00 AM"],
+      ["invoice_tax: $1,382.40", "invoice_total: $11,302.40"],
+      ["order_subtotal: $214.99", "order_total: $242.94"],
+      ["shipping_cost: $18.50", "order_total: $218.50"],
+      ["home_phone: (519) 555-0142", "work_phone: (519) 555-0148"],
+      ["home_address: 41 Larkspur Crescent, Fergus", "office_address: 41 Larkspur Crescent, Fergus"],
+      ["reports_to: Marguerite Solberg", "direct_report: Marguerite Solberg"],
+      ["spouse: Rafael Marchetti", "brother: Rafael Marchetti"],
+      ["birthday: 1984-07-19", "anniversary: 1984-07-19"],
+      ["preferred_seat: aisle", "preferred_seat: window"],
+      ["dietary_restriction: vegetarian", "dietary_restriction: shellfish allergy"],
+      ["board_role: treasurer", "board_role: chair"],
+      ["meeting_start: 2031-05-14", "meeting_end: 2031-05-14"],
+      ["subscription_renewal: 2031-09-01", "subscription_cancelled: 2031-09-01"],
+      ["contract_value: $48,000", "contract_value: $84,000"],
+      ["preferred_airline: Northgate Air", "avoided_airline: Northgate Air"],
+      ["timezone: America/Toronto", "timezone: America/Vancouver"]
+    ]
+  },
+  "search": {
+    "corpus": [
+      "Dana Whitfield",
+      "current_employer: Brightwater Analytics",
+      "job_title: VP of Operations",
+      "phone: (519) 555-0142",
+      "known_email_1: dana.whitfield@example.org",
+      "known_email_2: dwhitfield@brightwater.test",
+      "birthday: 1984-07-19",
+      "home_city: Fergus",
+      "reports_to: Marguerite Solberg",
+      "Marguerite Solberg",
+      "job_title: Chief Operating Officer",
+      "current_employer: Halvorsen Freight",
+      "former_employer: Brightwater Analytics",
+      "assistant: Kofi Mensah-Ardayfio",
+      "Kofi Mensah-Ardayfio",
+      "work_phone: (226) 555-0187",
+      "Tomasz Brandvold",
+      "primary_email: tbrandvold@halvorsen.test",
+      "job_title: Head of Logistics",
+      "Halvorsen Freight",
+      "Brightwater Analytics",
+      "Corvane Labs",
+      "Quillfeather Partners",
+      "Rafael Marchetti",
+      "spouse: Rafael Marchetti",
+      "Elspeth Varga",
+      "board_role: treasurer",
+      "dietary_restriction: vegetarian",
+      "preferred_airline: Northgate Air",
+      "seat_preference: aisle",
+      "frequent_flyer_number: NG40921177",
+      "timezone: America/Toronto",
+      "Order 112-4409-7731",
+      "order_total: $242.94",
+      "order_status: shipped",
+      "Tracking 1Z84X2950371644218",
+      "Invoice INV-20418",
+      "invoice_total: $11,302.40",
+      "invoice_tax: $1,382.40",
+      "invoice_due: 2031-07-31",
+      "Booking ref QX4417HB",
+      "hotel: Larkspur Inn, Kingston",
+      "check_in: 2031-06-02 3:00 PM",
+      "check_out: 2031-06-05 11:00 AM",
+      "flight_departure: 2031-06-02T07:15:00",
+      "Q2 board meeting",
+      "meeting_start: 2031-05-14T09:30:00",
+      "meeting_end: 2031-05-14T10:45:00",
+      "meeting_location: Corvane Labs boardroom",
+      "Ticket SUP-58823",
+      "ticket_status: waiting on vendor",
+      "Policy HFL-0099172",
+      "policy_renewal: 2031-09-01",
+      "insurer: Halvorsen Freight Insurance",
+      "Priyanka Nadkarni-Lindgren",
+      "current_title: General Counsel",
+      "current_employer: Quillfeather Partners",
+      "Ines Valcourt",
+      "role: outside auditor",
+      "Iggy Okonkwo-Baptiste",
+      "investor_in: Corvane Labs",
+      "coffee_order: oat flat white",
+      "contract_value: $48,000",
+      "contract_counterparty: Halvorsen Freight",
+      "contract_renewal: 2031-12-31"
+    ],
+    "queries": [
+      {
+        "query": "dana whitfield phone",
+        "relevant": ["phone: (519) 555-0142"]
+      },
+      {
+        "query": "dana whitfield email address",
+        "relevant": ["known_email_1: dana.whitfield@example.org", "known_email_2: dwhitfield@brightwater.test"]
+      },
+      {
+        "query": "who does dana report to",
+        "relevant": ["reports_to: Marguerite Solberg"]
+      },
+      {
+        "query": "invoice INV-20418 total",
+        "relevant": ["invoice_total: $11,302.40", "Invoice INV-20418"]
+      },
+      {
+        "query": "order 112-4409-7731 tracking",
+        "relevant": ["Tracking 1Z84X2950371644218", "Order 112-4409-7731"]
+      },
+      {
+        "query": "kingston hotel check in",
+        "relevant": ["hotel: Larkspur Inn, Kingston", "check_in: 2031-06-02 3:00 PM"]
+      },
+      {
+        "query": "Q2 board meeting start time",
+        "relevant": ["meeting_start: 2031-05-14T09:30:00", "Q2 board meeting"]
+      },
+      {
+        "query": "frequent flyer number",
+        "relevant": ["frequent_flyer_number: NG40921177"]
+      },
+      {
+        "query": "general counsel quillfeather",
+        "relevant": ["current_title: General Counsel", "Priyanka Nadkarni-Lindgren"]
+      },
+      {
+        "query": "halvorsen contract renewal date",
+        "relevant": ["contract_renewal: 2031-12-31"]
+      },
+      {
+        "query": "support ticket status",
+        "relevant": ["ticket_status: waiting on vendor", "Ticket SUP-58823"]
+      },
+      {
+        "query": "insurance policy renewal",
+        "relevant": ["policy_renewal: 2031-09-01", "Policy HFL-0099172"]
+      },
+      {
+        "query": "dietary restrictions",
+        "relevant": ["dietary_restriction: vegetarian"]
+      },
+      {
+        "query": "who is the outside auditor",
+        "relevant": ["role: outside auditor", "Ines Valcourt"]
+      }
+    ]
+  }
+}

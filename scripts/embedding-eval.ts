@@ -10,6 +10,18 @@
 // --key-env names the environment variable that holds the endpoint's key, so the key is
 // never on the command line. Omit it for a server that takes no key.
 //
+// --bundled scores the model Curia runs in-process (all-MiniLM-L6-v2) through the same
+// backend production uses, from models/embedding/all-MiniLM-L6-v2 or --model-dir:
+//
+//   pnpm embedding-eval --bundled --identifier-guard [--fixture private.json]
+//
+// --identifier-guard drops every pair the identifier guard blocks before thresholds are
+// chosen. Production never merges a blocked pair whatever its score, so a threshold chosen
+// with the guard on matches what runs. The report says how many pairs it dropped per class.
+//
+// Without --fixture, both committed fixtures run, each reported on its own. --fixture may
+// be repeated.
+//
 // The vectors are fetched once at the widest requested width, then truncated and
 // renormalised per width exactly as the service does, so a width above the 2,000 the
 // index allows can be measured without a schema change.
@@ -18,14 +30,22 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs as parseNodeArgs } from 'node:util';
 import pino from 'pino';
+import { DEFAULT_EMBEDDING_MODEL_DIR } from '../src/config.js';
 import { EmbeddingService, truncateAndNormalize } from '../src/memory/embedding.js';
+import { hashBundledWeights } from '../src/memory/embedding-onnx.js';
 import {
+  ALL_MINILM_L6_V2,
   OPENAI_TEXT_EMBEDDING_3_SMALL,
+  embeddingStamp,
   type EmbeddingProfile,
   type EmbeddingPurpose,
 } from '../src/memory/embedding-profiles.js';
+import { hasConflictingIdentifiers } from '../src/memory/identifier-guard.js';
 
 export const DEFAULT_FIXTURE = path.resolve(import.meta.dirname, '../tests/fixtures/embedding-eval/fixture.json');
+/** Structured `attribute: value` facts, ID-like labels and name variants (design §6). */
+export const STRUCTURED_FIXTURE = path.resolve(import.meta.dirname, '../tests/fixtures/embedding-eval/fixture-structured.json');
+export const DEFAULT_FIXTURES: readonly string[] = [DEFAULT_FIXTURE, STRUCTURED_FIXTURE];
 
 /** Thresholds are picked on this grid, so a suggested value has two decimals like the shipped ones. */
 const GRID_STEPS = 100;
@@ -171,6 +191,10 @@ export function rankingMetrics(
 // -- Evaluation --
 
 export interface PairTaskReport {
+  /** Pairs scored per class, after any the identifier guard dropped. */
+  pairs: { pos: number; neg: number };
+  /** Pairs the identifier guard dropped per class (zero with the guard off). */
+  guardDropped: { pos: number; neg: number };
   auc: number;
   bestF1: ThresholdPoint;
   noFalseMerge: ThresholdPoint | undefined;
@@ -186,8 +210,10 @@ export interface WidthReport {
   suggested: EmbeddingProfile['thresholds'];
 }
 
-function pairTask(pos: number[], neg: number[]): PairTaskReport {
+function pairTask(pos: number[], neg: number[], guardDropped: PairTaskReport['guardDropped']): PairTaskReport {
   return {
+    pairs: { pos: pos.length, neg: neg.length },
+    guardDropped,
     auc: rocAuc(pos, neg),
     bestF1: bestF1(pos, neg),
     noFalseMerge: noFalseMerge(pos, neg),
@@ -205,6 +231,7 @@ export async function evaluate(
   fixture: EvalFixture,
   service: EmbeddingService,
   widths: readonly number[],
+  options: { identifierGuard?: boolean } = {},
 ): Promise<WidthReport[]> {
   const wanted = new Map<string, { text: string; purpose: EmbeddingPurpose }>();
   const key = (text: string, purpose: EmbeddingPurpose) => `${purpose}\u0000${text}`;
@@ -228,9 +255,25 @@ export async function evaluate(
     const vec = (text: string, purpose: EmbeddingPurpose) => truncateAndNormalize(full.get(key(text, purpose))!, width);
     const scores = (pairs: Pair[]) => pairs.map(([a, b]) => EmbeddingService.cosineSimilarity(vec(a, 'similarity'), vec(b, 'document')));
 
-    const entityPos = scores(fixture.entities.match);
-    const entities = { ...pairTask(entityPos, scores(fixture.entities.distinct)), ambiguityFloor: keepFloor(entityPos, FLOOR_KEEP) };
-    const facts = pairTask(scores(fixture.facts.merge), scores(fixture.facts.distinct));
+    // With the guard on, a blocked pair never merges in production whatever it scores, so
+    // it says nothing about where the threshold belongs: drop it from both classes.
+    const task = (name: string, posPairs: Pair[], negPairs: Pair[]) => {
+      const keep = (pairs: Pair[]) => options.identifierGuard ? pairs.filter(([a, b]) => !hasConflictingIdentifiers(a, b)) : pairs;
+      const pos = keep(posPairs);
+      const neg = keep(negPairs);
+      // Every metric divides by the class sizes; an empty class would print NaN thresholds.
+      if (pos.length === 0 || neg.length === 0) {
+        throw new Error(`${name}: needs at least one true and one false pair to score, has ${pos.length} and ${neg.length}` +
+          (options.identifierGuard ? ' after the identifier guard' : ''));
+      }
+      const posScores = scores(pos);
+      const report = pairTask(posScores, scores(neg), { pos: posPairs.length - pos.length, neg: negPairs.length - neg.length });
+      return { report, posScores };
+    };
+
+    const entityTask = task('entities', fixture.entities.match, fixture.entities.distinct);
+    const entities = { ...entityTask.report, ambiguityFloor: keepFloor(entityTask.posScores, FLOOR_KEEP) };
+    const facts = task('facts', fixture.facts.merge, fixture.facts.distinct).report;
 
     const corpus = fixture.search.corpus.map(label => ({ label, v: vec(label, 'document') }));
     const search = rankingMetrics(fixture.search.queries.map(q => {
@@ -262,25 +305,35 @@ function fmt(n: number): string {
   return n.toFixed(3);
 }
 
-function describePairTask(name: string, t: PairTaskReport): string[] {
+function describePairTask(name: string, t: PairTaskReport, identifierGuard: boolean): string[] {
   const safe = t.noFalseMerge
     ? `${t.noFalseMerge.threshold.toFixed(2)} (F1 ${fmt(t.noFalseMerge.f1)}, recall ${fmt(t.noFalseMerge.recall)})`
     : 'none on the grid';
   return [
-    `  ${name}: ROC-AUC ${fmt(t.auc)}, separation margin ${fmt(t.margin)}`,
+    `  ${name}: ${t.pairs.pos} true / ${t.pairs.neg} false pairs` +
+      (identifierGuard ? `, identifier guard dropped ${t.guardDropped.pos} true / ${t.guardDropped.neg} false` : ''),
+    `    ROC-AUC ${fmt(t.auc)}, separation margin ${fmt(t.margin)}`,
     `    best-F1 threshold ${t.bestF1.threshold.toFixed(2)} (F1 ${fmt(t.bestF1.f1)}, ${t.bestF1.falseMerges} false merge(s))`,
     `    no-false-merge threshold ${safe}`,
-    `    chosen ${t.chosen.point.threshold.toFixed(2)} by ${t.chosen.rule === 'no_false_merge' ? 'no-false-merge' : 'best-F1'}`,
+    `    chosen ${t.chosen.point.threshold.toFixed(2)} by ${t.chosen.rule === 'no_false_merge' ? 'no-false-merge' : 'best-F1'}` +
+      ` (merges ${fmt(t.chosen.point.recall)} of true pairs, ${t.chosen.point.falseMerges} false merge(s))`,
   ];
 }
 
-export function formatReport(model: string, prefixes: EmbeddingProfile['prefixes'], reports: readonly WidthReport[]): string {
-  const lines = [`Model ${model}`, `Prefixes ${JSON.stringify(prefixes)}`, ''];
+export function formatReport(
+  model: string,
+  prefixes: EmbeddingProfile['prefixes'],
+  reports: readonly WidthReport[],
+  context: { fixture?: string; identifierGuard?: boolean } = {},
+): string {
+  const lines = [`Model ${model}`, `Prefixes ${JSON.stringify(prefixes)}`];
+  if (context.fixture) lines.push(`Fixture ${context.fixture}`);
+  lines.push(`Identifier guard ${context.identifierGuard ? 'on' : 'off'}`, '');
   for (const r of reports) {
     lines.push(`Width ${r.width}`);
-    lines.push(...describePairTask('Entity resolution', r.entities));
+    lines.push(...describePairTask('Entity resolution', r.entities, context.identifierGuard ?? false));
     lines.push(`    ambiguity floor (keeps ${FLOOR_KEEP * 100}% of true pairs) ${r.entities.ambiguityFloor.toFixed(2)}`);
-    lines.push(...describePairTask('Fact dedup', r.facts));
+    lines.push(...describePairTask('Fact dedup', r.facts, context.identifierGuard ?? false));
     lines.push(`  Search: recall@${RECALL_AT} ${fmt(r.search.recallAtK)}, MRR ${fmt(r.search.mrr)}`);
     lines.push(
       `  Suggested thresholds: fact_dedup ${r.suggested.factDedup.toFixed(2)}, ` +
@@ -294,13 +347,25 @@ export function formatReport(model: string, prefixes: EmbeddingProfile['prefixes
 // -- CLI --
 
 export interface EvalArgs {
-  baseUrl: string;
-  model: string;
+  /** Score the in-process bundled model instead of an endpoint. */
+  bundled: boolean;
+  /** The bundled model's files; set only with `bundled`. */
+  modelDir: string | undefined;
+  /** The endpoint; set only without `bundled`. */
+  baseUrl: string | undefined;
+  model: string | undefined;
   keyEnv: string | undefined;
   widths: number[];
   prefixes: EmbeddingProfile['prefixes'];
-  fixture: string;
+  /** Drop pairs the identifier guard blocks before choosing thresholds. */
+  identifierGuard: boolean;
+  /** Each fixture is scored and reported on its own. */
+  fixtures: string[];
 }
+
+// Flags that describe an endpoint. The bundled model has a fixed profile (no task prompts)
+// and no transport, so with --bundled each of these is a mistake worth saying so.
+const ENDPOINT_FLAGS = ['base-url', 'model', 'key-env', 'query-prefix', 'document-prefix', 'similarity-prefix'] as const;
 
 export function parseArgs(argv: string[]): EvalArgs {
   const { values } = parseNodeArgs({
@@ -313,19 +378,38 @@ export function parseArgs(argv: string[]): EvalArgs {
       'query-prefix': { type: 'string' },
       'document-prefix': { type: 'string' },
       'similarity-prefix': { type: 'string' },
-      fixture: { type: 'string' },
+      fixture: { type: 'string', multiple: true },
+      bundled: { type: 'boolean' },
+      'model-dir': { type: 'string' },
+      'identifier-guard': { type: 'boolean' },
     },
     strict: true,
   });
+  const bundled = values.bundled ?? false;
   const baseUrl = values['base-url'];
   const model = values.model;
-  if (!baseUrl || !model) throw new Error('--base-url and --model are required');
-  const widths = (values.widths ?? '').split(',').filter(Boolean).map(w => Number.parseInt(w, 10));
+  if (bundled) {
+    const given = ENDPOINT_FLAGS.filter(flag => values[flag] !== undefined);
+    if (given.length > 0) {
+      throw new Error(`--bundled scores the in-process model, so it takes no endpoint flags; remove ${given.map(f => `--${f}`).join(', ')}`);
+    }
+  } else {
+    if (!baseUrl || !model) throw new Error('--base-url and --model are required (or pass --bundled)');
+    if (values['model-dir'] !== undefined) throw new Error('--model-dir applies only with --bundled');
+  }
+  // The bundled model has one width; it is the default, and nothing wider exists to truncate.
+  const widths = (values.widths ?? (bundled ? String(ALL_MINILM_L6_V2.dimensions) : ''))
+    .split(',').filter(Boolean).map(w => Number.parseInt(w, 10));
   if (widths.length === 0 || widths.some(w => !Number.isInteger(w) || w < 1)) {
     throw new Error(`--widths must be a comma-separated list of positive integers, got: ${values.widths ?? ''}`);
   }
+  if (bundled && widths.some(w => w > ALL_MINILM_L6_V2.dimensions)) {
+    throw new Error(`--widths: the bundled model's vectors are ${ALL_MINILM_L6_V2.dimensions} wide, got: ${values.widths ?? ''}`);
+  }
   return {
-    baseUrl: baseUrl.replace(/\/+$/, ''),
+    bundled,
+    modelDir: bundled ? path.resolve(process.cwd(), values['model-dir'] ?? DEFAULT_EMBEDDING_MODEL_DIR) : undefined,
+    baseUrl: baseUrl?.replace(/\/+$/, ''),
     model,
     keyEnv: values['key-env'],
     widths,
@@ -334,41 +418,68 @@ export function parseArgs(argv: string[]): EvalArgs {
       document: values['document-prefix'] ?? '',
       similarity: values['similarity-prefix'] ?? '',
     },
-    fixture: values.fixture ?? DEFAULT_FIXTURE,
+    identifierGuard: values['identifier-guard'] ?? false,
+    fixtures: values.fixture ?? [...DEFAULT_FIXTURES],
   };
 }
 
 const logger = pino({ name: 'embedding-eval', level: process.env.LOG_LEVEL ?? 'info' });
 
-async function main(): Promise<number> {
-  const args = parseArgs(process.argv.slice(2));
+/** The service under test and the name the report gives it. */
+async function buildService(args: EvalArgs): Promise<{ service: EmbeddingService; name: string; prefixes: EmbeddingProfile['prefixes'] } | undefined> {
+  if (args.bundled) {
+    const modelDir = args.modelDir!;
+    // The same factory and profile production boots with, so the vectors are the ones
+    // the thresholds will be applied to. The profile's thresholds are not read here.
+    const profile: EmbeddingProfile = { ...ALL_MINILM_L6_V2, weightsSha256: await hashBundledWeights(modelDir, logger) };
+    const service = await EmbeddingService.createBundled(modelDir, profile, logger);
+    return { service, name: `${embeddingStamp(profile)} (bundled, ${modelDir})`, prefixes: profile.prefixes };
+  }
+
+  const model = args.model!;
   let apiKey: string | undefined;
   if (args.keyEnv) {
     apiKey = process.env[args.keyEnv];
     if (!apiKey) {
       logger.error(`embedding-eval: --key-env names ${args.keyEnv}, which is not set`);
-      return 1;
+      return undefined;
     }
   }
-  const fixture = loadFixture(args.fixture);
   // Only the transport and the prefixes are used; the thresholds are what this run measures.
   const probe: EmbeddingProfile = {
-    model: args.model,
+    model,
     dimensions: Math.max(...args.widths),
     prefixes: args.prefixes,
     thresholds: OPENAI_TEXT_EMBEDDING_3_SMALL.thresholds,
   };
-  const service = EmbeddingService.createWithEndpoint({ baseUrl: args.baseUrl, model: args.model, apiKey }, probe, logger);
-  const reports = await evaluate(fixture, service, args.widths);
-  process.stdout.write(formatReport(args.model, args.prefixes, reports) + '\n');
+  const service = EmbeddingService.createWithEndpoint({ baseUrl: args.baseUrl!, model, apiKey }, probe, logger);
+  return { service, name: model, prefixes: args.prefixes };
+}
+
+async function main(): Promise<number> {
+  const args = parseArgs(process.argv.slice(2));
+  // Load every fixture first, so a malformed one fails before any embedding work.
+  const fixtures = args.fixtures.map(file => ({ file, fixture: loadFixture(file) }));
+  const built = await buildService(args);
+  if (!built) return 1;
+  for (const { file, fixture } of fixtures) {
+    const reports = await evaluate(fixture, built.service, args.widths, { identifierGuard: args.identifierGuard });
+    process.stdout.write(
+      formatReport(built.name, built.prefixes, reports, { fixture: file, identifierGuard: args.identifierGuard }) + '\n',
+    );
+  }
   return 0;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  // exitCode, not process.exit(): exiting while onnxruntime-node's session is still alive
+  // intermittently aborts in its native teardown (libc++abi "recursive_mutex lock failed",
+  // exit 134), which turns a finished --bundled run into a failure. Letting the event loop
+  // drain shuts it down cleanly.
   main()
-    .then(code => process.exit(code))
+    .then(code => { process.exitCode = code; })
     .catch((err: unknown) => {
       logger.error({ err }, 'embedding-eval: failed');
-      process.exit(1);
+      process.exitCode = 1;
     });
 }
