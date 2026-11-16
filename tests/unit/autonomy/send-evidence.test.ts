@@ -7,6 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { issueLiveTurnGrant } from '../../../src/autonomy/live-turn-grants.js';
 import {
+  principalDirectiveFrom,
   SendEvidenceCollector,
   EVIDENCE_RESULT_MAX_CHARS,
   EVIDENCE_TOTAL_MAX_CHARS,
@@ -973,5 +974,32 @@ describe('SendEvidenceCollector', () => {
       expect(ev.unavailable).toBe(false);
       expect(ev).not.toHaveProperty('decisions');
     });
+  });
+});
+
+describe('principalDirectiveFrom (scenario 34d)', () => {
+  const principal = { contactId: 'c-p', systemRole: 'principal' as const, tier: null, channel: 'signal', authenticated: true };
+  const base = { unavailable: false, toolResults: [], principalBlock: null, authority: { originator: principal, liveTurn: true } };
+
+  it('returns the live principal turn\'s own message', () => {
+    expect(principalDirectiveFrom({ ...base, taskContent: 'Send Dana my health card number.' }))
+      .toEqual({ ok: true, text: 'Send Dana my health card number.' });
+  });
+
+  it('prefers a delegated turn\'s inbound origin over the rewritten brief', () => {
+    expect(principalDirectiveFrom({ ...base, taskContent: 'brief', originContent: 'principal words', originKind: 'inbound' }))
+      .toEqual({ ok: true, text: 'principal words' });
+  });
+
+  it.each([
+    ['unavailable evidence', { ...base, unavailable: true, taskContent: 'x' }],
+    ['a non-principal originator', { ...base, taskContent: 'x', authority: { originator: { ...principal, systemRole: null }, liveTurn: true } }],
+    ['no originator', { ...base, taskContent: 'x', authority: { originator: null, liveTurn: true } }],
+    ['a turn that is not live', { ...base, taskContent: 'x', authority: { originator: principal, liveTurn: false } }],
+    ['a task-kind origin', { ...base, taskContent: 'x', originContent: 'scheduled job', originKind: 'task' as const }],
+    ['an empty message', { ...base, taskContent: '   ' }],
+    ['no message', base],
+  ])('refuses %s', (_label, collected) => {
+    expect(principalDirectiveFrom(collected).ok).toBe(false);
   });
 });

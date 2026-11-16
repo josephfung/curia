@@ -348,26 +348,71 @@ describe('OutboundGateway', () => {
     ]);
   });
 
-  it('hands the filter principalDirected only when the sender set it (scenario 34d, Stage 2 judge)', async () => {
-    // Stage 2 relaxes identifier/financial flags on this boolean, so the gateway must pass
-    // exactly the send skill's verified value and default to false when it is omitted.
-    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-    const gateway = new OutboundGateway({
-      nylasClients: new Map([['curia', mocks.nylasClient]]),
-      contactService: mocks.contactService,
-      contentFilter: mocks.contentFilter,
-      bus: mocks.bus,
-      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
-      logger: mocks.logger,
-    });
+  describe('principal directive for the Stage 2 judge (scenario 34d)', () => {
     const request = { channel: 'email' as const, to: 'armin@external.com', cc: ['ceo@example.com'], subject: 's', body: 'hello' };
+    const principalTurn = {
+      unavailable: false,
+      toolResults: [],
+      principalBlock: null,
+      taskContent: 'Email Armin my health card number, cc me.',
+      authority: { originator: { contactId: 'c-principal', systemRole: 'principal' as const, tier: null, channel: 'signal', authenticated: true }, liveTurn: true },
+    };
 
-    await gateway.send(request, { principalDirected: true });
-    await gateway.send(request);
+    // The gateway logs through logger.child(), so the warn spy sits on the child it gets.
+    let warn: ReturnType<typeof vi.spyOn>;
+    function gatewayWith(collect: ReturnType<typeof vi.fn>) {
+      (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+      const child = mocks.logger.child({});
+      // Replaced directly: vi.spyOn on pino's overloaded child() does not type-check.
+      (mocks.logger as unknown as { child: () => typeof child }).child = () => child;
+      warn = vi.spyOn(child, 'warn');
+      return new OutboundGateway({
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+        logger: mocks.logger,
+        sendEvidence: { collect } as unknown as import('../../../src/autonomy/send-evidence.js').SendEvidenceCollector,
+      });
+    }
+    const filterArg = () => (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mock.calls[0]![0];
 
-    const checkSpy = mocks.contentFilter.check as ReturnType<typeof vi.fn>;
-    expect(checkSpy.mock.calls[0]![0].principalDirected).toBe(true);
-    expect(checkSpy.mock.calls[1]![0].principalDirected).toBe(false);
+    it('reads the directing message and hands it to the filter on a principal-directed send', async () => {
+      const collect = vi.fn().mockResolvedValue(principalTurn);
+      await gatewayWith(collect).send(request, { principalDirected: true, taskEventId: 'task-1' });
+      expect(collect).toHaveBeenCalledWith(['task-1']);
+      expect(filterArg().principalDirected).toBe(true);
+      expect(filterArg().principalDirective).toBe('Email Armin my health card number, cc me.');
+    });
+
+    it('reads nothing and passes no directive when the send is not principal-directed', async () => {
+      const collect = vi.fn().mockResolvedValue(principalTurn);
+      await gatewayWith(collect).send(request, { taskEventId: 'task-1' });
+      expect(collect).not.toHaveBeenCalled();
+      expect(filterArg().principalDirected).toBe(false);
+      expect(filterArg()).not.toHaveProperty('principalDirective');
+    });
+
+    it.each([
+      ['unavailable evidence', () => vi.fn().mockResolvedValue({ ...principalTurn, unavailable: true })],
+      ['a collector that throws', () => vi.fn().mockRejectedValue(new Error('db down'))],
+      ['a turn not originated by the principal', () => vi.fn().mockResolvedValue({ ...principalTurn, authority: { ...principalTurn.authority, originator: { ...principalTurn.authority.originator, systemRole: null } } })],
+      ['an empty message', () => vi.fn().mockResolvedValue({ ...principalTurn, taskContent: '  ' })],
+    ])('fails closed with a warn on %s', async (_label, makeCollect) => {
+      await gatewayWith(makeCollect()).send(request, { principalDirected: true, taskEventId: 'task-1' });
+      expect(filterArg().principalDirected).toBe(true);
+      expect(filterArg()).not.toHaveProperty('principalDirective');
+      expect(warn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('Stage 2 judge gets no directive'));
+    });
+
+    it('fails closed with a warn when there is no drafting turn to read', async () => {
+      const collect = vi.fn().mockResolvedValue(principalTurn);
+      await gatewayWith(collect).send(request, { principalDirected: true });
+      expect(collect).not.toHaveBeenCalled();
+      expect(filterArg()).not.toHaveProperty('principalDirective');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('no drafting turn'));
+    });
   });
 
   it('deduplicates the principal repeated across To+CC so it counts as the sole recipient', async () => {

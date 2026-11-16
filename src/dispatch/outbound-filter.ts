@@ -79,10 +79,17 @@ export interface FilterCheckInput {
    * content autonomously. Stage 2.5 does not block a principal-directed send: the
    * principal may tell a `known` contact something about a third party. Absent means
    * the gate applies, so a sender that omits it fails closed (#1870).
-   * Stage 2 also reads it: the LLM judge stops flagging personal identifiers and financial
-   * details the principal chose to share, but still flags secrets and its (a)-(c) leaks.
+   * Stage 2 reads it together with principalDirective below.
    */
   principalDirected?: boolean;
+  /**
+   * The principal's own message that directed this send (scenario 34d), read by the gateway
+   * from the audit log via SendEvidenceCollector — the evidence band review reads. Used only
+   * with principalDirected: the Stage 2 judge then releases personal identifiers and financial
+   * details that message asks to send to these recipients. Secrets and the judge's (a)-(c)
+   * leaks still block. Absent (not directed, or the read failed): Stage 2 as before.
+   */
+  principalDirective?: string;
   /**
    * Full recipient set (To + CC), each tagged isPrincipal structurally. Used by
    * Stage 2 (LLM judge). Optional: when absent (legacy callers / Stage-1-only unit
@@ -646,11 +653,12 @@ export class OutboundContentFilter {
       recipients: input.recipients ?? [],
       principalIncluded: input.principalIncluded ?? false,
       principalIsSoleRecipient: input.principalIsSoleRecipient ?? false,
-      // Same verified authority signal band review trusts (scenario 34d): both gateway call
-      // sites set it from the send's principalDirected option, which send skills compute with
-      // isPrincipalDirectedSend() (live principal turn by stamped originator, or humanApproved).
-      // Lets Stage 2 pass identifiers the principal asked to share; secrets still block.
-      principalDirected: input.principalDirected === true,
+      // Scenario 34d: the principal's directing message, only on a principal-directed send
+      // (both flags must agree, so a stray directive alone releases nothing). Lets Stage 2
+      // pass identifiers that message asks to share; secrets and (a)-(c) still block.
+      ...(input.principalDirected === true && input.principalDirective
+        ? { principalDirective: input.principalDirective }
+        : {}),
       conversationId: input.conversationId,
       channelId: input.channelId,
     };

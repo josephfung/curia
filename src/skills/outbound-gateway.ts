@@ -63,6 +63,7 @@ import { enrichGatewayApprovalPayload } from '../autonomy/approval-notification.
 import type { ApprovalDelivery } from '../autonomy/approval-delivery.js';
 import type { AutonomyGating } from '../autonomy/band-policy.js';
 import { budgetedOriginator, type RelayBudget } from '../autonomy/relay-budget.js';
+import { principalDirectiveFrom, type SendEvidenceCollector } from '../autonomy/send-evidence.js';
 import { isUuid } from '../util/uuid.js';
 import {
   BAND_RULES, describePiiLabels, plainReviewReasons, type BandReviewAsk, type BandReviewReport, type BandReviewSignals, type BandSendReview,
@@ -418,6 +419,12 @@ export interface OutboundGatewayConfig {
   gating?: AutonomyGating;
   /** The band review (#2159). Used only when gating is 'band'. */
   bandReview?: Pick<BandSendReview, 'review'>;
+  /**
+   * Reads the principal's directing message for a principal-directed send, for the content
+   * filter's Stage 2 judge (scenario 34d). The same collector band review reads. Absent: no
+   * directive is read, so Stage 2 releases nothing (fail-closed).
+   */
+  sendEvidence?: Pick<SendEvidenceCollector, 'collect'>;
   /**
    * Caps the immediate messages to the principal that one outside contact can cause (#1320).
    * Absent: no cap.
@@ -1276,6 +1283,7 @@ export class OutboundGateway {
   private readonly outboundQueueReadiness: Map<string, () => boolean>;
   private readonly gating: AutonomyGating;
   private readonly bandReview?: Pick<BandSendReview, 'review'>;
+  private readonly sendEvidence?: Pick<SendEvidenceCollector, 'collect'>;
   private readonly relayBudget?: RelayBudget;
   private readonly principalMailbox?: PrincipalMailboxResolver;
   private readonly principalMailboxIds?: () => Promise<readonly string[]>;
@@ -1316,6 +1324,7 @@ export class OutboundGateway {
     this.outboundQueueReadiness = new Map(config.outboundQueueReadiness ?? []);
     this.gating = config.gating ?? 'tier';
     this.bandReview = config.bandReview;
+    this.sendEvidence = config.sendEvidence;
     this.relayBudget = config.relayBudget;
     this.principalMailbox = config.principalMailbox;
     this.principalMailboxIds = config.principalMailboxIds;
@@ -2038,6 +2047,7 @@ export class OutboundGateway {
         recipientTier,
         recipientTierUnresolved,
         principalDirected: options?.principalDirected === true,
+        ...(await this.principalDirectiveOption(options, principalIsSoleRecipient)),
         recipients,
         principalIncluded,
         principalIsSoleRecipient,
@@ -2459,6 +2469,55 @@ export class OutboundGateway {
     } catch (err) {
       this.log.warn({ err, channel }, 'outbound-gateway: PII redactor threw building an audit copy — scrubbing it instead');
       return scrubPii(text);
+    }
+  }
+
+  /**
+   * The content filter's `principalDirective` for this send (scenario 34d): the principal's own
+   * directing message, so the Stage 2 judge can release identifiers and financial details that
+   * message asks to send. Read only for a principal-directed send that reaches a third party
+   * (the judge skips a principal-only send, so reading would be wasted).
+   *
+   * Fail-closed and non-throwing: no collector, no drafting turn, a failed read, or a turn that
+   * is not a live principal turn with a readable message all return {} (Stage 2 releases
+   * nothing, as before) with a warn, so a principal-directed block can be traced to it.
+   *
+   * TODO(#2312 follow-up): band review (Step 2.5) collects evidence for the same turn again.
+   * Its collect() scope differs (prior bounced turns, decision scope), so sharing the result
+   * would mean threading a pre-collected value through BandSendReview; one extra audit read
+   * per principal-directed send was judged cheaper than that coupling.
+   */
+  private async principalDirectiveOption(
+    options: { principalDirected?: boolean; taskEventId?: string } | undefined,
+    principalIsSoleRecipient: boolean,
+  ): Promise<{ principalDirective?: string }> {
+    if (options?.principalDirected !== true || principalIsSoleRecipient) return {};
+    if (!this.sendEvidence) {
+      this.log.warn('outbound-gateway: principal-directed send but no evidence collector wired — Stage 2 judge gets no directive');
+      return {};
+    }
+    if (!options.taskEventId) {
+      this.log.warn('outbound-gateway: principal-directed send has no drafting turn — Stage 2 judge gets no directive');
+      return {};
+    }
+    try {
+      const read = principalDirectiveFrom(await this.sendEvidence.collect([options.taskEventId]));
+      if (!read.ok) {
+        this.log.warn(
+          { taskEventId: options.taskEventId, reason: read.reason },
+          'outbound-gateway: principal\'s directing message not usable — Stage 2 judge gets no directive',
+        );
+        return {};
+      }
+      return { principalDirective: read.text };
+    } catch (err) {
+      // collect() is documented never to throw; guard anyway so a throw cannot block the send
+      // for the wrong reason. Failing here only withholds the release.
+      this.log.warn(
+        { err, taskEventId: options.taskEventId },
+        'outbound-gateway: reading the principal\'s directing message threw — Stage 2 judge gets no directive',
+      );
+      return {};
     }
   }
 
@@ -5764,6 +5823,7 @@ export class OutboundGateway {
         recipientTier: recipientTierForDraft,
         recipientTierUnresolved: recipientTierUnresolvedForDraft,
         principalDirected: options?.principalDirected === true,
+        ...(await this.principalDirectiveOption(options, draftPrincipalSole)),
         recipients: draftRecipients,
         principalIncluded: draftPrincipalIncluded,
         principalIsSoleRecipient: draftPrincipalSole,

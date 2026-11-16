@@ -2255,6 +2255,8 @@ async function main(): Promise<void> {
       outboundQueueReadiness,
       gating: autonomyGating,
       ...(bandReview ? { bandReview } : {}),
+      // The principal's directing message for the Stage 2 judge (scenario 34d), under either gating.
+      sendEvidence,
       // Caps immediate relays to the principal per outside contact (#1320).
       relayBudget: new RelayBudget({ perHour: resolveRelayBudgetConfig(yamlConfig.autonomy).perHour }),
       // Sends from the principal's own mailbox (#2474). Its own entry, never in nylasClients;

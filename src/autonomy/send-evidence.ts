@@ -290,6 +290,38 @@ function taskText(text: string): string {
   return clip(redactSecrets(text), EVIDENCE_RESULT_MAX_CHARS);
 }
 
+/**
+ * The principal's own words that directed a send, read from collected evidence, for the
+ * outbound Stage 2 judge (scenario 34d). Pure: the caller collects, this only decides.
+ *
+ * Fail-closed: anything short of a readable message from a live principal turn is refused
+ * with a reason the caller logs. The authority check mirrors band review's 'principal'
+ * authority (stamped originator systemRole, plus the drafting turn's liveTurn).
+ *
+ * Which text counts: a delegated turn's origin, only when it is the root inbound message
+ * (kind 'inbound'), because the drafting turn's own content is then the assistant's
+ * rewritten brief. A task-kind origin is a system-started root, not the principal speaking,
+ * so it is refused. With no delegation origin the drafting turn's content is the principal's
+ * inbound itself.
+ */
+export function principalDirectiveFrom(
+  collected: CollectedEvidence,
+): { ok: true; text: string } | { ok: false; reason: string } {
+  if (collected.unavailable) return { ok: false, reason: 'evidence unavailable' };
+  const { authority } = collected;
+  if (authority.originator?.systemRole !== 'principal') return { ok: false, reason: 'drafting turn not principal-originated' };
+  if (!authority.liveTurn) return { ok: false, reason: 'drafting turn is not a live turn' };
+  let text: string | undefined;
+  if (collected.originContent !== undefined) {
+    if (collected.originKind !== 'inbound') return { ok: false, reason: 'delegation origin is not an inbound message' };
+    text = collected.originContent;
+  } else {
+    text = collected.taskContent;
+  }
+  if (text === undefined || text.trim() === '') return { ok: false, reason: 'principal message is empty' };
+  return { ok: true, text };
+}
+
 /** The delegation chain's root task, or why it could not be followed. */
 type DelegationRoot =
   | { ok: true; root: AuditLogRow | null }
