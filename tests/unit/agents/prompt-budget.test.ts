@@ -177,7 +177,7 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // #2474 D6 batch read-back moved to code (rung 1): send-draft's optional batch_size and
   // batch_confirmed (+82 bytes after trimming the description's batch sentence). The tool can only
   // refuse an unconfirmed batch at its first send if the model says it is one, so the inputs can't
-  // move higher: 49,598 over 46 local tools. TODO: needs the maintainer's approval.
+  // move higher: 49,598 over 46 local tools (raise approved by the maintainer, 2026-11-16).
   { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 49_598, allowMcpPins: false },
   // contacts: YAML 15,595 → 11,423 chars (~4,831 → ~3,788 tokens always-on with its SKILL.md bodies);
   // 35,311 bytes over its local tools.
