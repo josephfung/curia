@@ -96,13 +96,14 @@ All event types are defined as a TypeScript discriminated union — no `any` pay
 - **Database:** PostgreSQL 16+ with pgvector extension
 - **LLM SDKs:** @anthropic-ai/sdk, openai (embeddings + OpenRouter provider); `ollama` planned for a future local-model provider (not yet implemented — see spec 02)
 - **MCP:** @modelcontextprotocol/sdk (client)
+- **Local inference:** onnxruntime-node and @huggingface/tokenizers (the bundled embedding model, ADR-065)
 - **HTTP:** Fastify (for HTTP API channel + dashboard endpoints)
 - **Testing:** Vitest
 - **Build:** tsup
 - **Config:** YAML (js-yaml) with env var interpolation
 - **Logging:** pino (structured JSON)
 - **Migrations:** node-pg-migrate (plain SQL migrations, no ORM coupling)
-- **Embeddings:** any OpenAI-compatible `/embeddings` endpoint, OpenAI `text-embedding-3-small` by default; width and thresholds from a per-model profile (ADR-051); pgvector HNSW index
+- **Embeddings:** by default the bundled all-MiniLM-L6-v2 (int8 ONNX, 384-d), run in-process via onnxruntime-node (ADR-065); any OpenAI-compatible `/embeddings` endpoint works via `EMBEDDING_BASE_URL` (ADR-051); width and thresholds from a per-model profile (ADR-051); pgvector HNSW index
 
 ---
 

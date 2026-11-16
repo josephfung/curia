@@ -225,7 +225,9 @@ overrides:
   # >=0.6.0 was satisfied by 0.6.0, which carries GHSA-7q85-xj36-vmfc (HIGH) as well as
   # GHSA-xcpc-8h2w-3j85, the advisory this pin was added for. 0.6.1 published 2026-09-11
   # and also escapes GHSA-vwc7-r8mq-g2x9 (range caps at <=0.6.0), which the block at the
-  # bottom of this file used to list as unfixable. Only consumer is optional onnxruntime-node.
+  # bottom of this file used to list as unfixable. Only consumer is onnxruntime-node, now a
+  # direct production dependency (the bundled embedder, #2023) whose install script is
+  # disabled (allowBuilds: false), so adm-zip is installed but never run.
   adm-zip: '>=0.6.1'
   # Raised off >=0.35.4 (#1949): that floor admitted 0.35.4, which carries
   # GHSA-wq5f-xc86-pv6w (HIGH, <0.35.5), a librsvg CVE in the bundled libvips.
