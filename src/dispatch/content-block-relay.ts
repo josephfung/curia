@@ -8,7 +8,7 @@
 
 import { NO_REPLY_SENTINEL } from './no-reply.js';
 import { CONTENT_BLOCK_REWRITE_MARKER } from '../memory/synthetic-user-turn.js';
-import type { TaskOriginator } from '../contacts/types.js';
+import type { InboundSenderContext, TaskOriginator } from '../contacts/types.js';
 import type { LinkedTaskMeta } from './dispatcher.js';
 import type { AuditLogRow } from '../audit/audit-log-repo.js';
 import { redactSecrets, renderResult } from '../autonomy/send-evidence.js';
@@ -54,6 +54,13 @@ export interface RelayOutboundContext {
   liveTurn?: boolean;
   /** Propagated so rewrite retries still enforce Gate C (#1733). */
   originator?: TaskOriginator;
+  /**
+   * The drafting turn's resolved sender and trust score, so the rewrite is told who it is
+   * writing to. Without them the runtime takes the rewrite for an unresolved sender and
+   * applies the LOW-TRUST rules, even to the principal (scenario 47b).
+   */
+  senderContext?: InboundSenderContext;
+  messageTrustScore?: number;
   /** The note queued for the principal with the first reply: evidence for the rewrite's review (#2312). */
   reportedToPrincipal?: string;
   /** The reply's outreach link, so the rewrite's review sees the same authority as the first (#2192). */

@@ -1337,7 +1337,10 @@ export class AgentRuntime {
     const senderCtx = taskEvent.payload.senderContext;
     // Stamped onto user turns so a later conversation can recall this contact
     // without scanning every thread (#1599). Non-UUIDs are dropped.
-    const attributedSenderContactId = senderCtx?.resolved
+    // Not on Curia's own briefs (a content-block rewrite carries the drafting turn's sender
+    // context so it knows who it writes to): their text is not that person's words, and recall
+    // would quote it back as theirs.
+    const attributedSenderContactId = senderCtx?.resolved && taskEvent.payload.syntheticTurn !== true
       ? persistableContactId(senderCtx.contactId)
       : undefined;
     const turnChannelId = taskEvent.payload.channelId;

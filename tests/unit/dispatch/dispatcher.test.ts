@@ -2632,6 +2632,72 @@ describe('Dispatcher content-block relay (#1355)', () => {
     expect(response.parentEventId).toBe(task.id);
   });
 
+  // Scenario 47b: a rewrite with no sender context fell to the runtime's unresolved-sender
+  // LOW-TRUST branch, so a blocked reply to the principal on Signal was rewritten into the
+  // outsider decline ("I'll check with Avery and get back to you"), sent to the principal.
+  it('gives the rewrite the drafting turn\'s sender context and trust score', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const principal = {
+      resolved: true,
+      contactId: 'principal-1',
+      displayName: 'Avery Testwell',
+      role: 'ceo',
+      systemRole: 'principal' as const,
+      tier: 'principal' as ContactTier,
+      kind: 'principal' as ContactKind,
+      verified: true,
+      kgNodeId: null,
+      knowledgeSummary: '',
+      authorization: null,
+      contactConfidence: 1.0,
+    } satisfies InboundSenderContext;
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: { resolve: vi.fn().mockResolvedValue(principal) } as unknown as ContactResolver,
+      channelPolicies: { signal: { trust: 'high', unknownSender: 'allow', threaded: false } },
+    });
+    dispatcher.register();
+    const tasks: AgentTaskEvent[] = [];
+    const outbound: OutboundMessageEvent[] = [];
+    bus.subscribe('agent.task', 'system', (e) => { tasks.push(e as AgentTaskEvent); });
+    bus.subscribe('outbound.message', 'channel', (e) => { outbound.push(e as OutboundMessageEvent); });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'signal:conv-47b', channelId: 'signal', senderId: '+15555550147', content: 'Book a sync with Priya',
+    }));
+    expect(tasks).toHaveLength(1);
+    const first = tasks[0]!;
+    await bus.publish('system', createAgentResponse({
+      agentId: 'coordinator', conversationId: 'signal:conv-47b', content: 'Already booked with Priya Raman.', parentEventId: first.id,
+    }));
+    await bus.publish('dispatch', createOutboundBlocked({
+      blockId: 'block_47b', conversationId: 'signal:conv-47b', channelId: 'signal', content: 'Already booked with Priya Raman.',
+      recipientId: '+15555550147', reason: 'unresolved-identity', findings: [{ rule: 'unresolved-identity', detail: 'Priya Raman' }],
+      parentEventId: outbound[0]!.id,
+    }));
+
+    expect(tasks).toHaveLength(2);
+    const rewrite = tasks[1]!;
+    expect(rewrite.payload.metadata?.contentBlockRewrite).toBe(true);
+    expect(rewrite.payload.senderContext).toEqual(first.payload.senderContext);
+    expect(rewrite.payload.senderContext).toMatchObject({ resolved: true, systemRole: 'principal' });
+    expect(rewrite.payload.messageTrustScore).toBe(first.payload.messageTrustScore);
+
+    // A second block: the next rewrite inherits it from the first rewrite's routing.
+    await bus.publish('system', createAgentResponse({
+      agentId: 'coordinator', conversationId: 'signal:conv-47b', content: 'Already booked with Priya Raman, still.', parentEventId: rewrite.id,
+    }));
+    await bus.publish('dispatch', createOutboundBlocked({
+      blockId: 'block_47b_2', conversationId: 'signal:conv-47b', channelId: 'signal', content: 'Already booked with Priya Raman, still.',
+      recipientId: '+15555550147', reason: 'unresolved-identity', findings: [{ rule: 'unresolved-identity', detail: 'Priya Raman' }],
+      parentEventId: outbound[1]!.id,
+    }));
+    expect(tasks).toHaveLength(3);
+    expect(tasks[2]!.payload.senderContext).toEqual(first.payload.senderContext);
+  });
+
   describe('what the original turn did (#2615)', () => {
     function bookingRow(): AuditLogRow {
       return {
