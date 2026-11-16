@@ -67,6 +67,8 @@ function loadOnnxRuntime(): Promise<OnnxRuntime> {
 /** The part of an ONNX session the backend uses. A stub stands in for it in tests. */
 export interface OnnxRunner {
   run(feeds: Record<string, Tensor>): Promise<Record<string, OnnxValue>>;
+  /** Frees the native session. InferenceSession has it; a test stub may leave it out. */
+  release?(): Promise<void>;
 }
 
 /** The part of a tokenizer the backend uses. Padding is off: one text per call. */
@@ -156,6 +158,8 @@ export class OnnxEmbeddingBackend {
   // Each call chains onto this, so session.run() never runs concurrently on one session.
   // Single-label inference is about a millisecond, so the queue costs nothing (design §2).
   private queue: Promise<unknown> = Promise.resolve();
+  // Set by close(), so a second close() waits on the first instead of releasing twice.
+  private closing: Promise<void> | undefined;
 
   constructor(private readonly opts: OnnxEmbeddingBackendOptions) {}
 
@@ -185,9 +189,26 @@ export class OnnxEmbeddingBackend {
         if (isMissing(err)) throw missingFileError(file, err);
         throw err;
       }
-      return JSON.parse(text) as object;
+      try {
+        return JSON.parse(text) as object;
+      } catch (err) {
+        // A plain Error (not BundledModelFileMissingError): the file is there but will not
+        // load, which the boot gate reports as bundled_load_failed. Name the file, since
+        // JSON.parse's own message does not.
+        throw new Error(`${file}: ${(err as Error).message}`, { cause: err });
+      }
     };
-    const tokenizer = new Tokenizer(await readJson(TOKENIZER_FILE), await readJson(TOKENIZER_CONFIG_FILE));
+    const tokenizerJson = await readJson(TOKENIZER_FILE);
+    const tokenizerConfig = await readJson(TOKENIZER_CONFIG_FILE);
+    let tokenizer: Tokenizer;
+    try {
+      tokenizer = new Tokenizer(tokenizerJson, tokenizerConfig);
+    } catch (err) {
+      // Valid JSON the tokenizer cannot use (another format, a truncated vocab). Same
+      // classification as above: bundled_load_failed, with the file named.
+      const file = path.join(modelDir, TOKENIZER_FILE);
+      throw new Error(`${file}: ${(err as Error).message}`, { cause: err });
+    }
 
     const weights = path.join(modelDir, BUNDLED_WEIGHTS_FILE);
     try {
@@ -232,11 +253,30 @@ export class OnnxEmbeddingBackend {
   }
 
   embed(text: string): Promise<number[]> {
+    if (this.closing) return Promise.reject(new Error('Bundled embedding backend is closed'));
     const result = this.queue.then(() => this.embedNow(text));
     // The next call waits for this one to settle, not to succeed. The rejection itself
     // still reaches this call's caller through `result`, so nothing is swallowed.
     this.queue = result.catch(() => undefined);
     return result;
+  }
+
+  /**
+   * Releases the native ONNX session. Call it before process.exit(): exiting while a
+   * session is alive can abort the process in onnxruntime's native teardown (exit 134)
+   * instead of exiting with the intended code. Waits for an in-flight embed() first, so
+   * the session is never released under a running inference. Idempotent, and never
+   * throws: a failed release is logged, since the caller is on its way out anyway.
+   */
+  close(): Promise<void> {
+    this.closing ??= this.queue.then(async () => {
+      try {
+        await this.opts.session.release?.();
+      } catch (err) {
+        this.opts.logger.error({ err }, 'Failed to release the bundled embedding model session');
+      }
+    });
+    return this.closing;
   }
 
   private async embedNow(text: string): Promise<number[]> {
@@ -267,6 +307,13 @@ export class OnnxEmbeddingBackend {
     }
 
     const n = ids.length;
+    // A float tensor is what pooling reads. Another dtype (an export that outputs float16 or
+    // int8 activations) is its own problem, not a shape problem, so it gets its own message.
+    if (hidden instanceof ort.Tensor && !(hidden.data instanceof Float32Array)) {
+      this.publishError('PARSE_ERROR');
+      this.opts.logger.error({ type: hidden.type, dims: hidden.dims }, 'Bundled embedding output has an unexpected dtype');
+      throw new Error(`Unexpected embedding output type: ${hidden.type} (expected float32)`);
+    }
     const d = hidden instanceof ort.Tensor ? hidden.dims[2] : undefined;
     if (!(hidden instanceof ort.Tensor) || !(hidden.data instanceof Float32Array) || d !== this.opts.dimensions
       || hidden.dims[1] !== n) {

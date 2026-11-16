@@ -205,6 +205,8 @@ export function describeImplicitOpenAIDeprecation(): string {
 // Lets us swap OpenAI for a deterministic fake in tests without touching callers.
 interface EmbeddingBackend {
   embed(text: string): Promise<number[]>;
+  /** Frees native resources. Only the bundled (ONNX) backend holds any. */
+  close?(): Promise<void>;
 }
 
 /**
@@ -288,6 +290,15 @@ export class EmbeddingService {
 
   async embed(text: string, purpose: EmbeddingPurpose): Promise<number[]> {
     return this.backend.embed(this.profile.prefixes[purpose] + text);
+  }
+
+  /**
+   * Releases the backend's native resources: the bundled model's ONNX session. A no-op
+   * for an endpoint (HTTP) or test backend. Call it before process.exit(), since exiting
+   * with a live ONNX session can abort the process (exit 134). Never throws.
+   */
+  async close(): Promise<void> {
+    await this.backend.close?.();
   }
 
   /**

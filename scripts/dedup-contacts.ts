@@ -688,6 +688,17 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   }
 
   const pool = new Pool({ connectionString: databaseUrl });
+  // The real run's embedding service, hoisted so every exit path can release it: the
+  // bundled model holds an onnxruntime-node session, and exiting with one alive can abort
+  // the process in its native teardown (exit 134) instead of exiting with the sweep's code.
+  let kgEmbeddingService: EmbeddingService | undefined;
+  // Exit codes go through process.exitCode, not process.exit() (as reembed-kg.ts does):
+  // the session is released and the pool ended first, so the process exits on its own.
+  const finish = async (code: number): Promise<void> => {
+    await kgEmbeddingService?.close();
+    await pool.end();
+    process.exitCode = code;
+  };
 
   (async () => {
     try {
@@ -739,8 +750,10 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
           { err: embedding.gate === 'schema' || embedding.gate === 'bundled' ? embedding.err : undefined },
           `dedup-contacts: ${embedding.message} A real sweep needs entity memory (KG entity merge embeds fact labels). Re-run with --dry-run to preview without it.`,
         );
-        process.exit(1);
+        await finish(1);
+        return;
       }
+      if (embedding?.ok) kgEmbeddingService = embedding.service;
 
       // A real run uses real embeddings (the check above exits one that lacks them). A
       // dry-run uses the fake backend; it never embeds, so its results are unaffected.
@@ -862,14 +875,17 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
         }, 'dedup-contacts: sweep complete');
       }
 
-      await pool.end();
       // Non-zero exit on any sweep error OR any lost audit publish, so a partial audit
       // trail surfaces as a failed run rather than a silent gap.
-      process.exit((result.errorCount > 0 || auditPublishFailures > 0) ? 1 : 0);
+      await finish((result.errorCount > 0 || auditPublishFailures > 0) ? 1 : 0);
     } catch (err) {
       logger.error({ err }, 'dedup-contacts: fatal error');
-      await pool.end();
-      process.exit(1);
+      // finish() itself can only reject on pool.end(); fall back to a plain exit code so
+      // the failure is never reported as success.
+      await finish(1).catch((finishErr: unknown) => {
+        logger.error({ err: finishErr }, 'dedup-contacts: cleanup after the fatal error failed');
+        process.exitCode = 1;
+      });
     }
   })();
 }
