@@ -502,8 +502,31 @@ describe('recordingBandReview', () => {
     const decision = await recordingBandReview(inner, recorder).review(input);
     expect(decision).toEqual({ kind: 'bounce', findings: [] });
     expect(inner.review).toHaveBeenCalledWith(input);
-    expect(reviews).toEqual([{ labels: ['phone_us'], quoteLabels: ['sin_ca'], outcome: 'bounce' }]);
+    expect(reviews).toEqual([{ labels: ['phone_us'], quoteLabels: ['sin_ca'], outcome: 'bounce', rules: [] }]);
     expect(JSON.stringify(reviews)).not.toMatch(/555|692/);
+  });
+
+  it('records a bounce\'s rules but not its findings\' details, which quote the message', async () => {
+    const reviews: RecordedReview[] = [];
+    const recorder: SendRecorder = { ...runRecorder(), reviewed: (r) => { reviews.push(r); } };
+    const inner = { review: vi.fn().mockResolvedValue({ kind: 'bounce', findings: [{ rule: 'band_pii_unneeded', detail: 'shares "519-555-0186"' }] }) };
+    await recordingBandReview(inner, recorder).review({} as BandReviewInput);
+    expect(reviews).toEqual([{ labels: [], quoteLabels: [], outcome: 'bounce', rules: ['band_pii_unneeded'] }]);
+    expect(JSON.stringify(reviews)).not.toMatch(/555/);
+  });
+
+  it('records a hold\'s and a block\'s reason in full, with their rules (why the send stopped)', async () => {
+    const reviews: RecordedReview[] = [];
+    const recorder: SendRecorder = { ...runRecorder(), reviewed: (r) => { reviews.push(r); } };
+    const reason = `Held for the principal: ${'it commits the principal to a delivery date. '.repeat(8)}`;
+    const hold = { kind: 'hold', reason, findings: [{ rule: 'band_stakes', detail: reason }, { rule: 'band_pii', detail: 'x' }] };
+    const block = { kind: 'block', reason: 'Still has problems.', findings: [{ rule: 'band_pii_unneeded', detail: 'y' }] };
+    await recordingBandReview({ review: vi.fn().mockResolvedValue(hold) }, recorder).review({} as BandReviewInput);
+    await recordingBandReview({ review: vi.fn().mockResolvedValue(block) }, recorder).review({} as BandReviewInput);
+    expect(reviews).toEqual([
+      { labels: [], quoteLabels: [], outcome: 'hold', rules: ['band_stakes', 'band_pii'], reason },
+      { labels: [], quoteLabels: [], outcome: 'block', rules: ['band_pii_unneeded'], reason: 'Still has problems.' },
+    ]);
   });
 
   it('records a review with no detected items as one with no labels', async () => {

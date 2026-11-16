@@ -1523,7 +1523,12 @@ export async function readGatewayOutcome(stack: TestModeStack, scenario: Scenari
       ...(d.ownBody !== undefined ? { ownBody: d.ownBody } : {}),
       ...(d.quotedBody !== undefined ? { quotedBody: d.quotedBody } : {}),
     })),
-    reviews: scope.reviews.map(r => ({ labels: [...r.labels], quoteLabels: [...r.quoteLabels], outcome: r.outcome })),
+    // rules and reason say why a send was stopped (the approval's preview cuts the reason off).
+    reviews: scope.reviews.map(r => ({
+      labels: [...r.labels], quoteLabels: [...r.quoteLabels], outcome: r.outcome,
+      ...(r.rules ? { rules: [...r.rules] } : {}),
+      ...(r.reason !== undefined ? { reason: r.reason } : {}),
+    })),
     principalSends: scope.principalSends.map(e => ({ ...e, recipients: [...e.recipients] })),
     mailboxDigests: [...scope.mailboxDigests],
     holds: holds.rows.map(r => {
