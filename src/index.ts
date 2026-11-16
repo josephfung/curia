@@ -737,10 +737,9 @@ async function main(): Promise<void> {
   // /api/health reports whether entity memory is on and why not (design §7). One holder,
   // set here from the boot verdict; a later runtime check may set it again.
   const knowledgeGraphHealth = new KnowledgeGraphHealth();
-  {
-    const verdict = knowledgeGraphReasonFrom(embedding);
-    knowledgeGraphHealth.set(verdict.result, verdict.reason);
-  }
+  // setVerdict, not set: a boot drift finding can hide the deprecation reason, which the
+  // canary restores once its drift check passes.
+  knowledgeGraphHealth.setVerdict(knowledgeGraphReasonFrom(embedding));
   if (embedding.ok) {
     // Sensitivity classifier — built from the already-merged config (default.yaml +
     // local.yaml, see loadYamlConfig()) so operator overrides in local.yaml actually

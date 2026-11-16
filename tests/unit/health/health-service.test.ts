@@ -839,6 +839,20 @@ describe('HealthService embeddings canary: endpoint weight drift (#2023)', () =>
     expect(kg.get()).toEqual({ result: 'ok', reason: 'drift_unchecked' });
   });
 
+  it('counts an embed failure from the drift check itself in the canary outcome', async () => {
+    let tracker: { recordError: (key: string) => void } | undefined;
+    // The drift check's own embed call fails while it runs (as the bus subscriber would
+    // record it), then the check reports unchecked. The canary must see that failure.
+    const driftCheck = vi.fn(async () => {
+      tracker!.recordError('embeddings');
+      return 'unchecked';
+    });
+    const svc = new HealthService(makeDeps({ embeddingsEnabled: true, driftCheck }) as never);
+    tracker = (svc as unknown as { tracker: { recordError: (key: string) => void } }).tracker;
+    const results = await svc.runCanaries();
+    expect(results.find((r) => r.name === 'embeddings')?.status).toBe('fail');
+  });
+
   it('does not run without a drift check (bundled source) or with entity memory off', async () => {
     const driftCheck = vi.fn();
     const off = new HealthService(makeDeps({ embeddingsEnabled: false, driftCheck }) as never);

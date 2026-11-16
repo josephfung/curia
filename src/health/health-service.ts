@@ -347,8 +347,7 @@ export class HealthService {
     // endpoint (OpenAI or the operator's own) would serve it.
     await run('embeddings', async () => {
       if (!embeddingsEnabled) return { name: 'embeddings', status: 'skipped' };
-      const calls = this.canaryOutcome('embeddings', 'embeddings');
-      if (!this.deps.driftCheck) return calls;
+      if (!this.deps.driftCheck) return this.canaryOutcome('embeddings', 'embeddings');
       const drift = await this.canaryDrift(this.deps.driftCheck);
       if (drift === 'changed') {
         return {
@@ -357,7 +356,9 @@ export class HealthService {
           detail: `the endpoint serves other weights than made the stored vectors; run ${REEMBED_FORCE_COMMAND}`,
         };
       }
-      return calls;
+      // Read the call outcome after the drift check, so the check's own embed calls (and
+      // any failures among them) count, rather than a snapshot taken before they ran.
+      return this.canaryOutcome('embeddings', 'embeddings');
     });
 
     // Image generation canary — skipped when OpenAI is not configured.
