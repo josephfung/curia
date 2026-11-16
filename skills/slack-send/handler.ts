@@ -116,7 +116,9 @@ export class SlackSendHandler implements ToolHandler {
           // An approve-action replay: the principal approved this exact send (#2159).
           humanApproved: ctx.humanApproved,
           // Used only if band review holds this send (#2159): approval replays this skill with this input.
-          holdRecipe: { toolName: 'slack-send', partialPayload: ctx.input, description: `Slack message to ${identityName ?? destination}` },
+          // Named by the contact, as signal-send's is (scenario 34k): an identity label like
+          // "unlabelled" gives the agent nothing to match the principal's answer to.
+          holdRecipe: { toolName: 'slack-send', partialPayload: ctx.input, description: `Slack message to ${resolved.displayName?.trim() || identityName || destination}` },
         },
       );
 

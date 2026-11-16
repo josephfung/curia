@@ -103,7 +103,9 @@ export class SmsSendHandler implements ToolHandler {
           // An approve-action replay: the principal approved this exact send (#2159).
           humanApproved: ctx.humanApproved,
           // Used only if band review holds this send (#2159): approval replays this skill with this input.
-          holdRecipe: { toolName: 'sms-send', partialPayload: ctx.input, description: `SMS to ${identityName ?? destination}` },
+          // Named by the contact, as signal-send's is (scenario 34k): an identity label like
+          // "unlabelled" gives the agent nothing to match the principal's answer to.
+          holdRecipe: { toolName: 'sms-send', partialPayload: ctx.input, description: `SMS to ${resolved.displayName?.trim() || identityName || destination}` },
         },
       );
 
