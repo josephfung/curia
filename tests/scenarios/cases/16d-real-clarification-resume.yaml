@@ -15,6 +15,9 @@ description: >
   the resume token, research-analyst finishes the brief with a technology focus, and the
   coordinator relays the findings in its own words.
 tags: [real-delegation, delegation, clarification, outbound-context, research]
+# 5 runs: its critical behavior split across runs on the 2026-11-16 gate, so one run cannot
+# tell a flake from a regression. The default is 1 (tests/scenarios/README.md, "The gate").
+runs: 5
 delegation: real
 stub_sets: [human-channels]
 seed:

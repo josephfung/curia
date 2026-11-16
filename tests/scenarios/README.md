@@ -25,14 +25,14 @@ does with it, and what the coordinator makes of the result. See
 ## Run it
 
 ```bash
-# Release gate: every case, 5 runs, on the production standard-tier model
+# Release gate: every case, once (5 runs for the few nondeterministic ones), on the production standard-tier model
 pnpm scenarios --model deepseek/deepseek-v4.1-flash
 
 # Iterate on one case
 pnpm scenarios --case "sweep-on-close" --runs 2 --model deepseek/deepseek-v4.1-flash
 ```
 
-**Every run costs money:** each case runs 5 times by default, and the judge is billed too. The unfiltered suite is the release gate. While developing, run only the cases your change touches, with few runs, and compare against saved transcripts rather than re-running `main`.
+**Every run costs money:** each case runs once by default (a case can set `runs:`), and the judge is billed too. The unfiltered suite is the release gate. While developing, run only the cases your change touches, with few runs, and compare against saved transcripts rather than re-running `main`.
 
 | Flag | Meaning |
 |---|---|
@@ -134,8 +134,14 @@ PARTIAL counts as a miss here: the table below is binomial (pass/fail), and with
 at 0.5, three PASS and two PARTIAL would clear 0.8 on a behavior that fully held in 60% of
 runs. PARTIAL still earns half credit in the weighted score shown per case.
 
-The default is **5 runs** because the gate's discrimination depends on the run count.
-The figures come from curia-deploy's eval README:
+**One run per case by default**, like any other test. On the 2026-11-16 gate, 124 of the
+155 gate cases gave the same verdict on all five runs; repeating them bought nothing but
+time (107 minutes) and money. With one run, a critical behavior simply has to pass.
+
+**`runs: 5` only for a critical behavior that is genuinely nondeterministic**: one whose
+runs disagree, usually because it turns on a model's judgment call (the PII, grounding
+and band-stakes cases). Give the reason in a comment beside it. Where repeats are needed,
+the run count sets how well the gate discriminates (figures from curia-deploy's eval README):
 
 | Runs | 0.8 means | Fails a truly 95%-reliable behavior | Catches a truly 60% behavior |
 |---|---|---|---|
@@ -143,8 +149,12 @@ The figures come from curia-deploy's eval README:
 | **5** | **4/5** | **2.3%** | 66.3% |
 | 9 | 8/9 | 7.1% | 92.9% |
 
-At 3 runs the gate demands unanimity and is flaky. At 5 runs it rarely blocks a good
-prompt. Use 9 runs for a decision that needs to catch a mediocre behavior.
+So a repeated case uses 5 runs, not 3: at 3 the gate demands unanimity and is flaky. Use 9
+runs (`--runs 9`) for a one-off decision that needs to catch a mediocre behavior.
+
+A one-run case that fails is re-run on its own (`--case`) before anyone digs in: if it then
+passes, it is a flake to note, and if it flakes twice it earns `runs: 5`. See the release
+skill (`.claude/skills/release/SKILL.md`) for the gate's triage time-box.
 
 **Known failures.** A case can carry `known_failure: { issue: "#1234", reason: … }` for a
 tracked regression. It still runs, and its critical failures are printed under "Known

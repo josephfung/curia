@@ -16,7 +16,6 @@ description: >
   reply is drafted, in its own words, and neither agent releases the entry a second time.
 tags: [real-delegation, outbound-context, transfer-ownership, ceo-inbox]
 delegation: real
-runs: 5
 stub_sets: [human-channels, voice-profile, ceo-inbox-office]
 seed:
   contacts:

@@ -35,7 +35,6 @@ description: >
   click "Text me the code", and does not send an SMS.
 tags: [turn-injection, signin, browser]
 release_gate: true
-runs: 3
 stub_sets: [human-channels]
 seed:
   principal_identities:

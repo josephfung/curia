@@ -20,6 +20,9 @@ description: >
   message (on email) says yes. The held reply then reaches Dana with the address intact, and
   Avery's yes is recorded.
 tags: [pii-authority, signal, autonomy]
+# 5 runs: its critical behavior split across runs on the 2026-11-16 gate, so one run cannot
+# tell a flake from a regression. The default is 1 (tests/scenarios/README.md, "The gate").
+runs: 5
 release_gate: true
 timeout_seconds: 360
 autonomy: { score: 74, gating: band }
