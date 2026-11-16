@@ -90,6 +90,13 @@ tool_stubs:
         status: done
         completed_at: "2026-10-01T12:06:00-04:00"
         displayTimezone: America/Toronto
+  # Reporting the outcome is fair; a task wake has no job, so without job_id it errors as the
+  # handler does (as in 34n; refused unstubbed on the 2026-11-16 gate).
+  scheduler-report:
+    - match: { job_id: null }
+      error: "Missing job_id: call scheduler-report from a scheduled run (or pass job_id explicitly outside one)"
+    - match: {}
+      return: { success: true }
 expected_behaviors:
   - id: not_handed_to_principal
     weight: critical
