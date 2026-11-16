@@ -616,6 +616,30 @@ describe('EntityMemory.resolveOrCreate — fuzzy auto-resolve end-to-end', () =>
   });
 });
 
+describe('EntityMemory.resolveOrCreate — identifier guard (#2023)', () => {
+  it('does not auto-resolve or flag as ambiguous a candidate with a conflicting order number', async () => {
+    const embeddingService = EmbeddingService.createForTesting();
+    const store = KnowledgeGraphStore.createInMemory(embeddingService);
+    const validator = new MemoryValidator(store, embeddingService);
+    const mem = new EntityMemory(store, validator, embeddingService, createSilentLogger());
+
+    const queryLabel = 'Order #418-5530217-6094512';
+    const queryEmbedding = await embeddingService.embed(queryLabel, 'similarity');
+
+    // Identical vector (similarity 1.0) but a different order number.
+    await store.createNode({
+      type: 'organization',
+      label: 'Order #418-5530217-6094412',
+      properties: {},
+      source: 'test',
+      embedding: queryEmbedding,
+    });
+
+    const result = await mem.resolveOrCreate({ label: queryLabel, type: 'organization', source: 'test' });
+    expect(result.kind).toBe('created');
+  });
+});
+
 describe('EntityMemory.findEntities — alias awareness', () => {
   it('finds an entity by alias when the canonical label does not match', async () => {
     const embeddingService = EmbeddingService.createForTesting();

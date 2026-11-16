@@ -7,6 +7,7 @@
 
 import { createHash } from 'node:crypto';
 import { EmbeddingService } from '../memory/embedding.js';
+import { hasConflictingIdentifiers } from '../memory/identifier-guard.js';
 import { MAX_ALIASES_PER_ENTITY } from '../memory/entity-memory.js';
 import { maxSensitivity } from '../memory/sensitivity.js';
 import type { DecayClass } from '../memory/types.js';
@@ -314,7 +315,10 @@ export function planFacts(survivor: MergeSide, absorbed: MergeSide, similarity?:
   // 3. Near-duplicates by embedding. Greedy by similarity so each absorbed fact pairs with
   // its best match and each survivor fact with at most one absorbed fact. Survivor facts
   // that already absorbed an exact duplicate are left out of pairing. Without a
-  // FactSimilarity (no embedding profile) nothing is paired.
+  // FactSimilarity (no embedding profile) nothing is paired. Facts whose labels carry
+  // different identifiers (two order numbers, two message ids) embed near-identically but are
+  // different facts, and the factDedup threshold was calibrated with this guard on, as in
+  // MemoryValidator's dedup loop (#2023, design §5): they are never paired.
   const pairs: { s: SnapshotNode; a: SnapshotFact; similarity: number }[] = [];
   const comparable = (node: SnapshotNode): number[] | null =>
     similarity && node.embeddingModel === similarity.embeddingModel ? node.embedding : null;
@@ -324,6 +328,7 @@ export function planFacts(survivor: MergeSide, absorbed: MergeSide, similarity?:
     for (const s of survivorPlain) {
       const sEmb = comparable(s.node);
       if (!sEmb || sEmb.length !== aEmb.length || collapseTargets.has(s.node.id)) continue;
+      if (hasConflictingIdentifiers(s.node.label, aFact.node.label)) continue;
       const score = EmbeddingService.cosineSimilarity(sEmb, aEmb);
       if (score >= similarity!.threshold) pairs.push({ s: s.node, a: aFact, similarity: score });
     }

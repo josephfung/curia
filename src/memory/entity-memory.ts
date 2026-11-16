@@ -24,6 +24,7 @@ import type {
   SearchResult,
 } from './types.js';
 import { SENSITIVITY_LEVELS } from './types.js';
+import { hasConflictingIdentifiers } from './identifier-guard.js';
 
 export interface EdgeResult {
   edge: KgEdge;
@@ -420,11 +421,17 @@ export class EntityMemory {
     // the pre-PR behavior as the degraded-mode path — fact storage must not block
     // on embedding service availability.
     try {
-      const fuzzyResults = await this.store.semanticSearch(options.label, {
+      const rawFuzzyResults = await this.store.semanticSearch(options.label, {
         limit: FUZZY_SEARCH_LIMIT,
         entitiesOnly: true,
         purpose: 'similarity',
       });
+      // Labels carrying different order numbers / ids embed almost identically but
+      // are different things. Drop such candidates before partitioning so they are
+      // neither auto-resolved nor offered as ambiguous; phase 3 creates instead (#2023).
+      const fuzzyResults = rawFuzzyResults.filter(
+        r => !hasConflictingIdentifiers(options.label, r.node.label),
+      );
       const { fuzzyResolve, fuzzyAmbiguityFloor } = this.embeddingService.profile.thresholds;
 
       // Partition candidates by threshold

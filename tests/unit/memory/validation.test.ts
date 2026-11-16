@@ -102,6 +102,39 @@ describe('MemoryValidator', () => {
     });
   });
 
+  describe('identifier guard (#2023)', () => {
+    async function seed(factLabel: string, incomingLabel: string) {
+      const embeddingService = EmbeddingService.createForTesting();
+      const localStore = KnowledgeGraphStore.createInMemory(embeddingService);
+      const localValidator = new MemoryValidator(localStore, embeddingService);
+      const entity = await localStore.createNode({
+        type: 'person', label: 'Bob', properties: {}, source: 'test',
+      });
+      // Force a similarity of 1.0 by storing the incoming label's vector on the fact.
+      const fact = await localStore.createNode({
+        type: 'fact',
+        label: factLabel,
+        properties: {},
+        source: 'test',
+        embedding: await embeddingService.embed(incomingLabel, 'similarity'),
+      });
+      await localStore.createEdge({
+        sourceNodeId: entity.id, targetNodeId: fact.id, type: 'relates_to', properties: {}, source: 'test',
+      });
+      return localValidator.validate({ entityNodeId: entity.id, label: incomingLabel, source: 'test' });
+    }
+
+    it('does not merge facts whose identifiers conflict', async () => {
+      const result = await seed('Order #418-5530217-6094412', 'Order #418-5530217-6094512');
+      expect(result.action).toBe('create');
+    });
+
+    it('still merges facts with compatible identifiers', async () => {
+      const result = await seed('Order #418-5530217-6094412', 'Order #418-5530217-6094412 shipped');
+      expect(result.action).toBe('update');
+    });
+  });
+
   describe('rate limiting', () => {
     it('rejects writes beyond the per-agent rate limit', async () => {
       const entity = await store.createNode({
