@@ -10,6 +10,11 @@ tests
 coverage
 *.md
 !README.md
+# Bundled embedder weights (#2023): the build stage fetches and verifies them itself, so a
+# copy a developer fetched locally (`pnpm fetch:embedder`) must never reach the image.
+# Only the pinned manifest the fetch reads goes into the context.
+models/embedding/*
+!models/embedding/manifest.json
 docker/*
 !docker/postgres.Dockerfile
 !docker/postgres-init-pgaudit.sql
