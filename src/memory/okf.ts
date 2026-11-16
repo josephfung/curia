@@ -200,7 +200,9 @@ export function splitSections(body: string): { preamble: string; sections: DocSe
   };
 
   for (const line of lines) {
-    const sectionMatch = /^##\s+(.+?)\s*$/.exec(line);
+    // One whitespace character, then the rest of the line, trimmed below. Same matches as the
+    // old /^##\s+(.+?)\s*$/, without its overlapping quantifiers (polynomial ReDoS, CodeQL 373).
+    const sectionMatch = /^##\s(.+)$/.exec(line);
     if (sectionMatch) {
       flush();
       currentHeading = sectionMatch[1]!.trim();
