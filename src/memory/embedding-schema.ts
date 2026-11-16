@@ -353,6 +353,15 @@ export async function resolveKnowledgeGraphEmbedding(
         `stop Curia, run ${REEMBED_FORCE_COMMAND}, then start Curia. ${REEMBED_DOCKER_NOTE}`,
     };
   }
+  if (drift === 'shifted') {
+    // Logged here, beside the deprecation warn, so every caller reports it: boot,
+    // dedup-contacts, test-mode and the smoke script alike.
+    logger.warn(
+      `The embedding endpoint's weights shifted (e.g. re-quantised) under the model name ${embeddingStamp(profile)}. ` +
+      'Entity memory stays on; health reports ok with the reason weights_shifted. ' +
+      `To re-embed with the current weights: stop Curia, run ${REEMBED_FORCE_COMMAND}, then start Curia.`,
+    );
+  }
   return {
     ok: true,
     source: embedding.source,
