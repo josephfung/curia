@@ -80,11 +80,11 @@ tool_stubs:
   memory-store:
     - match: {}
       return: { stored: true, action: created, node_id: 3a4b5c6d-7e8f-4a1b-9c2d-34c100000001, sensitivity: internal }
-  # The clinic is a contact already: creating it is answered with the existing record, as the
-  # handler's duplicate check would find it (refused unstubbed on the 2026-11-16 gate).
+  # The clinic is a contact already: the handler refuses, naming its record (takenError in
+  # duplicate-refusal.ts). Refused as unstubbed on the 2026-11-16 gate.
   contact-create:
-    - match: { name: Acme Physio Bookings }
-      return: { contact_id: "{{contact:bookings}}", display_name: Acme Physio Bookings, role: null, kg_node_id: null, identities_added: 0 }
+    - match: {}
+      error: 'That email address is already on "Acme Physio Bookings" ({{contact:bookings}}). No contact was created. Use that contact''s ID; contact-link-identity adds another address to it.'
 expected_behaviors:
   - id: asks_avery
     weight: critical
