@@ -67,6 +67,17 @@ const BAND_DESCRIPTIONS: Record<AutonomyBand, string> = {
     'Every step that would have an external effect requires explicit principal instruction.',
 };
 
+// The ask-first rules in the band set below are about what Curia does on its own initiative:
+// principal-directed sends are not stakes-gated (spec 14, "Behavior by band"). The tier text
+// carries the same carve-out (#2068); without it here, a direct "move it to next week and send
+// my apologies" at 75 came back as "which slot should I book?" (smoke "Reschedule Board Chair
+// Meeting"). Only the bands whose text says "ask first" about commitments need it.
+const DIRECT_INSTRUCTION_IS_APPROVAL =
+  'A direct instruction from the principal is their approval: carry it out, deciding the ' +
+  'details it leaves open yourself (which slot, the latest version) and saying what you chose, ' +
+  'rather than handing the choice back. Ask only when the context cannot tell you which of ' +
+  'several things they mean.';
+
 // The same bands under `autonomy.gating: band` (#2159, ADR-049), matching the spec's
 // "Behavior by band" table. Injected instead of the descriptions above when band gating is
 // live, so the agent's guidance matches what the gates actually do.
@@ -82,10 +93,11 @@ const BAND_DESCRIPTIONS_BAND_GATING: Record<AutonomyBand, string> = {
     'committing them on payments, pricing, contracts or legal positions (a reply that commits ' +
     'to nothing needs no approval). Every claim about the ' +
     'principal is fact-checked against what you looked up before it is sent, so look things up ' +
-    'rather than recall them. Report what you did in the digest.',
+    'rather than recall them. Report what you did in the digest. ' + DIRECT_INSTRUCTION_IS_APPROVAL,
   'approval-required':
     'Take on work and coordinate (logistics, confirmations, replies, bringing people in) without ' +
-    'asking. Ask the principal first before you speak for them or commit them to anything.',
+    'asking. Ask the principal first before you speak for them or commit them to anything. ' +
+    DIRECT_INSTRUCTION_IS_APPROVAL,
   'draft-only':
     'Draft rather than send. The principal confirms new work with one tap; internal logistics ' +
     'within confirmed work can proceed. Surface drafts and asks in the digest.',
