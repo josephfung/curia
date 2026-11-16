@@ -41,6 +41,25 @@ describe('slack-send handler', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  // Scenario 34k (as signal-send): an identity label gives the agent nothing to match the
+  // principal's answer to, so a held send is named by the contact.
+  it('names a held send by the contact\'s name, falling back to the identity label', async () => {
+    const send = vi.fn().mockResolvedValue({ success: true, messageId: '1.9' });
+    const resolve = (displayName: string) => vi.fn().mockResolvedValue({
+      ok: true, kind: 'contact', contactId: 'dana-id', identifier: 'U0DANAREYES', displayName, identityName: 'unlabelled',
+    });
+    await new SlackSendHandler().execute(makeCtx({
+      input: { recipient: 'dana-id', message: 'hi' },
+      outboundGateway: { send, resolveRecipientReference: resolve('Dana Reyes') } as never,
+    }));
+    expect(send.mock.calls[0]![1].holdRecipe.description).toBe('Slack message to Dana Reyes');
+    await new SlackSendHandler().execute(makeCtx({
+      input: { recipient: 'dana-id', message: 'hi' },
+      outboundGateway: { send, resolveRecipientReference: resolve('  ') } as never,
+    }));
+    expect(send.mock.calls[1]![1].holdRecipe.description).toBe('Slack message to unlabelled');
+  });
+
   it('rejects missing gateway', async () => {
     const handler = new SlackSendHandler();
     const result = await handler.execute(makeCtx({

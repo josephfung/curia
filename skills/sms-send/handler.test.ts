@@ -35,6 +35,25 @@ describe('sms-send handler', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  // Scenario 34k (as signal-send): an identity label gives the agent nothing to match the
+  // principal's answer to, so a held send is named by the contact.
+  it('names a held send by the contact\'s name, falling back to the identity label', async () => {
+    const send = vi.fn().mockResolvedValue({ success: true, messageId: 'm9' });
+    const resolve = (displayName: string) => vi.fn().mockResolvedValue({
+      ok: true, kind: 'contact', contactId: BOB_ID, identifier: '+14155552671', displayName, identityName: 'unlabelled',
+    });
+    await new SmsSendHandler().execute(makeCtx({
+      input: { recipient: BOB_ID, message: 'hi' },
+      outboundGateway: { send, resolveRecipientReference: resolve('Dana Reyes') } as never,
+    }));
+    expect(send.mock.calls[0]![1].holdRecipe.description).toBe('SMS to Dana Reyes');
+    await new SmsSendHandler().execute(makeCtx({
+      input: { recipient: BOB_ID, message: 'hi' },
+      outboundGateway: { send, resolveRecipientReference: resolve('  ') } as never,
+    }));
+    expect(send.mock.calls[1]![1].holdRecipe.description).toBe('SMS to unlabelled');
+  });
+
   it('refuses a stored number that is not E.164', async () => {
     const handler = new SmsSendHandler();
     const send = vi.fn();
