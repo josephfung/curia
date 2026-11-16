@@ -432,6 +432,11 @@ export class EntityMemory {
       const fuzzyResults = rawFuzzyResults.filter(
         r => !hasConflictingIdentifiers(options.label, r.node.label),
       );
+      if (fuzzyResults.length < rawFuzzyResults.length) {
+        // Leave a trace of the veto. Node ids only: labels are entity names (PII).
+        const vetoedNodeIds = rawFuzzyResults.filter(r => !fuzzyResults.includes(r)).map(r => r.node.id);
+        this.logger.debug({ vetoedNodeIds }, 'Identifier guard dropped fuzzy entity candidates with conflicting ids');
+      }
       const { fuzzyResolve, fuzzyAmbiguityFloor } = this.embeddingService.profile.thresholds;
 
       // Partition candidates by threshold
