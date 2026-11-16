@@ -78,12 +78,13 @@ principal-ask cases fail for the environment rather than the code (13 cases on t
 2026-11-16 gate). So an unfiltered run refuses to start unless the principal's name is
 Avery Testwell and they have that verified email. A `--case` / `--tags` run only warns,
 unless `CURIA_RELEASE_GATE=1` is set (`--runs` alone still runs every case, so it refuses).
-To set one up, copy the dev database and rename the copy's principal. Only the oldest email
-identity becomes Avery's; any others are marked `defunct`, since addresses are unique:
+To set one up, copy the dev database and rename the copy's principal. One email identity
+becomes Avery's (the one already holding Avery's address, else the oldest) and any others are
+marked `defunct`, since addresses are unique; a principal with no email gets one inserted:
 
 ```bash
 docker exec curia-postgres-1 psql -U curia -d postgres -c "CREATE DATABASE curia_scenarios TEMPLATE curia"
-docker exec curia-postgres-1 psql -U curia -d curia_scenarios -c "UPDATE contacts SET display_name='Avery Testwell', preferred_name='Avery' WHERE system_role='principal'; UPDATE contact_channel_identities SET status='defunct' WHERE channel='email' AND contact_id=(SELECT id FROM contacts WHERE system_role='principal'); UPDATE contact_channel_identities SET channel_identifier='avery.testwell@example.test', verified=true, verified_at=now(), status='active' WHERE id=(SELECT id FROM contact_channel_identities WHERE channel='email' AND contact_id=(SELECT id FROM contacts WHERE system_role='principal') ORDER BY created_at LIMIT 1);"
+docker exec curia-postgres-1 psql -U curia -d curia_scenarios -c "UPDATE contacts SET display_name='Avery Testwell', preferred_name='Avery' WHERE system_role='principal'; UPDATE contact_channel_identities SET status='defunct' WHERE channel='email' AND contact_id=(SELECT id FROM contacts WHERE system_role='principal'); UPDATE contact_channel_identities SET channel_identifier='avery.testwell@example.test', verified=true, verified_at=now(), status='active' WHERE id=(SELECT id FROM contact_channel_identities WHERE channel='email' AND contact_id=(SELECT id FROM contacts WHERE system_role='principal') ORDER BY lower(channel_identifier)='avery.testwell@example.test' DESC, created_at LIMIT 1); INSERT INTO contact_channel_identities (contact_id, channel, channel_identifier, verified, verified_at, source, status) SELECT id, 'email', 'avery.testwell@example.test', true, now(), 'ceo_stated', 'active' FROM contacts WHERE system_role='principal' AND NOT EXISTS (SELECT 1 FROM contact_channel_identities WHERE channel='email' AND contact_id=contacts.id);"
 export DATABASE_URL=postgres://curia:<password>@localhost:5432/curia_scenarios   # --env-file does not override it
 ```
 
