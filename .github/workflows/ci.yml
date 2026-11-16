@@ -100,6 +100,18 @@ jobs:
       - name: Install Chromium for Patchright
         run: pnpm exec patchright install --with-deps chromium
 
+      # Bundled embedder weights (#2023): pinned in models/embedding/manifest.json and
+      # downloaded only by `pnpm fetch:embedder`, which verifies size + sha256. Cached on
+      # the manifest hash so a pin change is the only thing that re-downloads.
+      - name: Cache embedder weights
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: models/embedding
+          key: embedder-${{ hashFiles('models/embedding/manifest.json') }}
+
+      - name: Fetch embedder weights
+        run: pnpm fetch:embedder
+
       - name: Run tests
         run: pnpm test
         env:
@@ -135,3 +147,107 @@ jobs:
 
       - name: Build + boot curia-postgres (fresh-init regression)
         run: bash tests/docker/test-postgres-init.sh
+
+  # Decides whether curia-image runs. Cheap (a checkout and a git diff) and always runs,
+  # so curia-image can gate on its output without the skipped-dependency pitfall (a job
+  # that `needs` a skipped job is skipped too). Modelled on trivy.yml's `changes` job and
+  # fail-safe the same way: curia-image runs UNLESS this job explicitly outputs
+  # image=false, so any error or doubt here errs toward building. Not a workflow-level
+  # `paths` filter, which would leave a required check pending forever on a PR it skips.
+  changes:
+    name: Detect image-relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      # 'true' -> curia-image runs; 'false' -> it is skipped.
+      image: ${{ steps.decide.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history so the PR's base commit is present to diff against.
+          fetch-depth: 0
+
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Every push to main builds the image; only pull requests are filtered.
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "image=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # On a pull_request event SHA is the PR's merge commit, whose first parent is
+          # BASE, so this diff is exactly what the PR changes. If BASE is missing or not
+          # in the clone, build rather than guess.
+          if [ -z "$BASE" ] || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "image=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! changed="$(git diff --name-only "$BASE" "$SHA")"; then
+            echo "git diff failed; building as a fail-safe" >&2
+            echo "image=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # What shapes the built image or this check: the Dockerfile and its context
+          # filter, every package manifest and the lockfile/workspace (deps, overrides),
+          # docker/ helpers, the pinned weights manifest, the embedding code the load
+          # check and smoke run, the fetch and smoke scripts, the egress test, and this
+          # workflow.
+          # A here-string, not `echo | grep -q`: grep -q exits at the first match, and under
+          # pipefail the echo's SIGPIPE would fail the pipeline and skip a needed build.
+          if grep -qE '^Dockerfile$|^\.dockerignore$|(^|/)package\.json$|^pnpm-lock\.yaml$|^pnpm-workspace\.yaml$|^docker/|^models/embedding/|^src/memory/|^scripts/fetch-embedder\.ts$|^scripts/bundled-embedder-smoke\.ts$|^tests/docker/test-bundled-embedder-egress\.sh$|^\.github/workflows/ci\.yml$' <<<"$changed"; then
+            echo "image=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  curia-image:
+    # Builds the real Curia image (amd64, the runner's native arch) and proves the bundled
+    # embedding model works with no network (#2023). The build itself runs the image's
+    # fail-closed checks: the weights' sha256 against the pinned manifest, the
+    # onnxruntime-node platform prune (node_modules and the kept pnpm store), and a
+    # build-time model load (native builds only, so it runs here). The egress script then
+    # runs entity memory on an internal Docker network with no route out. The `ci` job
+    # never builds the image, so without this a regression that only shows in the
+    # container (a pruned binary, weights left out, a first-use download) would surface at
+    # a deploy.
+    #
+    # A full, uncached image build is expensive (trivy.yml keeps its image build off PRs
+    # for that reason), so pull requests build only when `changes` sees an image-relevant
+    # file; pushes to main always build. `!cancelled()` lets this run when `changes`
+    # failed (fail-safe), while a real cancellation still stops it.
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.image != 'false' }}
+    timeout-minutes: 45
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The build pulls node:26-slim from Docker Hub; authenticate it (#2095). Skipped
+      # where the secrets are absent (fork and Dependabot PRs), as in postgres-image.
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build the Curia image
+        run: docker build -t curia:ci .
+
+      # The amd64 footprint of the bundled embedder (design §4, "Image size"): compare
+      # with the same figure from a main build.
+      - name: Report the image size
+        run: |
+          size="$(docker image inspect -f '{{.Size}}' curia:ci)"
+          echo "curia:ci (amd64) image size: ${size} bytes"
+          echo "Curia image (amd64): ${size} bytes" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Bundled embedder works with egress blocked
+        run: bash tests/docker/test-bundled-embedder-egress.sh curia:ci

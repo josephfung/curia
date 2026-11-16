@@ -46,6 +46,19 @@ COPY packages/shared-types/package.json ./packages/shared-types/
 COPY docker/pnpm-retry.sh /usr/local/bin/pnpm-retry
 RUN pnpm-retry pnpm install --frozen-lockfile
 
+# Bundled embedding model (#2023): all-MiniLM-L6-v2 weights + tokenizer, downloaded HERE at
+# build time and never at runtime. `pnpm fetch:embedder` pulls the Hugging Face revision
+# pinned in models/embedding/manifest.json and checks each file's size and sha256 against
+# it; a mismatch exits non-zero and fails the build. Only the three files the fetch needs
+# are copied, so this layer (and the download) is cached until the pin or the fetcher
+# changes. .dockerignore keeps locally fetched weights out of the build context, so the
+# image always carries what this step verified, never a developer's copy.
+# pnpm-retry re-runs a dropped download; a checksum mismatch fails every attempt.
+COPY models/embedding/manifest.json ./models/embedding/
+COPY src/memory/embedder-manifest.ts ./src/memory/
+COPY scripts/fetch-embedder.ts ./scripts/
+RUN pnpm-retry pnpm fetch:embedder
+
 # Build backend
 COPY src/ ./src/
 COPY tsconfig.json ./
@@ -218,7 +231,119 @@ COPY --from=build /app/packages/shared-types ./packages/shared-types
 # import(), and they use ESM .js extension mapping (e.g., import from './foo.js'
 # resolving to foo.ts). Node's --experimental-strip-types doesn't handle this;
 # tsx does, and it's already used for dev (pnpm dev).
-RUN pnpm-retry pnpm install --frozen-lockfile --prod
+#
+# The same RUN prunes onnxruntime-node (the bundled embedder's runtime, #2023) down to
+# this image's own platform. The package ships native binaries for every platform it
+# supports, ~286 MB in all (darwin/arm64, win32/x64, win32/arm64, linux/x64,
+# linux/arm64), and the image needs one: bin/napi-v*/linux/<arch>, 44 MB on x64 and
+# 24 MB on arm64. Docker's TARGETARCH says amd64 where onnxruntime-node says x64.
+#
+# Why here, and why from the store too (maintainer's decision, design §4):
+#   - The pnpm store is KEPT in this image for curia-deploy (#1758, see the long comment
+#     below), and it holds its own copy of every file, so pruning node_modules alone
+#     leaves the binaries in the image.
+#   - The store copy is found by CONTENT, not by inode. Most node_modules entries are
+#     hardlinks into the store, but pnpm COPIES a package that has a build script, and
+#     onnxruntime-node has a postinstall (left disabled by allowBuilds), so its files have
+#     separate store copies that `find -samefile` cannot see (verified: link count 1).
+#     The store is content-addressed: a file lives at <storeDir>/files/<first 2 hex of
+#     its sha512>/<the rest>, with an `-exec` suffix when executable. So each pruned
+#     file's sha512 names its store copy, hardlinked or not. storeDir is read from
+#     node_modules/.modules.yaml, which records the store this install used.
+#   - A layer can only shrink what it created. Pruning in a later RUN would leave the
+#     binaries in this layer and add whiteouts on top, so the prune lives in the install
+#     RUN itself.
+#   - Accepted cost: curia-deploy's downstream `pnpm add` may find onnxruntime-node's
+#     store entry incomplete and re-download that one package. A failed downstream build
+#     is NOT accepted. Verified with pnpm 11.7.0: Dockerfile.curia builds on this image,
+#     its `pnpm add` downloaded nothing, and onnxruntime-node still loads there (#2023).
+#
+# Fail closed, in the #1758 style below: a glob that matches nothing, a missing
+# linux/<arch> dir, an unexpected storeDir, a pruned file whose store copy is not where
+# its hash says (the store layout changed, so the prune would leave it in the image),
+# or any platform dir left behind fails the build, and
+# `require('onnxruntime-node')`, which loads the native binding eagerly, must still work.
+# The temp lists are files rather than pipes because dash has no pipefail: a failing
+# `find` at the head of a pipe would otherwise go unnoticed.
+#
+# Two refinements, both keyed on the KEPT linux/<arch> files' own hashes:
+#   - A pruned file whose content matches a kept file is removed from node_modules but
+#     its store copy stays: deleting it would delete the kept file's store copy too.
+#   - Each kept node_modules file is then replaced by a hardlink to its store copy. pnpm
+#     wrote them as two separate files (it copied the package, above), so without this
+#     the binary sits in this layer twice. As hardlinks in one layer, the layer tar stores
+#     it once: 24 MB saved on arm64, 44 MB on amd64. The store stays complete for the
+#     kept files, so curia-deploy's `pnpm add` sees the same store as before.
+#
+# Image size (design §4, "Image size"), `docker image inspect -f '{{.Size}}'` against the
+# image before #2023: arm64 +103.7 MB before the hardlinks, +78.2 MB after; amd64
+# +119.5 MB (emulated local build; CI's curia-image job prints the native figure on every
+# build). The weights are
+# 23.7 MB and the new JS dependencies a few MB; the rest is the kept binary (24 MB arm64,
+# 44 MB amd64), which still ships twice: once here, and once more in the
+# `chown -R curia:curia /app` layer below, whose copy-up rewrites every file under /app
+# into its own layer (breaking the hardlink there).
+# TODO(#2631): that chown layer duplicates ALL of node_modules (~611 MB on
+# arm64 before this change), not just this binary. It is the real root cause of the
+# image's size and is out of scope here; `COPY --chown`/`--chmod` or installing as the
+# curia user would remove it, but either touches #1758's store-for-curia-deploy contract.
+ARG TARGETARCH
+RUN set -e; \
+    pnpm-retry pnpm install --frozen-lockfile --prod; \
+    case "$TARGETARCH" in \
+      amd64) ort_arch=x64 ;; \
+      arm64) ort_arch=arm64 ;; \
+      *) echo "onnxruntime-node prune: unsupported TARGETARCH '$TARGETARCH'" >&2; exit 1 ;; \
+    esac; \
+    storedir=$(sed -n 's/^ *"storeDir": "\(.*\)",\{0,1\}$/\1/p' node_modules/.modules.yaml); \
+    case "$storedir" in /root/.local/share/pnpm/*) ;; \
+      *) echo "onnxruntime-node prune: unexpected pnpm storeDir '$storedir' in node_modules/.modules.yaml" >&2; exit 1 ;; \
+    esac; \
+    test -d "$storedir/files"; \
+    ort_bins=$(echo node_modules/.pnpm/onnxruntime-node@*/node_modules/onnxruntime-node/bin/napi-v*); \
+    for d in $ort_bins; do test -d "$d/linux/$ort_arch"; done; \
+    find $ort_bins -type f -path "*/linux/$ort_arch/*" -exec sha512sum {} + > /tmp/ort-keep.sums; \
+    test -s /tmp/ort-keep.sums; \
+    cut -d' ' -f1 /tmp/ort-keep.sums | sort -u > /tmp/ort-keep.hashes; \
+    find $ort_bins -type f ! -path "*/linux/$ort_arch/*" -exec sha512sum {} + > /tmp/ort-prune.sums; \
+    test -s /tmp/ort-prune.sums; \
+    cut -d' ' -f1 /tmp/ort-prune.sums | sort -u > /tmp/ort-prune.all; \
+    comm -23 /tmp/ort-prune.all /tmp/ort-keep.hashes > /tmp/ort-prune.hashes; \
+    while read -r h; do \
+      p="$storedir/files/$(printf %.2s "$h")/${h#??}"; \
+      hits=0; \
+      for c in "$p" "$p-exec"; do \
+        if [ -e "$c" ]; then rm -f "$c"; hits=$((hits + 1)); fi; \
+      done; \
+      if [ "$hits" -eq 0 ]; then \
+        echo "onnxruntime-node prune: no pnpm store copy at $p (sha512 of a pruned file); pruning node_modules alone would leave the store copy in the image" >&2; \
+        exit 1; \
+      fi; \
+    done < /tmp/ort-prune.hashes; \
+    echo "onnxruntime-node prune: removed $(wc -l < /tmp/ort-prune.sums) node_modules files, $(wc -l < /tmp/ort-prune.hashes) store files ($(($(wc -l < /tmp/ort-prune.all) - $(wc -l < /tmp/ort-prune.hashes))) shared with a kept file, left in the store); keeping linux/$ort_arch"; \
+    for d in $ort_bins; do \
+      for p in "$d"/*/*; do \
+        if [ "$p" != "$d/linux/$ort_arch" ]; then rm -rf "$p"; fi; \
+      done; \
+      find "$d" -mindepth 1 -type d -empty -delete; \
+    done; \
+    find $ort_bins -mindepth 1 -maxdepth 2 -type d ! -name linux ! -path "*/linux/$ort_arch" > /tmp/ort-left; \
+    if [ -s /tmp/ort-left ]; then \
+      echo "onnxruntime-node prune: platform dirs left behind:" >&2; cat /tmp/ort-left >&2; exit 1; \
+    fi; \
+    while read -r h f; do \
+      p="$storedir/files/$(printf %.2s "$h")/${h#??}"; \
+      if [ -x "$f" ]; then first="$p-exec"; second="$p"; else first="$p"; second="$p-exec"; fi; \
+      if [ -e "$first" ]; then c="$first"; \
+      elif [ -e "$second" ]; then c="$second"; \
+      else echo "onnxruntime-node prune: no pnpm store copy at $p for kept $f; cannot hardlink it" >&2; exit 1; fi; \
+      ln -f "$c" "$f"; \
+      if [ ! "$f" -ef "$c" ]; then echo "onnxruntime-node prune: $f is not a hardlink to $c after ln" >&2; exit 1; fi; \
+    done < /tmp/ort-keep.sums; \
+    echo "onnxruntime-node prune: hardlinked $(wc -l < /tmp/ort-keep.sums) kept files to their store copies"; \
+    node -e "require('onnxruntime-node')"; \
+    echo "onnxruntime-node prune: OK, require('onnxruntime-node') loads on linux/$ort_arch"; \
+    rm -f /tmp/ort-keep.sums /tmp/ort-keep.hashes /tmp/ort-prune.sums /tmp/ort-prune.all /tmp/ort-prune.hashes /tmp/ort-left
 
 # Three flags are load-bearing (verified against pnpm 11.7.0, the pinned pkg mgr).
 # Since packages/shared-types made this a real workspace, this dir is now a workspace
@@ -340,6 +465,71 @@ COPY scripts/ ./scripts/
 # to the non-root user before dropping privileges. /usr/local/bin/uv,
 # /usr/local/bin/uvx, and /usr/bin/curl are world-executable (no chown needed).
 RUN chown -R curia:curia /app
+
+# The bundled embedding model (#2023), fetched and sha256-verified in the build stage:
+# manifest.json plus all-MiniLM-L6-v2/, at /app/models/embedding/all-MiniLM-L6-v2, the
+# directory boot resolves by default (EMBEDDING_MODEL_DIR overrides it). Copied AFTER the
+# chown above on purpose: the chown rewrites every file it touches into its own layer, so
+# copying first would ship the ~23 MB of weights twice. They stay root-owned and
+# world-readable; nothing at runtime writes them, and the curia user should not be able to.
+COPY --from=build /app/models/embedding ./models/embedding
+
+# Build-time load check (#2023): load the model once, exactly as the bundled backend does
+# at boot (weights hashed into the profile, then EmbeddingService.createBundled), and embed
+# one string. Runs here, in the runtime stage, after the prune and the `pnpm add` above,
+# so it tests what actually ships: the weights, the tokenizer and this platform's
+# onnxruntime-node binding. The prune's own `require()` check proves the binding loads;
+# this proves it runs the model. A failure here fails the build instead of turning the
+# knowledge graph off at a customer's first boot.
+# It also re-asserts the prune: no onnxruntime-node platform dir but linux/<arch> may
+# exist after the `pnpm add`, which could in principle have re-imported the package.
+# Native builds only (BUILDPLATFORM == TARGETPLATFORM). docker-publish builds the arm64
+# image on an amd64 runner under QEMU, where running onnxruntime inference is slow and
+# itself unverified; a cross-arch build prints a skip line and passes. Each arch is still
+# proven natively elsewhere: amd64 by CI's curia-image job (this check, then
+# tests/docker/test-bundled-embedder-egress.sh), arm64 by running that egress test on an
+# arm64 host. The prune RUN's `require('onnxruntime-node')` still runs on every build.
+# The load leaves root-owned files in /tmp, which would otherwise ship: tsx's transpile
+# cache (/tmp/tsx-0), and onnxruntime's session marker (/tmp/.ses) and debug log
+# (/tmp/mat-debug-<pid>.log). Removed so the curia user never meets a root-owned copy.
+ARG BUILDPLATFORM
+ARG TARGETPLATFORM
+RUN set -e; \
+    case "$TARGETARCH" in \
+      amd64) ort_arch=x64 ;; \
+      arm64) ort_arch=arm64 ;; \
+      *) echo "bundled embedder load check: unsupported TARGETARCH '$TARGETARCH'" >&2; exit 1 ;; \
+    esac; \
+    if [ -z "$BUILDPLATFORM" ] || [ -z "$TARGETPLATFORM" ]; then \
+      echo "bundled embedder load check: BUILDPLATFORM/TARGETPLATFORM unset (BuildKit required)" >&2; exit 1; \
+    fi; \
+    find node_modules/.pnpm/onnxruntime-node@*/node_modules/onnxruntime-node/bin/napi-v* \
+      -mindepth 1 -maxdepth 2 -type d ! -name linux ! -path "*/linux/$ort_arch" > /tmp/ort-left; \
+    if [ -s /tmp/ort-left ]; then \
+      echo "onnxruntime-node platform dirs reappeared after the prune:" >&2; cat /tmp/ort-left >&2; exit 1; \
+    fi; \
+    rm -f /tmp/ort-left; \
+    if [ "$BUILDPLATFORM" != "$TARGETPLATFORM" ]; then \
+      echo "bundled embedder load check: SKIPPED, cross-arch build ($BUILDPLATFORM -> $TARGETPLATFORM); verified natively by the egress test"; \
+    else \
+    ./node_modules/.bin/tsx -e "(async () => { \
+      const { default: pino } = await import('pino'); \
+      const { EmbeddingService } = await import('./src/memory/embedding.js'); \
+      const { ALL_MINILM_L6_V2 } = await import('./src/memory/embedding-profiles.js'); \
+      const { hashBundledWeights } = await import('./src/memory/embedding-onnx.js'); \
+      const dir = 'models/embedding/all-MiniLM-L6-v2'; \
+      const logger = pino({ level: 'warn' }); \
+      const profile = { ...ALL_MINILM_L6_V2, weightsSha256: await hashBundledWeights(dir, logger) }; \
+      const service = await EmbeddingService.createBundled(dir, profile, logger); \
+      const v = await service.embed('build-time load check', 'document'); \
+      if (v.length !== profile.dimensions) throw new Error('expected ' + profile.dimensions + ' dims, got ' + v.length); \
+      process.stdout.write('bundled embedder load check: OK, ' + v.length + ' dims\n'); \
+    })().catch((err) => { \
+      process.stderr.write('bundled embedder load check failed: ' + (err && err.stack ? err.stack : err) + '\n'); \
+      process.exit(1); \
+    });"; \
+    fi; \
+    rm -rf /tmp/tsx-0 /tmp/.ses /tmp/mat-debug-*.log
 
 # Pre-create the tmpfs mount point so Docker's runtime tmpfs mount inherits
 # curia ownership. Without this, Docker mounts the tmpfs as root:root with
