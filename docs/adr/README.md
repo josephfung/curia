@@ -87,6 +87,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [063](063-only-the-principal-commissions-work.md) | Only the principal commissions work — a fast-tier judgment classifies each outsider-started turn where it starts; commissioned work the principal didn't ask for runs in courtesy mode (no follow-on work, lower round cap); a daily per-sender request count; no sponsor data type (#2569) | Proposed |
 | [064](064-multiple-principal-mailboxes.md) | Multiple principal mailboxes are a registry — an unknown id is an error, never a fallback to the default; the account follows the object, evidence-based choice for new mail and meetings; ids are never reused; per-mailbox health canary alerts once per outage (#2475) | Accepted |
 | [065](065-bundled-in-process-embedding-model.md) | A bundled in-process embedding model (all-MiniLM-L6-v2, onnxruntime-node) is the default — no base URL means bundled; installs holding another model's vectors keep it; the implicit OpenAI default is deprecated (#2628); weights-hashed stamp, identifier guard, `knowledge_graph` health check, endpoint drift check; amends ADR-051 (#2023) | Accepted |
+| [066](066-local-speech-providers.md) | Local speech providers (amends ADR-037): a separate speech service; two-pass STT (FastConformer streaming interims, Silero VAD endpointing, Parakeet finals and voice notes); Pocket TTS (default voice alba, six curated voices) behind a spoken-form normaliser; minimum host 4 vCPU / 8 GB; Deepgram and Cartesia optional (#2469) | Proposed |
 
 ## Adding new ADRs
 

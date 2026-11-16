@@ -1,0 +1,6 @@
+{
+ "engines": ["fastconformer", "parakeet"],
+ "load_seconds": {"fastconformer": 1.152, "parakeet": 2.027, "_total": 3.179},
+ "rss_mb": 1236.5,
+ "peak_rss_mb": 1236.5
+}

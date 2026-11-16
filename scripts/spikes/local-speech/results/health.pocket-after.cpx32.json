@@ -1,0 +1,6 @@
+{
+ "engines": ["pocket-native"],
+ "load_seconds": {"pocket-native": 8.956, "_total": 8.956},
+ "rss_mb": 1258.1,
+ "peak_rss_mb": 1258.1
+}

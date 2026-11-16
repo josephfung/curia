@@ -1,0 +1,10 @@
+engine	image	load_s	rss_idle_mb	rss_after_mb	peak_mb
+fastconformer	sherpa	1.68	285.0	310.8	310.3
+zipformer	sherpa	1.507	317.4	337.7	337.4
+moonshine-tiny	moonshine	0.334	233.4	293.6	293.6
+moonshine-small	moonshine	0.516	446.2	534.9	534.5
+parakeet	sherpa	2.713	847.1	930.1	929.3
+whisper-base.en	whisper	0.166	186.3	239.9	240.6
+kokoro	moonshine	0.749	514.4	600.6	599.7
+piper	moonshine	1.033	344.5	464.2	463.2
+pocket	sherpa	0.676	386.2	669.5	669.3
