@@ -14,5 +14,6 @@
   "secrets": [],
   "timeout": 15000,
   "capabilities": ["bus", "actionLogRepo", "disclosureDecisions"],
+  "optional_capabilities": ["cardUse"],
   "allowed_callers": ["coordinator"]
 }
