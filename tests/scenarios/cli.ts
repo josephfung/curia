@@ -415,7 +415,9 @@ async function main(): Promise<void> {
       harness.stack.principalIdentities.filter(id => id.channel === 'email').map(id => id.channelIdentifier),
     );
     if (principalMismatch) {
-      const narrowed = args.caseFilter || args.tags || args.runs !== undefined;
+      // --runs alone still runs every case, so it is not narrowing; a run marked as the
+      // release gate is always strict.
+      const narrowed = (args.caseFilter || args.tags) && process.env.CURIA_RELEASE_GATE !== '1';
       if (!narrowed) {
         err(`\nThis database is not set up for the scenario cases: ${principalMismatch}.`);
         err('Run the gate on a disposable copy whose principal is the scenario principal:');

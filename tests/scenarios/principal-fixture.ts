@@ -31,9 +31,17 @@ export function principalFixtureMismatch(
 
 /**
  * SQL that turns a disposable copy's principal into the scenario principal. Printed with the
- * refusal so the fix is one paste; never run against the dev database itself.
+ * refusal so the fix is one paste; never run it against the dev database itself. psql runs a
+ * multi-statement -c as one transaction, so a failure leaves the copy unchanged.
+ *
+ * A mirrored principal often has several email identities, and (channel, address) is unique
+ * (migration 044), so only the oldest is renamed; the rest are marked defunct, which drops them
+ * from the boot snapshot (verified and active only) without deleting rows that others reference.
  */
-export const SCENARIO_PRINCIPAL_SQL =
-  `UPDATE contacts SET display_name='${SCENARIO_PRINCIPAL.displayName}', preferred_name='Avery' WHERE system_role='principal'; `
-  + `UPDATE contact_channel_identities SET channel_identifier='${SCENARIO_PRINCIPAL.email}' `
-  + `WHERE channel='email' AND contact_id=(SELECT id FROM contacts WHERE system_role='principal');`;
+const PRINCIPAL_ID = "(SELECT id FROM contacts WHERE system_role='principal')";
+export const SCENARIO_PRINCIPAL_SQL = [
+  `UPDATE contacts SET display_name='${SCENARIO_PRINCIPAL.displayName}', preferred_name='Avery' WHERE system_role='principal';`,
+  `UPDATE contact_channel_identities SET status='defunct' WHERE channel='email' AND contact_id=${PRINCIPAL_ID};`,
+  `UPDATE contact_channel_identities SET channel_identifier='${SCENARIO_PRINCIPAL.email}', verified=true, verified_at=now(), status='active'`
+    + ` WHERE id=(SELECT id FROM contact_channel_identities WHERE channel='email' AND contact_id=${PRINCIPAL_ID} ORDER BY created_at LIMIT 1);`,
+].join(' ');

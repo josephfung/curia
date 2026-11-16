@@ -76,12 +76,14 @@ them name Avery. A database whose principal is someone else, such as a dev datab
 mirrored from a real deployment, makes the coordinator treat Avery as a stranger, and the
 principal-ask cases fail for the environment rather than the code (13 cases on the
 2026-11-16 gate). So an unfiltered run refuses to start unless the principal's name is
-Avery Testwell and they have that verified email; a `--case` / `--tags` / `--runs` run
-only warns. To set one up, copy the dev database and rename the copy's principal:
+Avery Testwell and they have that verified email. A `--case` / `--tags` run only warns,
+unless `CURIA_RELEASE_GATE=1` is set (`--runs` alone still runs every case, so it refuses).
+To set one up, copy the dev database and rename the copy's principal. Only the oldest email
+identity becomes Avery's; any others are marked `defunct`, since addresses are unique:
 
 ```bash
 docker exec curia-postgres-1 psql -U curia -d postgres -c "CREATE DATABASE curia_scenarios TEMPLATE curia"
-docker exec curia-postgres-1 psql -U curia -d curia_scenarios -c "UPDATE contacts SET display_name='Avery Testwell', preferred_name='Avery' WHERE system_role='principal'; UPDATE contact_channel_identities SET channel_identifier='avery.testwell@example.test' WHERE channel='email' AND contact_id=(SELECT id FROM contacts WHERE system_role='principal');"
+docker exec curia-postgres-1 psql -U curia -d curia_scenarios -c "UPDATE contacts SET display_name='Avery Testwell', preferred_name='Avery' WHERE system_role='principal'; UPDATE contact_channel_identities SET status='defunct' WHERE channel='email' AND contact_id=(SELECT id FROM contacts WHERE system_role='principal'); UPDATE contact_channel_identities SET channel_identifier='avery.testwell@example.test', verified=true, verified_at=now(), status='active' WHERE id=(SELECT id FROM contact_channel_identities WHERE channel='email' AND contact_id=(SELECT id FROM contacts WHERE system_role='principal') ORDER BY created_at LIMIT 1);"
 export DATABASE_URL=postgres://curia:<password>@localhost:5432/curia_scenarios   # --env-file does not override it
 ```
 

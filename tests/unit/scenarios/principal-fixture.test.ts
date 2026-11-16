@@ -30,6 +30,9 @@ describe('principalFixtureMismatch', () => {
 
   it('prints SQL that sets both the name and the email', () => {
     expect(SCENARIO_PRINCIPAL_SQL).toContain(`display_name='${SCENARIO_PRINCIPAL.displayName}'`);
-    expect(SCENARIO_PRINCIPAL_SQL).toContain(`channel_identifier='${SCENARIO_PRINCIPAL.email}'`);
+    expect(SCENARIO_PRINCIPAL_SQL).toContain(`channel_identifier='${SCENARIO_PRINCIPAL.email}', verified=true`);
+    // Several email identities would collide on the unique address index if all were renamed.
+    expect(SCENARIO_PRINCIPAL_SQL).toContain("SET status='defunct'");
+    expect(SCENARIO_PRINCIPAL_SQL).toContain('ORDER BY created_at LIMIT 1');
   });
 });
