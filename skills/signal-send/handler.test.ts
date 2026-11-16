@@ -272,6 +272,20 @@ describe('SignalSendHandler', () => {
     );
   });
 
+  // Scenario 34k: "Signal message to unlabelled" gave the agent nothing to match "share it with
+  // Dana" to, so the hold's description names the contact.
+  it('names a held 1:1 send by the contact\'s name, not the identity label', async () => {
+    const send = vi.fn().mockResolvedValue({ success: true });
+    const resolve = (displayName: string) => vi.fn().mockResolvedValue({
+      ok: true, kind: 'contact', contactId: BOB_ID, identifier: '+14155551234', displayName, identityName: 'unlabelled', identityId: 'i1',
+    });
+    await handler.execute(makeCtx({ input: { recipient: BOB_ID, message: 'hello' }, gateway: { send, resolveRecipientReference: resolve('Dana Reyes') } }));
+    expect(send.mock.calls[0]![1].holdRecipe.description).toBe('Signal message to Dana Reyes');
+    // No usable name: the identity label, as before.
+    await handler.execute(makeCtx({ input: { recipient: BOB_ID, message: 'hello' }, gateway: { send, resolveRecipientReference: resolve('  ') } }));
+    expect(send.mock.calls[1]![1].holdRecipe.description).toBe('Signal message to unlabelled');
+  });
+
   it('passes an approved replay on as humanApproved, so band review does not hold it again (#2159)', async () => {
     const gateway = { send: vi.fn().mockResolvedValue({ success: true }) };
     const ctx = makeCtx({ input: { recipient: BOB_ID, message: 'hello' }, gateway });

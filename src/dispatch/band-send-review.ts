@@ -62,12 +62,12 @@
 //   sender, or an address, contact or org domain on the outreach row. A `[REDACTED: …]`
 //   placeholder in the content bounces the same way. The strictest outcome of all the rules
 //   wins: block > hold > bounce > send, except that a bounce beats an ask, and an ask survives
-//   a hold for speaking as the principal below what its stakes need (both reasons show on the approval).
+//   a hold for speaking as the principal below what its stakes need, or for steering (both reasons show on the approval).
 //
 // A hold that waits only on the principal's yes to a requester (an askable recipient's request,
 // or a requested item held below 80 under the principal's task) carries `ask`: the gateway
 // shows the principal a question (naming the task only when the principal's authority is that
-// task's) and tells the agent to deliver it now. Any other hold reason beside it drops the ask;
+// task's) and tells the agent to deliver it now. Any other hold reason beside it (except speaking as the principal or steering) drops the ask;
 // a bounce beside it wins, so the drafter fixes the other finding and the recheck asks. A cold stranger's request bounces with `strangerRequest`, so the
 // digest says Curia did not share it. Both name labels and the requester only, never values.
 //
@@ -986,6 +986,12 @@ function steeredOnly(d: BandReviewDecision): boolean {
     && d.findings.every((f) => f.rule === BAND_RULES.steered || f.rule === BAND_RULES.speaksAsPrincipal);
 }
 
+/**
+ * The hold rules an ask survives in combine(): both are reasons the principal decides anyway, so
+ * asking the requester's question costs nothing and records the answer.
+ */
+const ASK_SURVIVES: ReadonlySet<string> = new Set([BAND_RULES.speaksAsPrincipal, BAND_RULES.steered]);
+
 /** Who directed the work behind a send: the principal's own turn, the principal's task, or nobody. */
 type Authority = 'principal' | 'principal-task' | 'none';
 
@@ -1002,9 +1008,13 @@ type Authority = 'principal' | 'principal-task' | 'none';
  * draft the gateway holds still shows them.
  *
  * Two holds merge into a plain hold, except that an ask survives a hold for speaking as the
- * principal below what its stakes need (#2312, #2473): the principal is asked first either way, and the question names
- * who asked and records the answer. The approval shows the other reason beside it. Any other
- * hold (steered, a judge failure) drops the ask, so its warning leads.
+ * principal below what its stakes need (#2312, #2473), or for steering, or both: the principal is
+ * asked first either way, and the question names who asked and records the answer. The approval
+ * shows the other reason beside it ("Also held by the send review: …", alsoHeld in the gateway),
+ * so a steering warning is still in front of the principal when they answer. Dropping the ask
+ * beside a steering hold lost the question: the approval read as a plain send, and no
+ * disclosure_decisions row was recorded for the requester (scenario 34k). Any other hold (a judge
+ * failure, off-thread, a second item nobody asked for) drops the ask, so its warning leads.
  */
 export function combine(a: BandReviewDecision, b: BandReviewDecision): BandReviewDecision {
   if (a.kind === 'bounce' && b.kind === 'hold' && b.ask) return a;
@@ -1045,7 +1055,7 @@ export function combine(a: BandReviewDecision, b: BandReviewDecision): BandRevie
     const ask = a.ask ?? b.ask;
     const plain = a.ask ? b : a;
     // Leads with the ask's reason, so the question and its reason stay together.
-    if (ask && !(a.ask && b.ask) && plain.findings.every((f) => f.rule === BAND_RULES.speaksAsPrincipal)) {
+    if (ask && !(a.ask && b.ask) && plain.findings.every((f) => ASK_SURVIVES.has(f.rule))) {
       return { kind: 'hold', reason: (a.ask ? a : b).reason, findings, ask };
     }
     return { kind: 'hold', reason: a.reason, findings };
