@@ -3001,7 +3001,9 @@ export class OutboundGateway {
 
     // A block asks the drafter to rewrite, so it needs one waiting. A dispatcher relay's
     // drafter is gone and a saved draft cannot be rewritten in place: the principal decides.
-    if (decision.kind === 'block' && (options?.postTurn === true || args.editable === false)) {
+    // A repeated block (the drafter already had one on this draft) holds too: another "rewrite
+    // it again" only kept a retrying coordinator looping until its turn ran out.
+    if (decision.kind === 'block' && (options?.postTurn === true || args.editable === false || decision.repeated === true)) {
       // A hold the block outranked comes along (#2333): the principal sees its warning.
       const findings = [...decision.findings, ...(decision.heldBeside ?? [])];
       const rules = [...new Set(findings.map((f) => f.rule))].join(', ');

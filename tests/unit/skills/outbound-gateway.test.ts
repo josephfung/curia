@@ -4621,6 +4621,29 @@ describe('band review (#2159)', () => {
       expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
     });
 
+    // Release-gate runs: a coordinator that kept retrying after its block got 8-20 blocks in one turn.
+    it('holds a live send\'s repeated block for the principal, with an approval, instead of blocking again', async () => {
+      const actionLogRepo = makeActionLogRepo();
+      const gw = makeBandGateway({ review: vi.fn().mockResolvedValue({ ...blockDecision, repeated: true }), score: 84, actionLogRepo });
+      const result = await gw.send(emailReq, {
+        taskEventId: 't1',
+        reExecRecipe: { toolName: 'send-draft', partialPayload: { account: 'a' }, description: 'Draft reply to joel@example.com' },
+      });
+      expect(result).toMatchObject({ success: false, gated: true, actionRef: expect.any(String) });
+      expect(result.blockedReason).toContain('after one rewrite it still has these problems (ungrounded-claim)');
+      expect(result.blockedReason).not.toContain('Rewrite it again');
+      expect(actionLogRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ toolName: 'send-draft', outcome: 'pending_approval' }));
+      expect(publishedOfType(mocks.bus, 'outbound.blocked')).toHaveLength(0);
+      expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('still blocks a live send\'s first block, so the drafter gets its rewrite', async () => {
+      const gw = makeBandGateway({ review: vi.fn().mockResolvedValue(blockDecision), score: 84 });
+      const result = await gw.send(emailReq, { taskEventId: 't1', reExecRecipe: { toolName: 'send-draft', partialPayload: { account: 'a' }, description: 'x' } });
+      expect(result.gated).toBeUndefined();
+      expect(result.blockedReason!.startsWith(BLOCK_REASON)).toBe(true);
+    });
+
     it('falls back to the digest for a relayed reply with nothing to replay', async () => {
       const gw = makeBandGateway({ review: vi.fn().mockResolvedValue(blockDecision), score: 84 });
       const result = await gw.send(emailReq, { taskEventId: 't1', conversationId: 'c1', postTurn: true });

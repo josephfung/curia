@@ -253,7 +253,8 @@ export type BandReviewDecision =
   | { kind: 'bounce'; findings: FilterFinding[]; strangerRequest?: { labels: string[]; requester: string }; heldBeside?: FilterFinding[] }
   // Not sent, and not held for the principal: the drafter must rewrite it again (80+ only). The gateway converts it to a hold for a relayed reply or a saved draft.
   // heldBeside: a hold this block outranked (#2333). The drafter sees only `findings`; the converted hold shows both.
-  | { kind: 'block'; reason: string; findings: FilterFinding[]; heldBeside?: FilterFinding[] }
+  // repeated: the drafter was already blocked once on this draft; the gateway converts it to a hold for the principal, so retries stop.
+  | { kind: 'block'; reason: string; findings: FilterFinding[]; heldBeside?: FilterFinding[]; repeated?: true }
   // ask: the hold waits only on the principal's yes to a requester (#2312).
   | { kind: 'hold'; reason: string; findings: FilterFinding[]; ask?: BandReviewAsk };
 
@@ -367,7 +368,7 @@ export class BandSendReview {
           : undefined;
       const pii = this.unreviewedPiiOutcome(input, own, hasToken, prior !== undefined);
       // PII first, so its reason leads a merged hold: the bounce may have been for the items.
-      return this.settle(key, taskIds, input, prior !== undefined, other ? combine(pii, other) : pii);
+      return this.settle(key, taskIds, input, prior, other ? combine(pii, other) : pii);
     }
     this.deps.limiter.recordJudgeSuccess();
     if (isAutonomousMailbox(input)) {
@@ -413,7 +414,7 @@ export class BandSendReview {
       this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel, score: input.score, other: decision.kind }, 'band review: held — an autonomous reply shares information that isn\'t on the thread');
       decision = offThreadHold(decision);
     }
-    return this.settle(key, taskIds, input, prior !== undefined, decision);
+    return this.settle(key, taskIds, input, prior, decision);
   }
 
   /** The band rules other than disclosure, as before #2312. Writes nothing to the ledger. */
@@ -708,11 +709,22 @@ export class BandSendReview {
   }
 
   /** Record the final outcome in the one-bounce ledger and return it. */
-  private settle(key: string, taskIds: string[], input: BandReviewInput, hasPrior: boolean, decision: BandReviewDecision): BandReviewDecision {
+  private settle(key: string, taskIds: string[], input: BandReviewInput, prior: LedgerEntry | undefined, decision: BandReviewDecision): BandReviewDecision {
+    const hasPrior = prior !== undefined;
+    if (decision.kind === 'block' && prior?.blocked === true) {
+      // The drafter was already blocked once after its bounce and is still sending something the
+      // review rejects. Another block only invites another retry: a coordinator that kept
+      // retrying looped 8-20 times in one turn, until maxTurns or a timeout. So the principal
+      // decides: the gateway turns this block into a hold, as it does for a relayed reply. The
+      // entry is cleared like any hold's, so a later new draft starts with a fresh bounce.
+      this.bounced.delete(key);
+      this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel, rules: decision.findings.map((f) => f.rule) }, 'band review: blocked again after a block — holding for the principal');
+      return { ...decision, repeated: true };
+    }
     if (decision.kind === 'bounce' || decision.kind === 'block') {
       // A block keeps the entry and refreshes its time: the drafter's next attempt is still a
-      // recheck, and a clean one clears it.
-      this.bounced.set(key, { taskEventIds: taskIds, at: this.now(), rules: decision.findings.map((f) => f.rule) });
+      // recheck, and a clean one clears it. `blocked` marks that the drafter has had its block.
+      this.bounced.set(key, { taskEventIds: taskIds, at: this.now(), rules: decision.findings.map((f) => f.rule), ...(decision.kind === 'block' ? { blocked: true as const } : {}) });
       return decision;
     }
     this.bounced.delete(key);
@@ -1173,7 +1185,8 @@ function rulesOnEach(rulings: readonly DisclosureRuling[] | undefined, items: re
   return ids.size === items.length && items.every((i) => ids.has(i.id));
 }
 
-type LedgerEntry = { taskEventIds: string[]; at: number; rules: string[] };
+/** `blocked`: the drafter has already had a block after its one bounce (see settle()). */
+type LedgerEntry = { taskEventIds: string[]; at: number; rules: string[]; blocked?: true };
 
 /** The recheck hold's reason, naming what the draft was flagged for. */
 function recheckReason(rules: readonly string[]): string {
