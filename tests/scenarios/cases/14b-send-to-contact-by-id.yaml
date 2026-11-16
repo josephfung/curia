@@ -7,7 +7,7 @@ description: >
   The principal asks the coordinator to email Priya Natarajan, a known contact, from the
   coordinator's own account. Priya's contact card, with her ID and email, is in context.
 tags: [email, recipient]
-# On demand since the 2026-11-16 gate prune: raw addresses refused in code (send-by-reference.test.ts); 14a gates the alias.
+# On demand since the 2026-11-16 gate prune: 41a gates a send by contact ID; raw addresses refused in code (send-by-reference.test.ts).
 release_gate: false
 stub_sets: [human-channels]
 seed:
