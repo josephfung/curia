@@ -29,6 +29,12 @@ tool_stubs:
   ceo-inbox-send-draft:
     - match: {}
       return: { message_id: msg-sent-jane-1, to: [jane.cole@work.example.test], subject: Q3 audit }
+  # Reading a draft before sending it is fair (refused unstubbed on the 2026-11-16 gate).
+  ceo-inbox-read:
+    - match: { draft_id: draft-jane-1 }
+      return: { id: draft-jane-1, mailbox: work, mailbox_label: Work, subject: Q3 audit, to: [{ name: Jane Cole, email: jane.cole@work.example.test }], cc: [], bcc: [], body_plain: "Hi Jane, attached are the schedules for the Q3 audit.", date_local: "{{at:now-2h}}", is_draft: true }
+    - match: { draft_id: draft-tim-2 }
+      return: { id: draft-tim-2, mailbox: personal, mailbox_label: Personal, subject: Beers, to: [{ name: Tim Okafor, email: tim.okafor@family.example.test }], cc: [], bcc: [], body_plain: "Thursday after work?", date_local: "{{at:now-1h}}", is_draft: true }
 expected_behaviors:
   - id: sends_work_draft
     weight: critical
