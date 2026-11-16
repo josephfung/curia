@@ -40,11 +40,13 @@ export function principalFixtureMismatch(
  * Defunct rows still hold their address under the unique index, so the renamed row is the one
  * already holding Avery's address when there is one (a half-prepared copy), else the oldest.
  * A principal with no email identity at all (Signal-only) gets one inserted.
+ * The designated primary (contacts.primary_email) becomes Avery's too: a copied primary that
+ * no verified identity matches is dropped from the prompt, with a boot warning.
  */
 const PRINCIPAL_ID = "(SELECT id FROM contacts WHERE system_role='principal')";
 const EMAIL = SCENARIO_PRINCIPAL.email;
 export const SCENARIO_PRINCIPAL_SQL = [
-  `UPDATE contacts SET display_name='${SCENARIO_PRINCIPAL.displayName}', preferred_name='Avery' WHERE system_role='principal';`,
+  `UPDATE contacts SET display_name='${SCENARIO_PRINCIPAL.displayName}', preferred_name='Avery', primary_email='${EMAIL}' WHERE system_role='principal';`,
   `UPDATE contact_channel_identities SET status='defunct' WHERE channel='email' AND contact_id=${PRINCIPAL_ID};`,
   `UPDATE contact_channel_identities SET channel_identifier='${EMAIL}', verified=true, verified_at=now(), status='active'`
     + ` WHERE id=(SELECT id FROM contact_channel_identities WHERE channel='email' AND contact_id=${PRINCIPAL_ID}`
