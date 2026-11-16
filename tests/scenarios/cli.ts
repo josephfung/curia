@@ -17,6 +17,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { calledTools, evaluateCheck, leafChecks } from './assertions.js';
 import { formatPct, gateFailures, knownFailureLines, scoreCase, staleKnownFailures } from './gate.js';
+import { principalFixtureMismatch, SCENARIO_PRINCIPAL_SQL } from './principal-fixture.js';
 import {
   acquireSuiteLock,
   createScenarioHarness,
@@ -405,6 +406,27 @@ async function main(): Promise<void> {
       ? await harness.stack.contactService.getContact(harness.stack.principalContactId)
       : undefined;
     const judge = createJudge(harness.stack.llmProviders, principal?.displayName, { logger: harness.stack.logger });
+
+    // The cases are written for Avery Testwell (principal-fixture.ts). A gate run on another
+    // principal fails cases for the environment, not the code, so refuse it before any paid
+    // call. A narrowed run only warns: authoring a case on the dev database is still useful.
+    const principalMismatch = principalFixtureMismatch(
+      principal?.displayName,
+      harness.stack.principalIdentities.filter(id => id.channel === 'email').map(id => id.channelIdentifier),
+    );
+    if (principalMismatch) {
+      const narrowed = args.caseFilter || args.tags || args.runs !== undefined;
+      if (!narrowed) {
+        err(`\nThis database is not set up for the scenario cases: ${principalMismatch}.`);
+        err('Run the gate on a disposable copy whose principal is the scenario principal:');
+        err('  docker exec curia-postgres-1 psql -U curia -d postgres -c "CREATE DATABASE curia_scenarios TEMPLATE curia"');
+        err(`  docker exec curia-postgres-1 psql -U curia -d curia_scenarios -c "${SCENARIO_PRINCIPAL_SQL}"`);
+        err('  then point DATABASE_URL at curia_scenarios (tests/scenarios/README.md, "The scenario principal").');
+        exitCode = 1;
+        return;
+      }
+      out(`   [WARN] ${principalMismatch}: cases that name Avery will see a stranger (not a gate run, so continuing)`);
+    }
     out(`   Model: ${model}`);
     out(`   Reasoning: ${reasoningLabel}`);
     out(`   Judge: ${judge.model} (OpenRouter)`);
