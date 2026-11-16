@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadTestCases, loadTestCase, targetProblems } from '../../smoke/loader.js';
+import { loadTestCases, loadTestCase, targetProblems, resolveJudgedText } from '../../smoke/loader.js';
 import { WEB_FETCH_NOT_FOUND_LINES } from '../../../src/agents/prompts/dead-end-guidance.js';
 
 // Track temp dirs created in this suite for cleanup
@@ -307,10 +307,36 @@ describe('placeholders and behavior ids at load time', () => {
     ].join('\n'))).not.toThrow();
   });
 
+  it('rejects a misspelt placeholder in a behavior description or failure mode', () => {
+    expect(() => loadText([
+      'name: A', 'turns:', '  - content: hi', 'expected_behaviors:',
+      '  - { id: x, description: "due {{dat:next-friday}}" }',
+    ].join('\n'))).toThrow(/unrecognised placeholder/);
+    expect(() => loadText([
+      'name: A', 'turns:', '  - content: hi', behavior, 'failure_modes:', '  - "Picks {{dat:today}}"',
+    ].join('\n'))).toThrow(/unrecognised placeholder/);
+  });
+
   it('rejects duplicate behavior ids', () => {
     expect(() => loadText([
       'name: A', 'turns:', '  - content: hi', 'expected_behaviors:',
       '  - { id: x, description: one, weight: critical }', '  - { id: x, description: two, weight: nice-to-have }',
     ].join('\n'))).toThrow(/Duplicate behavior id 'x'/);
+  });
+});
+
+describe('resolveJudgedText', () => {
+  // The judge rates against these descriptions. Left unresolved, a case has to ask the judge
+  // to do calendar arithmetic, which gpt-4o gets wrong (it once rated a correct "next Friday"
+  // of Nov 20 as a miss, insisting on Saturday Nov 21).
+  it('resolves date placeholders in behaviors and failure modes against the case clock', () => {
+    const tc = loadTestCase('tests/smoke/cases/forwarded-receipt.yaml');
+    const resolved = resolveJudgedText({
+      ...tc,
+      expectedBehaviors: [{ id: 'd', description: 'Due {{day:next-friday}}', weight: 'critical' }],
+      failureModes: ['Picks {{day:next-friday+7}}'],
+    }, 'America/Toronto', new Date('2026-11-15T17:00:00Z'), v => v);
+    expect(resolved.expectedBehaviors[0]!.description).toBe('Due Friday, November 20');
+    expect(resolved.failureModes[0]).toBe('Picks Friday, November 27');
   });
 });

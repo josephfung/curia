@@ -13,6 +13,7 @@ import {
 import { sumBreakdowns, type UsageBreakdown } from '../shared/usage.js';
 import type { ToolStub } from '../scenarios/types.js';
 import type { CaseTarget, TestCase, CaseExecution, CapturedResponse } from './types.js';
+import { resolveJudgedText } from './loader.js';
 
 /**
  * After an attempt ends and is cancelled, how long to wait for its leftover work to wind
@@ -107,11 +108,16 @@ async function runAttempt(
     // judge both see. Dates resolve against the moment the case starts. Resolved inside
     // the try below, so a bad placeholder fails this case, not the whole run.
     let target: CaseTarget | undefined;
+    // What the judge rates against, on the same clock as the target. Stays the raw case if
+    // resolving throws, so the case still fails with that error rather than vanishing.
+    let judged: TestCase = tc;
 
     try {
+      const caseStart = new Date();
       target = tc.target
-        ? withPrincipalOf(options.principal)(resolveDatePlaceholders(tc.target, harness.stack.config.timezone, new Date()))
+        ? withPrincipalOf(options.principal)(resolveDatePlaceholders(tc.target, harness.stack.config.timezone, caseStart))
         : undefined;
+      judged = resolveJudgedText(tc, harness.stack.config.timezone, caseStart, withPrincipalOf(options.principal));
       await runSingleCase(harness, tc, target, responses, options.defaultStubs ?? {}, options.principal);
     } catch (err) {
       // Case-level failure (a turn timed out or errored). Turns that did complete are
@@ -146,7 +152,7 @@ async function runAttempt(
     state.closed = true;
 
     const execution: CaseExecution = {
-      testCase: tc,
+      testCase: judged,
       responses,
       agentCalls,
       ...(target ? { target } : {}),
