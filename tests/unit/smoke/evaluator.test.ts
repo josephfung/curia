@@ -150,6 +150,12 @@ describe('Evaluator', () => {
       expect(sent).not.toContain('Sunday, November 15, 2026');
     });
 
+    it('keeps the attempt\'s date on the result, so a re-judge can use it', async () => {
+      const judge = judgeReplying(JSON.stringify({ scores: [{ behaviorId: 'books', rating: 'PASS', justification: 'ok' }] }));
+      const [result] = await evaluateCases([execution({ today: 'Monday, November 16, 2026 (America/Toronto)' })], judge);
+      expect(result!.today).toBe('Monday, November 16, 2026 (America/Toronto)');
+    });
+
     it('gives the judge today\'s date, so relative dates can be checked', () => {
       expect(formatJudgeInput(execution(), undefined, 'Friday, October 2, 2026 (America/Toronto)'))
         .toContain('## Today\nFriday, October 2, 2026 (America/Toronto)');

@@ -171,6 +171,8 @@ export interface CaseResult {
   usage: UsageBreakdown;
   /** Provider failures retried on the way to this result (both gated attempts). */
   providerRetries: string[];
+  /** "Today" on the judged attempt's clock (CaseExecution.today); a re-judge uses it. */
+  today?: string;
 }
 
 // -- Run-level results --
@@ -193,7 +195,10 @@ export interface RunResult {
   durationMs: number;
   /** Cases run at once (--concurrency). */
   concurrency: number;
-  /** "Today" as the agents and the judge were told it (re-judging needs the same). */
+  /**
+   * "Today" when the run started. Each case carries its own attempt's date
+   * (CaseResult.today), which the judge read; this is the fallback for older results.
+   */
   today: string;
   /**
    * The run's estimated model spend: every case's plus `overheadUsage`. An estimate from
