@@ -15,30 +15,83 @@ export interface EmbedderManifest {
 
 export type VerifyResult = { ok: true } | { ok: false; problems: string[] };
 
-/** Load the committed manifest (default: models/embedding/manifest.json under cwd). */
+// What a well-formed manifest holds (#2023 review). The manifest is the trust anchor the
+// weights are verified against, and its fields end up in a download URL and a file path,
+// so a malformed or hostile value is refused here rather than used.
+const REVISION_RE = /^[0-9a-f]{40}$/; // a full git commit sha, never a branch name
+const SHA256_RE = /^[0-9a-f]{64}$/;
+const REPO_RE = /^[\w.-]+\/[\w.-]+$/; // owner/name on the Hugging Face hub
+
+function invalid(source: string, field: string, problem: string): Error {
+  return new Error(`Invalid embedder manifest ${source}: ${field} ${problem}`);
+}
+
+/** A relative path with no `..` segment: it may name a file under a directory, never escape it. */
+function checkRelative(value: unknown, source: string, field: string): string {
+  if (typeof value !== 'string' || value === '') throw invalid(source, field, 'must be a non-empty string');
+  // win32 too: a backslash or drive-letter path must not slip past on Linux.
+  if (path.posix.isAbsolute(value) || path.win32.isAbsolute(value)) throw invalid(source, field, 'must be a relative path');
+  if (value.split(/[\\/]/).includes('..')) throw invalid(source, field, 'must not contain a ".." segment');
+  return value;
+}
+
+/**
+ * Validates a parsed manifest and returns it typed. `dir` is the directory the `dest`
+ * paths resolve under (where the weights are written and read); every one must stay
+ * strictly inside it. Throws an Error naming the offending field.
+ */
+export function validateEmbedderManifest(raw: unknown, dir: string, source = 'manifest'): EmbedderManifest {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw invalid(source, 'root', 'must be an object');
+  const m = raw as Record<string, unknown>;
+  if (typeof m.model !== 'string' || m.model === '') throw invalid(source, 'model', 'must be a non-empty string');
+  // REPO_RE alone admits "../name"; a dot segment would rewrite the URL path, so it is refused.
+  if (typeof m.repo !== 'string' || !REPO_RE.test(m.repo) || m.repo.split('/').some(part => part === '.' || part === '..')) {
+    throw invalid(source, 'repo', 'must look like "owner/name"');
+  }
+  if (typeof m.revision !== 'string' || !REVISION_RE.test(m.revision)) {
+    throw invalid(source, 'revision', 'must be a 40-character lowercase hex commit sha');
+  }
+  if (!Array.isArray(m.files) || m.files.length === 0) throw invalid(source, 'files', 'must be a non-empty array');
+
+  const root = path.resolve(dir);
+  m.files.forEach((entry: unknown, i: number) => {
+    const at = `files[${i}]`;
+    if (typeof entry !== 'object' || entry === null) throw invalid(source, at, 'must be an object');
+    const f = entry as Record<string, unknown>;
+    checkRelative(f.path, source, `${at}.path`);
+    const dest = checkRelative(f.dest, source, `${at}.dest`);
+    // Belt and braces after the segment check: resolved, dest must land strictly inside dir.
+    const rel = path.relative(root, path.resolve(root, dest));
+    if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+      throw invalid(source, `${at}.dest`, `must resolve to a file inside ${root}`);
+    }
+    if (typeof f.bytes !== 'number' || !Number.isSafeInteger(f.bytes) || f.bytes <= 0) {
+      throw invalid(source, `${at}.bytes`, 'must be a positive integer');
+    }
+    if (typeof f.sha256 !== 'string' || !SHA256_RE.test(f.sha256)) {
+      throw invalid(source, `${at}.sha256`, 'must be 64 lowercase hex characters');
+    }
+  });
+  // Every field the interface declares was checked above.
+  return m as unknown as EmbedderManifest;
+}
+
+/**
+ * Load and validate the committed manifest (default: models/embedding/manifest.json under
+ * cwd). `dir` is where its `dest` paths resolve, by default the manifest's own directory.
+ */
 export function loadEmbedderManifest(
   file: string = path.resolve(process.cwd(), 'models/embedding/manifest.json'),
+  dir: string = path.dirname(file),
 ): EmbedderManifest {
-  const raw: unknown = JSON.parse(readFileSync(file, 'utf8'));
-  // Runtime shape check: a malformed manifest must fail loudly, not at first use.
-  const m = raw as Partial<EmbedderManifest> | null;
-  if (
-    !m ||
-    typeof m.model !== 'string' ||
-    typeof m.repo !== 'string' ||
-    typeof m.revision !== 'string' ||
-    !Array.isArray(m.files) ||
-    !m.files.every(
-      (f) =>
-        typeof f?.path === 'string' &&
-        typeof f?.dest === 'string' &&
-        typeof f?.bytes === 'number' &&
-        typeof f?.sha256 === 'string',
-    )
-  ) {
-    throw new Error(`Invalid embedder manifest: ${file}`);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (err) {
+    throw new Error(`Invalid embedder manifest ${file}: ${(err as Error).message}`, { cause: err });
   }
-  return m as EmbedderManifest;
+  // A malformed manifest must fail loudly here, not at first use.
+  return validateEmbedderManifest(raw, dir, file);
 }
 
 async function sha256File(file: string): Promise<string> {

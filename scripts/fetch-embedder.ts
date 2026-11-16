@@ -5,8 +5,9 @@ import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdir, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { pathToFileURL } from 'node:url';
 import {
   loadEmbedderManifest,
   verifyEmbedderFiles,
@@ -23,10 +24,15 @@ function parseDir(argv: string[]): string {
   return path.resolve(process.cwd(), 'models/embedding');
 }
 
-async function downloadOne(
+/**
+ * Downloads one manifest file to `<dir>/<dest>`, via a `.part` file renamed only once its
+ * size and sha256 match. Exported, with `fetchImpl` as a seam, for the unit test.
+ */
+export async function downloadOne(
   manifest: EmbedderManifest,
   file: EmbedderManifest['files'][number],
   dir: string,
+  fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
   const url = `https://huggingface.co/${manifest.repo}/resolve/${manifest.revision}/${file.path}`;
   const dest = path.join(dir, file.dest);
@@ -34,20 +40,33 @@ async function downloadOne(
   await mkdir(path.dirname(dest), { recursive: true });
 
   // Node's fetch follows redirects by default (HF resolve/ redirects to a CDN).
-  const res = await fetch(url, { redirect: 'follow' });
+  const controller = new AbortController();
+  const res = await fetchImpl(url, { redirect: 'follow', signal: controller.signal });
   if (!res.ok || !res.body) throw new Error(`${file.path}: HTTP ${res.status} from ${url}`);
 
-  // Hash while streaming to a temp file; rename only after verification.
+  // Hash while streaming to a temp file; rename only after verification. The byte count is
+  // checked as it streams: a response larger than the manifest says (a wrong or hostile
+  // server) is cut off at the first chunk past the limit, not written to disk in full.
   const hash = createHash('sha256');
   let bytes = 0;
   const source = Readable.fromWeb(res.body as import('node:stream/web').ReadableStream);
-  source.on('data', (chunk: Buffer) => {
-    hash.update(chunk);
-    bytes += chunk.length;
+  const limit = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      bytes += chunk.length;
+      if (bytes > file.bytes) {
+        callback(new Error(`${file.path}: download exceeded the manifest's ${file.bytes} bytes; aborted`));
+        return;
+      }
+      hash.update(chunk);
+      callback(null, chunk);
+    },
   });
   try {
-    await pipeline(source, createWriteStream(tmp));
+    // pipeline() destroys every stream on an error, the source included.
+    await pipeline(source, limit, createWriteStream(tmp));
   } catch (err) {
+    // Tear the connection down too, so nothing more is read from the server.
+    controller.abort();
     await rm(tmp, { force: true });
     throw err;
   }
@@ -63,7 +82,8 @@ async function downloadOne(
 
 async function main(): Promise<void> {
   const dir = parseDir(process.argv.slice(2));
-  const manifest = loadEmbedderManifest();
+  // Validated against the directory the files are written to, so no `dest` can escape it.
+  const manifest = loadEmbedderManifest(undefined, dir);
 
   const before = await verifyEmbedderFiles(dir, manifest);
   if (before.ok) {
@@ -82,7 +102,10 @@ async function main(): Promise<void> {
   process.stdout.write(`embedder weights fetched and verified in ${dir}\n`);
 }
 
-main().catch((err: unknown) => {
-  process.stderr.write(`fetch:embedder failed: ${err instanceof Error ? err.message : String(err)}\n`);
-  process.exit(1);
-});
+// Run only as the entry point, so the unit test can import downloadOne.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err: unknown) => {
+    process.stderr.write(`fetch:embedder failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(1);
+  });
+}
