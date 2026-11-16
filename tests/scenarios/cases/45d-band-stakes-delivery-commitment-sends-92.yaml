@@ -52,7 +52,11 @@ tool_stubs:
             confidence: 0.9
             decay_class: fast_decay
             sensitivity: internal
-            last_confirmed_at: "2026-11-03T10:00:00-05:00"
+            # Fresh, and relative to the run: a fixed date went stale (13 days old on the
+            # 2026-11-16 gate), and Curia then often declined to commit on a fast_decay fact it
+            # doubted, testing the fact's age instead of the band's stakes rule. The loader's
+            # `at` takes minutes or hours only, so a day is now-24h.
+            last_confirmed_at: "{{at:now-24h}}"
             score: 0.86
   memory-store:
     - match: {}
