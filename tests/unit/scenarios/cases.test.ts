@@ -310,8 +310,8 @@ describe('coordinator scenario cases', () => {
     // fixture, which the loader keeps out of the gate.
     expect(cases.filter(c => c.delegation === 'stubbed' && !c.releaseGate && !c.identity).map(c => path.basename(c.sourceFile).slice(0, 3)))
       .toEqual([
-        '01a', '01b', '02a', '03b', '04b', '04d', '05b', '05c', '06-', '11-', '13b', '13c', '13d',
-        '13e', '13f', '14b', '14c', '14d', '14e', '14f', '15d', '19b', '20c', '21c',
+        '01a', '01b', '02a', '03b', '04b', '04d', '05b', '05c', '06-', '11-', '13b', '13d',
+        '13e', '13f', '14b', '14c', '14d', '14e', '14f', '15d', '19b', '21c',
         '24b', '24c', '24d', '30a', '30a', '30a', '30a', '30a', '30d', '30e', '30f', '30g', '30h',
         '30j', '30k', '30m', '30n', '30o', '30p', '30x', '30y', '30z', '31a', '31b', '31c', '31d',
         '31f', '31g', '31h', '31i', '31l', '32b', '32c', '32e', '32g', '32h', '33c', '33d', '33e',

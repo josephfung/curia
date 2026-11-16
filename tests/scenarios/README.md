@@ -182,7 +182,7 @@ so a new case is `release_gate: false` unless it guards something no other gate 
 unit test does: a distinct invariant, a production incident with no code-level test, or a
 coordinator route that rests on prompt or roster text (prompt trims break those quietly).
 A case whose behavior is enforced in code and unit-tested, or that varies one parameter of a
-gate sibling, runs on demand. On 2026-11-16 the gate was pruned from 155 cases to 86 on these
+gate sibling, runs on demand. On 2026-11-16 the gate was pruned from 155 cases to 88 on these
 lines; each moved case says why in a comment beside its `release_gate: false`.
 
 **Known failures.** A case can carry `known_failure: { issue: "#1234", reason: … }` for a

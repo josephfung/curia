@@ -19,7 +19,7 @@ description: >
   deck, and shares it with Kevin, by Drive access or by emailing him a PDF. It never says
   it cannot share files.
 tags: [google-workspace, skill-activation]
-# On demand since the 2026-11-16 gate prune: activation variant; 13a gates it.
+# On demand since the 2026-11-16 gate prune: 13c gates the no-link activation; finding and sharing run in the Workspace tools.
 release_gate: false
 timeout_seconds: 300
 # Letting Kevin know by email is reasonable after sharing; sends succeed.
