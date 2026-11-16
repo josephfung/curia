@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { principalFixtureMismatch, SCENARIO_PRINCIPAL, SCENARIO_PRINCIPAL_SQL } from '../../scenarios/principal-fixture.js';
 
@@ -33,6 +35,17 @@ describe('principalFixtureMismatch', () => {
     expect(SCENARIO_PRINCIPAL_SQL).toContain(`channel_identifier='${SCENARIO_PRINCIPAL.email}', verified=true`);
     // Several email identities would collide on the unique address index if all were renamed.
     expect(SCENARIO_PRINCIPAL_SQL).toContain("SET status='defunct'");
-    expect(SCENARIO_PRINCIPAL_SQL).toContain('ORDER BY created_at LIMIT 1');
+    // Defunct rows keep their address, so a row already holding Avery's is the one renamed.
+    expect(SCENARIO_PRINCIPAL_SQL).toContain(
+      `ORDER BY lower(channel_identifier)='${SCENARIO_PRINCIPAL.email}' DESC, created_at LIMIT 1`,
+    );
+    // A principal with no email identity (Signal-only) gets one.
+    expect(SCENARIO_PRINCIPAL_SQL).toMatch(/INSERT INTO contact_channel_identities .* AND NOT EXISTS \(/);
+  });
+
+  it('matches the setup command in the scenarios README', () => {
+    // The README's copy-paste command must not drift from the one the refusal prints.
+    const readme = readFileSync(join(import.meta.dirname, '../../scenarios/README.md'), 'utf8');
+    expect(readme).toContain(SCENARIO_PRINCIPAL_SQL);
   });
 });

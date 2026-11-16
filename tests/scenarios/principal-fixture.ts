@@ -35,13 +35,21 @@ export function principalFixtureMismatch(
  * multi-statement -c as one transaction, so a failure leaves the copy unchanged.
  *
  * A mirrored principal often has several email identities, and (channel, address) is unique
- * (migration 044), so only the oldest is renamed; the rest are marked defunct, which drops them
+ * (migration 044), so only one row is renamed; the rest are marked defunct, which drops them
  * from the boot snapshot (verified and active only) without deleting rows that others reference.
+ * Defunct rows still hold their address under the unique index, so the renamed row is the one
+ * already holding Avery's address when there is one (a half-prepared copy), else the oldest.
+ * A principal with no email identity at all (Signal-only) gets one inserted.
  */
 const PRINCIPAL_ID = "(SELECT id FROM contacts WHERE system_role='principal')";
+const EMAIL = SCENARIO_PRINCIPAL.email;
 export const SCENARIO_PRINCIPAL_SQL = [
   `UPDATE contacts SET display_name='${SCENARIO_PRINCIPAL.displayName}', preferred_name='Avery' WHERE system_role='principal';`,
   `UPDATE contact_channel_identities SET status='defunct' WHERE channel='email' AND contact_id=${PRINCIPAL_ID};`,
-  `UPDATE contact_channel_identities SET channel_identifier='${SCENARIO_PRINCIPAL.email}', verified=true, verified_at=now(), status='active'`
-    + ` WHERE id=(SELECT id FROM contact_channel_identities WHERE channel='email' AND contact_id=${PRINCIPAL_ID} ORDER BY created_at LIMIT 1);`,
+  `UPDATE contact_channel_identities SET channel_identifier='${EMAIL}', verified=true, verified_at=now(), status='active'`
+    + ` WHERE id=(SELECT id FROM contact_channel_identities WHERE channel='email' AND contact_id=${PRINCIPAL_ID}`
+    + ` ORDER BY lower(channel_identifier)='${EMAIL}' DESC, created_at LIMIT 1);`,
+  `INSERT INTO contact_channel_identities (contact_id, channel, channel_identifier, verified, verified_at, source, status)`
+    + ` SELECT id, 'email', '${EMAIL}', true, now(), 'ceo_stated', 'active' FROM contacts WHERE system_role='principal'`
+    + ` AND NOT EXISTS (SELECT 1 FROM contact_channel_identities WHERE channel='email' AND contact_id=contacts.id);`,
 ].join(' ');
