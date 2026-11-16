@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { CeoInboxSendDraftHandler, SEND_DEADLINE_RESERVE_MS, SEND_OUTCOME_UNKNOWN } from './handler.js';
+import { BATCH_READ_BACK_FIRST, CeoInboxSendDraftHandler, SEND_DEADLINE_RESERVE_MS, SEND_OUTCOME_UNKNOWN } from './handler.js';
 import { stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import {
@@ -206,5 +206,87 @@ describe('CeoInboxSendDraftHandler — limit cue (#2475 R47)', () => {
 
   it('a thread cooldown never reads as held', () => {
     expect(PRINCIPAL_SEND_REFUSALS.thread_cooldown).not.toMatch(/held/i);
+  });
+});
+
+// #2474 design D6: "send yesterday morning's drafts" is read back before anything goes out. The
+// rule used to live only in the description, and a coordinator brief saying "send them" beat it.
+describe('CeoInboxSendDraftHandler — batch read-back (#2474 D6)', () => {
+  const sentOk: PrincipalDraftSendResult = { success: true, messageId: 'm-1', to: ['a@example.com'], subject: 'Hi' };
+  const refused = { success: false, error: BATCH_READ_BACK_FIRST, errorType: 'POLICY_HOLD' };
+  // Two specialist tasks the coordinator started for the same principal message share its task id.
+  const delegatedFrom = (coordinatorTask: string) => ({ ...principalMetadata, delegationOrigin: { taskEventId: coordinatorTask } });
+
+  it('refuses an unconfirmed send declared as one of a batch, without calling the gateway', async () => {
+    const { gateway, sendPrincipalDraft } = gatewayReturning(sentOk);
+    const result = await new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-1', batch_size: 2 } }));
+    expect(result).toEqual(refused);
+    expect(sendPrincipalDraft).not.toHaveBeenCalled();
+  });
+
+  it('sends a single draft in one turn, declared or not (46d/46f)', async () => {
+    for (const input of [{ draft_id: 'draft-1' }, { draft_id: 'draft-1', batch_size: 1 }]) {
+      const { gateway, sendPrincipalDraft } = gatewayReturning(sentOk);
+      const result = await new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway, input }));
+      expect(result.success).toBe(true);
+      expect(sendPrincipalDraft).toHaveBeenCalledOnce();
+    }
+  });
+
+  it('sends every draft of a confirmed batch, one call each (30w, the turn after the read-back)', async () => {
+    const { gateway, sendPrincipalDraft } = gatewayReturning(sentOk);
+    const handler = new CeoInboxSendDraftHandler();
+    for (const id of ['draft-1', 'draft-2', 'draft-3']) {
+      const result = await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: id, batch_size: 3, batch_confirmed: true } }));
+      expect(result.success).toBe(true);
+    }
+    expect(sendPrincipalDraft.mock.calls.map((c) => c[0])).toEqual(['draft-1', 'draft-2', 'draft-3']);
+  });
+
+  it('refuses a second, different draft in the same turn when the model called neither a batch', async () => {
+    const { gateway, sendPrincipalDraft } = gatewayReturning(sentOk);
+    const handler = new CeoInboxSendDraftHandler();
+    expect((await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-1' } }))).success).toBe(true);
+    expect(await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-2' } }))).toEqual(refused);
+    expect(sendPrincipalDraft).toHaveBeenCalledOnce();
+  });
+
+  it('keeps refusing in a turn once a read-back was asked, even if the model re-calls it a single', async () => {
+    const { gateway, sendPrincipalDraft } = gatewayReturning(sentOk);
+    const handler = new CeoInboxSendDraftHandler();
+    await handler.execute(buildCtx({ outboundGateway: gateway, taskEventId: 'spec-1', taskMetadata: delegatedFrom('coord-1'), input: { draft_id: 'draft-1', batch_size: 2 } }));
+    // A re-delegation in the same principal turn is a new specialist task under the same coordinator task.
+    const again = await handler.execute(buildCtx({ outboundGateway: gateway, taskEventId: 'spec-2', taskMetadata: delegatedFrom('coord-1'), input: { draft_id: 'draft-1' } }));
+    expect(again).toEqual(refused);
+    expect(sendPrincipalDraft).not.toHaveBeenCalled();
+    // The principal's next message is a new coordinator task: a confirmed send goes through.
+    const next = await handler.execute(buildCtx({ outboundGateway: gateway, taskEventId: 'spec-3', taskMetadata: delegatedFrom('coord-2'), input: { draft_id: 'draft-1', batch_size: 2, batch_confirmed: true } }));
+    expect(next.success).toBe(true);
+  });
+
+  it('counts an unknown outcome as sent for the turn', async () => {
+    const sendPrincipalDraft = vi.fn(async () => { throw new Error('socket hang up'); });
+    const gateway = { sendPrincipalDraft } as unknown as OutboundGateway;
+    const handler = new CeoInboxSendDraftHandler();
+    await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-1' } }));
+    expect(await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-2' } }))).toEqual(refused);
+  });
+
+  it('leaves sends that are not principal-directed to the gateway (triage)', async () => {
+    const { gateway, sendPrincipalDraft } = gatewayReturning(sentOk);
+    const handler = new CeoInboxSendDraftHandler();
+    for (const id of ['draft-1', 'draft-2']) {
+      await handler.execute(buildCtx({ outboundGateway: gateway, liveTurn: false, input: { draft_id: id } }));
+    }
+    expect(sendPrincipalDraft).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a batch_size that is not a whole number of 1 or more', async () => {
+    const { gateway, sendPrincipalDraft } = gatewayReturning(sentOk);
+    for (const batch_size of [0, 1.5, 'two']) {
+      const result = await new CeoInboxSendDraftHandler().execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-1', batch_size } }));
+      expect(result.success).toBe(false);
+    }
+    expect(sendPrincipalDraft).not.toHaveBeenCalled();
   });
 });

@@ -174,7 +174,11 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // #2475 D6 which-draft guidance on send-draft (+329 bytes), approved by the maintainer: 49,416 over 46 local tools.
   // #2475 review I1: draft-compose's optional topic_matches_account (D5: topic AND evidence), +100
   // bytes under the coordinator's pre-approval of multi-mailbox wording: 49,516 over 46 local tools.
-  { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 49_516, allowMcpPins: false },
+  // #2474 D6 batch read-back moved to code (rung 1): send-draft's optional batch_size and
+  // batch_confirmed (+82 bytes after trimming the description's batch sentence). The tool can only
+  // refuse an unconfirmed batch at its first send if the model says it is one, so the inputs can't
+  // move higher: 49,598 over 46 local tools. TODO: needs the maintainer's approval.
+  { agent: 'ceo-inbox', alwaysOnPromptTokens: 14_100, localToolDefinitionBytes: 49_598, allowMcpPins: false },
   // contacts: YAML 15,595 → 11,423 chars (~4,831 → ~3,788 tokens always-on with its SKILL.md bodies);
   // 35,311 bytes over its local tools.
   // #2475 the optional `mailbox` input on calendar-list-events (+136 bytes), covered by the same
