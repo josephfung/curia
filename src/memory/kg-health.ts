@@ -27,15 +27,48 @@ export type KnowledgeGraphReason =
   | 'drift_unchecked'
   | 'weights_shifted';
 
+/** Reasons a drift check (boot or canary) sets. Every other ok reason is a base reason. */
+const DRIFT_REASONS: ReadonlySet<KnowledgeGraphReason> = new Set<KnowledgeGraphReason>([
+  'drift_unchecked',
+  'weights_shifted',
+  'weights_changed',
+]);
+
+/** A health verdict: what to report now, and the ok reason a drift finding sits on top of. */
+export interface KnowledgeGraphVerdict {
+  result: 'ok' | 'fail';
+  reason?: KnowledgeGraphReason;
+  /**
+   * Set only when a drift finding (`reason`) hides an ok reason of its own, such as the
+   * implicit-OpenAI deprecation. The canary restores it once the drift check passes.
+   */
+  baseReason?: KnowledgeGraphReason;
+}
+
 export class KnowledgeGraphHealth {
   private result: CheckResult = 'ok';
   private reason: KnowledgeGraphReason | undefined;
-  /** The ok reason the canary's `drift_unchecked` replaced, restored when a later check passes. */
-  private beforeUnchecked: KnowledgeGraphReason | undefined;
+  /**
+   * The ok reason that is not a drift finding (today only `implicit_openai_deprecated`),
+   * kept apart from `reason` so a canary `same` after `drift_unchecked` can restore it.
+   * Without this, a boot verdict of `drift_unchecked` would lose the deprecation for good
+   * (#2023 review).
+   */
+  private baseReason: KnowledgeGraphReason | undefined;
 
   set(result: 'ok' | 'fail', reason?: KnowledgeGraphReason): void {
     this.result = result;
     this.reason = reason;
+    // A drift reason leaves the base alone: it is reported on top of it. Anything else
+    // replaces it (a failed graph has no ok reason to come back to).
+    if (result === 'fail') this.baseReason = undefined;
+    else if (reason === undefined || !DRIFT_REASONS.has(reason)) this.baseReason = reason;
+  }
+
+  /** Applies the boot verdict, including the base reason a drift finding hides. */
+  setVerdict(verdict: KnowledgeGraphVerdict): void {
+    this.set(verdict.result, verdict.reason);
+    if (verdict.result === 'ok' && verdict.baseReason !== undefined) this.baseReason = verdict.baseReason;
   }
 
   get(): { result: CheckResult; reason?: KnowledgeGraphReason } {
@@ -62,11 +95,11 @@ export class KnowledgeGraphHealth {
       case 'unchecked':
         // A check that could not run says nothing new about a shift already found.
         if (this.reason === 'weights_shifted' || this.reason === 'drift_unchecked') return;
-        this.beforeUnchecked = this.reason;
         this.set('ok', 'drift_unchecked');
         return;
       case 'same':
-        if (this.reason === 'drift_unchecked') this.set('ok', this.beforeUnchecked);
+        // Back to the base reason (the deprecation, when there is one), not to nothing.
+        if (this.reason === 'drift_unchecked') this.set('ok', this.baseReason);
         return;
     }
   }
@@ -76,16 +109,16 @@ export class KnowledgeGraphHealth {
  * Maps the boot resolution to a health verdict. Maps by the structured codes only
  * (gate, reason, state.reason), never by message text.
  */
-export function knowledgeGraphReasonFrom(
-  kg: KnowledgeGraphEmbedding,
-): { result: 'ok' | 'fail'; reason?: KnowledgeGraphReason } {
+export function knowledgeGraphReasonFrom(kg: KnowledgeGraphEmbedding): KnowledgeGraphVerdict {
   if (kg.ok) {
-    // One reason fits. A drift finding is what an operator must act on, so it goes first.
-    if (kg.drift === 'shifted') return { result: 'ok', reason: 'weights_shifted' };
-    if (kg.drift === 'unchecked') return { result: 'ok', reason: 'drift_unchecked' };
-    return kg.deprecation === 'implicit_openai'
-      ? { result: 'ok', reason: 'implicit_openai_deprecated' }
-      : { result: 'ok' };
+    const deprecated: KnowledgeGraphReason | undefined =
+      kg.deprecation === 'implicit_openai' ? 'implicit_openai_deprecated' : undefined;
+    // One reason is reported. A drift finding is what an operator must act on, so it goes
+    // first, and the deprecation it hides rides along as the base reason.
+    const drift: KnowledgeGraphReason | undefined =
+      kg.drift === 'shifted' ? 'weights_shifted' : kg.drift === 'unchecked' ? 'drift_unchecked' : undefined;
+    if (drift) return deprecated ? { result: 'ok', reason: drift, baseReason: deprecated } : { result: 'ok', reason: drift };
+    return deprecated ? { result: 'ok', reason: deprecated } : { result: 'ok' };
   }
   switch (kg.gate) {
     case 'config':

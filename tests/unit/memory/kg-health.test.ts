@@ -47,8 +47,11 @@ describe('knowledgeGraphReasonFrom', () => {
     expect(knowledgeGraphReasonFrom(ok({ drift: 'shifted' }))).toEqual({ result: 'ok', reason: 'weights_shifted' });
     expect(knowledgeGraphReasonFrom(ok({ drift: 'unchecked' }))).toEqual({ result: 'ok', reason: 'drift_unchecked' });
     // One reason fits: the drift finding is the one an operator must act on.
+    // The deprecation it hides is kept as the base reason, for the canary to restore.
     expect(knowledgeGraphReasonFrom(ok({ drift: 'shifted', deprecation: 'implicit_openai' })))
-      .toEqual({ result: 'ok', reason: 'weights_shifted' });
+      .toEqual({ result: 'ok', reason: 'weights_shifted', baseReason: 'implicit_openai_deprecated' });
+    expect(knowledgeGraphReasonFrom(ok({ drift: 'unchecked', deprecation: 'implicit_openai' })))
+      .toEqual({ result: 'ok', reason: 'drift_unchecked', baseReason: 'implicit_openai_deprecated' });
   });
 
   it('maps ok to ok, and the implicit OpenAI deprecation to ok with a reason', () => {
@@ -106,6 +109,17 @@ describe('KnowledgeGraphHealth.recordDrift (the canary re-running the check)', (
   it('restores the reason drift_unchecked replaced once the check passes', () => {
     const h = at('ok', 'implicit_openai_deprecated');
     h.recordDrift('unchecked');
+    expect(h.get()).toEqual({ result: 'ok', reason: 'drift_unchecked' });
+    h.recordDrift('same');
+    expect(h.get()).toEqual({ result: 'ok', reason: 'implicit_openai_deprecated' });
+  });
+
+  it('restores the deprecation after a boot drift_unchecked once the canary sees same', () => {
+    // Boot: the endpoint was unreachable for the drift check, and the OpenAI default applied
+    // implicitly. Health reports drift_unchecked; the deprecation must not be lost.
+    const ok = { ok: true, drift: 'unchecked', deprecation: 'implicit_openai' } as unknown as KnowledgeGraphEmbedding;
+    const h = new KnowledgeGraphHealth();
+    h.setVerdict(knowledgeGraphReasonFrom(ok));
     expect(h.get()).toEqual({ result: 'ok', reason: 'drift_unchecked' });
     h.recordDrift('same');
     expect(h.get()).toEqual({ result: 'ok', reason: 'implicit_openai_deprecated' });
