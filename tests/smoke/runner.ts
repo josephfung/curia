@@ -170,12 +170,21 @@ async function runAttempt(
       ...(error ? { error } : {}),
       usage,
       providerRetries: [],
+      today: todayIn(harness.stack.config.timezone, caseClock),
     };
     const providerReason = error
       ? providerFailure({ ...(errorKind ? { kind: errorKind } : {}), ...(errorType ? { errorType } : {}), stalledCallMs: stalled })
       : undefined;
     return { execution, ...(providerReason ? { providerReason } : {}) };
   });
+}
+
+/** e.g. "Friday, October 2, 2026 (America/Toronto)": the date at `at` in the principal's timezone. */
+export function todayIn(timezone: string, at: Date = new Date()): string {
+  const date = at.toLocaleDateString('en-US', {
+    timeZone: timezone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+  });
+  return `${date} (${timezone})`;
 }
 
 /** Resolve {{principal:…}}. Without a principal contact, a placeholder stays visible rather than silently becoming "". */

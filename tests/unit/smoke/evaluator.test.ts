@@ -140,6 +140,16 @@ describe('Evaluator', () => {
       expect(input).toContain('FAILED: no calendar');
     });
 
+    it('judges an execution against its own attempt\'s date, not the run start\'s', async () => {
+      // A retry, or a long run, can cross local midnight after the run printed its date.
+      const judge = judgeReplying(JSON.stringify({ scores: [{ behaviorId: 'books', rating: 'PASS', justification: 'ok' }] }));
+      await evaluateCases([execution({ today: 'Monday, November 16, 2026 (America/Toronto)' })], judge,
+        { today: 'Sunday, November 15, 2026 (America/Toronto)' });
+      const sent = JSON.stringify(vi.mocked(judge.provider.chat).mock.calls[0]![0]);
+      expect(sent).toContain('Monday, November 16, 2026');
+      expect(sent).not.toContain('Sunday, November 15, 2026');
+    });
+
     it('gives the judge today\'s date, so relative dates can be checked', () => {
       expect(formatJudgeInput(execution(), undefined, 'Friday, October 2, 2026 (America/Toronto)'))
         .toContain('## Today\nFriday, October 2, 2026 (America/Toronto)');

@@ -21,7 +21,7 @@ import { cloneDatabase, databaseName, isLocalDatabase, type DatabaseClone } from
 import { loadPeople, seedPeople } from './fixtures.js';
 import { loadDefaultStubs, loadTestCases, targetProblems } from './loader.js';
 import { createHarness, RESPONSE_TIMEOUT_MS, turnTimeoutMs, type CuriaHarness } from './harness.js';
-import { runTestCases } from './runner.js';
+import { runTestCases, todayIn } from './runner.js';
 import { evaluateCases } from './evaluator.js';
 import { formatPct, gatingFailures, mergeRetries, retryTemplates, staleKnownFailures } from './gate.js';
 import { generateReport } from './report.js';
@@ -204,6 +204,8 @@ async function main(): Promise<void> {
         `${coordinatorDisabled.map(d => d.tool).join(', ')}`,
       );
     }
+    // The run's start date: printed and recorded in the results. The judge reads each
+    // execution's own date (CaseExecution.today) and falls back to this one.
     const today = todayIn(harness.stack.config.timezone);
     out(`   Today: ${today}`);
 
@@ -426,14 +428,6 @@ async function exitAfterFlush(code: number): Promise<never> {
     new Promise<void>(resolve => process.stderr.write('', () => resolve())),
   ]);
   process.exit(code);
-}
-
-/** e.g. "Friday, October 2, 2026 (America/Toronto)" — the date the agents were told. */
-function todayIn(timezone: string): string {
-  const date = new Date().toLocaleDateString('en-US', {
-    timeZone: timezone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-  });
-  return `${date} (${timezone})`;
 }
 
 function fileTimestamp(iso: string): string {

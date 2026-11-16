@@ -67,7 +67,9 @@ export async function evaluateCases(
         justification: `Case execution failed: ${exec.error}`,
       }));
     } else {
-      ({ scores, error: judgeError } = await judgeCase(exec, judge, options?.today, judgeUsage));
+      // The attempt's own date first: the run's start date is stale for a retry or a long
+      // run that crossed local midnight.
+      ({ scores, error: judgeError } = await judgeCase(exec, judge, exec.today ?? options?.today, judgeUsage));
     }
 
     const weightedScore = exec.error ? 0 : computeWeightedScore(exec.testCase.expectedBehaviors, scores);
