@@ -102,11 +102,14 @@ jobs:
 
       # Bundled embedder weights (#2023): pinned in models/embedding/manifest.json and
       # downloaded only by `pnpm fetch:embedder`, which verifies size + sha256. Cached on
-      # the manifest hash so a pin change is the only thing that re-downloads.
+      # the manifest hash so a pin change is the only thing that re-downloads. Only the
+      # weights directory (every manifest `dest` lives under it) is cached: the manifest
+      # is the trust anchor the weights are verified against, so it must always come from
+      # the checkout, never from a cache entry.
       - name: Cache embedder weights
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: models/embedding
+          path: models/embedding/all-MiniLM-L6-v2
           key: embedder-${{ hashFiles('models/embedding/manifest.json') }}
 
       - name: Fetch embedder weights
@@ -193,15 +196,22 @@ jobs:
           fi
           # What shapes the built image or this check: the Dockerfile and its context
           # filter, every package manifest and the lockfile/workspace (deps, overrides),
-          # docker/ helpers, the pinned weights manifest, the embedding code the load
-          # check and smoke run, the fetch and smoke scripts, the egress test, and this
-          # workflow.
+          # docker/ helpers, the pinned weights manifest, all of src/ and config/ (the
+          # smoke run boots through src/config.ts, config/, src/db/, src/bus/ and
+          # src/agents/llm/, not only src/memory/), every tsconfig, the fetch and smoke
+          # scripts, the egress test, and this workflow. Whole trees rather than a list of
+          # files: a list goes stale as imports change, and a stale list skips a needed build.
           # A here-string, not `echo | grep -q`: grep -q exits at the first match, and under
           # pipefail the echo's SIGPIPE would fail the pipeline and skip a needed build.
-          if grep -qE '^Dockerfile$|^\.dockerignore$|(^|/)package\.json$|^pnpm-lock\.yaml$|^pnpm-workspace\.yaml$|^docker/|^models/embedding/|^src/memory/|^scripts/fetch-embedder\.ts$|^scripts/bundled-embedder-smoke\.ts$|^tests/docker/test-bundled-embedder-egress\.sh$|^\.github/workflows/ci\.yml$' <<<"$changed"; then
-            echo "image=true" >> "$GITHUB_OUTPUT"
-          else
+          # grep's status is captured rather than tested with `if`: only 1 (no match) skips
+          # the build; 0 (a match) and anything else (2, a grep error) build, as promised above.
+          rc=0
+          grep -qE '^Dockerfile$|^\.dockerignore$|(^|/)package\.json$|^pnpm-lock\.yaml$|^pnpm-workspace\.yaml$|^docker/|^models/embedding/|^src/|^config/|(^|/)tsconfig[^/]*\.json$|^scripts/fetch-embedder\.ts$|^scripts/bundled-embedder-smoke\.ts$|^tests/docker/test-bundled-embedder-egress\.sh$|^\.github/workflows/ci\.yml$' <<<"$changed" || rc=$?
+          if [ "$rc" -eq 1 ]; then
             echo "image=false" >> "$GITHUB_OUTPUT"
+          else
+            [ "$rc" -eq 0 ] || echo "grep exited $rc; building as a fail-safe" >&2
+            echo "image=true" >> "$GITHUB_OUTPUT"
           fi
 
   curia-image:
@@ -227,6 +237,10 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing in this job pushes or fetches, so the token is not left in .git/config
+          # for the build or the egress script to reach.
+          persist-credentials: false
 
       # The build pulls node:26-slim from Docker Hub; authenticate it (#2095). Skipped
       # where the secrets are absent (fork and Dependabot PRs), as in postgres-image.

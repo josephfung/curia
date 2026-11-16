@@ -72,11 +72,19 @@ docker network create --internal "$NET" >/dev/null
 
 # Positive control: the premise of the whole test is that this network has no egress.
 # Probe with the image under test (Node's fetch, 10s cap): reaching the internet fails it.
+# Only the probe's own fetch-failed code (3) counts as blocked. Any other non-zero status
+# (the container failed to start, node missing, an OOM kill) proves nothing about egress.
 echo "==> Confirming the network blocks egress"
-if docker run --rm --network "$NET" --entrypoint node "$IMAGE" -e \
-  "fetch('https://huggingface.co', { signal: AbortSignal.timeout(10000) }).then(() => process.exit(0), () => process.exit(3))"; then
-  fail "a container on $NET reached https://huggingface.co; the network is not egress-blocked, so this test would prove nothing"
-fi
+set +e
+docker run --rm --network "$NET" --entrypoint node "$IMAGE" -e \
+  "fetch('https://huggingface.co', { signal: AbortSignal.timeout(10000) }).then(() => process.exit(0), () => process.exit(3))"
+probe_status=$?
+set -e
+case "$probe_status" in
+  3) ;;
+  0) fail "a container on $NET reached https://huggingface.co; the network is not egress-blocked, so this test would prove nothing" ;;
+  *) fail "the egress probe exited $probe_status, not 3 (fetch failed), so it says nothing about the network" ;;
+esac
 pass "outbound HTTPS from $NET fails"
 
 echo "==> Starting $PG_IMAGE on $NET"
