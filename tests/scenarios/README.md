@@ -951,7 +951,10 @@ item apart from one the review stopped, so a "nothing went out" check that passe
 nothing was ever drafted shows as not exercised. Make it `important`, not `critical`: whether
 the drafter reaches for an item is the model's choice. The recording gateway records each
 review's labels and outcome, never the values (`recordingBandReview`,
-`src/startup/test-mode-sends.ts`).
+`src/startup/test-mode-sends.ts`). A stopped send also records its `rules`, and a hold or
+block its full `reason` (what the approval shows after "Held by the send review:", which the
+delivered approval cuts to a preview), so the results' `gateway.reviews` say why each send was
+held without the logs.
 
 `left_as_draft` (#2474 PR 2) reads the run's principal-mailbox digest items (`principal.report`
 events from source `principal_mailbox`, kept in the results as `gateway.mailboxDigests`). Every

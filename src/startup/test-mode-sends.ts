@@ -85,6 +85,18 @@ export interface RecordedReview {
   quoteLabels: string[];
   /** What the review decided for the send: send, bounce, block or hold. */
   outcome: 'send' | 'bounce' | 'block' | 'hold';
+  /**
+   * The rules behind a bounce, block or hold (`decision.findings[].rule`), in order; empty for a
+   * send. Rule names only: a bounce finding's detail quotes the message's own claims.
+   */
+  rules?: string[];
+  /**
+   * A hold's or block's reason, in full: the sentence the approval shows after "Held by the send
+   * review:" (the stakes judge's reason, a disclosure ruling, an unreviewed hold). Recorded because
+   * the approval the principal is sent is cut to a preview, and the band decision otherwise lives
+   * only in pino logs, so a results file could not say why a send was held. Absent otherwise.
+   */
+  reason?: string;
 }
 
 /**
@@ -615,6 +627,8 @@ function recent(e: PrincipalSendEntry, sinceEpochMs: number): boolean {
  * Band review as the recording gateway calls it: production's, with each review's detected
  * labels and outcome handed to the recorder (#2312), so a case can tell a run whose drafter
  * never wrote an item from one whose review ruled on it. Labels only, never the matched text.
+ * A stopped send also records its rules, and a hold or block its reason, so a run's results say
+ * why a send was held without reading the logs.
  */
 export function recordingBandReview(inner: Pick<BandSendReview, 'review'>, recorder: SendRecorder): Pick<BandSendReview, 'review'> {
   return {
@@ -625,6 +639,8 @@ export function recordingBandReview(inner: Pick<BandSendReview, 'review'>, recor
         labels: [...new Set(items.filter(i => i.field !== 'quote').map(i => i.label))],
         quoteLabels: [...new Set(items.filter(i => i.field === 'quote').map(i => i.label))],
         outcome: decision.kind,
+        ...(decision.kind !== 'send' ? { rules: decision.findings.map(f => f.rule) } : {}),
+        ...(decision.kind === 'hold' || decision.kind === 'block' ? { reason: decision.reason } : {}),
       });
       return decision;
     },
