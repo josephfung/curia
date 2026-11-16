@@ -329,7 +329,7 @@ describe('resolveJudgedText', () => {
   // The judge rates against these descriptions. Left unresolved, a case has to ask the judge
   // to do calendar arithmetic, which gpt-4o gets wrong (it once rated a correct "next Friday"
   // of Nov 20 as a miss, insisting on Saturday Nov 21).
-  it('resolves date placeholders in behaviors and failure modes against the case clock', () => {
+  it('resolves date placeholders in behaviors and failure modes against the given clock', () => {
     const tc = loadTestCase('tests/smoke/cases/forwarded-receipt.yaml');
     const resolved = resolveJudgedText({
       ...tc,

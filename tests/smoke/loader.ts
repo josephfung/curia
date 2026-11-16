@@ -248,7 +248,8 @@ export function loadTestCase(filePath: string): TestCase {
 
 /**
  * The case as the judge should read it: date placeholders in behavior descriptions and
- * failure modes resolved against the case's clock, so a description can name the exact
+ * failure modes resolved against `now` (the runner passes the clock its first turn's message
+ * resolved on), so a description can name the exact
  * date it expects ("Due {{day:next-friday}}") instead of asking the judge to work it out.
  * `withPrincipal` resolves {{principal:…}} the same way the runner does for messages.
  */
