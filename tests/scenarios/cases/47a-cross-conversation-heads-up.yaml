@@ -26,7 +26,6 @@ tags: [cross-conversation, turn-awareness, calendar, signal, real-delegation]
 delegation: real
 # On demand: tests/scenarios/README.md, "Which real-delegation cases gate a release".
 release_gate: false
-runs: 3
 timeout_seconds: 600
 autonomy: { score: 85, gating: band }
 through_gateway: true

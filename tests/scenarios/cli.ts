@@ -1,7 +1,7 @@
 // tests/scenarios/cli.ts — `pnpm scenarios`: run the coordinator scenario suite (#1956).
 //
 //   pnpm scenarios --model deepseek/deepseek-v4.1-flash          # release gate
-//   pnpm scenarios --case transfer --runs 3                       # iterate on one case
+//   pnpm scenarios --case transfer                                # iterate on one case (one run)
 //   pnpm scenarios --concurrency 1                                # one case at a time
 //   pnpm scenarios --on-demand                                    # also the release_gate: false cases
 //   pnpm scenarios --model … --reasoning-effort low               # an effort A/B arm (ADR-048)

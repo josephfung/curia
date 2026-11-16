@@ -99,7 +99,7 @@ Two patterns that pass local checks but fail CI regularly:
 - Integration tests use real Postgres (via Docker), not mocks
 - Unit tests for `src/` live in `tests/unit/` (mirror the source tree). Integration tests live in `tests/integration/`. Skill handler tests stay beside the skill; app tests stay in the app package.
 - **The behavior suites (`pnpm smoke`, `pnpm scenarios`) cost money and are the release gate** (see "Behavior gate" below), not a development check. Every run bills real model calls, agents plus the judge, and day-to-day runs added up to hundreds of dollars a month. While developing, rely on unit and integration tests. Run a suite only when the change is to a prompt or a behavior, and then:
-  - run only the cases the change touches (`--case`, `--tags`), with few runs;
+  - run only the cases the change touches (`--case`, `--tags`), once each: no `--runs`. A case repeats only when its file sets `runs: 5` for a nondeterministic critical behavior (`tests/scenarios/README.md`, "The gate");
   - compare against saved baseline transcripts rather than re-running a `main` arm;
   - get the maintainer's agreement first, stating the cases, the run count and the estimated cost, and report the summary's spend afterwards;
   - never run a full suite mid-branch to check that nothing else broke. That is the release gate's job.
