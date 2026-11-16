@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   loadEmbedderManifest,
+  validateEmbedderManifest,
   verifyEmbedderFiles,
   type EmbedderManifest,
 } from '../../../src/memory/embedder-manifest.js';
@@ -84,5 +85,74 @@ describe('verifyEmbedderFiles', () => {
     writeFileSync(path.join(dir, 'm', 'a.bin'), Buffer.concat([content, Buffer.from('x')]));
     const r = await verifyEmbedderFiles(dir, manifest);
     expect(r.ok).toBe(false);
+  });
+});
+
+describe('validateEmbedderManifest', () => {
+  const dir = path.resolve(tmpdir(), 'embedder-validate');
+  // An invented, well-formed manifest; each case below breaks one field.
+  const valid = () => ({
+    model: 'invented-model',
+    repo: 'some-org/invented-model',
+    revision: 'a'.repeat(40),
+    files: [{ path: 'onnx/model.onnx', dest: 'invented-model/model.onnx', bytes: 1024, sha256: 'b'.repeat(64) }],
+  });
+  const withFile = (patch: Record<string, unknown>) => {
+    const m = valid();
+    return { ...m, files: [{ ...m.files[0]!, ...patch }] };
+  };
+
+  it('accepts a well-formed manifest', () => {
+    expect(validateEmbedderManifest(valid(), dir)).toEqual(valid());
+  });
+
+  it('accepts the committed manifest against its own directory', () => {
+    expect(() => loadEmbedderManifest()).not.toThrow();
+  });
+
+  it.each([
+    ['revision', { ...valid(), revision: 'main' }],
+    ['revision', { ...valid(), revision: 'A'.repeat(40) }],
+    ['revision', { ...valid(), revision: 'a'.repeat(39) }],
+    ['repo', { ...valid(), repo: 'no-slash' }],
+    ['repo', { ...valid(), repo: 'org/name/extra' }],
+    ['repo', { ...valid(), repo: 'org/na me' }],
+    ['repo', { ...valid(), repo: '../evil' }],
+    ['model', { ...valid(), model: 42 }],
+    ['files', { ...valid(), files: [] }],
+    ['files', { ...valid(), files: 'nope' }],
+    ['files[0].sha256', withFile({ sha256: 'b'.repeat(63) })],
+    ['files[0].sha256', withFile({ sha256: 'B'.repeat(64) })],
+    ['files[0].sha256', withFile({ sha256: 'g'.repeat(64) })],
+    ['files[0].bytes', withFile({ bytes: 0 })],
+    ['files[0].bytes', withFile({ bytes: -5 })],
+    ['files[0].bytes', withFile({ bytes: 1.5 })],
+    ['files[0].bytes', withFile({ bytes: '1024' })],
+    ['files[0].path', withFile({ path: '/etc/passwd' })],
+    ['files[0].path', withFile({ path: '../model.onnx' })],
+    ['files[0].path', withFile({ path: 'onnx/../../model.onnx' })],
+    ['files[0].path', withFile({ path: '' })],
+    ['files[0].dest', withFile({ dest: '/tmp/model.onnx' })],
+    ['files[0].dest', withFile({ dest: '../outside.onnx' })],
+    ['files[0].dest', withFile({ dest: 'a/../../outside.onnx' })],
+    ['files[0].dest', withFile({ dest: 'a\\..\\..\\outside.onnx' })],
+    ['files[0].dest', withFile({ dest: 'C:\\outside.onnx' })],
+    ['files[0].dest', withFile({ dest: '.' })],
+    ['root', null],
+    ['root', []],
+  ])('rejects a bad %s, naming it', (field, manifest) => {
+    expect(() => validateEmbedderManifest(manifest, dir, 'test-manifest'))
+      .toThrow(`Invalid embedder manifest test-manifest: ${field} `);
+  });
+
+  it('names the file when the manifest is not valid JSON', () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), 'embedder-manifest-json-'));
+    try {
+      const file = path.join(tmp, 'manifest.json');
+      writeFileSync(file, '{ not json');
+      expect(() => loadEmbedderManifest(file)).toThrow(file);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
