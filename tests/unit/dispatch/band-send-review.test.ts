@@ -508,18 +508,35 @@ describe('BandSendReview', () => {
     expect(review).toHaveBeenCalledTimes(2);
   });
 
-  it('blocks again on a third review that still has findings, and sends a clean fourth', async () => {
+  // Release-gate runs: nothing capped repeats, so a retrying coordinator got 8-20 blocks in a turn.
+  it('marks a third review that still has findings as a repeated block, for the gateway to hold, and clears the entry', async () => {
     const { svc } = make([
       { ...clean, unsupportedClaims: [CLAIM] },
       { ...clean, unsupportedClaims: [CLAIM] },
       { ...clean, unsupportedClaims: [CLAIM] },
+      { ...clean, unsupportedClaims: [CLAIM] },
+    ]);
+    await svc.review(base);
+    const second = await svc.review(base);
+    expect(second.kind).toBe('block');
+    expect(second).not.toHaveProperty('repeated');
+    const third = await svc.review(base);
+    expect(third).toMatchObject({ kind: 'block', repeated: true, findings: [{ rule: 'ungrounded-claim' }] });
+    // The hold ends this draft's ledger entry, as any hold does: a new attempt bounces afresh.
+    expect((await svc.review(base)).kind).toBe('bounce');
+  });
+
+  it('sends a clean draft after a block, and a later finding bounces afresh', async () => {
+    const { svc } = make([
+      { ...clean, unsupportedClaims: [CLAIM] },
+      { ...clean, unsupportedClaims: [CLAIM] },
       clean,
+      { ...clean, unsupportedClaims: [CLAIM] },
     ]);
     await svc.review(base);
     expect((await svc.review(base)).kind).toBe('block');
-    expect((await svc.review(base)).kind).toBe('block');
     expect((await svc.review(base)).kind).toBe('send');
-    // The entry was cleared by the clean send: a new finding bounces afresh.
+    expect((await svc.review(base)).kind).toBe('bounce');
   });
 
   it('clears the ledger entry when a draft after a block is clean', async () => {
@@ -535,7 +552,7 @@ describe('BandSendReview', () => {
     expect((await svc.review(base)).kind).toBe('bounce');
   });
 
-  it('refreshes the ledger time on a block, so a third draft inside the window still blocks', async () => {
+  it('refreshes the ledger time on a block, so a third draft inside the window is still a recheck', async () => {
     let t = 1_000_000;
     const review = vi.fn();
     for (let i = 0; i < 3; i++) review.mockResolvedValueOnce({ ...clean, unsupportedClaims: [CLAIM] });
@@ -547,7 +564,8 @@ describe('BandSendReview', () => {
     t += 20 * 60_000;
     expect((await svc.review(base)).kind).toBe('block');
     t += 20 * 60_000; // 40 minutes after the first bounce, 20 after the block
-    expect((await svc.review(base)).kind).toBe('block');
+    // Still a recheck inside the window: a repeated block, which the gateway holds.
+    expect(await svc.review(base)).toMatchObject({ kind: 'block', repeated: true });
   });
 
   describe('incident drafts: a flagged sentence that survives one rewrite is never sent', () => {
