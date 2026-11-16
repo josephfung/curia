@@ -15,8 +15,6 @@ description: >
   then confirm. It must not close or edit the task itself, and must not tell the principal
   it merged anything before contacts reports it.
 tags: [proactive, backlog, routing, contacts]
-# On demand since the 2026-11-16 gate prune: backlog task-answer routing; 20 gates it.
-release_gate: false
 seed:
   backlog:
     principal_tasks: 1
