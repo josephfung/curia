@@ -4383,7 +4383,7 @@ describe('band review (#2159)', () => {
 
   const emailReq = { channel: 'email' as const, to: 'joel@example.com', subject: 'Forms', body: 'Hi Joel. I am out of office until the 13th.' };
 
-  function makeBandGateway(opts: { review: ReturnType<typeof vi.fn>; score: number; gating?: 'band' | 'tier'; actionLogRepo?: ActionLogRepo; emailAccountAddresses?: Map<string, string>; signalPhoneNumber?: string; autonomyService?: AutonomyService }) {
+  function makeBandGateway(opts: { review: ReturnType<typeof vi.fn>; score: number; gating?: 'band' | 'tier'; actionLogRepo?: ActionLogRepo; emailAccountAddresses?: Map<string, string>; signalPhoneNumber?: string; autonomyService?: AutonomyService; releaseHeld?: ReturnType<typeof vi.fn> }) {
     return new OutboundGateway({
       nylasClients: new Map([['curia', mocks.nylasClient]]),
       ...(opts.emailAccountAddresses ? { emailAccountAddresses: opts.emailAccountAddresses } : {}),
@@ -4398,7 +4398,10 @@ describe('band review (#2159)', () => {
       autonomyService: opts.autonomyService ?? makeAutonomyService(opts.score),
       actionLogRepo: opts.actionLogRepo ?? makeActionLogRepo(),
       gating: opts.gating ?? 'band',
-      bandReview: { review: opts.review as unknown as BandSendReview['review'] },
+      bandReview: {
+        review: opts.review as unknown as BandSendReview['review'],
+        ...(opts.releaseHeld ? { releaseHeld: opts.releaseHeld as unknown as BandSendReview['releaseHeld'] } : {}),
+      },
     });
   }
 
@@ -4734,6 +4737,47 @@ describe('band review (#2159)', () => {
       expect(actionLogRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ toolName: 'send-draft', outcome: 'pending_approval' }));
       expect(publishedOfType(mocks.bus, 'outbound.blocked')).toHaveLength(0);
       expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+    });
+
+    // SF-4: the review records a repeated block as held. Where no approval stands behind the hold,
+    // the gateway must have the review forget it, or an identical retry is told one is waiting.
+    describe('releases the review\'s held entry when a repeated block raises no approval', () => {
+      const recipe = { toolName: 'send-draft', partialPayload: { account: 'a' }, description: 'Draft reply to joel@example.com' };
+
+      it('keeps it when the approval was written', async () => {
+        const releaseHeld = vi.fn();
+        const gw = makeBandGateway({ review: vi.fn().mockResolvedValue({ ...blockDecision, repeated: true }), score: 84, releaseHeld });
+        expect(await gw.send(emailReq, { taskEventId: 't1', reExecRecipe: recipe })).toMatchObject({ gated: true, actionRef: expect.any(String) });
+        expect(releaseHeld).not.toHaveBeenCalled();
+      });
+
+      it('releases it when the approval row could not be written', async () => {
+        const releaseHeld = vi.fn();
+        const actionLogRepo = makeActionLogRepo();
+        (actionLogRepo.insert as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db down'));
+        const gw = makeBandGateway({ review: vi.fn().mockResolvedValue({ ...blockDecision, repeated: true }), score: 84, actionLogRepo, releaseHeld });
+        const result = await gw.send(emailReq, { taskEventId: 't1', reExecRecipe: recipe });
+        expect(result.actionRef).toBeUndefined();
+        expect(releaseHeld).toHaveBeenCalledOnce();
+        expect(releaseHeld).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('out of office'), channel: 'email' }));
+      });
+
+      it('releases it when the send has nothing to attach an approval to', async () => {
+        const releaseHeld = vi.fn();
+        const gw = makeBandGateway({ review: vi.fn().mockResolvedValue({ ...blockDecision, repeated: true }), score: 84, releaseHeld });
+        await gw.send(emailReq, {});
+        expect(releaseHeld).toHaveBeenCalledOnce();
+      });
+
+      it('leaves a non-repeated hold alone', async () => {
+        const releaseHeld = vi.fn();
+        const actionLogRepo = makeActionLogRepo();
+        (actionLogRepo.insert as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db down'));
+        const hold = { kind: 'hold', reason: 'Held for the principal: speaks for them.', findings: blockFindings };
+        const gw = makeBandGateway({ review: vi.fn().mockResolvedValue(hold), score: 84, actionLogRepo, releaseHeld });
+        await gw.send(emailReq, { taskEventId: 't1', reExecRecipe: recipe });
+        expect(releaseHeld).not.toHaveBeenCalled();
+      });
     });
 
     // SF-4: a resend of the held draft must not raise an approval per retry cycle.

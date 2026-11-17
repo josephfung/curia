@@ -923,6 +923,18 @@ export class BandSendReview {
     return `${input.conversationId ?? input.taskEventId ?? ''}|${input.channel}|${who}`;
   }
 
+  /**
+   * Forget that this exact draft is held (SF-4), for a caller whose hold raised no approval (the
+   * row could not be written, there was nothing to replay, or a saved draft was left in Drafts).
+   * Otherwise an identical retry would be told an approval is waiting when none exists. The next
+   * attempt starts a fresh review.
+   */
+  releaseHeld(input: BandReviewInput): void {
+    if (this.held.delete(heldKey(this.draftKey(input), draftFingerprint(input)))) {
+      this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel }, 'band review: hold raised no approval — the draft is no longer treated as held');
+    }
+  }
+
   /** The hold this exact draft is already under (SF-4), or undefined; expired entries are dropped. */
   private heldDraft(key: string, fingerprint: string): HeldEntry | undefined {
     const k = heldKey(key, fingerprint);

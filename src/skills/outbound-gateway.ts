@@ -417,8 +417,11 @@ export interface OutboundGatewayConfig {
    * suite pins it per case.
    */
   gating?: AutonomyGating;
-  /** The band review (#2159). Used only when gating is 'band'. */
-  bandReview?: Pick<BandSendReview, 'review'>;
+  /**
+   * The band review (#2159). Used only when gating is 'band'. `releaseHeld` is called when a
+   * repeated block's hold raised no approval, so an identical retry is not told one is waiting.
+   */
+  bandReview?: Pick<BandSendReview, 'review'> & Partial<Pick<BandSendReview, 'releaseHeld'>>;
   /**
    * Reads the principal's directing message for a principal-directed send, for the content
    * filter's Stage 2 judge (scenario 34d). The same collector band review reads. Absent: no
@@ -1288,7 +1291,7 @@ export class OutboundGateway {
   private readonly outboundQueue?: OutboundQueueRepo;
   private readonly outboundQueueReadiness: Map<string, () => boolean>;
   private readonly gating: AutonomyGating;
-  private readonly bandReview?: Pick<BandSendReview, 'review'>;
+  private readonly bandReview?: Pick<BandSendReview, 'review'> & Partial<Pick<BandSendReview, 'releaseHeld'>>;
   private readonly sendEvidence?: Pick<SendEvidenceCollector, 'collect'>;
   private readonly relayBudget?: RelayBudget;
   private readonly principalMailbox?: PrincipalMailboxResolver;
@@ -3023,30 +3026,31 @@ export class OutboundGateway {
     // review threw: then nothing judged the send and the hold is a failure, a hiccup.
     let reviewFailed = false;
     const reviewed = (result: OutboundSendResult): OutboundSendResult => (reviewFailed ? result : asPolicyHold(result));
+    const reviewInput: Parameters<BandSendReview['review']>[0] = {
+      content,
+      channel: request.channel,
+      recipients,
+      principalRecipients,
+      score,
+      ...(options?.conversationId ? { conversationId: options.conversationId } : {}),
+      ...(options?.taskEventId ? { taskEventId: options.taskEventId } : {}),
+      principalDirected: options?.principalDirected === true,
+      postTurn: options?.postTurn === true,
+      ...(options?.reportedToPrincipal ? { reportedToPrincipal: options.reportedToPrincipal } : {}),
+      ...(args.detectedItems && args.detectedItems.length > 0 ? { detectedItems: args.detectedItems } : {}),
+      ...(args.recipientTier ? { recipientTier: args.recipientTier } : {}),
+      ...(args.recipientTiers ? { recipientTiers: args.recipientTiers } : {}),
+      ...(args.recipientContactIds ? { recipientContactIds: args.recipientContactIds } : {}),
+      ...(args.subject !== undefined ? { subject: args.subject } : {}),
+      ...(args.senderProfile ? { senderProfile: args.senderProfile } : {}),
+      ...(args.draftAuthor ? { draftAuthor: args.draftAuthor } : {}),
+      ...(args.stakesCeiling ? { stakesCeiling: args.stakesCeiling } : {}),
+      ...(args.origin ? { origin: args.origin } : {}),
+      ...(args.threadMessages ? { threadMessages: args.threadMessages } : {}),
+      ...(args.copied ? { copied: args.copied } : {}),
+    };
     try {
-      decision = await this.bandReview!.review({
-        content,
-        channel: request.channel,
-        recipients,
-        principalRecipients,
-        score,
-        ...(options?.conversationId ? { conversationId: options.conversationId } : {}),
-        ...(options?.taskEventId ? { taskEventId: options.taskEventId } : {}),
-        principalDirected: options?.principalDirected === true,
-        postTurn: options?.postTurn === true,
-        ...(options?.reportedToPrincipal ? { reportedToPrincipal: options.reportedToPrincipal } : {}),
-        ...(args.detectedItems && args.detectedItems.length > 0 ? { detectedItems: args.detectedItems } : {}),
-        ...(args.recipientTier ? { recipientTier: args.recipientTier } : {}),
-        ...(args.recipientTiers ? { recipientTiers: args.recipientTiers } : {}),
-        ...(args.recipientContactIds ? { recipientContactIds: args.recipientContactIds } : {}),
-        ...(args.subject !== undefined ? { subject: args.subject } : {}),
-        ...(args.senderProfile ? { senderProfile: args.senderProfile } : {}),
-        ...(args.draftAuthor ? { draftAuthor: args.draftAuthor } : {}),
-        ...(args.stakesCeiling ? { stakesCeiling: args.stakesCeiling } : {}),
-        ...(args.origin ? { origin: args.origin } : {}),
-        ...(args.threadMessages ? { threadMessages: args.threadMessages } : {}),
-        ...(args.copied ? { copied: args.copied } : {}),
-      });
+      decision = await this.bandReview!.review(reviewInput);
     } catch (err) {
       // BandSendReview is not meant to throw; if it does, the send was not reviewed. Hold.
       this.log.error({ err, channel: request.channel }, 'outbound-gateway: band review threw — holding the send');
@@ -3061,6 +3065,13 @@ export class OutboundGateway {
     // A send carrying a report went out fail-open, without review (BandReviewReport). If a saved
     // draft then cannot drop its quote and stays a draft, nothing judged it either (#2587).
     if (decision.kind === 'send' && decision.report !== undefined) reviewFailed = true;
+    // A repeated block is recorded as held by the review (SF-4) and becomes a hold below. Where no
+    // approval stands behind that hold, the review must forget it, or an identical retry would be
+    // told an approval is waiting when none exists.
+    const repeatedBlock = decision.kind === 'block' && decision.repeated === true;
+    const releaseUnapprovedHold = (): void => {
+      if (repeatedBlock) this.bandReview?.releaseHeld?.(reviewInput);
+    };
 
     // A principal-mailbox draft stays a draft on a hold, an ask or a block (#2474, design D5): no
     // approval, so nothing can be replayed from a queue, and no digest item, since the agent tells
@@ -3072,6 +3083,8 @@ export class OutboundGateway {
         ? decision.reason
         : `Held for the principal: after one rewrite it still has these problems (${rules.join(', ')}).${heldBesideNote(decision.heldBeside)}`;
       this.log.info({ channel: request.channel, kind: decision.kind, rules }, 'outbound-gateway: band review held a principal-mailbox draft — left as a draft');
+      // Left in Drafts with no approval (design D5): nothing is waiting on the principal.
+      releaseUnapprovedHold();
       return { held: reason, result: reviewed({ success: false, blockedReason: reason, blockedRules: rules }) };
     }
     // The review would send it without its quote, but a saved draft's quote cannot be cut (#2474
@@ -3247,7 +3260,10 @@ export class OutboundGateway {
         stored,
         ask,
       );
-      if (!raised) await reportUnapprovedHold('the approval row could not be written');
+      if (!raised) {
+        releaseUnapprovedHold();
+        await reportUnapprovedHold('the approval row could not be written');
+      }
       const askGuidance = ask && raised
         ? ` This is waiting on the principal. Deliver approval ${raised.approvalNumber ?? raised.shortRef} to them now with deliver-approval on their urgent channel, then send ${normalizeCounterparty(ask.requester)} a short holding reply that doesn't include the requested details.`
         : '';
@@ -3265,6 +3281,7 @@ export class OutboundGateway {
         }),
       };
     }
+    releaseUnapprovedHold();
     await reportUnapprovedHold(recipe ? 'the send has no task to attach it to' : 'this send has no way to replay it');
     return {
       result: reviewed({ success: false, blockedReason: `${decision.reason} Ask the principal before sending it.`, blockedRules: [rule] }),

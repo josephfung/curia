@@ -554,6 +554,17 @@ describe('BandSendReview', () => {
     expect(review).toHaveBeenCalledTimes(3);
   });
 
+  it('forgets a hold the gateway could not raise an approval for, so the retry is reviewed again', async () => {
+    const { svc, review } = make(Array.from({ length: 4 }, () => ({ ...clean, unsupportedClaims: [CLAIM] })));
+    await svc.review(base);
+    await svc.review(base);
+    expect(await svc.review(base)).toMatchObject({ repeated: true });
+    svc.releaseHeld(base);
+    // A fresh review: its first finding is a bounce again, not "already held".
+    expect((await svc.review(base)).kind).toBe('bounce');
+    expect(review).toHaveBeenCalledTimes(4);
+  });
+
   it('reviews a different message to the same recipients on its own after a hold: it can bounce, or send', async () => {
     const { svc } = make([
       { ...clean, unsupportedClaims: [CLAIM] },
