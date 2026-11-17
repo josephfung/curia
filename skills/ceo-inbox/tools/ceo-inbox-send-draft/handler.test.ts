@@ -215,7 +215,9 @@ describe('CeoInboxSendDraftHandler — batch read-back (#2474 D6)', () => {
   const sentOk: PrincipalDraftSendResult = { success: true, messageId: 'm-1', to: ['a@example.com'], subject: 'Hi' };
   const refused = { success: false, error: BATCH_READ_BACK_FIRST, errorType: 'POLICY_HOLD' };
   // A draft already went out in this turn: the refusal says so, so the agent reports the partial send.
-  const refusedAfterOne = { success: false, error: expect.stringMatching(/^Not sent: one draft has already gone out/), errorType: 'POLICY_HOLD' };
+  const refusedAfterOne = { success: false, error: expect.stringMatching(/^Not sent: one draft already went out in this request\. /), errorType: 'POLICY_HOLD' };
+  // An unknown outcome is named as possibly gone, never as gone (SEND_OUTCOME_UNKNOWN).
+  const refusedAfterUncertain = { success: false, error: expect.stringMatching(/^Not sent: one draft may have gone out .*check the principal's Sent folder/), errorType: 'POLICY_HOLD' };
   // Two specialist tasks the coordinator started for the same principal message share its task id.
   const delegatedFrom = (coordinatorTask: string) => ({ ...principalMetadata, delegationOrigin: { taskEventId: coordinatorTask } });
 
@@ -266,12 +268,37 @@ describe('CeoInboxSendDraftHandler — batch read-back (#2474 D6)', () => {
     expect(next.success).toBe(true);
   });
 
-  it('counts an unknown outcome as sent for the turn', async () => {
+  it('counts an unknown outcome for the turn, as possibly gone rather than gone', async () => {
     const sendPrincipalDraft = vi.fn(async () => { throw new Error('socket hang up'); });
     const gateway = { sendPrincipalDraft } as unknown as OutboundGateway;
     const handler = new CeoInboxSendDraftHandler();
     await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-1' } }));
-    expect(await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-2' } }))).toEqual(refusedAfterOne);
+    const refusal = await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-2' } }));
+    expect(refusal).toEqual(refusedAfterUncertain);
+    expect(refusal.success ? '' : refusal.error).not.toMatch(/already went out/);
+  });
+
+  it('names a definite send and an unknown outcome apart', async () => {
+    const sendPrincipalDraft = vi.fn()
+      .mockResolvedValueOnce(sentOk)
+      .mockRejectedValueOnce(new Error('socket hang up'));
+    const gateway = { sendPrincipalDraft } as unknown as OutboundGateway;
+    const handler = new CeoInboxSendDraftHandler();
+    // A confirmed batch in the turn after a read-back: the second send's outcome is unknown.
+    await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-1', batch_size: 3, batch_confirmed: true } }));
+    await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-2', batch_size: 3, batch_confirmed: true } }));
+    const third = await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-3' } }));
+    expect(third.success ? '' : third.error).toMatch(/^Not sent: one draft already went out in this request, and one draft may have gone out/);
+  });
+
+  // The turn never read the set back once a draft went out unconfirmed in it, so a confirmation
+  // first claimed after that is the model's own (CodeRabbit, PR #2649).
+  it('refuses batch_confirmed introduced after an unconfirmed send in the same turn', async () => {
+    const { gateway, sendPrincipalDraft } = gatewayReturning(sentOk);
+    const handler = new CeoInboxSendDraftHandler();
+    expect((await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-1' } }))).success).toBe(true);
+    expect(await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-2', batch_size: 2, batch_confirmed: true } }))).toEqual(refusedAfterOne);
+    expect(sendPrincipalDraft).toHaveBeenCalledOnce();
   });
 
   // The refusal names batch_confirmed, so a model could retry with it at once. The principal's yes

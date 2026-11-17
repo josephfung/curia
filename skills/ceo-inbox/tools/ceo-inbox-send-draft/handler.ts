@@ -29,12 +29,17 @@ export const BATCH_CONFIRMED_TOO_SOON =
   "Not sent: the principal hasn't answered the read-back yet. Their yes comes in a later message, not this turn. This draft is still in Drafts: reply with each draft's recipient and subject and ask \"send all, or one by one?\".";
 
 /**
- * The refusal when a different draft already went out (or may have) in this turn: the model must
- * report that partial send, not "none of them went", so it names how many already left.
+ * The refusal when a different draft already went out, or may have, in this turn: the model must
+ * report that partial send, not "none of them went". Drafts whose send has an unknown outcome are
+ * named apart, since they may not have gone (SEND_OUTCOME_UNKNOWN): the principal checks Sent.
  */
-function partialBatchRefusal(alreadySent: number): string {
-  const which = alreadySent === 1 ? 'one draft has' : `${alreadySent} drafts have`;
-  return `Not sent: ${which} already gone out in this request, and the rest wait until the principal confirms the set. Tell the principal what already went, then list the remaining drafts' recipients and subjects and ask "send the rest?". When they say yes in a later message, send each with batch_confirmed: true.`;
+function partialBatchRefusal(sent: number, uncertain: number): string {
+  const drafts = (n: number): string => (n === 1 ? 'one draft' : `${n} drafts`);
+  const what = [
+    ...(sent > 0 ? [`${drafts(sent)} already went out in this request`] : []),
+    ...(uncertain > 0 ? [`${drafts(uncertain)} may have gone out (the send didn't finish; check the principal's Sent folder before reporting it either way)`] : []),
+  ].join(', and ');
+  return `Not sent: ${what}. The rest wait until the principal confirms the set. Tell the principal what went or may have gone, then list the remaining drafts' recipients and subjects and ask "send the rest?". When they say yes in a later message, send each with batch_confirmed: true.`;
 }
 
 /** How long a turn's send record is kept: far longer than any one turn runs. */
@@ -43,8 +48,12 @@ const TURN_RECORD_TTL_MS = 60 * 60 * 1000;
 /** What this process has seen of one principal turn's principal-directed sends. */
 interface TurnSends {
   at: number;
-  /** Drafts sent, or possibly sent (outcome unknown), in this turn. */
+  /** Drafts sent in this turn. */
   sent: Set<string>;
+  /** Drafts whose send in this turn has an unknown outcome: they may have gone out. */
+  uncertain: Set<string>;
+  /** A draft went out (or may have) in this turn without batch_confirmed. */
+  unconfirmedSent: boolean;
   /** A batch read-back was demanded in this turn, so every unconfirmed send in it waits. */
   readBackAsked: boolean;
 }
@@ -75,6 +84,26 @@ export const SEND_DEADLINE_RESERVE_MS = 1_000;
 export const SEND_OUTCOME_UNKNOWN =
   "The send didn't finish, so it may still go out. Don't send this draft again and don't report it as sent or as not sent; check the principal's Sent folder later.";
 
+/** Record a draft that went out, or may have, in this turn. A later definite send replaces an uncertain one. */
+function recordGone(turn: TurnSends | undefined, draftId: string, how: 'sent' | 'uncertain', confirmed: boolean): void {
+  if (!turn) return;
+  if (how === 'sent') {
+    turn.uncertain.delete(draftId);
+    turn.sent.add(draftId);
+  } else if (!turn.sent.has(draftId)) {
+    turn.uncertain.add(draftId);
+  }
+  if (!confirmed) turn.unconfirmedSent = true;
+}
+
+/** How many drafts other than this one went out (sent) or may have (uncertain) in this turn. */
+function othersGone(turn: TurnSends, draftId: string): { sent: number; uncertain: number } {
+  return {
+    sent: [...turn.sent].filter((id) => id !== draftId).length,
+    uncertain: [...turn.uncertain].filter((id) => id !== draftId).length,
+  };
+}
+
 export class CeoInboxSendDraftHandler implements ToolHandler {
   // Per turn, in memory: the loader builds one handler per process, and a turn lasts minutes.
   // A restart forgets it, which loosens the guard for that turn (a sent draft or a demanded read-back
@@ -87,7 +116,7 @@ export class CeoInboxSendDraftHandler implements ToolHandler {
     for (const [k, t] of this.turns) if (now - t.at > TURN_RECORD_TTL_MS) this.turns.delete(k);
     let turn = this.turns.get(key);
     if (!turn) {
-      turn = { at: now, sent: new Set(), readBackAsked: false };
+      turn = { at: now, sent: new Set(), uncertain: new Set(), unconfirmedSent: false, readBackAsked: false };
       this.turns.set(key, turn);
     }
     return turn;
@@ -141,15 +170,24 @@ export class CeoInboxSendDraftHandler implements ToolHandler {
       ctx.log.warn({ draftId }, 'ceo-inbox-send-draft: batch_confirmed in the turn the read-back was asked — the yes must come in a later message');
       return { success: false, error: BATCH_CONFIRMED_TOO_SOON, errorType: 'POLICY_HOLD' };
     }
+    // A draft already went out unconfirmed in this turn, so this turn never read the set back: a
+    // confirmation introduced now is the model's, not the principal's (the yes to a read-back comes
+    // in a later message, whose turn starts clean). The rest wait, and the partial send is named.
+    if (directed && confirmed && turn?.unconfirmedSent === true) {
+      turn.readBackAsked = true;
+      const { sent, uncertain } = othersGone(turn, draftId);
+      ctx.log.warn({ draftId, sent, uncertain }, 'ceo-inbox-send-draft: batch_confirmed after an unconfirmed send in the same turn — refused');
+      return { success: false, error: partialBatchRefusal(sent, uncertain), errorType: 'POLICY_HOLD' };
+    }
     if (directed && !confirmed) {
       const declaredBatch = typeof batchSize === 'number' && batchSize >= 2;
-      const anotherSent = turn !== undefined && [...turn.sent].some((id) => id !== draftId);
+      const anotherSent = turn !== undefined && [...turn.sent, ...turn.uncertain].some((id) => id !== draftId);
       const priorReadBack = turn?.readBackAsked === true;
       if (declaredBatch || anotherSent || priorReadBack) {
         if (turn) turn.readBackAsked = true;
         ctx.log.info({ draftId, batchSize, anotherSent, priorReadBack }, 'ceo-inbox-send-draft: unconfirmed batch send refused — read the set back first');
-        const alreadySent = turn ? [...turn.sent].filter((id) => id !== draftId).length : 0;
-        return { success: false, error: alreadySent > 0 ? partialBatchRefusal(alreadySent) : BATCH_READ_BACK_FIRST, errorType: 'POLICY_HOLD' };
+        const { sent, uncertain } = turn ? othersGone(turn, draftId) : { sent: 0, uncertain: 0 };
+        return { success: false, error: sent + uncertain > 0 ? partialBatchRefusal(sent, uncertain) : BATCH_READ_BACK_FIRST, errorType: 'POLICY_HOLD' };
       }
     }
 
@@ -172,16 +210,16 @@ export class CeoInboxSendDraftHandler implements ToolHandler {
       }
       result = await Promise.race(racers);
     } catch (err) {
-      // May have gone out: counts as sent for this turn's batch check.
-      turn?.sent.add(draftId);
+      // May have gone out: counts for this turn's batch check, as uncertain.
+      recordGone(turn, draftId, 'uncertain', confirmed);
       ctx.log.error({ err, draftId }, 'ceo-inbox-send-draft: send threw — outcome unknown');
       return { success: false, error: SEND_OUTCOME_UNKNOWN };
     } finally {
       clearTimeout(timer);
     }
     if (result === 'unfinished') {
-      // May still go out: counts as sent for this turn's batch check.
-      turn?.sent.add(draftId);
+      // May still go out: counts for this turn's batch check, as uncertain.
+      recordGone(turn, draftId, 'uncertain', confirmed);
       // The gateway call keeps running; log how it ends, since the agent has already moved on.
       send.then(
         (late) => ctx.log.warn({ draftId, sent: late.success, refusal: late.success ? undefined : late.refusal }, 'ceo-inbox-send-draft: send finished after the deadline'),
@@ -199,12 +237,12 @@ export class CeoInboxSendDraftHandler implements ToolHandler {
       // structured field, is what the model sees.
       ctx.log.info({ draftId, refusal: result.refusal, refusalKind: result.refusalKind, leftAsDraft: result.leftAsDraft }, 'ceo-inbox-send-draft: not sent');
       // send_unconfirmed may have gone out: it counts as sent for this turn's batch check.
-      if (result.refusal === 'send_unconfirmed') turn?.sent.add(draftId);
+      if (result.refusal === 'send_unconfirmed') recordGone(turn, draftId, 'uncertain', confirmed);
       // A refusal the gateway made by design carries POLICY_HOLD (#2587): held, not a hiccup.
       return gatewaySendFailure(result, 'The draft was not sent.');
     }
 
-    turn?.sent.add(draftId);
+    recordGone(turn, draftId, 'sent', confirmed);
     return {
       success: true,
       data: { message_id: result.messageId ?? '', to: result.to ?? [], subject: result.subject ?? '' },
