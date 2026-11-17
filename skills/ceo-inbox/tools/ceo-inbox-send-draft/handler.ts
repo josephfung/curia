@@ -18,7 +18,7 @@ import { isPrincipalDirectedMailboxSend } from '../../../../src/skills/principal
  * no read-back. So it is enforced here, and this text tells the model what to do instead.
  */
 export const BATCH_READ_BACK_FIRST =
-  "Not sent: two or more drafts in one request go out only after the principal confirms the set. This draft is still in Drafts. Send none of them now: reply with the count and each draft's recipient and subject, and ask \"send all, or go through them?\". When the principal says yes to that list in a later message, send each one with batch_confirmed: true. Being asked to send them is not that yes.";
+  "Not sent: two or more drafts in one request go out only after the principal confirms the set. This draft is still in Drafts. Send none of them now: reply with the count and each draft's recipient and subject, and ask \"send all, or one by one?\". When the principal says yes to that list in a later message, send each one with batch_confirmed: true. Being asked to send them is not that yes.";
 
 /**
  * Returned when the model claims batch_confirmed in the same turn a read-back was demanded. The
@@ -26,7 +26,7 @@ export const BATCH_READ_BACK_FIRST =
  * the model lifting the guard itself, which is the D6 failure this guard exists to stop.
  */
 export const BATCH_CONFIRMED_TOO_SOON =
-  "Not sent: the principal hasn't answered the read-back yet. Their yes comes in a later message, not this turn. This draft is still in Drafts: reply with each draft's recipient and subject and ask \"send all, or go through them?\".";
+  "Not sent: the principal hasn't answered the read-back yet. Their yes comes in a later message, not this turn. This draft is still in Drafts: reply with each draft's recipient and subject and ask \"send all, or one by one?\".";
 
 /**
  * The refusal when a different draft already went out (or may have) in this turn: the model must
@@ -77,7 +77,8 @@ export const SEND_OUTCOME_UNKNOWN =
 
 export class CeoInboxSendDraftHandler implements ToolHandler {
   // Per turn, in memory: the loader builds one handler per process, and a turn lasts minutes.
-  // A restart forgets it, which can only make a later send in that turn ask again (fail toward asking).
+  // A restart forgets it, which loosens the guard for that turn (a sent draft or a demanded read-back
+  // is no longer remembered). In practice a restart also ends the turn, so the next message starts clean.
   private readonly turns = new Map<string, TurnSends>();
 
   /** This turn's record, created on first use; stale turns are dropped on the way. */

@@ -1144,6 +1144,13 @@ export async function sweepLeftovers(
   await count('bullpen_threads',
     `DELETE FROM bullpen_threads WHERE source_message_id LIKE $1`,
     [`${SCENARIO_THREAD_MARKER}%`]);
+  // Retired with per-case principal identities (the fixture now gives Avery a permanent Signal
+  // number), but a crashed run before that change can have left verified, active principal
+  // identities carrying this label; they would still reach the boot snapshot. TODO: drop this
+  // sweep once no dev database predating the change remains.
+  await count('principal_identities (retired label)',
+    `DELETE FROM contact_channel_identities WHERE label = $1`,
+    ['scenario-fixture (#2017)']);
   // Seeded verifications (scenario-origin-verification-…), and any opened in a run's conversation.
   await count('verifications',
     `DELETE FROM verifications WHERE conversation_id LIKE ANY($1::text[])`,
