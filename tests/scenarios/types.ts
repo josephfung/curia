@@ -3,6 +3,7 @@
 // A scenario is one inbound message to the coordinator, or one task fired at a specialist
 // (#2025), with seeded state and stubbed tools, run N times on the production prompt.
 // Behaviors are scored per run, either in code (`check`) or by the LLM judge (no `check`).
+import type { ApprovalChannel } from '../../src/autonomy/approval-delivery.js';
 import type { InjectionDrainPoint } from '../../src/bus/events.js';
 import type { PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
 import type { AutonomyFixture, OfficeIdentityFixture } from '../../src/startup/test-mode-stack.js';
@@ -613,6 +614,12 @@ export interface ScenarioCase {
    * production's approval. Needs `through_gateway`. Absent: stubs answer before any gate.
    */
   gatedTools?: string[];
+  /**
+   * The channels the run's approvals may go out on (`approval_channels`), as if the principal had
+   * verified identities on those alone; deliver-approval on any other answers channel_unavailable.
+   * Needs `through_gateway`. Absent: every channel the principal has (Signal first).
+   */
+  approvalChannels?: ApprovalChannel[];
   /** File the case came from, for messages. */
   sourceFile: string;
 }

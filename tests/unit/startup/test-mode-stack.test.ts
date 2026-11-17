@@ -38,8 +38,10 @@ import {
   readOnlyBullpen,
   readOnlyView,
   reachClientsFrom,
+  limitApprovalChannels,
   TEST_MODE_PASSTHROUGH_SECRETS,
 } from '../../../src/startup/test-mode-stack.js';
+import type { ApprovalChannel, ApprovalDelivery, DeliverResult } from '../../../src/autonomy/approval-delivery.js';
 
 const logger = createLogger('error');
 
@@ -505,5 +507,55 @@ describe('reachClientsFrom', () => {
       slackAppToken: 'xapp-1',
       nylasApiKey: 'nyk',
     })).toEqual({ signal: true, sms: true, slack: true, email: true });
+  });
+});
+
+// A case's approval_channels (34o): the run's approvals use only those channels, as if the
+// principal had verified identities on those alone.
+describe('limitApprovalChannels', () => {
+  function fakeDelivery(result: DeliverResult = { delivered: true, channel: 'email' }) {
+    const inner = {
+      availableChannels: vi.fn(async (): Promise<ApprovalChannel[]> => ['signal', 'slack', 'email']),
+      deliver: vi.fn(async (): Promise<DeliverResult> => result),
+      registerDisplay: vi.fn(),
+    };
+    return { inner, delivery: inner as unknown as ApprovalDelivery };
+  }
+
+  it('lists only the allowed channels, in the delivery order', async () => {
+    const { delivery } = fakeDelivery();
+    const limited = limitApprovalChannels(delivery, () => ['email', 'signal']);
+    expect(await limited.availableChannels()).toEqual(['signal', 'email']);
+  });
+
+  it('answers channel_unavailable for another channel without sending, naming the allowed ones', async () => {
+    const { inner, delivery } = fakeDelivery();
+    const limited = limitApprovalChannels(delivery, () => ['email']);
+    expect(await limited.deliver('A1', 'signal')).toEqual({ delivered: false, reason: 'channel_unavailable', available: ['email'] });
+    expect(inner.deliver).not.toHaveBeenCalled();
+  });
+
+  it('delivers on an allowed channel, and narrows the channels a failure reports', async () => {
+    const ok = fakeDelivery();
+    expect(await limitApprovalChannels(ok.delivery, () => ['email']).deliver('A1', 'email')).toEqual({ delivered: true, channel: 'email' });
+    expect(ok.inner.deliver).toHaveBeenCalledWith('A1', 'email');
+
+    const failed = fakeDelivery({ delivered: false, reason: 'send_failed', available: ['signal', 'slack'] });
+    expect(await limitApprovalChannels(failed.delivery, () => ['email', 'slack']).deliver('A1', 'email'))
+      .toEqual({ delivered: false, reason: 'send_failed', available: ['slack'] });
+  });
+
+  it('leaves every call unchanged when the run sets no channels', async () => {
+    const { inner, delivery } = fakeDelivery();
+    const limited = limitApprovalChannels(delivery, () => undefined);
+    expect(await limited.availableChannels()).toEqual(['signal', 'slack', 'email']);
+    await limited.deliver('A1', 'signal');
+    expect(inner.deliver).toHaveBeenCalledWith('A1', 'signal');
+  });
+
+  it('keeps the rest of the delivery: registerDisplay reaches the wrapped one', () => {
+    const { inner, delivery } = fakeDelivery();
+    limitApprovalChannels(delivery, () => ['email']).registerDisplay('A1', {} as never);
+    expect(inner.registerDisplay).toHaveBeenCalledWith('A1', {});
   });
 });

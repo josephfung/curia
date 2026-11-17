@@ -375,6 +375,7 @@ identity: style-brief-dry                 # optional; run-level office identity,
 autonomy: { score: 84, gating: band }     # optional; this case's autonomy, see Per-case fixtures
 through_gateway: true                     # optional; sends run production's review, see Sends through the gateway
 gated_tools: [calendar-create-event]      # optional, through_gateway only; these stubs answer only after the gates, see Gated stubs
+approval_channels: [email]                # optional, through_gateway only; the channels approvals may use, see Approval channels
 seed:
   contacts:                               # → {{contact:<key>}}
     - key: sam
@@ -755,6 +756,14 @@ runs the whole execution layer, it is also recorded by the cross-turn backstop (
 later turn's note and hold see it. A case may pair `gated_tools` with `inbound.then`, but
 approve-action is refused in such a run: its replay of a held call would reach the gated
 tool's real handler.
+
+**Approval channels.** Avery has verified email and Signal, and approval delivery prefers
+Signal, so a held send's approval goes out on Signal. A case about another channel lists the
+ones its approvals may use in `approval_channels` (`signal`, `sms`, `web`, `slack`, `email`),
+as if Avery had verified identities on those alone: `deliver-approval` lists only them, and a
+call on any other gets production's `channel_unavailable`, naming the channels left. 34o, a
+reply on the approval email's thread, sets `[email]`. Through-gateway cases only, since other
+runs never deliver an approval.
 
 **Nothing can send.** The stack builds this review on a second ExecutionLayer
 (`recordSends`, `src/startup/test-mode-sends.ts`) that only these calls reach. Its gateway
