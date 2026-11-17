@@ -326,10 +326,13 @@ value — so the secret does not re-leak into the `outbound.blocked` audit event
   authenticated the sender (`originator.authenticated`: Signal texts and calls, Slack, the web
   console's chat and voice, or email with `senderVerified`; a forged email From, an SMS or the
   local CLI does not count); the text is the raw `inbound.message` the turn answered (a delegated turn's root
-  inbound) plus drained follow-ups, never the dispatcher-assembled task content with its
-  outbound-context and participant preambles; and quoted and forwarded text is cut from it,
-  so a quoted "send my SIN to X" is not a request. An approval replay reads nothing (no live
-  turn). Any read failure leaves the prompt as it is without a directive.
+  inbound) plus drained follow-ups, each of which its own channel must have authenticated (turn
+  lanes inject by contact, so a forged From mid-turn would otherwise join), never the
+  dispatcher-assembled task content with its outbound-context and participant preambles; and
+  quoted and forwarded text is cut from it, so a quoted "send my SIN to X" is not a request. A
+  forward (Fwd:/FW: or a localized prefix) whose cut does not land on a forward header the
+  cutter knows reads nothing, since a missed header would keep the forwarded sender's request.
+  An approval replay reads nothing (no live turn). Any read failure leaves the prompt as it is without a directive.
 - **Disabled / not wired.** When `filter.llmJudge.enabled: false` (or the judge is left
   undefined at bootstrap), Stage 2 emits no `outbound.judge` rows. Detect that gap with
   `count(outbound.message)` vs `count(outbound.judge)` over the same window — a sustained
