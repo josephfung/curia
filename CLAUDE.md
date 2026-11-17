@@ -103,6 +103,7 @@ Two patterns that pass local checks but fail CI regularly:
   - compare against saved baseline transcripts rather than re-running a `main` arm;
   - get the maintainer's agreement first, stating the cases, the run count and the estimated cost, and report the summary's spend afterwards;
   - never run a full suite mid-branch to check that nothing else broke. That is the release gate's job.
+- **Writing, running and triaging behavior tests** (gate versus evals, deterministic checks first, fixtures, triage): `docs/dev/behavior-tests.md`.
 
 ### pnpm-workspace.yaml — do not edit during worktree setup
 
@@ -275,6 +276,8 @@ When creating a new GitHub issue:
 ## Creating Pull Requests
 
 Before opening a PR, review the diff against `docs/dev/review-checklist.md`.
+
+Pre-PR review agents (code review, silent-failure hunting, security review) weigh their findings by `docs/dev/reviewing.md`, as CodeRabbit does through `.coderabbit.yaml`. Give the agents that file along with the diff.
 
 Every PR that resolves a tracked issue must include `Closes #N` (or `Fixes #N`) in the PR body. GitHub uses this to auto-close the linked issue on merge. Include it in the Summary section.
 
