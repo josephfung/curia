@@ -233,7 +233,9 @@ overrides:
   # optional: promptfoo, directly and via @huggingface/transformers).
   # allowBuilds stays false (prebuilt binary).
   sharp: '>=0.35.5'
-  find-my-way: '>=9.7.0'                    # GHSA-c96f-x56v-gq3h (HTTP/2 DoS)
+  # Raised off >=9.7.0, which admitted 9.7.0–9.10.0 inside GHSA-fcj7-c534-vj7f (medium,
+  # >=6.0.0 <=9.10.0): maxParamLength does not bound regex route evaluation (ReDoS).
+  find-my-way: '>=9.10.1'                   # GHSA-c96f-x56v-gq3h (HTTP/2 DoS), GHSA-fcj7-c534-vj7f (ReDoS)
   # Raised off >=1.9.0, which sat INSIDE the vulnerable range of GHSA-pqg4-j6r4-53mv
   # (HIGH, >=1.8.4 <1.11.0): quote() command injection via a line terminator in a token
   # after a `{ comment }` token. Not a backstop: resolution was 1.10.0, inside that
