@@ -2,6 +2,7 @@
 
 - **Send stakes** — re-confirming an agreed time and offering open slots now send as routine at 80+.
 - **Band gating** — a direct instruction from the principal counts as approval; Curia picks open details itself.
+- **Sender authentication** — the web console (chat and voice) and Signal calls now authenticate the principal.
 
 ### Fixed
 
