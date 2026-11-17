@@ -73,8 +73,9 @@ describe('resolveConsoleVoiceCaller', () => {
     expect(caller.originator.systemRole).toBe('principal');
     expect(caller.originator.channel).toBe('voice');
     expect(caller.originator.tier).toBe('principal');
-    // Voice never authenticates its sender (#2312): the flag is stamped false, not left out.
-    expect(caller.originator.authenticated).toBe(false);
+    // Console voice rides the same logged-in principal session as web chat, so it is
+    // authenticated (maintainer, 2026-11-16, reversing #2312 for this transport).
+    expect(caller.originator.authenticated).toBe(true);
   });
 
   it('warns when the principal row has a stale kind (migration-055) via the shared helper', async () => {
@@ -162,6 +163,8 @@ describe('resolveVoiceCallerFromToken', () => {
     expect(result.caller.originator.systemRole).toBeNull();
     expect(result.caller.originator.tier).toBe('trusted');
     expect(contactResolver.resolve).toHaveBeenCalledWith('voice', '+15551234567');
+    // A caller-id token (a future phone/SIP transport) is spoofable (ADR-036): never authenticated.
+    expect(result.caller.originator.authenticated).toBe(false);
   });
 
   it('fail-closes an unresolved token under the loaded voice unknown_sender: ignore', async () => {
@@ -308,8 +311,9 @@ describe('resolveSignalVoiceCaller (#1672)', () => {
     if (result.ok) {
       expect(result.caller.liveTurn).toBe(true);
       expect(result.caller.senderId).toBe('+15196161377');
-      // A Signal call's caller id is not the Signal message envelope: voice stays unauthenticated (#2312).
-      expect(result.caller.originator.authenticated).toBe(false);
+      // A Signal call is set up over the caller's end-to-end Signal session, the same account
+      // identity a Signal text carries, so it is authenticated (maintainer, 2026-11-16).
+      expect(result.caller.originator.authenticated).toBe(true);
     }
     expect(contactResolver.resolve).toHaveBeenCalledWith('signal', '+15196161377');
   });
