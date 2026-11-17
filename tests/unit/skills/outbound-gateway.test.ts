@@ -409,6 +409,35 @@ describe('OutboundGateway', () => {
       expect(warn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('Stage 2 judge gets no directive'));
     });
 
+    // CR-3: a replay is principal-directed (humanApproved) but not a live turn: nothing to read.
+    it('reads nothing and does not warn on an approval replay', async () => {
+      const collect = vi.fn().mockResolvedValue(principalTurn);
+      await gatewayWith(collect).send(request, { principalDirected: true, humanApproved: true, taskEventId: 'task-1' });
+      expect(collect).not.toHaveBeenCalled();
+      expect(filterArg()).not.toHaveProperty('principalDirective');
+      expect(warn).not.toHaveBeenCalledWith(expect.anything(), expect.stringContaining('Stage 2 judge gets no directive'));
+    });
+
+    const draftMeta = { recipientEmail: 'armin@external.com', body: 'hello', subject: 's' };
+    it('reads nothing on a draft approval replay', async () => {
+      const collect = vi.fn().mockResolvedValue(principalTurn);
+      await gatewayWith(collect).sendEmailDraft('draft-1', undefined, draftMeta, {
+        humanApproved: true, approvalReplay: true, principalDirected: true, taskEventId: 'task-1',
+      });
+      expect(collect).not.toHaveBeenCalled();
+      expect(filterArg()).not.toHaveProperty('principalDirective');
+    });
+
+    // send-draft sets humanApproved on every call, so it alone must not read as a replay.
+    it('still reads the directive for send-draft on a live turn (humanApproved without a replay)', async () => {
+      const collect = vi.fn().mockResolvedValue(principalTurn);
+      await gatewayWith(collect).sendEmailDraft('draft-1', undefined, draftMeta, {
+        humanApproved: true, approvalReplay: false, principalDirected: true, taskEventId: 'task-1',
+      });
+      expect(collect).toHaveBeenCalledWith(['task-1']);
+      expect(filterArg().principalDirective).toBe('Email Armin my health card number, cc me.');
+    });
+
     it('fails closed with a warn when there is no drafting turn to read', async () => {
       const collect = vi.fn().mockResolvedValue(principalTurn);
       await gatewayWith(collect).send(request, { principalDirected: true });
