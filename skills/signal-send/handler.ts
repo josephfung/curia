@@ -16,6 +16,7 @@
 // (recipient_number) is refused, never ignored.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
+import { holdRecipientName } from '../../src/skills/_shared/hold-recipient-name.js';
 import { checkGroupMemberTrust } from '../../src/channels/signal/group-trust.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
@@ -241,7 +242,7 @@ export class SignalSendHandler implements ToolHandler {
         // Named by the contact, not the identity label: "Signal message to unlabelled" gave the
         // agent nothing to match "share it with Dana" to (scenario 34k). The label, then the
         // number, are fallbacks for a contact with no usable name.
-        holdRecipe: { toolName: 'signal-send', partialPayload: ctx.input, description: `Signal message to ${resolved.displayName?.trim() || identityName || destination}` },
+        holdRecipe: { toolName: 'signal-send', partialPayload: ctx.input, description: `Signal message to ${holdRecipientName(resolved.displayName, identityName, destination)}` },
       });
 
       if (!result.success) {

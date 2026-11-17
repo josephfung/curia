@@ -10,6 +10,7 @@
 // (recipient_number) is refused, never ignored.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
+import { holdRecipientName } from '../../src/skills/_shared/hold-recipient-name.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
 import { isPrincipalDirectedSend, originatorOption, relayDeferredData, redactionData } from '../../src/skills/_shared/principal-directed.js';
@@ -105,7 +106,7 @@ export class SmsSendHandler implements ToolHandler {
           // Used only if band review holds this send (#2159): approval replays this skill with this input.
           // Named by the contact, as signal-send's is (scenario 34k): an identity label like
           // "unlabelled" gives the agent nothing to match the principal's answer to.
-          holdRecipe: { toolName: 'sms-send', partialPayload: ctx.input, description: `SMS to ${resolved.displayName?.trim() || identityName || destination}` },
+          holdRecipe: { toolName: 'sms-send', partialPayload: ctx.input, description: `SMS to ${holdRecipientName(resolved.displayName, identityName, destination)}` },
         },
       );
 
