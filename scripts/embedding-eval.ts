@@ -462,13 +462,18 @@ async function main(): Promise<number> {
   const fixtures = args.fixtures.map(file => ({ file, fixture: loadFixture(file) }));
   const built = await buildService(args);
   if (!built) return 1;
-  for (const { file, fixture } of fixtures) {
-    const reports = await evaluate(fixture, built.service, args.widths, { identifierGuard: args.identifierGuard });
-    process.stdout.write(
-      formatReport(built.name, built.prefixes, reports, { fixture: file, identifierGuard: args.identifierGuard }) + '\n',
-    );
+  try {
+    for (const { file, fixture } of fixtures) {
+      const reports = await evaluate(fixture, built.service, args.widths, { identifierGuard: args.identifierGuard });
+      process.stdout.write(
+        formatReport(built.name, built.prefixes, reports, { fixture: file, identifierGuard: args.identifierGuard }) + '\n',
+      );
+    }
+    return 0;
+  } finally {
+    // Release a --bundled run's ONNX session on every path (close() never throws).
+    await built.service.close();
   }
-  return 0;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
