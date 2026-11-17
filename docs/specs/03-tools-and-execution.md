@@ -239,8 +239,10 @@ member declared in a manifest but absent from `tool_registry` discovery is rende
   that is **not enabled** but is pinned by an **enabled** agent is flagged in the UI as
   unresolved for that agent. This is a real production failure mode and it is silent without
   the flag: an un-enrolled bundle takes its whole tool set out of the pinning agent's hands,
-  and the only other signal is a startup warning (`unresolvedPins`, reasons `not_found` or
-  `member_tools_missing`).
+  and the only other signal is a startup warning (`unresolvedPins`, reasons `not_found`,
+  `member_tools_missing` or `caller_not_allowed`). The last means the agent pinned a tool whose
+  `allowed_callers` excludes it: the tool is withheld from the agent's tool list instead of
+  failing at call time (#2646).
 
 Channels have their own parallel registry — see [spec 04 — Channels](04-channels.md).
 

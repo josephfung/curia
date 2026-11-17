@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { parseSkillMd } from '../../../src/skills/skill-md.js';
 import { SkillRegistry } from '../../../src/skills/skill-registry.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
-import { resolvePinnedSkills, appendSkillInstructions, reportScheduledPinGaps, collectPinnedByBundle } from '../../../src/skills/pin-resolution.js';
+import { resolvePinnedSkills, appendSkillInstructions, reportScheduledPinGaps, reportWithheldPinTools, collectPinnedByBundle } from '../../../src/skills/pin-resolution.js';
 import { registerSyntheticSingletonSkills } from '../../../src/skills/skill-loader.js';
 import { discoverToolManifests } from '../../../src/skills/loader.js';
 import type { ToolManifest } from '../../../src/skills/types.js';
@@ -183,6 +183,83 @@ describe('resolvePinnedSkills', () => {
     const r = resolvePinnedSkills(['web'], skills, tools);
     expect(r.toolNames).toEqual(['card-use-request']);
     expect(r.unresolvedPins).toEqual([]);
+  });
+
+  describe('allowed_callers (#2646)', () => {
+    function calendarFixture(
+      members: string[] = ['calendar-list-events', 'calendar-open-tool'],
+      instructions = '',
+    ) {
+      const tools = new ToolRegistry();
+      tools.register(
+        { ...toolManifest('calendar-list-events'), allowed_callers: ['calendar', 'meeting-debrief', 'contacts'] },
+        noopHandler,
+      );
+      tools.register(toolManifest('calendar-open-tool'), noopHandler);
+      const skills = new SkillRegistry();
+      skills.register({
+        name: 'calendar',
+        description: 'calendar',
+        tools: members,
+        instructions,
+      }, '/tmp/calendar');
+      return { tools, skills };
+    }
+
+    it('does not hand an agent a bundle member its allowed_callers excludes', () => {
+      const { tools, skills } = calendarFixture();
+      const r = resolvePinnedSkills(['calendar'], skills, tools, undefined, 'social-media');
+      expect(r.toolNames).toEqual(['calendar-open-tool']);
+      expect(r.unresolvedPins).toEqual([
+        { pin: 'calendar', reason: 'caller_not_allowed', withheldTools: ['calendar-list-events'] },
+      ]);
+    });
+
+    it('still hands the tool to an agent that allowed_callers names', () => {
+      const { tools, skills } = calendarFixture();
+      const r = resolvePinnedSkills(['calendar'], skills, tools, undefined, 'calendar');
+      expect(r.toolNames).toEqual(['calendar-list-events', 'calendar-open-tool']);
+      expect(r.unresolvedPins).toEqual([]);
+    });
+
+    it('does not resolve a bundle whose every member is withheld, nor splice in its owner\'s instructions', () => {
+      const { tools, skills } = calendarFixture(['calendar-list-events'], 'Owner-only calendar playbook');
+      const r = resolvePinnedSkills(['calendar'], skills, tools, undefined, 'social-media');
+      expect(r.toolNames).toEqual([]);
+      expect(r.instructionBlocks).toEqual([]);
+      expect(r.instructionBlockSkills).toEqual([]);
+      expect(r.resolvedSkills).toEqual([]);
+      expect(r.resolvedPins).toEqual([]);
+      expect(r.unresolvedPins).toEqual([
+        { pin: 'calendar', reason: 'caller_not_allowed', withheldTools: ['calendar-list-events'] },
+      ]);
+    });
+
+    it('keeps the instructions of a bundle the agent can still use in part', () => {
+      const { tools, skills } = calendarFixture(['calendar-list-events', 'calendar-open-tool'], 'Shared calendar notes');
+      const r = resolvePinnedSkills(['calendar'], skills, tools, undefined, 'social-media');
+      expect(r.instructionBlocks).toEqual(['Shared calendar notes']);
+      expect(r.resolvedSkills).toEqual(['calendar']);
+    });
+
+    it('skips a direct tool pin the agent may not call and reports it with a distinct reason', () => {
+      const { tools, skills } = calendarFixture();
+      const r = resolvePinnedSkills(['calendar-list-events'], skills, tools, undefined, 'social-media');
+      expect(r.toolNames).toEqual([]);
+      expect(r.resolvedPins).toEqual([]);
+      expect(r.unresolvedPins).toEqual([
+        { pin: 'calendar-list-events', reason: 'caller_not_allowed', withheldTools: ['calendar-list-events'] },
+      ]);
+    });
+
+    it('reports missing and withheld members as separate entries when a bundle has both', () => {
+      const { tools, skills } = calendarFixture(['calendar-list-events', 'calendar-open-tool', 'calendar-not-loaded']);
+      const r = resolvePinnedSkills(['calendar'], skills, tools, undefined, 'social-media');
+      expect(r.unresolvedPins).toEqual([
+        { pin: 'calendar', reason: 'member_tools_missing', missingTools: ['calendar-not-loaded'] },
+        { pin: 'calendar', reason: 'caller_not_allowed', withheldTools: ['calendar-list-events'] },
+      ]);
+    });
   });
 
   it('does not flatten per-tool action_risk when expanding calendar', () => {
@@ -412,6 +489,73 @@ describe('reportScheduledPinGaps (#1501)', () => {
 
     reportScheduledPinGaps('ceo-inbox', emptyResolution(), true, logger);
     expect(errors).toHaveLength(0);
+  });
+});
+
+describe('reportWithheldPinTools (#2646)', () => {
+  function captureLogger() {
+    const warns: Array<{ msg: string; ctx: Record<string, unknown> }> = [];
+    const errors: string[] = [];
+    const logger = {
+      error: (_ctx: Record<string, unknown>, msg: string) => { errors.push(msg); },
+      warn: (ctx: Record<string, unknown>, msg: string) => { warns.push({ msg, ctx }); },
+      info: () => {},
+      debug: () => {},
+    } as unknown as import('../../../src/logger.js').Logger;
+    return { logger, warns, errors };
+  }
+
+  function resolutionWith(unresolvedPins: ReturnType<typeof resolvePinnedSkills>['unresolvedPins']) {
+    return {
+      toolNames: [],
+      instructionBlocks: [],
+      instructionBlockSkills: [],
+      heartbeatEligible: false,
+      documentWorkspaceEnabled: false,
+      resolvedSkills: [],
+      resolvedPins: [],
+      unresolvedPins,
+    };
+  }
+
+  it('logs one warn per agent naming the agent and every withheld tool', () => {
+    const { logger, warns } = captureLogger();
+    reportWithheldPinTools('social-media', resolutionWith([
+      { pin: 'calendar', reason: 'caller_not_allowed', withheldTools: ['calendar-list-events', 'calendar-find-slot'] },
+      { pin: 'calendar-get-event', reason: 'caller_not_allowed', withheldTools: ['calendar-get-event'] },
+    ]), logger);
+
+    expect(warns).toHaveLength(1);
+    expect(warns[0]!.ctx.agent).toBe('social-media');
+    expect(warns[0]!.ctx.withheldTools).toEqual([
+      { pin: 'calendar', tools: ['calendar-list-events', 'calendar-find-slot'] },
+      { pin: 'calendar-get-event', tools: ['calendar-get-event'] },
+    ]);
+  });
+
+  it('stays quiet when nothing was withheld', () => {
+    const { logger, warns } = captureLogger();
+    reportWithheldPinTools('ceo-inbox', resolutionWith([{ pin: 'x', reason: 'not_found' }]), logger);
+    expect(warns).toHaveLength(0);
+  });
+
+  it('does not make a scheduled agent error when a pin lost only some tools', () => {
+    const { logger, errors } = captureLogger();
+    reportScheduledPinGaps('social-media', {
+      ...resolutionWith([
+        { pin: 'calendar', reason: 'caller_not_allowed', withheldTools: ['calendar-list-events'] },
+      ]),
+      resolvedPins: [{ pin: 'calendar', kind: 'skill' }],
+    }, true, logger);
+    expect(errors).toHaveLength(0);
+  });
+
+  it('errors for a scheduled agent that lost a whole pin to allowed_callers', () => {
+    const { logger, errors } = captureLogger();
+    reportScheduledPinGaps('social-media', resolutionWith([
+      { pin: 'calendar', reason: 'caller_not_allowed', withheldTools: ['calendar-list-events'] },
+    ]), true, logger);
+    expect(errors).toHaveLength(1);
   });
 });
 
