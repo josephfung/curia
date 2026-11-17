@@ -327,8 +327,8 @@ These are out of scope for this feature but identified during design:
 - Cross-specialist via Bullpen: CEO asks for research → agent posts Bullpen thread mentioning research-analyst → research-analyst processes and replies → agent incorporates results
 - Queryability: CEO asks "what meetings still need debrief?" → coordinator calls `debrief-status` → correct results
 
-### Smoke tests
-- Add to existing smoke test framework (GPT-4o judge, HTML reports)
+### Behavior tests
+- Scenario cases in `tests/scenarios/` (the 32-series covers debrief detection, reminders and replies)
 - Scenario: "A meeting with external attendees just ended. Does the agent prompt for a debrief?"
 - Scenario: "CEO provides takeaways. Does the agent execute reasonable follow-up actions?"
 - Scenario: "CEO asks what meetings need debrief. Does the status skill return useful info?"

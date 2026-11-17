@@ -1,11 +1,10 @@
 // tests/shared/rejudge-cli.ts — `pnpm rejudge --judge <model> <results.json>...` (#1980).
 //
-// Re-judges the transcripts a smoke or scenario run saved (tests/smoke/results/*.json,
-// tests/scenarios/results/*.json) with a candidate judge model, and reports how often its
-// verdicts match the judge that produced the file. No agent runs: only judge calls are
-// paid for, at the candidate's price.
+// Re-judges the transcripts a scenario run saved (tests/scenarios/results/*.json) with a
+// candidate judge model, and reports how often its verdicts match the judge that produced
+// the file. No agent runs: only judge calls are paid for, at the candidate's price.
 //
-//   pnpm rejudge --judge google/gemini-3.1-flash-lite tests/smoke/results/<run>.json
+//   pnpm rejudge --judge google/gemini-3.1-flash-lite tests/scenarios/results/<run>.json
 //
 // The bar for switching judges is in rejudge.ts (REJUDGE_AGREEMENT_BAR). Exit code is 0
 // either way: this is a report for a person, and every disagreement needs reading.
@@ -18,11 +17,9 @@ import { scoreCase, JUDGE_ERROR_PREFIX } from '../scenarios/gate.js';
 import { loadScenarioCases, resolveRunPlaceholders } from '../scenarios/loader.js';
 import { hasDatePlaceholders } from './date-placeholders.js';
 import type { RunRating, SuiteResult } from '../scenarios/types.js';
-import { evaluateCases } from '../smoke/evaluator.js';
-import type { RunResult } from '../smoke/types.js';
 import { DEFAULT_CONCURRENCY, parseConcurrency, runConcurrently } from './case-scope.js';
 import { formatAgreement, meetsBar, summarize, type CaseComparison, type RatingPair } from './rejudge.js';
-import { emptyBreakdown, formatUsd, sumBreakdowns, UsageLedger, type UsageBreakdown } from './usage.js';
+import { emptyBreakdown, formatUsd, UsageLedger, type UsageBreakdown } from './usage.js';
 
 const SCENARIO_CASES_DIR = path.resolve(import.meta.dirname, '../scenarios/cases');
 
@@ -61,48 +58,6 @@ function parseArgs(argv: string[]): Args {
 interface Rejudged {
   comparisons: CaseComparison[];
   spend: UsageBreakdown;
-}
-
-/** Smoke: one transcript per case; the verdict is the case's gate result. */
-async function rejudgeSmoke(run: RunResult, judge: Judge, concurrency: number): Promise<Rejudged> {
-  // An errored case was never judged, and a judge error has placeholder scores: neither
-  // says anything about how the baseline judge rated the transcript.
-  const judged = run.cases.filter(c => !c.error && !c.judgeError);
-  const skipped = run.cases.length - judged.length;
-  if (skipped > 0) out(`   Skipped ${skipped} case(s) the baseline never judged (errored, or a judge error)`);
-  if (!run.today) err('  [WARN] this results file predates `today`; the candidate judges relative dates without it');
-  const untargeted = judged.filter(c => c.testCase.target && !c.target);
-  if (untargeted.length > 0) {
-    err(`  [WARN] ${untargeted.length} targeted case(s) predate the saved target; the candidate sees unresolved placeholders in their thread`);
-  }
-  const results = await evaluateCases(
-    judged.map(c => ({
-      testCase: c.testCase,
-      ...(c.target ? { target: c.target } : {}),
-      responses: c.responses,
-      agentCalls: c.agentCalls,
-      usage: emptyBreakdown(),
-      providerRetries: [],
-      // The date this case's judge read; older files have only the run's, used below.
-      ...(c.today ? { today: c.today } : {}),
-    })),
-    judge,
-    { ...(run.today ? { today: run.today } : {}), concurrency },
-  );
-  const comparisons = judged.map((before, i): CaseComparison => {
-    const after = results[i]!;
-    const ratings: RatingPair[] = before.scores.map((b) => {
-      const a = after.scores.find(s => s.behaviorId === b.behaviorId);
-      return {
-        behaviorId: b.behaviorId,
-        before: { rating: b.rating, justification: b.justification },
-        after: a ? { rating: a.rating, justification: a.justification } : { rating: 'MISS', justification: '(no score)' },
-      };
-    });
-    if (after.judgeError) err(`  [WARN] ${before.testCase.name}: the candidate judge errored (${after.judgeError})`);
-    return { name: before.testCase.name, passedBefore: before.passed, passedAfter: after.passed, ratings };
-  });
-  return { comparisons, spend: sumBreakdowns(results.map(r => r.usage)) };
 }
 
 /**
@@ -183,13 +138,12 @@ async function main(): Promise<void> {
     if (principal) judge.principalName = principal.displayName;
 
     for (const file of args.files) {
-      const data = JSON.parse(readFileSync(file, 'utf-8')) as RunResult | SuiteResult;
-      const isScenarios = 'runsPerCase' in data;
+      const data = JSON.parse(readFileSync(file, 'utf-8')) as SuiteResult;
+      // Smoke results files (no runsPerCase) predate smoke's retirement; they can't be re-judged.
+      if (!('runsPerCase' in data)) throw new Error(`${file} is not a scenario results file`);
       out(`\n${file}`);
-      out(`   ${isScenarios ? 'scenarios' : 'smoke'} run of ${data.timestamp} on ${data.model ?? 'configured routing'}; candidate judge ${args.judge}`);
-      const { comparisons, spend } = isScenarios
-        ? await rejudgeScenarios(data as SuiteResult, judge, args.concurrency)
-        : await rejudgeSmoke(data as RunResult, judge, args.concurrency);
+      out(`   scenarios run of ${data.timestamp} on ${data.model ?? 'configured routing'}; candidate judge ${args.judge}`);
+      const { comparisons, spend } = await rejudgeScenarios(data, judge, args.concurrency);
       const agreement = summarize(comparisons);
       out('');
       for (const line of formatAgreement(agreement, args.judge, 'baseline')) out(`   ${line}`);

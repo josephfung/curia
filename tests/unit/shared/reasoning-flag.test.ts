@@ -2,7 +2,6 @@
 
 import { describe, it, expect } from 'vitest';
 import { describeReasoningOverride, parseReasoningEffortFlag } from '../../shared/reasoning-flag.js';
-import { parseSmokeArgs } from '../../smoke/args.js';
 
 describe('parseReasoningEffortFlag', () => {
   it('sets every tier from a bare effort', () => {
@@ -29,15 +28,5 @@ describe('describeReasoningOverride', () => {
     expect(describeReasoningOverride(undefined)).toBe('as configured');
     expect(describeReasoningOverride(parseReasoningEffortFlag('low'))).toBe('fast=low, standard=low, powerful=low');
     expect(describeReasoningOverride(parseReasoningEffortFlag('fast=none'))).toBe('fast=none (other tiers as configured)');
-  });
-});
-
-describe('smoke --reasoning-effort', () => {
-  it('parses into the run arguments', () => {
-    expect(parseSmokeArgs(['--reasoning-effort', 'standard=low']).reasoning).toEqual({ standard: { effort: 'low' } });
-  });
-
-  it('rejects it twice', () => {
-    expect(() => parseSmokeArgs(['--reasoning-effort', 'low', '--reasoning-effort', 'max'])).toThrow(/given twice/);
   });
 });

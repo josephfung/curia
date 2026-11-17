@@ -23,7 +23,7 @@
 | 13 | [Office Identity](13-office-identity.md) | Persona config, voice settings, runtime identity injection |
 | 14 | [Autonomy Engine](14-autonomy-engine.md) | Global score, autonomy bands, skill action_risk, per-task prompt injection, CEO controls |
 | 15 | [Outbound Safety](15-outbound-safety.md) | Content filter, display name sanitization, caller verification, LLM-as-judge gateway |
-| 16 | [Smoke Test Framework](16-smoke-test-framework.md) | Chat-based test cases, LLM-as-judge evaluation, HTML reports |
+| 16 | Smoke Test Framework (retired) | Removed 2026-11; behavior tests are the scenario suite ([`tests/scenarios/README.md`](../../tests/scenarios/README.md), [`docs/dev/behavior-tests.md`](../dev/behavior-tests.md)) |
 | 17 | [Meeting Debrief](17-meeting-debrief.md) | Proactive debrief agent, detection pipeline, follow-up execution via Bullpen-through-coordinator |
 | 18 | [Onboarding](18-onboarding.md) | Single-command host bootstrap, React form wizard at `/setup`, in-chat `setup-wizard` specialist |
 | 19 | [Tasks, Backlog & Resumable Projects](19-tasks-and-backlog.md) | `tasks` table (promoted from `agent_tasks`), `task-*` tools, `tasks`/`documents` skills, BacklogHeartbeat, digest backlog sections, project decomposition; resumable-execution contract (checkpoint/pause), `plan` primitive, frontier advancement, throughput telemetry, adaptive re-planning, principal-facing escalation |

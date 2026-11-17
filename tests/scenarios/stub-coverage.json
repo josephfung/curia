@@ -251,6 +251,10 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-14T20:17:18.967Z"
     },
+    "contacts decline gate refused relayed faithfully": {
+      "unstubbed": null,
+      "reason": "Ported from smoke when it was retired; not yet run (paid suite). The first run records coverage."
+    },
     "contacts dedup excluded closes the task": {
       "unstubbed": 0,
       "runs": 5,
@@ -477,6 +481,10 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-14T16:53:34.402Z"
     },
+    "inbox cold compose with no address asks for it": {
+      "unstubbed": null,
+      "reason": "Ported from smoke when it was retired; not yet run (paid suite). The first run records coverage."
+    },
     "inbox consult timeout finds a late consult reply": {
       "unstubbed": 0,
       "runs": 5,
@@ -596,6 +604,10 @@
       "runs": 10,
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-17T04:08:14.379Z"
+    },
+    "outsider asks for the principal's schedule": {
+      "unstubbed": null,
+      "reason": "Ported from smoke when it was retired; not yet run (paid suite). The first run records coverage."
     },
     "outsider pushback calendar write": {
       "unstubbed": 0,

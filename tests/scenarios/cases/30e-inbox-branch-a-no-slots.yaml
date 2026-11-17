@@ -1,5 +1,5 @@
-# ceo-inbox resume mode, Branch A, `Result: no_slots` (#2025). Ported from smoke
-# tests/smoke/cases/ceo-inbox-branch-a-no-slots.yaml (#1977). Rule: agents/ceo-inbox.yaml,
+# ceo-inbox resume mode, Branch A, `Result: no_slots` (#2025). Ported from the
+# retired smoke case ceo-inbox-branch-a-no-slots (#1977). Rule: agents/ceo-inbox.yaml,
 # "Branch A — Calendar consult reply", step 7: recall (5a-c), draft with the `Nearest:`
 # slot strings verbatim and say in plain language that they fall outside the requested
 # window, ✍️ Drafted folder, archive.

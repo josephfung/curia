@@ -69,13 +69,13 @@ the maintainer settles a parked question in a way that will recur, add it here.
 
 ## Testing and cost
 
-- **Develop with unit tests, integration tests, typecheck and the prompt-budget test; the smoke and scenario suites are the release gate.**
-  Because every suite run bills real model calls, and day-to-day runs added up fast (CLAUDE.md "Testing", `docs/dev/smoke-tests.md`).
+- **Develop with unit tests, integration tests, typecheck and the prompt-budget test; the scenario suite is the release gate.**
+  Because every suite run bills real model calls, and day-to-day runs added up fast (CLAUDE.md "Testing", `docs/dev/behavior-tests.md`).
 - **Ask before every paid run, naming the cases, the run count and the estimated cost; report the spend afterwards.**
   Because the suites' own estimates undercount, and the maintainer wants to see the spend.
 - **Keep paid runs targeted and few: only the cases the change touches, saved baselines instead of a fresh `main` arm, multi-run A/Bs only when asked.**
   Because runs repeated "just to check" are where the money went.
-- **Write the scenario or smoke case even when you don't run it.**
+- **Write the scenario case even when you don't run it.**
   Because writing a case is free and running one is not; the release gate will run it.
 - **Stub paid third-party calls in the suites by default and let a case opt in.**
   Because an exhausted quota turns runs into timeouts that look like behavior failures.

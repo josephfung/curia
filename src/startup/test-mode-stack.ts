@@ -1,5 +1,5 @@
 // test-mode-stack.ts — the production agent stack, minus everything that can reach
-// the outside world. Used by the smoke harness, the scenario runner (#1956) and
+// the outside world. Used by the scenario runner (#1956) and
 // scripts/render-coordinator-prompt.ts (#1966).
 //
 // Agents are built through src/startup/agent-assembly.ts, the same path src/index.ts
@@ -25,7 +25,7 @@
 //     secret (e.g. ceo-inbox → Nylas) get a "withheld in test mode" error. Only the
 //     read-only secrets in TEST_MODE_PASSTHROUGH_SECRETS fall back to env as usual.
 //   - No deferred work. The stack usually shares a database with a real instance
-//     (smoke reads DATABASE_URL from .env), and anything a real process acts on
+//     (the suites read DATABASE_URL from .env), and anything a real process acts on
 //     later would send with real transports. So the ExecutionLayer gets no
 //     scheduler service, task repo, action log (pending approvals), outbound-context
 //     service or bullpen service, and the gateway gets no outbound queue. Tools that
@@ -38,7 +38,7 @@
 //     `delegationClaims` wires production's pending_delegations claims for `delegate`,
 //     and `recordSends` wires the action log (held sends' approval rows) beside the
 //     recording gateway.
-//   - No shared-setting writes. Smoke turns run with principal standing, so agents get
+//   - No shared-setting writes. Test turns run with principal standing, so agents get
 //     read-only views of the autonomy score and office identity (a real instance would
 //     send under a changed score), and no working-docs repo (ceo-inbox shadow drafts
 //     feed the real instance's learning signal).
@@ -58,7 +58,7 @@
 //   - The tools above fail closed instead of running.
 //   - MCP tools come from a snapshot and return canned results; a configured server
 //     without a snapshot is absent (listed in `warnings`).
-//   - No Dispatcher: the caller wires its own (the smoke harness does).
+//   - No Dispatcher: the caller wires its own.
 //   - Offline mode without SECRET_ENCRYPTION_KEY: no Signal or SMS number, and email
 //     self-addresses come from email_accounts without the vault grant check.
 //   - Your Contact Details shows the Signal and SMS numbers whenever they resolve, and

@@ -1,5 +1,5 @@
-# ceo-inbox resume mode, Branch A, `Result: ok` (#2025). Ported from smoke
-# tests/smoke/cases/ceo-inbox-branch-a-stored-preference.yaml (#1977). Rule:
+# ceo-inbox resume mode, Branch A, `Result: ok` (#2025). Ported from the
+# retired smoke case ceo-inbox-branch-a-stored-preference (#1977). Rule:
 # agents/ceo-inbox.yaml, "Branch A — Calendar consult reply", steps 0 (load the thread),
 # 1 (reload the email), 5a-c (voice profile, memory-query anchored on sender and subject,
 # date-resolve) and 6 (draft with the slot strings verbatim as a counter-proposal, no

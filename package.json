@@ -25,7 +25,6 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.skills.json && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.scripts.json && pnpm -r run typecheck",
     "lint": "eslint src/ tests/ apps/",
     "migrate": "tsx --env-file=.env node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir src/db/migrations --migration-file-language sql",
-    "smoke": "tsx --env-file=.env tests/smoke/cli.ts",
     "smoke:bedrock-tools": "tsx --env-file=.env scripts/smoke-bedrock-tool-use.ts",
     "scenarios": "tsx --env-file=.env tests/scenarios/cli.ts",
     "e2e:setup-wizard": "node --env-file-if-exists=.env --import tsx tests/setup-wizard/cli.ts",

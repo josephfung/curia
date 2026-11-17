@@ -39,8 +39,9 @@ const DURABLE_TREES = ['src', 'tests', 'skills', 'scripts', 'docs/specs', 'docs/
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'coverage', '.git']);
 /**
  * Gitignored run output of the behavior suites (#1956), by path from the repo root. Every
- * local `pnpm smoke` / `pnpm scenarios` run writes reports and results here; they are not
- * hand-written and never committed, so they are neither scanned nor counted in the census.
+ * local `pnpm scenarios` run writes results here; they are not hand-written and never
+ * committed, so they are neither scanned nor counted in the census. The smoke paths stay
+ * because older checkouts may still hold output from the retired smoke suite.
  */
 const GENERATED_DIRS = new Set(['tests/smoke/reports', 'tests/smoke/results', 'tests/scenarios/results']);
 
