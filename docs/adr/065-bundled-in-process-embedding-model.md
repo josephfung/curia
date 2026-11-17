@@ -11,7 +11,9 @@ ADR-051 made knowledge-graph embeddings come from any OpenAI-compatible `/embedd
 
 Issue #2023 gives the reasons: installability, one fewer outage mode and key, privacy (labels stay on the server) and latency. Cost is not one of them.
 
-The evaluation has now been run, on a hand-labelled set drawn from a production graph. The write-up is in the issue: https://github.com/josephfung/curia/issues/2023#issuecomment-6901002341. `all-MiniLM-L6-v2` (int8 ONNX, 384 dimensions, about 23 MB) tied `text-embedding-3-small` on entity names and beat it on fact dedup.
+The evaluation has now been run, on a hand-labelled set drawn from a production graph. The write-up is in the issue: https://github.com/josephfung/curia/issues/2023#issuecomment-6901002341. `all-MiniLM-L6-v2` (int8 ONNX, 384 dimensions, about 23 MB) tied `text-embedding-3-small` on entity names and beat it on fact dedup. That write-up compares the incumbent with seven open candidates that pass #2023's hard requirements (all-MiniLM-L6-v2, nomic-embed-text-v1.5, granite-embedding-english-r2, snowflake-arctic-embed-m-v2.0, BGE-M3, Qwen3-Embedding-0.6B and EmbeddingGemma 2) on quality, safe thresholds and cost on the prod VPS class. It records why three more were left out: harrier-oss-v1 (its ONNX export would not load), EmbeddingGemma v1 (Gemma Terms of Use) and jina-embeddings-v5-text-small (CC-BY-NC). The harness is `scripts/embedding-eval.ts`, with the committed synthetic fixture in `tests/fixtures/embedding-eval/`.
+
+The setup wizard catalog needs no entry: there is nothing to configure for the default, and the `kg_memory` task that asked for an OpenAI key was removed earlier in #2023.
 
 The bounds were set before building: no network call from the bundled path, ever; no change to an operator's chosen model without their action, including at upgrade; vectors from two models never compared; Curia's container memory up by no more than ~100 MB; image growth not much beyond ~70 MB.
 
