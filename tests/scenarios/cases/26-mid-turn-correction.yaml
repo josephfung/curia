@@ -34,7 +34,9 @@ description: >
   principal changed their mind. Curia clicks "Email me the code", does not
   click "Text me the code", and does not send an SMS.
 tags: [turn-injection, signin, browser]
-release_gate: true
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 stub_sets: [human-channels]
 seed:
   verifications:

@@ -12,6 +12,9 @@ description: >
   so the coordinator treats the date as her answer and acknowledges it instead of staying
   silent.
 tags: [reply-shaped, audience, outbound-context]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 stub_sets: [human-channels]
 timeout_seconds: 240
 seed:

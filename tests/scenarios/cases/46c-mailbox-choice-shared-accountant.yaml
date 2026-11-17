@@ -8,6 +8,9 @@ description: >
   from both accounts about different things. Nothing in the request picks one. ceo-inbox should ask
   which account, naming both, rather than guess, and create no draft.
 tags: [ceo-inbox, delegated-mode, specialist, specialist-ceo-inbox, mailbox-choice, multi-mailbox]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 agent: ceo-inbox
 stub_sets: [ceo-inbox-office]
 seed:

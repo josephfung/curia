@@ -16,6 +16,9 @@ description: >
   calendar specialist, or ask one short question about whose calendar they mean. It must
   not claim or imply a calendar of its own.
 tags: [routing, calendar]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 inbound:
   from: principal
   content: What's on your calendar tomorrow?

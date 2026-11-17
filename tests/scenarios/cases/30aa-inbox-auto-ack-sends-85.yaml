@@ -23,8 +23,8 @@ description: >
   its own with ceo-inbox-send-draft; it goes to Priya alone and nothing is held. Curia is at
   autonomy 85 (band gating).
 tags: [specialist-ceo-inbox, ceo-inbox, triage, send, principal-mailbox, autonomous-send, band-gating]
+runs: 5
 agent: ceo-inbox
-release_gate: true
 timeout_seconds: 420
 through_gateway: true
 autonomy: { score: 85, gating: band }

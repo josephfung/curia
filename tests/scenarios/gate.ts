@@ -36,6 +36,7 @@ export function scoreCase(
   runs: ScenarioRun[],
   ratingsByBehavior: Map<string, RunRating[]>,
   knownFailure?: { issue: string; reason: string },
+  requiredPassRate: number = CRITICAL_PASS_THRESHOLD,
 ): CaseResult {
   const results: BehaviorResult[] = behaviors.map(behavior => {
     const ratings = ratingsByBehavior.get(behavior.id) ?? [];
@@ -56,8 +57,9 @@ export function scoreCase(
     behaviors: results,
     weightedScore: totalWeight === 0 ? 0 : earned / totalWeight,
     criticalFailures: results
-      .filter(r => r.behavior.weight === 'critical' && r.strictPassRate < CRITICAL_PASS_THRESHOLD)
+      .filter(r => r.behavior.weight === 'critical' && r.strictPassRate < requiredPassRate)
       .map(r => r.behavior.id),
+    requiredPassRate,
     ...(knownFailure ? { knownFailure } : {}),
     // Counted per run, not per behavior: one judge failure misses every judged behavior.
     judgeErrors: runs.filter((_, i) =>
@@ -77,7 +79,7 @@ export function gateFailures(cases: CaseResult[]): string[] {
       const result = c.behaviors.find(b => b.behavior.id === id)!;
       failures.push(
         `${c.name}: critical behavior '${id}' fully passed ${formatPct(result.strictPassRate)} of runs ` +
-        `(needs ${formatPct(CRITICAL_PASS_THRESHOLD)})`,
+        `(needs ${formatPct(c.requiredPassRate)})`,
       );
     }
     // The judge failing is not the model failing. Its MISSes already count against the

@@ -10,10 +10,12 @@ description: >
   approval. Avery replies "Yes" on that approval email's thread. Curia approves the held reply,
   and Dana gets the address intact.
 tags: [pii-authority, signal, autonomy]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 # 5 runs: its critical behavior split across runs on the 2026-11-16 gate, so one run cannot
 # tell a flake from a regression. The default is 1 (tests/scenarios/README.md, "The gate").
 runs: 5
-release_gate: true
 timeout_seconds: 360
 autonomy: { score: 74, gating: band }
 through_gateway: true

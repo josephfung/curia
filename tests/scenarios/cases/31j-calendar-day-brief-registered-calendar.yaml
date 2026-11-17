@@ -15,6 +15,9 @@ description: >
   report all three events with titles, times and locations, and not refuse or hedge on who
   is asking.
 tags: [specialist-calendar, day-brief, disclosure]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 agent: calendar
 stub_sets: [calendar-specialist, calendar-office]
 inbound:

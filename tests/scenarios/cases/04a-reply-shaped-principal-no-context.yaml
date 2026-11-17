@@ -7,6 +7,9 @@ description: >
   makes sense as a reply to something, so the coordinator should briefly ask what it
   refers to rather than act.
 tags: [reply-shaped, audience]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 stub_sets: [human-channels, deferred-work]
 inbound:
   from: principal
