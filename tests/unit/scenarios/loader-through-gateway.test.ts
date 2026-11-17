@@ -245,6 +245,28 @@ describe('gated_tools', () => {
   });
 });
 
+// The channels a run's approvals may use (34o: email, though Avery also has Signal).
+describe('approval_channels', () => {
+  const withChannels = (s: string, channels: string) =>
+    s.replace('through_gateway: true\n', `through_gateway: true\napproval_channels: ${channels}\n`);
+
+  it('reads the list, and leaves a case without it unchanged', () => {
+    expect(load(withChannels(CASE, '[email]')).approvalChannels).toEqual(['email']);
+    expect(load(withChannels(CASE, '[sms, email]')).approvalChannels).toEqual(['sms', 'email']);
+    expect(load(CASE).approvalChannels).toBeUndefined();
+  });
+
+  it.each([
+    ['without through_gateway', (s: string) => withChannels(s, '[email]').replace('through_gateway: true\n', '').replace(/expected_behaviors:[\s\S]*$/, 'expected_behaviors:\n  - id: a\n    description: replies\n'), /'approval_channels' needs through_gateway/],
+    ['an empty list', (s: string) => withChannels(s, '[]'), /lists at least one channel/],
+    ['an unknown channel', (s: string) => withChannels(s, '[pager]'), /'pager' is not one of signal, sms, web, slack, email/],
+    ['a channel twice', (s: string) => withChannels(s, '[email, email]'), /'email' is listed twice/],
+    ['a list that is not strings', (s: string) => withChannels(s, '[1]'), /'approval_channels' must be a list of strings/],
+  ])('rejects %s', (_label, edit, error) => {
+    expect(() => load(edit(CASE))).toThrow(error);
+  });
+});
+
 describe('gated_tools with a later principal turn (#2588)', () => {
   it('accepts inbound.then: the stub layer refuses approve-action in a gated run instead', () => {
     const body = CASE

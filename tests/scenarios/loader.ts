@@ -7,6 +7,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 import { hasBacklog, type PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
+import { APPROVAL_CHANNELS, type ApprovalChannel } from '../../src/autonomy/approval-delivery.js';
 import { parsePinnedContext } from '../../src/agents/pinned-context.js';
 import { isKnownPiiLabel } from '../../src/pii/scrubber.js';
 import { registrableDomain } from '../../src/verification/domain.js';
@@ -83,7 +84,7 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
   }
 }
 
-const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway', 'gated_tools'] as const;
+const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway', 'gated_tools', 'approval_channels'] as const;
 const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'tasks', 'outreach', 'pinned', 'principal_mailbox'] as const;
 const PRINCIPAL_MAILBOX_KEYS = ['send_level', 'drafts', 'threads', 'expect_no_band_review'] as const;
 const PRINCIPAL_DRAFT_KEYS = ['id', 'thread', 'to', 'cc', 'subject', 'body', 'modified', 'by_curia'] as const;
@@ -1212,6 +1213,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
   const throughGateway = optBool(raw, 'through_gateway', file, 'case');
   if (throughGateway === false) throw new CaseError(file, `'through_gateway' is true or absent`);
   const gatedTools = strList(raw, 'gated_tools', file, 'case');
+  const approvalChannels = parseApprovalChannels(raw, file);
   // The release gate is one unfiltered run on the database's identity. An autonomy fixture
   // is pinned per case (#2312), so a case with one can join it.
   if (identity && releaseGate) {
@@ -1239,6 +1241,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     ...(autonomy ? { autonomy } : {}),
     ...(throughGateway ? { throughGateway: true as const } : {}),
     ...(gatedTools.length > 0 ? { gatedTools } : {}),
+    ...(approvalChannels ? { approvalChannels } : {}),
     sourceFile: file,
   };
 
@@ -1247,6 +1250,28 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
   validateEnvelope(scenario, file);
   validateThroughGateway(scenario, file);
   return scenario;
+}
+
+/**
+ * `approval_channels`: the channels a run's approvals may go out on, as if the principal had
+ * verified identities on those alone. Each must be a channel approval delivery knows, once.
+ * Absent: undefined (every channel the principal has).
+ */
+function parseApprovalChannels(raw: Raw, file: string): ApprovalChannel[] | undefined {
+  if (raw['approval_channels'] === undefined) return undefined;
+  const channels = strList(raw, 'approval_channels', file, 'case');
+  if (channels.length === 0) {
+    throw new CaseError(file, `'approval_channels' lists at least one channel (omit it for every channel)`);
+  }
+  const seen = new Set<string>();
+  for (const channel of channels) {
+    if (!(APPROVAL_CHANNELS as readonly string[]).includes(channel)) {
+      throw new CaseError(file, `approval_channels: '${channel}' is not one of ${APPROVAL_CHANNELS.join(', ')}`);
+    }
+    if (seen.has(channel)) throw new CaseError(file, `approval_channels: '${channel}' is listed twice`);
+    seen.add(channel);
+  }
+  return channels as ApprovalChannel[];
 }
 
 /**
@@ -1264,6 +1289,10 @@ function validateThroughGateway(scenario: ScenarioCase, file: string): void {
   }
   if (scenario.gatedTools && !scenario.throughGateway) {
     throw new CaseError(file, `'gated_tools' needs through_gateway: true (the gates run on its review layer)`);
+  }
+  // Only a through-gateway run delivers approvals for real; elsewhere deliver-approval is a stub.
+  if (scenario.approvalChannels && !scenario.throughGateway) {
+    throw new CaseError(file, `'approval_channels' needs through_gateway: true (only its runs deliver approvals)`);
   }
   // Only the review layer's gateway has the principal's mailbox (#2474); elsewhere the send is a stub.
   if (scenario.seed.principalMailbox && !scenario.throughGateway) {

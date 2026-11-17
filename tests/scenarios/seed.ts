@@ -34,6 +34,7 @@ import { resolvePlaceholders } from './loader.js';
 import { SCENARIO_DELEGATE_PREFIX } from './stub-layer.js';
 import type { DbPool } from '../../src/db/connection.js';
 import type { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
+import type { ApprovalChannel } from '../../src/autonomy/approval-delivery.js';
 import { NO_REF_RETRY_GUIDANCE, type ActionLogRow, type ResolveResult } from '../../src/autonomy/action-log-types.js';
 import type { ApprovalDisplay } from '../../src/autonomy/approval-delivery.js';
 import type { NylasMessage } from '../../src/channels/email/nylas-client.js';
@@ -101,6 +102,8 @@ export class SeedScope {
   rootConversation: string | undefined;
   /** The run's case sets through_gateway (#2312): its relays, notifications and wakes are the run's. */
   throughGateway = false;
+  /** The case's approval_channels: the channels this run's approvals may go out on. Undefined: every one. */
+  approvalChannels: readonly ApprovalChannel[] | undefined;
   /** Email threads the fake mailbox lists for a relayed reply, by thread id, most recent first (#2312). */
   readonly threadMessages = new Map<string, NylasMessage[]>();
   /** Approval-wake turns a held relay started in this run, captured (#2312). */
@@ -200,6 +203,7 @@ export class SeedScope {
     this.thenStartsAt = undefined;
     this.rootConversation = undefined;
     this.throughGateway = false;
+    this.approvalChannels = undefined;
     this.threadMessages.clear();
     this.wakeTurns.length = 0;
     this.deliveries.length = 0;

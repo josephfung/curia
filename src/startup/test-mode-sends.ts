@@ -19,7 +19,7 @@ import type { SignalSendParams } from '../channels/signal/types.js';
 import type { SlackClient } from '../channels/slack/slack-client.js';
 import type { SlackPostMessageParams, SlackPostMessageResult } from '../channels/slack/types.js';
 import type { SmsClient } from '../channels/sms/sms-client.js';
-import type { ApprovalDisplay } from '../autonomy/approval-delivery.js';
+import type { ApprovalChannel, ApprovalDisplay } from '../autonomy/approval-delivery.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
 import type { AutonomyService } from '../autonomy/autonomy-service.js';
 import { FailOpenLimiter, type AutonomyGating } from '../autonomy/band-policy.js';
@@ -115,6 +115,14 @@ export interface SendRecorder {
   message(messageId: string): NylasMessage | undefined;
   /** What a held send will show the principal (ApprovalDelivery.registerDisplay). */
   display?(shortRef: string, display: ApprovalDisplay): void;
+  /**
+   * The channels the calling run's approvals may go out on, as if the principal had verified
+   * identities on those alone: availableChannels lists only them, and deliver() on any other
+   * answers channel_unavailable, as production does for a channel with no identity. A case about
+   * the approval email's thread needs email when the principal also has Signal, which approval
+   * delivery prefers. Absent or undefined: every channel the principal has.
+   */
+  approvalChannels?(): readonly ApprovalChannel[] | undefined;
   /**
    * The band review's fail-open cap for the calling run. Production keeps one per process;
    * on a shared test stack one run's judge failures would hold another run's sends. Absent or

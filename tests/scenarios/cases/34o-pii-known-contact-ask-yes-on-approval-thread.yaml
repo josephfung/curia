@@ -17,6 +17,10 @@ release_gate: true
 timeout_seconds: 360
 autonomy: { score: 74, gating: band }
 through_gateway: true
+# The case is about the approval EMAIL's thread. Avery also has Signal (+15555550147), which
+# approval delivery prefers, so the approval went out on Signal and no run had an email to reply
+# on (5/5 errored, 2026-11-16 verification). Email alone, as for a principal with no Signal.
+approval_channels: [email]
 seed:
   contacts:
     - key: dana

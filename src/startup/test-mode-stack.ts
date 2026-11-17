@@ -70,7 +70,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import * as path from 'node:path';
 import { loadConfig, loadYamlConfig, resolveAutonomyGating, resolveIdentityGateMode, resolveLateDeliveryConfig, resolveOutboundJudgeConfig, resolveOutboundRedactionConfig, resolveRelayBudgetConfig, resolveTasksConfig, resolveTurnInjectionConfig, resolveVerificationConfig, type Config, type YamlConfig } from '../config.js';
 import { ActionLogRepo } from '../autonomy/action-log-repo.js';
-import { ApprovalDelivery, type ApprovalDisplay } from '../autonomy/approval-delivery.js';
+import { ApprovalDelivery, type ApprovalChannel, type ApprovalDisplay, type DeliverResult } from '../autonomy/approval-delivery.js';
 import { ApprovalTriggerService } from '../autonomy/approval-trigger.js';
 import { DisclosureDecisionRecorder, DisclosureDecisionsRepo } from '../autonomy/disclosure-decisions.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
@@ -931,7 +931,7 @@ function buildRecordingSends(deps: {
   // principal will be shown; the recorder sees it too, so a `held` check can read the
   // preamble the approval carries. Everything else is the real delivery.
   const display = deps.recorder.display?.bind(deps.recorder);
-  const approvalDelivery = display
+  const displayed = display
     ? Object.assign(Object.create(delivery) as ApprovalDelivery, {
         registerDisplay: (ref: string, shown: ApprovalDisplay): void => {
           delivery.registerDisplay(ref, shown);
@@ -939,6 +939,8 @@ function buildRecordingSends(deps: {
         },
       })
     : delivery;
+  const allowedChannels = deps.recorder.approvalChannels?.bind(deps.recorder);
+  const approvalDelivery = allowedChannels ? limitApprovalChannels(displayed, allowedChannels) : displayed;
   gateway.setApprovalDelivery(approvalDelivery);
   // Relayed replies (outbound.message) take production's adapter path to this gateway, for
   // the events the recorder accepts (its through-gateway runs).
@@ -969,6 +971,37 @@ function buildRecordingSends(deps: {
     taskReads,
     bandReviewJudgeMissing,
   };
+}
+
+/**
+ * Approval delivery narrowed, per call, to the channels `allowed()` names (SendRecorder.approvalChannels):
+ * as if the principal had verified identities on those alone. availableChannels lists only them,
+ * and deliver() on any other answers channel_unavailable without sending, as production does for
+ * a channel with no identity; the `available` it reports is narrowed too. `allowed()` returning
+ * undefined leaves the call unchanged. Everything else is the real delivery.
+ */
+export function limitApprovalChannels(
+  delivery: ApprovalDelivery,
+  allowed: () => readonly ApprovalChannel[] | undefined,
+): ApprovalDelivery {
+  const narrow = (channels: ApprovalChannel[], only: readonly ApprovalChannel[]): ApprovalChannel[] =>
+    channels.filter((c) => only.includes(c));
+  return Object.assign(Object.create(delivery) as ApprovalDelivery, {
+    availableChannels: async (): Promise<ApprovalChannel[]> => {
+      const all = await delivery.availableChannels();
+      const only = allowed();
+      return only ? narrow(all, only) : all;
+    },
+    deliver: async (shortRef: string, channel: ApprovalChannel): Promise<DeliverResult> => {
+      const only = allowed();
+      if (!only) return delivery.deliver(shortRef, channel);
+      if (!only.includes(channel)) {
+        return { delivered: false, reason: 'channel_unavailable', available: narrow(await delivery.availableChannels(), only) };
+      }
+      const result = await delivery.deliver(shortRef, channel);
+      return result.delivered ? result : { ...result, available: narrow(result.available, only) };
+    },
+  });
 }
 
 /**

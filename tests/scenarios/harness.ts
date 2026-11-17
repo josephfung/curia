@@ -534,6 +534,8 @@ export async function createScenarioHarness(
       },
       message: (messageId) => currentScope()?.inboundMessages.get(messageId),
       display: (shortRef, shown) => { currentScope()?.approvalDisplays.set(shortRef, shown); },
+      // The case's approval_channels (34o: email, though the principal also has Signal).
+      approvalChannels: () => currentScope()?.approvalChannels,
       // Each run's own fail-open cap (#2312).
       limiter: () => currentScope()?.failOpen,
       drafts: () => currentScope()?.drafts,
@@ -1166,6 +1168,7 @@ export async function createScenarioHarness(
 
       scope.rootConversation = runConversationId;
       scope.throughGateway = scenario.throughGateway === true;
+      scope.approvalChannels = scenario.approvalChannels;
       controller.beginRun(stubTable, runConversationId, {
         realDelegation,
         throughGateway: scenario.throughGateway === true,
