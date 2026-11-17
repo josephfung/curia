@@ -315,6 +315,17 @@ const FORWARD_SUBJECT = /^Subject:\s*(fwd?|fw)\s*:/i;
  * history holds an older forward is a reply. Not the Outlook underscore separator alone,
  * which replies carry too; an Outlook forward is caught by its "FW:" subject.
  */
+/**
+ * An email whose subject says it is a forward ("Fwd:", "FW:", "Fw:"), but in which no quote or
+ * forward marker was found to cut (cutsQuotedText false): the forwarded part's header is one
+ * firstQuoteLine does not know (another language, another client), so senderOwnText would keep
+ * the forwarded sender's words as the forwarder's own. A reader that must have only the sender's
+ * words (the Stage 2 directive) fails closed on it. Always false off email.
+ */
+export function forwardNotCut(channelId: string, content: string): boolean {
+  return channelId === 'email' && FORWARD_SUBJECT.test(content) && !cutsQuotedText(channelId, content);
+}
+
 export function looksLikeForward(channelId: string, content: string): boolean {
   if (channelId !== 'email') return false;
   if (FORWARD_SUBJECT.test(content)) return true;

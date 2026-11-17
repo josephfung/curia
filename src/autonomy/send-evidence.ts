@@ -44,7 +44,7 @@ import type { ContactTier, SystemRole } from '../contacts/types.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import { inboundSenderAuthenticated } from '../dispatch/outbound-entry-access.js';
 import type { OutreachLinkKind } from '../dispatch/outreach-matcher.js';
-import { senderOwnTextAnyChannel } from '../dispatch/turn-guidance-triggers.js';
+import { forwardNotCut, senderOwnTextAnyChannel } from '../dispatch/turn-guidance-triggers.js';
 import type { TaskOutreachRepo } from '../dispatch/task-outreach.js';
 import type { Logger } from '../logger.js';
 import { createSecretPatterns } from '../security/secret-patterns.js';
@@ -719,6 +719,11 @@ export class SendEvidenceCollector {
       // address mid-turn must not become their directive. Fail closed on the whole message.
       if (parts.slice(1).some((p) => !p.senderAuthenticated)) {
         return leaveOut('a follow-up drained into the turn was not channel-authenticated');
+      }
+      // A forward whose forwarded part was not found to cut (an unknown header) would read the
+      // forwarded sender's request as the principal's own. Fail closed rather than under-block.
+      if (parts.some((p) => forwardNotCut(p.channelId, p.text))) {
+        return leaveOut('a forwarded email\'s forwarded part could not be located to cut');
       }
       // SEC-MED-2: only the principal's own words. A reply's quoted message and a forward are
       // someone else's text (or the principal's earlier words, not this request): a reply quoting
