@@ -354,7 +354,9 @@ describe('OutboundGateway', () => {
       unavailable: false,
       toolResults: [],
       principalBlock: null,
-      taskContent: 'Email Armin my health card number, cc me.',
+      // The dispatcher's assembled prompt; the directive is principalMessage only (SEC-HIGH-1).
+      taskContent: '[ACTIVE OUTBOUND CONTEXT]\n---\nEmail Armin my health card number, cc me.',
+      principalMessage: 'Email Armin my health card number, cc me.',
       authority: { originator: { contactId: 'c-principal', systemRole: 'principal' as const, tier: null, channel: 'signal', authenticated: true }, liveTurn: true },
     };
 
@@ -398,7 +400,8 @@ describe('OutboundGateway', () => {
       ['unavailable evidence', () => vi.fn().mockResolvedValue({ ...principalTurn, unavailable: true })],
       ['a collector that throws', () => vi.fn().mockRejectedValue(new Error('db down'))],
       ['a turn not originated by the principal', () => vi.fn().mockResolvedValue({ ...principalTurn, authority: { ...principalTurn.authority, originator: { ...principalTurn.authority.originator, systemRole: null } } })],
-      ['an empty message', () => vi.fn().mockResolvedValue({ ...principalTurn, taskContent: '  ' })],
+      ['an empty message', () => vi.fn().mockResolvedValue({ ...principalTurn, principalMessage: '  ' })],
+      ['no raw inbound (task content only)', () => vi.fn().mockResolvedValue({ ...principalTurn, principalMessage: undefined })],
     ])('fails closed with a warn on %s', async (_label, makeCollect) => {
       await gatewayWith(makeCollect()).send(request, { principalDirected: true, taskEventId: 'task-1' });
       expect(filterArg().principalDirected).toBe(true);

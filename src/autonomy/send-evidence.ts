@@ -111,6 +111,19 @@ export interface CollectedEvidence extends BriefEvidence {
    * (#2499), as opposed to a failed read. The send review holds rather than failing open.
    */
   originUnresolved?: true;
+  /**
+   * The principal's own message that directed this turn (scenario 34d, security review
+   * SEC-HIGH-1): the raw text of the `inbound.message` the turn answered, with any follow-ups a
+   * turn lane drained into it, read from audit_log, never the agent.task content. That content
+   * is the dispatcher's assembled prompt: it prepends [ACTIVE OUTBOUND CONTEXT] (outsiders'
+   * replies) and email participant/CC preambles, so an outsider's words would read as the
+   * principal's. For a delegated turn it is the root inbound (originContent's source).
+   *
+   * Set only for a live principal-originated turn whose inbound could be read; anything else
+   * leaves it absent, which withholds every release it supports (fail closed). Credentials
+   * redacted, trimmed from the middle.
+   */
+  principalMessage?: string;
 }
 
 /** Which thread and recipients a send's decisions are read for (#2312). */
@@ -298,11 +311,11 @@ function taskText(text: string): string {
  * with a reason the caller logs. The authority check mirrors band review's 'principal'
  * authority (stamped originator systemRole, plus the drafting turn's liveTurn).
  *
- * Which text counts: a delegated turn's origin, only when it is the root inbound message
- * (kind 'inbound'), because the drafting turn's own content is then the assistant's
- * rewritten brief. A task-kind origin is a system-started root, not the principal speaking,
- * so it is refused. With no delegation origin the drafting turn's content is the principal's
- * inbound itself.
+ * Which text counts: only `principalMessage`, which collect() reads from the raw
+ * inbound.message row the turn answered (a delegated turn's root inbound). Never the drafting
+ * turn's task content: for a delegated turn that is the assistant's rewritten brief, and for
+ * any turn it is the dispatcher's assembled prompt, which carries outsiders' replies in its
+ * outbound-context preamble (security review SEC-HIGH-1).
  */
 export function principalDirectiveFrom(
   collected: CollectedEvidence,
@@ -311,14 +324,13 @@ export function principalDirectiveFrom(
   const { authority } = collected;
   if (authority.originator?.systemRole !== 'principal') return { ok: false, reason: 'drafting turn not principal-originated' };
   if (!authority.liveTurn) return { ok: false, reason: 'drafting turn is not a live turn' };
-  let text: string | undefined;
-  if (collected.originContent !== undefined) {
-    if (collected.originKind !== 'inbound') return { ok: false, reason: 'delegation origin is not an inbound message' };
-    text = collected.originContent;
-  } else {
-    text = collected.taskContent;
+  if (collected.originContent !== undefined && collected.originKind !== 'inbound') {
+    return { ok: false, reason: 'delegation origin is not an inbound message' };
   }
-  if (text === undefined || text.trim() === '') return { ok: false, reason: 'principal message is empty' };
+  const text = collected.principalMessage;
+  if (text === undefined || text.trim() === '') {
+    return { ok: false, reason: 'the principal\'s own inbound message is absent or empty' };
+  }
   return { ok: true, text };
 }
 
@@ -333,9 +345,23 @@ interface SenderHistory {
   olderLeftOut: boolean;
 }
 
+/** One inbound message's raw text and the channel it came in on. */
+interface InboundPart {
+  channelId: string;
+  text: string;
+}
+
+/**
+ * An inbound turn's message and drained follow-ups, oldest first, and every inbound row read
+ * (`used`), or why they could not be read.
+ */
+type InboundRead =
+  | { ok: true; parts: InboundPart[]; used: Set<string> }
+  | { ok: false; reason: string };
+
 /** What started the chain, as the judge sees it, or why it could not be read. */
 type OriginRead =
-  | { ok: true; content: string; kind: 'inbound' | 'task'; at: string; history: SenderHistory }
+  | { ok: true; content: string; kind: 'inbound' | 'task'; at: string; history: SenderHistory; parts?: InboundPart[] }
   | { ok: false; reason: string };
 
 export class SendEvidenceCollector {
@@ -444,6 +470,7 @@ export class SendEvidenceCollector {
       };
 
       const decisions = await this.readDecisions(scope);
+      const principalMessage = await this.readPrincipalMessage(authority, origin, task, drafting);
 
       return {
         unavailable: false,
@@ -454,6 +481,7 @@ export class SendEvidenceCollector {
         ...(origin ? { originContent: origin.content, originKind: origin.kind, originAt: origin.at } : {}),
         ...(origin && origin.history.items.length > 0 ? { senderHistory: origin.history.items } : {}),
         ...(origin?.history.olderLeftOut ? { senderHistoryOlderLeftOut: true } : {}),
+        ...(principalMessage !== undefined ? { principalMessage } : {}),
         ...(typeof content === 'string' ? { taskContent: clip(redactSecrets(content), EVIDENCE_RESULT_MAX_CHARS) } : {}),
         ...(progress !== undefined ? { taskProgress: clip(redactSecrets(JSON.stringify(progress)), EVIDENCE_RESULT_MAX_CHARS) } : {}),
         toolResults,
@@ -594,31 +622,107 @@ export class SendEvidenceCollector {
         content: clipMiddle(redactSecrets(content), EVIDENCE_ORIGIN_MAX_CHARS),
       };
     }
-    const first = parent.payload['content'];
-    if (typeof first !== 'string') return { ok: false, reason: 'root inbound has no content' };
-    const texts = [first];
-    const used = new Set<string>([parent.id]);
-    if (root.conversationId !== null) {
+    const read = await this.readInboundParts(root, parent);
+    if (!read.ok) return read;
+    const history = await this.readSenderHistory(parent.conversationId ?? root.conversationId, parent.payload['senderId'], parent.timestamp, read.used);
+    return {
+      ok: true, kind: 'inbound', at: parent.timestamp.toISOString(), history, parts: read.parts,
+      content: clipMiddle(redactSecrets(read.parts.map((p) => p.text).join(FOLLOW_UP_SEPARATOR)), EVIDENCE_ORIGIN_MAX_CHARS),
+    };
+  }
+
+  /**
+   * An inbound turn's own words: its parent `inbound.message` as received (before any dispatcher
+   * preamble), then the follow-ups a turn lane drained into the turn, oldest first. `used` is
+   * every inbound row read, so the sender's history can skip them. A row without text is a
+   * failure, never a shorter read.
+   */
+  private async readInboundParts(
+    turn: AuditLogRow,
+    inbound: AuditLogRow,
+  ): Promise<InboundRead> {
+    const part = (r: AuditLogRow): InboundPart | null => {
+      const text = r.payload['content'];
+      const channelId = r.payload['channelId'];
+      return typeof text === 'string' ? { channelId: typeof channelId === 'string' ? channelId : '', text } : null;
+    };
+    const first = part(inbound);
+    if (first === null) return { ok: false, reason: 'root inbound has no content' };
+    const parts = [first];
+    const used = new Set<string>([inbound.id]);
+    if (turn.conversationId !== null) {
       // Turn lanes inject only the host turn's own sender (turn-lanes.ts), so these are that
       // sender's words too. Newest first from the repo, so a cut keeps the latest push; read
       // back oldest first.
-      const ids = await this.deps.auditLogRepo.findInjectedInboundIds(root.conversationId, root.id, ORIGIN_FOLLOW_UPS_LIMIT);
+      const ids = await this.deps.auditLogRepo.findInjectedInboundIds(turn.conversationId, turn.id, ORIGIN_FOLLOW_UPS_LIMIT);
       if (ids.length === ORIGIN_FOLLOW_UPS_LIMIT) {
-        this.deps.logger.info({ rootTaskEventId: root.id, limit: ORIGIN_FOLLOW_UPS_LIMIT }, 'send-evidence: follow-up limit reached — older follow-ups left out');
+        this.deps.logger.info({ rootTaskEventId: turn.id, limit: ORIGIN_FOLLOW_UPS_LIMIT }, 'send-evidence: follow-up limit reached — older follow-ups left out');
       }
       for (const id of [...ids].reverse()) {
         const row = await this.deps.auditLogRepo.findById(id);
-        const text = row?.eventType === 'inbound.message' ? row.payload['content'] : undefined;
-        if (typeof text !== 'string') return { ok: false, reason: 'a follow-up drained into the root turn cannot be read' };
-        texts.push(text);
+        const followUp = row?.eventType === 'inbound.message' ? part(row) : null;
+        if (followUp === null) return { ok: false, reason: 'a follow-up drained into the root turn cannot be read' };
+        parts.push(followUp);
         used.add(id);
       }
     }
-    const history = await this.readSenderHistory(parent.conversationId ?? root.conversationId, parent.payload['senderId'], parent.timestamp, used);
-    return {
-      ok: true, kind: 'inbound', at: parent.timestamp.toISOString(), history,
-      content: clipMiddle(redactSecrets(texts.join(FOLLOW_UP_SEPARATOR)), EVIDENCE_ORIGIN_MAX_CHARS),
+    return { ok: true, parts, used };
+  }
+
+  /**
+   * The principal's own message for `principalMessage` (SEC-HIGH-1): the raw inbound the turn
+   * answered, never its assembled task content. Read only when the authority could make it the
+   * principal's (principal originator, live turn), so other turns cost no extra reads. For a
+   * delegated turn, the root inbound readOrigin already read; a task-kind root has none. For any
+   * other turn, the drafting turn's parent row, which must be an `inbound.message` (a content-block
+   * rewrite is followed back to the turn it rewrote). Every failure, a throw included, leaves the
+   * message out with a log: that withholds the releases it supports, and never fails the review.
+   */
+  private async readPrincipalMessage(
+    authority: SendAuthority,
+    origin: Extract<OriginRead, { ok: true }> | null,
+    task: AuditLogRow,
+    drafting: readonly string[],
+  ): Promise<string | undefined> {
+    if (authority.originator?.systemRole !== 'principal' || !authority.liveTurn) return undefined;
+    const leaveOut = (reason: string): undefined => {
+      this.deps.logger.warn({ taskEventId: task.id, reason }, 'send-evidence: principal\'s own message not read — nothing is released on it');
+      return undefined;
     };
+    try {
+      let parts: InboundPart[];
+      if (origin !== null) {
+        if (origin.kind !== 'inbound' || origin.parts === undefined) return leaveOut('delegation root is not an inbound message');
+        parts = origin.parts;
+      } else {
+        const turn = await this.directingTurn(task, drafting);
+        if (turn === null) return leaveOut('content-block rewrite\'s drafting turn cannot be read');
+        const parent = turn.parentEventId ? await this.deps.auditLogRepo.findById(turn.parentEventId) : null;
+        if (parent?.eventType !== 'inbound.message') return leaveOut('drafting turn\'s parent is not an inbound.message');
+        const read = await this.readInboundParts(turn, parent);
+        if (!read.ok) return leaveOut(read.reason);
+        parts = read.parts;
+      }
+      const text = parts.map((p) => p.text).join(FOLLOW_UP_SEPARATOR);
+      if (text.trim() === '') return leaveOut('the inbound message is empty');
+      return clipMiddle(redactSecrets(text), EVIDENCE_ORIGIN_MAX_CHARS);
+    } catch (err) {
+      this.deps.logger.warn({ err, taskEventId: task.id }, 'send-evidence: reading the principal\'s own message failed — nothing is released on it');
+      return undefined;
+    }
+  }
+
+  /**
+   * The turn that answered the inbound: the drafting turn, or for a content-block rewrite (whose
+   * parent is the outbound.blocked event) the oldest turn withRewriteOrigins found. Null when
+   * that turn cannot be read or is itself a rewrite.
+   */
+  private async directingTurn(task: AuditLogRow, drafting: readonly string[]): Promise<AuditLogRow | null> {
+    if (!isContentBlockRewrite(task)) return task;
+    const first = drafting[0];
+    if (first === undefined || first === task.id) return null;
+    const row = await this.deps.auditLogRepo.findById(first);
+    return row !== null && row.eventType === 'agent.task' && !isContentBlockRewrite(row) ? row : null;
   }
 
   /**
