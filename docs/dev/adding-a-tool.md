@@ -153,6 +153,7 @@ Restricts which agents may invoke this skill. When set, only the named agents (a
 - Principal-approved re-executions (`humanApproved: true`) bypass the caller gate.
 - Omit `allowed_callers` entirely (or set to `[]`) to allow any agent to invoke the skill — this is the default behavior.
 - The `toolSearch` closure also respects `allowed_callers`: skills whose caller list excludes the searching agent are filtered from discovery results (defense-in-depth).
+- Pin resolution applies the same rule: a pinned bundle or tool the agent may not call is left out of its tool list, and boot logs a warning naming the agent and the withheld tools (#2646).
 
 **When to use `allowed_callers`:**
 
