@@ -119,7 +119,8 @@ export interface CollectedEvidence extends BriefEvidence {
    * replies) and email participant/CC preambles, so an outsider's words would read as the
    * principal's. For a delegated turn it is the root inbound (originContent's source).
    *
-   * Set only for a live principal-originated turn whose inbound could be read; anything else
+   * Set only for a live principal-originated turn whose sender the channel authenticated
+   * (SEC-HIGH-2) and whose inbound could be read; anything else
    * leaves it absent, which withholds every release it supports (fail closed). Credentials
    * redacted, trimmed from the middle.
    */
@@ -307,9 +308,10 @@ function taskText(text: string): string {
  * The principal's own words that directed a send, read from collected evidence, for the
  * outbound Stage 2 judge (scenario 34d). Pure: the caller collects, this only decides.
  *
- * Fail-closed: anything short of a readable message from a live principal turn is refused
- * with a reason the caller logs. The authority check mirrors band review's 'principal'
- * authority (stamped originator systemRole, plus the drafting turn's liveTurn).
+ * Fail-closed: anything short of a readable message from a live, channel-authenticated
+ * principal turn is refused with a reason the caller logs. The authority check mirrors band
+ * review's 'principal' authority (stamped originator systemRole, plus the drafting turn's
+ * liveTurn) and adds `originator.authenticated === true`.
  *
  * Which text counts: only `principalMessage`, which collect() reads from the raw
  * inbound.message row the turn answered (a delegated turn's root inbound). Never the drafting
@@ -323,6 +325,10 @@ export function principalDirectiveFrom(
   if (collected.unavailable) return { ok: false, reason: 'evidence unavailable' };
   const { authority } = collected;
   if (authority.originator?.systemRole !== 'principal') return { ok: false, reason: 'drafting turn not principal-originated' };
+  // SEC-HIGH-2: stampOriginator marks any inbound that resolves to a principal identity as
+  // principal, authenticated or not. A forged email From or a spoofed SMS number (ADR-036)
+  // would otherwise direct a release; only a channel-verified sender counts.
+  if (authority.originator.authenticated !== true) return { ok: false, reason: 'principal sender not authenticated by the channel' };
   if (!authority.liveTurn) return { ok: false, reason: 'drafting turn is not a live turn' };
   if (collected.originContent !== undefined && collected.originKind !== 'inbound') {
     return { ok: false, reason: 'delegation origin is not an inbound message' };
@@ -684,7 +690,10 @@ export class SendEvidenceCollector {
     task: AuditLogRow,
     drafting: readonly string[],
   ): Promise<string | undefined> {
-    if (authority.originator?.systemRole !== 'principal' || !authority.liveTurn) return undefined;
+    // Unauthenticated (a forged email From, SMS): never the principal's message (SEC-HIGH-2).
+    if (authority.originator?.systemRole !== 'principal' || authority.originator.authenticated !== true || !authority.liveTurn) {
+      return undefined;
+    }
     const leaveOut = (reason: string): undefined => {
       this.deps.logger.warn({ taskEventId: task.id, reason }, 'send-evidence: principal\'s own message not read — nothing is released on it');
       return undefined;
