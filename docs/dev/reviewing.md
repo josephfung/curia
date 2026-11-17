@@ -1,43 +1,71 @@
 # Reviewing Curia changes
 
-Guidance for code reviewers: CodeRabbit (through `.coderabbit.yaml`) and the agents that review a PR before it opens. `docs/dev/review-checklist.md` is the author's self-check. This page is about how to weigh findings.
+The starting point for anyone reviewing a Curia PR: CodeRabbit (through `.coderabbit.yaml`), the agents that review a PR before it opens, and people. It says which standards apply, how to weigh a finding, and how to review each kind of test. It links to the standards rather than repeating them.
 
-**Why it exists:** in November 2026, review rounds kept asking for wider heuristics, more test cases and more guard options. Each request was reasonable on its own. Together they grew code and tests that then drew the next round of findings. A finding costs a fix, a re-review and often a paid test run, so each one has to be worth that.
+## The standards
 
-## Raise a finding when
+- **Code conventions:** `CLAUDE.md` covers TypeScript (ESM, no `any`, strict null patterns, CommonJS imports), error handling (`AgentError`, no empty catches, skills return results rather than throw), logging (pino, no `console.log`), the database (parameterized queries, migration numbering), where tests live, and how to add tools, agents and channels.
+- **Finding classes that keep coming back:** `docs/dev/review-checklist.md` is the author's self-check, distilled from 644 past review findings. A diff that trips one of its lines has a real finding.
+- **Judgment calls:** `docs/dev/principles.md` covers where a behavior fix belongs, what counts as evidence, the single-principal threat model, and what goes to the maintainer.
+- **Decisions already made:** the ADRs in `docs/adr/` and the specs in `docs/specs/`. A change that contradicts one is a finding. A finding that would reverse one goes to the maintainer, not into the PR.
 
-- **It has a realistic failure scenario.** Name the concrete inputs or state and what goes wrong. "Could in theory", "for robustness" and "consider also handling" are not findings.
-- **It breaks a send, write or hide path.** Who gets a message, which address it goes to, what personal data leaves, whether an approval is needed, what gets deleted or hidden. These stay strict: flag anything that could send to the wrong person, leak, skip an approval or lose data.
-- **It's a correctness bug a test would catch:** wrong result, swallowed error, missing await, unbounded query, broken migration.
-- **It's on the self-check list** (`docs/dev/review-checklist.md`) and the diff actually trips it.
+## Weighing a finding
 
-## Don't raise
+A finding costs a fix, a re-review and sometimes a paid test run. Each one has to be worth that. In November 2026, review rounds kept asking for wider heuristics, more test cases and more guard options. Each request was reasonable on its own, but together they grew code and tests that then drew the next round of findings.
+
+### Raise a finding when
+
+- **It has a realistic failure scenario.** Name the concrete inputs or state, and what goes wrong. "Could in theory", "for robustness" and "consider also handling" are not findings.
+- **It breaks a send, write or hide path.** That covers who gets a message, which address it goes to, what personal data leaves, whether an approval is needed, and what gets deleted or hidden. These stay strict: flag anything that could send to the wrong person, leak, skip an approval or lose data.
+- **It's a correctness bug a test would catch:** a wrong result, a swallowed error, a missing await, an unbounded query, a broken migration.
+- **It breaks a standard above**, or trips a line on the checklist.
+
+### Don't raise
 
 - **Races that need two concurrent actions by the principal.** Curia serves one principal, so these don't happen in practice. Real single-user bugs still count.
 - **Defenses against implausible spoofs on everyday paths.** Curia is held to a human assistant's standard. Don't add friction to daily use to stop an attack that needs an unrealistic setup. Send, write and hide paths keep their strictness.
-- **Wider coverage for heuristics that fail closed.** Quote and forward detection, trigger patterns and similar code withhold or over-block when they miss. A missed pattern costs an extra question, not a leak. Ask for wider coverage only if the miss sends something, leaks something or skips an approval. Don't ask for more languages, more formats or more variants for their own sake.
-- **New guards, options or config keys** without a failure scenario. If a guard is warranted, say what simpler change (removing the capability, narrowing an input) was considered and why it doesn't work.
-- **Nitpicks on docs, test cases or wording,** unless the text is wrong or misleads.
-- **Findings on code the diff doesn't touch,** unless the change makes it newly reachable.
+- **Wider coverage for heuristics that fail closed.** Quote and forward detection, trigger patterns and similar code withhold or over-block when they miss, so a miss costs an extra question, not a leak. Ask for wider coverage only if the miss sends something, leaks something or skips an approval. Don't ask for more languages, formats or variants for their own sake.
+- **New guards, options or config keys without a failure scenario.** If a guard is warranted, say what simpler change was considered (removing the capability, narrowing an input) and why it doesn't work.
+- **Findings on code the diff doesn't touch,** unless the change makes that code newly reachable.
 
-## Behavior test cases (`tests/scenarios/cases/**`)
+### Broadly acceptable
+
+None of these is worth a finding when the change is otherwise sound:
+- **Pre-existing style or structure** in code the diff doesn't touch.
+- **A reasonable design the author chose** over one the reviewer would have picked, when both work.
+- **Small duplication**, in tests especially, where sharing the code would hide what each test does.
+- **Comments that explain why** rather than what. Long ones are fine when the reason isn't obvious.
+- **Wording, formatting and style nitpicks** in docs, comments and test cases, unless the text is wrong or misleads.
+
+## Reviewing tests
+
+### Unit tests
+
+- **Assert behavior and returned values,** not implementation details. A test that only checks that a call happened is weak (checklist "Test each new branch").
+- **Don't pin text the model reads.** Prefer a test of the code or a behavior case over one that pins prompt or description wording (ADR-046).
+- **Versions:** assert a version floor, never an exact pin (CLAUDE.md "Versioning skills and agents").
+- **Flaky tests:** fix the cause (an unpinned clock, an order assumption), never add retries.
+- **Don't ask for** tests of trivial code, for coverage numbers for their own sake, or for a test per input permutation when one test shows the rule.
+
+### Integration tests
+
+- **Real Postgres, no mocks** of the database.
+- **Each test owns its rows:** it cleans up and counts only rows it created, never table-wide totals (checklist "Own your rows").
+- **Local failures:** a failure seen only on the shared local database isn't evidence until it repeats on a clean one. CI's fresh database decides.
+
+### Behavior tests (`tests/scenarios/cases/**`)
 
 These run real models and cost money on every run. Review them against `docs/dev/behavior-tests.md`.
 
 **Flag:**
-- A critical check that can't fail: it would pass a wrong run too.
-- A stub that contradicts the case's own message.
-- A fixed date, or wording that only works on some weekdays.
-- A judged behavior whose criteria two graders would read differently.
-- A judged behavior that a check on tool calls could replace.
-- A new harness option added for one case.
+- a critical check that can't fail (one that would pass a wrong run too);
+- a stub that contradicts the case's own message;
+- a fixed date, or wording that only works on some weekdays;
+- a judged behavior whose criteria two graders would read differently, or that a check on tool calls could replace;
+- a new harness option added for one case.
 
-**Don't ask for:**
-- More cases, or exhaustive edge cases.
-- Extra runs.
-- New harness options.
-- Coverage of paths that unit tests already cover.
+**Don't ask for:** more cases, exhaustive edge cases, extra runs, new harness options, or coverage that unit tests already give.
 
-## Weighing a fix the author pushed back on
+## When the author pushes back
 
-A reasoned pushback that cites one of the rules above, `docs/dev/principles.md`, an ADR or a maintainer decision settles the thread. Don't re-raise the same point in different words.
+A reasoned pushback that cites this page, the checklist, `docs/dev/principles.md`, an ADR or a maintainer decision settles the thread. Don't raise the same point again in different words.
