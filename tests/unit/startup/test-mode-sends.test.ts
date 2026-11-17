@@ -156,6 +156,37 @@ describe('createRecordingOutboundGateway', () => {
     expect(await gw.flushChannel('email')).toEqual({ flushed: 0, skipped: true });
   });
 
+  // CR-1: the scenario harness must exercise the Stage 2 principal directive as production does.
+  it('forwards the review\'s evidence collector to the gateway, which reads the principal\'s directive from it', async () => {
+    const contentFilter = new OutboundContentFilter({ systemPromptMarkers: [], ceoEmail: '' });
+    const check = vi.spyOn(contentFilter, 'check');
+    const collect = vi.fn().mockResolvedValue({
+      unavailable: false, toolResults: [], principalBlock: null,
+      principalMessage: 'Email Pat my health card number.',
+      authority: { originator: { contactId: 'p', systemRole: 'principal', tier: 'principal', channel: 'signal', authenticated: true }, liveTurn: true },
+    });
+    const gw = createRecordingOutboundGateway({
+      recorder: runRecorder(),
+      emailAccounts: [{ name: 'curia', selfEmail: 'curia@example.test' }],
+      contactService: {
+        resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
+        getContact: vi.fn().mockResolvedValue(null),
+        createContact: vi.fn().mockResolvedValue({ id: 'contact-new' }),
+        linkIdentity: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ContactService,
+      bus: new EventBus(logger),
+      logger,
+      principalIdentities: [],
+      review: { contentFilter, sendEvidence: { collect } },
+    });
+    await gw.send(
+      { channel: 'email', to: 'pat@vendor.example.test', subject: 'Hi', body: 'Hello' },
+      { principalDirected: true, taskEventId: 'task-1' },
+    );
+    expect(collect).toHaveBeenCalledWith(['task-1']);
+    expect(check.mock.calls[0]![0].principalDirective).toBe('Email Pat my health card number.');
+  });
+
   it('records an email send as text, to the run that made it', async () => {
     const recorder = runRecorder();
     const result = await gateway(recorder).send(
