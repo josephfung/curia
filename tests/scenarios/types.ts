@@ -306,17 +306,6 @@ export interface SeedVerification {
   sessionAlive: boolean;
 }
 
-/**
- * A channel identity the principal needs for the run (#2017): a case that sends as the
- * principal on a channel the database's principal may have no identity on. Seeding adds a
- * verified, active one only when the principal has no active identity on the channel, and
- * cleanup removes only that row.
- */
-export interface SeedPrincipalIdentity {
-  channel: string;
-  identifier: string;
-}
-
 /** A recipient on a seeded principal-mailbox draft (#2474). */
 export interface SeedDraftRecipient {
   name?: string;
@@ -474,7 +463,7 @@ export interface ScenarioInbound {
 /** A principal turn after the first one (ScenarioInbound.then). */
 export interface ScenarioPrincipalTurn {
   content: string;
-  /** A channel the principal has a verified identity on (seed one with principal_identities). */
+  /** A channel the principal has a verified identity on: email or Signal for the scenario principal (principal-fixture.ts). */
   channel: string;
   /**
    * Email only (#2333): the turn is a reply on the thread of the approval email the run
@@ -563,7 +552,6 @@ export interface ScenarioCase {
     outboundContext: SeedOutboundEntry[];
     bullpen: SeedBullpenThread[];
     verifications: SeedVerification[];
-    principalIdentities: SeedPrincipalIdentity[];
     /** Standing tasks (#2312). */
     tasks: SeedTask[];
     /** Outreach rows (#2312). */

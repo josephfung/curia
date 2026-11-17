@@ -410,10 +410,11 @@ async function main(): Promise<void> {
     // The cases are written for Avery Testwell (principal-fixture.ts). A gate run on another
     // principal fails cases for the environment, not the code, so refuse it before any paid
     // call. A narrowed run only warns: authoring a case on the dev database is still useful.
-    const principalMismatch = principalFixtureMismatch(
-      principal?.displayName,
-      harness.stack.principalIdentities.filter(id => id.channel === 'email').map(id => id.channelIdentifier),
-    );
+    // The boot snapshot, which holds verified, active identities only: what the gateway and the
+    // prompts see, so a row the database has but the snapshot lacks does not count.
+    const snapshotIds = (channel: string) =>
+      harness.stack.principalIdentities.filter(id => id.channel === channel).map(id => id.channelIdentifier);
+    const principalMismatch = principalFixtureMismatch(principal?.displayName, snapshotIds('email'), snapshotIds('signal'));
     if (principalMismatch) {
       // --runs alone still runs every case, so it is not narrowing; a run marked as the
       // release gate is always strict.

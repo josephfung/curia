@@ -39,8 +39,6 @@ seed:
       kind: person
       channel: email
       identifier: leo@brandt.example.test
-  principal_identities:
-    - { channel: signal, identifier: "+15555550147" }
 inbound:
   from: principal
   channel: email

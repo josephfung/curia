@@ -9,6 +9,7 @@
 // delegation (#2027) that includes what the specialists write: their conversations,
 // the dispatch claims in pending_delegations, and changes to the run's entries.
 import { randomUUID } from 'node:crypto';
+import { SCENARIO_PRINCIPAL } from './principal-fixture.js';
 import type { PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
 import type { PinnedContextReader } from '../../src/agents/pinned-context.js';
 import { encodeResumeToken } from '../../src/agents/resume-token.js';
@@ -45,7 +46,7 @@ import type { PrincipalSendEntry } from '../../src/skills/principal-send/send-le
 import type { SendLevel } from '../../src/skills/principal-send/send-level.js';
 import type { DraftParticipant, MailboxDraft } from '../shared/tool-state.js';
 import type {
-  GatewayOutcome, ScenarioCase, SeedContact, SeedMailParty, SeedOutreach, SeedPinned, SeedPrincipalIdentity, SeedTask, SeedThreadMessage,
+  GatewayOutcome, ScenarioCase, SeedContact, SeedMailParty, SeedOutreach, SeedPinned, SeedTask, SeedThreadMessage,
 } from './types.js';
 
 /**
@@ -773,8 +774,6 @@ export interface SeededRun {
   entryIds: string[];
   threads: Map<string, { threadId: string; messageId: string; topic: string; participants: string[] }>;
   verificationIds: string[];
-  /** Principal identities this run added (seed.principal_identities), and only those. */
-  principalIdentityIds: string[];
   /** Seeded tasks (#2312); their outreach rows cascade with them. */
   taskIds: string[];
   /** Seeded outreach rows (#2312). */
@@ -791,54 +790,13 @@ export interface SeedDeps {
 const SCENARIO_VERIFICATION_ORIGIN = `${SCENARIO_ENTRY_ORIGIN}verification-`;
 
 /**
- * `contact_channel_identities.label` of every principal identity the suite adds. Cleanup
- * and the sweep delete only rows carrying it, so the principal's own identities survive.
- */
-export const SCENARIO_IDENTITY_LABEL = 'scenario-fixture (#2017)';
-
-/**
- * Give the principal `identity` for the run, unless they already have an active identity on
- * that channel (theirs is then used as it is). Returns the added row's id, or null when
- * nothing was added. A raw insert, not ContactService.linkIdentity: that refreshes the
- * principal's identity list every agent's prompt is built from, mid-suite, for every run.
- */
-export async function seedPrincipalIdentity(
-  pool: DbPool,
-  principalContactId: string,
-  identity: SeedPrincipalIdentity,
-): Promise<string | null> {
-  const existing = await pool.query<{ id: string }>(
-    `SELECT id FROM contact_channel_identities WHERE contact_id = $1 AND channel = $2 AND status = 'active'`,
-    [principalContactId, identity.channel],
-  );
-  if (existing.rows.length > 0) return null;
-  const added = await pool.query<{ id: string }>(
-    `INSERT INTO contact_channel_identities
-       (contact_id, channel, channel_identifier, label, verified, verified_at, source, status)
-     VALUES ($1, $2, $3, $4, true, now(), 'ceo_stated', 'active')
-     RETURNING id`,
-    [principalContactId, identity.channel, identity.identifier, SCENARIO_IDENTITY_LABEL],
-  );
-  return added.rows[0]!.id;
-}
-
-/** Remove principal identities a run added: only these ids, and only rows carrying the marker. */
-export async function removeSeededPrincipalIdentities(pool: DbPool, ids: string[]): Promise<void> {
-  if (ids.length === 0) return;
-  await pool.query(
-    `DELETE FROM contact_channel_identities WHERE id = ANY($1::uuid[]) AND label = $2`,
-    [ids, SCENARIO_IDENTITY_LABEL],
-  );
-}
-
-/**
  * Create the case's rows. On any failure, removes what it already created before
  * rethrowing, so a half-seeded run never leaks into the next.
  */
 export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<SeededRun> {
   const { stack, outboundContext, scope } = deps;
   const seeded: SeededRun = {
-    refs: new Map(), contacts: [], entryIds: [], threads: new Map(), verificationIds: [], principalIdentityIds: [],
+    refs: new Map(), contacts: [], entryIds: [], threads: new Map(), verificationIds: [],
     taskIds: [], outreachIds: [],
   };
   if (stack.principalContactId) seeded.refs.set('principal_contact_id', stack.principalContactId);
@@ -866,12 +824,6 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
     scope.principalThreads.set(t.id, t.messages.map((m) => principalThreadMessage(m, t.id, scope.principalAddress)));
   }
   try {
-    for (const identity of scenario.seed.principalIdentities) {
-      if (!stack.principalContactId) throw new Error('No principal contact in this database');
-      const added = await seedPrincipalIdentity(stack.pool, stack.principalContactId, identity);
-      if (added) seeded.principalIdentityIds.push(added);
-    }
-
     for (const contact of scenario.seed.contacts) {
       const created = await seedContact(stack, contact);
       seeded.contacts.push(created);
@@ -1192,9 +1144,6 @@ export async function sweepLeftovers(
   await count('bullpen_threads',
     `DELETE FROM bullpen_threads WHERE source_message_id LIKE $1`,
     [`${SCENARIO_THREAD_MARKER}%`]);
-  await count('principal_identities',
-    `DELETE FROM contact_channel_identities WHERE label = $1`,
-    [SCENARIO_IDENTITY_LABEL]);
   // Seeded verifications (scenario-origin-verification-…), and any opened in a run's conversation.
   await count('verifications',
     `DELETE FROM verifications WHERE conversation_id LIKE ANY($1::text[])`,
@@ -1228,14 +1177,25 @@ export async function sweepLeftovers(
   return removed;
 }
 
+/** The principal's Signal DM (harness.ts): every principal Signal turn runs in it. */
+export const PRINCIPAL_SIGNAL_CONVERSATION = `signal:${SCENARIO_PRINCIPAL.signal}`;
+
+/** Whether a case has a turn from the principal on Signal: its first inbound or its `then`. */
+export function hasPrincipalSignalTurn(scenario: ScenarioCase): boolean {
+  const { inbound } = scenario;
+  return (inbound.from === 'principal' && inbound.channel === 'signal') || inbound.then?.channel === 'signal';
+}
+
 /**
- * The `signal:<number>` conversations a through-gateway case's Signal third party replies in
- * (harness.ts names them so): one per Signal contact any loaded case seeds, selected or not,
- * so a sweep finds what an earlier selection's crashed run left.
+ * The `signal:<number>` conversations Signal turns run in (harness.ts names them so): one per
+ * Signal contact a through-gateway case seeds, and the principal's DM when a case has a
+ * principal Signal turn. Every loaded case counts, selected or not, so a sweep finds what an
+ * earlier selection's crashed run left.
  */
 export function fixtureSignalConversations(cases: readonly ScenarioCase[]): string[] {
   const ids = new Set<string>();
   for (const c of cases) {
+    if (hasPrincipalSignalTurn(c)) ids.add(PRINCIPAL_SIGNAL_CONVERSATION);
     if (c.throughGateway !== true) continue;
     for (const contact of c.seed.contacts) {
       if (contact.channel === 'signal') ids.add(`signal:${contact.identifier}`);
@@ -1259,9 +1219,11 @@ export function seedConflictKeys(scenario: ScenarioCase): string[] {
     // One pending verification per site (#2017). Every seeded row is opened as pending
     // before its status is set, so two runs seeding one site collide whatever the status.
     ...scenario.seed.verifications.map(v => `verification-site:${registrableDomain(v.site) ?? v.site.toLowerCase()}`),
-    // A principal identity a run adds is visible to every run while it lasts, and a second
-    // case adding one on the same channel could remove the first's mid-run.
-    ...scenario.seed.principalIdentities.map(p => `principal-identity:${p.channel}`),
+    // Every principal Signal turn runs in the one conversation, the principal's DM. Two runs in
+    // it at once would read each other's turns as history, join each other's live turn through
+    // the turn lanes (keyed by conversation), and one's start-of-turn cleanup would delete the
+    // other's rows. So those cases never run at once.
+    ...(hasPrincipalSignalTurn(scenario) ? [`conversation:${PRINCIPAL_SIGNAL_CONVERSATION}`] : []),
   ];
 }
 
@@ -1323,7 +1285,6 @@ export async function cleanupRun(
   if (verificationIds.length > 0) {
     await attempt(() => stack.pool.query(`DELETE FROM verifications WHERE id = ANY($1::uuid[])`, [verificationIds]));
   }
-  await attempt(() => removeSeededPrincipalIdentities(stack.pool, seeded.principalIdentityIds));
   const threadIds = [...seeded.threads.values()].map(t => t.threadId);
   if (threadIds.length > 0) {
     // Messages and read watermarks cascade.
@@ -1412,12 +1373,15 @@ export async function resolveSender(
     if (!stack.principalContactId) throw new Error('No principal contact in this database');
     // A real channel needs the principal's own identity on it, or the resolver would
     // treat the sender as a stranger and the case would test the wrong audience.
+    // A verified, active one, as the boot snapshot holds: a defunct row still resolves the
+    // contact but without principal standing, so sending from it tests an outsider.
     const identities = await stack.contactService.getIdentitiesForContact(stack.principalContactId);
-    const identity = identities.find(i => i.channel === channelId);
+    const identity = identities.find(i => i.channel === channelId && i.verified && i.status === 'active');
     if (!identity) {
       throw new Error(
         `Case '${scenario.name}' sends as the principal on '${channelId}', but the principal has no ` +
-        `${channelId} identity in this database. Use channel: cli, or a channel the principal has.`,
+        `verified, active ${channelId} identity in this database. Use channel: cli, or a channel the ` +
+        'principal has (the scenario principal has email and Signal: principal-fixture.ts).',
       );
     }
     return { channelId, senderId: identity.channelIdentifier };

@@ -963,14 +963,21 @@ export async function createScenarioHarness(
     if (typeof sender !== 'object' || !('channelId' in sender)) throw new Error('unreachable: inbound.then sender is not a channel sender');
     // A reply on the approval email's thread (#2333) joins that thread, as Nylas threads it.
     const approvalThread = turn.replyToApproval ? await approvalEmailThread(scope) : undefined;
-    // A Signal DM's conversation id is `signal:<target>` in production, and the one-to-one
-    // audience rule (audience.ts, contact recall) reads that prefix (#2588). The target is a
-    // per-run id, not the principal's number, which every case shares and runs at once.
+    // A Signal DM's conversation id is `signal:<number>` in production: the one-to-one audience
+    // rule (audience.ts, contact recall) reads the prefix (#2588), and the Signal adapter sends the
+    // reply to the number it names, so the gateway sees the principal as its only recipient. It
+    // was a per-run id once, and the gateway took the reply for an outsider's (47b). Cases with
+    // a principal Signal turn never run at once (seedConflictKeys), and the conversation starts
+    // clean, so one run's turns are never another's history.
     const conversationId = sender.channelId === 'email'
       ? `email:${approvalThread ?? `scenario-then-${randomUUID()}`}`
       : sender.channelId === 'signal'
-        ? `signal:scenario-then-${randomUUID()}`
+        ? `signal:${sender.senderId}`
         : `scenario-then-${randomUUID()}`;
+    // Unless the root turn is that same DM: its turns are this run's history.
+    if (sender.channelId === 'signal' && conversationId !== rootConversationId) {
+      await cleanupScenarioConversation(stack.pool, conversationId);
+    }
     scope.followOnConversations.add(conversationId);
     // The turn boundary (#2333): a delivery before it went out before the principal answered.
     scope.thenStartsAt = scope.deliveries.length;
@@ -1141,11 +1148,12 @@ export async function createScenarioHarness(
           ? `scheduler:scenario-${randomUUID()}:${randomUUID()}` // scheduler:<job>:<run>
           : typeof sender === 'object' && 'channelId' in sender && sender.channelId === 'email'
             ? `email:scenario-${randomUUID()}`
-            // A through-gateway Signal reply relays to the number the conversation names, as
-            // the adapter reads it (#2312). Third parties only: cases seeding one identity never
-            // run at once, while the principal's number is every case's.
-            : scenario.throughGateway && typeof sender === 'object' && 'channelId' in sender
-                && sender.channelId === 'signal' && scenario.inbound.from !== 'principal'
+            // A Signal reply relays to the number the conversation names, as the adapter reads it
+            // (#2312). A third party's only through the gateway. The principal's always, so the
+            // turn is a Signal DM to the principal's own number (principal-fixture.ts), as in
+            // production. Cases sharing a number never run at once (seedConflictKeys).
+            : typeof sender === 'object' && 'channelId' in sender && sender.channelId === 'signal'
+                && (scenario.inbound.from === 'principal' || scenario.throughGateway)
               ? `signal:${sender.senderId}`
               : `scenario-${randomUUID()}`;
       conversationId = runConversationId;

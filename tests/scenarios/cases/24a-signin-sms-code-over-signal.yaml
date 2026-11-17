@@ -10,8 +10,8 @@
 # code screen, typing fills it, and submitting lands on the policy page with the renewal
 # notice on it, so the errand can finish in this turn.
 #
-# The principal sends on Signal, so the case gives them a Signal identity for the run
-# (seed.principal_identities) when the database's principal has none.
+# The principal sends on Signal, from the scenario principal's Signal number
+# (tests/scenarios/principal-fixture.ts).
 name: signin sms code over signal
 description: >
   Earlier the principal asked Curia to get their home-policy renewal notice from their
@@ -24,8 +24,6 @@ description: >
 tags: [verification, signin, browser]
 stub_sets: [human-channels]
 seed:
-  principal_identities:
-    - { channel: signal, identifier: "+15555550142" }
   verifications:
     - key: otp
       site: example-insurer.ca

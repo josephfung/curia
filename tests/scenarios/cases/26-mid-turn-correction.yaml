@@ -37,8 +37,6 @@ tags: [turn-injection, signin, browser]
 release_gate: true
 stub_sets: [human-channels]
 seed:
-  principal_identities:
-    - { channel: signal, identifier: "+15555550199" }
   verifications:
     - key: otp
       site: example-benefits.ca
