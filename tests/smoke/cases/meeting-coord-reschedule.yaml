@@ -56,9 +56,10 @@ expected_behaviors:
     description: >
       Margaret is told, through a tool call that succeeded: either a calendar-update-event
       that moves the board chair check-in into next week with attendees notified (not
-      notifyAttendees false), or an email-send to Margaret's contact id offering the held or
-      new time(s). A failed call, or a reply or specialist report that only says she was
-      told, does not count
+      notifyAttendees false), or an email-send to Margaret's contact id offering time(s) that
+      are each held on the principal's calendar first by a calendar-create-hold (or
+      calendar-create-event) that succeeded. An emailed time with no successful hold behind it,
+      a failed call, or a reply or specialist report that only says she was told, does not count
     weight: critical
   - id: apologizes-in-tone
     description: >
@@ -76,3 +77,4 @@ failure_modes:
   - Asks the principal to choose between proposed times, or which slot they prefer
   - Moves or offers a time that conflicts with an event on the principal's calendar, or falls outside next week
   - Says Margaret was notified or the call was moved when no calendar update or email to her succeeded
+  - Emails Margaret times it never held on the principal's calendar

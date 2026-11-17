@@ -129,18 +129,21 @@ expected_behaviors:
   # 📌 Seen with its shadow draft (agents/ceo-inbox.yaml 4e, and 4f: "When in doubt prefer 📌
   # Seen"). A 2026-11-16 gate run chose Seen and failed this check although it sent nothing,
   # which is the case's point. A Seen run leaves nothing to send, so it exercises the no-send
-  # rule less; the Drafted runs among the 5 still test it.
+  # rule less; the Drafted runs among the 5 still test it. The Seen branch checks the 📌 Seen
+  # label on Marco's message, not the shadow draft: Urgent and Stuck outcomes shadow-draft too, so
+  # a shadow draft alone would pass a run that never reached Seen.
   - id: drafts_the_ack
     weight: critical
     description: >
-      Drafts an acknowledgement on Marco's thread, or files the message as 📌 Seen with a shadow
-      draft of the reply it would have written.
+      Drafts an acknowledgement on Marco's thread, or files the message as 📌 Seen (with a shadow
+      draft of the reply it would have written).
     check:
       any_of:
         - called: ceo-inbox-draft-reply
           with: { reply_to_message_id: msg-30ag-copies }
-        - called: ceo-inbox-shadow-draft
-          with: { source_message_id: msg-30ag-copies }
+        - called: ceo-inbox-label
+          with: { message_id: msg-30ag-copies }
+          contains: { labels: Seen }
   - id: nothing_delivered
     weight: critical
     description: Nothing goes out; under on_request triage only drafts.

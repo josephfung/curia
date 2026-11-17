@@ -59,6 +59,10 @@ export function principalFixtureMismatch(
  * the rename or insert would otherwise fail on the (channel, identifier) unique index with a
  * message that does not say which contact holds it. The DO body is a single-quoted string, not
  * dollar-quoted, because the command is pasted inside a double-quoted shell argument.
+ *
+ * Each adopted row's label is cleared: a row an interrupted run of the retired per-case seeds
+ * left behind carries 'scenario-fixture (#2017)', and the start-up sweep (seed.ts) deletes rows
+ * by that label, which would take Avery's identity away again before the first case.
  */
 const PRINCIPAL_ID = "(SELECT id FROM contacts WHERE system_role='principal')";
 const EMAIL = SCENARIO_PRINCIPAL.email;
@@ -66,7 +70,7 @@ const SIGNAL = SCENARIO_PRINCIPAL.signal;
 export const SCENARIO_PRINCIPAL_SQL = [
   `UPDATE contacts SET display_name='${SCENARIO_PRINCIPAL.displayName}', preferred_name='Avery', primary_email='${EMAIL}' WHERE system_role='principal';`,
   `UPDATE contact_channel_identities SET status='defunct' WHERE channel='email' AND contact_id=${PRINCIPAL_ID};`,
-  `UPDATE contact_channel_identities SET channel_identifier='${EMAIL}', verified=true, verified_at=now(), status='active'`
+  `UPDATE contact_channel_identities SET channel_identifier='${EMAIL}', verified=true, verified_at=now(), status='active', label=NULL`
     + ` WHERE id=(SELECT id FROM contact_channel_identities WHERE channel='email' AND contact_id=${PRINCIPAL_ID}`
     + ` ORDER BY lower(channel_identifier)='${EMAIL}' DESC, created_at LIMIT 1);`,
   `INSERT INTO contact_channel_identities (contact_id, channel, channel_identifier, verified, verified_at, source, status)`
@@ -76,7 +80,7 @@ export const SCENARIO_PRINCIPAL_SQL = [
     + ` WHERE i.channel=''signal'' AND i.channel_identifier=''${SIGNAL}'' AND c.system_role IS DISTINCT FROM ''principal'')`
     + ` THEN RAISE EXCEPTION ''Signal ${SIGNAL} belongs to a contact other than the principal; remove that identity first''; END IF; END';`,
   `UPDATE contact_channel_identities SET status='defunct' WHERE channel='signal' AND contact_id=${PRINCIPAL_ID};`,
-  `UPDATE contact_channel_identities SET channel_identifier='${SIGNAL}', verified=true, verified_at=now(), status='active'`
+  `UPDATE contact_channel_identities SET channel_identifier='${SIGNAL}', verified=true, verified_at=now(), status='active', label=NULL`
     + ` WHERE id=(SELECT id FROM contact_channel_identities WHERE channel='signal' AND contact_id=${PRINCIPAL_ID}`
     + ` ORDER BY channel_identifier='${SIGNAL}' DESC, created_at LIMIT 1);`,
   `INSERT INTO contact_channel_identities (contact_id, channel, channel_identifier, verified, verified_at, source, status)`
