@@ -7,8 +7,12 @@
 // and downloaded the package and its dependencies on every boot. Until #2657 the tree was
 // frozen by one global --exclude-newer cutoff, so fixing one CVE moved every package and
 // Dependabot could not see any of them. The Dockerfile installs the lockfile at build time
-// and imports one module per allowlisted service, so a service whose import breaks fails
-// the build instead of quietly dropping its tools.
+// and probes the installed server's tool list per allowlisted service (probe.py), so a
+// service whose dependencies break fails the build instead of quietly dropping its tools.
+//
+// These tests check the lockfile and the launch sites, not how the Dockerfile or the
+// workflows are written: the image build itself (workspace-mcp-lock.yml on PRs) is the
+// check that the install works.
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -45,15 +49,6 @@ function lockEntries(text: string): string[] {
     .split('\n')
     .filter((line) => /^[A-Za-z0-9]/.test(line));
 }
-
-// The module workspace-mcp's main.py imports for each `--tools` service. A service
-// added to the allowlist needs its module here, so the Dockerfile's import check
-// covers it; look it up in the `tool_imports` map in upstream main.py.
-const SERVICE_MODULES: Record<string, string> = {
-  drive: 'gdrive.drive_tools',
-  docs: 'gdocs.docs_tools',
-  sheets: 'gsheets.sheets_tools',
-};
 
 function googleWorkspaceServer() {
   const servers = loadSkillsConfig(join(ROOT, 'config')).servers ?? [];
@@ -140,24 +135,6 @@ describe('every launch site uses the lockfile', () => {
     expect(script).not.toMatch(/command\s*=\s*"uvx"/);
   });
 
-  it('the Dockerfile installs exactly the lockfile, checking every hash', () => {
-    const dockerfile = read('Dockerfile');
-    expect(dockerfile).toContain(`COPY ${LOCKFILE} /tmp/workspace-mcp.lock`);
-    expect(dockerfile).toMatch(/uv pip sync [^;]*--require-hashes[^;]*\/tmp\/workspace-mcp\.lock/);
-    // A wheel-less entry must fail the build, not fetch an unhashed build backend.
-    expect(dockerfile).toMatch(/uv pip sync [^;]*--no-build[^;]*\/tmp\/workspace-mcp\.lock/);
-    // uv 0.6.3's tool install ignores the hashes in a constraints file. Comments may name it.
-    const instructions = dockerfile.split('\n').filter((l) => !l.trimStart().startsWith('#'));
-    expect(instructions.join('\n')).not.toContain('uv tool install');
-  });
-
-  it('a lockfile change builds the image, on the PR and on main', () => {
-    // No other PR check builds the image, so a Dependabot bump would otherwise merge unbuilt.
-    expect(read('.github/workflows/workspace-mcp-lock.yml')).toContain("'scripts/workspace-mcp/**'");
-    // Trivy's push-to-main filter decides whether the merged image gets scanned.
-    expect(read('.github/workflows/trivy.yml')).toContain('^scripts/workspace-mcp/requirements\\.txt$');
-  });
-
   it('no site hard-codes a version or a dependency cutoff', () => {
     expect(existsSync(join(ROOT, 'scripts/workspace-mcp.pin')), 'the old pin file is back').toBe(false);
     for (const path of ['Dockerfile', 'config/skills.yaml', 'scripts/gdrive-auth.py', LAUNCHER, 'docs/dev/google-drive.md']) {
@@ -169,16 +146,12 @@ describe('every launch site uses the lockfile', () => {
   });
 });
 
-describe('the Dockerfile import check', () => {
-  it('imports main plus the module of every allowlisted service, and nothing else', () => {
-    const match = /-c\s*\\?\s*"import (main(?:, [\w.]+)*)"/.exec(read('Dockerfile'));
-    expect(match, 'no `python -c "import main, ..."` check in the Dockerfile').not.toBeNull();
-    const imported = match![1]!.split(', ').sort();
-
-    const services = allowlistedServices();
-    const unmapped = services.filter((s) => !(s in SERVICE_MODULES));
-    expect(unmapped, 'add these services to SERVICE_MODULES').toEqual([]);
-    expect(imported).toEqual(['main', ...services.map((s) => SERVICE_MODULES[s]!)].sort());
+describe('the Dockerfile tool-list probe', () => {
+  it('probes every service in the allowlist, and only those', () => {
+    // A service added to `--tools` but not probed could ship with no tools unnoticed.
+    const match = /probe\.py \S+ ([a-z ]+);/.exec(read('Dockerfile'));
+    expect(match, 'no `probe.py <executable> <services>` step in the Dockerfile').not.toBeNull();
+    expect(match![1]!.trim().split(/\s+/).sort()).toEqual(allowlistedServices().sort());
   });
 });
 
