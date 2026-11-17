@@ -57,8 +57,8 @@ importers:
         specifier: ^11.2.2
         version: 11.2.2
       '@fastify/static':
-        specifier: ^10.1.8
-        version: 10.1.8
+        specifier: ^10.1.10
+        version: 10.1.10
       '@ghostery/adblocker-playwright':
         specifier: ^2.20.3
         version: 2.20.3(playwright@1.64.1)
@@ -1142,8 +1142,8 @@ packages:
   '@fastify/send@4.2.1':
     resolution: {integrity: sha512-zOB8L9z444PnGbd1Nd7gNXPz/7bnDR8Z4KNTNSwLVQuE3cTGsU9qUj1N4SjXKK0Tq4cauZYTwB+tqvlqosuKsw==}
 
-  '@fastify/static@10.1.8':
-    resolution: {integrity: sha512-3CbgWOXJX8f46xxsuOgQl9h0lyQQiABMG40kxRF5PWJk4LyBW5m3mLZoW5glnm2TUTC1gVFCBnqOt5S6zIIIrg==}
+  '@fastify/static@10.1.10':
+    resolution: {integrity: sha512-CGwOoZiKg5m4SAqeiS8bzCSKDa71DMFQ7QeVsuWBOrfFu32DpVZWFFb0cpEg7e54YK6HZZsl4g/wfoKMnRQMUw==}
 
   '@ghostery/adblocker-content@2.20.3':
     resolution: {integrity: sha512-tuV4T5wPbfVdcY6dnM1dfaXSazpStx7ZI54bd2l9r93yPZfZoVsHR1Uxf/A8ETBMXJPQ92JMDQzmV8hOgpyq+w==}
@@ -4428,8 +4428,8 @@ packages:
     resolution: {integrity: sha512-vpLQEs+VLCr1nU0BXS07maYoFwlDAH0gngQuuttxIwutDFEMHq2blX+8vpgxDdK3J1PwjCJiep77OitTZ4Ll1A==}
     engines: {node: 18 || 20 || >=22}
 
-  minimatch@11.0.8:
-    resolution: {integrity: sha512-nFQuYSTVrGvysVBps5Ih+0BdnYFN/Cj3C816r6+p7yK+FHrVLGE4O4N9AFwykrlNlvM2HYt+Rad1Uiro6h88Ig==}
+  minimatch@11.0.9:
+    resolution: {integrity: sha512-KCFkfyjqerNlSstjlhIGNXIKZGA/6O4V4RlhZ+Dsr621SPPw0mzlypE9D9ZOoPiVefHID+j7/XuMMlqfD/F60Q==}
     engines: {node: 20 || >=22}
 
   minimatch@3.1.5:
@@ -7085,7 +7085,7 @@ snapshots:
       http-errors: 2.0.1
       mime: 3.0.0
 
-  '@fastify/static@10.1.8':
+  '@fastify/static@10.1.10':
     dependencies:
       '@fastify/accept-negotiator': 2.1.2
       '@fastify/error': 4.2.1
@@ -9653,7 +9653,7 @@ snapshots:
 
   glob@14.0.6:
     dependencies:
-      minimatch: 11.0.8
+      minimatch: 11.0.9
       minipass: 7.1.3
       path-scurry: 3.0.0
 
@@ -10338,7 +10338,7 @@ snapshots:
     dependencies:
       brace-expansion: 5.0.13
 
-  minimatch@11.0.8:
+  minimatch@11.0.9:
     dependencies:
       '@isaacs/nonrecursive-glob-match': 1.1.0
       brace-expansion: 5.0.13
