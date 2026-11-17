@@ -5,7 +5,7 @@
 # and overrides only what is set here. Without it, this file would replace the UI settings
 # and reset everything it doesn't name to the defaults.
 #
-# What reviewers should and shouldn't raise: docs/dev/reviewing.md.
+# Where reviewers start (standards, how to weigh findings, reviewing tests): docs/dev/reviewing.md.
 inheritance: true
 
 tone_instructions: >-
@@ -15,6 +15,7 @@ tone_instructions: >-
 knowledge_base:
   code_guidelines:
     filePatterns:
+      - CLAUDE.md
       - docs/dev/reviewing.md
       - docs/dev/review-checklist.md
       - docs/dev/principles.md
