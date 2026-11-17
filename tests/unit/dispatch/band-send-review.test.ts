@@ -537,33 +537,39 @@ describe('BandSendReview', () => {
     }
   });
 
-  it('keeps the held entry when a reviewer failure on the resend would have cleared it', async () => {
-    const { svc } = make([
+  it('does not review a resend of the held draft again, so a judge failure or pass cannot raise a second approval or send it twice', async () => {
+    const { svc, review } = make([
       { ...clean, unsupportedClaims: [CLAIM] },
       { ...clean, unsupportedClaims: [CLAIM] },
       { ...clean, unsupportedClaims: [CLAIM] },
       { ok: false, failure: 'unreachable' },
-      { ...clean, unsupportedClaims: [CLAIM] },
+      clean,
     ]);
     await svc.review(base);
     await svc.review(base);
     await svc.review(base);
     expect(await svc.review(base)).toMatchObject({ kind: 'block', alreadyHeld: true });
-    expect(await svc.review(base)).toMatchObject({ kind: 'block', alreadyHeld: true });
+    // Re-spaced, it is still the same message.
+    expect(await svc.review({ ...base, content: `  ${base.content.replace(/ /g, '  ')}\n` })).toMatchObject({ kind: 'block', alreadyHeld: true });
+    expect(review).toHaveBeenCalledTimes(3);
   });
 
-  it('lets a clean message through after a hold, and the held entry stays', async () => {
+  it('reviews a different message to the same recipients on its own after a hold: it can bounce, or send', async () => {
     const { svc } = make([
       { ...clean, unsupportedClaims: [CLAIM] },
       { ...clean, unsupportedClaims: [CLAIM] },
       { ...clean, unsupportedClaims: [CLAIM] },
-      clean,
       { ...clean, unsupportedClaims: [CLAIM] },
+      clean,
     ]);
     await svc.review(base);
     await svc.review(base);
     await svc.review(base);
-    expect((await svc.review(base)).kind).toBe('send');
+    const other = { ...base, content: 'A different message about Thursday.' };
+    // Its own first finding is a bounce, not the earlier draft's hold.
+    expect((await svc.review(other)).kind).toBe('bounce');
+    expect((await svc.review(other)).kind).toBe('send');
+    // The held draft is still held.
     expect(await svc.review(base)).toMatchObject({ kind: 'block', alreadyHeld: true });
   });
 

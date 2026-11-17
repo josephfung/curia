@@ -89,6 +89,7 @@
 // dirty attempt blocks again; a hold (below 80) clears it, because the principal now decides
 // and a later draft on the same key starts a fresh cycle with its own bounce.
 
+import { createHash } from 'node:crypto';
 import type { Logger } from '../logger.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 import { replyTargetEvidence, reportEvidence, threadEvidence, type CollectedEvidence, type SendEvidenceCollector } from '../autonomy/send-evidence.js';
@@ -276,6 +277,8 @@ export interface BandSendReviewDeps {
 export class BandSendReview {
   /** `rules`: what the draft bounced or was blocked for, so a recheck hold can say so. */
   private readonly bounced = new Map<string, LedgerEntry>();
+  /** Drafts a repeated block held for the principal (SF-4), by draft key and content fingerprint. */
+  private readonly held = new Map<string, HeldEntry>();
   private readonly now: () => number;
 
   constructor(private readonly deps: BandSendReviewDeps) {
@@ -284,25 +287,23 @@ export class BandSendReview {
 
   async review(input: BandReviewInput): Promise<BandReviewDecision> {
     const key = this.draftKey(input);
+    const held = this.heldDraft(key, draftFingerprint(input));
+    if (held) return this.alreadyHeld(held, input);
     const prior = this.priorBounce(key);
-    const decision = await this.reviewDraft(input, key, prior);
-    return prior?.held === true ? this.keepHeld(key, prior, decision, input) : decision;
+    return this.reviewDraft(input, key, prior);
   }
 
   /**
-   * A resend after this draft's repeated block was held for the principal (SF-4). The hold's
-   * approval is still pending, and a coordinator that resends the same draft would otherwise
-   * cycle bounce, block, hold and raise a fresh approval each time. Whatever the review
-   * decided, the held entry is put back (its time unchanged, so it ends with the TTL, measured
-   * from the hold). Anything short of a send is the existing hold: an alreadyHeld block the
-   * gateway refuses without a new approval. A clean send goes out: it is a different message
-   * the review passed, and holding it would stop every reply to these recipients for the
-   * TTL. Restoring the entry also undoes the paths that delete it (a reviewer failure, a hold).
+   * A resend of a draft whose repeated block was held for the principal (SF-4): the same subject
+   * and text to the same recipients in the same conversation, within the TTL of the hold. Its
+   * approval is still pending, and a coordinator that resends it would otherwise cycle bounce,
+   * block, hold and raise a fresh approval each time, or, should the judge pass it this time,
+   * send it beside the pending approval (sent twice once approved). So it is not reviewed again:
+   * an alreadyHeld block the gateway refuses without a new approval. A different message to the
+   * same recipients is not this hold; it gets its own review, and its own approval if it needs one.
    */
-  private keepHeld(key: string, held: LedgerEntry, decision: BandReviewDecision, input: BandReviewInput): BandReviewDecision {
-    this.bounced.set(key, held);
-    if (decision.kind === 'send') return decision;
-    this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel, other: decision.kind }, 'band review: resend of a draft already held for the principal — no new hold');
+  private alreadyHeld(held: HeldEntry, input: BandReviewInput): BandReviewDecision {
+    this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel, rules: held.rules }, 'band review: resend of a draft already held for the principal — not reviewed, no new hold');
     return {
       kind: 'block',
       reason: ALREADY_HELD_REASON,
@@ -745,9 +746,11 @@ export class BandSendReview {
       // review rejects. Another block only invites another retry: a coordinator that kept
       // retrying looped 8-20 times in one turn, until maxTurns or a timeout. So the principal
       // decides: the gateway turns this block into a hold, as it does for a relayed reply. The
-      // entry stays, marked held (SF-4): a resend of the same draft is that hold, not a fresh
-      // bounce, block and second approval (see keepHeld). It ends with the TTL.
-      this.bounced.set(key, { taskEventIds: taskIds, at: this.now(), rules: decision.findings.map((f) => f.rule), blocked: true, held: true });
+      // draft is remembered as held (SF-4): a resend of the same draft is that hold, not a fresh
+      // bounce, block and second approval (see alreadyHeld). It ends with the TTL. The bounce
+      // ledger is cleared, so a different message to these recipients starts its own review.
+      this.bounced.delete(key);
+      this.held.set(heldKey(key, draftFingerprint(input)), { at: this.now(), rules: decision.findings.map((f) => f.rule) });
       this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel, rules: decision.findings.map((f) => f.rule) }, 'band review: blocked again after a block — holding for the principal');
       return { ...decision, repeated: true };
     }
@@ -918,6 +921,18 @@ export class BandSendReview {
   private draftKey(input: BandReviewInput): string {
     const who = [...input.recipients].map((r) => r.toLowerCase()).sort().join(',');
     return `${input.conversationId ?? input.taskEventId ?? ''}|${input.channel}|${who}`;
+  }
+
+  /** The hold this exact draft is already under (SF-4), or undefined; expired entries are dropped. */
+  private heldDraft(key: string, fingerprint: string): HeldEntry | undefined {
+    const k = heldKey(key, fingerprint);
+    const entry = this.held.get(k);
+    if (!entry) return undefined;
+    if (this.now() - entry.at > BOUNCE_TTL_MS) {
+      this.held.delete(k);
+      return undefined;
+    }
+    return entry;
   }
 
   private priorBounce(key: string): LedgerEntry | undefined {
@@ -1225,11 +1240,24 @@ function rulesOnEach(rulings: readonly DisclosureRuling[] | undefined, items: re
   return ids.size === items.length && items.every((i) => ids.has(i.id));
 }
 
+/** `blocked`: the drafter has already had a block after its one bounce (see settle()). */
+type LedgerEntry = { taskEventIds: string[]; at: number; rules: string[]; blocked?: true };
+
+/** A draft a repeated block held for the principal (SF-4; see alreadyHeld()): when, and for what. */
+type HeldEntry = { at: number; rules: string[] };
+
 /**
- * `blocked`: the drafter has already had a block after its one bounce (see settle()).
- * `held`: a repeated block was then held for the principal (SF-4; see keepHeld()).
+ * The draft's content as a held entry matches it: subject and body, whitespace collapsed (a resend
+ * re-wrapped or re-spaced is the same message). Hashed, so the ledger keeps no message text.
  */
-type LedgerEntry = { taskEventIds: string[]; at: number; rules: string[]; blocked?: true; held?: true };
+function draftFingerprint(input: Pick<BandReviewInput, 'subject' | 'content'>): string {
+  const norm = (s: string): string => s.replace(/\s+/g, ' ').trim();
+  return createHash('sha256').update(`${norm(input.subject ?? '')}\n${norm(input.content)}`).digest('hex');
+}
+
+function heldKey(draftKey: string, fingerprint: string): string {
+  return `${draftKey}|${fingerprint}`;
+}
 
 /** What a resend of a draft already held for the principal is told (SF-4). */
 export const ALREADY_HELD_REASON = 'Not sent: this message is already held for the principal\'s approval from an earlier attempt, and no new approval was raised. Don\'t send it again; tell the principal it is waiting on them.';
