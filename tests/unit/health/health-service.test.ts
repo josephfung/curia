@@ -817,6 +817,13 @@ describe('HealthService embeddings canary: endpoint weight drift (#2023)', () =>
     expect(logged.some((m: string) => m.includes('pnpm reembed:kg --force'))).toBe(true);
   });
 
+  it('keeps the canary failed when a later check reads same after an earlier change', async () => {
+    const { kg, result } = await canary('same', ['fail', 'weights_changed']);
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('pnpm reembed:kg --force');
+    expect(kg.get()).toEqual({ result: 'fail', reason: 'weights_changed' });
+  });
+
   it('shifted and unchecked keep the canary ok and set the matching ok reason', async () => {
     const shifted = await canary('shifted');
     expect(shifted.result.status).toBe('ok');
