@@ -11,10 +11,11 @@ official hosted Workspace MCP server.
 Google's hosted Workspace MCP server is not yet available. In the meantime, Curia
 uses [`taylorwilsdon/google_workspace_mcp`](https://github.com/taylorwilsdon/google_workspace_mcp)
 as a local stdio subprocess — the MCP loader spawns it via `scripts/workspace-mcp.sh`
-and communicates over stdin/stdout. That launcher runs the version pinned in
-`scripts/workspace-mcp.pin` (#2010): the Docker image installs it at build time, so
-the container never fetches it from PyPI, and anywhere else (`pnpm dev`,
-`scripts/gdrive-auth.py`) it runs through `uvx` at the same pin. See
+and communicates over stdin/stdout. That launcher runs the version and dependency
+tree locked in `scripts/workspace-mcp/requirements.txt` (#2010, #2657). The Docker
+image installs that lockfile at build time, so the container never fetches anything
+from PyPI. Anywhere else (`pnpm dev`, `scripts/gdrive-auth.py`), it runs through
+`uvx`, constrained to the same lockfile. See
 [Bumping workspace-mcp](#bumping-workspace-mcp).
 
 This gives Curia access to Drive, Sheets and Docs using OAuth 2.0 as Curia's own
@@ -226,23 +227,41 @@ security settings, then repeat Step 5.
 
 ## Bumping workspace-mcp
 
-The version and the dependency cutoff live in `scripts/workspace-mcp.pin`, and
-nowhere else. Bump them together, in the same edit:
+workspace-mcp and its whole dependency tree are pinned in two files in
+`scripts/workspace-mcp/`, and nowhere else:
 
-- `WORKSPACE_MCP_VERSION` is the exact release. It pins one package only.
-- `WORKSPACE_MCP_EXCLUDE_NEWER` is passed to uv as `--exclude-newer`. uv ignores
-  every distribution uploaded after it, so fastmcp, mcp and the Google client
-  libraries resolve the same way on every rebuild. The image's uv supports only
-  this single global cutoff, which applies to workspace-mcp too, so it must fall
-  **after** the new release's upload time. Otherwise the pin cannot resolve and
-  the image build fails.
+- `requirements.in` names the one direct requirement: workspace-mcp at an exact
+  release.
+- `requirements.txt` is compiled from it. It's the lockfile, with every package
+  (fastmcp, mcp, the Google client libraries, ...) at an exact version, with hashes.
+  The image installs it with `uv pip sync --require-hashes`, so a rebuild gets the
+  same tree byte for byte, and a package missing from it fails the build.
 
-To bump:
+workspace-mcp declares every dependency open-ended (`>=`), so without the lockfile
+each rebuild would pick up whatever PyPI has that day, new majors included.
 
-1. Find the release's upload time on PyPI
-   (`curl -s https://pypi.org/pypi/workspace-mcp/<version>/json | jq '.urls[].upload_time_iso_8601'`)
-   and set the cutoff a little after it (e.g. the next midnight UTC).
-2. Update both lines in `scripts/workspace-mcp.pin`.
+**Security fixes arrive as Dependabot PRs.** `.github/dependabot.yml` watches this
+directory with the `uv` ecosystem, for security updates only. A PR for a vulnerable
+package recompiles the lockfile with just that package upgraded (`uv pip compile -P
+<package>`), and the dependabot merge agent handles it like any other bump. No
+version updates are opened: the tree moves only for a CVE or a deliberate bump.
+
+**To bump workspace-mcp itself,** or to refresh the whole tree on purpose:
+
+1. Change the version in `requirements.in`.
+2. Recompile from inside the directory, so the header records the command
+   Dependabot replays:
+
+   ```sh
+   cd scripts/workspace-mcp
+   uv pip compile --universal --python-version 3.13 --generate-hashes \
+     requirements.in -o requirements.txt
+   ```
+
+   uv keeps every version already in `requirements.txt` that still satisfies the new
+   release, and moves only what it must. Add `--upgrade` to refresh everything. Then
+   read the diff for majors. `--python-version` is the image's Debian python3; change
+   it only together with the image.
 3. Build the image (`docker build .`). The build imports `main` and the module of
    each `--tools` service, so a broken dependency or a service that no longer
    loads fails here, not at boot. If the allowlist changes, update the import
@@ -250,6 +269,7 @@ To bump:
    `tests/unit/config.workspace-mcp-pin.test.ts`.
 4. Start the server and compare its `tools/list` with the previous version's.
    Upstream renames and drops tools between releases, majors in particular.
+   curia-deploy's `pnpm check-mcp-drift` does this against its snapshots.
 
 ---
 

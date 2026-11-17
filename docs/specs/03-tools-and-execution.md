@@ -361,7 +361,7 @@ Apart from Google Workspace, these are not bundled but documented as recommended
 
 | Server | Purpose | Link |
 |---|---|---|
-| **Google Workspace** | Drive, Docs, Sheets only (#1957). **Shipped** in `config/skills.yaml` (stdio), version pinned in the image via `scripts/workspace-mcp.pin` (#2010); agents load it on demand with `skill-activate` (#2024) | [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp) |
+| **Google Workspace** | Drive, Docs, Sheets only (#1957). **Shipped** in `config/skills.yaml` (stdio), version and dependencies locked in the image via `scripts/workspace-mcp/requirements.txt` (#2010, #2657); agents load it on demand with `skill-activate` (#2024) | [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp) |
 | **Filesystem** | Scoped file access (read/write/search) | [modelcontextprotocol/servers/filesystem](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem) |
 | **GitHub** | Repo management, issues, PRs | [modelcontextprotocol/servers/github](https://github.com/modelcontextprotocol/servers/tree/main/src/github) |
 | **Brave Search** | Web search for research agents | [modelcontextprotocol/servers/brave-search](https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search) |

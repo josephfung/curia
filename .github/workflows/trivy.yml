@@ -66,8 +66,9 @@ jobs:
           # Push to main: only build+scan the image when a file that actually
           # changes the built image was touched — the base image / runtime pins
           # (Dockerfile), the package-manager pin or workspace manifests
-          # (package.json), the dependency lockfile (pnpm-lock.yaml), or the
-          # dependency overrides where CVE pins live (pnpm-workspace.yaml).
+          # (package.json), the dependency lockfile (pnpm-lock.yaml), the
+          # dependency overrides where CVE pins live (pnpm-workspace.yaml), or the
+          # workspace-mcp Python lockfile the image installs (#2657).
           # github.event.before is all-zeros for a brand-new branch or after a
           # force-push/history rewrite; when we cannot compute a reliable diff,
           # fail safe and run the scan.
@@ -86,7 +87,7 @@ jobs:
           # Match the relevant files at the repo root or in any nested workspace
           # package (e.g. apps/console/package.json). `*.Dockerfile` and the browser
           # entrypoint cover the curia-browser image (#2541).
-          if echo "$changed" | grep -qE '(^|/)([^/]*Dockerfile|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^docker/browser-entrypoint\.sh$'; then
+          if echo "$changed" | grep -qE '(^|/)([^/]*Dockerfile|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^docker/browser-entrypoint\.sh$|^scripts/workspace-mcp/requirements\.txt$'; then
             echo "image=true" >> "$GITHUB_OUTPUT"
           else
             echo "image=false" >> "$GITHUB_OUTPUT"
@@ -130,7 +131,7 @@ jobs:
     # `changes` job decides: it runs on the weekly schedule, on manual dispatch
     # (for on-demand fix verification), and on a push to main that touches a file
     # affecting the built image (Dockerfile / package.json / pnpm-lock.yaml /
-    # pnpm-workspace.yaml). This closes the gap where a dependency/base-image CVE
+    # pnpm-workspace.yaml / scripts/workspace-mcp/requirements.txt). This closes the gap where a dependency/base-image CVE
     # fix could sit unverified for up to a week between the weekly scans.
     #
     # Fail-safe gate: run UNLESS the decider explicitly said 'false'. An empty

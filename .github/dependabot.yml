@@ -65,6 +65,24 @@ updates:
         patterns:
           - "*"
 
+  # workspace-mcp's Python dependency tree: the hash-pinned lockfile
+  # scripts/workspace-mcp/requirements.txt, compiled by `uv pip compile` from
+  # requirements.in (#2657). The `uv` ecosystem recompiles it with the options in its
+  # header, upgrading only the one package (`-P`), so a CVE fix moves that package
+  # alone. Security updates only: open-pull-requests-limit 0 turns off version updates,
+  # which would otherwise move the tree weekly and bring in majors workspace-mcp never
+  # tested (its dependencies are all open-ended). Security updates have their own limit
+  # and bypass the cooldown. To move the tree on purpose, see docs/dev/google-drive.md
+  # ("Bumping workspace-mcp").
+  - package-ecosystem: "uv"
+    directory: "/scripts/workspace-mcp"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 0
+
   # Docker base images — the root Dockerfile (node:26-slim, digest-pinned).
   # Without this ecosystem the base image was never tracked and silently drifted
   # (prod ended up on node 26 Current via curia-deploy#87). Dependabot keeps the

@@ -33,7 +33,8 @@ from mcp.client.stdio import stdio_client
 SERVICES = ["drive", "docs", "sheets"]
 
 # Same launcher as config/skills.yaml, so the tokens are minted by the pinned
-# version (scripts/workspace-mcp.pin, #2010) rather than whatever PyPI has today.
+# version (scripts/workspace-mcp/requirements.txt, #2010, #2657) rather than whatever
+# PyPI has today.
 LAUNCHER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace-mcp.sh")
 
 

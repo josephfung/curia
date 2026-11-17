@@ -1,0 +1,40 @@
+name: workspace-mcp lock
+
+# Build the image on any PR that changes the workspace-mcp lockfile (#2657).
+#
+# No other PR check builds the image: CI runs the unit tests, which only read the
+# lockfile, and Trivy builds only on pushes to main. So without this, a Dependabot `uv`
+# bump (or a hand edit) would merge first and break its install or import check on main.
+# The Dockerfile's workspace-mcp step installs the lock with every hash checked, then
+# imports main and each allowlisted service's module, so a green build here means the
+# locked tree installs and loads. The dependabot merge agent treats any failing check as
+# blocking, so a red build here stops the merge.
+#
+# It builds the whole image: the step needs the runtime stage's Debian python3 and uv, and
+# a copy of those steps here would drift from the Dockerfile. These PRs are rare.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/workspace-mcp/**'
+
+concurrency:
+  group: workspace-mcp-lock-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-image:
+    name: Build image with the workspace-mcp lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build Docker image
+        run: docker build -t curia:workspace-mcp-lock .

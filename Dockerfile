@@ -167,19 +167,27 @@ COPY docker/pnpm-retry.sh /usr/local/bin/pnpm-retry
 # (uv's cache lives under $HOME, which is not a volume), and one network error there
 # lost every Workspace tool until the next restart (curia-deploy#181).
 #
-# The version and the --exclude-newer cutoff come from scripts/workspace-mcp.pin, the
-# one place core defines them. scripts/workspace-mcp.sh, which config/skills.yaml
-# launches, runs this install whenever it is present. The cutoff freezes the whole
-# dependency tree, not just workspace-mcp.
+# The whole dependency tree, workspace-mcp included, comes from the hash-pinned lockfile
+# scripts/workspace-mcp/requirements.txt (#2657), the one place core defines it.
+# scripts/workspace-mcp.sh, which config/skills.yaml launches, runs this install whenever
+# it is present.
 #
-# Fixed paths, not $HOME: the build runs as root and the server as curia, so
-# UV_TOOL_DIR/UV_TOOL_BIN_DIR put the venv and its shim under /opt/uv, root-owned and
-# world-readable. The shim execs the venv's python by absolute path, so it needs
+# `uv pip sync --require-hashes` into a plain venv, not `uv tool install`: uv 0.6.3's
+# tool install ignores the hashes in a constraints file, while sync checks every one and
+# installs exactly the lockfile (minus the packages whose markers exclude Linux), with no
+# unlisted dependency resolved on the side. --no-build: a source-only release would pull
+# its build backend unpinned and unhashed, so a lock entry without a wheel fails the build
+# instead. --no-config: no stray uv.toml can change the index.
+#
+# Fixed paths, not $HOME: the build runs as root and the server as curia, so the venv
+# goes under /opt/uv/tools and the shim under /opt/uv/bin, root-owned and
+# world-readable (the layout `uv tool install` used, which curia-deploy's image and its
+# alerts refer to). The entry point execs the venv's python by absolute path, so it needs
 # neither uv nor the network. UV_PYTHON_DOWNLOADS=never fails the build rather than
 # quietly fetching a CPython if the Debian python3 above ever goes missing.
 #
 # Then fail the build, not the boot:
-#   - `test -x`: uv can exit 0 without the shim the launcher looks for.
+#   - `test -x`: the shim the launcher looks for.
 #   - the imports: workspace-mcp's main.py catches ModuleNotFoundError per service,
 #     logs it and starts without that service's tools. The MCP handshake still
 #     succeeds, so the zero-tool alert (#1500) never fires. Import main plus the module
@@ -187,16 +195,18 @@ COPY docker/pnpm-retry.sh /usr/local/bin/pnpm-retry
 #     tests/unit/config.workspace-mcp-pin.test.ts keeps this list in step. Importing
 #     main creates $HOME/.google_workspace_mcp/logs, hence the throwaway HOME.
 # Only the install is wrapped in pnpm-retry: retrying an assertion defeats it.
-COPY scripts/workspace-mcp.pin /tmp/workspace-mcp.pin
+COPY scripts/workspace-mcp/requirements.txt /tmp/workspace-mcp.lock
 RUN set -eu; \
-    . /tmp/workspace-mcp.pin; \
-    UV_TOOL_DIR=/opt/uv/tools UV_TOOL_BIN_DIR=/opt/uv/bin UV_PYTHON_DOWNLOADS=never \
-      pnpm-retry uv tool install --python /usr/bin/python3 --compile-bytecode \
-        --exclude-newer "$WORKSPACE_MCP_EXCLUDE_NEWER" "workspace-mcp==$WORKSPACE_MCP_VERSION"; \
+    export UV_PYTHON_DOWNLOADS=never; \
+    uv venv --python /usr/bin/python3 /opt/uv/tools/workspace-mcp; \
+    pnpm-retry uv pip sync --python /opt/uv/tools/workspace-mcp/bin/python \
+      --require-hashes --no-build --no-config --compile-bytecode /tmp/workspace-mcp.lock; \
+    mkdir -p /opt/uv/bin; \
+    ln -s /opt/uv/tools/workspace-mcp/bin/workspace-mcp /opt/uv/bin/workspace-mcp; \
     test -x /opt/uv/bin/workspace-mcp; \
     HOME=/tmp/workspace-mcp-smoke /opt/uv/tools/workspace-mcp/bin/python -c \
       "import main, gdrive.drive_tools, gdocs.docs_tools, gsheets.sheets_tools"; \
-    rm -rf /tmp/workspace-mcp-smoke /tmp/workspace-mcp.pin /root/.cache/uv
+    rm -rf /tmp/workspace-mcp-smoke /tmp/workspace-mcp.lock /root/.cache/uv
 
 # Copy manifest and lockfile, then install production deps only
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
