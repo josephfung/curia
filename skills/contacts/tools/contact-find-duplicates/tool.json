@@ -1,7 +1,7 @@
 {
   "name": "contact-find-duplicates",
   "description": "Weekly contacts dedup scan. Merges pairs with structural proof itself (when the autonomy score allows), files one Curia-owned review task per remaining pair above the score threshold, closes review tasks that are already settled, and returns summary counts, never a raw pair list. Skips pairs with an open review task, a recorded exclusion, or a review closed in the last 8 weeks unless a contact changed since.",
-  "version": "2.2.1",
+  "version": "2.3.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

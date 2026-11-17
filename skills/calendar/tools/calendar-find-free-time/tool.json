@@ -1,7 +1,7 @@
 {
   "name": "calendar-find-free-time",
   "description": "Find available time windows across one or more calendars. Returns free slots within a date range. Only busy/tentative events block availability; free-status events do not block. Use duration (minutes) to filter to slots at least that long. Supports checking multiple people's availability at once. Naming any of the principal's calendars reads all of them (every account); `blocking` lists what takes their time. If the principal's calendaring preferences say an event doesn't block them (the cleaner's visit), rerun with its eventId in treat_as_free.",
-  "version": "1.1.4",
+  "version": "1.2.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {

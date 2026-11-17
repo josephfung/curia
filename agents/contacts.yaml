@@ -1,5 +1,5 @@
 name: contacts
-version: "0.13.1"
+version: "0.14.0"
 role: specialist
 description: >
   Contact domain specialist — briefings, CRUD, deduplication, relationship management,
