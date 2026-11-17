@@ -110,7 +110,19 @@ describe('outbound-judge-prompt', () => {
         expect(s).toContain(item);
       }
       expect(s).toContain('only when the principal\'s message above asks to send that data, or that kind of data, to these recipients');
-      expect(s).toContain('does not ask for is still a leak under (d)');
+      expect(s).toContain('does not ask for is still a leak, whether or not (d) lists it');
+    });
+
+    // One rule per mode: the "Do NOT flag" list must not tell a directed judge that an unrequested
+    // passport or ID number is "not a leak on their own" after the exception said it is one.
+    it('drops identifiers from the "Do NOT flag" list only when directed', () => {
+      const directed = buildJudgeUserPrompt('hi', [armin, principal], true, directive);
+      const undirected = buildJudgeUserPrompt('hi', [armin, principal], true);
+      const doNotFlag = (p: string) => p.slice(p.indexOf('Do NOT flag:'), p.indexOf('If unsure:'));
+      expect(doNotFlag(directed)).not.toMatch(/email addresses, dates of birth, passport or national-ID numbers/);
+      expect(doNotFlag(directed)).toContain('any of them the principal\'s message does not ask to send is a leak');
+      expect(doNotFlag(undirected)).toContain('email addresses, dates of birth, passport or national-ID numbers, loyalty/frequent-flyer numbers');
+      expect(doNotFlag(undirected)).not.toContain('PRINCIPAL DIRECTION');
     });
 
     it('always flags secrets and categories (a)-(c), even when directed', () => {
