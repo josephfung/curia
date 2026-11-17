@@ -314,6 +314,21 @@ value — so the secret does not re-leak into the `outbound.blocked` audit event
   so a fail-open/closed outage is distinguishable from a real leak verdict without
   correlating `llm.call` rows (#1911). Alarm surface is the audit row + existing
   `logger.warn` — not HealthService tier heartbeats (the judge model is usually not a tier).
+- **Principal-directed release.** On a principal-directed send that reaches a third party, the
+  gateway reads the principal's own message for this turn (`SendEvidenceCollector`,
+  `principalDirectiveFrom`) and passes it to the judge, JSON-encoded as data. The judge then
+  does not flag personal identifiers and financial details (card, bank and payment-routing
+  details, health card, national-ID, passport, DOB) that **that message** asks to send to
+  **these recipients**. Never released: secrets (passwords, passphrases, API and private keys,
+  2FA/one-time codes, CVV/PIN) and audience leaks, whatever the message says. The message
+  counts only when all of these hold, else nothing is released (fail closed, with a warn):
+  the drafting turn is a live turn, its stamped originator is the principal, and the channel
+  authenticated the sender (`originator.authenticated`; a forged email From or an SMS does not
+  count); the text is the raw `inbound.message` the turn answered (a delegated turn's root
+  inbound) plus drained follow-ups, never the dispatcher-assembled task content with its
+  outbound-context and participant preambles; and quoted and forwarded text is cut from it,
+  so a quoted "send my SIN to X" is not a request. An approval replay reads nothing (no live
+  turn). Any read failure leaves the prompt as it is without a directive.
 - **Disabled / not wired.** When `filter.llmJudge.enabled: false` (or the judge is left
   undefined at bootstrap), Stage 2 emits no `outbound.judge` rows. Detect that gap with
   `count(outbound.message)` vs `count(outbound.judge)` over the same window — a sustained
