@@ -367,6 +367,8 @@ describe('outbound identity gate (#1818)', () => {
 
       expect(result.success).toBe(true);
       expect(signalClient.send).toHaveBeenCalledOnce();
+      // The destination, not just the call: a substituted recipient must fail this test.
+      expect(signalClient.send).toHaveBeenCalledWith(expect.objectContaining({ recipient: ['+15555551111'], message: expect.stringContaining('Already handled') }));
     });
 
     it('still blocks the same Signal reply to anyone else', async () => {

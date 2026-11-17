@@ -70,6 +70,13 @@ describe('principalFixtureMismatch', () => {
     expect(SCENARIO_PRINCIPAL_SQL).not.toContain('"');
   });
 
+  // A row an interrupted run of the retired per-case seeds left carries 'scenario-fixture (#2017)',
+  // which the start-up sweep deletes; the adopted email and Signal rows must lose that label.
+  it('clears the label on both identity rows it adopts, so the start-up sweep cannot delete them', () => {
+    expect(SCENARIO_PRINCIPAL_SQL).toContain(`SET channel_identifier='${SCENARIO_PRINCIPAL.email}', verified=true, verified_at=now(), status='active', label=NULL`);
+    expect(SCENARIO_PRINCIPAL_SQL).toContain(`SET channel_identifier='${SCENARIO_PRINCIPAL.signal}', verified=true, verified_at=now(), status='active', label=NULL`);
+  });
+
   it('matches the setup command in the scenarios README', () => {
     // The README's copy-paste command must not drift from the one the refusal prints.
     const readme = readFileSync(join(import.meta.dirname, '../../scenarios/README.md'), 'utf8');
