@@ -33,6 +33,13 @@ describe('hasConflictingIdentifiers', () => {
     ).toBe(true);
   });
 
+  it('flags UUIDs that differ only in a middle group, and keeps the same UUID with prose compatible', () => {
+    const uuid = '7c2e90af-41b3-4d58-a6e9-12c34d56e78f';
+    expect(hasConflictingIdentifiers(`Message ${uuid}`, 'Message 7c2e90af-41b4-4d58-a6e9-12c34d56e78f')).toBe(true);
+    expect(hasConflictingIdentifiers(`Message ${uuid}`, `Message ${uuid}, from the board thread`)).toBe(false);
+    expect(hasConflictingIdentifiers(`Message ${uuid}`, `Message ${uuid.replace(/-/g, '')}`)).toBe(false);
+  });
+
   it('treats a superset of identifiers as compatible', () => {
     expect(
       hasConflictingIdentifiers('tax: $1,204.50', 'tax: $1,204.50 (no change since 2030)'),
