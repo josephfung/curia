@@ -349,7 +349,9 @@ export class HealthService {
       if (!embeddingsEnabled) return { name: 'embeddings', status: 'skipped' };
       if (!this.deps.driftCheck) return this.canaryOutcome('embeddings', 'embeddings');
       const drift = await this.canaryDrift(this.deps.driftCheck);
-      if (drift === 'changed') {
+      // A change found by an earlier run sticks (KnowledgeGraphHealth.recordDrift): vectors
+      // written since came from the other weights, so a later `same` does not clear it.
+      if (drift === 'changed' || this.deps.knowledgeGraphHealth?.get().reason === 'weights_changed') {
         return {
           name: 'embeddings',
           status: 'fail',
