@@ -254,7 +254,8 @@ export type BandReviewDecision =
   // Not sent, and not held for the principal: the drafter must rewrite it again (80+ only). The gateway converts it to a hold for a relayed reply or a saved draft.
   // heldBeside: a hold this block outranked (#2333). The drafter sees only `findings`; the converted hold shows both.
   // repeated: the drafter was already blocked once on this draft; the gateway converts it to a hold for the principal, so retries stop.
-  | { kind: 'block'; reason: string; findings: FilterFinding[]; heldBeside?: FilterFinding[]; repeated?: true }
+  // alreadyHeld: a repeated block on this draft is already held for the principal (SF-4); the gateway refuses the resend and raises no new approval.
+  | { kind: 'block'; reason: string; findings: FilterFinding[]; heldBeside?: FilterFinding[]; repeated?: true; alreadyHeld?: true }
   // ask: the hold waits only on the principal's yes to a requester (#2312).
   | { kind: 'hold'; reason: string; findings: FilterFinding[]; ask?: BandReviewAsk };
 
@@ -284,6 +285,34 @@ export class BandSendReview {
   async review(input: BandReviewInput): Promise<BandReviewDecision> {
     const key = this.draftKey(input);
     const prior = this.priorBounce(key);
+    const decision = await this.reviewDraft(input, key, prior);
+    return prior?.held === true ? this.keepHeld(key, prior, decision, input) : decision;
+  }
+
+  /**
+   * A resend after this draft's repeated block was held for the principal (SF-4). The hold's
+   * approval is still pending, and a coordinator that resends the same draft would otherwise
+   * cycle bounce, block, hold and raise a fresh approval each time. Whatever the review
+   * decided, the held entry is put back (its time unchanged, so it ends with the TTL, measured
+   * from the hold). Anything short of a send is the existing hold: an alreadyHeld block the
+   * gateway refuses without a new approval. A clean send goes out: it is a different message
+   * the review passed, and holding it would stop every reply to these recipients for the
+   * TTL. Restoring the entry also undoes the paths that delete it (a reviewer failure, a hold).
+   */
+  private keepHeld(key: string, held: LedgerEntry, decision: BandReviewDecision, input: BandReviewInput): BandReviewDecision {
+    this.bounced.set(key, held);
+    if (decision.kind === 'send') return decision;
+    this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel, other: decision.kind }, 'band review: resend of a draft already held for the principal — no new hold');
+    return {
+      kind: 'block',
+      reason: ALREADY_HELD_REASON,
+      findings: [{ rule: held.rules[0] ?? BAND_RULES.unreviewed, detail: ALREADY_HELD_REASON }],
+      alreadyHeld: true,
+    };
+  }
+
+  /** review()'s body: the draft's outcome, with the one-bounce ledger read as `prior`. */
+  private async reviewDraft(input: BandReviewInput, key: string, prior: LedgerEntry | undefined): Promise<BandReviewDecision> {
     const taskIds = [...new Set([...(prior?.taskEventIds ?? []), ...(input.taskEventId ? [input.taskEventId] : [])])];
 
     const items = input.detectedItems ?? [];
@@ -716,8 +745,9 @@ export class BandSendReview {
       // review rejects. Another block only invites another retry: a coordinator that kept
       // retrying looped 8-20 times in one turn, until maxTurns or a timeout. So the principal
       // decides: the gateway turns this block into a hold, as it does for a relayed reply. The
-      // entry is cleared like any hold's, so a later new draft starts with a fresh bounce.
-      this.bounced.delete(key);
+      // entry stays, marked held (SF-4): a resend of the same draft is that hold, not a fresh
+      // bounce, block and second approval (see keepHeld). It ends with the TTL.
+      this.bounced.set(key, { taskEventIds: taskIds, at: this.now(), rules: decision.findings.map((f) => f.rule), blocked: true, held: true });
       this.deps.logger.info({ conversationId: input.conversationId, channel: input.channel, rules: decision.findings.map((f) => f.rule) }, 'band review: blocked again after a block — holding for the principal');
       return { ...decision, repeated: true };
     }
@@ -1195,8 +1225,14 @@ function rulesOnEach(rulings: readonly DisclosureRuling[] | undefined, items: re
   return ids.size === items.length && items.every((i) => ids.has(i.id));
 }
 
-/** `blocked`: the drafter has already had a block after its one bounce (see settle()). */
-type LedgerEntry = { taskEventIds: string[]; at: number; rules: string[]; blocked?: true };
+/**
+ * `blocked`: the drafter has already had a block after its one bounce (see settle()).
+ * `held`: a repeated block was then held for the principal (SF-4; see keepHeld()).
+ */
+type LedgerEntry = { taskEventIds: string[]; at: number; rules: string[]; blocked?: true; held?: true };
+
+/** What a resend of a draft already held for the principal is told (SF-4). */
+export const ALREADY_HELD_REASON = 'Not sent: this message is already held for the principal\'s approval from an earlier attempt, and no new approval was raised. Don\'t send it again; tell the principal it is waiting on them.';
 
 /** The recheck hold's reason, naming what the draft was flagged for. */
 function recheckReason(rules: readonly string[]): string {
