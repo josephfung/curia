@@ -997,6 +997,9 @@ describe('principalDirectiveFrom (scenario 34d)', () => {
     ['a non-principal originator', { ...base, principalMessage: 'x', authority: { originator: { ...principal, systemRole: null }, liveTurn: true } }],
     ['no originator', { ...base, principalMessage: 'x', authority: { originator: null, liveTurn: true } }],
     ['a turn that is not live', { ...base, principalMessage: 'x', authority: { originator: principal, liveTurn: false } }],
+    // SEC-HIGH-2: a forged email From or a spoofed SMS number resolves to the principal too.
+    ['an unauthenticated email sender', { ...base, principalMessage: 'x', authority: { originator: { ...principal, channel: 'email', authenticated: false }, liveTurn: true } }],
+    ['an unauthenticated SMS sender', { ...base, principalMessage: 'x', authority: { originator: { ...principal, channel: 'sms', authenticated: false }, liveTurn: true } }],
     ['a task-kind origin', { ...base, principalMessage: 'x', originContent: 'scheduled job', originKind: 'task' as const }],
     ['an empty message', { ...base, principalMessage: '   ' }],
     ['no message', base],
@@ -1065,6 +1068,19 @@ describe('SendEvidenceCollector: the principal\'s own message (SEC-HIGH-1)', () 
   it('leaves it out when the turn has no parent', async () => {
     const collected = await collector(repoFor([principalTurn({ parentEventId: null })])).collect(['task-p']);
     expect(collected.principalMessage).toBeUndefined();
+  });
+
+  it.each([
+    ['a forged email From', 'email'],
+    ['an SMS from the principal\'s number', 'sms'],
+  ])('does not read the inbound for an unauthenticated principal turn (%s)', async (_label, channel) => {
+    const repo = repoFor([principalTurn({}, { ...PRINCIPAL_EMAIL_UNVERIFIED, channel }), INBOUND]);
+    const collected = await collector(repo).collect(['task-p']);
+    expect(collected.authority.originator?.systemRole).toBe('principal');
+    expect(collected.authority.originator?.authenticated).toBe(false);
+    expect(collected.principalMessage).toBeUndefined();
+    expect(repo.findById).not.toHaveBeenCalledWith('inbound-1');
+    expect(principalDirectiveFrom(collected).ok).toBe(false);
   });
 
   it('does not read the inbound for a turn that is not principal-originated', async () => {
