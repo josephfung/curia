@@ -98,7 +98,7 @@ Two patterns that pass local checks but fail CI regularly:
 - Vitest for unit and integration tests
 - Integration tests use real Postgres (via Docker), not mocks
 - Unit tests for `src/` live in `tests/unit/` (mirror the source tree). Integration tests live in `tests/integration/`. Skill handler tests stay beside the skill; app tests stay in the app package.
-- **The behavior suites (`pnpm smoke`, `pnpm scenarios`) cost money and are the release gate** (see "Behavior gate" below), not a development check. Every run bills real model calls, agents plus the judge, and day-to-day runs added up to hundreds of dollars a month. While developing, rely on unit and integration tests. Run a suite only when the change is to a prompt or a behavior, and then:
+- **The behavior suite (`pnpm scenarios`) costs money and is the release gate** (see "Behavior gate" below), not a development check. Every run bills real model calls, agents plus the judge, and day-to-day runs added up to hundreds of dollars a month. While developing, rely on unit and integration tests. Run a suite only when the change is to a prompt or a behavior, and then:
   - run only the cases the change touches (`--case`, `--tags`), once each: no `--runs`. A case repeats only when its file sets `runs: 5` for a nondeterministic critical behavior (`tests/scenarios/README.md`, "The gate");
   - compare against saved baseline transcripts rather than re-running a `main` arm;
   - get the maintainer's agreement first, stating the cases, the run count and the estimated cost, and report the summary's spend afterwards;
@@ -178,7 +178,7 @@ When adding a new agent, ensure it receives the autonomy block via the runtime i
 
 ### Fixing agent behavior
 
-Don't append a paragraph to `system_prompt`. Put the rule on the highest rung that works: code enforcement → injection with its trigger → tool description → lazy playbook → always-on prompt. See [ADR-046](docs/adr/046-agent-behavior-fix-placement.md). `tests/unit/agents/prompt-budget.test.ts` fails CI when a budgeted agent's always-on prompt or local tool definitions grow past budget — the coordinator plus calendar, ceo-inbox, contacts and meeting-debrief (#2025). Prefer a behavioral test (scenario, smoke, or a unit test of the code) over one that pins prompt text. Writing a case is free; running one is not (see Testing).
+Don't append a paragraph to `system_prompt`. Put the rule on the highest rung that works: code enforcement → injection with its trigger → tool description → lazy playbook → always-on prompt. See [ADR-046](docs/adr/046-agent-behavior-fix-placement.md). `tests/unit/agents/prompt-budget.test.ts` fails CI when a budgeted agent's always-on prompt or local tool definitions grow past budget — the coordinator plus calendar, ceo-inbox, contacts and meeting-debrief (#2025). Prefer a behavioral test (a scenario case, or a unit test of the code) over one that pins prompt text. Writing a case is free; running one is not (see Testing).
 
 ### Setup wizard — keep the catalog current
 

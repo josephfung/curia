@@ -462,7 +462,7 @@ To see what a budgeted agent's fixed context is made of before it reaches produc
 
 ## Testing Your Agent
 
-Behavior is tested with the two suites in the release gate: `pnpm scenarios` scores agent decisions against stubbed tools (cases can target a specialist with `agent:`; see `tests/scenarios/README.md`), and `pnpm smoke` runs end-to-end turns against a fixture office (see [smoke-tests.md](smoke-tests.md)). Add a case when you add a route or a behavior. Writing a case is free, but every run bills model calls, so while developing run only the cases you are working on (see "Testing" in the repo's `CLAUDE.md`). For hands-on checks:
+Behavior is tested with the scenario suite in the release gate: `pnpm scenarios` scores agent decisions against stubbed tools (cases can target a specialist with `agent:`; see `tests/scenarios/README.md` and [behavior-tests.md](behavior-tests.md)). Add a case when you add a route or a behavior. Writing a case is free, but every run bills model calls, so while developing run only the cases you are working on (see "Testing" in the repo's `CLAUDE.md`). For hands-on checks:
 
 1. Start Curia with `docker compose up`
 2. Send a message on the CLI channel: `pnpm cli "your test message"`

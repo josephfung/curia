@@ -11,8 +11,7 @@ Most cases test the coordinator. A case can instead fire a task straight at a sp
 (see [Cases for a specialist](#cases-for-a-specialist)), and a deployment can run its own
 agents' cases on this runner (see [A deployment's own agents](#a-deployments-own-agents)).
 
-Smoke (`tests/smoke/`, spec 16) asks "does the whole stack produce a good answer?". This
-suite asks "did the agent make the right decision?", which is usually a tool call: the
+This suite asks "did the agent make the right decision?", which is usually a tool call: the
 coordinator routed instead of answering, released the entry, edited instead of
 duplicating; a specialist placed the hold, linked the child task, kept the slot string.
 
@@ -137,8 +136,7 @@ Migrate the copy if the dev database is behind `main`. The refusal prints the sa
   results JSON holds the split per run, per case and for the suite (`usage`). Then the
   number of `web-search` calls that reached Tavily (`liveSearch` in the JSON), with a warning
   when Tavily refused any for an exhausted quota (HTTP 432 or 433). These are
-  estimates from registry prices; see
-  [docs/dev/smoke-tests.md](../../docs/dev/smoke-tests.md#concurrency-cost-and-provider-failures).
+  estimates from registry prices; see [Cost and the judge](#cost-and-the-judge).
 - `tests/scenarios/results/<timestamp>.json` (gitignored), with the commit, the model and
   every run's tool calls, reply and ratings.
 - `tests/scenarios/stub-coverage.json` (committed). See [Stub coverage](#stub-coverage).
@@ -220,8 +218,29 @@ seeded rows, stubs, model calls and spend are found through its own case context
    each specialist's brief, calls and response too (`delegation-capture.ts`).
 4. **Clean up** every seeded row and the run's own conversation rows.
 5. **Rate:** apply each `check` in code and send the other behaviors to the judge, one run
-   at a time. To try a cheaper judge on saved runs, see `pnpm rejudge` in
-   [docs/dev/smoke-tests.md](../../docs/dev/smoke-tests.md#concurrency-cost-and-provider-failures).
+   at a time. To try a cheaper judge on saved runs, see [Cost and the judge](#cost-and-the-judge).
+
+### Cost and the judge
+
+The spend each run prints is an **estimate** from the model registry's prices, not
+OpenRouter's bill. Cache reads are priced at the registry's cache rate where it has one, and
+a call that fails after the provider billed it publishes no `llm.call`, so it is missing.
+For the real figure, compare OpenRouter's credit balance or activity page before and after a
+run. The last comparison (2026-10-05, before cache reads were reported, #1962) found the
+estimate about 2.1× the bill.
+
+The judge (`openai/gpt-4o`, `JUDGE_MODEL` in `judge.ts`) costs more per token than the
+production standard tier. A cheaper one can be tried on transcripts a run already saved,
+without running any agent:
+
+```bash
+pnpm rejudge --judge google/gemini-3.1-flash-lite tests/scenarios/results/<run>.json
+```
+
+It re-judges every judged behavior, prints how many verdicts and ratings match, lists each
+verdict change with both judges' reasons, and prices the candidate's calls. A new judge
+needs the same pass/fail verdict on at least 95% of cases, and every disagreement read by a
+person, before `JUDGE_MODEL` changes.
 
 ### Seeded state and the shared database
 
@@ -243,7 +262,7 @@ seeded rows, stubs, model calls and spend are found through its own case context
 | Outreach rows (#2312) | `seed.outreach`: a `task_outreach` row, inserted as it is (not merged into another open row) | The Dispatcher's outreach link (`OutreachMatcher`) sees only the run's seeded rows and the rows its sends wrote (`scopedOutreachRepo`). Deleted after the run, with what its sends recorded. |
 | The principal's mailbox (#2474) | `seed.principal_mailbox`: drafts, their authorship, the threads they reply on and the send level, plus the run's stubbed ceo-inbox draft writes | In memory, per run (`SeedScope.principalDrafts`, `principalThreads`, `principalSends`); only a through-gateway run's `ceo-inbox-send-draft` reads it. Nothing reaches the database or a mailbox. See [Sends through the gateway](#sends-through-the-gateway). |
 | What through-gateway sends write (#2312) | the gateway's approvals, the principal's answers to asks, outreach records | Approvals, `disclosure_decisions` and `task_outreach` rows in the run's conversations are deleted after the run; approve-action and deny-action see only the run's approvals (`scopedActionLog`). |
-| Prior history | | Withheld. *Contact recent history* (a sender's turns from other conversations) returns nothing during a run (the `wrapWorkingMemory` stack option), so a case never inherits smoke runs' or the real principal's turns from the dev database. |
+| Prior history | | Withheld. *Contact recent history* (a sender's turns from other conversations) returns nothing during a run (the `wrapWorkingMemory` stack option), so a case never inherits earlier test runs' or the real principal's turns from the dev database. |
 
 `audit_log` keeps the runs' events. It is append-only by design.
 
@@ -263,7 +282,7 @@ every start-up, the CLI sweeps anything carrying those markers — and nothing e
 
 The stub layer (`stub-layer.ts`) wraps the test-mode ExecutionLayer:
 
-1. A **matching stub** answers the call. The real tool never runs. Within one run, scheduler, task and draft reads then replay that run's stubbed writes onto the stub, the same way smoke does (`docs/dev/smoke-tests.md`). A stub whose match names `draft_id` still answers that `ceo-inbox-read` itself. A success stub for
+1. A **matching stub** answers the call. The real tool never runs. Within one run, scheduler, task and draft reads then replay that run's stubbed writes onto the stub. A stub whose match names `draft_id` still answers that `ceo-inbox-read` itself. A success stub for
    `email-send`, `email-reply`, or `email-draft-save` still refuses an attachment whose `file_url` is outside
    the temp store, with the error production's gateway returns (#2059). That call is
    recorded as stubbed: the model is told what went wrong and can recover, and it is
@@ -290,7 +309,7 @@ The stub layer (`stub-layer.ts`) wraps the test-mode ExecutionLayer:
    [Sends through the gateway](#sends-through-the-gateway). Every other case is unchanged.
 
 This sits on top of the test-mode stack's own guarantee: a gateway with no transport
-client (spec 16). So a run cannot send, and `tests/unit/scenarios/stub-layer.test.ts`
+client (`src/startup/test-mode-stack.ts`). So a run cannot send, and `tests/unit/scenarios/stub-layer.test.ts`
 asserts that unstubbed and stubbed sends never reach the real tool, from the coordinator
 or from a real specialist. Unless a case sets `delegation: real`, `delegate` is always
 stubbed, so no specialist runs.
@@ -497,7 +516,7 @@ a load error.
 
 **Dates are relative to the run.** Never write an absolute date the model reasons about
 (a meeting, a free slot, a job's next run): it goes stale, and the case starts testing
-the calendar instead of the coordinator. Use the date placeholders smoke uses
+the calendar instead of the coordinator. Use the date placeholders
 (`tests/shared/date-placeholders.ts`), in the principal's timezone:
 
 | Placeholder | Example on Mon 2026-10-05 |

@@ -1,9 +1,8 @@
 // tests/shared/live-search.ts — counting the live web searches a suite run makes (#2106).
 //
 // `web-search` is a read-only tool, so neither suite would stub it on its own, and every
-// call costs a Tavily credit. Both suites now stub it by default (smoke: stubs/office.yaml,
-// scenarios: stubs/defaults.yaml); a case opts back in with `live_search: true`. The stub
-// layers count what still reached Tavily, and each summary prints it beside the model
+// call costs a Tavily credit. The scenario suite stubs it by default (stubs/defaults.yaml);
+// a case opts back in with `live_search: true`. The stub layer counts what still reached Tavily, and each summary prints it beside the model
 // spend, so a case that starts searching shows up without anyone checking the bill.
 import type { ToolResult } from '../../src/skills/types.js';
 

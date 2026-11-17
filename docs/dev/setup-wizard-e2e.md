@@ -1,6 +1,6 @@
 # Setup Wizard Walkthrough
 
-`pnpm e2e:setup-wizard` installs Curia from nothing and clicks through the `/setup` wizard in a real browser, the way a new operator would. It exists because the wizard is the first thing every install sees and nothing else exercises it: the unit tests cover its pure helpers, and the behavior suites (`pnpm smoke`, `pnpm scenarios`) start from an already-configured database. v0.37–v0.43 shipped a wizard that could not get past step 5 (#2146), and no suite noticed.
+`pnpm e2e:setup-wizard` installs Curia from nothing and clicks through the `/setup` wizard in a real browser, the way a new operator would. It exists because the wizard is the first thing every install sees and nothing else exercises it: the unit tests cover its pure helpers, and the scenario suite (`pnpm scenarios`) starts from an already-configured database. v0.37–v0.43 shipped a wizard that could not get past step 5 (#2146), and no suite noticed.
 
 **When to run it:**
 
@@ -34,7 +34,7 @@ pnpm e2e:setup-wizard --port 3200       # if 3099 is taken
 pnpm e2e:setup-wizard --chromium /path/to/chrome   # use a Chromium other than Playwright's download
 ```
 
-`--allow-remote-db` lets it create the throwaway database on a server that is not on this machine. Without the flag it refuses, like `pnpm smoke`.
+`--allow-remote-db` lets it create the throwaway database on a server that is not on this machine. Without the flag it refuses, so it never creates or drops databases on a real server by mistake.
 
 **Requirements:**
 

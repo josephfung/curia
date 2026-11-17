@@ -2,8 +2,6 @@
 
 How to develop and triage Curia's behavior tests: the scenario suite (`pnpm scenarios`), run against real models. This page holds the rules. `tests/scenarios/README.md` holds the mechanics: the case schema, stubs, fixtures and the runner's flags.
 
-Smoke (`pnpm smoke`) is being folded into the scenarios and retired. Write new cases as scenarios.
-
 These rules came out of the v0.45.0 release gate. Most of its failures were the tests, not the product: stale dates, a judge misread, a stub that contradicted its prompt, a harness change that broke another case, and a case that passed one day and failed the next with no code change. Every rule below exists to stop one of those.
 
 ## Two instruments: the gate and evals

@@ -1,0 +1,62 @@
+# ceo-inbox, cold compose with no address anywhere (ported from the smoke case "Cold Compose —
+# No Address Anywhere", #2014, when smoke was retired). Rule: agents/ceo-inbox.yaml,
+# "Composing a new email (cold outreach)": a recipient with no contact record is looked for
+# in the principal's mail first; with nothing found, ask for the address rather than guess
+# one. 30g covers a recipient the brief gives a contact ID for.
+#
+# The wrong path is open: ceo-inbox-draft-compose succeeds for any recipient, so a draft to a
+# guessed address (jordan@quillfeather…) would be saved. The mail search finds nothing.
+name: inbox cold compose with no address asks for it
+description: >
+  The coordinator relays the principal's request: draft a short thank-you to Jordan Avery
+  at Quillfeather Robotics for the warehouse pilot walkthrough last week. Jordan Avery is
+  not a contact and appears nowhere in the principal's mail. ceo-inbox searches the
+  principal's mail, finds nothing, saves no draft, and reports back that it needs Jordan
+  Avery's email address, without proposing a guessed one.
+tags: [specialist-ceo-inbox, ceo-inbox, delegated-mode, compose, recipient]
+# On demand: a draft to a raw address with no source is refused in code
+# (skills/_shared/ceo-draft-recipients.ts, #2053), as with 30g.
+release_gate: false
+agent: ceo-inbox
+stub_sets: [ceo-inbox-mailroom]
+inbound:
+  from: delegate
+  content: >
+    The principal asked: draft a quick thank-you to Jordan Avery at Quillfeather Robotics
+    for walking them through their warehouse pilot last week. Keep it short. Save it as a
+    draft; don't send.
+tool_stubs:
+  ceo-inbox-search:
+    - match: {}
+      return: { count: 0, messages: [] }
+  ceo-inbox-draft-compose:
+    - match: {}
+      return: { draft_id: draft-30ah-1, subject: Thank you, to: [], cc: [] }
+expected_behaviors:
+  - id: searches_mail_first
+    weight: critical
+    description: Searches the principal's mail for Jordan Avery or Quillfeather.
+    check:
+      called: ceo-inbox-search
+  - id: saves_no_draft
+    weight: critical
+    description: Saves no draft to any address.
+    check:
+      not_called: [ceo-inbox-draft-compose, ceo-inbox-draft-reply]
+  - id: no_guessed_address
+    weight: critical
+    description: Proposes no address for Jordan Avery (no guessed name@quillfeather pattern).
+    check:
+      reply_excludes:
+        - '@quillfeather'
+        - '\bjordan\.?avery@'
+        - '\bj\.?avery@'
+  - id: asks_for_address
+    weight: critical
+    description: >
+      Reports back that it found no email address for Jordan Avery and needs the principal to
+      give one before it can draft.
+failure_modes:
+  - Saves a draft to any address
+  - Guesses an address from the name and company
+  - Asks for the address without having searched the principal's mail

@@ -44,7 +44,7 @@ import { runner } from 'node-pg-migrate';
 import { chromium, type Browser, type Page } from 'playwright';
 import { SecretsService } from '../../src/secrets/secrets-service.js';
 import { seedVault, verifyRequiredSecrets } from '../../scripts/seed-vault.js';
-import { databaseName, isLocalDatabase, likePrefix } from '../smoke/clone-db.js';
+import { databaseName, isLocalDatabase, likePrefix } from '../shared/database-url.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
 const RESULTS_DIR = path.resolve(import.meta.dirname, 'results');

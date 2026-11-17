@@ -4,7 +4,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BullpenReplyHandler } from '../../../skills/bullpen/tools/bullpen-reply/handler.js';
-import { PAUSED_NEXT_STEP, delegateFailureNextStep } from '../../../src/agents/prompts/delegate-result-guidance.js';
+import { PAUSED_NEXT_STEP, declineNextStep, delegateFailureNextStep } from '../../../src/agents/prompts/delegate-result-guidance.js';
+import { isDeclineCause, type DeclineCause } from '../../../src/agents/specialist-decline.js';
 import { WEB_FETCH_NOT_FOUND_LINES } from '../../../src/agents/prompts/dead-end-guidance.js';
 import { googleWorkspaceUrlError } from '../../../src/skills/_shared/google-workspace-url.js';
 import { shapeSpecialistAnswer } from '../../../src/agents/specialist-answer.js';
@@ -121,10 +122,25 @@ describe('coordinator scenario cases', () => {
   });
 
   it('gives a failed delegate stub the next_step the handler would add (prompt trim PR 6)', () => {
+    // A decline is a failed result too, but carries the decline next step (tested below).
     const failed = cases.flatMap(c => (c.toolStubs['delegate'] ?? []).map(stub => stub.return))
-      .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null && (r as Record<string, unknown>)['failed'] === true);
+      .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null
+        && (r as Record<string, unknown>)['failed'] === true && (r as Record<string, unknown>)['declined'] !== true);
     expect(failed.length).toBeGreaterThan(0);
     for (const r of failed) expect(r['next_step'], String(r['agent'])).toBe(delegateFailureNextStep(String(r['agent'])));
+  });
+
+  it('gives a declined delegate stub the next_step the handler would add (#2494)', () => {
+    const declined = cases.flatMap(c => (c.toolStubs['delegate'] ?? []).map(stub => stub.return))
+      .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null && (r as Record<string, unknown>)['declined'] === true);
+    expect(declined.length).toBeGreaterThan(0);
+    for (const r of declined) {
+      const cause = r['cause'];
+      expect(cause === undefined || isDeclineCause(cause), String(r['agent'])).toBe(true);
+      // The YAML folds the long text, so compare with whitespace collapsed.
+      const expected = declineNextStep(cause as DeclineCause | undefined, typeof r['work_product'] === 'string');
+      expect(String(r['next_step']).replace(/\s+/g, ' ').trim(), String(r['agent'])).toBe(expected);
+    }
   });
 
   it('answers a Google file URL in a web tool with the handler\'s refusal (prompt trim PR 6)', () => {
@@ -311,8 +327,8 @@ describe('coordinator scenario cases', () => {
     expect(cases.filter(c => c.delegation === 'stubbed' && !c.releaseGate && !c.identity).map(c => path.basename(c.sourceFile).slice(0, 3)))
       .toEqual([
         '01a', '01b', '02a', '03b', '04b', '04d', '05b', '05c', '06-', '11-', '13b', '13d',
-        '13e', '13f', '14b', '14c', '14d', '14e', '14f', '15d', '19b', '21c',
-        '24b', '24c', '24d', '30a', '30a', '30a', '30a', '30a', '30d', '30e', '30f', '30g', '30h',
+        '13e', '13f', '14b', '14c', '14d', '14e', '14f', '15d', '19b', '19c', '21c',
+        '24b', '24c', '24d', '30a', '30a', '30a', '30a', '30a', '30a', '30d', '30e', '30f', '30g', '30h',
         '30j', '30m', '30n', '30o', '30p', '30y', '30z', '31a', '31b', '31c', '31d',
         '31f', '31g', '31h', '31i', '31l', '32b', '32c', '32e', '32g', '32h', '33c', '33e',
         '33g', '33h', '33i', '33j', '34p', '42a', '45c', '45e', '45f', '46e', '46f', '46g', '46i',

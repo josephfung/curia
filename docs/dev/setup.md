@@ -271,7 +271,7 @@ Calendar and the `ceo-inbox` tools work in the principal's own mailbox, through 
 
 ### Embeddings
 
-An embedding model powers entity memory and semantic search in the knowledge graph. Without an embedding source, entity memory is off, and the knowledge graph, the sensitivity classifier and the setup wizard with it. The smoke tests no longer need it (#1956). Both behavior suites (`pnpm smoke`, `pnpm scenarios`) need `openrouter_api_key` in the vault for their judge; scenarios also need a working embedding source, either route below (see [smoke-tests.md](smoke-tests.md) and `tests/scenarios/README.md`).
+An embedding model powers entity memory and semantic search in the knowledge graph. Without an embedding source, entity memory is off, and the knowledge graph, the sensitivity classifier and the setup wizard with it. The scenario suite (`pnpm scenarios`) needs `openrouter_api_key` in the vault for its judge, and a working embedding source, either route below (see [behavior-tests.md](behavior-tests.md) and `tests/scenarios/README.md`).
 
 To use OpenAI, get an API key from [platform.openai.com](https://platform.openai.com) and seed it into the vault:
 

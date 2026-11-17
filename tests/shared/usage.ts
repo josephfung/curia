@@ -12,7 +12,7 @@
 // - OpenRouter cache reads are reported as zero (#1962), so cached input is priced as
 //   uncached and the estimate runs high wherever the provider caches.
 // - A call that fails after the provider billed it publishes no llm.call, so it is missing.
-// docs/dev/smoke-tests.md records how far one full run's estimate was from the bill.
+// tests/scenarios/README.md ("Cost and the judge") records how far one run's estimate was from the bill.
 
 /** Token and cost totals for a set of calls. */
 export interface UsageTotals {
