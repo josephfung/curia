@@ -42,6 +42,7 @@ import type { AuditLogRepo, AuditLogRow } from '../audit/audit-log-repo.js';
 import { isLiveTurnGrantActive } from './live-turn-grants.js';
 import type { ContactTier, SystemRole } from '../contacts/types.js';
 import type { TaskRepo } from '../db/task-repo.js';
+import { inboundSenderAuthenticated } from '../dispatch/outbound-entry-access.js';
 import type { OutreachLinkKind } from '../dispatch/outreach-matcher.js';
 import { senderOwnTextAnyChannel } from '../dispatch/turn-guidance-triggers.js';
 import type { TaskOutreachRepo } from '../dispatch/task-outreach.js';
@@ -342,6 +343,12 @@ interface SenderHistory {
 interface InboundPart {
   channelId: string;
   text: string;
+  /**
+   * The channel authenticated this message's sender (inboundSenderAuthenticated on its own row's
+   * metadata). Turn lanes inject by resolved contact, not by authentication, so a forged email
+   * From mid-turn can be drained into an authenticated turn: each part is checked on its own.
+   */
+  senderAuthenticated: boolean;
 }
 
 /**
@@ -636,8 +643,15 @@ export class SendEvidenceCollector {
   ): Promise<InboundRead> {
     const part = (r: AuditLogRow): InboundPart | null => {
       const text = r.payload['content'];
-      const channelId = r.payload['channelId'];
-      return typeof text === 'string' ? { channelId: typeof channelId === 'string' ? channelId : '', text } : null;
+      const rawChannel = r.payload['channelId'];
+      const channelId = typeof rawChannel === 'string' ? rawChannel : '';
+      const rawMetadata = r.payload['metadata'];
+      const metadata = typeof rawMetadata === 'object' && rawMetadata !== null && !Array.isArray(rawMetadata)
+        ? rawMetadata as Record<string, unknown>
+        : undefined;
+      return typeof text === 'string'
+        ? { channelId, text, senderAuthenticated: inboundSenderAuthenticated(channelId, metadata) }
+        : null;
     };
     const first = part(inbound);
     if (first === null) return { ok: false, reason: 'root inbound has no content' };
@@ -698,6 +712,13 @@ export class SendEvidenceCollector {
         const read = await this.readInboundParts(turn, parent);
         if (!read.ok) return leaveOut(read.reason);
         parts = read.parts;
+      }
+      // The originator check above covers the turn's own inbound (voice is authenticated per
+      // session, not by its row). A follow-up a turn lane drained in was injected by resolved
+      // contact, not by authentication: a forged email From or a spoofed SMS from the principal's
+      // address mid-turn must not become their directive. Fail closed on the whole message.
+      if (parts.slice(1).some((p) => !p.senderAuthenticated)) {
+        return leaveOut('a follow-up drained into the turn was not channel-authenticated');
       }
       // SEC-MED-2: only the principal's own words. A reply's quoted message and a forward are
       // someone else's text (or the principal's earlier words, not this request): a reply quoting
