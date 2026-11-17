@@ -4,6 +4,7 @@ Read your diff against this list before opening a PR. Each line is a finding cla
 CodeRabbit raised repeatedly on curia from August to November 2026 (644 findings over
 207 PRs). The checks CI can run are already tests (`tests/unit/changelog-format.test.ts`,
 `tests/unit/integration-db-hygiene.test.ts`); this list covers the ones that need judgment.
+How reviewers weigh findings, including what not to raise, is in `docs/dev/reviewing.md`.
 
 ## Logic and failure paths
 

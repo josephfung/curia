@@ -1,0 +1,66 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# Repo-level CodeRabbit settings. `inheritance: true` keeps everything configured in the
+# CodeRabbit UI (the review profile, and the automatic approvals the PR conveyor relies on)
+# and overrides only what is set here. Without it, this file would replace the UI settings
+# and reset everything it doesn't name to the defaults.
+#
+# What reviewers should and shouldn't raise: docs/dev/reviewing.md.
+inheritance: true
+
+tone_instructions: >-
+  Be concise. Raise a finding only with a realistic failure scenario: concrete inputs and what
+  goes wrong. Skip speculative hardening and nitpicks on docs, test cases and wording.
+
+knowledge_base:
+  code_guidelines:
+    filePatterns:
+      - docs/dev/reviewing.md
+      - docs/dev/review-checklist.md
+      - docs/dev/principles.md
+      - files: docs/dev/behavior-tests.md
+        applyTo: "tests/scenarios/**"
+
+reviews:
+  security_risk_instructions: >-
+    Curia is a single-principal assistant: one installation serves one executive. Untrusted input
+    arrives as inbound email, SMS, Signal and web pages read by the browser tools. The principal
+    is authenticated on the web console (chat and voice) and Signal calls; SMS, the CLI and
+    caller-id voice are not. Every outbound send goes through src/skills/outbound-gateway.ts,
+    which enforces recipient identity, approvals, autonomy bands and personal-data disclosure;
+    those send, write and hide paths must stay strict. Races that need the principal to act
+    twice at once are not realistic. Heuristic text detectors (quote and forward detection,
+    turn-guidance triggers) fail closed: a miss over-blocks or asks, it doesn't send. The web
+    browser runs in its own container without Curia's secrets or private-network access.
+  path_instructions:
+    - path: "tests/scenarios/cases/**"
+      instructions: >-
+        Behavior test cases that run real models and cost money on every run; review against
+        docs/dev/behavior-tests.md. Flag: a critical check that would also pass a wrong run, a
+        stub that contradicts the case's own message, a fixed date or weekday-dependent wording,
+        a judged behavior whose criteria two graders would read differently or that a tool-call
+        check could replace, and a new harness option added for one case. Don't ask for more
+        cases, exhaustive edge cases, extra runs, new harness options, or coverage that unit
+        tests already provide.
+    - path: "tests/scenarios/**/*.ts"
+      instructions: >-
+        The scenario harness. Flag bugs that would make a check pass or fail wrongly, leak state
+        between cases, or let a run reach a real channel or paid service it shouldn't. Don't ask
+        for new options, configurability or generality beyond what the diff's cases use.
+    - path: "src/autonomy/send-evidence.ts"
+      instructions: >-
+        Heuristic detection of what the principal's own words are (quotes, forwards,
+        attribution lines). It fails closed: when unsure, no directive is passed and the send is
+        held or asked about. Flag only a miss that would treat someone else's text as the
+        principal's (that could release data). Don't ask for more languages, formats or patterns
+        when a miss only withholds the directive.
+    - path: "src/dispatch/turn-guidance-triggers.ts"
+      instructions: >-
+        Heuristic patterns that add guidance to a turn or cut quoted text. A miss means missing
+        guidance or a held send, not an unapproved one. Flag patterns that can backtrack badly or
+        that would mark someone else's text as the principal's. Don't ask for wider coverage for
+        its own sake.
+    - path: "docs/**"
+      instructions: >-
+        Flag text that is wrong, contradicts the code, or misleads. Skip style, wording and
+        formatting nitpicks.
