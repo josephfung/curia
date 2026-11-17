@@ -48,14 +48,54 @@ const usage = { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, ca
 const provenance = { requestedModel: 'fake', actualModel: 'fake', providerRequestId: 'req_1' };
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-/** Poll until TTS has published a frame. A fixed sleep flakes when the runner is slow. */
+/*
+ * No test here may pass or fail on how fast the runner is (#2652). Wait on
+ * something the test can observe (a frame published, a fake reached, a turn
+ * idle), hold a fake until the test lets it go, or fake the timers. A sleep
+ * that is left only gives wrongly fired work a chance to show up, and says so.
+ */
+
+/** A promise the test settles by hand, to hold a fake at a point until it lets go. */
+function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(r => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+/**
+ * Counts arrivals at a point in a fake. `reached(n)` resolves once n have arrived.
+ * The test resumes in the same tick, ahead of any timer the fake's caller arms next.
+ */
+function arrivals(): { arrive: () => void; reached: (n: number) => Promise<void> } {
+  let count = 0;
+  const waiters: Array<{ n: number; resolve: () => void }> = [];
+  return {
+    arrive() {
+      count += 1;
+      for (const waiter of waiters) if (waiter.n <= count) waiter.resolve();
+    },
+    reached(n) {
+      if (count >= n) return Promise.resolve();
+      return new Promise(resolve => waiters.push({ n, resolve }));
+    },
+  };
+}
+
+/**
+ * Poll until TTS has published `minFrames` frames. A fixed sleep flakes when the
+ * runner is slow. Returns quietly on timeout: callers assert the count after.
+ */
 async function waitForPublishedFrame(
   transport: { publishedFrames: unknown[] },
   timeoutMs = 2_000,
+  minFrames = 1,
 ): Promise<void> {
-  // performance.now, not Date: callers may have frozen Date before the turn starts.
+  // performance.now and a real-timer poll, not Date or vi.waitFor: callers may have
+  // frozen Date, and vi.waitFor advances a faked Date on every poll.
   const deadline = performance.now() + timeoutMs;
-  while (transport.publishedFrames.length === 0 && performance.now() < deadline) {
+  while (transport.publishedFrames.length < minFrames && performance.now() < deadline) {
     await delay(10);
   }
 }
@@ -125,6 +165,77 @@ class SlowTtsProvider implements TextToSpeechProvider {
   cancel(streamId: string): void {
     this.cancelled.add(streamId);
   }
+}
+
+/**
+ * TTS for interruption tests. A held stream yields `framesBeforeHold` frames, then
+ * stays mid-synthesis until it is cancelled or its turn is aborted, so the reply is
+ * still playing when the interruption lands, however slow the runner. Streams that
+ * are not held yield one frame and finish. By default only the first is held.
+ * `framesAfterRelease` keeps a released stream yielding, so only the runtime's own
+ * stop on cancel keeps those frames off the transport.
+ */
+class HoldingTtsProvider implements TextToSpeechProvider {
+  readonly id = 'holding-tts';
+  readonly requests: TtsSynthesizeOptions[] = [];
+  readonly cancelled = new Set<string>();
+  private readonly releases = new Map<string, () => void>();
+  constructor(
+    private readonly framesBeforeHold = 1,
+    private readonly holds: (opts: TtsSynthesizeOptions, index: number) => boolean = (_opts, index) => index === 0,
+    private readonly framesAfterRelease = 0,
+  ) {}
+  async *synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame> {
+    const index = this.requests.length;
+    this.requests.push(opts);
+    const frame = (): PcmFrame => ({ pcm: new Int16Array(160), sampleRate: opts.sampleRate ?? 24000, channels: 1 });
+    if (!this.holds(opts, index)) {
+      yield frame();
+      return;
+    }
+    for (let i = 0; i < this.framesBeforeHold; i += 1) yield frame();
+    await new Promise<void>(resolve => {
+      if (this.cancelled.has(opts.streamId) || opts.signal?.aborted) {
+        resolve();
+        return;
+      }
+      this.releases.set(opts.streamId, resolve);
+      opts.signal?.addEventListener('abort', () => resolve(), { once: true });
+    });
+    for (let i = 0; i < this.framesAfterRelease; i += 1) yield frame();
+  }
+  cancel(streamId: string): void {
+    this.cancelled.add(streamId);
+    this.releases.get(streamId)?.();
+  }
+}
+
+/** TTS that yields one frame with no timer, for tests that fake setTimeout. */
+class InstantTtsProvider implements TextToSpeechProvider {
+  readonly id = 'instant-tts';
+  async *synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame> {
+    yield { pcm: new Int16Array(160), sampleRate: opts.sampleRate ?? 24000, channels: 1 };
+  }
+  cancel(): void {}
+}
+
+/**
+ * Outbound context whose getActive() never settles, so each turn sits in its
+ * prelude until the history-read deadline. `reached(n)` resolves when the nth turn
+ * calls getActive, before that turn arms its deadline timer: speech the test sends
+ * then lands inside the prelude with no sleep to race the deadline.
+ */
+function stalledOutboundContext(): { outbound: OutboundContextService; reached: (n: number) => Promise<void> } {
+  const outbound = new OutboundContextService(
+    { query: async () => ({ rows: [] }) } as never,
+    logger,
+  );
+  const calls = arrivals();
+  outbound.getActive = () => {
+    calls.arrive();
+    return new Promise(() => {});
+  };
+  return { outbound, reached: calls.reached };
 }
 
 /** In-memory VoiceSessionStore stand-in. */
@@ -303,7 +414,9 @@ describe('VoiceRuntime', () => {
       ],
       3,
     );
-    const tts = new SlowTtsProvider(50, 5);
+    // Held until the barge-in, then still yielding: only the runtime's stop keeps
+    // those frames from being published.
+    const tts = new HoldingTtsProvider(1, undefined, 5);
     const { runtime, stt, transport } = makeRuntime({ llm, tts });
 
     await runtime.startSession({
@@ -317,8 +430,7 @@ describe('VoiceRuntime', () => {
 
     stt.emit({ text: 'tell me a long story', isFinal: true, speechFinal: true });
 
-    // Let the assistant start speaking. Poll: a fixed 40ms sleep misses the first
-    // frame when the runner is busy, and the barge-in assertion then fails closed.
+    // Let the assistant start speaking. The held TTS keeps it speaking until the barge-in.
     await waitForPublishedFrame(transport);
     const framesBeforeBarge = transport.publishedFrames.length;
     expect(framesBeforeBarge).toBeGreaterThan(0);
@@ -330,11 +442,8 @@ describe('VoiceRuntime', () => {
     await runtime.awaitIdle('s2');
     // TTS was cancelled for the in-flight stream.
     expect(tts.cancelled.size).toBeGreaterThan(0);
-    const framesAfter = transport.publishedFrames.length;
-
-    // Give any (incorrectly) un-cancelled synthesis time to keep publishing.
-    await delay(60);
-    expect(transport.publishedFrames.length).toBe(framesAfter);
+    // Nothing the stream yielded after the barge-in reached the transport.
+    expect(transport.publishedFrames.length).toBe(framesBeforeBarge);
   });
 
   it('ignores low-confidence / tiny interim transcripts for barge-in (echo guard)', async () => {
@@ -347,7 +456,8 @@ describe('VoiceRuntime', () => {
       ],
       2,
     );
-    const tts = new SlowTtsProvider(40, 8);
+    // Held, so the reply is still playing when the noise arrives.
+    const tts = new HoldingTtsProvider();
     const { runtime, stt, transport } = makeRuntime({ llm, tts });
 
     await runtime.startSession({
@@ -362,13 +472,13 @@ describe('VoiceRuntime', () => {
     await waitForPublishedFrame(transport);
     expect(transport.publishedFrames.length).toBeGreaterThan(0);
 
-    // Tiny + low-confidence interims must NOT cancel the assistant.
+    // Tiny + low-confidence interims must NOT cancel the assistant. A barge-in
+    // cancels inside emit(), so there is nothing to wait for.
     stt.emit({ text: 'hi', isFinal: false, confidence: 0.9 }); // too short
     stt.emit({ text: 'hello there', isFinal: false, confidence: 0.1 }); // too low confidence
-    await delay(20);
     expect(tts.cancelled.size).toBe(0);
 
-    await runtime.awaitIdle('s-echo');
+    await runtime.endSession('s-echo', 'test');
   });
 
   it('ends the session when the audio transport closes (ungraceful hangup)', async () => {
@@ -387,12 +497,13 @@ describe('VoiceRuntime', () => {
     expect(runtime.activeSessionCount).toBe(1);
 
     transport.emitClose('principal_disconnected');
-    // Allow the void endSession to settle.
-    await delay(30);
 
+    // The close ends the session through a void endSession: wait for its last step.
+    await vi.waitFor(() => {
+      expect(events.filter(e => e.type === 'voice.session.ended')).toHaveLength(1);
+    });
     expect(runtime.activeSessionCount).toBe(0);
     expect(transport.disconnectCount).toBe(1);
-    expect(events.filter(e => e.type === 'voice.session.ended')).toHaveLength(1);
     expect(deleteRoom).toHaveBeenCalledWith('voice-s-close');
   });
 
@@ -471,12 +582,13 @@ describe('VoiceRuntime', () => {
 
     // SignalCallBridge.handleEnded: notifyRemoteHangup() fires onClose, which starts
     // ending the session and parks in disconnect; then it calls endSession itself.
+    // Both calls are made while the first teardown is parked: the close's endSession
+    // reaches disconnect synchronously, and the explicit one joins it at once.
     transport.emitClose('principal_disconnected');
     const remote = runtime.endSession('s-race', 'remote_hangup');
-    await delay(10);
     releaseDisconnect();
+    // Resolves after the store write and the ended event's delivery.
     const record = await remote;
-    await delay(10);
 
     // The explicit hangup reason wins over the transport close, as it did before.
     expect(endReasons).toEqual(['remote_hangup']);
@@ -517,14 +629,15 @@ describe('VoiceRuntime', () => {
     let reenter: (() => void) | null = null;
     // tts.cancel runs in teardown's synchronous prefix; a provider error path
     // that ends the session from there must not publish an event without stats.
-    class ReentrantTts extends SlowTtsProvider {
+    // Held, so a stream is still open for teardown to cancel.
+    class ReentrantTts extends HoldingTtsProvider {
       override cancel(streamId: string): void {
         super.cancel(streamId);
         reenter?.();
       }
     }
     const { store, endReasons } = fakeStore();
-    const { runtime, events, stt, transport } = makeRuntime({ llm, store, tts: new ReentrantTts(50, 5) });
+    const { runtime, events, stt, transport } = makeRuntime({ llm, store, tts: new ReentrantTts() });
     await runtime.startSession({
       sessionId: 's-reenter',
       conversationId: 'voice:s-reenter',
@@ -630,8 +743,10 @@ describe('VoiceRuntime', () => {
 
     stt.emit({ text: 'three', isFinal: true, speechFinal: true });
     await runtime.awaitIdle('s-tts-fail');
-    // void endSession from the third failure — let it settle.
-    await delay(30);
+    // void endSession from the third failure: wait for its last step.
+    await vi.waitFor(() => {
+      expect(events.filter(e => e.type === 'voice.session.ended')).toHaveLength(1);
+    });
 
     expect(tts.failures.length).toBeGreaterThanOrEqual(3);
     expect(runtime.activeSessionCount).toBe(0);
@@ -664,6 +779,8 @@ describe('VoiceRuntime', () => {
     await runtime.awaitIdle('s-tts-blip');
     stt.emit({ text: 'two', isFinal: true, speechFinal: true });
     await runtime.awaitIdle('s-tts-blip');
+    // Negative check: lets a wrongly fired void endSession land. A slow runner
+    // only shortens what it can catch, never fails a correct run.
     await delay(20);
 
     expect(tts.failures).toBe(1);
@@ -690,7 +807,10 @@ describe('VoiceRuntime', () => {
 
     stt.emit({ text: 'hello', isFinal: true, speechFinal: true });
     await runtime.awaitIdle('s-tts-hard');
-    await delay(30);
+    // The hard failure ends the session through a void endSession.
+    await vi.waitFor(() => {
+      expect(events.filter(e => e.type === 'voice.session.ended')).toHaveLength(1);
+    });
 
     expect(tts.failures).toHaveLength(1);
     expect(runtime.activeSessionCount).toBe(0);
@@ -732,6 +852,8 @@ describe('VoiceRuntime', () => {
       stt.emit({ text: utter, isFinal: true, speechFinal: true });
       await runtime.awaitIdle('s-pub-fail');
     }
+    // Negative check: lets a wrongly fired void endSession land. A slow runner
+    // only shortens what it can catch, never fails a correct run.
     await delay(30);
 
     // Three publish-failed turns must not escalate to tts_error.
@@ -762,7 +884,7 @@ describe('VoiceRuntime', () => {
     expect(invokeTool).toHaveBeenCalledOnce();
   });
 
-  it('barge-in during a hung tool unwinds within 100ms and drops the late result (#2265)', async () => {
+  it('barge-in during a hung tool unwinds without waiting for it and drops the late result (#2265)', async () => {
     const lateResult = 'LATE_SECRET_RESULT_should_not_leak';
     let releaseTool: (result: { content: string }) => void = () => {};
     const gate = new Promise<{ content: string }>((resolve) => {
@@ -810,7 +932,6 @@ describe('VoiceRuntime', () => {
       expect(invokeTool).toHaveBeenCalledOnce();
     });
 
-    const bargeAt = Date.now();
     stt.emit({ text: 'never mind the lookup', isFinal: true, speechFinal: true, confidence: 0.95 });
     await vi.waitFor(() => {
       const followUp = llm.seenMessages.findIndex((msgs) =>
@@ -818,20 +939,14 @@ describe('VoiceRuntime', () => {
       );
       expect(followUp).toBeGreaterThan(0);
     });
-    const followUp = llm.seenMessages.findIndex((msgs) =>
-      msgs.some((m) => m.content === 'never mind the lookup'),
-    );
-    // toolSettled staying false is the proof the follow-up did not wait on the
-    // tool. The clock is only a margin under the 15s skill timeout: a loaded
-    // runner can miss a tight bound even when the logic is right (#2265 review).
+    // The tool is gated until releaseTool below, so toolSettled staying false is
+    // the proof the follow-up did not wait on it. No clock bound: a loaded runner
+    // can miss one even when the logic is right (#2265 review, #2652).
     expect(toolSettled).toBe(false);
-    expect(llm.streamStartedAt[followUp]! - bargeAt).toBeLessThan(1_000);
 
-    const idle = await Promise.race([
-      runtime.awaitIdle('tool-barge').then(() => 'idle' as const),
-      delay(1_000).then(() => 'still-waiting' as const),
-    ]);
-    expect(idle).toBe('idle');
+    // Going idle at all is the proof: a turn that waited on the gated tool never
+    // would, and the test timeout reports it.
+    await runtime.awaitIdle('tool-barge');
     expect(toolSettled).toBe(false);
     const streamsBeforeLateResult = llm.streamStartedAt.length;
     expect(JSON.stringify(llm.seenMessages)).toContain('never mind the lookup');
@@ -1119,12 +1234,9 @@ describe('VoiceRuntime brain/context parity (#1551)', () => {
       await start(runtime, 'sum1');
       stt.emit({ text: 'what is next', isFinal: true, speechFinal: true });
 
-      const idle = runtime.awaitIdle('sum1');
-      const outcome = await Promise.race([
-        idle.then(() => 'reply' as const),
-        delay(2_000).then(() => 'blocked' as const),
-      ]);
-      expect(outcome).toBe('reply');
+      // The summarizer is held until the finally below, so going idle at all is the
+      // proof: a turn blocked on it never would, and the test timeout reports it.
+      await runtime.awaitIdle('sum1');
       expect(transport.publishedFrames.length).toBeGreaterThan(0);
       expect(llm.seenMessages.length).toBeGreaterThan(0);
       await vi.waitFor(() => expect(summarizer.chat).toHaveBeenCalled());
@@ -1755,9 +1867,10 @@ describe('VoiceRuntime orphaned-user history sanitization (#1776)', () => {
       ],
       3,
     );
-    const { runtime, stt, events } = makeRuntime({
+    // The first reply stays playing until the barge-in; the second plays and ends.
+    const { runtime, stt, events, transport } = makeRuntime({
       llm,
-      tts: new SlowTtsProvider(50, 5),
+      tts: new HoldingTtsProvider(),
       workingMemory: wm,
     });
     await runtime.startSession({
@@ -1770,7 +1883,11 @@ describe('VoiceRuntime orphaned-user history sanitization (#1776)', () => {
     });
 
     stt.emit({ text: 'book me a flight to Tokyo next Tuesday', isFinal: true, speechFinal: true });
-    await delay(40);
+    // The reply must have been heard. Speech before its first frame joins the two
+    // utterances into one turn instead (#2240): a fixed 40 ms sleep landed there
+    // on a loaded runner, and the second call never saw the first utterance (#2652).
+    await waitForPublishedFrame(transport);
+    expect(transport.publishedFrames.length).toBeGreaterThan(0);
     stt.emit({ text: 'wait, make it business class', isFinal: true, speechFinal: true, confidence: 0.9 });
     await runtime.awaitIdle('barge-ref');
 
@@ -1798,19 +1915,15 @@ describe('VoiceRuntime orphaned-user history sanitization (#1776)', () => {
 
   it('joins a turn cancelled before any audio to the next utterance, with no failure marker (#2240)', async () => {
     const wm = WorkingMemory.createInMemory();
-    const outbound = new OutboundContextService(
-      { query: async () => ({ rows: [] }) } as never,
-      logger,
-    );
     // Holds the first turn in its prelude, so barge-in cancels it before any audio.
-    outbound.getActive = () => new Promise(() => {});
+    const stalled = stalledOutboundContext();
 
     const llm = new FakeStreamProvider([reply('Afternoon only.')]);
     const { runtime, stt, events } = makeRuntime({
       llm,
       tts: new SlowTtsProvider(2, 1),
       workingMemory: wm,
-      outboundContextService: outbound,
+      outboundContextService: stalled.outbound,
       historyReadTimeoutMs: 80,
     });
     await runtime.startSession({
@@ -1823,7 +1936,8 @@ describe('VoiceRuntime orphaned-user history sanitization (#1776)', () => {
     });
 
     stt.emit({ text: "what's on my calendar?", isFinal: true, speechFinal: true });
-    await delay(20);
+    // In the prelude, before its deadline: a fixed sleep could outlast the 80 ms.
+    await stalled.reached(1);
     stt.emit({ text: 'just the afternoon', isFinal: true, speechFinal: true, confidence: 0.9 });
     await runtime.awaitIdle('prelude-abort');
 
@@ -2201,8 +2315,9 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
       ],
       3,
     );
-    const tts = new SlowTtsProvider(50, 5);
-    const { runtime, stt, events } = makeRuntime({ llm, tts });
+    // The greeting stays playing until the barge-in; the user turn's reply plays and ends.
+    const tts = new HoldingTtsProvider();
+    const { runtime, stt, events, transport } = makeRuntime({ llm, tts });
 
     await runtime.startSession({
       sessionId: 'g3',
@@ -2214,8 +2329,8 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
     });
 
     // Let the greeting start speaking.
-    await delay(40);
-    expect(tts.requests.length).toBeGreaterThan(0);
+    await waitForPublishedFrame(transport);
+    expect(transport.publishedFrames.length).toBeGreaterThan(0);
 
     // Principal interrupts mid-greeting.
     stt.emit({ text: 'what is on my calendar', isFinal: false, confidence: 0.9 });
@@ -2682,6 +2797,18 @@ describe('VoiceRuntime contact recent history (#1599)', () => {
 });
 
 describe('VoiceRuntime turn-taking: hold, join, coalesce (#2240)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * The hold window is a setTimeout, so the hold tests fake it and move time by
+   * hand. Their TTS is instant, so a turn needs no timer to finish.
+   */
+  function fakeHoldTimer(): void {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  }
+
   async function start(runtime: VoiceRuntime, sessionId: string): Promise<void> {
     await runtime.startSession({
       sessionId,
@@ -2694,22 +2821,23 @@ describe('VoiceRuntime turn-taking: hold, join, coalesce (#2240)', () => {
   }
 
   it('runs a multi-clause utterance with sub-second pauses as one turn, with no cancels', async () => {
+    fakeHoldTimer();
     const llm = new FakeStreamProvider([replyScript('On it.')]);
-    const { runtime, stt, events } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), turnHoldMs: 80 });
+    const { runtime, stt, events } = makeRuntime({ llm, tts: new InstantTtsProvider(), turnHoldMs: 80 });
     await start(runtime, 'hold-multi');
 
     // Each clause ends in an end-of-speech signal, as Deepgram sends at a pause.
     stt.emit({ text: 'I want you to research', isFinal: true, speechFinal: true });
-    await delay(30);
+    await vi.advanceTimersByTimeAsync(30);
     stt.emit({ text: 'tutoring', isFinal: false, confidence: 0.9 });
     stt.emit({ text: 'tutoring programs for Evan', isFinal: true, speechFinal: true });
-    await delay(30);
+    await vi.advanceTimersByTimeAsync(30);
     stt.emit({ text: 'near his school', isFinal: true, speechFinal: true });
     // Deepgram's UtteranceEnd follows speech_final and must not count again.
     stt.emit({ text: '', isFinal: true, speechFinal: true });
     expect(llm.seenMessages).toHaveLength(0);
 
-    await delay(150);
+    await vi.advanceTimersByTimeAsync(150);
     await runtime.awaitIdle('hold-multi');
 
     expect(llm.seenMessages).toHaveLength(1);
@@ -2719,38 +2847,40 @@ describe('VoiceRuntime turn-taking: hold, join, coalesce (#2240)', () => {
   });
 
   it('extends the pending utterance when speech arrives inside the hold window', async () => {
+    fakeHoldTimer();
     const llm = new FakeStreamProvider([replyScript('Got it.')]);
-    const { runtime, stt, events } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), turnHoldMs: 100 });
+    const { runtime, stt, events } = makeRuntime({ llm, tts: new InstantTtsProvider(), turnHoldMs: 100 });
     await start(runtime, 'hold-extend');
 
     stt.emit({ text: 'His school is', isFinal: true, speechFinal: true });
-    await delay(60);
+    await vi.advanceTimersByTimeAsync(60);
     // The caller resumes before the hold expires.
     stt.emit({ text: 'Oakbridge', isFinal: false, confidence: 0.9 });
-    await delay(80);
+    await vi.advanceTimersByTimeAsync(80);
     // Past the first hold's deadline: no turn, because the speech restarted it.
     expect(llm.seenMessages).toHaveLength(0);
 
     stt.emit({ text: 'Oakbridge Academy', isFinal: true, speechFinal: true });
-    await delay(50);
+    await vi.advanceTimersByTimeAsync(50);
     // The re-armed hold has not expired yet.
     expect(llm.seenMessages).toHaveLength(0);
 
-    await delay(120);
+    await vi.advanceTimersByTimeAsync(120);
     await runtime.awaitIdle('hold-extend');
     expect(llm.seenMessages).toHaveLength(1);
     expect(inboundContents(events)).toEqual(['His school is Oakbridge Academy']);
   });
 
   it('ignores echo-sized or low-confidence speech inside the hold window', async () => {
+    fakeHoldTimer();
     const llm = new FakeStreamProvider([replyScript('Sure.')]);
-    const { runtime, stt, events } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), turnHoldMs: 60 });
+    const { runtime, stt, events } = makeRuntime({ llm, tts: new InstantTtsProvider(), turnHoldMs: 60 });
     await start(runtime, 'hold-noise');
 
     stt.emit({ text: 'call Dana', isFinal: true, speechFinal: true });
     stt.emit({ text: 'mm', isFinal: false, confidence: 0.9 });
     stt.emit({ text: 'something', isFinal: false, confidence: 0.1 });
-    await delay(120);
+    await vi.advanceTimersByTimeAsync(120);
     await runtime.awaitIdle('hold-noise');
 
     expect(inboundContents(events)).toEqual(['call Dana']);
@@ -2764,74 +2894,78 @@ describe('VoiceRuntime turn-taking: hold, join, coalesce (#2240)', () => {
       replyScript('Understood.'),
       replyScript('Understood.'),
     ]);
-    const invokeTool = vi.fn(async () => {
-      await delay(150);
-      return { content: 'queued' };
-    });
+    // Stalled until the test releases it, so the speech below always lands mid-tool.
+    const toolGate = deferred<{ content: string }>();
+    const invokeTool = vi.fn(() => toolGate.promise);
     const { runtime, stt, events } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), invokeTool });
     await start(runtime, 'coalesce');
 
     stt.emit({ text: 'look into tutoring for Evan', isFinal: true, speechFinal: true });
-    await delay(40);
-    expect(invokeTool).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(invokeTool).toHaveBeenCalledOnce();
+    });
 
     stt.emit({ text: 'Before they begin that work,', isFinal: true, speechFinal: true, confidence: 0.9 });
     stt.emit({ text: 'find facilities that', isFinal: true, speechFinal: true, confidence: 0.9 });
     stt.emit({ text: 'are close to his school', isFinal: true, speechFinal: true, confidence: 0.9 });
     await runtime.awaitIdle('coalesce');
+    toolGate.resolve({ content: 'queued' });
 
     expect(inboundContents(events)).toEqual([
       'look into tutoring for Evan',
       'Before they begin that work, find facilities that are close to his school',
     ]);
     await runtime.endSession('coalesce', 'test');
-    // The stalled turn had played its filler, so it is a real barge-in, not joined.
+    // The stalled turn had invoked a tool, so it is a real barge-in, not joined.
     expect(endedTurnStats(events)).toEqual({ utterances: 4, turns: 2, bargeInCancels: 1, joinedUtterances: 2, unbackedCompletionClaims: 0 });
   });
 
   it('still runs the held utterance when an interim restarts the hold and no final follows', async () => {
+    fakeHoldTimer();
     const llm = new FakeStreamProvider([replyScript('Okay.')]);
-    const { runtime, stt, events } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), turnHoldMs: 60 });
+    const { runtime, stt, events } = makeRuntime({ llm, tts: new InstantTtsProvider(), turnHoldMs: 60 });
     await start(runtime, 'hold-revised');
 
     stt.emit({ text: 'send it to Dana', isFinal: true, speechFinal: true });
-    await delay(30);
+    await vi.advanceTimersByTimeAsync(30);
     // An interim Deepgram later revises away: no final, no end-of-speech.
     stt.emit({ text: 'hmm well', isFinal: false, confidence: 0.9 });
-    await delay(150);
+    await vi.advanceTimersByTimeAsync(150);
     await runtime.awaitIdle('hold-revised');
 
     expect(inboundContents(events)).toEqual(['send it to Dana']);
   });
 
   it('re-arms the hold on an end-of-speech that adds a short or low-confidence word', async () => {
+    fakeHoldTimer();
     const llm = new FakeStreamProvider([replyScript('Will do.')]);
-    const { runtime, stt, events } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), turnHoldMs: 100 });
+    const { runtime, stt, events } = makeRuntime({ llm, tts: new InstantTtsProvider(), turnHoldMs: 100 });
     await start(runtime, 'hold-short');
 
     stt.emit({ text: 'call Dana', isFinal: true, speechFinal: true });
-    await delay(70);
+    await vi.advanceTimersByTimeAsync(70);
     // "ok" fails the speech gate (too short) but is part of the utterance.
     stt.emit({ text: 'ok', isFinal: true, speechFinal: true });
-    await delay(60);
-    // Past the first deadline (100 ms), inside the re-armed one (~170 ms).
+    await vi.advanceTimersByTimeAsync(60);
+    // Past the first deadline (100 ms), inside the re-armed one (170 ms).
     expect(llm.seenMessages).toHaveLength(0);
 
-    await delay(120);
+    await vi.advanceTimersByTimeAsync(120);
     await runtime.awaitIdle('hold-short');
     expect(inboundContents(events)).toEqual(['call Dana ok']);
   });
 
   it('counts a final that lands after end-of-speech in the turn the hold flushes it into', async () => {
+    fakeHoldTimer();
     const llm = new FakeStreamProvider([replyScript('Calling her.')]);
-    const { runtime, stt, events } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), turnHoldMs: 60 });
+    const { runtime, stt, events } = makeRuntime({ llm, tts: new InstantTtsProvider(), turnHoldMs: 60 });
     await start(runtime, 'hold-open-words');
 
     stt.emit({ text: 'call Dana', isFinal: true, speechFinal: true });
-    await delay(20);
+    await vi.advanceTimersByTimeAsync(20);
     // A final segment with no end-of-speech of its own; "ok" is too short to restart the hold.
     stt.emit({ text: 'ok', isFinal: true });
-    await delay(100);
+    await vi.advanceTimersByTimeAsync(100);
     await runtime.awaitIdle('hold-open-words');
     expect(inboundContents(events)).toEqual(['call Dana ok']);
 
@@ -2841,49 +2975,76 @@ describe('VoiceRuntime turn-taking: hold, join, coalesce (#2240)', () => {
     expect(endedTurnStats(events)).toEqual({ utterances: 2, turns: 1, bargeInCancels: 0, joinedUtterances: 1, unbackedCompletionClaims: 0 });
   });
 
-  /** Working memory whose history reads take `ms`, so a user turn sits in its preamble. */
-  function slowHistoryMemory(ms: number): WorkingMemory {
+  /**
+   * Working memory whose first `heldReads` turn-context reads wait until the test
+   * calls release(), so a user turn sits in its preamble for as long as the test
+   * needs. `reached(n)` resolves when the nth held read starts, before the turn
+   * arms its read deadline. Raw reads (pairing checks, the test's own) pass through.
+   */
+  function heldHistoryMemory(heldReads: number): {
+    wm: WorkingMemory;
+    reached: (n: number) => Promise<void>;
+    release: () => void;
+  } {
     const wm = WorkingMemory.createInMemory();
     const read = wm.getHistory.bind(wm);
+    const started = arrivals();
+    const waiting: Array<() => void> = [];
+    let held = 0;
     vi.spyOn(wm, 'getHistory').mockImplementation(async (...args: Parameters<typeof read>) => {
-      await delay(ms);
+      if (!args[2]?.raw && held < heldReads) {
+        held += 1;
+        const gate = deferred();
+        waiting.push(gate.resolve);
+        started.arrive();
+        await gate.promise;
+      }
       return read(...args);
     });
-    return wm;
+    return {
+      wm,
+      reached: started.reached,
+      release: () => {
+        for (const resolve of waiting.splice(0)) resolve();
+      },
+    };
   }
 
   it('joins speech that arrives during a user turn\'s preamble instead of queuing a second turn', async () => {
-    const wm = slowHistoryMemory(80);
+    const memory = heldHistoryMemory(1);
     const llm = new FakeStreamProvider([replyScript('Booked.'), replyScript('Booked.')]);
-    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: wm });
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: memory.wm });
     await start(runtime, 'preamble');
 
     stt.emit({ text: 'book the boardroom', isFinal: true, speechFinal: true });
-    await delay(20);
+    await memory.reached(1);
     // The first turn is still reading history; nothing has been sent to the model.
     expect(llm.seenMessages).toHaveLength(0);
     stt.emit({ text: 'for Thursday at ten', isFinal: true, speechFinal: true, confidence: 0.9 });
+    memory.release();
     await runtime.awaitIdle('preamble');
 
     expect(llm.seenMessages).toHaveLength(1);
     const messages = llm.seenMessages[0]!;
     expect(messages[messages.length - 1]).toEqual({ role: 'user', content: 'book the boardroom for Thursday at ten' });
-    const stored = await wm.getHistory('voice:preamble', 'coordinator', { raw: true });
+    const stored = await memory.wm.getHistory('voice:preamble', 'coordinator', { raw: true });
     expect(stored.some(t => t.content === LLM_FAILURE_TURN_CONTENT)).toBe(false);
   });
 
   it('counts a chain of silent cancels once: utterances = turns + joined', async () => {
-    const wm = slowHistoryMemory(80);
+    const memory = heldHistoryMemory(2);
     const llm = new FakeStreamProvider([replyScript('Got it.')]);
-    const { runtime, stt, events } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: wm });
+    const { runtime, stt, events } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: memory.wm });
     await start(runtime, 'chain');
 
     stt.emit({ text: 'find tutoring', isFinal: true, speechFinal: true });
-    await delay(20);
+    await memory.reached(1);
     stt.emit({ text: 'near his school', isFinal: true, speechFinal: true, confidence: 0.9 });
-    // The joined turn starts once the first unwinds (~80 ms); cancel it in its preamble too.
-    await delay(90);
+    memory.release();
+    // The joined turn starts once the first unwinds; cancel it in its preamble too.
+    await memory.reached(2);
     stt.emit({ text: 'after three pm', isFinal: true, speechFinal: true, confidence: 0.9 });
+    memory.release();
     await runtime.awaitIdle('chain');
 
     expect(llm.seenMessages).toHaveLength(1);
@@ -2897,20 +3058,21 @@ describe('VoiceRuntime turn-taking: hold, join, coalesce (#2240)', () => {
   });
 
   it('pairs a carried-over utterance with the failure marker when the caller hangs up', async () => {
-    const wm = slowHistoryMemory(60);
+    const memory = heldHistoryMemory(1);
     const llm = new FakeStreamProvider([replyScript('Never spoken.')]);
-    const { runtime, stt, events } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: wm });
+    const { runtime, stt, events } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: memory.wm });
     await start(runtime, 'carry-hangup');
 
     stt.emit({ text: 'move my three o clock', isFinal: true, speechFinal: true });
-    await delay(20);
+    await memory.reached(1);
     // Speech cancels the turn before any audio, but never finalizes.
     stt.emit({ text: 'hold on a sec', isFinal: false, confidence: 0.9 });
+    memory.release();
     await runtime.awaitIdle('carry-hangup');
     await runtime.endSession('carry-hangup', 'test');
 
     expect(llm.seenMessages).toHaveLength(0);
-    const stored = await wm.getHistory('voice:carry-hangup', 'coordinator', { raw: true });
+    const stored = await memory.wm.getHistory('voice:carry-hangup', 'coordinator', { raw: true });
     expect(stored).toEqual([
       { role: 'user', content: 'move my three o clock' },
       { role: 'assistant', content: LLM_FAILURE_TURN_CONTENT },
@@ -2919,26 +3081,27 @@ describe('VoiceRuntime turn-taking: hold, join, coalesce (#2240)', () => {
   });
 
   it('pairs the carried-over part when the join would exceed maxUtteranceBytes', async () => {
-    const wm = slowHistoryMemory(60);
+    const memory = heldHistoryMemory(1);
     const llm = new FakeStreamProvider([replyScript('Planning review noted.')]);
     const { runtime, stt, events } = makeRuntime({
       llm,
       tts: new SlowTtsProvider(2, 1),
-      workingMemory: wm,
+      workingMemory: memory.wm,
       maxUtteranceBytes: 40,
     });
     await start(runtime, 'carry-oversize');
 
     stt.emit({ text: 'please book the conference room', isFinal: true, speechFinal: true });
-    await delay(20);
+    await memory.reached(1);
     stt.emit({ text: 'for the quarterly planning review', isFinal: true, speechFinal: true, confidence: 0.9 });
+    memory.release();
     await runtime.awaitIdle('carry-oversize');
 
     expect(inboundContents(events)).toEqual([
       'please book the conference room',
       'for the quarterly planning review',
     ]);
-    const stored = await wm.getHistory('voice:carry-oversize', 'coordinator', { raw: true });
+    const stored = await memory.wm.getHistory('voice:carry-oversize', 'coordinator', { raw: true });
     expect(stored.slice(0, 2)).toEqual([
       { role: 'user', content: 'please book the conference room' },
       { role: 'assistant', content: LLM_FAILURE_TURN_CONTENT },
@@ -2954,19 +3117,20 @@ describe('VoiceRuntime turn-taking: hold, join, coalesce (#2240)', () => {
       replyScript('Copied Dana.'),
       replyScript('Copied Dana.'),
     ]);
-    const invokeTool = vi.fn(async () => {
-      await delay(50);
-      return { content: 'sent' };
-    });
+    // Held until the test releases it, so the speech below always lands mid-tool.
+    const toolGate = deferred<{ content: string }>();
+    const invokeTool = vi.fn(() => toolGate.promise);
     // A TTS that yields no frames: the filler finishes without anything heard.
     const { runtime, stt, events } = makeRuntime({ llm, tts: new SlowTtsProvider(0, 1), invokeTool, workingMemory: wm });
     await start(runtime, 'tool-silent');
 
     stt.emit({ text: 'email the board the deck', isFinal: true, speechFinal: true });
-    await delay(20);
-    expect(invokeTool).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(invokeTool).toHaveBeenCalledOnce();
+    });
     stt.emit({ text: 'and cc Dana', isFinal: true, speechFinal: true, confidence: 0.9 });
     await runtime.awaitIdle('tool-silent');
+    toolGate.resolve({ content: 'sent' });
 
     // Joined, the model would see the send request again and could resend it.
     expect(inboundContents(events)).toEqual(['email the board the deck', 'and cc Dana']);
@@ -2981,13 +3145,18 @@ describe('VoiceRuntime turn-taking: hold, join, coalesce (#2240)', () => {
   });
 
   it('drops a pending hold when the session ends', async () => {
+    fakeHoldTimer();
     const llm = new FakeStreamProvider([replyScript('Never spoken.')]);
-    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), turnHoldMs: 50 });
+    const { runtime, stt } = makeRuntime({ llm, tts: new InstantTtsProvider(), turnHoldMs: 50 });
     await start(runtime, 'hold-hangup');
 
     stt.emit({ text: 'one more thing', isFinal: true, speechFinal: true });
+    expect(vi.getTimerCount()).toBe(1);
     await runtime.endSession('hold-hangup', 'test');
-    await delay(100);
+    // Teardown cleared the hold. A flush that fired anyway would stop at
+    // `ending`, so the timer itself is what shows the hold was dropped.
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(100);
 
     expect(llm.seenMessages).toHaveLength(0);
   });
@@ -3399,7 +3568,9 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
       purgeExpired: async () => 0,
     } as unknown as WorkingMemory;
     const llm = new FakeStreamProvider([replyScript('A long answer.')]);
-    const tts = new SlowTtsProvider(5, 200);
+    // Held before its first frame until the mute cancels it: a frame that played
+    // first would make the reply heard, and saved.
+    const tts = new HoldingTtsProvider(0);
     const { runtime, stt, transport } = makeRuntime({
       llm,
       tts,
@@ -3440,17 +3611,9 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
       }),
       purgeExpired: async () => 0,
     } as unknown as WorkingMemory;
-    // The second sentence reaches TTS but its first frame is slow.
-    class SlowSecondSentenceTts extends SlowTtsProvider {
-      readonly asked: string[] = [];
-      override async *synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame> {
-        this.asked.push(opts.text);
-        if (opts.text.includes('Never heard')) await delay(400);
-        yield* super.synthesize(opts);
-      }
-    }
+    // The second sentence reaches TTS, but its first frame never comes before the mute.
     const llm = new FakeStreamProvider([replyScript('First one. Never heard this part.')]);
-    const tts = new SlowSecondSentenceTts(3, 5);
+    const tts = new HoldingTtsProvider(0, opts => opts.text.includes('Never heard'));
     const { runtime, stt, transport } = makeRuntime({
       llm,
       tts,
@@ -3467,7 +3630,7 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
     });
     stt.emit({ text: 'hello curia', isFinal: true, speechFinal: true });
     await vi.waitFor(() => {
-      expect(tts.asked).toContain('Never heard this part.');
+      expect(tts.requests.map(request => request.text)).toContain('Never heard this part.');
     });
     transport.emitCallerMuted(true);
     await runtime.awaitIdle('s-queued');
@@ -3488,7 +3651,8 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
       purgeExpired: async () => 0,
     } as unknown as WorkingMemory;
     const llm = new FakeStreamProvider([replyScript('Heard this. The rest stays quiet.')]);
-    const tts = new SlowTtsProvider(40, 20);
+    // One frame, then held until the mute: the first sentence is heard, unfinished.
+    const tts = new HoldingTtsProvider();
     const { runtime, stt, transport } = makeRuntime({
       llm,
       tts,
@@ -3518,16 +3682,12 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
   });
 
   it('an idle mute does not replay a later barge-in as its own turn', async () => {
-    const outbound = new OutboundContextService(
-      { query: async () => ({ rows: [] }) } as never,
-      logger,
-    );
-    outbound.getActive = () => new Promise(() => {});
+    const stalled = stalledOutboundContext();
     const llm = new FakeStreamProvider([replyScript('Afternoon only.')]);
     const { runtime, stt, transport } = makeRuntime({
       llm,
       tts: new SlowTtsProvider(2, 1),
-      outboundContextService: outbound,
+      outboundContextService: stalled.outbound,
       historyReadTimeoutMs: 80,
       pauseGraceMs: 60_000,
     });
@@ -3543,11 +3703,12 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
     transport.emitCallerMuted(true);
     transport.emitCallerMuted(false);
     stt.emit({ text: "what's on my calendar?", isFinal: true, speechFinal: true });
-    await delay(20);
+    await stalled.reached(1);
     // The barge-in is an interim; its final comes later. A stale hold would
-    // speak the first half alone in the gap between them.
+    // speak the first half alone in the gap between them, which lasts until
+    // the cancelled turn and anything it set off have run.
     stt.emit({ text: 'just the', isFinal: false, speechFinal: false, confidence: 0.9 });
-    await delay(300);
+    await runtime.awaitIdle('s-idle-barge');
     stt.emit({ text: 'just the afternoon', isFinal: true, speechFinal: true, confidence: 0.9 });
     await runtime.awaitIdle('s-idle-barge');
 
@@ -3561,16 +3722,12 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
   });
 
   it('an unmute with no pause in effect does not speak a barge-in carry alone', async () => {
-    const outbound = new OutboundContextService(
-      { query: async () => ({ rows: [] }) } as never,
-      logger,
-    );
-    outbound.getActive = () => new Promise(() => {});
+    const stalled = stalledOutboundContext();
     const llm = new FakeStreamProvider([replyScript('Afternoon only.'), replyScript('Afternoon only.')]);
     const { runtime, stt, transport } = makeRuntime({
       llm,
       tts: new SlowTtsProvider(2, 1),
-      outboundContextService: outbound,
+      outboundContextService: stalled.outbound,
       historyReadTimeoutMs: 80,
       pauseGraceMs: 60_000,
     });
@@ -3584,9 +3741,10 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
     });
 
     stt.emit({ text: "what's on my calendar?", isFinal: true, speechFinal: true });
-    await delay(20);
+    await stalled.reached(1);
     stt.emit({ text: 'just the', isFinal: false, speechFinal: false, confidence: 0.9 });
-    await delay(150);
+    // The cancelled turn unwinds and leaves its carry.
+    await runtime.awaitIdle('s-stray-unmute');
     // A Mute-button release (curia.mute=user, or the track unmuting) with no
     // background pause before it.
     transport.emitCallerMuted(false);
@@ -3604,16 +3762,12 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
   });
 
   it('a mute and unmute during the greeting leave no hold for a later barge-in', async () => {
-    const outbound = new OutboundContextService(
-      { query: async () => ({ rows: [] }) } as never,
-      logger,
-    );
-    outbound.getActive = () => new Promise(() => {});
+    const stalled = stalledOutboundContext();
     const llm = new FakeStreamProvider([replyScript('Afternoon only.'), replyScript('Afternoon only.')]);
     const { runtime, stt, transport } = makeRuntime({
       llm,
       tts: new SlowTtsProvider(2, 1),
-      outboundContextService: outbound,
+      outboundContextService: stalled.outbound,
       historyReadTimeoutMs: 80,
       pauseGraceMs: 60_000,
     });
@@ -3626,16 +3780,17 @@ describe('VoiceRuntime meeting notes (#2347)', () => {
     });
 
     // The greeting is still loading context: no audio yet.
-    await delay(10);
+    await stalled.reached(1);
     transport.emitCallerMuted(true);
     transport.emitCallerMuted(false);
     await runtime.awaitIdle('s-greet-mute');
     expect(llm.seenMessages).toHaveLength(0);
 
     stt.emit({ text: "what's on my calendar?", isFinal: true, speechFinal: true });
-    await delay(20);
+    await stalled.reached(2);
     stt.emit({ text: 'just the', isFinal: false, speechFinal: false, confidence: 0.9 });
-    await delay(300);
+    // The gap a stale hold would speak the first half alone in.
+    await runtime.awaitIdle('s-greet-mute');
     stt.emit({ text: 'just the afternoon', isFinal: true, speechFinal: true, confidence: 0.9 });
     await runtime.awaitIdle('s-greet-mute');
 
@@ -3796,12 +3951,21 @@ describe('VoiceRuntime audio timing telemetry (#2379)', () => {
       caller: principalCaller(),
       openingGreeting: false,
     });
-    stt.emit({ text: 'tell me a story', isFinal: true, speechFinal: true });
-    await vi.waitFor(() => expect(transport.publishedFrames.length).toBeGreaterThan(5));
-    transport.queuedMs = 840;
+    // Freeze Date before the turn, so the audio accepted ahead of the clock stays
+    // ahead however long the runner pauses before the barge-in (#2652). If the
+    // reply finishes first, its queued audio still takes the same barge-in path.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      stt.emit({ text: 'tell me a story', isFinal: true, speechFinal: true });
+      await waitForPublishedFrame(transport, 2_000, 6);
+      expect(transport.publishedFrames.length).toBeGreaterThan(5);
+      transport.queuedMs = 840;
 
-    stt.emit({ text: 'actually wait', isFinal: false, confidence: 0.9, speechStartedAgoMs: 350 });
-    await runtime.awaitIdle('barge-log');
+      stt.emit({ text: 'actually wait', isFinal: false, confidence: 0.9, speechStartedAgoMs: 350 });
+      await runtime.awaitIdle('barge-log');
+    } finally {
+      vi.useRealTimers();
+    }
 
     const [barge] = infoFields(info, 'voice barge-in: cancelled assistant turn');
     expect(barge).toMatchObject({
@@ -3822,9 +3986,13 @@ describe('VoiceRuntime audio timing telemetry (#2379)', () => {
     const publishGate = new Promise<void>(resolve => {
       releasePublish = resolve;
     });
+    const atGate = deferred();
     class SlowPublishTransport extends FakeAudioTransport {
       override async publishAudio(frame: PcmFrame): Promise<void> {
-        if (this.publishedFrames.length === 2) await publishGate;
+        if (this.publishedFrames.length === 2) {
+          atGate.resolve();
+          await publishGate;
+        }
         await super.publishAudio(frame);
       }
     }
@@ -3839,8 +4007,8 @@ describe('VoiceRuntime audio timing telemetry (#2379)', () => {
       openingGreeting: false,
     });
     stt.emit({ text: 'tell me a story', isFinal: true, speechFinal: true });
-    await vi.waitFor(() => expect(transport.publishedFrames.length).toBe(2));
-    await delay(10);
+    // The third frame is inside publishAudio, held at the gate.
+    await atGate.promise;
 
     stt.emit({ text: 'actually wait', isFinal: false, confidence: 0.9 });
     expect(transport.clearQueuedAudioCount).toBe(1);
@@ -3877,7 +4045,8 @@ describe('VoiceRuntime audio timing telemetry (#2379)', () => {
   it('logs TTS chunks that arrive slower than real time as starved, and a call summary', async () => {
     const { logger, info } = spyLogger();
     const llm = new FakeStreamProvider([replyScript('Sure.')]);
-    // 160-sample frames are 6.7 ms of audio at 24 kHz, delivered every 20 ms.
+    // 160-sample frames are 6.7 ms of audio at 24 kHz, delivered every 20 ms. A slow
+    // runner only lengthens the gaps, so it cannot make a frame arrive in time.
     const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(5, 20), logger });
     await runtime.startSession({
       sessionId: 'starve',
