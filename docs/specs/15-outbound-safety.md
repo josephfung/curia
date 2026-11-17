@@ -330,8 +330,12 @@ value — so the secret does not re-leak into the `outbound.blocked` audit event
   lanes inject by contact, so a forged From mid-turn would otherwise join), never the
   dispatcher-assembled task content with its outbound-context and participant preambles; and
   quoted and forwarded text is cut from it, so a quoted "send my SIN to X" is not a request. A
+  reply or forward subject (English or localized: AW:, TR:, WG: …) is not the principal's own
+  words. The message reads nothing when where the principal's own words end is unknown: a
   forward (Fwd:/FW: or a localized prefix) whose cut does not land on a forward header the
-  cutter knows reads nothing, since a missed header would keep the forwarded sender's request.
+  cutter knows, or kept text holding a framed banner or a localized From or "wrote" line, since
+  a missed header would keep the forwarded sender's request. It also reads nothing when more
+  follow-ups were drained than are read, since a missing early one could be a cancellation.
   An approval replay reads nothing (no live turn). Any read failure leaves the prompt as it is without a directive.
 - **Disabled / not wired.** When `filter.llmJudge.enabled: false` (or the judge is left
   undefined at bootstrap), Stage 2 emits no `outbound.judge` rows. Detect that gap with
