@@ -24,6 +24,7 @@ import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
 import type { AutonomyService } from '../autonomy/autonomy-service.js';
 import { FailOpenLimiter, type AutonomyGating } from '../autonomy/band-policy.js';
 import type { RelayBudget } from '../autonomy/relay-budget.js';
+import type { SendEvidenceCollector } from '../autonomy/send-evidence.js';
 import type { EventBus } from '../bus/bus.js';
 import type { IdentityGateMode } from '../config.js';
 import type { ContactService } from '../contacts/contact-service.js';
@@ -493,6 +494,13 @@ export interface RecordingGatewayReview {
   relayBudget?: RelayBudget;
   agentPersona?: AgentPersona;
   gating?: AutonomyGating;
+  /**
+   * The drafting turn's evidence, as production wires it (src/index.ts): the gateway reads the
+   * principal's directive for the Stage 2 judge from it (scenario 34d). Without it the harness
+   * would never exercise the directive path, so a principal-directed send would be judged with
+   * no directive in every scenario run while production released on it.
+   */
+  sendEvidence?: Pick<SendEvidenceCollector, 'collect'>;
 }
 
 /**
@@ -541,6 +549,7 @@ export function createRecordingOutboundGateway(deps: {
     autonomyService: deps.autonomyService,
     ...(review.piiRedactor ? { piiRedactor: review.piiRedactor } : {}),
     ...(review.actionLogRepo ? { actionLogRepo: review.actionLogRepo } : {}),
+    ...(review.sendEvidence ? { sendEvidence: review.sendEvidence } : {}),
     // No outboundQueue and no readiness probes: nothing is ever deferred to a later flush,
     // which a real instance sharing the database would perform with real transports.
     gating: review.gating ?? 'tier',

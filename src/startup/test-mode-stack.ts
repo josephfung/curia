@@ -910,6 +910,9 @@ function buildRecordingSends(deps: {
       piiRedactor,
       bandReview,
       actionLogRepo,
+      // The same collector band review and execution read: the gateway reads the principal's
+      // Stage 2 directive from it, as production does.
+      sendEvidence,
       conversationEntities: deps.conversationEntities,
       identityGate: resolveIdentityGateMode(yamlConfig.filter),
       relayBudget: new RelayBudget({ perHour: resolveRelayBudgetConfig(yamlConfig.autonomy).perHour }),
