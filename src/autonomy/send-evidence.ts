@@ -44,7 +44,7 @@ import type { ContactTier, SystemRole } from '../contacts/types.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import { inboundSenderAuthenticated } from '../dispatch/outbound-entry-access.js';
 import type { OutreachLinkKind } from '../dispatch/outreach-matcher.js';
-import { forwardNotCut, senderOwnTextAnyChannel } from '../dispatch/turn-guidance-triggers.js';
+import { ownTextBoundaryUnknown, senderOwnTextAnyChannel } from '../dispatch/turn-guidance-triggers.js';
 import type { TaskOutreachRepo } from '../dispatch/task-outreach.js';
 import type { Logger } from '../logger.js';
 import { createSecretPatterns } from '../security/secret-patterns.js';
@@ -356,12 +356,13 @@ interface InboundPart {
  * (`used`), or why they could not be read.
  */
 type InboundRead =
-  | { ok: true; parts: InboundPart[]; used: Set<string> }
+  /** `truncated`: more follow-ups were drained than ORIGIN_FOLLOW_UPS_LIMIT; the oldest are missing. */
+  | { ok: true; parts: InboundPart[]; used: Set<string>; truncated: boolean }
   | { ok: false; reason: string };
 
 /** What started the chain, as the judge sees it, or why it could not be read. */
 type OriginRead =
-  | { ok: true; content: string; kind: 'inbound' | 'task'; at: string; history: SenderHistory; parts?: InboundPart[] }
+  | { ok: true; content: string; kind: 'inbound' | 'task'; at: string; history: SenderHistory; parts?: InboundPart[]; partsTruncated?: boolean }
   | { ok: false; reason: string };
 
 export class SendEvidenceCollector {
@@ -626,7 +627,7 @@ export class SendEvidenceCollector {
     if (!read.ok) return read;
     const history = await this.readSenderHistory(parent.conversationId ?? root.conversationId, parent.payload['senderId'], parent.timestamp, read.used);
     return {
-      ok: true, kind: 'inbound', at: parent.timestamp.toISOString(), history, parts: read.parts,
+      ok: true, kind: 'inbound', at: parent.timestamp.toISOString(), history, parts: read.parts, partsTruncated: read.truncated,
       content: clipMiddle(redactSecrets(read.parts.map((p) => p.text).join(FOLLOW_UP_SEPARATOR)), EVIDENCE_ORIGIN_MAX_CHARS),
     };
   }
@@ -657,13 +658,18 @@ export class SendEvidenceCollector {
     if (first === null) return { ok: false, reason: 'root inbound has no content' };
     const parts = [first];
     const used = new Set<string>([inbound.id]);
+    let truncated = false;
     if (turn.conversationId !== null) {
       // Turn lanes inject only the host turn's own sender (turn-lanes.ts), so these are that
       // sender's words too. Newest first from the repo, so a cut keeps the latest push; read
       // back oldest first.
-      const ids = await this.deps.auditLogRepo.findInjectedInboundIds(turn.conversationId, turn.id, ORIGIN_FOLLOW_UPS_LIMIT);
-      if (ids.length === ORIGIN_FOLLOW_UPS_LIMIT) {
-        this.deps.logger.info({ rootTaskEventId: turn.id, limit: ORIGIN_FOLLOW_UPS_LIMIT }, 'send-evidence: follow-up limit reached — older follow-ups left out');
+      // One past the limit, so a cut is known for certain (the lane's cap is configurable and can be
+      // higher): the evidence then reads the newest ORIGIN_FOLLOW_UPS_LIMIT, the directive nothing.
+      const found = await this.deps.auditLogRepo.findInjectedInboundIds(turn.conversationId, turn.id, ORIGIN_FOLLOW_UPS_LIMIT + 1);
+      truncated = found.length > ORIGIN_FOLLOW_UPS_LIMIT;
+      const ids = found.slice(0, ORIGIN_FOLLOW_UPS_LIMIT);
+      if (truncated) {
+        this.deps.logger.info({ rootTaskEventId: turn.id, limit: ORIGIN_FOLLOW_UPS_LIMIT }, 'send-evidence: follow-up limit passed — older follow-ups left out');
       }
       for (const id of [...ids].reverse()) {
         const row = await this.deps.auditLogRepo.findById(id);
@@ -673,7 +679,7 @@ export class SendEvidenceCollector {
         used.add(id);
       }
     }
-    return { ok: true, parts, used };
+    return { ok: true, parts, used, truncated };
   }
 
   /**
@@ -703,6 +709,7 @@ export class SendEvidenceCollector {
       let parts: InboundPart[];
       if (origin !== null) {
         if (origin.kind !== 'inbound' || origin.parts === undefined) return leaveOut('delegation root is not an inbound message');
+        if (origin.partsTruncated === true) return leaveOut('more follow-ups were drained than are read; an early one (a cancellation) could be missing');
         parts = origin.parts;
       } else {
         const turn = await this.directingTurn(task, drafting);
@@ -711,6 +718,7 @@ export class SendEvidenceCollector {
         if (parent?.eventType !== 'inbound.message') return leaveOut('drafting turn\'s parent is not an inbound.message');
         const read = await this.readInboundParts(turn, parent);
         if (!read.ok) return leaveOut(read.reason);
+        if (read.truncated) return leaveOut('more follow-ups were drained than are read; an early one (a cancellation) could be missing');
         parts = read.parts;
       }
       // The originator check above covers the turn's own inbound (voice is authenticated per
@@ -720,10 +728,11 @@ export class SendEvidenceCollector {
       if (parts.slice(1).some((p) => !p.senderAuthenticated)) {
         return leaveOut('a follow-up drained into the turn was not channel-authenticated');
       }
-      // A forward whose forwarded part was not found to cut (an unknown header) would read the
-      // forwarded sender's request as the principal's own. Fail closed rather than under-block.
-      if (parts.some((p) => forwardNotCut(p.channelId, p.text))) {
-        return leaveOut('a forwarded email\'s forwarded part could not be located to cut');
+      // Where someone else's text starts in a form the cutter does not know (an unknown or nested
+      // forward header, a localized attribution), the kept text could be theirs read as the
+      // principal's own. Fail closed rather than under-block.
+      if (parts.some((p) => ownTextBoundaryUnknown(p.channelId, p.text))) {
+        return leaveOut('where the principal\'s own words end could not be established (an unknown quote or forward header)');
       }
       // SEC-MED-2: only the principal's own words. A reply's quoted message and a forward are
       // someone else's text (or the principal's earlier words, not this request): a reply quoting

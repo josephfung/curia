@@ -230,7 +230,10 @@ export function spotCheckCandidateText(channelId: string, content: string): stri
 }
 
 // A reply's or forward's subject: the text after the prefix is the earlier message's subject.
-const REPLY_OR_FORWARD_SUBJECT = /^(re|fwd?|fw)\s*:/i;
+// Localized prefixes too, since the subject would otherwise be kept as the sender's own words:
+// reply AW (German), SV (Swedish, Norwegian), Antw (Dutch), RES (Portuguese); forward TR (French),
+// WG (German), RV (Spanish), VS (Finnish), ENC (Portuguese), Doorst (Dutch).
+const REPLY_OR_FORWARD_SUBJECT = /^(re|aw|sv|antw|res|fwd?|fw|tr|wg|rv|vs|enc|doorst)\s*:/i;
 const EMAIL_SUBJECT_LINE = /^Subject:([^\n]*)/;
 
 /**
@@ -316,19 +319,35 @@ const FORWARD_SUBJECT = /^Subject:\s*(fwd?|fw)\s*:/i;
  * which replies carry too; an Outlook forward is caught by its "FW:" subject.
  */
 // Forward subject prefixes, localized as well: Fwd/Fw/FW, TR (French), WG (German), RV (Spanish),
-// VS (Finnish), ENC (Portuguese), Doorst (Dutch). Only for forwardNotCut, which fails closed on a
-// match; looksLikeForward keeps FORWARD_SUBJECT.
+// VS (Finnish), ENC (Portuguese), Doorst (Dutch). Only for ownTextBoundaryUnknown, which fails
+// closed on a match; looksLikeForward keeps FORWARD_SUBJECT.
 const FORWARD_SUBJECT_ANY_LANGUAGE = /^Subject:\s*(fwd?|fw|tr|wg|rv|vs|enc|doorst)\s*:/i;
 
+// Lines that start someone else's text in a form firstQuoteLine does not cut at: a banner framed
+// by rules ("-------- Message transféré --------", "----- Weitergeleitete Nachricht -----"), a
+// localized From header ("De :", "Von:", "Van:", "Från:", "Fra:", "Da:", "Od:", "Lähettäjä:"),
+// or a localized "wrote" attribution ("Le … a écrit :", "Am … schrieb …:", "El … escribió:").
+const FRAMED_BANNER = /^[-_=*]{2,}\s*\S.*\S\s*[-_=*]{2,}$/;
+const LOCALIZED_FROM_HEADER = /^(de|von|van|från|fra|da|od|lähettäjä|remetente|envoyé par)\s*:\s*\S/i;
+const LOCALIZED_WROTE = /\b(a écrit|schrieb|escribió|ha scritto|schreef|skrev|kirjoitti|escreveu|napisał)\b.*:?$/i;
+
 /**
- * An email whose subject says it is a forward, where the cut senderOwnText makes does not land on
- * a forward header it knows (Gmail's, Apple Mail's, Outlook's underscore rule or its From: block):
- * no marker at all, or one inside the forwarded part (a "> " line the forwarded message quoted),
- * which would keep the forwarded sender's words above the cut as the forwarder's own. A reader
- * that must have only the sender's words (the Stage 2 directive) fails closed on it. Always false
- * off email.
+ * Whether senderOwnTextAnyChannel's cut cannot be trusted to have kept only the sender's words, so
+ * a reader that must have nothing else (the Stage 2 directive) fails closed:
+ * - the kept text still holds a line that starts someone else's text in a form the cutter does
+ *   not know (a framed banner, a localized From header or "wrote" line). An unknown outer forward
+ *   header above a known nested one is caught here, since the cut lands on the nested one;
+ * - an email whose subject marks a forward, where the cut does not land on a forward header the
+ *   cutter knows (Gmail's, Apple Mail's, Outlook's underscore rule or its From: block): no marker
+ *   at all, or one inside the forwarded part.
+ * Over-matching only withholds a release, the fail-closed direction.
  */
-export function forwardNotCut(channelId: string, content: string): boolean {
+export function ownTextBoundaryUnknown(channelId: string, content: string): boolean {
+  const kept = (channelId === 'email' ? spotCheckCandidateText(channelId, content) : senderOwnTextAnyChannel(channelId, content)).split('\n');
+  if (kept.some((l) => {
+    const line = l.trim();
+    return FRAMED_BANNER.test(line) || LOCALIZED_FROM_HEADER.test(line) || LOCALIZED_WROTE.test(line);
+  })) return true;
   if (channelId !== 'email' || !FORWARD_SUBJECT_ANY_LANGUAGE.test(content)) return false;
   const lines = content.replace(EMAIL_SUBJECT_PREFIX, '').split('\n');
   const quoteAt = firstQuoteLine(lines);

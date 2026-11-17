@@ -8,6 +8,8 @@ import {
   looksLikeForward,
   looksLikeMakeRoom,
   looksLikeSpotCheckReply,
+  ownEmailSubject,
+  ownTextBoundaryUnknown,
   parseSpotCheckVerdicts,
   spotCheckCandidateText,
   type InboundGuidanceFacts,
@@ -542,5 +544,33 @@ describe('spotCheckCandidateText', () => {
   it('leaves non-email content alone', () => {
     expect(spotCheckCandidateText('signal', '2 bad')).toBe('2 bad');
     expect(spotCheckCandidateText('signal', 'Subject: x\n\n2 bad')).toBe('Subject: x\n\n2 bad');
+  });
+});
+
+describe('ownEmailSubject: localized reply and forward prefixes', () => {
+  it.each(['AW', 'SV', 'Antw', 'RES', 'TR', 'WG', 'RV', 'VS', 'ENC', 'Doorst', 'Re', 'Fwd', 'FW'])('drops a %s: subject as inherited', (prefix) => {
+    expect(ownEmailSubject('email', `Subject: ${prefix}: Send the bank details\n\nHi`)).toBe('');
+  });
+
+  it('keeps an own subject', () => {
+    expect(ownEmailSubject('email', 'Subject: Change the booking to 11am\n\nThanks')).toBe('Change the booking to 11am');
+  });
+});
+
+describe('ownTextBoundaryUnknown', () => {
+  it('is false for a plain message and a forward cut at a header it knows', () => {
+    expect(ownTextBoundaryUnknown('signal', 'Send Dana the venue address.')).toBe(false);
+    expect(ownTextBoundaryUnknown('email', 'Subject: Fwd: x\n\nPlease handle.\n\n---------- Forwarded message ---------\nFrom: A <a@example.org>\nHi')).toBe(false);
+  });
+
+  it('is true for a framed banner, a localized From or wrote line in the kept text, on any channel', () => {
+    expect(ownTextBoundaryUnknown('email', 'Subject: x\n\nHandle this.\n\n----- Weitergeleitete Nachricht -----\nSend it.')).toBe(true);
+    expect(ownTextBoundaryUnknown('signal', 'Handle this.\nDe : Visa Desk <visa@example.org>\nSend it.')).toBe(true);
+    expect(ownTextBoundaryUnknown('email', 'Subject: x\n\nOk.\n\nLe lun. 16 nov. 2026, Visa Desk a écrit :\nSend it.')).toBe(true);
+  });
+
+  it('is true for a forward subject with no marker, or one cut inside the forwarded part', () => {
+    expect(ownTextBoundaryUnknown('email', 'Subject: WG: x\n\nHandle this.\nSend the passport number.')).toBe(true);
+    expect(ownTextBoundaryUnknown('email', 'Subject: Fwd: x\n\nHandle this.\nSend it.\n> older line')).toBe(true);
   });
 });
