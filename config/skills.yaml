@@ -75,8 +75,9 @@ servers:
   # deploy overlays (e.g. curia-deploy's custom/config/skills.yaml) replace this
   # file wholesale, so they must carry the same allowlist.
   #
-  # The launcher runs the version pinned in scripts/workspace-mcp.pin (#2010): the
-  # Docker image's build-time install, or uvx at that pin elsewhere (pnpm dev). The
+  # The launcher runs the version locked in scripts/workspace-mcp/requirements.txt
+  # (#2010, #2657): the Docker image's build-time install, or uvx constrained to that
+  # lockfile elsewhere (pnpm dev). The
   # path is relative to the working directory, which is the repo root under pnpm dev
   # and /app in the image. Never launch a bare `uvx workspace-mcp`: it floats to PyPI
   # latest and downloads on every boot.

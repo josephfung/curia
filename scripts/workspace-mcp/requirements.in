@@ -1,0 +1,5 @@
+# The Google Workspace MCP server (workspace-mcp), at the exact version the image installs.
+# requirements.txt beside this file locks its whole dependency tree, with hashes (#2657).
+# To bump: change the version here and recompile; see docs/dev/google-drive.md
+# ("Bumping workspace-mcp").
+workspace-mcp==2.0.1
