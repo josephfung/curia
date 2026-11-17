@@ -7,6 +7,9 @@ description: >
   unrelated coordinator note about a Google security alert. The principal approves the
   Priya intro. The reply matches the ceo-inbox entry, which has a delegation hint.
 tags: [outbound-context, routing, transfer-ownership, voice-parity]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 stub_sets: [human-channels]
 seed:
   outbound_context:

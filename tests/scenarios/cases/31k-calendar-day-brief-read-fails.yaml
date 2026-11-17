@@ -10,6 +10,9 @@ description: >
   calendar could not be read, not describe the day as clear or invent events, and stop
   retrying after a few attempts.
 tags: [specialist-calendar, day-brief, error-path]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 agent: calendar
 stub_sets: [calendar-specialist, calendar-office]
 inbound:

@@ -11,6 +11,7 @@ description: >
   next step is to nudge Marcus once. The coordinator nudges Marcus, leaves Priya alone, and
   parks the task again until Marcus answers.
 tags: [task-wake, tasks, email]
+runs: 5
 stub_sets: [human-channels]
 seed:
   contacts:

@@ -6,6 +6,7 @@ description: >
   holds exactly one draft (in the personal account). ceo-inbox should list the drafts without
   restricting to one mailbox, find the single candidate and send it without asking which account.
 tags: [ceo-inbox, delegated-mode, specialist, specialist-ceo-inbox, send, multi-mailbox]
+runs: 5
 agent: ceo-inbox
 stub_sets: [ceo-inbox-office]
 seed:

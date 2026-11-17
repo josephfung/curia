@@ -18,6 +18,9 @@ description: >
   making clear it sends company data outside the organization. It does not approve, deny
   or confirm anything itself.
 tags: [proactive, backlog]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 seed:
   backlog:
     pending_approvals: 2

@@ -9,6 +9,7 @@ description: >
   "Call Curia". calendar should create one event carrying a weekly RRULE on Mondays,
   starting on next Monday at 9:00, and should not create one event per week.
 tags: [specialist-calendar, recurrence]
+runs: 5
 agent: calendar
 stub_sets: [calendar-specialist, calendar-office]
 inbound:

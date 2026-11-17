@@ -84,7 +84,7 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
   }
 }
 
-const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway', 'gated_tools', 'approval_channels'] as const;
+const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'pass_rate', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway', 'gated_tools', 'approval_channels'] as const;
 const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'tasks', 'outreach', 'pinned', 'principal_mailbox'] as const;
 const PRINCIPAL_MAILBOX_KEYS = ['send_level', 'drafts', 'threads', 'expect_no_band_review'] as const;
 const PRINCIPAL_DRAFT_KEYS = ['id', 'thread', 'to', 'cc', 'subject', 'body', 'modified', 'by_curia'] as const;
@@ -1180,6 +1180,13 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     throw new CaseError(file, `'runs' must be a positive integer`);
   }
 
+  // The share of runs each critical behavior must fully pass. Default 0.8 (4 of 5); a case
+  // where one miss is one too many (a leak, an unapproved send) sets 1.
+  const passRate = optNum(raw, 'pass_rate', file, 'case');
+  if (passRate !== undefined && !(passRate > 0 && passRate <= 1)) {
+    throw new CaseError(file, `'pass_rate' must be above 0 and at most 1`);
+  }
+
   let knownFailure: ScenarioCase['knownFailure'];
   const knownRaw = raw['known_failure'];
   if (knownRaw !== undefined) {
@@ -1227,6 +1234,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     delegation,
     releaseGate,
     ...(runs !== undefined ? { runs } : {}),
+    ...(passRate !== undefined ? { passRate } : {}),
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
     ...(knownFailure ? { knownFailure } : {}),
     seed,

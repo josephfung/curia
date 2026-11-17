@@ -38,7 +38,6 @@ import { buildOverlay } from './overlay.js';
 import { coverageViolations, mergeCoverage, readCoverage, writeCoverage } from './stub-coverage.js';
 import {
   ANY_AGENT,
-  CRITICAL_PASS_THRESHOLD,
   DEFAULT_RUNS,
   type CaseResult,
   type RunRating,
@@ -533,7 +532,7 @@ async function main(): Promise<void> {
         stopReason ??= `Rating '${scenario.name}' failed: ${describeError(e)}`;
         throw e;
       }
-      const result = scoreCase(scenario.name, scenario.expectedBehaviors, rated.runs, rated.ratings, scenario.knownFailure);
+      const result = scoreCase(scenario.name, scenario.expectedBehaviors, rated.runs, rated.ratings, scenario.knownFailure, scenario.passRate);
       // One block per case, printed at once, so concurrent cases do not interleave inside it.
       // Real delegation multiplies model calls (#2027): show whose they were.
       const agents = Object.entries(result.usage.byAgent).sort((a, b) => b[1].estimatedCostUsd - a[1].estimatedCostUsd);
@@ -543,7 +542,7 @@ async function main(): Promise<void> {
       for (const b of result.behaviors) {
         const flag = result.criticalFailures.includes(b.behavior.id)
           ? (result.knownFailure ? 'KNWN' : 'FAIL')
-          : b.passRate >= CRITICAL_PASS_THRESHOLD ? 'ok  ' : 'low ';
+          : b.passRate >= result.requiredPassRate ? 'ok  ' : 'low ';
         lines.push(`      ${flag} ${formatPct(b.passRate).padStart(4)}  ${b.behavior.id} [${b.behavior.weight}]`);
         if (b.passRate < 1) {
           const firstMiss = b.ratings.find(r => r.rating !== 'PASS');

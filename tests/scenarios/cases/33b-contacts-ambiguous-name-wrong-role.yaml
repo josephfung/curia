@@ -13,6 +13,9 @@ description: >
   neither is the CFO on file (Marcus Bell is), and include no <resolved_entities> block.
   It changes no one's role.
 tags: [specialist-contacts, contacts, disambiguation, conflict]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 agent: contacts
 seed:
   contacts:
