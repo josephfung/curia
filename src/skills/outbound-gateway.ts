@@ -2527,6 +2527,12 @@ export class OutboundGateway {
         );
         return {};
       }
+      // The one branch that lets Stage 2 release what the principal asked for: logged (never the
+      // text) so a released identifier can be traced to a directed judgement, not a judge miss.
+      this.log.info(
+        { taskEventId: options.taskEventId, directiveChars: read.text.length },
+        'outbound-gateway: Stage 2 judge runs with the principal\'s directive',
+      );
       return { principalDirective: read.text };
     } catch (err) {
       // collect() is documented never to throw; guard anyway so a throw cannot block the send
