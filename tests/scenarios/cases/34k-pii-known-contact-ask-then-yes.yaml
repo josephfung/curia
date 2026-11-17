@@ -63,6 +63,12 @@ tool_stubs:
         role: null
         kg_node_id: null
         identities_added: 0
+  # After the yes, the coordinator may release the reply's context bridge, as in 34n: refused
+  # unstubbed (2026-11-17, 1 run in 5). Released as the real tool would, with no effect on what
+  # the case checks.
+  context-bridge-release:
+    - match: {}
+      return: { released: "scenario-bridge-entry" }
   memory-store:
     - match: {}
       return: { stored: true, action: created, node_id: 3a4b5c6d-7e8f-4a1b-9c2d-34bb00000001, sensitivity: internal }
