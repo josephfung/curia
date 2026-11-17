@@ -14,6 +14,9 @@ description: >
   (no interim "I'll get that to you" without a backing task), reclassifies the message
   as 📌 Seen, marks it read and leaves it in the inbox.
 tags: [specialist-ceo-inbox, ceo-inbox, triage, reification]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 # 5 runs: its critical behavior split across runs on the 2026-11-16 gate, so one run cannot
 # tell a flake from a regression. The default is 1 (tests/scenarios/README.md, "The gate").
 runs: 5

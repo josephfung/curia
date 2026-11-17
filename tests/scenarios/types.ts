@@ -537,6 +537,12 @@ export interface ScenarioCase {
   /** Per-case override of the CLI default. */
   runs?: number;
   /**
+   * The share of runs each critical behavior must fully pass, overriding
+   * CRITICAL_PASS_THRESHOLD (0.8). A case where a single miss is a real failure (a leak, an
+   * unapproved send) sets 1.
+   */
+  passRate?: number;
+  /**
    * A tracked regression: the case still runs and reports, but its critical failures do
    * not fail the gate. Requires an issue, so the exception is reviewable and has an
    * owner. Errored runs, judge errors and stub holes still fail the gate.
@@ -852,8 +858,10 @@ export interface CaseResult {
   behaviors: BehaviorResult[];
   /** Σ(weight × passRate) / Σweight. */
   weightedScore: number;
-  /** Critical behaviors whose strict pass rate is under CRITICAL_PASS_THRESHOLD. */
+  /** Critical behaviors whose strict pass rate is under requiredPassRate. */
   criticalFailures: string[];
+  /** The strict pass rate each critical behavior needed: the case's pass_rate, else CRITICAL_PASS_THRESHOLD. */
+  requiredPassRate: number;
   /** Copied from the case: when set, criticalFailures are reported, not gated. */
   knownFailure?: { issue: string; reason: string };
   /** Runs where the judge itself failed (not the model) — reported as a gate failure. */
@@ -915,9 +923,8 @@ export interface SuiteResult {
 export const CRITICAL_PASS_THRESHOLD = 0.8;
 
 /**
- * Default runs per case: one, like any other test. Most cases are deterministic (124 of 155
- * gave the same verdict on all five runs of the 2026-11-16 gate), so repeats only cost time
- * and money. A case whose critical behavior is genuinely nondeterministic sets `runs: 5` in
- * its file; see CRITICAL_PASS_THRESHOLD for why 5 and not 3.
+ * Default runs per case: one, like any other test. Every gate case sets `runs: 5` in its file
+ * and is held to its pass rate over them (tests/scenarios/README.md, "The gate"); see
+ * CRITICAL_PASS_THRESHOLD for why 5 and not 3.
  */
 export const DEFAULT_RUNS = 1;

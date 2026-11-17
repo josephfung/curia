@@ -14,6 +14,9 @@ description: >
   scheduling_email block for the coordinator to send, described as a draft. It must not say
   the email was sent.
 tags: [specialist-calendar, scheduling-email, timezone]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 agent: calendar
 stub_sets: [calendar-specialist, calendar-office]
 seed:

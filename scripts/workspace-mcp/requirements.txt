@@ -31,9 +31,9 @@ attrs==26.1.0 \
     #   jsonschema
     #   jsonschema-path
     #   referencing
-authlib==1.9.3 \
-    --hash=sha256:2f834630f452d2e01d787b5477cf37341b73577073bfab38f10d988782da018b \
-    --hash=sha256:95e13a6ea7d6008615b1463a695a35c3acc846547a90e4f767b7d476098af30a
+authlib==1.9.9 \
+    --hash=sha256:0199649865fefb4304fc57683eaebb15614523073e41e09d98c72f3268ce5cbc \
+    --hash=sha256:cca3dffa51c8d80d6df19aee2279e47219dc996f5a527c06ac2e39d0757c99ef
     # via fastmcp-slim
 beartype==0.23.1 \
     --hash=sha256:4461b4dc57e3fdd6c8a8464b22cf118002eea107c33e9fef651c69068ab3cce3 \
@@ -474,13 +474,13 @@ fastapi==0.162.0 \
     --hash=sha256:3785963de305dd09912426cb81f2d230fce98ab3521cdfe97265c8d14983128c \
     --hash=sha256:6a22c1e2e6e32e0633ee7e170f00009a29b8228b16feb219ee42f32fd8d88a8f
     # via workspace-mcp
-fastmcp==4.1.6 \
-    --hash=sha256:5e307ae4ac3048a1b586aac6fc31e08661141bb69b8a2b473070e5becae0176c \
-    --hash=sha256:f54367fdca3d1a37c53164ebf864fb2461acdd92a9d9df731a244078c0332926
+fastmcp==4.1.7 \
+    --hash=sha256:0cfbfc150457b681056a502fb55f7417dacda28b3f307138bde6c5cdcdfc68d9 \
+    --hash=sha256:af7426a77689627b282fa1dc876dc65a200c2e81636e7dd81ad761640ce8070c
     # via workspace-mcp
-fastmcp-slim==4.1.6 \
-    --hash=sha256:cd181b9b780161bbfdfc16ca6e417aaa8efd75d0a9ae961fdd20fa992d3d789f \
-    --hash=sha256:d25691ae70a7f2b9d8197d6261bdd0f4b9ff33064087cd35c20539b0b48bb1ca
+fastmcp-slim==4.1.7 \
+    --hash=sha256:5b5fcd8acc6bb17d850d5bc8c3a6e83c33cd7715511ff8ae8670f1acf264913a \
+    --hash=sha256:f7275f1f79b1e0383e66fd3cc0cbd84df3b67407d7954f22ffde29628091c0a2
     # via fastmcp
 google-api-core==2.43.2 \
     --hash=sha256:5a9d21baab97fd3c0547ccfc186a9e64f4227d8d7026f393835316400b29a6d4 \
@@ -573,7 +573,9 @@ jsonref==1.1.0 \
 jsonschema==4.26.0 \
     --hash=sha256:0c26707e2efad8aa1bfc5b7ce170f3fccc2e4918ff85989ba9ffa9facb2be326 \
     --hash=sha256:d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce
-    # via mcp
+    # via
+    #   fastmcp-slim
+    #   mcp
 jsonschema-path==0.5.0 \
     --hash=sha256:2790a070bc7abb08ea3dbe4d340ece4efadf639223001f020c7503229ba068e2 \
     --hash=sha256:493b156ba895c97602655b620a8456caa2ce08c1aa389f5a7addec065e6e855c

@@ -6,6 +6,9 @@ description: >
   The no-mailbox compose returns needs_mailbox with evidence that every message to her went from
   the personal account. ceo-inbox should compose again in personal and not mention the account.
 tags: [ceo-inbox, delegated-mode, specialist, specialist-ceo-inbox, mailbox-choice, multi-mailbox]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 agent: ceo-inbox
 stub_sets: [ceo-inbox-office]
 seed:

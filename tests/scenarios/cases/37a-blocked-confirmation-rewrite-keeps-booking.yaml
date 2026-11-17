@@ -18,7 +18,9 @@ description: >
   is booked and the invite sent; none says Curia will check with the principal first. Curia does
   not ask the principal to approve a slot that is already booked.
 tags: [content-block-rewrite, email, calendar]
-release_gate: true
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 # 92: a confirmation that a booking is made commits the principal, which band review sends
 # only at 90+ (STAKES_MIN_SCORE). Below that it is held by design, which this case is not about.
 autonomy: { score: 92, gating: band }

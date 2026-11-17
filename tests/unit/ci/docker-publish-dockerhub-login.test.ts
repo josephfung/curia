@@ -104,6 +104,7 @@ describe('PR-check Docker Hub pulls (#2095)', () => {
   it.each([
     ['ci.yml', 'ci', 'postgres'],
     ['dast.yml', 'zap-baseline', 'postgres'],
+    ['behavior-gate.yml', 'gate', 'postgres'],
   ])('%s authenticates its %s job\'s %s service', (file, job, service) => {
     const spec = load<CheckWorkflow>(file).jobs[job]!.services![service]!;
     expect(spec.image).toMatch(/^pgvector\//);

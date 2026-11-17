@@ -53,7 +53,15 @@ The ZAP DAST scan (`zap-dast` category) is alert-only and review-only for now â€
 
 ***C. Behavior gate***
 
-Run the scenario suite against the **same `main` commit as the security gate**, on the standard-tier model the production deployment uses (its `model_routing.tiers.standard.model`, e.g. `deepseek/deepseek-v4.1-flash`). Run it from a worktree checked out at that commit:
+Run the scenario suite against the **same `main` commit as the security gate**, on the standard-tier model the production deployment uses (its `model_routing.tiers.standard.model`, e.g. `deepseek/deepseek-v4.1-flash`).
+
+The weekly workflow does this (`docs/dev/behavior-tests.md`, "The weekly run"). If its latest Sunday run was on that commit, that run is the gate: read its summary on the tracking issue. Otherwise run it on `main` now, which is that commit while nothing has merged since the security gate:
+
+```bash
+gh workflow run behavior-gate.yml   # about $1; its summary lands on the tracking issue
+```
+
+Without the workflow, run it from a worktree checked out at that commit:
 
 ```bash
 docker stop curia-curia-1                       # scenarios refuses to run beside a live instance
@@ -64,7 +72,7 @@ Scenarios needs a database whose principal is Avery Testwell, the principal its 
 
 `CURIA_RELEASE_GATE=1` marks the run as the release gate. The suite ignores it, but the maintainer's local guard refuses an unfiltered run without it (see Testing in CLAUDE.md).
 
-The suite runs 4 cases at a time (`--concurrency`) and prints its spend by agent and judge. The gate is meant to be a quick regression sweep, not a slog: each case runs **once** (a few nondeterministic ones run 5 times; `tests/scenarios/README.md`, "The gate"). Record the actual time and spend with the results, and if the gate creeps back toward an hour, prune cases (`release_gate: false`) rather than accept it.
+The suite runs 4 cases at a time (`--concurrency`) and prints its spend by agent and judge. The gate is about 20 cases, each run 5 times against its pass rate (`tests/scenarios/README.md`, "The gate"). Record the actual time and spend with the results, and if the gate creeps back toward an hour, move cases on demand (`release_gate: false`) rather than accept it.
 
 - **Block the release** if the command exits non-zero: a critical behavior below threshold. Judge errors and errored runs also fail the gate; re-run those rather than waving them through. A case marked `known_failure` is listed under known failures and not gated: confirm each one's issue is still open, because a marker on a closed issue would wave a regression through.
 - **Record the results with their commit.** The suite prints the `Commit:` it ran on, and it must equal the commit the run was made for exactly â€” a `-dirty` suffix means uncommitted changes were tested, so the run does not count. The full run is made on the first gate commit; if fixes follow, the re-run cases are made on `<gate-sha>` (below), and both commits are recorded. Note the outcome (gate passed, plus any known failures) next to the security gate's.

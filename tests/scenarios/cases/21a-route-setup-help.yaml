@@ -8,6 +8,9 @@ description: >
   the setup specialist and relay its instructions in its own voice, rather than answering
   from memory or saying it can't help.
 tags: [routing, setup-wizard]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 inbound:
   from: principal
   content: Can you help me get Slack connected?

@@ -16,7 +16,7 @@ import { judgeRun } from '../scenarios/judge.js';
 import { scoreCase, JUDGE_ERROR_PREFIX } from '../scenarios/gate.js';
 import { loadScenarioCases, resolveRunPlaceholders } from '../scenarios/loader.js';
 import { hasDatePlaceholders } from './date-placeholders.js';
-import type { RunRating, SuiteResult } from '../scenarios/types.js';
+import { CRITICAL_PASS_THRESHOLD, type RunRating, type SuiteResult } from '../scenarios/types.js';
 import { DEFAULT_CONCURRENCY, parseConcurrency, runConcurrently } from './case-scope.js';
 import { formatAgreement, meetsBar, summarize, type CaseComparison, type RatingPair } from './rejudge.js';
 import { emptyBreakdown, formatUsd, UsageLedger, type UsageBreakdown } from './usage.js';
@@ -107,7 +107,10 @@ async function rejudgeScenarios(suite: SuiteResult, judge: Judge, concurrency: n
         ratings.push({ behaviorId: b.id, run: i + 1, before: before(b.id), after: next });
       }
     }
-    const rescored = scoreCase(result.name, behaviors, result.runs, after);
+    // Score the candidate against the threshold the saved verdict used, so a changed verdict is
+    // the judge's, not a pass_rate edited since. Files saved before pass_rate lack the field.
+    const savedRate = (saved as { requiredPassRate?: number }).requiredPassRate ?? CRITICAL_PASS_THRESHOLD;
+    const rescored = scoreCase(result.name, behaviors, result.runs, after, undefined, savedRate);
     return {
       name: result.name,
       passedBefore: result.criticalFailures.length === 0,

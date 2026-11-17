@@ -13,6 +13,9 @@ description: >
   The coordinator activates its Google Drive tools, moves the Doc into that folder, gives
   the principal edit access, and tells the principal it is ready.
 tags: [google-workspace, skill-activation]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 timeout_seconds: 300
 inbound:
   from: principal

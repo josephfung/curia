@@ -7,6 +7,9 @@ description: >
   about tomorrow's meeting. The reply should come back as the response text, not through
   an email tool.
 tags: [email, channel]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 stub_sets: [human-channels]
 seed:
   contacts:

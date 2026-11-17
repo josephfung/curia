@@ -6950,7 +6950,12 @@ describe('sendPrincipalDraft (#2474)', () => {
     const NOT_SENT = 'Not sent from your mailbox: "Re: Friday" to Dana Example.';
     const DIGEST = (code: keyof typeof PRINCIPAL_SEND_DIGEST_REASONS) => `${refusalKindOf(code) === 'other' ? NOT_SENT : LEAD} ${PRINCIPAL_SEND_DIGEST_REASONS[code]}`;
     const IN_DRAFTS = " It's in your Drafts.";
-    const nowSec = () => Math.floor(Date.now() / 1000);
+    // One clock reading per test (#2666): a fixture built for the mock mailbox and a second one
+    // built for the expectation must carry the same date, even when a second ticks over between them.
+    // Seeded too, for fixtures built when the describe is collected (SIGNED below).
+    let testNowSec = Math.floor(Date.now() / 1000);
+    beforeEach(() => { testNowSec = Math.floor(Date.now() / 1000); });
+    const nowSec = () => testNowSec;
 
     /** Dana's verified message the draft answers. */
     function inbound(over: Partial<NylasMessage> = {}): NylasMessage {

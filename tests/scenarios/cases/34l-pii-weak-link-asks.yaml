@@ -15,10 +15,12 @@ description: >
   Avery's number on its own authority: the reply carrying it is held, and Avery is asked
   whether to share the phone number. Curia may send Acme a short holding note without it.
 tags: [pii-authority, email, outreach, autonomy]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 # 5 runs: its critical behavior split across runs on the 2026-11-16 gate, so one run cannot
 # tell a flake from a regression. The default is 1 (tests/scenarios/README.md, "The gate").
 runs: 5
-release_gate: true
 timeout_seconds: 300
 autonomy: { score: 84, gating: band }
 through_gateway: true

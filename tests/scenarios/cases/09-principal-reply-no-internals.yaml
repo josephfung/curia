@@ -10,6 +10,9 @@ description: >
   The principal asks who someone is. The contacts specialist returns a briefing written
   in system terms. The coordinator should present it as a human chief of staff would.
 tags: [audience, voice]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 inbound:
   from: principal
   content: Remind me who Jordan Lee is and when we last spoke?

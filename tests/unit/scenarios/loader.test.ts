@@ -202,11 +202,19 @@ describe('loadScenarioCase', () => {
     ['an invalid weight', VALID.replace('weight: critical', 'weight: urgent'), /invalid weight/],
     ['a duplicate behavior id', VALID.replace('id: silent', 'id: routes'), /duplicate behavior id/],
     ['zero runs', VALID.replace('runs: 3', 'runs: 0'), /positive integer/],
+    ['a pass_rate of 0', VALID.replace('runs: 3', 'runs: 3\npass_rate: 0'), /'pass_rate' must be above 0 and at most 1/],
+    ['a pass_rate above 1', VALID.replace('runs: 3', 'runs: 3\npass_rate: 1.2'), /'pass_rate' must be above 0 and at most 1/],
+    ['a pass_rate that is not a number', VALID.replace('runs: 3', 'runs: 3\npass_rate: all'), /pass_rate/],
     ['a bad regex', VALID.replace('description: does not answer directly', 'description: x\n    check: { reply_excludes: ["("] }'), /invalid pattern/],
     ['a non-boolean success', VALID.replace('max: 1', 'max: 1\n      success: yes'), /'success' must be a boolean/],
     ['success on not_called', VALID.replace('    check:\n      called: delegate\n      with: { agent: ceo-inbox }\n      contains: { task: "{{entry:offsite}}" }\n      max: 1', '    check:\n      not_called: [email-send]\n      success: true'), /unknown key\(s\) success/],
   ])('rejects %s', (_label, body, error) => {
     expect(() => loadScenarioCase(write('bad.yaml', body))).toThrow(error);
+  });
+
+  it('reads pass_rate, and leaves it unset by default', () => {
+    expect(loadScenarioCase(write('rate.yaml', VALID.replace('runs: 3', 'runs: 3\npass_rate: 1'))).passRate).toBe(1);
+    expect(loadScenarioCase(write('norate.yaml', VALID)).passRate).toBeUndefined();
   });
 
   it.each([
@@ -924,9 +932,9 @@ describe('the authority-aware PII cases (#2312)', () => {
     for (const c of pii) {
       expect(c.throughGateway, c.name).toBe(true);
       expect(c.autonomy?.gating, c.name).toBe('band');
-      // 34p runs on demand since the 2026-11-16 gate prune (34k and 34n gate the ask).
-      expect(c.releaseGate, c.name).toBe(!c.sourceFile.includes('/34p-'));
     }
+    // The 2026-11-17 trim kept the leak and ask cases; cases.test.ts pins the whole gate.
+    expect(ids(pii.filter(c => c.releaseGate))).toEqual(['34d', '34e', '34g', '34i', '34k', '34m']);
     expect(ids(pii.filter(c => c.autonomy?.score === 74))).toEqual(['34c', '34f', '34k', '34n', '34o', '34p', '34q']);
     expect(ids(pii.filter(c => c.autonomy?.score === 84))).toEqual(['34a', '34b', '34d', '34e', '34g', '34h', '34i', '34j', '34l', '34m']);
   });

@@ -1,0 +1,6 @@
+{
+ "engines": ["fastconformer", "kokoro"],
+ "load_seconds": {"fastconformer": 1.132, "kokoro": 0.721, "_total": 1.853},
+ "rss_mb": 666,
+ "peak_rss_mb": 686.1
+}
