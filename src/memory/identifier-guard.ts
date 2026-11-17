@@ -7,6 +7,8 @@
 // paths consult this guard before trusting a similarity score. It is
 // model-independent: it looks at the strings, not the vectors.
 
+import { UUID_PATTERN } from '../util/uuid.js';
+
 // Separators allowed INSIDE a number: they are deleted when they sit between
 // digits, so "(519) 555-0142" and "519-555-0142" tokenise identically, and so
 // do order numbers written with dashes. The set covers phone/order formatting
@@ -19,6 +21,11 @@ const DIGIT_RUN = /\d+(?:[\s\-.,:/()]+\d+)*/g;
 // Alphanumeric ids (message ids, hashes). Must contain a digit so ordinary
 // long words ("Corporation") are not treated as identifiers.
 const ALNUM_RUN = /[a-z0-9]{8,}/g;
+
+// A whole UUID (message ids, record ids). ALNUM_RUN sees only its 8- and 12-character
+// groups, so two UUIDs differing in a middle group would tokenise identically; the whole
+// value, dashes dropped, is the token that tells them apart.
+const UUID = new RegExp(UUID_PATTERN, 'g');
 
 // Digit runs shorter than this are quantities/years-in-prose/"Q3", not ids.
 const MIN_DIGITS = 4;
@@ -59,6 +66,11 @@ function classifyTokens(label: string): Map<string, TokenKind> {
     // A pure-digit run is a number, matched exactly like one.
     const kind: TokenKind = /[a-z]/.test(run) ? 'alnum' : 'digits';
     if (!tokens.has(run) || kind === 'digits') tokens.set(run, kind);
+  }
+  for (const uuid of lower.match(UUID) ?? []) {
+    const value = uuid.replace(/-/g, '');
+    // An all-digit UUID is already a digits token from DIGIT_RUN; only add the alnum form.
+    if (!tokens.has(value)) tokens.set(value, 'alnum');
   }
   return tokens;
 }
