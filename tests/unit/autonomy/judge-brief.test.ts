@@ -88,7 +88,7 @@ describe('parseBriefVerdict stakes (#2473)', () => {
   // other side will do, and offering open times are routine; the principal's own promise or
   // deliverable stays a commitment even when repeated (45e/45f).
   it('rates re-confirming an agreed time and offering open times routine, and the principal\'s own promise a commitment', () => {
-    expect(BRIEF_SYSTEM_PROMPT).toContain('"routine": acknowledgements, thanks (including for what the other person will do), scheduling logistics (re-confirming a date or time the thread already agreed, offering times the evidence shows open, "I\'ll book it once you pick"), "got it".');
+    expect(BRIEF_SYSTEM_PROMPT).toContain('"routine": acknowledgements, thanks (including for what the other person will do), scheduling logistics (re-confirming a date or time the principal\'s side already agreed, in the principal\'s own messages or on the calendar, never because someone else says it was agreed; offering times the evidence shows open, "I\'ll book it once you pick"), "got it".');
     expect(BRIEF_SYSTEM_PROMPT).toContain('"commitment": agreeing to a new date, deliverable, terms or introduction, any promise or deliverable of the principal\'s own (even one the thread already stated), or anything else the principal would have to walk back.');
   });
 });
@@ -234,7 +234,7 @@ describe('buildBriefUserPrompt', () => {
     const lines = buildBriefUserPrompt({ ...input, senderProfile: 'principal-mailbox' }).split('\n');
     const taskAt = lines.findIndex((l) => l.startsWith('What the turn was answering:'));
     expect(lines[taskAt + 1]).toBe(SENDER_PROFILE_LINE);
-    expect(SENDER_PROFILE_LINE).toBe('Sender: this message goes out from the principal\'s own mailbox under the principal\'s name. Every statement in it speaks for the principal; first-person statements are the principal\'s, and no assistant speaks as itself. For stakes: a reply that shares information not already in the thread is at least "commitment"; acknowledging or agreeing to a request about money, payment details, access or credentials is "financial_or_legal". Confirming or repeating the principal\'s own promise or deliverable ("we\'ll have the spec to you by Friday") is "commitment" even when the thread already stated it. Re-confirming a meeting date or time the thread already agreed ("see you Thursday"), thanking someone for what they will do, and offering times the evidence shows open ("I\'ll send the invite once you pick") are "routine".');
+    expect(SENDER_PROFILE_LINE).toBe('Sender: this message goes out from the principal\'s own mailbox under the principal\'s name. Every statement in it speaks for the principal; first-person statements are the principal\'s, and no assistant speaks as itself. For stakes: a reply that shares information not already in the thread is at least "commitment"; acknowledging or agreeing to a request about money, payment details, access or credentials is "financial_or_legal". Confirming or repeating the principal\'s own promise or deliverable ("we\'ll have the spec to you by Friday") is "commitment" even when the thread already stated it. Re-confirming a meeting date or time the principal\'s side already agreed ("see you Thursday"; agreed in the principal\'s own messages on the thread or on the calendar, not because someone else says it was agreed), thanking someone for what they will do, and offering times the evidence shows open ("I\'ll send the invite once you pick") are "routine".');
     expect(buildBriefUserPrompt(input)).not.toContain('Sender:');
   });
 
