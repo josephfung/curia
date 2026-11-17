@@ -112,22 +112,6 @@ export interface CollectedEvidence extends BriefEvidence {
    * (#2499), as opposed to a failed read. The send review holds rather than failing open.
    */
   originUnresolved?: true;
-  /**
-   * The principal's own message that directed this turn (scenario 34d, security review
-   * SEC-HIGH-1): the raw text of the `inbound.message` the turn answered, with any follow-ups a
-   * turn lane drained into it, read from audit_log, never the agent.task content. That content
-   * is the dispatcher's assembled prompt: it prepends [ACTIVE OUTBOUND CONTEXT] (outsiders'
-   * replies) and email participant/CC preambles, so an outsider's words would read as the
-   * principal's. For a delegated turn it is the root inbound (originContent's source).
-   * Quoted and forwarded text is cut from each message (SEC-MED-2): only the principal's own
-   * words, and an email's own Subject, remain.
-   *
-   * Set only for a live principal-originated turn whose sender the channel authenticated
-   * (SEC-HIGH-2) and whose inbound could be read; anything else
-   * leaves it absent, which withholds every release it supports (fail closed). Credentials
-   * redacted, trimmed from the middle.
-   */
-  principalMessage?: string;
 }
 
 /** Which thread and recipients a send's decisions are read for (#2312). */
