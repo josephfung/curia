@@ -1,7 +1,7 @@
 {
   "name": "contact-merge",
   "description": "Merge two contacts into one, consolidating channel identities and auth overrides using golden-record survivorship rules. Use dry_run: true to preview the result before committing. Run dry_run: false only when the principal confirmed the merge, or when a dedup review task says the decision is yours. It cannot change the principal's own addresses.",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {

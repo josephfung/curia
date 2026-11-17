@@ -2,7 +2,7 @@
 name: ceo-inbox
 description: >
   The principal's personal inbox tools — list/read/search/draft/send/archive/label/mark plus sent-observe and shadow-draft. Per-tool action_risk preserved.
-version: "0.1.1"
+version: "0.2.0"
 tools:
   - ceo-inbox-list
   - ceo-inbox-read

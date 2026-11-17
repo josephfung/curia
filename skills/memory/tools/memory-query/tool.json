@@ -1,7 +1,7 @@
 {
   "name": "memory-query",
   "description": "Semantic search over the knowledge graph for the nodes most similar to the query. Use it to find everything known about a topic without a target entity, e.g. 'investor relations'. Optionally filter by node type or sensitivity ceiling. A fact belongs to the entities in its owners, not to whoever the query names; unattached: true means it has none.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {

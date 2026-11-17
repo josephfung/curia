@@ -1,7 +1,7 @@
 {
   "name": "contact-dedup-exclude",
   "description": "Record that two contacts are not the same person, so the pair is never proposed as a duplicate again. Call it for every \"not the same person\" outcome, whether the principal said so or you decided it. Works for same-name contacts with no knowledge-graph node too.",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
