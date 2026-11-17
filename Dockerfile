@@ -186,27 +186,21 @@ COPY docker/pnpm-retry.sh /usr/local/bin/pnpm-retry
 # neither uv nor the network. UV_PYTHON_DOWNLOADS=never fails the build rather than
 # quietly fetching a CPython if the Debian python3 above ever goes missing.
 #
-# Then fail the build, not the boot:
-#   - `test -x`: the shim the launcher looks for.
-#   - the imports: workspace-mcp's main.py catches ModuleNotFoundError per service,
-#     logs it and starts without that service's tools. The MCP handshake still
-#     succeeds, so the zero-tool alert (#1500) never fires. Import main plus the module
-#     of every service in the `--tools` allowlist in config/skills.yaml;
-#     tests/unit/config.workspace-mcp-pin.test.ts keeps this list in step. Importing
-#     main creates $HOME/.google_workspace_mcp/logs, hence the throwaway HOME.
+# Then fail the build, not the boot: probe.py asks the installed server for its tool
+# list, over MCP, once per service in config/skills.yaml's `--tools` allowlist. A
+# service whose dependencies break is skipped by workspace-mcp at startup, which still
+# completes the handshake, so the zero-tool alert (#1500) would never fire.
 # Only the install is wrapped in pnpm-retry: retrying an assertion defeats it.
-COPY scripts/workspace-mcp/requirements.txt /tmp/workspace-mcp.lock
+COPY scripts/workspace-mcp/requirements.txt scripts/workspace-mcp/probe.py /tmp/workspace-mcp/
 RUN set -eu; \
     export UV_PYTHON_DOWNLOADS=never; \
     uv venv --python /usr/bin/python3 /opt/uv/tools/workspace-mcp; \
     pnpm-retry uv pip sync --python /opt/uv/tools/workspace-mcp/bin/python \
-      --require-hashes --no-build --no-config --compile-bytecode /tmp/workspace-mcp.lock; \
+      --require-hashes --no-build --no-config --compile-bytecode /tmp/workspace-mcp/requirements.txt; \
     mkdir -p /opt/uv/bin; \
     ln -s /opt/uv/tools/workspace-mcp/bin/workspace-mcp /opt/uv/bin/workspace-mcp; \
-    test -x /opt/uv/bin/workspace-mcp; \
-    HOME=/tmp/workspace-mcp-smoke /opt/uv/tools/workspace-mcp/bin/python -c \
-      "import main, gdrive.drive_tools, gdocs.docs_tools, gsheets.sheets_tools"; \
-    rm -rf /tmp/workspace-mcp-smoke /tmp/workspace-mcp.lock /root/.cache/uv
+    /usr/bin/python3 -I /tmp/workspace-mcp/probe.py /opt/uv/bin/workspace-mcp drive docs sheets; \
+    rm -rf /tmp/workspace-mcp /root/.cache/uv
 
 # Copy manifest and lockfile, then install production deps only
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
