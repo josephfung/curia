@@ -15,14 +15,19 @@ import { isOutsiderOriginated } from '../contacts/principal.js';
  * verified contact identity says the address belongs to the contact, not that this message
  * came from it. Signal and Slack identities are authenticated by the protocol. Email counts
  * only when SPF, DKIM and DMARC passed (`senderVerified`, set by the email adapter, which
- * still publishes mail that fails them). SMS and voice caller IDs are spoofable (ADR-036),
- * and any other channel is refused until it is shown to be authenticated.
+ * still publishes mail that fails them). The web console counts: its chat route admits only
+ * a logged-in principal session or the principal-only bootstrap secret (routes/chat.ts), and
+ * the channel always resolves to the principal, so the session proves who wrote the message
+ * (maintainer decision, 2026-11-16, reversing #2312's "session, not message" for the console).
+ * SMS caller IDs are spoofable (ADR-036). Voice is decided per session in
+ * voice/caller-context.ts, not here. Any other channel (the local CLI included) is refused
+ * until it is shown to be authenticated.
  */
 export function inboundSenderAuthenticated(
   channelId: string,
   metadata: Record<string, unknown> | undefined,
 ): boolean {
-  if (channelId === 'signal' || channelId === 'slack') return true;
+  if (channelId === 'signal' || channelId === 'slack' || channelId === 'web') return true;
   if (channelId === 'email') return metadata?.['senderVerified'] === true;
   return false;
 }

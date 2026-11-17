@@ -9,6 +9,12 @@ describe('inboundSenderAuthenticated', () => {
     expect(inboundSenderAuthenticated('slack', undefined)).toBe(true);
   });
 
+  // The console's chat route admits only a logged-in principal session or the principal-only
+  // bootstrap secret, so the session proves who wrote the message (maintainer, 2026-11-16).
+  it('trusts the web console', () => {
+    expect(inboundSenderAuthenticated('web', undefined)).toBe(true);
+  });
+
   it('trusts email only when SPF, DKIM and DMARC passed', () => {
     expect(inboundSenderAuthenticated('email', { senderVerified: true })).toBe(true);
     expect(inboundSenderAuthenticated('email', { senderVerified: false })).toBe(false);
@@ -18,7 +24,10 @@ describe('inboundSenderAuthenticated', () => {
 
   it('refuses spoofable and unknown channels', () => {
     expect(inboundSenderAuthenticated('sms', { senderVerified: true })).toBe(false);
+    // Voice is decided per session in voice/caller-context.ts, never from the channel id.
     expect(inboundSenderAuthenticated('voice', undefined)).toBe(false);
+    // The local CLI has no login.
+    expect(inboundSenderAuthenticated('cli', undefined)).toBe(false);
     expect(inboundSenderAuthenticated('carrier-pigeon', undefined)).toBe(false);
   });
 });

@@ -46,11 +46,19 @@ function toCallerContext(
   senderContext: InboundSenderContext,
   channel: string,
   senderId: string,
+  /**
+   * Whether the transport authenticated who is speaking. #2312 set this false for all voice;
+   * the maintainer reversed that on 2026-11-16 for the two transports that do prove identity:
+   * - console voice: the same logged-in principal session (or principal-only bootstrap
+   *   secret) as web chat, which inboundSenderAuthenticated now counts as authenticated;
+   * - a Signal call: set up over the caller's end-to-end Signal session, the same account
+   *   identity a Signal text carries (and Signal texts count as authenticated).
+   * A caller-id token (a future phone/SIP transport) stays unauthenticated: caller ids are
+   * spoofable (ADR-036).
+   */
+  authenticated: boolean,
 ): VoiceCallerContext {
-  // Voice never authenticates its sender (#2312): caller ids are spoofable (ADR-036), a Signal
-  // call's number is not a Signal message envelope, and the console's bootstrap secret proves
-  // the session, not the message. liveTurn still carries console principal standing.
-  const { originator, liveTurn } = stampOriginator({ senderContext, channel, senderId, authenticated: false });
+  const { originator, liveTurn } = stampOriginator({ senderContext, channel, senderId, authenticated });
   if (senderContext.resolved) {
     return {
       contactId: senderContext.contactId,
@@ -107,7 +115,7 @@ export async function resolveConsoleVoiceCaller(opts: {
   // resolveByChannelIdentity (#1598). Construction shares buildPrincipalSenderContext
   // with ContactResolver so the migration-055 kind warning cannot drift (#1627).
   const senderContext = buildPrincipalSenderContext(principal, opts.logger, 'voice-console');
-  return toCallerContext(senderContext, 'voice', VOICE_CONSOLE_SENDER_ID);
+  return toCallerContext(senderContext, 'voice', VOICE_CONSOLE_SENDER_ID, true);
 }
 
 /**
@@ -143,7 +151,7 @@ export async function resolveVoiceCallerFromToken(opts: {
   }
   // Missing voice key → allow, matching dispatcher (not a voice-only fail-closed default).
   const senderId = opts.senderId ?? (senderContext.resolved ? senderContext.contactId : opts.callerToken);
-  return { ok: true, caller: toCallerContext(senderContext, 'voice', senderId) };
+  return { ok: true, caller: toCallerContext(senderContext, 'voice', senderId, false) };
 }
 
 export type ResolveSignalVoiceCallerResult =
@@ -183,5 +191,5 @@ export async function resolveSignalVoiceCaller(opts: {
   if (isUnknownSenderIgnored(senderContext, opts.channelPolicies, 'signal')) {
     return { ok: false, reason: 'unknown_sender' };
   }
-  return { ok: true, caller: toCallerContext(senderContext, 'voice', opts.callerNumber) };
+  return { ok: true, caller: toCallerContext(senderContext, 'voice', opts.callerNumber, true) };
 }
