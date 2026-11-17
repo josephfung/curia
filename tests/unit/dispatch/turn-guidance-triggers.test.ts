@@ -569,6 +569,22 @@ describe('ownTextBoundaryUnknown', () => {
     expect(ownTextBoundaryUnknown('email', 'Subject: x\n\nOk.\n\nLe lun. 16 nov. 2026, Visa Desk a écrit :\nSend it.')).toBe(true);
   });
 
+  // Words ending in a non-ASCII letter: a trailing ASCII \b never matched after them (CodeRabbit, #2649).
+  it.each([
+    'El lun., 16 nov. 2026, Visa Desk <visa@example.org> escribió:',
+    'W dniu pon., 16 lis 2026 Visa Desk <visa@example.org> napisał:',
+    'Le lun. 16 nov. 2026, Visa Desk a écrit :',
+    'Från: Visa Desk <visa@example.org>',
+    'FRÅN: Visa Desk <visa@example.org>',
+    'Lähettäjä: Visa Desk <visa@example.org>',
+  ])('is true for the attribution or header %s', (line) => {
+    expect(ownTextBoundaryUnknown('email', `Subject: x\n\nHandle this.\n\n${line}\nSend the passport number.`)).toBe(true);
+  });
+
+  it('does not flag a word that only starts with one of those words', () => {
+    expect(ownTextBoundaryUnknown('signal', 'Mi colega escribióla ayer, todo bien.')).toBe(false);
+  });
+
   it('is true for a forward subject with no marker, or one cut inside the forwarded part', () => {
     expect(ownTextBoundaryUnknown('email', 'Subject: WG: x\n\nHandle this.\nSend the passport number.')).toBe(true);
     expect(ownTextBoundaryUnknown('email', 'Subject: Fwd: x\n\nHandle this.\nSend it.\n> older line')).toBe(true);

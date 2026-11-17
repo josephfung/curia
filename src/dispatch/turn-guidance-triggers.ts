@@ -328,8 +328,11 @@ const FORWARD_SUBJECT_ANY_LANGUAGE = /^Subject:\s*(fwd?|fw|tr|wg|rv|vs|enc|doors
 // localized From header ("De :", "Von:", "Van:", "Från:", "Fra:", "Da:", "Od:", "Lähettäjä:"),
 // or a localized "wrote" attribution ("Le … a écrit :", "Am … schrieb …:", "El … escribió:").
 const FRAMED_BANNER = /^[-_=*]{2,}\s*\S.*\S\s*[-_=*]{2,}$/;
-const LOCALIZED_FROM_HEADER = /^(de|von|van|från|fra|da|od|lähettäjä|remetente|envoyé par)\s*:\s*\S/i;
-const LOCALIZED_WROTE = /\b(a écrit|schrieb|escribió|ha scritto|schreef|skrev|kirjoitti|escreveu|napisał)\b.*:?$/i;
+// The u flag and the letter lookahead: plain \b and case folding are ASCII-only, and several of
+// these words end in or hold non-ASCII letters (escribió, napisał, Från), so a trailing \b never
+// matched after them.
+const LOCALIZED_FROM_HEADER = /^(de|von|van|från|fra|da|od|lähettäjä|remetente|envoyé par)\s*:\s*\S/iu;
+const LOCALIZED_WROTE = /\b(a écrit|schrieb|escribió|ha scritto|schreef|skrev|kirjoitti|escreveu|napisał)(?![\p{L}\p{N}_]).*:?$/iu;
 
 /**
  * Whether senderOwnTextAnyChannel's cut cannot be trusted to have kept only the sender's words, so
