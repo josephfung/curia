@@ -38,7 +38,7 @@ describe('parseJudgeResponse', () => {
 describe('formatJudgeInput', () => {
   const scenario: ScenarioCase = {
     name: 'paused', description: 'Delegate returns paused.', tags: [], agent: 'coordinator', delegation: 'stubbed', releaseGate: true, sourceFile: 'x.yaml',
-    seed: { contacts: [], outboundContext: [], bullpen: [], verifications: [], principalIdentities: [], tasks: [], outreach: [] },
+    seed: { contacts: [], outboundContext: [], bullpen: [], verifications: [], tasks: [], outreach: [] },
     inbound: { from: 'principal', content: 'How is the research going?' },
     toolStubs: {}, explicitStubTools: [], ownStubTools: [], expectedBehaviors: behaviors, failureModes: ['Blames an API outage'],
   };
@@ -76,7 +76,7 @@ describe('formatJudgeInput', () => {
 describe('formatJudgeInput with the principal\'s next turn (#2333)', () => {
   const scenario: ScenarioCase = {
     name: 'then', description: 'Dana asks; Avery says no.', tags: [], agent: 'coordinator', delegation: 'stubbed', releaseGate: true, sourceFile: 'x.yaml',
-    seed: { contacts: [{ key: 'dana', displayName: 'Dana Whitfield', tier: 'known', channel: 'signal', identifier: '+15195550177' }], outboundContext: [], bullpen: [], verifications: [], principalIdentities: [], tasks: [], outreach: [] },
+    seed: { contacts: [{ key: 'dana', displayName: 'Dana Whitfield', tier: 'known', channel: 'signal', identifier: '+15195550177' }], outboundContext: [], bullpen: [], verifications: [], tasks: [], outreach: [] },
     inbound: { from: 'dana', content: 'What is Avery\'s email?', then: { content: 'No, don\'t give Dana my email.', channel: 'email' } },
     toolStubs: {}, explicitStubTools: [], ownStubTools: [], expectedBehaviors: behaviors, failureModes: [],
   };
@@ -108,7 +108,7 @@ describe('formatJudgeInput with the principal\'s next turn (#2333)', () => {
 describe('formatJudgeInput with the run clock', () => {
   const scenario: ScenarioCase = {
     name: 'clock', description: 'Coffee in a week or two.', tags: [], agent: 'coordinator', delegation: 'stubbed', releaseGate: true, sourceFile: 'x.yaml',
-    seed: { contacts: [], outboundContext: [], bullpen: [], verifications: [], principalIdentities: [], tasks: [], outreach: [] },
+    seed: { contacts: [], outboundContext: [], bullpen: [], verifications: [], tasks: [], outreach: [] },
     inbound: { from: 'principal', content: 'Coffee in a week or two?' },
     toolStubs: {}, explicitStubTools: [], ownStubTools: [], expectedBehaviors: behaviors, failureModes: [],
   };
@@ -138,7 +138,7 @@ describe('formatJudgeInput with the run clock', () => {
 describe('formatJudgeInput with an identity fixture (#2143)', () => {
   const scenario: ScenarioCase = {
     name: 'style', description: 'A brief reply.', tags: ['style'], agent: 'coordinator', delegation: 'stubbed', releaseGate: false, sourceFile: 'x.yaml',
-    seed: { contacts: [], outboundContext: [], bullpen: [], verifications: [], principalIdentities: [], tasks: [], outreach: [] },
+    seed: { contacts: [], outboundContext: [], bullpen: [], verifications: [], tasks: [], outreach: [] },
     inbound: { from: 'principal', content: 'Did Dana confirm?' },
     toolStubs: {}, explicitStubTools: [], ownStubTools: [], expectedBehaviors: behaviors, failureModes: [],
   };
@@ -164,7 +164,7 @@ describe('formatJudgeInput with an identity fixture (#2143)', () => {
 describe('formatJudgeInput with real delegation (#2027)', () => {
   const scenario: ScenarioCase = {
     name: 'real', description: 'Calendar really runs.', tags: [], agent: 'coordinator', delegation: 'real', releaseGate: true, sourceFile: 'x.yaml',
-    seed: { contacts: [], outboundContext: [], bullpen: [], verifications: [], principalIdentities: [], tasks: [], outreach: [] },
+    seed: { contacts: [], outboundContext: [], bullpen: [], verifications: [], tasks: [], outreach: [] },
     inbound: { from: 'principal', content: "What's on tomorrow?" },
     toolStubs: {}, explicitStubTools: [], ownStubTools: [], expectedBehaviors: behaviors, failureModes: [],
   };
@@ -209,7 +209,7 @@ describe('extractJsonObject', () => {
 describe('judgeRun', () => {
   const scenario = {
     name: 'x', description: '', tags: [], agent: 'coordinator', delegation: 'stubbed', releaseGate: true, sourceFile: 'x.yaml',
-    seed: { contacts: [], outboundContext: [], bullpen: [], verifications: [], principalIdentities: [], tasks: [], outreach: [] },
+    seed: { contacts: [], outboundContext: [], bullpen: [], verifications: [], tasks: [], outreach: [] },
     inbound: { from: 'principal', content: 'hi' },
     toolStubs: {}, explicitStubTools: [], ownStubTools: [], expectedBehaviors: behaviors, failureModes: [],
   } as ScenarioCase;

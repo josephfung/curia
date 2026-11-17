@@ -41,7 +41,6 @@ import {
   type SeedMailParty,
   type SeedPinned,
   type SeedPrincipalDraft,
-  type SeedPrincipalIdentity,
   type SeedPrincipalMailbox,
   type SeedPrincipalThread,
   type SeedTask,
@@ -85,7 +84,7 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
 }
 
 const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway', 'gated_tools'] as const;
-const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'principal_identities', 'tasks', 'outreach', 'pinned', 'principal_mailbox'] as const;
+const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'tasks', 'outreach', 'pinned', 'principal_mailbox'] as const;
 const PRINCIPAL_MAILBOX_KEYS = ['send_level', 'drafts', 'threads', 'expect_no_band_review'] as const;
 const PRINCIPAL_DRAFT_KEYS = ['id', 'thread', 'to', 'cc', 'subject', 'body', 'modified', 'by_curia'] as const;
 /** `by_curia` values (#2474 PR 2). PR 1's `true` is now `earlier`, and is refused so a stale case is not misread. */
@@ -100,7 +99,6 @@ const PINNED_KEYS = ['docs', 'configs', 'unavailable'] as const;
 const TASK_KEYS = ['key', 'title', 'intent', 'originator', 'agent'] as const;
 const OUTREACH_KEYS = ['key', 'task', 'via', 'org_name', 'domains', 'addresses', 'contacts', 'summary', 'confirmed'] as const;
 const OUTREACH_VIAS: readonly SeedOutreach['via'][] = ['email', 'web_form', 'signal', 'sms', 'slack', 'phone', 'other'];
-const PRINCIPAL_IDENTITY_KEYS = ['channel', 'identifier'] as const;
 /** Channels the resolver maps to the principal without an identity (seed.ts: PRINCIPAL_LOCAL_CHANNELS). */
 const PRINCIPAL_LOCAL_CHANNELS = ['cli', 'smoke-test', 'web'];
 const VERIFICATION_KEYS = ['key', 'site', 'page_domain', 'delivery', 'browser_session_id', 'task', 'status', 'requested_minutes_ago', 'session_alive'] as const;
@@ -615,27 +613,6 @@ function parseVerifications(raw: Raw, file: string): SeedVerification[] {
       requestedMinutesAgo: optNum(v, 'requested_minutes_ago', file, where) ?? (pending ? 1 : 15),
       sessionAlive: optBool(v, 'session_alive', file, where) ?? pending,
     };
-  });
-}
-
-/** `seed.principal_identities` (#2017): one per channel, never a local one. */
-function parsePrincipalIdentities(raw: Raw, file: string): SeedPrincipalIdentity[] {
-  const seen = new Set<string>();
-  return list(raw, 'principal_identities', file).map((p, i) => {
-    const where = `seed.principal_identities[${i}]`;
-    onlyKeys(p, PRINCIPAL_IDENTITY_KEYS, file, where);
-    const channel = str(p, 'channel', file, where);
-    const identifier = str(p, 'identifier', file, where);
-    if (PRINCIPAL_LOCAL_CHANNELS.includes(channel)) {
-      throw new CaseError(file, `${where}: the principal needs no identity on '${channel}'`);
-    }
-    if (seen.has(channel)) throw new CaseError(file, `${where}: at most one per channel`);
-    seen.add(channel);
-    // A fixture must never collide with a real person's address.
-    if (channel === 'email' && !/@([a-z0-9-]+\.)*example\.test$/i.test(identifier)) {
-      throw new CaseError(file, `${where}: email identifiers must be under example.test`);
-    }
-    return { channel, identifier };
   });
 }
 
@@ -1190,7 +1167,6 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     outboundContext: parseOutbound(seedRaw, file),
     bullpen: parseBullpen(seedRaw, file),
     verifications: parseVerifications(seedRaw, file),
-    principalIdentities: parsePrincipalIdentities(seedRaw, file),
     tasks: parseTasks(seedRaw, file),
     outreach: parseOutreach(seedRaw, file),
     ...(pinned && { pinned }),

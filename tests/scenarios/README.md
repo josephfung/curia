@@ -76,15 +76,18 @@ them name Avery. A database whose principal is someone else, such as a dev datab
 mirrored from a real deployment, makes the coordinator treat Avery as a stranger, and the
 principal-ask cases fail for the environment rather than the code (13 cases on the
 2026-11-16 gate). So an unfiltered run refuses to start unless the principal's name is
-Avery Testwell and they have that verified email. A `--case` / `--tags` run only warns,
+Avery Testwell and they have that verified email and Signal number. A `--case` / `--tags` run only warns,
 unless `CURIA_RELEASE_GATE=1` is set (`--runs` alone still runs every case, so it refuses).
 To set one up, copy the dev database and rename the copy's principal. One email identity
 becomes Avery's (the one already holding Avery's address, else the oldest) and any others are
-marked `defunct`, since addresses are unique; a principal with no email gets one inserted:
+marked `defunct`, since addresses are unique; a principal with no email gets one inserted.
+Signal works the same way: the principal gets exactly one verified, active Signal identity,
+`+15555550147`, which the cases' principal Signal turns come from. The command refuses, before
+changing anything, if another contact already holds that number:
 
 ```bash
 docker exec curia-postgres-1 psql -U curia -d postgres -c "CREATE DATABASE curia_scenarios TEMPLATE curia"
-docker exec curia-postgres-1 psql -U curia -d curia_scenarios -c "UPDATE contacts SET display_name='Avery Testwell', preferred_name='Avery', primary_email='avery.testwell@example.test' WHERE system_role='principal'; UPDATE contact_channel_identities SET status='defunct' WHERE channel='email' AND contact_id=(SELECT id FROM contacts WHERE system_role='principal'); UPDATE contact_channel_identities SET channel_identifier='avery.testwell@example.test', verified=true, verified_at=now(), status='active' WHERE id=(SELECT id FROM contact_channel_identities WHERE channel='email' AND contact_id=(SELECT id FROM contacts WHERE system_role='principal') ORDER BY lower(channel_identifier)='avery.testwell@example.test' DESC, created_at LIMIT 1); INSERT INTO contact_channel_identities (contact_id, channel, channel_identifier, verified, verified_at, source, status) SELECT id, 'email', 'avery.testwell@example.test', true, now(), 'ceo_stated', 'active' FROM contacts WHERE system_role='principal' AND NOT EXISTS (SELECT 1 FROM contact_channel_identities WHERE channel='email' AND contact_id=contacts.id);"
+docker exec curia-postgres-1 psql -U curia -d curia_scenarios -c "UPDATE contacts SET display_name='Avery Testwell', preferred_name='Avery', primary_email='avery.testwell@example.test' WHERE system_role='principal'; UPDATE contact_channel_identities SET status='defunct' WHERE channel='email' AND contact_id=(SELECT id FROM contacts WHERE system_role='principal'); UPDATE contact_channel_identities SET channel_identifier='avery.testwell@example.test', verified=true, verified_at=now(), status='active' WHERE id=(SELECT id FROM contact_channel_identities WHERE channel='email' AND contact_id=(SELECT id FROM contacts WHERE system_role='principal') ORDER BY lower(channel_identifier)='avery.testwell@example.test' DESC, created_at LIMIT 1); INSERT INTO contact_channel_identities (contact_id, channel, channel_identifier, verified, verified_at, source, status) SELECT id, 'email', 'avery.testwell@example.test', true, now(), 'ceo_stated', 'active' FROM contacts WHERE system_role='principal' AND NOT EXISTS (SELECT 1 FROM contact_channel_identities WHERE channel='email' AND contact_id=contacts.id); DO 'BEGIN IF EXISTS (SELECT 1 FROM contact_channel_identities i JOIN contacts c ON c.id=i.contact_id WHERE i.channel=''signal'' AND i.channel_identifier=''+15555550147'' AND c.system_role IS DISTINCT FROM ''principal'') THEN RAISE EXCEPTION ''Signal +15555550147 belongs to a contact other than the principal; remove that identity first''; END IF; END'; UPDATE contact_channel_identities SET status='defunct' WHERE channel='signal' AND contact_id=(SELECT id FROM contacts WHERE system_role='principal'); UPDATE contact_channel_identities SET channel_identifier='+15555550147', verified=true, verified_at=now(), status='active' WHERE id=(SELECT id FROM contact_channel_identities WHERE channel='signal' AND contact_id=(SELECT id FROM contacts WHERE system_role='principal') ORDER BY channel_identifier='+15555550147' DESC, created_at LIMIT 1); INSERT INTO contact_channel_identities (contact_id, channel, channel_identifier, verified, verified_at, source, status) SELECT id, 'signal', '+15555550147', true, now(), 'ceo_stated', 'active' FROM contacts WHERE system_role='principal' AND NOT EXISTS (SELECT 1 FROM contact_channel_identities WHERE channel='signal' AND contact_id=contacts.id);"
 export DATABASE_URL=postgres://curia:<password>@localhost:5432/curia_scenarios   # --env-file does not override it
 ```
 
@@ -228,13 +231,12 @@ seeded rows, stubs, model calls and spend are found through its own case context
 | Outbound-context entries | `OutboundContextService.register`, backdated to `sent_minutes_ago` | The Dispatcher's `getActive()` returns only this run's entries, each read through the real `getEntry` SQL. Deleted after the run. |
 | Bullpen threads | `BullpenService.openThread` | Runtimes see only this run's threads (the `wrapBullpenService` stack option). Deleted after the run. |
 | Sign-in verifications (#2017) | the verification runtime's `open`, then backdated (and closed, for a non-pending `status`) | The coordinator's "## Sign-in verifications" block, the Dispatcher's code tracking and the ExecutionLayer see only the run's rows (`scopedVerification`, the `wrapVerification` stack option), and only the run's sessions read as alive (`browserSessionAlive`). Cases seeding one site never run at once (one pending row per site). Deleted after the run. |
-| Principal identities (#2017) | `seed.principal_identities`: a verified, active identity for the principal, added only when they have no active one on that channel | Labelled `scenario-fixture (#2017)`; cleanup deletes only the row its run added, and the sweep only labelled rows. Cases adding one on the same channel never run at once. A raw insert, so the principal's identity list in every agent's prompt (read at boot) is unchanged. |
 | The principal backlog (prompt trim PR 7) | `seed.backlog` counts | The Dispatcher's backlog line reads the run's own counts (`scopedPrincipalBacklog`), never the shared tables. A case stubs the list tools to show the items its counts promise. |
 | Pinned context (#2339) | `seed.pinned`: `/shared/` document text and config values by key, and entries whose read fails | Agents' `## Pinned context` block reads the run's own values (`scopedPinnedContextReader`, the `wrapPinnedContextReader` stack option), never the copied database's documents or settings. An entry the case does not name reads as not yet created or not set. A write is the case's to stub (`doc-write`, `config-store`). |
 | Scheduler jobs | the `scheduler-list` stub, and `scheduler-get` (with a `job_id` match) for a job's full task | Never written to the database. Within a run, a later list or `scheduler-get` replays that run's stubbed creates, edits and cancels. |
 | The run's conversation | | `working_memory`, `conversation_checkpoints` and `conversation_resolved_entities` rows are deleted. |
 | Specialists' conversations (real delegation) | | The same rows for each `scenario-delegate-…` conversation. A specialist the run abandoned is cleaned again when it finishes. |
-| The principal's later turn (`inbound.then`, #2312) | | The same rows for its `scenario-then-…` conversation, and what its tools wrote there. |
+| The principal's later turn (`inbound.then`, #2312) | | The same rows for its conversation (`scenario-then-…`, or on Signal the principal's DM `signal:+15555550147`, also cleared before the turn), and what its tools wrote there. |
 | Delegation claims (real delegation) | production's `pending_delegations` claims | Rows whose origin is the run's conversation or whose delegate conversation is a specialist's are deleted. |
 | Entries a specialist changes or registers | the run-scoped outbound-context view | Every read or write outside the run's entries finds nothing. A registered entry joins the run's and is deleted with them. |
 | Standing tasks (#2312) | `seed.tasks`: an open `tasks` row with its originator, as `task-create` writes one, but no bus event and no wake job | `created_by` is `scenario-suite (#2312)`; cleanup and the sweep delete only rows carrying it. The Dispatcher's outreach link reads a task's status only for the run's own. |
@@ -253,7 +255,8 @@ specialist conversations a `scenario-delegate-` id, and delegation claims those
 conversations. Seeded tasks carry their `created_by` marker; seeded outreach, and what
 through-gateway sends wrote, a run's or a `scenario-origin-` conversation id. A through-gateway
 Signal third party's conversation, `signal:<fixture number>`, has no prefix of its own: the sweep
-finds it by the exact numbers the loaded through-gateway cases seed. On Ctrl-C/SIGTERM, and at
+finds it by the exact numbers the loaded through-gateway cases seed, and the principal's Signal
+DM, `signal:+15555550147`, when a loaded case has a principal Signal turn. On Ctrl-C/SIGTERM, and at
 every start-up, the CLI sweeps anything carrying those markers — and nothing else.
 
 ### Stubs, and why nothing can send
@@ -414,8 +417,6 @@ seed:
       status: pending                     # optional; pending | expired | satisfied | abandoned
       requested_minutes_ago: 3            # optional; default 1 if pending, else 15
       session_alive: true                 # optional; default: alive while pending
-  principal_identities:                   # optional; for an inbound as the principal on a channel
-    - { channel: signal, identifier: "+15555550142" }   # the database's principal may lack (#2017)
   backlog:                                # optional; what the backlog line reports on a principal turn
     pending_approvals: 1                  #   decay_warnings, pending_approvals, principal_tasks;
     decay_warnings: 0                     #   absent counts are 0, and one must be positive
@@ -771,8 +772,10 @@ gateway, with the reply-all recipients, the quote, provenance, the relay hold re
 gated-draft fallback and, for a held reply, the coordinator's approval-delivery wake. That
 wake turn is filed under the run (its tools get the run's stubs, `deliver-approval` runs) and
 its calls join the run's. A Signal third party's conversation is `signal:<their number>`, the
-address the adapter replies to (cases seeding one identity never run at once); the principal's
-Signal turns keep a `scenario-` conversation, so a reply relayed to them is not sent. Other
+address the adapter replies to (cases seeding one identity never run at once). The principal's
+Signal turns run in their DM, `signal:+15555550147` (`principal-fixture.ts`), so a relayed reply
+reaches them as the principal, as in production. Cases with a principal Signal turn never run at
+once: they share that conversation, its history and its turn lane. Other
 cases' relays stay on the bus, unsent, as before. Slack and SMS relays are not wired.
 
 An `email-reply` fetches the message it answers: the fake mailbox serves the run's inbound
@@ -874,8 +877,8 @@ Approving is elevated, so it needs a live principal turn. Two ways to give one:
 - `inbound.followup` from the principal, joining a turn the principal started (a follow-up
   from anyone else is not queued into another sender's turn);
 - `inbound.then`, the principal's next message as a turn of its own, once the first turn has
-  ended. It arrives from the principal's verified identity on `channel` (default `signal`;
-  seed one with `principal_identities` if the database's principal has none), in a second
+  ended. It arrives from the principal's verified identity on `channel` (default `signal`,
+  the scenario principal's `+15555550147`), in a second
   conversation filed under the run: same stubs, its calls listed with the run's, its rows the
   run's and cleaned with them. This is how a hold raised on a third party's turn is approved
   within the run. The checks read the run after this turn has settled; its reply is

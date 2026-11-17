@@ -153,7 +153,7 @@ const scenario = {
 
 function seededRun(extra: Partial<SeededRun> = {}): SeededRun {
   return {
-    refs: new Map(), contacts: [], entryIds: [], threads: new Map(), verificationIds: [], principalIdentityIds: [],
+    refs: new Map(), contacts: [], entryIds: [], threads: new Map(), verificationIds: [],
     taskIds: ['task-a'], outreachIds: ['seeded'], ...extra,
   };
 }
@@ -241,7 +241,7 @@ describe('seedRun: the seeds a through-gateway case needs', () => {
     const c = {
       seed: {
         contacts: [{ key: 'pat', displayName: 'Pat Okafor', tier: 'trusted', channel: 'email', identifier: 'pat@vendor.example.test' }],
-        outboundContext: [], bullpen: [], verifications: [], principalIdentities: [],
+        outboundContext: [], bullpen: [], verifications: [],
         tasks: [{ key: 'onboarding', title: 'Vendor forms', originator: 'principal', agent: 'coordinator' }],
         outreach: [{ key: 'forms', task: 'onboarding', via: 'email', domains: ['vendor.example.test'], addresses: [], contacts: ['pat'], summary: 'Sent forms', confirmed: true }],
       },
@@ -395,7 +395,7 @@ describe('the run\'s principal mailbox (#2474)', () => {
   const CLOCK = new Date('2026-11-07T15:00:00.000Z');
   const seededCase = (byCuria: false | 'same_task' | 'earlier', extra: Record<string, unknown> = {}) => ({
     seed: {
-      contacts: [], outboundContext: [], bullpen: [], verifications: [], principalIdentities: [], tasks: [], outreach: [],
+      contacts: [], outboundContext: [], bullpen: [], verifications: [], tasks: [], outreach: [],
       principalMailbox: {
         sendLevel: 'off',
         drafts: [{
