@@ -44,6 +44,8 @@ Every run bills real model calls (CLAUDE.md "Testing").
 
 The gate runs on `main` and at release, never as a mid-branch "did anything else break" check.
 
+**The weekly run.** `.github/workflows/behavior-gate.yml` runs the gate on `main` every Sunday at about 11:20 UTC, on a fresh database (`tests/scenarios/ci-setup.ts`), and posts its summary on the pinned tracking issue, #2663. A red run is triaged as below. Its transcripts are the run's `behavior-gate-results` artifact, and are the baseline to compare the next run against. At release, if `main` has not moved since the latest weekly run, that run is the behavior gate; otherwise dispatch the workflow on the release commit (Actions → Behavior gate (weekly) → Run workflow). It uses its own OpenRouter and OpenAI keys, in the `behavior-tests` environment, each with a monthly credit limit.
+
 ## Triage
 
 **Deterministic failure.** A check in code failed, so this is a bug in the product or in the case. Root-cause it, time-boxed to about an hour. Then:

@@ -53,7 +53,15 @@ The ZAP DAST scan (`zap-dast` category) is alert-only and review-only for now â€
 
 ***C. Behavior gate***
 
-Run the scenario suite against the **same `main` commit as the security gate**, on the standard-tier model the production deployment uses (its `model_routing.tiers.standard.model`, e.g. `deepseek/deepseek-v4.1-flash`). Run it from a worktree checked out at that commit:
+Run the scenario suite against the **same `main` commit as the security gate**, on the standard-tier model the production deployment uses (its `model_routing.tiers.standard.model`, e.g. `deepseek/deepseek-v4.1-flash`).
+
+The weekly workflow does this (`docs/dev/behavior-tests.md`, "The weekly run"). If its latest Sunday run was on that commit, that run is the gate: read its summary on the tracking issue. Otherwise run it on `main` now, which is that commit while nothing has merged since the security gate:
+
+```bash
+gh workflow run behavior-gate.yml   # about $1; its summary lands on the tracking issue
+```
+
+Without the workflow, run it from a worktree checked out at that commit:
 
 ```bash
 docker stop curia-curia-1                       # scenarios refuses to run beside a live instance
