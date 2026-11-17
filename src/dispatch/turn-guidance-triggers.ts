@@ -315,15 +315,29 @@ const FORWARD_SUBJECT = /^Subject:\s*(fwd?|fw)\s*:/i;
  * history holds an older forward is a reply. Not the Outlook underscore separator alone,
  * which replies carry too; an Outlook forward is caught by its "FW:" subject.
  */
+// Forward subject prefixes, localized as well: Fwd/Fw/FW, TR (French), WG (German), RV (Spanish),
+// VS (Finnish), ENC (Portuguese), Doorst (Dutch). Only for forwardNotCut, which fails closed on a
+// match; looksLikeForward keeps FORWARD_SUBJECT.
+const FORWARD_SUBJECT_ANY_LANGUAGE = /^Subject:\s*(fwd?|fw|tr|wg|rv|vs|enc|doorst)\s*:/i;
+
 /**
- * An email whose subject says it is a forward ("Fwd:", "FW:", "Fw:"), but in which no quote or
- * forward marker was found to cut (cutsQuotedText false): the forwarded part's header is one
- * firstQuoteLine does not know (another language, another client), so senderOwnText would keep
- * the forwarded sender's words as the forwarder's own. A reader that must have only the sender's
- * words (the Stage 2 directive) fails closed on it. Always false off email.
+ * An email whose subject says it is a forward, where the cut senderOwnText makes does not land on
+ * a forward header it knows (Gmail's, Apple Mail's, Outlook's underscore rule or its From: block):
+ * no marker at all, or one inside the forwarded part (a "> " line the forwarded message quoted),
+ * which would keep the forwarded sender's words above the cut as the forwarder's own. A reader
+ * that must have only the sender's words (the Stage 2 directive) fails closed on it. Always false
+ * off email.
  */
 export function forwardNotCut(channelId: string, content: string): boolean {
-  return channelId === 'email' && FORWARD_SUBJECT.test(content) && !cutsQuotedText(channelId, content);
+  if (channelId !== 'email' || !FORWARD_SUBJECT_ANY_LANGUAGE.test(content)) return false;
+  const lines = content.replace(EMAIL_SUBJECT_PREFIX, '').split('\n');
+  const quoteAt = firstQuoteLine(lines);
+  if (quoteAt === -1) return true;
+  const marker = lines[quoteAt]!.trim();
+  const isForwardHeader = FORWARD_GMAIL.test(marker) || FORWARD_APPLE.test(marker) || SEPARATOR_UNDERSCORES.test(marker)
+    || /^From:\s/i.test(marker)
+    || (OUTLOOK_HR_RULE.test(marker) && /^From:\s/i.test(lines[quoteAt + 1]?.trim() ?? ''));
+  return !isForwardHeader;
 }
 
 export function looksLikeForward(channelId: string, content: string): boolean {
