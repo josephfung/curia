@@ -521,9 +521,13 @@ RUN set -e; \
       const logger = pino({ level: 'warn' }); \
       const profile = { ...ALL_MINILM_L6_V2, weightsSha256: await hashBundledWeights(dir, logger) }; \
       const service = await EmbeddingService.createBundled(dir, profile, logger); \
-      const v = await service.embed('build-time load check', 'document'); \
-      if (v.length !== profile.dimensions) throw new Error('expected ' + profile.dimensions + ' dims, got ' + v.length); \
-      process.stdout.write('bundled embedder load check: OK, ' + v.length + ' dims\n'); \
+      try { \
+        const v = await service.embed('build-time load check', 'document'); \
+        if (v.length !== profile.dimensions) throw new Error('expected ' + profile.dimensions + ' dims, got ' + v.length); \
+        process.stdout.write('bundled embedder load check: OK, ' + v.length + ' dims\n'); \
+      } finally { \
+        await service.close(); \
+      } \
     })().catch((err) => { \
       process.stderr.write('bundled embedder load check failed: ' + (err && err.stack ? err.stack : err) + '\n'); \
       process.exit(1); \
