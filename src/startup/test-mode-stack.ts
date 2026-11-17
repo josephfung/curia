@@ -148,6 +148,7 @@ import { ConversationEntityState } from '../entity-context/conversation-entities
 import { OfficeIdentityService } from '../identity/service.js';
 import type { OfficeIdentity } from '../identity/types.js';
 import { BullpenService } from '../memory/bullpen.js';
+import type { EmbeddingService } from '../memory/embedding.js';
 import { resolveKnowledgeGraphEmbedding } from '../memory/embedding-schema.js';
 import { EntityMemory } from '../memory/entity-memory.js';
 import { KnowledgeGraphStore } from '../memory/knowledge-graph.js';
@@ -1189,8 +1190,10 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
   const securityContextBlock = compileSecurityContextBlock(thresholds.thresholds);
 
   const pool = createPool(config.databaseUrl, logger);
-  // Everything below may throw; release the pool and identity watcher if it does.
+  // Everything below may throw; release the pool, identity watcher and embedding service if it does.
   let officeIdentityService: OfficeIdentityService | undefined;
+  // The bundled model's native ONNX session; released on shutdown and on a failed boot.
+  let kgEmbeddingService: EmbeddingService | undefined;
   try {
     await pool.query('SELECT 1');
 
@@ -1305,6 +1308,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     }
     if (embedding.ok) {
       const embeddingService = embedding.service;
+      kgEmbeddingService = embeddingService;
       const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
       entityMemory = new EntityMemory(kgStore, new MemoryValidator(kgStore, embeddingService), embeddingService, logger);
     }
@@ -1750,6 +1754,8 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
         try {
           await identityService.stop();
         } finally {
+          // close() never throws (it logs a failed release), so the pool always ends.
+          await kgEmbeddingService?.close();
           await pool.end();
         }
       },
@@ -1761,6 +1767,8 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     } catch (stopErr) {
       logger.error({ err: stopErr }, 'test-mode stack: identity service stop failed during boot cleanup');
     }
+    // Never throws: a failed release is logged by close() itself.
+    await kgEmbeddingService?.close();
     try {
       await pool.end();
     } catch (endErr) {

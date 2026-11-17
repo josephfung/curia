@@ -64,13 +64,19 @@ describeIf('bundled embedding model as the default source', () => {
   let scratch: ScratchDatabase;
   let pool: pg.Pool;
   let created: EmbeddingSource[];
+  // Every real service a test makes; afterEach releases their native ONNX sessions.
+  let services: EmbeddingService[] = [];
+  const track = (service: EmbeddingService): EmbeddingService => {
+    services.push(service);
+    return service;
+  };
 
   // The fake backend for every endpoint, the real one for the bundled model.
   const createService: typeof EmbeddingService.create = async (source, profile, ...rest) => {
     created.push(source);
     return source.kind === 'endpoint'
       ? EmbeddingService.createForTesting(profile)
-      : EmbeddingService.create(source, profile, ...rest);
+      : track(await EmbeddingService.create(source, profile, ...rest));
   };
 
   async function seedNodes(profile: EmbeddingProfile, labels: string[]): Promise<void> {
@@ -93,6 +99,12 @@ describeIf('bundled embedding model as the default source', () => {
   afterAll(async () => {
     await pool?.end();
     await scratch?.drop();
+  });
+
+  // Runs when an assertion fails too. close() never throws.
+  afterEach(async () => {
+    await Promise.all(services.map(s => s.close()));
+    services = [];
   });
 
   beforeEach(async () => {
@@ -214,11 +226,11 @@ describeIf('bundled embedding model as the default source', () => {
     expect(created).toEqual([]);
 
     // What `pnpm reembed:kg` does with the same settings.
-    const service = await EmbeddingService.create(
+    const service = track(await EmbeddingService.create(
       { kind: 'bundled', modelDir: MODEL_DIR },
       { ...ALL_MINILM_L6_V2, weightsSha256: await hashBundledWeights(MODEL_DIR, logger) },
       logger,
-    );
+    ));
     expect(await reembedKnowledgeGraph({ pool, embeddingService: service, logger, dryRun: false })).toMatchObject({ status: 'done' });
 
     const after = await resolveKnowledgeGraphEmbedding(pool, config, undefined, logger, {}, { createService });

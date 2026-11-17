@@ -33,7 +33,13 @@ const { Pool } = pg;
 // holds no vectors its schema check would resize kg_nodes.embedding to 384 for every other
 // file writing 1536-wide vectors, and leave it so. A model directory that does not exist
 // stops the gate before the schema check (gate 'bundled'), so the column is never touched.
-const NO_BUNDLED_EMBEDDER = { embeddingModelDir: path.resolve(import.meta.dirname, 'no-bundled-embedder') };
+// No base URL and the bundled model named explicitly, so neither an EMBEDDING_BASE_URL in
+// the environment nor stored OpenAI vectors can route around the missing directory.
+const NO_BUNDLED_EMBEDDER = {
+  embeddingBaseUrl: undefined,
+  embeddingModel: 'all-MiniLM-L6-v2',
+  embeddingModelDir: path.resolve(import.meta.dirname, 'no-bundled-embedder'),
+};
 
 describeIf('test-mode stack', () => {
   let stack: TestModeStack;

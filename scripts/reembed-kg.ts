@@ -61,23 +61,29 @@ async function main(): Promise<number> {
       return 1;
     }
 
-    const result = await reembedKnowledgeGraph({ pool, embeddingService, logger, dryRun, force });
-    switch (result.status) {
-      case 'locked':
-        logger.error(
-          { holder: result.holder },
-          `reembed-kg: Curia appears to be running: the instance lock is held by ${describeInstanceLockHolder(result.holder)}. ` +
-          `Stop Curia, run ${REEMBED_COMMAND} again, then start Curia. ${REEMBED_DOCKER_NOTE} Nothing was changed.`,
-        );
-        return 1;
-      case 'dry_run':
-        logger.info(
-          { rowsToEmbed: result.rowsToEmbed, widthChanges: result.widthChanges, force: result.force },
-          'reembed-kg: DRY-RUN complete — nothing was changed',
-        );
-        return 0;
-      case 'done':
-        return 0;
+    try {
+      const result = await reembedKnowledgeGraph({ pool, embeddingService, logger, dryRun, force });
+      switch (result.status) {
+        case 'locked':
+          logger.error(
+            { holder: result.holder },
+            `reembed-kg: Curia appears to be running: the instance lock is held by ${describeInstanceLockHolder(result.holder)}. ` +
+            `Stop Curia, run ${REEMBED_COMMAND} again, then start Curia. ${REEMBED_DOCKER_NOTE} Nothing was changed.`,
+          );
+          return 1;
+        case 'dry_run':
+          logger.info(
+            { rowsToEmbed: result.rowsToEmbed, widthChanges: result.widthChanges, force: result.force },
+            'reembed-kg: DRY-RUN complete — nothing was changed',
+          );
+          return 0;
+        case 'done':
+          return 0;
+      }
+    } finally {
+      // Release the bundled model's ONNX session before the process drains, as src/index.ts
+      // and the other scripts do. close() never throws.
+      await embeddingService.close();
     }
   } finally {
     await pool.end();

@@ -234,6 +234,13 @@ export class OnnxEmbeddingBackend {
     // boot, not as an opaque run() failure on the first write.
     const missingInputs = INPUT_NAMES.filter(n => !session.inputNames.includes(n));
     if (missingInputs.length > 0 || !session.outputNames.includes(OUTPUT_NAME)) {
+      // No backend reaches the caller to close it, so release the session here; boot carries
+      // on with the knowledge graph off. A failed release is logged; the mismatch is the error.
+      try {
+        await session.release?.();
+      } catch (err) {
+        logger.error({ err }, 'Failed to release the bundled embedding model session');
+      }
       throw new Error(
         `Bundled embedding model ${weights} has inputs [${session.inputNames.join(', ')}] and outputs ` +
         `[${session.outputNames.join(', ')}]; expected inputs [${INPUT_NAMES.join(', ')}] and output ${OUTPUT_NAME}`,

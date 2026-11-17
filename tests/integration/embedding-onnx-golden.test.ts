@@ -15,7 +15,7 @@
 // No database: this lives under integration because it loads the real model. Locally it
 // skips without the weights; in CI, which runs `pnpm fetch:embedder` first, it never skips.
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { EmbeddingService } from '../../src/memory/embedding.js';
@@ -39,7 +39,7 @@ const golden = JSON.parse(
 ) as GoldenFixture;
 
 describe.skipIf(!weightsPresent && !process.env.CI)('bundled embedder golden vectors', () => {
-  let service: EmbeddingService;
+  let service: EmbeddingService | undefined;
 
   beforeAll(async () => {
     if (!weightsPresent) {
@@ -48,6 +48,11 @@ describe.skipIf(!weightsPresent && !process.env.CI)('bundled embedder golden vec
     const logger = createSilentLogger();
     const weightsSha256 = await hashBundledWeights(MODEL_DIR, logger);
     service = await EmbeddingService.createBundled(MODEL_DIR, { ...ALL_MINILM_L6_V2, weightsSha256 }, logger);
+  });
+
+  // Release the native session before the worker exits, failed assertions included.
+  afterAll(async () => {
+    await service?.close();
   });
 
   // A mismatch below then means the backend drifted, not that other weights were fetched.
@@ -59,7 +64,7 @@ describe.skipIf(!weightsPresent && !process.env.CI)('bundled embedder golden vec
   it.each(golden.vectors.map(g => [g.text, g.vector] as const))(
     'reproduces the pipeline vector for %j',
     async (text, expected) => {
-      const actual = await service.embed(text, 'similarity');
+      const actual = await service!.embed(text, 'similarity');
       expect(actual).toHaveLength(expected.length);
       expect(EmbeddingService.cosineSimilarity(actual, expected)).toBeGreaterThanOrEqual(DRIFT_SAME_MIN);
     },
