@@ -184,6 +184,8 @@ export class SendDraftHandler implements ToolHandler {
         humanApproved: true,
         principalDirected: isPrincipalDirectedSend(ctx),
         principalApproved,
+        // humanApproved above is set on every call; this says whether this one is a replay.
+        approvalReplay: ctx.humanApproved === true,
         conversationId: ctx.conversationId,
         taskEventId: ctx.taskEventId,
         // Used only if band review holds this draft (#2159): approval replays send-draft from

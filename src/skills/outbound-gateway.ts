@@ -1176,6 +1176,12 @@ interface DraftSendOptions {
   principalDirected?: boolean;
   /** The principal approved this draft as written (an approval replay): sent intact (#2312). */
   principalApproved?: boolean;
+  /**
+   * This call is an approval replay (ctx.humanApproved), as opposed to send-draft's standing
+   * `humanApproved: true`, which it sets on every call. No live turn to read the principal's
+   * Stage 2 directive from (CR-3).
+   */
+  approvalReplay?: boolean;
   conversationId?: string;
   taskEventId?: string;
   parentEventId?: string;
@@ -2047,7 +2053,8 @@ export class OutboundGateway {
         recipientTier,
         recipientTierUnresolved,
         principalDirected: options?.principalDirected === true,
-        ...(await this.principalDirectiveOption(options, principalIsSoleRecipient)),
+        // send()'s humanApproved is set only on an approval replay (ctx.humanApproved).
+        ...(await this.principalDirectiveOption(options, principalIsSoleRecipient, options?.humanApproved === true)),
         recipients,
         principalIncluded,
         principalIsSoleRecipient,
@@ -2482,6 +2489,12 @@ export class OutboundGateway {
    * is not a live principal turn with a readable message all return {} (Stage 2 releases
    * nothing, as before) with a warn, so a principal-directed block can be traced to it.
    *
+   * An approval replay (`replay`) returns {} at once with a debug log (CR-3): it is
+   * principal-directed (isPrincipalDirectedSend counts humanApproved) but is not a live turn, so
+   * there is no message to read. Collecting would cost an audit read and warn on every replay.
+   * The release is withheld there too, which is as before: the principal approved this message,
+   * and the replay still runs the content filter like any send.
+   *
    * TODO(#2312 follow-up): band review (Step 2.5) collects evidence for the same turn again.
    * Its collect() scope differs (prior bounced turns, decision scope), so sharing the result
    * would mean threading a pre-collected value through BandSendReview; one extra audit read
@@ -2490,8 +2503,13 @@ export class OutboundGateway {
   private async principalDirectiveOption(
     options: { principalDirected?: boolean; taskEventId?: string } | undefined,
     principalIsSoleRecipient: boolean,
+    replay: boolean,
   ): Promise<{ principalDirective?: string }> {
     if (options?.principalDirected !== true || principalIsSoleRecipient) return {};
+    if (replay) {
+      this.log.debug({ taskEventId: options.taskEventId }, 'outbound-gateway: approval replay has no live turn — Stage 2 judge gets no directive');
+      return {};
+    }
     if (!this.sendEvidence) {
       this.log.warn('outbound-gateway: principal-directed send but no evidence collector wired — Stage 2 judge gets no directive');
       return {};
@@ -5823,7 +5841,8 @@ export class OutboundGateway {
         recipientTier: recipientTierForDraft,
         recipientTierUnresolved: recipientTierUnresolvedForDraft,
         principalDirected: options?.principalDirected === true,
-        ...(await this.principalDirectiveOption(options, draftPrincipalSole)),
+        // Not options.humanApproved: send-draft sets it on every call, live turns included.
+        ...(await this.principalDirectiveOption(options, draftPrincipalSole, options?.approvalReplay === true || options?.principalApproved === true)),
         recipients: draftRecipients,
         principalIncluded: draftPrincipalIncluded,
         principalIsSoleRecipient: draftPrincipalSole,

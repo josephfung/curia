@@ -380,6 +380,21 @@ describe('SendDraftHandler', () => {
       );
     });
 
+    // CR-3: the gateway reads the principal's Stage 2 directive only off a live turn, and
+    // humanApproved is true on every send-draft call, so the replay is said separately.
+    it('marks an approval replay, and only a replay', async () => {
+      const replay = approvedCtx(approvedInput, true);
+      await handler.execute(replay);
+      expect(replay.outboundGateway!.sendEmailDraft).toHaveBeenCalledWith(
+        'draft-abc123', 'personal', expect.anything(), expect.objectContaining({ humanApproved: true, approvalReplay: true }),
+      );
+      const live = approvedCtx(approvedInput, false);
+      await handler.execute(live);
+      expect(live.outboundGateway!.sendEmailDraft).toHaveBeenCalledWith(
+        'draft-abc123', 'personal', expect.anything(), expect.objectContaining({ humanApproved: true, approvalReplay: false }),
+      );
+    });
+
     it('is false when the draft changed since the approval, or the approval never showed it', async () => {
       const edited = approvedCtx({ ...approvedInput, body: '<p>Hello Kevin, an older version</p>' }, true);
       await handler.execute(edited);
