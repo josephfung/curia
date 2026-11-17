@@ -1112,6 +1112,304 @@
     "availability covers the personal calendar too": {
       "unstubbed": null,
       "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "finesse 50a drops out of board update": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 50b drops out of board deep dive": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 50c drops out of one-on-one": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 50d drops out of vendor demo": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 51a reschedules a direct report": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 51b reschedules an agency": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 51c reschedules the board chair": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 51d reschedules an unknown vc": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 51e reschedules a friend": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 51f leaves the chair's meeting early": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 52a late to team stand-up": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 52b late to board chair one-on-one": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 52c late to largest customer": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 52d late to lunch with a friend": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 52e two minutes late to stand-up": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 53a ask time with direct report": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 53b ask time with prospective investor": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 53c ask time with prominent stranger": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 53d ask time with friend": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 53e ask time with peer ceo": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 54a nudge investor too soon": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 54b nudge investor with deadline": {
+      "allowUnstubbed": {
+        "count": 1,
+        "reason": "Refused side-task call(s) in the 2026-11-14 baseline (s). Now stubbed in finesse-office. Remove this allowance once the next run re-measures the case (#2556)."
+      },
+      "unstubbed": 1,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 54c nudge late agency": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 54d nudge late direct report": {
+      "allowUnstubbed": {
+        "count": 2,
+        "reason": "Refused side-task call(s) in the 2026-11-14 baseline (s). Now stubbed in finesse-office (54d's two were not captured, so not yet named; the next run names them). Remove this allowance once the next run re-measures the case (#2556)."
+      },
+      "unstubbed": 2,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 54e nudge prospective investor": {
+      "allowUnstubbed": {
+        "count": 1,
+        "reason": "Refused side-task call(s) in the 2026-11-14 baseline (s). Now stubbed in finesse-office. Remove this allowance once the next run re-measures the case (#2556)."
+      },
+      "unstubbed": 1,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 55a decline persistent salesperson": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 55b decline board chair nephew": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 55c decline former colleague": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 55d largest customer asks for time": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 56a decline conference panel": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 56b decline board chair gala": {
+      "allowUnstubbed": {
+        "count": 1,
+        "reason": "Refused side-task call(s) in the 2026-11-14 baseline (s). Now stubbed in finesse-office. Remove this allowance once the next run re-measures the case (#2556)."
+      },
+      "unstubbed": 1,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 56c friend wedding invitation": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 57a ruth asks about sunday dinner": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 57b move ruth's visit": {
+      "allowUnstubbed": {
+        "count": 1,
+        "reason": "Refused side-task call(s) in the 2026-11-14 baseline (s). Now stubbed in finesse-office. Remove this allowance once the next run re-measures the case (#2556)."
+      },
+      "unstubbed": 1,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 57c move parent-teacher conference": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 57d move contractor walk-through": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 57e ruth's birthday": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 58a board agenda with staff copied": {
+      "allowUnstubbed": {
+        "count": 3,
+        "reason": "Refused side-task call(s) in the 2026-11-14 baseline (s). Now stubbed in finesse-office. Remove this allowance once the next run re-measures the case (#2556)."
+      },
+      "unstubbed": 3,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 58b customer follow-up with sales copied": {
+      "allowUnstubbed": {
+        "count": 1,
+        "reason": "Refused side-task call(s) in the 2026-11-14 baseline (s). Now stubbed in finesse-office. Remove this allowance once the next run re-measures the case (#2556)."
+      },
+      "unstubbed": 1,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 58c dinner invitation to mixed guests": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 59a casual invite from lead investor": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 59b casual invite from board chair": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 59c casual invite from unknown vc": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 59d casual invite from friend": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
+    },
+    "finesse 59e casual invite from salesperson": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-14T21:48:42.519Z"
     }
   }
 }

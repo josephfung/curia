@@ -1,0 +1,89 @@
+# Finesse 52d (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery is running about ten
+# minutes behind, and the next thing is lunch with a friend. Curia sends Josh a quick, casual
+# text. Information level 3: as in 51e, Josh's contact record says former Halcyon engineer;
+# only Curia's notes (memory) say he and Avery are friends.
+name: finesse 52d late to lunch with a friend
+description: >
+  Avery (the principal) tells Curia "I'm running about ten minutes behind." Next, in five
+  minutes, is lunch with Josh Tanaka, one of Halcyon's first engineers who left to start his
+  own company. Curia's notes say Josh and Avery are friends who play pickup basketball.
+  Curia should send Josh a quick, casual text: "Avery's running ten minutes late. Grab a
+  table and they'll be right there." Formality is the failure.
+tags: [finesse, finesse-52]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: josh
+      display_name: Josh Tanaka
+      tier: known
+      title: Founder (former Halcyon engineer)
+      channel: sms
+      identifier: "+15555550144"
+inbound:
+  from: principal
+  content: I'm running about ten minutes behind.
+tool_stubs:
+  memory-query:
+    - match: {}
+      return:
+        count: 1
+        results:
+          - id: 7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c61
+            type: fact
+            label: Josh Tanaka and Avery
+            properties: { value: "Josh and Avery are friends: they play pickup basketball most weeks. Josh prefers texts." }
+            confidence: 0.85
+            decay_class: slow
+            sensitivity: internal
+            last_confirmed_at: "2026-09-15T10:00:00-04:00"
+            score: 0.8
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 3
+        events:
+          - { id: evt-52d-prev, title: "Investor call: pipeline review", location: Video call, startTime: "{{at:now-55m}}", endTime: "{{at:now+5m}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+          - { id: evt-52d-lunch, title: Lunch with Josh, location: Café Lumen, startTime: "{{at:now+5m}}", endTime: "{{at:now+65m}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+          - { id: evt-52d-later, title: "Focus: board prep", location: null, startTime: "{{at:now+3h}}", endTime: "{{at:now+4h}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+expected_behaviors:
+  - id: texts_josh
+    weight: critical
+    layer: decision
+    description: Curia sends Josh a text before lunch starts.
+    check:
+      called: [sms-send, signal-send]
+      agent: any
+      contains: { recipient: "{{contact:josh}}" }
+  - id: not_by_email
+    weight: nice-to-have
+    layer: decision
+    description: Does not email Josh about being ten minutes late to lunch; he won't see it in time.
+    check:
+      not_called: [email-send]
+      agent: any
+      contains: { to: "{{contact:josh}}" }
+  - id: does_not_ask_avery
+    weight: important
+    layer: decision
+    description: Does not ask Avery whether or what to tell Josh. It just tells him.
+  - id: josh_text_casual
+    weight: critical
+    layer: voice
+    description: >
+      The text is quick and casual, as between friends ("Avery's running ten minutes late.
+      Grab a table and they'll be right there."). No formal apology and no business register.
+contrast:
+  group: finesse-52-running-late
+  recipient: A friend of the executive, a former employee who now runs his own company.
+  message:
+    - { tool: sms-send, arg: message, with: { recipient: "{{contact:josh}}" } }
+    - { tool: signal-send, arg: message, with: { recipient: "{{contact:josh}}" } }
+    - { tool: email-send, arg: body, with: { to: "{{contact:josh}}" } }
+failure_modes:
+  - Formality
+  - Emails instead of texting

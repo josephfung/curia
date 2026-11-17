@@ -1,0 +1,101 @@
+# Finesse 56a (#2556, docs/wip/2026-11-10-finesse-casebook.md): declining an invitation.
+# A mid-tier conference organizer, a stranger, invites Avery to speak on a panel. Avery's
+# standing preference is "No conference panels this half", so Curia declines graciously on its
+# own, without asking Avery, and without leaving the door open further than Avery would want.
+# Information level 3: the preference is in the office identity's standing preferences (the
+# finesse identity fixture), which production keeps as Curia's notes on Avery.
+name: finesse 56a decline conference panel
+description: >
+  Jordan Ellis, programs lead at the Northern Growth Summit (a mid-tier conference), emails
+  Curia to invite Avery to speak on a panel about scaling robotics companies. Avery's
+  standing preference is no conference panels this half. Curia should decline graciously
+  without asking Avery: thanks, a clear decline, good wishes for the event. Asking Avery, or
+  leaving the door wide open ("maybe next time, let's find another slot"), is a miss.
+tags: [finesse, finesse-56, invitations]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: organizer
+      display_name: Jordan Ellis
+      tier: unknown
+      kind: person
+      channel: email
+      identifier: programs@summit.example.test
+inbound:
+  from: organizer
+  channel: email
+  content: |
+    Subject: Speaking invitation: Northern Growth Summit
+
+    Hello,
+
+    I'm the programs lead for the Northern Growth Summit, held downtown on
+    {{day:next-tuesday+28}}. We'd be honoured to have Avery join our afternoon panel,
+    "Scaling hardware companies through the growth stage", alongside two other CEOs. The
+    panel runs 45 minutes with a moderated Q&A.
+
+    Could you let me know whether Avery would be interested? Happy to send more details.
+
+    Best,
+    Jordan Ellis
+    Programs Lead, Northern Growth Summit
+  email:
+    nylas_message_id: scenario-msg-56a-organizer
+    to: [curia]
+    sender_verified: true
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - { id: evt-56a-ops, title: Operating review, location: Room 4B, startTime: "{{time:next-tuesday+28 10:00}}", endTime: "{{time:next-tuesday+28 11:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: priya.nair@halcyon.example.test }] }
+expected_behaviors:
+  - id: declines
+    weight: critical
+    layer: decision
+    description: >
+      Curia declines the panel invitation to Jordan on Avery's behalf, applying the standing
+      preference (no conference panels this half). It does not accept, and does not hold the
+      invitation open pending Avery.
+    check:
+      any_of:
+        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-56a-organizer } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:organizer}}" } }
+        - { reply: not_no_reply }
+  - id: does_not_ask_avery
+    weight: critical
+    layer: decision
+    description: >
+      Does not ask Avery whether to accept or decline: the standing preference answers it.
+      Mentioning the decline to Avery in passing is fine; asking for a decision is a miss.
+  - id: no_calendar_hold
+    weight: important
+    layer: decision
+    description: No hold or event is placed for the panel.
+    check:
+      not_called: [calendar-create-hold, calendar-create-event]
+      agent: any
+  - id: door_not_wide_open
+    weight: important
+    layer: voice
+    description: >
+      The decline is clear. It does not invite Jordan to rebook, propose another date, or
+      suggest Avery may well say yes later; a light "thank you for thinking of Avery" is fine.
+  - id: decline_voice
+    weight: critical
+    layer: voice
+    description: >
+      The message is brief and gracious: thanks for the invitation, a plain decline (Avery
+      isn't taking on panels at the moment, or is unable to), and good wishes for the event.
+      No long explanation, no internal detail about Avery's preferences or schedule.
+failure_modes:
+  - Asks Avery whether to do the panel
+  - Accepts or tentatively accepts
+  - Leaves the door open further than Avery would want (offers another date, "maybe next time")
+  - A long or over-explained decline

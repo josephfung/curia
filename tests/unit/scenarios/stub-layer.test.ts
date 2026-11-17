@@ -567,6 +567,31 @@ describe('real delegation (#2027)', () => {
     expect((await layer.invoke('email-send', {}, undefined, coordinatorCall)).success).toBe(false);
   });
 
+  it('shows a move or a cancellation in the run\'s later calendar listings (#2556)', async () => {
+    const event = (id: string, start: string): Record<string, unknown> => ({ id, title: id, startTime: start, endTime: start });
+    const { layer, controller } = delegationSetup([]);
+    controller.beginRun({
+      'calendar-list-events': [{ match: {}, return: { events: [event('evt-a', '2026-11-19T08:00:00-05:00'), event('evt-b', '2026-11-19T09:00:00-05:00')] } }],
+      'calendar-update-event': [{ match: {}, return: { event: { id: 'evt-scenario-updated' } } }],
+      'calendar-delete-event': [{ match: {}, return: { deleted: true } }],
+    }, 'scenario-1', { realDelegation: true });
+    // The stubs' own answers are unchanged.
+    expect(await layer.invoke('calendar-update-event', { eventId: 'evt-a', start: '2026-11-26T08:00:00-05:00' }, undefined, coordinatorCall))
+      .toMatchObject({ data: { event: { id: 'evt-scenario-updated' } } });
+    await layer.invoke('calendar-delete-event', { eventId: 'evt-b' }, undefined, coordinatorCall);
+    const listed = await layer.invoke('calendar-list-events', {}, undefined, coordinatorCall);
+    expect((listed.success ? (listed.data as { events: Array<Record<string, unknown>> }).events : []).map(e => [e['id'], e['startTime']]))
+      .toEqual([['evt-a', '2026-11-26T08:00:00-05:00']]);
+    controller.endRun('scenario-1');
+
+    // A new run starts from the fixture again.
+    controller.beginRun({
+      'calendar-list-events': [{ match: {}, return: { events: [event('evt-a', '2026-11-19T08:00:00-05:00')] } }],
+    }, 'scenario-2', { realDelegation: true });
+    const fresh = await layer.invoke('calendar-list-events', {}, undefined, { ...coordinatorCall, conversationId: 'scenario-2' });
+    expect(fresh).toMatchObject({ data: { events: [{ id: 'evt-a', startTime: '2026-11-19T08:00:00-05:00' }] } });
+  });
+
   it('runs the outbound-context tools a specialist settles entries with, but not release', async () => {
     const { layer, controller, specialistResults, executed } = delegationSetup([
       { tool: 'context-bridge-keep-open', input: { entry_id: 'e-1' } },

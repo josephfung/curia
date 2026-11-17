@@ -1,0 +1,139 @@
+# Finesse 50a (#2556, docs/wip/2026-11-10-finesse-casebook.md): an attendee drops out of a
+# meeting that goes ahead without them. Tomás, a direct report, is out sick tomorrow; his
+# 2pm is Avery's quarterly update with the lead investor, where he had one ten-minute item.
+# The right call keeps the meeting, replies kindly to Tomás and tells Avery. Information
+# level 2: David's standing is on his contact record (title and organization) only.
+#
+# The casebook says "today"; the case uses the next workday so the meeting is still ahead
+# whenever the suite runs.
+name: finesse 50a drops out of board update
+description: >
+  Tomás Herrera, Director of Engineering and a direct report of the principal (Avery), emails
+  Curia that he is out sick on the next workday and can't make the 2pm. That 2pm is Avery's
+  quarterly update with David Okonkwo, General Partner at Ridgeline Ventures, Halcyon's lead
+  investor and a board member. Tomás was due to give a ten-minute hiring update, one item on
+  a six-item agenda. The meeting should go ahead: Curia replies kindly to Tomás, gives Avery a
+  short heads-up (Tomás is out; Avery covers or skips the hiring item; Curia can get Tomás's
+  notes), and leaves David alone.
+tags: [finesse, finesse-50, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: tomas
+      display_name: Tomás Herrera
+      tier: known
+      title: Director of Engineering
+      organization: Halcyon Robotics
+      channel: email
+      identifier: tomas.herrera@halcyon.example.test
+    - key: david
+      display_name: David Okonkwo
+      tier: known
+      title: General Partner (Halcyon board member)
+      organization: Ridgeline Ventures
+      channel: email
+      identifier: david.okonkwo@ridgeline.example.test
+inbound:
+  from: tomas
+  channel: email
+  content: |
+    Subject: Out sick {{weekday:workday+1}}
+
+    Feeling awful. I'll be out sick {{weekday:workday+1}}, so I can't make the 2pm. Sorry!
+
+    Tomás
+  email:
+    nylas_message_id: scenario-msg-50a-tomas
+    to: [curia]
+    sender_verified: true
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 3
+        events:
+          - { id: evt-50a-standup, title: Leadership stand-up, location: Room 4B, startTime: "{{time:workday+1 09:00}}", endTime: "{{time:workday+1 09:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: tomas.herrera@halcyon.example.test }, { email: priya.nair@halcyon.example.test }] }
+          - id: evt-50a-update
+            title: "Quarterly update: Ridgeline / Halcyon"
+            location: Halcyon boardroom
+            description: |
+              Agenda
+              1. Q3 numbers (Avery, 15 min)
+              2. Product roadmap (Avery, 10 min)
+              3. Hiring update (Tomás, 10 min)
+              4. Customer pipeline (Avery, 10 min)
+              5. Fundraising timeline (Avery, 10 min)
+              6. AOB
+            startTime: "{{time:workday+1 14:00}}"
+            endTime: "{{time:workday+1 15:00}}"
+            status: confirmed
+            busy: true
+            calendarId: cal-principal-work
+            participants: [{ email: david.okonkwo@ridgeline.example.test }, { email: tomas.herrera@halcyon.example.test }]
+          - { id: evt-50a-focus, title: "Focus: board prep", location: null, startTime: "{{time:workday+1 11:00}}", endTime: "{{time:workday+1 12:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+expected_behaviors:
+  - id: keeps_meeting
+    weight: critical
+    layer: decision
+    description: The quarterly update is neither moved nor cancelled.
+    check:
+      not_called: [calendar-update-event, calendar-delete-event]
+      agent: any
+      with: { eventId: evt-50a-update }
+  - id: leaves_david_alone
+    weight: critical
+    layer: decision
+    description: Nothing is sent to David; the meeting is going ahead.
+    check:
+      not_called: [email-send]
+      agent: any
+      contains: { to: "{{contact:david}}" }
+  - id: tells_avery
+    weight: critical
+    layer: decision
+    description: Avery hears that Tomás is out of the 2pm (a note, a message or a report), before the meeting.
+    check:
+      any_of:
+        - { principal_note: present }
+        - { called: report-to-principal, agent: any }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: does_not_ask_whether_to_cancel
+    weight: important
+    layer: decision
+    description: >
+      Does not ask Avery whether to cancel or move the meeting. The answer is obvious: the
+      meeting goes ahead. Telling Avery and offering to get Tomás's notes is not asking.
+  - id: answers_tomas
+    weight: important
+    layer: decision
+    description: Replies to Tomás.
+    check:
+      any_of:
+        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-50a-tomas } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:tomas}}" } }
+        - { reply: not_no_reply }
+  - id: tomas_reply_kind
+    weight: important
+    layer: voice
+    description: >
+      The reply to Tomás is short and warm ("Feel better") and says Avery will be told and
+      the hiring item covered. It asks nothing of a sick person: no slides, notes or handover.
+  - id: avery_note_brief
+    weight: important
+    layer: voice
+    description: >
+      What Avery gets is two or three lines: Tomás is out of the 2pm with David, Avery will
+      need to cover or skip the hiring item, and Curia can get Tomás's notes if useful.
+      It does not ask Avery an open question about what to do with the meeting.
+failure_modes:
+  - Cancels or reschedules the quarterly update
+  - Emails David that Tomás won't make it, or that the meeting is in doubt
+  - Asks Avery whether to cancel
+  - Never tells Avery
+  - Asks Tomás for his slides or notes while he is sick

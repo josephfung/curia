@@ -1,0 +1,149 @@
+# Finesse 53c (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery asks for time with a
+# prominent person who barely knows them. Curia looks her up, makes the ask small (20
+# minutes, by phone, at her convenience), says where they met and why her advice, and gives
+# her an easy out. Information level 4 for who Diane is: her contact record has only her
+# name and email, and only a web search shows she is a well-known operator, author and
+# public-company director. Level 3 for where they met: only Curia's notes say so.
+#
+# The casebook leaves open whether the request goes from Curia or as a draft in Avery's
+# mailbox for Avery to send, so either passes.
+name: finesse 53c ask time with prominent stranger
+description: >
+  Avery asks Curia to get time with Diane Kessler for her advice on building out Halcyon's
+  board. Diane's contact record has only her name and email. A web search shows she is a
+  well-known operator, the author of a book on boards, and a director on several
+  public-company boards. Curia's notes say Avery met her briefly at a conference in the
+  spring. Curia should look her up before writing (and save what it learned), then ask for
+  something small: 20 minutes, by phone, at her convenience, mentioning where they met and
+  why her advice in particular, with an easy way to say no. Asking for an hour in person on
+  Avery's terms, writing as though she'd remember Avery, or flattery are the failures.
+tags: [finesse, finesse-53, calendar, lookup]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    # Name and email only (information level 4): no title, no organization.
+    - key: diane
+      display_name: Diane Kessler
+      tier: known
+      channel: email
+      identifier: diane.kessler@kessler.example.test
+inbound:
+  from: principal
+  content: Can you get me time with Diane Kessler? I want her advice on building out our board.
+tool_stubs:
+  # Curia's notes: where they met (information level 3).
+  memory-query:
+    - match: {}
+      return:
+        count: 1
+        results:
+          - id: 7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b5302
+            type: fact
+            label: Avery and Diane Kessler
+            properties: { value: "Avery met Diane Kessler briefly at the Northern Operators Summit in Toronto in April. A short conversation; no follow-up since." }
+            confidence: 0.8
+            decay_class: slow
+            sensitivity: internal
+            last_confirmed_at: "2026-04-24T10:00:00-04:00"
+            score: 0.78
+  # Who she is: only on the web (information level 4).
+  web-search:
+    - match: {}
+      return:
+        count: 3
+        results:
+          - title: "Diane Kessler | Board director and operator"
+            url: https://kessler.example.test/about
+            content: Diane Kessler is a former COO turned board director. She serves on the boards of three public companies, Arcturus Systems, Pellmark Foods and Verity Health, and chairs two of their audit committees.
+            score: 0.93
+          - title: "The Working Board, by Diane Kessler"
+            url: https://books.example.test/the-working-board
+            content: Kessler's book on how growth-stage companies should build and run their first independent boards is widely read by founders.
+            score: 0.88
+          - title: "Diane Kessler on recruiting independent directors"
+            url: https://news.example.test/kessler-interview
+            content: In an interview, Kessler describes the mistakes founders make when adding their first independent directors.
+            score: 0.81
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - { id: evt-53c-standup, title: Leadership stand-up, location: Room 4B, startTime: "{{time:workday+1 09:00}}", endTime: "{{time:workday+1 09:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-monday+7 09:00}}", end: "{{time:next-monday+7 17:00}}" }
+          - { start: "{{time:next-monday+8 09:00}}", end: "{{time:next-monday+8 17:00}}" }
+          - { start: "{{time:next-monday+9 09:00}}", end: "{{time:next-monday+9 17:00}}" }
+expected_behaviors:
+  - id: looks_her_up
+    weight: critical
+    layer: decision
+    description: Curia looks Diane up on the web before writing to her.
+    check:
+      called: web-search
+      agent: any
+  - id: saves_what_it_learned
+    weight: important
+    layer: decision
+    description: What the search found (board director, author) is saved to Diane's contact record.
+    check:
+      any_of:
+        - { called: contact-update, agent: any, contains: { fields: board } }
+        - { called: contact-update, agent: any, contains: { fields: author } }
+        - { called: contact-create, agent: any, contains: { notes: board } }
+  - id: asks_diane
+    weight: critical
+    layer: decision
+    description: >
+      The request to Diane goes out from Curia, or is left as a draft in Avery's mailbox for
+      Avery to send. Either is fine.
+    check:
+      any_of:
+        - { called: email-send, agent: any, contains: { to: "{{contact:diane}}" } }
+        - { called: ceo-inbox-draft-compose, agent: any, contains: { to: diane.kessler } }
+        - { called: ceo-inbox-draft-compose, agent: any, contains: { to_addresses: diane.kessler } }
+        - { called: ceo-inbox-draft-compose, agent: any, contains: { to: "{{contact:diane}}" } }
+  - id: small_ask
+    weight: critical
+    layer: decision
+    description: >
+      The ask is small: about 20 minutes, by phone or video, at her convenience. An hour, a
+      meal, an in-person meeting, or times that suit Avery only are a miss.
+  - id: no_event_before_she_agrees
+    weight: important
+    layer: decision
+    description: Nothing with Diane is put on the calendar before she agrees.
+    check:
+      not_called: [calendar-create-event]
+      agent: any
+      contains: { attendees: diane.kessler@kessler.example.test }
+  - id: diane_ask_voice
+    weight: critical
+    layer: voice
+    description: >
+      The message reminds Diane where she met Avery (the conference in the spring) rather
+      than assuming she remembers, says in a sentence why her advice in particular (Halcyon
+      is building out its board and she has served on and written about boards), asks for a
+      short call at whatever time suits her, and gives her an easy way to say no. It is
+      gracious without flattery: no gushing about her career.
+contrast:
+  group: finesse-53-ask-for-time
+  recipient: A prominent operator and public-company director whom the executive met once, briefly. She owes the executive nothing.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:diane}}" } }
+    - { tool: ceo-inbox-draft-compose, arg: body }
+failure_modes:
+  - Writes without looking Diane up
+  - Asks for an hour, in person, on Avery's terms
+  - Writes as though Diane would remember Avery
+  - Flattery
