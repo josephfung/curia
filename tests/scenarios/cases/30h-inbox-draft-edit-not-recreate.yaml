@@ -13,7 +13,7 @@ description: >
   folder, edits it with ceo-inbox-draft-edit (removing Dana, adding Lee by contact ID) and
   does not create a new draft.
 tags: [specialist-ceo-inbox, ceo-inbox, delegated-mode, drafts]
-# On demand since the 2026-11-16 gate prune: draft editing, low risk; 30w gates the send.
+# On demand since the 2026-11-16 gate prune: draft editing, low risk. 46d gates choosing to send (its send is stubbed); the real gateway send path is unit-tested.
 release_gate: false
 agent: ceo-inbox
 stub_sets: [ceo-inbox-mailroom]
