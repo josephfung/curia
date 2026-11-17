@@ -20,6 +20,23 @@ import { isPrincipalDirectedMailboxSend } from '../../../../src/skills/principal
 export const BATCH_READ_BACK_FIRST =
   "Not sent: two or more drafts in one request go out only after the principal confirms the set. This draft is still in Drafts. Send none of them now: reply with the count and each draft's recipient and subject, and ask \"send all, or go through them?\". When the principal says yes to that list in a later message, send each one with batch_confirmed: true. Being asked to send them is not that yes.";
 
+/**
+ * Returned when the model claims batch_confirmed in the same turn a read-back was demanded. The
+ * principal's yes can only arrive in a later message (a new turn), so a same-turn confirmation is
+ * the model lifting the guard itself, which is the D6 failure this guard exists to stop.
+ */
+export const BATCH_CONFIRMED_TOO_SOON =
+  "Not sent: the principal hasn't answered the read-back yet. Their yes comes in a later message, not this turn. This draft is still in Drafts: reply with each draft's recipient and subject and ask \"send all, or go through them?\".";
+
+/**
+ * The refusal when a different draft already went out (or may have) in this turn: the model must
+ * report that partial send, not "none of them went", so it names how many already left.
+ */
+function partialBatchRefusal(alreadySent: number): string {
+  const which = alreadySent === 1 ? 'one draft has' : `${alreadySent} drafts have`;
+  return `Not sent: ${which} already gone out in this request, and the rest wait until the principal confirms the set. Tell the principal what already went, then list the remaining drafts' recipients and subjects and ask "send the rest?". When they say yes in a later message, send each with batch_confirmed: true.`;
+}
+
 /** How long a turn's send record is kept: far longer than any one turn runs. */
 const TURN_RECORD_TTL_MS = 60 * 60 * 1000;
 
@@ -113,6 +130,16 @@ export class CeoInboxSendDraftHandler implements ToolHandler {
     const directed = isPrincipalDirectedMailboxSend({ liveTurn: ctx.liveTurn, taskMetadata: ctx.taskMetadata, humanApproved: ctx.humanApproved });
     const turnKey = directed ? turnKeyOf(ctx) : undefined;
     const turn = turnKey !== undefined ? this.turnSends(turnKey) : undefined;
+    // Without a turn key only a declared batch_size is enforced; refusing every keyless send would
+    // break single sends, so say so loudly instead of switching the turn checks off unseen.
+    if (directed && turnKey === undefined) {
+      ctx.log.warn({ draftId }, 'ceo-inbox-send-draft: no turn key on a principal-directed send — batch turn checks are off for it');
+    }
+    // A confirmation claimed in the turn that demanded the read-back cannot be the principal's.
+    if (directed && confirmed && turn?.readBackAsked === true) {
+      ctx.log.warn({ draftId }, 'ceo-inbox-send-draft: batch_confirmed in the turn the read-back was asked — the yes must come in a later message');
+      return { success: false, error: BATCH_CONFIRMED_TOO_SOON, errorType: 'POLICY_HOLD' };
+    }
     if (directed && !confirmed) {
       const declaredBatch = typeof batchSize === 'number' && batchSize >= 2;
       const anotherSent = turn !== undefined && [...turn.sent].some((id) => id !== draftId);
@@ -120,7 +147,8 @@ export class CeoInboxSendDraftHandler implements ToolHandler {
       if (declaredBatch || anotherSent || priorReadBack) {
         if (turn) turn.readBackAsked = true;
         ctx.log.info({ draftId, batchSize, anotherSent, priorReadBack }, 'ceo-inbox-send-draft: unconfirmed batch send refused — read the set back first');
-        return { success: false, error: BATCH_READ_BACK_FIRST, errorType: 'POLICY_HOLD' };
+        const alreadySent = turn ? [...turn.sent].filter((id) => id !== draftId).length : 0;
+        return { success: false, error: alreadySent > 0 ? partialBatchRefusal(alreadySent) : BATCH_READ_BACK_FIRST, errorType: 'POLICY_HOLD' };
       }
     }
 

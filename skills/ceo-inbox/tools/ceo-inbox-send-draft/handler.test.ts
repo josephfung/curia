@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { BATCH_READ_BACK_FIRST, CeoInboxSendDraftHandler, SEND_DEADLINE_RESERVE_MS, SEND_OUTCOME_UNKNOWN } from './handler.js';
+import { BATCH_CONFIRMED_TOO_SOON, BATCH_READ_BACK_FIRST, CeoInboxSendDraftHandler, SEND_DEADLINE_RESERVE_MS, SEND_OUTCOME_UNKNOWN } from './handler.js';
 import { stubPrincipalMailboxes } from '../../../_shared/principal-mailboxes-test-helpers.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import {
@@ -214,6 +214,8 @@ describe('CeoInboxSendDraftHandler — limit cue (#2475 R47)', () => {
 describe('CeoInboxSendDraftHandler — batch read-back (#2474 D6)', () => {
   const sentOk: PrincipalDraftSendResult = { success: true, messageId: 'm-1', to: ['a@example.com'], subject: 'Hi' };
   const refused = { success: false, error: BATCH_READ_BACK_FIRST, errorType: 'POLICY_HOLD' };
+  // A draft already went out in this turn: the refusal says so, so the agent reports the partial send.
+  const refusedAfterOne = { success: false, error: expect.stringMatching(/^Not sent: one draft has already gone out/), errorType: 'POLICY_HOLD' };
   // Two specialist tasks the coordinator started for the same principal message share its task id.
   const delegatedFrom = (coordinatorTask: string) => ({ ...principalMetadata, delegationOrigin: { taskEventId: coordinatorTask } });
 
@@ -247,7 +249,7 @@ describe('CeoInboxSendDraftHandler — batch read-back (#2474 D6)', () => {
     const { gateway, sendPrincipalDraft } = gatewayReturning(sentOk);
     const handler = new CeoInboxSendDraftHandler();
     expect((await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-1' } }))).success).toBe(true);
-    expect(await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-2' } }))).toEqual(refused);
+    expect(await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-2' } }))).toEqual(refusedAfterOne);
     expect(sendPrincipalDraft).toHaveBeenCalledOnce();
   });
 
@@ -269,7 +271,18 @@ describe('CeoInboxSendDraftHandler — batch read-back (#2474 D6)', () => {
     const gateway = { sendPrincipalDraft } as unknown as OutboundGateway;
     const handler = new CeoInboxSendDraftHandler();
     await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-1' } }));
-    expect(await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-2' } }))).toEqual(refused);
+    expect(await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-2' } }))).toEqual(refusedAfterOne);
+  });
+
+  // The refusal names batch_confirmed, so a model could retry with it at once. The principal's yes
+  // only arrives in a later message, so a confirmation in the refusing turn is refused too.
+  it('refuses batch_confirmed claimed in the same turn the read-back was asked', async () => {
+    const { gateway, sendPrincipalDraft } = gatewayReturning(sentOk);
+    const handler = new CeoInboxSendDraftHandler();
+    expect(await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-1', batch_size: 2 } }))).toEqual(refused);
+    expect(await handler.execute(buildCtx({ outboundGateway: gateway, input: { draft_id: 'draft-1', batch_size: 2, batch_confirmed: true } })))
+      .toEqual({ success: false, error: BATCH_CONFIRMED_TOO_SOON, errorType: 'POLICY_HOLD' });
+    expect(sendPrincipalDraft).not.toHaveBeenCalled();
   });
 
   it('leaves sends that are not principal-directed to the gateway (triage)', async () => {
