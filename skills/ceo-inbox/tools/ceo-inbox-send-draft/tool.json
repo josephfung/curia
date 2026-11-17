@@ -6,8 +6,6 @@
   "action_risk": 80,
   "inputs": {
     "draft_id": "string (draft ID from ceo-inbox-list/search with folder DRAFTS)",
-    "batch_size": "number? (if 2+ drafts asked for)",
-    "batch_confirmed": "boolean? (yes to the read-back)",
     "mailbox": "string? (Mailbox id. Omit unless the principal named an account; Curia finds the right one.)"
   },
   "outputs": {
