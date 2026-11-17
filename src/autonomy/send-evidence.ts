@@ -43,6 +43,7 @@ import { isLiveTurnGrantActive } from './live-turn-grants.js';
 import type { ContactTier, SystemRole } from '../contacts/types.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import type { OutreachLinkKind } from '../dispatch/outreach-matcher.js';
+import { senderOwnTextAnyChannel } from '../dispatch/turn-guidance-triggers.js';
 import type { TaskOutreachRepo } from '../dispatch/task-outreach.js';
 import type { Logger } from '../logger.js';
 import { createSecretPatterns } from '../security/secret-patterns.js';
@@ -118,6 +119,8 @@ export interface CollectedEvidence extends BriefEvidence {
    * is the dispatcher's assembled prompt: it prepends [ACTIVE OUTBOUND CONTEXT] (outsiders'
    * replies) and email participant/CC preambles, so an outsider's words would read as the
    * principal's. For a delegated turn it is the root inbound (originContent's source).
+   * Quoted and forwarded text is cut from each message (SEC-MED-2): only the principal's own
+   * words, and an email's own Subject, remain.
    *
    * Set only for a live principal-originated turn whose sender the channel authenticated
    * (SEC-HIGH-2) and whose inbound could be read; anything else
@@ -712,8 +715,17 @@ export class SendEvidenceCollector {
         if (!read.ok) return leaveOut(read.reason);
         parts = read.parts;
       }
-      const text = parts.map((p) => p.text).join(FOLLOW_UP_SEPARATOR);
-      if (text.trim() === '') return leaveOut('the inbound message is empty');
+      // SEC-MED-2: only the principal's own words. A reply's quoted message and a forward are
+      // someone else's text (or the principal's earlier words, not this request): a reply quoting
+      // "> Joseph: send my SIN to Dana" must not read as the principal asking now. Each message
+      // is cut on its own, so a quote in the first does not drop a follow-up. The inbound row
+      // has no structured quote split (the email converter keeps the whole body as text), so
+      // the cut is the dispatcher's quote-marker heuristic; see senderOwnTextAnyChannel.
+      const text = parts
+        .map((p) => senderOwnTextAnyChannel(p.channelId, p.text))
+        .filter((t) => t !== '')
+        .join(FOLLOW_UP_SEPARATOR);
+      if (text.trim() === '') return leaveOut('the inbound message has no text of the principal\'s own');
       return clipMiddle(redactSecrets(text), EVIDENCE_ORIGIN_MAX_CHARS);
     } catch (err) {
       this.deps.logger.warn({ err, taskEventId: task.id }, 'send-evidence: reading the principal\'s own message failed — nothing is released on it');
