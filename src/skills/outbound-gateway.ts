@@ -3076,6 +3076,15 @@ export class OutboundGateway {
       return { held: reason, result: reviewed({ success: false, blockedReason: reason, blockedRules: [BAND_RULES.pii] }) };
     }
 
+    // A resend of a draft whose repeated block is already held (SF-4): the principal has its
+    // approval. Refused with no new approval and no digest item, so a coordinator that retries
+    // the same draft cannot raise one approval per cycle.
+    if (decision.kind === 'block' && decision.alreadyHeld === true) {
+      const rules = [...new Set(decision.findings.map((f) => f.rule))];
+      this.log.info({ channel: request.channel, rules }, 'outbound-gateway: resend of a draft already held for the principal — refused, no new approval');
+      return { result: reviewed({ success: false, blockedReason: decision.reason, blockedRules: rules }) };
+    }
+
     // A block asks the drafter to rewrite, so it needs one waiting. A dispatcher relay's
     // drafter is gone and a saved draft cannot be rewritten in place: the principal decides.
     // A repeated block (the drafter already had one on this draft) holds too: another "rewrite

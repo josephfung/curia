@@ -12,7 +12,7 @@ import type { BusEvent } from '../../../src/bus/events.js';
 import type { AutonomyService, AutonomyConfig } from '../../../src/autonomy/autonomy-service.js';
 import type { PiiRedactor } from '../../../src/dispatch/pii-redactor.js';
 import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
-import { BLOCK_REASON, BandSendReview } from '../../../src/dispatch/band-send-review.js';
+import { ALREADY_HELD_REASON, BLOCK_REASON, BandSendReview } from '../../../src/dispatch/band-send-review.js';
 import { FailOpenLimiter } from '../../../src/autonomy/band-policy.js';
 import type { OutboundQueueRepo } from '../../../src/skills/outbound-queue-repo.js';
 import { readFile, realpath } from 'node:fs/promises';
@@ -4733,6 +4733,28 @@ describe('band review (#2159)', () => {
       expect(result.blockedReason).not.toContain('Rewrite it again');
       expect(actionLogRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ toolName: 'send-draft', outcome: 'pending_approval' }));
       expect(publishedOfType(mocks.bus, 'outbound.blocked')).toHaveLength(0);
+      expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+    });
+
+    // SF-4: a resend of the held draft must not raise an approval per retry cycle.
+    it.each([
+      ['a live send', {}],
+      ['a relayed reply', { postTurn: true }],
+    ])('refuses %s of a draft already held, with no new approval and no digest item', async (_label, extra) => {
+      const actionLogRepo = makeActionLogRepo();
+      const gw = makeBandGateway({
+        review: vi.fn().mockResolvedValue({ kind: 'block', reason: ALREADY_HELD_REASON, findings: blockFindings, alreadyHeld: true }),
+        score: 84, actionLogRepo,
+      });
+      const result = await gw.send(emailReq, {
+        taskEventId: 't1', ...extra,
+        reExecRecipe: { toolName: 'send-draft', partialPayload: { account: 'a' }, description: 'Draft reply to joel@example.com' },
+      });
+      expect(result).toMatchObject({ success: false, blockedReason: ALREADY_HELD_REASON, blockedRules: ['ungrounded-claim'] });
+      expect(result.actionRef).toBeUndefined();
+      expect(actionLogRepo.insert).not.toHaveBeenCalled();
+      expect(publishedOfType(mocks.bus, 'outbound.blocked')).toHaveLength(0);
+      expect(publishedOfType(mocks.bus, 'principal.report')).toHaveLength(0);
       expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
     });
 

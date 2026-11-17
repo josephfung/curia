@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import * as bandReviewModule from '../../../src/dispatch/band-send-review.js';
-import { BandSendReview, BLOCK_REASON, type BandReviewDecision, type BandReviewInput } from '../../../src/dispatch/band-send-review.js';
+import { ALREADY_HELD_REASON, BandSendReview, BLOCK_REASON, type BandReviewDecision, type BandReviewInput } from '../../../src/dispatch/band-send-review.js';
 import { FailOpenLimiter } from '../../../src/autonomy/band-policy.js';
 import type { BriefDetectedItem, BriefVerdict, DisclosureRuling, SendAuthority } from '../../../src/autonomy/judge-brief.js';
 import type { ContactTier } from '../../../src/contacts/types.js';
@@ -509,9 +509,8 @@ describe('BandSendReview', () => {
   });
 
   // Release-gate runs: nothing capped repeats, so a retrying coordinator got 8-20 blocks in a turn.
-  it('marks a third review that still has findings as a repeated block, for the gateway to hold, and clears the entry', async () => {
+  it('marks a third review that still has findings as a repeated block, for the gateway to hold', async () => {
     const { svc } = make([
-      { ...clean, unsupportedClaims: [CLAIM] },
       { ...clean, unsupportedClaims: [CLAIM] },
       { ...clean, unsupportedClaims: [CLAIM] },
       { ...clean, unsupportedClaims: [CLAIM] },
@@ -522,7 +521,64 @@ describe('BandSendReview', () => {
     expect(second).not.toHaveProperty('repeated');
     const third = await svc.review(base);
     expect(third).toMatchObject({ kind: 'block', repeated: true, findings: [{ rule: 'ungrounded-claim' }] });
-    // The hold ends this draft's ledger entry, as any hold does: a new attempt bounces afresh.
+  });
+
+  // SF-4: the held entry stays, so resending the same draft does not cycle bounce, block and a
+  // fresh hold with a new approval each time.
+  it('answers a resend of the held draft with the existing hold, every time', async () => {
+    const { svc } = make(Array.from({ length: 6 }, () => ({ ...clean, unsupportedClaims: [CLAIM] })));
+    await svc.review(base);
+    await svc.review(base);
+    expect(await svc.review(base)).toMatchObject({ kind: 'block', repeated: true });
+    for (let i = 0; i < 3; i++) {
+      const resend = await svc.review(base);
+      expect(resend).toMatchObject({ kind: 'block', alreadyHeld: true, reason: ALREADY_HELD_REASON });
+      expect(resend).not.toHaveProperty('repeated');
+    }
+  });
+
+  it('keeps the held entry when a reviewer failure on the resend would have cleared it', async () => {
+    const { svc } = make([
+      { ...clean, unsupportedClaims: [CLAIM] },
+      { ...clean, unsupportedClaims: [CLAIM] },
+      { ...clean, unsupportedClaims: [CLAIM] },
+      { ok: false, failure: 'unreachable' },
+      { ...clean, unsupportedClaims: [CLAIM] },
+    ]);
+    await svc.review(base);
+    await svc.review(base);
+    await svc.review(base);
+    expect(await svc.review(base)).toMatchObject({ kind: 'block', alreadyHeld: true });
+    expect(await svc.review(base)).toMatchObject({ kind: 'block', alreadyHeld: true });
+  });
+
+  it('lets a clean message through after a hold, and the held entry stays', async () => {
+    const { svc } = make([
+      { ...clean, unsupportedClaims: [CLAIM] },
+      { ...clean, unsupportedClaims: [CLAIM] },
+      { ...clean, unsupportedClaims: [CLAIM] },
+      clean,
+      { ...clean, unsupportedClaims: [CLAIM] },
+    ]);
+    await svc.review(base);
+    await svc.review(base);
+    await svc.review(base);
+    expect((await svc.review(base)).kind).toBe('send');
+    expect(await svc.review(base)).toMatchObject({ kind: 'block', alreadyHeld: true });
+  });
+
+  it('ends the held entry with the TTL, measured from the hold', async () => {
+    let t = 1_000_000;
+    const review = vi.fn();
+    for (let i = 0; i < 4; i++) review.mockResolvedValueOnce({ ...clean, unsupportedClaims: [CLAIM] });
+    const svc = new BandSendReview({
+      judge: { review, isEnabled: () => true }, evidence: { collect: vi.fn().mockResolvedValue(OK_EVIDENCE) },
+      limiter: new FailOpenLimiter(), onLimiterTripped: vi.fn(), contactTier: vi.fn(), logger: createSilentLogger(), now: () => t,
+    });
+    await svc.review(base);
+    await svc.review(base);
+    expect(await svc.review(base)).toMatchObject({ repeated: true });
+    t += 31 * 60_000;
     expect((await svc.review(base)).kind).toBe('bounce');
   });
 
