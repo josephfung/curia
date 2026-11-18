@@ -47,7 +47,9 @@ export function capOriginatorToParent(
  *
  * Use this, not `systemRole === 'principal'`, wherever a principal originator grants authority.
  */
-export function hasPrincipalAuthority(originator: TaskOriginator | null | undefined): boolean {
+export function hasPrincipalAuthority(
+  originator: Pick<TaskOriginator, 'systemRole' | 'authenticated'> | null | undefined,
+): boolean {
   return originator?.systemRole === 'principal' && originator.authenticated === true;
 }
 
