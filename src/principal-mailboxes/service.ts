@@ -33,6 +33,8 @@ export interface PrincipalMailboxesDeps {
   store: PrincipalMailboxStore;
   secrets: { get(name: string): Promise<string | null> };
   apiKey: () => string | undefined;
+  /** The Nylas region's API host, read per call so a region change applies without a rebuild. Unset: SDK default (US). */
+  apiUri?: () => string;
   logger: Logger;
   createNylasClient?: (apiKey: string, grantId: string, timeoutMs?: number) => NylasClient;
   createCalendarClient?: (apiKey: string, grantId: string) => NylasCalendarClient;
@@ -226,13 +228,13 @@ export class PrincipalMailboxes {
       ? (timeoutMs === undefined
         ? this.deps.createNylasClient(apiKey, grantId)
         : this.deps.createNylasClient(apiKey, grantId, timeoutMs))
-      : new NylasClient(apiKey, grantId, this.deps.logger, timeoutMs);
+      : new NylasClient(apiKey, grantId, this.deps.logger, timeoutMs, this.deps.apiUri?.());
   }
 
   /** A ceo-inbox client for one mailbox: the key and grant are read here and never returned. */
   async ceoClient(id: string, log: Logger, budget?: CallBudget): Promise<CeoNylasClient> {
     const { apiKey, grantId } = await this.credentials(id);
-    return new CeoNylasClient(apiKey, grantId, log, budget);
+    return new CeoNylasClient(apiKey, grantId, log, budget, this.deps.apiUri?.());
   }
 
   /**
@@ -280,6 +282,6 @@ export class PrincipalMailboxes {
     const { apiKey, grantId } = await this.credentials(id);
     return this.deps.createCalendarClient
       ? this.deps.createCalendarClient(apiKey, grantId)
-      : new NylasCalendarClient(apiKey, grantId, this.deps.logger);
+      : new NylasCalendarClient(apiKey, grantId, this.deps.logger, this.deps.apiUri?.());
   }
 }

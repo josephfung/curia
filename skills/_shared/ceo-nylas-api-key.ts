@@ -7,6 +7,7 @@
 // Every tool that calls this must declare the name in its manifest's `secrets`.
 
 import type { ToolContext } from '../../src/skills/types.js';
+import { nylasApiUri, parseNylasRegion } from '../../src/nylas/region.js';
 
 export const CHANNEL_NYLAS_API_KEY = 'channel.email.nylas_api_key';
 
@@ -15,4 +16,22 @@ export function ceoNylasApiKey(ctx: ToolContext): string {
   const key = ctx.secret(CHANNEL_NYLAS_API_KEY).trim();
   if (!key) throw new Error(`Secret '${CHANNEL_NYLAS_API_KEY}' is declared but not set in the environment`);
   return key;
+}
+
+export const CHANNEL_NYLAS_REGION = 'channel.email.nylas_region';
+
+/**
+ * The Nylas API host for the configured region, read live from the vault like the key. Unset,
+ * blank or unrecognised reads as 'us' (boot warns about a bad value); a vault failure propagates.
+ * Every tool that calls this must declare the name in its manifest's `secrets`.
+ */
+export function ceoNylasApiUri(ctx: ToolContext): string {
+  let raw: string | undefined;
+  try {
+    raw = ctx.secret(CHANNEL_NYLAS_REGION);
+  } catch (err) {
+    // Optional setting: "not set" is the default, anything else (a vault read failure) is real.
+    if (!(err instanceof Error && /declared but not set/.test(err.message))) throw err;
+  }
+  return nylasApiUri(parseNylasRegion(raw) ?? 'us');
 }

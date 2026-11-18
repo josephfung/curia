@@ -1,10 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockGrants } = vi.hoisted(() => ({ mockGrants: { find: vi.fn() } }));
+const { mockGrants, sdkConfigs } = vi.hoisted(() => ({
+  mockGrants: { find: vi.fn() },
+  sdkConfigs: [] as Array<Record<string, unknown>>,
+}));
 
 vi.mock('nylas', () => {
   class MockNylas {
     grants = mockGrants;
+    constructor(config: Record<string, unknown>) {
+      sdkConfigs.push(config);
+    }
   }
   return { default: MockNylas };
 });
@@ -41,5 +47,19 @@ describe('NylasClient.getGrant', () => {
       throw err;
     });
     await expect(client.getGrant()).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe('NylasClient region', () => {
+  it('passes apiUri to the SDK when given', () => {
+    sdkConfigs.length = 0;
+    new NylasClient('key', 'grant-1', pino({ level: 'silent' }), undefined, 'https://api.eu.nylas.com');
+    expect(sdkConfigs.at(-1)).toMatchObject({ apiKey: 'key', apiUri: 'https://api.eu.nylas.com' });
+  });
+
+  it('leaves apiUri out of the SDK config when not given (SDK default)', () => {
+    sdkConfigs.length = 0;
+    new NylasClient('key', 'grant-1', pino({ level: 'silent' }));
+    expect(sdkConfigs.at(-1)).not.toHaveProperty('apiUri');
   });
 });

@@ -18,6 +18,7 @@ import type { Logger } from '../logger.js';
 // Shared so the gate (channelCredentialStatus) and this overlay make the SAME present/absent
 // decision — in particular both treat a whitespace-only value as absent (#964).
 import { normalizeSecretValue } from './credential-resolver.js';
+import { parseNylasRegion, type NylasRegion } from '../nylas/region.js';
 
 /** Narrow view of the vault — only get() is needed (and only get() must ever be called). */
 interface ChannelSecretsPort {
@@ -54,6 +55,7 @@ export async function applyChannelVaultSecrets(
 
   const [
     nylasApiKey,
+    nylasRegionRaw,
     signalPhoneNumber,
     signalSocketPath,
     slackBotToken,
@@ -69,6 +71,7 @@ export async function applyChannelVaultSecrets(
     voiceCartesiaVoiceId,
   ] = await Promise.all([
     resolve('channel.email.nylas_api_key', 'NYLAS_API_KEY', config.nylasApiKey),
+    resolve('channel.email.nylas_region', 'NYLAS_REGION', config.nylasRegion),
     resolve('channel.signal.phone_number', 'SIGNAL_PHONE_NUMBER', config.signalPhoneNumber),
     resolve('channel.signal.socket_path', 'SIGNAL_SOCKET_PATH', config.signalSocketPath),
     resolve('channel.slack.bot_token', 'SLACK_BOT_TOKEN', config.slackBotToken),
@@ -91,6 +94,15 @@ export async function applyChannelVaultSecrets(
   ]);
 
   config.nylasApiKey = nylasApiKey;
+  let nylasRegion: NylasRegion = 'us';
+  const parsedRegion = parseNylasRegion(nylasRegionRaw);
+  if (parsedRegion === null) {
+    // A typo must not point the API key at the wrong data center silently; the value is not a secret.
+    logger.warn({ value: nylasRegionRaw }, "Unknown Nylas region (expected 'us' or 'eu'); falling back to 'us'");
+  } else {
+    nylasRegion = parsedRegion;
+  }
+  config.nylasRegion = nylasRegion;
   config.signalPhoneNumber = signalPhoneNumber;
   config.signalSocketPath = signalSocketPath;
   config.slackBotToken = slackBotToken;
@@ -109,6 +121,7 @@ export async function applyChannelVaultSecrets(
   // supplied vs. which are absent (feature-off), the same debuggability win as applyVaultSecrets.
   const present = {
     'channel.email.nylas_api_key': nylasApiKey !== undefined,
+    'channel.email.nylas_region': nylasRegionRaw !== undefined,
     'channel.signal.phone_number': signalPhoneNumber !== undefined,
     'channel.signal.socket_path': signalSocketPath !== undefined,
     'channel.slack.bot_token': slackBotToken !== undefined,

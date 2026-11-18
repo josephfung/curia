@@ -97,6 +97,7 @@ import { closeDedupTasksForMergedContact } from './contacts/dedup-tasks.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
 import { createContactDuplicateDetected, createContactElevated, createContactMerged } from './bus/events.js';
 import { NylasClient } from './channels/email/nylas-client.js';
+import { nylasApiUri } from './nylas/region.js';
 import { CalendarRouter, calendarRouterEnabled } from './channels/calendar/calendar-router.js';
 import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
@@ -1109,7 +1110,7 @@ async function main(): Promise<void> {
     logger.warn('No email accounts resolved — email channel disabled. Add an account via the console (Settings → Channels → Email).');
   } else {
     for (const account of resolvedEmailAccounts) {
-      nylasClientMap.set(account.name, new NylasClient(config.nylasApiKey, account.nylasGrantId, logger));
+      nylasClientMap.set(account.name, new NylasClient(config.nylasApiKey, account.nylasGrantId, logger, undefined, nylasApiUri(config.nylasRegion)));
     }
     logger.info(
       { accounts: [...nylasClientMap.keys()] },
@@ -1261,6 +1262,7 @@ async function main(): Promise<void> {
     store: principalMailboxStore,
     secrets: secretsService,
     apiKey: () => config.nylasApiKey,
+    apiUri: () => nylasApiUri(config.nylasRegion),
     logger,
     principalEmailIdentities: mailboxPrincipalId
       ? async () => {
@@ -1288,7 +1290,7 @@ async function main(): Promise<void> {
         return () => migrateFlatPrincipalMailbox({
           store: principalMailboxStore,
           secrets: secretsService,
-          lookupGrant: (grantId) => new NylasClient(nylasApiKey, grantId, logger).getGrant(),
+          lookupGrant: (grantId) => new NylasClient(nylasApiKey, grantId, logger, undefined, nylasApiUri(config.nylasRegion)).getGrant(),
           isVerifiedPrincipalEmail: principalId
             ? async (address) => {
                 const found = await contactService.getContactWithIdentities(principalId);
@@ -1423,7 +1425,7 @@ async function main(): Promise<void> {
         curiaAccountGrantIds,
         lookupGrant: (grantId) => {
           if (!principalMailboxApiKey) return Promise.reject(new Error('No Nylas API key configured'));
-          return new NylasClient(principalMailboxApiKey, grantId, logger).getGrant();
+          return new NylasClient(principalMailboxApiKey, grantId, logger, undefined, nylasApiUri(config.nylasRegion)).getGrant();
         },
         isFallbackActive: () => principalMailboxes.isFallbackActive(),
         // Scoped inbox rules on removal (task 27). The working-docs repo is built further down;
@@ -2294,7 +2296,7 @@ async function main(): Promise<void> {
       relayBudget: new RelayBudget({ perHour: resolveRelayBudgetConfig(yamlConfig.autonomy).perHour }),
       // Sends from the principal's own mailbox (#2474). Its own entry, never in nylasClients;
       // the grant is read per call so a re-sign-in applies without a restart.
-      principalMailbox: createPrincipalMailboxResolver({ mailboxes: principalMailboxes, logger }),
+      principalMailbox: createPrincipalMailboxResolver({ mailboxes: principalMailboxes, logger, apiUri: () => nylasApiUri(config.nylasRegion) }),
       // The mailboxes a principal draft may be found in (#2475, D6); the send level is that mailbox's own.
       principalMailboxIds: async () => (await principalMailboxes.list()).map((m) => m.id),
       principalEmailAddresses: () => principalMailboxes.principalEmailAddresses(),
@@ -3782,7 +3784,7 @@ async function main(): Promise<void> {
             principalEmails: () =>
               principalIdentities.filter((id) => id.channel === 'email').map((id) => id.channelIdentifier),
             // Every live mailbox, resolved per call so a replaced grant applies without a restart.
-            mailbox: config.nylasApiKey ? new MultiPrincipalMailbox(principalMailboxes, logger) : undefined,
+            mailbox: config.nylasApiKey ? new MultiPrincipalMailbox(principalMailboxes, logger, undefined, undefined, () => nylasApiUri(config.nylasRegion)) : undefined,
             logger,
           }),
           contacts: contactService,
@@ -4082,7 +4084,7 @@ async function main(): Promise<void> {
           store: principalMailboxStore,
           admin: principalMailboxAdmin,
           lookupGrant: principalMailboxApiKey
-            ? (grantId: string) => new NylasClient(principalMailboxApiKey, grantId, logger).getGrant()
+            ? (grantId: string) => new NylasClient(principalMailboxApiKey, grantId, logger, undefined, nylasApiUri(config.nylasRegion)).getGrant()
             : undefined,
         }
       : undefined,
