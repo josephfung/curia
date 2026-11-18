@@ -933,6 +933,47 @@ describe('autonomy gates', () => {
       expect(ctx.input['sender_only']).toBe(expected);
     });
 
+    // A held sender-only reply with an explicit cc could never run: the handler refuses that
+    // combination on the approved replay. Refuse it up front instead of filing a dead approval.
+    it('refuses a sender-only email-reply with an explicit cc before any gate files an approval', async () => {
+      const registry = new ToolRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+      const trigger = makeApprovalTrigger({ created: true, shortRef: 'a3f7c12b', approvalNumber: 3 });
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(59), approvalTrigger: trigger });
+
+      const result = await layer.invoke('email-reply', { reply_to_message_id: 'm-1', body: 'hi', cc: 'bob@example.com' }, undefined, {
+        taskEventId: 'task-2',
+        taskMetadata: {
+          originator: { ...principalLineage, channel: 'sms', authenticated: false, systemRole: 'agent', tier: null, ladderedFrom: 'principal' },
+        },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/cc is not allowed/);
+      expect(trigger.request).not.toHaveBeenCalled();
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an empty cc', ''],
+      ['no cc', undefined],
+    ] as const)('still holds a sender-only email-reply with %s for approval', async (_label, cc) => {
+      const registry = new ToolRegistry();
+      registry.register(makeRiskyManifest('email-reply', 'medium'), makeHandler('should not run'));
+      const trigger = makeApprovalTrigger({ created: true, shortRef: 'a3f7c12b', approvalNumber: 3 });
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(59), approvalTrigger: trigger });
+
+      await layer.invoke('email-reply', { reply_to_message_id: 'm-1', body: 'hi', ...(cc !== undefined ? { cc } : {}) }, undefined, {
+        taskEventId: 'task-2',
+        taskMetadata: {
+          originator: { ...principalLineage, channel: 'sms', authenticated: false, systemRole: 'agent', tier: null, ladderedFrom: 'principal' },
+        },
+      });
+
+      expect(trigger.request).toHaveBeenCalledOnce();
+    });
+
     it('same-task wake of a principal task LOSES the bypass at score < 70 (propose-only)', async () => {
       const registry = new ToolRegistry();
       const handler = makeHandler('should not run');

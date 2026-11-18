@@ -33,6 +33,7 @@ import {
 import type { ChannelIdentity } from '../contacts/types.js';
 import { isCaretOrDeleteKey, keyedCharacter, provenanceSourceText } from '../contacts/identifier-provenance.js';
 import { mainFrameProse } from './_shared/web-page-content.js';
+import { SENDER_ONLY_CC_REFUSAL } from './_shared/principal-directed.js';
 import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence, KG_WRITE_TOOLS } from '../autonomy/escalation-policy.js';
 import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
@@ -2628,6 +2629,17 @@ export class ExecutionLayer {
         toolName, input, manifest.action_risk, autonomyConfig?.score ?? 0, options, skillLogger, unverifiedChannelOf(options?.taskMetadata),
       );
       return { success: false, error: this.wrapSkillError(confirmError), gate: 'live_principal_turn' };
+    }
+
+    // A sender-only email-reply refuses an explicit cc (the handler checks it too). Refuse before
+    // the gates, so a hold never files an approval whose replay could only fail.
+    if (
+      toolName === 'email-reply'
+      && hasUnauthenticatedPrincipalLineage(options?.taskMetadata)
+      && typeof input['cc'] === 'string'
+      && input['cc'].trim().length > 0
+    ) {
+      return { success: false, error: this.wrapSkillError(SENDER_ONLY_CC_REFUSAL) };
     }
 
     // Caller gate: enforce allowed_callers manifest field.
