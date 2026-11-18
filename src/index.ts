@@ -99,7 +99,7 @@ import { createContactDuplicateDetected, createContactElevated, createContactMer
 import { NylasClient } from './channels/email/nylas-client.js';
 import { nylasApiUri } from './nylas/region.js';
 import { checkNylasSignIn, createNylasSignInReaders, type NylasSignInReadiness } from './nylas/signin-readiness.js';
-import { MailboxSignInService } from './nylas/mailbox-signin-service.js';
+import { MailboxSignInService, MailboxSignInUnavailableError, MAX_SIGNIN_TTL_MINUTES } from './nylas/mailbox-signin-service.js';
 import { handleMailboxSignInCallback, type MailboxSignInCallbackQuery } from './nylas/mailbox-signin-callback.js';
 import { MailboxSignInResumeSubscriber } from './nylas/mailbox-signin-resume-subscriber.js';
 import { NylasAppClient } from './nylas/app-client.js';
@@ -2948,6 +2948,28 @@ async function main(): Promise<void> {
           // Delivered only by the primary ('curia') adapter once it has subscribed (start() runs
           // after the health service): until then an alert is not counted as sent, and retried.
           canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
+          // A 7-day sign-in link for the failing mailbox (#2361). mailboxSignInService is built
+          // later in boot; the canary only calls this after boot, so the reference is live then.
+          mintReconnectLink: async (mailboxId, label) => {
+            const address = (await principalMailboxes.list()).find((m) => m.id === mailboxId)?.address;
+            if (!address) return null;
+            try {
+              const { url } = await mailboxSignInService.mintForOperator({
+                target: 'principal',
+                expectedEmail: address,
+                label,
+                ttlMinutes: MAX_SIGNIN_TTL_MINUTES,
+              });
+              return url;
+            } catch (err) {
+              // Sign-in not set up (no https origin, no key): keep the grant-paste wording.
+              if (err instanceof MailboxSignInUnavailableError) {
+                logger.info({ mailboxId, reason: err.reason }, 'Reconnect link not offered in the outage alert: sign-in is not ready');
+                return null;
+              }
+              throw err;
+            }
+          },
           logger,
         })
       : undefined,
