@@ -21,7 +21,12 @@ describe('inboundSenderAuthenticated', () => {
   });
 
   it('trusts email only when SPF, DKIM and DMARC passed', () => {
-    expect(inboundSenderAuthenticated('email', { senderVerified: true })).toBe(true);
+    expect(inboundSenderAuthenticated('email', { senderVerified: true, senderSpfAligned: true })).toBe(true);
+    // GHSA-p49r-jqh2-v668: a DKIM-signed message replayed from another server passes DMARC; SPF
+    // aligned with From is what tells it apart, and a missing flag fails closed.
+    expect(inboundSenderAuthenticated('email', { senderVerified: true, senderSpfAligned: false })).toBe(false);
+    expect(inboundSenderAuthenticated('email', { senderVerified: true })).toBe(false);
+    expect(inboundSenderAuthenticated('email', { senderVerified: false, senderSpfAligned: true })).toBe(false);
     expect(inboundSenderAuthenticated('email', { senderVerified: false })).toBe(false);
     expect(inboundSenderAuthenticated('email', { senderVerified: 'true' })).toBe(false);
     expect(inboundSenderAuthenticated('email', undefined)).toBe(false);

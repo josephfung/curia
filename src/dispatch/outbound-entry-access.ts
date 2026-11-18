@@ -15,7 +15,9 @@ import { isOutsiderOriginated, isUnauthenticatedPrincipal } from '../contacts/pr
  * verified contact identity says the address belongs to the contact, not that this message
  * came from it. Signal and Slack identities are authenticated by the protocol. Email counts
  * only when SPF, DKIM and DMARC passed (`senderVerified`, set by the email adapter, which
- * still publishes mail that fails them). The web console counts: its chat route admits only
+ * still publishes mail that fails them) and the SPF pass is aligned with the From domain
+ * (`senderSpfAligned`): DMARC passes on DKIM alone, so a DKIM-signed message replayed from
+ * another server would otherwise count (GHSA-p49r-jqh2-v668). The web console counts: its chat route admits only
  * a logged-in principal session or the principal-only bootstrap secret (routes/chat.ts), and
  * the channel always resolves to the principal, so the session proves who wrote the message
  * (maintainer decision, 2026-11-16, reversing #2312's "session, not message" for the console).
@@ -29,7 +31,7 @@ export function inboundSenderAuthenticated(
   metadata: Record<string, unknown> | undefined,
 ): boolean {
   if (channelId === 'signal' || channelId === 'slack' || channelId === 'web' || channelId === 'cli') return true;
-  if (channelId === 'email') return metadata?.['senderVerified'] === true;
+  if (channelId === 'email') return metadata?.['senderVerified'] === true && metadata['senderSpfAligned'] === true;
   return false;
 }
 

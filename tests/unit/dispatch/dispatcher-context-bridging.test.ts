@@ -174,7 +174,7 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
         senderId: 'ceo@example.com',
         content: 'Any update on the neurology appointment?',
         // The principal's own mail passes SPF, DKIM and DMARC.
-        metadata: { senderVerified: true },
+        metadata: { senderVerified: true, senderSpfAligned: true },
       }),
     );
 
@@ -340,7 +340,7 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
         channelId: 'email',
         senderId: 'xiaopu@example.com',
         content: 'Subject: Re: Lunch\n\nThur Nov 5 works.\n\nOn Tue, Oct 20, 2026 at 9:00 AM Curia <curia@example.com> wrote:\n> Which day works?',
-        metadata: { senderVerified: true, curiaRole: 'to', otherRecipientCount: 0 },
+        metadata: { senderVerified: true, senderSpfAligned: true, curiaRole: 'to', otherRecipientCount: 0 },
       }));
 
       expect(harness.recordReply).toHaveBeenCalledWith(
@@ -377,14 +377,15 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
 
     // A verified identity says the address is the contact's, not that this message is from
     // them: a forged From of a verified address must not get the block or a recorded message.
-    it('reads entries for email only when SPF, DKIM and DMARC passed', async () => {
+    it('reads entries for email only when SPF, DKIM and DMARC passed, SPF aligned', async () => {
       const send = (harness: ReturnType<typeof buildHarness>, senderVerified: boolean) =>
         harness.bus.publish('channel', createInboundMessage({
           conversationId: 'email:thread-lunch',
           channelId: 'email',
           senderId: 'xiaopu@example.com',
           content: 'Thur Nov 5',
-          metadata: { senderVerified, curiaRole: 'to', otherRecipientCount: 0 },
+          // Aligned exactly when verified here; the alignment rule is pinned in outbound-entry-access.test.ts.
+          metadata: { senderVerified, senderSpfAligned: senderVerified, curiaRole: 'to', otherRecipientCount: 0 },
         }));
 
       const forged = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
@@ -443,17 +444,17 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
 
       it('not on an email where Curia is only CC\'d', () => expectNoBlock({
         conversationId: 'email:thread-cc', channelId: 'email', senderId: 'xiaopu@example.com',
-        content: 'Thur Nov 5', metadata: { senderVerified: true, curiaRole: 'cc', otherRecipientCount: 1 },
+        content: 'Thur Nov 5', metadata: { senderVerified: true, senderSpfAligned: true, curiaRole: 'cc', otherRecipientCount: 1 },
       }));
 
       it('not on an email with anyone else on To or CC', () => expectNoBlock({
         conversationId: 'email:thread-group', channelId: 'email', senderId: 'xiaopu@example.com',
-        content: 'Thur Nov 5', metadata: { senderVerified: true, curiaRole: 'to', otherRecipientCount: 2 },
+        content: 'Thur Nov 5', metadata: { senderVerified: true, senderSpfAligned: true, curiaRole: 'to', otherRecipientCount: 2 },
       }));
 
       it('not on an email whose recipient count is unknown', () => expectNoBlock({
         conversationId: 'email:thread-unknown', channelId: 'email', senderId: 'xiaopu@example.com',
-        content: 'Thur Nov 5', metadata: { senderVerified: true, curiaRole: 'to' },
+        content: 'Thur Nov 5', metadata: { senderVerified: true, senderSpfAligned: true, curiaRole: 'to' },
       }));
 
       it('in a Slack DM', async () => {
@@ -569,7 +570,7 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
         channelId: 'email',
         senderId: 'ceo@example.com',
         content: 'Looping in my assistant.',
-        metadata: { senderVerified: true, curiaRole: 'cc', primaryRecipientEmails: ['nik@example.com'] },
+        metadata: { senderVerified: true, senderSpfAligned: true, curiaRole: 'cc', primaryRecipientEmails: ['nik@example.com'] },
       }));
       expect(tasks[0]!.payload.turnGuidance).toEqual([
         'outbound-context',

@@ -1070,7 +1070,7 @@ describe('SendEvidenceCollector: the principal\'s own message (SEC-HIGH-1)', () 
     const emailTurn = principalTurn({ conversationId: 'email:t' }, { ...PRINCIPAL_SIGNAL, channel: 'email', authenticated: true });
     const verified = row({
       id: 'inbound-1', eventType: 'inbound.message', conversationId: 'email:t',
-      payload: { channelId: 'email', senderId: 'joseph@example.com', content: 'Email Dana the venue details.', metadata: { senderVerified: true } },
+      payload: { channelId: 'email', senderId: 'joseph@example.com', content: 'Email Dana the venue details.', metadata: { senderVerified: true, senderSpfAligned: true } },
     });
     const forged = row({
       id: 'inbound-2', eventType: 'inbound.message', conversationId: 'email:t',
@@ -1085,11 +1085,11 @@ describe('SendEvidenceCollector: the principal\'s own message (SEC-HIGH-1)', () 
     const emailTurn = principalTurn({ conversationId: 'email:t' }, { ...PRINCIPAL_SIGNAL, channel: 'email', authenticated: true });
     const verified = row({
       id: 'inbound-1', eventType: 'inbound.message', conversationId: 'email:t',
-      payload: { channelId: 'email', senderId: 'joseph@example.com', content: 'Email Dana the venue details.', metadata: { senderVerified: true } },
+      payload: { channelId: 'email', senderId: 'joseph@example.com', content: 'Email Dana the venue details.', metadata: { senderVerified: true, senderSpfAligned: true } },
     });
     const followUp = row({
       id: 'inbound-2', eventType: 'inbound.message', conversationId: 'email:t',
-      payload: { channelId: 'email', senderId: 'joseph@example.com', content: 'And the parking info.', metadata: { senderVerified: true } },
+      payload: { channelId: 'email', senderId: 'joseph@example.com', content: 'And the parking info.', metadata: { senderVerified: true, senderSpfAligned: true } },
     });
     const collected = await collector(repoFor([emailTurn, verified, followUp], ['inbound-2'])).collect(['task-p']);
     expect(collected.principalMessage).toBe(`Email Dana the venue details.${FOLLOW_UP_SEPARATOR}And the parking info.`);

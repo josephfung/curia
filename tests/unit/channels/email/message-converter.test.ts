@@ -573,6 +573,23 @@ describe('convertNylasMessage — senderVerified in metadata', () => {
     const result = convertNylasMessage(msg);
     expect(result.metadata.senderVerified).toBe(false);
   });
+
+  // GHSA-p49r-jqh2-v668: DMARC passes on DKIM alone, so a DKIM-signed message replayed from
+  // another server verifies. SPF aligned with From tells the replay apart.
+  it('records whether the SPF pass is aligned with the From domain', () => {
+    const aligned = convertNylasMessage(mockMessage({
+      headers: [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass smtp.mailfrom=bounce@mail.example.com; dkim=pass; dmarc=pass' }],
+    }));
+    expect(aligned.metadata.senderSpfAligned).toBe(true);
+
+    const replayed = convertNylasMessage(mockMessage({
+      headers: [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass smtp.mailfrom=x@attacker.example; dkim=pass header.d=example.com; dmarc=pass' }],
+    }));
+    expect(replayed.metadata.senderVerified).toBe(true);
+    expect(replayed.metadata.senderSpfAligned).toBe(false);
+
+    expect(convertNylasMessage(mockMessage({ headers: undefined })).metadata.senderSpfAligned).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -42,6 +42,13 @@ export interface ConvertedEmail {
      */
     senderVerified: boolean;
     /**
+     * The provider's SPF pass is aligned with the From domain (spfAlignedWithFrom). DMARC passes
+     * on DKIM alone, so a DKIM-signed message replayed from another server still sets
+     * senderVerified; this tells it apart. Sender authentication (inboundSenderAuthenticated)
+     * needs both (GHSA-p49r-jqh2-v668).
+     */
+    senderSpfAligned: boolean;
+    /**
      * The same check as a status, for stating it to the agent (#2312): `failed` when a
      * mechanism explicitly failed, `not confirmed` when no header vouches either way.
      * senderVerified stays the boolean every security decision reads.
@@ -416,6 +423,7 @@ export function convertNylasMessage(msg: NylasMessage, selfEmail?: string): Conv
       // Nylas stores timestamps as Unix seconds; Date expects milliseconds
       receivedAt: new Date(msg.date * 1000),
       senderVerified: parseSenderVerified(msg.headers),
+      senderSpfAligned: spfAlignedWithFrom(msg.headers, fromEmail),
       senderAuthentication: senderAuthenticationStatus(msg.headers),
       curiaRole,
       primaryRecipientEmails,

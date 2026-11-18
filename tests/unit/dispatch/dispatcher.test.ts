@@ -1728,7 +1728,7 @@ describe('originator metadata stamping', () => {
   // computed from the channel and its adapter metadata, never taken from inbound input.
   it.each([
     { channelId: 'signal', metadata: {}, expected: true },
-    { channelId: 'email', metadata: { senderVerified: true }, expected: true },
+    { channelId: 'email', metadata: { senderVerified: true, senderSpfAligned: true }, expected: true },
     { channelId: 'email', metadata: {}, expected: false },
     { channelId: 'sms', metadata: {}, expected: false },
     // A forged originator claiming authentication is stripped like any other originator.
@@ -2118,7 +2118,7 @@ describe('Dispatcher auto-elevation — Path 3 judgment (#951)', () => {
       channelId: 'email',
       senderId: 'alice@example.com',
       content: 'Hello again',
-      metadata: { senderVerified: true },
+      metadata: { senderVerified: true, senderSpfAligned: true },
     }));
 
     await vi.waitFor(() => expect(elevateFn).toHaveBeenCalledWith('test-contact-id', 'judgment'), { timeout: 200 });
@@ -2229,7 +2229,7 @@ describe('Dispatcher auto-elevation — Path 3 judgment (#951)', () => {
       channelId: 'email',
       senderId: 'alice@example.com',
       content: 'Can we book a call?',
-      metadata: { senderVerified: true },
+      metadata: { senderVerified: true, senderSpfAligned: true },
     }));
 
     await new Promise<void>(r => setTimeout(r, 10));
@@ -2247,7 +2247,7 @@ describe('Dispatcher auto-elevation — Path 3 judgment (#951)', () => {
       channelId: 'email',
       senderId: 'alice@example.com',
       content: 'Following up',
-      metadata: { senderVerified: true },
+      metadata: { senderVerified: true, senderSpfAligned: true },
     }));
 
     await vi.waitFor(() => expect(elevateFn).toHaveBeenCalledWith('test-contact-id', 'judgment'), { timeout: 200 });
@@ -2305,7 +2305,7 @@ describe('Dispatcher — first-time email sender stays unknown (#2500)', () => {
       channelId: 'email',
       senderId: 'new.sender@gmail.com',
       content,
-      metadata: { senderVerified: true },
+      metadata: { senderVerified: true, senderSpfAligned: true },
     }));
     // Judgment elevation is fire-and-forget; give it time to land if it were going to.
     await new Promise<void>(r => setTimeout(r, 20));
@@ -3138,7 +3138,7 @@ describe('Dispatcher — spot-check verdict turn guidance', () => {
     await bus.publish('channel', createInboundMessage({
       conversationId: 'email:thread-digest-1',
       channelId: 'email',
-      metadata: { senderVerified: true },
+      metadata: { senderVerified: true, senderSpfAligned: true },
       senderId: 'dana@example.com',
       content: 'Subject: Re: Your daily digest\n\n2 bad, that was a renewal notice\n\nOn Mon, Curia wrote:\n> Spot check (optional, reply with a number):',
     }));
@@ -3167,7 +3167,7 @@ describe('Dispatcher — spot-check verdict turn guidance', () => {
     await bus.publish('channel', createInboundMessage({
       conversationId: 'email:thread-digest-quoted',
       channelId: 'email',
-      metadata: { senderVerified: true },
+      metadata: { senderVerified: true, senderSpfAligned: true },
       senderId: 'dana@example.com',
       content,
     }));
@@ -3191,7 +3191,7 @@ describe('Dispatcher — spot-check verdict turn guidance', () => {
     await bus.publish('channel', createInboundMessage({
       conversationId: 'email:thread-digest-2',
       channelId: 'email',
-      metadata: { senderVerified: true },
+      metadata: { senderVerified: true, senderSpfAligned: true },
       senderId: 'dana@example.com',
       content: 'Subject: Ideas\n\nI have 2 good ideas for the offsite',
     }));
@@ -3205,7 +3205,7 @@ describe('Dispatcher — spot-check verdict turn guidance', () => {
       channelId: 'email',
       senderId: 'dana@example.com',
       content: 'Subject: Candidates\n\n2 good candidates came through this week',
-      metadata: { senderVerified: true, curiaRole: 'cc', primaryRecipientEmails: ['sam@example.com'] },
+      metadata: { senderVerified: true, senderSpfAligned: true, curiaRole: 'cc', primaryRecipientEmails: ['sam@example.com'] },
     }));
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.payload.liveTurn).toBe(true);
@@ -3217,7 +3217,7 @@ describe('Dispatcher — spot-check verdict turn guidance', () => {
     await bus.publish('channel', createInboundMessage({
       conversationId: 'email:thread-digest-3',
       channelId: 'email',
-      metadata: { senderVerified: true },
+      metadata: { senderVerified: true, senderSpfAligned: true },
       senderId: 'sam@example.com',
       content: 'Subject: Re: Your daily digest\n\n2 good',
     }));
@@ -3238,7 +3238,7 @@ describe('Dispatcher — spot-check verdict turn guidance', () => {
       await bus.publish('channel', createInboundMessage({
         conversationId: 'email:thread-digest-stamp',
         channelId: 'email',
-        metadata: { senderVerified: true },
+        metadata: { senderVerified: true, senderSpfAligned: true },
         senderId: 'dana@example.com',
         // The quoted digest carries its own "N. ..." lines and a planted "3 bad"; only the
         // reply above the quote is the principal's text.
@@ -3253,7 +3253,7 @@ describe('Dispatcher — spot-check verdict turn guidance', () => {
       await bus.publish('channel', createInboundMessage({
         conversationId: 'email:thread-fwd-1',
         channelId: 'email',
-        metadata: { senderVerified: true },
+        metadata: { senderVerified: true, senderSpfAligned: true },
         senderId: 'dana@example.com',
         content: [
           'Subject: Fwd: Spot check',
@@ -3275,7 +3275,7 @@ describe('Dispatcher — spot-check verdict turn guidance', () => {
       await bus.publish('channel', createInboundMessage({
         conversationId: 'email:thread-ideas',
         channelId: 'email',
-        metadata: { senderVerified: true },
+        metadata: { senderVerified: true, senderSpfAligned: true },
         senderId: 'dana@example.com',
         content: 'Subject: Ideas\n\nI have 2 good ideas for the offsite',
       }));
@@ -3290,7 +3290,7 @@ describe('Dispatcher — spot-check verdict turn guidance', () => {
         channelId: 'email',
         senderId: 'dana@example.com',
         content: 'Subject: Candidates\n\n2 good candidates came through this week',
-        metadata: { senderVerified: true, curiaRole: 'cc', primaryRecipientEmails: ['sam@example.com'] },
+        metadata: { senderVerified: true, senderSpfAligned: true, curiaRole: 'cc', primaryRecipientEmails: ['sam@example.com'] },
       }));
       expect(tasks[0]!.payload.metadata?.spotCheckVerdicts).toBeUndefined();
     });
@@ -3300,7 +3300,7 @@ describe('Dispatcher — spot-check verdict turn guidance', () => {
       await bus.publish('channel', createInboundMessage({
         conversationId: 'email:thread-digest-4',
         channelId: 'email',
-        metadata: { senderVerified: true },
+        metadata: { senderVerified: true, senderSpfAligned: true },
         senderId: 'sam@example.com',
         content: 'Subject: Re: Your daily digest\n\n2 good',
       }));
@@ -3314,7 +3314,7 @@ describe('Dispatcher — spot-check verdict turn guidance', () => {
         channelId: 'signal',
         senderId: '+15551230000',
         content: 'Can you move my 3pm?',
-        metadata: { senderVerified: true, spotCheckVerdicts: [{ n: 1, verdict: 'good' }, { n: 2, verdict: 'good' }] },
+        metadata: { senderVerified: true, senderSpfAligned: true, spotCheckVerdicts: [{ n: 1, verdict: 'good' }, { n: 2, verdict: 'good' }] },
       }));
       expect(tasks[0]!.payload.liveTurn).toBe(true);
       expect(tasks[0]!.payload.metadata?.spotCheckVerdicts).toBeUndefined();
@@ -3327,7 +3327,7 @@ describe('Dispatcher — spot-check verdict turn guidance', () => {
         channelId: 'signal',
         senderId: '+15551230000',
         content: '2 bad',
-        metadata: { senderVerified: true, spotCheckVerdicts: [{ n: 1, verdict: 'good' }, { n: 3, verdict: 'good' }] },
+        metadata: { senderVerified: true, senderSpfAligned: true, spotCheckVerdicts: [{ n: 1, verdict: 'good' }, { n: 3, verdict: 'good' }] },
       }));
       expect(tasks[0]!.payload.metadata?.spotCheckVerdicts).toEqual([{ n: 2, verdict: 'bad' }]);
     });

@@ -167,7 +167,7 @@ describe('dispatcher stamps the sender text and scan count (#2588)', () => {
   it("stamps the sender's own words, without a reply's Subject, quoted thread or any preamble", async () => {
     const { bus, tasks } = harness();
     // The principal's own mail passes SPF, DKIM and DMARC, so the turn gets the outbound context.
-    await bus.publish('channel', emailInbound(EMAIL_CONTENT, { senderVerified: true }));
+    await bus.publish('channel', emailInbound(EMAIL_CONTENT, { senderVerified: true, senderSpfAligned: true }));
     expect(tasks).toHaveLength(1);
     const meta = tasks[0]!.payload.metadata!;
     // The content does carry the preamble: participants and the other person's preview.
@@ -241,7 +241,7 @@ describe('dispatcher stamps the sender text and scan count (#2588)', () => {
   it('the registry takes requestText from the stamp, so the note shows no preamble', async () => {
     const { bus, tasks } = harness();
     // A sender the email adapter verified: only an authenticated turn is listed in the note.
-    await bus.publish('channel', emailInbound(EMAIL_CONTENT, { senderVerified: true }));
+    await bus.publish('channel', emailInbound(EMAIL_CONTENT, { senderVerified: true, senderSpfAligned: true }));
     const registry = new TurnActivityRegistry({ logger: createLogger('error') });
     register(registry, tasks[0]!);
     expect(registry.rootOf(tasks[0]!.id)!.requestText).toBe('Book the 9am flight to Montreal please.');

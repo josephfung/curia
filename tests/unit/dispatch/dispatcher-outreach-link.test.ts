@@ -106,7 +106,7 @@ async function sendEmail(
     content: overrides.content ?? `Subject: Re: Appointment\n\n${BODY}\n\nOn Mon, Curia wrote:\n> Do you have Tuesday?`,
     metadata: {
       subject: 'Re: Appointment',
-      senderVerified: true,
+      senderVerified: true, senderSpfAligned: true,
       curiaRole: 'to',
       otherRecipientCount: 0,
       primaryRecipientEmails: [],
