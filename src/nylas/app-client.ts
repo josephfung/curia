@@ -34,6 +34,13 @@ export interface NylasConnectorInfo {
   clientId?: string;
 }
 
+/**
+ * What probeRegion found. `unreachable`: no region answered 200 and at least one attempt failed
+ * for a reason other than rejecting the key (a network error, a timeout, a 5xx, a 429 or any other
+ * non-401/403 status), so the key may be fine. False only when every region said 401/403.
+ */
+export type NylasRegionProbe = { region: NylasRegion } | { region: null; unreachable: boolean };
+
 export interface NylasGrantInfo {
   email: string;
   provider: string;
@@ -88,14 +95,17 @@ export class NylasAppClient {
   }
 
   /**
-   * Find which region the API key belongs to. Tries us, then eu; the first 200 wins.
-   * Null when neither accepts the key (or both are unreachable).
+   * Find which region the API key belongs to. Tries us, then eu; the first 200 wins. Otherwise
+   * `region: null`, with `unreachable` false only when every region rejected the key (401/403).
+   * Each miss is logged by region with the error name or status only, never the key or the text.
    */
   static async probeRegion(
     apiKey: string,
     fetchImpl: typeof fetch = fetch,
     timeoutMs: number = DEFAULT_TIMEOUT_MS,
-  ): Promise<NylasRegion | null> {
+    logger?: Logger,
+  ): Promise<NylasRegionProbe> {
+    let unreachable = false;
     for (const region of ['us', 'eu'] as const) {
       try {
         const res = await fetchImpl(`${nylasApiUri(region)}/v3/applications`, {
@@ -103,14 +113,16 @@ export class NylasAppClient {
           headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
           signal: AbortSignal.timeout(timeoutMs),
         });
-        if (res.status === 200) return region;
-      } catch {
-        // A network failure on one region is not an answer; the next region (or null) is.
-        // Not logged: the error text could carry the request URL, and the caller reports null.
-        continue;
+        if (res.status === 200) return { region };
+        logger?.info({ region, status: res.status }, 'Nylas region probe: the region did not accept the key');
+        if (res.status !== 401 && res.status !== 403) unreachable = true;
+      } catch (err) {
+        // The error text could carry the request URL, so only its name is logged.
+        logger?.warn({ region, errorName: err instanceof Error ? err.name : 'unknown' }, 'Nylas region probe: the region could not be reached');
+        unreachable = true;
       }
     }
-    return null;
+    return { region: null, unreachable };
   }
 
   async getApplication(): Promise<NylasApplicationInfo> {

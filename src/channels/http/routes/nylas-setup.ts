@@ -23,7 +23,7 @@ import type { EventBus } from '../../../bus/bus.js';
 import { createSecretChanged } from '../../../bus/events.js';
 import { assertSecret, type SessionStore } from '../session-auth.js';
 import { actorFromRequest } from './sessions.js';
-import { NylasAppClient, NylasAppError } from '../../../nylas/app-client.js';
+import { NylasAppClient, NylasAppError, type NylasRegionProbe } from '../../../nylas/app-client.js';
 import { nylasApiUri, parseNylasRegion, type NylasRegion } from '../../../nylas/region.js';
 import {
   MAILBOX_SIGNIN_SCOPES,
@@ -50,6 +50,7 @@ export interface NylasSetupRouteOptions {
   webAppBootstrapSecret: string;
   sessions: SessionStore;
   bus: Pick<EventBus, 'publish'>;
+  /** The real pino logger. Fastify is created with `logger: false`, so request.log is a no-op. */
   logger: Logger;
   /** The boot-time Nylas key and region: readiness reads restart_required after either changes. */
   boot?: NylasBootConfig;
@@ -57,7 +58,7 @@ export interface NylasSetupRouteOptions {
   signIn?: Pick<MailboxSignInService, 'mint' | 'mintForOperator'>;
   /** Test seams. */
   makeClient?: (apiKey: string, apiUri: string) => NylasAppClient;
-  probeRegion?: (apiKey: string) => Promise<NylasRegion | null>;
+  probeRegion?: (apiKey: string) => Promise<NylasRegionProbe>;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -75,10 +76,11 @@ function googleRedirectUri(region: NylasRegion): string {
 export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetupRouteOptions): Promise<void> {
   const { secretsService, webAppBootstrapSecret, sessions, logger, bus } = options;
   const env = options.env ?? process.env;
+  const log = logger.child({ component: 'nylas-setup' });
   const readers = createNylasSignInReaders({ secrets: secretsService, env, logger });
   const makeClient = options.makeClient
     ?? ((apiKey: string, apiUri: string) => new NylasAppClient({ apiKey, apiUri, logger }));
-  const probeRegion = options.probeRegion ?? ((apiKey: string) => NylasAppClient.probeRegion(apiKey));
+  const probeRegion = options.probeRegion ?? ((apiKey: string) => NylasAppClient.probeRegion(apiKey, fetch, undefined, log));
 
   function requireAuth(request: FastifyRequest, reply: FastifyReply): boolean {
     return assertSecret(request, reply, webAppBootstrapSecret, sessions);
@@ -95,7 +97,7 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
       await bus.publish('system', payload(request, secretName, action, 'requested'));
       return true;
     } catch (err) {
-      request.log.error({ ...grantSafeErrorFields(err), action }, 'nylas setup audit write failed — change refused');
+      log.error({ ...grantSafeErrorFields(err), action }, 'nylas setup audit write failed — change refused');
       void reply.status(500).send({ error: 'Nothing was changed: the change could not be audited, so it was not made. Check the server logs.' });
       return false;
     }
@@ -105,7 +107,7 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
     try {
       await bus.publish('system', payload(request, secretName, action, 'completed'));
     } catch (err) {
-      request.log.error({ ...grantSafeErrorFields(err), action }, 'nylas setup outcome audit write failed');
+      log.error({ ...grantSafeErrorFields(err), action }, 'nylas setup outcome audit write failed');
     }
   }
 
@@ -132,7 +134,7 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
     try {
       await secretsService.set(NYLAS_REGION_SECRET, region);
     } catch (err) {
-      request.log.error(grantSafeErrorFields(err), 'nylas region save failed');
+      log.error(grantSafeErrorFields(err), 'nylas region save failed');
       void reply.status(500).send({ error: 'Failed to save the region. Check server logs.' });
       return false;
     }
@@ -157,7 +159,7 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
         googleRedirectUri: googleRedirectUri(region),
       });
     } catch (err) {
-      request.log.error(grantSafeErrorFields(err), 'GET /api/registry/nylas/signin failed');
+      log.error(grantSafeErrorFields(err), 'GET /api/registry/nylas/signin failed');
       return reply.status(500).send({ error: 'Failed to check sign-in readiness. Check server logs.' });
     }
   });
@@ -175,18 +177,22 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
     if (!requireAuth(request, reply)) return;
     const key = await requireKey(reply);
     if (key === undefined) return;
-    let region: NylasRegion | null;
+    let probe: NylasRegionProbe;
     try {
-      region = await probeRegion(key);
+      probe = await probeRegion(key);
     } catch (err) {
-      request.log.error(grantSafeErrorFields(err), 'nylas region probe failed');
+      log.error(grantSafeErrorFields(err), 'nylas region probe failed');
       return reply.status(502).send({ error: 'Nylas did not answer; try again in a moment.' });
     }
-    if (region === null) {
+    if (probe.region === null) {
+      if (probe.unreachable) {
+        log.warn('nylas region probe: no region answered and at least one could not be reached');
+        return reply.status(502).send({ error: 'Nylas did not answer; try again in a moment.' });
+      }
       return reply.status(422).send({ error: 'Neither Nylas region accepted the API key. Check the key.' });
     }
-    if (!await saveRegion(request, reply, region)) return;
-    return reply.send({ region });
+    if (!await saveRegion(request, reply, probe.region)) return;
+    return reply.send({ region: probe.region });
   });
 
   app.post('/api/registry/nylas/callback', AUTH_RATE, async (request, reply) => {
@@ -201,7 +207,7 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
     try {
       await makeClient(key, nylasApiUri(await readers.readRegion())).addCallbackUri(callbackUrl);
     } catch (err) {
-      request.log.warn(grantSafeErrorFields(err), 'nylas callback registration failed');
+      log.warn(grantSafeErrorFields(err), 'nylas callback registration failed');
       return reply.status(502).send({ error: nylasFailureMessage(err) });
     }
     await auditCompleted(request, NYLAS_API_KEY_SECRET, 'nylas_callback');
@@ -232,7 +238,7 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
       });
     } catch (err) {
       // Class and status only: the error text is never logged or returned.
-      request.log.warn(grantSafeErrorFields(err), 'nylas google connector creation failed');
+      log.warn(grantSafeErrorFields(err), 'nylas google connector creation failed');
       return reply.status(502).send({ error: nylasFailureMessage(err) });
     }
     await auditCompleted(request, NYLAS_API_KEY_SECRET, 'nylas_connector');
@@ -270,13 +276,13 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
       return reply.send({ url: link.url, expiresAt: link.expiresAt.toISOString() });
     } catch (err) {
       if (err instanceof MailboxSignInUnavailableError) {
-        request.log.warn({ reason: err.reason }, 'nylas sign-in link refused: sign-in not ready');
+        log.warn({ reason: err.reason }, 'nylas sign-in link refused: sign-in not ready');
         return reply.status(409).send({ error: err.detail !== '' ? err.detail : `Mailbox sign-in is not ready (${err.reason}).` });
       }
       if (err instanceof MailboxSignInAddressError) {
         return reply.status(422).send({ error: err.message });
       }
-      request.log.error(grantSafeErrorFields(err), 'nylas sign-in link mint failed');
+      log.error(grantSafeErrorFields(err), 'nylas sign-in link mint failed');
       return reply.status(500).send({ error: 'Failed to create the sign-in link. Check server logs.' });
     }
   });
