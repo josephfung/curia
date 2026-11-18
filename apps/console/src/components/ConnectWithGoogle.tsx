@@ -63,7 +63,8 @@ export function ConnectWithGoogle({ target, label, address, disabled = false }: 
       // The start route lives on Curia's own origin; never navigate anywhere else.
       let sameOrigin = false;
       try { sameOrigin = new URL(d.url, window.location.origin).origin === window.location.origin; } catch { /* malformed: refused below */ }
-      if (!sameOrigin) throw new Error('The sign-in link pointed somewhere unexpected, so it was not opened.');
+      // Usually the console was opened at another address than APP_ORIGIN, which the link is built from.
+      if (!sameOrigin) throw new Error('The sign-in link is for a different address than this page, so it was not opened; open the console at its APP_ORIGIN address and try again.');
       window.location.assign(d.url);
     } catch (e) {
       console.error('[ConnectWithGoogle] could not start sign-in:', e);

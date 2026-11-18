@@ -558,6 +558,8 @@ describe('PrincipalMailboxesSection: Connect with Google (#2361)', () => {
     await settle();
     expect(assign).not.toHaveBeenCalled();
     expect(container.textContent).toContain('not opened');
+    // M: the usual cause is a console opened at an address other than APP_ORIGIN.
+    expect(container.textContent).toContain('open the console at its APP_ORIGIN address');
   });
 
   it('keeps the grant-id form behind a "Paste a grant ID instead" disclosure', async () => {
