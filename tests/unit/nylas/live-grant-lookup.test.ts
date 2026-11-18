@@ -2,14 +2,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createLiveGrantLookup } from '../../../src/nylas/live-grant-lookup.js';
 import { createNylasSignInReaders, NYLAS_API_KEY_SECRET, NYLAS_REGION_SECRET } from '../../../src/nylas/signin-readiness.js';
-import { MissingNylasApiKeyError } from '../../../src/principal-mailboxes/types.js';
+import { MissingNylasApiKeyError, NylasRestartRequiredError } from '../../../src/principal-mailboxes/types.js';
 import { createSilentLogger } from '../../../src/logger.js';
 
-function build(env: NodeJS.ProcessEnv = {}) {
+function build(env: NodeJS.ProcessEnv = {}, boot?: { apiKey: string | undefined; region: 'us' | 'eu' }) {
   const vault = new Map<string, string>();
   const lookup = vi.fn(async () => ({ email: 'boss@example.com', provider: 'google' }));
   const readers = createNylasSignInReaders({ secrets: { get: async (n) => vault.get(n) ?? null }, env, logger: createSilentLogger() });
-  return { vault, lookup, fn: createLiveGrantLookup({ ...readers, lookup }) };
+  return { vault, lookup, fn: createLiveGrantLookup({ ...readers, lookup, ...(boot ? { boot } : {}) }) };
 }
 
 describe('createLiveGrantLookup', () => {
@@ -34,5 +34,27 @@ describe('createLiveGrantLookup', () => {
     const err = await fn('grant-SECRET').then(() => null, (e: unknown) => e as Error);
     expect(err).toBeInstanceOf(MissingNylasApiKeyError);
     expect(err!.message).not.toContain('grant-SECRET');
+  });
+
+  describe('with the boot values (R11)', () => {
+    it('looks the grant up while the live key and region match boot', async () => {
+      const { lookup, fn } = build({ NYLAS_API_KEY: 'nyk_boot' }, { apiKey: 'nyk_boot', region: 'us' });
+      await expect(fn('g-1')).resolves.toEqual({ email: 'boss@example.com', provider: 'google' });
+      expect(lookup).toHaveBeenCalledOnce();
+    });
+
+    it('refuses without asking Nylas when the key changed since boot', async () => {
+      const { vault, lookup, fn } = build({ NYLAS_API_KEY: 'nyk_boot' }, { apiKey: 'nyk_boot', region: 'us' });
+      vault.set(NYLAS_API_KEY_SECRET, 'nyk_new');
+      await expect(fn('g-1')).rejects.toBeInstanceOf(NylasRestartRequiredError);
+      expect(lookup).not.toHaveBeenCalled();
+    });
+
+    it('refuses when the region changed since boot', async () => {
+      const { vault, lookup, fn } = build({ NYLAS_API_KEY: 'nyk_boot' }, { apiKey: 'nyk_boot', region: 'us' });
+      vault.set(NYLAS_REGION_SECRET, 'eu');
+      await expect(fn('g-1')).rejects.toBeInstanceOf(NylasRestartRequiredError);
+      expect(lookup).not.toHaveBeenCalled();
+    });
   });
 });

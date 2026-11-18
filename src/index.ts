@@ -1368,8 +1368,13 @@ async function main(): Promise<void> {
   // Live Nylas key and region (vault, then env), shared with sign-in readiness (#2361). The admin's
   // grant lookup reads through them so a key saved after boot works for hosted sign-in (R7).
   const nylasSignInReaders = createNylasSignInReaders({ secrets: secretsService, env: process.env, logger });
+  // The key and region the mailboxes are served with. A live key or region that differs reads
+  // restart_required (R11): sign-in readiness, the callback, and the admin's add and reconnect
+  // (through liveGrantLookup, before anything is written) all wait for one restart.
+  const nylasBoot = { apiKey: config.nylasApiKey, region: config.nylasRegion };
   const liveGrantLookup = createLiveGrantLookup({
     ...nylasSignInReaders,
+    boot: nylasBoot,
     lookup: (apiKey, apiUri, grantId) => new NylasClient(apiKey, grantId, logger, undefined, apiUri).getGrant(),
   });
   const mailboxCalendarHooks = principalContact && principalMailboxApiKey
@@ -3185,7 +3190,6 @@ async function main(): Promise<void> {
   // Mailbox sign-in readiness (#2361). Reads the Nylas key and region live on every call; a key or
   // region saved or changed after boot reads restart_required until one restart (R11), since the
   // mailboxes are served with the boot values. It asks Nylas, so it is a network call.
-  const nylasBoot = { apiKey: config.nylasApiKey, region: config.nylasRegion };
   const nylasSignInReadiness = (): Promise<NylasSignInReadiness> =>
     checkNylasSignIn({ ...nylasSignInReaders, appOrigin: config.appOrigin, boot: nylasBoot, logger });
   // Single-use mailbox sign-in links (#2361). The principal's address comes from their designated
