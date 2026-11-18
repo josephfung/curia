@@ -247,6 +247,9 @@ describe('nylas-setup routes', () => {
       await build(opts);
       await req('POST', '/api/registry/nylas/signin-links', { target: 'principal', address: ' Boss@Gmail.com ' });
       expect(signIn.mintForOperator).toHaveBeenCalledWith({ target: 'principal', expectedEmail: 'Boss@Gmail.com' });
+      // R8: the operator may pin a Curia link to an address too.
+      await req('POST', '/api/registry/nylas/signin-links', { target: 'curia', address: 'assistant@office.com' });
+      expect(signIn.mintForOperator).toHaveBeenLastCalledWith({ target: 'curia', expectedEmail: 'assistant@office.com' });
     });
 
     it('rejects a bad target or an over-long label with 400', async () => {

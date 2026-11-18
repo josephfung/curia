@@ -3198,6 +3198,10 @@ async function main(): Promise<void> {
       primary: findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier ?? null,
       all: principalIdentities.filter((i) => i.channel === 'email').map((i) => i.channelIdentifier),
     }),
+    // R8: an agent-minted Curia link only while Curia has no email account at all (enabled or not).
+    hasCuriaMailbox: async () => (await emailAccountsRepo.list()).length > 0,
+    // R9: no principal sign-in while the flat mailbox is served as the deferred-migration fallback.
+    isFallbackActive: () => principalMailboxes.isFallbackActive(),
   });
   // The hosted-auth callback (#2361): exchanges the code with the live key and region, and writes
   // through the same registries as the console. The principal side needs the principal admin, so

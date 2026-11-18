@@ -33,7 +33,7 @@ import type { MailboxSignInOutcome } from './signin-outcome.js';
 import type { MailboxSignInService, SignInTarget, SignInTokenRow } from './mailbox-signin-service.js';
 import type { PrincipalMailboxAdmin } from '../principal-mailboxes/admin.js';
 import type { PrincipalMailboxStore } from '../principal-mailboxes/store.js';
-import { principalMailboxGrantSecretName } from '../principal-mailboxes/secrets.js';
+import { FLAT_EMAIL_KEY, FLAT_GRANT_KEY, principalMailboxGrantSecretName } from '../principal-mailboxes/secrets.js';
 import { mailboxIdFromAddress } from '../principal-mailboxes/migrate-flat-mailbox.js';
 import { MAILBOX_ID_RE, RESERVED_MAILBOX_IDS } from '../principal-mailboxes/types.js';
 import { grantSafeErrorFields } from '../principal-mailboxes/error-fields.js';
@@ -151,7 +151,9 @@ export async function handleMailboxSignInCallback(
       log.error({ ...grantSafeErrorFields(err), target: row.target }, 'mailbox sign-in callback failed unexpectedly');
       settled = done('failed');
     }
-    if (!isSuccess(settled.outcome) && held.grantId !== undefined && held.client !== undefined) {
+    // Never on `refused`: the account was the right kind, so its grant is likely held somewhere
+    // (a registry this scan cannot see, or the flat fallback) and revoking it would cut it off.
+    if (!isSuccess(settled.outcome) && settled.outcome !== 'refused' && held.grantId !== undefined && held.client !== undefined) {
       await revokeIfUnused(held.grantId, held.client, deps, log);
     }
   }
@@ -349,7 +351,10 @@ async function writeCuria(
   deps: MailboxSignInCallbackDeps,
   log: Logger,
 ): Promise<Settled> {
-  if ((await deps.principalStore.listLive()).some((m) => lower(m.address) === email)) {
+  // The flat fallback's address (R9) is the principal's too, while the deferred migration has not
+  // moved it into the registry; the key is deleted once it has.
+  const flatAddress = (await deps.secrets.get(FLAT_EMAIL_KEY))?.trim().toLowerCase();
+  if (flatAddress === email || (await deps.principalStore.listLive()).some((m) => lower(m.address) === email)) {
     log.warn({ reason: 'principal_mailbox_address' }, "mailbox sign-in refused: that address is one of the principal's mailboxes");
     return done('refused');
   }
@@ -434,8 +439,8 @@ async function uniqueMailboxId(
 }
 
 /**
- * 6. Revoke a grant only when nothing holds it: no live principal mailbox and no Curia account
- * stores it in the vault. A failed read means "unknown", and an unknown grant is kept.
+ * 6. Revoke a grant only when nothing holds it: no live principal mailbox, no Curia account and
+ * not the flat fallback grant stores it in the vault. A failed read means "unknown", and an unknown grant is kept.
  * The ids compared here are never logged.
  */
 async function revokeIfUnused(
@@ -447,6 +452,8 @@ async function revokeIfUnused(
 ): Promise<void> {
   try {
     const names = [
+      // The flat grant the deferred-migration fallback serves (R9).
+      FLAT_GRANT_KEY,
       ...(await deps.principalStore.listLive()).map((m) => principalMailboxGrantSecretName(m.id)),
       ...(await deps.emailAccounts.list()).map((a) => emailAccountGrantSecretName(a.name)),
     ];

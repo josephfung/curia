@@ -8,7 +8,11 @@
 // identities. It is never an input, so a model cannot point a link at another account (ADR-047).
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import { MailboxSignInAddressError, MailboxSignInUnavailableError } from '../../src/nylas/mailbox-signin-service.js';
+import {
+  MailboxSignInAddressError,
+  MailboxSignInRefusedError,
+  MailboxSignInUnavailableError,
+} from '../../src/nylas/mailbox-signin-service.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 import { buildCaptureOrigin } from '../../src/secrets/build-capture-origin.js';
 
@@ -29,7 +33,8 @@ export class MailboxSignInLinkHandler implements ToolHandler {
       return { success: false, error: "for must be 'principal' or 'curia'." };
     }
     // Curia's own mailbox is set up once, by the setup wizard. Any other agent asking for it is a
-    // mistake or an injection; refuse in code rather than leave it to the prompt.
+    // mistake or an injection; refuse in code rather than leave it to the prompt. The service also
+    // refuses once Curia has any email account (R8), so "during setup" holds in code too.
     if (target === 'curia' && ctx.agentId !== 'setup-wizard') {
       return { success: false, error: "Signing in Curia's own mailbox is only available during setup." };
     }
@@ -87,6 +92,10 @@ export class MailboxSignInLinkHandler implements ToolHandler {
         },
       };
     } catch (err) {
+      if (err instanceof MailboxSignInRefusedError) {
+        ctx.log.warn({ reason: err.reason }, 'mailbox-signin-link: Curia link refused');
+        return { success: false, error: err.message };
+      }
       if (err instanceof MailboxSignInAddressError) {
         ctx.log.warn({ reason: err.reason }, 'mailbox-signin-link: no usable principal address');
         return { success: false, error: err.message };
