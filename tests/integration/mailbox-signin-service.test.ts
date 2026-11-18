@@ -128,6 +128,15 @@ describeIf('MailboxSignInService', () => {
     expect(after.rows[0]!.n).toBe(before.rows[0]!.n);
   });
 
+  it('refuses a new address with a control character, over 254 characters, or a domain with / or #', async () => {
+    const svc = makeService();
+    const long = `${'a'.repeat(250)}@acme.com`;
+    for (const bad of ['a\u0001b@acme.com', 'a@acme\u007f.com', long, 'a@acme.com/x.org', 'a@acme.com#x.org']) {
+      await expect(svc.mint({ target: 'principal', mailboxAddress: bad, allowNewAddress: true }))
+        .rejects.toMatchObject({ reason: 'unknown_principal_address' });
+    }
+  });
+
   it('uses the only verified address when none is designated, and refuses when it is ambiguous or absent', async () => {
     const one = makeService({ emails: { primary: null, all: ['solo@example.com'] } });
     const { raw } = await mintToken(one, { target: 'principal' });
