@@ -57,6 +57,8 @@ describe('MailboxSignInDonePage', () => {
   it('explains wrong_account and missing_scopes', async () => {
     await mount('?result=wrong_account&target=principal&restart=0');
     expect(host.textContent).toContain('different Google account');
+    expect(host.textContent).toContain('set to Internal');
+    expect(host.textContent).toContain('audience to External');
     act(() => root!.unmount()); host.remove();
     await mount('?result=missing_scopes&target=curia&restart=0');
     expect(host.textContent).toContain('mail and calendar');
