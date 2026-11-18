@@ -38,7 +38,7 @@ export function resultMessage(result: string, target: Target | null): ResultMess
     case 'org_internal':
       return { ok: false, title: 'Account not allowed', body: 'Curia\'s Google app is limited to one organization, and this account is outside it. Sign in with an account from that organization.' };
     case 'wrong_account':
-      return { ok: false, title: 'Wrong account', body: 'You signed in with a different Google account than the one requested. This sign-in link is now used. Ask Curia for a fresh sign-in link, then choose the right account.' };
+      return { ok: false, title: 'Wrong account', body: 'You signed in with a different Google account than the one requested. This sign-in link is now used. Ask Curia for a fresh sign-in link, then choose the right account. If Google only offered accounts from one organization, the operator\'s Google app may be set to Internal; ask them to set its audience to External, then get a fresh link.' };
     case 'missing_scopes':
       return { ok: false, title: 'Permissions missing', body: 'Google did not grant everything Curia needs. When Google asks, leave both the mail and calendar boxes ticked, then try again.' };
     case 'not_google':
