@@ -41,7 +41,7 @@ import type { PrincipalMailboxStore } from '../principal-mailboxes/store.js';
 import { FLAT_EMAIL_KEY, FLAT_GRANT_KEY, principalMailboxGrantSecretName } from '../principal-mailboxes/secrets.js';
 import { mailboxIdFromAddress } from '../principal-mailboxes/migrate-flat-mailbox.js';
 import { MAILBOX_ID_RE, RESERVED_MAILBOX_IDS } from '../principal-mailboxes/types.js';
-import { grantSafeErrorFields } from '../principal-mailboxes/error-fields.js';
+import { grantSafeErrorFields, mayCarryGrantId } from '../principal-mailboxes/error-fields.js';
 import type { EmailAccountsRepo } from '../channels/email/email-accounts-repo.js';
 import { emailAccountGrantSecretName } from '../channels/email/email-account-secrets.js';
 
@@ -52,8 +52,11 @@ export interface MailboxSignInCallbackQuery {
   error_description?: string;
 }
 
+/** What the done page is told: an outcome, or `used` for a link that was already spent (K). */
+export type MailboxSignInCallbackOutcome = MailboxSignInOutcome | 'used';
+
 export interface MailboxSignInCallbackResult {
-  outcome: MailboxSignInOutcome;
+  outcome: MailboxSignInCallbackOutcome;
   /** Absent when the state named no claimable link (unknown or already spent). */
   target?: SignInTarget;
   /** The principal mailbox id, when the sign-in resolved one. */
@@ -95,7 +98,17 @@ const DEFAULT_LABEL = 'Primary';
 const MAX_LABEL = 80;
 const MAX_ID_SUFFIX = 50;
 
-type Settled = Omit<MailboxSignInCallbackResult, 'target'>;
+type Settled = Omit<MailboxSignInCallbackResult, 'target' | 'outcome'> & { outcome: MailboxSignInOutcome };
+
+/** Where a claimed sign-in had got to, for the catch-all log (F). */
+type Step = 'readiness' | 'exchange' | 'lookup_grant' | 'write_principal' | 'write_curia';
+
+/** Grant-safe fields, plus the message of an error that cannot carry a grant id (F). */
+function errorFields(err: unknown): Record<string, unknown> {
+  return err instanceof Error && !mayCarryGrantId(err)
+    ? { ...grantSafeErrorFields(err), errMessage: err.message }
+    : { ...grantSafeErrorFields(err) };
+}
 
 const lower = (s: string): string => s.trim().toLowerCase();
 const done = (outcome: MailboxSignInOutcome, extra: Partial<Settled> = {}): Settled => ({
@@ -140,9 +153,9 @@ export async function handleMailboxSignInCallback(
   if (claim.status === 'not_found' || claim.status === 'used') {
     // No finished event: an unknown state has no origin to resume, and a spent one already
     // published its own (a second would resume the agent twice). The endpoint is public, so a
-    // garbage state must not reach the bus either.
+    // garbage state must not reach the bus either. A spent link says so on the done page (K).
     log.warn({ tokenStatus: claim.status }, 'mailbox sign-in callback refused: the state names no live link');
-    return { outcome: 'failed', restartScheduled: false };
+    return { outcome: claim.status === 'used' ? 'used' : 'failed', restartScheduled: false };
   }
   const row = claim.row;
 
@@ -156,7 +169,7 @@ export async function handleMailboxSignInCallback(
     try {
       settled = await settle(query, row, deps, log, held);
     } catch (err) {
-      log.error({ ...grantSafeErrorFields(err), target: row.target }, 'mailbox sign-in callback failed unexpectedly');
+      log.error({ ...errorFields(err), step: held.step, target: row.target }, 'mailbox sign-in callback failed unexpectedly');
       settled = done('failed');
     }
     // Never on `refused`: the account was the right kind, so its grant is likely held somewhere
@@ -182,10 +195,12 @@ export async function handleMailboxSignInCallback(
   return { ...settled, target: row.target };
 }
 
-/** The grant this callback obtained, kept for the revoke step if anything after it fails. */
+/** The grant this callback obtained, kept for the revoke step if anything after it fails, and
+ *  the step it had reached, for the catch-all log. */
 interface Held {
   grantId?: string;
   client?: CallbackClient;
+  step?: Step;
 }
 
 function isSuccess(o: MailboxSignInOutcome): boolean {
@@ -237,6 +252,7 @@ async function settle(
     log.warn({ target: row.target }, 'mailbox sign-in callback carried neither a code nor an error');
     return done('failed');
   }
+  held.step = 'readiness';
   // Only the application id (the hosted-auth client_id) and region are needed here, not full
   // readiness: a blip listing connectors must not throw away a valid code (L).
   const apiKey = (await deps.readApiKey())?.trim();
@@ -260,6 +276,7 @@ async function settle(
   }
 
   // 3. Exchange the code, then read the grant.
+  held.step = 'exchange';
   let grantId: string;
   try {
     ({ grantId } = await client.exchangeCode({
@@ -274,11 +291,12 @@ async function settle(
   held.grantId = grantId;
   held.client = client;
 
+  held.step = 'lookup_grant';
   let grant: Awaited<ReturnType<CallbackClient['getGrant']>>;
   try {
     grant = await client.getGrant(grantId);
   } catch (err) {
-    log.warn({ ...grantSafeErrorFields(err), step: 'get_grant', target: row.target }, 'mailbox sign-in: the new grant could not be read');
+    log.warn({ ...grantSafeErrorFields(err), step: 'lookup_grant', target: row.target }, 'mailbox sign-in: the new grant could not be read');
     return done('failed');
   }
   if (grant.provider !== 'google') {
@@ -306,6 +324,7 @@ async function settle(
     return done('wrong_account');
   }
 
+  held.step = row.target === 'principal' ? 'write_principal' : 'write_curia';
   return row.target === 'principal'
     ? writePrincipal(email, grantId, row, client, deps, log)
     : writeCuria(email, grantId, client, deps, log);
@@ -330,7 +349,7 @@ async function writePrincipal(
     if (stored === grantId) return done('reconnected', { mailboxId: existing.id });
 
     if (!(await auditRequested(deps, log, existing.id, 'replace_grant'))) return done('failed');
-    const replaced = await admin.replaceGrant(existing.id, grantId);
+    const replaced = await afterRequested(log, existing.id, 'replace_grant', () => admin.replaceGrant(existing.id, grantId));
     if (!replaced.ok) {
       log.warn({ mailboxId: existing.id, refusal: replaced.refusal }, 'mailbox sign-in: replacing the mailbox grant was refused');
       return done('refused', { mailboxId: existing.id });
@@ -347,7 +366,7 @@ async function writePrincipal(
   const label = validLabel(row.mailbox_label) ?? DEFAULT_LABEL;
 
   if (!(await auditRequested(deps, log, id, 'add'))) return done('failed');
-  const added = await admin.add({ id, label, grantId, makeDefault: firstEver || noLiveDefault });
+  const added = await afterRequested(log, id, 'add', () => admin.add({ id, label, grantId, makeDefault: firstEver || noLiveDefault }));
   if (!added.ok) {
     log.warn({ mailboxId: id, refusal: added.refusal }, 'mailbox sign-in: adding the principal mailbox was refused');
     return done('refused');
@@ -518,6 +537,21 @@ async function auditSecretCompleted(deps: MailboxSignInCallbackDeps, log: Logger
 }
 
 type AuditAction = 'add' | 'replace_grant';
+
+/**
+ * Run a registry change whose `requested` audit row is already written. A throw leaves the outcome
+ * unknown (the change event has no failure marker, and `requested` without `completed` already
+ * reads "not done, or outcome unknown"), so it is logged at error and rethrown (F).
+ */
+async function afterRequested<T>(log: Logger, mailboxId: string, action: AuditAction, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    log.error({ ...errorFields(err), mailboxId, action, step: 'write_principal' },
+      'mailbox sign-in: the principal mailbox change threw after it was requested; its outcome is unknown');
+    throw err;
+  }
+}
 
 /** principal_mailbox.changed `requested`, as the console route does: an unrecordable change is not made. */
 async function auditRequested(deps: MailboxSignInCallbackDeps, log: Logger, mailboxId: string, action: AuditAction): Promise<boolean> {

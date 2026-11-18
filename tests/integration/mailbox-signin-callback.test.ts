@@ -392,9 +392,9 @@ describeIf('mailbox sign-in callback', () => {
     expect(exchangeCode).not.toHaveBeenCalled();
     expect(await store.listLive()).toEqual([]);
     expect(expectOneFinished('expired')).toMatchObject({ conversationId: 'conv-1', agentId: 'coordinator' });
-    // Spent: a replay of the same state is refused and publishes nothing more.
+    // Spent: a replay of the same state reads used and publishes nothing more (K).
     published = [];
-    expect((await handleMailboxSignInCallback({ state, code: 'code-1' }, deps)).outcome).toBe('failed');
+    expect((await handleMailboxSignInCallback({ state, code: 'code-1' }, deps)).outcome).toBe('used');
     expect(finished()).toHaveLength(0);
   });
 
@@ -459,7 +459,19 @@ describeIf('mailbox sign-in callback', () => {
     expectOneFinished('failed');
   });
 
-  it('an unknown or replayed state is failed, exchanges nothing and publishes nothing', async () => {
+  it('a replay of a link that already connected is used: no exchange, no event (K)', async () => {
+    nylasGrant('code-1', 'grant-boss-0001', 'boss@example.com');
+    const state = await token();
+    expect((await handleMailboxSignInCallback({ state, code: 'code-1' }, deps)).outcome).toBe('connected');
+    published = [];
+    exchangeCode.mockClear();
+    const res = await handleMailboxSignInCallback({ state, code: 'code-1' }, deps);
+    expect(res).toEqual({ outcome: 'used', restartScheduled: false });
+    expect(exchangeCode).not.toHaveBeenCalled();
+    expect(published).toEqual([]);
+  });
+
+  it('an unknown state is failed, exchanges nothing and publishes nothing', async () => {
     const res = await handleMailboxSignInCallback({ state: 'not-a-real-token', code: 'code-1' }, deps);
     expect(res).toEqual({ outcome: 'failed', restartScheduled: false });
     expect(exchangeCode).not.toHaveBeenCalled();
@@ -649,5 +661,23 @@ describeIf('mailbox sign-in callback', () => {
     const res = await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps);
     expect(res.outcome).toBe('failed');
     expectOneFinished('failed');
+    // F: the catch-all names the step, and the message of an error that cannot carry a grant id.
+    expect(logLines.find((l) => l['msg'] === 'mailbox sign-in callback failed unexpectedly')).toMatchObject({
+      step: 'write_principal', errName: 'Error', errMessage: 'db down',
+    });
+  });
+
+  it('a principal add that throws after it was requested logs the unknown outcome with its step (F)', async () => {
+    nylasGrant('code-1', 'grant-boss-0001', 'boss@example.com');
+    const failing = { add: async () => { throw new Error('vault write failed'); }, replaceGrant: async () => { throw new Error('unused'); } };
+    deps = { ...deps, principalAdmin: failing };
+    const res = await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps);
+    expect(res.outcome).toBe('failed');
+    // requested was published; completed was not, and the log says the outcome is unknown.
+    expect(ofType('principal_mailbox.changed').map((e) => (e.payload as { stage: string }).stage)).toEqual(['requested']);
+    expect(logLines.find((l) => l['level'] === 50 && l['action'] === 'add' && l['step'] === 'write_principal')).toMatchObject({
+      errMessage: 'vault write failed', mailboxId: 'example',
+    });
+    expectNoGrantInLogs();
   });
 });
