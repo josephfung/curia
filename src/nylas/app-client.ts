@@ -46,6 +46,8 @@ export interface NylasGrantInfo {
   provider: string;
   scopes: string[];
   status: 'valid' | 'invalid';
+  /** Nylas's created_at (Unix seconds). Absent when Nylas sent none or an unusable value. */
+  createdAt?: Date;
 }
 
 export interface NylasAppClientOptions {
@@ -73,6 +75,13 @@ function str(v: unknown): string | undefined {
 
 function strArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+}
+
+/** A positive Unix-seconds timestamp as a Date; anything else is undefined. */
+function unixSeconds(v: unknown): Date | undefined {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return undefined;
+  const d = new Date(v * 1000);
+  return Number.isNaN(d.getTime()) ? undefined : d;
 }
 
 function splitScopes(v: unknown): string[] {
@@ -126,7 +135,7 @@ export class NylasAppClient {
   }
 
   async getApplication(): Promise<NylasApplicationInfo> {
-    const { status, data } = await this.request('GET', '/v3/applications', undefined, 'get application');
+    const { status, data } = await this.request('GET', '/v3/applications', undefined, 'get application', { needsBody: true });
     const d = isObject(data) ? data : {};
     const applicationId = str(d['application_id']);
     if (applicationId === undefined || applicationId === '') {
@@ -148,8 +157,9 @@ export class NylasAppClient {
   }
 
   async listConnectors(): Promise<NylasConnectorInfo[]> {
-    const { data } = await this.request('GET', `/v3/connectors?limit=${CONNECTOR_PAGE_LIMIT}`, undefined, 'list connectors');
-    if (!Array.isArray(data)) return [];
+    const { status, data } = await this.request('GET', `/v3/connectors?limit=${CONNECTOR_PAGE_LIMIT}`, undefined, 'list connectors', { needsBody: true });
+    // Never read as "no connectors": readiness would tell the operator to create one that exists.
+    if (!Array.isArray(data)) throw new NylasAppError('Nylas list connectors: response carried no connector list', status);
     const out: NylasConnectorInfo[] = [];
     for (const c of data) {
       if (!isObject(c)) continue;
@@ -215,7 +225,7 @@ export class NylasAppClient {
         redirect_uri: input.redirectUri,
       },
       'exchange code',
-      false,
+      { unwrap: false, needsBody: true },
     );
     const b = isObject(body) ? body : {};
     const grantId = str(b['grant_id']);
@@ -226,19 +236,22 @@ export class NylasAppClient {
   }
 
   async getGrant(grantId: string): Promise<NylasGrantInfo> {
-    const { status, data } = await this.request('GET', `/v3/grants/${encodeURIComponent(grantId)}`, undefined, 'get grant');
+    const { status, data } = await this.request('GET', `/v3/grants/${encodeURIComponent(grantId)}`, undefined, 'get grant', { needsBody: true });
     const d = isObject(data) ? data : {};
     const email = str(d['email']);
     const grantStatus = str(d['grant_status']);
     if (str(d['id']) === undefined || email === undefined || email === '' || grantStatus === undefined) {
       throw new NylasAppError('Nylas get grant: response was missing required fields', status);
     }
-    return {
+    const info: NylasGrantInfo = {
       email,
       provider: str(d['provider']) ?? '',
       scopes: strArray(d['scope']),
       status: grantStatus === 'valid' ? 'valid' : 'invalid',
     };
+    const createdAt = unixSeconds(d['created_at']);
+    if (createdAt !== undefined) info.createdAt = createdAt;
+    return info;
   }
 
   async deleteGrant(grantId: string): Promise<void> {
@@ -248,14 +261,18 @@ export class NylasAppClient {
   /**
    * One request. Returns the `data` member of the Nylas envelope (or the whole body when
    * `unwrap` is false). Non-2xx and network failures become NylasAppError with a fixed message.
+   * With `needsBody`, a 2xx whose body cannot be read (a stall cut off by the timeout, a dropped
+   * connection) or is not JSON is an error too; without it, an empty or unreadable 2xx body is fine.
    */
   private async request(
     method: 'GET' | 'POST' | 'DELETE',
     path: string,
     body: unknown,
     operation: string,
-    unwrap = true,
+    opts: { unwrap?: boolean; needsBody?: boolean } = {},
   ): Promise<{ status: number; data: unknown }> {
+    const unwrap = opts.unwrap ?? true;
+    const needsBody = opts.needsBody ?? false;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.apiKey}`,
       Accept: 'application/json',
@@ -277,12 +294,30 @@ export class NylasAppClient {
       throw new NylasAppError(`Nylas ${operation} failed: ${timedOut ? 'timed out' : 'network error'}`, 0);
     }
 
-    let parsed: unknown;
+    let text: string | undefined;
+    let readErrorName: string | undefined;
     try {
-      parsed = await res.json();
-    } catch {
-      // An empty or non-JSON body: fine on a 2xx (e.g. DELETE), and for an error the status is the signal.
-      parsed = undefined;
+      text = await res.text();
+    } catch (err) {
+      // A stalled body aborted by the timeout, or a dropped connection. The text is not kept.
+      readErrorName = err instanceof Error ? err.name : 'unknown';
+    }
+    let parsed: unknown;
+    let notJson = false;
+    if (text !== undefined && text.trim() !== '') {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        // The body text is never logged; whether this matters depends on the status and needsBody.
+        notJson = true;
+      }
+    }
+
+    if (res.ok && needsBody && (readErrorName !== undefined || notJson || parsed === undefined)) {
+      this.logger.warn({ operation, status: res.status, errorName: readErrorName, notJson }, 'Nylas application response body could not be read');
+      const timedOut = readErrorName === 'TimeoutError' || readErrorName === 'AbortError';
+      const what = timedOut ? 'timed out reading the response' : readErrorName !== undefined ? 'response could not be read' : 'response was not JSON';
+      throw new NylasAppError(`Nylas ${operation} failed: ${what}`, 0);
     }
 
     if (!res.ok) {

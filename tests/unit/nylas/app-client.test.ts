@@ -160,6 +160,27 @@ describe('NylasAppClient', () => {
     expect(authHeader(init)).toBe(`Bearer ${KEY}`);
   });
 
+  it('getGrant parses created_at (Unix seconds) into createdAt', async () => {
+    const { client } = setup(json({
+      data: { id: 'g-1', email: 'me@x.com', provider: 'google', grant_status: 'valid', scope: [], created_at: 1_763_000_000 },
+    }));
+    expect((await client.getGrant('g-1')).createdAt).toEqual(new Date(1_763_000_000_000));
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['a string', '1763000000'],
+    ['zero', 0],
+    ['negative', -5],
+    ['not finite', null],
+  ])('getGrant leaves createdAt unset when created_at is %s', async (_f, created_at) => {
+    const { client } = setup(json({
+      data: { id: 'g-1', email: 'me@x.com', provider: 'google', grant_status: 'valid', scope: [], ...(created_at !== undefined ? { created_at } : {}) },
+    }));
+    const grant = await client.getGrant('g-1');
+    expect(grant).not.toHaveProperty('createdAt');
+  });
+
   it('getGrant reads any status other than valid as invalid', async () => {
     const { client } = setup(json({ data: { id: 'g', email: 'e', provider: 'google', grant_status: 'weird', scope: [] } }));
     expect((await client.getGrant('g')).status).toBe('invalid');
@@ -213,6 +234,56 @@ describe('NylasAppClient', () => {
       expect(err).toBeInstanceOf(NylasAppError);
       expect((err as NylasAppError).status).toBe(0);
       expect((err as NylasAppError).message).not.toContain(KEY);
+    });
+  });
+
+  describe('2xx bodies that cannot be read', () => {
+    /** A 200 whose body stream fails mid-read, as a stall cut off by the timeout does. */
+    function stalledBody(errorName: string): Response {
+      const stream = new ReadableStream({
+        start(controller) { controller.error(new DOMException('body stalled', errorName)); },
+      });
+      return new Response(stream, { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    const needsBody: Array<[string, (c: NylasAppClient) => Promise<unknown>]> = [
+      ['getApplication', (c) => c.getApplication()],
+      ['listConnectors', (c) => c.listConnectors()],
+      ['exchangeCode', (c) => c.exchangeCode({ clientId: 'c', code: 'AUTH-CODE-XYZ', redirectUri: 'https://x/cb' })],
+      ['getGrant', (c) => c.getGrant('grant-secret-id')],
+    ];
+
+    it.each(needsBody)('%s: a body read that times out is a NylasAppError, not an empty result', async (_n, run) => {
+      const { client } = setup(() => stalledBody('TimeoutError'));
+      const err = await run(client).then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(NylasAppError);
+      expect((err as NylasAppError).status).toBe(0);
+      expect((err as NylasAppError).message).toContain('timed out');
+    });
+
+    it.each(needsBody)('%s: an empty or non-JSON 200 body is a NylasAppError', async (_n, run) => {
+      for (const body of ['', '<html>proxy</html>']) {
+        const { client } = setup(() => new Response(body, { status: 200 }));
+        await expect(run(client)).rejects.toBeInstanceOf(NylasAppError);
+      }
+    });
+
+    it('listConnectors does not read a missing connector list as none', async () => {
+      const { client } = setup(json({ data: { not: 'a list' } }));
+      await expect(client.listConnectors()).rejects.toBeInstanceOf(NylasAppError);
+    });
+
+    it('listConnectors still returns an empty list Nylas actually sent', async () => {
+      const { client } = setup(json({ data: [] }));
+      expect(await client.listConnectors()).toEqual([]);
+    });
+
+    it.each([
+      ['addCallbackUri', (c: NylasAppClient) => c.addCallbackUri('https://x/cb')],
+      ['createGoogleConnector', (c: NylasAppClient) => c.createGoogleConnector({ clientId: 'c', clientSecret: 's', scopes: [] })],
+      ['deleteGrant', (c: NylasAppClient) => c.deleteGrant('g-1')],
+    ])('%s: an empty or unreadable 200 body is still a success', async (_n, run) => {
+      await expect(run(setup(() => new Response(null, { status: 200 })).client)).resolves.toBeUndefined();
+      await expect(run(setup(() => stalledBody('AbortError')).client)).resolves.toBeUndefined();
     });
   });
 
