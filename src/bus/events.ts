@@ -1048,9 +1048,10 @@ interface SecretChangedPayload {
   secretName: string;
   action: 'set' | 'delete' | 'details' | 'nylas_region' | 'nylas_callback' | 'nylas_connector';
   stage: 'requested' | 'completed';
-  /** A console session, or the bootstrap-secret header with no cookie. */
-  initiatedBy: 'session' | 'bootstrap_secret';
-  /** sessions.id of the actor. Absent when initiatedBy is bootstrap_secret. */
+  /** A console session, the bootstrap-secret header with no cookie, or a single-use hosted
+   *  sign-in link redeemed at the Nylas callback (#2361: Curia's own mailbox grant). */
+  initiatedBy: 'session' | 'bootstrap_secret' | 'signin_callback';
+  /** sessions.id of the actor. Absent unless initiatedBy is session. */
   actorSessionId?: string;
   /** A delete that went ahead although an enabled component requires the key. */
   force?: boolean;
