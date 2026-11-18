@@ -180,6 +180,11 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
         ...(options.boot ? { boot: options.boot } : {}),
       });
       const callbackUrl = options.appOrigin ? mailboxSignInCallbackUrl(options.appOrigin) : null;
+      // Ready: the region that passed the check, not a second read that may see a region saved
+      // meanwhile. Not ready: the saved region, so the operator can see and change it.
+      if (readiness.ready) {
+        return reply.send({ ...readiness, callbackUrl, googleRedirectUri: googleRedirectUri(readiness.region) });
+      }
       let region: NylasRegion;
       try {
         region = await readers.readRegion();
