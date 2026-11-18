@@ -24,6 +24,7 @@ import {
   createMailboxSignInFinished,
   createPrincipalMailboxChanged,
   createPrincipalMailboxConnected,
+  createSecretChanged,
 } from '../bus/events.js';
 import type { NylasAppClient } from './app-client.js';
 import { nylasApiUri } from './region.js';
@@ -282,8 +283,8 @@ async function settle(
   }
 
   return row.target === 'principal'
-    ? writePrincipal(email, grantId, row, deps, log)
-    : writeCuria(email, grantId, deps, log);
+    ? writePrincipal(email, grantId, row, client, deps, log)
+    : writeCuria(email, grantId, client, deps, log);
 }
 
 /** 7. The principal's mailbox, through PrincipalMailboxAdmin (the console's own path). */
@@ -291,6 +292,7 @@ async function writePrincipal(
   email: string,
   grantId: string,
   row: SignInTokenRow,
+  client: CallbackClient,
   deps: MailboxSignInCallbackDeps,
   log: Logger,
 ): Promise<Settled> {
@@ -310,6 +312,8 @@ async function writePrincipal(
       return done('refused', { mailboxId: existing.id });
     }
     await auditCompleted(deps, log, existing.id, 'replace_grant');
+    // The grant it replaced is now held by nothing (unless another registry holds it).
+    if (stored) await revokeIfUnused(stored, client, deps, log, 'previous');
     return done('reconnected', { mailboxId: existing.id });
   }
 
@@ -341,6 +345,7 @@ async function writePrincipal(
 async function writeCuria(
   email: string,
   grantId: string,
+  client: CallbackClient,
   deps: MailboxSignInCallbackDeps,
   log: Logger,
 ): Promise<Settled> {
@@ -352,24 +357,37 @@ async function writeCuria(
   let outcome: MailboxSignInOutcome;
   const existing = await deps.emailAccounts.findBySelfEmail(email);
   if (existing) {
-    // Grant first, then enable: a failed vault write leaves the account as it was.
-    await deps.secrets.set(emailAccountGrantSecretName(existing.name), grantId);
+    const secretName = emailAccountGrantSecretName(existing.name);
+    const stored = (await deps.secrets.get(secretName))?.trim();
+    // Nylas returns the same grant id for an account that already has one: nothing to change,
+    // so no write, no audit and no restart.
+    if (stored === grantId && existing.enabled) return done('reconnected');
+    if (stored !== grantId) {
+      // Grant first, then enable: a failed vault write leaves the account as it was.
+      if (!(await auditSecretRequested(deps, log, secretName))) return done('failed');
+      await deps.secrets.set(secretName, grantId);
+      await auditSecretCompleted(deps, log, secretName);
+    }
     if (!existing.enabled) await deps.emailAccounts.update(existing.name, { enabled: true });
     log.info({ account: existing.name }, "Curia's email account re-connected by hosted sign-in");
+    if (stored && stored !== grantId) await revokeIfUnused(stored, client, deps, log, 'previous');
     outcome = 'reconnected';
   } else {
+    // The row first: its name (and so the vault key) is only known once the insert wins one.
     const created = await deps.emailAccounts.createForAddress(email, { createdBy: CREATED_BY, preferName: PRIMARY_CURIA_ACCOUNT });
+    const secretName = emailAccountGrantSecretName(created.name);
+    if (!(await auditSecretRequested(deps, log, secretName))) {
+      await undoCreate(created.name, deps, log);
+      return done('failed');
+    }
     try {
-      await deps.secrets.set(emailAccountGrantSecretName(created.name), grantId);
+      await deps.secrets.set(secretName, grantId);
     } catch (err) {
       // Never leave an account without its grant (as the console's POST route compensates).
-      try {
-        await deps.emailAccounts.delete(created.name);
-      } catch (undoErr) {
-        log.error({ ...grantSafeErrorFields(undoErr), account: created.name }, 'mailbox sign-in: could not remove the account whose grant failed to save; delete it in the console');
-      }
+      await undoCreate(created.name, deps, log);
       throw err;
     }
+    await auditSecretCompleted(deps, log, secretName);
     log.info({ account: created.name }, "Curia's email account connected by hosted sign-in");
     outcome = 'connected';
   }
@@ -382,6 +400,15 @@ async function writeCuria(
     return done(outcome);
   }
   return done(outcome, { restartScheduled: true });
+}
+
+/** Remove an account created by this sign-in whose grant could not be saved. Never throws. */
+async function undoCreate(name: string, deps: MailboxSignInCallbackDeps, log: Logger): Promise<void> {
+  try {
+    await deps.emailAccounts.delete(name);
+  } catch (undoErr) {
+    log.error({ ...grantSafeErrorFields(undoErr), account: name }, 'mailbox sign-in: could not remove the account whose grant failed to save; delete it in the console');
+  }
 }
 
 /** The label stored on the token, if it meets the registry's rule (1-80 chars, no control chars). */
@@ -416,6 +443,7 @@ async function revokeIfUnused(
   client: CallbackClient,
   deps: MailboxSignInCallbackDeps,
   log: Logger,
+  which: 'new' | 'previous' = 'new',
 ): Promise<void> {
   try {
     const names = [
@@ -424,19 +452,39 @@ async function revokeIfUnused(
     ];
     for (const name of names) {
       if ((await deps.secrets.get(name))?.trim() === grantId) {
-        log.info('mailbox sign-in: the grant belongs to a connected mailbox; not revoking it');
+        log.info({ grant: which }, 'mailbox sign-in: the grant belongs to a connected mailbox; not revoking it');
         return;
       }
     }
   } catch (err) {
-    log.warn({ ...grantSafeErrorFields(err) }, 'mailbox sign-in: could not check whether the grant is in use; leaving it in Nylas');
+    log.warn({ ...grantSafeErrorFields(err), grant: which }, 'mailbox sign-in: could not check whether the grant is in use; leaving it in Nylas');
     return;
   }
   try {
     await client.deleteGrant(grantId);
-    log.info('mailbox sign-in: revoked the unused grant');
+    log.info({ grant: which }, 'mailbox sign-in: revoked the unused grant');
   } catch (err) {
-    log.warn({ ...grantSafeErrorFields(err) }, 'mailbox sign-in: could not revoke the unused grant; remove it in the Nylas dashboard');
+    log.warn({ ...grantSafeErrorFields(err), grant: which }, 'mailbox sign-in: could not revoke the unused grant; remove it in the Nylas dashboard');
+  }
+}
+
+/** secret.changed `requested` for Curia's grant key (name only, never the value); refused if unrecordable. */
+async function auditSecretRequested(deps: MailboxSignInCallbackDeps, log: Logger, secretName: string): Promise<boolean> {
+  try {
+    await deps.bus.publish('system', createSecretChanged({ secretName, action: 'set', stage: 'requested', initiatedBy: 'signin_callback' }));
+    return true;
+  } catch (err) {
+    log.error({ ...grantSafeErrorFields(err), secretName }, 'mailbox sign-in: the grant write could not be audited, so it was not made');
+    return false;
+  }
+}
+
+/** secret.changed `completed`: the write happened, so a miss is only logged. */
+async function auditSecretCompleted(deps: MailboxSignInCallbackDeps, log: Logger, secretName: string): Promise<void> {
+  try {
+    await deps.bus.publish('system', createSecretChanged({ secretName, action: 'set', stage: 'completed', initiatedBy: 'signin_callback' }));
+  } catch (err) {
+    log.error({ ...grantSafeErrorFields(err), secretName }, 'mailbox sign-in: the completed grant write could not be audited');
   }
 }
 

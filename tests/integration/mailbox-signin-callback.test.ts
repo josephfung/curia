@@ -326,7 +326,22 @@ describeIf('mailbox sign-in callback', () => {
     expect(vault.get(principalMailboxGrantSecretName('example'))).toBe('grant-boss-0099');
     expect(ofType('principal_mailbox.changed').map((e) => (e.payload as { action: string }).action)).toEqual(['replace_grant', 'replace_grant']);
     expect(ofType('principal_mailbox.connected')).toHaveLength(0);
+    // The replaced grant is held by nothing now: revoked.
+    expect(deleteGrant.mock.calls).toEqual([['grant-boss-0001']]);
     expectOneFinished('reconnected');
+    expectNoGrantInLogs();
+  });
+
+  it('a replaced principal grant still held elsewhere is NOT revoked', async () => {
+    nylasGrant('code-1', 'grant-boss-0001', 'boss@example.com');
+    await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps);
+    // The same id also sits under a Curia account (the used-anywhere scan must find it).
+    await repo.create({ name: 'curia', selfEmail: 'curia@office.com' });
+    vault.set(emailAccountGrantSecretName('curia'), 'grant-boss-0001');
+    nylasGrant('code-2', 'grant-boss-0099', 'boss@example.com');
+    const res = await handleMailboxSignInCallback({ state: await token(), code: 'code-2' }, deps);
+    expect(res.outcome).toBe('reconnected');
+    expect(deleteGrant).not.toHaveBeenCalled();
   });
 
   it('wrong account: the stray grant is revoked and nothing is stored', async () => {
@@ -458,6 +473,11 @@ describeIf('mailbox sign-in callback', () => {
     expect(vault.get(emailAccountGrantSecretName('curia'))).toBe('grant-curia-0006');
     expect(expectOneFinished('connected')).toMatchObject({ target: 'curia', restartScheduled: true });
     expect(await store.listLive()).toEqual([]);
+    // The vault write is audited by key name, attributed to the sign-in link, never the value.
+    expect(ofType('secret.changed').map((e) => e.payload)).toEqual([
+      { secretName: 'channel.email.curia.nylas_grant_id', action: 'set', stage: 'requested', initiatedBy: 'signin_callback' },
+      { secretName: 'channel.email.curia.nylas_grant_id', action: 'set', stage: 'completed', initiatedBy: 'signin_callback' },
+    ]);
 
     published = [];
     await repo.update('curia', { enabled: false });
@@ -468,8 +488,54 @@ describeIf('mailbox sign-in callback', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ name: 'curia', enabled: true });
     expect(vault.get(emailAccountGrantSecretName('curia'))).toBe('grant-curia-0007');
+    expect(ofType('secret.changed').map((e) => (e.payload as { stage: string }).stage)).toEqual(['requested', 'completed']);
+    // The grant it replaced is held by nothing now: revoked.
+    expect(deleteGrant.mock.calls).toEqual([['grant-curia-0006']]);
     expectOneFinished('reconnected');
     expectNoGrantInLogs();
+  });
+
+  it('Curia re-auth returning the stored grant of an enabled account: no write, no audit, no restart', async () => {
+    await repo.create({ name: 'curia', selfEmail: 'assistant@office.com' });
+    vault.set(emailAccountGrantSecretName('curia'), 'grant-curia-0006');
+    nylasGrant('code-1', 'grant-curia-0006', 'assistant@office.com');
+    secretsSet.mockClear();
+    const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null }), code: 'code-1' }, deps);
+    expect(res).toMatchObject({ outcome: 'reconnected', restartScheduled: false });
+    expect(secretsSet).not.toHaveBeenCalled();
+    expect(ofType('secret.changed')).toHaveLength(0);
+    expect(scheduleProcessExit).not.toHaveBeenCalled();
+    expect(deleteGrant).not.toHaveBeenCalled();
+    expect(expectOneFinished('reconnected')).not.toHaveProperty('restartScheduled');
+  });
+
+  it('a replaced Curia grant still held elsewhere is NOT revoked', async () => {
+    await repo.create({ name: 'curia', selfEmail: 'assistant@office.com' });
+    await repo.create({ name: 'ops', selfEmail: 'ops@office.com' });
+    vault.set(emailAccountGrantSecretName('curia'), 'grant-shared-0012');
+    vault.set(emailAccountGrantSecretName('ops'), 'grant-shared-0012');
+    nylasGrant('code-1', 'grant-curia-0013', 'assistant@office.com');
+    const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null }), code: 'code-1' }, deps);
+    expect(res.outcome).toBe('reconnected');
+    expect(vault.get(emailAccountGrantSecretName('curia'))).toBe('grant-curia-0013');
+    expect(deleteGrant).not.toHaveBeenCalled();
+  });
+
+  it('a Curia grant write that cannot be audited is not made, and the new account is removed', async () => {
+    nylasGrant('code-1', 'grant-curia-0014', 'assistant@office.com');
+    const publish = deps.bus.publish;
+    deps = { ...deps, bus: { publish: async (layer, event) => {
+      if (event.type === 'secret.changed') throw new Error('audit down');
+      return publish(layer, event);
+    } } };
+    const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null }), code: 'code-1' }, deps);
+    expect(res).toMatchObject({ outcome: 'failed', restartScheduled: false });
+    expect(await repo.list()).toEqual([]);
+    expect(storedGrants()).toEqual([]);
+    expect(scheduleProcessExit).not.toHaveBeenCalled();
+    // Stored nowhere, so the fresh grant is revoked.
+    expect(deleteGrant).toHaveBeenCalledWith('grant-curia-0014');
+    expectOneFinished('failed');
   });
 
   it("a second Curia address gets a slug of its local part, suffixed on collision", async () => {
