@@ -4,6 +4,7 @@ import { apiFetch } from '../api';
 import { SettingsLayout } from './SettingsPage';
 import { errorMessage } from '../components/settings/ConfigHistory';
 import { PrincipalMailboxesSection } from '../components/PrincipalMailboxesSection';
+import { NylasSignInSetupSection } from '../components/NylasSignInSetupSection';
 
 // Settings → Behaviour → Email & Calendar (#2475): the principal's own mailboxes and the
 // calendars read through them. Curia's own email accounts stay under Channels → Email.
@@ -96,6 +97,8 @@ function EmailCalendarSection() {
           Couldn&apos;t check whether the email channel is set up: {keyState.message}
         </p>
       )}
+
+      <NylasSignInSetupSection />
 
       <section className="settings-section">
         <div className="settings-section-body">

@@ -31,6 +31,7 @@ import {
   validateNylasMessageId,
 } from '../channels/email/nylas-message-id.js';
 import type { ChannelIdentity } from '../contacts/types.js';
+import type { NylasSignInReadiness } from '../nylas/signin-readiness.js';
 import { isCaretOrDeleteKey, keyedCharacter, provenanceSourceText } from '../contacts/identifier-provenance.js';
 import { mainFrameProse } from './_shared/web-page-content.js';
 import { SENDER_ONLY_CC_REFUSAL } from './_shared/principal-directed.js';
@@ -414,6 +415,7 @@ export class ExecutionLayer {
   private phoneAppReady?: () => Promise<boolean>;
   private emailChannelStatus?: () => Promise<EmailChannelStatus>;
   private principalMailboxReady?: () => Promise<PrincipalMailboxReadiness>;
+  private nylasSignInReadiness?: () => Promise<NylasSignInReadiness>;
   private curiaEmailAddresses?: () => Promise<string[]>;
   private agentRegistry?: AgentRegistry;
   private contactService?: ContactService;
@@ -545,6 +547,7 @@ export class ExecutionLayer {
     emailChannelStatus?: () => Promise<EmailChannelStatus>;
     /** setup-status: a live principal mailbox passed its last canary (#2475). */
     principalMailboxReady?: () => Promise<PrincipalMailboxReadiness>;
+    nylasSignInReadiness?: () => Promise<NylasSignInReadiness>;
     /** ceo-inbox list/search: Curia's own addresses, read live (#2409). */
     curiaEmailAddresses?: () => Promise<string[]>;
     confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
@@ -588,6 +591,7 @@ export class ExecutionLayer {
     this.phoneAppReady = options?.phoneAppReady;
     this.emailChannelStatus = options?.emailChannelStatus;
     this.principalMailboxReady = options?.principalMailboxReady;
+    this.nylasSignInReadiness = options?.nylasSignInReadiness;
     this.curiaEmailAddresses = options?.curiaEmailAddresses;
     this.agentRegistry = options?.agentRegistry;
     this.contactService = options?.contactService;
@@ -693,6 +697,7 @@ export class ExecutionLayer {
       phoneAppReady: this.phoneAppReady,
       emailChannelStatus: this.emailChannelStatus,
       principalMailboxReady: this.principalMailboxReady,
+      nylasSignInReadiness: this.nylasSignInReadiness,
       curiaEmailAddresses: this.curiaEmailAddresses,
       confidencePipeline: this.confidencePipeline,
       // tempFileStore is handled as a special case in the injection loop (writeTempFile closure).

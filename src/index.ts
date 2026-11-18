@@ -98,6 +98,7 @@ import { ContactResolver } from './contacts/contact-resolver.js';
 import { createContactDuplicateDetected, createContactElevated, createContactMerged } from './bus/events.js';
 import { NylasClient } from './channels/email/nylas-client.js';
 import { nylasApiUri } from './nylas/region.js';
+import { checkNylasSignIn, createNylasSignInReaders, type NylasSignInReadiness } from './nylas/signin-readiness.js';
 import { CalendarRouter, calendarRouterEnabled } from './channels/calendar/calendar-router.js';
 import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
@@ -3149,7 +3150,19 @@ async function main(): Promise<void> {
     }
     return triageServicesCache;
   };
-  const executionLayer = new ExecutionLayer(toolRegistry, logger, { triageServices, bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, calendarRouter, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, principalMailboxes, cardUseRepo, cardUseService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, principalMailboxReady: () => healthService.principalMailboxReady(), curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime, turnActivity,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
+  // Mailbox sign-in readiness (#2361). Reads the Nylas key and region live on every call, so a key
+  // saved from the console counts without a restart. It asks Nylas, so it is a network call.
+  const nylasSignInReaders = createNylasSignInReaders({ secrets: secretsService, env: process.env, logger });
+  const nylasSignInReadiness = (): Promise<NylasSignInReadiness> =>
+    checkNylasSignIn({ ...nylasSignInReaders, appOrigin: config.appOrigin, logger });
+  // One info line at boot when sign-in is unavailable. Fire-and-forget: boot never waits on Nylas,
+  // and an unreachable Nylas is a reason to report, not an error.
+  void nylasSignInReadiness().then((r) => {
+    if (!r.ready) logger.info({ reason: r.reason }, `mailbox sign-in unavailable: ${r.reason}`);
+  }).catch((err: unknown) => {
+    logger.warn({ errName: err instanceof Error ? err.name : typeof err }, 'mailbox sign-in readiness check failed at boot');
+  });
+  const executionLayer = new ExecutionLayer(toolRegistry, logger, { triageServices, bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, calendarRouter, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, principalMailboxes, cardUseRepo, cardUseService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, principalMailboxReady: () => healthService.principalMailboxReady(), nylasSignInReadiness, curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime, turnActivity,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
     findInFlight: (targetAgent: string, originConversationId: string) =>
       findInFlightPendingDelegation(pool, { targetAgent, originConversationId }),
     acquireRunning: (params: Parameters<typeof acquireRunningDelegation>[1]) =>

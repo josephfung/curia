@@ -60,6 +60,7 @@ import { channelRegistryRoutes } from './routes/channel-registry.js';
 import { mcpRegistryRoutes } from './routes/mcp-registry.js';
 import { vaultRoutes } from './routes/vault.js';
 import { emailAccountsRoutes } from './routes/email-accounts.js';
+import { nylasSetupRoutes } from './routes/nylas-setup.js';
 import { principalMailboxesRoutes } from './routes/principal-mailboxes.js';
 import { EmailAccountsRepo } from '../email/email-accounts-repo.js';
 import { SecretUsageRepo } from '../../secrets/secret-usage-repo.js';
@@ -631,6 +632,18 @@ export class HttpAdapter implements Channel {
         secretsService: this.config.secretsService,
         webAppBootstrapSecret,
         sessions,
+      });
+    }
+
+    // Nylas mailbox sign-in setup from the API key (#2361): region, callback URL, Google connector.
+    if (webAppBootstrapSecret && this.config.secretsService) {
+      await this.app.register(nylasSetupRoutes, {
+        secretsService: this.config.secretsService,
+        appOrigin,
+        webAppBootstrapSecret,
+        sessions,
+        bus,
+        logger,
       });
     }
 

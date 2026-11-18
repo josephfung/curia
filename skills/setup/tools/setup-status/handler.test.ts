@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import * as yaml from 'js-yaml';
 import { SetupStatusHandler, parseCatalog } from './handler.js';
 import type { ToolContext, EmailChannelStatus, PrincipalMailboxReadiness } from '../../../../src/skills/types.js';
+import type { NylasSignInReadiness } from '../../../../src/nylas/signin-readiness.js';
 import type { EntityMemory } from '../../../../src/memory/entity-memory.js';
 
 // ── EntityMemory mock helpers ────────────────────────────────────────────────
@@ -123,6 +124,7 @@ function makeCtx(overrides: Partial<{
   phoneAppReady: () => Promise<boolean>;
   emailChannelStatus: () => Promise<EmailChannelStatus>;
   principalMailboxReady: () => Promise<PrincipalMailboxReadiness>;
+  nylasSignInReadiness: () => Promise<NylasSignInReadiness>;
   browserContext: object | null;
   liveMailboxIds: string[];
 }> = {}): ToolContext {
@@ -176,6 +178,7 @@ function makeCtx(overrides: Partial<{
     ...(overrides.phoneAppReady ? { phoneAppReady: overrides.phoneAppReady } : {}),
     ...(overrides.emailChannelStatus ? { emailChannelStatus: overrides.emailChannelStatus } : {}),
     ...(overrides.principalMailboxReady ? { principalMailboxReady: overrides.principalMailboxReady } : {}),
+    ...(overrides.nylasSignInReadiness ? { nylasSignInReadiness: overrides.nylasSignInReadiness } : {}),
     ...(overrides.browserContext !== undefined ? { browserService: { browserContext: overrides.browserContext } } : {}),
   } as unknown as ToolContext;
 }
@@ -190,7 +193,7 @@ describe('setup-status', () => {
     });
 
     it('declares the optional capabilities its checks read', () => {
-      expect(manifest.optional_capabilities).toEqual(expect.arrayContaining(['phoneAppReady', 'emailChannelStatus', 'principalMailboxReady', 'browserService']));
+      expect(manifest.optional_capabilities).toEqual(expect.arrayContaining(['phoneAppReady', 'emailChannelStatus', 'principalMailboxReady', 'nylasSignInReadiness', 'browserService']));
     });
 
     it('offers the Tavily key web-search reads as the upgrade', () => {
@@ -321,6 +324,20 @@ describe('setup-status', () => {
       const task = data.tasks.find(t => t.id === 'principal_mailboxes');
       expect(task?.status).toBe(expected);
       expect(task?.docs_url).toBe('/get-started/principal-email-calendar');
+      expect(task?.handoff_path).toBe('/settings/email-calendar');
+    });
+
+    it.each([
+      ['sign-in is ready', { nylasSignInReadiness: async (): Promise<NylasSignInReadiness> => ({ ready: true, applicationId: 'app-1', region: 'us' }) }, 'done'],
+      ['sign-in is not ready', { nylasSignInReadiness: async (): Promise<NylasSignInReadiness> => ({ ready: false, reason: 'no_google_connector', detail: 'x' }) }, 'pending'],
+      ['the check throws', { nylasSignInReadiness: async (): Promise<NylasSignInReadiness> => { throw new Error('boom'); } }, 'pending'],
+      ['the check is absent', {}, 'pending'],
+    ] as const)('mailbox sign-in: %s → %s', async (_name, overrides, expected) => {
+      const result = await handler.execute(makeCtx(overrides));
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string; handoff_path?: string }> } }).data;
+      const task = data.tasks.find(t => t.id === 'mailbox_signin');
+      expect(task?.status).toBe(expected);
       expect(task?.handoff_path).toBe('/settings/email-calendar');
     });
 
