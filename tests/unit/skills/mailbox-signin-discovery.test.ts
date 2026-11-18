@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import * as yaml from 'js-yaml';
+import semver from 'semver';
 import { loadRegistryDefaults } from '../../../src/registry/reconcile.js';
 import { SkillRegistry } from '../../../src/skills/skill-registry.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
@@ -34,7 +35,9 @@ describe('mailbox-signin-link registration', () => {
 
   it('declares the shape the plan asks for', () => {
     const m = loadManifest();
-    expect(m.version).toBe('0.1.0');
+    // A floor, not an exact pin: the release PR bumps versions.
+    expect(semver.valid(m.version)).not.toBeNull();
+    expect(semver.gte(m.version, '0.1.0')).toBe(true);
     expect(m.action_risk).toBe('none');
     expect(m.sensitivity).toBe('elevated');
     expect(m.capabilities).toEqual(['mailboxSignIn']);

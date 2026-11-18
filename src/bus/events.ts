@@ -1087,8 +1087,9 @@ interface PrincipalMailboxChangedPayload {
   warning?: boolean;
 }
 
-// PrincipalMailboxConnectedPayload — a mailbox was connected or re-connected through Nylas hosted
-// sign-in (#2361). Audit-only. Carries the mailbox id — NEVER a grant id or an address.
+// PrincipalMailboxConnectedPayload — the first-ever principal mailbox registry row was created
+// through Nylas hosted sign-in (#2361). It does not fire for a reconnect or a second mailbox; those
+// end in mailbox_signin.finished. Audit-only. Carries the mailbox id — NEVER a grant id or an address.
 interface PrincipalMailboxConnectedPayload {
   mailboxId: string;
 }
