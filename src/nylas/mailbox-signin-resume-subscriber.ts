@@ -48,7 +48,8 @@ function reason(outcome: MailboxSignInOutcome, clientId: string | undefined, ope
       return 'the sign-in was cancelled on the Google consent screen.';
     case 'admin_blocked':
       return operatorNotified
-        ? `the Google Workspace administrator's policy blocks this app. The operator has been told: an administrator must mark ${clientIdPhrase(clientId)} as Trusted in the Google Admin console (Security → API controls → App access control).`
+        // A published notice, not a confirmed email: the send can still fail at the provider.
+        ? `the Google Workspace administrator's policy blocks this app. Curia asked for a notice to be sent to the operator; either way, an administrator must mark ${clientIdPhrase(clientId)} as Trusted in the Google Admin console (Security → API controls → App access control).`
         : `the Google Workspace administrator's policy blocks this app. I couldn't notify the operator; ask them to mark the app Trusted in the Google Workspace admin console (${clientIdPhrase(clientId)}, under Security → API controls → App access control).`;
     case 'org_internal':
       return "the Google Cloud project's consent screen is set to Internal, so accounts outside its organisation cannot sign in; the operator must set it to External.";
@@ -71,7 +72,8 @@ function reason(outcome: MailboxSignInOutcome, clientId: string | undefined, ope
 export interface ResumeLineOptions {
   /** admin_blocked: the Google OAuth client id to trust, when known. */
   clientId?: string;
-  /** admin_blocked: whether the operator notice was actually sent. Absent: not sent. */
+  /** admin_blocked: whether the operator notice was requested (published to the outbound
+   *  gateway; delivery is not confirmed). Absent: not requested. */
   operatorNotified?: boolean;
   /** Whether Curia restarts after this sign-in. Absent: no restart. */
   restartScheduled?: boolean;
@@ -80,7 +82,7 @@ export interface ResumeLineOptions {
 /**
  * The outcome line the resumed agent reads. Success: "… connected — continue". Otherwise the
  * plain reason and a pointer to a fresh link; admin_blocked also names the client id to trust,
- * and says the operator was told only when the notice went out.
+ * and says a notice to the operator was requested only when it was published (not that it arrived).
  */
 export function mailboxSignInResumeLine(outcome: MailboxSignInOutcome, target: SignInTarget, opts: ResumeLineOptions = {}): string {
   if (outcome === 'connected' || outcome === 'reconnected') {
@@ -216,7 +218,8 @@ export class MailboxSignInResumeSubscriber {
     }
   }
 
-  /** True when the notice was sent. Never throws: the notice is best effort and the resume still runs. */
+  /** True when the notice was published (the gateway accepted it; delivery is not confirmed).
+   *  Never throws: the notice is best effort and the resume still runs. */
   private async notifyOperator(target: SignInTarget, clientId: string | undefined, eventId: string): Promise<boolean> {
     const notifier = this.deps.notifier;
     const ceoEmail = notifier?.principalEmail();
