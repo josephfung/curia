@@ -748,7 +748,8 @@ describe('holderFromAgentTask', () => {
   // means the principal's authority, not their identity.
   it('does not mark an unauthenticated principal originator as the principal', () => {
     expect(stamped({ ...principal, authenticated: false }).originatorIsPrincipal).toBe(false);
-    const { authenticated: _omitted, ...missing } = principal;
+    const missing = { ...principal };
+    delete (missing as { authenticated?: boolean }).authenticated;
     expect(stamped(missing).originatorIsPrincipal).toBe(false);
   });
 
