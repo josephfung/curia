@@ -50,14 +50,19 @@ describeIf('mailbox sign-in callback', () => {
   // Per-test state, rebuilt in beforeEach.
   let vault: Map<string, string>;
   let grants: Map<string, NylasGrantInfo>;
+  /** Nylas's created_at per grant id; an entry set to undefined reads as an undated grant. */
+  let createdAt: Map<string, Date | undefined>;
   let codes: Map<string, string>;
   let published: BusEvent[];
+  /** Event types published through publishDetached, and the order of publishes and the restart. */
+  let detached: string[];
+  let sequence: string[];
   let logLines: Array<Record<string, unknown>>;
   let rawLog: string[];
   let exchangeCode: Mock<NylasAppClient['exchangeCode']>;
   let deleteGrant: Mock<NylasAppClient['deleteGrant']>;
   let getApplication: Mock<NylasAppClient['getApplication']>;
-  let scheduleProcessExit: Mock<(delayMs: number) => void>;
+  let scheduleRestart: Mock<(delayMs: number) => void>;
   let secretsSet: Mock<(name: string, value: string) => Promise<void>>;
   /** Every (key, base URL) the admin's grant lookup used. */
   let lookups: Array<{ apiKey: string; apiUri: string }>;
@@ -91,8 +96,11 @@ describeIf('mailbox sign-in callback', () => {
     }
     vault = new Map();
     grants = new Map();
+    createdAt = new Map();
     codes = new Map();
     published = [];
+    detached = [];
+    sequence = [];
     logLines = [];
     rawLog = [];
     const logger = pino({ level: 'debug' }, {
@@ -114,9 +122,11 @@ describeIf('mailbox sign-in callback', () => {
     const getGrant = vi.fn(async (grantId: string) => {
       const g = grants.get(grantId);
       if (!g) throw new NylasAppError('Nylas get grant failed: HTTP 404', 404);
-      return g;
+      // Undated grants are dated "now", after the link was minted: created by this sign-in. The
+      // minute's margin keeps a host/DB clock difference from making it look older.
+      return { ...g, createdAt: createdAt.has(grantId) ? createdAt.get(grantId) : new Date(Date.now() + 60_000) };
     });
-    scheduleProcessExit = vi.fn<(delayMs: number) => void>();
+    scheduleRestart = vi.fn<(delayMs: number) => void>(() => { sequence.push('restart'); });
 
     secretsSet = vi.fn<(name: string, value: string) => Promise<void>>(async (name, value) => { vault.set(name, value); });
     const secrets = {
@@ -178,8 +188,11 @@ describeIf('mailbox sign-in callback', () => {
       principalAdmin,
       emailAccounts: repo,
       secrets,
-      bus: { publish: async (_layer, event) => { published.push(event); } },
-      scheduleProcessExit,
+      bus: {
+        publish: async (_layer, event) => { published.push(event); sequence.push(event.type); },
+        publishDetached: async (_layer, event) => { published.push(event); detached.push(event.type); sequence.push(event.type); },
+      },
+      scheduleRestart,
       logger,
     };
   });
@@ -502,7 +515,7 @@ describeIf('mailbox sign-in callback', () => {
     nylasGrant('code-1', 'grant-curia-0006', 'Assistant@Office.com');
     const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null }), code: 'code-1' }, deps);
     expect(res).toMatchObject({ outcome: 'connected', target: 'curia', restartScheduled: true });
-    expect(scheduleProcessExit).toHaveBeenCalledWith(3000);
+    expect(scheduleRestart).toHaveBeenCalledWith(3000);
     let rows = await repo.list();
     expect(rows).toHaveLength(1);
     // No account delivers notifications until one is named 'curia', so the first one takes it.
@@ -519,7 +532,8 @@ describeIf('mailbox sign-in callback', () => {
     published = [];
     await repo.update('curia', { enabled: false });
     nylasGrant('code-2', 'grant-curia-0007', 'assistant@office.com');
-    const again = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null }), code: 'code-2' }, deps);
+    // An operator link: an agent-minted one is refused once Curia has an account (R8).
+    const again = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null, origin: false }), code: 'code-2' }, deps);
     expect(again).toMatchObject({ outcome: 'reconnected', restartScheduled: true });
     rows = await repo.list();
     expect(rows).toHaveLength(1);
@@ -537,11 +551,11 @@ describeIf('mailbox sign-in callback', () => {
     vault.set(emailAccountGrantSecretName('curia'), 'grant-curia-0006');
     nylasGrant('code-1', 'grant-curia-0006', 'assistant@office.com');
     secretsSet.mockClear();
-    const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null }), code: 'code-1' }, deps);
+    const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null, origin: false }), code: 'code-1' }, deps);
     expect(res).toMatchObject({ outcome: 'reconnected', restartScheduled: false });
     expect(secretsSet).not.toHaveBeenCalled();
     expect(ofType('secret.changed')).toHaveLength(0);
-    expect(scheduleProcessExit).not.toHaveBeenCalled();
+    expect(scheduleRestart).not.toHaveBeenCalled();
     expect(deleteGrant).not.toHaveBeenCalled();
     expect(expectOneFinished('reconnected')).not.toHaveProperty('restartScheduled');
   });
@@ -552,7 +566,7 @@ describeIf('mailbox sign-in callback', () => {
     vault.set(emailAccountGrantSecretName('curia'), 'grant-shared-0012');
     vault.set(emailAccountGrantSecretName('ops'), 'grant-shared-0012');
     nylasGrant('code-1', 'grant-curia-0013', 'assistant@office.com');
-    const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null }), code: 'code-1' }, deps);
+    const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null, origin: false }), code: 'code-1' }, deps);
     expect(res.outcome).toBe('reconnected');
     expect(vault.get(emailAccountGrantSecretName('curia'))).toBe('grant-curia-0013');
     expect(deleteGrant).not.toHaveBeenCalled();
@@ -561,7 +575,7 @@ describeIf('mailbox sign-in callback', () => {
   it('a Curia grant write that cannot be audited is not made, and the new account is removed', async () => {
     nylasGrant('code-1', 'grant-curia-0014', 'assistant@office.com');
     const publish = deps.bus.publish;
-    deps = { ...deps, bus: { publish: async (layer, event) => {
+    deps = { ...deps, bus: { ...deps.bus, publish: async (layer, event) => {
       if (event.type === 'secret.changed') throw new Error('audit down');
       return publish(layer, event);
     } } };
@@ -569,7 +583,7 @@ describeIf('mailbox sign-in callback', () => {
     expect(res).toMatchObject({ outcome: 'failed', restartScheduled: false });
     expect(await repo.list()).toEqual([]);
     expect(storedGrants()).toEqual([]);
-    expect(scheduleProcessExit).not.toHaveBeenCalled();
+    expect(scheduleRestart).not.toHaveBeenCalled();
     // Stored nowhere, so the fresh grant is revoked.
     expect(deleteGrant).toHaveBeenCalledWith('grant-curia-0014');
     expectOneFinished('failed');
@@ -579,7 +593,7 @@ describeIf('mailbox sign-in callback', () => {
     await repo.create({ name: 'curia', selfEmail: 'curia@office.com' });
     await repo.create({ name: 'ops-desk', selfEmail: 'other@office.com' });
     nylasGrant('code-1', 'grant-ops-0008', 'Ops.Desk@office.com');
-    const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null }), code: 'code-1' }, deps);
+    const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null, origin: false }), code: 'code-1' }, deps);
     expect(res.outcome).toBe('connected');
     expect((await repo.findBySelfEmail('ops.desk@office.com'))?.name).toBe('ops-desk-2');
   });
@@ -592,7 +606,7 @@ describeIf('mailbox sign-in callback', () => {
     const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null }), code: 'code-2' }, deps);
     expect(res).toMatchObject({ outcome: 'refused', restartScheduled: false });
     expect(await repo.list()).toEqual([]);
-    expect(scheduleProcessExit).not.toHaveBeenCalled();
+    expect(scheduleRestart).not.toHaveBeenCalled();
     // The grant is the live principal mailbox's: never revoked.
     expect(deleteGrant).not.toHaveBeenCalled();
     expectOneFinished('refused');
@@ -617,7 +631,7 @@ describeIf('mailbox sign-in callback', () => {
     expect(res).toMatchObject({ outcome: 'wrong_account', target: 'curia', restartScheduled: false });
     expect(await repo.list()).toEqual([]);
     expect(storedGrants()).toEqual([]);
-    expect(scheduleProcessExit).not.toHaveBeenCalled();
+    expect(scheduleRestart).not.toHaveBeenCalled();
     expectOneFinished('wrong_account');
   });
 
@@ -637,7 +651,7 @@ describeIf('mailbox sign-in callback', () => {
     const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null }), code: 'code-1' }, deps);
     expect(res).toMatchObject({ outcome: 'refused', restartScheduled: false });
     expect(await repo.list()).toEqual([]);
-    expect(scheduleProcessExit).not.toHaveBeenCalled();
+    expect(scheduleRestart).not.toHaveBeenCalled();
     expect(deleteGrant).not.toHaveBeenCalled();
     expectOneFinished('refused');
   });
@@ -698,5 +712,87 @@ describeIf('mailbox sign-in callback', () => {
       errMessage: 'vault write failed', mailboxId: 'example',
     });
     expectNoGrantInLogs();
+  });
+
+  it('publishes mailbox_signin.finished detached, so the browser does not wait on the resumed turn', async () => {
+    nylasGrant('code-1', 'grant-boss-0001', 'boss@example.com');
+    const res = await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps);
+    expect(res.outcome).toBe('connected');
+    // Only the finished event: the registry audit rows stay awaited (a refused audit blocks the write).
+    expect(detached).toEqual(['mailbox_signin.finished']);
+    expectOneFinished('connected');
+  });
+
+  it('wrong account whose grant predates the link is NOT revoked: it may be another integration\'s', async () => {
+    nylasGrant('code-1', 'grant-other-app-0030', 'someone@else.com');
+    createdAt.set('grant-other-app-0030', new Date(Date.now() - 24 * 60 * 60_000));
+    const res = await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps);
+    expect(res.outcome).toBe('wrong_account');
+    expect(deleteGrant).not.toHaveBeenCalled();
+    expect(logLines.some((l) => l['msg'] === 'mailbox sign-in: the grant was not shown to be new; leaving it in Nylas')).toBe(true);
+    expectOneFinished('wrong_account');
+  });
+
+  it('a grant Nylas does not date is NOT revoked (unknown ownership is kept)', async () => {
+    nylasGrant('code-1', 'grant-undated-0031', 'boss@example.com', { provider: 'microsoft' });
+    createdAt.set('grant-undated-0031', undefined);
+    const res = await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps);
+    expect(res.outcome).toBe('not_google');
+    expect(deleteGrant).not.toHaveBeenCalled();
+  });
+
+  it('a grant that could not be read is NOT revoked', async () => {
+    codes.set('code-1', 'grant-unreadable-0032');
+    const res = await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps);
+    expect(res.outcome).toBe('failed');
+    expect(deleteGrant).not.toHaveBeenCalled();
+  });
+
+  it('an agent-minted Curia link is refused once Curia has an account, before any exchange (R8)', async () => {
+    await repo.create({ name: 'curia', selfEmail: 'curia@office.com' });
+    nylasGrant('code-1', 'grant-second-0033', 'second@office.com');
+    const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null }), code: 'code-1' }, deps);
+    expect(res).toMatchObject({ outcome: 'refused', target: 'curia', restartScheduled: false });
+    expect(exchangeCode).not.toHaveBeenCalled();
+    expect((await repo.list()).map((a) => a.name)).toEqual(['curia']);
+    expect(storedGrants()).toEqual([]);
+    expect(scheduleRestart).not.toHaveBeenCalled();
+    expect(logLines.some((l) => l['reason'] === 'curia_mailbox_exists')).toBe(true);
+    expectOneFinished('refused');
+  });
+
+  it('an operator-minted Curia link still adds a second account (R8 limits agents only)', async () => {
+    await repo.create({ name: 'curia', selfEmail: 'curia@office.com' });
+    nylasGrant('code-1', 'grant-second-0034', 'second@office.com');
+    const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null, origin: false }), code: 'code-1' }, deps);
+    expect(res).toMatchObject({ outcome: 'connected', restartScheduled: true });
+    expect((await repo.list())).toHaveLength(2);
+  });
+
+  it('an agent-minted Curia link is refused when the account list cannot be read (fail closed, R8)', async () => {
+    nylasGrant('code-1', 'grant-curia-0035', 'assistant@office.com');
+    deps = { ...deps, emailAccounts: { ...repo, list: async () => { throw new Error('db down'); },
+      findBySelfEmail: (e: string) => repo.findBySelfEmail(e),
+      createForAddress: (e: string, o: Parameters<EmailAccountsRepo['createForAddress']>[1]) => repo.createForAddress(e, o),
+      update: (n: string, u: Parameters<EmailAccountsRepo['update']>[1]) => repo.update(n, u),
+      delete: (n: string) => repo.delete(n) } };
+    const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null }), code: 'code-1' }, deps);
+    expect(res.outcome).toBe('refused');
+    expect(exchangeCode).not.toHaveBeenCalled();
+  });
+
+  it('the Curia restart is scheduled last, after the grant audit and the finished event', async () => {
+    nylasGrant('code-1', 'grant-curia-0036', 'assistant@office.com');
+    const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null }), code: 'code-1' }, deps);
+    expect(res).toMatchObject({ outcome: 'connected', restartScheduled: true });
+    expect(sequence).toEqual(['secret.changed', 'secret.changed', 'mailbox_signin.finished', 'restart']);
+  });
+
+  it('a restart that cannot be scheduled is reported as not scheduled', async () => {
+    nylasGrant('code-1', 'grant-curia-0037', 'assistant@office.com');
+    scheduleRestart.mockImplementationOnce(() => { throw new Error('no timers'); });
+    const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null }), code: 'code-1' }, deps);
+    expect(res).toMatchObject({ outcome: 'connected', restartScheduled: false });
+    expect(logLines.some((l) => l['level'] === 50 && String(l['msg']).includes('could not schedule the restart'))).toBe(true);
   });
 });

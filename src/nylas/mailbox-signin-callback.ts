@@ -7,13 +7,18 @@
 //   2. A provider error is mapped (admin block, org-internal, cancel) without an exchange.
 //   3-5. Exchange the code, read the grant, and check provider, scopes and (for the principal) the
 //      address the link was pinned to.
-//   6. A grant that ends up stored nowhere is revoked, but only when no principal mailbox and no
-//      Curia account holds it in the vault (Nylas hands back the same grant id for an account that
-//      already has one, so a "stray" grant may be a live mailbox's).
+//   6. A grant that ends up stored nowhere is revoked, but only when this attempt can show it
+//      created the grant (Nylas dates it at or after the link was minted) and no principal mailbox
+//      and no Curia account holds it in the vault. Nylas hands back the same grant id for an
+//      account that already has one, so a "stray" grant may be a live mailbox's or another
+//      integration's; a grant of unknown age is kept.
 //   7-8. Write through the existing registries: PrincipalMailboxAdmin for the principal (live at
-//      once), email_accounts plus a controlled restart for Curia.
+//      once), email_accounts plus a controlled restart for Curia. An agent-minted Curia link is
+//      refused once Curia has any email account (R8, rechecked here: a link minted during setup
+//      must not add a second mailbox after the first one connected).
 //   9. Publish mailbox_signin.finished with the token's origin, so the agent that sent the link
-//      can continue.
+//      can continue. Detached: the browser is not kept waiting on the resumed agent turn.
+//  10. After a Curia mailbox write, the graceful restart (SIGTERM) is scheduled, last.
 //
 // Secrets: the auth code, the raw state, the grant id and the API key never reach a log line, an
 // event payload or the result. Nylas errors are logged with grantSafeErrorFields only.
@@ -26,7 +31,7 @@ import {
   createPrincipalMailboxConnected,
   createSecretChanged,
 } from '../bus/events.js';
-import type { NylasAppClient } from './app-client.js';
+import type { NylasAppClient, NylasGrantInfo } from './app-client.js';
 import { nylasApiUri, type NylasRegion } from './region.js';
 import {
   MAILBOX_SIGNIN_SCOPES,
@@ -64,7 +69,13 @@ export interface MailboxSignInCallbackResult {
   restartScheduled: boolean;
 }
 
-type CallbackClient = Pick<NylasAppClient, 'getApplication' | 'exchangeCode' | 'getGrant' | 'deleteGrant'>;
+/** The grant as the callback reads it. `createdAt` (Nylas's created_at) is optional: without it
+ *  a grant's age is unknown, and a grant of unknown age is never revoked. */
+export type CallbackGrantInfo = NylasGrantInfo & { createdAt?: Date };
+
+type CallbackClient = Pick<NylasAppClient, 'getApplication' | 'exchangeCode' | 'deleteGrant'> & {
+  getGrant(grantId: string): Promise<CallbackGrantInfo>;
+};
 
 export interface MailboxSignInCallbackDeps {
   signIn: Pick<MailboxSignInService, 'claim'>;
@@ -82,13 +93,14 @@ export interface MailboxSignInCallbackDeps {
   principalAdmin?: Pick<PrincipalMailboxAdmin, 'add' | 'replaceGrant'>;
   emailAccounts: Pick<EmailAccountsRepo, 'list' | 'findBySelfEmail' | 'createForAddress' | 'update' | 'delete'>;
   secrets: { get(name: string): Promise<string | null>; set(name: string, value: string): Promise<void> };
-  bus: Pick<EventBus, 'publish'>;
-  /** Exits the process after the delay so the supervisor restarts it (as the setup route does). */
-  scheduleProcessExit: (delayMs: number) => void;
+  bus: Pick<EventBus, 'publish' | 'publishDetached'>;
+  /** Starts the graceful shutdown (SIGTERM, as POST /api/system/restart does) after the delay, so
+   *  the email adapters drain and the supervisor brings the process back with the new mailbox. */
+  scheduleRestart: (delayMs: number) => void;
   logger: Logger;
 }
 
-/** How long after a Curia-mailbox sign-in the process exits, so the done page can render first. */
+/** How long after a Curia-mailbox sign-in the restart starts, so the done page can render first. */
 export const CURIA_MAILBOX_RESTART_DELAY_MS = 3000;
 
 /** The account name the first Curia mailbox takes: only the 'curia' adapter delivers notifications. */
@@ -175,13 +187,20 @@ export async function handleMailboxSignInCallback(
     // Never on `refused`: the account was the right kind, so its grant is likely held somewhere
     // (a registry this scan cannot see, or the flat fallback) and revoking it would cut it off.
     if (!isSuccess(settled.outcome) && settled.outcome !== 'refused' && held.grantId !== undefined && held.client !== undefined) {
-      await revokeIfUnused(held.grantId, held.client, deps, log);
+      if (createdByThisAttempt(held.grantCreatedAt, row.created_at)) {
+        await revokeIfUnused(held.grantId, held.client, deps, log);
+      } else {
+        // Nylas returns an account's existing grant id, so an older (or undated) grant may be
+        // another integration's, which no vault scan here can see. Kept, never deleted.
+        log.info({ outcome: settled.outcome }, 'mailbox sign-in: the grant was not shown to be new; leaving it in Nylas');
+      }
     }
   }
 
-  // 9. One finished event per claimed link, whatever the outcome.
+  // 9. One finished event per claimed link, whatever the outcome. Detached: the write-ahead audit
+  // row is written before this returns, but the resumed agent turn is not awaited.
   try {
-    await deps.bus.publish('system', createMailboxSignInFinished({
+    await deps.bus.publishDetached('system', createMailboxSignInFinished({
       target: row.target,
       outcome: settled.outcome,
       ...(settled.mailboxId !== undefined ? { mailboxId: settled.mailboxId } : {}),
@@ -191,14 +210,31 @@ export async function handleMailboxSignInCallback(
   } catch (err) {
     log.error({ ...grantSafeErrorFields(err), outcome: settled.outcome }, 'mailbox sign-in callback: could not publish mailbox_signin.finished');
   }
+  // 10. Last, after the mailbox write and its audit rows: the email adapters are wired at boot, so
+  // Curia's new grant is picked up by a graceful restart.
+  if (settled.restartScheduled) {
+    try {
+      deps.scheduleRestart(CURIA_MAILBOX_RESTART_DELAY_MS);
+    } catch (err) {
+      log.error({ ...grantSafeErrorFields(err) }, 'mailbox sign-in: could not schedule the restart; restart Curia to use the mailbox');
+      settled = { ...settled, restartScheduled: false };
+    }
+  }
   log.info({ target: row.target, outcome: settled.outcome, mailboxId: settled.mailboxId, restartScheduled: settled.restartScheduled }, 'mailbox sign-in finished');
   return { ...settled, target: row.target };
+}
+
+/** True only when Nylas dates the grant at or after the link was minted: this attempt made it. */
+function createdByThisAttempt(grantCreatedAt: Date | undefined, mintedAt: Date): boolean {
+  return grantCreatedAt !== undefined && !Number.isNaN(grantCreatedAt.getTime()) && grantCreatedAt.getTime() >= mintedAt.getTime();
 }
 
 /** The grant this callback obtained, kept for the revoke step if anything after it fails, and
  *  the step it had reached, for the catch-all log. */
 interface Held {
   grantId?: string;
+  /** Nylas's created_at for that grant, once read; absent means its age is unknown. */
+  grantCreatedAt?: Date;
   client?: CallbackClient;
   step?: Step;
 }
@@ -245,6 +281,12 @@ async function settle(
       log.warn('mailbox sign-in refused: there is no principal yet (setup-required mode)');
       return done('refused');
     }
+  } else if (row.agent_id !== null && (await curiaMailboxMayExist(deps, log))) {
+    // R8, rechecked now: an agent may only mint a Curia link while Curia has no email account,
+    // and that must still hold when the link is used (another link may have connected one since).
+    // Checked before the exchange, so no grant is created. Operator-minted links are not limited.
+    log.warn({ reason: 'curia_mailbox_exists' }, 'mailbox sign-in refused: an agent-minted Curia link, and Curia already has an email account');
+    return done('refused');
   }
 
   const code = typeof query.code === 'string' ? query.code : '';
@@ -292,13 +334,14 @@ async function settle(
   held.client = client;
 
   held.step = 'lookup_grant';
-  let grant: Awaited<ReturnType<CallbackClient['getGrant']>>;
+  let grant: CallbackGrantInfo;
   try {
     grant = await client.getGrant(grantId);
   } catch (err) {
     log.warn({ ...grantSafeErrorFields(err), step: 'lookup_grant', target: row.target }, 'mailbox sign-in: the new grant could not be read');
     return done('failed');
   }
+  if (grant.createdAt !== undefined) held.grantCreatedAt = grant.createdAt;
   if (grant.provider !== 'google') {
     log.info({ target: row.target, provider: grant.provider }, 'mailbox sign-in refused: not a Google account');
     return done('not_google');
@@ -438,14 +481,19 @@ async function writeCuria(
     outcome = 'connected';
   }
 
-  // The email adapters are wired at boot, so the new grant is picked up by a restart.
-  try {
-    deps.scheduleProcessExit(CURIA_MAILBOX_RESTART_DELAY_MS);
-  } catch (err) {
-    log.error({ ...grantSafeErrorFields(err) }, 'mailbox sign-in: could not schedule the restart; restart Curia to use the mailbox');
-    return done(outcome);
-  }
+  // The email adapters are wired at boot, so the new grant is picked up by a restart. It is
+  // scheduled by the caller, after the finished event (step 10).
   return done(outcome, { restartScheduled: true });
+}
+
+/** True unless it is known that Curia has no email account yet (fail closed, as mint does). */
+async function curiaMailboxMayExist(deps: MailboxSignInCallbackDeps, log: Logger): Promise<boolean> {
+  try {
+    return (await deps.emailAccounts.list()).length > 0;
+  } catch (err) {
+    log.warn({ ...grantSafeErrorFields(err) }, "mailbox sign-in: could not read whether Curia has an email account; refusing the agent's Curia link");
+    return true;
+  }
 }
 
 /** Remove an account created by this sign-in whose grant could not be saved. Never throws. */
@@ -482,7 +530,8 @@ async function uniqueMailboxId(
 /**
  * 6. Revoke a grant only when nothing holds it: no live principal mailbox, no Curia account and
  * not the flat fallback grant stores it in the vault. A failed read means "unknown", and an unknown grant is kept.
- * The ids compared here are never logged.
+ * The ids compared here are never logged. A `new` grant reaches here only once it is shown to be
+ * this attempt's (createdByThisAttempt); a `previous` grant is one Curia itself stored.
  */
 async function revokeIfUnused(
   grantId: string,

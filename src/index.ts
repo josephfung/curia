@@ -23,7 +23,7 @@ import { runner } from 'node-pg-migrate';
 import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveApprovalExpiryConfig, resolveReportFallbackConfig, resolveIdentityGateMode, resolveAutonomyGating, resolveVerificationConfig, resolveRelayBudgetConfig, resolveTurnInjectionConfig, resolveOutboundJudgeConfig, resolveOutboundRedactionConfig, OutboundConfigError, type OutboundJudgeSettings, type OutboundRedactionSettings } from './config.js';
 import { createVerificationRuntime } from './verification/index.js';
 import { createLogger } from './logger.js';
-import { HttpAdapter, scheduleProcessExit } from './channels/http/http-adapter.js';
+import { HttpAdapter } from './channels/http/http-adapter.js';
 import { hasLivePushSubscription, WebPushService } from './channels/web/push-service.js';
 import { loadVapidSetup, logVapidReadiness } from './channels/web/vapid.js';
 import { configuredReachChannels, reachChannelsFor } from './agents/principal-reach.js';
@@ -3224,7 +3224,11 @@ async function main(): Promise<void> {
     emailAccounts: emailAccountsRepo,
     secrets: secretsService,
     bus,
-    scheduleProcessExit,
+    // SIGTERM, as POST /api/system/restart does: shutdown() drains the email adapters before exit,
+    // and the supervisor brings the process back with Curia's new mailbox.
+    scheduleRestart: (delayMs) => {
+      setTimeout(() => process.kill(process.pid, 'SIGTERM'), delayMs);
+    },
     logger,
   });
   // One info line at boot when sign-in is unavailable. Fire-and-forget: boot never waits on Nylas,
