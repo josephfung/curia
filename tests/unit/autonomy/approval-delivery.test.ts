@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ApprovalDelivery } from '../../../src/autonomy/approval-delivery.js';
 import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
-import type { ActionLogRow } from '../../../src/autonomy/action-log-types.js';
+import type { ActionLogRow, ResolveResult } from '../../../src/autonomy/action-log-types.js';
 import type { OutboundGateway } from '../../../src/skills/outbound-gateway.js';
 import type { ChannelIdentity, PrincipalEmailRef } from '../../../src/contacts/types.js';
 import type { Logger } from '../../../src/logger.js';
@@ -28,6 +28,7 @@ function makeRow(overrides: Partial<ActionLogRow> = {}): ActionLogRow {
 
 function makeDelivery(opts: {
   row?: ActionLogRow | null;
+  resolve?: ResolveResult;
   claimed?: boolean;
   sendResult?: { success: boolean; messageId?: string; blockedReason?: string };
   sendThrows?: boolean;
@@ -39,6 +40,9 @@ function makeDelivery(opts: {
     findPendingByShortRef: vi.fn().mockResolvedValue(opts.row === undefined ? makeRow() : opts.row),
     findPendingByApprovalNumber: vi.fn().mockResolvedValue(opts.row === undefined ? makeRow() : opts.row),
     findAllPending: vi.fn().mockResolvedValue(opts.row === null ? [] : [opts.row ?? makeRow()]),
+    resolvePending: vi.fn().mockResolvedValue(opts.resolve ?? (opts.row === null
+      ? { found: false, reason: 'not_found', error: 'No pending approval requests' }
+      : { found: true, row: opts.row ?? makeRow() })),
     claimNotification: vi.fn().mockResolvedValue(opts.claimed ?? true),
     releaseNotification: vi.fn().mockResolvedValue(undefined),
     bindDeliveryMessage: vi.fn().mockResolvedValue(true),
@@ -410,18 +414,41 @@ describe('ApprovalDelivery — unverified requests', () => {
       expect(send.mock.calls[0]![0].message).toContain('Someone answered approval 3 from your SMS number, which can\'t be verified.');
     });
 
-    it('looks an approval number up by number', async () => {
+    it('resolves the reference as approve-action does', async () => {
       const { delivery, repo } = makeDelivery({ row: makeRow({ notificationSentAt: new Date(), approvalNumber: 3 }) });
       await delivery.redeliverForVerification('3', 'email');
-      expect(repo.findPendingByApprovalNumber).toHaveBeenCalledWith(3);
-      expect(repo.findPendingByShortRef).not.toHaveBeenCalled();
+      expect(repo.resolvePending).toHaveBeenCalledWith('3');
     });
 
     it('takes the sole pending approval when the answer named none', async () => {
       const { delivery, repo, send } = makeDelivery({ row: makeRow({ notificationSentAt: new Date(), approvalNumber: 3 }) });
       await expect(delivery.redeliverForVerification('', 'sms')).resolves.toEqual({ delivered: true, channel: 'signal' });
-      expect(repo.findAllPending).toHaveBeenCalledOnce();
+      expect(repo.resolvePending).toHaveBeenCalledWith(undefined);
       expect(send.mock.calls[0]![0].message).toContain('approval 3');
+    });
+
+    it('reports several pending approvals as ambiguous, not as none', async () => {
+      const pending = [makeRow({ approvalNumber: 3 }), makeRow({ id: 43, approvalNumber: 4 })];
+      const { delivery, send } = makeDelivery({ resolve: { found: false, reason: 'ambiguous', error: 'Multiple pending requests', pending } });
+      await expect(delivery.redeliverForVerification('', 'sms')).resolves.toMatchObject({ delivered: false, reason: 'ambiguous' });
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    // An approval not yet delivered (held by the cap, or not sent yet) is claimed, so it counts as
+    // delivered: approve-action takes it, and the safety net does not send it a second time.
+    it('claims an undelivered approval before re-sending it', async () => {
+      const { delivery, repo, send } = makeDelivery({ row: makeRow({ requesterUnverified: true, approvalNumber: 3 }) });
+      await expect(delivery.redeliverForVerification('3', 'sms')).resolves.toEqual({ delivered: true, channel: 'signal' });
+      expect(repo.claimNotification).toHaveBeenCalledWith(42);
+      expect(repo.claimNotification.mock.invocationCallOrder[0]!).toBeLessThan(send.mock.invocationCallOrder[0]!);
+    });
+
+    it('gives the claim and the hourly slot back when the re-send throws', async () => {
+      const { delivery, repo } = makeDelivery({ row: makeRow({ approvalNumber: 3 }), sendThrows: true });
+      for (let i = 0; i < 4; i++) {
+        await expect(delivery.redeliverForVerification('3', 'sms')).resolves.toMatchObject({ delivered: false, reason: 'send_failed' });
+      }
+      expect(repo.releaseNotification).toHaveBeenCalledTimes(4);
     });
 
     it('reports no verified channel when the principal has none', async () => {

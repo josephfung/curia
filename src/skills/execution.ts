@@ -1205,6 +1205,9 @@ export class ExecutionLayer {
       switch (result.reason) {
         case 'not_found':
           return baseMsg + `There is no pending approval ${ref === '' ? 'to answer' : ref}; it may have been answered or expired.`;
+        case 'ambiguous':
+          return baseMsg + 'Several approvals are pending. Ask the principal which approval number they meant; ' +
+            'Curia then sends that one to a verified channel to answer.';
         case 'rate_limited':
           return baseMsg + `Too many unverified requests this hour, so ${named} waits for the principal in the console and the next digest.`;
         case 'verified_channel_required':

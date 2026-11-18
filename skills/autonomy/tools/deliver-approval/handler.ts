@@ -50,6 +50,8 @@ export class DeliverApprovalHandler implements ToolHandler {
         case 'channel_unavailable':
           return { success: false, error: `The principal has no verified ${CHANNEL_NAMES[chosen]} identity. Channels available: ${list(result.available)}.` };
         case 'not_found':
+        // deliver() looks up one exact reference, so it never finds several.
+        case 'ambiguous':
           return { success: false, error: `No pending approval with reference ${shortRef}; it may have been resolved or expired.` };
         // GHSA-p49r-jqh2-v668: an approval raised on an unauthenticated principal turn.
         case 'verified_channel_required':
