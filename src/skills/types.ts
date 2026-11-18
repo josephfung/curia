@@ -28,6 +28,8 @@ export type ActionRisk = 'none' | 'low' | 'medium' | 'high' | 'critical' | numbe
  * Skill manifest shape — loaded from tool.json files in each skill directory.
  * Declares what the skill does, what it needs, and its security classification.
  */
+import type { NylasSignInReadiness } from '../nylas/signin-readiness.js';
+
 /** See ToolContext.emailChannelStatus. */
 export type EmailChannelStatus = 'running' | 'restart_required' | 'not_configured';
 /** Principal mailbox setup (#2475). `ready`: a live mailbox passed its canary. `pending`: no live
@@ -65,7 +67,7 @@ export interface ToolManifest {
    *  executiveProfileService, officeIdentityService, browserService, bullpenService, toolSearch,
    *  actionLogRepo, auditLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext,
    *  taskRepo, workingDocs, secretCapture, cardUse, secretResolver, userSecretIndex, taskOutreach, disclosureDecisions,
-   *  voiceSessions, phoneAppReady, emailChannelStatus, principalMailboxReady, curiaEmailAddresses.
+   *  voiceSessions, phoneAppReady, emailChannelStatus, principalMailboxReady, nylasSignInReadiness, curiaEmailAddresses.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */
@@ -199,6 +201,12 @@ export interface ToolContext {
    * `principalMailboxReady`. Absent means the setup task stays pending.
    */
   principalMailboxReady?: () => Promise<PrincipalMailboxReadiness>;
+  /**
+   * Whether mailbox sign-in through Nylas is usable right now (#2361): reads the key and region
+   * live and asks Nylas, so it is a network call. Injected for skills that declare optional
+   * capability `nylasSignInReadiness`. Absent means the setup task stays pending.
+   */
+  nylasSignInReadiness?: () => Promise<NylasSignInReadiness>;
   /**
    * Curia's own mailbox addresses, read from the email accounts table at call time
    * (#2409) — unlike `selfEmails`, which is fixed at boot. Injected for skills that

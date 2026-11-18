@@ -1030,6 +1030,11 @@ interface SecretAccessedPayload {
 // secret (`details`). Audit-only:
 // nothing subscribes to act on it. Carries the key NAME and what happened — NEVER a value.
 //
+// The `nylas_*` actions (#2361) record console actions taken WITH a vault credential rather than
+// on a secret's value: `nylas_region` writes the region setting (secretName is that key),
+// `nylas_callback` and `nylas_connector` use the Nylas API key (secretName is its key name) to
+// register the sign-in callback / create the Google connector. No value of any kind is carried.
+//
 // Two-stage, like document.console_action and operator.session. `requested` is published
 // BEFORE the vault is touched, and the console refuses the change if it cannot be recorded.
 // `completed` follows a successful write. There is no `failed` stage: a vault write that
@@ -1037,7 +1042,7 @@ interface SecretAccessedPayload {
 // not happen or whose outcome is unknown — never one known to have happened.
 interface SecretChangedPayload {
   secretName: string;
-  action: 'set' | 'delete' | 'details';
+  action: 'set' | 'delete' | 'details' | 'nylas_region' | 'nylas_callback' | 'nylas_connector';
   stage: 'requested' | 'completed';
   /** A console session, or the bootstrap-secret header with no cookie. */
   initiatedBy: 'session' | 'bootstrap_secret';

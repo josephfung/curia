@@ -18,6 +18,8 @@ type CompletionCheck =
   | { type: 'email_channel_ready' }
   // At least one live principal mailbox whose last health canary passed (#2475).
   | { type: 'principal_mailbox_ready' }
+  // Mailbox sign-in through Nylas is usable: key, https origin, callback and Google connector (#2361).
+  | { type: 'nylas_signin_ready' }
   | { type: 'browser_ready' }
   // Done once ConfigStore holds a non-empty value for the key (#2474). Presence only: the
   // setting has a working default, so "set" means the principal has made a choice.
@@ -239,6 +241,16 @@ export class SetupStatusHandler implements ToolHandler {
         }
       }
 
+      // Done when Nylas hosted sign-in is fully set up (#2361). A failed check reports pending.
+      let nylasSignInReady = false;
+      if (ctx.nylasSignInReadiness) {
+        try {
+          nylasSignInReady = (await ctx.nylasSignInReadiness()).ready;
+        } catch (err) {
+          ctx.log.warn({ errName: err instanceof Error ? err.name : typeof err }, 'setup-status: Nylas sign-in check failed — reporting pending');
+        }
+      }
+
       // Done while a browser is attached: a container that is down reads as pending (#2541).
       const browserReady = ctx.browserService?.browserContext != null;
 
@@ -319,6 +331,9 @@ export class SetupStatusHandler implements ToolHandler {
               break;
             case 'principal_mailbox_ready':
               done = principalMailboxStatus === 'ready';
+              break;
+            case 'nylas_signin_ready':
+              done = nylasSignInReady;
               break;
             case 'browser_ready':
               done = browserReady;

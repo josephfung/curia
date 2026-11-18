@@ -50,8 +50,19 @@ tasks:
     handoff_path: /channels
     completion_check:
       type: email_channel_ready
-    credential_how_to: "Get your Nylas API key at app.nylas.com (free tier works) and connect Curia's mailbox there to get its grant ID. In Settings → Channels → Email, install the channel, save the API key, add the mailbox under Email accounts (name, address, grant ID), then enable the channel and restart."
+    credential_how_to: "Get your Nylas API key at dashboard-v3.nylas.com (a production application; the free tier works). In Settings → Channels → Email, install the channel and save the API key, then add Curia's own mailbox under Email accounts (name, address, grant ID from the Nylas dashboard), enable the channel and restart. Your own Gmail accounts are connected separately, by signing in with Google (see Mailbox sign-in)."
     docs_url: /channels/email-setup
+
+  - id: mailbox_signin
+    label: "Mailbox sign-in (Nylas)"
+    value_prop: "Lets you connect your own Gmail accounts by signing in with Google, with no grant IDs to copy."
+    tier: heavy
+    handoff: console
+    handoff_path: /settings/email-calendar
+    completion_check:
+      type: nylas_signin_ready
+    credential_how_to: "Needs the Nylas API key (Settings → Channels → Email) and APP_ORIGIN set to this console's public https:// address. In Settings → Behaviour → Email & Calendar, use Detect to find the Nylas region, Register callback to add the sign-in callback URL, and paste your Google Cloud OAuth client id and secret to create the Google connector. Add the two URLs shown there to the OAuth client in Google Cloud. Check should then read Ready; no restart is needed."
+    docs_url: /get-started/principal-email-calendar
 
   - id: principal_mailboxes
     label: "Principal mailboxes and calendars"
@@ -61,7 +72,7 @@ tasks:
     handoff_path: /settings/email-calendar
     completion_check:
       type: principal_mailbox_ready
-    credential_how_to: "In Nylas, connect each Gmail account and copy its grant ID. In the console under Settings → Behaviour → Email & Calendar, add each mailbox (a short id, a label, the grant ID), use Test to confirm the address, and pick the default. Changes apply without a restart."
+    credential_how_to: "In the console under Settings → Behaviour → Email & Calendar, finish the Nylas sign-in setup at the top of the page, then add each Gmail account with Sign in with Google (no grant ID to copy). Give each a short id and a label, check the address, and pick the default. Changes apply without a restart."
     docs_url: /get-started/principal-email-calendar
 
   - id: signal
