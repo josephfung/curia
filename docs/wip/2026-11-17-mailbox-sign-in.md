@@ -95,7 +95,7 @@
 **Interfaces — Produces:** `class NylasAppClient { constructor(opts: { apiKey: string; apiUri: string; logger: Logger; fetchImpl?: typeof fetch }) }` with:
 - `getApplication(): Promise<{ applicationId: string; region: string; environment: string | null; callbackUris: string[] }>`
 - `addCallbackUri(url: string): Promise<void>` (`POST /v3/applications/redirect-uris`, `{url, platform:'web'}`)
-- `listConnectors(): Promise<Array<{ provider: string; scopes: string[] }>>`
+- `listConnectors(): Promise<Array<{ provider: string; scopes: string[]; clientId?: string }>>` (`clientId` from the non-secret `settings.client_id` when Nylas returns it; never read or return `client_secret`)
 - `createGoogleConnector(input: { clientId: string; clientSecret: string; topicName?: string; scopes: string[] }): Promise<void>`
 - `buildAuthUrl(input: { clientId: string; redirectUri: string; state: string; loginHint?: string; scopes: string[] }): string` (`provider=google`, `response_type=code`, `access_type=offline`)
 - `exchangeCode(input: { clientId: string; code: string; redirectUri: string }): Promise<{ grantId: string; email: string | null; scopes: string[] }>`
