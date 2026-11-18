@@ -150,12 +150,18 @@ describe('MailboxSignInDonePage', () => {
   });
 
   it('tells a cancelled or wrong-account user the link is used and to ask for a fresh one', async () => {
-    for (const r of ['cancelled', 'wrong_account']) {
+    for (const r of ['cancelled', 'wrong_account', 'org_internal']) {
       const m = resultMessage(r, 'principal').body;
       expect(m).toContain('now used');
       expect(m).toContain('fresh sign-in link');
       expect(m).not.toContain('Open the link again');
     }
+  });
+
+  it('sends an org_internal user to the operator to set the audience to External', () => {
+    const m = resultMessage('org_internal', 'principal').body;
+    expect(m).toContain('audience to External');
+    expect(m).not.toContain('Sign in with an account from that organization');
   });
 
   it('does not poll without restart=1', async () => {

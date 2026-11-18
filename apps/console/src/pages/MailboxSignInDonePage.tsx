@@ -36,7 +36,7 @@ export function resultMessage(result: string, target: Target | null): ResultMess
     case 'admin_blocked':
       return { ok: false, title: 'Blocked by your Google admin', body: "Google Workspace blocked this sign-in. Please ask your Google Workspace admin to mark Curia's app as Trusted, then try again." };
     case 'org_internal':
-      return { ok: false, title: 'Account not allowed', body: 'Curia\'s Google app is limited to one organization, and this account is outside it. Sign in with an account from that organization.' };
+      return { ok: false, title: 'Account not allowed', body: 'Curia\'s Google app is limited to one organization, and this account is outside it. This sign-in link is now used. Ask the operator to set the Google app\'s audience to External, then ask Curia for a fresh sign-in link.' };
     case 'wrong_account':
       return { ok: false, title: 'Wrong account', body: 'You signed in with a different Google account than the one requested. This sign-in link is now used. Ask Curia for a fresh sign-in link, then choose the right account. If Google only offered accounts from one organization, the operator\'s Google app may be set to Internal; ask them to set its audience to External, then get a fresh link.' };
     case 'missing_scopes':
