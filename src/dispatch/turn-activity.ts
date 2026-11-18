@@ -341,8 +341,9 @@ function originatorAuthenticatedOf(metadata: Record<string, unknown> | undefined
  * go only to authenticated roots, so a forged-From email resolved to the principal neither
  * sees the principal's actions nor has its own shown to the principal as theirs.
  *
- * - SMS: caller ids are spoofable, but SMS counts as the principal's for sending from the
- *   principal's mailbox (principal-send/authority.ts); this mirrors that accepted risk.
+ * - Not SMS: caller ids are spoofable (ADR-036), and a spoofed SMS from the principal's number
+ *   has none of the principal's authority (GHSA-p49r-jqh2-v668). It once counted, mirroring an
+ *   accepted risk the principal-mailbox send no longer takes either.
  * - web: every message needs the principal's bootstrap secret or session
  *   (channels/http/routes/chat.ts assertSecret).
  * - cli: a local shell's stdin.
@@ -351,7 +352,7 @@ function originatorAuthenticatedOf(metadata: Record<string, unknown> | undefined
  * authenticated, so they are named here.
  */
 export function isAuthenticatedRoot(root: RootTurn): boolean {
-  return root.originatorAuthenticated || root.channelId === 'sms' || root.channelId === 'web' || root.channelId === 'cli';
+  return root.originatorAuthenticated || root.channelId === 'web' || root.channelId === 'cli';
 }
 
 function targetKey(target: ActionTarget): string {

@@ -32,7 +32,7 @@ import { createLogger } from '../../../src/logger.js';
 const CONTACT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const STRANGER = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const MY_CONVERSATION = 'signal:+15550001';
-const TARGET_CONVERSATION = 'sms:+15550001';
+const TARGET_CONVERSATION = 'web:session-target';
 const REQUEST = 'actually make it Tuesday';
 const INITIATED_AT = '2026-11-14T15:00:00.000Z';
 /** The dispatcher's stamp for the handing turn: a Signal sender, authenticated by the channel. */
@@ -59,7 +59,7 @@ function startTask(registry: TurnActivityRegistry, over: Partial<TaskStartInput>
   registry.taskStarted({
     agentId: 'coordinator',
     conversationId: `conv-${over.taskEventId}`,
-    channelId: 'sms',
+    channelId: 'web',
     parentEventId: undefined,
     metadata: undefined,
     startedAt: Date.now(),
@@ -102,11 +102,14 @@ function emailTargetMetadata(authenticated: boolean): Record<string, unknown> {
   };
 }
 
-/** The target: the same person's coordinator turn on a one-to-one SMS conversation. */
+/**
+ * The target: the same person's coordinator turn on the web app, which is principal-only and
+ * one-to-one. (It was SMS until GHSA-p49r-jqh2-v668 stopped counting SMS as authenticated.)
+ */
 function startTarget(registry: TurnActivityRegistry, over: Partial<TaskStartInput> = {}): void {
   startTask(registry, {
     taskEventId: 'other-root',
-    channelId: 'sms',
+    channelId: 'web',
     conversationId: TARGET_CONVERSATION,
     metadata: { inboundSenderText: 'book the 9am flight', inboundScanFindingCount: 0 },
     startedAt: Date.now() - 60_000,
@@ -474,15 +477,16 @@ describe('performHandoff', () => {
     expect(verified.lanes.takeQueued('other-root')).toHaveLength(1);
   });
 
-  it('an SMS handing root is the accepted-risk exception (as in authority.ts)', async () => {
+  // GHSA-p49r-jqh2-v668: SMS caller ids are spoofable; an SMS root no longer counts as authenticated.
+  it('an SMS handing root is refused: its channel does not authenticate the sender', async () => {
     const { registry, lanes, run } = setup();
     startTarget(registry, { channelId: 'signal', conversationId: 'signal:+15550001', metadata: SIGNAL_TARGET_METADATA });
     startMine(registry, { originator: { ...MY_ORIGINATOR, channel: 'sms', authenticated: false } }, {
       channelId: 'sms', conversationId: 'sms:+15550009',
     });
     await lanes.acquire(targetHolder({ conversationId: 'signal:+15550001' }));
-    void run();
-    expect(lanes.takeQueued('other-root')).toHaveLength(1);
+    expect(await run()).toEqual({ kind: 'do_it_yourself', reason: 'ineligible' });
+    expect(lanes.takeQueued('other-root')).toEqual([]);
   });
 
   describe('the target must be authenticated too (#2588 SEC HIGH)', () => {
@@ -532,18 +536,15 @@ describe('performHandoff', () => {
       expect(await pending).toEqual({ kind: 'delivered' });
     });
 
-    it('an SMS target with no authenticated stamp still takes it (the accepted-risk exception)', async () => {
+    // GHSA-p49r-jqh2-v668: an SMS target could be a spoofed number's turn; it gets no hand-off.
+    it('an SMS target is refused, and nothing is injected', async () => {
       const { registry, lanes, run } = setup();
-      // startTarget's default: SMS, no originator stamp at all.
-      startTarget(registry);
+      startTarget(registry, { channelId: 'sms', conversationId: 'sms:+15550001' });
       expect(registry.rootOf('other-root')!.originatorAuthenticated).toBe(false);
       startMine(registry);
-      await lanes.acquire(targetHolder());
-      const pending = run({ handingLiveTurn: true });
-      const [input] = lanes.takeQueued('other-root');
-      expect(input).toMatchObject({ content: REQUEST, liveTurn: true });
-      lanes.confirmDrained('other-root', [input!.inboundEventId]);
-      expect(await pending).toEqual({ kind: 'delivered' });
+      await lanes.acquire(targetHolder({ conversationId: 'sms:+15550001' }));
+      expect(await run({ handingLiveTurn: true })).toEqual({ kind: 'do_it_yourself', reason: 'unauthenticated' });
+      expect(lanes.takeQueued('other-root')).toEqual([]);
     });
 
     it('a running web turn takes a hand-off from Signal: the web app is principal-only and one-to-one', async () => {
@@ -1101,7 +1102,7 @@ describe('runtime turn-handoff wiring', () => {
       }))).not.toContain(HEADING);
     });
 
-    it('a sender its channel did not authenticate gets no note; SMS is the exception', async () => {
+    it('a sender its channel did not authenticate gets no note, SMS included', async () => {
       const unstamped = { contactId: CONTACT, channel: 'signal', systemRole: null, tier: 'known', initiatedAt: INITIATED_AT };
       expect(await system(myTask({ metadata: { originator: unstamped } }))).not.toContain(HEADING);
       expect(await system(myTask({ metadata: { originator: { ...ORIGINATOR, authenticated: false } } }))).not.toContain(HEADING);
@@ -1109,7 +1110,7 @@ describe('runtime turn-handoff wiring', () => {
         channelId: 'sms',
         conversationId: 'sms:+15550002',
         metadata: { originator: { ...unstamped, channel: 'sms' } },
-      }))).toContain(HEADING);
+      }))).not.toContain(HEADING);
     });
 
     it('the principal on the web app or the CLI gets the note: both are principal-only, never stamped', async () => {
