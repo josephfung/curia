@@ -463,7 +463,7 @@ against prompt injection attacks that attempt to trigger high-consequence action
 The verification mechanism is a cross-channel confirmation (GHSA-p49r-jqh2-v668). The elevated gate
 requires a live principal turn, which only an authenticated inbound gets. When a request matches
 the principal on a channel that does not authenticate the sender (SMS, or email failing SPF, DKIM
-or DMARC), the execution layer files an approval marked `requester_unverified`. Delivery sends it
+or DMARC or whose SPF pass is not aligned with the From domain), the execution layer files an approval marked `requester_unverified`. Delivery sends it
 only to a verified channel (Signal, Slack or the phone app), at most 3 an hour, and the action
 runs when the principal approves it there. See [spec 14](14-autonomy-engine.md#unverified-principal-requests).
 

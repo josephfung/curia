@@ -227,8 +227,8 @@ A message that matches the principal's identity is the principal's own turn **on
 | Channel | Principal authority |
 |---|---|
 | Signal (texts and calls), Slack, the web console and console voice, the local CLI | Yes. The protocol, session or shell proves the sender. |
-| Email that passed SPF, DKIM and DMARC (`senderVerified`) | Yes |
-| Email that failed or could not confirm them | No |
+| Email that passed SPF, DKIM and DMARC (`senderVerified`), with the SPF pass aligned to the From domain (`senderSpfAligned`) | Yes. Alignment refuses a DKIM-signed message replayed from another server, which DMARC alone passes. |
+| Email that failed or could not confirm them, or whose SPF pass is not aligned | No |
 | SMS | No, ever. Caller ids are spoofable (ADR-036). |
 
 `stampOriginator` stamps `originator.authenticated` from the channel (`inboundSenderAuthenticated`, or per voice transport). It keeps `systemRole: 'principal'` on an unauthenticated match, so Curia still knows who it is talking to and does ordinary work for them. It grants `liveTurn` only when authenticated. `hasPrincipalAuthority(originator)` (principal **and** `authenticated === true`) backs `isPrincipalOriginated` and every other check that grants authority, so a missing flag fails closed. `hasPrincipalIdentity` keeps the identity-only meaning for checks that only turn a protection on, such as scrubbing a sign-in code the principal texts. Migration 128 made the flag explicit on every stored principal originator.
@@ -239,11 +239,13 @@ An unauthenticated principal match therefore gets none of the following:
 - outbound entries beyond those sent to the principal;
 - the cross-turn note, or hand-offs (`isAuthenticatedRoot`);
 - another contact's calendar.
+- a reply-all. The relayed reply to an unverified principal email goes only to its sender, the address that matched the principal, so what the principal may read on identity alone reaches only their own mailbox or phone. `email-reply` on such a turn answers only the original message's sender: it drops the other To and Cc, refuses an explicit `cc` and a reply to Curia's own message, and keeps that restriction through an approved replay. A reply to someone else's own message, like `email-send` to them, is a send to that person under the band review, with no principal authority.
 
 Where that authority is needed, Curia **asks for confirmation on a verified channel** instead of refusing:
 - An elevated tool, `send-draft` or `contact-link-identity` files an approval marked `requester_unverified`.
 - An answer to an approval (`approve-action`, `deny-action`, `dismiss-action`) from such a turn resolves nothing. The approval is re-sent to a verified channel, saying someone answered it from an unverified one.
-- Holds and escalations raised for such a turn are marked the same way.
+- Holds and escalations raised for such a turn are marked the same way. That includes a hold on the relayed reply, which the dispatcher flags on its `outbound.message` (`requesterUnverified`).
+- A repeat of the same request, which arrives as a new task, joins the confirmation already pending.
 
 A confirmation the principal did not expect is the spoofing alert. `ceo-inbox-send-draft` is the exception: the principal-mailbox path never raises approvals (its design, D5), so the draft stays for the digest. The coordinator is told on the turn that the message is unverified, and says a confirmation is waiting rather than asking for a repeat.
 
