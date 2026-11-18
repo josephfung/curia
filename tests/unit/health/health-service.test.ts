@@ -325,7 +325,9 @@ describe('HealthService.getStatus()', () => {
       expect(failed?.detail).toMatch(/reconnect/i);
       // Names the console control that does it (R29).
       expect(failed?.detail).toContain('reconnect it from Settings → Email & Calendar');
-      expect(failed?.detail).not.toMatch(/grant ID|mailbox-signin/i);
+      // And the manual path for when Google sign-in is unavailable (no connector, no https origin).
+      expect(failed?.detail).toMatch(/reconnect the account in the Nylas dashboard and paste the new grant ID/);
+      expect(failed?.detail).not.toMatch(/mailbox-signin/i);
       expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledWith('work', 'Work', true, { authFailure: false });
       expect(deps.mailboxOutageNotifier.record).toHaveBeenCalledWith('personal', 'Personal', false, { authFailure: true });
     });
