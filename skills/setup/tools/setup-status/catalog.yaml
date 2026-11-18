@@ -50,7 +50,7 @@ tasks:
     handoff_path: /channels
     completion_check:
       type: email_channel_ready
-    credential_how_to: "Get your Nylas API key at dashboard-v3.nylas.com (a production application; the free tier works). In Settings → Channels → Email, install the channel and save the API key, then add Curia's own mailbox under Email accounts with Connect with Google once mailbox sign-in is set up (or paste a grant ID from the Nylas dashboard), enable the channel and restart. Your own Gmail accounts are connected separately, by signing in with Google (see Mailbox sign-in)."
+    credential_how_to: "Get your Nylas API key at dashboard-v3.nylas.com (a production application used only by this Curia; the free tier works). In Settings → Channels → Email, install the channel and save the API key, then add Curia's own mailbox under Email accounts with Connect with Google once mailbox sign-in is set up (or paste a grant ID from the Nylas dashboard), enable the channel and restart. Your own Gmail accounts are connected separately, by signing in with Google (see Mailbox sign-in)."
     docs_url: /channels/email-setup
 
   - id: mailbox_signin
