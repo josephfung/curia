@@ -213,6 +213,23 @@ describe('vault routes', () => {
     expect(secrets.sets).toEqual([{ name: 'channel.email.nylas_api_key', value: 'nk_live_abc' }]);
   });
 
+  it('rejects a Nylas region other than us or eu with 400, writing nothing', async () => {
+    const secrets = fakeSecrets();
+    app = await build(secrets, fakeRegistry());
+    const res = await put(app, 'channel.email.nylas_region', { value: 'apac' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain("'us' or 'eu'");
+    expect(secrets.sets).toEqual([]);
+  });
+
+  it('accepts a valid Nylas region', async () => {
+    const secrets = fakeSecrets();
+    app = await build(secrets, fakeRegistry());
+    const res = await put(app, 'channel.email.nylas_region', { value: 'EU' });
+    expect(res.statusCode).toBe(200);
+    expect(secrets.sets).toEqual([{ name: 'channel.email.nylas_region', value: 'EU' }]);
+  });
+
   it('accepts a skill-declared secret (existing behavior preserved)', async () => {
     const secrets = fakeSecrets();
     app = await build(secrets, fakeRegistry([DECLARED_SECRET]));
