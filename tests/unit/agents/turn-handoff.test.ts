@@ -124,7 +124,9 @@ function targetHolder(over: Partial<LaneHolder> = {}): LaneHolder {
     originatorContactId: CONTACT,
     originatorResolved: true,
     originatorIsPrincipal: false,
-    liveTurn: true,
+    // Not the principal, so not a live turn: only an authenticated principal's turn is live, and
+    // a live holder takes only live input (GHSA-p49r-jqh2-v668).
+    liveTurn: false,
     synthetic: false,
     // A full tool set: a tool-limited holder (a content-block rewrite) is never injectable (#2615).
     toolLimited: false,

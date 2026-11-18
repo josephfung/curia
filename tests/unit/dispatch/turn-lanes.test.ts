@@ -371,6 +371,20 @@ describe('TurnLanes', () => {
       }))).toEqual({ kind: 'not_injected', reason: 'ineligible' });
     });
 
+    // GHSA-p49r-jqh2-v668: a forged-From email matches the principal's contact but is not a live
+    // turn. Drained into the principal's live turn, it would act with that turn's authority.
+    it('refuses an unauthenticated follow-up into a live principal turn', async () => {
+      const gate = lanes();
+      await gate.acquire(holder('a', { liveTurn: true }));
+      expect(gate.tryInject('conv-1', input({ liveTurn: false }))).toEqual({ kind: 'not_injected', reason: 'ineligible' });
+    });
+
+    it('still queues a same-contact follow-up when neither side is a live turn', async () => {
+      const gate = lanes();
+      await gate.acquire(holder('a', { originatorIsPrincipal: false, liveTurn: false }));
+      expect(gate.tryInject('conv-1', input({ liveTurn: false })).kind).toBe('queued');
+    });
+
     // #2615: a turn limited to some tools (a content-block rewrite has none) cannot serve a
     // new request, so the follow-up waits for its own turn.
     it('refuses a follow-up into a tool-limited turn', async () => {
