@@ -256,6 +256,8 @@ export class HttpAdapter implements Channel {
   private app: FastifyInstance;
   private config: HttpAdapterConfig;
   private eventRouter: EventRouter;
+  /** The 60 s session / capture-token / sign-in-token sweep; cleared in stop(). */
+  private pruneInterval: NodeJS.Timeout | undefined;
 
   constructor(config: HttpAdapterConfig) {
     this.config = config;
@@ -399,7 +401,7 @@ export class HttpAdapter implements Channel {
     // overlap the sessions guard prevents for its own DELETE.
     let isPruningCaptureTokens = false;
     let isPruningSignInTokens = false;
-    const pruneInterval = setInterval(() => {
+    this.pruneInterval = setInterval(() => {
       const now = Date.now();
       for (const [tokenHash, entry] of sessions) {
         const expiresAt = sessionExpiresAt(entry);
@@ -437,7 +439,7 @@ export class HttpAdapter implements Channel {
         })
         .finally(() => { isPruning = false; });
     }, 60_000);
-    pruneInterval.unref();
+    this.pruneInterval.unref();
 
     await this.app.register(healthRoutes, {
       healthService: this.config.healthService ?? createFallbackHealthService(pool, logger),
@@ -816,6 +818,11 @@ export class HttpAdapter implements Channel {
   }
 
   async stop(): Promise<void> {
+    // unref() only lets the process exit; without this the sweeps keep running after stop().
+    if (this.pruneInterval !== undefined) {
+      clearInterval(this.pruneInterval);
+      this.pruneInterval = undefined;
+    }
     await this.app.close();
     this.config.logger.info('HTTP API stopped');
   }
