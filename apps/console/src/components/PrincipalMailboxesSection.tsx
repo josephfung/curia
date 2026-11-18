@@ -286,6 +286,7 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
   const [id, setId] = useState('');
   const [label, setLabel] = useState('');
   const [grantId, setGrantId] = useState('');
+  const [signInAddress, setSignInAddress] = useState('');
   const [makeDefault, setMakeDefault] = useState(false);
   const [tested, setTested] = useState<{ email: string; provider: string; grantId: string } | null>(null);
   // The grant input as typed now: a Test answer for an older value is dropped, never shown.
@@ -482,7 +483,15 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
 
       {!migrating && (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
-        <ConnectWithGoogle target="principal" disabled={readOnly} />
+        {/* Blank pins the link to the principal's primary address; an address signs in (and adds) that exact account. */}
+        <input type="email" autoComplete="off" placeholder="Gmail address to add (optional)" value={signInAddress}
+          aria-label="Google account address" aria-describedby="mailbox-signin-address-help" disabled={readOnly}
+          onChange={e => setSignInAddress(e.target.value)} />
+        <p id="mailbox-signin-address-help" className="settings-page-sub mailbox-id-help">
+          Leave blank to sign in with the primary address. To add another Gmail account, enter
+          its address, then sign in with exactly that Google account.
+        </p>
+        <ConnectWithGoogle target="principal" address={signInAddress.trim() || undefined} disabled={readOnly} />
         <details>
         <summary>Paste a grant ID instead</summary>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
