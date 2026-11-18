@@ -19,7 +19,8 @@
 
 import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest, ActionRisk, EmailChannelStatus, PrincipalMailboxReadiness, ApprovalVia } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
-import { isPrincipalOriginated, isOutsiderOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
+import { isPrincipalOriginated, isOutsiderOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier, isUnauthenticatedPrincipal, hasUnauthenticatedPrincipalLineage } from '../contacts/principal.js';
+import { unverifiedChannelLabel } from '../autonomy/approval-delivery.js';
 import { resolvePrincipalIsSoleRecipientFromSkillInput, isSolelyInitiatingSender } from '../contacts/principal-recipient.js';
 import { findCarveoutSkill } from '../contacts/principal-channel-registry.js';
 import { emailAccountIdFromInput } from '../channels/email/account-id.js';
@@ -32,6 +33,7 @@ import {
 import type { ChannelIdentity } from '../contacts/types.js';
 import { isCaretOrDeleteKey, keyedCharacter, provenanceSourceText } from '../contacts/identifier-provenance.js';
 import { mainFrameProse } from './_shared/web-page-content.js';
+import { SENDER_ONLY_CC_REFUSAL } from './_shared/principal-directed.js';
 import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence, KG_WRITE_TOOLS } from '../autonomy/escalation-policy.js';
 import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
@@ -258,6 +260,23 @@ const NO_QUEUED_APPROVAL_TOOLS: ReadonlySet<string> = new Set(['ceo-inbox-send-d
  * request for one of these (#2495): the principal would be approving an approval.
  */
 const APPROVAL_RESOLUTION_TOOLS: ReadonlySet<string> = new Set(['approve-action', 'deny-action', 'dismiss-action']);
+
+/**
+ * Normal-sensitivity tools whose handler requires the principal's authority right now (a live
+ * principal turn or principal origination, or their approval). On an unauthenticated principal
+ * turn the execution layer files a confirmation for them, as it does for elevated tools, so the
+ * principal approves on a verified channel instead of repeating the request (GHSA-p49r-jqh2-v668).
+ * Not ceo-inbox-send-draft: the principal-mailbox path never raises approvals (design D5), so an
+ * unverified request leaves the draft for the digest.
+ */
+const UNVERIFIED_CONFIRM_TOOLS: ReadonlySet<string> = new Set(['send-draft', 'contact-link-identity']);
+
+/** The channel id a principal-matching turn came in on, for wording (unverifiedChannelLabel). */
+function unverifiedChannelOf(metadata: Record<string, unknown> | undefined): string {
+  const originator = metadata?.['originator'] as { channel?: unknown } | undefined;
+  return typeof originator?.channel === 'string' && originator.channel.length > 0 ? originator.channel : 'unverified';
+}
+const VERIFIED_CHANNEL_NAMES: Record<string, string> = { signal: 'Signal', slack: 'Slack', web: 'the phone app' };
 
 /** The cross-turn backstop checks calls at action_risk medium (70) and above (#2588). */
 const CROSS_TURN_BACKSTOP_MIN_RISK_SCORE = 70;
@@ -979,6 +998,9 @@ export class ExecutionLayer {
     skillLogger: Logger,
     sendResolution?: readonly SendRecipientPin[],
     sendingThreshold: number = requiredScore,
+    // The raw lineage: `options.taskMetadata` is the ladder's effective copy, which demotes a
+    // woken principal to agent and would drop the unverified-requester flag (GHSA-p49r-jqh2-v668).
+    lineageTaskMetadata: InvokeOptions['taskMetadata'] = options?.taskMetadata,
   ): Promise<string> {
     const baseMsg =
       `Tool '${toolName}' blocked — autonomy score is ${currentScore}, ` +
@@ -1003,10 +1025,12 @@ export class ExecutionLayer {
       try {
         const result = await this.approvalTrigger.request({
           taskId: options.taskEventId,
+          // Raised on an unauthenticated principal turn: delivered only on a verified channel (GHSA-p49r-jqh2-v668).
+          requesterUnverified: hasUnauthenticatedPrincipalLineage(lineageTaskMetadata),
           conversationId: options.conversationId,
           toolName,
           actionRisk: String(actionRisk),
-          input: await this.approvalInput(toolName, input, skillLogger),
+          input: await this.approvalInput(toolName, input, skillLogger, lineageTaskMetadata),
           displayInput: await this.approvalDisplayInput(toolName, input, skillLogger),
           currentScore,
           requiredScore,
@@ -1062,10 +1086,12 @@ export class ExecutionLayer {
       try {
         const result = await this.approvalTrigger.request({
           taskId: options.taskEventId,
+          // Raised on an unauthenticated principal turn: delivered only on a verified channel (GHSA-p49r-jqh2-v668).
+          requesterUnverified: hasUnauthenticatedPrincipalLineage(options.taskMetadata),
           conversationId: options.conversationId,
           toolName,
           actionRisk: String(actionRisk),
-          input: await this.approvalInput(toolName, input, skillLogger),
+          input: await this.approvalInput(toolName, input, skillLogger, options.taskMetadata),
           displayInput: await this.approvalDisplayInput(toolName, input, skillLogger),
           currentScore,
           requiredScore: currentScore,
@@ -1107,13 +1133,20 @@ export class ExecutionLayer {
     currentScore: number,
     options: InvokeOptions | undefined,
     skillLogger: Logger,
+    /** Set when the turn matched the principal on a channel that did not prove it (GHSA-p49r-jqh2-v668). */
+    unverifiedVia?: string,
   ): Promise<string> {
+    const why = unverifiedVia
+      ? `this message came from the principal's ${unverifiedChannelLabel(unverifiedVia)}, which cannot prove the principal sent it`
+      : 'the principal asked for it on a call that is no longer live';
     const baseMsg =
-      `Not done yet: '${toolName}' needs the principal's confirmation, because the principal asked for it ` +
-      `on a call that is no longer live. This is not a missing capability; never say Curia cannot do it. `;
-    const fallback =
-      baseMsg + 'No approval request was created. Tell the principal it is waiting for their go-ahead: ' +
-      'they can confirm by asking again on any channel.';
+      `Not done yet: '${toolName}' needs the principal's confirmation, because ${why}. ` +
+      `This is not a missing capability; never say Curia cannot do it. `;
+    const fallback = unverifiedVia
+      ? baseMsg + 'No confirmation could be filed, so it was not done and nothing is waiting. Tell the principal; to go ahead, ' +
+        'they can ask again on Signal, Slack or the phone app.'
+      : baseMsg + 'No approval request was created. Tell the principal it is waiting for their go-ahead: ' +
+        'they can confirm by asking again on any channel.';
 
     if (this.holdsUnscrubbedCode(toolName, input)) return fallback;
     if (!this.approvalTrigger || !options?.taskEventId) return fallback;
@@ -1121,25 +1154,72 @@ export class ExecutionLayer {
     try {
       const result = await this.approvalTrigger.request({
         taskId: options.taskEventId,
+        // Raised on an unauthenticated principal turn: delivered only on a verified channel (GHSA-p49r-jqh2-v668).
+        requesterUnverified: hasUnauthenticatedPrincipalLineage(options.taskMetadata),
         conversationId: options.conversationId,
         toolName,
         actionRisk: String(actionRisk),
-        input: await this.approvalInput(toolName, input, skillLogger),
+        input: await this.approvalInput(toolName, input, skillLogger, options.taskMetadata),
         displayInput: await this.approvalDisplayInput(toolName, input, skillLogger),
         currentScore,
         requiredScore: currentScore,
-        // Neutral on who asked: the call handed off work, but the tool call itself came from an
-        // agent, which may have read untrusted content since. The principal judges the action.
-        reason: `Curia wanted to run '${toolName}' for work handed off from the principal's voice call. ` +
-          `It is an elevated action, so it needs the principal's confirmation now that the call is no longer live.`,
+        // Neutral on who asked: the tool call came from an agent, which may have read untrusted
+        // content since. The principal judges the action.
+        reason: unverifiedVia
+          ? `Curia wanted to run '${toolName}' for a message from your ${unverifiedChannelLabel(unverifiedVia)}. ` +
+            `That channel can't prove you sent it, so it needs your confirmation.`
+          : `Curia wanted to run '${toolName}' for work handed off from the principal's voice call. ` +
+            `It is an elevated action, so it needs the principal's confirmation now that the call is no longer live.`,
       });
       if (!result.created) {
         return baseMsg + `A confirmation request for it is already pending (ref: ${result.existingShortRef}).`;
       }
       return baseMsg + approvalAdvisory(result.shortRef, options.agentId, result.approvalNumber);
     } catch (err) {
-      skillLogger.warn({ err, toolName }, 'elevated confirmation: approval trigger failed — returning fallback advisory');
+      // On an unverified principal turn the confirmation is the only way the action can happen: log it loudly.
+      skillLogger[unverifiedVia ? 'error' : 'warn']({ err, toolName }, 'elevated confirmation: approval trigger failed — returning fallback advisory');
       return fallback;
+    }
+  }
+
+  /**
+   * An approval answered (approve, deny or dismiss) from a channel that cannot prove it was the
+   * principal (GHSA-p49r-jqh2-v668). The answer is not taken; the approval is re-sent to the
+   * principal on a verified channel to answer there. Returns the advisory for the agent.
+   */
+  private async buildUnverifiedAnswerError(
+    input: Record<string, unknown>,
+    via: string,
+    skillLogger: Logger,
+  ): Promise<string> {
+    const ref = typeof input['short_ref'] === 'string' ? input['short_ref'].trim() : '';
+    const named = ref === '' ? 'the pending approval' : `approval ${ref}`;
+    const baseMsg =
+      `Not done: approvals cannot be answered from the principal's ${unverifiedChannelLabel(via)}, because that channel ` +
+      `cannot prove the principal sent it. This is not a missing capability; never say Curia cannot do it. `;
+    if (!this.approvalDelivery) return baseMsg + `Tell the principal ${named} is waiting for them in the console.`;
+    try {
+      const result = await this.approvalDelivery.redeliverForVerification(ref, via);
+      if (result.delivered) {
+        return baseMsg + `Curia sent ${named} to the principal on ${VERIFIED_CHANNEL_NAMES[result.channel] ?? result.channel} ` +
+          'to answer there. Tell them it is waiting there; do not ask them to repeat it.';
+      }
+      switch (result.reason) {
+        case 'not_found':
+          return baseMsg + `There is no pending approval ${ref === '' ? 'to answer' : ref}; it may have been answered or expired.`;
+        case 'ambiguous':
+          return baseMsg + 'Several approvals are pending. Ask the principal which approval number they meant; ' +
+            'Curia then sends that one to a verified channel to answer.';
+        case 'rate_limited':
+          return baseMsg + `Too many unverified requests this hour, so ${named} waits for the principal in the console and the next digest.`;
+        case 'verified_channel_required':
+          return baseMsg + `The principal has no verified channel (Signal, Slack or the phone app) to answer on; ${named} waits in the console.`;
+        default:
+          return baseMsg + `Curia could not re-send ${named}; it waits for the principal in the console.`;
+      }
+    } catch (err) {
+      skillLogger.warn({ err }, 'unverified approval answer: re-send failed');
+      return baseMsg + `Tell the principal ${named} is waiting for them in the console.`;
     }
   }
 
@@ -1236,10 +1316,12 @@ export class ExecutionLayer {
         }));
         const result = await this.approvalTrigger.request({
           taskId: options.taskEventId,
+          // Raised on an unauthenticated principal turn: delivered only on a verified channel (GHSA-p49r-jqh2-v668).
+          requesterUnverified: hasUnauthenticatedPrincipalLineage(options.taskMetadata),
           conversationId: options.conversationId,
           toolName,
           actionRisk: String(actionRisk),
-          input: { ...(await this.approvalInput(toolName, input, skillLogger)), export_items: exportItems },
+          input: { ...(await this.approvalInput(toolName, input, skillLogger, options.taskMetadata)), export_items: exportItems },
           displayInput: {
             ...(await this.approvalDisplayInput(toolName, input, skillLogger)),
             export_items: exportItems,
@@ -1338,8 +1420,20 @@ export class ExecutionLayer {
    * retired and refused before any gate (#2041), so none reaches an approval.
    */
   /** What an approval stores as the call's input: a calendar call is bound to its sole mailbox (#2475). */
-  private async approvalInput(toolName: string, input: Record<string, unknown>, skillLogger: Logger): Promise<Record<string, unknown>> {
-    return this.calendarRouter ? bindApprovalMailbox(this.calendarRouter, skillLogger, toolName, input) : input;
+  private async approvalInput(
+    toolName: string,
+    input: Record<string, unknown>,
+    skillLogger: Logger,
+    lineageTaskMetadata: InvokeOptions['taskMetadata'],
+  ): Promise<Record<string, unknown>> {
+    const bound = this.calendarRouter ? await bindApprovalMailbox(this.calendarRouter, skillLogger, toolName, input) : input;
+    // A reply asked for on an unverified principal turn answers the sender only. The approved
+    // replay runs on the approver's verified turn, and the reply's recipients come from the
+    // thread at run time, where the approver cannot see what a forged message added, so the
+    // restriction rides in the stored input (GHSA-p49r-jqh2-v668).
+    return toolName === 'email-reply' && hasUnauthenticatedPrincipalLineage(lineageTaskMetadata)
+      ? { ...bound, sender_only: true }
+      : bound;
   }
 
   private async approvalDisplayInput(
@@ -2483,6 +2577,27 @@ export class ExecutionLayer {
           // Still a live-turn refusal: the principal's confirmation lifts it (#2494).
           return { success: false, error: this.wrapSkillError(confirmError), gate: 'live_principal_turn' };
         }
+        // The message matched the principal's SMS number or email address, but its channel did not
+        // prove the principal sent it (GHSA-p49r-jqh2-v668). Not a refusal to repeat: ask the
+        // principal on a verified channel. An answer to an approval is re-sent there instead
+        // (approving an approval is circular). Never for a wake, nor a caller the manifest forbids.
+        if (
+          !isWokenTurn
+          && isUnauthenticatedPrincipal(effectiveTaskMetadata)
+          && (!manifest.allowed_callers?.length || manifest.allowed_callers.includes(options?.agentId ?? 'system'))
+        ) {
+          const via = unverifiedChannelOf(options?.taskMetadata);
+          this.logger.info(
+            { toolName, agentId: options?.agentId, taskEventId: options?.taskEventId, via },
+            'Elevated skill on an unauthenticated principal turn — asking the principal on a verified channel (GHSA-p49r-jqh2-v668)',
+          );
+          const error = APPROVAL_RESOLUTION_TOOLS.has(toolName)
+            ? await this.buildUnverifiedAnswerError(input, via, skillLogger)
+            : await this.buildElevatedConfirmationError(
+              toolName, input, manifest.action_risk, autonomyConfig?.score ?? 0, options, skillLogger, via,
+            );
+          return { success: false, error: this.wrapSkillError(error), gate: 'live_principal_turn' };
+        }
         this.logger.warn(
           {
             toolName,
@@ -2498,6 +2613,34 @@ export class ExecutionLayer {
           gate: 'live_principal_turn',
         };
       }
+    }
+
+    // A normal tool whose handler needs the principal's authority, on an unauthenticated principal
+    // turn: file the same confirmation the elevated gate does (GHSA-p49r-jqh2-v668). An approved
+    // replay carries the approver's own authenticated originator, so it never lands here.
+    if (
+      UNVERIFIED_CONFIRM_TOOLS.has(toolName)
+      && !options?.humanApproved
+      && (options?.taskMetadata as Record<string, unknown> | undefined)?.['wakeContext'] === undefined
+      && isUnauthenticatedPrincipal(effectiveTaskMetadata)
+      && (!manifest.allowed_callers?.length || manifest.allowed_callers.includes(options?.agentId ?? 'system'))
+    ) {
+      const confirmError = await this.buildElevatedConfirmationError(
+        toolName, input, manifest.action_risk, autonomyConfig?.score ?? 0, options, skillLogger, unverifiedChannelOf(options?.taskMetadata),
+      );
+      return { success: false, error: this.wrapSkillError(confirmError), gate: 'live_principal_turn' };
+    }
+
+    // A sender-only email-reply refuses an explicit cc (the handler checks it too), and the handler
+    // cannot resolve a non-string one. Refuse both before the gates, so a hold never files an
+    // approval whose replay could only fail. An absent or empty cc stays eligible.
+    if (
+      toolName === 'email-reply'
+      && hasUnauthenticatedPrincipalLineage(options?.taskMetadata)
+      && input['cc'] !== undefined
+      && (typeof input['cc'] !== 'string' || input['cc'].trim().length > 0)
+    ) {
+      return { success: false, error: this.wrapSkillError(SENDER_ONLY_CC_REFUSAL) };
     }
 
     // Caller gate: enforce allowed_callers manifest field.
@@ -2695,7 +2838,7 @@ export class ExecutionLayer {
             const gateOptions = { ...options, taskMetadata: effectiveTaskMetadata };
             const gateAError = await this.buildGateError(
               toolName, input, currentScore, 60, manifest.action_risk, gateOptions, skillLogger, sendPins,
-              Math.max(60, requiredScore),
+              Math.max(60, requiredScore), options?.taskMetadata,
             );
             return {
               success: false,
@@ -2727,6 +2870,7 @@ export class ExecutionLayer {
             const gateOptions = { ...options, taskMetadata: effectiveTaskMetadata };
             const gateBError = await this.buildGateError(
               toolName, input, currentScore, requiredScore, manifest.action_risk, gateOptions, skillLogger, sendPins,
+              requiredScore, options?.taskMetadata,
             );
             return {
               success: false,
@@ -3157,7 +3301,12 @@ export class ExecutionLayer {
       // from ctx instead of hardcoding a const that must be kept in sync with tool.json.
       toolName: manifest.name,
       toolVersion: manifest.version,
-      input,
+      // An email-reply from an unverified principal request answers the sender only
+      // (GHSA-p49r-jqh2-v668). Read from the raw lineage: the ladder can demote a wake to agent,
+      // and the handler sees only that demoted copy. Carried on the input, so a held reply keeps it.
+      input: toolName === 'email-reply' && hasUnauthenticatedPrincipalLineage(options?.taskMetadata)
+        ? { ...input, sender_only: true }
+        : input,
       secret: (name: string): string => {
         if (!declaredSecrets.has(name)) {
           throw new Error(`Secret '${name}' is not declared in the manifest for skill '${toolName}'`);

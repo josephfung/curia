@@ -41,13 +41,13 @@ function knownSender(overrides: Partial<SenderContext> = {}): SenderContext {
 }
 
 describe('stampOriginator', () => {
-  it('stamps principal originator with liveTurn=true', () => {
+  it('stamps an authenticated principal originator with liveTurn=true', () => {
     const { originator, liveTurn } = stampOriginator({
       senderContext: principalSender(),
       channel: 'voice',
       senderId: 'ceo-web-user',
       initiatedAt: FIXED_AT,
-      authenticated: false,
+      authenticated: true,
     });
 
     expect(liveTurn).toBe(true);
@@ -57,8 +57,37 @@ describe('stampOriginator', () => {
       channel: 'voice',
       initiatedAt: FIXED_AT,
       tier: 'principal',
+      authenticated: true,
+    });
+  });
+
+  // GHSA-p49r-jqh2-v668: a forged email From or a spoofed SMS number resolves to the principal.
+  // It keeps the principal's identity but gets no live turn, the sole satisfier of the elevated gate.
+  it.each([
+    ['sms', '+15550100199'],
+    ['email', 'ceo@example.test'],
+  ])('keeps principal identity but grants no live turn on an unauthenticated %s inbound', (channel, senderId) => {
+    const { originator, liveTurn } = stampOriginator({
+      senderContext: principalSender(),
+      channel,
+      senderId,
+      initiatedAt: FIXED_AT,
       authenticated: false,
     });
+
+    expect(liveTurn).toBe(false);
+    expect(originator.systemRole).toBe('principal');
+    expect(originator.authenticated).toBe(false);
+  });
+
+  it.each(['signal', 'email', 'voice', 'web', 'cli'])('grants an authenticated %s principal inbound a live turn', (channel) => {
+    const { liveTurn } = stampOriginator({
+      senderContext: principalSender(),
+      channel,
+      senderId: 'x',
+      authenticated: true,
+    });
+    expect(liveTurn).toBe(true);
   });
 
   it('stamps a non-principal caller with their tier/trust and liveTurn=false', () => {

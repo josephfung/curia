@@ -88,7 +88,7 @@ Agents can't write the send ledger (`doc-write` refuses the prefix), and a reply
 
 **Accepted risks:**
 
-- SMS spoofing of the principal (an earlier maintainer call): an SMS principal turn counts as principal-directed.
+- ~~SMS spoofing of the principal (an earlier maintainer call): an SMS principal turn counts as principal-directed.~~ Withdrawn by GHSA-p49r-jqh2-v668 (2026-11-17): an SMS principal turn is never a live principal turn, so it is never principal-directed, and the draft stays for the digest.
 - An agent can write `ceo_inbox/sending` from any turn, including system-originated triage, until #2519 decides a general guard for authority-widening settings writes.
 - Standing inbox rules (`/shared/inbox/rules.md`, "never reply for me to the board") are applied by the agent only; the gateway does not read them.
 - A forged marker under `/scratch/principal-mailbox-sends/` removes learning evidence or blocks autonomous sends on a thread; it can never allow a send.

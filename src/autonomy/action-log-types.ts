@@ -74,6 +74,12 @@ export interface ActionLogRow {
    * principal's yes, denying it their no. Null on every other row. Not skill input.
    */
   disclosureAsk?: DisclosureAsk | null;
+  /**
+   * Raised on a turn that matched the principal's identity without the channel proving it (an
+   * SMS, or email failing sender checks). Delivered only on a verified channel, under an hourly
+   * cap (GHSA-p49r-jqh2-v668). False on every other row; absent reads as false.
+   */
+  requesterUnverified?: boolean;
 
   createdAt: Date;
 }
@@ -109,6 +115,8 @@ export interface ActionLogInsert {
   sendResolution?: SendRecipientPin[] | null;
   /** A held send's personal-data ask (#2312). Stored beside the skill payload, never inside it. */
   disclosureAsk?: DisclosureAsk;
+  /** Raised on an unauthenticated principal turn (GHSA-p49r-jqh2-v668). Defaults to false. */
+  requesterUnverified?: boolean;
 
   /**
    * Pre-scored flags (shadow-reconciler / #1426). When scoredBy is set, findUnscoredTerminal

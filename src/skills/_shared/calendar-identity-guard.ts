@@ -12,7 +12,7 @@
 
 import type { ToolContext, ToolResult } from '../types.js';
 import type { AgentError } from '../../errors/types.js';
-import { isPrincipalOriginated, isSystemOriginated } from '../../contacts/principal.js';
+import { hasPrincipalIdentity, isSystemOriginated } from '../../contacts/principal.js';
 
 /** Structured marker embedded in IDENTITY_MISMATCH error strings for audit backfill. */
 export const CALENDAR_IDENTITY_MISMATCH_CODE = 'calendar_identity_mismatch' as const;
@@ -36,12 +36,13 @@ export interface CalendarIdentityMismatchDetails {
  * system jobs (morning brief, etc.) or principal-originated turns.
  *
  * Agent-originated tasks are excluded: an agent reading its own calendar for its
- * own work is not a mismatch.
+ * own work is not a mismatch. On the principal's identity, authenticated or not
+ * (GHSA-p49r-jqh2-v668): this only turns the mismatch check on, so it stays on for an SMS turn.
  */
 export function isPrincipalScopedCalendarTask(
   taskMetadata: Record<string, unknown> | undefined,
 ): boolean {
-  return isSystemOriginated(taskMetadata) || isPrincipalOriginated(taskMetadata);
+  return isSystemOriginated(taskMetadata) || hasPrincipalIdentity(taskMetadata);
 }
 
 /**

@@ -173,6 +173,8 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
         channelId: 'email',
         senderId: 'ceo@example.com',
         content: 'Any update on the neurology appointment?',
+        // The principal's own mail passes SPF, DKIM and DMARC.
+        metadata: { senderVerified: true, senderSpfAligned: true },
       }),
     );
 
@@ -188,7 +190,6 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
   it.each([
     { channelId: 'signal' as const, conversationId: 'signal:+15551234567', senderId: '+15551234567' },
     { channelId: 'slack' as const, conversationId: 'slack:U123', senderId: 'U123' },
-    { channelId: 'sms' as const, conversationId: 'sms:+15559876543', senderId: '+15559876543' },
     { channelId: 'cli' as const, conversationId: 'cli:local', senderId: 'local-user' },
     { channelId: 'web' as const, conversationId: 'web:ceo', senderId: 'ceo-web-user' },
   ])('injects for principal inbound on $channelId (gate is channel-agnostic)', async ({ channelId, conversationId, senderId }) => {
@@ -211,6 +212,27 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
 
     expect(getActive).toHaveBeenCalledOnce();
     expect(tasks[0]!.payload.content).toContain('[ACTIVE OUTBOUND CONTEXT');
+  });
+
+  // GHSA-p49r-jqh2-v668: a forged email From or a spoofed SMS number resolves to the principal,
+  // but its channel did not authenticate it, so it gets no live turn and no outbound context.
+  it.each([
+    { channelId: 'sms' as const, conversationId: 'sms:+15559876543', senderId: '+15559876543', metadata: undefined },
+    { channelId: 'email' as const, conversationId: 'email:thread-forged', senderId: 'ceo@example.com', metadata: { senderVerified: false } },
+  ])('does not inject for an unauthenticated principal inbound on $channelId', async ({ channelId, conversationId, senderId, metadata }) => {
+    const { bus, tasks, getActive } = buildHarness(
+      makeResolver({ systemRole: 'principal', tier: 'principal' }),
+    );
+
+    await bus.publish(
+      'channel',
+      createInboundMessage({ conversationId, channelId, senderId, content: 'Following up', ...(metadata ? { metadata } : {}) }),
+    );
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.payload.liveTurn).toBe(false);
+    expect(getActive).not.toHaveBeenCalled();
+    expect(tasks[0]!.payload.content).not.toContain('[ACTIVE OUTBOUND CONTEXT');
   });
 
   it('does not inject for a resolved non-principal contact (liveTurn=false)', async () => {
@@ -318,7 +340,7 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
         channelId: 'email',
         senderId: 'xiaopu@example.com',
         content: 'Subject: Re: Lunch\n\nThur Nov 5 works.\n\nOn Tue, Oct 20, 2026 at 9:00 AM Curia <curia@example.com> wrote:\n> Which day works?',
-        metadata: { senderVerified: true, curiaRole: 'to', otherRecipientCount: 0 },
+        metadata: { senderVerified: true, senderSpfAligned: true, curiaRole: 'to', otherRecipientCount: 0 },
       }));
 
       expect(harness.recordReply).toHaveBeenCalledWith(
@@ -355,14 +377,15 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
 
     // A verified identity says the address is the contact's, not that this message is from
     // them: a forged From of a verified address must not get the block or a recorded message.
-    it('reads entries for email only when SPF, DKIM and DMARC passed', async () => {
+    it('reads entries for email only when SPF, DKIM and DMARC passed, SPF aligned', async () => {
       const send = (harness: ReturnType<typeof buildHarness>, senderVerified: boolean) =>
         harness.bus.publish('channel', createInboundMessage({
           conversationId: 'email:thread-lunch',
           channelId: 'email',
           senderId: 'xiaopu@example.com',
           content: 'Thur Nov 5',
-          metadata: { senderVerified, curiaRole: 'to', otherRecipientCount: 0 },
+          // Aligned exactly when verified here; the alignment rule is pinned in outbound-entry-access.test.ts.
+          metadata: { senderVerified, senderSpfAligned: senderVerified, curiaRole: 'to', otherRecipientCount: 0 },
         }));
 
       const forged = buildHarness(makeResolver({ systemRole: null, tier: 'trusted' }));
@@ -421,17 +444,17 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
 
       it('not on an email where Curia is only CC\'d', () => expectNoBlock({
         conversationId: 'email:thread-cc', channelId: 'email', senderId: 'xiaopu@example.com',
-        content: 'Thur Nov 5', metadata: { senderVerified: true, curiaRole: 'cc', otherRecipientCount: 1 },
+        content: 'Thur Nov 5', metadata: { senderVerified: true, senderSpfAligned: true, curiaRole: 'cc', otherRecipientCount: 1 },
       }));
 
       it('not on an email with anyone else on To or CC', () => expectNoBlock({
         conversationId: 'email:thread-group', channelId: 'email', senderId: 'xiaopu@example.com',
-        content: 'Thur Nov 5', metadata: { senderVerified: true, curiaRole: 'to', otherRecipientCount: 2 },
+        content: 'Thur Nov 5', metadata: { senderVerified: true, senderSpfAligned: true, curiaRole: 'to', otherRecipientCount: 2 },
       }));
 
       it('not on an email whose recipient count is unknown', () => expectNoBlock({
         conversationId: 'email:thread-unknown', channelId: 'email', senderId: 'xiaopu@example.com',
-        content: 'Thur Nov 5', metadata: { senderVerified: true, curiaRole: 'to' },
+        content: 'Thur Nov 5', metadata: { senderVerified: true, senderSpfAligned: true, curiaRole: 'to' },
       }));
 
       it('in a Slack DM', async () => {
@@ -547,7 +570,7 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
         channelId: 'email',
         senderId: 'ceo@example.com',
         content: 'Looping in my assistant.',
-        metadata: { curiaRole: 'cc', primaryRecipientEmails: ['nik@example.com'] },
+        metadata: { senderVerified: true, senderSpfAligned: true, curiaRole: 'cc', primaryRecipientEmails: ['nik@example.com'] },
       }));
       expect(tasks[0]!.payload.turnGuidance).toEqual([
         'outbound-context',

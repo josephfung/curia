@@ -252,14 +252,16 @@ describe('approval_channels', () => {
 
   it('reads the list, and leaves a case without it unchanged', () => {
     expect(load(withChannels(CASE, '[email]')).approvalChannels).toEqual(['email']);
-    expect(load(withChannels(CASE, '[sms, email]')).approvalChannels).toEqual(['sms', 'email']);
+    expect(load(withChannels(CASE, '[slack, email]')).approvalChannels).toEqual(['slack', 'email']);
     expect(load(CASE).approvalChannels).toBeUndefined();
   });
 
   it.each([
     ['without through_gateway', (s: string) => withChannels(s, '[email]').replace('through_gateway: true\n', '').replace(/expected_behaviors:[\s\S]*$/, 'expected_behaviors:\n  - id: a\n    description: replies\n'), /'approval_channels' needs through_gateway/],
     ['an empty list', (s: string) => withChannels(s, '[]'), /lists at least one channel/],
-    ['an unknown channel', (s: string) => withChannels(s, '[pager]'), /'pager' is not one of signal, sms, web, slack, email/],
+    ['an unknown channel', (s: string) => withChannels(s, '[pager]'), /'pager' is not one of signal, web, slack, email/],
+    // SMS cannot carry an approval (GHSA-p49r-jqh2-v668).
+    ['sms', (s: string) => withChannels(s, '[sms]'), /'sms' is not one of signal, web, slack, email/],
     ['a channel twice', (s: string) => withChannels(s, '[email, email]'), /'email' is listed twice/],
     ['a list that is not strings', (s: string) => withChannels(s, '[1]'), /'approval_channels' must be a list of strings/],
   ])('rejects %s', (_label, edit, error) => {

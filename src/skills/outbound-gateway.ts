@@ -99,7 +99,7 @@ import {
   AUTONOMOUS_DAILY_CAP, AUTONOMOUS_DAILY_CAP_WINDOW_MS, AUTONOMOUS_MAX_COPIED_EVIDENCE, AUTONOMOUS_THREAD_COOLDOWN_MS, checkAutonomousLimits, conversationIdsOf, newlyCopied, repliedToLatest,
   type AutonomousLimitRefusal,
 } from './principal-send/autonomous-limits.js';
-import { hasSystemLineage, isOutsiderOriginated } from '../contacts/principal.js';
+import { hasSystemLineage, isOutsiderOriginated, hasUnauthenticatedPrincipalLineage } from '../contacts/principal.js';
 import {
   mailboxDraftLabel, quoteItemsToReview, quoteProblem, replyOrigin, threadMessageProof, threadTextSeenByAll,
   type QuoteProblem, type ThreadMessageProof,
@@ -946,6 +946,14 @@ function loggableContactId(contactId: string): string {
   return isUuid(contactId) ? contactId : redactId(contactId);
 }
 
+/**
+ * Whether a send belongs to a turn an unverified principal match started (GHSA-p49r-jqh2-v668):
+ * its originator says so, or, for a relayed reply with no originator, the dispatcher's flag.
+ */
+function unverifiedRequester(options: { originator?: TaskOriginator; requesterUnverified?: boolean } | undefined): boolean {
+  return options?.requesterUnverified === true || hasUnauthenticatedPrincipalLineage({ originator: options?.originator });
+}
+
 /** Every To address of an email request, primary first (#2273). */
 function emailToAddresses(request: EmailSendRequest): string[] {
   return [request.to, ...(request.additionalTo ?? [])];
@@ -1510,6 +1518,12 @@ export class OutboundGateway {
        * pass through. Used only by the relay budget (#1320). Omitted: never budgeted.
        */
       originator?: TaskOriginator;
+      /**
+       * The send belongs to a turn an unverified principal match started (GHSA-p49r-jqh2-v668), for a
+       * caller with no originator to pass: a relayed reply, which the dispatcher flags. Any hold it
+       * raises is marked so, as for an unauthenticated principal originator.
+       */
+      requesterUnverified?: boolean;
     },
   ): Promise<OutboundSendResult> {
     // Closes the second outbound surface (#2474, design D1): a send through an account bound to
@@ -1614,7 +1628,7 @@ export class OutboundGateway {
           raised = await this.raiseSendApproval(
             request,
             options.reExecRecipe,
-            { taskEventId: options.taskEventId, conversationId: options.conversationId, postTurn: options.postTurn },
+            { taskEventId: options.taskEventId, conversationId: options.conversationId, postTurn: options.postTurn, requesterUnverified: unverifiedRequester(options) },
             [`Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`],
           );
         }
@@ -1863,6 +1877,7 @@ export class OutboundGateway {
                 shortRef: candidateRef,
                 description: recipe.description,
                 payload: recipe.partialPayload ?? {},
+                ...(unverifiedRequester(options) ? { requesterUnverified: true } : {}),
                 expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
               });
               actionRef = candidateRef;
@@ -2821,7 +2836,7 @@ export class OutboundGateway {
   private async raiseSendApproval(
     request: OutboundSendRequest,
     recipe: SendRecipe,
-    ctx: { taskEventId: string; conversationId?: string | null; postTurn?: boolean },
+    ctx: { taskEventId: string; conversationId?: string | null; postTurn?: boolean; requesterUnverified?: boolean },
     extraLines: string[],
     preamble?: string,
     disclosureAsk?: DisclosureAsk,
@@ -2846,6 +2861,8 @@ export class OutboundGateway {
         description: recipe.description,
         payload: recipe.partialPayload ?? {},
         ...(disclosureAsk ? { disclosureAsk } : {}),
+        // A send an unverified principal match started: delivered only on a verified channel (GHSA-p49r-jqh2-v668).
+        ...(ctx.requesterUnverified === true ? { requesterUnverified: true } : {}),
         expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
       });
     } catch (err) {
@@ -2992,6 +3009,10 @@ export class OutboundGateway {
       principalDirected?: boolean;
       holdRecipe?: SendRecipe;
       reExecRecipe?: SendRecipe;
+      /** Who started the work: a hold raised for an unverified principal match is marked (GHSA-p49r-jqh2-v668). */
+      originator?: TaskOriginator;
+      /** A relayed reply's flag for the same (see send()). */
+      requesterUnverified?: boolean;
     } | undefined;
     /**
      * False for a saved draft: its drafter cannot rewrite it, so a block holds instead, and so
@@ -3254,7 +3275,7 @@ export class OutboundGateway {
       const raised = await this.raiseSendApproval(
         request,
         recipe,
-        { taskEventId: options.taskEventId, conversationId: options.conversationId, postTurn: options.postTurn },
+        { taskEventId: options.taskEventId, conversationId: options.conversationId, postTurn: options.postTurn, requesterUnverified: unverifiedRequester(options) },
         ask ? alsoHeld(decision.findings) : [`Held by the send review: ${decision.reason}`],
         ask ? askPreamble({ ...ask, ...this.requesterNameFor(ask, args.requester) }) : undefined,
         stored,

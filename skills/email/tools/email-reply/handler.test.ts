@@ -168,6 +168,92 @@ describe('EmailReplyHandler', () => {
     expect(options).not.toHaveProperty('recipientDisplayName');
   });
 
+  // GHSA-p49r-jqh2-v668: on a turn a principal-matching but unverified message started (a
+  // forged From, an SMS), a reply never fans out: what the principal may read must not reach
+  // an address the forger put on the thread.
+  describe('on an unverified principal turn', () => {
+    const UNVERIFIED = {
+      originator: { contactId: 'principal-id', systemRole: 'principal', authenticated: false, channel: 'email', tier: 'principal', initiatedAt: '2026-11-17T00:00:00Z' },
+    };
+    const forged = {
+      from: [{ email: 'boss@example.com' }],
+      to: [{ email: 'nathan@example.com' }, { email: 'partner@example.com' }],
+      cc: [{ email: 'attacker@example.com' }],
+      subject: 'Calendar', body: '', date: 0,
+    };
+
+    it('replies to the sender only, never reply-all', async () => {
+      const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'Your week: ...' }, { taskMetadata: UNVERIFIED });
+      ctx.selfEmails = ['nathan@example.com'];
+      (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue(forged);
+      (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, messageId: 'reply-1' });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      const request = (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<string, unknown>;
+      expect(request['to']).toBe('boss@example.com');
+      expect(request['additionalTo']).toBeUndefined();
+      expect(request['cc']).toBeUndefined();
+    });
+
+    // A demoted wake carries an agent originator, so only the input says the request was
+    // unverified. The gateway must still hear it, so a hold goes to a verified channel only.
+    it('tells the gateway the requester is unverified when only the input carries sender_only', async () => {
+      const DEMOTED = { originator: { ...UNVERIFIED.originator, systemRole: 'agent', tier: null } };
+      const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'Your week: ...', sender_only: true }, { taskMetadata: DEMOTED });
+      ctx.selfEmails = ['nathan@example.com'];
+      (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue(forged);
+      (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, messageId: 'reply-1' });
+
+      expect((await handler.execute(ctx)).success).toBe(true);
+      const [request, options] = (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mock.calls[0]! as [Record<string, unknown>, Record<string, unknown>];
+      expect(request['cc']).toBeUndefined();
+      expect(request['additionalTo']).toBeUndefined();
+      expect(options['requesterUnverified']).toBe(true);
+    });
+
+    // An approval replays the stored payload under the approver's verified turn: the restriction
+    // must travel with the hold, or the approved reply would go reply-all after all.
+    it('pins sender-only into the hold, and an approved replay honours it', async () => {
+      const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'Your week: ...' }, { taskMetadata: UNVERIFIED });
+      ctx.selfEmails = ['nathan@example.com'];
+      (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue(forged);
+      (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, messageId: 'reply-1' });
+      await handler.execute(ctx);
+      const options = (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mock.calls[0]![1] as { holdRecipe: { partialPayload: Record<string, unknown> } };
+      expect(options.holdRecipe.partialPayload).toMatchObject({ sender_only: true });
+
+      const VERIFIED = { originator: { ...UNVERIFIED.originator, authenticated: true } };
+      const replay = makeCtx(options.holdRecipe.partialPayload, { taskMetadata: VERIFIED });
+      replay.selfEmails = ['nathan@example.com'];
+      (replay.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue(forged);
+      (replay.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, messageId: 'reply-2' });
+      await handler.execute(replay);
+      const request = (replay.outboundGateway!.send as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<string, unknown>;
+      expect(request['additionalTo']).toBeUndefined();
+      expect(request['cc']).toBeUndefined();
+    });
+
+    it('refuses an explicit cc', async () => {
+      const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'x', cc: 'attacker@example.com' }, { taskMetadata: UNVERIFIED });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
+    });
+
+    it("refuses a reply to Curia's own message, whose To list could be anyone", async () => {
+      const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'x' }, { taskMetadata: UNVERIFIED });
+      ctx.selfEmails = ['nathan@example.com'];
+      (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ...forged, from: [{ email: 'nathan@example.com' }], to: [{ email: 'attacker@example.com' }], cc: [],
+      });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
+    });
+  });
+
   describe('replying to a message Curia sent (#2273)', () => {
     it('addresses the original recipient, not Curia, and never CCs Curia', async () => {
       const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'Update on the three.' });
@@ -904,7 +990,7 @@ describe('EmailReplyHandler task outreach (#2312)', () => {
   it('with no task title, summarises the outreach row by the reply subject, never the body', async () => {
     const ctx = makeCtx(
       { reply_to_message_id: 'nylas-msg-1', body: 'My card ends 4242, call me on 416-555-0100.' },
-      { taskMetadata: { originator: { contactId: 'principal-id', systemRole: 'principal', channel: 'email', initiatedAt: '2026-10-26T00:00:00Z' } } },
+      { taskMetadata: { originator: { contactId: 'principal-id', systemRole: 'principal', authenticated: true, channel: 'email', initiatedAt: '2026-10-26T00:00:00Z' } } },
     );
     (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
       from: [{ email: 'bookings@acme.example' }], to: [], cc: [], subject: 'Appointment', body: '', date: 0,

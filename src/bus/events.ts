@@ -274,6 +274,13 @@ interface OutboundMessagePayload {
    * that Curia told the principal; it is never part of the outbound text.
    */
   reportedToPrincipal?: string;
+  /**
+   * True when the turn this replies to was started by a message that matched the principal on
+   * a channel that did not prove it (a forged email From, an SMS; GHSA-p49r-jqh2-v668). Set
+   * only by the dispatcher from the task's stamped originator. Adapters hand it to the gateway,
+   * which marks any approval the reply's hold raises as unverified.
+   */
+  requesterUnverified?: boolean;
 }
 
 // OutboundDeliveredPayload — emitted by OutboundGateway after a successful

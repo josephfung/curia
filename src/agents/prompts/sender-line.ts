@@ -17,6 +17,15 @@
 /** Stated for every sender who is not the principal, resolved or not. */
 export const NOT_PRINCIPAL_LINE = 'This sender is not the principal.';
 
+/**
+ * Stated when the message matches the principal's SMS number or email address but its channel
+ * did not prove they sent it (GHSA-p49r-jqh2-v668): identity yes, authority no. Only on that turn.
+ */
+export const UNAUTHENTICATED_PRINCIPAL_LINE =
+  'This message matches the principal\'s address, but its channel did not prove they sent it. Help as usual. '
+  + 'Actions that need the principal\'s authority are sent to them for confirmation on a verified channel. '
+  + 'When that happens, tell them a confirmation is waiting; don\'t ask them to repeat the request.';
+
 /** First line of the LOW-TRUST block for a sender with no contact record. */
 export const UNRESOLVED_SENDER_HEAD = `Unknown sender (no contact record). ${NOT_PRINCIPAL_LINE}`;
 
@@ -47,7 +56,13 @@ export function renderSenderLine(input: SenderLineInput): string {
  *     adapter sets `metadata.senderVerified`, and `metadata.senderAuthentication` to tell
  *     an explicit failure from a message with no result).
  */
-export function renderSenderFacts(input: { identityVerified: boolean; messageAuthenticated: unknown; messageAuthentication?: unknown }): string {
+export function renderSenderFacts(input: {
+  identityVerified: boolean;
+  messageAuthenticated: unknown;
+  messageAuthentication?: unknown;
+  /** The turn matched the principal without the channel proving it (GHSA-p49r-jqh2-v668). */
+  principalUnauthenticated?: boolean;
+}): string {
   const identity = input.identityVerified ? 'verified' : 'not verified';
   // The adapter's status when present: a message with no Authentication-Results is "not
   // confirmed", not "failed". Otherwise the boolean, as before.
@@ -58,5 +73,6 @@ export function renderSenderFacts(input: { identityVerified: boolean; messageAut
       ? 'not available'
       : input.messageAuthenticated ? 'passed' : 'failed';
   return `Contact identity: ${identity} (whether this address is confirmed as belonging to this contact)\n`
-    + `Message authentication: ${auth} (SPF/DKIM/DMARC for this message)`;
+    + `Message authentication: ${auth} (SPF/DKIM/DMARC for this message)`
+    + (input.principalUnauthenticated === true ? `\n${UNAUTHENTICATED_PRINCIPAL_LINE}` : '');
 }

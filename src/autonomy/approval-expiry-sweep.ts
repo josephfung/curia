@@ -225,9 +225,10 @@ export class ApprovalExpirySweep {
     for (const channel of order) {
       result = await approvalDelivery.deliver(shortRef, channel);
       if (result.delivered) return result;
-      // Only a channel problem is worth another channel; anything else (already delivered,
-      // gone) is final for this row.
-      if (result.reason !== 'channel_unavailable' && result.reason !== 'send_failed') return result;
+      // Only a channel problem is worth another channel, including email for an unverified
+      // request (GHSA-p49r-jqh2-v668); anything else (already delivered, gone, over the hourly
+      // cap for unverified requests) is final for this row this tick.
+      if (result.reason !== 'channel_unavailable' && result.reason !== 'send_failed' && result.reason !== 'verified_channel_required') return result;
     }
     // `order` always has email, so the loop ran at least once.
     return result as DeliverResult;
