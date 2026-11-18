@@ -19,7 +19,7 @@
 
 import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest, ActionRisk, EmailChannelStatus, PrincipalMailboxReadiness, ApprovalVia } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
-import { isPrincipalOriginated, isOutsiderOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier, isUnauthenticatedPrincipal } from '../contacts/principal.js';
+import { isPrincipalOriginated, isOutsiderOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier, isUnauthenticatedPrincipal, hasUnauthenticatedPrincipalLineage } from '../contacts/principal.js';
 import { unverifiedChannelLabel } from '../autonomy/approval-delivery.js';
 import { resolvePrincipalIsSoleRecipientFromSkillInput, isSolelyInitiatingSender } from '../contacts/principal-recipient.js';
 import { findCarveoutSkill } from '../contacts/principal-channel-registry.js';
@@ -1025,7 +1025,7 @@ export class ExecutionLayer {
         const result = await this.approvalTrigger.request({
           taskId: options.taskEventId,
           // Raised on an unauthenticated principal turn: delivered only on a verified channel (GHSA-p49r-jqh2-v668).
-          requesterUnverified: isUnauthenticatedPrincipal(lineageTaskMetadata),
+          requesterUnverified: hasUnauthenticatedPrincipalLineage(lineageTaskMetadata),
           conversationId: options.conversationId,
           toolName,
           actionRisk: String(actionRisk),
@@ -1086,7 +1086,7 @@ export class ExecutionLayer {
         const result = await this.approvalTrigger.request({
           taskId: options.taskEventId,
           // Raised on an unauthenticated principal turn: delivered only on a verified channel (GHSA-p49r-jqh2-v668).
-          requesterUnverified: isUnauthenticatedPrincipal(options.taskMetadata),
+          requesterUnverified: hasUnauthenticatedPrincipalLineage(options.taskMetadata),
           conversationId: options.conversationId,
           toolName,
           actionRisk: String(actionRisk),
@@ -1154,7 +1154,7 @@ export class ExecutionLayer {
       const result = await this.approvalTrigger.request({
         taskId: options.taskEventId,
         // Raised on an unauthenticated principal turn: delivered only on a verified channel (GHSA-p49r-jqh2-v668).
-        requesterUnverified: isUnauthenticatedPrincipal(options.taskMetadata),
+        requesterUnverified: hasUnauthenticatedPrincipalLineage(options.taskMetadata),
         conversationId: options.conversationId,
         toolName,
         actionRisk: String(actionRisk),
@@ -1316,7 +1316,7 @@ export class ExecutionLayer {
         const result = await this.approvalTrigger.request({
           taskId: options.taskEventId,
           // Raised on an unauthenticated principal turn: delivered only on a verified channel (GHSA-p49r-jqh2-v668).
-          requesterUnverified: isUnauthenticatedPrincipal(options.taskMetadata),
+          requesterUnverified: hasUnauthenticatedPrincipalLineage(options.taskMetadata),
           conversationId: options.conversationId,
           toolName,
           actionRisk: String(actionRisk),
@@ -1430,7 +1430,7 @@ export class ExecutionLayer {
     // replay runs on the approver's verified turn, and the reply's recipients come from the
     // thread at run time, where the approver cannot see what a forged message added, so the
     // restriction rides in the stored input (GHSA-p49r-jqh2-v668).
-    return toolName === 'email-reply' && isUnauthenticatedPrincipal(lineageTaskMetadata)
+    return toolName === 'email-reply' && hasUnauthenticatedPrincipalLineage(lineageTaskMetadata)
       ? { ...bound, sender_only: true }
       : bound;
   }
@@ -3291,7 +3291,7 @@ export class ExecutionLayer {
       // An email-reply from an unverified principal request answers the sender only
       // (GHSA-p49r-jqh2-v668). Read from the raw lineage: the ladder can demote a wake to agent,
       // and the handler sees only that demoted copy. Carried on the input, so a held reply keeps it.
-      input: toolName === 'email-reply' && isUnauthenticatedPrincipal(options?.taskMetadata)
+      input: toolName === 'email-reply' && hasUnauthenticatedPrincipalLineage(options?.taskMetadata)
         ? { ...input, sender_only: true }
         : input,
       secret: (name: string): string => {

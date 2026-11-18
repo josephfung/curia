@@ -36,7 +36,7 @@ import {
   parseRecipientReference,
 } from '../../../../src/skills/_shared/recipient-reference.js';
 import { deriveEmailReplyRecipientSet } from '../../../../src/channels/email/reply-recipients.js';
-import { isUnauthenticatedPrincipal } from '../../../../src/contacts/principal.js';
+import { hasUnauthenticatedPrincipalLineage } from '../../../../src/contacts/principal.js';
 import { replyDisplayName, replyRecipientSource } from '../../../../src/channels/email/reply-recipient-provenance.js';
 import {
   looksLikeOutboundContextEntryId,
@@ -171,7 +171,7 @@ export class EmailReplyHandler implements ToolHandler {
     // read must not reach an address the forger put on the thread.
     // `sender_only` is not a manifest input: it rides in a held reply's payload, so the approved
     // replay (run under the approver's verified turn) keeps the restriction. It only narrows.
-    const senderOnly = isUnauthenticatedPrincipal(ctx.taskMetadata) || ctx.input['sender_only'] === true;
+    const senderOnly = hasUnauthenticatedPrincipalLineage(ctx.taskMetadata) || ctx.input['sender_only'] === true;
     const replayPayload = senderOnly ? { ...ctx.input, sender_only: true } : ctx.input;
     if (senderOnly && typeof ccInput === 'string' && ccInput.trim().length > 0) {
       return {

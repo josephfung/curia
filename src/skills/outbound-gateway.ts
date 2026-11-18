@@ -99,7 +99,7 @@ import {
   AUTONOMOUS_DAILY_CAP, AUTONOMOUS_DAILY_CAP_WINDOW_MS, AUTONOMOUS_MAX_COPIED_EVIDENCE, AUTONOMOUS_THREAD_COOLDOWN_MS, checkAutonomousLimits, conversationIdsOf, newlyCopied, repliedToLatest,
   type AutonomousLimitRefusal,
 } from './principal-send/autonomous-limits.js';
-import { hasSystemLineage, isOutsiderOriginated, isUnauthenticatedPrincipal } from '../contacts/principal.js';
+import { hasSystemLineage, isOutsiderOriginated, hasUnauthenticatedPrincipalLineage } from '../contacts/principal.js';
 import {
   mailboxDraftLabel, quoteItemsToReview, quoteProblem, replyOrigin, threadMessageProof, threadTextSeenByAll,
   type QuoteProblem, type ThreadMessageProof,
@@ -951,7 +951,7 @@ function loggableContactId(contactId: string): string {
  * its originator says so, or, for a relayed reply with no originator, the dispatcher's flag.
  */
 function unverifiedRequester(options: { originator?: TaskOriginator; requesterUnverified?: boolean } | undefined): boolean {
-  return options?.requesterUnverified === true || isUnauthenticatedPrincipal({ originator: options?.originator });
+  return options?.requesterUnverified === true || hasUnauthenticatedPrincipalLineage({ originator: options?.originator });
 }
 
 /** Every To address of an email request, primary first (#2273). */

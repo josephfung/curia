@@ -104,6 +104,22 @@ export function isUnauthenticatedPrincipal(
 }
 
 /**
+ * isUnauthenticatedPrincipal, or an `agent` originator the autonomy ladder demoted from such a
+ * principal (`ladderedFrom: 'principal'`, still unauthenticated). A demoted wake, and a specialist
+ * it delegates to, carry only the demoted copy. Use this where the request's unverified origin
+ * narrows what happens (sender-only replies, approvals to verified channels only), never to grant.
+ */
+export function hasUnauthenticatedPrincipalLineage(
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  if (isUnauthenticatedPrincipal(metadata)) return true;
+  const originator = metadata?.['originator'] as unknown as TaskOriginator | undefined;
+  return originator?.systemRole === 'agent'
+    && originator.ladderedFrom === 'principal'
+    && originator.authenticated !== true;
+}
+
+/**
  * True when THIS execution context is a live principal turn — the current turn originated from a
  * fresh principal inbound (directly, or via a SYNCHRONOUS delegation that forwarded the signal).
  * This is the sole satisfier of the `elevated` skill gate (#1126): system, agent, scheduled, and

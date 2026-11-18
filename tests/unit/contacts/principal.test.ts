@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { isPrincipalOriginated, hasPrincipalIdentity, hasPrincipalAuthority, isAgentOriginated, isSystemOriginated, isLivePrincipalTurn, makeSystemOriginator, makePrincipalOriginator, capOriginatorToParent, isOutsiderOriginated } from '../../../src/contacts/principal.js';
+import { isPrincipalOriginated, hasPrincipalIdentity, hasPrincipalAuthority, isAgentOriginated, isSystemOriginated, isLivePrincipalTurn, makeSystemOriginator, makePrincipalOriginator, capOriginatorToParent, isOutsiderOriginated, hasUnauthenticatedPrincipalLineage } from '../../../src/contacts/principal.js';
 import type { TaskOriginator } from '../../../src/contacts/types.js';
 
 describe('isPrincipalOriginated', () => {
@@ -306,5 +306,26 @@ describe('isOutsiderOriginated (#1320 — digest tools refuse an outsider\'s tas
   it('is false when there is no originator (structurally internal work)', () => {
     expect(isOutsiderOriginated(undefined)).toBe(false);
     expect(isOutsiderOriginated({})).toBe(false);
+  });
+});
+
+describe('hasUnauthenticatedPrincipalLineage (GHSA-p49r-jqh2-v668)', () => {
+  const base = { contactId: 'ceo-id', channel: 'sms', initiatedAt: '2026-06-23T00:00:00.000Z' };
+  const meta = (o: Record<string, unknown>) => ({ originator: { ...base, ...o } });
+
+  it.each([
+    ['an unauthenticated principal', { systemRole: 'principal', authenticated: false }, true],
+    ['one the ladder demoted to agent', { systemRole: 'agent', ladderedFrom: 'principal', authenticated: false, tier: null }, true],
+    ['an authenticated principal', { systemRole: 'principal', authenticated: true }, false],
+    ['an authenticated principal the ladder demoted', { systemRole: 'agent', ladderedFrom: 'principal', authenticated: true, tier: null }, false],
+    ['an agent demoted from system', { systemRole: 'agent', ladderedFrom: 'system', tier: null }, false],
+    ['a plain agent', { systemRole: 'agent', tier: null }, false],
+  ] as const)('%s', (_label, originator, expected) => {
+    expect(hasUnauthenticatedPrincipalLineage(meta(originator))).toBe(expected);
+  });
+
+  it('is false with no originator', () => {
+    expect(hasUnauthenticatedPrincipalLineage(undefined)).toBe(false);
+    expect(hasUnauthenticatedPrincipalLineage({})).toBe(false);
   });
 });

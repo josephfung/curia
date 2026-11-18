@@ -910,6 +910,29 @@ describe('autonomy gates', () => {
       expect(ctx.input['sender_only']).toBe(expected);
     });
 
+    // `delegate` forwards the demoted originator to the specialist, with no wake marker. The
+    // ladder's `ladderedFrom` is what still says the request came from an unverified principal match.
+    it.each([
+      ['an unverified', false, true],
+      ['a verified', true, undefined],
+    ] as const)('passes sender_only to a specialist\'s email-reply delegated from a demoted wake of %s principal request', async (_label, authenticated, expected) => {
+      const registry = new ToolRegistry();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(80) });
+
+      const result = await layer.invoke('email-reply', { reply_to_message_id: 'm-1', body: 'hi' }, undefined, {
+        taskEventId: 'task-2',
+        taskMetadata: {
+          originator: { ...principalLineage, channel: authenticated ? 'email' : 'sms', authenticated, systemRole: 'agent', tier: null, ladderedFrom: 'principal' },
+        },
+      });
+
+      expect(result.success).toBe(true);
+      const ctx = vi.mocked(handler.execute).mock.calls[0]![0];
+      expect(ctx.input['sender_only']).toBe(expected);
+    });
+
     it('same-task wake of a principal task LOSES the bypass at score < 70 (propose-only)', async () => {
       const registry = new ToolRegistry();
       const handler = makeHandler('should not run');

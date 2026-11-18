@@ -8,7 +8,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { buildCaptureOrigin } from '../../../../src/secrets/build-capture-origin.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
-import { isUnauthenticatedPrincipal } from '../../../../src/contacts/principal.js';
+import { hasUnauthenticatedPrincipalLineage } from '../../../../src/contacts/principal.js';
 
 function requiredString(input: Record<string, unknown>, key: string): string | null {
   const v = input[key];
@@ -42,7 +42,7 @@ export class CardUseRequestHandler implements ToolHandler {
           taskEventId: ctx.taskEventId,
           conversationId: ctx.conversationId,
           origin,
-          requesterUnverified: isUnauthenticatedPrincipal(ctx.taskMetadata),
+          requesterUnverified: hasUnauthenticatedPrincipalLineage(ctx.taskMetadata),
         },
       );
       return {
