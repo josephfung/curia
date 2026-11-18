@@ -67,7 +67,7 @@ export interface ToolManifest {
    *  executiveProfileService, officeIdentityService, browserService, bullpenService, toolSearch,
    *  actionLogRepo, auditLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext,
    *  taskRepo, workingDocs, secretCapture, cardUse, secretResolver, userSecretIndex, taskOutreach, disclosureDecisions,
-   *  voiceSessions, phoneAppReady, emailChannelStatus, principalMailboxReady, nylasSignInReadiness, curiaEmailAddresses.
+   *  voiceSessions, phoneAppReady, emailChannelStatus, principalMailboxReady, nylasSignInReadiness, mailboxSignIn, curiaEmailAddresses.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */
@@ -207,6 +207,11 @@ export interface ToolContext {
    * capability `nylasSignInReadiness`. Absent means the setup task stays pending.
    */
   nylasSignInReadiness?: () => Promise<NylasSignInReadiness>;
+  /**
+   * Mint-only mailbox sign-in links (#2361), for skills declaring `mailboxSignIn`. It yields a URL
+   * and an expiry; there is no method that returns a grant or a token row.
+   */
+  mailboxSignIn?: import('../nylas/mailbox-signin-service.js').MailboxSignInMinter;
   /**
    * Curia's own mailbox addresses, read from the email accounts table at call time
    * (#2409) — unlike `selfEmails`, which is fixed at boot. Injected for skills that

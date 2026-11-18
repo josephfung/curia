@@ -54,6 +54,7 @@ export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
   'emailChannelStatus',
   'principalMailboxReady',
   'nylasSignInReadiness',
+  'mailboxSignIn',
   'curiaEmailAddresses',
   'mailboxDirectory',
   'triageServices',

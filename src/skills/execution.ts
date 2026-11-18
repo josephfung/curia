@@ -416,6 +416,7 @@ export class ExecutionLayer {
   private emailChannelStatus?: () => Promise<EmailChannelStatus>;
   private principalMailboxReady?: () => Promise<PrincipalMailboxReadiness>;
   private nylasSignInReadiness?: () => Promise<NylasSignInReadiness>;
+  private mailboxSignIn?: import('../nylas/mailbox-signin-service.js').MailboxSignInMinter;
   private curiaEmailAddresses?: () => Promise<string[]>;
   private agentRegistry?: AgentRegistry;
   private contactService?: ContactService;
@@ -548,6 +549,8 @@ export class ExecutionLayer {
     /** setup-status: a live principal mailbox passed its last canary (#2475). */
     principalMailboxReady?: () => Promise<PrincipalMailboxReadiness>;
     nylasSignInReadiness?: () => Promise<NylasSignInReadiness>;
+    /** Backs the 'mailboxSignIn' capability (#2361). */
+    mailboxSignIn?: import('../nylas/mailbox-signin-service.js').MailboxSignInMinter;
     /** ceo-inbox list/search: Curia's own addresses, read live (#2409). */
     curiaEmailAddresses?: () => Promise<string[]>;
     confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
@@ -592,6 +595,7 @@ export class ExecutionLayer {
     this.emailChannelStatus = options?.emailChannelStatus;
     this.principalMailboxReady = options?.principalMailboxReady;
     this.nylasSignInReadiness = options?.nylasSignInReadiness;
+    this.mailboxSignIn = options?.mailboxSignIn;
     this.curiaEmailAddresses = options?.curiaEmailAddresses;
     this.agentRegistry = options?.agentRegistry;
     this.contactService = options?.contactService;
@@ -698,6 +702,7 @@ export class ExecutionLayer {
       emailChannelStatus: this.emailChannelStatus,
       principalMailboxReady: this.principalMailboxReady,
       nylasSignInReadiness: this.nylasSignInReadiness,
+      mailboxSignIn: this.mailboxSignIn,
       curiaEmailAddresses: this.curiaEmailAddresses,
       confidencePipeline: this.confidencePipeline,
       // tempFileStore is handled as a special case in the injection loop (writeTempFile closure).
