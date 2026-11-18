@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '../api.js';
+import { ConnectWithGoogle } from './ConnectWithGoogle.js';
 
 // Mirrors the Task 9 email-accounts registry entry shape.
 interface EmailAccount {
@@ -181,8 +182,13 @@ export function EmailAccountsSection({ onChanged }: { onChanged?: () => void } =
         )}
       </div>
 
-      {/* Add-account form */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+      {/* Add-account: Google sign-in first; the grant-id form is the fallback. */}
+      <div style={{ marginTop: 12 }}>
+        <ConnectWithGoogle target="curia" label={name} />
+      </div>
+      <details style={{ marginTop: 8 }}>
+      <summary>Paste a grant ID instead</summary>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
         <input
           type="text"
           placeholder="account name (e.g. curia)"
@@ -222,6 +228,7 @@ export function EmailAccountsSection({ onChanged }: { onChanged?: () => void } =
           Add account
         </button>
       </div>
+      </details>
     </div>
   );
 }
