@@ -52,6 +52,12 @@ describe('GET /api/mailbox-signin/callback', () => {
     expect(res.headers.location).toBe('/mailbox-signin/done?result=failed&restart=0');
   });
 
+  it('a spent link redirects with result=used (K)', async () => {
+    app = await build(async () => ({ outcome: 'used' as const, restartScheduled: false }));
+    const res = await app.inject({ method: 'GET', url: '/api/mailbox-signin/callback?state=S&code=C' });
+    expect(res.headers.location).toBe('/mailbox-signin/done?result=used&restart=0');
+  });
+
   it('never answers 500: a throwing handler still redirects to failed', async () => {
     app = await build(async () => { throw new Error('boom'); });
     const res = await app.inject({ method: 'GET', url: '/api/mailbox-signin/callback?state=S&code=C' });
