@@ -64,9 +64,10 @@ describeIf('migration 128: principal originator authenticated backfill', () => {
       for (const [label, o] of cases) {
         const { rows } = await client.query<{ id: string }>(
           `INSERT INTO scheduled_jobs (agent_id, source_agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone, originator)
-           VALUES ('coordinator', 'coordinator', '0 9 * * *', '{}'::jsonb, 'pending', now() + interval '1 day', 'system', 'UTC', $1)
+           VALUES ('coordinator', 'coordinator', '0 9 * * *', $2::jsonb, 'pending', now() + interval '1 day', 'system', 'UTC', $1)
            RETURNING id`,
-          [JSON.stringify(o)],
+          // A payload per case: system jobs are unique on agent, cron and payload (scheduled_jobs_declarative_uq).
+          [JSON.stringify(o), JSON.stringify({ case: label })],
         );
         ids[label] = rows[0]!.id;
       }
