@@ -431,6 +431,8 @@ interface OutboundNoReplyPayload {
 //   - 'database_unavailable': principal alert that Postgres has been unreachable for >5 minutes (#1381)
 //   - 'principal_mailbox_outage': principal alert that a principal mailbox failed its health canary (#2475)
 //   - 'inbox_triage_paused': principal alert that inbox triage hit its daily batch ceiling; once a day (#2475)
+//   - 'mailbox_signin_admin_blocked': principal alert that a Google Workspace admin policy blocked a
+//                           hosted mailbox sign-in, naming the OAuth client id to trust (#2361)
 //   - 'principal_note':     no longer emitted (#2159: notes go to the digest queue); kept for historical audit rows
 export interface OutboundNotificationPayload {
   notificationType:
@@ -444,6 +446,7 @@ export interface OutboundNotificationPayload {
     | 'database_unavailable'  // Postgres unreachable beyond escalation threshold (#1381)
     | 'principal_mailbox_outage' // a principal mailbox failed its health canary; once per outage (#2475)
     | 'inbox_triage_paused'      // inbox triage hit its daily batch ceiling; once a local day (#2475)
+    | 'mailbox_signin_admin_blocked' // a Workspace admin policy blocked a mailbox sign-in (#2361)
     | 'principal_note';       // no longer emitted (#2159); kept for historical audit rows
   /** Recipient email for this notification (always the principal email today). */
   ceoEmail: string;
@@ -1066,9 +1069,10 @@ interface PrincipalMailboxChangedPayload {
   mailboxId: string;
   action: 'add' | 'relabel' | 'set_default' | 'replace_grant' | 'remove';
   stage: 'requested' | 'completed';
-  /** A console session, or the bootstrap-secret header with no cookie. */
-  initiatedBy: 'session' | 'bootstrap_secret';
-  /** sessions.id of the actor. Absent when initiatedBy is bootstrap_secret. */
+  /** A console session, the bootstrap-secret header with no cookie, or a single-use hosted
+   *  sign-in link redeemed at the Nylas callback (#2361; no session, the link is the capability). */
+  initiatedBy: 'session' | 'bootstrap_secret' | 'signin_callback';
+  /** sessions.id of the actor. Absent unless initiatedBy is session. */
   actorSessionId?: string;
   /** remove: whether the principal still owns the address. */
   stillOwned?: boolean;

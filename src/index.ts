@@ -23,7 +23,7 @@ import { runner } from 'node-pg-migrate';
 import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveApprovalExpiryConfig, resolveReportFallbackConfig, resolveIdentityGateMode, resolveAutonomyGating, resolveVerificationConfig, resolveRelayBudgetConfig, resolveTurnInjectionConfig, resolveOutboundJudgeConfig, resolveOutboundRedactionConfig, OutboundConfigError, type OutboundJudgeSettings, type OutboundRedactionSettings } from './config.js';
 import { createVerificationRuntime } from './verification/index.js';
 import { createLogger } from './logger.js';
-import { HttpAdapter } from './channels/http/http-adapter.js';
+import { HttpAdapter, scheduleProcessExit } from './channels/http/http-adapter.js';
 import { hasLivePushSubscription, WebPushService } from './channels/web/push-service.js';
 import { loadVapidSetup, logVapidReadiness } from './channels/web/vapid.js';
 import { configuredReachChannels, reachChannelsFor } from './agents/principal-reach.js';
@@ -100,6 +100,9 @@ import { NylasClient } from './channels/email/nylas-client.js';
 import { nylasApiUri } from './nylas/region.js';
 import { checkNylasSignIn, createNylasSignInReaders, type NylasSignInReadiness } from './nylas/signin-readiness.js';
 import { MailboxSignInService } from './nylas/mailbox-signin-service.js';
+import { handleMailboxSignInCallback, type MailboxSignInCallbackQuery } from './nylas/mailbox-signin-callback.js';
+import { MailboxSignInResumeSubscriber } from './nylas/mailbox-signin-resume-subscriber.js';
+import { NylasAppClient } from './nylas/app-client.js';
 import { CalendarRouter, calendarRouterEnabled } from './channels/calendar/calendar-router.js';
 import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
@@ -3169,6 +3172,23 @@ async function main(): Promise<void> {
       all: principalIdentities.filter((i) => i.channel === 'email').map((i) => i.channelIdentifier),
     }),
   });
+  // The hosted-auth callback (#2361): exchanges the code with the live key and region, and writes
+  // through the same registries as the console. The principal side needs the principal admin, so
+  // in setup-required mode a principal sign-in is refused; Curia's own mailbox still works.
+  const mailboxSignInCallback = (query: MailboxSignInCallbackQuery) => handleMailboxSignInCallback(query, {
+    signIn: mailboxSignInService,
+    readiness: nylasSignInReadiness,
+    readApiKey: nylasSignInReaders.readApiKey,
+    appOrigin: config.appOrigin,
+    makeClient: (apiKey, apiUri) => new NylasAppClient({ apiKey, apiUri, logger }),
+    principalStore: principalMailboxStore,
+    ...(principalMailboxAdmin ? { principalAdmin: principalMailboxAdmin } : {}),
+    emailAccounts: emailAccountsRepo,
+    secrets: secretsService,
+    bus,
+    scheduleProcessExit,
+    logger,
+  });
   // One info line at boot when sign-in is unavailable. Fire-and-forget: boot never waits on Nylas,
   // and an unreachable Nylas is a reason to report, not an error.
   void nylasSignInReadiness().then((r) => {
@@ -3894,6 +3914,33 @@ async function main(): Promise<void> {
   );
   secretCaptureResumeSubscriber.start();
 
+  // Resume-after-sign-in (#2361): mailbox_signin.finished → a synthetic agent.task in the
+  // conversation the link came from. admin_blocked also notifies the principal with the Google
+  // client id to trust, read from the Nylas Google connector with the live key.
+  const mailboxSignInResumeSubscriber = new MailboxSignInResumeSubscriber({
+    bus,
+    logger,
+    registerRouting: (taskEventId, routing) => dispatcher.registerExternalTaskRouting(taskEventId, routing),
+    googleClientId: async () => {
+      const apiKey = await nylasSignInReaders.readApiKey();
+      if (!apiKey) return undefined;
+      const apiUri = nylasApiUri(await nylasSignInReaders.readRegion());
+      const connectors = await new NylasAppClient({ apiKey, apiUri, logger }).listConnectors();
+      return connectors.find((c) => c.provider === 'google')?.clientId;
+    },
+    ...(outboundGateway
+      ? {
+          notifier: {
+            gateway: outboundGateway,
+            principalEmail: () =>
+              findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
+              ?? (principalEmail.current || undefined),
+          },
+        }
+      : {}),
+  });
+  mailboxSignInResumeSubscriber.start();
+
   // Resume-after-card-decision (#1358): re-enters the agent parked mid-checkout when the
   // principal answers a card-use confirmation outside the requesting conversation.
   const cardUseResumeSubscriber = new CardUseResumeSubscriber(
@@ -4109,6 +4156,7 @@ async function main(): Promise<void> {
       service: mailboxSignInService,
       readiness: nylasSignInReadiness,
       readApiKey: nylasSignInReaders.readApiKey,
+      callback: mailboxSignInCallback,
     },
     principalMailboxConsole: principalMailboxAdmin
       ? {

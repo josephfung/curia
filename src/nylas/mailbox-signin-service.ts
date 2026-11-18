@@ -202,6 +202,15 @@ export class MailboxSignInService implements MailboxSignInMinter {
    * token cannot be replayed; the same statement tells a lapsed claim from a live one.
    */
   async consume(rawToken: string): Promise<SignInTokenRow | 'expired' | 'not_found' | 'used'> {
+    const claimed = await this.claim(rawToken);
+    return claimed.status === 'claimed' ? claimed.row : claimed.status;
+  }
+
+  /**
+   * consume(), but a lapsed claim keeps its row: the callback still owes the originating agent a
+   * `mailbox_signin.finished` with outcome `expired`, and the row carries that agent's routing.
+   */
+  async claim(rawToken: string): Promise<SignInClaim> {
     const tokenHash = hashToken(rawToken);
     const claim = await this.deps.pool.query<SignInTokenRow & { lapsed: boolean }>(
       `UPDATE mailbox_signin_tokens
@@ -211,12 +220,19 @@ export class MailboxSignInService implements MailboxSignInMinter {
       [tokenHash],
     );
     const claimed = claim.rows[0];
-    if (claimed) return claimed.lapsed ? 'expired' : toRow(claimed);
+    if (claimed) return claimed.lapsed ? { status: 'expired', row: toRow(claimed) } : { status: 'claimed', row: toRow(claimed) };
     // Nothing was claimed: either the link was already spent, or it never existed.
     const exists = await this.deps.pool.query('SELECT 1 FROM mailbox_signin_tokens WHERE token_hash = $1', [tokenHash]);
-    return exists.rowCount === 0 ? 'not_found' : 'used';
+    return exists.rowCount === 0 ? { status: 'not_found' } : { status: 'used' };
   }
 }
+
+/** What claim() found. A lapsed link is spent all the same, and comes back with its row. */
+export type SignInClaim =
+  | { status: 'claimed'; row: SignInTokenRow }
+  | { status: 'expired'; row: SignInTokenRow }
+  | { status: 'not_found' }
+  | { status: 'used' };
 
 /** Keep only the stored columns; the SELECT/UPDATE adds a computed flag that is not part of the row. */
 function toRow(found: SignInTokenRow & { spent?: boolean; lapsed?: boolean }): SignInTokenRow {

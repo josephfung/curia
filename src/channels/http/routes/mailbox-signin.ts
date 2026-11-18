@@ -5,9 +5,13 @@
 // and authorize by the token alone.
 //
 //   GET /api/mailbox-signin/start/:token — 302 to Nylas hosted auth, carrying the token as `state`
+//   GET /api/mailbox-signin/callback     — Nylas redirects back here; 302 to the console's done page
 //
 // The start route only PEEKS. The token is spent by the callback, so a link opened twice (a
 // prefetch, a second tab) still works until the sign-in actually returns.
+//
+// The done page's query carries the outcome, the target and whether a restart is coming — never
+// the state, the code, an address or a grant id.
 
 import type { FastifyInstance } from 'fastify';
 import type { Logger } from '../../../logger.js';
@@ -19,6 +23,10 @@ import {
   type NylasSignInReadiness,
 } from '../../../nylas/signin-readiness.js';
 import type { MailboxSignInService } from '../../../nylas/mailbox-signin-service.js';
+import type {
+  MailboxSignInCallbackQuery,
+  MailboxSignInCallbackResult,
+} from '../../../nylas/mailbox-signin-callback.js';
 
 export interface MailboxSignInRouteOptions {
   /** Only what the start route needs; the callback adds consume. */
@@ -32,18 +40,43 @@ export interface MailboxSignInRouteOptions {
   makeClient?: (apiKey: string, apiUri: string) => Pick<NylasAppClient, 'buildAuthUrl'>;
   /** The real pino logger. Fastify is created with `logger: false`, so request.log is a no-op. */
   logger: Logger;
+  /** The callback logic (handleMailboxSignInCallback with its deps bound). Absent: the callback
+   *  redirects to `failed` without touching the token. */
+  callback?: (query: MailboxSignInCallbackQuery) => Promise<MailboxSignInCallbackResult>;
 }
 
-/** Where the SPA's result page lives; the page itself arrives with the callback work. */
+/** Where the SPA's result page lives. */
 function donePage(result: string): string {
   return `/mailbox-signin/done?result=${result}`;
+}
+
+/** The done page after a callback: outcome, target (when a link was claimed) and restart flag. */
+function callbackDonePage(r: Pick<MailboxSignInCallbackResult, 'outcome' | 'target' | 'restartScheduled'>): string {
+  const params = new URLSearchParams({ result: r.outcome });
+  if (r.target !== undefined) params.set('target', r.target);
+  params.set('restart', r.restartScheduled ? '1' : '0');
+  return `/mailbox-signin/done?${params.toString()}`;
+}
+
+const CALLBACK_PARAMS = ['state', 'code', 'error', 'error_description'] as const;
+
+/** Only single-valued string params reach the handler; a repeated or odd one is dropped. */
+function callbackQuery(raw: unknown): MailboxSignInCallbackQuery {
+  const q: MailboxSignInCallbackQuery = {};
+  if (typeof raw !== 'object' || raw === null) return q;
+  const bag = raw as Record<string, unknown>;
+  for (const key of CALLBACK_PARAMS) {
+    const v = bag[key];
+    if (typeof v === 'string') q[key] = v;
+  }
+  return q;
 }
 
 export async function mailboxSignInRoutes(
   app: FastifyInstance,
   options: MailboxSignInRouteOptions,
 ): Promise<void> {
-  const { signIn, readiness, readApiKey, appOrigin, logger } = options;
+  const { signIn, readiness, readApiKey, appOrigin, logger, callback } = options;
   const makeClient = options.makeClient
     ?? ((apiKey: string, apiUri: string) => new NylasAppClient({ apiKey, apiUri, logger }));
 
@@ -77,6 +110,23 @@ export async function mailboxSignInRoutes(
       // Never log the token; the failure alone is enough to find the cause. The visitor is anonymous.
       logger.error({ err: err instanceof Error ? { name: err.name, message: err.message } : String(err) }, 'GET /api/mailbox-signin/start failed');
       return reply.redirect(donePage('failed'));
+    }
+  });
+
+  // Nylas sends the browser back here after Google. The handler never throws by contract; the
+  // catch is the last guard so the visitor always lands on the done page, never a 500.
+  app.get('/api/mailbox-signin/callback', START_RATE, async (request, reply) => {
+    if (callback === undefined) {
+      logger.warn('mailbox sign-in callback reached but not wired');
+      return reply.redirect(callbackDonePage({ outcome: 'failed', restartScheduled: false }));
+    }
+    try {
+      const result = await callback(callbackQuery(request.query));
+      return reply.redirect(callbackDonePage(result));
+    } catch (err) {
+      // Name only: never the query, which holds the state and the code.
+      logger.error({ errName: err instanceof Error ? err.name : typeof err }, 'GET /api/mailbox-signin/callback failed');
+      return reply.redirect(callbackDonePage({ outcome: 'failed', restartScheduled: false }));
     }
   });
 }

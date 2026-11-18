@@ -57,6 +57,25 @@ export interface CreateEmailAccountInput {
  *
  * All methods use parameterized queries; never interpolate variables into SQL.
  */
+/** How many suffixed names createForAddress tries before giving up. */
+const MAX_NAME_SUFFIX = 50;
+const MAX_NAME_LENGTH = 40;
+
+/**
+ * An account name from an address's local part, matching EMAIL_ACCOUNT_NAME_RE: lowercased,
+ * anything outside [a-z0-9_-] becomes '-', leading/trailing separators trimmed, 'mailbox' when
+ * nothing is left.
+ */
+export function emailAccountNameFromAddress(address: string): string {
+  const local = address.trim().toLowerCase().split('@')[0] ?? '';
+  const slug = local
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^[^a-z0-9]+/, '')
+    .slice(0, MAX_NAME_LENGTH)
+    .replace(/[-_]+$/, '');
+  return slug === '' ? 'mailbox' : slug;
+}
+
 /** How long the ceo-inbox tools wait for listSelfEmails, and its statement timeout (#2409). */
 export const CURIA_ADDRESS_LOOKUP_TIMEOUT_MS = 3000;
 
@@ -140,6 +159,43 @@ export class EmailAccountsRepo {
     );
     if (!rows[0]) throw new Error(`create: INSERT returned no row for email account '${input.name}'`);
     return mapRow(rows[0]);
+  }
+
+  /** The account whose address is `selfEmail` (case-insensitive), or null. The oldest name wins a tie. */
+  async findBySelfEmail(selfEmail: string): Promise<EmailAccountRow | null> {
+    const { rows } = await this.pool.query<DbEmailAccount>(
+      `SELECT ${COLS} FROM email_accounts WHERE lower(self_email) = lower($1) ORDER BY created_at ASC, name ASC LIMIT 1`,
+      [selfEmail.trim()],
+    );
+    return rows[0] ? mapRow(rows[0]) : null;
+  }
+
+  /**
+   * Insert an account for `selfEmail` under the first free name (#2361 sign-in): `preferName`
+   * when given, then the slug of the address's local part, then that slug suffixed -2, -3, ….
+   * ON CONFLICT DO NOTHING makes each try atomic, so a name taken meanwhile just moves on.
+   */
+  async createForAddress(
+    selfEmail: string,
+    opts: { createdBy: string; preferName?: string },
+  ): Promise<EmailAccountRow> {
+    const slug = emailAccountNameFromAddress(selfEmail);
+    const candidates = [
+      ...(opts.preferName !== undefined ? [opts.preferName] : []),
+      slug,
+      ...Array.from({ length: MAX_NAME_SUFFIX - 1 }, (_, i) => `${slug}-${i + 2}`),
+    ];
+    for (const name of candidates) {
+      const { rows } = await this.pool.query<DbEmailAccount>(
+        `INSERT INTO email_accounts (name, self_email, provider, enabled, created_by)
+         VALUES ($1, $2, 'nylas', true, $3)
+         ON CONFLICT (name) DO NOTHING
+         RETURNING ${COLS}`,
+        [name, selfEmail.trim(), opts.createdBy],
+      );
+      if (rows[0]) return mapRow(rows[0]);
+    }
+    throw new Error(`createForAddress: no free account name after ${candidates.length} tries`);
   }
 
   /**
