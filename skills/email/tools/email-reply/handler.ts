@@ -304,6 +304,8 @@ export class EmailReplyHandler implements ToolHandler {
         principalDirected: isPrincipalDirectedSend(ctx),
         // Counted against the outside contact who started this work (#1320).
         ...originatorOption(ctx),
+        // A demoted wake's originator no longer says the request was unverified; the input does.
+        ...(senderOnly ? { requesterUnverified: true } : {}),
         // Used only if band review holds this send (#2159): approval replays this skill with this input.
         holdRecipe: { toolName: 'email-reply', partialPayload: replayPayload, description: `Email reply to ${toLabel} — "${replySubject}"` },
         ...(provenance ? { recipientSource: provenance } : {}),

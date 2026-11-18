@@ -887,6 +887,29 @@ describe('autonomy gates', () => {
       expect(filed.input['sender_only']).toBe(expected);
     });
 
+    // A derived child below its threshold runs as agent, so the handler cannot see the unverified
+    // principal lineage on ctx.taskMetadata. The restriction has to reach it on the input.
+    it.each([
+      ['an unverified', false, true],
+      ['a verified', true, undefined],
+    ] as const)('passes sender_only to an email-reply that runs on a demoted derived wake of %s principal request', async (_label, authenticated, expected) => {
+      const registry = new ToolRegistry();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+      // 80 clears medium (70) but is below the derived-child threshold (90), so the ladder demotes.
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(80) });
+
+      const result = await layer.invoke('email-reply', { reply_to_message_id: 'm-1', body: 'hi' }, undefined, {
+        taskEventId: 'task-1',
+        taskMetadata: { originator: { ...principalLineage, channel: authenticated ? 'email' : 'sms', authenticated }, wakeContext: { derived: true } },
+      });
+
+      expect(result.success).toBe(true);
+      const ctx = vi.mocked(handler.execute).mock.calls[0]![0];
+      expect((ctx.taskMetadata as { originator: { systemRole: string } }).originator.systemRole).toBe('agent');
+      expect(ctx.input['sender_only']).toBe(expected);
+    });
+
     it('same-task wake of a principal task LOSES the bypass at score < 70 (propose-only)', async () => {
       const registry = new ToolRegistry();
       const handler = makeHandler('should not run');

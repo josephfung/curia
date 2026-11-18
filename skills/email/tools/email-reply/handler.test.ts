@@ -197,6 +197,22 @@ describe('EmailReplyHandler', () => {
       expect(request['cc']).toBeUndefined();
     });
 
+    // A demoted wake carries an agent originator, so only the input says the request was
+    // unverified. The gateway must still hear it, so a hold goes to a verified channel only.
+    it('tells the gateway the requester is unverified when only the input carries sender_only', async () => {
+      const DEMOTED = { originator: { ...UNVERIFIED.originator, systemRole: 'agent', tier: null } };
+      const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'Your week: ...', sender_only: true }, { taskMetadata: DEMOTED });
+      ctx.selfEmails = ['nathan@example.com'];
+      (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue(forged);
+      (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, messageId: 'reply-1' });
+
+      expect((await handler.execute(ctx)).success).toBe(true);
+      const [request, options] = (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mock.calls[0]! as [Record<string, unknown>, Record<string, unknown>];
+      expect(request['cc']).toBeUndefined();
+      expect(request['additionalTo']).toBeUndefined();
+      expect(options['requesterUnverified']).toBe(true);
+    });
+
     // An approval replays the stored payload under the approver's verified turn: the restriction
     // must travel with the hold, or the approved reply would go reply-all after all.
     it('pins sender-only into the hold, and an approved replay honours it', async () => {

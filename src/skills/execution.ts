@@ -3288,7 +3288,12 @@ export class ExecutionLayer {
       // from ctx instead of hardcoding a const that must be kept in sync with tool.json.
       toolName: manifest.name,
       toolVersion: manifest.version,
-      input,
+      // An email-reply from an unverified principal request answers the sender only
+      // (GHSA-p49r-jqh2-v668). Read from the raw lineage: the ladder can demote a wake to agent,
+      // and the handler sees only that demoted copy. Carried on the input, so a held reply keeps it.
+      input: toolName === 'email-reply' && isUnauthenticatedPrincipal(options?.taskMetadata)
+        ? { ...input, sender_only: true }
+        : input,
       secret: (name: string): string => {
         if (!declaredSecrets.has(name)) {
           throw new Error(`Secret '${name}' is not declared in the manifest for skill '${toolName}'`);
