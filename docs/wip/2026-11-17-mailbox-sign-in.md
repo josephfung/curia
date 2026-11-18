@@ -40,9 +40,7 @@
 
 ## Parked for the maintainer (answer at plan review)
 
-1. **Coordinator tool budget.** `mailbox-signin-link` must be pinned to the coordinator so the principal can be sent a link in conversation (reconnects now, onboarding in #2360). That grows the budgeted coordinator tool definitions by one short manifest.
-   - (a) Pin it and raise the budget by the measured amount (recommended).
-   - (b) Pin it only to setup-wizard now and let #2360 decide.
+1. ~~Coordinator tool budget~~ — *settled 2026-11-17:* `mailbox-signin-link` is **pinned to setup-wizard** (operator flows; that agent isn't budgeted) and **discoverable, not pinned, for the coordinator** (`allow_discovery: true`; it's rare, like `image-generate`). #2360's agenda names the tool when onboarding needs it. No budget change.
 2. **New public API.** Two new bus event types. `mailbox_signin.finished` is not named in the issue; it carries the result back to the agent that sent the link.
    - (a) Accept both (recommended).
    - (b) Fold the result into one event.
@@ -187,8 +185,8 @@
 - Modify:
   - `src/channels/http/auth.ts:48-79` (add `/api/mailbox-signin`)
   - `src/skills/types.ts`, `src/skills/loader.ts:54`, `src/execution.ts` (capability `mailboxSignIn`), `src/index.ts`
-  - `agents/coordinator.yaml` (pin, per Park 1) and `agents/setup-wizard.yaml`
-  - `config/registry-defaults.yaml` (`tools:` gets `mailbox-signin-link`)
+  - `agents/setup-wizard.yaml` (pin). **Not** `agents/coordinator.yaml`: the coordinator reaches it through discovery.
+  - `config/registry-defaults.yaml` (`tools:` gets `mailbox-signin-link`, so it is enabled and discoverable)
 - Test:
   - `tests/integration/mailbox-signin-service.test.ts` (real Postgres)
   - `tests/unit/channels/http/routes/mailbox-signin-start.test.ts`
@@ -211,8 +209,9 @@
   - Otherwise: 302 to `/mailbox-signin/done?result=expired|not_found`.
   - Rate limit `{max: 20, timeWindow: '15 minutes'}`.
 - Tool `mailbox-signin-link`:
-  - Input `{ mailbox_label?: string }`.
-  - `target` is always `'principal'`, and `expectedEmail` is the principal's primary verified email. It's looked up in code, never from model input (ADR-047).
+  - Input `{ for?: 'principal' | 'curia'; mailbox_label?: string }`. Default `'principal'`. No `allowed_callers` restriction, so a discovering coordinator can call it. `for: 'curia'` is accepted only from `setup-wizard` (checked in the handler against `ctx.agentId`; refused otherwise).
+  - For `'principal'`, `expectedEmail` is the principal's primary verified email. It's looked up in code, never from model input (ADR-047).
+  - The description leads with a discovery-friendly phrase: "Connect, reconnect or sign in to the principal's Gmail and Google Calendar".
   - `action_risk: "none"`, `sensitivity: elevated`, capability `mailboxSignIn`, version `0.1.0`.
   - `data.summary` tells the agent to send the URL verbatim and to warn that Google may show an "unverified app" screen and consent twice, and that both boxes must stay ticked.
 
@@ -223,9 +222,11 @@
   - mint when not ready → `MailboxSignInUnavailableError('origin_not_https')`;
   - the stored hash ≠ the raw token;
   - the start route 302s to `https://api.us.nylas.com/v3/connect/auth?...state=<raw>&login_hint=...`;
-  - the tool rejects a call without the capability, and its output contains the URL and no grant id.
+  - the tool rejects a call without the capability, and its output contains the URL and no grant id;
+  - `for: 'curia'` from `ctx.agentId === 'coordinator'` is refused;
+  - `tool-registry` search for "connect gmail" returns `mailbox-signin-link` (registry search unit test).
 - [ ] **Step 2:** Run → FAIL. **Step 3:** Implement, including migration 127.
-- [ ] **Step 4:** Tests pass. Typecheck, `ls src/db/migrations | sort` unique, and `tests/unit/agents/prompt-budget.test.ts`: record the delta for Park 1.
+- [ ] **Step 4:** Tests pass. Typecheck, `ls src/db/migrations | sort` unique, and `tests/unit/agents/prompt-budget.test.ts` passes unchanged (the coordinator gains no pin).
 - [ ] **Step 5:** Commit `feat(email): single-use mailbox sign-in links (#2361)`.
 
 ### Task 6: Callback
