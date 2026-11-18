@@ -23,7 +23,7 @@ function row(over: Partial<SignInTokenRow> = {}): SignInTokenRow {
 }
 
 async function build(opts: {
-  peek: SignInTokenRow | 'expired' | 'not_found';
+  peek: SignInTokenRow | 'expired' | 'used' | 'not_found';
   readiness?: NylasSignInReadiness;
   apiKey?: string | undefined;
   rateLimit?: boolean;
@@ -77,6 +77,12 @@ describe('GET /api/mailbox-signin/start/:token', () => {
     const res = await app.inject({ method: 'GET', url: '/api/mailbox-signin/start/T' });
     expect(res.statusCode).toBe(302);
     expect(res.headers.location).toBe('/mailbox-signin/done?result=expired');
+  });
+
+  it('redirects a spent token to the done page as used', async () => {
+    app = await build({ peek: 'used' });
+    const res = await app.inject({ method: 'GET', url: '/api/mailbox-signin/start/T' });
+    expect(res.headers.location).toBe('/mailbox-signin/done?result=used');
   });
 
   it('redirects an unknown token to the done page', async () => {

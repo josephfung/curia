@@ -5,6 +5,7 @@ import pg from 'pg';
 import pino from 'pino';
 import { hashToken } from '../../src/channels/http/session-auth.js';
 import {
+  MailboxSignInAddressError,
   MailboxSignInService,
   MailboxSignInUnavailableError,
 } from '../../src/nylas/mailbox-signin-service.js';
@@ -23,13 +24,17 @@ describeIf('MailboxSignInService', () => {
   let databaseValidated = false;
   const hashes: string[] = [];
 
-  function makeService(over: { readiness?: NylasSignInReadiness; principalEmail?: string | null; appOrigin?: string } = {}): MailboxSignInService {
+  function makeService(over: {
+    readiness?: NylasSignInReadiness;
+    emails?: { primary: string | null; all: string[] };
+    appOrigin?: string;
+  } = {}): MailboxSignInService {
     return new MailboxSignInService({
       pool,
       logger,
       appOrigin: over.appOrigin ?? ORIGIN,
       readiness: async () => over.readiness ?? READY,
-      resolvePrincipalEmail: () => (over.principalEmail === undefined ? 'boss@example.com' : over.principalEmail),
+      principalEmails: () => over.emails ?? { primary: 'boss@example.com', all: ['boss@example.com', 'Work@Example.com'] },
     });
   }
 
@@ -75,6 +80,53 @@ describeIf('MailboxSignInService', () => {
     expect(await svc.peek(curia.raw)).toMatchObject({ target: 'curia', expected_email: null });
   });
 
+  it('pins a principal link to a requested verified address, case-insensitively', async () => {
+    const svc = makeService();
+    const { raw } = await mintToken(svc, { target: 'principal', mailboxAddress: ' WORK@example.com ' });
+    expect(await svc.peek(raw)).toMatchObject({ expected_email: 'work@example.com' });
+  });
+
+  it('refuses an address that is not a verified principal address, and writes nothing', async () => {
+    const svc = makeService();
+    const before = await pool.query('SELECT count(*)::int AS n FROM mailbox_signin_tokens');
+    await expect(svc.mint({ target: 'principal', mailboxAddress: 'stranger@example.com' }))
+      .rejects.toMatchObject({ reason: 'unknown_principal_address' });
+    const after = await pool.query('SELECT count(*)::int AS n FROM mailbox_signin_tokens');
+    expect(after.rows[0]!.n).toBe(before.rows[0]!.n);
+  });
+
+  it('uses the only verified address when none is designated, and refuses when it is ambiguous or absent', async () => {
+    const one = makeService({ emails: { primary: null, all: ['solo@example.com'] } });
+    const { raw } = await mintToken(one, { target: 'principal' });
+    expect(await one.peek(raw)).toMatchObject({ expected_email: 'solo@example.com' });
+    for (const emails of [{ primary: null, all: ['a@example.com', 'b@example.com'] }, { primary: null, all: [] }]) {
+      const err = await makeService({ emails }).mint({ target: 'principal' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(MailboxSignInAddressError);
+      expect(err).toMatchObject({ reason: 'no_principal_address' });
+    }
+  });
+
+  it('operator mint may pin or leave any account; skills\' minter has no such path', async () => {
+    const svc = makeService({ emails: { primary: null, all: [] } });
+    const { url } = await svc.mintForOperator({ target: 'principal', expectedEmail: 'New@Example.com' });
+    const raw = url.slice(url.lastIndexOf('/') + 1);
+    hashes.push(hashToken(raw));
+    expect(await svc.peek(raw)).toMatchObject({ expected_email: 'new@example.com' });
+  });
+
+  it('prunes lapsed rows and rows spent over an hour ago, and keeps live ones', async () => {
+    const svc = makeService();
+    const live = await mintToken(svc, { target: 'principal' });
+    const lapsed = await mintToken(svc, { target: 'principal' });
+    const spent = await mintToken(svc, { target: 'principal' });
+    await pool.query("UPDATE mailbox_signin_tokens SET expires_at = now() - interval '1 minute' WHERE token_hash = $1", [hashToken(lapsed.raw)]);
+    await pool.query("UPDATE mailbox_signin_tokens SET consumed_at = now() - interval '2 hours' WHERE token_hash = $1", [hashToken(spent.raw)]);
+    await svc.pruneExpired();
+    expect(await svc.peek(lapsed.raw)).toBe('not_found');
+    expect(await svc.peek(spent.raw)).toBe('not_found');
+    expect(await svc.peek(live.raw)).toMatchObject({ target: 'principal' });
+  });
+
   it('stores only the hash of the token', async () => {
     const svc = makeService();
     const { raw } = await mintToken(svc, { target: 'principal' });
@@ -103,7 +155,7 @@ describeIf('MailboxSignInService', () => {
     expect(first).toMatchObject({ target: 'principal' });
     expect(await svc.consume(raw)).toBe('used');
     // A consumed link no longer starts a sign-in.
-    expect(await svc.peek(raw)).toBe('expired');
+    expect(await svc.peek(raw)).toBe('used');
   });
 
   it('consume of an unknown token is not_found', async () => {

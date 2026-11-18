@@ -4,19 +4,20 @@
 import { describe, it, expect } from 'vitest';
 import pino from 'pino';
 import { MailboxSignInLinkHandler } from './handler.js';
-import { MailboxSignInUnavailableError, type MailboxSignInMinter, type MintSignInArgs } from '../../src/nylas/mailbox-signin-service.js';
+import { MailboxSignInAddressError, MailboxSignInUnavailableError, type MailboxSignInMinter, type MintSignInArgs } from '../../src/nylas/mailbox-signin-service.js';
 import type { ToolContext } from '../../src/skills/types.js';
 import { serializeForLeakCheck } from '../../tests/helpers/leak-check.js';
 
 const URL_OUT = 'https://curia.example.com/api/mailbox-signin/start/AbCdEfGhIjKlMnOpQrSt12';
 
-function fakeMinter(opts: { unavailable?: boolean; boom?: boolean } = {}): MailboxSignInMinter & { calls: MintSignInArgs[] } {
+function fakeMinter(opts: { unavailable?: boolean; boom?: boolean; badAddress?: boolean } = {}): MailboxSignInMinter & { calls: MintSignInArgs[] } {
   const calls: MintSignInArgs[] = [];
   return {
     calls,
     async mint(args) {
       calls.push(args);
       if (opts.unavailable) throw new MailboxSignInUnavailableError('origin_not_https', 'Sign-in needs APP_ORIGIN set to an https:// address.');
+      if (opts.badAddress) throw new MailboxSignInAddressError('unknown_principal_address');
       if (opts.boom) throw new Error('connection refused at 10.0.0.5:5432');
       return { url: URL_OUT, expiresAt: new Date(Date.now() + 60 * 60_000) };
     },
@@ -103,6 +104,21 @@ describe('MailboxSignInLinkHandler', () => {
     const b = await new MailboxSignInLinkHandler().execute(makeCtx({ mailbox_label: '   ' }, { minter }));
     expect(a.success).toBe(false);
     expect(b.success).toBe(false);
+    expect(minter.calls).toHaveLength(0);
+  });
+
+  it('passes a requested mailbox_address to the service to validate, and reports a refusal plainly', async () => {
+    const minter = fakeMinter();
+    await new MailboxSignInLinkHandler().execute(makeCtx({ mailbox_address: ' Work@Example.com ' }, { minter }));
+    expect(minter.calls[0]).toMatchObject({ mailboxAddress: 'Work@Example.com' });
+    const refused = await new MailboxSignInLinkHandler().execute(makeCtx({ mailbox_address: 'x@y.com' }, { minter: fakeMinter({ badAddress: true }) }));
+    expect(refused).toMatchObject({ success: false, error: expect.stringContaining('verified') });
+  });
+
+  it("rejects mailbox_address with for:'curia'", async () => {
+    const minter = fakeMinter();
+    const r = await new MailboxSignInLinkHandler().execute(makeCtx({ for: 'curia', mailbox_address: 'a@b.com' }, { minter, agentId: 'setup-wizard' }));
+    expect(r.success).toBe(false);
     expect(minter.calls).toHaveLength(0);
   });
 

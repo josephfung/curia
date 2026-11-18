@@ -1,11 +1,12 @@
 {
   "name": "mailbox-signin-link",
-  "description": "Connect, reconnect or sign in to the principal's Gmail and Google Calendar: mints a one-time sign-in link the principal opens and approves with Google, so a mailbox can be connected or an expired one reconnected. Use it when the principal wants to connect Gmail, add another mailbox, or fix a mailbox that stopped working. You never see the Google account or any credential; the link is the only output. Pass for 'curia' only during setup, to sign in Curia's own mailbox.",
+  "description": "Connect, reconnect or sign in to the principal's Gmail and Google Calendar: mints a one-time sign-in link the principal opens and approves with Google, so a mailbox can be connected or an expired one reconnected. Use it when the principal wants to connect Gmail or fix a mailbox that stopped working. It works for any of the principal's own verified email addresses (the primary unless mailbox_address names another); a brand-new account that is not a verified address yet is added by the operator from the console. You never see the Google account or any credential; the link is the only output. Pass for 'curia' only during setup, to sign in Curia's own mailbox.",
   "version": "0.1.0",
   "sensitivity": "elevated",
   "action_risk": "none",
   "inputs": {
     "for": "string? ('principal' (default) signs in the principal's own Gmail, pre-filled with their address; 'curia' signs in Curia's own mailbox and is accepted only from setup-wizard)",
+    "mailbox_address": "string? (one of the principal's verified email addresses, to connect or reconnect that mailbox; defaults to their primary address; an address that is not theirs is refused)",
     "mailbox_label": "string? (a short name for the mailbox, e.g. 'Work'; optional)"
   },
   "outputs": {

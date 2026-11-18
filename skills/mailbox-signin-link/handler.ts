@@ -8,7 +8,7 @@
 // identities. It is never an input, so a model cannot point a link at another account (ADR-047).
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import { MailboxSignInUnavailableError } from '../../src/nylas/mailbox-signin-service.js';
+import { MailboxSignInAddressError, MailboxSignInUnavailableError } from '../../src/nylas/mailbox-signin-service.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 import { buildCaptureOrigin } from '../../src/secrets/build-capture-origin.js';
 
@@ -20,7 +20,9 @@ export class MailboxSignInLinkHandler implements ToolHandler {
       return { success: false, error: 'mailbox-signin-link requires the mailboxSignIn capability in context.' };
     }
 
-    const { for: forInput, mailbox_label } = ctx.input as { for?: unknown; mailbox_label?: unknown };
+    const { for: forInput, mailbox_label, mailbox_address } = ctx.input as {
+      for?: unknown; mailbox_label?: unknown; mailbox_address?: unknown;
+    };
 
     const target = forInput === undefined || forInput === null ? 'principal' : forInput;
     if (target !== 'principal' && target !== 'curia') {
@@ -40,6 +42,19 @@ export class MailboxSignInLinkHandler implements ToolHandler {
       label = mailbox_label.trim();
     }
 
+    let mailboxAddress: string | undefined;
+    if (mailbox_address !== undefined && mailbox_address !== null) {
+      if (typeof mailbox_address !== 'string' || mailbox_address.trim() === '') {
+        return { success: false, error: 'mailbox_address must be an email address.' };
+      }
+      if (target === 'curia') {
+        return { success: false, error: "mailbox_address applies only to the principal's own mailboxes." };
+      }
+      // Not trusted: the service checks it against the principal's verified addresses and refuses
+      // anything else, so the model can pick among them but never invent one.
+      mailboxAddress = mailbox_address.trim();
+    }
+
     // Route the finished sign-in back to this conversation. A delegated specialist's resume is
     // retargeted at the coordinator by the shared helper (#995).
     const origin = buildCaptureOrigin(
@@ -51,6 +66,7 @@ export class MailboxSignInLinkHandler implements ToolHandler {
       const { url, expiresAt } = await ctx.mailboxSignIn.mint({
         target,
         ...(label !== undefined ? { label } : {}),
+        ...(mailboxAddress !== undefined ? { mailboxAddress } : {}),
         origin,
       });
       const expiresLocal = toLocalIso(Math.floor(expiresAt.getTime() / 1000), ctx.timezone);
@@ -71,6 +87,10 @@ export class MailboxSignInLinkHandler implements ToolHandler {
         },
       };
     } catch (err) {
+      if (err instanceof MailboxSignInAddressError) {
+        ctx.log.warn({ reason: err.reason }, 'mailbox-signin-link: no usable principal address');
+        return { success: false, error: err.message };
+      }
       if (err instanceof MailboxSignInUnavailableError) {
         // The reason and its operator-facing detail carry no key or Nylas body. Surface them so the
         // agent can send the principal to the fix (usually Channels → Email in the console).

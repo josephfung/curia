@@ -3164,8 +3164,10 @@ async function main(): Promise<void> {
     logger,
     appOrigin: config.appOrigin,
     readiness: nylasSignInReadiness,
-    resolvePrincipalEmail: () =>
-      findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier ?? null,
+    principalEmails: () => ({
+      primary: findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier ?? null,
+      all: principalIdentities.filter((i) => i.channel === 'email').map((i) => i.channelIdentifier),
+    }),
   });
   // One info line at boot when sign-in is unavailable. Fire-and-forget: boot never waits on Nylas,
   // and an unreachable Nylas is a reason to report, not an error.
