@@ -7,6 +7,7 @@ import type { CardBrand } from '../secrets/structured-secret-schema.js';
 import type { CaptureOrigin } from '../secrets/secret-capture-service.js';
 import type { ReasoningEffort } from '../agents/llm/sampling-options.js';
 import type { ReasoningWatchdogRecord } from '../agents/llm/reasoning-watchdog.js';
+import type { MailboxSignInOutcome } from '../nylas/signin-outcome.js';
 
 // -- Base event shape --
 // Every event on the bus shares these fields; parentEventId forms the causal chain.
@@ -1081,6 +1082,32 @@ interface PrincipalMailboxChangedPayload {
   warning?: boolean;
 }
 
+// PrincipalMailboxConnectedPayload — a mailbox was connected or re-connected through Nylas hosted
+// sign-in (#2361). Audit-only. Carries the mailbox id — NEVER a grant id or an address.
+interface PrincipalMailboxConnectedPayload {
+  mailboxId: string;
+}
+
+// MailboxSignInFinishedPayload — a hosted sign-in ended, whatever the outcome (#2361). A resume
+// subscriber turns it into a synthetic agent.task so the agent that asked for the sign-in can
+// continue. Carries the outcome and routing context — NEVER a grant id or an address. The origin
+// fields mirror SecretCapturedPayload and are round-tripped opaquely; all are optional because a
+// sign-in started from the console has no agent to resume.
+interface MailboxSignInFinishedPayload {
+  /** Whose mailbox the sign-in was for: the principal's, or Curia's own. */
+  target: 'principal' | 'curia';
+  outcome: MailboxSignInOutcome;
+  /** The principal mailbox id, when the sign-in resolved one. Never an address. */
+  mailboxId?: string;
+  conversationId?: string;
+  channelId?: string;
+  agentId?: string;
+  taskEventId?: string;   // originating agent.task event id — threaded as parentEventId on resume
+  originator?: Record<string, unknown>;  // TaskOriginator that started the chain (preserved on resume)
+  /** Base64 delegate resume_token, as on secret.captured. Carries no secret. */
+  resumeToken?: string;
+}
+
 // SecretCapturedPayload — emitted when a user submits a value to a one-time capture link and
 // it is redeemed into the vault (#972). Carries the secret NAME/label and the routing context
 // needed to re-enter the originating agent — NEVER the value. The resume subscriber turns this
@@ -2039,6 +2066,21 @@ export interface PrincipalMailboxChangedEvent extends BaseEvent {
   payload: PrincipalMailboxChangedPayload;
 }
 
+export interface PrincipalMailboxConnectedEvent extends BaseEvent {
+  type: 'principal_mailbox.connected';
+  sourceLayer: 'system';
+  payload: PrincipalMailboxConnectedPayload;
+}
+
+// MailboxSignInFinishedEvent — published by the sign-in callback (trusted system infra) when a
+// hosted sign-in ends (#2361). parentEventId traces to the originating agent.task. Never carries
+// a grant id or an address.
+export interface MailboxSignInFinishedEvent extends BaseEvent {
+  type: 'mailbox_signin.finished';
+  sourceLayer: 'system';
+  payload: MailboxSignInFinishedPayload;
+}
+
 // SecretCapturedEvent — published by the capture endpoint (trusted system infra) when a
 // one-time link is redeemed (#972). sourceLayer 'system' because the capture endpoint
 // self-authorizes via the token and writes to the vault, like the scheduler emitting its
@@ -2357,6 +2399,8 @@ export type BusEvent =
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
   | SecretChangedEvent       // #2453: console set/delete of a vault secret (name only, never value)
   | PrincipalMailboxChangedEvent // #2475: console add/relabel/default/grant/remove of a principal mailbox
+  | PrincipalMailboxConnectedEvent // #2361: a mailbox connected through Hosted Auth (id only)
+  | MailboxSignInFinishedEvent // #2361: a hosted sign-in ended (outcome + routing, never a grant id)
   | SecretCapturedEvent      // #972: one-time capture link redeemed (name/routing only, never value)
   | CardUseRequestedEvent    // #1358: saved-card use requested (brand/last4/site/amount, never the number)
   | CardUseDecidedEvent      // #1358: saved-card use approved, denied or expired
@@ -3029,6 +3073,34 @@ export function createPrincipalMailboxChanged(payload: PrincipalMailboxChangedPa
     type: 'principal_mailbox.changed',
     sourceLayer: 'system',
     payload,
+  };
+}
+
+export function createPrincipalMailboxConnected(
+  payload: PrincipalMailboxConnectedPayload,
+  parentEventId?: string,
+): PrincipalMailboxConnectedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'principal_mailbox.connected',
+    sourceLayer: 'system',
+    payload,
+    parentEventId,
+  };
+}
+
+export function createMailboxSignInFinished(
+  payload: MailboxSignInFinishedPayload,
+  parentEventId?: string,
+): MailboxSignInFinishedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'mailbox_signin.finished',
+    sourceLayer: 'system',
+    payload,
+    parentEventId,
   };
 }
 
