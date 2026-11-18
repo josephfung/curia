@@ -128,4 +128,59 @@ describe('NylasSignInSetupSection', () => {
     expect(container.textContent).toContain('Nylas rejected the API key.');
     expect((container.querySelector('[aria-label="Google client ID"]') as HTMLInputElement).value).toBe('abc');
   });
+
+  it('does not show a US redirect URI or region while readiness is unknown (A3)', async () => {
+    mocks.respond = () => json({ error: 'boom' }, 500);
+    await mount();
+    expect([...container.querySelectorAll('code')].map(c => c.textContent).join(' ')).not.toContain('nylas.com');
+    expect((container.querySelector('[aria-label="Nylas region"]') as HTMLSelectElement).value).toBe('');
+    const detect = [...container.querySelectorAll('button')].find(b => b.textContent === 'Detect')!;
+    expect(detect.disabled).toBe(false);
+  });
+
+  it('ignores a slow earlier check that finishes after a newer one (A1)', async () => {
+    let releaseFirst: (r: Response) => void = () => {};
+    let n = 0;
+    mocks.respond = () => (++n === 1
+      ? new Promise<Response>(r => { releaseFirst = r; })
+      : json({ ...notReady, ready: true, reason: undefined }));
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => { root!.render(<NylasSignInSetupSection />); });
+    await click('Check');
+    expect(container.textContent).toContain('Ready.');
+    await act(async () => { releaseFirst(json(notReady)); });
+    await settle();
+    expect(container.textContent).toContain('Ready.');
+    expect(container.textContent).not.toContain('Not ready');
+  });
+
+  it('locks the connector inputs while the create request is in flight (A2)', async () => {
+    let release: (r: Response) => void = () => {};
+    mocks.respond = (path) => (path.endsWith('/google-connector')
+      ? new Promise<Response>(r => { release = r; })
+      : json(notReady));
+    await mount();
+    await type('Google client ID', 'abc');
+    await type('Google client secret', 's');
+    const btn = [...container.querySelectorAll('button')].find(b => b.textContent === 'Create connector')!;
+    await act(async () => { btn.click(); });
+    expect((container.querySelector('[aria-label="Google client ID"]') as HTMLInputElement).disabled).toBe(true);
+    expect((container.querySelector('[aria-label="Google client secret"]') as HTMLInputElement).disabled).toBe(true);
+    expect((container.querySelector('[aria-label="Pub/Sub topic"]') as HTMLInputElement).disabled).toBe(true);
+    await act(async () => { release(json({}, 200)); });
+    await settle();
+    expect((container.querySelector('[aria-label="Google client ID"]') as HTMLInputElement).disabled).toBe(false);
+  });
+
+  it('announces each applied readiness result to the page (A6)', async () => {
+    const seen: unknown[] = [];
+    const on = (e: Event) => seen.push((e as CustomEvent).detail);
+    window.addEventListener('curia:nylas-signin-readiness', on);
+    mocks.respond = () => json({ ...notReady, ready: true, reason: undefined });
+    await mount();
+    window.removeEventListener('curia:nylas-signin-readiness', on);
+    expect(seen[0]).toMatchObject({ ready: true });
+  });
 });

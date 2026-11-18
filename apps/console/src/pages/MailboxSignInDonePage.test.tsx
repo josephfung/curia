@@ -21,16 +21,19 @@ async function mount(search: string, props: { pollIntervalMs?: number; maxWaitMs
   await act(async () => { root!.render(<MailboxSignInDonePage {...props} />); });
 }
 
+// Fake time: advances inside act and flushes each mocked response, so a slow CI worker cannot
+// reorder the polls the tests count.
 async function wait(ms: number) {
-  await act(async () => { await new Promise(r => setTimeout(r, ms)); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(ms); });
 }
 
-beforeEach(() => { fetchMock.mockReset(); vi.stubGlobal('fetch', fetchMock); });
+beforeEach(() => { vi.useFakeTimers(); fetchMock.mockReset(); vi.stubGlobal('fetch', fetchMock); });
 afterEach(() => {
   if (root) act(() => root!.unmount());
   root = null;
   host?.remove();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe('MailboxSignInDonePage', () => {
@@ -82,12 +85,12 @@ describe('MailboxSignInDonePage', () => {
     let up = 100;
     fetchMock.mockImplementation(async () => new Response(JSON.stringify({ uptime_s: (up += 1) }), { status: 200 }));
     await mount('?result=connected&target=curia&restart=1', { pollIntervalMs: 5, maxWaitMs: 1000 });
-    await wait(60);
-    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+    await wait(5); await wait(5); await wait(5);
+    expect(fetchMock.mock.calls.length).toBe(3);
     expect(host.textContent).not.toContain('Curia is back');
     // The process restarted: uptime drops below the first sample.
     fetchMock.mockImplementation(async () => new Response(JSON.stringify({ uptime_s: 2 }), { status: 200 }));
-    await wait(30);
+    await wait(5);
     expect(host.textContent).toContain('Curia is back');
   });
 
@@ -115,6 +118,42 @@ describe('MailboxSignInDonePage', () => {
     const n = fetchMock.mock.calls.length;
     await wait(40);
     expect(fetchMock.mock.calls.length).toBe(n);
+  });
+
+  it('times out on the deadline even when a health request never answers, and aborts it', async () => {
+    let signal: AbortSignal | undefined;
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Promise(() => { /* never answers */ });
+    });
+    await mount('?result=connected&target=curia&restart=1', { pollIntervalMs: 5, maxWaitMs: 50 });
+    await wait(10);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain('Curia is restarting');
+    await wait(50);
+    expect(host.textContent).toContain('refresh');
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it('aborts the active health request on unmount', async () => {
+    let signal: AbortSignal | undefined;
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Promise(() => { /* never answers */ });
+    });
+    await mount('?result=connected&target=curia&restart=1', { pollIntervalMs: 5, maxWaitMs: 1000 });
+    await wait(10);
+    act(() => root!.unmount()); root = null;
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it('tells a cancelled or wrong-account user the link is used and to ask for a fresh one', async () => {
+    for (const r of ['cancelled', 'wrong_account']) {
+      const m = resultMessage(r, 'principal').body;
+      expect(m).toContain('now used');
+      expect(m).toContain('fresh sign-in link');
+      expect(m).not.toContain('Open the link again');
+    }
   });
 
   it('does not poll without restart=1', async () => {

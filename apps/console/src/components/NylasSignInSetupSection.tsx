@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '../api.js';
+import { SIGNIN_READINESS_EVENT } from './ConnectWithGoogle.js';
 
 // ── Nylas sign-in setup (#2361) ──────────────────────────────────────────────
 //
@@ -69,13 +70,24 @@ export function NylasSignInSetupSection() {
   const [clientSecret, setClientSecret] = useState('');
   const [topic, setTopic] = useState('');
 
+  // Only the newest check may apply its result: a slow earlier one must not overwrite it.
+  const checkSeq = useRef(0);
+
   const check = useCallback(async () => {
+    const seq = ++checkSeq.current;
     try {
       const res = await apiFetch(`${BASE}/signin`);
       if (!res.ok) throw new Error(await errorMessage(res));
-      setStatus(await res.json() as SignInStatus);
+      const next = await res.json() as SignInStatus;
+      if (seq !== checkSeq.current) return;
+      setStatus(next);
       setLoadError(null);
+      // Tell the Connect with Google buttons on this page (they read readiness only on mount).
+      window.dispatchEvent(new CustomEvent(SIGNIN_READINESS_EVENT, {
+        detail: { ready: next.ready === true, detail: next.detail },
+      }));
     } catch (err) {
+      if (seq !== checkSeq.current) return;
       console.error('[NylasSignInSetupSection] failed to read sign-in readiness:', err);
       // A stale Ready (or an old reason) must not sit beside the error.
       setStatus(null);
@@ -105,10 +117,13 @@ export function NylasSignInSetupSection() {
     }
   }
 
-  const region: Region = status?.region ?? 'us';
-  const googleRedirect = status?.googleRedirectUri ?? `https://api.${region}.nylas.com/v3/connect/callback`;
+  // Unknown until the server confirms it: a guessed US value would be wrong on an EU install.
+  const region: Region | '' = status?.region ?? '';
+  const googleRedirect = status?.googleRedirectUri ?? null;
   const canCreate = clientId.trim() !== '' && clientSecret.trim() !== '' && !busy;
 
+  // The inputs are locked while the create request and re-check run, so the success cleanup
+  // below can only clear the draft that was submitted.
   async function createConnector() {
     const body: Record<string, string> = { client_id: clientId.trim(), client_secret: clientSecret.trim() };
     if (topic.trim() !== '') body['topic_name'] = topic.trim();
@@ -145,6 +160,7 @@ export function NylasSignInSetupSection() {
               disabled={busy}
               onChange={e => { const next = e.target.value; void act(() => apiFetch(`${BASE}/region`, jsonInit('PUT', { region: next })), 'Region saved.'); }}
             >
+              {region === '' && <option value="" disabled>Unknown: use Check or Detect</option>}
               <option value="us">US (api.us.nylas.com)</option>
               <option value="eu">EU (api.eu.nylas.com)</option>
             </select>
@@ -172,23 +188,25 @@ export function NylasSignInSetupSection() {
 
         <div className="form-field">
           <div>Google Cloud: add this as an authorised redirect URI on your OAuth client:</div>
-          <code>{googleRedirect}</code>
+          {googleRedirect
+            ? <code>{googleRedirect}</code>
+            : <code>Shown once Check confirms the region</code>}
         </div>
 
         <div className="form-field">
           <div>Create the Google connector from your Google Cloud OAuth client:</div>
           <label style={{ display: 'block', marginBottom: 6 }}>
             Client ID{' '}
-            <input aria-label="Google client ID" value={clientId} onChange={e => setClientId(e.target.value)} autoComplete="off" />
+            <input aria-label="Google client ID" disabled={busy} value={clientId} onChange={e => setClientId(e.target.value)} autoComplete="off" />
           </label>
           <label style={{ display: 'block', marginBottom: 6 }}>
             Client secret{' '}
-            <input aria-label="Google client secret" type="password" value={clientSecret}
+            <input aria-label="Google client secret" type="password" disabled={busy} value={clientSecret}
               onChange={e => setClientSecret(e.target.value)} autoComplete="off" />
           </label>
           <label style={{ display: 'block', marginBottom: 6 }}>
             Pub/Sub topic (optional){' '}
-            <input aria-label="Pub/Sub topic" value={topic} onChange={e => setTopic(e.target.value)} autoComplete="off" />
+            <input aria-label="Pub/Sub topic" disabled={busy} value={topic} onChange={e => setTopic(e.target.value)} autoComplete="off" />
           </label>
           <button type="button" className="btn btn-primary btn-sm" disabled={!canCreate} onClick={() => void createConnector()}>
             Create connector
