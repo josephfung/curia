@@ -27,7 +27,7 @@
 - **Region:** `us` → `https://api.us.nylas.com`, `eu` → `https://api.eu.nylas.com`. It is stored as the non-secret email-channel credential field `nylas_region` (env fallback `NYLAS_REGION`), and a missing value means `us`.
 - **Never let a grant id, API key, GCP client secret, auth code or raw `state` reach logs, audit payloads, tool output or event payloads.** Use `grantSafeErrorFields` (`src/principal-mailboxes/error-fields.ts`) on every Nylas error.
 - **No `version` bumps.** New tool/agent artifacts start at `0.1.0`. Commits carry DCO `-s` and no AI-attribution trailers. Add a changelog fragment at `changes/<branch>.md`.
-- **Next migration number is `127`.** Re-check prefix uniqueness after every rebase.
+- **Next migration number was `127`; renumbered to `129` after main took 127 and 128.** Re-check prefix uniqueness after every rebase.
 
 ## Decisions taken here (principle applied)
 
@@ -178,7 +178,7 @@
 
 **Files:**
 - Create:
-  - `src/db/migrations/127_mailbox_signin_tokens.sql`
+  - `src/db/migrations/129_mailbox_signin_tokens.sql`
   - `src/nylas/mailbox-signin-service.ts`
   - `src/channels/http/routes/mailbox-signin.ts` (start route; Task 6 adds the callback)
   - `skills/mailbox-signin-link/{tool.json,handler.ts,handler.test.ts}`
@@ -225,7 +225,7 @@
   - the tool rejects a call without the capability, and its output contains the URL and no grant id;
   - `for: 'curia'` from `ctx.agentId === 'coordinator'` is refused;
   - `tool-registry` search for "connect gmail" returns `mailbox-signin-link` (registry search unit test).
-- [ ] **Step 2:** Run → FAIL. **Step 3:** Implement, including migration 127.
+- [ ] **Step 2:** Run → FAIL. **Step 3:** Implement, including migration 129.
 - [ ] **Step 4:** Tests pass. Typecheck, `ls src/db/migrations | sort` unique, and `tests/unit/agents/prompt-budget.test.ts` passes unchanged (the coordinator gains no pin).
 - [ ] **Step 5:** Commit `feat(email): single-use mailbox sign-in links (#2361)`.
 
