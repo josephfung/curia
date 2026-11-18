@@ -5,7 +5,8 @@
 // grant it produces goes straight into the mailbox registry, never through this skill.
 //
 // The address the sign-in must land on is filled in by the service from the principal's verified
-// identities. It is never an input, so a model cannot point a link at another account (ADR-047).
+// identities. A model may name one of them; it may name a NEW address only on an authenticated
+// principal turn, a fact the handler takes from the stamped originator (ADR-047).
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import {
@@ -14,9 +15,18 @@ import {
   MailboxSignInUnavailableError,
 } from '../../src/nylas/mailbox-signin-service.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
+import { parseTaskOriginator } from '../../src/agents/delegated-task-context.js';
 import { buildCaptureOrigin } from '../../src/secrets/build-capture-origin.js';
 
 const MAX_LABEL_LENGTH = 100;
+
+/** True only when the task's stamped originator is the principal on an authenticated channel.
+ *  Read from the task metadata the runtime stamped, never from model input; absent or malformed
+ *  fails closed (same test as send-evidence's principalDirectiveFrom). */
+function isAuthenticatedPrincipalTurn(metadata: Record<string, unknown> | undefined): boolean {
+  const originator = parseTaskOriginator(metadata?.['originator']);
+  return originator?.systemRole === 'principal' && originator.authenticated === true;
+}
 
 export class MailboxSignInLinkHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -55,8 +65,8 @@ export class MailboxSignInLinkHandler implements ToolHandler {
       if (target === 'curia') {
         return { success: false, error: "mailbox_address applies only to the principal's own mailboxes." };
       }
-      // Not trusted: the service checks it against the principal's verified addresses and refuses
-      // anything else, so the model can pick among them but never invent one.
+      // Not trusted: the service checks it against the principal's verified addresses. A new one is
+      // accepted only on an authenticated principal turn (allowNewAddress below).
       mailboxAddress = mailbox_address.trim();
     }
 
@@ -72,6 +82,7 @@ export class MailboxSignInLinkHandler implements ToolHandler {
         target,
         ...(label !== undefined ? { label } : {}),
         ...(mailboxAddress !== undefined ? { mailboxAddress } : {}),
+        allowNewAddress: target === 'principal' && isAuthenticatedPrincipalTurn(ctx.taskMetadata),
         origin,
       });
       const expiresLocal = toLocalIso(Math.floor(expiresAt.getTime() / 1000), ctx.timezone);

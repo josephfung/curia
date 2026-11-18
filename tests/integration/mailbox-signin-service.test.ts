@@ -100,6 +100,34 @@ describeIf('MailboxSignInService', () => {
     expect(after.rows[0]!.n).toBe(before.rows[0]!.n);
   });
 
+  it('pins to a new address when the caller allows it, normalized', async () => {
+    const svc = makeService();
+    const { raw } = await mintToken(svc, { target: 'principal', mailboxAddress: '  New.Job@Acme.COM ', allowNewAddress: true });
+    expect(await svc.peek(raw)).toMatchObject({ expected_email: 'new.job@acme.com' });
+  });
+
+  it('refuses a new address when the caller does not allow it, and writes nothing', async () => {
+    const svc = makeService();
+    const before = await pool.query('SELECT count(*)::int AS n FROM mailbox_signin_tokens');
+    for (const allowNewAddress of [false, undefined]) {
+      await expect(svc.mint({ target: 'principal', mailboxAddress: 'new@acme.com', ...(allowNewAddress === undefined ? {} : { allowNewAddress }) }))
+        .rejects.toMatchObject({ reason: 'unknown_principal_address' });
+    }
+    const after = await pool.query('SELECT count(*)::int AS n FROM mailbox_signin_tokens');
+    expect(after.rows[0]!.n).toBe(before.rows[0]!.n);
+  });
+
+  it('refuses a malformed new address even when allowed, and writes nothing', async () => {
+    const svc = makeService();
+    const before = await pool.query('SELECT count(*)::int AS n FROM mailbox_signin_tokens');
+    for (const bad of ['not-an-email', 'a@b', 'a b@acme.com', 'a@@acme.com', 'a@acme.com, b@acme.com', '<a@acme.com>', '@acme.com', 'a@']) {
+      await expect(svc.mint({ target: 'principal', mailboxAddress: bad, allowNewAddress: true }))
+        .rejects.toMatchObject({ reason: 'unknown_principal_address' });
+    }
+    const after = await pool.query('SELECT count(*)::int AS n FROM mailbox_signin_tokens');
+    expect(after.rows[0]!.n).toBe(before.rows[0]!.n);
+  });
+
   it('uses the only verified address when none is designated, and refuses when it is ambiguous or absent', async () => {
     const one = makeService({ emails: { primary: null, all: ['solo@example.com'] } });
     const { raw } = await mintToken(one, { target: 'principal' });

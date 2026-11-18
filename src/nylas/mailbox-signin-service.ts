@@ -76,7 +76,7 @@ export class MailboxSignInAddressError extends Error {
   constructor(readonly reason: 'unknown_principal_address' | 'no_principal_address') {
     super(
       reason === 'unknown_principal_address'
-        ? "That address is not one of the principal's verified email addresses. Connecting a new account is done by the operator from the console."
+        ? "That address is not one of the principal's verified email addresses. The principal can connect a new address by asking from a signed-in conversation with you, or the operator can do it from the console."
         : "The principal has no designated primary email address, so there is no mailbox address to sign in. Ask them which of their verified addresses to use, or set a primary in the console.",
     );
     this.name = 'MailboxSignInAddressError';
@@ -88,6 +88,10 @@ export interface MintSignInArgs {
   /** For 'principal': one of the principal's verified addresses (case-insensitive). Omitted means
    *  the designated primary. Anything else is refused; it never reaches the DB unchecked. */
   mailboxAddress?: string;
+  /** Set by the caller from the task's stamped originator (an authenticated principal turn),
+   *  never from model input: lets `mailboxAddress` name an address that is not yet one of the
+   *  principal's verified identities. The callback links it to their contact once they sign in. */
+  allowNewAddress?: boolean;
   label?: string;
   origin?: CaptureOrigin;
   ttlMinutes?: number;
@@ -95,7 +99,7 @@ export interface MintSignInArgs {
 
 /** Operator-facing mint (console, Task 7): may pin the link to an address that is not yet a
  *  verified identity, which skills must never be able to do. Not part of MailboxSignInMinter. */
-export interface OperatorMintSignInArgs extends Omit<MintSignInArgs, 'mailboxAddress'> {
+export interface OperatorMintSignInArgs extends Omit<MintSignInArgs, 'mailboxAddress' | 'allowNewAddress'> {
   expectedEmail?: string;
 }
 
@@ -122,6 +126,9 @@ export interface MailboxSignInServiceDeps {
   isFallbackActive?: () => Promise<boolean>;
 }
 
+/** One plain address: no whitespace, quotes, angle brackets, commas or a second `@`; a dotted domain. */
+const NEW_ADDRESS_SHAPE = /^[^\s@<>,;"'()[\]\\]+@[^\s@<>,;"'()[\]\\]+\.[^\s@<>,;"'()[\]\\.]+$/;
+
 const ROW_COLUMNS = `target, expected_email, mailbox_label, expires_at, consumed_at, created_at,
   conversation_id, channel_id, agent_id, task_event_id, originator, resume_token`;
 
@@ -136,11 +143,11 @@ export class MailboxSignInService implements MailboxSignInMinter {
   /** The agent path (the `mailboxSignIn` capability). A Curia link is refused once Curia has any
    *  email account, so the skill's "during setup" gate holds in code (R8). */
   async mint(args: MintSignInArgs): Promise<{ url: string; expiresAt: Date }> {
-    const { mailboxAddress, ...rest } = args;
+    const { mailboxAddress, allowNewAddress, ...rest } = args;
     if (rest.target === 'curia' && (await this.curiaMailboxMayExist())) {
       throw new MailboxSignInRefusedError('curia_mailbox_exists');
     }
-    const expectedEmail = rest.target === 'principal' ? this.resolvePrincipalAddress(mailboxAddress) : null;
+    const expectedEmail = rest.target === 'principal' ? this.resolvePrincipalAddress(mailboxAddress, allowNewAddress === true) : null;
     return this.insert(rest, expectedEmail);
   }
 
@@ -165,13 +172,16 @@ export class MailboxSignInService implements MailboxSignInMinter {
    * Pick the address a principal link is pinned to. Fails closed: a principal link is never
    * minted with no address, because that would let any Google account sign in as the principal.
    */
-  private resolvePrincipalAddress(requested: string | undefined): string {
+  private resolvePrincipalAddress(requested: string | undefined, allowNew: boolean): string {
     const { primary, all } = this.deps.principalEmails?.() ?? { primary: null, all: [] };
     const verified = all.map((a) => a.trim().toLowerCase()).filter((a) => a !== '');
     if (requested !== undefined) {
       const want = requested.trim().toLowerCase();
-      if (!verified.includes(want)) throw new MailboxSignInAddressError('unknown_principal_address');
-      return want;
+      if (verified.includes(want)) return want;
+      // A new address is accepted only when the caller vouched for an authenticated principal turn,
+      // and only if it is plainly one address. The callback still requires that exact account.
+      if (allowNew && NEW_ADDRESS_SHAPE.test(want)) return want;
+      throw new MailboxSignInAddressError('unknown_principal_address');
     }
     const designated = primary?.trim().toLowerCase();
     if (designated && verified.includes(designated)) return designated;
@@ -181,7 +191,7 @@ export class MailboxSignInService implements MailboxSignInMinter {
   }
 
   private async insert(
-    args: Omit<MintSignInArgs, 'mailboxAddress'>,
+    args: Omit<MintSignInArgs, 'mailboxAddress' | 'allowNewAddress'>,
     expectedEmail: string | null,
   ): Promise<{ url: string; expiresAt: Date }> {
     // R9: while the flat mailbox is served as a fallback, a principal sign-in would end it (any

@@ -61,6 +61,7 @@ describeIf('mailbox sign-in callback', () => {
   let secretsSet: Mock<(name: string, value: string) => Promise<void>>;
   /** Every (key, base URL) the admin's grant lookup used. */
   let lookups: Array<{ apiKey: string; apiUri: string }>;
+  let linkIdentity: Mock<(input: Record<string, unknown>) => Promise<{ id: string }>>;
   let store: PrincipalMailboxStore;
   let repo: EmailAccountsRepo;
   let deps: MailboxSignInCallbackDeps;
@@ -125,9 +126,10 @@ describeIf('mailbox sign-in callback', () => {
     };
     store = new PrincipalMailboxStore(pool, logger);
     repo = new EmailAccountsRepo(pool);
+    linkIdentity = vi.fn(async () => ({ id: randomUUID() }));
     const contacts = {
       getContactWithIdentities: async () => ({ contact: { primaryEmail: 'boss@example.com' }, identities: [] }),
-      linkIdentity: async () => ({ id: randomUUID() }),
+      linkIdentity,
       resolveByChannelIdentity: async () => null,
       unlinkIdentity: async () => {},
       verifyIdentity: async () => {},
@@ -262,6 +264,23 @@ describeIf('mailbox sign-in callback', () => {
     expect(exchangeCode).toHaveBeenCalledWith({ clientId: 'app-123', code: 'code-1', redirectUri: `${ORIGIN}/api/mailbox-signin/callback` });
     expect(deleteGrant).not.toHaveBeenCalled();
     expectNoGrantInLogs();
+  });
+
+  it('a link pinned to a brand-new address, signed in with that account, connects and links the identity', async () => {
+    nylasGrant('code-new', 'grant-new-0001', 'New.Job@Acme.com');
+    const mint = new MailboxSignInService({
+      pool, logger: pino({ level: 'silent' }), appOrigin: ORIGIN, readiness: async () => READY,
+      principalEmails: () => ({ primary: 'boss@example.com', all: ['boss@example.com'] }),
+    });
+    const { url } = await mint.mint({ target: 'principal', mailboxAddress: ' New.Job@Acme.com ', allowNewAddress: true });
+    const state = url.slice(url.lastIndexOf('/') + 1);
+    const res = await handleMailboxSignInCallback({ state, code: 'code-new' }, deps);
+    expect(res).toMatchObject({ outcome: 'connected', target: 'principal' });
+    expect((await store.listLive()).map((m) => m.address)).toEqual(['new.job@acme.com']);
+    expect(linkIdentity).toHaveBeenCalledTimes(1);
+    expect(linkIdentity).toHaveBeenCalledWith({
+      contactId: 'ceo', channel: 'email', channelIdentifier: 'new.job@acme.com', source: 'ceo_stated', verified: true,
+    });
   });
 
   it('uses a Nylas key that reached the vault only after the admin was built (R7)', async () => {
