@@ -37,7 +37,7 @@ function setup(over: Partial<NylasSetupRouteOptions> = {}, store: Record<string,
     bus: { publish: vi.fn(async () => {}) },
     logger: pino({ level: 'silent' }),
     makeClient: vi.fn(() => client as unknown as NylasAppClient),
-    probeRegion: vi.fn(async () => 'eu' as const),
+    probeRegion: vi.fn(async () => ({ region: 'eu' as const })),
     env: {},
     ...over,
   };
@@ -114,11 +114,31 @@ describe('nylas-setup routes', () => {
   });
 
   it('POST /discover-region 422s when neither region accepts the key, and writes nothing', async () => {
-    const { opts, secrets } = setup({ probeRegion: vi.fn(async () => null) });
+    const { opts, secrets } = setup({ probeRegion: vi.fn(async () => ({ region: null, unreachable: false })) });
     await build(opts);
     const res = await req('POST', '/api/registry/nylas/discover-region');
     expect(res.statusCode).toBe(422);
     expect(secrets.set).not.toHaveBeenCalled();
+  });
+
+  it('POST /discover-region 502s when Nylas could not be reached, and writes nothing (G)', async () => {
+    const { opts, secrets } = setup({ probeRegion: vi.fn(async () => ({ region: null, unreachable: true })) });
+    await build(opts);
+    const res = await req('POST', '/api/registry/nylas/discover-region');
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error).toMatch(/did not answer/);
+    expect(secrets.set).not.toHaveBeenCalled();
+  });
+
+  it('logs through the injected logger, not request.log (E)', async () => {
+    const lines: Array<Record<string, unknown>> = [];
+    const logger = pino({ level: 'trace' }, { write: (s: string) => { lines.push(JSON.parse(s) as Record<string, unknown>); } });
+    const { opts, client } = setup({ logger });
+    client.addCallbackUri.mockRejectedValueOnce(new NylasAppError('Nylas add callback uri failed: HTTP 503', 503));
+    // Fastify's own logger is off, as in http-adapter: request.log is a no-op there.
+    await build(opts);
+    expect((await req('POST', '/api/registry/nylas/callback')).statusCode).toBe(502);
+    expect(lines.find((l) => l['msg'] === 'nylas callback registration failed')).toMatchObject({ errName: 'NylasAppError', statusCode: 503 });
   });
 
   it('PUT /region validates and persists', async () => {

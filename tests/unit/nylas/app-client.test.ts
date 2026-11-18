@@ -257,7 +257,7 @@ describe('NylasAppClient', () => {
 
     it('probeRegion passes a signal and treats a timeout as a miss', async () => {
       const fetchImpl = vi.fn(async () => { throw new DOMException('too slow', 'TimeoutError'); });
-      expect(await NylasAppClient.probeRegion(KEY, fetchImpl as unknown as typeof fetch)).toBeNull();
+      expect(await NylasAppClient.probeRegion(KEY, fetchImpl as unknown as typeof fetch)).toEqual({ region: null, unreachable: true });
       expect(call(fetchImpl).init.signal).toBeInstanceOf(AbortSignal);
     });
 
@@ -274,7 +274,7 @@ describe('NylasAppClient', () => {
       const fetchImpl = vi.fn(async (url: string) =>
         url.startsWith('https://api.us.') ? json({}, 401) : json({ data: { application_id: 'a' } }));
       const region = await NylasAppClient.probeRegion(KEY, fetchImpl as unknown as typeof fetch);
-      expect(region).toBe('eu');
+      expect(region).toEqual({ region: 'eu' });
       expect(fetchImpl.mock.calls.map((c) => (c as unknown as [string])[0])).toEqual([
         'https://api.us.nylas.com/v3/applications',
         'https://api.eu.nylas.com/v3/applications',
@@ -283,16 +283,39 @@ describe('NylasAppClient', () => {
 
     it('returns us without trying eu when us answers 200', async () => {
       const fetchImpl = vi.fn(async () => json({ data: {} }));
-      expect(await NylasAppClient.probeRegion(KEY, fetchImpl as unknown as typeof fetch)).toBe('us');
+      expect(await NylasAppClient.probeRegion(KEY, fetchImpl as unknown as typeof fetch)).toEqual({ region: 'us' });
       expect(fetchImpl).toHaveBeenCalledTimes(1);
     });
 
-    it('returns null when both fail, including by throwing', async () => {
+    it('a throw on either region is unreachable, not a rejected key (G)', async () => {
       const fetchImpl = vi.fn(async (url: string) => {
         if (url.startsWith('https://api.us.')) return json({}, 401);
         throw new Error('network');
       });
-      expect(await NylasAppClient.probeRegion(KEY, fetchImpl as unknown as typeof fetch)).toBeNull();
+      expect(await NylasAppClient.probeRegion(KEY, fetchImpl as unknown as typeof fetch)).toEqual({ region: null, unreachable: true });
+    });
+
+    it.each([500, 503, 429])('a %i is unreachable (G)', async (status) => {
+      const fetchImpl = vi.fn(async (url: string) => (url.startsWith('https://api.us.') ? json({}, 403) : json({}, status)));
+      expect(await NylasAppClient.probeRegion(KEY, fetchImpl as unknown as typeof fetch)).toEqual({ region: null, unreachable: true });
+    });
+
+    it('both regions 401/403 is a rejected key, not unreachable (G)', async () => {
+      const fetchImpl = vi.fn(async (url: string) => json({}, url.startsWith('https://api.us.') ? 401 : 403));
+      expect(await NylasAppClient.probeRegion(KEY, fetchImpl as unknown as typeof fetch)).toEqual({ region: null, unreachable: false });
+    });
+
+    it('logs the error name and status per region, never the key (G)', async () => {
+      const lines: Array<Record<string, unknown>> = [];
+      const log = pino({ level: 'debug' }, { write: (s: string) => { lines.push(JSON.parse(s) as Record<string, unknown>); } });
+      const fetchImpl = vi.fn(async (url: string) => {
+        if (url.startsWith('https://api.us.')) return json({}, 503);
+        throw new TypeError('fetch failed');
+      });
+      await NylasAppClient.probeRegion(KEY, fetchImpl as unknown as typeof fetch, undefined, log);
+      expect(lines.find((l) => l['region'] === 'us')).toMatchObject({ status: 503 });
+      expect(lines.find((l) => l['region'] === 'eu')).toMatchObject({ errorName: 'TypeError' });
+      expect(JSON.stringify(lines)).not.toContain(KEY);
     });
   });
 });
