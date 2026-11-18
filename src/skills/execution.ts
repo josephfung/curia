@@ -997,6 +997,9 @@ export class ExecutionLayer {
     skillLogger: Logger,
     sendResolution?: readonly SendRecipientPin[],
     sendingThreshold: number = requiredScore,
+    // The raw lineage: `options.taskMetadata` is the ladder's effective copy, which demotes a
+    // woken principal to agent and would drop the unverified-requester flag (GHSA-p49r-jqh2-v668).
+    lineageTaskMetadata: InvokeOptions['taskMetadata'] = options?.taskMetadata,
   ): Promise<string> {
     const baseMsg =
       `Tool '${toolName}' blocked — autonomy score is ${currentScore}, ` +
@@ -1022,11 +1025,11 @@ export class ExecutionLayer {
         const result = await this.approvalTrigger.request({
           taskId: options.taskEventId,
           // Raised on an unauthenticated principal turn: delivered only on a verified channel (GHSA-p49r-jqh2-v668).
-          requesterUnverified: isUnauthenticatedPrincipal(options.taskMetadata),
+          requesterUnverified: isUnauthenticatedPrincipal(lineageTaskMetadata),
           conversationId: options.conversationId,
           toolName,
           actionRisk: String(actionRisk),
-          input: await this.approvalInput(toolName, input, skillLogger),
+          input: await this.approvalInput(toolName, input, skillLogger, lineageTaskMetadata),
           displayInput: await this.approvalDisplayInput(toolName, input, skillLogger),
           currentScore,
           requiredScore,
@@ -1087,7 +1090,7 @@ export class ExecutionLayer {
           conversationId: options.conversationId,
           toolName,
           actionRisk: String(actionRisk),
-          input: await this.approvalInput(toolName, input, skillLogger),
+          input: await this.approvalInput(toolName, input, skillLogger, options.taskMetadata),
           displayInput: await this.approvalDisplayInput(toolName, input, skillLogger),
           currentScore,
           requiredScore: currentScore,
@@ -1155,7 +1158,7 @@ export class ExecutionLayer {
         conversationId: options.conversationId,
         toolName,
         actionRisk: String(actionRisk),
-        input: await this.approvalInput(toolName, input, skillLogger),
+        input: await this.approvalInput(toolName, input, skillLogger, options.taskMetadata),
         displayInput: await this.approvalDisplayInput(toolName, input, skillLogger),
         currentScore,
         requiredScore: currentScore,
@@ -1317,7 +1320,7 @@ export class ExecutionLayer {
           conversationId: options.conversationId,
           toolName,
           actionRisk: String(actionRisk),
-          input: { ...(await this.approvalInput(toolName, input, skillLogger)), export_items: exportItems },
+          input: { ...(await this.approvalInput(toolName, input, skillLogger, options.taskMetadata)), export_items: exportItems },
           displayInput: {
             ...(await this.approvalDisplayInput(toolName, input, skillLogger)),
             export_items: exportItems,
@@ -1416,8 +1419,20 @@ export class ExecutionLayer {
    * retired and refused before any gate (#2041), so none reaches an approval.
    */
   /** What an approval stores as the call's input: a calendar call is bound to its sole mailbox (#2475). */
-  private async approvalInput(toolName: string, input: Record<string, unknown>, skillLogger: Logger): Promise<Record<string, unknown>> {
-    return this.calendarRouter ? bindApprovalMailbox(this.calendarRouter, skillLogger, toolName, input) : input;
+  private async approvalInput(
+    toolName: string,
+    input: Record<string, unknown>,
+    skillLogger: Logger,
+    lineageTaskMetadata: InvokeOptions['taskMetadata'],
+  ): Promise<Record<string, unknown>> {
+    const bound = this.calendarRouter ? await bindApprovalMailbox(this.calendarRouter, skillLogger, toolName, input) : input;
+    // A reply asked for on an unverified principal turn answers the sender only. The approved
+    // replay runs on the approver's verified turn, and the reply's recipients come from the
+    // thread at run time, where the approver cannot see what a forged message added, so the
+    // restriction rides in the stored input (GHSA-p49r-jqh2-v668).
+    return toolName === 'email-reply' && isUnauthenticatedPrincipal(lineageTaskMetadata)
+      ? { ...bound, sender_only: true }
+      : bound;
   }
 
   private async approvalDisplayInput(
@@ -2810,7 +2825,7 @@ export class ExecutionLayer {
             const gateOptions = { ...options, taskMetadata: effectiveTaskMetadata };
             const gateAError = await this.buildGateError(
               toolName, input, currentScore, 60, manifest.action_risk, gateOptions, skillLogger, sendPins,
-              Math.max(60, requiredScore),
+              Math.max(60, requiredScore), options?.taskMetadata,
             );
             return {
               success: false,
@@ -2842,6 +2857,7 @@ export class ExecutionLayer {
             const gateOptions = { ...options, taskMetadata: effectiveTaskMetadata };
             const gateBError = await this.buildGateError(
               toolName, input, currentScore, requiredScore, manifest.action_risk, gateOptions, skillLogger, sendPins,
+              requiredScore, options?.taskMetadata,
             );
             return {
               success: false,

@@ -844,6 +844,49 @@ describe('autonomy gates', () => {
       expect(handler.execute).toHaveBeenCalledOnce();
     });
 
+    // GHSA-p49r-jqh2-v668: the ladder demotes the wake to agent for the gate, but the approval it
+    // files still came from an unverified principal request, so it goes only to a verified channel.
+    it.each([
+      ['Gate A', 'medium', 59],
+      ['Gate B', 'high', 69],
+    ] as const)('%s keeps the unverified-requester flag when the ladder demotes an unverified principal wake', async (_gate, risk, score) => {
+      const registry = new ToolRegistry();
+      registry.register(makeRiskyManifest('calendar-create-event', risk), makeHandler('should not run'));
+      const trigger = makeApprovalTrigger({ created: true, shortRef: 'a3f7c12b', approvalNumber: 3 });
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(score), approvalTrigger: trigger });
+
+      const result = await layer.invoke('calendar-create-event', {}, undefined, {
+        taskEventId: 'task-1',
+        taskMetadata: { originator: { ...principalLineage, channel: 'sms', authenticated: false }, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(false);
+      expect(trigger.request).toHaveBeenCalledWith(expect.objectContaining({ requesterUnverified: true }));
+    });
+
+    // A held email-reply from an unverified principal request answers the sender only, through the
+    // approved replay too: the replay runs on the approver's verified turn, so the stored input
+    // must carry the restriction. A verified request keeps the full recipient set.
+    it.each([
+      ['an unverified', false, true],
+      ['a verified', true, undefined],
+    ] as const)('stores sender_only on a held email-reply from %s principal request', async (_label, authenticated, expected) => {
+      const registry = new ToolRegistry();
+      registry.register(makeRiskyManifest('email-reply', 'medium'), makeHandler('should not run'));
+      const trigger = makeApprovalTrigger({ created: true, shortRef: 'a3f7c12b', approvalNumber: 3 });
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(59), approvalTrigger: trigger });
+
+      const result = await layer.invoke('email-reply', { reply_to_message_id: 'm-1', body: 'hi' }, undefined, {
+        taskEventId: 'task-1',
+        // A wake, so the ladder demotes both to the same gate (a live verified turn bypasses it).
+        taskMetadata: { originator: { ...principalLineage, channel: authenticated ? 'email' : 'sms', authenticated }, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(false);
+      const filed = vi.mocked(trigger.request).mock.calls[0]![0];
+      expect(filed.input['sender_only']).toBe(expected);
+    });
+
     it('same-task wake of a principal task LOSES the bypass at score < 70 (propose-only)', async () => {
       const registry = new ToolRegistry();
       const handler = makeHandler('should not run');
