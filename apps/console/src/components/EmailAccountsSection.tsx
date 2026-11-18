@@ -184,7 +184,7 @@ export function EmailAccountsSection({ onChanged }: { onChanged?: () => void } =
 
       {/* Add-account: Google sign-in first; the grant-id form is the fallback. */}
       <div style={{ marginTop: 12 }}>
-        <ConnectWithGoogle target="curia" label={name} />
+        <ConnectWithGoogle target="curia" />
       </div>
       <details style={{ marginTop: 8 }}>
       <summary>Paste a grant ID instead</summary>

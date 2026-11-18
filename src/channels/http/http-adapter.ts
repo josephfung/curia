@@ -171,7 +171,7 @@ export interface HttpAdapterConfig {
    *  Token-authed, so mounted independently of the bootstrap secret. */
   mailboxSignIn?: {
     service: MailboxSignInRouteOptions['signIn'] & { pruneExpired(): Promise<number> }
-      & Partial<Pick<import('../../nylas/mailbox-signin-service.js').MailboxSignInService, 'mint' | 'mintForOperator'>>;
+      & Pick<import('../../nylas/mailbox-signin-service.js').MailboxSignInService, 'mint' | 'mintForOperator'>;
     readiness: MailboxSignInRouteOptions['readiness'];
     readApiKey: MailboxSignInRouteOptions['readApiKey'];
     /** The bound callback logic (handleMailboxSignInCallback). Absent: the callback answers failed. */
@@ -671,9 +671,7 @@ export class HttpAdapter implements Channel {
         sessions,
         bus,
         logger,
-        ...(this.config.mailboxSignIn?.service.mint && this.config.mailboxSignIn.service.mintForOperator
-          ? { signIn: this.config.mailboxSignIn.service as Pick<import('../../nylas/mailbox-signin-service.js').MailboxSignInService, 'mint' | 'mintForOperator'> }
-          : {}),
+        ...(this.config.mailboxSignIn ? { signIn: this.config.mailboxSignIn.service } : {}),
       });
     }
 
