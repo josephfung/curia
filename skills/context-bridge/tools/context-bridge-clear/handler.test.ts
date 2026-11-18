@@ -134,7 +134,7 @@ describe('ContextBridgeClearHandler', () => {
   it('still clears on a principal turn', async () => {
     const ctx = makeCtx({ subjects: ['Sean Brownlee'] }, { totalReleased: 1, perSubject: [{ subject: 'Sean Brownlee', released: 1 }], unmatched: [] });
     (ctx as unknown as Record<string, unknown>).taskMetadata = {
-      originator: { contactId: 'principal-1', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-10-21T21:29:59.973Z', tier: null },
+      originator: { contactId: 'principal-1', systemRole: 'principal', authenticated: true, channel: 'signal', initiatedAt: '2026-10-21T21:29:59.973Z', tier: null },
     };
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
