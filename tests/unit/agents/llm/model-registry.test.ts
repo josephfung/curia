@@ -34,15 +34,18 @@ describe('ModelRegistry', () => {
   });
 
   describe('getContextWindow', () => {
-    it('returns context window for a known model', () => {
-      expect(registry.getContextWindow('claude-opus-4-6')).toBe(200_000);
-    });
+    it.each(['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'])(
+      'returns the context window for %s',
+      (model) => {
+        expect(registry.getContextWindow(model)).toBe(200_000);
+      },
+    );
 
     it('returns context window for a versioned model name', () => {
       expect(registry.getContextWindow('claude-haiku-4-5-20251001')).toBe(200_000);
     });
 
-    it('returns 0 for unknown models', () => {
+    it('returns undefined for unknown models', () => {
       expect(registry.getContextWindow('unknown-model')).toBeUndefined();
     });
   });

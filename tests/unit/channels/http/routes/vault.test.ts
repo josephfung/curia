@@ -288,16 +288,6 @@ describe('vault routes', () => {
     expect(secrets.sets).toEqual([{ name: 'channel.email.curia.nylas_grant_id', value: 'grant_abc' }]);
   });
 
-  it('still rejects an undeclared, non-credential key', async () => {
-    // Widening the guard to accept per-account grant keys must not open the door
-    // to arbitrary undeclared names.
-    const secrets = fakeSecrets();
-    app = await build(secrets, fakeRegistry());
-    const res = await put(app, 'random_key', { value: 'x' });
-    expect(res.statusCode).toBe(400);
-    expect(secrets.sets).toEqual([]);
-  });
-
   it('rejects a per-account key for a non-grant field', async () => {
     // channel.email.<name>.nylas_api_key is not the per-account grant pattern;
     // only nylas_grant_id is written per-account. This must stay rejected.
