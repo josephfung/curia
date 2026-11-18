@@ -26,7 +26,19 @@ export interface MailboxOutageNotifierDeps {
    * The link goes in the email alone: never in a log or the canary detail.
    */
   mintReconnectLink?: (mailboxId: string, label: string) => Promise<string | null>;
+  /** How long the alert waits for mintReconnectLink. Default MINT_RECONNECT_LINK_TIMEOUT_MS. */
+  mintTimeoutMs?: number;
   logger: Logger;
+}
+
+/** The mint reads the registry and the DB; a stall past this sends the grant-paste wording. */
+export const MINT_RECONNECT_LINK_TIMEOUT_MS = 10_000;
+
+class MintTimeoutError extends Error {
+  constructor() {
+    super('Minting the reconnect link timed out');
+    this.name = 'MintTimeoutError';
+  }
 }
 
 export class MailboxOutageNotifier {
@@ -60,14 +72,24 @@ export class MailboxOutageNotifier {
       return;
     }
 
-    // A mint failure must never stop the alert: any problem falls back to the grant-paste wording.
+    // A mint failure must never stop the alert: any problem, a stall included, falls back to the
+    // grant-paste wording. A mint that finishes after the deadline leaves an unused link that expires.
     let reconnectLink: string | null = null;
     if (opts.authFailure && this.deps.mintReconnectLink) {
+      let timer: NodeJS.Timeout | undefined;
       try {
-        reconnectLink = await this.deps.mintReconnectLink(mailboxId, label);
+        const deadline = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new MintTimeoutError()), this.deps.mintTimeoutMs ?? MINT_RECONNECT_LINK_TIMEOUT_MS);
+        });
+        const mint = this.deps.mintReconnectLink(mailboxId, label);
+        // A late rejection after the deadline won is already handled here, never unhandled.
+        mint.catch(() => undefined);
+        reconnectLink = await Promise.race([mint, deadline]);
       } catch (err) {
         // Error name only: the message could carry a token or address.
         this.log.warn({ mailboxId, errorName: err instanceof Error ? err.name : 'UnknownError' }, 'Could not mint a reconnect link for the outage alert; sending the grant-paste wording');
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
       }
     }
 

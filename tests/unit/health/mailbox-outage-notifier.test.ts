@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { MailboxOutageNotifier } from '../../../src/health/mailbox-outage-notifier.js';
+import { MailboxOutageNotifier, MINT_RECONNECT_LINK_TIMEOUT_MS } from '../../../src/health/mailbox-outage-notifier.js';
 
 function make(email: string | null = 'owner@example.com', sent = true) {
   const sendNotification = vi.fn().mockResolvedValue(sent);
@@ -99,13 +99,14 @@ describe('MailboxOutageNotifier', () => {
 
   describe('reconnect link (#2361)', () => {
     const URL_ = 'https://curia.example.com/api/mailbox-signin/start/abc123';
-    function withLink(mint: (id: string, label: string) => Promise<string | null>) {
+    function withLink(mint: (id: string, label: string) => Promise<string | null>, mintTimeoutMs?: number) {
       const sendNotification = vi.fn().mockResolvedValue(true);
       const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
       const n = new MailboxOutageNotifier({
         gateway: { sendNotification },
         principalEmail: () => 'owner@example.com',
         mintReconnectLink: mint,
+        ...(mintTimeoutMs !== undefined ? { mintTimeoutMs } : {}),
         logger: logger as never,
       });
       return { n, sendNotification, logger };
@@ -145,6 +146,18 @@ describe('MailboxOutageNotifier', () => {
       expect(sendNotification.mock.calls[0]![0].body).toContain('paste its new grant ID');
       expect(logger.warn).toHaveBeenCalledWith(expect.objectContaining({ mailboxId: 'work', errorName: 'TypeError' }), expect.any(String));
       expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('secret-token-xyz');
+    });
+
+    it('a stalled mint does not hold the alert: past the deadline it sends the grant-paste wording', async () => {
+      const { n, sendNotification, logger } = withLink(() => new Promise<string | null>(() => {}), 20);
+      await n.record('work', 'Work', false, { authFailure: true });
+      expect(sendNotification).toHaveBeenCalledTimes(1);
+      expect(sendNotification.mock.calls[0]![0].body).toContain('paste its new grant ID');
+      expect(logger.warn).toHaveBeenCalledWith(expect.objectContaining({ mailboxId: 'work', errorName: 'MintTimeoutError' }), expect.any(String));
+    });
+
+    it('defaults the mint deadline to 10 s', () => {
+      expect(MINT_RECONNECT_LINK_TIMEOUT_MS).toBe(10_000);
     });
 
     it('does not mint again for later failures in the same episode', async () => {
