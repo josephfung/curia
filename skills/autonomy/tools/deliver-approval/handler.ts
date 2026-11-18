@@ -10,7 +10,6 @@ import { APPROVAL_CHANNELS, type ApprovalChannel } from '../../../../src/autonom
 
 const CHANNEL_NAMES: Record<ApprovalChannel, string> = {
   signal: 'Signal',
-  sms: 'SMS',
   web: 'the phone app',
   slack: 'Slack',
   email: 'Email',
@@ -52,6 +51,11 @@ export class DeliverApprovalHandler implements ToolHandler {
           return { success: false, error: `The principal has no verified ${CHANNEL_NAMES[chosen]} identity. Channels available: ${list(result.available)}.` };
         case 'not_found':
           return { success: false, error: `No pending approval with reference ${shortRef}; it may have been resolved or expired.` };
+        // GHSA-p49r-jqh2-v668: an approval raised on an unauthenticated principal turn.
+        case 'verified_channel_required':
+          return { success: false, error: `This request came from a channel that cannot prove it was the principal, so it goes only to a verified channel. Channels available: ${list(result.available)}.` };
+        case 'rate_limited':
+          return { success: false, error: `Too many unverified requests this hour, so approval ${shortRef} waits in the console and the next digest. Do not try another channel. Tell the requester it is waiting for the principal.` };
         default: {
           // Exhaustive: a new reason must be given its own wording here.
           const unhandled: never = result.reason;

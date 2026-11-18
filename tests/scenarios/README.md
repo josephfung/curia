@@ -775,7 +775,7 @@ tool's real handler.
 
 **Approval channels.** Avery has verified email and Signal, and approval delivery prefers
 Signal, so a held send's approval goes out on Signal. A case about another channel lists the
-ones its approvals may use in `approval_channels` (`signal`, `sms`, `web`, `slack`, `email`),
+ones its approvals may use in `approval_channels` (`signal`, `web`, `slack`, `email`; never `sms`),
 as if Avery had verified identities on those alone: `deliver-approval` lists only them, and a
 call on any other gets production's `channel_unavailable`, naming the channels left. 34o, a
 reply on the approval email's thread, sets `[email]`. Through-gateway cases only, since other

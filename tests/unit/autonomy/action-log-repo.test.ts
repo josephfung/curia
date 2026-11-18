@@ -118,12 +118,12 @@ describe('ActionLogRepo', () => {
       expect(sqls[2]).toContain("created_at > now() - interval '7 days'");
       expect(sqls[2]).toContain('approval_number IS NOT NULL');
       expect(sqls[3]).toContain('INSERT INTO autonomy_action_log');
-      expect(sqls[3]).toContain('approval_number, disclosure_ask)');
+      expect(sqls[3]).toContain('approval_number, disclosure_ask, requester_unverified)');
       expect(sqls[4]).toBe('COMMIT');
       // Controller ruling R1: approval_number is $17, so the positional indices of the
       // existing 16 params are unchanged; disclosure_ask (#2312) came after it, as $18.
       const insertParams = clientQueries[3]!.params;
-      expect(insertParams).toHaveLength(18);
+      expect(insertParams).toHaveLength(19);
       expect(insertParams[16]).toBe(3);
       expect(insertParams[4]).toBe('pending_approval');
       expect(insertParams[8]).toBe('a3f7c12b');
@@ -196,7 +196,7 @@ describe('ActionLogRepo', () => {
       expect(poolQueries).toHaveLength(1);
       expect(poolQueries[0]!.sql).not.toContain('pg_advisory_xact_lock');
       // The column is still in the list (one insert shape), always NULL off the pending path.
-      expect(poolQueries[0]!.params).toHaveLength(18);
+      expect(poolQueries[0]!.params).toHaveLength(19);
       expect(poolQueries[0]!.params[16]).toBeNull();
     });
   });
@@ -261,10 +261,27 @@ describe('ActionLogRepo', () => {
       const repo = new ActionLogRepo(pool, createSilentLogger());
       await repo.insert({ taskId: 't', toolName: 'email-send', actionRisk: 'medium', outcome: 'success', payload: { to: 'c-1' }, disclosureAsk: ask });
       await repo.insert({ taskId: 't', toolName: 'email-send', actionRisk: 'medium', outcome: 'success', payload: { to: 'c-1' } });
-      expect(queries[0]!.sql).toContain('disclosure_ask)');
+      expect(queries[0]!.sql).toContain('disclosure_ask, requester_unverified)');
       expect(JSON.parse(queries[0]!.params[17] as string)).toEqual(ask);
       expect(JSON.parse(queries[0]!.params[6] as string)).toEqual({ to: 'c-1' });
       expect(queries[1]!.params[17]).toBeNull();
+    });
+
+    // GHSA-p49r-jqh2-v668: an approval raised on an unauthenticated principal turn is marked, so
+    // delivery sends it only on a verified channel.
+    it('stores requesterUnverified as $19, false unless set, and reads it back', async () => {
+      const { pool, queries } = makePool([{ id: '5' }]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.insert({ taskId: 't', toolName: 'contact-set-tier', actionRisk: 'none', outcome: 'success', requesterUnverified: true });
+      await repo.insert({ taskId: 't', toolName: 'contact-set-tier', actionRisk: 'none', outcome: 'success' });
+      expect(queries[0]!.params[18]).toBe(true);
+      expect(queries[1]!.params[18]).toBe(false);
+
+      const { pool: readPool } = makePool([{
+        id: '1', task_id: 't', conversation_id: null, skill_name: 'contact-set-tier', action_risk: 'none', outcome: 'pending_approval',
+        payload: {}, short_ref: 'ab12cd34', created_at: new Date().toISOString(), requester_unverified: true,
+      }]);
+      expect((await new ActionLogRepo(readPool, createSilentLogger()).findPendingByShortRef('ab12cd34'))?.requesterUnverified).toBe(true);
     });
 
     it('reads a stored ask back onto the row, and a malformed or missing one as null', async () => {
