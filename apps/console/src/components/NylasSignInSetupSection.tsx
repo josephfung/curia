@@ -96,12 +96,15 @@ export function NylasSignInSetupSection() {
     }
   }, []);
 
+  // Bumps the live counter when called, so every check still in flight fails its guard.
+  const invalidateChecks = useCallback(() => { checkSeq.current++; }, []);
+
   useEffect(() => {
     void check();
     // Unmount invalidates any check still in flight: a late answer must neither set state nor
     // broadcast a stale result to a page mounted afterwards.
-    return () => { checkSeq.current++; };
-  }, [check]);
+    return invalidateChecks;
+  }, [check, invalidateChecks]);
 
   // Run one action, then re-check. Returns whether it succeeded.
   async function act(run: () => Promise<Response>, done: string): Promise<boolean> {
