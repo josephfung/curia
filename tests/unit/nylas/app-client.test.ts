@@ -216,6 +216,59 @@ describe('NylasAppClient', () => {
     });
   });
 
+  describe('malformed 2xx bodies', () => {
+    it('getApplication without application_id throws with the HTTP status', async () => {
+      const { client } = setup(json({ data: { region: 'us' } }));
+      const err = await client.getApplication().then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(NylasAppError);
+      expect((err as NylasAppError).status).toBe(200);
+    });
+
+    it.each([
+      ['id', { email: 'e', provider: 'google', grant_status: 'valid', scope: [] }],
+      ['email', { id: 'g', provider: 'google', grant_status: 'valid', scope: [] }],
+      ['grant_status', { id: 'g', email: 'e', provider: 'google', scope: [] }],
+    ])('getGrant without %s throws', async (_f, data) => {
+      const { client } = setup(json({ data }));
+      const err = await client.getGrant('g').then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(NylasAppError);
+      expect((err as NylasAppError).status).toBe(200);
+      expect((err as NylasAppError).message).not.toContain('g-secret');
+    });
+
+    it('exchangeCode 200 without grant_id throws', async () => {
+      const { client } = setup(json({ email: 'a@b.com', scope: 'x' }));
+      const err = await client.exchangeCode({ clientId: 'a', code: 'c', redirectUri: 'https://x/cb' }).then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(NylasAppError);
+      expect((err as NylasAppError).status).toBe(200);
+    });
+  });
+
+  describe('timeout and url', () => {
+    it('a timeout becomes status 0 with a "timed out" message and passes a signal', async () => {
+      const fetchImpl = vi.fn(async () => { throw new DOMException('too slow', 'TimeoutError'); });
+      const client = new NylasAppClient({ apiKey: KEY, apiUri: API, logger, fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 50 });
+      const err = await client.getApplication().then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(NylasAppError);
+      expect((err as NylasAppError).status).toBe(0);
+      expect((err as NylasAppError).message).toContain('timed out');
+      expect(call(fetchImpl).init.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('probeRegion passes a signal and treats a timeout as a miss', async () => {
+      const fetchImpl = vi.fn(async () => { throw new DOMException('too slow', 'TimeoutError'); });
+      expect(await NylasAppClient.probeRegion(KEY, fetchImpl as unknown as typeof fetch)).toBeNull();
+      expect(call(fetchImpl).init.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('strips trailing slashes from apiUri', async () => {
+      const fetchImpl = vi.fn(async () => json({ data: {} }));
+      const client = new NylasAppClient({ apiKey: KEY, apiUri: `${API}//`, logger, fetchImpl: fetchImpl as unknown as typeof fetch });
+      await client.addCallbackUri('https://x/cb');
+      expect(call(fetchImpl).url).toBe(`${API}/v3/applications/redirect-uris`);
+    });
+  });
+
   describe('probeRegion', () => {
     it('returns eu when us is 401 and eu is 200', async () => {
       const fetchImpl = vi.fn(async (url: string) =>
