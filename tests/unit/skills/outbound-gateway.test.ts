@@ -3252,6 +3252,27 @@ describe('gated draft-fallback (two-step pattern)', () => {
     expect(result.policyHold).toBe(true);
   });
 
+  // GHSA-p49r-jqh2-v668: a relayed reply to a spoofed principal message, held by the score gate.
+  it('marks a score-gate hold as unverified when the send says its turn was unverified', async () => {
+    const mocks = createMocks();
+    const actionLogRepo = makeActionLogRepo();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo,
+    });
+    await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123', conversationId: 'conv-456', reExecRecipe: TEST_RECIPE, requesterUnverified: true },
+    );
+    expect(actionLogRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'pending_approval', requesterUnverified: true }));
+  });
+
   it('is a failure, not a policy hold, when the approval row cannot be written (#2587)', async () => {
     const mocks = createMocks();
     const actionLogRepo = makeActionLogRepo();
@@ -5075,6 +5096,14 @@ describe('band review (#2159)', () => {
       const gw2 = makeBandGateway({ review: vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held.', findings: [{ rule: 'steered', detail: 'x' }] }), score: 84, actionLogRepo: verified });
       await gw2.send(emailReq, { taskEventId: 't1', holdRecipe, originator: { ...forged, channel: 'signal', authenticated: true } });
       expect(verified.insert).toHaveBeenCalledWith(expect.not.objectContaining({ requesterUnverified: true }));
+    });
+
+    // A relayed reply carries no originator, only the dispatcher's flag for the turn it answers.
+    it('marks a relayed reply\'s hold as unverified when the dispatcher flagged the turn', async () => {
+      const actionLogRepo = makeActionLogRepo();
+      const gw = makeBandGateway({ review: vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held.', findings: [{ rule: 'steered', detail: 'x' }] }), score: 84, actionLogRepo });
+      await gw.send(emailReq, { taskEventId: 't1', postTurn: true, holdRecipe, requesterUnverified: true });
+      expect(actionLogRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'pending_approval', requesterUnverified: true }));
     });
 
     it('keeps the recipe\'s description as the preamble of any other hold', async () => {

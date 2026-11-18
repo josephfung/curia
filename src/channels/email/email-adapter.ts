@@ -1480,6 +1480,8 @@ export class EmailAdapter implements Channel {
         ...(outbound.payload.principalApproved === true ? { humanApproved: true } : {}),
         // The note queued for the principal from this reply: evidence for the send review (#2312).
         ...(outbound.payload.reportedToPrincipal ? { reportedToPrincipal: outbound.payload.reportedToPrincipal } : {}),
+        // A reply to a forged-From principal turn: a hold's approval is marked unverified (GHSA-p49r-jqh2-v668).
+        ...(outbound.payload.requesterUnverified === true ? { requesterUnverified: true } : {}),
       });
     } catch (err) {
       logger.error({ err, threadId }, 'Failed to send email reply');
@@ -1503,6 +1505,8 @@ export class EmailAdapter implements Channel {
       /** The principal approved this exact text (#2159). */
       humanApproved?: boolean;
       reportedToPrincipal?: string;
+      /** The turn this replies to was an unverified principal match (GHSA-p49r-jqh2-v668). */
+      requesterUnverified?: boolean;
     },
   ): Promise<void> {
     const { outboundGateway, logger, accountId } = this.config;
@@ -1526,6 +1530,7 @@ export class EmailAdapter implements Channel {
       postTurn: true,
       ...(context.humanApproved ? { humanApproved: true } : {}),
       ...(context.reportedToPrincipal ? { reportedToPrincipal: context.reportedToPrincipal } : {}),
+      ...(context.requesterUnverified ? { requesterUnverified: true } : {}),
       ...(context.recipientSource ? { recipientSource: context.recipientSource } : {}),
       ...(context.recipientDisplayName ? { recipientDisplayName: context.recipientDisplayName } : {}),
       reExecRecipe: {

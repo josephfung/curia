@@ -36,7 +36,7 @@ import { isTaskWakeReplyBinding } from './task-wake-reply.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import { inboundIsOneToOne, inboundSenderAuthenticated } from './outbound-entry-access.js';
 import type { AcquaintanceEvidence } from '../contacts/principal-acquaintance.js';
-import { hasPrincipalAuthority } from '../contacts/principal.js';
+import { hasPrincipalAuthority, isUnauthenticatedPrincipal } from '../contacts/principal.js';
 import { cutsQuotedText, formatSenderOwnText, hasBookingPageLink, inboundTurnGuidance, looksLikeForward, looksLikeMakeRoom, looksLikeSpotCheckReply, parseSpotCheckVerdicts, senderOwnParts, spotCheckCandidateText, type SenderOwnParts } from './turn-guidance-triggers.js';
 import { hasBacklog, type PrincipalBacklogCounts } from '../agents/prompts/backlog-line.js';
 import type { AwaitingAnswer } from '../agents/prompts/awaiting-answers.js';
@@ -2380,6 +2380,8 @@ export class Dispatcher {
       taskEventId: event.parentEventId ?? undefined,
       contentBlockSalvage: routing.contentBlockSalvage,
       ...(reportedToPrincipal && { reportedToPrincipal }),
+      // A hold on this reply raises an approval marked unverified (GHSA-p49r-jqh2-v668).
+      ...(isUnauthenticatedPrincipal({ originator: routing.originator }) && { requesterUnverified: true }),
     });
 
     // Track for content-filter block handling (#1355) — cleared on delivery or block.
