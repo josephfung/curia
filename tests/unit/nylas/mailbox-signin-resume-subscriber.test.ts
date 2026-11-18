@@ -82,10 +82,13 @@ describe('mailboxSignInResumeLine', () => {
     expect(new Set(lines).size).toBe(lines.length);
   });
 
-  it('admin_blocked says the operator was told and names the client id, or the generic phrase', () => {
+  it('admin_blocked says a notice was requested (not delivered) and names the client id, or the generic phrase', () => {
     const named = mailboxSignInResumeLine('admin_blocked', 'principal', { clientId: '1234-abc.apps.googleusercontent.com', operatorNotified: true });
     expect(named).toContain('1234-abc.apps.googleusercontent.com');
-    expect(named).toMatch(/operator has been (told|notified)/);
+    expect(named).toContain('Curia asked for a notice to be sent to the operator');
+    // A published notice is not a delivered email: never claimed as one.
+    expect(named).not.toMatch(/operator has been (told|notified)/);
+    expect(named).toMatch(/an administrator must mark .* as Trusted/);
     expect(mailboxSignInResumeLine('admin_blocked', 'principal', { operatorNotified: true })).toContain('the OAuth client ID from your Google Cloud project');
   });
 
@@ -200,10 +203,11 @@ describe('MailboxSignInResumeSubscriber', () => {
     expect(tasks()[0]!.payload.content).toContain("I couldn't notify the operator");
   });
 
-  it('admin_blocked: a delivered notice is reported as told', async () => {
+  it('admin_blocked: a published notice is reported as requested, with the administrator step', async () => {
     const { emit, tasks } = setup();
     await emit(finished({ outcome: 'admin_blocked' }));
-    expect(tasks()[0]!.payload.content).toMatch(/operator has been told/);
+    expect(tasks()[0]!.payload.content).toContain('Curia asked for a notice to be sent to the operator');
+    expect(tasks()[0]!.payload.content).toMatch(/as Trusted in the Google Admin console/);
   });
 
   it('other outcomes send no operator notice', async () => {
