@@ -80,6 +80,29 @@ describe('nylas-setup routes', () => {
     expect(res.body).not.toContain(API_KEY);
   });
 
+  it('GET /signin, when ready, reports the region that passed the check even if another is saved meanwhile', async () => {
+    const { opts, client, store } = setup();
+    // The region changes to eu while the us check is talking to Nylas.
+    client.listConnectors.mockImplementation(async () => {
+      store['channel.email.nylas_region'] = 'eu';
+      return [{ provider: 'google', scopes: [] }];
+    });
+    await build(opts);
+    const res = await req('GET', '/api/registry/nylas/signin');
+    expect(res.json()).toMatchObject({
+      ready: true, region: 'us', googleRedirectUri: 'https://api.us.nylas.com/v3/connect/callback',
+    });
+  });
+
+  it('GET /signin, when not ready, reports the saved region', async () => {
+    const { opts } = setup({}, { 'channel.email.nylas_region': 'eu' });
+    await build(opts);
+    const res = await req('GET', '/api/registry/nylas/signin');
+    expect(res.json()).toMatchObject({
+      ready: false, reason: 'no_api_key', region: 'eu', googleRedirectUri: 'https://api.eu.nylas.com/v3/connect/callback',
+    });
+  });
+
   it('GET /signin with no key says no_api_key without calling Nylas', async () => {
     const { opts } = setup({}, {});
     await build(opts);
