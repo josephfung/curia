@@ -103,6 +103,7 @@ import { MailboxSignInService } from './nylas/mailbox-signin-service.js';
 import { handleMailboxSignInCallback, type MailboxSignInCallbackQuery } from './nylas/mailbox-signin-callback.js';
 import { MailboxSignInResumeSubscriber } from './nylas/mailbox-signin-resume-subscriber.js';
 import { NylasAppClient } from './nylas/app-client.js';
+import { createLiveGrantLookup } from './nylas/live-grant-lookup.js';
 import { CalendarRouter, calendarRouterEnabled } from './channels/calendar/calendar-router.js';
 import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
@@ -1364,6 +1365,13 @@ async function main(): Promise<void> {
   // without one the process is in setup-required mode and the routes are not mounted.
   // Without a Nylas API key the routes still list and remove, but add and test answer 503.
   const principalMailboxApiKey = config.nylasApiKey;
+  // Live Nylas key and region (vault, then env), shared with sign-in readiness (#2361). The admin's
+  // grant lookup reads through them so a key saved after boot works for hosted sign-in (R7).
+  const nylasSignInReaders = createNylasSignInReaders({ secrets: secretsService, env: process.env, logger });
+  const liveGrantLookup = createLiveGrantLookup({
+    ...nylasSignInReaders,
+    lookup: (apiKey, apiUri, grantId) => new NylasClient(apiKey, grantId, logger, undefined, apiUri).getGrant(),
+  });
   const mailboxCalendarHooks = principalContact && principalMailboxApiKey
     ? createMailboxCalendarHooks({
         contacts: contactService,
@@ -1428,10 +1436,8 @@ async function main(): Promise<void> {
         curiaAccountAddresses: async () => (await emailAccountsRepo.list()).map(a => a.selfEmail),
         // F6: a principal mailbox may never reuse one of Curia's own account grants.
         curiaAccountGrantIds,
-        lookupGrant: (grantId) => {
-          if (!principalMailboxApiKey) return Promise.reject(new Error('No Nylas API key configured'));
-          return new NylasClient(principalMailboxApiKey, grantId, logger, undefined, nylasApiUri(config.nylasRegion)).getGrant();
-        },
+        // Read live (R7): the sign-in callback adds through this admin with a key saved after boot.
+        lookupGrant: liveGrantLookup,
         isFallbackActive: () => principalMailboxes.isFallbackActive(),
         // Scoped inbox rules on removal (task 27). The working-docs repo is built further down;
         // the adapter reads it only when a removal runs, after boot.
@@ -3156,7 +3162,6 @@ async function main(): Promise<void> {
   };
   // Mailbox sign-in readiness (#2361). Reads the Nylas key and region live on every call, so a key
   // saved from the console counts without a restart. It asks Nylas, so it is a network call.
-  const nylasSignInReaders = createNylasSignInReaders({ secrets: secretsService, env: process.env, logger });
   const nylasSignInReadiness = (): Promise<NylasSignInReadiness> =>
     checkNylasSignIn({ ...nylasSignInReaders, appOrigin: config.appOrigin, logger });
   // Single-use mailbox sign-in links (#2361). The principal's address comes from their designated

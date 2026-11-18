@@ -72,7 +72,7 @@ function reason(outcome: MailboxSignInOutcome, clientId: string | undefined): st
  */
 export function mailboxSignInResumeLine(outcome: MailboxSignInOutcome, target: SignInTarget, clientId?: string): string {
   if (outcome === 'connected' || outcome === 'reconnected') {
-    const restart = target === 'curia' ? ' Curia restarts in a few seconds to start using it, so keep the next reply short.' : '';
+    const restart = target === 'curia' ? ' Curia restarts to start using it.' : '';
     return `The mailbox sign-in finished: ${whose(target)} is connected — continue.${restart}`;
   }
   const after = outcome === 'admin_blocked' ? ' once the app is trusted' : '';
@@ -111,7 +111,7 @@ export class MailboxSignInResumeSubscriber {
       this.log.info({ eventId: event.id }, 'mailbox_signin.finished already handled — skipping duplicate');
       return;
     }
-    const { target, outcome, conversationId, agentId, channelId, taskEventId, resumeToken, originator } = event.payload;
+    const { target, outcome, conversationId, agentId, channelId, taskEventId, resumeToken, originator, restartScheduled } = event.payload;
 
     // Marked before any await so a re-delivery during the notice cannot notify twice.
     this.markDispatched(event.id);
@@ -122,6 +122,12 @@ export class MailboxSignInResumeSubscriber {
       await this.notifyOperator(target, clientId, event.id);
     }
 
+    // R6: Curia exits a few seconds after connecting its own mailbox; a resumed turn would be cut
+    // off mid-reply. The console's done page tells the operator instead.
+    if (restartScheduled === true) {
+      this.log.info({ eventId: event.id, outcome, agentId }, 'mailbox_signin.finished precedes a restart — not resuming an agent');
+      return;
+    }
     if (!agentId || !conversationId || !channelId) {
       this.log.info({ eventId: event.id, outcome, hasAgentId: !!agentId }, 'mailbox_signin.finished has no routable origin — not resuming an agent');
       return;
