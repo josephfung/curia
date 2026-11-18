@@ -187,6 +187,10 @@ class SlowTtsProvider implements TextToSpeechProvider {
  * cancelled, aborted or released. A test can then act while Curia is mid-reply
  * however slowly the runner goes. Only the first `holds` requests hold; later
  * ones (the next turn's reply) finish after their frames.
+ *
+ * `framesAfterHold` makes a held reply yield that many more frames once its hold
+ * ends, ignoring the cancel and the abort, like a provider slow to honour them.
+ * Only the runtime's own checks can then keep those frames off the line.
  */
 class HoldingTtsProvider implements TextToSpeechProvider {
   readonly id = 'holding-tts';
@@ -196,11 +200,13 @@ class HoldingTtsProvider implements TextToSpeechProvider {
   open = 0;
   private readonly frames: number;
   private readonly holds: number;
+  private readonly framesAfterHold: number;
   private readonly holding = new Map<string, () => void>();
   private released = false;
-  constructor(opts: { frames?: number; holds?: number } = {}) {
+  constructor(opts: { frames?: number; holds?: number; framesAfterHold?: number } = {}) {
     this.frames = opts.frames ?? 1;
     this.holds = opts.holds ?? 1;
+    this.framesAfterHold = opts.framesAfterHold ?? 0;
   }
   async *synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame> {
     this.open += 1;
@@ -212,15 +218,20 @@ class HoldingTtsProvider implements TextToSpeechProvider {
         if (stopped()) return;
         yield { pcm: new Int16Array(160), sampleRate: opts.sampleRate ?? 24000, channels: 1 };
       }
-      if (!hold || this.released || stopped()) return;
-      await new Promise<void>(resolve => {
-        const done = () => {
-          this.holding.delete(opts.streamId);
-          resolve();
-        };
-        this.holding.set(opts.streamId, done);
-        opts.signal?.addEventListener('abort', done, { once: true });
-      });
+      if (!hold) return;
+      if (!this.released && !stopped()) {
+        await new Promise<void>(resolve => {
+          const done = () => {
+            this.holding.delete(opts.streamId);
+            resolve();
+          };
+          this.holding.set(opts.streamId, done);
+          opts.signal?.addEventListener('abort', done, { once: true });
+        });
+      }
+      for (let i = 0; i < this.framesAfterHold; i += 1) {
+        yield { pcm: new Int16Array(160), sampleRate: opts.sampleRate ?? 24000, channels: 1 };
+      }
     } finally {
       this.open -= 1;
     }
@@ -450,7 +461,9 @@ describe('VoiceRuntime', () => {
       3,
     );
     // Holds the reply after its first frame, so it is still playing at the barge-in.
-    const tts = new HoldingTtsProvider();
+    // After the barge-in it ignores the cancel and yields five more frames, so only
+    // the runtime's abort check keeps them off the line.
+    const tts = new HoldingTtsProvider({ framesAfterHold: 5 });
     const { runtime, stt, transport } = makeRuntime({ llm, tts });
 
     await runtime.startSession({
@@ -464,6 +477,7 @@ describe('VoiceRuntime', () => {
 
     stt.emit({ text: 'tell me a long story', isFinal: true, speechFinal: true });
     await waitForPublishedFrame(transport);
+    const framesBeforeBargeIn = transport.publishedFrames.length;
 
     // Principal interrupts (interim transcript while assistant is talking).
     // Must clear the confidence/length gate (min 3 chars).
@@ -472,6 +486,8 @@ describe('VoiceRuntime', () => {
     await runtime.awaitIdle('s2');
     // TTS was cancelled for the in-flight stream...
     expect(tts.cancelled.size).toBeGreaterThan(0);
+    // ...the frames it yielded after the barge-in never reached the caller...
+    expect(transport.publishedFrames).toHaveLength(framesBeforeBargeIn);
     // ...and every synthesis has returned, so nothing is left that could publish.
     expect(tts.open).toBe(0);
     expect(tts.requests).toHaveLength(1);
