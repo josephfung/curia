@@ -65,6 +65,7 @@ export class MailboxSignInLinkHandler implements ToolHandler {
       if (target === 'curia') {
         return { success: false, error: "mailbox_address applies only to the principal's own mailboxes." };
       }
+      // The elevated-sensitivity gate already limits this tool to live principal turns; this check is defence in depth.
       // Not trusted: the service checks it against the principal's verified addresses. A new one is
       // accepted only on an authenticated principal turn (allowNewAddress below).
       mailboxAddress = mailbox_address.trim();

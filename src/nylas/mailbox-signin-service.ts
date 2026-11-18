@@ -126,8 +126,10 @@ export interface MailboxSignInServiceDeps {
   isFallbackActive?: () => Promise<boolean>;
 }
 
-/** One plain address: no whitespace, quotes, angle brackets, commas or a second `@`; a dotted domain. */
-const NEW_ADDRESS_SHAPE = /^[^\s@<>,;"'()[\]\\]+@[^\s@<>,;"'()[\]\\]+\.[^\s@<>,;"'()[\]\\.]+$/;
+/** One plain, lowercased address: no whitespace, control characters, quotes, angle brackets,
+ *  commas or a second `@`; a dotted domain of [a-z0-9-] labels; at most 254 characters. */
+const NEW_ADDRESS_SHAPE = /^[^\s@<>,;"'()[\]\\\x00-\x1f\x7f]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/;
+const MAX_ADDRESS_LENGTH = 254;
 
 const ROW_COLUMNS = `target, expected_email, mailbox_label, expires_at, consumed_at, created_at,
   conversation_id, channel_id, agent_id, task_event_id, originator, resume_token`;
@@ -180,7 +182,7 @@ export class MailboxSignInService implements MailboxSignInMinter {
       if (verified.includes(want)) return want;
       // A new address is accepted only when the caller vouched for an authenticated principal turn,
       // and only if it is plainly one address. The callback still requires that exact account.
-      if (allowNew && NEW_ADDRESS_SHAPE.test(want)) return want;
+      if (allowNew && want.length <= MAX_ADDRESS_LENGTH && NEW_ADDRESS_SHAPE.test(want)) return want;
       throw new MailboxSignInAddressError('unknown_principal_address');
     }
     const designated = primary?.trim().toLowerCase();
