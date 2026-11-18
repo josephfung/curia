@@ -481,6 +481,21 @@ describe('ActionLogRepo', () => {
     });
   });
 
+  describe('findPendingUnverifiedBySkill (GHSA-p49r-jqh2-v668)', () => {
+    it('matches a pending unverified row by skill and payload, on any task', async () => {
+      const { pool, queries } = makePool([]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await expect(repo.findPendingUnverifiedBySkill('contact-set-tier', { tier: 'blocked' })).resolves.toBeNull();
+      const sql = queries[0]!.sql;
+      expect(sql).toContain('requester_unverified = true');
+      expect(sql).toContain("outcome = 'pending_approval'");
+      expect(sql).toContain('expires_at > now()');
+      expect(sql).toContain('payload::jsonb = $2::jsonb');
+      expect(sql).not.toContain('task_id');
+      expect(queries[0]!.params).toEqual(['contact-set-tier', JSON.stringify({ tier: 'blocked' })]);
+    });
+  });
+
   describe('setNotificationSentAt', () => {
     it('updates the notification_sent_at column', async () => {
       const { pool, queries } = makePool([], 1);

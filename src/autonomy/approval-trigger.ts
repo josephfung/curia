@@ -309,7 +309,9 @@ export class ApprovalTriggerService {
         return { created: false, reason: 'duplicate', existingShortRef };
       }
     }
-    const existing = await this.actionLogRepo.findPendingByTaskAndSkill(taskId, toolName, input);
+    // An unverified request is a task per message: a repeat on a new task joins the pending one.
+    const existing = await this.actionLogRepo.findPendingByTaskAndSkill(taskId, toolName, input)
+      ?? (opts.requesterUnverified === true ? await this.actionLogRepo.findPendingUnverifiedBySkill(toolName, input) : null);
     if (existing) {
       const existingShortRef = existing.shortRef ?? 'unknown';
       if (!existing.shortRef) {

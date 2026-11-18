@@ -413,6 +413,29 @@ export class ActionLogRepo {
   }
 
   /**
+   * Find a pending unverified-request row (GHSA-p49r-jqh2-v668) with this skill and payload,
+   * on any task. Each SMS or forged email is a task of its own, so a repeat of the same request
+   * is matched across tasks to join the confirmation already pending.
+   */
+  async findPendingUnverifiedBySkill(
+    toolName: string,
+    payload: Record<string, unknown>,
+  ): Promise<ActionLogRow | null> {
+    const result = await this.pool.query(
+      `SELECT * FROM autonomy_action_log
+       WHERE requester_unverified = true
+         AND skill_name = $1
+         AND outcome = 'pending_approval'
+         AND expires_at > now()
+         AND payload::jsonb = $2::jsonb
+       LIMIT 1`,
+      [toolName, JSON.stringify(payload)],
+    );
+    if (result.rows.length === 0) return null;
+    return mapRow(result.rows[0]);
+  }
+
+  /**
    * Find a pending_approval row for a task whose skill is in the given set (#1733).
    * Used by the dispatcher relay so a Gate C escalate joins a reply-class approval
    * already pending on the same turn — not an unrelated calendar/etc. approval.
