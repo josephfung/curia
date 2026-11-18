@@ -1,7 +1,7 @@
 // live-grant-lookup.test.ts — the principal admin's grant lookup reads the Nylas key live (#2361, R7).
 import { describe, it, expect, vi } from 'vitest';
 import { createLiveGrantLookup } from '../../../src/nylas/live-grant-lookup.js';
-import { createNylasSignInReaders, NYLAS_API_KEY_SECRET, NYLAS_REGION_SECRET } from '../../../src/nylas/signin-readiness.js';
+import { createNylasSignInReaders, NYLAS_API_KEY_SECRET, NYLAS_REGION_SECRET, NylasSettingsReadError } from '../../../src/nylas/signin-readiness.js';
 import { MissingNylasApiKeyError, NylasRestartRequiredError } from '../../../src/principal-mailboxes/types.js';
 import { createSilentLogger } from '../../../src/logger.js';
 
@@ -34,6 +34,18 @@ describe('createLiveGrantLookup', () => {
     const err = await fn('grant-SECRET').then(() => null, (e: unknown) => e as Error);
     expect(err).toBeInstanceOf(MissingNylasApiKeyError);
     expect(err!.message).not.toContain('grant-SECRET');
+  });
+
+  it('refuses without using the environment key when the vault read fails', async () => {
+    const lookup = vi.fn(async () => ({ email: 'boss@example.com', provider: 'google' }));
+    const readers = createNylasSignInReaders({
+      secrets: { get: async () => { throw new Error('vault down'); } },
+      env: { NYLAS_API_KEY: 'nyk_env' },
+      logger: createSilentLogger(),
+    });
+    const fn = createLiveGrantLookup({ ...readers, lookup });
+    await expect(fn('g-1')).rejects.toBeInstanceOf(NylasSettingsReadError);
+    expect(lookup).not.toHaveBeenCalled();
   });
 
   describe('with the boot values (R11)', () => {

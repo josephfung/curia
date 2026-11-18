@@ -2,7 +2,10 @@ import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import {
   checkNylasSignIn,
+  createNylasSignInReaders,
   mailboxSignInCallbackUrl,
+  NYLAS_REGION_SECRET,
+  NylasSettingsReadError,
   type NylasSignInReadiness,
 } from '../../../src/nylas/signin-readiness.js';
 import { NylasAppError, type NylasAppClient } from '../../../src/nylas/app-client.js';
@@ -149,5 +152,40 @@ describe('checkNylasSignIn', () => {
     const r = await run({ appError: new TypeError('x is undefined') }, { logger });
     expect(r).toMatchObject({ reason: 'nylas_unreachable' });
     expect(lines.find((l) => l['level'] === 50 && l['step'] === 'get_application')).toBeDefined();
+  });
+});
+
+describe('createNylasSignInReaders', () => {
+  const failingVault = { get: async (): Promise<string | null> => { throw new Error('vault down'); } };
+
+  it('uses the environment only when the vault holds no value', async () => {
+    const readers = createNylasSignInReaders({ secrets: { get: async () => null }, env: { NYLAS_API_KEY: 'nyk_env', NYLAS_REGION: 'eu' }, logger: silent });
+    expect(await readers.readApiKey()).toBe('nyk_env');
+    expect(await readers.readRegion()).toBe('eu');
+  });
+
+  it('a failed vault read throws instead of falling back to the environment', async () => {
+    const { logger, lines } = capture();
+    const readers = createNylasSignInReaders({ secrets: failingVault, env: { NYLAS_API_KEY: 'nyk_env', NYLAS_REGION: 'eu' }, logger });
+    await expect(readers.readApiKey()).rejects.toBeInstanceOf(NylasSettingsReadError);
+    await expect(readers.readRegion()).rejects.toBeInstanceOf(NylasSettingsReadError);
+    expect(lines.filter((l) => l['level'] === 50)).toHaveLength(2);
+    expect(JSON.stringify(lines)).not.toContain('nyk_env');
+  });
+
+  it('an invalid vault region gives way to a valid env region, and is never logged', async () => {
+    const { logger, lines } = capture();
+    const readers = createNylasSignInReaders({ secrets: { get: async (n) => (n === NYLAS_REGION_SECRET ? 'nyk_pasted' : null) }, env: { NYLAS_REGION: 'eu' }, logger });
+    expect(await readers.readRegion()).toBe('eu');
+    expect(lines.find((l) => l['level'] === 40)).toMatchObject({ rejectedSources: ['vault'], using: 'eu' });
+    expect(JSON.stringify(lines)).not.toContain('nyk_pasted');
+  });
+
+  it('readiness reports settings_unreadable when the vault read fails, without calling Nylas', async () => {
+    const readers = createNylasSignInReaders({ secrets: failingVault, env: { NYLAS_API_KEY: 'nyk_env' }, logger: silent });
+    const makeClient = vi.fn(() => fakeClient());
+    const r = await checkNylasSignIn({ ...readers, appOrigin: ORIGIN, makeClient, logger: silent });
+    expect(r).toMatchObject({ ready: false, reason: 'settings_unreadable' });
+    expect(makeClient).not.toHaveBeenCalled();
   });
 });

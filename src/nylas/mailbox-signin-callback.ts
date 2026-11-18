@@ -37,6 +37,7 @@ import {
   MAILBOX_SIGNIN_SCOPES,
   mailboxSignInCallbackUrl,
   nylasRestartRequired,
+  NylasSettingsReadError,
   type NylasBootConfig,
 } from './signin-readiness.js';
 import type { MailboxSignInOutcome } from './signin-outcome.js';
@@ -297,12 +298,22 @@ async function settle(
   held.step = 'readiness';
   // Only the application id (the hosted-auth client_id) and region are needed here, not full
   // readiness: a blip listing connectors must not throw away a valid code (L).
-  const apiKey = (await deps.readApiKey())?.trim();
+  let apiKey: string | undefined;
+  let region: NylasRegion;
+  try {
+    apiKey = (await deps.readApiKey())?.trim();
+    region = await deps.readRegion();
+  } catch (err) {
+    // A failed vault read: the code is not exchanged with the environment's key, which may be
+    // another Nylas application's. The reader logged the key name.
+    if (!(err instanceof NylasSettingsReadError)) throw err;
+    log.error({ reason: 'settings_unreadable', secretName: err.secretName, target: row.target }, 'mailbox sign-in callback: the saved Nylas settings could not be read; the code was not exchanged');
+    return done('failed');
+  }
   if (apiKey === undefined || apiKey === '' || deps.appOrigin === undefined) {
     log.warn({ reason: 'no_api_key_or_origin' }, 'mailbox sign-in callback: sign-in is not ready');
     return done('failed');
   }
-  const region = await deps.readRegion();
   if (nylasRestartRequired(apiKey, region, deps.boot)) {
     log.warn({ reason: 'restart_required' }, 'mailbox sign-in callback: the Nylas key or region changed since boot; restart Curia');
     return done('failed');

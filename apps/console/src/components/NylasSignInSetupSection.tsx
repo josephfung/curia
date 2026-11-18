@@ -14,7 +14,7 @@ import { SIGNIN_READINESS_EVENT } from './ConnectWithGoogle.js';
 type Region = 'us' | 'eu';
 type Reason =
   | 'no_api_key' | 'restart_required' | 'bad_api_key' | 'sandbox' | 'origin_not_https'
-  | 'callback_unregistered' | 'no_google_connector' | 'nylas_unreachable';
+  | 'callback_unregistered' | 'no_google_connector' | 'nylas_unreachable' | 'settings_unreadable';
 
 interface SignInStatus {
   ready?: boolean;
@@ -42,6 +42,7 @@ const FIX: Record<Reason, string> = {
   callback_unregistered: 'Click Register callback to add the sign-in callback URL to Nylas.',
   no_google_connector: 'Create the Google connector below with your Google Cloud OAuth client.',
   nylas_unreachable: 'Nylas did not answer. Try Check again in a moment.',
+  settings_unreadable: 'Curia could not read its saved Nylas settings. Try Check again in a moment; if it persists, check the server logs.',
 };
 
 async function errorMessage(res: Response): Promise<string> {

@@ -314,6 +314,23 @@ describeIf('mailbox sign-in callback', () => {
     expect(await store.listLive()).toEqual([]);
   });
 
+  it('a failed vault read of the key fails the sign-in without exchanging the code with the env key', async () => {
+    const readers = createNylasSignInReaders({
+      secrets: { get: async () => { throw new Error('vault down'); } },
+      env: { NYLAS_API_KEY: 'nyk_test_key' },
+      logger: deps.logger,
+    });
+    deps = { ...deps, ...readers };
+    nylasGrant('code-1', 'grant-boss-0001', 'boss@example.com');
+    const res = await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps);
+    expect(res.outcome).toBe('failed');
+    expect(exchangeCode).not.toHaveBeenCalled();
+    expect(logLines.some((l) => l['reason'] === 'settings_unreadable')).toBe(true);
+    expect(rawLog.join('\n')).not.toContain('nyk_test_key');
+    expect(await store.listLive()).toEqual([]);
+    expectOneFinished('failed');
+  });
+
   it('adds a second mailbox with no principal_mailbox.connected event, keeping the default', async () => {
     nylasGrant('code-1', 'grant-boss-0001', 'boss@example.com');
     await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps);
