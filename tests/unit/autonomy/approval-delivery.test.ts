@@ -414,6 +414,12 @@ describe('ApprovalDelivery — unverified requests', () => {
       expect(send.mock.calls[0]![0].message).toContain('Someone answered approval 3 from your SMS number, which can\'t be verified.');
     });
 
+    it('names the channel the answer came from, not SMS for everything that is not email', async () => {
+      const { delivery, send } = makeDelivery({ row: makeRow({ notificationSentAt: new Date(), approvalNumber: 3 }) });
+      await delivery.redeliverForVerification('3', 'voice');
+      expect(send.mock.calls[0]![0].message).toContain('from your phone number (caller ID), which can\'t be verified.');
+    });
+
     it('resolves the reference as approve-action does', async () => {
       const { delivery, repo } = makeDelivery({ row: makeRow({ notificationSentAt: new Date(), approvalNumber: 3 }) });
       await delivery.redeliverForVerification('3', 'email');

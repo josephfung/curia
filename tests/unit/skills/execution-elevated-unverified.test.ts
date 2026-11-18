@@ -44,7 +44,14 @@ const invokeAs = (layer: ExecutionLayer, tool: string, input: Record<string, unk
   layer.invoke(tool, input, undefined, { taskEventId: 'task-1', agentId: 'coordinator', liveTurn, taskMetadata: metadata });
 
 describe('elevated gate on an unauthenticated principal turn (GHSA-p49r-jqh2-v668)', () => {
-  it.each([['sms', 'SMS number'], ['email', 'email address']])('files a marked confirmation for an elevated tool on %s', async (channel, wording) => {
+  it.each([
+    ['sms', 'SMS number'],
+    ['email', 'email address'],
+    // A caller-id voice transport authenticates nothing either; it is not an SMS.
+    ['voice', 'phone number (caller ID)'],
+    // A future channel is named as itself, never mislabelled as one of the above.
+    ['telegram', 'telegram account'],
+  ])('files a marked confirmation for an elevated tool on %s', async (channel, wording) => {
     const { layer, execute, request } = setup();
     const result = await invokeAs(layer, 'contact-set-tier', { tier: 'blocked' }, principal(channel, false), false);
 

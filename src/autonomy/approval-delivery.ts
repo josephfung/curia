@@ -41,8 +41,21 @@ export const VERIFIED_APPROVAL_CHANNELS: readonly ApprovalChannel[] = ['signal',
 export const UNVERIFIED_CAP_PER_HOUR = 3;
 const HOUR_MS = 60 * 60 * 1000;
 
-/** The unverified channel a principal-matching message arrived on, for wording only. */
-export type UnverifiedChannel = 'sms' | 'email';
+/**
+ * What a principal-matching message on an unverified channel matched, in words: "your SMS
+ * number", "your email address". Keyed on the originator's channel id, for wording only. A
+ * channel without its own wording is named as itself, so a new one is never mislabelled as
+ * SMS or email.
+ */
+export function unverifiedChannelLabel(channel: string): string {
+  switch (channel) {
+    case 'sms': return 'SMS number';
+    case 'email': return 'email address';
+    // A caller-id voice transport (voice/caller-context.ts) proves no more than SMS does.
+    case 'voice': return 'phone number (caller ID)';
+    default: return `${channel} account`;
+  }
+}
 
 export type DeliverResult =
   | { delivered: true; channel: ApprovalChannel }
@@ -91,17 +104,16 @@ const REACT_CTA = 'React 👍 to approve or 👎 to deny this request.';
 
 /** Leads every unverified-request approval, whoever raised it. */
 export const UNVERIFIED_REQUEST_NOTE =
-  'This request came from a message that matches your phone number or email address, but that channel can\'t prove you sent it. ' +
+  'This request came from a message that matches your contact details, but its channel can\'t prove you sent it. ' +
   'Approve only if it was you. If it wasn\'t, deny it: someone may be impersonating you.';
 
 /** Sent once per window when the cap holds an unverified request back. */
 export const UNVERIFIED_CAP_NOTICE =
-  'More requests that claim to come from you, from a phone number or email address that can\'t be verified, are waiting. ' +
+  'More requests that claim to come from you, on channels that can\'t prove it, are waiting. ' +
   'They are listed in the console and your next digest; none will be sent here for the rest of the hour.';
 
-function redeliverPreamble(ref: string, answeredOn: UnverifiedChannel): string {
-  const via = answeredOn === 'sms' ? 'SMS number' : 'email address';
-  return `Someone answered approval ${ref} from your ${via}, which can't be verified. If that was you, approve it here.`;
+function redeliverPreamble(ref: string, answeredOn: string): string {
+  return `Someone answered approval ${ref} from your ${unverifiedChannelLabel(answeredOn)}, which can't be verified. If that was you, approve it here.`;
 }
 // For approvals without a number (raised before migration 098, or when all 999 were in use).
 const REPLY_CTA = 'Reply approve or deny, with the reference.';
@@ -246,7 +258,7 @@ export class ApprovalDelivery {
    * not send it again). `ref` is the approval number or short reference as the answer gave it;
    * empty means the sole pending approval, resolved as approve-action resolves it. Never throws.
    */
-  async redeliverForVerification(ref: string, answeredOn: UnverifiedChannel): Promise<DeliverResult> {
+  async redeliverForVerification(ref: string, answeredOn: string): Promise<DeliverResult> {
     const { actionLogRepo, logger } = this.deps;
     let slotTaken = false;
     let claimedRowId: number | null = null;

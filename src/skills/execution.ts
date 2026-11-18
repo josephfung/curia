@@ -20,7 +20,7 @@
 import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest, ActionRisk, EmailChannelStatus, PrincipalMailboxReadiness, ApprovalVia } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated, isOutsiderOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier, isUnauthenticatedPrincipal } from '../contacts/principal.js';
-import type { UnverifiedChannel } from '../autonomy/approval-delivery.js';
+import { unverifiedChannelLabel } from '../autonomy/approval-delivery.js';
 import { resolvePrincipalIsSoleRecipientFromSkillInput, isSolelyInitiatingSender } from '../contacts/principal-recipient.js';
 import { findCarveoutSkill } from '../contacts/principal-channel-registry.js';
 import { emailAccountIdFromInput } from '../channels/email/account-id.js';
@@ -270,13 +270,11 @@ const APPROVAL_RESOLUTION_TOOLS: ReadonlySet<string> = new Set(['approve-action'
  */
 const UNVERIFIED_CONFIRM_TOOLS: ReadonlySet<string> = new Set(['send-draft', 'contact-link-identity']);
 
-/** Which unverified channel a principal-matching turn came in on, for wording. */
-function unverifiedChannelOf(metadata: Record<string, unknown> | undefined): UnverifiedChannel {
+/** The channel id a principal-matching turn came in on, for wording (unverifiedChannelLabel). */
+function unverifiedChannelOf(metadata: Record<string, unknown> | undefined): string {
   const originator = metadata?.['originator'] as { channel?: unknown } | undefined;
-  return originator?.channel === 'email' ? 'email' : 'sms';
+  return typeof originator?.channel === 'string' && originator.channel.length > 0 ? originator.channel : 'unverified';
 }
-
-const UNVERIFIED_VIA: Record<UnverifiedChannel, string> = { sms: 'SMS number', email: 'email address' };
 const VERIFIED_CHANNEL_NAMES: Record<string, string> = { signal: 'Signal', slack: 'Slack', web: 'the phone app' };
 
 /** The cross-turn backstop checks calls at action_risk medium (70) and above (#2588). */
@@ -1132,10 +1130,10 @@ export class ExecutionLayer {
     options: InvokeOptions | undefined,
     skillLogger: Logger,
     /** Set when the turn matched the principal on a channel that did not prove it (GHSA-p49r-jqh2-v668). */
-    unverifiedVia?: UnverifiedChannel,
+    unverifiedVia?: string,
   ): Promise<string> {
     const why = unverifiedVia
-      ? `this message came from the principal's ${UNVERIFIED_VIA[unverifiedVia]}, which cannot prove the principal sent it`
+      ? `this message came from the principal's ${unverifiedChannelLabel(unverifiedVia)}, which cannot prove the principal sent it`
       : 'the principal asked for it on a call that is no longer live';
     const baseMsg =
       `Not done yet: '${toolName}' needs the principal's confirmation, because ${why}. ` +
@@ -1164,7 +1162,7 @@ export class ExecutionLayer {
         // Neutral on who asked: the tool call came from an agent, which may have read untrusted
         // content since. The principal judges the action.
         reason: unverifiedVia
-          ? `Curia wanted to run '${toolName}' for a message from your ${UNVERIFIED_VIA[unverifiedVia]}. ` +
+          ? `Curia wanted to run '${toolName}' for a message from your ${unverifiedChannelLabel(unverifiedVia)}. ` +
             `That channel can't prove you sent it, so it needs your confirmation.`
           : `Curia wanted to run '${toolName}' for work handed off from the principal's voice call. ` +
             `It is an elevated action, so it needs the principal's confirmation now that the call is no longer live.`,
@@ -1187,13 +1185,13 @@ export class ExecutionLayer {
    */
   private async buildUnverifiedAnswerError(
     input: Record<string, unknown>,
-    via: UnverifiedChannel,
+    via: string,
     skillLogger: Logger,
   ): Promise<string> {
     const ref = typeof input['short_ref'] === 'string' ? input['short_ref'].trim() : '';
     const named = ref === '' ? 'the pending approval' : `approval ${ref}`;
     const baseMsg =
-      `Not done: approvals cannot be answered from the principal's ${UNVERIFIED_VIA[via]}, because that channel ` +
+      `Not done: approvals cannot be answered from the principal's ${unverifiedChannelLabel(via)}, because that channel ` +
       `cannot prove the principal sent it. This is not a missing capability; never say Curia cannot do it. `;
     if (!this.approvalDelivery) return baseMsg + `Tell the principal ${named} is waiting for them in the console.`;
     try {
