@@ -168,6 +168,54 @@ describe('EmailReplyHandler', () => {
     expect(options).not.toHaveProperty('recipientDisplayName');
   });
 
+  // GHSA-p49r-jqh2-v668: on a turn a principal-matching but unverified message started (a
+  // forged From, an SMS), a reply never fans out: what the principal may read must not reach
+  // an address the forger put on the thread.
+  describe('on an unverified principal turn', () => {
+    const UNVERIFIED = {
+      originator: { contactId: 'principal-id', systemRole: 'principal', authenticated: false, channel: 'email', tier: 'principal', initiatedAt: '2026-11-17T00:00:00Z' },
+    };
+    const forged = {
+      from: [{ email: 'boss@example.com' }],
+      to: [{ email: 'nathan@example.com' }, { email: 'partner@example.com' }],
+      cc: [{ email: 'attacker@example.com' }],
+      subject: 'Calendar', body: '', date: 0,
+    };
+
+    it('replies to the sender only, never reply-all', async () => {
+      const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'Your week: ...' }, { taskMetadata: UNVERIFIED });
+      ctx.selfEmails = ['nathan@example.com'];
+      (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue(forged);
+      (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, messageId: 'reply-1' });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      const request = (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<string, unknown>;
+      expect(request['to']).toBe('boss@example.com');
+      expect(request['additionalTo']).toBeUndefined();
+      expect(request['cc']).toBeUndefined();
+    });
+
+    it('refuses an explicit cc', async () => {
+      const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'x', cc: 'attacker@example.com' }, { taskMetadata: UNVERIFIED });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
+    });
+
+    it("refuses a reply to Curia's own message, whose To list could be anyone", async () => {
+      const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'x' }, { taskMetadata: UNVERIFIED });
+      ctx.selfEmails = ['nathan@example.com'];
+      (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ...forged, from: [{ email: 'nathan@example.com' }], to: [{ email: 'attacker@example.com' }], cc: [],
+      });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
+    });
+  });
+
   describe('replying to a message Curia sent (#2273)', () => {
     it('addresses the original recipient, not Curia, and never CCs Curia', async () => {
       const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'Update on the three.' });

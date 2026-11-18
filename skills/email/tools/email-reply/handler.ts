@@ -36,6 +36,7 @@ import {
   parseRecipientReference,
 } from '../../../../src/skills/_shared/recipient-reference.js';
 import { deriveEmailReplyRecipientSet } from '../../../../src/channels/email/reply-recipients.js';
+import { isUnauthenticatedPrincipal } from '../../../../src/contacts/principal.js';
 import { replyDisplayName, replyRecipientSource } from '../../../../src/channels/email/reply-recipient-provenance.js';
 import {
   looksLikeOutboundContextEntryId,
@@ -165,6 +166,17 @@ export class EmailReplyHandler implements ToolHandler {
       };
     }
 
+    // A turn a principal-matching but unverified message started (a forged From, an SMS;
+    // GHSA-p49r-jqh2-v668): a reply goes to the original's sender only. What the principal may
+    // read must not reach an address the forger put on the thread.
+    const senderOnly = isUnauthenticatedPrincipal(ctx.taskMetadata);
+    if (senderOnly && typeof ccInput === 'string' && ccInput.trim().length > 0) {
+      return {
+        success: false,
+        error: 'This message could not be verified as the principal\'s, so a reply goes only to the original sender: cc is not allowed. Nothing was sent.',
+      };
+    }
+
     // Resolve cc before the thread fetch, so a bad entry costs no Nylas round trip.
     let ccResolved: unknown = ccInput;
     if (typeof ccInput === 'string' && ccInput.trim().length > 0) {
@@ -210,11 +222,18 @@ export class EmailReplyHandler implements ToolHandler {
           error: 'Could not resolve reply recipients — the original has no sender, was sent by Curia to no one else, or cc is not a string. Nothing was sent.',
         };
       }
+      if (senderOnly && !recipientSet.toIsOriginalSender) {
+        return {
+          success: false,
+          error: 'This message could not be verified as the principal\'s, so a reply goes only to the original sender, ' +
+            'and this message was Curia\'s own. Nothing was sent.',
+        };
+      }
       // The original sender, or — when Curia sent the original — the people it wrote to (#2273).
       const replyTo = recipientSet.to;
-      const additionalTo = recipientSet.additionalTo.length > 0 ? recipientSet.additionalTo : undefined;
-      const toLabel = [replyTo, ...recipientSet.additionalTo].join(', ');
-      const ccAddresses = recipientSet.cc.length > 0 ? recipientSet.cc : undefined;
+      const additionalTo = !senderOnly && recipientSet.additionalTo.length > 0 ? recipientSet.additionalTo : undefined;
+      const toLabel = [replyTo, ...(additionalTo ?? [])].join(', ');
+      const ccAddresses = !senderOnly && recipientSet.cc.length > 0 ? recipientSet.cc : undefined;
       if (!recipientSet.toIsOriginalSender) {
         ctx.log.info({ replyToMessageId, to: toLabel }, 'email-reply: original was sent by Curia — replying to its recipients');
       }
