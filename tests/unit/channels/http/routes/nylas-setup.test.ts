@@ -241,6 +241,51 @@ describe('nylas-setup routes', () => {
     }
   });
 
+  describe('a failed vault read (no fallback to the environment key)', () => {
+    function unreadable(failOn: string) {
+      const s = setup({ env: { NYLAS_API_KEY: 'nyk_env_other_app' } });
+      s.secrets.get.mockImplementation(async (n: string) => {
+        if (n === failOn) throw new Error('vault down');
+        return s.store[n] ?? null;
+      });
+      return s;
+    }
+
+    it('POST /callback, /google-connector and /discover-region 503 and change nothing', async () => {
+      for (const failOn of ['channel.email.nylas_api_key', 'channel.email.nylas_region']) {
+        const { opts, client } = unreadable(failOn);
+        await build(opts);
+        const routes: Array<[string, unknown]> = [
+          ['/api/registry/nylas/callback', {}],
+          ['/api/registry/nylas/google-connector', { client_id: 'cid', client_secret: GCP_SECRET }],
+        ];
+        if (failOn === 'channel.email.nylas_api_key') routes.push(['/api/registry/nylas/discover-region', {}]);
+        for (const [u, body] of routes) {
+          const res = await req('POST', u, body);
+          expect(res.statusCode, `${failOn} ${u}`).toBe(503);
+          expect(res.json().error).toContain('Nothing was changed');
+        }
+        expect(opts.makeClient).not.toHaveBeenCalled();
+        expect(opts.probeRegion).not.toHaveBeenCalled();
+        expect(client.addCallbackUri).not.toHaveBeenCalled();
+        expect(opts.bus.publish).not.toHaveBeenCalled();
+        await app.close();
+      }
+    });
+
+    it('GET /signin reports settings_unreadable and shows no guessed region', async () => {
+      const { opts } = unreadable('channel.email.nylas_region');
+      await build(opts);
+      const res = await req('GET', '/api/registry/nylas/signin');
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body).toMatchObject({ ready: false, reason: 'settings_unreadable', callbackUrl: CALLBACK });
+      expect(body.region).toBeUndefined();
+      expect(body.googleRedirectUri).toBeUndefined();
+      expect(opts.makeClient).not.toHaveBeenCalled();
+    });
+  });
+
   describe('POST /signin-links', () => {
     const URL_OUT = 'https://curia.example.com/api/mailbox-signin/start/tok22';
     const expiresAt = new Date('2026-11-18T12:00:00Z');

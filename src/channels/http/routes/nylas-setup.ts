@@ -32,6 +32,8 @@ import {
   checkNylasSignIn,
   createNylasSignInReaders,
   mailboxSignInCallbackUrl,
+  NylasSettingsReadError,
+  SETTINGS_UNREADABLE_DETAIL,
   type NylasBootConfig,
 } from '../../../nylas/signin-readiness.js';
 import {
@@ -119,14 +121,40 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
     return 'Nylas refused the request. Check the values and try again.';
   }
 
-  // The key must be saved; sends the 409 itself and returns undefined when it is not.
+  // A vault read failed: nothing is changed, and the environment's key (possibly another Nylas
+  // application's) is not used in its place. The reader logged the key name.
+  function refuseUnreadable(reply: FastifyReply, err: NylasSettingsReadError): undefined {
+    log.error({ secretName: err.secretName }, 'nylas setup refused: the saved Nylas settings could not be read');
+    void reply.status(503).send({ error: `Nothing was changed: ${SETTINGS_UNREADABLE_DETAIL}` });
+    return undefined;
+  }
+
+  // The key must be saved; sends the 409 (or 503) itself and returns undefined when it is not.
   async function requireKey(reply: FastifyReply): Promise<string | undefined> {
-    const key = await readers.readApiKey();
+    let key: string | undefined;
+    try {
+      key = await readers.readApiKey();
+    } catch (err) {
+      if (err instanceof NylasSettingsReadError) return refuseUnreadable(reply, err);
+      throw err;
+    }
     if (key === undefined) {
       void reply.status(409).send({ error: 'Save the Nylas API key first (Channels → Email).' });
       return undefined;
     }
     return key;
+  }
+
+  // The key and the region, read before any change is audited or sent to Nylas.
+  async function requireKeyAndRegion(reply: FastifyReply): Promise<{ key: string; region: NylasRegion } | undefined> {
+    const key = await requireKey(reply);
+    if (key === undefined) return undefined;
+    try {
+      return { key, region: await readers.readRegion() };
+    } catch (err) {
+      if (err instanceof NylasSettingsReadError) return refuseUnreadable(reply, err);
+      throw err;
+    }
   }
 
   async function saveRegion(request: FastifyRequest, reply: FastifyReply, region: NylasRegion): Promise<boolean> {
@@ -151,11 +179,19 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
         ...(options.makeClient ? { makeClient: options.makeClient } : {}),
         ...(options.boot ? { boot: options.boot } : {}),
       });
-      const region = await readers.readRegion();
+      const callbackUrl = options.appOrigin ? mailboxSignInCallbackUrl(options.appOrigin) : null;
+      let region: NylasRegion;
+      try {
+        region = await readers.readRegion();
+      } catch (err) {
+        if (!(err instanceof NylasSettingsReadError)) throw err;
+        // Unknown region: no region or redirect URI is shown rather than a guessed one.
+        return reply.send({ ...readiness, callbackUrl });
+      }
       return reply.send({
         ...readiness,
         region,
-        callbackUrl: options.appOrigin ? mailboxSignInCallbackUrl(options.appOrigin) : null,
+        callbackUrl,
         googleRedirectUri: googleRedirectUri(region),
       });
     } catch (err) {
@@ -197,15 +233,15 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
 
   app.post('/api/registry/nylas/callback', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
-    const key = await requireKey(reply);
-    if (key === undefined) return;
+    const settings = await requireKeyAndRegion(reply);
+    if (settings === undefined) return;
     if (!options.appOrigin?.startsWith('https://')) {
       return reply.status(409).send({ error: "Sign-in needs APP_ORIGIN set to this console's public https:// address." });
     }
     const callbackUrl = mailboxSignInCallbackUrl(options.appOrigin);
     if (!await auditRequested(request, reply, NYLAS_API_KEY_SECRET, 'nylas_callback')) return;
     try {
-      await makeClient(key, nylasApiUri(await readers.readRegion())).addCallbackUri(callbackUrl);
+      await makeClient(settings.key, nylasApiUri(settings.region)).addCallbackUri(callbackUrl);
     } catch (err) {
       log.warn(grantSafeErrorFields(err), 'nylas callback registration failed');
       return reply.status(502).send({ error: nylasFailureMessage(err) });
@@ -226,11 +262,11 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
     if (clientId.length > MAX_FIELD || clientSecret.length > MAX_FIELD || topicName.length > MAX_FIELD) {
       return reply.status(400).send({ error: 'A value is too long' });
     }
-    const key = await requireKey(reply);
-    if (key === undefined) return;
+    const settings = await requireKeyAndRegion(reply);
+    if (settings === undefined) return;
     if (!await auditRequested(request, reply, NYLAS_API_KEY_SECRET, 'nylas_connector')) return;
     try {
-      await makeClient(key, nylasApiUri(await readers.readRegion())).createGoogleConnector({
+      await makeClient(settings.key, nylasApiUri(settings.region)).createGoogleConnector({
         clientId,
         clientSecret,
         ...(topicName !== '' ? { topicName } : {}),

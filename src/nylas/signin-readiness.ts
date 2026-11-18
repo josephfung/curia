@@ -30,7 +30,8 @@ export type NylasSignInReadiness =
         | 'origin_not_https'
         | 'callback_unregistered'
         | 'no_google_connector'
-        | 'nylas_unreachable';
+        | 'nylas_unreachable'
+        | 'settings_unreadable';
       detail: string;
     };
 
@@ -78,11 +79,19 @@ function notReady(
 }
 
 export async function checkNylasSignIn(deps: CheckNylasSignInDeps): Promise<NylasSignInReadiness> {
-  const apiKey = (await deps.readApiKey())?.trim();
-  if (apiKey === undefined || apiKey === '') {
-    return notReady('no_api_key', 'Save the Nylas API key first (Channels → Email).');
+  let apiKey: string | undefined;
+  let region: NylasRegion;
+  try {
+    apiKey = (await deps.readApiKey())?.trim();
+    if (apiKey === undefined || apiKey === '') {
+      return notReady('no_api_key', 'Save the Nylas API key first (Channels → Email).');
+    }
+    region = await deps.readRegion();
+  } catch (err) {
+    // The reader already logged the key name; the environment's key is not tried in its place.
+    if (err instanceof NylasSettingsReadError) return notReady('settings_unreadable', SETTINGS_UNREADABLE_DETAIL);
+    throw err;
   }
-  const region = await deps.readRegion();
   if (deps.boot !== undefined && nylasRestartRequired(apiKey, region, deps.boot)) {
     return notReady('restart_required', RESTART_REQUIRED_DETAIL);
   }
@@ -133,9 +142,26 @@ export const NYLAS_API_KEY_SECRET = 'channel.email.nylas_api_key';
 export const NYLAS_REGION_SECRET = 'channel.email.nylas_region';
 
 /**
+ * A vault read of the Nylas key or region failed, so whether the vault overrides the environment
+ * is unknown. Callers must not fall back to the environment's key: it may belong to a different
+ * Nylas application. Carries the key name only, never a value.
+ */
+export class NylasSettingsReadError extends Error {
+  readonly secretName: string;
+
+  constructor(secretName: string) {
+    super(`Could not read ${secretName} from the vault`);
+    this.name = 'NylasSettingsReadError';
+    this.secretName = secretName;
+  }
+}
+
+export const SETTINGS_UNREADABLE_DETAIL = 'Curia could not read its saved Nylas settings; try again in a moment.';
+
+/**
  * Readers for the live key and region: vault first, then the environment, then the default.
- * A vault read that throws is logged and treated as absent, so a blip reads as "not ready"
- * rather than crashing the caller.
+ * The environment is used only when the vault confirms it holds no value. A vault read that
+ * throws is logged (key name and error class only) and rethrown as NylasSettingsReadError.
  */
 export function createNylasSignInReaders(deps: {
   secrets: { get(name: string): Promise<string | null> };
@@ -144,24 +170,41 @@ export function createNylasSignInReaders(deps: {
 }): { readApiKey: () => Promise<string | undefined>; readRegion: () => Promise<NylasRegion> } {
   const { secrets, env, logger } = deps;
   async function fromVault(name: string): Promise<string | undefined> {
+    let raw: string | null;
     try {
-      const v = (await secrets.get(name))?.trim();
-      return v !== undefined && v !== '' ? v : undefined;
+      raw = await secrets.get(name);
     } catch (err) {
-      logger.warn({ name, errName: err instanceof Error ? err.name : typeof err }, 'Nylas sign-in: vault read failed; treating as unset');
-      return undefined;
+      logger.error({ name, errName: err instanceof Error ? err.name : typeof err }, 'Nylas sign-in: vault read failed; not falling back to the environment');
+      throw new NylasSettingsReadError(name);
     }
+    const v = raw?.trim();
+    return v !== undefined && v !== '' ? v : undefined;
   }
   return {
     readApiKey: async () => (await fromVault(NYLAS_API_KEY_SECRET)) ?? (env['NYLAS_API_KEY']?.trim() || undefined),
+    // The first valid value of vault ▸ env, else 'us': the same choice the boot overlay
+    // (applyChannelVaultSecrets) makes, so an ignored invalid value does not read as a change.
     readRegion: async () => {
-      const raw = (await fromVault(NYLAS_REGION_SECRET)) ?? env['NYLAS_REGION'];
-      const parsed = parseNylasRegion(raw);
-      if (parsed === null) {
-        logger.warn({ value: raw }, "Unknown Nylas region (expected 'us' or 'eu'); using 'us'");
-        return 'us';
+      const candidates: Array<[source: string, raw: string | undefined]> = [
+        ['vault', await fromVault(NYLAS_REGION_SECRET)],
+        ['env', env['NYLAS_REGION']?.trim() || undefined],
+      ];
+      const rejectedSources: string[] = [];
+      let region: NylasRegion = 'us';
+      for (const [source, raw] of candidates) {
+        if (raw === undefined) continue;
+        const parsed = parseNylasRegion(raw);
+        if (parsed !== null) {
+          region = parsed;
+          break;
+        }
+        rejectedSources.push(source);
       }
-      return parsed;
+      if (rejectedSources.length > 0) {
+        // Never the value: an operator may have pasted the API key into the field.
+        logger.warn({ setting: NYLAS_REGION_SECRET, rejectedSources, using: region }, "Ignored an unknown Nylas region setting (expected 'us' or 'eu')");
+      }
+      return region;
     },
   };
 }
