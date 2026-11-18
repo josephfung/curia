@@ -235,6 +235,25 @@ describe('resolvePinnedSkills', () => {
       ]);
     });
 
+    it('records a gap when a bundle holds only system-only tools, instead of dropping it silently', () => {
+      const tools = new ToolRegistry();
+      tools.register({ ...toolManifest('infra-sweep'), allowed_callers: ['system'] }, noopHandler);
+      const skills = new SkillRegistry();
+      skills.register({
+        name: 'infra',
+        description: 'infra',
+        tools: ['infra-sweep'],
+        instructions: 'Infra playbook',
+      }, '/tmp/infra');
+      const r = resolvePinnedSkills(['infra'], skills, tools, undefined, 'social-media');
+      expect(r.toolNames).toEqual([]);
+      expect(r.instructionBlocks).toEqual([]);
+      expect(r.resolvedSkills).toEqual([]);
+      expect(r.unresolvedPins).toEqual([
+        { pin: 'infra', reason: 'caller_not_allowed', withheldTools: ['infra-sweep'] },
+      ]);
+    });
+
     it('keeps the instructions of a bundle the agent can still use in part', () => {
       const { tools, skills } = calendarFixture(['calendar-list-events', 'calendar-open-tool'], 'Shared calendar notes');
       const r = resolvePinnedSkills(['calendar'], skills, tools, undefined, 'social-media');

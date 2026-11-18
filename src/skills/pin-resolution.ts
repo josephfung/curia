@@ -123,7 +123,12 @@ export function resolvePinnedSkills(
       for (const t of skill.manifest.tools) {
         // A tool only the system may call (allowed_callers: ["system"]) is never offered to an
         // agent through a bundle. card-use-confirm lives in `web` so it ships with its siblings.
-        if (isSystemOnlyTool(toolRegistry, t)) continue;
+        // When the whole bundle is dropped below, though, name them: otherwise a bundle of
+        // nothing but system-only tools vanishes with no gap for either reporter.
+        if (isSystemOnlyTool(toolRegistry, t)) {
+          if (reservedForOthers) withheldTools.push(t);
+          continue;
+        }
         // A member the agent may not call is withheld too: handing over the definition only
         // teaches the model a call that fails every time (#2646). Unloaded tools are a
         // different gap (missingTools), so check registration first.
