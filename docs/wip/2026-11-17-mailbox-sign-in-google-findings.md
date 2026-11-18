@@ -129,17 +129,14 @@ Things only a person can do: create the Nylas application and API key in the das
 work. That means the project, the consent screen, the OAuth web client with redirect
 `https://api.{us|eu}.nylas.com/v3/connect/callback`, and the Pub/Sub topic for mail notifications.
 
-**Choosing a provider for Curia's own mailbox:**
+**Curia's own mailbox** uses the **same hosted-auth flow** as the principal's, through the same Google
+connector. The callback's target (`email_accounts` or `principal_mailboxes`) is a parameter of the
+minted link, and the operator clicks the link instead of the principal. The restricted-scope
+questions apply to Curia's Google account too, so the real run below covers both.
 
-| Option | Operator effort | Calendar | Notes |
-|---|---|---|---|
-| Google account, through the same GCP client | None beyond the principal's setup | Yes | The same restricted-scope questions apply. Curia's Gmail account is consumer or Workspace. |
-| **Nylas Agent Account** (`POST /v3/connect/custom`, `provider: nylas`) | Register a domain with Nylas (dashboard or CLI; `*.nylas.email` trial domain needs no DNS) | Yes (ICS RSVP) | No OAuth and no Google questions. The Free plan includes 3, capped at 20 sent messages per account per day, so production needs a paid plan. Domain registration can't be done with an app API key. |
-| IMAP (hosted auth, `provider: imap`) | An app password | **No** | Mail only. |
-
-The plain recommendation: use the **same hosted-auth flow for both**. The provider for Curia's mailbox
-can be either Google or a Nylas Agent Account. The flow and the callback are shared, and the
-callback's target (`email_accounts` or `principal_mailboxes`) is a parameter of the minted link.
+*Decided 2026-11-17:* no Nylas Agent Accounts. They save nothing for a personal Google mailbox and
+tie Curia more closely to Nylas. **Region:** selectable in setup, with discovery by probing
+`GET /v3/applications` as a convenience.
 
 ## 4. The real run (needed to close the acceptance criterion)
 
