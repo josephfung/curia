@@ -566,7 +566,10 @@ before routing (#2227, `src/contacts/principal-acquaintance.ts`). Two fields dri
 
 - `inbound.email.sender_verified: true` is the adapter's `senderVerified` (SPF, DKIM and
   DMARC pass). The check runs only when it is set. Unset leaves it out of the metadata, so
-  existing cases never meet the rule.
+  existing cases never meet the rule. The principal's own email is the exception: it is
+  verified unless the case sets `sender_verified: false`, since the principal's mail passes
+  those checks and an unverified principal email carries none of the principal's authority
+  (GHSA-p49r-jqh2-v668; `inboundSenderVerified` in `harness.ts`).
 - `principal_wrote: true` on a seeded email contact means the principal has sent them mail:
   the run's stand-in for the principal's Sent folder answers yes for that address.
 

@@ -214,11 +214,38 @@ The `OutboundGateway` (see [15-outbound-safety.md](15-outbound-safety.md)) is al
 
 ### Principal bypass
 
-When a task is **principal-originated** (initiated by a direct CEO message, as determined by `isPrincipalOriginated(taskMetadata)`), both Gate A and Gate B are skipped. The autonomy gate governs *autonomous* behavior; an explicit CEO instruction is its own authorization and must not be blocked by the score the CEO themselves set.
+When a task is **principal-originated** (initiated by a direct CEO message whose channel authenticated the sender, as determined by `isPrincipalOriginated(taskMetadata)`), both Gate A and Gate B are skipped. The autonomy gate governs *autonomous* behavior; an explicit CEO instruction is its own authorization and must not be blocked by the score the CEO themselves set.
 
 Implementation: the execution layer calls `isPrincipalOriginated()` before evaluating autonomy gates. If the task traces back to a principal message, the gates are logged but not enforced. Bypasses are written to the audit log at `info` level for operator visibility.
 
 Scope: principal bypass applies to Gates A and B only. It uses task **lineage** (`isPrincipalOriginated` on effective standing) — a woken principal-lineage task can inherit it via the ladder at high trust. This is deliberately a *different* notion of "principal" from the elevated-skill gate (`sensitivity: 'elevated'`), which requires a **live principal turn** and is never bypassed or inherited (#1126). Acting *within* CEO-authorized work (a `normal` skill) can reasonably be inherited at high trust; *exercising authority* (an `elevated` skill) needs the human now. See [03-tools-and-execution.md](03-tools-and-execution.md) and ADR-017.
+
+### Unverified principal requests
+
+A message that matches the principal's identity is the principal's own turn **only when its channel authenticated the sender** (GHSA-p49r-jqh2-v668). The rule is *identity yes, authority no*:
+
+| Channel | Principal authority |
+|---|---|
+| Signal (texts and calls), Slack, the web console and console voice, the local CLI | Yes. The protocol, session or shell proves the sender. |
+| Email that passed SPF, DKIM and DMARC (`senderVerified`) | Yes |
+| Email that failed or could not confirm them | No |
+| SMS | No, ever. Caller ids are spoofable (ADR-036). |
+
+`stampOriginator` stamps `originator.authenticated` from the channel (`inboundSenderAuthenticated`, or per voice transport). It keeps `systemRole: 'principal'` on an unauthenticated match, so Curia still knows who it is talking to and does ordinary work for them. It grants `liveTurn` only when authenticated. `hasPrincipalAuthority(originator)` (principal **and** `authenticated === true`) backs `isPrincipalOriginated` and every other check that grants authority, so a missing flag fails closed. `hasPrincipalIdentity` keeps the identity-only meaning for checks that only turn a protection on, such as scrubbing a sign-in code the principal texts. Migration 128 made the flag explicit on every stored principal originator.
+
+An unauthenticated principal match therefore gets none of the following:
+- the principal bypass above, or the elevated gate;
+- band review's principal or principal-task authority (spec 15);
+- outbound entries beyond those sent to the principal;
+- the cross-turn note, or hand-offs (`isAuthenticatedRoot`);
+- another contact's calendar.
+
+Where that authority is needed, Curia **asks for confirmation on a verified channel** instead of refusing:
+- An elevated tool, `send-draft` or `contact-link-identity` files an approval marked `requester_unverified`.
+- An answer to an approval (`approve-action`, `deny-action`, `dismiss-action`) from such a turn resolves nothing. The approval is re-sent to a verified channel, saying someone answered it from an unverified one.
+- Holds and escalations raised for such a turn are marked the same way.
+
+A confirmation the principal did not expect is the spoofing alert. `ceo-inbox-send-draft` is the exception: the principal-mailbox path never raises approvals (its design, D5), so the draft stays for the digest. The coordinator is told on the turn that the message is unverified, and says a confirmation is waiting rather than asking for a repeat.
 
 ### Principal-only send bypass
 
@@ -242,6 +269,8 @@ A gated action that files an approval (ADR-018) stays `pending_approval` until i
 
 The blocked agent is told to deliver the approval itself with `deliver-approval`. That tool sends it on **one** channel the agent picks from the principal's standing preferences. Fresh installs seed a preference of Signal, then SMS, then email.
 
+SMS never carries an approval. An SMS answer cannot approve anything (see *Unverified principal requests*), so an approval sent there could not be answered there. An approval marked `requester_unverified` goes only to Signal, Slack or the phone app (`verified_channel_required` otherwise). At most 3 such approvals, deliveries and re-sends together, go out per rolling hour (`rate_limited` past that). The rest wait in the console and the digest, with one notice per window on the verified channel.
+
 - Delivery claims `notification_sent_at` atomically, so an approval is pinged once.
 - A failed send releases the claim, and the tool's error lists the channels still available.
 - Signal and Slack deliveries are bound, so a 👍/👎 reaction resolves the approval.
@@ -250,7 +279,7 @@ The blocked agent is told to deliver the approval itself with `deliver-approval`
 
 A system interval (`autonomy.approval_expiry.sweep_interval_minutes`, default 15) runs with no agent turn and no LLM call, and does two things:
 
-1. **Safety net.** It delivers, by email or the next available channel, any approval no one delivered within 15 minutes, and logs a warning. With the 15-minute interval, that lands 15–30 minutes after the approval was raised.
+1. **Safety net.** It delivers, by email or the next available channel (a verified one for an unverified request), any approval no one delivered within 15 minutes, and logs a warning. With the 15-minute interval, that lands 15–30 minutes after the approval was raised.
 2. **Expiry.** It marks stale rows expired and queues a digest item for each (#2013, #2159).
 
 See [Configuration](../dev/configuration.md#autonomyapproval_expiry).
