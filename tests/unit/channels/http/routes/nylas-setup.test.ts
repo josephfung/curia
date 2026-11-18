@@ -354,6 +354,17 @@ describe('nylas-setup routes', () => {
       expect(signIn.mintForOperator).toHaveBeenLastCalledWith({ target: 'curia', expectedEmail: 'assistant@office.com' });
     });
 
+    it('rejects a supplied non-string address with 400 and mints nothing', async () => {
+      const { opts, signIn } = withSignIn();
+      await build(opts);
+      for (const address of [42, ['a@b.com'], { email: 'a@b.com' }, true, null]) {
+        const res = await req('POST', '/api/registry/nylas/signin-links', { target: 'curia', address });
+        expect(res.statusCode, JSON.stringify(address)).toBe(400);
+      }
+      expect(signIn.mint).not.toHaveBeenCalled();
+      expect(signIn.mintForOperator).not.toHaveBeenCalled();
+    });
+
     it('rejects a bad target or an over-long label with 400', async () => {
       await build(withSignIn().opts);
       expect((await req('POST', '/api/registry/nylas/signin-links', { target: 'x' })).statusCode).toBe(400);

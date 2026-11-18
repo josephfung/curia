@@ -298,6 +298,11 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
     }
     const target = body.target;
     const label = typeof body.label === 'string' ? body.label.trim() : '';
+    // Omitted means unpinned; a supplied non-string is refused, never read as omitted, so a
+    // malformed request cannot turn a pinned Curia link into one any account can use.
+    if (body.address !== undefined && typeof body.address !== 'string') {
+      return reply.status(400).send({ error: 'address must be a string' });
+    }
     const address = typeof body.address === 'string' ? body.address.trim() : '';
     if (label.length > MAX_LINK_LABEL || address.length > MAX_FIELD) {
       return reply.status(400).send({ error: 'A value is too long' });
