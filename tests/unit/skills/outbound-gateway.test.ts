@@ -5062,6 +5062,21 @@ describe('band review (#2159)', () => {
       });
     });
 
+    // GHSA-p49r-jqh2-v668: a hold on a send that a principal-matching but unverified message (an
+    // SMS, a forged From) started is marked, so delivery sends it only to a verified channel.
+    it('marks the approval of a hold on an unauthenticated principal\'s send as unverified', async () => {
+      const actionLogRepo = makeActionLogRepo();
+      const gw = makeBandGateway({ review: vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held.', findings: [{ rule: 'steered', detail: 'x' }] }), score: 84, actionLogRepo });
+      const forged = { contactId: 'c-p', systemRole: 'principal' as const, channel: 'sms', initiatedAt: '2026-11-17T12:00:00Z', tier: 'principal' as const, authenticated: false };
+      await gw.send(emailReq, { taskEventId: 't1', holdRecipe, originator: forged });
+      expect(actionLogRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'pending_approval', requesterUnverified: true }));
+
+      const verified = makeActionLogRepo();
+      const gw2 = makeBandGateway({ review: vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held.', findings: [{ rule: 'steered', detail: 'x' }] }), score: 84, actionLogRepo: verified });
+      await gw2.send(emailReq, { taskEventId: 't1', holdRecipe, originator: { ...forged, channel: 'signal', authenticated: true } });
+      expect(verified.insert).toHaveBeenCalledWith(expect.not.objectContaining({ requesterUnverified: true }));
+    });
+
     it('keeps the recipe\'s description as the preamble of any other hold', async () => {
       const registerDisplay = vi.fn();
       const gw = makeBandGateway({ review: vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held.', findings: [{ rule: 'steered', detail: 'x' }] }), score: 84 });

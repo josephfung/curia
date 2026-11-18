@@ -71,7 +71,7 @@ export interface ApprovalDisplay {
 }
 
 export interface ApprovalDeliveryDeps {
-  actionLogRepo: Pick<ActionLogRepo, 'findPendingByShortRef' | 'findPendingByApprovalNumber' | 'claimNotification' | 'releaseNotification' | 'bindDeliveryMessage'>;
+  actionLogRepo: Pick<ActionLogRepo, 'findPendingByShortRef' | 'findPendingByApprovalNumber' | 'findAllPending' | 'claimNotification' | 'releaseNotification' | 'bindDeliveryMessage'>;
   outboundGateway: Pick<OutboundGateway, 'send'>;
   /** The shared array index.ts refreshes when the principal's identities change. */
   principalIdentities: readonly ChannelIdentity[];
@@ -241,15 +241,18 @@ export class ApprovalDelivery {
    * Send a pending approval again, on the first verified channel, because someone answered it
    * ("approve 3") from a channel that cannot prove it was the principal (GHSA-p49r-jqh2-v668).
    * It does not claim the row (it was usually delivered already) and counts against the hourly
-   * cap. `ref` is the approval number or short reference as the answer gave it. Never throws.
+   * cap. `ref` is the approval number or short reference as the answer gave it; empty means the
+   * sole pending approval, as approve-action reads it. Never throws.
    */
   async redeliverForVerification(ref: string, answeredOn: UnverifiedChannel): Promise<DeliverResult> {
     const { actionLogRepo, logger } = this.deps;
     try {
       const trimmed = ref.trim();
-      const row = /^\d{1,3}$/.test(trimmed)
-        ? await actionLogRepo.findPendingByApprovalNumber(Number(trimmed))
-        : await actionLogRepo.findPendingByShortRef(trimmed);
+      const row = trimmed === ''
+        ? await this.solePending()
+        : /^\d{1,3}$/.test(trimmed)
+          ? await actionLogRepo.findPendingByApprovalNumber(Number(trimmed))
+          : await actionLogRepo.findPendingByShortRef(trimmed);
       const recipients = await this.resolveRecipients();
       const verified = [...recipients.keys()].filter((c) => VERIFIED_APPROVAL_CHANNELS.includes(c));
       if (!row) return { delivered: false, reason: 'not_found', available: verified };
@@ -279,6 +282,12 @@ export class ApprovalDelivery {
       logger.error({ err, answeredOn }, 'approval-delivery: re-send for verification failed');
       return { delivered: false, reason: 'send_failed', available: [] };
     }
+  }
+
+  /** The only pending approval, or null when there are none or several (as approve-action reads an absent ref). */
+  private async solePending(): Promise<ActionLogRow | null> {
+    const rows = await this.deps.actionLogRepo.findAllPending();
+    return rows.length === 1 ? rows[0]! : null;
   }
 
   /**

@@ -38,6 +38,7 @@ function makeDelivery(opts: {
   const repo = {
     findPendingByShortRef: vi.fn().mockResolvedValue(opts.row === undefined ? makeRow() : opts.row),
     findPendingByApprovalNumber: vi.fn().mockResolvedValue(opts.row === undefined ? makeRow() : opts.row),
+    findAllPending: vi.fn().mockResolvedValue(opts.row === null ? [] : [opts.row ?? makeRow()]),
     claimNotification: vi.fn().mockResolvedValue(opts.claimed ?? true),
     releaseNotification: vi.fn().mockResolvedValue(undefined),
     bindDeliveryMessage: vi.fn().mockResolvedValue(true),
@@ -414,6 +415,13 @@ describe('ApprovalDelivery — unverified requests', () => {
       await delivery.redeliverForVerification('3', 'email');
       expect(repo.findPendingByApprovalNumber).toHaveBeenCalledWith(3);
       expect(repo.findPendingByShortRef).not.toHaveBeenCalled();
+    });
+
+    it('takes the sole pending approval when the answer named none', async () => {
+      const { delivery, repo, send } = makeDelivery({ row: makeRow({ notificationSentAt: new Date(), approvalNumber: 3 }) });
+      await expect(delivery.redeliverForVerification('', 'sms')).resolves.toEqual({ delivered: true, channel: 'signal' });
+      expect(repo.findAllPending).toHaveBeenCalledOnce();
+      expect(send.mock.calls[0]![0].message).toContain('approval 3');
     });
 
     it('reports no verified channel when the principal has none', async () => {

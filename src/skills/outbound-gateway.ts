@@ -99,7 +99,7 @@ import {
   AUTONOMOUS_DAILY_CAP, AUTONOMOUS_DAILY_CAP_WINDOW_MS, AUTONOMOUS_MAX_COPIED_EVIDENCE, AUTONOMOUS_THREAD_COOLDOWN_MS, checkAutonomousLimits, conversationIdsOf, newlyCopied, repliedToLatest,
   type AutonomousLimitRefusal,
 } from './principal-send/autonomous-limits.js';
-import { hasSystemLineage, isOutsiderOriginated } from '../contacts/principal.js';
+import { hasSystemLineage, isOutsiderOriginated, isUnauthenticatedPrincipal } from '../contacts/principal.js';
 import {
   mailboxDraftLabel, quoteItemsToReview, quoteProblem, replyOrigin, threadMessageProof, threadTextSeenByAll,
   type QuoteProblem, type ThreadMessageProof,
@@ -1614,7 +1614,7 @@ export class OutboundGateway {
           raised = await this.raiseSendApproval(
             request,
             options.reExecRecipe,
-            { taskEventId: options.taskEventId, conversationId: options.conversationId, postTurn: options.postTurn },
+            { taskEventId: options.taskEventId, conversationId: options.conversationId, postTurn: options.postTurn, originator: options.originator },
             [`Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`],
           );
         }
@@ -1863,6 +1863,7 @@ export class OutboundGateway {
                 shortRef: candidateRef,
                 description: recipe.description,
                 payload: recipe.partialPayload ?? {},
+                ...(isUnauthenticatedPrincipal({ originator: options.originator }) ? { requesterUnverified: true } : {}),
                 expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
               });
               actionRef = candidateRef;
@@ -2821,7 +2822,7 @@ export class OutboundGateway {
   private async raiseSendApproval(
     request: OutboundSendRequest,
     recipe: SendRecipe,
-    ctx: { taskEventId: string; conversationId?: string | null; postTurn?: boolean },
+    ctx: { taskEventId: string; conversationId?: string | null; postTurn?: boolean; originator?: TaskOriginator },
     extraLines: string[],
     preamble?: string,
     disclosureAsk?: DisclosureAsk,
@@ -2846,6 +2847,8 @@ export class OutboundGateway {
         description: recipe.description,
         payload: recipe.partialPayload ?? {},
         ...(disclosureAsk ? { disclosureAsk } : {}),
+        // A send an unverified principal match started: delivered only on a verified channel (GHSA-p49r-jqh2-v668).
+        ...(isUnauthenticatedPrincipal({ originator: ctx.originator }) ? { requesterUnverified: true } : {}),
         expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
       });
     } catch (err) {
@@ -2992,6 +2995,8 @@ export class OutboundGateway {
       principalDirected?: boolean;
       holdRecipe?: SendRecipe;
       reExecRecipe?: SendRecipe;
+      /** Who started the work: a hold raised for an unverified principal match is marked (GHSA-p49r-jqh2-v668). */
+      originator?: TaskOriginator;
     } | undefined;
     /**
      * False for a saved draft: its drafter cannot rewrite it, so a block holds instead, and so
@@ -3254,7 +3259,7 @@ export class OutboundGateway {
       const raised = await this.raiseSendApproval(
         request,
         recipe,
-        { taskEventId: options.taskEventId, conversationId: options.conversationId, postTurn: options.postTurn },
+        { taskEventId: options.taskEventId, conversationId: options.conversationId, postTurn: options.postTurn, originator: options.originator },
         ask ? alsoHeld(decision.findings) : [`Held by the send review: ${decision.reason}`],
         ask ? askPreamble({ ...ask, ...this.requesterNameFor(ask, args.requester) }) : undefined,
         stored,
