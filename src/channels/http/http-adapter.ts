@@ -65,6 +65,7 @@ import { principalMailboxesRoutes } from './routes/principal-mailboxes.js';
 import { EmailAccountsRepo } from '../email/email-accounts-repo.js';
 import { SecretUsageRepo } from '../../secrets/secret-usage-repo.js';
 import { secretCaptureRoutes } from './routes/secret-capture.js';
+import { mailboxSignInRoutes, type MailboxSignInRouteOptions } from './routes/mailbox-signin.js';
 import { setupRoutes } from './routes/setup.js';
 import { smsWebhookRoutes } from '../sms/webhook-route.js';
 import { SmsWebhookBridge } from '../sms/webhook-bridge.js';
@@ -152,6 +153,13 @@ export interface HttpAdapterConfig {
   /** Backs the public /api/secret-capture/* routes (one-time tokenized secret capture, #971).
    *  Token-authed, so mounted independently of the bootstrap secret. */
   secretCaptureService?: import('../../secrets/secret-capture-service.js').SecretCaptureService;
+  /** Backs the public /api/mailbox-signin/* routes (mailbox sign-in through Nylas hosted auth, #2361).
+   *  Token-authed, so mounted independently of the bootstrap secret. */
+  mailboxSignIn?: {
+    service: MailboxSignInRouteOptions['signIn'];
+    readiness: MailboxSignInRouteOptions['readiness'];
+    readApiKey: MailboxSignInRouteOptions['readApiKey'];
+  };
   /**
    * True when the process booted without a principal contact and is running in
    * setup-required mode (email + Signal adapters are skipped until restart).
@@ -749,6 +757,17 @@ export class HttpAdapter implements Channel {
         logger,
         // Pass the bus so a successful redeem publishes secret.captured for agent resume (#972).
         bus,
+      });
+    }
+
+    // Mailbox sign-in routes (#2361) — public, token-authed, bearer-exempt like secret capture.
+    if (this.config.mailboxSignIn) {
+      await this.app.register(mailboxSignInRoutes, {
+        signIn: this.config.mailboxSignIn.service,
+        readiness: this.config.mailboxSignIn.readiness,
+        readApiKey: this.config.mailboxSignIn.readApiKey,
+        appOrigin: this.config.appOrigin,
+        logger,
       });
     }
 

@@ -75,6 +75,9 @@ tools:
   # Personal vault (agent-captured user.* secrets)
   - secret-capture-request
   - list-user-secrets
+  # Mailbox sign-in links (#2361): pinned to setup-wizard, reached by the coordinator through
+  # discovery (tool-registry), so the coordinator's always-on prompt does not grow.
+  - mailbox-signin-link
   # Autonomy
   - activity-log
   # Infrastructure-only: re-publishes a Gate C–withheld dispatcher relay after CEO
