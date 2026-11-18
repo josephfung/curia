@@ -21,6 +21,7 @@
 /** A trigger the dispatcher detected for this turn. Rendering order is TURN_GUIDANCE_ORDER. */
 export type TurnGuidanceKey =
   | 'principal-reply-shaped'
+  | 'running-late'
   | 'verification-code-received'
   | 'principal-forward'
   | 'booking-link'
@@ -50,6 +51,22 @@ const PRINCIPAL_REPLY_SHAPED = [
   'reply to something earlier ("Yes", "The second one", "Go ahead"), briefly ask what they are',
   'replying to before acting ("I lost the thread — what are you replying to?"). A self-contained',
   'request needs no clarification.',
+];
+
+/**
+ * The principal says they are running late (#2612). The message names no meeting, so the
+ * reply-shaped note read it as a reply and the coordinator asked what they were replying to
+ * (finesse 52b/c/d, 3 of 15 baseline runs). It is self-contained: the meeting is on the
+ * calendar. Replaces the reply-shaped note, and says who to write to and how.
+ */
+const RUNNING_LATE = [
+  'The principal is telling you they are running late, not replying to anything earlier: look at',
+  'what is on the calendar now or next, and tell the people waiting that the principal is running',
+  'late by the amount they gave. Do not ask what they are replying to or which meeting they mean.',
+  'Write to each of them in the way that suits who they are: a short line to someone close, a',
+  'properly apologetic note to a board chair or a customer. Say how late only; if the principal',
+  'gave a personal reason, do not pass it on. If the delay is a deliverable rather than a',
+  'meeting, ignore this note. If the principal named who to tell, tell only those people.',
 ];
 
 /**
@@ -368,6 +385,7 @@ const SCHEDULER_DELIVERY = [
 
 const TURN_GUIDANCE: Record<TurnGuidanceKey, readonly string[]> = {
   'principal-reply-shaped': PRINCIPAL_REPLY_SHAPED,
+  'running-late': RUNNING_LATE,
   'verification-code-received': VERIFICATION_CODE_RECEIVED,
   'principal-forward': PRINCIPAL_FORWARD,
   'booking-link': BOOKING_LINK,
@@ -395,6 +413,8 @@ const TURN_GUIDANCE: Record<TurnGuidanceKey, readonly string[]> = {
  */
 export const TURN_GUIDANCE_ORDER: readonly TurnGuidanceKey[] = [
   'principal-reply-shaped',
+  // Replaces the reply-shaped note in turn: a principal running late is self-contained.
+  'running-late',
   // Straight after the reply-shaped note: a bare code is not a reply needing clarification.
   'verification-code-received',
   'principal-forward',
