@@ -46,10 +46,13 @@ export interface NylasAppClientOptions {
   apiUri: string;
   logger: Logger;
   fetchImpl?: typeof fetch;
+  /** Per-request timeout in ms. Default 15000. */
+  timeoutMs?: number;
 }
 
 // One page of connectors is enough: an application has a handful of providers.
 const CONNECTOR_PAGE_LIMIT = 50;
+const DEFAULT_TIMEOUT_MS = 15_000;
 
 type JsonObject = Record<string, unknown>;
 
@@ -74,24 +77,31 @@ export class NylasAppClient {
   private readonly apiUri: string;
   private readonly logger: Logger;
   private readonly fetchImpl: typeof fetch;
+  private readonly timeoutMs: number;
 
   constructor(opts: NylasAppClientOptions) {
     this.apiKey = opts.apiKey;
-    this.apiUri = opts.apiUri;
+    this.apiUri = opts.apiUri.replace(/\/+$/, '');
     this.logger = opts.logger;
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
   /**
    * Find which region the API key belongs to. Tries us, then eu; the first 200 wins.
    * Null when neither accepts the key (or both are unreachable).
    */
-  static async probeRegion(apiKey: string, fetchImpl: typeof fetch = fetch): Promise<NylasRegion | null> {
+  static async probeRegion(
+    apiKey: string,
+    fetchImpl: typeof fetch = fetch,
+    timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  ): Promise<NylasRegion | null> {
     for (const region of ['us', 'eu'] as const) {
       try {
         const res = await fetchImpl(`${nylasApiUri(region)}/v3/applications`, {
           method: 'GET',
           headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+          signal: AbortSignal.timeout(timeoutMs),
         });
         if (res.status === 200) return region;
       } catch {
@@ -104,13 +114,17 @@ export class NylasAppClient {
   }
 
   async getApplication(): Promise<NylasApplicationInfo> {
-    const data = await this.request('GET', '/v3/applications', undefined, 'get application');
+    const { status, data } = await this.request('GET', '/v3/applications', undefined, 'get application');
     const d = isObject(data) ? data : {};
+    const applicationId = str(d['application_id']);
+    if (applicationId === undefined || applicationId === '') {
+      throw new NylasAppError('Nylas get application: response carried no application id', status);
+    }
     const callbackUris = Array.isArray(d['callback_uris'])
       ? d['callback_uris'].flatMap((c) => (isObject(c) && typeof c['url'] === 'string' ? [c['url']] : []))
       : [];
     return {
-      applicationId: str(d['application_id']) ?? '',
+      applicationId,
       region: str(d['region']) ?? '',
       environment: str(d['environment']) ?? null,
       callbackUris,
@@ -122,7 +136,7 @@ export class NylasAppClient {
   }
 
   async listConnectors(): Promise<NylasConnectorInfo[]> {
-    const data = await this.request('GET', `/v3/connectors?limit=${CONNECTOR_PAGE_LIMIT}`, undefined, 'list connectors');
+    const { data } = await this.request('GET', `/v3/connectors?limit=${CONNECTOR_PAGE_LIMIT}`, undefined, 'list connectors');
     if (!Array.isArray(data)) return [];
     const out: NylasConnectorInfo[] = [];
     for (const c of data) {
@@ -178,7 +192,7 @@ export class NylasAppClient {
   }): Promise<{ grantId: string; email: string | null; scopes: string[] }> {
     // The token endpoint answers with the bare object, not the { data } wrapper. The
     // access_token in it is never read.
-    const body = await this.request(
+    const { status, data: body } = await this.request(
       'POST',
       '/v3/connect/token',
       {
@@ -194,19 +208,24 @@ export class NylasAppClient {
     const b = isObject(body) ? body : {};
     const grantId = str(b['grant_id']);
     if (grantId === undefined || grantId === '') {
-      throw new NylasAppError('Nylas exchange code: response carried no grant', 200);
+      throw new NylasAppError('Nylas exchange code: response carried no grant', status);
     }
     return { grantId, email: str(b['email']) ?? null, scopes: splitScopes(b['scope']) };
   }
 
   async getGrant(grantId: string): Promise<NylasGrantInfo> {
-    const data = await this.request('GET', `/v3/grants/${encodeURIComponent(grantId)}`, undefined, 'get grant');
+    const { status, data } = await this.request('GET', `/v3/grants/${encodeURIComponent(grantId)}`, undefined, 'get grant');
     const d = isObject(data) ? data : {};
+    const email = str(d['email']);
+    const grantStatus = str(d['grant_status']);
+    if (str(d['id']) === undefined || email === undefined || email === '' || grantStatus === undefined) {
+      throw new NylasAppError('Nylas get grant: response was missing required fields', status);
+    }
     return {
-      email: str(d['email']) ?? '',
+      email,
       provider: str(d['provider']) ?? '',
       scopes: strArray(d['scope']),
-      status: d['grant_status'] === 'valid' ? 'valid' : 'invalid',
+      status: grantStatus === 'valid' ? 'valid' : 'invalid',
     };
   }
 
@@ -224,12 +243,12 @@ export class NylasAppClient {
     body: unknown,
     operation: string,
     unwrap = true,
-  ): Promise<unknown> {
+  ): Promise<{ status: number; data: unknown }> {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.apiKey}`,
       Accept: 'application/json',
     };
-    const init: RequestInit = { method, headers };
+    const init: RequestInit = { method, headers, signal: AbortSignal.timeout(this.timeoutMs) };
     if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
       init.body = JSON.stringify(body);
@@ -240,8 +259,10 @@ export class NylasAppClient {
       res = await this.fetchImpl(`${this.apiUri}${path}`, init);
     } catch (err) {
       // The underlying error text can carry the URL (which holds a grant id), so it is dropped.
-      this.logger.warn({ operation, errorName: err instanceof Error ? err.name : 'unknown' }, 'Nylas application request failed to send');
-      throw new NylasAppError(`Nylas ${operation} failed: network error`, 0);
+      const errorName = err instanceof Error ? err.name : 'unknown';
+      this.logger.warn({ operation, errorName }, 'Nylas application request failed to send');
+      const timedOut = errorName === 'TimeoutError' || errorName === 'AbortError';
+      throw new NylasAppError(`Nylas ${operation} failed: ${timedOut ? 'timed out' : 'network error'}`, 0);
     }
 
     let parsed: unknown;
@@ -260,7 +281,7 @@ export class NylasAppClient {
       throw new NylasAppError(`Nylas ${operation} failed: HTTP ${res.status}${suffix}`, res.status, nylasType);
     }
 
-    if (!unwrap) return parsed;
-    return isObject(parsed) ? parsed['data'] : undefined;
+    if (!unwrap) return { status: res.status, data: parsed };
+    return { status: res.status, data: isObject(parsed) ? parsed['data'] : undefined };
   }
 }
