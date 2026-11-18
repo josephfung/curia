@@ -19,8 +19,8 @@ const MIGRATION = fs.readFileSync(
 );
 const UP = MIGRATION.split('-- Up Migration')[1]!.split('-- Down Migration')[0]!;
 
-const originator = (systemRole: string | null, channel: string, authenticated?: boolean) => ({
-  contactId: 'c-1', systemRole, channel, initiatedAt: '2026-10-01T00:00:00Z', tier: systemRole === 'principal' ? 'principal' : 'trusted',
+const originator = (systemRole: string | null, channel: string | undefined, authenticated?: boolean) => ({
+  contactId: 'c-1', systemRole, ...(channel !== undefined ? { channel } : {}), initiatedAt: '2026-10-01T00:00:00Z', tier: systemRole === 'principal' ? 'principal' : 'trusted',
   ...(authenticated !== undefined ? { authenticated } : {}),
 });
 
@@ -49,6 +49,10 @@ describeIf('migration 128: principal originator authenticated backfill', () => {
       ['email, missing', originator('principal', 'email'), false],
       ['sms, missing', originator('principal', 'sms'), false],
       ['voice, false', originator('principal', 'voice', false), true],
+      ['web, false', originator('principal', 'web', false), true],
+      ['cli, false', originator('principal', 'cli', false), true],
+      // jsonb_set is strict: without COALESCE a missing channel would null the whole originator.
+      ['no channel, missing', originator('principal', undefined), false],
       ['email, true', originator('principal', 'email', true), true],
       ['email, false', originator('principal', 'email', false), false],
       ['trusted contact, missing', originator(null, 'email'), undefined],
