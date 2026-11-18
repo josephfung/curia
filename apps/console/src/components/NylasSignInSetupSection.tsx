@@ -12,12 +12,13 @@ import { apiFetch } from '../api.js';
 
 type Region = 'us' | 'eu';
 type Reason =
-  | 'no_api_key' | 'bad_api_key' | 'sandbox' | 'origin_not_https'
+  | 'no_api_key' | 'restart_required' | 'bad_api_key' | 'sandbox' | 'origin_not_https'
   | 'callback_unregistered' | 'no_google_connector' | 'nylas_unreachable';
 
 interface SignInStatus {
   ready?: boolean;
-  reason?: Reason;
+  /** A Reason, or one this console does not know yet (then `detail` is shown). */
+  reason?: string;
   detail?: string;
   region?: Region;
   callbackUrl?: string | null;
@@ -26,9 +27,14 @@ interface SignInStatus {
 
 const BASE = '/api/registry/nylas';
 
+function isReason(r: string | undefined): r is Reason {
+  return r !== undefined && Object.prototype.hasOwnProperty.call(FIX, r);
+}
+
 // One line per failing reason: what to do next.
 const FIX: Record<Reason, string> = {
   no_api_key: 'Save the Nylas API key under Channels → Email first.',
+  restart_required: 'Restart Curia to finish setting up sign-in.',
   bad_api_key: 'Nylas rejected the key. Check the key, then use Detect to find its region.',
   sandbox: 'This Nylas application is a sandbox. Use a production application and its API key.',
   origin_not_https: 'Set APP_ORIGIN to this console\'s public https:// address and restart Curia.',
@@ -71,6 +77,8 @@ export function NylasSignInSetupSection() {
       setLoadError(null);
     } catch (err) {
       console.error('[NylasSignInSetupSection] failed to read sign-in readiness:', err);
+      // A stale Ready (or an old reason) must not sit beside the error.
+      setStatus(null);
       setLoadError(err instanceof Error ? err.message : 'unknown error');
     }
   }, []);
@@ -122,9 +130,9 @@ export function NylasSignInSetupSection() {
         {status && status.ready === true && (
           <p role="status"><strong>Ready.</strong> Mailbox sign-in is set up.</p>
         )}
-        {status && status.ready === false && status.reason && (
+        {status && status.ready === false && (
           <p className="autonomy-error" role="alert">
-            Not ready: {FIX[status.reason]}
+            Not ready: {isReason(status.reason) ? FIX[status.reason] : (status.detail || 'Not ready')}
           </p>
         )}
 

@@ -74,6 +74,8 @@ describe('MailboxSignInDonePage', () => {
     expect(fetchMock.mock.calls[0]![0]).toBe('/api/health');
     expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(host.textContent).toContain('Curia is back');
+    // M: the restart alone doesn't prove the mailbox runs, so the page points at where to check.
+    expect(host.textContent).toContain('Curia is back. Check Channels → Email to confirm the mailbox is running.');
   });
 
   it('does not declare success while the old process keeps answering', async () => {

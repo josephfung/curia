@@ -80,6 +80,27 @@ describe('NylasSignInSetupSection', () => {
     expect(container.textContent).toContain('Ready.');
   });
 
+  it('says to restart for restart_required (D)', async () => {
+    mocks.respond = () => json({ ...notReady, reason: 'restart_required', detail: 'Restart Curia to finish setting up sign-in.' });
+    await mount();
+    expect(container.textContent).toContain('Not ready: Restart Curia to finish setting up sign-in.');
+  });
+
+  it('falls back to the server detail for a reason it does not know (M)', async () => {
+    mocks.respond = () => json({ ...notReady, reason: 'something_new', detail: 'A new thing is missing.' });
+    await mount();
+    expect(container.textContent).toContain('Not ready: A new thing is missing.');
+  });
+
+  it('clears the previous status when a later check fails (M)', async () => {
+    await mount();
+    expect(container.textContent).toContain('Create the Google connector below');
+    mocks.respond = () => json({ error: 'boom' }, 500);
+    await click('Check');
+    expect(container.textContent).toContain("Couldn't check sign-in: boom");
+    expect(container.textContent).not.toContain('Create the Google connector below');
+  });
+
   it('Register callback and Detect post to their routes', async () => {
     await mount();
     await click('Register callback');

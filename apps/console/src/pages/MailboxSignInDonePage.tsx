@@ -122,7 +122,7 @@ export default function MailboxSignInDonePage(
         {restart && (
           <p role="status">
             {restartState === 'waiting' && 'Curia is restarting to start using this mailbox. This takes a minute or so.'}
-            {restartState === 'back' && 'Curia is back and using this mailbox.'}
+            {restartState === 'back' && 'Curia is back. Check Channels → Email to confirm the mailbox is running.'}
             {restartState === 'timeout' && 'Curia is taking longer than expected to restart. Please refresh this page in a minute.'}
           </p>
         )}
