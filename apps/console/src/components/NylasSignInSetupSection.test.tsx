@@ -183,4 +183,22 @@ describe('NylasSignInSetupSection', () => {
     window.removeEventListener('curia:nylas-signin-readiness', on);
     expect(seen[0]).toMatchObject({ ready: true });
   });
+
+  it('does not broadcast a result that arrives after the panel unmounted', async () => {
+    let release: (r: Response) => void = () => {};
+    mocks.respond = () => new Promise<Response>(r => { release = r; });
+    const seen: unknown[] = [];
+    const on = (e: Event) => seen.push((e as CustomEvent).detail);
+    window.addEventListener('curia:nylas-signin-readiness', on);
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => { root!.render(<NylasSignInSetupSection />); });
+    await act(async () => { root!.unmount(); });
+    root = null;
+    await act(async () => { release(json({ ...notReady, ready: true, reason: undefined })); });
+    await settle();
+    window.removeEventListener('curia:nylas-signin-readiness', on);
+    expect(seen).toEqual([]);
+  });
 });
