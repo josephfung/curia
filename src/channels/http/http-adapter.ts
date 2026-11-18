@@ -176,6 +176,8 @@ export interface HttpAdapterConfig {
     readApiKey: MailboxSignInRouteOptions['readApiKey'];
     /** The bound callback logic (handleMailboxSignInCallback). Absent: the callback answers failed. */
     callback?: MailboxSignInRouteOptions['callback'];
+    /** The boot-time Nylas key and region, so the console's readiness shows restart_required (R11). */
+    boot?: import('../../nylas/signin-readiness.js').NylasBootConfig;
   };
   /**
    * True when the process booted without a principal contact and is running in
@@ -672,6 +674,7 @@ export class HttpAdapter implements Channel {
         bus,
         logger,
         ...(this.config.mailboxSignIn ? { signIn: this.config.mailboxSignIn.service } : {}),
+        ...(this.config.mailboxSignIn?.boot ? { boot: this.config.mailboxSignIn.boot } : {}),
       });
     }
 

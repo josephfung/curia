@@ -32,6 +32,7 @@ import {
   checkNylasSignIn,
   createNylasSignInReaders,
   mailboxSignInCallbackUrl,
+  type NylasBootConfig,
 } from '../../../nylas/signin-readiness.js';
 import {
   MailboxSignInAddressError,
@@ -50,6 +51,8 @@ export interface NylasSetupRouteOptions {
   sessions: SessionStore;
   bus: Pick<EventBus, 'publish'>;
   logger: Logger;
+  /** The boot-time Nylas key and region: readiness reads restart_required after either changes. */
+  boot?: NylasBootConfig;
   /** Mints the console's "Connect with Google" links. Absent: the route answers 409. */
   signIn?: Pick<MailboxSignInService, 'mint' | 'mintForOperator'>;
   /** Test seams. */
@@ -140,7 +143,12 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
   app.get('/api/registry/nylas/signin', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     try {
-      const readiness = await checkNylasSignIn({ ...readers, appOrigin: options.appOrigin, makeClient, logger });
+      const readiness = await checkNylasSignIn({
+        ...readers, appOrigin: options.appOrigin, logger,
+        // Readiness's own default client has the short timeout; only a test seam replaces it.
+        ...(options.makeClient ? { makeClient: options.makeClient } : {}),
+        ...(options.boot ? { boot: options.boot } : {}),
+      });
       const region = await readers.readRegion();
       return reply.send({
         ...readiness,

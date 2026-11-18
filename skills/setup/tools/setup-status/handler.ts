@@ -242,10 +242,14 @@ export class SetupStatusHandler implements ToolHandler {
       }
 
       // Done when Nylas hosted sign-in is fully set up (#2361). A failed check reports pending.
+      // A key or region saved after boot reads restart_required until one restart (R11).
       let nylasSignInReady = false;
+      let nylasSignInRestart = false;
       if (ctx.nylasSignInReadiness) {
         try {
-          nylasSignInReady = (await ctx.nylasSignInReadiness()).ready;
+          const readiness = await ctx.nylasSignInReadiness();
+          nylasSignInReady = readiness.ready;
+          nylasSignInRestart = !readiness.ready && readiness.reason === 'restart_required';
         } catch (err) {
           ctx.log.warn({ errName: err instanceof Error ? err.name : typeof err }, 'setup-status: Nylas sign-in check failed — reporting pending');
         }
@@ -334,6 +338,7 @@ export class SetupStatusHandler implements ToolHandler {
               break;
             case 'nylas_signin_ready':
               done = nylasSignInReady;
+              restartRequired = nylasSignInRestart;
               break;
             case 'browser_ready':
               done = browserReady;

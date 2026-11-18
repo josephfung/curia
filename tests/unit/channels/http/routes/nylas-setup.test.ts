@@ -88,6 +88,20 @@ describe('nylas-setup routes', () => {
     expect(opts.makeClient).not.toHaveBeenCalled();
   });
 
+  it('GET /signin says restart_required for a key saved after a boot that had none (D, R11)', async () => {
+    const { opts } = setup({ boot: { apiKey: undefined, region: 'us' } });
+    await build(opts);
+    const res = await req('GET', '/api/registry/nylas/signin');
+    expect(res.json()).toMatchObject({ ready: false, reason: 'restart_required', detail: 'Restart Curia to finish setting up sign-in.' });
+    expect(opts.makeClient).not.toHaveBeenCalled();
+  });
+
+  it('GET /signin is ready when the boot key and region match the live ones', async () => {
+    const { opts } = setup({ boot: { apiKey: API_KEY, region: 'us' } });
+    await build(opts);
+    expect((await req('GET', '/api/registry/nylas/signin')).json()).toMatchObject({ ready: true });
+  });
+
   it('POST /discover-region probes with the saved key and persists the region', async () => {
     const { opts, secrets } = setup();
     await build(opts);
