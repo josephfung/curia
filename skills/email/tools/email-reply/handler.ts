@@ -169,7 +169,10 @@ export class EmailReplyHandler implements ToolHandler {
     // A turn a principal-matching but unverified message started (a forged From, an SMS;
     // GHSA-p49r-jqh2-v668): a reply goes to the original's sender only. What the principal may
     // read must not reach an address the forger put on the thread.
-    const senderOnly = isUnauthenticatedPrincipal(ctx.taskMetadata);
+    // `sender_only` is not a manifest input: it rides in a held reply's payload, so the approved
+    // replay (run under the approver's verified turn) keeps the restriction. It only narrows.
+    const senderOnly = isUnauthenticatedPrincipal(ctx.taskMetadata) || ctx.input['sender_only'] === true;
+    const replayPayload = senderOnly ? { ...ctx.input, sender_only: true } : ctx.input;
     if (senderOnly && typeof ccInput === 'string' && ccInput.trim().length > 0) {
       return {
         success: false,
@@ -302,14 +305,14 @@ export class EmailReplyHandler implements ToolHandler {
         // Counted against the outside contact who started this work (#1320).
         ...originatorOption(ctx),
         // Used only if band review holds this send (#2159): approval replays this skill with this input.
-        holdRecipe: { toolName: 'email-reply', partialPayload: ctx.input, description: `Email reply to ${toLabel} — "${replySubject}"` },
+        holdRecipe: { toolName: 'email-reply', partialPayload: replayPayload, description: `Email reply to ${toLabel} — "${replySubject}"` },
         ...(provenance ? { recipientSource: provenance } : {}),
         ...(fromName ? { recipientDisplayName: fromName } : {}),
         ...(attachmentsParsed.length > 0
           ? {
             reExecRecipe: {
               toolName: 'email-reply',
-              partialPayload: ctx.input,
+              partialPayload: replayPayload,
               description: `Send email reply with ${attachmentsParsed.length} attachment(s)`,
             },
             exportContext: {

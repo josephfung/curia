@@ -197,6 +197,28 @@ describe('EmailReplyHandler', () => {
       expect(request['cc']).toBeUndefined();
     });
 
+    // An approval replays the stored payload under the approver's verified turn: the restriction
+    // must travel with the hold, or the approved reply would go reply-all after all.
+    it('pins sender-only into the hold, and an approved replay honours it', async () => {
+      const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'Your week: ...' }, { taskMetadata: UNVERIFIED });
+      ctx.selfEmails = ['nathan@example.com'];
+      (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue(forged);
+      (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, messageId: 'reply-1' });
+      await handler.execute(ctx);
+      const options = (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mock.calls[0]![1] as { holdRecipe: { partialPayload: Record<string, unknown> } };
+      expect(options.holdRecipe.partialPayload).toMatchObject({ sender_only: true });
+
+      const VERIFIED = { originator: { ...UNVERIFIED.originator, authenticated: true } };
+      const replay = makeCtx(options.holdRecipe.partialPayload, { taskMetadata: VERIFIED });
+      replay.selfEmails = ['nathan@example.com'];
+      (replay.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue(forged);
+      (replay.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, messageId: 'reply-2' });
+      await handler.execute(replay);
+      const request = (replay.outboundGateway!.send as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<string, unknown>;
+      expect(request['additionalTo']).toBeUndefined();
+      expect(request['cc']).toBeUndefined();
+    });
+
     it('refuses an explicit cc', async () => {
       const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'x', cc: 'attacker@example.com' }, { taskMetadata: UNVERIFIED });
       const result = await handler.execute(ctx);
