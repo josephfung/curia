@@ -169,6 +169,12 @@ client, so **no Curia code is needed** to answer Q1 and Q2.
 
 Optional: an Advanced Protection user, with and without Trusted.
 
-**Already partly answered?** If Curia's own Drive OAuth client in prod is External, published and
-unverified, and its token has lasted more than 7 days, that answers R1 and R7 for a consumer account
-with a restricted scope (`drive`).
+**Partly answered by prod (2026-11-17).** Curia's own Drive OAuth client in prod is **External and
+In production**. Its Verification Center says "Your app's data access is not verified. Verification
+is required because your app requests sensitive or restricted scopes." Its grant has kept working for
+more than 7 days. So an unverified production app holding a restricted scope (`drive`) is neither
+blocked nor on 7-day tokens, for Curia's consumer Google account. That settles R1 and R7 for
+that case: **Q1 is "yes"** on the evidence so far.
+
+R1 and R7 still need repeating with the Gmail scopes. The verification rules treat restricted scopes
+alike, but Gmail scopes also lose tokens on a password change. R2–R6 (Workspace) remain open.
