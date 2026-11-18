@@ -50,7 +50,7 @@ tasks:
     handoff_path: /channels
     completion_check:
       type: email_channel_ready
-    credential_how_to: "Get your Nylas API key at dashboard-v3.nylas.com (a production application; the free tier works). In Settings → Channels → Email, install the channel and save the API key, then add Curia's own mailbox under Email accounts (name, address, grant ID from the Nylas dashboard), enable the channel and restart. Your own Gmail accounts are connected separately, by signing in with Google (see Mailbox sign-in)."
+    credential_how_to: "Get your Nylas API key at dashboard-v3.nylas.com (a production application; the free tier works). In Settings → Channels → Email, install the channel and save the API key, then add Curia's own mailbox under Email accounts with Connect with Google once mailbox sign-in is set up (or paste a grant ID from the Nylas dashboard), enable the channel and restart. Your own Gmail accounts are connected separately, by signing in with Google (see Mailbox sign-in)."
     docs_url: /channels/email-setup
 
   - id: mailbox_signin
@@ -62,7 +62,7 @@ tasks:
     completion_check:
       type: nylas_signin_ready
     credential_how_to: "Needs the Nylas API key (Settings → Channels → Email) and APP_ORIGIN set to this console's public https:// address. In Settings → Behaviour → Email & Calendar, use Detect to find the Nylas region, Register callback to add the sign-in callback URL, and paste your Google Cloud OAuth client id and secret to create the Google connector. Add the two URLs shown there to the OAuth client in Google Cloud. Check should then read Ready; no restart is needed."
-    docs_url: /get-started/principal-email-calendar
+    docs_url: /get-started/curia-email
 
   - id: principal_mailboxes
     label: "Principal mailboxes and calendars"
