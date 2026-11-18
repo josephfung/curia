@@ -149,6 +149,15 @@ describe('TaskOutreachService confirmed (#2312)', () => {
     expect(record).toHaveBeenLastCalledWith(expect.objectContaining({ confirmed: true }));
   });
 
+  // GHSA-p49r-jqh2-v668: a forged From or spoofed SMS number is the principal's identity
+  // without the principal's authority, so its acts are not confirmed.
+  it('an explicit act on an unauthenticated principal turn is not confirmed', async () => {
+    const { service, record } = makeService();
+    const forged = { ...principalTask, taskMetadata: { ...principalTask.taskMetadata, originator: { ...principalOriginator, channel: 'sms', authenticated: false } } };
+    await service.recordForTurn(forged, { via: 'phone', summary: 'Called' });
+    expect(record).toHaveBeenLastCalledWith(expect.objectContaining({ confirmed: false }));
+  });
+
   it('a backstop row is never confirmed, even on a principal turn', async () => {
     const { service, record } = makeService();
     await service.recordForTurn(principalTask, { via: 'web_form', summary: 'Web form submitted', backstop: true });

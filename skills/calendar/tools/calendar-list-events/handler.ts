@@ -16,7 +16,7 @@ import type { NylasCalendarEvent } from '../../../../src/channels/calendar/nylas
 import { formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { localizeEventTimes } from '../../../../src/channels/calendar/event-display.js';
 import { meetingKey, sameMeetingKey } from '../../../../src/channels/calendar/event-identity.js';
-import { isSystemOriginated, isPrincipalOriginated } from '../../../../src/contacts/principal.js';
+import { isSystemOriginated, hasPrincipalIdentity } from '../../../../src/contacts/principal.js';
 import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from '../../../../src/skills/_shared/placeholder-guard.js';
 import { guardNylasExplicitCalendarIdentity } from '../../../../src/skills/_shared/calendar-identity-guard.js';
 import { isUuid } from '../../../../src/util/uuid.js';
@@ -105,7 +105,9 @@ export class CalendarListEventsHandler implements ToolHandler {
         // Use trusted originator metadata, not caller shape, to avoid misclassifying
         // agent-originated delegated tasks (which can have non-UUID contactIds) as system.
         const callerIsSystem = isSystemOriginated(ctx.taskMetadata);
-        const callerIsPrincipal = isPrincipalOriginated(ctx.taskMetadata);
+        // Identity, not authority (GHSA-p49r-jqh2-v668): the result goes back to the principal
+        // even when they texted by SMS, so an unauthenticated principal turn may look it up.
+        const callerIsPrincipal = hasPrincipalIdentity(ctx.taskMetadata);
         if (!callerIsSystem && !callerIsPrincipal) {
           return {
             success: false,

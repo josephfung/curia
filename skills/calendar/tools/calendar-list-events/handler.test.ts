@@ -226,6 +226,27 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
     expect(result.success).toBe(true);
   });
 
+  // GHSA-p49r-jqh2-v668: a read whose reply reaches the principal anyway stays on identity, so
+  // the principal texting by SMS (unauthenticated) can still look up a contact's calendar.
+  it('allows the contactId override for the principal on an unauthenticated channel (SMS)', async () => {
+    const handler = new CalendarListEventsHandler();
+    const principalId = 'deadbeef-0000-0000-0000-000000000001';
+    const contactService = {
+      getCalendarsForContact: vi.fn().mockResolvedValue([{ nylasCalendarId: 'cal-principal' }]),
+    } as unknown as ToolContext['contactService'];
+
+    const result = await handler.execute(makeCtx({
+      input: { contactId: principalId, timeMin: '2026-05-26T00:00:00Z', timeMax: '2026-05-26T23:59:59Z' },
+      caller: { contactId: principalId, role: 'ceo', channel: 'sms' },
+      taskMetadata: { originator: { systemRole: 'principal', authenticated: false, channel: 'sms' } },
+      contactService,
+      calendarRouter: singleMailboxRouter({ listEvents: vi.fn().mockResolvedValue([]) }),
+    }));
+
+    expect(result.success).toBe(true);
+    expect(contactService!.getCalendarsForContact).toHaveBeenCalledWith(principalId);
+  });
+
   it('rejects contactId override for non-principal, non-system callers', async () => {
     const handler = new CalendarListEventsHandler();
     const someContactId = 'deadbeef-0000-0000-0000-000000000001';
