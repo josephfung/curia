@@ -37,8 +37,9 @@ export class MultiPrincipalMailbox implements PrincipalMailbox {
     private readonly logger: Logger,
     private readonly timeoutMs = LOOKUP_TIMEOUT_MS,
     createClient?: (apiKey: string, grantId: string, timeoutMs: number) => NylasClient,
+    apiUri?: () => string,
   ) {
-    this.createClient = createClient ?? ((key, grant, ms) => new NylasClient(key, grant, logger, ms));
+    this.createClient = createClient ?? ((key, grant, ms) => new NylasClient(key, grant, logger, ms, apiUri?.()));
   }
 
   async hasSentTo(address: string): Promise<boolean> {

@@ -6,12 +6,12 @@
 // This is intentional: the principal's email is a separate data source accessed via
 // dedicated secrets, not through the core's channel account infrastructure.
 
+import { nylasApiUri } from '../../nylas/region.js';
 import { budgetExpired, remainingMs } from '../../util/call-budget.js';
 import type { CallBudget } from '../../util/call-budget.js';
 import { markMessageRequestError } from './nylas-message-id.js';
 import { withoutReadOnlySystemLabels } from './system-labels.js';
 
-const NYLAS_BASE = 'https://api.us.nylas.com/v3/grants';
 
 // Nylas guidance: requests with limit > 20 on list endpoints trigger concurrent-user 429s.
 export const NYLAS_MAX_LIST_LIMIT = 20;
@@ -201,9 +201,10 @@ export class CeoNylasClient {
    * @param budget  The tool call's time budget. Handlers pass `ctx`. When it runs
    *                out, the in-flight request is aborted and no further request
    *                is sent.
+   * @param apiUri  The Nylas region's API host (nylasApiUri); defaults to the US region.
    */
-  constructor(apiKey: string, grantId: string, log: Logger, budget?: CallBudget) {
-    this.#baseUrl = `${NYLAS_BASE}/${grantId}`;
+  constructor(apiKey: string, grantId: string, log: Logger, budget?: CallBudget, apiUri: string = nylasApiUri('us')) {
+    this.#baseUrl = `${apiUri}/v3/grants/${grantId}`;
     this.#grantId = grantId;
     this.#headers = {
       Authorization: `Bearer ${apiKey}`,
