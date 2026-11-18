@@ -548,7 +548,7 @@ describe('EmailSendHandler redactions (#2312)', () => {
 describe('EmailSendHandler task outreach (#2312)', () => {
   const TASK_ID = '33333333-3333-4333-8333-333333333333';
   const PAL_ID = '44444444-4444-4444-8444-444444444444';
-  const principal = { contactId: 'principal-id', systemRole: 'principal', channel: 'email', initiatedAt: '2026-10-26T00:00:00Z', tier: 'principal' };
+  const principal = { contactId: 'principal-id', systemRole: 'principal', authenticated: true, channel: 'email', initiatedAt: '2026-10-26T00:00:00Z', tier: 'principal' };
   const outsider = { contactId: ALICE_ID, systemRole: null, channel: 'email', initiatedAt: '2026-10-26T00:00:00Z', tier: 'known' };
 
   function withOutreach(ctx: ToolContext) {

@@ -284,7 +284,7 @@ describe('Draft Fallback Flow Integration', () => {
         bus,
         humanApproved: true,
         taskMetadata: {
-          originator: { contactId: 'ceo-contact-id', systemRole: 'principal', channel: 'signal', initiatedAt: new Date().toISOString() },
+          originator: { contactId: 'ceo-contact-id', systemRole: 'principal', authenticated: true, channel: 'signal', initiatedAt: new Date().toISOString() },
         },
         taskEventId: 'task-evt-approve',
       } as unknown as ToolContext;

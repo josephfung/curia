@@ -157,7 +157,7 @@ describe('ContactUpdateHandler', () => {
   const PRINCIPAL_LIVE = {
     liveTurn: true,
     taskMetadata: {
-      originator: { contactId: 'p', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-11-14T12:00:00Z', tier: null },
+      originator: { contactId: 'p', systemRole: 'principal', authenticated: true, channel: 'signal', initiatedAt: '2026-11-14T12:00:00Z', tier: null },
     },
   } as unknown as Partial<ToolContext>;
 
