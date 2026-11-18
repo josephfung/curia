@@ -4,6 +4,7 @@
 - **Nylas sign-in setup** — Settings registers the callback and creates the Google connector from the saved API key. (#2361)
 - **Nylas region** — choose US or EU, or detect it, instead of the hardcoded US API. (#2361)
 - **Mailbox outage email** — now includes a seven-day reconnect link when sign-in is ready. (#2361)
+- **Connect a new address** — the principal can add a new mailbox address by asking Curia directly. (#2361)
 
 ### Changed
 

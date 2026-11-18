@@ -27,7 +27,7 @@ function fakeMinter(opts: { unavailable?: boolean; boom?: boolean; badAddress?: 
 
 function makeCtx(
   input: Record<string, unknown>,
-  over: { minter?: MailboxSignInMinter | undefined; agentId?: string } = {},
+  over: { minter?: MailboxSignInMinter | undefined; agentId?: string; taskMetadata?: Record<string, unknown> } = {},
 ): ToolContext {
   return {
     input,
@@ -39,10 +39,45 @@ function makeCtx(
     channelId: 'web',
     taskEventId: 'evt-1',
     timezone: 'America/Toronto',
+    ...(over.taskMetadata ? { taskMetadata: over.taskMetadata } : {}),
   } as unknown as ToolContext;
 }
 
+const principalOriginator = (extra: Record<string, unknown> = {}) => ({
+  originator: { contactId: 'c-1', channel: 'web', systemRole: 'principal', authenticated: true, ...extra },
+});
+
 describe('MailboxSignInLinkHandler', () => {
+  describe('allowNewAddress', () => {
+    async function allow(taskMetadata: Record<string, unknown> | undefined, input: Record<string, unknown> = { mailbox_address: 'new@example.com' }) {
+      const minter = fakeMinter();
+      await new MailboxSignInLinkHandler().execute(makeCtx(input, { minter, ...(taskMetadata ? { taskMetadata } : {}) }));
+      return minter.calls[0]!.allowNewAddress;
+    }
+
+    it('is true only for an authenticated principal originator', async () => {
+      expect(await allow(principalOriginator())).toBe(true);
+    });
+
+    it('is false when authenticated is false, absent, or not exactly true', async () => {
+      expect(await allow(principalOriginator({ authenticated: false }))).toBe(false);
+      expect(await allow(principalOriginator({ authenticated: undefined }))).toBe(false);
+      expect(await allow(principalOriginator({ authenticated: 'true' }))).toBe(false);
+    });
+
+    it('is false for a non-principal role, a malformed originator, or no metadata', async () => {
+      expect(await allow(principalOriginator({ systemRole: 'ceo' }))).toBe(false);
+      expect(await allow(principalOriginator({ systemRole: null }))).toBe(false);
+      expect(await allow({ originator: { systemRole: 'principal', authenticated: true } })).toBe(false);
+      expect(await allow({ originator: 'principal' })).toBe(false);
+      expect(await allow(undefined)).toBe(false);
+    });
+
+    it('cannot be flipped by model input', async () => {
+      expect(await allow(undefined, { mailbox_address: 'new@example.com', allowNewAddress: true, allow_new_address: true, authenticated: true })).toBe(false);
+    });
+  });
+
   it('rejects a call made without the mailboxSignIn capability', async () => {
     const result = await new MailboxSignInLinkHandler().execute(makeCtx({}, { minter: undefined }));
     expect(result.success).toBe(false);
