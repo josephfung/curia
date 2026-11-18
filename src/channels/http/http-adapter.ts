@@ -106,6 +106,20 @@ function createFallbackHealthService(pool: Pool, logger: Logger): HealthService 
   } as never);
 }
 
+/**
+ * Exit the process after `delayMs` so the supervisor boots it fresh: the setup wizard's restart
+ * and the Curia-mailbox sign-in (#2361) use it.
+ *
+ * No .unref() on the timer: the whole point of this scheduled exit is to be the forcing function
+ * that brings the process down. .unref() would let Node exit early (defeating the explicit exit),
+ * or — worse — let the process hang if some other ref is keeping the loop alive and the timer
+ * never fires. The delays used are short enough that the active ref doesn't meaningfully prolong
+ * a healthy shutdown.
+ */
+export function scheduleProcessExit(delayMs: number): void {
+  setTimeout(() => process.exit(0), delayMs);
+}
+
 export interface HttpAdapterConfig {
   bus: EventBus;
   logger: Logger;
@@ -159,6 +173,8 @@ export interface HttpAdapterConfig {
     service: MailboxSignInRouteOptions['signIn'] & { pruneExpired(): Promise<number> };
     readiness: MailboxSignInRouteOptions['readiness'];
     readApiKey: MailboxSignInRouteOptions['readApiKey'];
+    /** The bound callback logic (handleMailboxSignInCallback). Absent: the callback answers failed. */
+    callback?: MailboxSignInRouteOptions['callback'];
   };
   /**
    * True when the process booted without a principal contact and is running in
@@ -501,17 +517,7 @@ export class HttpAdapter implements Channel {
         // Inject the actual exit trigger here rather than have setup.ts call
         // process.exit directly; this keeps the route handler unit-testable
         // and keeps the "kill the process" capability narrowly scoped.
-        //
-        // No .unref() on the timer: the whole point of this scheduled exit is
-        // to be the forcing function that brings the process down so the
-        // supervisor can boot it fresh. .unref() would let Node exit early
-        // (defeating the explicit exit), or — worse — let the process hang
-        // if some other ref is keeping the loop alive and the timer never
-        // fires. The 500ms delay is short enough that the active ref doesn't
-        // meaningfully prolong a healthy shutdown.
-        scheduleProcessExit: (delayMs) => {
-          setTimeout(() => process.exit(0), delayMs);
-        },
+        scheduleProcessExit,
         infraLlmService: this.config.infraLlmService,
         contactService: this.config.contactService,
         entityMemory: this.config.entityMemory,
@@ -778,6 +784,7 @@ export class HttpAdapter implements Channel {
         signIn: this.config.mailboxSignIn.service,
         readiness: this.config.mailboxSignIn.readiness,
         readApiKey: this.config.mailboxSignIn.readApiKey,
+        ...(this.config.mailboxSignIn.callback ? { callback: this.config.mailboxSignIn.callback } : {}),
         appOrigin: this.config.appOrigin,
         logger,
       });
