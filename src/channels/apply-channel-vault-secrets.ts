@@ -55,7 +55,7 @@ export async function applyChannelVaultSecrets(
 
   const [
     nylasApiKey,
-    nylasRegionRaw,
+    nylasRegionVault,
     signalPhoneNumber,
     signalSocketPath,
     slackBotToken,
@@ -71,7 +71,9 @@ export async function applyChannelVaultSecrets(
     voiceCartesiaVoiceId,
   ] = await Promise.all([
     resolve('channel.email.nylas_api_key', 'NYLAS_API_KEY', config.nylasApiKey),
-    resolve('channel.email.nylas_region', 'NYLAS_REGION', config.nylasRegion),
+    // Region precedence is applied below, per candidate: an invalid vault value must not
+    // shadow a valid env or config one.
+    readVaultKey(secrets, 'channel.email.nylas_region', logger),
     resolve('channel.signal.phone_number', 'SIGNAL_PHONE_NUMBER', config.signalPhoneNumber),
     resolve('channel.signal.socket_path', 'SIGNAL_SOCKET_PATH', config.signalSocketPath),
     resolve('channel.slack.bot_token', 'SLACK_BOT_TOKEN', config.slackBotToken),
@@ -94,15 +96,33 @@ export async function applyChannelVaultSecrets(
   ]);
 
   config.nylasApiKey = nylasApiKey;
+  // The first VALID region among vault ▸ env ▸ current config wins; 'us' only when none is valid.
+  // A rejected value is never logged: an operator may have pasted the API key into the field.
+  const regionCandidates: Array<{ source: 'vault' | 'env' | 'config'; raw: string | undefined }> = [
+    { source: 'vault', raw: nylasRegionVault },
+    { source: 'env', raw: normalizeSecretValue(env['NYLAS_REGION']) },
+    { source: 'config', raw: normalizeSecretValue(config.nylasRegion) },
+  ];
   let nylasRegion: NylasRegion = 'us';
-  const parsedRegion = parseNylasRegion(nylasRegionRaw);
-  if (parsedRegion === null) {
-    // A typo must not point the API key at the wrong data center silently; the value is not a secret.
-    logger.warn({ value: nylasRegionRaw }, "Unknown Nylas region (expected 'us' or 'eu'); falling back to 'us'");
-  } else {
-    nylasRegion = parsedRegion;
+  const rejectedSources: string[] = [];
+  for (const { source, raw } of regionCandidates) {
+    if (raw === undefined) continue;
+    const parsed = parseNylasRegion(raw);
+    if (parsed === null) {
+      rejectedSources.push(source);
+      continue;
+    }
+    nylasRegion = parsed;
+    break;
+  }
+  if (rejectedSources.length > 0) {
+    logger.warn(
+      { setting: 'channel.email.nylas_region', rejectedSources, using: nylasRegion },
+      "Ignored an unknown Nylas region setting (expected 'us' or 'eu')",
+    );
   }
   config.nylasRegion = nylasRegion;
+  const nylasRegionPresent = regionCandidates.some((c) => c.raw !== undefined);
   config.signalPhoneNumber = signalPhoneNumber;
   config.signalSocketPath = signalSocketPath;
   config.slackBotToken = slackBotToken;
@@ -121,7 +141,7 @@ export async function applyChannelVaultSecrets(
   // supplied vs. which are absent (feature-off), the same debuggability win as applyVaultSecrets.
   const present = {
     'channel.email.nylas_api_key': nylasApiKey !== undefined,
-    'channel.email.nylas_region': nylasRegionRaw !== undefined,
+    'channel.email.nylas_region': nylasRegionPresent,
     'channel.signal.phone_number': signalPhoneNumber !== undefined,
     'channel.signal.socket_path': signalSocketPath !== undefined,
     'channel.slack.bot_token': slackBotToken !== undefined,

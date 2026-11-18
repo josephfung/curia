@@ -234,13 +234,44 @@ describe('applyChannelVaultSecrets nylasRegion', () => {
     expect(unset.nylasRegion).toBe('us');
   });
 
-  it('warns and falls back to us on an unknown value', async () => {
+  it('warns and falls back to us when no source holds a valid value', async () => {
     const config = baseConfig();
-    config.nylasRegion = 'eu';
+    config.nylasRegion = 'us';
     const warn = vi.fn();
     const spyLogger = { warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as typeof logger;
-    await applyChannelVaultSecrets(config, fakeSecrets({ 'channel.email.nylas_region': 'apac' }), {}, spyLogger);
+    await applyChannelVaultSecrets(config, fakeSecrets({ 'channel.email.nylas_region': 'apac' }), { NYLAS_REGION: 'mars' }, spyLogger);
     expect(config.nylasRegion).toBe('us');
     expect(warn).toHaveBeenCalled();
+  });
+
+  it('skips an invalid vault value for a valid env value', async () => {
+    const config = baseConfig();
+    await applyChannelVaultSecrets(config, fakeSecrets({ 'channel.email.nylas_region': 'apac' }), { NYLAS_REGION: 'eu' }, logger);
+    expect(config.nylasRegion).toBe('eu');
+  });
+
+  it('skips invalid vault and env values for a valid config value', async () => {
+    const config = baseConfig();
+    config.nylasRegion = 'eu';
+    await applyChannelVaultSecrets(config, fakeSecrets({ 'channel.email.nylas_region': 'apac' }), { NYLAS_REGION: 'mars' }, logger);
+    expect(config.nylasRegion).toBe('eu');
+  });
+
+  it('keeps a valid vault value over env', async () => {
+    const config = baseConfig();
+    await applyChannelVaultSecrets(config, fakeSecrets({ 'channel.email.nylas_region': 'eu' }), { NYLAS_REGION: 'us' }, logger);
+    expect(config.nylasRegion).toBe('eu');
+  });
+
+  it('never logs the rejected value', async () => {
+    const config = baseConfig();
+    const warn = vi.fn();
+    const spyLogger = { warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as typeof logger;
+    await applyChannelVaultSecrets(config, fakeSecrets({ 'channel.email.nylas_region': 'nyk_pasted_key' }), {}, spyLogger);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ setting: 'channel.email.nylas_region', rejectedSources: ['vault'], using: 'us' }),
+      expect.any(String),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('nyk_pasted_key');
   });
 });
