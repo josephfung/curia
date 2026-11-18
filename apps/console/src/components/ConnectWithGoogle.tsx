@@ -6,7 +6,7 @@ import { apiFetch } from '../api.js';
 // Readiness is read from GET /api/registry/nylas/signin; while it is not ready the button is
 // disabled and the reason is shown under it. No token is stored: the URL is navigated to and dropped.
 
-interface Readiness { ready: boolean; detail?: string; reason?: string }
+interface Readiness { ready: boolean; detail?: string }
 
 async function errorText(res: Response): Promise<string> {
   try {
@@ -60,6 +60,10 @@ export function ConnectWithGoogle({ target, label, address, disabled = false }: 
       if (!res.ok) throw new Error(await errorText(res));
       const d = await res.json() as { url?: string };
       if (!d.url) throw new Error('The server did not return a sign-in link.');
+      // The start route lives on Curia's own origin; never navigate anywhere else.
+      let sameOrigin = false;
+      try { sameOrigin = new URL(d.url, window.location.origin).origin === window.location.origin; } catch { /* malformed: refused below */ }
+      if (!sameOrigin) throw new Error('The sign-in link pointed somewhere unexpected, so it was not opened.');
       window.location.assign(d.url);
     } catch (e) {
       console.error('[ConnectWithGoogle] could not start sign-in:', e);

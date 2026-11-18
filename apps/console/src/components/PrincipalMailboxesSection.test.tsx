@@ -513,7 +513,7 @@ describe('PrincipalMailboxesSection: Connect with Google (#2361)', () => {
   beforeEach(() => {
     mocks.calls.length = 0;
     assign.mockReset();
-    Object.defineProperty(window, 'location', { configurable: true, value: { ...window.location, assign } });
+    Object.defineProperty(window, 'location', { configurable: true, value: { origin: 'https://curia.example.com', href: 'https://curia.example.com/', search: '', assign } });
   });
   afterEach(() => {
     if (root) act(() => root!.unmount());
@@ -535,7 +535,7 @@ describe('PrincipalMailboxesSection: Connect with Google (#2361)', () => {
   it('mints a principal link and navigates to it when ready', async () => {
     mocks.respond = (path) => {
       if (path === signinPath) return json({ ready: true });
-      if (path === '/api/registry/nylas/signin-links') return json({ url: 'https://curia.example.com/api/mailbox-signin/start/abc', expiresAt: 'x' });
+      if (path === '/api/registry/nylas/signin-links') return json({ url: `${window.location.origin}/api/mailbox-signin/start/abc`, expiresAt: 'x' });
       return json({ mailboxes: [] });
     };
     await mount();
@@ -544,7 +544,20 @@ describe('PrincipalMailboxesSection: Connect with Google (#2361)', () => {
     await settle();
     const mint = mocks.calls.find(c => c.path === '/api/registry/nylas/signin-links')!;
     expect(JSON.parse(mint.init!.body as string)).toEqual({ target: 'principal' });
-    expect(assign).toHaveBeenCalledWith('https://curia.example.com/api/mailbox-signin/start/abc');
+    expect(assign).toHaveBeenCalledWith(`${window.location.origin}/api/mailbox-signin/start/abc`);
+  });
+
+  it('refuses to navigate to a link on another origin', async () => {
+    mocks.respond = (path) => {
+      if (path === signinPath) return json({ ready: true });
+      if (path === '/api/registry/nylas/signin-links') return json({ url: 'https://evil.example.net/start/abc', expiresAt: 'x' });
+      return json({ mailboxes: [] });
+    };
+    await mount();
+    await act(async () => { connectBtn().click(); });
+    await settle();
+    expect(assign).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('not opened');
   });
 
   it('keeps the grant-id form behind a "Paste a grant ID instead" disclosure', async () => {

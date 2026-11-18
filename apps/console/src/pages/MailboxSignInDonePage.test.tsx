@@ -66,12 +66,42 @@ describe('MailboxSignInDonePage', () => {
   });
 
   it('on restart=1 shows the restart line and polls /api/health until it answers', async () => {
-    fetchMock.mockRejectedValueOnce(new Error('down')).mockResolvedValue(new Response('{}', { status: 200 }));
+    fetchMock.mockImplementationOnce(async () => { throw new Error('down'); })
+      .mockImplementation(async () => new Response(JSON.stringify({ uptime_s: 3 }), { status: 200 }));
     await mount('?result=connected&target=curia&restart=1', { pollIntervalMs: 5, maxWaitMs: 1000 });
     expect(host.textContent).toContain('Curia is restarting to start using this mailbox');
     await wait(60);
     expect(fetchMock.mock.calls[0]![0]).toBe('/api/health');
     expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(host.textContent).toContain('Curia is back');
+  });
+
+  it('does not declare success while the old process keeps answering', async () => {
+    let up = 100;
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ uptime_s: (up += 1) }), { status: 200 }));
+    await mount('?result=connected&target=curia&restart=1', { pollIntervalMs: 5, maxWaitMs: 1000 });
+    await wait(60);
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(host.textContent).not.toContain('Curia is back');
+    // The process restarted: uptime drops below the first sample.
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ uptime_s: 2 }), { status: 200 }));
+    await wait(30);
+    expect(host.textContent).toContain('Curia is back');
+  });
+
+  it('does not trust an ok answer that has no uptime_s', async () => {
+    fetchMock.mockImplementation(async () => new Response('{}', { status: 200 }));
+    await mount('?result=connected&target=curia&restart=1', { pollIntervalMs: 5, maxWaitMs: 1000 });
+    await wait(50);
+    expect(host.textContent).not.toContain('Curia is back');
+  });
+
+  it('counts a non-ok answer followed by an ok one as a restart', async () => {
+    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ uptime_s: 50 }), { status: 200 }))
+      .mockImplementationOnce(async () => new Response('{}', { status: 503 }))
+      .mockImplementation(async () => new Response(JSON.stringify({ uptime_s: 51 }), { status: 200 }));
+    await mount('?result=connected&target=curia&restart=1', { pollIntervalMs: 5, maxWaitMs: 1000 });
+    await wait(60);
     expect(host.textContent).toContain('Curia is back');
   });
 

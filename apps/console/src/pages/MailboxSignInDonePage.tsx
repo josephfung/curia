@@ -75,15 +75,35 @@ export default function MailboxSignInDonePage(
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const started = Date.now();
+    // The old process may still answer for a moment after the restart is scheduled, so an ok
+    // answer alone proves nothing. Done means: an ok answer after a failed/non-ok one (the old
+    // process went away), or an ok answer whose uptime_s is below the first sample (a new
+    // process). An ok answer with no usable uptime_s is not trusted on its own.
+    let firstUptime: number | null = null;
+    let sawFailure = false;
     const poll = async () => {
       try {
         const res = await fetch('/api/health');
         if (res.ok) {
-          if (!cancelled) setRestartState('back');
-          return;
+          let uptime: number | null = null;
+          try {
+            const body = await res.json() as { uptime_s?: unknown };
+            if (typeof body.uptime_s === 'number' && body.uptime_s >= 0) uptime = body.uptime_s;
+          } catch {
+            // A body that is not JSON carries no uptime: treated as not trustworthy below.
+          }
+          const restarted = uptime !== null && firstUptime !== null && uptime < firstUptime;
+          if (sawFailure || restarted) {
+            if (!cancelled) setRestartState('back');
+            return;
+          }
+          if (firstUptime === null && uptime !== null) firstUptime = uptime;
+        } else {
+          sawFailure = true;
         }
       } catch {
-        // Expected while the process is down: keep waiting until the bound.
+        // Expected while the process is down.
+        sawFailure = true;
       }
       if (cancelled) return;
       if (Date.now() - started >= maxWaitMs) { setRestartState('timeout'); return; }
