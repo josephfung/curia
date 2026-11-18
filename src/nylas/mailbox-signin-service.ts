@@ -143,7 +143,8 @@ export class MailboxSignInService implements MailboxSignInMinter {
   constructor(private readonly deps: MailboxSignInServiceDeps) {}
 
   /** The agent path (the `mailboxSignIn` capability). A Curia link is refused once Curia has any
-   *  email account, so the skill's "during setup" gate holds in code (R8). */
+   *  email account, so the skill's "during setup" gate holds in code (R8). The callback checks
+   *  again when the link is used, so a link minted during setup cannot add a second account. */
   async mint(args: MintSignInArgs): Promise<{ url: string; expiresAt: Date }> {
     const { mailboxAddress, allowNewAddress, ...rest } = args;
     if (rest.target === 'curia' && (await this.curiaMailboxMayExist())) {
