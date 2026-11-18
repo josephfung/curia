@@ -226,9 +226,10 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
     expect(result.success).toBe(true);
   });
 
-  // GHSA-p49r-jqh2-v668: a read whose reply reaches the principal anyway stays on identity, so
-  // the principal texting by SMS (unauthenticated) can still look up a contact's calendar.
-  it('allows the contactId override for the principal on an unauthenticated channel (SMS)', async () => {
+  // GHSA-p49r-jqh2-v668: looking up another contact's calendar is the principal's authority. An
+  // unauthenticated principal match (SMS, or a forged email From) may not: an email reply goes to
+  // everyone on the thread, so a forged From that CCs someone would read the calendar out to them.
+  it('refuses the contactId override for an unauthenticated principal (SMS)', async () => {
     const handler = new CalendarListEventsHandler();
     const principalId = 'deadbeef-0000-0000-0000-000000000001';
     const contactService = {
@@ -243,8 +244,8 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
       calendarRouter: singleMailboxRouter({ listEvents: vi.fn().mockResolvedValue([]) }),
     }));
 
-    expect(result.success).toBe(true);
-    expect(contactService!.getCalendarsForContact).toHaveBeenCalledWith(principalId);
+    expect(result.success).toBe(false);
+    expect(contactService!.getCalendarsForContact).not.toHaveBeenCalled();
   });
 
   it('rejects contactId override for non-principal, non-system callers', async () => {
