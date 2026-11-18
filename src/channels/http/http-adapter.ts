@@ -170,7 +170,8 @@ export interface HttpAdapterConfig {
   /** Backs the public /api/mailbox-signin/* routes (mailbox sign-in through Nylas hosted auth, #2361).
    *  Token-authed, so mounted independently of the bootstrap secret. */
   mailboxSignIn?: {
-    service: MailboxSignInRouteOptions['signIn'] & { pruneExpired(): Promise<number> };
+    service: MailboxSignInRouteOptions['signIn'] & { pruneExpired(): Promise<number> }
+      & Partial<Pick<import('../../nylas/mailbox-signin-service.js').MailboxSignInService, 'mint' | 'mintForOperator'>>;
     readiness: MailboxSignInRouteOptions['readiness'];
     readApiKey: MailboxSignInRouteOptions['readApiKey'];
     /** The bound callback logic (handleMailboxSignInCallback). Absent: the callback answers failed. */
@@ -670,6 +671,9 @@ export class HttpAdapter implements Channel {
         sessions,
         bus,
         logger,
+        ...(this.config.mailboxSignIn?.service.mint && this.config.mailboxSignIn.service.mintForOperator
+          ? { signIn: this.config.mailboxSignIn.service as Pick<import('../../nylas/mailbox-signin-service.js').MailboxSignInService, 'mint' | 'mintForOperator'> }
+          : {}),
       });
     }
 

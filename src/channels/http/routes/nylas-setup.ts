@@ -8,6 +8,7 @@
 //   POST /discover-region   — probe both regions with the saved key, save the match
 //   POST /callback          — register the sign-in callback URL with Nylas
 //   POST /google-connector  — { client_id, client_secret, topic_name? } -> create the Google connector
+//   POST /signin-links      — { target, label?, address? } -> a single-use sign-in link for the console button
 //
 // The Nylas API key and the GCP client secret never leave this module: the GCP secret is passed
 // to Nylas and then dropped (Curia stores and echoes nothing), errors are logged by class and
@@ -32,6 +33,11 @@ import {
   createNylasSignInReaders,
   mailboxSignInCallbackUrl,
 } from '../../../nylas/signin-readiness.js';
+import {
+  MailboxSignInAddressError,
+  MailboxSignInUnavailableError,
+  type MailboxSignInService,
+} from '../../../nylas/mailbox-signin-service.js';
 import { grantSafeErrorFields } from '../../../principal-mailboxes/error-fields.js';
 
 export interface NylasSetupRouteOptions {
@@ -44,6 +50,8 @@ export interface NylasSetupRouteOptions {
   sessions: SessionStore;
   bus: Pick<EventBus, 'publish'>;
   logger: Logger;
+  /** Mints the console's "Connect with Google" links. Absent: the route answers 409. */
+  signIn?: Pick<MailboxSignInService, 'mint' | 'mintForOperator'>;
   /** Test seams. */
   makeClient?: (apiKey: string, apiUri: string) => NylasAppClient;
   probeRegion?: (apiKey: string) => Promise<NylasRegion | null>;
@@ -54,6 +62,7 @@ type NylasAction = 'nylas_region' | 'nylas_callback' | 'nylas_connector';
 
 // A Google OAuth client secret / id are short; the cap is defense in depth on top of bodyLimit.
 const MAX_FIELD = 512;
+const MAX_LINK_LABEL = 80;
 
 /** Nylas's Google redirect URI for a region, to paste into the GCP OAuth client. */
 function googleRedirectUri(region: NylasRegion): string {
@@ -220,5 +229,46 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
     }
     await auditCompleted(request, NYLAS_API_KEY_SECRET, 'nylas_connector');
     return reply.send({ ok: true });
+  });
+
+  // Operator-minted sign-in link. A principal link defaults to the principal's designated primary
+  // address (the service resolves it); the operator, who is trusted, may name any other address.
+  // A Curia link is not pinned to an address. The link's token is only ever in the response body.
+  app.post('/api/registry/nylas/signin-links', AUTH_RATE, async (request, reply) => {
+    if (!requireAuth(request, reply)) return;
+    const body = (request.body ?? {}) as { target?: unknown; label?: unknown; address?: unknown };
+    if (body.target !== 'principal' && body.target !== 'curia') {
+      return reply.status(400).send({ error: "target must be 'principal' or 'curia'" });
+    }
+    const target = body.target;
+    const label = typeof body.label === 'string' ? body.label.trim() : '';
+    const address = typeof body.address === 'string' ? body.address.trim() : '';
+    if (label.length > MAX_LINK_LABEL || address.length > MAX_FIELD) {
+      return reply.status(400).send({ error: 'A value is too long' });
+    }
+    const signIn = options.signIn;
+    if (signIn === undefined) {
+      return reply.status(409).send({ error: 'Mailbox sign-in is not available on this server.' });
+    }
+    try {
+      const link = target === 'principal' && address === ''
+        ? await signIn.mint({ target, ...(label !== '' ? { label } : {}) })
+        : await signIn.mintForOperator({
+          target,
+          ...(label !== '' ? { label } : {}),
+          ...(target === 'principal' ? { expectedEmail: address } : {}),
+        });
+      return reply.send({ url: link.url, expiresAt: link.expiresAt.toISOString() });
+    } catch (err) {
+      if (err instanceof MailboxSignInUnavailableError) {
+        request.log.warn({ reason: err.reason }, 'nylas sign-in link refused: sign-in not ready');
+        return reply.status(409).send({ error: err.detail !== '' ? err.detail : `Mailbox sign-in is not ready (${err.reason}).` });
+      }
+      if (err instanceof MailboxSignInAddressError) {
+        return reply.status(422).send({ error: err.message });
+      }
+      request.log.error(grantSafeErrorFields(err), 'nylas sign-in link mint failed');
+      return reply.status(500).send({ error: 'Failed to create the sign-in link. Check server logs.' });
+    }
   });
 }

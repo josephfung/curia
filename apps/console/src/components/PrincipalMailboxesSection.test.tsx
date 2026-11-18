@@ -506,3 +506,53 @@ describe('PrincipalMailboxesSection', () => {
     }
   });
 });
+
+describe('PrincipalMailboxesSection: Connect with Google (#2361)', () => {
+  const signinPath = '/api/registry/nylas/signin';
+  const assign = vi.fn();
+  beforeEach(() => {
+    mocks.calls.length = 0;
+    assign.mockReset();
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...window.location, assign } });
+  });
+  afterEach(() => {
+    if (root) act(() => root!.unmount());
+    root = null;
+    container?.remove();
+  });
+
+  const connectBtn = () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Connect with Google') as HTMLButtonElement;
+
+  it('is disabled with the readiness reason when sign-in is not ready', async () => {
+    mocks.respond = (path) => path === signinPath
+      ? json({ ready: false, reason: 'no_google_connector', detail: 'Create the Google connector first.' })
+      : json({ mailboxes: [] });
+    await mount();
+    expect(connectBtn().disabled).toBe(true);
+    expect(container.textContent).toContain('Create the Google connector first.');
+  });
+
+  it('mints a principal link and navigates to it when ready', async () => {
+    mocks.respond = (path) => {
+      if (path === signinPath) return json({ ready: true });
+      if (path === '/api/registry/nylas/signin-links') return json({ url: 'https://curia.example.com/api/mailbox-signin/start/abc', expiresAt: 'x' });
+      return json({ mailboxes: [] });
+    };
+    await mount();
+    expect(connectBtn().disabled).toBe(false);
+    await act(async () => { connectBtn().click(); });
+    await settle();
+    const mint = mocks.calls.find(c => c.path === '/api/registry/nylas/signin-links')!;
+    expect(JSON.parse(mint.init!.body as string)).toEqual({ target: 'principal' });
+    expect(assign).toHaveBeenCalledWith('https://curia.example.com/api/mailbox-signin/start/abc');
+  });
+
+  it('keeps the grant-id form behind a "Paste a grant ID instead" disclosure', async () => {
+    mocks.respond = () => json({ mailboxes: [] });
+    await mount();
+    const details = container.querySelector('details')!;
+    expect(details.querySelector('summary')!.textContent).toBe('Paste a grant ID instead');
+    expect(details.contains(byLabel('Grant ID'))).toBe(true);
+    expect(details.hasAttribute('open')).toBe(false);
+  });
+});

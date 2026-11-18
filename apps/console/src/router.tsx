@@ -38,6 +38,7 @@ const ChannelsPage = lazy(() =>
 const McpToolsPage = lazy(() => import('./pages/McpToolsPage'));
 const WizardPage = lazy(() => import('./pages/WizardPage'));
 const SecretCapturePage = lazy(() => import('./pages/SecretCapturePage'));
+const MailboxSignInDonePage = lazy(() => import('./pages/MailboxSignInDonePage'));
 const PairPage = lazy(() => import('./pages/PairPage'));
 const ContactsPage = lazy(() => import('./pages/ContactsPage'));
 const JobsPage = lazy(() => import('./pages/JobsPage'));
@@ -245,6 +246,14 @@ const secretCaptureRoute = createRoute({
   component: SecretCapturePage,
 });
 
+// Public mailbox sign-in result page (#2361). Also a child of rootRoute: the server redirects
+// here after the Google sign-in with only the outcome in the query string, no session needed.
+const mailboxSignInDoneRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/mailbox-signin/done',
+  component: MailboxSignInDonePage,
+});
+
 const contactsRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: '/contacts',
@@ -368,6 +377,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   pairRoute,
   secretCaptureRoute,
+  mailboxSignInDoneRoute,
 ]);
 
 export const router = createRouter({ routeTree });

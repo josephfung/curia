@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '../api.js';
+import { ConnectWithGoogle } from './ConnectWithGoogle.js';
 // Dependency-free server module (only imports state-keys.ts), safe in the browser bundle.
 import { MAILBOX_ID_RE, RESERVED_MAILBOX_IDS } from '../../../../src/principal-mailboxes/types.js';
 
@@ -476,6 +477,10 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
 
       {!migrating && (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+        <ConnectWithGoogle target="principal" disabled={readOnly} />
+        <details>
+        <summary>Paste a grant ID instead</summary>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
         <input type="text" placeholder="mailbox id (e.g. work)" value={id} aria-label="Mailbox id" disabled={readOnly}
           aria-describedby={idError ? 'mailbox-id-help mailbox-id-error' : 'mailbox-id-help'}
           aria-invalid={idError !== null}
@@ -512,6 +517,8 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
         {addBlocker && (
           <p id="mailbox-add-blocker" className="settings-page-sub mailbox-id-help">{addBlocker}</p>
         )}
+        </div>
+        </details>
       </div>
       )}
     </div>

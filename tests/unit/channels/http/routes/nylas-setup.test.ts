@@ -4,6 +4,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import pino from 'pino';
 import { nylasSetupRoutes, type NylasSetupRouteOptions } from '../../../../../src/channels/http/routes/nylas-setup.js';
 import { NylasAppError, type NylasAppClient } from '../../../../../src/nylas/app-client.js';
+import { MailboxSignInAddressError, MailboxSignInUnavailableError } from '../../../../../src/nylas/mailbox-signin-service.js';
 
 const BOOTSTRAP = 'test-bootstrap-secret';
 const auth = { 'x-web-bootstrap-secret': BOOTSTRAP };
@@ -204,5 +205,81 @@ describe('nylas-setup routes', () => {
     for (const u of ['/api/registry/nylas/discover-region', '/api/registry/nylas/callback']) {
       expect((await req('POST', u)).statusCode, u).toBe(409);
     }
+  });
+
+  describe('POST /signin-links', () => {
+    const URL_OUT = 'https://curia.example.com/api/mailbox-signin/start/tok22';
+    const expiresAt = new Date('2026-11-18T12:00:00Z');
+    function withSignIn(over: Record<string, unknown> = {}) {
+      const signIn = {
+        mint: vi.fn(async () => ({ url: URL_OUT, expiresAt })),
+        mintForOperator: vi.fn(async () => ({ url: URL_OUT, expiresAt })),
+        ...over,
+      };
+      return { signIn, ...setup({ signIn } as Partial<NylasSetupRouteOptions>) };
+    }
+
+    it('401s without auth', async () => {
+      await build(withSignIn().opts);
+      const res = await app.inject({ method: 'POST', url: '/api/registry/nylas/signin-links', payload: { target: 'curia' } });
+      expect(res.statusCode).toBe(401);
+    });
+
+    it('mints a Curia link with no pinned address', async () => {
+      const { opts, signIn } = withSignIn();
+      await build(opts);
+      const res = await req('POST', '/api/registry/nylas/signin-links', { target: 'curia', label: ' Curia ' });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ url: URL_OUT, expiresAt: expiresAt.toISOString() });
+      expect(signIn.mintForOperator).toHaveBeenCalledWith({ target: 'curia', label: 'Curia' });
+    });
+
+    it('mints a principal link for the primary address by default', async () => {
+      const { opts, signIn } = withSignIn();
+      await build(opts);
+      const res = await req('POST', '/api/registry/nylas/signin-links', { target: 'principal' });
+      expect(res.statusCode).toBe(200);
+      expect(signIn.mint).toHaveBeenCalledWith({ target: 'principal' });
+    });
+
+    it('pins a principal link to the address the operator names', async () => {
+      const { opts, signIn } = withSignIn();
+      await build(opts);
+      await req('POST', '/api/registry/nylas/signin-links', { target: 'principal', address: ' Boss@Gmail.com ' });
+      expect(signIn.mintForOperator).toHaveBeenCalledWith({ target: 'principal', expectedEmail: 'Boss@Gmail.com' });
+    });
+
+    it('rejects a bad target or an over-long label with 400', async () => {
+      await build(withSignIn().opts);
+      expect((await req('POST', '/api/registry/nylas/signin-links', { target: 'x' })).statusCode).toBe(400);
+      expect((await req('POST', '/api/registry/nylas/signin-links', { target: 'curia', label: 'a'.repeat(200) })).statusCode).toBe(400);
+    });
+
+    it('maps unavailable to 409 and address problems to 422 without echoing a token', async () => {
+      const a = withSignIn({ mintForOperator: vi.fn(async () => { throw new MailboxSignInUnavailableError('no_api_key', 'Save the Nylas API key first (Channels → Email).'); }) });
+      await build(a.opts);
+      const r1 = await req('POST', '/api/registry/nylas/signin-links', { target: 'curia' });
+      expect(r1.statusCode).toBe(409);
+      expect(r1.json().error).toContain('Save the Nylas API key');
+      await app.close();
+      const b = withSignIn({ mint: vi.fn(async () => { throw new MailboxSignInAddressError('no_principal_address'); }) });
+      await build(b.opts);
+      const r2 = await req('POST', '/api/registry/nylas/signin-links', { target: 'principal' });
+      expect(r2.statusCode).toBe(422);
+      expect(r2.body).not.toContain('tok22');
+    });
+
+    it('500s with a plain message on an unexpected error', async () => {
+      const { opts } = withSignIn({ mintForOperator: vi.fn(async () => { throw new Error('db down tok22'); }) });
+      await build(opts);
+      const res = await req('POST', '/api/registry/nylas/signin-links', { target: 'curia' });
+      expect(res.statusCode).toBe(500);
+      expect(res.body).not.toContain('db down');
+    });
+
+    it('409s when sign-in is not wired', async () => {
+      await build(setup().opts);
+      expect((await req('POST', '/api/registry/nylas/signin-links', { target: 'curia' })).statusCode).toBe(409);
+    });
   });
 });
