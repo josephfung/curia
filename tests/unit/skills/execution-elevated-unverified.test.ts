@@ -92,6 +92,19 @@ describe('elevated gate on an unauthenticated principal turn (GHSA-p49r-jqh2-v66
     expect(execute).toHaveBeenCalledOnce();
   });
 
+  it('when no confirmation can be filed, says nothing is waiting and where to ask again', async () => {
+    const { layer, execute, request } = setup();
+    request.mockRejectedValueOnce(new Error('db down'));
+    const result = await invokeAs(layer, 'contact-set-tier', { tier: 'blocked' }, principal('sms', false), false);
+    expect(result.success).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
+    if (!result.success) {
+      expect(result.error).not.toContain('waiting for their go-ahead');
+      expect(result.error).toContain('was not done');
+      expect(result.error).toContain('ask again on Signal, Slack or the phone app');
+    }
+  });
+
   it('leaves a wake on the plain refusal', async () => {
     const { layer, request } = setup();
     const result = await invokeAs(layer, 'contact-set-tier', { tier: 'blocked' }, { ...principal('sms', false), wakeContext: { derived: false } }, false);

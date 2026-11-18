@@ -1141,7 +1141,8 @@ export class ExecutionLayer {
       `Not done yet: '${toolName}' needs the principal's confirmation, because ${why}. ` +
       `This is not a missing capability; never say Curia cannot do it. `;
     const fallback = unverifiedVia
-      ? baseMsg + 'No approval request was created. Tell the principal it is waiting for their go-ahead on Signal or the console.'
+      ? baseMsg + 'No confirmation could be filed, so it was not done and nothing is waiting. Tell the principal; to go ahead, ' +
+        'they can ask again on Signal, Slack or the phone app.'
       : baseMsg + 'No approval request was created. Tell the principal it is waiting for their go-ahead: ' +
         'they can confirm by asking again on any channel.';
 
@@ -1173,7 +1174,8 @@ export class ExecutionLayer {
       }
       return baseMsg + approvalAdvisory(result.shortRef, options.agentId, result.approvalNumber);
     } catch (err) {
-      skillLogger.warn({ err, toolName }, 'elevated confirmation: approval trigger failed — returning fallback advisory');
+      // On an unverified principal turn the confirmation is the only way the action can happen: log it loudly.
+      skillLogger[unverifiedVia ? 'error' : 'warn']({ err, toolName }, 'elevated confirmation: approval trigger failed — returning fallback advisory');
       return fallback;
     }
   }
