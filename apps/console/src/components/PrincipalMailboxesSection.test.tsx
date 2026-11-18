@@ -570,4 +570,18 @@ describe('PrincipalMailboxesSection: Connect with Google (#2361)', () => {
     expect(details.contains(byLabel('Grant ID'))).toBe(true);
     expect(details.hasAttribute('open')).toBe(false);
   });
+
+  it('reconnect on a mailbox row mints a link pinned to that mailbox address (A7)', async () => {
+    mocks.respond = (path) => {
+      if (path === signinPath) return json({ ready: true });
+      if (path === '/api/registry/nylas/signin-links') return json({ url: `${window.location.origin}/api/mailbox-signin/start/abc`, expiresAt: 'x' });
+      return json({ mailboxes: [{ id: 'work', label: 'Work', address: 'boss@acme.com', isDefault: true }] });
+    };
+    await mount();
+    const btn = [...container.querySelectorAll('button')].find(b => b.textContent === 'Reconnect with Google') as HTMLButtonElement;
+    await act(async () => { btn.click(); });
+    await settle();
+    const mint = mocks.calls.find(c => c.path === '/api/registry/nylas/signin-links')!;
+    expect(JSON.parse(mint.init!.body as string)).toEqual({ target: 'principal', address: 'boss@acme.com' });
+  });
 });

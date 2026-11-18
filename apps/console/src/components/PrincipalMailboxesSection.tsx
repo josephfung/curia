@@ -444,6 +444,11 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
             <span className="mailbox-row-actions">
               <button type="button" className="btn btn-secondary btn-sm" disabled={locked}
                 onClick={() => setEditing({ id: m.id, label: m.label, grantId: '' })}>Edit</button>
+              {/* Pinned to this mailbox's own address, so a mailbox other than the primary can be reconnected. */}
+              {m.address && (
+                <ConnectWithGoogle target="principal" address={m.address} disabled={locked}
+                  buttonText="Reconnect with Google" hideUnlessReady />
+              )}
               {!m.isDefault && (
                 <button type="button" className="btn btn-secondary btn-sm" disabled={locked}
                   onClick={() => void makeDefaultMailbox(m.id)}>Make default</button>

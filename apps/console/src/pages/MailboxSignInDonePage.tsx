@@ -32,13 +32,13 @@ export function resultMessage(result: string, target: Target | null): ResultMess
     case 'used':
       return { ok: false, title: 'Link already used', body: 'This sign-in link has already been used. If the mailbox is not connected, ask Curia for a new one.' };
     case 'cancelled':
-      return { ok: false, title: 'Sign-in cancelled', body: 'You cancelled the Google sign-in, so nothing was connected. Open the link again to retry.' };
+      return { ok: false, title: 'Sign-in cancelled', body: 'You cancelled the Google sign-in, so nothing was connected. This sign-in link is now used. Ask Curia for a fresh sign-in link to retry.' };
     case 'admin_blocked':
       return { ok: false, title: 'Blocked by your Google admin', body: "Google Workspace blocked this sign-in. Please ask your Google Workspace admin to mark Curia's app as Trusted, then try again." };
     case 'org_internal':
       return { ok: false, title: 'Account not allowed', body: 'Curia\'s Google app is limited to one organization, and this account is outside it. Sign in with an account from that organization.' };
     case 'wrong_account':
-      return { ok: false, title: 'Wrong account', body: 'You signed in with a different Google account than the one requested. Open the link again and choose the right account.' };
+      return { ok: false, title: 'Wrong account', body: 'You signed in with a different Google account than the one requested. This sign-in link is now used. Ask Curia for a fresh sign-in link, then choose the right account.' };
     case 'missing_scopes':
       return { ok: false, title: 'Permissions missing', body: 'Google did not grant everything Curia needs. When Google asks, leave both the mail and calendar boxes ticked, then try again.' };
     case 'not_google':
@@ -74,7 +74,16 @@ export default function MailboxSignInDonePage(
     if (!restart) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const started = Date.now();
+    let inFlight: AbortController | null = null;
+    // The deadline is its own timer, not a check between polls: a health request that never
+    // answers (or stalls mid-body) must not keep the page on "restarting" past maxWaitMs.
+    const deadline = setTimeout(() => {
+      if (cancelled) return;
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      inFlight?.abort();
+      setRestartState('timeout');
+    }, maxWaitMs);
     // The old process may still answer for a moment after the restart is scheduled, so an ok
     // answer alone proves nothing. Done means: an ok answer after a failed/non-ok one (the old
     // process went away), or an ok answer whose uptime_s is below the first sample (a new
@@ -82,8 +91,10 @@ export default function MailboxSignInDonePage(
     let firstUptime: number | null = null;
     let sawFailure = false;
     const poll = async () => {
+      const ctrl = new AbortController();
+      inFlight = ctrl;
       try {
-        const res = await fetch('/api/health');
+        const res = await fetch('/api/health', { signal: ctrl.signal });
         if (res.ok) {
           let uptime: number | null = null;
           try {
@@ -91,10 +102,14 @@ export default function MailboxSignInDonePage(
             if (typeof body.uptime_s === 'number' && body.uptime_s >= 0) uptime = body.uptime_s;
           } catch {
             // A body that is not JSON carries no uptime: treated as not trustworthy below.
+            // (An abort mid-body also lands here; the cancelled check below ends the poll.)
           }
+          if (cancelled) return;
           const restarted = uptime !== null && firstUptime !== null && uptime < firstUptime;
           if (sawFailure || restarted) {
-            if (!cancelled) setRestartState('back');
+            cancelled = true;
+            clearTimeout(deadline);
+            setRestartState('back');
             return;
           }
           if (firstUptime === null && uptime !== null) firstUptime = uptime;
@@ -102,15 +117,19 @@ export default function MailboxSignInDonePage(
           sawFailure = true;
         }
       } catch {
-        // Expected while the process is down.
+        // Expected while the process is down (and when the deadline or unmount aborts us).
         sawFailure = true;
       }
       if (cancelled) return;
-      if (Date.now() - started >= maxWaitMs) { setRestartState('timeout'); return; }
       timer = setTimeout(() => void poll(), pollIntervalMs);
     };
     timer = setTimeout(() => void poll(), pollIntervalMs);
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+    return () => {
+      cancelled = true;
+      clearTimeout(deadline);
+      if (timer) clearTimeout(timer);
+      inFlight?.abort();
+    };
   }, [restart, pollIntervalMs, maxWaitMs]);
 
   return (
