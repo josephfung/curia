@@ -18,15 +18,37 @@ export type SignInTarget = 'principal' | 'curia';
 export const DEFAULT_SIGNIN_TTL_MINUTES = 60;
 /** A week. A link is single-use and unguessable, but a longer life only widens the window. */
 export const MAX_SIGNIN_TTL_MINUTES = 10080;
+/** A Curia link pinned to no address lets any Google account become Curia's mailbox, so it
+ *  lives no longer than this, whoever minted it (R8). */
+export const UNPINNED_CURIA_TTL_MINUTES = 15;
 
-type NotReadyReason = Extract<NylasSignInReadiness, { ready: false }>['reason'];
+/** Why a link cannot be minted: a readiness reason, or `migration_pending` while the flat
+ *  principal mailbox is still served as a fallback (a principal sign-in then would end it, R9). */
+export type MailboxSignInUnavailableReason =
+  | Extract<NylasSignInReadiness, { ready: false }>['reason']
+  | 'migration_pending';
+
+const MIGRATION_PENDING_DETAIL =
+  "The principal's existing mailbox is still being moved into the mailbox list; sign in another once it shows in the console.";
 
 /** Thrown by mint() when sign-in is not usable. `reason` is the readiness reason; `detail` is
  *  operator-facing text that never carries the key or any Nylas response body. */
 export class MailboxSignInUnavailableError extends Error {
-  constructor(readonly reason: NotReadyReason, readonly detail: string = '') {
+  constructor(readonly reason: MailboxSignInUnavailableReason, readonly detail: string = '') {
     super(detail !== '' ? `Mailbox sign-in is unavailable (${reason}): ${detail}` : `Mailbox sign-in is unavailable (${reason})`);
     this.name = 'MailboxSignInUnavailableError';
+  }
+}
+
+/** Thrown by mint() (the agent path) for a Curia link once Curia has any email account (R8): from
+ *  then on only the operator, from the console, signs in another Curia mailbox. */
+export class MailboxSignInRefusedError extends Error {
+  constructor(readonly reason: 'curia_mailbox_exists') {
+    super(
+      "Curia's own mailbox is already set up, so another sign-in for it is not available here. " +
+      'Ask the operator to use Connect with Google in the console (Channels → Email).',
+    );
+    this.name = 'MailboxSignInRefusedError';
   }
 }
 
@@ -92,23 +114,45 @@ export interface MailboxSignInServiceDeps {
   /** The principal's verified email addresses and the designated primary (or null), read at mint
    *  time so a change applies without a restart. */
   principalEmails?: () => { primary: string | null; all: readonly string[] };
+  /** True once any email_accounts row exists, enabled or not. Asked on every agent-minted Curia
+   *  link; absent, or a failed read, refuses the link (fail closed, R8). */
+  hasCuriaMailbox?: () => Promise<boolean>;
+  /** True while the deferred flat-mailbox fallback is served. A principal link is then refused:
+   *  adding a row would end the fallback, and its grant may be the flat one (R9). */
+  isFallbackActive?: () => Promise<boolean>;
 }
 
 const ROW_COLUMNS = `target, expected_email, mailbox_label, expires_at, consumed_at, created_at,
   conversation_id, channel_id, agent_id, task_event_id, originator, resume_token`;
 
-function clampTtlMinutes(requested: number | undefined): number {
-  if (requested === undefined || !Number.isFinite(requested)) return DEFAULT_SIGNIN_TTL_MINUTES;
-  return Math.min(Math.max(Math.floor(requested), 1), MAX_SIGNIN_TTL_MINUTES);
+function clampTtlMinutes(requested: number | undefined, max: number): number {
+  if (requested === undefined || !Number.isFinite(requested)) return Math.min(DEFAULT_SIGNIN_TTL_MINUTES, max);
+  return Math.min(Math.max(Math.floor(requested), 1), max);
 }
 
 export class MailboxSignInService implements MailboxSignInMinter {
   constructor(private readonly deps: MailboxSignInServiceDeps) {}
 
+  /** The agent path (the `mailboxSignIn` capability). A Curia link is refused once Curia has any
+   *  email account, so the skill's "during setup" gate holds in code (R8). */
   async mint(args: MintSignInArgs): Promise<{ url: string; expiresAt: Date }> {
     const { mailboxAddress, ...rest } = args;
+    if (rest.target === 'curia' && (await this.curiaMailboxMayExist())) {
+      throw new MailboxSignInRefusedError('curia_mailbox_exists');
+    }
     const expectedEmail = rest.target === 'principal' ? this.resolvePrincipalAddress(mailboxAddress) : null;
     return this.insert(rest, expectedEmail);
+  }
+
+  /** True unless it is known that Curia has no email account yet. */
+  private async curiaMailboxMayExist(): Promise<boolean> {
+    if (this.deps.hasCuriaMailbox === undefined) return true;
+    try {
+      return await this.deps.hasCuriaMailbox();
+    } catch (err) {
+      this.deps.logger.warn({ errName: err instanceof Error ? err.name : typeof err }, 'mailbox sign-in: could not read whether Curia has an email account; refusing the Curia link');
+      return true;
+    }
   }
 
   /** Operator path: the caller supplies the address (or none, for any account). */
@@ -140,6 +184,11 @@ export class MailboxSignInService implements MailboxSignInMinter {
     args: Omit<MintSignInArgs, 'mailboxAddress'>,
     expectedEmail: string | null,
   ): Promise<{ url: string; expiresAt: Date }> {
+    // R9: while the flat mailbox is served as a fallback, a principal sign-in would end it (any
+    // registry row hides the fallback). The console refuses the add for the same reason.
+    if (args.target === 'principal' && this.deps.isFallbackActive && (await this.deps.isFallbackActive())) {
+      throw new MailboxSignInUnavailableError('migration_pending', MIGRATION_PENDING_DETAIL);
+    }
     const readiness = await this.deps.readiness();
     if (!readiness.ready) throw new MailboxSignInUnavailableError(readiness.reason, readiness.detail);
     const origin = this.deps.appOrigin;
@@ -157,7 +206,8 @@ export class MailboxSignInService implements MailboxSignInMinter {
        VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5), $6, $7, $8, $9, $10, $11)
        RETURNING expires_at`,
       [
-        hashToken(rawToken), args.target, expectedEmail, args.label ?? null, clampTtlMinutes(args.ttlMinutes),
+        hashToken(rawToken), args.target, expectedEmail, args.label ?? null,
+        clampTtlMinutes(args.ttlMinutes, args.target === 'curia' && expectedEmail === null ? UNPINNED_CURIA_TTL_MINUTES : MAX_SIGNIN_TTL_MINUTES),
         args.origin?.conversationId ?? null,
         args.origin?.channelId ?? null,
         args.origin?.agentId ?? null,
@@ -188,11 +238,15 @@ export class MailboxSignInService implements MailboxSignInMinter {
     return toRow(found);
   }
 
-  /** Delete lapsed rows, and rows spent over an hour ago. Returns the number removed. */
+  /**
+   * Delete rows lapsed over a day ago, and rows spent over an hour ago. Returns the number removed.
+   * A lapsed row is kept a day so a late callback still claims it as `expired` (and resumes the
+   * agent that sent it) rather than as an unknown link.
+   */
   async pruneExpired(): Promise<number> {
     const res = await this.deps.pool.query(
       `DELETE FROM mailbox_signin_tokens
-        WHERE expires_at < now() OR consumed_at < now() - interval '1 hour'`,
+        WHERE expires_at < now() - interval '1 day' OR consumed_at < now() - interval '1 hour'`,
     );
     return res.rowCount ?? 0;
   }

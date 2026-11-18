@@ -233,7 +233,8 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
 
   // Operator-minted sign-in link. A principal link defaults to the principal's designated primary
   // address (the service resolves it); the operator, who is trusted, may name any other address.
-  // A Curia link is not pinned to an address. The link's token is only ever in the response body.
+  // A Curia link may be pinned to an address too (the callback then enforces it, R8); unpinned, it
+  // lives 15 minutes. The link's token is only ever in the response body.
   app.post('/api/registry/nylas/signin-links', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     const body = (request.body ?? {}) as { target?: unknown; label?: unknown; address?: unknown };
@@ -256,7 +257,7 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
         : await signIn.mintForOperator({
           target,
           ...(label !== '' ? { label } : {}),
-          ...(target === 'principal' ? { expectedEmail: address } : {}),
+          ...(address !== '' ? { expectedEmail: address } : {}),
         });
       return reply.send({ url: link.url, expiresAt: link.expiresAt.toISOString() });
     } catch (err) {

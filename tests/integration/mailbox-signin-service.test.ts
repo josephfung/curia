@@ -6,6 +6,7 @@ import pino from 'pino';
 import { hashToken } from '../../src/channels/http/session-auth.js';
 import {
   MailboxSignInAddressError,
+  MailboxSignInRefusedError,
   MailboxSignInService,
   MailboxSignInUnavailableError,
 } from '../../src/nylas/mailbox-signin-service.js';
@@ -28,6 +29,8 @@ describeIf('MailboxSignInService', () => {
     readiness?: NylasSignInReadiness;
     emails?: { primary: string | null; all: string[] };
     appOrigin?: string;
+    hasCuriaMailbox?: (() => Promise<boolean>) | null;
+    isFallbackActive?: () => Promise<boolean>;
   } = {}): MailboxSignInService {
     return new MailboxSignInService({
       pool,
@@ -35,6 +38,8 @@ describeIf('MailboxSignInService', () => {
       appOrigin: over.appOrigin ?? ORIGIN,
       readiness: async () => over.readiness ?? READY,
       principalEmails: () => over.emails ?? { primary: 'boss@example.com', all: ['boss@example.com', 'Work@Example.com'] },
+      ...(over.hasCuriaMailbox === null ? {} : { hasCuriaMailbox: over.hasCuriaMailbox ?? (async () => false) }),
+      ...(over.isFallbackActive ? { isFallbackActive: over.isFallbackActive } : {}),
     });
   }
 
@@ -114,17 +119,74 @@ describeIf('MailboxSignInService', () => {
     expect(await svc.peek(raw)).toMatchObject({ expected_email: 'new@example.com' });
   });
 
-  it('prunes lapsed rows and rows spent over an hour ago, and keeps live ones', async () => {
+  it('prunes rows lapsed over a day ago and rows spent over an hour ago, and keeps live ones', async () => {
     const svc = makeService();
     const live = await mintToken(svc, { target: 'principal' });
     const lapsed = await mintToken(svc, { target: 'principal' });
     const spent = await mintToken(svc, { target: 'principal' });
-    await pool.query("UPDATE mailbox_signin_tokens SET expires_at = now() - interval '1 minute' WHERE token_hash = $1", [hashToken(lapsed.raw)]);
+    await pool.query("UPDATE mailbox_signin_tokens SET expires_at = now() - interval '2 days' WHERE token_hash = $1", [hashToken(lapsed.raw)]);
     await pool.query("UPDATE mailbox_signin_tokens SET consumed_at = now() - interval '2 hours' WHERE token_hash = $1", [hashToken(spent.raw)]);
     await svc.pruneExpired();
     expect(await svc.peek(lapsed.raw)).toBe('not_found');
     expect(await svc.peek(spent.raw)).toBe('not_found');
     expect(await svc.peek(live.raw)).toMatchObject({ target: 'principal' });
+  });
+
+  it('keeps a lapsed row for a day, so a late claim still reads expired (C)', async () => {
+    const svc = makeService();
+    const recent = await mintToken(svc, { target: 'principal' });
+    const old = await mintToken(svc, { target: 'principal' });
+    await pool.query("UPDATE mailbox_signin_tokens SET expires_at = now() - interval '1 minute' WHERE token_hash = $1", [hashToken(recent.raw)]);
+    await pool.query("UPDATE mailbox_signin_tokens SET expires_at = now() - interval '25 hours' WHERE token_hash = $1", [hashToken(old.raw)]);
+    await svc.pruneExpired();
+    expect(await svc.peek(old.raw)).toBe('not_found');
+    expect((await svc.claim(recent.raw)).status).toBe('expired');
+  });
+
+  it("refuses an agent-minted Curia link once any Curia account exists, and writes nothing (A, R8)", async () => {
+    const before = await pool.query('SELECT count(*)::int AS n FROM mailbox_signin_tokens');
+    const svc = makeService({ hasCuriaMailbox: async () => true });
+    const err = await svc.mint({ target: 'curia' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MailboxSignInRefusedError);
+    expect(err).toMatchObject({ reason: 'curia_mailbox_exists' });
+    expect((err as Error).message).toMatch(/console/);
+    const after = await pool.query('SELECT count(*)::int AS n FROM mailbox_signin_tokens');
+    expect(after.rows[0]!.n).toBe(before.rows[0]!.n);
+  });
+
+  it('refuses an agent-minted Curia link when it cannot tell whether a Curia account exists (fail closed)', async () => {
+    const svc = makeService({ hasCuriaMailbox: null });
+    await expect(svc.mint({ target: 'curia' })).rejects.toBeInstanceOf(MailboxSignInRefusedError);
+  });
+
+  it('allows an agent-minted Curia link before any Curia account exists, capped at 15 minutes (A, R8)', async () => {
+    const svc = makeService({ hasCuriaMailbox: async () => false });
+    const { raw, expiresAt } = await mintToken(svc, { target: 'curia', ttlMinutes: 600 });
+    expect(await svc.peek(raw)).toMatchObject({ target: 'curia', expected_email: null });
+    expect(expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 15 * 60_000 + 30_000);
+    expect(expiresAt.getTime()).toBeGreaterThan(Date.now() + 14 * 60_000);
+  });
+
+  it('caps an unpinned operator Curia link at 15 minutes; a pinned one keeps its TTL and address (A, R8)', async () => {
+    const svc = makeService({ hasCuriaMailbox: async () => true });
+    const unpinned = await svc.mintForOperator({ target: 'curia' });
+    const pinned = await svc.mintForOperator({ target: 'curia', expectedEmail: ' Assistant@Office.com ' });
+    for (const l of [unpinned, pinned]) hashes.push(hashToken(l.url.slice(l.url.lastIndexOf('/') + 1)));
+    expect(unpinned.expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 15 * 60_000 + 30_000);
+    expect(pinned.expiresAt.getTime()).toBeGreaterThan(Date.now() + 50 * 60_000);
+    expect(await svc.peek(pinned.url.slice(pinned.url.lastIndexOf('/') + 1))).toMatchObject({ target: 'curia', expected_email: 'assistant@office.com' });
+  });
+
+  it('refuses a principal link while the flat-mailbox fallback is served, by agent or operator (B, R9)', async () => {
+    const before = await pool.query('SELECT count(*)::int AS n FROM mailbox_signin_tokens');
+    const svc = makeService({ isFallbackActive: async () => true });
+    for (const p of [svc.mint({ target: 'principal' }), svc.mintForOperator({ target: 'principal', expectedEmail: 'boss@example.com' })]) {
+      const err = await p.catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(MailboxSignInUnavailableError);
+      expect(err).toMatchObject({ reason: 'migration_pending' });
+    }
+    const after = await pool.query('SELECT count(*)::int AS n FROM mailbox_signin_tokens');
+    expect(after.rows[0]!.n).toBe(before.rows[0]!.n);
   });
 
   it('stores only the hash of the token', async () => {

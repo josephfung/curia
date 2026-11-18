@@ -16,7 +16,7 @@ import { hashToken } from '../../src/channels/http/session-auth.js';
 import { MailboxSignInService } from '../../src/nylas/mailbox-signin-service.js';
 import { PrincipalMailboxStore } from '../../src/principal-mailboxes/store.js';
 import { PrincipalMailboxAdmin, type PrincipalMailboxAdminDeps } from '../../src/principal-mailboxes/admin.js';
-import { principalMailboxGrantSecretName } from '../../src/principal-mailboxes/secrets.js';
+import { FLAT_EMAIL_KEY, FLAT_GRANT_KEY, principalMailboxGrantSecretName } from '../../src/principal-mailboxes/secrets.js';
 import { EmailAccountsRepo } from '../../src/channels/email/email-accounts-repo.js';
 import { emailAccountGrantSecretName } from '../../src/channels/email/email-account-secrets.js';
 import { NylasAppError, type NylasAppClient, type NylasGrantInfo } from '../../src/nylas/app-client.js';
@@ -561,15 +561,47 @@ describeIf('mailbox sign-in callback', () => {
     expectOneFinished('refused');
   });
 
-  it('a principal add refusal is refused and the unused grant is revoked', async () => {
+  it('a principal add refusal is refused and the grant is kept (B: never revoke on refused)', async () => {
     // The address is one of Curia's own accounts, but its grant differs: admin.add refuses it.
     await repo.create({ name: 'curia', selfEmail: 'boss@example.com' });
     vault.set(emailAccountGrantSecretName('curia'), 'grant-other-0010');
     nylasGrant('code-1', 'grant-boss-0011', 'boss@example.com');
     const res = await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps);
     expect(res.outcome).toBe('refused');
-    expect(deleteGrant).toHaveBeenCalledWith('grant-boss-0011');
+    // The account is the right one, so its grant is likely held somewhere: never revoked.
+    expect(deleteGrant).not.toHaveBeenCalled();
     expect(logLines.some((l) => l['refusal'] === 'curia_account_address')).toBe(true);
+    expectOneFinished('refused');
+  });
+
+  it('an operator-pinned Curia link signed in with another account is wrong_account, nothing written (A, R8)', async () => {
+    nylasGrant('code-1', 'grant-stray-0020', 'someone@else.com');
+    const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: 'assistant@office.com' }), code: 'code-1' }, deps);
+    expect(res).toMatchObject({ outcome: 'wrong_account', target: 'curia', restartScheduled: false });
+    expect(await repo.list()).toEqual([]);
+    expect(storedGrants()).toEqual([]);
+    expect(scheduleProcessExit).not.toHaveBeenCalled();
+    expectOneFinished('wrong_account');
+  });
+
+  it('a stray grant equal to the flat fallback grant is NOT revoked (B, R9)', async () => {
+    vault.set(FLAT_GRANT_KEY, 'grant-flat-0021');
+    nylasGrant('code-1', 'grant-flat-0021', 'someone@else.com');
+    const res = await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps);
+    expect(res.outcome).toBe('wrong_account');
+    expect(deleteGrant).not.toHaveBeenCalled();
+    expect(vault.get(FLAT_GRANT_KEY)).toBe('grant-flat-0021');
+  });
+
+  it('a Curia sign-in with the flat fallback address is refused, nothing written, grant kept (B, R9)', async () => {
+    vault.set(FLAT_GRANT_KEY, 'grant-flat-0021');
+    vault.set(FLAT_EMAIL_KEY, 'Boss@Example.com');
+    nylasGrant('code-1', 'grant-flat-0021', 'boss@example.com');
+    const res = await handleMailboxSignInCallback({ state: await token({ target: 'curia', expectedEmail: null }), code: 'code-1' }, deps);
+    expect(res).toMatchObject({ outcome: 'refused', restartScheduled: false });
+    expect(await repo.list()).toEqual([]);
+    expect(scheduleProcessExit).not.toHaveBeenCalled();
+    expect(deleteGrant).not.toHaveBeenCalled();
     expectOneFinished('refused');
   });
 
