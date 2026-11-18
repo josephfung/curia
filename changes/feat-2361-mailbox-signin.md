@@ -10,3 +10,4 @@
 - **Public API: bus events** — new `principal_mailbox.connected` and `mailbox_signin.finished` events. (#2361)
 - **Public API: `initiatedBy`** — gains `signin_callback` on `principal_mailbox.changed` and `secret.changed`. (#2361)
 - **Public API: `notificationType`** — gains `mailbox_signin_admin_blocked`. (#2361)
+- **Public API: `ToolContext`** — new `mailboxSignIn` and `nylasSignInReadiness` capability fields. (#2361)
