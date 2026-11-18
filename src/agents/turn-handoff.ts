@@ -11,7 +11,7 @@
 // The person's words come only from the handing root's trusted dispatcher stamp
 // (requestText), never from the model's tool input, and only after a clean inbound scan.
 // Both ends must pass the backstop's authenticated-root rule (isAuthenticatedRoot in
-// turn-activity.ts: the channel authenticated the sender, or the root is on SMS, web or CLI):
+// turn-activity.ts: the channel authenticated the sender, or the root is on web or CLI; never SMS):
 // a forged email From must not ride into another turn, and a person's real words must not
 // reach a turn a forged From started. The same rule picks the other-turns note's reader and
 // the turns it lists, a held correction's wake and a recovery's handing turn. Fail-open: any

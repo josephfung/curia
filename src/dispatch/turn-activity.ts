@@ -348,8 +348,9 @@ function originatorAuthenticatedOf(metadata: Record<string, unknown> | undefined
  *   (channels/http/routes/chat.ts assertSecret).
  * - cli: a local shell's stdin.
  *
- * Web and CLI are principal-only surfaces (audience.ts); the dispatcher does not stamp them
- * authenticated, so they are named here.
+ * Web and CLI are principal-only surfaces (audience.ts). The dispatcher now stamps both
+ * authenticated (inboundSenderAuthenticated), but roots stamped before that, and any whose
+ * stamp is missing, still count through the channel named here.
  */
 export function isAuthenticatedRoot(root: RootTurn): boolean {
   return root.originatorAuthenticated || root.channelId === 'web' || root.channelId === 'cli';
