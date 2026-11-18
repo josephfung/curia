@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ToolContext } from '../../src/skills/types.js';
-import { ceoNylasApiKey, ceoNylasApiUri, CHANNEL_NYLAS_API_KEY, CHANNEL_NYLAS_REGION } from './ceo-nylas-api-key.js';
+import { ceoNylasApiKey, CHANNEL_NYLAS_API_KEY } from './ceo-nylas-api-key.js';
 
 /** A ctx whose secret() behaves like the execution layer's for declared names. */
 function ctxWith(values: Record<string, string>, failing?: Error): ToolContext {
@@ -55,21 +55,5 @@ describe('ceoNylasApiKey', () => {
       const manifest = JSON.parse(readFileSync(path, 'utf-8')) as { secrets?: string[] };
       expect(manifest.secrets ?? [], tool).not.toContain('nylas_api_key');
     }
-  });
-});
-
-describe('ceoNylasApiUri', () => {
-  it('reads the region live and returns its API uri', () => {
-    expect(ceoNylasApiUri(ctxWith({ [CHANNEL_NYLAS_REGION]: 'EU' }))).toBe('https://api.eu.nylas.com');
-  });
-
-  it('defaults to the US API when the region is unset, blank or unknown', () => {
-    expect(ceoNylasApiUri(ctxWith({}))).toBe('https://api.us.nylas.com');
-    expect(ceoNylasApiUri(ctxWith({ [CHANNEL_NYLAS_REGION]: ' ' }))).toBe('https://api.us.nylas.com');
-    expect(ceoNylasApiUri(ctxWith({ [CHANNEL_NYLAS_REGION]: 'apac' }))).toBe('https://api.us.nylas.com');
-  });
-
-  it('propagates a vault failure', () => {
-    expect(() => ceoNylasApiUri(ctxWith({}, new Error('Vault read failed')))).toThrow(/Vault read failed/);
   });
 });
