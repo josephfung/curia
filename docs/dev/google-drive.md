@@ -67,6 +67,9 @@ exact: `tests/unit/config.google-workspace-allowlist.test.ts` fails on any chang
 > **In production**). Publishing does not list it publicly. It stays unverified, which is fine for
 > an app with a handful of known users: you click through the "unverified app" screen once.
 > An unverified production app kept a restricted scope working past 7 days in prod (2026-11-17).
+>
+> **Upgrading:** a token issued while the app was in Testing keeps its 7-day expiry even after you
+> publish. Publish the app, re-authorize to get a new token, then replace the deployed token cache.
 
 #### Step 3 — Create OAuth credentials
 

@@ -51,6 +51,13 @@ describeIf('MailboxSignInService', () => {
     return { raw, url, expiresAt };
   }
 
+  /** Operator mint: record the hash right after the mint so a failing assertion still cleans up. */
+  async function mintOperatorToken(service: MailboxSignInService, args: Parameters<MailboxSignInService['mintForOperator']>[0]): ReturnType<MailboxSignInService['mintForOperator']> {
+    const link = await service.mintForOperator(args);
+    hashes.push(hashToken(link.url.slice(link.url.lastIndexOf('/') + 1)));
+    return link;
+  }
+
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DATABASE_URL });
     await requireCuriaTestDatabase(pool);
@@ -206,9 +213,8 @@ describeIf('MailboxSignInService', () => {
 
   it('caps an unpinned operator Curia link at 15 minutes; a pinned one keeps its TTL and address (A, R8)', async () => {
     const svc = makeService({ hasCuriaMailbox: async () => true });
-    const unpinned = await svc.mintForOperator({ target: 'curia' });
-    const pinned = await svc.mintForOperator({ target: 'curia', expectedEmail: ' Assistant@Office.com ' });
-    for (const l of [unpinned, pinned]) hashes.push(hashToken(l.url.slice(l.url.lastIndexOf('/') + 1)));
+    const unpinned = await mintOperatorToken(svc, { target: 'curia' });
+    const pinned = await mintOperatorToken(svc, { target: 'curia', expectedEmail: ' Assistant@Office.com ' });
     expect(unpinned.expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 15 * 60_000 + 30_000);
     expect(pinned.expiresAt.getTime()).toBeGreaterThan(Date.now() + 50 * 60_000);
     expect(await svc.peek(pinned.url.slice(pinned.url.lastIndexOf('/') + 1))).toMatchObject({ target: 'curia', expected_email: 'assistant@office.com' });

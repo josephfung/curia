@@ -61,7 +61,7 @@ tasks:
     handoff_path: /settings/email-calendar
     completion_check:
       type: nylas_signin_ready
-    credential_how_to: "Needs the Nylas API key (Settings → Channels → Email) and APP_ORIGIN set to this console's public https:// address. In Settings → Behaviour → Email & Calendar, use Detect to find the Nylas region, Register callback to add the sign-in callback URL, and paste your Google Cloud OAuth client id and secret to create the Google connector. Add the two URLs shown there to the OAuth client in Google Cloud. After the API key or region is first saved or changed, restart Curia once; Check should then read Ready."
+    credential_how_to: "Needs the Nylas API key (Settings → Channels → Email) and APP_ORIGIN set to this console's public https:// address. In Settings → Behaviour → Email & Calendar, use Detect to find the Nylas region, Register callback to have Curia register its own sign-in callback with Nylas (it uses the saved API key), and paste your Google Cloud OAuth client id and secret to create the Google connector. In Google Cloud, add only the Nylas redirect URI shown there (https://api.us.nylas.com/v3/connect/callback, or the eu one) to the OAuth client. Curia's own callback does not go into Google. After the API key or region is first saved or changed, restart Curia once; Check should then read Ready."
     docs_url: /get-started/curia-email
 
   - id: principal_mailboxes
@@ -72,7 +72,7 @@ tasks:
     handoff_path: /settings/email-calendar
     completion_check:
       type: principal_mailbox_ready
-    credential_how_to: "In the console under Settings → Behaviour → Email & Calendar, finish the Nylas sign-in setup at the top of the page, then add each Gmail account with Sign in with Google (no grant ID to copy). Give each a short id and a label, check the address, and pick the default. Once sign-in reads Ready, changes apply without a restart."
+    credential_how_to: "In the console under Settings → Behaviour → Email & Calendar, finish the Nylas sign-in setup at the top of the page, then add each Gmail account with Sign in with Google (no grant ID to copy). Give each a short id and a label, check the address, and pick the default. Once sign-in reads Ready, changes apply without a restart. If sign-in is not available (for example there is no public https APP_ORIGIN), use Paste a grant ID instead: connect the account in the Nylas dashboard, paste its grant ID here, and run Test."
     docs_url: /get-started/principal-email-calendar
 
   - id: signal
