@@ -1,3 +1,4 @@
+import { getDomain } from 'tldts';
 import { htmlToText } from './html-to-text.js';
 import type { NylasMessage, EmailAttachment } from './nylas-client.js';
 import {
@@ -187,15 +188,22 @@ function domainOf(address: string): string {
   return (at === -1 ? address : address.slice(at + 1)).trim().toLowerCase();
 }
 
-/** The same domain, or one a subdomain of the other (a dot boundary, so badexample.org ≠ example.org). */
+/**
+ * Relaxed alignment (RFC 7489 §3.1.2): both domains have the same organizational domain, found
+ * with the public suffix list (§3.2). Private suffixes count as suffixes too, so two tenants of a
+ * shared host (a.github.io, b.github.io) are different organizations. A bare suffix, an IP
+ * address or anything unparsable has no organizational domain and aligns with nothing.
+ */
 function domainsAligned(a: string, b: string): boolean {
-  return a.length > 0 && b.length > 0 && (a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`));
+  const orgA = getDomain(a, { allowPrivateDomains: true });
+  return orgA !== null && orgA === getDomain(b, { allowPrivateDomains: true });
 }
 
 /**
  * Whether the provider's own SPF pass (the first Authentication-Results header) is for the From
- * address's domain or a related subdomain (#2589 security review H1): relaxed SPF alignment,
- * approximated without a public-suffix list. DMARC passes on DKIM alone, so a DKIM-signed message
+ * address's organizational domain (#2589 security review H1): relaxed SPF alignment, so a
+ * sibling subdomain aligns and another registrant under the same suffix does not. DMARC passes
+ * on DKIM alone, so a DKIM-signed message
  * replayed from an attacker's server, with SPF passing for the attacker's own envelope domain,
  * still verifies; this is what tells them apart. Anything missing or unreadable is false.
  */

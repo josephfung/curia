@@ -417,6 +417,17 @@ describe('spfAlignedWithFrom (#2589)', () => {
     expect(spfAlignedWithFrom(ar(GMAIL), 'Dana@Example.org')).toBe(true);
     expect(spfAlignedWithFrom(ar(GMAIL.replace('smtp.mailfrom=dana@example.org', 'smtp.mailfrom=bounce@mail.example.org')), 'dana@example.org')).toBe(true);
     expect(spfAlignedWithFrom(ar(GMAIL.replace('smtp.mailfrom=dana@example.org', 'smtp.mailfrom=example.org')), 'dana@example.org')).toBe(true);
+    // Relaxed alignment compares organizational domains (RFC 7489 §3.2), so sibling subdomains align.
+    expect(spfAlignedWithFrom(ar(GMAIL.replace('smtp.mailfrom=dana@example.org', 'smtp.mailfrom=bounce@mailer.example.org')), 'dana@people.example.org')).toBe(true);
+    expect(spfAlignedWithFrom(ar(GMAIL.replace('smtp.mailfrom=dana@example.org', 'smtp.mailfrom=bounce@mail.example.co.uk')), 'dana@example.co.uk')).toBe(true);
+  });
+
+  it('is false across organizational domains under a shared public suffix', () => {
+    // Two registrants under co.uk are different organizations, and a bare suffix is no domain.
+    expect(spfAlignedWithFrom(ar(GMAIL.replace('smtp.mailfrom=dana@example.org', 'smtp.mailfrom=x@attacker.co.uk')), 'dana@example.co.uk')).toBe(false);
+    expect(spfAlignedWithFrom(ar(GMAIL.replace('smtp.mailfrom=dana@example.org', 'smtp.mailfrom=x@co.uk')), 'dana@example.co.uk')).toBe(false);
+    // A private suffix (one tenant per subdomain) separates organizations too.
+    expect(spfAlignedWithFrom(ar(GMAIL.replace('smtp.mailfrom=dana@example.org', 'smtp.mailfrom=x@attacker.github.io')), 'dana@dana.github.io')).toBe(false);
   });
 
   it('is false for a replay sent from another domain\'s servers, or anything unreadable', () => {
