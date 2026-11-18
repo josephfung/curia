@@ -27,8 +27,13 @@ import {
   createSecretChanged,
 } from '../bus/events.js';
 import type { NylasAppClient } from './app-client.js';
-import { nylasApiUri } from './region.js';
-import { MAILBOX_SIGNIN_SCOPES, mailboxSignInCallbackUrl, type NylasSignInReadiness } from './signin-readiness.js';
+import { nylasApiUri, type NylasRegion } from './region.js';
+import {
+  MAILBOX_SIGNIN_SCOPES,
+  mailboxSignInCallbackUrl,
+  nylasRestartRequired,
+  type NylasBootConfig,
+} from './signin-readiness.js';
 import type { MailboxSignInOutcome } from './signin-outcome.js';
 import type { MailboxSignInService, SignInTarget, SignInTokenRow } from './mailbox-signin-service.js';
 import type { PrincipalMailboxAdmin } from '../principal-mailboxes/admin.js';
@@ -56,14 +61,17 @@ export interface MailboxSignInCallbackResult {
   restartScheduled: boolean;
 }
 
-type CallbackClient = Pick<NylasAppClient, 'exchangeCode' | 'getGrant' | 'deleteGrant'>;
+type CallbackClient = Pick<NylasAppClient, 'getApplication' | 'exchangeCode' | 'getGrant' | 'deleteGrant'>;
 
 export interface MailboxSignInCallbackDeps {
   signIn: Pick<MailboxSignInService, 'claim'>;
-  /** Live readiness: the application id (the hosted-auth client_id) and region. */
-  readiness: () => Promise<NylasSignInReadiness>;
   /** Live read of the Nylas API key (the token endpoint's client_secret). */
   readApiKey: () => Promise<string | undefined>;
+  /** Live read of the Nylas region. */
+  readRegion: () => Promise<NylasRegion>;
+  /** The key and region the process booted with: a sign-in waits for a restart after either
+   *  changes (R11), since the mailbox it connects would be served with the boot values. */
+  boot: NylasBootConfig;
   appOrigin: string | undefined;
   makeClient: (apiKey: string, apiUri: string) => CallbackClient;
   principalStore: Pick<PrincipalMailboxStore, 'listLive' | 'hasAnyRow' | 'getAny'>;
@@ -229,19 +237,33 @@ async function settle(
     log.warn({ target: row.target }, 'mailbox sign-in callback carried neither a code nor an error');
     return done('failed');
   }
-  const readiness = await deps.readiness();
-  const apiKey = await deps.readApiKey();
-  if (!readiness.ready || apiKey === undefined || apiKey === '' || deps.appOrigin === undefined) {
-    log.warn({ reason: readiness.ready ? 'no_api_key_or_origin' : readiness.reason }, 'mailbox sign-in callback: sign-in is not ready');
+  // Only the application id (the hosted-auth client_id) and region are needed here, not full
+  // readiness: a blip listing connectors must not throw away a valid code (L).
+  const apiKey = (await deps.readApiKey())?.trim();
+  if (apiKey === undefined || apiKey === '' || deps.appOrigin === undefined) {
+    log.warn({ reason: 'no_api_key_or_origin' }, 'mailbox sign-in callback: sign-in is not ready');
     return done('failed');
   }
-  const client = deps.makeClient(apiKey, nylasApiUri(readiness.region));
+  const region = await deps.readRegion();
+  if (nylasRestartRequired(apiKey, region, deps.boot)) {
+    log.warn({ reason: 'restart_required' }, 'mailbox sign-in callback: the Nylas key or region changed since boot; restart Curia');
+    return done('failed');
+  }
+  const client = deps.makeClient(apiKey, nylasApiUri(region));
+
+  let applicationId: string;
+  try {
+    ({ applicationId } = await client.getApplication());
+  } catch (err) {
+    log.warn({ ...grantSafeErrorFields(err), step: 'lookup_application', target: row.target }, 'mailbox sign-in: the Nylas application could not be read');
+    return done('failed');
+  }
 
   // 3. Exchange the code, then read the grant.
   let grantId: string;
   try {
     ({ grantId } = await client.exchangeCode({
-      clientId: readiness.applicationId,
+      clientId: applicationId,
       code,
       redirectUri: mailboxSignInCallbackUrl(deps.appOrigin),
     }));

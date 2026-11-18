@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import pino from 'pino';
 import {
   checkNylasSignIn,
   mailboxSignInCallbackUrl,
@@ -8,6 +9,14 @@ import { NylasAppError, type NylasAppClient } from '../../../src/nylas/app-clien
 
 const ORIGIN = 'https://curia.example.com';
 const CALLBACK = `${ORIGIN}/api/mailbox-signin/callback`;
+
+/** A logger whose lines are kept, to check what the catch logs (H). */
+function capture(): { logger: pino.Logger; lines: Array<Record<string, unknown>> } {
+  const lines: Array<Record<string, unknown>> = [];
+  const logger = pino({ level: 'debug' }, { write: (s: string) => { lines.push(JSON.parse(s) as Record<string, unknown>); } });
+  return { logger, lines };
+}
+const silent = pino({ level: 'silent' });
 
 interface FakeOpts {
   environment?: string | null;
@@ -37,6 +46,7 @@ function run(o: FakeOpts = {}, over: Partial<Parameters<typeof checkNylasSignIn>
     readRegion: async () => 'us',
     appOrigin: ORIGIN,
     makeClient: () => fakeClient(o),
+    logger: silent,
     ...over,
   });
 }
@@ -99,11 +109,45 @@ describe('checkNylasSignIn', () => {
     let key: string | undefined;
     let region: 'us' | 'eu' = 'us';
     const makeClient = vi.fn((_k: string, _u: string) => fakeClient());
-    const deps = { readApiKey: async () => key, readRegion: async () => region, appOrigin: ORIGIN, makeClient };
+    const deps = { readApiKey: async () => key, readRegion: async () => region, appOrigin: ORIGIN, makeClient, logger: silent };
     expect((await checkNylasSignIn(deps))).toMatchObject({ reason: 'no_api_key' });
     key = 'late-key';
     region = 'eu';
     expect(await checkNylasSignIn(deps)).toMatchObject({ ready: true, region: 'eu' });
     expect(makeClient).toHaveBeenCalledWith('late-key', 'https://api.eu.nylas.com');
+  });
+
+  it('restart_required when a key is saved after a boot that had none (D, R11)', async () => {
+    const makeClient = vi.fn(() => fakeClient());
+    const r = await run({}, { boot: { apiKey: undefined, region: 'us' }, makeClient });
+    expect(r).toMatchObject({ ready: false, reason: 'restart_required', detail: 'Restart Curia to finish setting up sign-in.' });
+    expect(makeClient).not.toHaveBeenCalled();
+  });
+
+  it('restart_required when the live key differs from the boot key', async () => {
+    expect(await run({}, { boot: { apiKey: 'old-key', region: 'us' } })).toMatchObject({ reason: 'restart_required' });
+  });
+
+  it('restart_required when the region changed after boot (D, R11)', async () => {
+    expect(await run({}, { readRegion: async () => 'eu', boot: { apiKey: 'key', region: 'us' } })).toMatchObject({ reason: 'restart_required' });
+  });
+
+  it('ready when the live key and region match the boot values', async () => {
+    expect(await run({}, { boot: { apiKey: ' key ', region: 'us' } })).toMatchObject({ ready: true });
+  });
+
+  it('logs a Nylas failure at warn with its step and status, never the key (H)', async () => {
+    const { logger, lines } = capture();
+    await run({ appError: new NylasAppError('Nylas get application failed: HTTP 503', 503) }, { logger, readApiKey: async () => 'nyk_secret' });
+    const warn = lines.find((l) => l['level'] === 40 && l['step'] === 'get_application');
+    expect(warn).toMatchObject({ errName: 'NylasAppError', statusCode: 503 });
+    expect(JSON.stringify(lines)).not.toContain('nyk_secret');
+  });
+
+  it('logs a non-Nylas error (a bug) at error and still reports unreachable (H)', async () => {
+    const { logger, lines } = capture();
+    const r = await run({ appError: new TypeError('x is undefined') }, { logger });
+    expect(r).toMatchObject({ reason: 'nylas_unreachable' });
+    expect(lines.find((l) => l['level'] === 50 && l['step'] === 'get_application')).toBeDefined();
   });
 });

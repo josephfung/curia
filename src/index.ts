@@ -3182,10 +3182,12 @@ async function main(): Promise<void> {
     }
     return triageServicesCache;
   };
-  // Mailbox sign-in readiness (#2361). Reads the Nylas key and region live on every call, so a key
-  // saved from the console counts without a restart. It asks Nylas, so it is a network call.
+  // Mailbox sign-in readiness (#2361). Reads the Nylas key and region live on every call; a key or
+  // region saved or changed after boot reads restart_required until one restart (R11), since the
+  // mailboxes are served with the boot values. It asks Nylas, so it is a network call.
+  const nylasBoot = { apiKey: config.nylasApiKey, region: config.nylasRegion };
   const nylasSignInReadiness = (): Promise<NylasSignInReadiness> =>
-    checkNylasSignIn({ ...nylasSignInReaders, appOrigin: config.appOrigin, logger });
+    checkNylasSignIn({ ...nylasSignInReaders, appOrigin: config.appOrigin, boot: nylasBoot, logger });
   // Single-use mailbox sign-in links (#2361). The principal's address comes from their designated
   // primary verified email (read at mint time, so a change applies without a restart), never from a
   // model; the link is only minted while readiness holds.
@@ -3208,8 +3210,9 @@ async function main(): Promise<void> {
   // in setup-required mode a principal sign-in is refused; Curia's own mailbox still works.
   const mailboxSignInCallback = (query: MailboxSignInCallbackQuery) => handleMailboxSignInCallback(query, {
     signIn: mailboxSignInService,
-    readiness: nylasSignInReadiness,
     readApiKey: nylasSignInReaders.readApiKey,
+    readRegion: nylasSignInReaders.readRegion,
+    boot: nylasBoot,
     appOrigin: config.appOrigin,
     makeClient: (apiKey, apiUri) => new NylasAppClient({ apiKey, apiUri, logger }),
     principalStore: principalMailboxStore,
@@ -4188,6 +4191,7 @@ async function main(): Promise<void> {
       readiness: nylasSignInReadiness,
       readApiKey: nylasSignInReaders.readApiKey,
       callback: mailboxSignInCallback,
+      boot: nylasBoot,
     },
     principalMailboxConsole: principalMailboxAdmin
       ? {

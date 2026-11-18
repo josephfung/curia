@@ -56,6 +56,7 @@ describeIf('mailbox sign-in callback', () => {
   let rawLog: string[];
   let exchangeCode: Mock<NylasAppClient['exchangeCode']>;
   let deleteGrant: Mock<NylasAppClient['deleteGrant']>;
+  let getApplication: Mock<NylasAppClient['getApplication']>;
   let scheduleProcessExit: Mock<(delayMs: number) => void>;
   let secretsSet: Mock<(name: string, value: string) => Promise<void>>;
   /** Every (key, base URL) the admin's grant lookup used. */
@@ -106,6 +107,9 @@ describeIf('mailbox sign-in callback', () => {
       return { grantId, email: grants.get(grantId)?.email ?? null, scopes: [] };
     });
     deleteGrant = vi.fn<NylasAppClient['deleteGrant']>(async () => {});
+    getApplication = vi.fn<NylasAppClient['getApplication']>(async () => ({
+      applicationId: READY.ready ? READY.applicationId : '', region: 'us', environment: 'production', callbackUris: [],
+    }));
     const getGrant = vi.fn(async (grantId: string) => {
       const g = grants.get(grantId);
       if (!g) throw new NylasAppError('Nylas get grant failed: HTTP 404', 404);
@@ -162,10 +166,12 @@ describeIf('mailbox sign-in callback', () => {
 
     deps = {
       signIn: new MailboxSignInService({ pool, logger, appOrigin: ORIGIN, readiness: async () => READY }),
-      readiness: async () => READY,
       readApiKey: async () => 'nyk_test_key',
+      readRegion: async () => 'us',
+      boot: { apiKey: 'nyk_test_key', region: 'us' },
       appOrigin: ORIGIN,
-      makeClient: () => ({ exchangeCode, getGrant, deleteGrant }),
+      // No listConnectors: the callback needs only the application id (L).
+      makeClient: () => ({ exchangeCode, getGrant, deleteGrant, getApplication }),
       principalStore: store,
       principalAdmin,
       emailAccounts: repo,
@@ -603,6 +609,38 @@ describeIf('mailbox sign-in callback', () => {
     expect(scheduleProcessExit).not.toHaveBeenCalled();
     expect(deleteGrant).not.toHaveBeenCalled();
     expectOneFinished('refused');
+  });
+
+  it('a key saved after boot (restart_required) is failed with no exchange (D, L)', async () => {
+    nylasGrant('code-1', 'grant-boss-0001', 'boss@example.com');
+    deps = { ...deps, boot: { apiKey: undefined, region: 'us' } };
+    const res = await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps);
+    expect(res.outcome).toBe('failed');
+    expect(exchangeCode).not.toHaveBeenCalled();
+    expect(logLines.some((l) => l['reason'] === 'restart_required')).toBe(true);
+    expectOneFinished('failed');
+  });
+
+  it('a region changed after boot is failed with no exchange (D, L)', async () => {
+    nylasGrant('code-1', 'grant-boss-0001', 'boss@example.com');
+    deps = { ...deps, readRegion: async () => 'eu' };
+    expect((await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps)).outcome).toBe('failed');
+    expect(exchangeCode).not.toHaveBeenCalled();
+  });
+
+  it('no key: failed with no exchange (L)', async () => {
+    nylasGrant('code-1', 'grant-boss-0001', 'boss@example.com');
+    deps = { ...deps, readApiKey: async () => undefined };
+    expect((await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps)).outcome).toBe('failed');
+    expect(exchangeCode).not.toHaveBeenCalled();
+  });
+
+  it('a failing application lookup is failed with no exchange, logged with its step (L, F)', async () => {
+    nylasGrant('code-1', 'grant-boss-0001', 'boss@example.com');
+    getApplication.mockRejectedValueOnce(new NylasAppError('Nylas get application failed: HTTP 503', 503));
+    expect((await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps)).outcome).toBe('failed');
+    expect(exchangeCode).not.toHaveBeenCalled();
+    expect(logLines.find((l) => l['step'] === 'lookup_application')).toMatchObject({ errName: 'NylasAppError', statusCode: 503 });
   });
 
   it('an unexpected throw after the token is spent is failed, published, and never thrown', async () => {

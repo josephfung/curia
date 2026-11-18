@@ -330,6 +330,7 @@ describe('setup-status', () => {
     it.each([
       ['sign-in is ready', { nylasSignInReadiness: async (): Promise<NylasSignInReadiness> => ({ ready: true, applicationId: 'app-1', region: 'us' }) }, 'done'],
       ['sign-in is not ready', { nylasSignInReadiness: async (): Promise<NylasSignInReadiness> => ({ ready: false, reason: 'no_google_connector', detail: 'x' }) }, 'pending'],
+      ['sign-in waits for a restart', { nylasSignInReadiness: async (): Promise<NylasSignInReadiness> => ({ ready: false, reason: 'restart_required', detail: 'x' }) }, 'pending'],
       ['the check throws', { nylasSignInReadiness: async (): Promise<NylasSignInReadiness> => { throw new Error('boom'); } }, 'pending'],
       ['the check is absent', {}, 'pending'],
     ] as const)('mailbox sign-in: %s → %s', async (_name, overrides, expected) => {
@@ -339,6 +340,16 @@ describe('setup-status', () => {
       const task = data.tasks.find(t => t.id === 'mailbox_signin');
       expect(task?.status).toBe(expected);
       expect(task?.handoff_path).toBe('/settings/email-calendar');
+    });
+
+    it('mailbox sign-in: a key or region saved after boot flags restart_required (D, R11)', async () => {
+      const result = await handler.execute(makeCtx({ nylasSignInReadiness: async (): Promise<NylasSignInReadiness> => ({ ready: false, reason: 'restart_required', detail: 'x' }) }));
+      const data = (result as { success: true; data: { tasks: Array<{ id: string; restart_required?: true; credential_how_to: string | null }> } }).data;
+      const task = data.tasks.find(t => t.id === 'mailbox_signin')!;
+      expect(task.restart_required).toBe(true);
+      // The guidance no longer claims sign-in setup never needs a restart.
+      expect(task.credential_how_to).toMatch(/restart Curia once/);
+      expect(task.credential_how_to).not.toMatch(/no restart is needed/);
     });
 
     it('principal mailboxes: never flags restart_required (#2475)', async () => {

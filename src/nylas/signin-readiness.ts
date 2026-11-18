@@ -1,11 +1,14 @@
 // Is mailbox sign-in (Nylas v3 hosted auth) usable right now? (#2361)
 //
-// Checked live on every call: the API key, region and APP_ORIGIN are read through the supplied
-// readers, never cached, so a key saved from the console is picked up without a restart. The
-// detail strings are operator-facing and never carry the key or any Nylas response text.
+// Checked live on every call: the API key and region are read through the supplied readers, never
+// cached. The email adapters and principal mailboxes take the key and region at boot, though, so
+// a key or region saved (or changed) after boot reads `restart_required` until Curia restarts
+// once (R11). The detail strings are operator-facing and never carry the key or any Nylas
+// response text.
 
 import type { Logger } from '../logger.js';
 import { NylasAppClient, NylasAppError } from './app-client.js';
+import { grantSafeErrorFields } from '../principal-mailboxes/error-fields.js';
 import { nylasApiUri, parseNylasRegion, type NylasRegion } from './region.js';
 
 /** The Google scopes sign-in requests and the grant must hold. */
@@ -21,6 +24,7 @@ export type NylasSignInReadiness =
       ready: false;
       reason:
         | 'no_api_key'
+        | 'restart_required'
         | 'bad_api_key'
         | 'sandbox'
         | 'origin_not_https'
@@ -35,13 +39,35 @@ export function mailboxSignInCallbackUrl(appOrigin: string): string {
   return `${appOrigin.replace(/\/+$/, '')}/api/mailbox-signin/callback`;
 }
 
+/** The Nylas key and region the process booted with (config.nylasApiKey / config.nylasRegion). */
+export interface NylasBootConfig {
+  apiKey: string | undefined;
+  region: NylasRegion;
+}
+
+/**
+ * True when the live key or region is not what the process booted with: the email adapters and
+ * principal mailboxes still use the boot values, so sign-in waits for a restart (R11).
+ */
+export function nylasRestartRequired(liveApiKey: string, liveRegion: NylasRegion, boot: NylasBootConfig): boolean {
+  const bootKey = boot.apiKey?.trim() || undefined;
+  return bootKey !== liveApiKey.trim() || boot.region !== liveRegion;
+}
+
+export const RESTART_REQUIRED_DETAIL = 'Restart Curia to finish setting up sign-in.';
+
+/** Per-request timeout for readiness's Nylas calls: two in a row must fit in setup-status's 15 s. */
+export const READINESS_TIMEOUT_MS = 5000;
+
 export interface CheckNylasSignInDeps {
   readApiKey: () => Promise<string | undefined>;
   readRegion: () => Promise<NylasRegion>;
   appOrigin: string | undefined;
-  /** Test seam. The default builds a real client; `logger` is only used by that default. */
+  /** The boot-time key and region. Absent: no boot values to compare (tests), so no restart check. */
+  boot?: NylasBootConfig;
+  /** Test seam. The default builds a real client with READINESS_TIMEOUT_MS. */
   makeClient?: (apiKey: string, apiUri: string) => NylasAppClient;
-  logger?: Logger;
+  logger: Logger;
 }
 
 function notReady(
@@ -56,19 +82,21 @@ export async function checkNylasSignIn(deps: CheckNylasSignInDeps): Promise<Nyla
   if (apiKey === undefined || apiKey === '') {
     return notReady('no_api_key', 'Save the Nylas API key first (Channels → Email).');
   }
+  const region = await deps.readRegion();
+  if (deps.boot !== undefined && nylasRestartRequired(apiKey, region, deps.boot)) {
+    return notReady('restart_required', RESTART_REQUIRED_DETAIL);
+  }
   const origin = deps.appOrigin;
   if (origin === undefined || !origin.startsWith('https://')) {
     return notReady('origin_not_https', 'Sign-in needs APP_ORIGIN set to this console\'s public https:// address.');
   }
 
-  const region = await deps.readRegion();
   const apiUri = nylasApiUri(region);
-  const make = deps.makeClient;
-  if (make === undefined && deps.logger === undefined) {
-    throw new Error('checkNylasSignIn needs a logger or a makeClient');
-  }
-  const client = make !== undefined ? make(apiKey, apiUri) : new NylasAppClient({ apiKey, apiUri, logger: deps.logger! });
+  const client = deps.makeClient !== undefined
+    ? deps.makeClient(apiKey, apiUri)
+    : new NylasAppClient({ apiKey, apiUri, logger: deps.logger, timeoutMs: READINESS_TIMEOUT_MS });
 
+  let step: 'get_application' | 'list_connectors' = 'get_application';
   try {
     const app = await client.getApplication();
     if ((app.environment ?? '').toLowerCase() === 'sandbox') {
@@ -77,14 +105,21 @@ export async function checkNylasSignIn(deps: CheckNylasSignInDeps): Promise<Nyla
     if (!app.callbackUris.includes(mailboxSignInCallbackUrl(origin))) {
       return notReady('callback_unregistered', 'Register the sign-in callback URL with Nylas.');
     }
+    step = 'list_connectors';
     const connectors = await client.listConnectors();
     if (!connectors.some((c) => c.provider === 'google')) {
       return notReady('no_google_connector', 'Create the Google connector in Nylas.');
     }
     return { ready: true, applicationId: app.applicationId, region };
   } catch (err) {
-    // Only the HTTP status decides; the error text is never copied into the detail.
-    const status = err instanceof NylasAppError ? err.status : 0;
+    // Only the HTTP status decides; the error text is never copied into the detail or the log.
+    if (!(err instanceof NylasAppError)) {
+      // Not a Nylas answer: a bug. Reported as unreachable, but loudly.
+      deps.logger.error({ ...grantSafeErrorFields(err), step }, 'mailbox sign-in readiness check failed unexpectedly');
+      return notReady('nylas_unreachable', 'Nylas did not answer; try again in a moment.');
+    }
+    deps.logger.warn({ ...grantSafeErrorFields(err), step }, 'mailbox sign-in readiness: a Nylas call failed');
+    const status = err.status;
     if (status === 401 || status === 403) {
       return notReady('bad_api_key', 'Nylas rejected the API key. Check the key and the region.');
     }
