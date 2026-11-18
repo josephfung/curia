@@ -3969,6 +3969,8 @@ async function main(): Promise<void> {
             principalEmail: () =>
               findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
               ?? (principalEmail.current || undefined),
+            // As for the outage notifier: a notice published before an adapter delivers reaches no one.
+            canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
           },
         }
       : {}),

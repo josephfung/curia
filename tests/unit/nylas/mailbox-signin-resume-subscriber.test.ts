@@ -83,16 +83,23 @@ describe('mailboxSignInResumeLine', () => {
   });
 
   it('admin_blocked says the operator was told and names the client id, or the generic phrase', () => {
-    const named = mailboxSignInResumeLine('admin_blocked', 'principal', '1234-abc.apps.googleusercontent.com');
+    const named = mailboxSignInResumeLine('admin_blocked', 'principal', { clientId: '1234-abc.apps.googleusercontent.com', operatorNotified: true });
     expect(named).toContain('1234-abc.apps.googleusercontent.com');
     expect(named).toMatch(/operator has been (told|notified)/);
-    expect(mailboxSignInResumeLine('admin_blocked', 'principal')).toContain('the OAuth client ID from your Google Cloud project');
+    expect(mailboxSignInResumeLine('admin_blocked', 'principal', { operatorNotified: true })).toContain('the OAuth client ID from your Google Cloud project');
   });
 
-  it("names Curia's own mailbox, and the restart, for the curia target", () => {
-    const line = mailboxSignInResumeLine('connected', 'curia');
-    expect(line).toContain("Curia's own mailbox");
-    expect(line).toMatch(/restart/i);
+  it('admin_blocked says the operator could not be told when the notice did not go (I)', () => {
+    const line = mailboxSignInResumeLine('admin_blocked', 'principal', { operatorNotified: false });
+    expect(line).not.toMatch(/operator has been/);
+    expect(line).toContain("I couldn't notify the operator; ask them to mark the app Trusted in the Google Workspace admin console");
+  });
+
+  it("names Curia's own mailbox for the curia target, and the restart only when one is scheduled (J)", () => {
+    const restarting = mailboxSignInResumeLine('connected', 'curia', { restartScheduled: true });
+    expect(restarting).toContain("Curia's own mailbox");
+    expect(restarting).toMatch(/restart/i);
+    expect(mailboxSignInResumeLine('reconnected', 'curia')).not.toMatch(/restart/i);
   });
 });
 
@@ -113,6 +120,13 @@ describe('MailboxSignInResumeSubscriber', () => {
     await emit(finished({ target: 'curia', outcome: 'connected', mailboxId: undefined, restartScheduled: true }));
     expect(tasks()).toHaveLength(0);
     expect(registerRouting).not.toHaveBeenCalled();
+  });
+
+  it('a Curia re-auth with no restart resumes without promising one (J)', async () => {
+    const { emit, tasks } = setup();
+    await emit(finished({ target: 'curia', outcome: 'reconnected', mailboxId: undefined }));
+    expect(tasks()[0]!.payload.content).toContain("Curia's own mailbox is connected");
+    expect(tasks()[0]!.payload.content).not.toMatch(/restart/i);
   });
 
   it('handles one event id once', async () => {
@@ -168,6 +182,28 @@ describe('MailboxSignInResumeSubscriber', () => {
     const notice = (sendNotification.mock.calls[0] as unknown as [{ body: string }])[0];
     expect(notice.body).toContain('the OAuth client ID from your Google Cloud project');
     expect(tasks()[0]!.payload.content).toContain('the OAuth client ID from your Google Cloud project');
+  });
+
+  it('admin_blocked: when the notice is not delivered, the agent is told the operator was not notified (I)', async () => {
+    const { emit, tasks } = setup({ notifier: { gateway: { sendNotification: vi.fn(async () => false) }, principalEmail: () => 'boss@example.com' } });
+    await emit(finished({ outcome: 'admin_blocked' }));
+    const content = tasks()[0]!.payload.content;
+    expect(content).not.toMatch(/operator has been/);
+    expect(content).toContain("I couldn't notify the operator");
+  });
+
+  it('admin_blocked: no email adapter delivers yet, so nothing is sent and the agent is told so (I)', async () => {
+    const sendNotification = vi.fn(async () => true);
+    const { emit, tasks } = setup({ notifier: { gateway: { sendNotification }, principalEmail: () => 'boss@example.com', canDeliver: () => false } });
+    await emit(finished({ outcome: 'admin_blocked' }));
+    expect(sendNotification).not.toHaveBeenCalled();
+    expect(tasks()[0]!.payload.content).toContain("I couldn't notify the operator");
+  });
+
+  it('admin_blocked: a delivered notice is reported as told', async () => {
+    const { emit, tasks } = setup();
+    await emit(finished({ outcome: 'admin_blocked' }));
+    expect(tasks()[0]!.payload.content).toMatch(/operator has been told/);
   });
 
   it('other outcomes send no operator notice', async () => {

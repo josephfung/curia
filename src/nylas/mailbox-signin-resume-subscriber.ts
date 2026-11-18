@@ -40,14 +40,16 @@ function clientIdPhrase(clientId: string | undefined): string {
 }
 
 /** The plain reason a sign-in did not connect, per outcome. */
-function reason(outcome: MailboxSignInOutcome, clientId: string | undefined): string {
+function reason(outcome: MailboxSignInOutcome, clientId: string | undefined, operatorNotified: boolean): string {
   switch (outcome) {
     case 'expired':
       return 'the sign-in link expired before it was used.';
     case 'cancelled':
       return 'the sign-in was cancelled on the Google consent screen.';
     case 'admin_blocked':
-      return `the Google Workspace administrator's policy blocks this app. The operator has been told: an administrator must mark ${clientIdPhrase(clientId)} as Trusted in the Google Admin console (Security → API controls → App access control).`;
+      return operatorNotified
+        ? `the Google Workspace administrator's policy blocks this app. The operator has been told: an administrator must mark ${clientIdPhrase(clientId)} as Trusted in the Google Admin console (Security → API controls → App access control).`
+        : `the Google Workspace administrator's policy blocks this app. I couldn't notify the operator; ask them to mark the app Trusted in the Google Workspace admin console (${clientIdPhrase(clientId)}, under Security → API controls → App access control).`;
     case 'org_internal':
       return "the Google Cloud project's consent screen is set to Internal, so accounts outside its organisation cannot sign in; the operator must set it to External.";
     case 'wrong_account':
@@ -66,17 +68,27 @@ function reason(outcome: MailboxSignInOutcome, clientId: string | undefined): st
   }
 }
 
+export interface ResumeLineOptions {
+  /** admin_blocked: the Google OAuth client id to trust, when known. */
+  clientId?: string;
+  /** admin_blocked: whether the operator notice was actually sent. Absent: not sent. */
+  operatorNotified?: boolean;
+  /** Whether Curia restarts after this sign-in. Absent: no restart. */
+  restartScheduled?: boolean;
+}
+
 /**
  * The outcome line the resumed agent reads. Success: "… connected — continue". Otherwise the
- * plain reason and a pointer to a fresh link; admin_blocked also names the client id to trust.
+ * plain reason and a pointer to a fresh link; admin_blocked also names the client id to trust,
+ * and says the operator was told only when the notice went out.
  */
-export function mailboxSignInResumeLine(outcome: MailboxSignInOutcome, target: SignInTarget, clientId?: string): string {
+export function mailboxSignInResumeLine(outcome: MailboxSignInOutcome, target: SignInTarget, opts: ResumeLineOptions = {}): string {
   if (outcome === 'connected' || outcome === 'reconnected') {
-    const restart = target === 'curia' ? ' Curia restarts to start using it.' : '';
+    const restart = opts.restartScheduled === true ? ' Curia restarts to start using it.' : '';
     return `The mailbox sign-in finished: ${whose(target)} is connected — continue.${restart}`;
   }
   const after = outcome === 'admin_blocked' ? ' once the app is trusted' : '';
-  return `The mailbox sign-in for ${whose(target)} did not connect: ${reason(outcome, clientId)} ${FRESH_LINK}${after}.`;
+  return `The mailbox sign-in for ${whose(target)} did not connect: ${reason(outcome, opts.clientId, opts.operatorNotified === true)} ${FRESH_LINK}${after}.`;
 }
 
 export interface MailboxSignInResumeSubscriberDeps {
@@ -90,6 +102,9 @@ export interface MailboxSignInResumeSubscriberDeps {
   notifier?: {
     gateway: Pick<OutboundGateway, 'sendNotification'>;
     principalEmail: () => string | undefined;
+    /** False until an email adapter that delivers notifications is running (as in
+     *  MailboxOutageNotifier): a publish before then reaches no one. Absent: assumed delivered. */
+    canDeliver?: () => boolean;
   };
 }
 
@@ -117,9 +132,10 @@ export class MailboxSignInResumeSubscriber {
     this.markDispatched(event.id);
 
     let clientId: string | undefined;
+    let operatorNotified = false;
     if (outcome === 'admin_blocked') {
       clientId = await this.lookupClientId();
-      await this.notifyOperator(target, clientId, event.id);
+      operatorNotified = await this.notifyOperator(target, clientId, event.id);
     }
 
     // R6: Curia exits a few seconds after connecting its own mailbox; a resumed turn would be cut
@@ -137,7 +153,11 @@ export class MailboxSignInResumeSubscriber {
       return;
     }
 
-    const line = mailboxSignInResumeLine(outcome, target, clientId);
+    // A restart-bound event returned above (R6), so this line never promises a restart (J).
+    const line = mailboxSignInResumeLine(outcome, target, {
+      ...(clientId !== undefined ? { clientId } : {}),
+      operatorNotified,
+    });
     let content: string;
     if (resumeToken) {
       const decoded = decodeResumeToken(resumeToken);
@@ -196,27 +216,38 @@ export class MailboxSignInResumeSubscriber {
     }
   }
 
-  /** Never throws: the notice is best effort and the resume still runs. */
-  private async notifyOperator(target: SignInTarget, clientId: string | undefined, eventId: string): Promise<void> {
+  /** True when the notice was sent. Never throws: the notice is best effort and the resume still runs. */
+  private async notifyOperator(target: SignInTarget, clientId: string | undefined, eventId: string): Promise<boolean> {
     const notifier = this.deps.notifier;
     const ceoEmail = notifier?.principalEmail();
     if (!notifier || !ceoEmail) {
       this.log.warn({ eventId, hasGateway: !!notifier }, 'A Google admin policy blocked a mailbox sign-in, but no notice can be sent (no gateway or no principal email)');
-      return;
+      return false;
     }
-    const sent = await notifier.gateway.sendNotification({
-      notificationType: 'mailbox_signin_admin_blocked',
-      ceoEmail,
-      subject: 'Google blocked a mailbox sign-in for Curia',
-      body: [
-        `A Google sign-in for ${whose(target)} was blocked by the Google Workspace administrator's policy.`,
-        '',
-        `To allow it, a Workspace administrator opens the Google Admin console → Security → Access and data control → API controls → App access control, adds the app by ${clientIdPhrase(clientId)}, and marks it Trusted.`,
-        '',
-        'Then ask Curia for a fresh sign-in link.',
-      ].join('\n'),
-    }, eventId);
+    if (notifier.canDeliver && !notifier.canDeliver()) {
+      this.log.warn({ eventId }, 'A Google admin policy blocked a mailbox sign-in, but no email adapter delivers notices yet');
+      return false;
+    }
+    let sent: boolean;
+    try {
+      sent = await notifier.gateway.sendNotification({
+        notificationType: 'mailbox_signin_admin_blocked',
+        ceoEmail,
+        subject: 'Google blocked a mailbox sign-in for Curia',
+        body: [
+          `A Google sign-in for ${whose(target)} was blocked by the Google Workspace administrator's policy.`,
+          '',
+          `To allow it, a Workspace administrator opens the Google Admin console → Security → Access and data control → API controls → App access control, adds the app by ${clientIdPhrase(clientId)}, and marks it Trusted.`,
+          '',
+          'Then ask Curia for a fresh sign-in link.',
+        ].join('\n'),
+      }, eventId);
+    } catch (err) {
+      this.log.warn({ eventId, errName: err instanceof Error ? err.name : typeof err }, 'The admin_blocked notice could not be sent');
+      return false;
+    }
     if (!sent) this.log.warn({ eventId }, 'The admin_blocked notice could not be published');
+    return sent;
   }
 
   private markDispatched(eventId: string): void {
