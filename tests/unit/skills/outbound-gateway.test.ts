@@ -6202,7 +6202,7 @@ describe('sendPrincipalDraft (#2474)', () => {
 
   const PRINCIPAL = 'avery@example.com';
   const PRINCIPAL_PHONE = '+14165550100';
-  const live = { liveTurn: true, taskMetadata: { originator: { contactId: 'ceo-contact-id', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-11-07T10:00:00.000Z' } } };
+  const live = { liveTurn: true, taskMetadata: { originator: { contactId: 'ceo-contact-id', systemRole: 'principal', authenticated: true, channel: 'signal', initiatedAt: '2026-11-07T10:00:00.000Z' } } };
   const opts = { authority: live, taskEventId: 't1', conversationId: 'c1' };
 
   function draft(over: Partial<NylasMessage> = {}): NylasMessage {
@@ -8548,7 +8548,7 @@ describe('sendPrincipalDraft (#2474)', () => {
           ['no task metadata', undefined],
           ['metadata with no originator', {}],
           ['a bullpen wake with no originator', { taskOrigin: 'bullpen', threadId: 'bp-1' }],
-          ['principal lineage on a task that is not a live turn', { originator: { contactId: 'ceo', systemRole: 'principal', channel: 'scheduler', initiatedAt: at } }],
+          ['principal lineage on a task that is not a live turn', { originator: { contactId: 'ceo', systemRole: 'principal', authenticated: true, channel: 'scheduler', initiatedAt: at } }],
         ])('refuses %s with origin_unknown', async (_name, taskMetadata) => {
           const { gw, client, ledger } = makeAuto();
           const r = await gw.sendPrincipalDraft('d1', { ...auto, authority: { taskMetadata: taskMetadata as Record<string, unknown> | undefined } });
@@ -8563,7 +8563,7 @@ describe('sendPrincipalDraft (#2474)', () => {
           const { computeEffectiveTaskMetadata } = await import('../../../src/autonomy/effective-standing.js');
           const ladder = { sameTaskThreshold: 70, derivedChildThreshold: 90 };
           const principalWoken = computeEffectiveTaskMetadata(
-            { originator: { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: at }, wakeContext: { derived: true } }, 85, ladder,
+            { originator: { contactId: 'ceo', systemRole: 'principal', authenticated: true, channel: 'email', initiatedAt: at }, wakeContext: { derived: true } }, 85, ladder,
           );
           expect((principalWoken?.['originator'] as { systemRole: string }).systemRole).toBe('agent');
           const agentContact = { originator: { contactId: 'curia', systemRole: 'agent', channel: 'email', initiatedAt: at } };

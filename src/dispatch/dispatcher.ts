@@ -1125,7 +1125,10 @@ export class Dispatcher {
     // The sender's own words as the turn-activity stamp will carry them (#2588), derived once:
     // the code check below reads exactly what the stamp would share.
     const senderOwn = senderOwnParts(payload.channelId, taskContent);
-    if (liveTurn) {
+    // On the principal's identity, not the live turn: tracking only scrubs, and a code the
+    // principal texts by SMS (no live turn, GHSA-p49r-jqh2-v668) must still be kept out of
+    // logs and tool calls. A forged message can register a code, which grants nothing.
+    if (originator.systemRole === 'principal') {
       const tracked = await this.trackPrincipalRelayedCodes(taskContent, senderOwn, payload.channelId, payload.conversationId);
       verificationCodeReceived = tracked.pendingReceived;
       relayedCodes = tracked.state;

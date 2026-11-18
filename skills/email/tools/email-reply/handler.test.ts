@@ -904,7 +904,7 @@ describe('EmailReplyHandler task outreach (#2312)', () => {
   it('with no task title, summarises the outreach row by the reply subject, never the body', async () => {
     const ctx = makeCtx(
       { reply_to_message_id: 'nylas-msg-1', body: 'My card ends 4242, call me on 416-555-0100.' },
-      { taskMetadata: { originator: { contactId: 'principal-id', systemRole: 'principal', channel: 'email', initiatedAt: '2026-10-26T00:00:00Z' } } },
+      { taskMetadata: { originator: { contactId: 'principal-id', systemRole: 'principal', authenticated: true, channel: 'email', initiatedAt: '2026-10-26T00:00:00Z' } } },
     );
     (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
       from: [{ email: 'bookings@acme.example' }], to: [], cc: [], subject: 'Appointment', body: '', date: 0,

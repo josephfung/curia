@@ -13,8 +13,14 @@ import type { ContactTier, SystemRole, TaskOriginator } from './types.js';
 // is a coarse audit-time cap, distinct from the runtime bypass ladder in effective-standing.ts.
 const STANDING_RANK: Record<NonNullable<SystemRole>, number> = { principal: 3, system: 2, agent: 1 };
 
+// A principal originator whose inbound did not authenticate them keeps the identity but has no
+// authority (GHSA-p49r-jqh2-v668), so it ranks below every role with standing: a child under it
+// can never come out carrying an authenticated principal's standing.
+const UNAUTHENTICATED_PRINCIPAL_RANK = 0.5;
+
 function originatorRank(o: TaskOriginator | null | undefined): number {
   if (!o || o.systemRole == null) return 0;
+  if (o.systemRole === 'principal' && !hasPrincipalAuthority(o)) return UNAUTHENTICATED_PRINCIPAL_RANK;
   return STANDING_RANK[o.systemRole] ?? 0;
 }
 
@@ -33,8 +39,23 @@ export function capOriginatorToParent(
 }
 
 /**
- * Check whether a task was originated by the principal (the human Curia serves).
+ * True when this originator carries the principal's authority: it is the principal AND the
+ * inbound that started it authenticated them (GHSA-p49r-jqh2-v668). A forged email From or a
+ * spoofed SMS number resolves to the principal's identity, but `stampOriginator` stamps it
+ * `authenticated: false`. A missing flag fails closed: every path that builds a principal
+ * originator sets it, and migration 128 made stored ones explicit.
+ *
+ * Use this, not `systemRole === 'principal'`, wherever a principal originator grants authority.
+ */
+export function hasPrincipalAuthority(originator: TaskOriginator | null | undefined): boolean {
+  return originator?.systemRole === 'principal' && originator.authenticated === true;
+}
+
+/**
+ * Check whether a task was originated by the principal with the principal's authority.
  * Used by principal-authorized skill handlers and the autonomy gate's principal-bypass.
+ * An unauthenticated principal match (see hasPrincipalAuthority) is not principal-originated;
+ * for "is this the principal, authenticated or not" use hasPrincipalIdentity.
  *
  * NOTE: this checks LINEAGE (who started the task chain), which is satisfied by a woken
  * principal-lineage task too. It is the correct notion for the autonomy principal-bypass
@@ -49,8 +70,35 @@ export function isPrincipalOriginated(
   metadata: Record<string, unknown> | undefined,
 ): boolean {
   if (!metadata) return false;
+  return hasPrincipalAuthority(metadata.originator as TaskOriginator | undefined);
+}
+
+/**
+ * The task's originator is the principal's identity, whether or not the inbound authenticated
+ * them (GHSA-p49r-jqh2-v668: identity yes, authority no). Only for reads whose output reaches
+ * the principal anyway (a reply goes to their real address or number) and for protections that
+ * should stay on, like scrubbing a sign-in code. Never for a decision that grants authority.
+ *
+ * @param metadata  Task metadata (from ctx.taskMetadata or agent.task payload)
+ */
+export function hasPrincipalIdentity(
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  if (!metadata) return false;
   const originator = metadata.originator as TaskOriginator | undefined;
   return originator?.systemRole === 'principal';
+}
+
+/**
+ * The principal's identity without the principal's authority: an inbound that resolved to the
+ * principal but whose channel did not authenticate the sender (SMS, or email failing SPF, DKIM
+ * or DMARC). Such a turn's actions that need the principal's authority are sent to the principal
+ * for confirmation on an authenticated channel (GHSA-p49r-jqh2-v668).
+ */
+export function isUnauthenticatedPrincipal(
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  return hasPrincipalIdentity(metadata) && !isPrincipalOriginated(metadata);
 }
 
 /**
@@ -180,6 +228,8 @@ export function makePrincipalOriginator(contactId: string, channel: string): Tas
     channel,
     initiatedAt: new Date().toISOString(),
     tier: 'principal',
+    // Every caller is a principal-only surface (the console session proves who is acting).
+    authenticated: true,
   };
 }
 

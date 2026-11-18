@@ -23,7 +23,7 @@ const PRINCIPAL_ID = '33333333-3333-4333-8333-333333333333';
 const CONTACT_ID = '44444444-4444-4444-8444-444444444444';
 
 const principalOriginator: TaskOriginator = {
-  contactId: PRINCIPAL_ID, systemRole: 'principal', channel: 'email', initiatedAt: '2026-10-26T00:00:00Z', tier: 'principal',
+  contactId: PRINCIPAL_ID, systemRole: 'principal', authenticated: true, channel: 'email', initiatedAt: '2026-10-26T00:00:00Z', tier: 'principal',
 };
 const outsiderOriginator: TaskOriginator = {
   contactId: CONTACT_ID, systemRole: null, channel: 'email', initiatedAt: '2026-10-26T00:00:00Z', tier: 'known',

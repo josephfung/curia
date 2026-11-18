@@ -7,7 +7,7 @@
 // third party's message must not be able to steer the coordinator into closing or
 // answering someone else's exchange.
 
-import { isOutsiderOriginated } from '../contacts/principal.js';
+import { isOutsiderOriginated, isUnauthenticatedPrincipal } from '../contacts/principal.js';
 
 /**
  * True when this inbound's sender address is authenticated by its channel, so a match on
@@ -19,15 +19,16 @@ import { isOutsiderOriginated } from '../contacts/principal.js';
  * a logged-in principal session or the principal-only bootstrap secret (routes/chat.ts), and
  * the channel always resolves to the principal, so the session proves who wrote the message
  * (maintainer decision, 2026-11-16, reversing #2312's "session, not message" for the console).
- * SMS caller IDs are spoofable (ADR-036). Voice is decided per session in
- * voice/caller-context.ts, not here. Any other channel (the local CLI included) is refused
- * until it is shown to be authenticated.
+ * The local CLI counts: only the principal has shell access to the host it runs on, and the
+ * channel always resolves to the principal (maintainer decision, 2026-11-17). SMS caller IDs are
+ * spoofable (ADR-036). Voice is decided per session in voice/caller-context.ts, not here. Any
+ * other channel is refused until it is shown to be authenticated.
  */
 export function inboundSenderAuthenticated(
   channelId: string,
   metadata: Record<string, unknown> | undefined,
 ): boolean {
-  if (channelId === 'signal' || channelId === 'slack' || channelId === 'web') return true;
+  if (channelId === 'signal' || channelId === 'slack' || channelId === 'web' || channelId === 'cli') return true;
   if (channelId === 'email') return metadata?.['senderVerified'] === true;
   return false;
 }
@@ -57,11 +58,14 @@ export function inboundIsOneToOne(
 /**
  * The contact ID of the outside sender a task was started by, or null when the principal,
  * the system or an agent started it. An outsider originator without a usable contact ID
- * (an unresolved sender) returns an empty string, which matches no entry.
+ * (an unresolved sender) returns an empty string, which matches no entry. A principal match the
+ * channel did not authenticate (SMS, or email failing SPF, DKIM or DMARC) is limited the same
+ * way, to the entries sent to the principal: acting on someone else's exchange is the
+ * principal's authority, not their identity (GHSA-p49r-jqh2-v668).
  */
 export function outsiderOriginatorContactId(taskMetadata: unknown): string | null {
   const metadata = taskMetadata as Record<string, unknown> | undefined;
-  if (!isOutsiderOriginated(metadata)) return null;
+  if (!isOutsiderOriginated(metadata) && !isUnauthenticatedPrincipal(metadata)) return null;
   const originator = metadata?.['originator'];
   if (typeof originator !== 'object' || originator === null) return '';
   const contactId = (originator as Record<string, unknown>)['contactId'];

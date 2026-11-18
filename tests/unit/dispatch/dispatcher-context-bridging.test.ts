@@ -173,6 +173,8 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
         channelId: 'email',
         senderId: 'ceo@example.com',
         content: 'Any update on the neurology appointment?',
+        // The principal's own mail passes SPF, DKIM and DMARC.
+        metadata: { senderVerified: true },
       }),
     );
 
@@ -188,7 +190,6 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
   it.each([
     { channelId: 'signal' as const, conversationId: 'signal:+15551234567', senderId: '+15551234567' },
     { channelId: 'slack' as const, conversationId: 'slack:U123', senderId: 'U123' },
-    { channelId: 'sms' as const, conversationId: 'sms:+15559876543', senderId: '+15559876543' },
     { channelId: 'cli' as const, conversationId: 'cli:local', senderId: 'local-user' },
     { channelId: 'web' as const, conversationId: 'web:ceo', senderId: 'ceo-web-user' },
   ])('injects for principal inbound on $channelId (gate is channel-agnostic)', async ({ channelId, conversationId, senderId }) => {
@@ -211,6 +212,27 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
 
     expect(getActive).toHaveBeenCalledOnce();
     expect(tasks[0]!.payload.content).toContain('[ACTIVE OUTBOUND CONTEXT');
+  });
+
+  // GHSA-p49r-jqh2-v668: a forged email From or a spoofed SMS number resolves to the principal,
+  // but its channel did not authenticate it, so it gets no live turn and no outbound context.
+  it.each([
+    { channelId: 'sms' as const, conversationId: 'sms:+15559876543', senderId: '+15559876543', metadata: undefined },
+    { channelId: 'email' as const, conversationId: 'email:thread-forged', senderId: 'ceo@example.com', metadata: { senderVerified: false } },
+  ])('does not inject for an unauthenticated principal inbound on $channelId', async ({ channelId, conversationId, senderId, metadata }) => {
+    const { bus, tasks, getActive } = buildHarness(
+      makeResolver({ systemRole: 'principal', tier: 'principal' }),
+    );
+
+    await bus.publish(
+      'channel',
+      createInboundMessage({ conversationId, channelId, senderId, content: 'Following up', ...(metadata ? { metadata } : {}) }),
+    );
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.payload.liveTurn).toBe(false);
+    expect(getActive).not.toHaveBeenCalled();
+    expect(tasks[0]!.payload.content).not.toContain('[ACTIVE OUTBOUND CONTEXT');
   });
 
   it('does not inject for a resolved non-principal contact (liveTurn=false)', async () => {
@@ -547,7 +569,7 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
         channelId: 'email',
         senderId: 'ceo@example.com',
         content: 'Looping in my assistant.',
-        metadata: { curiaRole: 'cc', primaryRecipientEmails: ['nik@example.com'] },
+        metadata: { senderVerified: true, curiaRole: 'cc', primaryRecipientEmails: ['nik@example.com'] },
       }));
       expect(tasks[0]!.payload.turnGuidance).toEqual([
         'outbound-context',

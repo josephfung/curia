@@ -214,7 +214,7 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
         timeMax: '2026-05-26T23:59:59Z',
       },
       caller: { contactId: callerId, role: 'ceo', channel: 'signal' },
-      taskMetadata: { originator: { systemRole: 'principal' } },
+      taskMetadata: { originator: { systemRole: 'principal', authenticated: true } },
       contactService,
       calendarRouter: singleMailboxRouter({
         listEvents: vi.fn().mockResolvedValue([]),

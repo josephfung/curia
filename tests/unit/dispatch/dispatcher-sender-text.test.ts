@@ -166,7 +166,8 @@ describe('dispatcher stamps the sender text and scan count (#2588)', () => {
 
   it("stamps the sender's own words, without a reply's Subject, quoted thread or any preamble", async () => {
     const { bus, tasks } = harness();
-    await bus.publish('channel', emailInbound(EMAIL_CONTENT));
+    // The principal's own mail passes SPF, DKIM and DMARC, so the turn gets the outbound context.
+    await bus.publish('channel', emailInbound(EMAIL_CONTENT, { senderVerified: true }));
     expect(tasks).toHaveLength(1);
     const meta = tasks[0]!.payload.metadata!;
     // The content does carry the preamble: participants and the other person's preview.

@@ -682,7 +682,7 @@ describe('autonomy gates', () => {
       taskMetadata: {
         originator: {
           contactId: 'primary-user',
-          systemRole: 'principal' as const,
+          systemRole: 'principal' as const, authenticated: true,
           channel: 'cli',
           initiatedAt: new Date().toISOString(),
         },
@@ -742,7 +742,7 @@ describe('autonomy gates', () => {
       taskMetadata: {
         originator: {
           contactId: 'ceo-contact-id',
-          systemRole: 'principal' as const,
+          systemRole: 'principal' as const, authenticated: true,
           channel: 'email',
           initiatedAt: new Date().toISOString(),
         },
@@ -768,7 +768,7 @@ describe('autonomy gates', () => {
       taskMetadata: {
         originator: {
           contactId: 'ceo-contact-id',
-          systemRole: 'principal' as const,
+          systemRole: 'principal' as const, authenticated: true,
           channel: 'email',
           initiatedAt: new Date().toISOString(),
         },
@@ -817,7 +817,7 @@ describe('autonomy gates', () => {
 
   describe('bypass ladder — woken/derived tasks', () => {
     const principalLineage = {
-      contactId: 'ceo-id', systemRole: 'principal' as const, channel: 'email',
+      contactId: 'ceo-id', systemRole: 'principal' as const, authenticated: true, channel: 'email',
       initiatedAt: '2026-06-23T00:00:00.000Z', tier: 'principal' as const,
     };
     const systemLineage = {
@@ -1766,7 +1766,7 @@ describe('autonomy gates', () => {
         taskMetadata: {
           originator: {
             contactId: 'ceo-id',
-            systemRole: 'principal' as const,
+            systemRole: 'principal' as const, authenticated: true,
             channel: 'email',
             initiatedAt: new Date().toISOString(),
             tier: 'principal',
@@ -2767,6 +2767,7 @@ describe('autonomy gates', () => {
               systemRole,
               channel: 'internal',
               initiatedAt: new Date().toISOString(),
+              ...(systemRole === 'principal' ? { authenticated: true } : {}),
             },
           },
         };
@@ -3089,7 +3090,7 @@ describe('autonomy gates', () => {
 
     const principalOriginator = {
       contactId: 'principal-1',
-      systemRole: 'principal',
+      systemRole: 'principal', authenticated: true,
       channel: 'email',
       initiatedAt: '2026-09-24T12:00:00.000Z',
       tier: 'principal',
@@ -3639,7 +3640,7 @@ describe('humanApproved on InvokeOptions', () => {
       taskMetadata: {
         originator: {
           contactId: 'primary-user',
-          systemRole: 'principal' as const,
+          systemRole: 'principal' as const, authenticated: true,
           channel: 'cli',
           initiatedAt: new Date().toISOString(),
         },
@@ -5296,7 +5297,7 @@ describe('spot-check pool — execution layer (#2159 Phase 3)', () => {
       taskEventId: 'task-2',
       liveTurn: true,
       taskMetadata: {
-        originator: { contactId: 'primary-user', systemRole: 'principal' as const, channel: 'cli', initiatedAt: new Date().toISOString() },
+        originator: { contactId: 'primary-user', systemRole: 'principal' as const, authenticated: true, channel: 'cli', initiatedAt: new Date().toISOString() },
       },
     })).success).toBe(true);
     expect((await layer.invoke('email-send', {}, undefined, agentTurn)).success).toBe(true);

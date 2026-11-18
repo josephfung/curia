@@ -1,18 +1,35 @@
 import { describe, it, expect, vi } from 'vitest';
-import { isPrincipalOriginated, isAgentOriginated, isSystemOriginated, isLivePrincipalTurn, makeSystemOriginator, makePrincipalOriginator, capOriginatorToParent, isOutsiderOriginated } from '../../../src/contacts/principal.js';
+import { isPrincipalOriginated, hasPrincipalIdentity, hasPrincipalAuthority, isAgentOriginated, isSystemOriginated, isLivePrincipalTurn, makeSystemOriginator, makePrincipalOriginator, capOriginatorToParent, isOutsiderOriginated } from '../../../src/contacts/principal.js';
 import type { TaskOriginator } from '../../../src/contacts/types.js';
 
 describe('isPrincipalOriginated', () => {
-  it('returns true when originator systemRole is principal', () => {
+  it('returns true when originator systemRole is principal and the inbound authenticated them', () => {
     const metadata = {
       originator: {
         contactId: 'c-1',
         systemRole: 'principal',
         channel: 'email',
         initiatedAt: new Date().toISOString(),
+        authenticated: true,
       } satisfies TaskOriginator,
     };
     expect(isPrincipalOriginated(metadata)).toBe(true);
+  });
+
+  // GHSA-p49r-jqh2-v668: identity yes, authority no. A forged From or spoofed SMS number keeps
+  // the principal's systemRole but carries none of the principal's authority; a missing flag
+  // fails closed.
+  it.each([
+    ['unauthenticated', false],
+    ['missing the flag', undefined],
+  ])('returns false for a principal originator %s', (_label, authenticated) => {
+    const originator: TaskOriginator = {
+      contactId: 'c-1', systemRole: 'principal', channel: 'sms', initiatedAt: new Date().toISOString(),
+      ...(authenticated !== undefined ? { authenticated } : {}),
+    };
+    expect(isPrincipalOriginated({ originator })).toBe(false);
+    expect(hasPrincipalAuthority(originator)).toBe(false);
+    expect(hasPrincipalIdentity({ originator })).toBe(true);
   });
 
   it('returns false when originator systemRole is agent', () => {
@@ -174,6 +191,8 @@ describe('makePrincipalOriginator (#1127 — console / principal surface)', () =
     expect(originator.channel).toBe('console');
     expect(originator.tier).toBe('principal');
     expect(originator.initiatedAt).toBeTruthy();
+    // The console session proves who is acting (GHSA-p49r-jqh2-v668).
+    expect(originator.authenticated).toBe(true);
   });
 
   it('reads as principal-originated but never as a live turn (lineage only)', () => {
@@ -195,8 +214,18 @@ describe('makePrincipalOriginator (#1127 — console / principal surface)', () =
 
 describe('capOriginatorToParent', () => {
   function originator(systemRole: 'principal' | 'system' | 'agent', contactId: string = systemRole): TaskOriginator {
-    return { contactId, systemRole, channel: 'test', initiatedAt: '2026-06-23T00:00:00.000Z' };
+    return {
+      contactId, systemRole, channel: 'test', initiatedAt: '2026-06-23T00:00:00.000Z',
+      ...(systemRole === 'principal' ? { authenticated: true } : {}),
+    };
   }
+
+  // GHSA-p49r-jqh2-v668: an unauthenticated principal carries no authority, so a child under it
+  // must not come out with an authenticated principal's standing.
+  it('caps an authenticated principal child to an unauthenticated principal parent', () => {
+    const parent: TaskOriginator = { ...originator('principal'), authenticated: false };
+    expect(capOriginatorToParent(originator('principal'), parent)).toBe(parent);
+  });
 
   it('returns the child when it is below the parent (no upgrade needed)', () => {
     const child = originator('agent');
@@ -229,9 +258,14 @@ describe('capOriginatorToParent', () => {
 describe('isLivePrincipalTurn (#1126 — the elevated gate predicate)', () => {
   const principal: TaskOriginator = {
     contactId: 'ceo-1', systemRole: 'principal', channel: 'cli',
-    initiatedAt: '2026-06-23T00:00:00.000Z',
+    initiatedAt: '2026-06-23T00:00:00.000Z', authenticated: true,
   };
   const meta = { originator: principal };
+
+  // GHSA-p49r-jqh2-v668: even a live flag that leaked onto an unauthenticated principal turn fails.
+  it('is false for an unauthenticated principal even with the live flag', () => {
+    expect(isLivePrincipalTurn(true, { originator: { ...principal, channel: 'sms', authenticated: false } })).toBe(false);
+  });
 
   it('is true only when BOTH the distinct liveTurn flag AND principal lineage are present', () => {
     expect(isLivePrincipalTurn(true, meta)).toBe(true);
