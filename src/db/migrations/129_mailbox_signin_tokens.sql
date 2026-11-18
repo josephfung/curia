@@ -1,4 +1,4 @@
--- 127_mailbox_signin_tokens.sql
+-- 129_mailbox_signin_tokens.sql
 --
 -- Single-use links for signing in to a mailbox through Nylas hosted auth (#2361). The raw token
 -- is the capability and lives only in the link and the OAuth `state`; this table keeps its
