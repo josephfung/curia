@@ -722,8 +722,11 @@ export class TurnLanes {
     }
     if (!isUuid(holder.originatorContactId) || !isUuid(input.senderContactId)) return false;
     // A message that matches the principal but did not authenticate (a forged email From) is
-    // not a live turn: it gets its own turn rather than the live one's authority (GHSA-p49r-jqh2-v668).
-    if (holder.liveTurn && input.liveTurn !== true) return false;
+    // not a live turn: it gets its own turn rather than the authority of a live turn or of a
+    // wake of the principal's authenticated work (GHSA-p49r-jqh2-v668). The holder's liveTurn
+    // is its stamp at acquire, so a wake a live follow-up has since raised is caught by the
+    // second clause.
+    if ((holder.liveTurn || holder.originatorIsPrincipal) && input.liveTurn !== true) return false;
     // And the reverse: a live input joins a non-live turn only when it can raise it (the
     // principal's own wake). In a turn a forged message started it would run without authority.
     if (input.liveTurn === true && !holder.liveTurn && !holder.originatorIsPrincipal) return false;

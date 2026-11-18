@@ -393,6 +393,14 @@ describe('TurnLanes', () => {
       expect(gate.tryInject('conv-1', input({ liveTurn: true })).kind).toBe('queued');
     });
 
+    // A wake of the principal's authenticated work carries their authority even though it is not
+    // live; an unauthenticated message from their address must not ride into it.
+    it("refuses an unauthenticated follow-up into the principal's own non-live turn (a wake)", async () => {
+      const gate = lanes();
+      await gate.acquire(holder('a', { originatorIsPrincipal: true, liveTurn: false, synthetic: true }));
+      expect(gate.tryInject('conv-1', input({ liveTurn: false }))).toEqual({ kind: 'not_injected', reason: 'ineligible' });
+    });
+
     it('still queues a same-contact follow-up when neither side is a live turn', async () => {
       const gate = lanes();
       await gate.acquire(holder('a', { originatorIsPrincipal: false, liveTurn: false }));
