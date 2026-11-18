@@ -108,6 +108,13 @@ describe('MailboxSignInResumeSubscriber', () => {
     expect(registerRouting).toHaveBeenCalledWith(t.id, expect.objectContaining({ channelId: 'email', conversationId: 'conv-1', senderId: 'ceo' }));
   });
 
+  it('does not resume when a restart is scheduled (R6): the turn would be cut by the exit', async () => {
+    const { emit, tasks, registerRouting } = setup();
+    await emit(finished({ target: 'curia', outcome: 'connected', mailboxId: undefined, restartScheduled: true }));
+    expect(tasks()).toHaveLength(0);
+    expect(registerRouting).not.toHaveBeenCalled();
+  });
+
   it('handles one event id once', async () => {
     const { emit, tasks } = setup();
     const e = finished();

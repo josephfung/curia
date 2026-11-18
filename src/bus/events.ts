@@ -1103,6 +1103,10 @@ interface MailboxSignInFinishedPayload {
   outcome: MailboxSignInOutcome;
   /** The principal mailbox id, when the sign-in resolved one. Never an address. */
   mailboxId?: string;
+  /** True when Curia's own mailbox was connected and the process exits in a few seconds to pick it
+   *  up. The resume subscriber then does not resume the agent (the turn would be cut by the exit);
+   *  the console's done page tells the operator instead. Absent means no restart. */
+  restartScheduled?: boolean;
   conversationId?: string;
   channelId?: string;
   agentId?: string;

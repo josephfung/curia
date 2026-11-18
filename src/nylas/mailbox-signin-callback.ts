@@ -161,6 +161,7 @@ export async function handleMailboxSignInCallback(
       target: row.target,
       outcome: settled.outcome,
       ...(settled.mailboxId !== undefined ? { mailboxId: settled.mailboxId } : {}),
+      ...(settled.restartScheduled ? { restartScheduled: true } : {}),
       ...originOf(row),
     }, row.task_event_id ?? undefined));
   } catch (err) {

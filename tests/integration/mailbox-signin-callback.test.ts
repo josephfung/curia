@@ -20,7 +20,14 @@ import { principalMailboxGrantSecretName } from '../../src/principal-mailboxes/s
 import { EmailAccountsRepo } from '../../src/channels/email/email-accounts-repo.js';
 import { emailAccountGrantSecretName } from '../../src/channels/email/email-account-secrets.js';
 import { NylasAppError, type NylasAppClient, type NylasGrantInfo } from '../../src/nylas/app-client.js';
-import { MAILBOX_SIGNIN_SCOPES, type NylasSignInReadiness } from '../../src/nylas/signin-readiness.js';
+import {
+  MAILBOX_SIGNIN_SCOPES,
+  NYLAS_API_KEY_SECRET,
+  NYLAS_REGION_SECRET,
+  createNylasSignInReaders,
+  type NylasSignInReadiness,
+} from '../../src/nylas/signin-readiness.js';
+import { createLiveGrantLookup } from '../../src/nylas/live-grant-lookup.js';
 import {
   handleMailboxSignInCallback,
   type MailboxSignInCallbackDeps,
@@ -51,6 +58,8 @@ describeIf('mailbox sign-in callback', () => {
   let deleteGrant: Mock<NylasAppClient['deleteGrant']>;
   let scheduleProcessExit: Mock<(delayMs: number) => void>;
   let secretsSet: Mock<(name: string, value: string) => Promise<void>>;
+  /** Every (key, base URL) the admin's grant lookup used. */
+  let lookups: Array<{ apiKey: string; apiUri: string }>;
   let store: PrincipalMailboxStore;
   let repo: EmailAccountsRepo;
   let deps: MailboxSignInCallbackDeps;
@@ -135,13 +144,21 @@ describeIf('mailbox sign-in callback', () => {
         }
         return ids;
       },
-      lookupGrant: async (grantId) => {
-        const g = grants.get(grantId);
-        if (!g) throw new Error('no grant');
-        return { email: g.email, provider: g.provider };
-      },
+      // Wired as src/index.ts wires it (R7): the key and region are read live from the vault.
+      lookupGrant: createLiveGrantLookup({
+        ...createNylasSignInReaders({ secrets, env: {}, logger }),
+        lookup: async (apiKey, apiUri, grantId) => {
+          lookups.push({ apiKey, apiUri });
+          const g = grants.get(grantId);
+          if (!g) throw new Error('no grant');
+          return { email: g.email, provider: g.provider };
+        },
+      }),
       logger,
     });
+    // Saved after the admin was built, as when the operator saves the key in the console after boot.
+    lookups = [];
+    vault.set(NYLAS_API_KEY_SECRET, 'nyk_saved_after_boot');
 
     deps = {
       signIn: new MailboxSignInService({ pool, logger, appOrigin: ORIGIN, readiness: async () => READY }),
@@ -195,6 +212,8 @@ describeIf('mailbox sign-in callback', () => {
     grants.set(grantId, { email, provider: 'google', scopes: [...MAILBOX_SIGNIN_SCOPES], status: 'valid', ...over });
   }
 
+  /** Vault entries other than the Nylas key itself. */
+  const storedGrants = () => [...vault.keys()].filter((k) => k !== NYLAS_API_KEY_SECRET && k !== NYLAS_REGION_SECRET);
   const ofType = (type: string) => published.filter((e) => e.type === type);
   const finished = () => ofType('mailbox_signin.finished');
   /** Every outcome publishes exactly one mailbox_signin.finished, and no event carries a grant id. */
@@ -218,6 +237,7 @@ describeIf('mailbox sign-in callback', () => {
     const state = await token({ label: 'Work' });
     const res = await handleMailboxSignInCallback({ state, code: 'code-1' }, deps);
     expect(res).toMatchObject({ outcome: 'connected', target: 'principal', mailboxId: 'example', restartScheduled: false });
+    expect(finished()[0]!.payload).not.toHaveProperty('restartScheduled');
     const live = await store.listLive();
     expect(live).toHaveLength(1);
     expect(live[0]).toMatchObject({ id: 'example', label: 'Work', address: 'boss@example.com', isDefault: true });
@@ -236,6 +256,24 @@ describeIf('mailbox sign-in callback', () => {
     expect(exchangeCode).toHaveBeenCalledWith({ clientId: 'app-123', code: 'code-1', redirectUri: `${ORIGIN}/api/mailbox-signin/callback` });
     expect(deleteGrant).not.toHaveBeenCalled();
     expectNoGrantInLogs();
+  });
+
+  it('uses a Nylas key that reached the vault only after the admin was built (R7)', async () => {
+    vault.set(NYLAS_REGION_SECRET, 'eu');
+    nylasGrant('code-1', 'grant-boss-0001', 'boss@example.com');
+    const res = await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps);
+    expect(res.outcome).toBe('connected');
+    expect(lookups).toEqual([{ apiKey: 'nyk_saved_after_boot', apiUri: 'https://api.eu.nylas.com' }]);
+  });
+
+  it('with no key in the vault or env, the add is refused and nothing is stored (R7)', async () => {
+    vault.delete(NYLAS_API_KEY_SECRET);
+    nylasGrant('code-1', 'grant-boss-0001', 'boss@example.com');
+    const res = await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps);
+    expect(res.outcome).toBe('refused');
+    expect(lookups).toEqual([]);
+    expect(logLines.some((l) => l['refusal'] === 'grant_unreadable')).toBe(true);
+    expect(await store.listLive()).toEqual([]);
   });
 
   it('adds a second mailbox with no principal_mailbox.connected event, keeping the default', async () => {
@@ -298,7 +336,7 @@ describeIf('mailbox sign-in callback', () => {
     expect(deleteGrant).toHaveBeenCalledTimes(1);
     expect(deleteGrant).toHaveBeenCalledWith('grant-stray-0003');
     expect(await store.listLive()).toEqual([]);
-    expect(vault.size).toBe(0);
+    expect(storedGrants()).toEqual([]);
     expectOneFinished('wrong_account');
     expectNoGrantInLogs();
   });
@@ -376,7 +414,7 @@ describeIf('mailbox sign-in callback', () => {
     expect(res.outcome).toBe('missing_scopes');
     expect(deleteGrant).toHaveBeenCalledWith('grant-boss-0001');
     expect(await store.listLive()).toEqual([]);
-    expect(vault.size).toBe(0);
+    expect(storedGrants()).toEqual([]);
     expectOneFinished('missing_scopes');
   });
 
@@ -392,7 +430,7 @@ describeIf('mailbox sign-in callback', () => {
     const res = await handleMailboxSignInCallback({ state: await token(), code: 'code-SECRET-unknown' }, deps);
     expect(res.outcome).toBe('failed');
     expect(await store.listLive()).toEqual([]);
-    expect(vault.size).toBe(0);
+    expect(storedGrants()).toEqual([]);
     expect(deleteGrant).not.toHaveBeenCalled();
     const warn = logLines.find((l) => l['level'] === 40 && l['step'] === 'exchange');
     expect(warn).toMatchObject({ errName: 'NylasAppError', statusCode: 400 });
@@ -418,7 +456,7 @@ describeIf('mailbox sign-in callback', () => {
     // No account delivers notifications until one is named 'curia', so the first one takes it.
     expect(rows[0]).toMatchObject({ name: 'curia', selfEmail: 'assistant@office.com', enabled: true });
     expect(vault.get(emailAccountGrantSecretName('curia'))).toBe('grant-curia-0006');
-    expect(expectOneFinished('connected')['target']).toBe('curia');
+    expect(expectOneFinished('connected')).toMatchObject({ target: 'curia', restartScheduled: true });
     expect(await store.listLive()).toEqual([]);
 
     published = [];
