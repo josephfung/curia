@@ -543,6 +543,10 @@ async function uniqueMailboxId(
  * not the flat fallback grant stores it in the vault. A failed read means "unknown", and an unknown grant is kept.
  * The ids compared here are never logged. A `new` grant reaches here only once it is shown to be
  * this attempt's (createdByThisAttempt); a `previous` grant is one Curia itself stored.
+ *
+ * This assumes the Nylas application serves only this Curia install, as the setup docs require.
+ * Nylas keeps one grant per account per application, so a second integration in the same
+ * application would already share and re-authenticate these grants; that setup is unsupported.
  */
 async function revokeIfUnused(
   grantId: string,
