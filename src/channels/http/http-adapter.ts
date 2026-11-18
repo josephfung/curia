@@ -156,7 +156,7 @@ export interface HttpAdapterConfig {
   /** Backs the public /api/mailbox-signin/* routes (mailbox sign-in through Nylas hosted auth, #2361).
    *  Token-authed, so mounted independently of the bootstrap secret. */
   mailboxSignIn?: {
-    service: MailboxSignInRouteOptions['signIn'];
+    service: MailboxSignInRouteOptions['signIn'] & { pruneExpired(): Promise<number> };
     readiness: MailboxSignInRouteOptions['readiness'];
     readApiKey: MailboxSignInRouteOptions['readApiKey'];
   };
@@ -379,6 +379,7 @@ export class HttpAdapter implements Channel {
     // query against the same pool, piling up work and exhausting connections — the same
     // overlap the sessions guard prevents for its own DELETE.
     let isPruningCaptureTokens = false;
+    let isPruningSignInTokens = false;
     const pruneInterval = setInterval(() => {
       const now = Date.now();
       for (const [tokenHash, entry] of sessions) {
@@ -396,6 +397,17 @@ export class HttpAdapter implements Channel {
             logger.error({ err }, 'Secret-capture token prune DELETE failed');
           })
           .finally(() => { isPruningCaptureTokens = false; });
+      }
+
+      // Same sweep for mailbox sign-in tokens (#2361), guarded on its own.
+      const signInSvc = this.config.mailboxSignIn?.service;
+      if (signInSvc && !isPruningSignInTokens) {
+        isPruningSignInTokens = true;
+        signInSvc.pruneExpired()
+          .catch((err: unknown) => {
+            logger.error({ err }, 'Mailbox sign-in token prune failed');
+          })
+          .finally(() => { isPruningSignInTokens = false; });
       }
 
       if (isPruning) return;

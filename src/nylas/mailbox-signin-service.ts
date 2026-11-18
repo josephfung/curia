@@ -46,14 +46,35 @@ export interface SignInTokenRow {
   resume_token: string | null;
 }
 
+/** Thrown by mint() when a principal link cannot be pinned to one of the principal's own
+ *  verified addresses. `unknown_principal_address`: the requested address is not one of them.
+ *  `no_principal_address`: none was requested and none can be chosen (no designated primary and
+ *  not exactly one verified address). */
+export class MailboxSignInAddressError extends Error {
+  constructor(readonly reason: 'unknown_principal_address' | 'no_principal_address') {
+    super(
+      reason === 'unknown_principal_address'
+        ? "That address is not one of the principal's verified email addresses. Connecting a new account is done by the operator from the console."
+        : "The principal has no designated primary email address, so there is no mailbox address to sign in. Ask them which of their verified addresses to use, or set a primary in the console.",
+    );
+    this.name = 'MailboxSignInAddressError';
+  }
+}
+
 export interface MintSignInArgs {
   target: SignInTarget;
-  /** Rarely needed: for 'principal' the service fills the principal's primary verified address
-   *  itself, so it never comes from model input (ADR-047). */
-  expectedEmail?: string;
+  /** For 'principal': one of the principal's verified addresses (case-insensitive). Omitted means
+   *  the designated primary. Anything else is refused; it never reaches the DB unchecked. */
+  mailboxAddress?: string;
   label?: string;
   origin?: CaptureOrigin;
   ttlMinutes?: number;
+}
+
+/** Operator-facing mint (console, Task 7): may pin the link to an address that is not yet a
+ *  verified identity, which skills must never be able to do. Not part of MailboxSignInMinter. */
+export interface OperatorMintSignInArgs extends Omit<MintSignInArgs, 'mailboxAddress'> {
+  expectedEmail?: string;
 }
 
 /** The mint-only surface injected into skills as the `mailboxSignIn` capability. */
@@ -68,8 +89,9 @@ export interface MailboxSignInServiceDeps {
   readiness: () => Promise<NylasSignInReadiness>;
   /** The console's public origin (APP_ORIGIN); the link is built from it. */
   appOrigin: string | undefined;
-  /** The principal's primary verified email, or null when they have none. Read at mint time. */
-  resolvePrincipalEmail?: () => string | null;
+  /** The principal's verified email addresses and the designated primary (or null), read at mint
+   *  time so a change applies without a restart. */
+  principalEmails?: () => { primary: string | null; all: readonly string[] };
 }
 
 const ROW_COLUMNS = `target, expected_email, mailbox_label, expires_at, consumed_at, created_at,
@@ -84,15 +106,45 @@ export class MailboxSignInService implements MailboxSignInMinter {
   constructor(private readonly deps: MailboxSignInServiceDeps) {}
 
   async mint(args: MintSignInArgs): Promise<{ url: string; expiresAt: Date }> {
+    const { mailboxAddress, ...rest } = args;
+    const expectedEmail = rest.target === 'principal' ? this.resolvePrincipalAddress(mailboxAddress) : null;
+    return this.insert(rest, expectedEmail);
+  }
+
+  /** Operator path: the caller supplies the address (or none, for any account). */
+  async mintForOperator(args: OperatorMintSignInArgs): Promise<{ url: string; expiresAt: Date }> {
+    const { expectedEmail, ...rest } = args;
+    return this.insert(rest, expectedEmail?.trim().toLowerCase() || null);
+  }
+
+  /**
+   * Pick the address a principal link is pinned to. Fails closed: a principal link is never
+   * minted with no address, because that would let any Google account sign in as the principal.
+   */
+  private resolvePrincipalAddress(requested: string | undefined): string {
+    const { primary, all } = this.deps.principalEmails?.() ?? { primary: null, all: [] };
+    const verified = all.map((a) => a.trim().toLowerCase()).filter((a) => a !== '');
+    if (requested !== undefined) {
+      const want = requested.trim().toLowerCase();
+      if (!verified.includes(want)) throw new MailboxSignInAddressError('unknown_principal_address');
+      return want;
+    }
+    const designated = primary?.trim().toLowerCase();
+    if (designated && verified.includes(designated)) return designated;
+    const only = [...new Set(verified)];
+    if (only.length === 1) return only[0]!;
+    throw new MailboxSignInAddressError('no_principal_address');
+  }
+
+  private async insert(
+    args: Omit<MintSignInArgs, 'mailboxAddress'>,
+    expectedEmail: string | null,
+  ): Promise<{ url: string; expiresAt: Date }> {
     const readiness = await this.deps.readiness();
     if (!readiness.ready) throw new MailboxSignInUnavailableError(readiness.reason, readiness.detail);
     const origin = this.deps.appOrigin;
     // Readiness already requires an https origin; this narrows the type and guards a drift.
     if (origin === undefined || !origin.startsWith('https://')) throw new MailboxSignInUnavailableError('origin_not_https');
-
-    const expectedEmail = args.target === 'principal'
-      ? (args.expectedEmail ?? this.deps.resolvePrincipalEmail?.() ?? null)
-      : null;
 
     // 128-bit base64url slug (~22 chars), the same shape as capture links: short enough that a
     // relaying model does not mistake it for a credential and redact it.
@@ -122,17 +174,27 @@ export class MailboxSignInService implements MailboxSignInMinter {
     };
   }
 
-  /** Read a link without spending it. A spent or lapsed link is 'expired'. */
-  async peek(rawToken: string): Promise<SignInTokenRow | 'expired' | 'not_found'> {
+  /** Read a link without spending it. A spent link is 'used'; a lapsed one is 'expired'. */
+  async peek(rawToken: string): Promise<SignInTokenRow | 'expired' | 'used' | 'not_found'> {
     const res = await this.deps.pool.query<SignInTokenRow & { spent: boolean }>(
-      `SELECT ${ROW_COLUMNS}, (consumed_at IS NOT NULL OR expires_at <= now()) AS spent
+      `SELECT ${ROW_COLUMNS}, (expires_at <= now()) AS spent
          FROM mailbox_signin_tokens WHERE token_hash = $1`,
       [hashToken(rawToken)],
     );
     const found = res.rows[0];
     if (!found) return 'not_found';
+    if (found.consumed_at !== null) return 'used';
     if (found.spent) return 'expired';
     return toRow(found);
+  }
+
+  /** Delete lapsed rows, and rows spent over an hour ago. Returns the number removed. */
+  async pruneExpired(): Promise<number> {
+    const res = await this.deps.pool.query(
+      `DELETE FROM mailbox_signin_tokens
+        WHERE expires_at < now() OR consumed_at < now() - interval '1 hour'`,
+    );
+    return res.rowCount ?? 0;
   }
 
   /**

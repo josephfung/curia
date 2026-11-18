@@ -54,7 +54,7 @@ export async function mailboxSignInRoutes(
     const { token } = request.params as { token: string };
     try {
       const row = await signIn.peek(token);
-      if (row === 'expired' || row === 'not_found') return reply.redirect(donePage(row));
+      if (typeof row === 'string') return reply.redirect(donePage(row));
 
       // Re-check at click time: the key or the Nylas application can change after the link was minted.
       const state = await readiness();
