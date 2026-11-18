@@ -96,7 +96,12 @@ export function NylasSignInSetupSection() {
     }
   }, []);
 
-  useEffect(() => { void check(); }, [check]);
+  useEffect(() => {
+    void check();
+    // Unmount invalidates any check still in flight: a late answer must neither set state nor
+    // broadcast a stale result to a page mounted afterwards.
+    return () => { checkSeq.current++; };
+  }, [check]);
 
   // Run one action, then re-check. Returns whether it succeeded.
   async function act(run: () => Promise<Response>, done: string): Promise<boolean> {
