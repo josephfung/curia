@@ -935,6 +935,29 @@ describe('autonomy gates', () => {
 
     // A held sender-only reply with an explicit cc could never run: the handler refuses that
     // combination on the approved replay. Refuse it up front instead of filing a dead approval.
+    it.each([
+      ['a non-empty string', 'bob@example.com'],
+      ['an array', ['bob@example.com']],
+      ['null', null],
+    ] as const)('refuses a sender-only email-reply whose cc is %s before any gate files an approval', async (_label, cc) => {
+      const registry = new ToolRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+      const trigger = makeApprovalTrigger({ created: true, shortRef: 'a3f7c12b', approvalNumber: 3 });
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(59), approvalTrigger: trigger });
+
+      const result = await layer.invoke('email-reply', { reply_to_message_id: 'm-1', body: 'hi', cc }, undefined, {
+        taskEventId: 'task-2',
+        taskMetadata: {
+          originator: { ...principalLineage, channel: 'sms', authenticated: false, systemRole: 'agent', tier: null, ladderedFrom: 'principal' },
+        },
+      });
+
+      expect(result.success).toBe(false);
+      expect(trigger.request).not.toHaveBeenCalled();
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
     it('refuses a sender-only email-reply with an explicit cc before any gate files an approval', async () => {
       const registry = new ToolRegistry();
       const handler = makeHandler('should not run');

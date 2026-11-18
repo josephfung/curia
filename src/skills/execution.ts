@@ -2631,13 +2631,14 @@ export class ExecutionLayer {
       return { success: false, error: this.wrapSkillError(confirmError), gate: 'live_principal_turn' };
     }
 
-    // A sender-only email-reply refuses an explicit cc (the handler checks it too). Refuse before
-    // the gates, so a hold never files an approval whose replay could only fail.
+    // A sender-only email-reply refuses an explicit cc (the handler checks it too), and the handler
+    // cannot resolve a non-string one. Refuse both before the gates, so a hold never files an
+    // approval whose replay could only fail. An absent or empty cc stays eligible.
     if (
       toolName === 'email-reply'
       && hasUnauthenticatedPrincipalLineage(options?.taskMetadata)
-      && typeof input['cc'] === 'string'
-      && input['cc'].trim().length > 0
+      && input['cc'] !== undefined
+      && (typeof input['cc'] !== 'string' || input['cc'].trim().length > 0)
     ) {
       return { success: false, error: this.wrapSkillError(SENDER_ONLY_CC_REFUSAL) };
     }
