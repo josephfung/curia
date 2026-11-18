@@ -379,6 +379,20 @@ describe('TurnLanes', () => {
       expect(gate.tryInject('conv-1', input({ liveTurn: false }))).toEqual({ kind: 'not_injected', reason: 'ineligible' });
     });
 
+    // The reverse: the principal's authenticated message must not be absorbed into a turn a
+    // forgery started, where it would run without authority. It gets its own turn.
+    it('refuses a live follow-up into a non-live host that cannot be raised', async () => {
+      const gate = lanes();
+      await gate.acquire(holder('a', { originatorIsPrincipal: false, liveTurn: false }));
+      expect(gate.tryInject('conv-1', input({ liveTurn: true }))).toEqual({ kind: 'not_injected', reason: 'ineligible' });
+    });
+
+    it("queues a live follow-up into the principal's own non-live turn (a wake), which it raises", async () => {
+      const gate = lanes();
+      await gate.acquire(holder('a', { originatorIsPrincipal: true, liveTurn: false, synthetic: true }));
+      expect(gate.tryInject('conv-1', input({ liveTurn: true })).kind).toBe('queued');
+    });
+
     it('still queues a same-contact follow-up when neither side is a live turn', async () => {
       const gate = lanes();
       await gate.acquire(holder('a', { originatorIsPrincipal: false, liveTurn: false }));
@@ -690,6 +704,7 @@ describe('holderFromAgentTask', () => {
     channel: 'email',
     initiatedAt: 't',
     tier: 'principal',
+    authenticated: true,
   };
 
   it('fails closed for an unresolved email and for a UUID-shaped Signal ACI', () => {
@@ -727,6 +742,14 @@ describe('holderFromAgentTask', () => {
       initiatedAt: 't',
       tier: 'trusted',
     }).originatorIsPrincipal).toBe(false);
+  });
+
+  // GHSA-p49r-jqh2-v668: the flag raises a host to a live turn when a live input joins it, so it
+  // means the principal's authority, not their identity.
+  it('does not mark an unauthenticated principal originator as the principal', () => {
+    expect(stamped({ ...principal, authenticated: false }).originatorIsPrincipal).toBe(false);
+    const { authenticated: _omitted, ...missing } = principal;
+    expect(stamped(missing).originatorIsPrincipal).toBe(false);
   });
 
   it('marks a turn tool-limited whenever it carries an allowlist, an empty one included (#2615)', () => {

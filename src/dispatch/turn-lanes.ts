@@ -25,6 +25,7 @@
 
 import type { AgentTaskEvent, AgentTaskPayload, InjectionDrainPoint } from '../bus/events.js';
 import { isDelegatedSpecialistTask, parseTaskOriginator } from '../agents/delegated-task-context.js';
+import { hasPrincipalAuthority } from '../contacts/principal.js';
 import type { Logger } from '../logger.js';
 import { isUuid } from '../util/uuid.js';
 
@@ -69,6 +70,10 @@ export interface LaneHolder {
    * are laned (others wait) but nothing may inject into them.
    */
   originatorResolved: boolean;
+  /**
+   * The originator carries the principal's authority (an authenticated principal, GHSA-p49r-jqh2-v668),
+   * not just their identity: a live input joining this turn raises it to a live turn.
+   */
   originatorIsPrincipal: boolean;
   liveTurn: boolean;
   synthetic: boolean;
@@ -227,7 +232,7 @@ export function holderFromAgentTask(
   admission?: { originatorResolved: boolean },
 ): LaneHolder {
   const rawOriginator = task.payload.metadata?.['originator'];
-  const role = parseTaskOriginator(rawOriginator)?.systemRole;
+  const parsed = parseTaskOriginator(rawOriginator);
   const { contactId, resolved: inferred } = inferOriginatorResolution(rawOriginator);
   const originatorResolved = admission
     ? admission.originatorResolved === true && isUuid(contactId)
@@ -237,7 +242,7 @@ export function holderFromAgentTask(
     conversationId: task.payload.conversationId,
     originatorContactId: contactId,
     originatorResolved,
-    originatorIsPrincipal: role === 'principal',
+    originatorIsPrincipal: hasPrincipalAuthority(parsed),
     liveTurn: task.payload.liveTurn === true,
     synthetic: task.payload.syntheticTurn === true,
     // Any value counts, an empty list included, as the runtime reads it: [] is "no tools", and
@@ -719,6 +724,9 @@ export class TurnLanes {
     // A message that matches the principal but did not authenticate (a forged email From) is
     // not a live turn: it gets its own turn rather than the live one's authority (GHSA-p49r-jqh2-v668).
     if (holder.liveTurn && input.liveTurn !== true) return false;
+    // And the reverse: a live input joins a non-live turn only when it can raise it (the
+    // principal's own wake). In a turn a forged message started it would run without authority.
+    if (input.liveTurn === true && !holder.liveTurn && !holder.originatorIsPrincipal) return false;
     return input.senderContactId === holder.originatorContactId;
   }
 
