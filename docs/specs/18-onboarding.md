@@ -10,8 +10,8 @@ instance in one path with no detours. The onboarding flow spans three layers:
 
 1. **Host bootstrap** — a single `pnpm run setup` command brings up Postgres,
    applies migrations, and starts the stack.
-2. **Form wizard** (`/setup`) — captures the principal's identity and operational
-   profile, plus the assistant's identity, tone & style, and autonomy level.
+2. **Setup page** (`/setup`, #2358) — the operator's checklist: who Curia is for,
+   Curia's name, its channels, Apply & restart, then Start onboarding.
 3. **In-chat specialist** (`setup-wizard` agent) — an outcome-backward concierge
    that runs on first chat and whenever the principal asks for help setting up
    integrations; catalog-aware and deferral-aware.
@@ -88,117 +88,50 @@ is absent — that signals a previous run was interrupted partway.
 
 ---
 
-## Layer 2 — Form wizard at `/setup`
+## Layer 2 — The Setup page at `/setup` (#2358)
 
-A React route in the console app (`apps/console/src/pages/WizardPage.tsx`)
-that captures the principal contact and operational profile, plus the
-configurable parts of the office identity, over six steps.
+A React route in the console app (`apps/console/src/pages/setup/`) that replaced the
+six-step form wizard. It is the console's landing page on a new install until Start
+onboarding, and an install that predates it never sees it. Design and mockup:
+`docs/wip/2026-10-29-onboarding-journey-design.md` (Phase 1) and
+`docs/wip/2026-10-29-onboarding-journey-design/setup-page-mockup.html`.
 
 ### Routing
 
-- `/setup` is its own route in `apps/console/src/router.tsx`, sibling to the
-  dashboard rather than nested inside it — no sidebar, no topbar, full-screen.
-  It is gated by the same auth guard as the dashboard.
-- The auth guard checks `configured: boolean` from `GET /api/identity`. If
-  `configured === false`, it redirects to `/setup` before letting the user
-  through to `/`.
-- After successful submit on step 6, the wizard navigates **directly to
-  `/chat`** (not to `/`) so the kickoff message can fire immediately.
-- `/setup` remains accessible directly even when configured — it can be
-  used as a manual re-run tool.
-- Step state lives in the URL as `?step=1`..`?step=6` (TanStack Router
-  search params, clamped 1–6). Field values do not persist across reloads.
+- `/setup` is its own full-screen route in `apps/console/src/router.tsx` (no sidebar or
+  topbar), behind the same auth guard as the rest of the console. `?step=<id>` opens one
+  step directly; without it the page opens on the first required step that isn't done.
+- The first-load gate is `setupRedirect` (`pages/setup/setup-steps.ts`), fed by
+  `GET /api/identity`'s `inSetup` (true from a new install's first load until Start
+  onboarding; migration 130 marked older installs complete). While Setup runs, every page
+  but the Setup page and the Settings pages its steps link to (`/settings`, `/system`,
+  `/channels`, `/tools`, `/agents`, `/mcp-skills`, `/secrets`, `/contacts`) redirects to
+  `/setup`; outside Setup, `/setup` redirects home. A server that predates `inSetup` falls
+  back to the older `configured` flag.
 
-### Step content
+### Steps
 
-| Step | Captures | Validation |
-|------|----------|------------|
-| 1 — About you | `principalName` (the CEO's name) — written through `POST /api/setup/principal` (idempotent) before advancing. Pre-populates the current name on re-entry so it can be corrected; no longer auto-skips when a principal already exists. | non-empty |
-| 2 — Your details | Principal operational profile: `timezone` (required, IANA string), `preferredName`, `title`, `primaryEmail`, `workingHours` (all optional). Written through `POST /api/setup/principal/profile`; email is stored as a verified `contact_channel_identity` that comes online after the wizard's restart. | timezone required |
-| 3 — Identity | `name`, `title`, `signature` (optional). The assistant name and email signature are prefilled via `POST /api/setup/suggest-name` (LLM-suggested first name, silent static fallback on failure). | `name` required |
-| 4 — Tone & style | `toneStyle` (a textarea, ≤800 chars, started from one of four starter templates that each end in an example line), `verbosity` (the Detail slider, 0–100) | style non-empty, ≤800 chars |
-| 5 — Autonomy & preferences | `autonomyBand` (one card per autonomy band, pre-selected from the current score), `preferences` textarea (appended to existing `behavioralPreferences`, not replaced) | none |
-| 6 — Review | Summary card, Confirm & save button | none |
+The step list shows each step's mark from the Setup checklist (`GET /api/setup/checklist`,
+the same computation as the setup agent's `setup-status`): done, waiting for a restart,
+not done, or locked. Status shows as one line inside the open step.
 
-**Standing preferences storage (#1376):** they live on `OfficeIdentity`
-(`behavioralPreferences`), versioned with the rest of office identity via
-`PUT /api/identity`, and are **not** part of `ExecutiveProfile`. Post-setup editing is
-on Settings → Standing preferences (`/settings/posture`; it replaces the list, the
-wizard still appends).
+| Step | Saves | Through |
+|------|-------|---------|
+| Who it's for | Myself or someone else; for someone else, the operator's name and email; the principal's name, title, email, timezone and pronouns | `PUT /api/setup/state` (first, which starts Setup), `POST /api/setup/principal`, `POST /api/setup/principal/profile` |
+| Curia's name | Name, title, email signature (a suggested first name on a new install, #799) | `PUT /api/identity` (`changedBy: 'wizard'`, the assistant block only) and `POST /api/identity/reload` |
+| Email, Email & calendar | Nothing yet: the live check, the how-to and a link to the Settings page that holds the credentials | — |
+| Messaging, Voice | The route (Messaging: the Curia app, Signal, SMS or Slack; Voice: the app or a Signal call, defaulting to match messaging), plus the live check and a link to the route's Settings page | `PUT /api/setup/state` |
+| Apply & restart | One restart turns on everything saved; every step is checked again | `POST /api/system/restart`, then `GET /api/system` until `bootedAt` changes |
+| Start onboarding | Locked until `setupComplete`, listing what's left. Ends Setup and loads the console afresh, so no chat stream stays on the Setup thread | `POST /api/setup/complete` (rotates the web thread) |
 
-**Autonomy, not posture (#2143).** Step 5 used to ask for a decision posture
-(Conservative / Balanced / Proactive) stored as `decisionStyle`, which no gate read and
-which could contradict the autonomy score. It now asks for the autonomy band, the setting
-that actually decides act-vs-ask (spec 14):
-- **Bands and copy** come from `apps/console/src/autonomy-bands.ts`, shared with
-  Settings → Autonomy. A picked band saves as its lower bound (`scoreForBand`), so it never
-  unlocks an `action_risk` tier above what its name says.
-- **`GET /api/autonomy` is a required load,** like `/api/identity` and `/api/setup/status`.
-  If it fails, or returns no config, the wizard shows a load error rather than guessing
-  a band: submitting a guessed default could quietly lower a real score.
-
-**Tone & style templates.** The four starters (*Dry & understated*, *Warm & personable*,
-*Crisp & direct*, *Formal*) are `STYLE_TEMPLATES` in
-[apps/console/src/pages/wizard-utils.ts](../../apps/console/src/pages/wizard-utils.ts).
-Choosing one replaces the text without asking only when the text is empty or still a
-template; otherwise the operator confirms first. The seeded default style is the *Warm &
-personable* template, so a fresh install switches freely.
-
-### API integration
-
-- **On mount:** `GET /api/identity` populates the form with current values
-  (the defaults seeded from `src/identity/defaults.ts` on first boot, or the
-  last saved values on re-entry); `GET /api/setup/status` resolves
-  `principalExists` to pre-populate step 1; `GET /api/autonomy` pre-selects step 5's
-  band. All three are required.
-- **On step 1 advance:** `POST /api/setup/principal` with `{ name }` writes
-  the principal contact before the user moves to step 2.
-- **On step 2 advance:** `POST /api/setup/principal/profile` with the
-  operational profile fields writes timezone, preferred name, title, email,
-  and working hours to the principal contact row.
-- **On step 3 mount:** `POST /api/setup/suggest-name` fires to pre-fill the
-  assistant name and signature (silent fallback on failure — also serves as
-  an early Anthropic key smoke test).
-- **On submit (step 6):**
-  1. `PUT /api/autonomy` with the picked band's score and
-     `reason: 'Set via onboarding wizard'`, skipped when the band is unchanged. It goes
-     **first**: as soon as the wizard's identity save lands (recorded as an `api` version,
-     since the wizard sends no `changedBy`), `isIdentityConfigured()` is true and the
-     wizard never shows again, so an autonomy failure after the identity save could not be
-     fixed here. With autonomy first, a failure leaves the deployment
-     unconfigured and the wizard runs again.
-  2. `PUT /api/identity` with the compiled identity payload and
-     `note: 'Saved via onboarding wizard'`.
-  3. `POST /api/identity/reload` to refresh the in-memory cache.
-  4. `GET /api/setup/status` to read `externalAdaptersPending`.
-  5. If `externalAdaptersPending === false` (email/Signal already running,
-     or never gated): set
-     `localStorage['curia:onboarding:welcome-banner-pending']` and
-     `navigate({ to: '/chat' })`.
-  6. Otherwise: `POST /api/setup/restart` to ask the supervisor to bring
-     the process back up in normal mode (email/Signal channels online). The
-     wizard then renders a full-screen "Setting up channels…" wait state and
-     polls `GET /api/setup/status` for the new `bootStartedAt`. When it
-     flips, the wizard sets the kickoff flag and navigates to `/chat`.
-     A 409 from `/api/setup/restart` is treated as success-equivalent (a
-     concurrent tab already restarted the process).
-
-### Submit failure
-
-Inline error message under the Confirm button, naming the call that failed ("Saving the
-autonomy level failed: …"). The wizard stays on step 6 with the button re-enabled, and
-does not reload, restart or navigate. The PUT itself is a single atomic write to
-`office_identity_versions`, so a failure mid-pipeline (e.g. between the
-reload and the restart) is recoverable by re-submitting. The restart-wait
-state has its own 60-second timeout; on timeout it falls into a
-"Curia didn't come back yet" view with a Keep waiting retry button.
+The channel steps' own forms (keys, Connect with Google, the principal's ids) and the
+optional extras (Working style, Google Workspace, the Tavily key, Capabilities) follow in
+later #2358 PRs, as does the setup guide panel.
 
 ### Out of scope
 
-- A Settings link to re-run the wizard (deferred until the settings page
-  is migrated to the console).
-- Aligning the system timezone (cron scheduler, `TIMEZONE` env var) to the
-  wizard-captured principal timezone — tracked as a follow-up.
+- Aligning the system timezone (cron scheduler, `TIMEZONE` env var) to the principal's
+  timezone — tracked as a follow-up.
 
 ---
 
@@ -337,28 +270,16 @@ pnpm run setup                                    ← Layer 1
   ↓  generates .env, starts stack, prints bootstrap secret
 open http://localhost:3000
   ↓  log in with bootstrap secret
-auth guard sees configured === false
+auth guard sees inSetup === true
   ↓  redirects to /setup
-[ form wizard ]                                   ← Layer 2
-  step 1 (About you) → POST /api/setup/principal
-  step 2 (Your details) → POST /api/setup/principal/profile
-  step 3 (Identity) — LLM suggest-name prefill, local state
-  steps 4–5 (Tone & style, Autonomy & preferences) — local state only
-  step 6 (Review) submit:
-       PUT /api/autonomy (if the band changed)
-                          →  PUT /api/identity  →  POST /api/identity/reload
-                          →  GET /api/setup/status
-       if externalAdaptersPending: POST /api/setup/restart,
-         render "Setting up channels…" wait state until back up
-       localStorage['curia:onboarding:welcome-banner-pending'] = true
-       navigate({ to: '/chat' })
-/chat mounts
-  ↓  useChatSession sees the localStorage flag, clears it,
-  ↓  auto-sends "Just finished setup — say hi!"
-coordinator delegates to setup-wizard               ← Layer 3 (v0.2.0)
-  ↓
-outcome-backward concierge: instant wins → outcome question
-→ shortest path to first integration → defer the rest
+[ Setup page ]                                    ← Layer 2 (#2358)
+  Who it's for → PUT /api/setup/state, POST /api/setup/principal(/profile)
+  Curia's name → PUT /api/identity → POST /api/identity/reload
+  Email, Messaging, Voice, Email & calendar → routes saved; credentials in Settings
+  Apply & restart → POST /api/system/restart, poll GET /api/system
+  Start onboarding (unlocked by setupComplete) → POST /api/setup/complete
+       → the web thread rotates; the console loads afresh, out of Setup
+the principal's first conversation                ← onboarding (#2360)
 ```
 
 ---

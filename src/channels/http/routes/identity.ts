@@ -11,6 +11,7 @@
 //   GET  /api/identity/history — return all versions, newest first
 //   POST /api/identity/reload  — force a reload from DB (used post-wizard)
 
+import { isInSetup, readSetupState } from '../../../setup/setup-state.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import type { OfficeIdentityService } from '../../../identity/service.js';
@@ -82,8 +83,11 @@ export async function identityRoutes(
       // or API. A fresh deployment (only file_load versions) returns configured: false,
       // which triggers the first-run wizard in the browser.
       const configured = await isIdentityConfigured(pool);
+      // #2358: the console's first-load gate. True on a new install until Start onboarding;
+      // migration 130 marked installs that predate the Setup page complete.
+      const inSetup = isInSetup(await readSetupState(pool));
 
-      return reply.send({ identity, configured, lengthLimits: LENGTH_LIMITS_RESPONSE });
+      return reply.send({ identity, configured, inSetup, lengthLimits: LENGTH_LIMITS_RESPONSE });
     } catch (err) {
       request.log.error({ err }, 'GET /api/identity: failed to query configured flag or get identity');
       return reply.status(500).send({ error: 'Failed to get identity. Check server logs.' });
