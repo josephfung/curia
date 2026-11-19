@@ -98,6 +98,7 @@ function StepMessage({ msg }: { msg: { notice?: string; error?: string } | undef
 export function NylasSignInSetupSection() {
   const [status, setStatus] = useState<SignInStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // True while any action or the first-load chain's steps run (see hold()).
   const [busy, setBusy] = useState(false);
   const [working, setWorking] = useState<Step | null>(null);
   const [messages, setMessages] = useState<Partial<Record<Step, { notice?: string; error?: string }>>>({});
@@ -108,6 +109,21 @@ export function NylasSignInSetupSection() {
   // Only the newest check may apply its result: a slow earlier one must not overwrite it.
   const checkSeq = useRef(0);
   const mounted = useRef(false);
+  // Work in flight: the first-load chain and each action hold one count. The panel is busy while
+  // any is held, and each holder releases only its own count, so one finishing never frees
+  // another's lock.
+  const pending = useRef(0);
+  const hold = useCallback(() => {
+    pending.current++;
+    setBusy(true);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      pending.current--;
+      if (mounted.current) setBusy(pending.current > 0);
+    };
+  }, []);
 
   // Resolves to the status it applied, or null when it failed or a newer check superseded it.
   const check = useCallback(async (): Promise<SignInStatus | null> => {
@@ -139,10 +155,13 @@ export function NylasSignInSetupSection() {
 
   // Run one action for a step, then re-check. Resolves to the re-checked status (or null) on
   // success, undefined on failure. The outcome is shown inside that step.
+  // A manual action (auto false) never starts while other work is in flight; the first-load
+  // chain's own steps pass auto true, since the chain already holds the lock they run under.
   const act = useCallback(async (
-    step: Step, run: () => Promise<Response>, done: string,
+    step: Step, run: () => Promise<Response>, done: string, auto = false,
   ): Promise<SignInStatus | null | undefined> => {
-    setBusy(true);
+    if (!auto && pending.current > 0) return undefined;
+    const release = hold();
     setWorking(step);
     setMessages({});
     try {
@@ -156,30 +175,36 @@ export function NylasSignInSetupSection() {
       if (mounted.current) setMessages({ [step]: { error: err instanceof Error ? err.message : 'unknown error' } });
       return undefined;
     } finally {
-      if (mounted.current) { setBusy(false); setWorking(null); }
+      release();
+      if (mounted.current) setWorking((w) => (w === step ? null : w));
     }
-  }, [check]);
+  }, [check, hold]);
 
   useEffect(() => {
     mounted.current = true;
     // First load: do the steps Curia can do by itself, once each, in order.
+    let release = (): void => {};
     void (async () => {
       let s = await check();
       if (!mounted.current || s === null || s.ready === true) return;
+      // A manual action started while the first check loaded: it re-checks when it ends, so the
+      // chain steps aside rather than run alongside it.
+      if (pending.current > 0) return;
+      release = hold();
       const regionUnknown = (s.region === undefined && !BLOCKING.has(s.reason ?? '')) || s.reason === 'bad_api_key';
       if (regionUnknown) {
-        const after = await act('region', () => apiFetch(`${BASE}/discover-region`, jsonInit('POST', {})), 'Region detected and saved.');
+        const after = await act('region', () => apiFetch(`${BASE}/discover-region`, jsonInit('POST', {})), 'Region detected and saved.', true);
         if (!mounted.current || !after) return;
         s = after;
       }
       if (s.checks?.callbackRegistered === false && s.callbackUrl) {
-        await act('callback', () => apiFetch(`${BASE}/callback`, jsonInit('POST', {})), 'Callback registered with Nylas.');
+        await act('callback', () => apiFetch(`${BASE}/callback`, jsonInit('POST', {})), 'Callback registered with Nylas.', true);
       }
-    })();
+    })().finally(() => release());
     // Unmount invalidates any check still in flight: a late answer must neither set state nor
     // broadcast a stale result to a page mounted afterwards.
     return () => { mounted.current = false; invalidateChecks(); };
-  }, [check, act, invalidateChecks]);
+  }, [check, act, hold, invalidateChecks]);
 
   const ready = status?.ready === true;
   const region: Region | undefined = status?.region;
