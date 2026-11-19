@@ -21,7 +21,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import type { Logger } from '../../../logger.js';
-import { assertSecret, type SessionStore } from '../session-auth.js';
+import { assertSecret, CONSOLE_RATE, type SessionStore } from '../session-auth.js';
 import { ensurePrincipalContact } from '../../../contacts/ensure-principal.js';
 import { isIdentityConfigured } from './identity.js';
 import type { InfraLlmService } from '../../../skills/infra-llm.js';
@@ -90,6 +90,10 @@ export interface SetupRouteOptions {
 const AUTH_RATE = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
 // The Setup page re-reads the checklist after every save and while a restart lands.
 const CHECKLIST_RATE = { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } };
+// The Setup page (#2358) re-reads its state after every save and saves on each route pick, so
+// its reads take the console-wide read limit and its saves 30/min, like the vault and
+// registry writes. Restart, complete and the LLM name suggestion keep AUTH_RATE.
+const SETUP_WRITE_RATE = { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } };
 
 const MAX_DISPLAY_NAME_LENGTH = 200;
 
@@ -132,7 +136,7 @@ export async function setupRoutes(
   // later, per channel. Idempotent: a second call when the principal already
   // exists returns the existing IDs. If the submitted name differs from the
   // stored name, the contact is renamed so Step 1 can correct a typo (#392).
-  app.post('/api/setup/principal', AUTH_RATE, async (request, reply) => {
+  app.post('/api/setup/principal', SETUP_WRITE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     const body = request.body as { name?: unknown };
@@ -206,7 +210,7 @@ export async function setupRoutes(
   // Loads the principal's name + operational profile so the wizard can pre-populate
   // Steps 1 and 2 (#392). Returns { exists:false } (not 404) when no principal yet —
   // the wizard treats that as a fresh install.
-  app.get('/api/setup/principal', AUTH_RATE, async (request, reply) => {
+  app.get('/api/setup/principal', CONSOLE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     try {
       const principal = await contactService.findContactBySystemRole('principal');
@@ -265,7 +269,7 @@ export async function setupRoutes(
   // after the wizard-end restart); working hours as a KG fact surfaced by entity-context.
   // Requires the principal to exist (created in Step 1). Omitted optional fields are not
   // written, so a partial submit never clobbers an existing value.
-  app.post('/api/setup/principal/profile', AUTH_RATE, async (request, reply) => {
+  app.post('/api/setup/principal/profile', SETUP_WRITE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     const body = (request.body ?? {}) as {
@@ -405,7 +409,7 @@ export async function setupRoutes(
   //     the operator has finished the wizard but the email/Signal adapters
   //     remain skipped until restart. This is the signal for the dashboard
   //     "please restart" banner.
-  app.get('/api/setup/status', AUTH_RATE, async (request, reply) => {
+  app.get('/api/setup/status', CONSOLE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     try {
@@ -535,7 +539,7 @@ export async function setupRoutes(
   //
   // Saves the Setup page's own fields (#2358). Partial: a field left out is unchanged, and
   // null clears it.
-  app.put<{ Body: unknown }>('/api/setup/state', AUTH_RATE, async (request, reply) => {
+  app.put<{ Body: unknown }>('/api/setup/state', SETUP_WRITE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     const parsed = parseStateUpdate(request.body);
     if ('error' in parsed) return reply.status(400).send({ error: parsed.error });
