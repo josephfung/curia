@@ -17,7 +17,7 @@
 // before invoking the handler. The handler receives ctx.entityContext[] and
 // never needs to call entity-context itself.
 
-import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest, ActionRisk, EmailChannelStatus, PrincipalMailboxReadiness, ApprovalVia } from './types.js';
+import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest, ActionRisk, ApprovalVia } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated, isOutsiderOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier, isUnauthenticatedPrincipal, hasUnauthenticatedPrincipalLineage } from '../contacts/principal.js';
 import { unverifiedChannelLabel } from '../autonomy/approval-delivery.js';
@@ -31,7 +31,7 @@ import {
   validateNylasMessageId,
 } from '../channels/email/nylas-message-id.js';
 import type { ChannelIdentity } from '../contacts/types.js';
-import type { NylasSignInReadiness } from '../nylas/signin-readiness.js';
+import type { SetupChecklist } from '../setup/checklist.js';
 import { isCaretOrDeleteKey, keyedCharacter, provenanceSourceText } from '../contacts/identifier-provenance.js';
 import { mainFrameProse } from './_shared/web-page-content.js';
 import { SENDER_ONLY_CC_REFUSAL } from './_shared/principal-directed.js';
@@ -412,10 +412,7 @@ export class ExecutionLayer {
   private skillRegistry?: SkillRegistry;
   private logger: Logger;
   private bus?: EventBus;
-  private phoneAppReady?: () => Promise<boolean>;
-  private emailChannelStatus?: () => Promise<EmailChannelStatus>;
-  private principalMailboxReady?: () => Promise<PrincipalMailboxReadiness>;
-  private nylasSignInReadiness?: () => Promise<NylasSignInReadiness>;
+  private setupChecklist?: () => Promise<SetupChecklist>;
   private mailboxSignIn?: import('../nylas/mailbox-signin-service.js').MailboxSignInMinter;
   private curiaEmailAddresses?: () => Promise<string[]>;
   private agentRegistry?: AgentRegistry;
@@ -542,13 +539,8 @@ export class ExecutionLayer {
     workingDocsRepo?: import('../db/working-docs-repo.js').WorkingDocsRepo;
     /** Backs the 'voiceSessions' capability (#2347). */
     voiceSessions?: Pick<import('../channels/voice/session-store.js').VoiceSessionStore, 'markNotesRequested'>;
-    /** setup-status: a paired phone has a live push subscription (#2341). */
-    phoneAppReady?: () => Promise<boolean>;
-    /** setup-status: whether the email channel is polling a mailbox (#2409). */
-    emailChannelStatus?: () => Promise<EmailChannelStatus>;
-    /** setup-status: a live principal mailbox passed its last canary (#2475). */
-    principalMailboxReady?: () => Promise<PrincipalMailboxReadiness>;
-    nylasSignInReadiness?: () => Promise<NylasSignInReadiness>;
+    /** setup-status: the Setup checklist, shared with the console's Setup page (#2358). */
+    setupChecklist?: () => Promise<SetupChecklist>;
     /** Backs the 'mailboxSignIn' capability (#2361). */
     mailboxSignIn?: import('../nylas/mailbox-signin-service.js').MailboxSignInMinter;
     /** ceo-inbox list/search: Curia's own addresses, read live (#2409). */
@@ -591,10 +583,7 @@ export class ExecutionLayer {
     this.skillRegistry = options?.skillRegistry;
     this.logger = logger;
     this.bus = options?.bus;
-    this.phoneAppReady = options?.phoneAppReady;
-    this.emailChannelStatus = options?.emailChannelStatus;
-    this.principalMailboxReady = options?.principalMailboxReady;
-    this.nylasSignInReadiness = options?.nylasSignInReadiness;
+    this.setupChecklist = options?.setupChecklist;
     this.mailboxSignIn = options?.mailboxSignIn;
     this.curiaEmailAddresses = options?.curiaEmailAddresses;
     this.agentRegistry = options?.agentRegistry;
@@ -698,10 +687,7 @@ export class ExecutionLayer {
       taskRepo: this.taskRepo,
       workingDocs: this.workingDocsRepo,
       voiceSessions: this.voiceSessions,
-      phoneAppReady: this.phoneAppReady,
-      emailChannelStatus: this.emailChannelStatus,
-      principalMailboxReady: this.principalMailboxReady,
-      nylasSignInReadiness: this.nylasSignInReadiness,
+      setupChecklist: this.setupChecklist,
       mailboxSignIn: this.mailboxSignIn,
       curiaEmailAddresses: this.curiaEmailAddresses,
       confidencePipeline: this.confidencePipeline,

@@ -28,9 +28,9 @@ export type ActionRisk = 'none' | 'low' | 'medium' | 'high' | 'critical' | numbe
  * Skill manifest shape — loaded from tool.json files in each skill directory.
  * Declares what the skill does, what it needs, and its security classification.
  */
-import type { NylasSignInReadiness } from '../nylas/signin-readiness.js';
+import type { SetupChecklist } from '../setup/checklist.js';
 
-/** See ToolContext.emailChannelStatus. */
+/** Whether the email channel is polling a mailbox (#2409); one of the Setup checklist's inputs. */
 export type EmailChannelStatus = 'running' | 'restart_required' | 'not_configured';
 /** Principal mailbox setup (#2475). `ready`: a live mailbox passed its canary. `pending`: no live
  *  mailbox passed. No restart state: calendar reads each mailbox's grant per call. */
@@ -67,7 +67,7 @@ export interface ToolManifest {
    *  executiveProfileService, officeIdentityService, browserService, bullpenService, toolSearch,
    *  actionLogRepo, auditLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext,
    *  taskRepo, workingDocs, secretCapture, cardUse, secretResolver, userSecretIndex, taskOutreach, disclosureDecisions,
-   *  voiceSessions, phoneAppReady, emailChannelStatus, principalMailboxReady, nylasSignInReadiness, mailboxSignIn, curiaEmailAddresses.
+   *  voiceSessions, setupChecklist, mailboxSignIn, curiaEmailAddresses.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */
@@ -184,29 +184,11 @@ export interface ToolContext {
    *  Populated whenever the ExecutionLayer has a contactService instance. */
   contactService?: import('../contacts/contact-service.js').ContactService;
   /**
-   * True when push is configured and a live session has a subscription.
-   * Injected for skills that declare optional capability `phoneAppReady`.
-   * Absent means the check cannot run and the setup task stays pending.
+   * The Setup checklist with each task's live status and setup_complete (#2358), the same
+   * computation the console's Setup page reads. Injected for skills that declare optional
+   * capability `setupChecklist`.
    */
-  phoneAppReady?: () => Promise<boolean>;
-  /**
-   * Whether the email channel is polling a mailbox (#2409). `running`: adapters started
-   * this boot. `restart_required`: enabled and its Enable gate passes, but nothing started
-   * yet (configured after boot). `not_configured`: neither. Injected for skills that
-   * declare optional capability `emailChannelStatus`. Absent means the setup task stays pending.
-   */
-  emailChannelStatus?: () => Promise<EmailChannelStatus>;
-  /**
-   * Whether a live principal mailbox passed its last health canary (#2475). Injected for skills that declare optional capability
-   * `principalMailboxReady`. Absent means the setup task stays pending.
-   */
-  principalMailboxReady?: () => Promise<PrincipalMailboxReadiness>;
-  /**
-   * Whether mailbox sign-in through Nylas is usable right now (#2361): reads the key and region
-   * live and asks Nylas, so it is a network call. Injected for skills that declare optional
-   * capability `nylasSignInReadiness`. Absent means the setup task stays pending.
-   */
-  nylasSignInReadiness?: () => Promise<NylasSignInReadiness>;
+  setupChecklist?: () => Promise<SetupChecklist>;
   /**
    * Mint-only mailbox sign-in links (#2361), for skills declaring `mailboxSignIn`. It yields a URL
    * and an expiry; there is no method that returns a grant or a token row.
