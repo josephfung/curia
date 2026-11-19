@@ -73,6 +73,16 @@ const INPUT = {
   pronouns: 'they/them',
   assistantName: 'Robin Curia',
   assistantTitle: 'Walkthrough EA',
+  // Channel steps (#2358, PR 3b): fake keys. They are saved and the channels turned on;
+  // nothing here talks to Telnyx, Deepgram or Cartesia before the restart.
+  nylasKey: 'nyk_v0_walkthrough_placeholder',
+  telnyxKey: 'KEY_walkthrough_placeholder',
+  telnyxNumber: '+14165550188',
+  telnyxWebhookKey: 'walkthrough-webhook-public-key',
+  principalMobile: '+14165550100',
+  deepgramKey: 'walkthrough-deepgram',
+  cartesiaKey: 'walkthrough-cartesia',
+  cartesiaVoice: 'walkthrough-voice-id',
 } as const;
 
 const out = (line: string): void => { process.stdout.write(`${line}\n`); };
@@ -302,6 +312,15 @@ async function expectStep(page: Page, step: number, id: string, heading: string)
   out(`  ✓ step ${step}: ${heading}`);
 }
 
+/** Fills one inline form by its labels, saves it, and waits for its message. */
+async function fillForm(page: Page, values: Record<string, string>, expected: string | null): Promise<void> {
+  const first = Object.keys(values)[0]!;
+  const form = page.locator('form').filter({ has: page.getByLabel(first, { exact: false }) });
+  for (const [label, value] of Object.entries(values)) await form.getByLabel(label, { exact: false }).fill(value);
+  await form.getByRole('button', { name: /^Save$|^Add another$/ }).click();
+  if (expected) await form.getByText(expected).waitFor({ timeout: STEP_TIMEOUT_MS });
+}
+
 async function saveAndContinue(page: Page): Promise<void> {
   await page.getByRole('button', { name: /^(Save and continue|Continue)$/ }).click();
 }
@@ -330,17 +349,32 @@ async function walkThroughSetup(page: Page, baseUrl: string, secret: string, cur
   await saveAndContinue(page);
 
   await expectStep(page, 3, 'email', 'Curia’s own email');
+  await fillForm(page, { 'Nylas API key': INPUT.nylasKey }, 'Saved. Now connect Curia’s mailbox below.');
   await saveAndContinue(page);
 
   // The principal's first name names the later steps.
   await expectStep(page, 4, 'messaging', 'How should Curia message Wizard?');
-  await page.getByRole('radio', { name: /Curia app/ }).click();
-  await page.getByRole('radio', { name: /Curia app/, checked: true }).waitFor({ timeout: STEP_TIMEOUT_MS });
+  await page.getByRole('radio', { name: /Text message/ }).click();
+  await page.getByRole('radio', { name: /Text message/, checked: true }).waitFor({ timeout: STEP_TIMEOUT_MS });
+  await fillForm(page, {
+    'Telnyx API key': INPUT.telnyxKey,
+    'Curia’s number': INPUT.telnyxNumber,
+    'Telnyx webhook public key': INPUT.telnyxWebhookKey,
+  }, 'Saved and turned on. It starts when you apply and restart.');
+  await fillForm(page, { 'Wizard’s mobile number': INPUT.principalMobile }, null);
+  await page.getByText(`Saved: ${INPUT.principalMobile}`).waitFor({ timeout: STEP_TIMEOUT_MS });
+  out('  ✓ text message keys saved, the channel turned on, the principal’s mobile linked');
   await saveAndContinue(page);
 
   await expectStep(page, 5, 'voice', 'How will Wizard talk to Curia?');
-  // Picking the app for messaging chose the app for voice too.
+  // Text messages can't carry calls, so voice followed messaging to the app.
   await page.getByRole('radio', { name: /In the Curia app/, checked: true }).waitFor({ timeout: STEP_TIMEOUT_MS });
+  // Saved, but not turned on: LiveKit's keys aren't seeded on this install (#2689).
+  await fillForm(page, {
+    'Deepgram API key': INPUT.deepgramKey,
+    'Cartesia API key': INPUT.cartesiaKey,
+    'Curia’s voice': INPUT.cartesiaVoice,
+  }, 'Saved. Add the rest to turn it on.');
   await saveAndContinue(page);
 
   await expectStep(page, 6, 'mailbox_signin', 'Wizard’s email and calendar');
@@ -387,6 +421,7 @@ interface StatusResponse {
 }
 interface PrincipalResponse {
   exists: boolean;
+  contactId: string | null;
   displayName: string | null;
   timezone: string | null;
   email: string | null;
@@ -405,11 +440,13 @@ async function verifySavedState(baseUrl: string, secret: string, curia: CuriaPro
     if (!res.ok) throw new Error(`GET ${route} returned ${res.status}`);
     return await res.json() as T;
   };
-  const [identity, status, principal, checklist] = await Promise.all([
+  const [identity, status, principal, checklist, channels, vault] = await Promise.all([
     get<IdentityResponse>('/api/identity'),
     get<StatusResponse>('/api/setup/status'),
     get<PrincipalResponse>('/api/setup/principal'),
     get<ChecklistResponse>('/api/setup/checklist'),
+    get<{ channels: Array<{ name: string; state: string }> }>('/api/registry/channels'),
+    get<{ configured_keys: string[] }>('/api/vault/status'),
   ]);
   const problems: string[] = [];
   const expect = (label: string, actual: unknown, expected: unknown): void => {
@@ -420,7 +457,7 @@ async function verifySavedState(baseUrl: string, secret: string, curia: CuriaPro
   expect('setup for', status.setup.setupFor, 'other');
   expect('operator name', status.setup.operatorName, INPUT.operatorName);
   expect('operator email', status.setup.operatorEmail, INPUT.operatorEmail);
-  expect('messaging route', status.setup.messagingRoute, 'app');
+  expect('messaging route', status.setup.messagingRoute, 'sms');
   expect('voice route', status.setup.voiceRoute, 'app');
   expect('principal exists', principal.exists, true);
   expect('principal name', principal.displayName, INPUT.principalName);
@@ -438,6 +475,20 @@ async function verifySavedState(baseUrl: string, secret: string, curia: CuriaPro
   expect('checklist: who it\'s for', done('who'), 'done');
   expect('checklist: Curia\'s name', done('curia_name'), 'done');
   expect('checklist: setup complete', checklist.setupComplete, false);
+  // The channel steps' forms (#2358, PR 3b).
+  const state = (name: string) => channels.channels.find((c) => c.name === name)?.state;
+  expect('sms channel', state('sms'), 'enabled');
+  expect('voice channel (no LiveKit keys yet, #2689)', state('voice') === 'enabled', false);
+  for (const key of ['channel.email.nylas_api_key', 'channel.sms.api_key', 'channel.sms.from_number', 'channel.sms.webhook_public_key',
+    'channel.voice.deepgram_api_key', 'channel.voice.cartesia_api_key', 'channel.voice.cartesia_voice_id']) {
+    expect(`vault: ${key}`, vault.configured_keys.includes(key), true);
+  }
+  if (principal.contactId) {
+    const ids = await get<{ identities: Array<{ channel: string; channelIdentifier: string }> }>(`/api/contacts/${principal.contactId}/identities`);
+    expect('principal mobile linked', ids.identities.some((i) => i.channel === 'sms' && i.channelIdentifier.replace(/\D/g, '').endsWith('4165550100')), true);
+  } else {
+    problems.push('principal contact id: missing');
+  }
   expect('status: left setup-required mode', status.externalAdaptersPending, false);
   // A fresh install boots in setup-required mode; Apply and restart costs exactly one restart.
   expect('restarts', curia.restarts, 1);

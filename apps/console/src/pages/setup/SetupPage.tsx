@@ -91,13 +91,13 @@ export default function SetupPage(): JSX.Element {
       case 'curia_name':
         return <CuriaNameStep key="curia_name" principalName={data.principal.displayName} onSaved={refresh} onContinue={goNext} />;
       case 'email':
-        return <EmailStep task={taskFor('email')} principal={principal} onContinue={goNext} />;
+        return <EmailStep task={taskFor('email')} principal={principal} onSaved={refresh} onContinue={goNext} />;
       case 'messaging':
-        return <MessagingStep key="messaging" task={taskFor('messaging')} principal={principal} fields={fields} onSaved={refresh} onContinue={goNext} />;
+        return <MessagingStep key="messaging" task={taskFor('messaging')} principal={principal} fields={fields} contactId={data.principal.contactId} onSaved={refresh} onContinue={goNext} />;
       case 'voice':
-        return <VoiceStep key="voice" task={taskFor('voice')} principal={principal} fields={fields} onSaved={refresh} onContinue={goNext} />;
+        return <VoiceStep key="voice" task={taskFor('voice')} principal={principal} fields={fields} contactId={data.principal.contactId} onSaved={refresh} onContinue={goNext} />;
       case 'mailbox_signin':
-        return <SignInStep task={taskFor('mailbox_signin')} principal={principal} onContinue={goNext} />;
+        return <SignInStep task={taskFor('mailbox_signin')} principal={principal} onSaved={refresh} onContinue={goNext} />;
       case 'apply':
         return <ApplyStep checklist={checklist} onSaved={refresh} onContinue={goNext} />;
       case 'start':

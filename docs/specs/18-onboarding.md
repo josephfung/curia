@@ -119,14 +119,17 @@ not done, or locked. Status shows as one line inside the open step.
 |------|-------|---------|
 | Who it's for | Myself or someone else; for someone else, the operator's name and email; the principal's name, title, email, timezone and pronouns | `PUT /api/setup/state` (first, which starts Setup), `POST /api/setup/principal`, `POST /api/setup/principal/profile` |
 | Curia's name | Name, title, email signature (a suggested first name on a new install, #799) | `PUT /api/identity` (`changedBy: 'wizard'`, the assistant block only) and `POST /api/identity/reload` |
-| Email, Email & calendar | Nothing yet: the live check, the how-to and a link to the Settings page that holds the credentials | — |
-| Messaging, Voice | The route (Messaging: the Curia app, Signal, SMS or Slack; Voice: the app or a Signal call, defaulting to match messaging), plus the live check and a link to the route's Settings page | `PUT /api/setup/state` |
+| Email | The Nylas API key, then Curia's own mailbox (Connect with Google, or a pasted grant ID); the email channel is turned on once both are there | `PUT /api/vault/secrets/channel.email.nylas_api_key`, the email accounts routes, `POST /api/registry/channels/email/{install,enable}` |
+| Messaging | The route (the Curia app, Signal, SMS or Slack), that route's credentials, and the principal's id on it (Signal number, mobile, Slack member id), linked to their contact. Nothing is sent to the principal | `PUT /api/setup/state`, the vault, the channel routes, `POST /api/contacts/:id/identities` |
+| Voice | The route (the app or a Signal call; Phone shows as coming soon), the Deepgram and Cartesia keys and Curia's voice. LiveKit's keys come with the install (#2689). A Signal call also takes Signal's credentials and the principal's number when messaging isn't Signal | `PUT /api/setup/state`, the vault, the channel routes |
+| Email & calendar | The Nylas API key again (the same key, so the step stands alone), the Nylas sign-in checks, and Connect with Google for the principal | the vault, `/api/registry/nylas/*` |
 | Apply & restart | One restart turns on everything saved; every step is checked again | `POST /api/system/restart`, then `GET /api/system` until `bootedAt` changes |
 | Start onboarding | Locked until `setupComplete`, listing what's left. Ends Setup and loads the console afresh, so no chat stream stays on the Setup thread | `POST /api/setup/complete` (rotates the web thread) |
 
-The channel steps' own forms (keys, Connect with Google, the principal's ids) and the
-optional extras (Working style, Google Workspace, the Tavily key, Capabilities) follow in
-later #2358 PRs, as does the setup guide panel.
+Every field a step needs is on the step, so an operator never has to leave Setup. A channel
+is turned on as soon as its required credentials resolve; it starts at Apply & restart. The
+optional extras (Working style, Google Workspace, the Tavily key, Capabilities) and the setup
+guide panel follow in later #2358 PRs.
 
 ### Out of scope
 
@@ -275,7 +278,7 @@ auth guard sees inSetup === true
 [ Setup page ]                                    ← Layer 2 (#2358)
   Who it's for → PUT /api/setup/state, POST /api/setup/principal(/profile)
   Curia's name → PUT /api/identity → POST /api/identity/reload
-  Email, Messaging, Voice, Email & calendar → routes saved; credentials in Settings
+  Email, Messaging, Voice, Email & calendar → keys, routes and the principal's ids, inline
   Apply & restart → POST /api/system/restart, poll GET /api/system
   Start onboarding (unlocked by setupComplete) → POST /api/setup/complete
        → the web thread rotates; the console loads afresh, out of Setup
