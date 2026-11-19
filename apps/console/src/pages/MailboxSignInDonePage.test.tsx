@@ -54,6 +54,12 @@ describe('MailboxSignInDonePage', () => {
     expect(host.textContent).toContain("ask your Google Workspace admin to mark Curia's app as Trusted");
   });
 
+  it('explains the Nylas connected-account limit for account_limit', async () => {
+    await mount('?result=account_limit&target=principal&restart=0');
+    expect(host.textContent).toContain("Nylas's account limit is reached. A Nylas sandbox allows 5 connected accounts.");
+    expect(host.textContent).toContain('Remove an unused mailbox, or move to a production Nylas application.');
+  });
+
   it('explains wrong_account and missing_scopes', async () => {
     await mount('?result=wrong_account&target=principal&restart=0');
     expect(host.textContent).toContain('different Google account');
