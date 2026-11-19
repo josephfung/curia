@@ -1,22 +1,60 @@
 // Small pieces every Setup step uses (#2358): the radio cards, the status line under a
 // step, and the step footer.
-import type { JSX, ReactNode } from 'react';
+import { useRef, type JSX, type KeyboardEvent, type ReactNode } from 'react';
 
-export function Choice(props: {
-  checked: boolean;
-  onSelect: () => void;
+export interface ChoiceOption<T extends string> {
+  value: T;
   title: string;
   description: string;
   tag?: string;
+}
+
+/**
+ * A group of radio cards with the WAI-ARIA radio pattern: one tab stop (the checked card,
+ * or the first when none is), and the arrow keys move the selection and the focus.
+ */
+export function ChoiceGroup<T extends string>(props: {
+  label: string;
+  options: ReadonlyArray<ChoiceOption<T>>;
+  value: T | null;
+  onChange: (value: T) => void;
 }): JSX.Element {
+  const { options, value, onChange } = props;
+  const refs = useRef<Array<HTMLButtonElement | null>>([]);
+  const checkedIndex = options.findIndex((o) => o.value === value);
+  const tabStop = checkedIndex >= 0 ? checkedIndex : 0;
+
+  function onKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
+    const step = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : 0;
+    if (step === 0) return;
+    e.preventDefault();
+    const from = refs.current.findIndex((el) => el === document.activeElement);
+    const next = ((from >= 0 ? from : tabStop) + step + options.length) % options.length;
+    refs.current[next]?.focus();
+    onChange(options[next]!.value);
+  }
+
   return (
-    <button type="button" role="radio" aria-checked={props.checked} className="setup-choice" onClick={props.onSelect}>
-      <span className="setup-radio" aria-hidden="true" />
-      <span>
-        <b>{props.title}{props.tag && <span className="setup-tag">{props.tag}</span>}</b>
-        <span className="setup-choice-desc">{props.description}</span>
-      </span>
-    </button>
+    <div className="setup-choices" role="radiogroup" aria-label={props.label} onKeyDown={onKeyDown}>
+      {options.map((o, i) => (
+        <button
+          key={o.value}
+          ref={(el) => { refs.current[i] = el; }}
+          type="button"
+          role="radio"
+          aria-checked={o.value === value}
+          tabIndex={i === tabStop ? 0 : -1}
+          className="setup-choice"
+          onClick={() => onChange(o.value)}
+        >
+          <span className="setup-radio" aria-hidden="true" />
+          <span>
+            <b>{o.title}{o.tag && <span className="setup-tag">{o.tag}</span>}</b>
+            <span className="setup-choice-desc">{o.description}</span>
+          </span>
+        </button>
+      ))}
+    </div>
   );
 }
 

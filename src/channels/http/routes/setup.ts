@@ -299,7 +299,14 @@ export async function setupRoutes(
     const preferredName =
       typeof body.preferredName === 'string' && body.preferredName.trim() ? body.preferredName.trim() : undefined;
     // Title and pronouns (#2358): absent leaves the value as it is; null or a blank string
-    // clears it, so clearing the field on the Setup page really clears it.
+    // clears it, so clearing the field on the Setup page really clears it. Any other type is
+    // refused before anything is written.
+    for (const field of ['title', 'pronouns'] as const) {
+      const v = body[field];
+      if (v !== undefined && v !== null && typeof v !== 'string') {
+        return reply.status(400).send({ error: `${field} must be a string or null.` });
+      }
+    }
     const clearable = (v: unknown): string | null | undefined =>
       v === undefined ? undefined : typeof v === 'string' && v.trim() ? v.trim() : null;
     const title = clearable(body.title);

@@ -5,7 +5,7 @@
 import { useState, type JSX } from 'react';
 import { saveSetupFields, type MessagingRoute, type SetupFields, type VoiceRoute } from './setup-api.js';
 import type { ChecklistTask } from './setup-steps.js';
-import { Choice, StatusLine, StepFooter } from './setup-ui.js';
+import { ChoiceGroup, StatusLine, StepFooter } from './setup-ui.js';
 
 const DOCS_ORIGIN = 'https://docs.meetcuria.com';
 
@@ -107,11 +107,12 @@ export function MessagingStep({ task, principal, fields, onSaved, onContinue, on
     <div>
       <h2>How should Curia message {principal}?</h2>
       <p className="setup-lede">Pick the one {principal} will use day to day. You can add more later.</p>
-      <div className="setup-choices" role="radiogroup" aria-label="Messaging route">
-        {MESSAGING_CHOICES.map((c) => (
-          <Choice key={c.id} checked={route === c.id} onSelect={() => void pick(c.id)} title={c.title} description={c.desc(principal)} tag={c.tag} />
-        ))}
-      </div>
+      <ChoiceGroup
+        label="Messaging route"
+        value={route}
+        onChange={(next) => void pick(next)}
+        options={MESSAGING_CHOICES.map((c) => ({ value: c.id, title: c.title, description: c.desc(principal), tag: c.tag }))}
+      />
       {error && <p className="setup-status attention" role="alert">{error}</p>}
       {route && route !== 'app' && (
         <p className="setup-hint">Add {principal}’s {route === 'slack' ? 'Slack member ID' : route === 'sms' ? 'mobile number' : 'Signal number'} on their contact (Contacts). Nothing is sent to {principal}.</p>
@@ -148,14 +149,17 @@ export function VoiceStep({ task, principal, fields, onSaved, onContinue, onHelp
           {fields.messagingRoute === 'sms' ? 'Text messages' : 'Slack'} can’t carry calls, so {principal} will call Curia in the Curia app or on Signal.
         </div>
       )}
-      <div className="setup-choices" role="radiogroup" aria-label="Voice route">
-        <Choice checked={route === 'app'} onSelect={() => void pick('app')} title="In the Curia app"
-          description={`${principal} taps to call from the phone app or the console.`}
-          tag={fields.messagingRoute === 'app' ? 'Matches messaging' : undefined} />
-        <Choice checked={route === 'signal'} onSelect={() => void pick('signal')} title="Signal call"
-          description={`${principal} calls Curia’s Signal number.`}
-          tag={fields.messagingRoute === 'signal' ? 'Matches messaging' : undefined} />
-      </div>
+      <ChoiceGroup
+        label="Voice route"
+        value={route}
+        onChange={(next) => void pick(next)}
+        options={[
+          { value: 'app', title: 'In the Curia app', description: `${principal} taps to call from the phone app or the console.`,
+            tag: fields.messagingRoute === 'app' ? 'Matches messaging' : undefined },
+          { value: 'signal', title: 'Signal call', description: `${principal} calls Curia’s Signal number.`,
+            tag: fields.messagingRoute === 'signal' ? 'Matches messaging' : undefined },
+        ]}
+      />
       {error && <p className="setup-status attention" role="alert">{error}</p>}
       {route && <TaskBlock task={task} settingsPath="/channels?channel=voice" settingsLabel="Open voice settings" />}
       <StepFooter primary="Continue" onPrimary={onContinue} onHelp={onHelp} />

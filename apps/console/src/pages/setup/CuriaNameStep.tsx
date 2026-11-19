@@ -90,11 +90,12 @@ export function CuriaNameStep({ principalName, onSaved, onContinue, onHelp }: Pr
       });
       if (!put.ok) throw new Error(await errorMessage(put));
       const reload = await apiFetch('/api/identity/reload', { method: 'POST' });
-      // The new version is stored even when the reload fails: say so, rather than that
-      // the save failed. A restart (Apply & restart) loads it.
+      // The PUT already made the new identity live (OfficeIdentityService.update sets it in
+      // memory before the response); the reload only re-reads it. A failed reload is reported
+      // as just that, never as a failed save.
       await onSaved();
       if (!reload.ok) {
-        setError(`Saved, but Curia isn’t using it yet: ${await errorMessage(reload)}. Apply & restart will load it.`);
+        setError(`Saved, and Curia is using it. The follow-up reload failed: ${await errorMessage(reload)}`);
         return;
       }
       onContinue();

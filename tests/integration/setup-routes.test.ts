@@ -855,6 +855,18 @@ describeIf('/api/setup/* routes', () => {
       expect(row.rows[0]).toEqual({ title: null, pronouns: null });
     });
 
+    it.each([false, 7, { v: 'x' }])('POST profile refuses a %j title and keeps the stored one', async (bad) => {
+      await appSetupMode.inject({ method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER, payload: { name: 'Profile Owner' } });
+      await appSetupMode.inject({ method: 'POST', url: '/api/setup/principal/profile', headers: AUTH_HEADER, payload: { timezone: 'America/Toronto', title: 'CEO' } });
+      const res = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal/profile', headers: AUTH_HEADER,
+        payload: { timezone: 'America/Toronto', title: bad },
+      });
+      expect(res.statusCode).toBe(400);
+      const row = await pool.query<{ title: string | null }>(`SELECT title FROM contacts WHERE system_role = 'principal'`);
+      expect(row.rows[0]?.title).toBe('CEO');
+    });
+
     it('POST profile leaves omitted optional fields untouched', async () => {
       const created = await appSetupMode.inject({
         method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER, payload: { name: 'Partial' },
