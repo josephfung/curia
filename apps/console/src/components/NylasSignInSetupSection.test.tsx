@@ -251,6 +251,45 @@ describe('NylasSignInSetupSection', () => {
     expect(container.textContent).not.toContain('Not ready');
   });
 
+  it('a manual Detect during the first check makes the automatic chain step aside', async () => {
+    let releaseFirst: (r: Response) => void = () => {};
+    let releaseDetect: (r: Response) => void = () => {};
+    let n = 0;
+    const unregistered = { ...notReady, reason: 'callback_unregistered', checks: { callbackRegistered: false, googleConnector: false } };
+    mocks.respond = (path) => {
+      if (path.endsWith('/discover-region')) return new Promise<Response>(r => { releaseDetect = r; });
+      return ++n === 1 ? new Promise<Response>(r => { releaseFirst = r; }) : json(unregistered);
+    };
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => { root!.render(<NylasSignInSetupSection />); });
+    await act(async () => { button('Detect')!.click(); });
+    // The first check lands while Detect is still in flight: no automatic step may start now.
+    await act(async () => { releaseFirst(json(unregistered)); });
+    await settle();
+    expect(posts()).toEqual(['/api/registry/nylas/discover-region']);
+    await act(async () => { releaseDetect(json({ region: 'us' })); });
+    await settle();
+    expect(posts()).toEqual(['/api/registry/nylas/discover-region']);
+  });
+
+  it('keeps every control locked while the automatic chain runs, across its steps', async () => {
+    let releaseCallback: (r: Response) => void = () => {};
+    const unregistered = { ...notReady, reason: 'callback_unregistered', checks: { callbackRegistered: false, googleConnector: false } };
+    mocks.respond = (path) => (path.endsWith('/callback')
+      ? new Promise<Response>(r => { releaseCallback = r; })
+      : json(unregistered));
+    await mount();
+    expect(posts()).toEqual(['/api/registry/nylas/callback']);
+    expect((container.querySelector('[aria-label="Change Nylas region"]') as HTMLSelectElement).disabled).toBe(true);
+    expect(button('Check again')!.disabled).toBe(true);
+    await act(async () => { releaseCallback(json({}, 500)); });
+    await settle();
+    expect(button('Check again')!.disabled).toBe(false);
+    expect(button('Register callback')!.disabled).toBe(false);
+  });
+
   it('locks the connector inputs while the create request is in flight (A2)', async () => {
     let release: (r: Response) => void = () => {};
     mocks.respond = (path) => (path.endsWith('/google-connector')
