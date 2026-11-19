@@ -61,9 +61,12 @@ export async function saveSetupFields(update: Partial<SetupFields>): Promise<Set
   return data.setup;
 }
 
-/** The Setup page opened: Setup has started, so web chat reaches the setup guide. */
-export async function startSetup(): Promise<void> {
-  await json<{ inSetup: boolean }>(await apiFetch('/api/setup/start', { method: 'POST' }));
+/**
+ * The Setup page opened: start Setup, so web chat reaches the setup guide. `setupGuide` is
+ * false when it doesn't (an install set up outside the Setup page, or Setup already over).
+ */
+export async function startSetup(): Promise<{ inSetup: boolean; setupGuide: boolean }> {
+  return json<{ inSetup: boolean; setupGuide: boolean }>(await apiFetch('/api/setup/start', { method: 'POST' }));
 }
 
 export async function postJson<T>(path: string, body: unknown): Promise<T> {

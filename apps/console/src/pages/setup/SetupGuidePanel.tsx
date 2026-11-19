@@ -33,12 +33,14 @@ export function withStepMarkers(messages: readonly Message[], markers: readonly 
 }
 
 export function SetupGuidePanel(props: {
+  /** Closed: kept mounted (its thread, markers and draft survive) but not shown. */
+  hidden: boolean;
   step: StepId;
   stepName: string;
   /** Text the "Need help?" link puts in the composer. */
   draft?: { text: string; seq: number };
-  /** Starting Setup failed, so messages may reach Curia's usual chat, not the guide. */
-  startError?: string | null;
+  /** Why messages may not reach the setup guide (starting Setup failed, or can't here). */
+  notice?: string | null;
   onClose: () => void;
   /** Shown below about 1,180px wide, where the step list hides while the panel is open. */
   onShowSteps: () => void;
@@ -49,16 +51,25 @@ export function SetupGuidePanel(props: {
   const lastStep = useRef(step);
   const lastMessageId = useRef<string | null>(null);
   lastMessageId.current = messages.at(-1)?.id ?? null;
+  const historyPending = useRef(true);
+  historyPending.current = loadingHistory && messages.length === 0;
 
-  // A marker each time the open step changes while the panel is open.
+  // A marker each time the open step changes. None before the history has loaded: it would
+  // sit above messages it came after.
   useEffect(() => {
     if (step === lastStep.current) return;
     lastStep.current = step;
+    if (historyPending.current) return;
     setMarkers((prev) => [...prev, { id: `step-${prev.length}-${step}`, text: `Now on: ${stepName}`, afterId: lastMessageId.current }]);
   }, [step, stepName]);
 
   return (
-    <aside className="setup-guide" aria-label="Setup guide">
+    <aside
+      className="setup-guide"
+      aria-label="Setup guide"
+      hidden={props.hidden}
+      onKeyDown={(e) => { if (e.key === 'Escape') props.onClose(); }}
+    >
       <div className="setup-guide-head">
         <div>
           <b>Setup guide</b>
@@ -67,11 +78,7 @@ export function SetupGuidePanel(props: {
         <button type="button" className="setup-guide-steps" onClick={props.onShowSteps}>Steps</button>
         <button type="button" className="setup-guide-close" aria-label="Close setup guide" onClick={props.onClose}>×</button>
       </div>
-      {props.startError && (
-        <div className="chat-connection" role="alert">
-          Couldn’t start Setup ({props.startError}), so messages here may reach Curia’s usual chat instead of the setup guide. Reload the page to try again.
-        </div>
-      )}
+      {props.notice && <div className="chat-connection" role="alert">{props.notice}</div>}
       {connectionError && <div className="chat-connection" role="status">{connectionError}</div>}
       <ChatThread messages={withStepMarkers(messages, markers)} hasMore={hasMore} loadingHistory={loadingHistory} loadMore={loadMore} />
       <ChatComposer disabled={sending} onSend={(text) => void send(text)} draft={props.draft} />

@@ -826,6 +826,9 @@ export class HttpAdapter implements Channel {
       clearInterval(this.pruneInterval);
       this.pruneInterval = undefined;
     }
+    // Open SSE streams never finish, and close() waits for them: end them first.
+    const streams = this.eventRouter.closeAllStreams();
+    if (streams > 0) this.config.logger.info({ streams }, 'Ended open event streams for shutdown');
     await this.app.close();
     this.config.logger.info('HTTP API stopped');
   }
