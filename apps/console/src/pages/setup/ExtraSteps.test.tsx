@@ -113,6 +113,34 @@ describe('VaultKeysForm', () => {
     expect(document.querySelector('[role="alert"]')!.textContent).toContain('enter an email address');
   });
 
+  it('Save and continue also saves what was typed while a save ran', async () => {
+    let release: () => void = () => {};
+    let gate: Promise<void> | null = new Promise((r) => { release = r; });
+    const puts: string[] = [];
+    stubFetch((method, path, body) => {
+      if (path === '/api/vault/status') return { status: 200, body: { configured_keys: [] } };
+      if (method === 'PUT') { puts.push((body as { value: string }).value); return { status: 200, body: { ok: true } }; }
+      return undefined;
+    });
+    // Hold the first PUT until released, so a second value can be typed while it runs.
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+      if (init?.method === 'PUT' && gate) { const g = gate; gate = null; await g; }
+      return realFetch(path, init);
+    }));
+    const ref = createRef<FieldGroupHandle>();
+    await render(<VaultKeysForm ref={ref} fields={GOOGLE} onChanged={vi.fn(async () => {})} />);
+    type('OAuth client secret', 'first');
+    let flushed: Promise<boolean> = Promise.resolve(false);
+    await act(async () => { flushed = ref.current!.flush(); });
+    type('OAuth client secret', 'second');
+    release();
+    let ok = false;
+    await act(async () => { ok = await flushed; });
+    expect(ok).toBe(true);
+    expect(puts).toEqual(['first', 'second']);
+  });
+
   it('says a key saved even when re-reading the saved keys fails', async () => {
     let statusFails = false;
     stubFetch((method, path) => {
@@ -237,6 +265,74 @@ describe('Working style', () => {
     expect(document.querySelector('[role="alert"]')!.textContent)
       .toBe('Couldn’t save Draft only: Too Many Requests. Couldn’t re-read the stored choice either: restarting');
     expect(radio('Independence', 'Ask first').getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('when two quick picks fail together, shows the stored choice again', async () => {
+    server({ failAutonomy: true });
+    await render(<WorkingStyleStep task={undefined} principal="Dana" onSaved={vi.fn(async () => {})} onContinue={vi.fn()} />);
+    await act(async () => {
+      radio('Independence', 'Draft only').click();
+      radio('Independence', 'Spot-check').click();
+    });
+    await settle();
+    await settle();
+    expect(radio('Independence', 'Ask first').getAttribute('aria-checked')).toBe('true');
+    expect(document.querySelector('[role="alert"]')!.textContent).toContain('Couldn’t save Spot-check');
+  });
+
+  it('a slow first read never undoes a pick that saved', async () => {
+    let releaseRead: () => void = () => {};
+    const readGate = new Promise<void>((r) => { releaseRead = r; });
+    let readFails = false;
+    let autonomyPuts = 0;
+    const { state } = server({ failAutonomy: false, failAutonomyRead: () => readFails });
+    const realFetch = globalThis.fetch;
+    let firstRead = true;
+    vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+      if (path === '/api/autonomy' && (init?.method ?? 'GET') === 'GET' && firstRead) {
+        firstRead = false;
+        await readGate;
+        return new Response(JSON.stringify({ autonomy: { score: 75 } }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (path === '/api/autonomy' && init?.method === 'PUT' && ++autonomyPuts === 2) {
+        return new Response(JSON.stringify({ error: 'Too Many Requests' }), { status: 429, headers: { 'content-type': 'application/json' } });
+      }
+      return realFetch(path, init);
+    }));
+    await render(<WorkingStyleStep task={undefined} principal="Dana" onSaved={vi.fn(async () => {})} onContinue={vi.fn()} />);
+    await click(radio('Independence', 'Spot-check'));
+    expect(state.score).toBe(85);
+    // The first read, started before the pick, lands late with the old value: ignored.
+    await act(async () => { releaseRead(); });
+    await settle();
+    expect(radio('Independence', 'Spot-check').getAttribute('aria-checked')).toBe('true');
+    // A failing save whose re-read fails too falls back to the last stored: Spot-check.
+    readFails = true;
+    await click(radio('Independence', 'Draft only'));
+    expect(radio('Independence', 'Spot-check').getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('locks the choices while Save and continue waits', async () => {
+    server();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+      if (path === '/api/identity' && init?.method === 'PUT') await gate;
+      return realFetch(path, init);
+    }));
+    const onContinue = vi.fn();
+    await render(<WorkingStyleStep task={undefined} principal="Dana" onSaved={vi.fn(async () => {})} onContinue={onContinue} />);
+    await act(async () => {
+      radio('Tone', 'Formal').click();
+      (Array.from(document.querySelectorAll('button')).find((b) => b.textContent === 'Save and continue') as HTMLElement).click();
+    });
+    expect(radio('Tone', 'Dry & understated').getAttribute('aria-disabled')).toBe('true');
+    expect(radio('Independence', 'Spot-check').getAttribute('aria-disabled')).toBe('true');
+    expect(onContinue).not.toHaveBeenCalled();
+    await act(async () => { release(); });
+    await settle();
+    expect(onContinue).toHaveBeenCalledOnce();
   });
 
   it('Save and continue waits for a pick’s save, and stays on the step when it failed', async () => {

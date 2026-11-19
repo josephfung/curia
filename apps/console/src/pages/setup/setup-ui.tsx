@@ -20,15 +20,18 @@ export function ChoiceGroup<T extends string>(props: {
   options: ReadonlyArray<ChoiceOption<T>>;
   value: T | null;
   onChange: (value: T) => void;
+  /** No option can be picked for now (e.g. while the step saves); the checked one still shows. */
+  disabled?: boolean;
 }): JSX.Element {
   const { options, value, onChange } = props;
+  const locked = props.disabled === true;
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
   const checkedIndex = options.findIndex((o) => o.value === value && !o.disabled);
   const tabStop = checkedIndex >= 0 ? checkedIndex : Math.max(0, options.findIndex((o) => !o.disabled));
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
     const step = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : 0;
-    if (step === 0) return;
+    if (step === 0 || locked) return;
     e.preventDefault();
     const from = refs.current.findIndex((el) => el === document.activeElement);
     let next = from >= 0 ? from : tabStop;
@@ -43,7 +46,7 @@ export function ChoiceGroup<T extends string>(props: {
   }
 
   return (
-    <div className="setup-choices" role="radiogroup" aria-label={props.label} onKeyDown={onKeyDown}>
+    <div className="setup-choices" role="radiogroup" aria-label={props.label} aria-disabled={props.disabled ? true : undefined} onKeyDown={onKeyDown}>
       {options.map((o, i) => (
         <button
           key={o.value}
@@ -51,10 +54,10 @@ export function ChoiceGroup<T extends string>(props: {
           type="button"
           role="radio"
           aria-checked={o.value === value && !o.disabled}
-          aria-disabled={o.disabled ? true : undefined}
+          aria-disabled={o.disabled || locked ? true : undefined}
           tabIndex={i === tabStop ? 0 : -1}
           className="setup-choice"
-          onClick={() => { if (!o.disabled) onChange(o.value); }}
+          onClick={() => { if (!o.disabled && !locked) onChange(o.value); }}
         >
           <span className="setup-radio" aria-hidden="true" />
           <span>
