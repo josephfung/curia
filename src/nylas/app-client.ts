@@ -12,13 +12,36 @@ import type { NylasRegion } from './region.js';
 export class NylasAppError extends Error {
   readonly status: number;
   readonly nylasType?: string;
+  /** True when a 4xx answer said the application's connected-account (grant) limit is reached,
+   *  as a Nylas sandbox does past 5 accounts. Only this flag is kept, never the response text. */
+  readonly grantLimitReached?: true;
 
-  constructor(message: string, status: number, nylasType?: string) {
+  constructor(message: string, status: number, nylasType?: string, grantLimitReached = false) {
     super(message);
     this.name = 'NylasAppError';
     this.status = status;
     if (nylasType !== undefined) this.nylasType = nylasType;
+    if (grantLimitReached) this.grantLimitReached = true;
   }
+}
+
+/**
+ * Nylas has no documented error type for the connected-account cap; the observed text is
+ * "Maximum number of grants reached for Organization". Matched conservatively on the wording of
+ * a count limit on grants or accounts. `grant.auth_limit_reached` is a hosted-auth retry cap, not
+ * this, so it is deliberately not matched.
+ */
+const GRANT_LIMIT_TEXT = /\bmax(imum)? (number of )?(grants|(connected )?accounts)\b|\b(grant|connected account|account)s? limit\b/i;
+
+/** Whether a rejected response's body says the grant limit is reached. Reads the v3 envelope
+ *  (`error.message`) and the OAuth token shape (`error`, `error_description`). */
+export function bodySaysGrantLimit(status: number, parsed: unknown): boolean {
+  if (status < 400 || status >= 500 || !isObject(parsed)) return false;
+  const texts: unknown[] = [parsed['error_description'], parsed['message']];
+  const e = parsed['error'];
+  if (isObject(e)) texts.push(e['message'], e['type']);
+  else texts.push(e);
+  return texts.some((t) => typeof t === 'string' && t !== 'grant.auth_limit_reached' && GRANT_LIMIT_TEXT.test(t));
 }
 
 export interface NylasApplicationInfo {
@@ -323,9 +346,10 @@ export class NylasAppClient {
     if (!res.ok) {
       const nylasType =
         isObject(parsed) && isObject(parsed['error']) ? str(parsed['error']['type']) : undefined;
-      this.logger.warn({ operation, status: res.status, nylasType }, 'Nylas application request rejected');
+      const grantLimitReached = bodySaysGrantLimit(res.status, parsed);
+      this.logger.warn({ operation, status: res.status, nylasType, ...(grantLimitReached ? { grantLimitReached } : {}) }, 'Nylas application request rejected');
       const suffix = nylasType !== undefined ? ` (${nylasType})` : '';
-      throw new NylasAppError(`Nylas ${operation} failed: HTTP ${res.status}${suffix}`, res.status, nylasType);
+      throw new NylasAppError(`Nylas ${operation} failed: HTTP ${res.status}${suffix}`, res.status, nylasType, grantLimitReached);
     }
 
     if (!unwrap) return { status: res.status, data: parsed };

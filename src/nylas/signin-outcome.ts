@@ -13,6 +13,8 @@ export const MAILBOX_SIGNIN_OUTCOMES = [
   'missing_scopes',
   'not_google',
   'refused',
+  // Nylas refused a new grant: the application's connected-account limit (5 on a sandbox).
+  'account_limit',
   'failed',
 ] as const;
 

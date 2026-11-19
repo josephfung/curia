@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
-import { NylasAppClient, NylasAppError } from '../../../src/nylas/app-client.js';
+import { bodySaysGrantLimit, NylasAppClient, NylasAppError } from '../../../src/nylas/app-client.js';
 
 const logger = pino({ level: 'silent' });
 const KEY = 'nyk_super_secret_key';
@@ -234,6 +234,41 @@ describe('NylasAppClient', () => {
       expect(err).toBeInstanceOf(NylasAppError);
       expect((err as NylasAppError).status).toBe(0);
       expect((err as NylasAppError).message).not.toContain(KEY);
+    });
+  });
+
+  describe('the connected-account (grant) limit', () => {
+    const exchange = (c: NylasAppClient) => c.exchangeCode({ clientId: 'c', code: 'AUTH-CODE-XYZ', redirectUri: 'https://x/cb' });
+
+    it.each([
+      ['v3 envelope', { error: { type: 'invalid_request_error', message: 'Maximum number of grants reached for Organization' } }],
+      ['OAuth token shape', { error: 'invalid_request', error_description: 'Maximum number of grants reached for Organization' }],
+      ['account limit wording', { error: { type: 'api_error', message: 'Connected account limit reached for this application' } }],
+    ])('flags a 4xx that says so (%s), keeping no response text', async (_name, body) => {
+      const { client } = setup(() => json(body, 400));
+      const err = await exchange(client).then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(NylasAppError);
+      expect((err as NylasAppError).grantLimitReached).toBe(true);
+      expect((err as NylasAppError).message).not.toMatch(/maximum|limit/i);
+    });
+
+    it('leaves other refusals unflagged, including the hosted-auth retry cap and a 5xx', async () => {
+      for (const [body, status] of [
+        [{ error: { type: 'grant.auth_limit_reached', message: 'Maximum number of retries reached for hosted auth.' } }, 400],
+        [{ error: 'invalid_grant', error_description: 'code expired' }, 400],
+        [{ error: { type: 'api_error', message: 'Maximum number of grants reached for Organization' } }, 503],
+        [{ error: { type: 'api.rate_limit_error', message: 'Rate limit error.' } }, 429],
+      ] as const) {
+        const { client } = setup(() => json(body, status));
+        const err = await exchange(client).then(() => null, (e: unknown) => e);
+        expect((err as NylasAppError).grantLimitReached, JSON.stringify(body)).toBeUndefined();
+      }
+    });
+
+    it('bodySaysGrantLimit ignores non-objects and non-4xx', () => {
+      expect(bodySaysGrantLimit(400, 'Maximum number of grants')).toBe(false);
+      expect(bodySaysGrantLimit(200, { error: 'Maximum number of grants' })).toBe(false);
+      expect(bodySaysGrantLimit(403, { message: 'Grant limit exceeded' })).toBe(true);
     });
   });
 

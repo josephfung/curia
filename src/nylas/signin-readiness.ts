@@ -18,22 +18,37 @@ export const MAILBOX_SIGNIN_SCOPES: readonly string[] = [
   'https://www.googleapis.com/auth/calendar',
 ];
 
+/** Which kind of Nylas application the key belongs to. Anything Nylas does not call 'sandbox'
+ *  reads as 'production'. A sandbox ships with Nylas's own Google connector and allows 5 grants. */
+export type NylasEnvironment = 'sandbox' | 'production';
+
+/** Per-step results, each set once that step was evaluated, so the console can show every step. */
+export interface NylasSignInChecks {
+  callbackRegistered?: boolean;
+  googleConnector?: boolean;
+}
+
+/** Filled on either branch whenever the check got far enough to learn them. */
+interface NylasSignInFacts {
+  environment?: NylasEnvironment;
+  checks?: NylasSignInChecks;
+}
+
 export type NylasSignInReadiness =
-  | { ready: true; applicationId: string; region: NylasRegion }
-  | {
+  | ({ ready: true; applicationId: string; region: NylasRegion } & NylasSignInFacts)
+  | ({
       ready: false;
       reason:
         | 'no_api_key'
         | 'restart_required'
         | 'bad_api_key'
-        | 'sandbox'
         | 'origin_not_https'
         | 'callback_unregistered'
         | 'no_google_connector'
         | 'nylas_unreachable'
         | 'settings_unreadable';
       detail: string;
-    };
+    } & NylasSignInFacts);
 
 /** The URL Nylas redirects back to after sign-in. Byte-identical in the auth and token calls. */
 export function mailboxSignInCallbackUrl(appOrigin: string): string {
@@ -74,8 +89,14 @@ export interface CheckNylasSignInDeps {
 function notReady(
   reason: Extract<NylasSignInReadiness, { ready: false }>['reason'],
   detail: string,
+  facts: NylasSignInFacts = {},
 ): NylasSignInReadiness {
-  return { ready: false, reason, detail };
+  return { ready: false, reason, detail, ...facts };
+}
+
+/** Nylas's `environment` field as the two kinds Curia tells apart. */
+export function nylasEnvironmentOf(raw: string | null | undefined): NylasEnvironment {
+  return (raw ?? '').trim().toLowerCase() === 'sandbox' ? 'sandbox' : 'production';
 }
 
 export async function checkNylasSignIn(deps: CheckNylasSignInDeps): Promise<NylasSignInReadiness> {
@@ -105,34 +126,57 @@ export async function checkNylasSignIn(deps: CheckNylasSignInDeps): Promise<Nyla
     ? deps.makeClient(apiKey, apiUri)
     : new NylasAppClient({ apiKey, apiUri, logger: deps.logger, timeoutMs: READINESS_TIMEOUT_MS });
 
+  // The callback and the connector are checked independently once the key works, so the console
+  // can show every step's status; `reason` is still the first failing one, in this order.
   let step: 'get_application' | 'list_connectors' = 'get_application';
+  const facts: NylasSignInFacts = {};
+  const checks: NylasSignInChecks = {};
   try {
     const app = await client.getApplication();
-    if ((app.environment ?? '').toLowerCase() === 'sandbox') {
-      return notReady('sandbox', 'This Nylas application is a sandbox; sign-in needs a production application.');
-    }
-    if (!app.callbackUris.includes(mailboxSignInCallbackUrl(origin))) {
-      return notReady('callback_unregistered', 'Register the sign-in callback URL with Nylas.');
-    }
+    // A sandbox is fine: it ships with Nylas's own Google connector (up to 5 connected accounts).
+    facts.environment = nylasEnvironmentOf(app.environment);
+    checks.callbackRegistered = app.callbackUris.includes(mailboxSignInCallbackUrl(origin));
+    facts.checks = checks;
     step = 'list_connectors';
-    const connectors = await client.listConnectors();
-    if (!connectors.some((c) => c.provider === 'google')) {
-      return notReady('no_google_connector', 'Create the Google connector in Nylas.');
+    let connectorErr: unknown;
+    try {
+      const connectors = await client.listConnectors();
+      checks.googleConnector = connectors.some((c) => c.provider === 'google');
+    } catch (err) {
+      connectorErr = err;
     }
-    return { ready: true, applicationId: app.applicationId, region };
+    if (!checks.callbackRegistered) {
+      if (connectorErr !== undefined) logConnectorFailure(deps.logger, connectorErr);
+      return notReady('callback_unregistered', 'Register the sign-in callback URL with Nylas.', facts);
+    }
+    if (connectorErr !== undefined) throw connectorErr;
+    if (!checks.googleConnector) {
+      return notReady('no_google_connector', 'Create the Google connector in Nylas.', facts);
+    }
+    return { ready: true, applicationId: app.applicationId, region, ...facts };
   } catch (err) {
     // Only the HTTP status decides; the error text is never copied into the detail or the log.
     if (!(err instanceof NylasAppError)) {
       // Not a Nylas answer: a bug. Reported as unreachable, but loudly.
       deps.logger.error({ ...grantSafeErrorFields(err), step }, 'mailbox sign-in readiness check failed unexpectedly');
-      return notReady('nylas_unreachable', 'Nylas did not answer; try again in a moment.');
+      return notReady('nylas_unreachable', 'Nylas did not answer; try again in a moment.', facts);
     }
     deps.logger.warn({ ...grantSafeErrorFields(err), step }, 'mailbox sign-in readiness: a Nylas call failed');
     const status = err.status;
     if (status === 401 || status === 403) {
-      return notReady('bad_api_key', 'Nylas rejected the API key. Check the key and the region.');
+      return notReady('bad_api_key', 'Nylas rejected the API key. Check the key and the region.', facts);
     }
-    return notReady('nylas_unreachable', 'Nylas did not answer; try again in a moment.');
+    return notReady('nylas_unreachable', 'Nylas did not answer; try again in a moment.', facts);
+  }
+}
+
+/** The connector listing failed while an earlier step already decides the reason: logged, and
+ *  the connector's status is left unknown (absent from `checks`). */
+function logConnectorFailure(logger: Logger, err: unknown): void {
+  if (err instanceof NylasAppError) {
+    logger.warn({ ...grantSafeErrorFields(err), step: 'list_connectors' }, 'mailbox sign-in readiness: a Nylas call failed');
+  } else {
+    logger.error({ ...grantSafeErrorFields(err), step: 'list_connectors' }, 'mailbox sign-in readiness check failed unexpectedly');
   }
 }
 

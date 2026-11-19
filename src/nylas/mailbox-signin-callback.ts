@@ -31,7 +31,7 @@ import {
   createPrincipalMailboxConnected,
   createSecretChanged,
 } from '../bus/events.js';
-import type { NylasAppClient, NylasGrantInfo } from './app-client.js';
+import { NylasAppError, type NylasAppClient, type NylasGrantInfo } from './app-client.js';
 import { nylasApiUri, type NylasRegion } from './region.js';
 import {
   MAILBOX_SIGNIN_SCOPES,
@@ -136,11 +136,15 @@ const done = (outcome: MailboxSignInOutcome, extra: Partial<Settled> = {}): Sett
  * `error=access_denied` with the reason in the description. These are the provider's own wire
  * codes, so matching their text is the only way to read them.
  */
+/** The connected-account cap, should Nylas report it on the redirect rather than at the exchange. */
+const GRANT_LIMIT_TEXT = /\bmax(imum)? (number of )?(grants|(connected )?accounts)\b/;
+
 export function mapSignInError(error: string | undefined, description: string | undefined): MailboxSignInOutcome {
   const text = `${error ?? ''} ${description ?? ''}`.toLowerCase();
   if (text.includes('admin_policy_enforced')) return 'admin_blocked';
   if (text.includes('org_internal')) return 'org_internal';
   if (text.includes('access_denied')) return 'cancelled';
+  if (GRANT_LIMIT_TEXT.test(text)) return 'account_limit';
   return 'failed';
 }
 
@@ -271,11 +275,12 @@ async function settle(
   }
 
   if (row.target === 'principal') {
-    // R4, fail closed: every principal link is pinned to an address (mint and the console both
-    // set one). A link without one would let any Google account become the principal's mailbox,
-    // so it is refused before the code is even exchanged.
-    if (row.expected_email === null) {
-      log.warn('mailbox sign-in refused: a principal link carried no expected address');
+    // R4, fail closed: an agent-minted principal link is always pinned to an address, so one
+    // without it is refused before the code is even exchanged. Only an operator-minted link (no
+    // agent_id: the console's "Connect with Google", 15 minutes, opened at once by the signed-in
+    // operator) may leave the address to Google; the account then adds or reconnects a mailbox.
+    if (row.expected_email === null && row.agent_id !== null) {
+      log.warn('mailbox sign-in refused: an agent-minted principal link carried no expected address');
       return done('refused');
     }
     if (deps.principalAdmin === undefined) {
@@ -338,8 +343,11 @@ async function settle(
       redirectUri: mailboxSignInCallbackUrl(deps.appOrigin),
     }));
   } catch (err) {
-    log.warn({ ...grantSafeErrorFields(err), step: 'exchange', target: row.target }, 'mailbox sign-in: the code exchange failed');
-    return done('failed');
+    // Nylas refuses a new grant past the application's account limit (5 on a sandbox); no grant
+    // was created, so there is nothing to revoke.
+    const accountLimit = err instanceof NylasAppError && err.grantLimitReached === true;
+    log.warn({ ...grantSafeErrorFields(err), step: 'exchange', target: row.target, ...(accountLimit ? { reason: 'account_limit' } : {}) }, 'mailbox sign-in: the code exchange failed');
+    return done(accountLimit ? 'account_limit' : 'failed');
   }
   held.grantId = grantId;
   held.client = client;
@@ -370,8 +378,8 @@ async function settle(
     return done('failed');
   }
 
-  // 5. The account must be the one the link was pinned to. Principal links always are (above);
-  // a Curia link may be pinned by the operator.
+  // 5. The account must be the one the link was pinned to: always for an agent's principal link
+  // (above); an operator's principal or Curia link may be unpinned.
   const email = lower(grant.email);
   if (row.expected_email !== null && lower(row.expected_email) !== email) {
     log.info({ target: row.target }, 'mailbox sign-in: a different account signed in than the link was for');

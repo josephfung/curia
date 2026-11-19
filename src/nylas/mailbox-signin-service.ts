@@ -18,9 +18,9 @@ export type SignInTarget = 'principal' | 'curia';
 export const DEFAULT_SIGNIN_TTL_MINUTES = 60;
 /** A week. A link is single-use and unguessable, but a longer life only widens the window. */
 export const MAX_SIGNIN_TTL_MINUTES = 10080;
-/** A Curia link pinned to no address lets any Google account become Curia's mailbox, so it
- *  lives no longer than this, whoever minted it (R8). */
-export const UNPINNED_CURIA_TTL_MINUTES = 15;
+/** A link pinned to no address lets any Google account become Curia's mailbox (R8) or one of the
+ *  principal's (an operator's console link only), so it lives no longer than this. */
+export const UNPINNED_TTL_MINUTES = 15;
 
 /** Why a link cannot be minted: a readiness reason, or `migration_pending` while the flat
  *  principal mailbox is still served as a fallback (a principal sign-in then would end it, R9). */
@@ -165,7 +165,9 @@ export class MailboxSignInService implements MailboxSignInMinter {
     }
   }
 
-  /** Operator path: the caller supplies the address (or none, for any account). */
+  /** Operator path: the caller supplies the address, or none for any account (then the link lives
+   *  at most UNPINNED_TTL_MINUTES). Never reachable from a skill: an agent's principal link is
+   *  always pinned, and the callback refuses an unpinned one that carries an agent id (R4). */
   async mintForOperator(args: OperatorMintSignInArgs): Promise<{ url: string; expiresAt: Date }> {
     const { expectedEmail, ...rest } = args;
     return this.insert(rest, expectedEmail?.trim().toLowerCase() || null);
@@ -220,7 +222,7 @@ export class MailboxSignInService implements MailboxSignInMinter {
        RETURNING expires_at`,
       [
         hashToken(rawToken), args.target, expectedEmail, args.label ?? null,
-        clampTtlMinutes(args.ttlMinutes, args.target === 'curia' && expectedEmail === null ? UNPINNED_CURIA_TTL_MINUTES : MAX_SIGNIN_TTL_MINUTES),
+        clampTtlMinutes(args.ttlMinutes, expectedEmail === null ? UNPINNED_TTL_MINUTES : MAX_SIGNIN_TTL_MINUTES),
         args.origin?.conversationId ?? null,
         args.origin?.channelId ?? null,
         args.origin?.agentId ?? null,
