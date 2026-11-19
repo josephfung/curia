@@ -361,7 +361,8 @@ async function walkThroughSetup(page: Page, baseUrl: string, secret: string, cur
     'Curia’s number': INPUT.telnyxNumber,
     'Telnyx webhook public key': INPUT.telnyxWebhookKey,
   }, 'Saved and turned on. It starts when you apply and restart.');
-  await fillForm(page, { 'Wizard’s mobile number': INPUT.principalMobile }, null);
+  // Typed the way people write it; stored as E.164, which the channels compare exactly.
+  await fillForm(page, { 'Wizard’s mobile number': '+1 (416) 555-0100' }, null);
   await page.getByText(`Saved: ${INPUT.principalMobile}`).waitFor({ timeout: STEP_TIMEOUT_MS });
   out('  ✓ text message keys saved, the channel turned on, the principal’s mobile linked');
   await saveAndContinue(page);
@@ -374,7 +375,7 @@ async function walkThroughSetup(page: Page, baseUrl: string, secret: string, cur
     'Deepgram API key': INPUT.deepgramKey,
     'Cartesia API key': INPUT.cartesiaKey,
     'Curia’s voice': INPUT.cartesiaVoice,
-  }, 'Saved. Add the rest to turn it on.');
+  }, 'Saved. Voice also needs LiveKit’s keys, which come with Curia’s install; this install doesn’t have them yet.');
   await saveAndContinue(page);
 
   await expectStep(page, 6, 'mailbox_signin', 'Wizard’s email and calendar');
@@ -485,7 +486,7 @@ async function verifySavedState(baseUrl: string, secret: string, curia: CuriaPro
   }
   if (principal.contactId) {
     const ids = await get<{ identities: Array<{ channel: string; channelIdentifier: string }> }>(`/api/contacts/${principal.contactId}/identities`);
-    expect('principal mobile linked', ids.identities.some((i) => i.channel === 'sms' && i.channelIdentifier.replace(/\D/g, '').endsWith('4165550100')), true);
+    expect('principal mobile linked as E.164', ids.identities.some((i) => i.channel === 'sms' && i.channelIdentifier === INPUT.principalMobile), true);
   } else {
     problems.push('principal contact id: missing');
   }
