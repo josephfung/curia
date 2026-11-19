@@ -114,33 +114,38 @@ export function ChannelCredentialsForm(props: {
 
   async function saveTyped(): Promise<boolean> {
     // Check every typed number first, so a bad one saves nothing.
-    const typed: Array<{ f: FieldSpec; value: string }> = [];
+    // `submitted` is the text as typed: the field is cleared after its save only if it still
+    // holds exactly that, so an edit made while the save ran is kept for the next save.
+    const typed: Array<{ f: FieldSpec; value: string; submitted: string }> = [];
     for (const f of fields) {
-      const raw = (valuesRef.current[f.key] ?? '').trim();
+      const submitted = valuesRef.current[f.key] ?? '';
+      const raw = submitted.trim();
       if (!raw) continue;
-      if (!f.phone) { typed.push({ f, value: raw }); continue; }
+      if (!f.phone) { typed.push({ f, value: raw, submitted }); continue; }
       const phone = normalizePhone(raw);
       if ('error' in phone) {
         setMessage({ kind: 'error', text: `${f.label}: ${phone.error}` });
         return false;
       }
-      typed.push({ f, value: phone.value });
+      typed.push({ f, value: phone.value, submitted });
     }
-    if (typed.length === 0) return true;
+    if (typed.length === 0) return retryTurnOn();
     let savedAny = false;
     try {
       // One field at a time, so a failure names the field and nothing after it is half-saved.
-      for (const { f, value } of typed) {
+      for (const { f, value, submitted } of typed) {
         const res = await apiFetch(`/api/vault/secrets/${encodeURIComponent(`channel.${channel}.${f.key}`)}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ value }),
         });
         if (!res.ok) throw new Error(`${f.label}: ${await errorMessage(res)}`);
-        // Never keep a saved credential in component state. Only clear it if it wasn't
-        // retyped while the save ran.
-        setValues((v) => ((v[f.key] ?? '').trim() === (valuesRef.current[f.key] ?? '').trim() ? { ...v, [f.key]: '' } : v));
-        valuesRef.current = { ...valuesRef.current, [f.key]: '' };
+        // Never keep a saved credential in component state, unless it was retyped while the
+        // save ran: that newer value is kept for the next save.
+        if (valuesRef.current[f.key] === submitted) {
+          valuesRef.current = { ...valuesRef.current, [f.key]: '' };
+          setValues((v) => (v[f.key] === submitted ? { ...v, [f.key]: '' } : v));
+        }
         savedAny = true;
       }
       const before = await loadChannel(channel);
@@ -164,6 +169,26 @@ export function ChannelCredentialsForm(props: {
       setMessage({ kind: 'error', text: savedAny ? `Saved, but couldn’t turn it on: ${text}` : text });
       await reload();
       if (savedAny) await onChanged();
+      return false;
+    }
+  }
+
+  /**
+   * Nothing typed: the step may move on, unless the channel's credentials resolve but it is
+   * still off (an earlier turn-on failed). Then turning it on is retried, and a failure keeps
+   * the step open. A channel whose credentials were never entered stays skippable.
+   */
+  async function retryTurnOn(): Promise<boolean> {
+    try {
+      const current = await loadChannel(channel);
+      if (current.state === 'enabled' || !current.requiredResolvable) return true;
+      await turnOnChannelIfReady(channel);
+      await reload();
+      setMessage({ kind: 'ok', text: 'Turned on. It starts when you apply and restart.' });
+      await onChanged();
+      return true;
+    } catch (err) {
+      setMessage({ kind: 'error', text: `Couldn’t turn it on: ${err instanceof Error ? err.message : 'unknown error'}` });
       return false;
     }
   }
@@ -256,7 +281,10 @@ export function PrincipalIdentityField(props: {
   useEffect(() => { void reload(); }, [reload]);
 
   async function link(): Promise<boolean> {
-    const typed = valueRef.current.trim();
+    // As typed: cleared afterwards only if the field still holds exactly this (an edit made
+    // while the request ran is kept for the next save).
+    const submitted = valueRef.current;
+    const typed = submitted.trim();
     if (!typed) return true;
     if (!contactId) return false;
     setError(null);
@@ -267,8 +295,7 @@ export function PrincipalIdentityField(props: {
       identifier = phone.value;
     }
     if (linked.some((i) => i.channelIdentifier === identifier)) {
-      setValue('');
-      valueRef.current = '';
+      clearIfUnchanged(submitted);
       return true;
     }
     try {
@@ -278,8 +305,7 @@ export function PrincipalIdentityField(props: {
         body: JSON.stringify({ channel, channelIdentifier: identifier }),
       });
       if (!res.ok) throw new Error(await errorMessage(res));
-      setValue('');
-      valueRef.current = '';
+      clearIfUnchanged(submitted);
       await reload();
       await onChanged();
       return true;
@@ -287,6 +313,12 @@ export function PrincipalIdentityField(props: {
       setError(err instanceof Error ? err.message : 'Could not save.');
       return false;
     }
+  }
+
+  function clearIfUnchanged(submitted: string): void {
+    if (valueRef.current !== submitted) return;
+    valueRef.current = '';
+    setValue('');
   }
 
   async function flush(): Promise<boolean> {
