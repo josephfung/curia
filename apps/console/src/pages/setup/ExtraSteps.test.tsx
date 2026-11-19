@@ -312,6 +312,36 @@ describe('Working style', () => {
     expect(radio('Independence', 'Spot-check').getAttribute('aria-checked')).toBe('true');
   });
 
+  it('keeps a queued pick that saved when the one after it fails', async () => {
+    let releaseFirst: () => void = () => {};
+    const firstGate = new Promise<void>((r) => { releaseFirst = r; });
+    let puts = 0;
+    let readFails = false;
+    const { state } = server({ failAutonomyRead: () => readFails });
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+      if (path === '/api/autonomy' && init?.method === 'PUT') {
+        puts++;
+        if (puts === 1) await firstGate;
+        if (puts === 2) return new Response(JSON.stringify({ error: 'Too Many Requests' }), { status: 429, headers: { 'content-type': 'application/json' } });
+      }
+      return realFetch(path, init);
+    }));
+    await render(<WorkingStyleStep task={undefined} principal="Dana" onSaved={vi.fn(async () => {})} onContinue={vi.fn()} />);
+    // Spot-check saving, Draft only queued behind it; Spot-check lands, Draft only fails, and
+    // so does the re-read: the page shows Spot-check, which is what is stored.
+    await act(async () => {
+      radio('Independence', 'Spot-check').click();
+      radio('Independence', 'Draft only').click();
+    });
+    readFails = true;
+    await act(async () => { releaseFirst(); });
+    await settle();
+    await settle();
+    expect(state.score).toBe(85);
+    expect(radio('Independence', 'Spot-check').getAttribute('aria-checked')).toBe('true');
+  });
+
   it('locks the choices while Save and continue waits', async () => {
     server();
     let release: () => void = () => {};
