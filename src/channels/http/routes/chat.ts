@@ -15,6 +15,7 @@ import { writeSseHead } from '../console-sessions.js';
 import { markdownToHtml } from '../../../format/markdown-to-html.js';
 import { fetchChatHistoryPage } from '../chat-history-page.js';
 import { getOrCreateWebThread, readClientMessageId } from '../web-thread.js';
+import { readSetupStep } from '../../../setup/setup-guide.js';
 
 export interface ChatRouteOptions {
   pool: Pool;
@@ -100,7 +101,7 @@ export async function chatRoutes(
   app.post('/api/chat/messages', CONSOLE_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
 
-    const body = request.body as { message?: unknown; clientMessageId?: unknown; conversationId?: unknown };
+    const body = request.body as { message?: unknown; clientMessageId?: unknown; conversationId?: unknown; setupStep?: unknown };
     if (typeof body?.message !== 'string' || body.message.trim().length === 0) {
       return reply.status(400).send({ error: 'Missing required field: message (non-empty string)' });
     }
@@ -120,6 +121,9 @@ export async function chatRoutes(
       );
     }
     const clientMessageId = readClientMessageId(body.clientMessageId);
+    // The Setup page's open step (#2358), for the setup guide. A catalog id or a step id:
+    // anything else is dropped, not refused, so a stale client never loses a message.
+    const setupStep = readSetupStep(body.setupStep);
 
     // stagePublish persists the inbound without waiting for the agent turn.
     // The echo goes out before deliver(), so other devices see the question
@@ -133,7 +137,7 @@ export async function chatRoutes(
         content: body.message,
         // Tag with structural channel trust level — session-cookie auth earns medium trust,
         // same as bearer token auth on the API channel. Required for messageTrustScore computation.
-        metadata: { trustLevel: 'medium' },
+        metadata: { trustLevel: 'medium', ...(setupStep ? { setupStep } : {}) },
       }));
     } catch (publishErr) {
       // Log the real error server-side (full context) but return a fixed,

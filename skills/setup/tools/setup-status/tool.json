@@ -6,6 +6,7 @@
   "action_risk": "none",
   "inputs": {},
   "outputs": {
+    "setup_for": "'self' | 'other' | null \u2014 whether the operator is setting Curia up for themselves or for someone else (null until chosen)",
     "setup_complete": "boolean \u2014 every required step is done; unlocks Start onboarding",
     "missing": "string[] \u2014 ids of required steps not yet done",
     "tasks": "tasks with status, optional (true for optional extras), detail (why a pending step is pending), handoff surface, credential_how_to, docs_url; restart_required: true when the step is saved but Curia must restart before it works; done_means: \"credentials_saved\" on key-based tasks (those with vault_keys), where done means the keys are saved, not that the integration is running",

@@ -2,6 +2,7 @@ import type { EventBus } from '../bus/bus.js';
 import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent, ToolResultEvent, OutboundBlockedEvent, AuthorizationDecisionEvent } from '../bus/events.js';
 import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplicate, createOutboundNoReply, createPrincipalReport, createContactResolved, createContactUnknown, createMessageRejected, createConversationCheckpoint, createAuthorizationDecision } from '../bus/events.js';
 import type { Logger } from '../logger.js';
+import { NO_SETUP_STEP, readSetupStep, SETUP_GUIDE_AGENT_ID } from '../setup/setup-guide.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import {
   summarizeAuthorizationDecision,
@@ -180,6 +181,11 @@ export interface DispatcherConfig {
   auditLogRepo?: Pick<AuditLogRepo, 'findToolResultsForTasks'>;
   /** Milliseconds of inactivity before conversation.checkpoint fires. Default: 600000. */
   conversationCheckpointDebounceMs?: number;
+  /**
+   * True while a new install is in Setup (#2358): web chat is then the operator's, so it
+   * goes to the setup guide instead of the coordinator. Absent means never.
+   */
+  setupGuideActive?: () => Promise<boolean>;
   /** Weights for messageTrustScore computation. Defaults to DEFAULT_TRUST_WEIGHTS if omitted. */
   trustScorerWeights?: TrustScorerWeights;
   /** In-memory rate limiter. When provided, enforces global and per-sender message rate limits.
@@ -432,6 +438,7 @@ export class Dispatcher {
   /** Key: `${conversationId}:${agentId}` — reset on every agent.response */
   private checkpointTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private pool: DbPool | undefined;
+  private setupGuideActive?: () => Promise<boolean>;
   private auditLogRepo: DispatcherConfig['auditLogRepo'];
   private conversationCheckpointDebounceMs: number;
   private maxMessageBytes: number;
@@ -463,6 +470,7 @@ export class Dispatcher {
     this.injectionScanner = config.injectionScanner;
     this.rateLimiter = config.rateLimiter;
     this.pool = config.pool;
+    this.setupGuideActive = config.setupGuideActive;
     this.auditLogRepo = config.auditLogRepo;
     this.conversationCheckpointDebounceMs = config.conversationCheckpointDebounceMs ?? 600_000;
     this.trustScorerWeights = config.trustScorerWeights ?? DEFAULT_TRUST_WEIGHTS;
@@ -1397,10 +1405,17 @@ export class Dispatcher {
       ...(scanCompleted ? { [INBOUND_SCAN_FINDING_COUNT_KEY]: scanFindingCount } : {}),
     };
 
+    // During Setup (#2358) web chat is the operator asking the setup guide for help, not the
+    // principal: it skips the coordinator and everything built for a principal turn below.
+    const setupGuide = await this.routesToSetupGuide(payload.channelId, payload.conversationId);
+    // Every setup guide turn carries a step, NO_SETUP_STEP when the client named none: the
+    // runtime's "[Setup page: ...]" line is how the agent knows it is talking to the operator.
+    const setupStep = setupGuide ? (readSetupStep(payload.metadata?.['setupStep']) ?? NO_SETUP_STEP) : null;
+
     // Trigger guidance (#1959): the coordinator's conditional rules travel with the
     // trigger instead of sitting in its always-on prompt. Rendered by the runtime into
     // this turn's user message only, never into `content` (which working memory keeps).
-    const turnGuidance = inboundTurnGuidance({
+    const turnGuidance = setupGuide ? [] : inboundTurnGuidance({
       liveTurn,
       injectedEntryMetadata: injectedOutboundEntries.map((e) => e.metadata),
       recipientEntryCount: recipientOutboundEntries.length,
@@ -1422,7 +1437,7 @@ export class Dispatcher {
     // them, the runtime adds the counts to the turn guidance. Best-effort, like the outbound
     // context block: a failed count means no line, not a failed turn.
     let principalBacklog: PrincipalBacklogCounts | undefined;
-    if (this.principalBacklog && liveTurn) {
+    if (this.principalBacklog && liveTurn && !setupGuide) {
       try {
         const counts = await this.principalBacklog.counts();
         if (hasBacklog(counts)) principalBacklog = counts;
@@ -1437,7 +1452,7 @@ export class Dispatcher {
     // this message replies on marked. Best-effort too: without it the coordinator can still
     // call list-pending-actions.
     let awaitingAnswers: AwaitingAnswer[] | undefined;
-    if (this.principalBacklog?.awaitingAnswers && liveTurn) {
+    if (this.principalBacklog?.awaitingAnswers && liveTurn && !setupGuide) {
       const thread = payload.channelId === 'email' ? payload.metadata?.['nylasThreadId'] : undefined;
       try {
         const list = await this.principalBacklog.awaitingAnswers(typeof thread === 'string' && thread !== '' ? { replyThreadId: thread } : {});
@@ -1451,7 +1466,7 @@ export class Dispatcher {
     }
 
     const lanes = this.turnLanes;
-    if (lanes?.enabled) {
+    if (lanes?.enabled && !setupGuide) {
       const resolvedContactId = senderContext?.resolved === true ? senderContext.contactId : undefined;
       // Principal mail bypasses autoGeneratedSuppress, so the message flag is
       // its own gate. An out-of-office from the principal's mailbox must not
@@ -1498,7 +1513,8 @@ export class Dispatcher {
     }
 
     const taskEvent = createAgentTask({
-      agentId: 'coordinator',
+      agentId: setupGuide ? SETUP_GUIDE_AGENT_ID : 'coordinator',
+      ...(setupStep ? { setupStep } : {}),
       conversationId: payload.conversationId,
       channelId: payload.channelId,
       accountId: payload.accountId,
@@ -2951,9 +2967,27 @@ export class Dispatcher {
     await this.bus.publish('dispatch', outbound);
   }
 
+  /**
+   * Whether this inbound goes to the setup guide (#2358): web chat while Setup runs. A
+   * failed read routes to the coordinator, as on any install that is not in Setup, and logs.
+   */
+  private async routesToSetupGuide(channelId: string, conversationId: string): Promise<boolean> {
+    if (channelId !== 'web' || !this.setupGuideActive) return false;
+    try {
+      return await this.setupGuideActive();
+    } catch (err) {
+      this.logger.error({ err, conversationId }, 'Could not read whether Setup is running — routing web chat to the coordinator');
+      return false;
+    }
+  }
+
   private scheduleCheckpoint(conversationId: string, agentId: string, channelId: string): void {
     // Checkpoint requires pool to query working_memory — if not configured, skip.
     if (!this.pool) return;
+    // The setup guide answers web chat only during Setup (#2358). Those turns are the
+    // operator configuring Curia, not the principal: no facts or relationships come from
+    // them. Delegated setup turns answer the coordinator, so they never reach here as web.
+    if (agentId === SETUP_GUIDE_AGENT_ID && channelId === 'web') return;
 
     const key = `${conversationId}:${agentId}`;
     const existing = this.checkpointTimers.get(key);

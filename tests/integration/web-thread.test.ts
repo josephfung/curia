@@ -3,7 +3,7 @@
 // Skips when DATABASE_URL is unset. CI migrates before the suite.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
-import { clearWebThreadCache, getOrCreateWebThread } from '../../src/channels/http/web-thread.js';
+import { clearWebThreadCache, getOrCreateWebThread, rotateWebThread } from '../../src/channels/http/web-thread.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const { Pool } = pg;
@@ -21,6 +21,8 @@ describeIf('web thread (integration)', () => {
     'wt-null-channel',
     'wt-race-a',
     'wt-race-b',
+    'wt-rotated',
+    'wt-rotated-fresh',
   ];
 
   beforeAll(async () => {
@@ -87,5 +89,29 @@ describeIf('web thread (integration)', () => {
     expect(['wt-race-a', 'wt-race-b']).toContain(a);
     const stored = await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1');
     expect(stored.rows[0]?.conversation_id).toBe(a);
+  });
+
+  // #2358: Start onboarding gives the principal a new thread; the Setup chat stays in
+  // working_memory, and every reader of the pointer sees the new id at once.
+  it('rotation moves the pointer and the cache, and keeps the old conversation', async () => {
+    clearWebThreadCache(pool);
+    const before = await getOrCreateWebThread(pool);
+    await expect(rotateWebThread(pool, { newId: () => 'wt-rotated' })).resolves.toBe('wt-rotated');
+    await expect(getOrCreateWebThread(pool)).resolves.toBe('wt-rotated');
+    clearWebThreadCache(pool);
+    await expect(getOrCreateWebThread(pool)).resolves.toBe('wt-rotated');
+    if (before !== 'wt-rotated') {
+      const kept = await pool.query('SELECT 1 FROM working_memory WHERE conversation_id = $1 LIMIT 1', [before]);
+      // A minted id has no turns; an adopted one keeps them.
+      if (['wt-web-new', 'wt-web-old'].includes(before)) expect(kept.rows).toHaveLength(1);
+    }
+  });
+
+  it('rotation creates the row when there is none yet', async () => {
+    await pool.query('DELETE FROM web_thread WHERE id = 1');
+    clearWebThreadCache(pool);
+    await expect(rotateWebThread(pool, { newId: () => 'wt-rotated-fresh' })).resolves.toBe('wt-rotated-fresh');
+    const stored = await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1');
+    expect(stored.rows[0]?.conversation_id).toBe('wt-rotated-fresh');
   });
 });

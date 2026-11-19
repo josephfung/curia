@@ -51,6 +51,7 @@ function ctx(checklist: SetupChecklist | Error | undefined, deferrals?: string):
 }
 
 const CHECKLIST: SetupChecklist = {
+  setupFor: 'other',
   tasks: [
     checklistTask('email', 'pending'),
     checklistTask('voice', 'done'),
@@ -67,6 +68,7 @@ describe('SetupStatusHandler', () => {
     if (!result.success) return;
     const data = result.data as { setup_complete: boolean; missing: string[]; summary: Record<string, number> };
     expect(data.setup_complete).toBe(false);
+    expect((data as unknown as { setup_for: string }).setup_for).toBe('other');
     expect(data.missing).toEqual(['email']);
     expect(data.summary).toEqual({ total: 3, done: 1, pending: 2, deferred: 0 });
   });

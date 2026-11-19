@@ -4,6 +4,7 @@ import {
   runStreamingToolLoop,
   type StreamingTurnOpenStreamParams,
 } from './llm/streaming-turn.js';
+import { readSetupStep, setupStepLine } from '../setup/setup-guide.js';
 import type { EventBus } from '../bus/bus.js';
 import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, createDelegationTimedOut, createDelegationRequesterContext, createDelegationPrincipalNote, createAgentTaskInputInjected, isInjectionDrainPoint, type AgentResponseFailureReason, type AgentTaskEvent, type InjectionDrainPoint } from '../bus/events.js';
 import { holderFromAgentTask, isLanedTurnShape, originatorIsSystem, type TurnLanes } from '../dispatch/turn-lanes.js';
@@ -907,6 +908,9 @@ export class AgentRuntime {
       named,
     );
     let promptContent = turnGuidance ? `${turnGuidance}\n\n${originalContent}` : originalContent;
+    // The Setup page's open step (#2358), for the setup guide. Prompt only, like the guidance.
+    const setupStep = readSetupStep(taskEvent.payload.setupStep);
+    if (setupStep) promptContent = `${setupStepLine(setupStep)}\n\n${promptContent}`;
     // A content-block rewrite's account of what its turn already did (#2615). Prompt only, like
     // the turn guidance: working memory stores originalContent, so this tool output is never
     // replayed into later turns. Re-validated: the payload crossed the bus.

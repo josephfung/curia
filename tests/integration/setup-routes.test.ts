@@ -850,12 +850,15 @@ describeIf('/api/setup/* routes', () => {
   // #2358: the Setup page's own state, its checklist and Start onboarding.
   describe('Setup page state', () => {
     let app: FastifyInstance;
-    let checklist: SetupChecklist = { tasks: [], setupComplete: false, missing: ['email'] };
+    let checklist: SetupChecklist = { setupFor: null, tasks: [], setupComplete: false, missing: ['email'] };
     let savedRow: Record<string, unknown> | undefined;
+    let savedThread: string | undefined;
 
     beforeAll(async () => {
       // Keep whatever row a working database has, and put it back afterwards.
       savedRow = (await pool.query('SELECT * FROM setup_state WHERE id = 1')).rows[0];
+      // Start onboarding rotates the shared web thread; put a working database's back after.
+      savedThread = (await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1')).rows[0]?.conversation_id;
       app = Fastify();
       await app.register(rateLimit, { max: 1000, timeWindow: '1 minute', allowList: () => true });
       await app.register(setupRoutes, {
@@ -875,12 +878,14 @@ describeIf('/api/setup/* routes', () => {
 
     beforeEach(async () => {
       await pool.query('DELETE FROM setup_state WHERE id = 1');
-      checklist = { tasks: [], setupComplete: false, missing: ['email'] };
+      checklist = { setupFor: null, tasks: [], setupComplete: false, missing: ['email'] };
     });
 
     afterAll(async () => {
       await app.close();
       await pool.query('DELETE FROM setup_state WHERE id = 1');
+      await pool.query('DELETE FROM web_thread WHERE id = 1');
+      if (savedThread) await pool.query('INSERT INTO web_thread (id, conversation_id) VALUES (1, $1)', [savedThread]);
       if (savedRow) {
         const cols = Object.keys(savedRow);
         await pool.query(
@@ -941,7 +946,7 @@ describeIf('/api/setup/* routes', () => {
     it('GET /api/setup/checklist returns the checklist', async () => {
       const res = await app.inject({ method: 'GET', url: '/api/setup/checklist', headers: AUTH_HEADER });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ tasks: [], setupComplete: false, missing: ['email'] });
+      expect(res.json()).toEqual({ setupFor: null, tasks: [], setupComplete: false, missing: ['email'] });
     });
 
     it('POST /api/setup/complete is refused with the missing steps until setup is complete', async () => {
@@ -951,10 +956,15 @@ describeIf('/api/setup/* routes', () => {
       expect(refused.json().missing).toEqual(['email']);
       expect((await readSetupState(pool)).phase).toBe('in_progress');
 
-      checklist = { tasks: [], setupComplete: true, missing: [] };
+      const threadBefore = (await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1')).rows[0]?.conversation_id;
+      checklist = { setupFor: null, tasks: [], setupComplete: true, missing: [] };
       const ok = await app.inject({ method: 'POST', url: '/api/setup/complete', headers: AUTH_HEADER });
       expect(ok.statusCode).toBe(200);
       expect((await readSetupState(pool)).phase).toBe('complete');
+      // The principal starts on a new thread (#2358): the pointer moved off the Setup chat.
+      const after = await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1');
+      expect(after.rows[0]?.conversation_id).toBeTruthy();
+      expect(after.rows[0]?.conversation_id).not.toBe(threadBefore);
     });
 
     it.each([

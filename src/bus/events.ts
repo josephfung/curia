@@ -131,6 +131,12 @@ export interface AgentTaskPayload {
    */
   turnGuidance?: import('../agents/prompts/turn-guidance.js').TurnGuidanceKey[];
   /**
+   * The Setup page step the operator has open (#2358), on a setup guide turn only. Like
+   * `turnGuidance`, the runtime renders it into this turn's user message and never into
+   * `content`. Re-validated there: the payload crossed the bus. Absent means none.
+   */
+  setupStep?: string;
+  /**
    * What is waiting on the principal (prompt trim PR 7): set by the dispatcher on a live
    * principal turn when anything is. The runtime renders it as the backlog line at the end
    * of the turn guidance (src/agents/prompts/backlog-line.ts); like `turnGuidance`, it is
