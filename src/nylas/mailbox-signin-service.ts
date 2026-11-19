@@ -174,8 +174,9 @@ export class MailboxSignInService implements MailboxSignInMinter {
   }
 
   /**
-   * Pick the address a principal link is pinned to. Fails closed: a principal link is never
-   * minted with no address, because that would let any Google account sign in as the principal.
+   * Pick the address an agent-minted principal link is pinned to. Fails closed: mint() never
+   * makes a principal link with no address, because that would let any Google account sign in as
+   * the principal. Only mintForOperator (the authenticated console) may leave a link unpinned.
    */
   private resolvePrincipalAddress(requested: string | undefined, allowNew: boolean): string {
     const { primary, all } = this.deps.principalEmails?.() ?? { primary: null, all: [] };
