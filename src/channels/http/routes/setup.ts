@@ -216,8 +216,11 @@ export async function setupRoutes(
           preferredName: null, title: null, pronouns: null, email: null, workingHours: null,
         });
       }
+      // The primary email (#2358): the profile route sets it on every save, so a corrected
+      // address is what shows, not an older one still linked. Only a principal with no primary
+      // set (created before it existed) falls back to the first verified, active email.
       const withIdentities = await contactService.getContactWithIdentities(principal.id);
-      const email = (withIdentities?.identities ?? [])
+      const email = principal.primaryEmail ?? (withIdentities?.identities ?? [])
         .find((i) => i.channel === 'email' && i.verified && i.status === 'active')
         ?.channelIdentifier ?? null;
 
