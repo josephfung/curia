@@ -312,13 +312,15 @@ async function expectStep(page: Page, step: number, id: string, heading: string)
   out(`  ✓ step ${step}: ${heading}`);
 }
 
-/** Fills one inline form by its labels, saves it, and waits for its message. */
+/**
+ * Fills fields by their labels and leaves the last one: a field saves when the operator
+ * leaves it (there is no Save button), then waits for the group's message.
+ */
 async function fillForm(page: Page, values: Record<string, string>, expected: string | null): Promise<void> {
-  const first = Object.keys(values)[0]!;
-  const form = page.locator('form').filter({ has: page.getByLabel(first, { exact: false }) });
-  for (const [label, value] of Object.entries(values)) await form.getByLabel(label, { exact: false }).fill(value);
-  await form.getByRole('button', { name: /^Save$|^Add another$/ }).click();
-  if (expected) await form.getByText(expected).waitFor({ timeout: STEP_TIMEOUT_MS });
+  const entries = Object.entries(values);
+  for (const [label, value] of entries) await page.getByLabel(label, { exact: false }).fill(value);
+  await page.getByLabel(entries.at(-1)![0], { exact: false }).blur();
+  if (expected) await page.getByText(expected).waitFor({ timeout: STEP_TIMEOUT_MS });
 }
 
 async function saveAndContinue(page: Page): Promise<void> {

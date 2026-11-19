@@ -8,7 +8,7 @@ import { NylasSignInSetupSection } from '../../components/NylasSignInSetupSectio
 import { saveSetupFields, type MessagingRoute, type SetupFields, type VoiceRoute } from './setup-api.js';
 import { atSentenceStart, createLatestSaver, type ChecklistTask } from './setup-steps.js';
 import { ChoiceGroup, StatusLine, StepFooter } from './setup-ui.js';
-import { ChannelCredentialsForm, PrincipalIdentityField, turnOnChannelIfReady, type FieldSpec } from './ChannelForms.js';
+import { ChannelCredentialsForm, PrincipalIdentityField, turnOnChannelIfReady, type FieldGroupHandle, type FieldSpec } from './ChannelForms.js';
 
 const DOCS_ORIGIN = 'https://docs.meetcuria.com';
 
@@ -18,6 +18,43 @@ interface StepProps {
   onSaved: () => Promise<void>;
   onContinue: () => void;
   onHelp?: () => void;
+}
+
+/**
+ * The step's one button (#2358, owner review): Save and continue saves anything still typed in
+ * every field group on the step (they also save when the operator leaves a field), and moves
+ * on only when all of them saved. A failure stays on the step, with the error under its field.
+ */
+function useSaveAndContinue(onContinue: () => void) {
+  const groups = useRef(new Map<string, FieldGroupHandle>());
+  const [saving, setSaving] = useState(false);
+  const register = (name: string) => (handle: FieldGroupHandle | null) => {
+    if (handle) groups.current.set(name, handle);
+    else groups.current.delete(name);
+  };
+  async function saveAndContinue(): Promise<void> {
+    setSaving(true);
+    try {
+      for (const group of groups.current.values()) {
+        if (!(await group.flush())) return;
+      }
+      onContinue();
+    } finally {
+      setSaving(false);
+    }
+  }
+  return { register, saveAndContinue, saving };
+}
+
+function SaveAndContinue(props: { save: ReturnType<typeof useSaveAndContinue>; onHelp?: () => void }): JSX.Element {
+  return (
+    <StepFooter
+      primary={props.save.saving ? 'Saving…' : 'Save and continue'}
+      primaryDisabled={props.save.saving}
+      onPrimary={() => void props.save.saveAndContinue()}
+      onHelp={props.onHelp}
+    />
+  );
 }
 
 /** The step's live check and its guide. */
@@ -45,6 +82,7 @@ const NYLAS_KEY_FIELD: readonly FieldSpec[] = [{ key: 'nylas_api_key', label: 'N
 
 export function EmailStep({ task, onSaved, onContinue, onHelp }: StepProps): JSX.Element {
   const [error, setError] = useState<string | null>(null);
+  const save = useSaveAndContinue(onContinue);
 
   // Connect with Google adds Curia's mailbox on the server, then restarts Curia, without
   // turning the channel on. So on arrival turn it on if the key and a mailbox are both
@@ -83,6 +121,7 @@ export function EmailStep({ task, onSaved, onContinue, onHelp }: StepProps): JSX
       <ChannelCredentialsForm
         channel="email"
         fields={NYLAS_KEY_FIELD}
+        ref={save.register('key')}
         incompleteNote="Saved. Now connect Curia’s mailbox below."
         onChanged={onSaved}
       />
@@ -93,12 +132,13 @@ export function EmailStep({ task, onSaved, onContinue, onHelp }: StepProps): JSX
       <EmailAccountsSection showHeading={false} onChanged={() => void mailboxChanged()} />
       {error && <p className="setup-status attention" role="alert">{error}</p>}
       <TaskStatus task={task} />
-      <StepFooter primary="Continue" onPrimary={onContinue} onHelp={onHelp} />
+      <SaveAndContinue save={save} onHelp={onHelp} />
     </div>
   );
 }
 
 export function SignInStep({ task, principal, onSaved, onContinue, onHelp }: StepProps): JSX.Element {
+  const save = useSaveAndContinue(onContinue);
   // The Nylas panel reads the key itself; remount it after a save so it checks again.
   const [keyVersion, setKeyVersion] = useState(0);
   return (
@@ -111,6 +151,7 @@ export function SignInStep({ task, principal, onSaved, onContinue, onHelp }: Ste
       <ChannelCredentialsForm
         channel="email"
         fields={NYLAS_KEY_FIELD}
+        ref={save.register('key')}
         incompleteNote="Saved. Curia’s own mailbox is connected in the Email step."
         onChanged={async () => { setKeyVersion((v) => v + 1); await onSaved(); }}
       />
@@ -121,7 +162,7 @@ export function SignInStep({ task, principal, onSaved, onContinue, onHelp }: Ste
         <ConnectWithGoogle target="principal" hideUnlessReady />
       </div>
       <TaskStatus task={task} />
-      <StepFooter primary="Continue" onPrimary={onContinue} onHelp={onHelp} />
+      <SaveAndContinue save={save} onHelp={onHelp} />
     </div>
   );
 }
@@ -212,6 +253,7 @@ export function MessagingStep({ task, principal, fields, contactId, onSaved, onC
       ...(fields.voiceRoute === null ? { voiceRoute: next === 'signal' ? 'signal' : 'app' } : {}),
     });
   }, onSaved);
+  const save = useSaveAndContinue(onContinue);
 
   return (
     <div>
@@ -229,9 +271,10 @@ export function MessagingStep({ task, principal, fields, contactId, onSaved, onC
       )}
       {route && route !== 'app' && (
         <>
-          <ChannelCredentialsForm key={route} channel={route} fields={ROUTE_FIELDS[route]} onChanged={onSaved} />
+          <ChannelCredentialsForm key={route} ref={save.register('credentials')} channel={route} fields={ROUTE_FIELDS[route]} onChanged={onSaved} />
           <PrincipalIdentityField
             key={`id-${route}`}
+            ref={save.register('principal-id')}
             contactId={contactId}
             channel={route}
             label={`${atSentenceStart(principal)}’s ${IDENTITY_LABEL[route].noun}`}
@@ -242,7 +285,7 @@ export function MessagingStep({ task, principal, fields, contactId, onSaved, onC
         </>
       )}
       {route && <TaskStatus task={task} />}
-      <StepFooter primary="Continue" onPrimary={onContinue} onHelp={onHelp} />
+      <SaveAndContinue save={save} onHelp={onHelp} />
     </div>
   );
 }
@@ -258,6 +301,7 @@ export function VoiceStep({ task, principal, fields, contactId, onSaved, onConti
   const { route, error, pick } = useRoute<VoiceRoute>(fields.voiceRoute, async (next) => {
     await saveSetupFields({ voiceRoute: next });
   }, onSaved);
+  const save = useSaveAndContinue(onContinue);
 
   return (
     <div>
@@ -280,6 +324,7 @@ export function VoiceStep({ task, principal, fields, contactId, onSaved, onConti
       {route && (
         <ChannelCredentialsForm
           channel="voice"
+          ref={save.register('voice')}
           fields={VOICE_FIELDS}
           incompleteNote="Saved. Voice also needs LiveKit’s keys, which come with Curia’s install; this install doesn’t have them yet."
           onChanged={onSaved}
@@ -288,19 +333,20 @@ export function VoiceStep({ task, principal, fields, contactId, onSaved, onConti
       {/* A Signal call needs the Signal channel itself; Messaging collects it when that is
           Signal too, so ask here only when it isn't. */}
       {route === 'signal' && fields.messagingRoute !== 'signal' && (
-        <ChannelCredentialsForm channel="signal" fields={ROUTE_FIELDS.signal} onChanged={onSaved} />
+        <ChannelCredentialsForm ref={save.register('signal')} channel="signal" fields={ROUTE_FIELDS.signal} onChanged={onSaved} />
       )}
       {route === 'signal' && fields.messagingRoute !== 'signal' && (
         <PrincipalIdentityField
           contactId={contactId}
           channel="signal"
+          ref={save.register('principal-signal')}
           label={`${atSentenceStart(principal)}’s Signal number`}
           placeholder="+14165550100"
           onChanged={onSaved}
         />
       )}
       {route && <TaskStatus task={task} />}
-      <StepFooter primary="Continue" onPrimary={onContinue} onHelp={onHelp} />
+      <SaveAndContinue save={save} onHelp={onHelp} />
     </div>
   );
 }

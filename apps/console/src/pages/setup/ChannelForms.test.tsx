@@ -2,9 +2,9 @@
 // The channel steps' credential form (#2358, PR 3b): saves only what was typed, turns the
 // channel on only once its credentials resolve, and stops at the field that fails.
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { act } from 'react';
+import { act, createRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { ChannelCredentialsForm, normalizePhone } from './ChannelForms.js';
+import { ChannelCredentialsForm, normalizePhone, type FieldGroupHandle } from './ChannelForms.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -75,9 +75,13 @@ function type(label: string, value: string): void {
   });
 }
 
+/** Leaves the last input, which saves what is typed (there is no Save button). */
 async function save(): Promise<void> {
+  const inputs = Array.from(document.querySelectorAll('input'));
   await act(async () => {
-    document.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    const last = inputs.at(-1)!;
+    last.focus();
+    last.blur();
   });
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 }
@@ -169,6 +173,45 @@ describe('ChannelCredentialsForm', () => {
     await save();
     expect(document.body.textContent).toContain('Saved, but couldn’t turn it on:');
     expect(onChanged).toHaveBeenCalled();
+  });
+});
+
+// Save and continue calls flush() on each field group and moves on only when all return true.
+describe('ChannelCredentialsForm flush (Save and continue)', () => {
+  async function mountWithRef() {
+    const ref = createRef<FieldGroupHandle>();
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(<ChannelCredentialsForm ref={ref} channel="sms" onChanged={async () => {}} fields={[
+        { key: 'api_key', label: 'Telnyx API key' },
+        { key: 'from_number', label: 'Curia’s number', phone: true },
+      ]} />);
+    });
+    return ref;
+  }
+
+  it('is true with nothing typed, and saves nothing', async () => {
+    const server: FakeServer = { calls: [], resolvable: false, state: 'uninstalled' };
+    stubFetch(server);
+    const ref = await mountWithRef();
+    let ok = false;
+    await act(async () => { ok = await ref.current!.flush(); });
+    expect(ok).toBe(true);
+    expect(server.calls.some((c) => c.startsWith('PUT'))).toBe(false);
+  });
+
+  it('is false for a number that cannot be saved, so the step stays put', async () => {
+    const server: FakeServer = { calls: [], resolvable: true, state: 'uninstalled' };
+    stubFetch(server);
+    const ref = await mountWithRef();
+    type('Curia’s number', '416 555 0188');
+    let ok = true;
+    await act(async () => { ok = await ref.current!.flush(); });
+    expect(ok).toBe(false);
+    expect(server.calls.some((c) => c.startsWith('PUT'))).toBe(false);
+    expect(document.body.textContent).toContain('Enter the number with its country code');
   });
 });
 
