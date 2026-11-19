@@ -1,20 +1,24 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { apiFetch } from '../api.js';
 import { SIGNIN_READINESS_EVENT } from './ConnectWithGoogle.js';
 
 // ── Nylas sign-in setup (#2361) ──────────────────────────────────────────────
 //
 // Top of Settings → Behaviour → Email & Calendar. Sets up Nylas hosted sign-in from the
-// Nylas API key already saved under Channels → Email: pick or detect the region, register the
-// callback URL, and create the Google connector from a GCP OAuth client. Reads readiness live
-// from GET /api/registry/nylas/signin. The GCP client secret lives only in this component's
-// state while the form is open: it is cleared on a successful create, and the server never
-// stores or returns it.
+// Nylas API key already saved under Channels → Email, as three steps with their own status:
+// the region, the sign-in callback URL, and the Google connector. Reads readiness live from
+// GET /api/registry/nylas/signin. On the first load the panel does the two steps it can do on
+// its own (detect an unknown region, register an unregistered callback) once each; their
+// buttons appear only if that failed. A sandbox application has Nylas's own Google connector,
+// so the connector form is shown only for a production application without one. The GCP client
+// secret lives only in this component's state while the form is open: it is cleared on a
+// successful create, and the server never stores or returns it.
 
 type Region = 'us' | 'eu';
 type Reason =
-  | 'no_api_key' | 'restart_required' | 'bad_api_key' | 'sandbox' | 'origin_not_https'
+  | 'no_api_key' | 'restart_required' | 'bad_api_key' | 'origin_not_https'
   | 'callback_unregistered' | 'no_google_connector' | 'nylas_unreachable' | 'settings_unreadable';
+type Step = 'region' | 'callback' | 'connector';
 
 interface SignInStatus {
   ready?: boolean;
@@ -24,26 +28,34 @@ interface SignInStatus {
   region?: Region;
   callbackUrl?: string | null;
   googleRedirectUri?: string;
+  environment?: 'sandbox' | 'production';
+  /** Each set once the check got that far. */
+  checks?: { callbackRegistered?: boolean; googleConnector?: boolean };
 }
 
 const BASE = '/api/registry/nylas';
+
+const REGION_HOST: Record<Region, string> = { us: 'api.us.nylas.com', eu: 'api.eu.nylas.com' };
 
 function isReason(r: string | undefined): r is Reason {
   return r !== undefined && Object.prototype.hasOwnProperty.call(FIX, r);
 }
 
-// One line per failing reason: what to do next.
+// One line per failing reason: what to do next. The two step reasons point at their step,
+// which shows the control.
 const FIX: Record<Reason, string> = {
   no_api_key: 'Save the Nylas API key under Channels → Email first.',
   restart_required: 'Restart Curia to finish setting up sign-in.',
-  bad_api_key: 'Nylas rejected the key. Check the key, then use Detect to find its region.',
-  sandbox: 'This Nylas application is a sandbox. Use a production application and its API key.',
+  bad_api_key: 'Nylas rejected the API key. Check the key under Channels → Email, then detect its region.',
   origin_not_https: 'Set APP_ORIGIN to this console\'s public https:// address and restart Curia.',
-  callback_unregistered: 'Click Register callback to add the sign-in callback URL to Nylas.',
-  no_google_connector: 'Create the Google connector below with your Google Cloud OAuth client.',
-  nylas_unreachable: 'Nylas did not answer. Try Check again in a moment.',
-  settings_unreadable: 'Curia could not read its saved Nylas settings. Try Check again in a moment; if it persists, check the server logs.',
+  callback_unregistered: 'Register the sign-in callback with Nylas (step 2).',
+  no_google_connector: 'Create the Google connector (step 3).',
+  nylas_unreachable: 'Nylas did not answer. Check again in a moment.',
+  settings_unreadable: 'Curia could not read its saved Nylas settings. Check again in a moment; if it persists, check the server logs.',
 };
+
+// Reasons that stop the check before Nylas is asked anything: no step is acted on by itself.
+const BLOCKING: ReadonlySet<string> = new Set(['no_api_key', 'restart_required', 'settings_unreadable']);
 
 async function errorMessage(res: Response): Promise<string> {
   try {
@@ -61,170 +73,287 @@ const jsonInit = (method: string, body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 
+/** One numbered step: a ✓ once done, else its number; what to do goes in the body. */
+function SetupStep({ n, title, done, children }: { n: number; title: string; done: boolean; children: ReactNode }) {
+  return (
+    <div className="settings-kv-row">
+      <dt>
+        <span className={done ? 'nylas-step-mark done' : 'nylas-step-mark'} aria-hidden="true">{done ? '✓' : n}</span>
+        {title}
+        <span className="sr-only">{done ? ' (done)' : ' (to do)'}</span>
+      </dt>
+      <dd className="nylas-step-body">{children}</dd>
+    </div>
+  );
+}
+
+/** The outcome of the last action on a step, shown inside that step. */
+function StepMessage({ msg }: { msg: { notice?: string; error?: string } | undefined }) {
+  if (!msg) return null;
+  if (msg.error) return <p className="autonomy-error" role="alert">{msg.error}</p>;
+  if (msg.notice) return <p className="nylas-step-note" role="status">{msg.notice}</p>;
+  return null;
+}
+
 export function NylasSignInSetupSection() {
   const [status, setStatus] = useState<SignInStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [working, setWorking] = useState<Step | null>(null);
+  const [messages, setMessages] = useState<Partial<Record<Step, { notice?: string; error?: string }>>>({});
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [topic, setTopic] = useState('');
 
   // Only the newest check may apply its result: a slow earlier one must not overwrite it.
   const checkSeq = useRef(0);
+  const mounted = useRef(false);
 
-  const check = useCallback(async () => {
+  // Resolves to the status it applied, or null when it failed or a newer check superseded it.
+  const check = useCallback(async (): Promise<SignInStatus | null> => {
     const seq = ++checkSeq.current;
     try {
       const res = await apiFetch(`${BASE}/signin`);
       if (!res.ok) throw new Error(await errorMessage(res));
       const next = await res.json() as SignInStatus;
-      if (seq !== checkSeq.current) return;
+      if (seq !== checkSeq.current || !mounted.current) return null;
       setStatus(next);
       setLoadError(null);
       // Tell the Connect with Google buttons on this page (they read readiness only on mount).
       window.dispatchEvent(new CustomEvent(SIGNIN_READINESS_EVENT, {
         detail: { ready: next.ready === true, detail: next.detail },
       }));
+      return next;
     } catch (err) {
-      if (seq !== checkSeq.current) return;
+      if (seq !== checkSeq.current || !mounted.current) return null;
       console.error('[NylasSignInSetupSection] failed to read sign-in readiness:', err);
       // A stale Ready (or an old reason) must not sit beside the error.
       setStatus(null);
       setLoadError(err instanceof Error ? err.message : 'unknown error');
+      return null;
     }
   }, []);
 
   // Bumps the live counter when called, so every check still in flight fails its guard.
   const invalidateChecks = useCallback(() => { checkSeq.current++; }, []);
 
-  useEffect(() => {
-    void check();
-    // Unmount invalidates any check still in flight: a late answer must neither set state nor
-    // broadcast a stale result to a page mounted afterwards.
-    return invalidateChecks;
-  }, [check, invalidateChecks]);
-
-  // Run one action, then re-check. Returns whether it succeeded.
-  async function act(run: () => Promise<Response>, done: string): Promise<boolean> {
+  // Run one action for a step, then re-check. Resolves to the re-checked status (or null) on
+  // success, undefined on failure. The outcome is shown inside that step.
+  const act = useCallback(async (
+    step: Step, run: () => Promise<Response>, done: string,
+  ): Promise<SignInStatus | null | undefined> => {
     setBusy(true);
-    setActionError(null);
-    setNotice(null);
+    setWorking(step);
+    setMessages({});
     try {
       const res = await run();
       if (!res.ok) throw new Error(await errorMessage(res));
-      setNotice(done);
-      await check();
-      return true;
+      if (!mounted.current) return undefined; // left the page: no re-check, no broadcast
+      setMessages({ [step]: { notice: done } });
+      return await check();
     } catch (err) {
-      console.error('[NylasSignInSetupSection] action failed:', err);
-      setActionError(err instanceof Error ? err.message : 'unknown error');
-      return false;
+      console.error(`[NylasSignInSetupSection] ${step} action failed:`, err);
+      if (mounted.current) setMessages({ [step]: { error: err instanceof Error ? err.message : 'unknown error' } });
+      return undefined;
     } finally {
-      setBusy(false);
+      if (mounted.current) { setBusy(false); setWorking(null); }
     }
-  }
+  }, [check]);
 
-  // Unknown until the server confirms it: a guessed US value would be wrong on an EU install.
-  const region: Region | '' = status?.region ?? '';
-  const googleRedirect = status?.googleRedirectUri ?? null;
+  useEffect(() => {
+    mounted.current = true;
+    // First load: do the steps Curia can do by itself, once each, in order.
+    void (async () => {
+      let s = await check();
+      if (!mounted.current || s === null || s.ready === true) return;
+      const regionUnknown = (s.region === undefined && !BLOCKING.has(s.reason ?? '')) || s.reason === 'bad_api_key';
+      if (regionUnknown) {
+        const after = await act('region', () => apiFetch(`${BASE}/discover-region`, jsonInit('POST', {})), 'Region detected and saved.');
+        if (!mounted.current || !after) return;
+        s = after;
+      }
+      if (s.checks?.callbackRegistered === false && s.callbackUrl) {
+        await act('callback', () => apiFetch(`${BASE}/callback`, jsonInit('POST', {})), 'Callback registered with Nylas.');
+      }
+    })();
+    // Unmount invalidates any check still in flight: a late answer must neither set state nor
+    // broadcast a stale result to a page mounted afterwards.
+    return () => { mounted.current = false; invalidateChecks(); };
+  }, [check, act, invalidateChecks]);
+
+  const ready = status?.ready === true;
+  const region: Region | undefined = status?.region;
+  const regionDone = region !== undefined && status?.reason !== 'bad_api_key';
+  const callbackUrl = status?.callbackUrl ?? null;
+  const callbackRegistered = ready || status?.checks?.callbackRegistered === true;
+  const sandbox = status?.environment === 'sandbox';
+  const connectorDone = ready || sandbox || status?.checks?.googleConnector === true;
+  const connectorMissing = !sandbox && status?.checks?.googleConnector === false;
   const canCreate = clientId.trim() !== '' && clientSecret.trim() !== '' && !busy;
+
+  function saveRegion(next: string) {
+    if (next !== 'us' && next !== 'eu') return;
+    void act('region', () => apiFetch(`${BASE}/region`, jsonInit('PUT', { region: next })), 'Region saved.');
+  }
 
   // The inputs are locked while the create request and re-check run, so the success cleanup
   // below can only clear the draft that was submitted.
   async function createConnector() {
     const body: Record<string, string> = { client_id: clientId.trim(), client_secret: clientSecret.trim() };
     if (topic.trim() !== '') body['topic_name'] = topic.trim();
-    const ok = await act(() => apiFetch(`${BASE}/google-connector`, jsonInit('POST', body)), 'Google connector created.');
+    const res = await act('connector', () => apiFetch(`${BASE}/google-connector`, jsonInit('POST', body)), 'Google connector created.');
     // Clear the secret once Nylas has it, whether or not the re-check then reads ready.
-    if (ok) { setClientId(''); setClientSecret(''); setTopic(''); }
+    if (res !== undefined) { setClientId(''); setClientSecret(''); setTopic(''); }
   }
+
+  const checkAgain = (
+    <button type="button" className="link-button" disabled={busy} onClick={() => { setMessages({}); void check(); }}>
+      Check again
+    </button>
+  );
+
+  let summary: ReactNode;
+  if (loadError) {
+    summary = (
+      <div className="settings-callout settings-callout-danger" role="alert">
+        <p>Couldn&apos;t check sign-in: {loadError}. {checkAgain}</p>
+      </div>
+    );
+  } else if (status === null) {
+    summary = <p className="settings-muted-hint" role="status">Checking Nylas… {checkAgain}</p>;
+  } else if (ready) {
+    summary = (
+      <div className="settings-callout settings-callout-success" role="status">
+        <p><strong>Ready.</strong> Mailboxes can be added by signing in with Google. {checkAgain}</p>
+      </div>
+    );
+  } else {
+    const why = isReason(status.reason) ? FIX[status.reason] : (status.detail || 'Sign-in is not set up yet.');
+    summary = (
+      <div className="settings-callout settings-callout-readonly" role="status">
+        <p><strong>Not ready.</strong> {why} {checkAgain}</p>
+      </div>
+    );
+  }
+
+  const notChecked = <p className="nylas-step-note">Not checked yet.</p>;
 
   return (
     <section className="settings-section" aria-label="Nylas sign-in setup">
-      <h3 className="settings-section-title">Sign in with Google (Nylas)</h3>
-      <div className="settings-section-body">
-        <p className="settings-page-sub">
-          Lets you add Gmail mailboxes by signing in with Google instead of copying grant IDs.
-          Uses the Nylas API key saved under Channels → Email.
+      <div className="settings-section-head">
+        <h3 className="settings-section-title">Nylas</h3>
+        <p className="settings-section-sub">
+          Connects Curia to Gmail through Nylas, so mailboxes are added by signing in with Google.
         </p>
+      </div>
+      <div className="settings-section-body">
+        {summary}
 
-        {loadError && <p className="autonomy-error" role="alert">Couldn&apos;t check sign-in: {loadError}</p>}
-        {status && status.ready === true && (
-          <p role="status"><strong>Ready.</strong> Mailbox sign-in is set up.</p>
-        )}
-        {status && status.ready === false && (
-          <p className="autonomy-error" role="alert">
-            Not ready: {isReason(status.reason) ? FIX[status.reason] : (status.detail || 'Not ready')}
-          </p>
-        )}
+        <dl className="settings-kv-list">
+          <SetupStep n={1} title="Region" done={regionDone}>
+            {regionDone && region ? (
+              <div className="nylas-step-inline">
+                <span>{region.toUpperCase()} <code>{REGION_HOST[region]}</code></span>
+                <select aria-label="Change Nylas region" value="" disabled={busy}
+                  onChange={e => saveRegion(e.target.value)}>
+                  <option value="" disabled>Change…</option>
+                  <option value="us">US (api.us.nylas.com)</option>
+                  <option value="eu">EU (api.eu.nylas.com)</option>
+                </select>
+              </div>
+            ) : (
+              <>
+                <p className="nylas-step-note">Choose the region of your Nylas application, or detect it from the API key.</p>
+                <div className="nylas-step-inline">
+                  <select aria-label="Nylas region" value={region ?? ''} disabled={busy}
+                    onChange={e => saveRegion(e.target.value)}>
+                    {region === undefined && <option value="" disabled>Choose…</option>}
+                    <option value="us">US (api.us.nylas.com)</option>
+                    <option value="eu">EU (api.eu.nylas.com)</option>
+                  </select>
+                  <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                    onClick={() => void act('region', () => apiFetch(`${BASE}/discover-region`, jsonInit('POST', {})), 'Region detected and saved.')}>
+                    Detect
+                  </button>
+                </div>
+              </>
+            )}
+            {working === 'region' && <p className="nylas-step-note" role="status">Asking Nylas…</p>}
+            <StepMessage msg={messages.region} />
+          </SetupStep>
 
-        <div className="form-field">
-          <label>
-            Region{' '}
-            <select
-              aria-label="Nylas region"
-              value={region}
-              disabled={busy}
-              onChange={e => { const next = e.target.value; void act(() => apiFetch(`${BASE}/region`, jsonInit('PUT', { region: next })), 'Region saved.'); }}
-            >
-              {region === '' && <option value="" disabled>Unknown: use Check or Detect</option>}
-              <option value="us">US (api.us.nylas.com)</option>
-              <option value="eu">EU (api.eu.nylas.com)</option>
-            </select>
-          </label>
-          {' '}
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-            onClick={() => void act(() => apiFetch(`${BASE}/discover-region`, jsonInit('POST', {})), 'Region detected and saved.')}>
-            Detect
-          </button>
-          {' '}
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void check()}>
-            Check
-          </button>
-        </div>
+          <SetupStep n={2} title="Callback" done={callbackRegistered}>
+            {callbackUrl ? (
+              <>
+                <code className="nylas-step-code">{callbackUrl}</code>
+                {callbackRegistered && <p className="nylas-step-note">Registered with Nylas.</p>}
+                {!callbackRegistered && status?.checks?.callbackRegistered === undefined && notChecked}
+                {status?.checks?.callbackRegistered === false && working !== 'callback' && (
+                  <div className="nylas-step-inline">
+                    <span className="nylas-step-note">Not registered with Nylas yet.</span>
+                    <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                      onClick={() => void act('callback', () => apiFetch(`${BASE}/callback`, jsonInit('POST', {})), 'Callback registered with Nylas.')}>
+                      Register callback
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="nylas-step-note">Set APP_ORIGIN to this console&apos;s public https:// address to get the callback URL.</p>
+            )}
+            {working === 'callback' && <p className="nylas-step-note" role="status">Registering with Nylas…</p>}
+            <StepMessage msg={messages.callback} />
+          </SetupStep>
 
-        <div className="form-field">
-          <div>Sign-in callback URL (registered with Nylas):</div>
-          <code>{status?.callbackUrl ?? 'Set APP_ORIGIN to see it'}</code>
-          {' '}
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy || !status?.callbackUrl}
-            onClick={() => void act(() => apiFetch(`${BASE}/callback`, jsonInit('POST', {})), 'Callback registered.')}>
-            Register callback
-          </button>
-        </div>
-
-        <div className="form-field">
-          <div>Google Cloud: add this as an authorised redirect URI on your OAuth client:</div>
-          {googleRedirect
-            ? <code>{googleRedirect}</code>
-            : <code>Shown once Check confirms the region</code>}
-        </div>
-
-        <div className="form-field">
-          <div>Create the Google connector from your Google Cloud OAuth client:</div>
-          <label style={{ display: 'block', marginBottom: 6 }}>
-            Client ID{' '}
-            <input aria-label="Google client ID" disabled={busy} value={clientId} onChange={e => setClientId(e.target.value)} autoComplete="off" />
-          </label>
-          <label style={{ display: 'block', marginBottom: 6 }}>
-            Client secret{' '}
-            <input aria-label="Google client secret" type="password" disabled={busy} value={clientSecret}
-              onChange={e => setClientSecret(e.target.value)} autoComplete="off" />
-          </label>
-          <label style={{ display: 'block', marginBottom: 6 }}>
-            Pub/Sub topic (optional){' '}
-            <input aria-label="Pub/Sub topic" disabled={busy} value={topic} onChange={e => setTopic(e.target.value)} autoComplete="off" />
-          </label>
-          <button type="button" className="btn btn-primary btn-sm" disabled={!canCreate} onClick={() => void createConnector()}>
-            Create connector
-          </button>
-          <p className="settings-page-sub">Curia passes the secret to Nylas and does not keep it.</p>
-        </div>
-
-        {notice && <p role="status">{notice}</p>}
-        {actionError && <p className="autonomy-error" role="alert">{actionError}</p>}
+          <SetupStep n={3} title="Google connector" done={connectorDone}>
+            {sandbox ? (
+              <>
+                <p>Built in (Nylas sandbox)</p>
+                <p className="nylas-step-note">
+                  Sandbox application: uses Nylas&apos;s built-in Google connector and allows up to 5
+                  connected accounts. Use a production application for more, or to use your own Google app.
+                </p>
+              </>
+            ) : connectorDone ? (
+              <p>Google connector set up.</p>
+            ) : connectorMissing ? (
+              <div className="nylas-connector-form">
+                <p className="nylas-step-note">
+                  Create it from your Google Cloud OAuth client. Curia passes the secret to Nylas and
+                  does not keep it.
+                </p>
+                {status?.googleRedirectUri && (
+                  <div className="form-field">
+                    <span className="nylas-step-label">Authorised redirect URI for your Google OAuth client</span>
+                    <code className="nylas-step-code">{status.googleRedirectUri}</code>
+                  </div>
+                )}
+                <div className="form-field">
+                  <label htmlFor="nylas-google-client-id">Client ID</label>
+                  <input id="nylas-google-client-id" type="text" disabled={busy} value={clientId}
+                    onChange={e => setClientId(e.target.value)} autoComplete="off" />
+                </div>
+                <div className="form-field">
+                  <label htmlFor="nylas-google-client-secret">Client secret</label>
+                  <input id="nylas-google-client-secret" type="password" disabled={busy} value={clientSecret}
+                    onChange={e => setClientSecret(e.target.value)} autoComplete="off" />
+                </div>
+                <div className="form-field">
+                  <label htmlFor="nylas-google-topic">Pub/Sub topic (optional)</label>
+                  <input id="nylas-google-topic" type="text" disabled={busy} value={topic}
+                    onChange={e => setTopic(e.target.value)} autoComplete="off" />
+                </div>
+                <div className="nylas-step-inline">
+                  <button type="button" className="btn btn-primary" disabled={!canCreate} onClick={() => void createConnector()}>
+                    Create connector
+                  </button>
+                </div>
+              </div>
+            ) : notChecked}
+            {working === 'connector' && <p className="nylas-step-note" role="status">Creating the connector…</p>}
+            <StepMessage msg={messages.connector} />
+          </SetupStep>
+        </dl>
       </div>
     </section>
   );
