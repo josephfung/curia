@@ -460,6 +460,7 @@ describeIf('mailbox sign-in callback', () => {
     [{ error: 'org_internal' }, 'org_internal'],
     [{ error: 'access_denied' }, 'cancelled'],
     [{ error: 'server_error', error_description: 'boom' }, 'failed'],
+    [{ error: 'invalid_request', error_description: 'Maximum number of grants reached for Organization' }, 'account_limit'],
   ])('maps the provider error %j to %s without an exchange', async (q, outcome) => {
     const res = await handleMailboxSignInCallback({ state: await token(), ...q }, deps);
     expect(res.outcome).toBe(outcome);
@@ -467,13 +468,80 @@ describeIf('mailbox sign-in callback', () => {
     expectOneFinished(outcome);
   });
 
-  it('a principal link with no expected address is refused before any exchange (R4)', async () => {
+  it('an agent-minted principal link with no expected address is refused before any exchange (R4)', async () => {
     nylasGrant('code-1', 'grant-boss-0001', 'boss@example.com');
     const res = await handleMailboxSignInCallback({ state: await token({ expectedEmail: null }), code: 'code-1' }, deps);
     expect(res.outcome).toBe('refused');
     expect(exchangeCode).not.toHaveBeenCalled();
     expect(await store.listLive()).toEqual([]);
     expectOneFinished('refused');
+  });
+
+  /** The console's top-level "Connect with Google": an operator link with no address (#2361). */
+  async function operatorUnpinnedPrincipal(): Promise<string> {
+    const { url, expiresAt } = await new MailboxSignInService({ pool, logger: pino({ level: 'silent' }), appOrigin: ORIGIN, readiness: async () => READY })
+      .mintForOperator({ target: 'principal' });
+    expect(expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 15 * 60_000 + 30_000);
+    return url.slice(url.lastIndexOf('/') + 1);
+  }
+
+  it('an operator link with no address adds a mailbox for a new account and links its identity (#2361)', async () => {
+    nylasGrant('code-1', 'grant-new-0001', 'Side.Gig@Acme.com');
+    const res = await handleMailboxSignInCallback({ state: await operatorUnpinnedPrincipal(), code: 'code-1' }, deps);
+    expect(res).toMatchObject({ outcome: 'connected', target: 'principal', mailboxId: 'acme' });
+    const live = await store.listLive();
+    expect(live).toHaveLength(1);
+    expect(live[0]).toMatchObject({ id: 'acme', address: 'side.gig@acme.com', isDefault: true });
+    expect(vault.get(principalMailboxGrantSecretName('acme'))).toBe('grant-new-0001');
+    expect(linkIdentity).toHaveBeenCalledWith({
+      contactId: 'ceo', channel: 'email', channelIdentifier: 'side.gig@acme.com', source: 'ceo_stated', verified: true,
+    });
+    // The first-ever rule is unchanged.
+    expect(ofType('principal_mailbox.connected')).toHaveLength(1);
+    const payload = expectOneFinished('connected');
+    expect(payload).not.toHaveProperty('agentId');
+    expect(deleteGrant).not.toHaveBeenCalled();
+    expectNoGrantInLogs();
+  });
+
+  it("an operator link with no address reconnects the live mailbox that has the account's address (#2361)", async () => {
+    nylasGrant('code-1', 'grant-boss-0001', 'boss@example.com');
+    await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps);
+    published = [];
+    linkIdentity.mockClear();
+    nylasGrant('code-2', 'grant-boss-0099', 'Boss@Example.com');
+    const res = await handleMailboxSignInCallback({ state: await operatorUnpinnedPrincipal(), code: 'code-2' }, deps);
+    expect(res).toMatchObject({ outcome: 'reconnected', mailboxId: 'example' });
+    expect(await store.listLive()).toHaveLength(1);
+    expect(vault.get(principalMailboxGrantSecretName('example'))).toBe('grant-boss-0099');
+    expect(ofType('principal_mailbox.changed').map((e) => (e.payload as { action: string }).action)).toEqual(['replace_grant', 'replace_grant']);
+    expect(ofType('principal_mailbox.connected')).toHaveLength(0);
+    expect(linkIdentity).not.toHaveBeenCalled();
+    expect(deleteGrant.mock.calls).toEqual([['grant-boss-0001']]);
+    expectOneFinished('reconnected');
+  });
+
+  it("an operator link with no address, signed in with Curia's own account, is refused and nothing is written", async () => {
+    await repo.create({ name: 'curia', selfEmail: 'curia@office.com' });
+    nylasGrant('code-1', 'grant-curia-new-0007', 'curia@office.com');
+    const res = await handleMailboxSignInCallback({ state: await operatorUnpinnedPrincipal(), code: 'code-1' }, deps);
+    expect(res.outcome).toBe('refused');
+    expect(await store.listLive()).toEqual([]);
+    expect(linkIdentity).not.toHaveBeenCalled();
+    expectOneFinished('refused');
+  });
+
+  it("Nylas's account limit at the exchange is account_limit: nothing stored, nothing revoked (#2361)", async () => {
+    exchangeCode.mockImplementationOnce(async () => {
+      throw new NylasAppError('Nylas exchange code failed: HTTP 400', 400, undefined, true);
+    });
+    const res = await handleMailboxSignInCallback({ state: await token(), code: 'code-1' }, deps);
+    expect(res.outcome).toBe('account_limit');
+    expect(await store.listLive()).toEqual([]);
+    expect(storedGrants()).toEqual([]);
+    expect(deleteGrant).not.toHaveBeenCalled();
+    expect(logLines.find((l) => l['step'] === 'exchange')).toMatchObject({ reason: 'account_limit', statusCode: 400 });
+    expectOneFinished('account_limit');
   });
 
   it('a missing calendar scope is missing_scopes, revoked, nothing stored', async () => {

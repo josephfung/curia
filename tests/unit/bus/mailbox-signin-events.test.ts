@@ -70,7 +70,7 @@ describe('mailbox_signin.finished', () => {
 describe('MAILBOX_SIGNIN_OUTCOMES', () => {
   it('lists every outcome', () => {
     expect([...MAILBOX_SIGNIN_OUTCOMES].sort()).toEqual([
-      'admin_blocked', 'cancelled', 'connected', 'expired', 'failed', 'missing_scopes',
+      'account_limit', 'admin_blocked', 'cancelled', 'connected', 'expired', 'failed', 'missing_scopes',
       'not_google', 'org_internal', 'reconnected', 'refused', 'wrong_account',
     ]);
   });

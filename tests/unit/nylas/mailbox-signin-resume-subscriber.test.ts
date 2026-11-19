@@ -98,6 +98,14 @@ describe('mailboxSignInResumeLine', () => {
     expect(line).toContain("I couldn't notify the operator; ask them to mark the app Trusted in the Google Workspace admin console");
   });
 
+  it('account_limit names the 5-account sandbox limit and what frees one', () => {
+    const line = mailboxSignInResumeLine('account_limit', 'principal');
+    expect(line).toContain("Nylas's account limit is reached");
+    expect(line).toContain('5 connected accounts');
+    expect(line).toMatch(/remove an unused mailbox, or move to a production Nylas application/);
+    expect(line).toMatch(/fresh link once an account is freed\.$/);
+  });
+
   it("names Curia's own mailbox for the curia target, and the restart only when one is scheduled (J)", () => {
     const restarting = mailboxSignInResumeLine('connected', 'curia', { restartScheduled: true });
     expect(restarting).toContain("Curia's own mailbox");

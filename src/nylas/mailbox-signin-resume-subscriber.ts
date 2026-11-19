@@ -59,6 +59,8 @@ function reason(outcome: MailboxSignInOutcome, clientId: string | undefined, ope
       return 'not every permission was granted; on the Google consent screen, every Gmail and Calendar box must be ticked.';
     case 'not_google':
       return 'the account that signed in is not a Google account; only Google mailboxes are supported.';
+    case 'account_limit':
+      return "Nylas's account limit is reached (a Nylas sandbox allows 5 connected accounts); the operator must remove an unused mailbox, or move to a production Nylas application.";
     case 'refused':
       return 'Curia refused to store the account (it is already connected in another role, or the link was not valid for it).';
     case 'failed':
@@ -89,7 +91,9 @@ export function mailboxSignInResumeLine(outcome: MailboxSignInOutcome, target: S
     const restart = opts.restartScheduled === true ? ' Curia restarts to start using it.' : '';
     return `The mailbox sign-in finished: ${whose(target)} is connected — continue.${restart}`;
   }
-  const after = outcome === 'admin_blocked' ? ' once the app is trusted' : '';
+  const after = outcome === 'admin_blocked' ? ' once the app is trusted'
+    : outcome === 'account_limit' ? ' once an account is freed'
+    : '';
   return `The mailbox sign-in for ${whose(target)} did not connect: ${reason(outcome, opts.clientId, opts.operatorNotified === true)} ${FRESH_LINK}${after}.`;
 }
 

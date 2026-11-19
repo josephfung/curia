@@ -220,6 +220,18 @@ describeIf('MailboxSignInService', () => {
     expect(await svc.peek(pinned.url.slice(pinned.url.lastIndexOf('/') + 1))).toMatchObject({ target: 'curia', expected_email: 'assistant@office.com' });
   });
 
+  it('caps an unpinned operator principal link at 15 minutes, stored with no address and no agent (#2361)', async () => {
+    const svc = makeService();
+    const unpinned = await mintOperatorToken(svc, { target: 'principal', ttlMinutes: 600 });
+    expect(unpinned.expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 15 * 60_000 + 30_000);
+    expect(unpinned.expiresAt.getTime()).toBeGreaterThan(Date.now() + 14 * 60_000);
+    expect(await svc.peek(unpinned.url.slice(unpinned.url.lastIndexOf('/') + 1)))
+      .toMatchObject({ target: 'principal', expected_email: null, agent_id: null });
+    // A pinned principal link keeps the requested TTL.
+    const pinned = await mintOperatorToken(svc, { target: 'principal', expectedEmail: 'boss@example.com', ttlMinutes: 600 });
+    expect(pinned.expiresAt.getTime()).toBeGreaterThan(Date.now() + 500 * 60_000);
+  });
+
   it('refuses a principal link while the flat-mailbox fallback is served, by agent or operator (B, R9)', async () => {
     const before = await pool.query('SELECT count(*)::int AS n FROM mailbox_signin_tokens');
     const svc = makeService({ isFallbackActive: async () => true });

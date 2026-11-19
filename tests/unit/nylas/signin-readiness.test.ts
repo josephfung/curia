@@ -26,6 +26,7 @@ interface FakeOpts {
   callbackUris?: string[];
   connectors?: Array<{ provider: string; scopes: string[] }>;
   appError?: Error;
+  connectorsError?: Error;
 }
 
 function fakeClient(o: FakeOpts = {}): NylasAppClient {
@@ -39,7 +40,10 @@ function fakeClient(o: FakeOpts = {}): NylasAppClient {
         callbackUris: o.callbackUris ?? [CALLBACK],
       };
     }),
-    listConnectors: vi.fn(async () => o.connectors ?? [{ provider: 'google', scopes: [] }]),
+    listConnectors: vi.fn(async () => {
+      if (o.connectorsError) throw o.connectorsError;
+      return o.connectors ?? [{ provider: 'google', scopes: [] }];
+    }),
   } as unknown as NylasAppClient;
 }
 
@@ -87,20 +91,66 @@ describe('checkNylasSignIn', () => {
     expect(await run({ appError: new Error('boom') })).toMatchObject({ ready: false, reason: 'nylas_unreachable' });
   });
 
-  it('sandbox, case-insensitive', async () => {
-    expect(await run({ environment: 'Sandbox' })).toMatchObject({ ready: false, reason: 'sandbox' });
+  it('a sandbox is ready, and reported as one (case-insensitive)', async () => {
+    expect(await run({ environment: 'Sandbox' })).toEqual({
+      ready: true, applicationId: 'app-1', region: 'us', environment: 'sandbox',
+      checks: { callbackRegistered: true, googleConnector: true },
+    });
   });
+
+  it.each([['production', 'production'], [null, 'production'], ['staging', 'production']] as const)(
+    'environment %s reads as %s',
+    async (raw, want) => {
+      expect(await run({ environment: raw })).toMatchObject({ ready: true, environment: want });
+    },
+  );
 
   it('callback not registered', async () => {
     expect(await run({ callbackUris: ['https://other/cb'] })).toMatchObject({ ready: false, reason: 'callback_unregistered' });
   });
 
+  it('checks the connector even when the callback is missing, keeping callback as the reason', async () => {
+    expect(await run({ callbackUris: [], connectors: [] })).toEqual({
+      ready: false, reason: 'callback_unregistered', detail: 'Register the sign-in callback URL with Nylas.',
+      environment: 'production', checks: { callbackRegistered: false, googleConnector: false },
+    });
+    expect(await run({ callbackUris: [], environment: 'sandbox' })).toMatchObject({
+      reason: 'callback_unregistered', environment: 'sandbox', checks: { callbackRegistered: false, googleConnector: true },
+    });
+  });
+
+  it('a failed connector listing leaves that step unknown when the callback already decides', async () => {
+    const { logger, lines } = capture();
+    const r = await run({ callbackUris: [], connectorsError: new NylasAppError('x', 503) }, { logger });
+    expect(r).toMatchObject({ ready: false, reason: 'callback_unregistered', checks: { callbackRegistered: false } });
+    expect(r.checks).not.toHaveProperty('googleConnector');
+    expect(lines.some((l) => l['level'] === 40 && l['step'] === 'list_connectors')).toBe(true);
+  });
+
+  it('a failed connector listing with the callback registered maps by status, keeping the facts', async () => {
+    expect(await run({ connectorsError: new NylasAppError('x', 503) })).toMatchObject({
+      ready: false, reason: 'nylas_unreachable', environment: 'production', checks: { callbackRegistered: true },
+    });
+    expect(await run({ connectorsError: new NylasAppError('x', 401) })).toMatchObject({ reason: 'bad_api_key' });
+  });
+
   it('no google connector', async () => {
-    expect(await run({ connectors: [{ provider: 'microsoft', scopes: [] }] })).toMatchObject({ ready: false, reason: 'no_google_connector' });
+    expect(await run({ connectors: [{ provider: 'microsoft', scopes: [] }] })).toMatchObject({
+      ready: false, reason: 'no_google_connector', checks: { callbackRegistered: true, googleConnector: false },
+    });
+  });
+
+  it('no environment or checks before the Nylas calls get anywhere', async () => {
+    const r = await run({ appError: new NylasAppError('x', 401) });
+    expect(r).not.toHaveProperty('environment');
+    expect(r).not.toHaveProperty('checks');
   });
 
   it('ready when everything is present', async () => {
-    expect(await run()).toEqual({ ready: true, applicationId: 'app-1', region: 'us' });
+    expect(await run()).toEqual({
+      ready: true, applicationId: 'app-1', region: 'us', environment: 'production',
+      checks: { callbackRegistered: true, googleConnector: true },
+    });
   });
 
   it('detail never carries the key', async () => {

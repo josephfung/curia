@@ -4,7 +4,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import pino from 'pino';
 import { nylasSetupRoutes, type NylasSetupRouteOptions } from '../../../../../src/channels/http/routes/nylas-setup.js';
 import { NylasAppError, type NylasAppClient } from '../../../../../src/nylas/app-client.js';
-import { MailboxSignInAddressError, MailboxSignInUnavailableError } from '../../../../../src/nylas/mailbox-signin-service.js';
+import { MailboxSignInUnavailableError } from '../../../../../src/nylas/mailbox-signin-service.js';
 
 const BOOTSTRAP = 'test-bootstrap-secret';
 const auth = { 'x-web-bootstrap-secret': BOOTSTRAP };
@@ -78,6 +78,21 @@ describe('nylas-setup routes', () => {
       callbackUrl: CALLBACK, googleRedirectUri: 'https://api.us.nylas.com/v3/connect/callback',
     });
     expect(res.body).not.toContain(API_KEY);
+  });
+
+  it('GET /signin passes environment and per-step checks through, ready or not (#2361)', async () => {
+    const { opts, client } = setup();
+    client.getApplication.mockImplementation(async () => ({ applicationId: 'app-1', region: 'us', environment: 'sandbox', callbackUris: [] }));
+    await build(opts);
+    const res = await req('GET', '/api/registry/nylas/signin');
+    expect(res.json()).toMatchObject({
+      ready: false, reason: 'callback_unregistered', environment: 'sandbox',
+      checks: { callbackRegistered: false, googleConnector: true }, callbackUrl: CALLBACK,
+    });
+    client.getApplication.mockImplementation(async () => ({ applicationId: 'app-1', region: 'us', environment: 'sandbox', callbackUris: [CALLBACK] }));
+    expect((await req('GET', '/api/registry/nylas/signin')).json()).toMatchObject({
+      ready: true, environment: 'sandbox', checks: { callbackRegistered: true, googleConnector: true },
+    });
   });
 
   it('GET /signin, when ready, reports the region that passed the check even if another is saved meanwhile', async () => {
@@ -336,12 +351,14 @@ describe('nylas-setup routes', () => {
       expect(signIn.mintForOperator).toHaveBeenCalledWith({ target: 'curia', label: 'Curia' });
     });
 
-    it('mints a principal link for the primary address by default', async () => {
+    it('mints an unpinned operator principal link when no address is given (Google decides the account)', async () => {
       const { opts, signIn } = withSignIn();
       await build(opts);
       const res = await req('POST', '/api/registry/nylas/signin-links', { target: 'principal' });
       expect(res.statusCode).toBe(200);
-      expect(signIn.mint).toHaveBeenCalledWith({ target: 'principal' });
+      expect(signIn.mintForOperator).toHaveBeenCalledWith({ target: 'principal' });
+      // Never the agent path, which would pin the link to the principal's primary address.
+      expect(signIn.mint).not.toHaveBeenCalled();
     });
 
     it('pins a principal link to the address the operator names', async () => {
@@ -371,18 +388,13 @@ describe('nylas-setup routes', () => {
       expect((await req('POST', '/api/registry/nylas/signin-links', { target: 'curia', label: 'a'.repeat(200) })).statusCode).toBe(400);
     });
 
-    it('maps unavailable to 409 and address problems to 422 without echoing a token', async () => {
+    it('maps unavailable to 409 without echoing a token', async () => {
       const a = withSignIn({ mintForOperator: vi.fn(async () => { throw new MailboxSignInUnavailableError('no_api_key', 'Save the Nylas API key first (Channels → Email).'); }) });
       await build(a.opts);
       const r1 = await req('POST', '/api/registry/nylas/signin-links', { target: 'curia' });
       expect(r1.statusCode).toBe(409);
       expect(r1.json().error).toContain('Save the Nylas API key');
-      await app.close();
-      const b = withSignIn({ mint: vi.fn(async () => { throw new MailboxSignInAddressError('no_principal_address'); }) });
-      await build(b.opts);
-      const r2 = await req('POST', '/api/registry/nylas/signin-links', { target: 'principal' });
-      expect(r2.statusCode).toBe(422);
-      expect(r2.body).not.toContain('tok22');
+      expect(r1.body).not.toContain('tok22');
     });
 
     it('500s with a plain message on an unexpected error', async () => {

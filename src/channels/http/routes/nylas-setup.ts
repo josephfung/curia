@@ -37,7 +37,6 @@ import {
   type NylasBootConfig,
 } from '../../../nylas/signin-readiness.js';
 import {
-  MailboxSignInAddressError,
   MailboxSignInUnavailableError,
   type MailboxSignInService,
 } from '../../../nylas/mailbox-signin-service.js';
@@ -57,7 +56,7 @@ export interface NylasSetupRouteOptions {
   /** The boot-time Nylas key and region: readiness reads restart_required after either changes. */
   boot?: NylasBootConfig;
   /** Mints the console's "Connect with Google" links. Absent: the route answers 409. */
-  signIn?: Pick<MailboxSignInService, 'mint' | 'mintForOperator'>;
+  signIn?: Pick<MailboxSignInService, 'mintForOperator'>;
   /** Test seams. */
   makeClient?: (apiKey: string, apiUri: string) => NylasAppClient;
   probeRegion?: (apiKey: string) => Promise<NylasRegionProbe>;
@@ -286,10 +285,10 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
     return reply.send({ ok: true });
   });
 
-  // Operator-minted sign-in link. A principal link defaults to the principal's designated primary
-  // address (the service resolves it); the operator, who is trusted, may name any other address.
-  // A Curia link may be pinned to an address too (the callback then enforces it, R8); unpinned, it
-  // lives 15 minutes. The link's token is only ever in the response body.
+  // Operator-minted sign-in link. Either target may be pinned to an address the operator names (the
+  // callback then enforces it), or left unpinned: Google then decides the account, and the link
+  // lives 15 minutes. An unpinned principal link adds a mailbox for a new address, or reconnects
+  // the live mailbox that has it (#2361). The link's token is only ever in the response body.
   app.post('/api/registry/nylas/signin-links', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     const body = (request.body ?? {}) as { target?: unknown; label?: unknown; address?: unknown };
@@ -312,21 +311,16 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
       return reply.status(409).send({ error: 'Mailbox sign-in is not available on this server.' });
     }
     try {
-      const link = target === 'principal' && address === ''
-        ? await signIn.mint({ target, ...(label !== '' ? { label } : {}) })
-        : await signIn.mintForOperator({
-          target,
-          ...(label !== '' ? { label } : {}),
-          ...(address !== '' ? { expectedEmail: address } : {}),
-        });
+      const link = await signIn.mintForOperator({
+        target,
+        ...(label !== '' ? { label } : {}),
+        ...(address !== '' ? { expectedEmail: address } : {}),
+      });
       return reply.send({ url: link.url, expiresAt: link.expiresAt.toISOString() });
     } catch (err) {
       if (err instanceof MailboxSignInUnavailableError) {
         log.warn({ reason: err.reason }, 'nylas sign-in link refused: sign-in not ready');
         return reply.status(409).send({ error: err.detail !== '' ? err.detail : `Mailbox sign-in is not ready (${err.reason}).` });
-      }
-      if (err instanceof MailboxSignInAddressError) {
-        return reply.status(422).send({ error: err.message });
       }
       log.error(grantSafeErrorFields(err), 'nylas sign-in link mint failed');
       return reply.status(500).send({ error: 'Failed to create the sign-in link. Check server logs.' });
