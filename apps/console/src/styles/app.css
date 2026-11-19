@@ -4007,6 +4007,11 @@ table.records-table tbody tr.active td { background: transparent; }
 }
 .setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; }
 .setup-actions .btn { text-decoration: none; }
+.setup-saved { color: var(--app-teal); }
+.setup-inline { display: flex; gap: 8px; align-items: center; }
+.setup-inline input { flex: 1; min-width: 0; }
+.setup-identity { margin-top: 14px; }
+.setup-panel { margin-top: 22px; }
 .setup-link {
   background: none; border: 0; padding: 0; color: var(--app-fg-muted); font-size: 12.5px; cursor: pointer;
   text-decoration: underline; text-underline-offset: 2px;
