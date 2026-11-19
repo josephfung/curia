@@ -571,16 +571,16 @@ describeIf('/api/setup/* routes', () => {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
-        await client.query('DELETE FROM office_identity_current');
-        await client.query('DELETE FROM office_identity_versions');
-        const insert = (version: number, changedBy: string) => client.query(
-          `INSERT INTO office_identity_versions (version, config, changed_by) VALUES ($1, '{}'::jsonb, $2)`,
-          [version, changedBy],
+        // As if no wizard or api save existed yet (rolled back below; no row is deleted).
+        await client.query(`UPDATE office_identity_versions SET changed_by = 'system_default' WHERE changed_by IN ('wizard', 'api')`);
+        const insert = (changedBy: string) => client.query(
+          `INSERT INTO office_identity_versions (version, config, changed_by)
+           VALUES ((SELECT COALESCE(MAX(version), 0) + 1 FROM office_identity_versions), '{}'::jsonb, $1)`,
+          [changedBy],
         );
-        await insert(1, 'system_default');
-        await insert(2, 'working_style');
+        await insert('working_style');
         expect(await isIdentityConfigured(client)).toBe(false);
-        await insert(3, 'wizard');
+        await insert('wizard');
         expect(await isIdentityConfigured(client)).toBe(true);
       } finally {
         await client.query('ROLLBACK');
