@@ -61,6 +61,11 @@ export async function saveSetupFields(update: Partial<SetupFields>): Promise<Set
   return data.setup;
 }
 
+/** The Setup page opened: Setup has started, so web chat reaches the setup guide. */
+export async function startSetup(): Promise<void> {
+  await json<{ inSetup: boolean }>(await apiFetch('/api/setup/start', { method: 'POST' }));
+}
+
 export async function postJson<T>(path: string, body: unknown): Promise<T> {
   return json<T>(await apiFetch(path, {
     method: 'POST',

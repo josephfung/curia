@@ -12,6 +12,7 @@
 //                               it back into normal (non-setup-required) mode
 //   GET  /api/setup/checklist — the Setup checklist and setup_complete (#2358)
 //   PUT  /api/setup/state     — who Setup is for, the operator, the routes (#2358)
+//   POST /api/setup/start     — the Setup page opened: Setup has started (#2358)
 //   POST /api/setup/complete  — Start onboarding: Setup is over (#2358)
 //
 // All routes require session cookie or x-web-bootstrap-secret authentication
@@ -35,6 +36,7 @@ import {
   isInSetup,
   MESSAGING_ROUTES,
   readSetupState,
+  startSetup,
   updateSetupState,
   VOICE_ROUTES,
   type SetupState,
@@ -549,6 +551,23 @@ export async function setupRoutes(
     } catch (err) {
       logger.error({ err }, 'PUT /api/setup/state: failed to save');
       return reply.status(500).send({ error: 'Failed to save. Check server logs.' });
+    }
+  });
+
+  // -- POST /api/setup/start --
+  //
+  // The Setup page calls this when it opens, so web chat goes to the setup guide from the
+  // first message (routesWebChatToSetupGuide reads in_progress). A database a script set up
+  // has no row and never opens the page, so its web chat stays with the coordinator.
+  // Never reopens a finished Setup.
+  app.post('/api/setup/start', SETUP_WRITE_RATE, async (request, reply) => {
+    if (!requireAuth(request, reply)) return;
+    try {
+      const state = await startSetup(pool);
+      return reply.send({ inSetup: isInSetup(state) });
+    } catch (err) {
+      logger.error({ err }, 'POST /api/setup/start: failed to start Setup');
+      return reply.status(500).send({ error: 'Failed to start Setup. Check server logs.' });
     }
   });
 

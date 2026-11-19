@@ -341,6 +341,12 @@ async function walkThroughSetup(page: Page, baseUrl: string, secret: string, cur
   await page.getByRole('button', { name: 'Sign in' }).click();
   // A new install is in Setup, so the router sends the operator to the Setup page.
   await expectStep(page, 1, 'who', 'Who are you setting Curia up for?');
+  // A first run: the setup guide opens by itself (nothing is sent to it: the model key is fake).
+  const guide = page.getByRole('complementary', { name: 'Setup guide' });
+  await guide.waitFor({ timeout: STEP_TIMEOUT_MS });
+  await guide.getByRole('button', { name: 'Close setup guide' }).click();
+  await guide.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  out('  ✓ the setup guide opened by itself on a first run, and closes');
   await page.getByRole('radio', { name: /Someone else/ }).click();
   await page.getByLabel('Your name').fill(INPUT.operatorName);
   await page.getByLabel('Your email').fill(INPUT.operatorEmail);
@@ -354,6 +360,21 @@ async function walkThroughSetup(page: Page, baseUrl: string, secret: string, cur
   await expectStep(page, 2, 'curia_name', 'What should Curia be called?');
   // The name loads after a suggestion attempt (which fails here: the Anthropic key is fake).
   await page.locator('#setup-curia-name:not([disabled])').waitFor({ timeout: STEP_TIMEOUT_MS });
+  // "Need help?" opens the guide with the step named in its composer.
+  await page.getByRole('button', { name: 'Need help? Ask the setup guide' }).click();
+  const composer = guide.getByRole('textbox', { name: 'Message' });
+  await composer.waitFor({ timeout: STEP_TIMEOUT_MS });
+  try {
+    await page.waitForFunction(
+      (want) => document.querySelector<HTMLTextAreaElement>('aside[aria-label="Setup guide"] textarea')?.value === want,
+      'I’m on the Curia’s name step. ',
+      { timeout: STEP_TIMEOUT_MS },
+    );
+  } catch {
+    throw new Error(`the guide's composer holds "${await composer.inputValue()}", not the step`);
+  }
+  await guide.getByRole('button', { name: 'Close setup guide' }).click();
+  out('  ✓ Need help? opened the guide with the step in its composer');
   await page.locator('#setup-curia-name').fill(INPUT.assistantName);
   await page.getByLabel('Title').fill(INPUT.assistantTitle);
   await saveAndContinue(page);

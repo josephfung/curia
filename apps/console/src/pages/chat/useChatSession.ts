@@ -91,8 +91,19 @@ function historyToMessages(items: HistoryMessage[]): Message[] {
   }));
 }
 
-export function useChatSession(): ChatSession {
+export interface ChatSessionOptions {
+  /**
+   * The Setup page's open step (#2358), sent with each message so the setup guide knows
+   * where the operator is. The server honours it only while Setup runs.
+   */
+  setupStep?: string | null;
+}
+
+export function useChatSession(options: ChatSessionOptions = {}): ChatSession {
   const navigate = useNavigate();
+  // Read at send time, so a step opened after the hook mounted is the one sent.
+  const setupStep = useRef(options.setupStep ?? null);
+  setupStep.current = options.setupStep ?? null;
   const [messages, setMessages] = useState<Message[]>([]);
   const [sending, setSending] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -534,7 +545,7 @@ export function useChatSession(): ChatSession {
       const res = await apiFetch('/api/chat/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, clientMessageId }),
+        body: JSON.stringify({ message: text, clientMessageId, ...(setupStep.current ? { setupStep: setupStep.current } : {}) }),
       });
 
       if (!res.ok) {

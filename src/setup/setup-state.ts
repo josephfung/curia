@@ -101,6 +101,16 @@ export async function updateSetupState(db: SetupStateQueryable, update: SetupSta
   return readSetupState(db);
 }
 
+/**
+ * The Setup page opened (#2358, PR 4): Setup has started, so web chat goes to the setup guide
+ * from the first message. Creates the row as in_progress; a row already there (in progress or
+ * complete) is left exactly as it is. Idempotent.
+ */
+export async function startSetup(db: SetupStateQueryable): Promise<SetupState> {
+  await db.query(`INSERT INTO setup_state (id, phase) VALUES (1, 'in_progress') ON CONFLICT (id) DO NOTHING`);
+  return readSetupState(db);
+}
+
 /** Start onboarding: Setup is over. Idempotent. */
 export async function markSetupComplete(db: SetupStateQueryable): Promise<void> {
   await db.query(

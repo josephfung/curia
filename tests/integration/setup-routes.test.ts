@@ -1008,6 +1008,29 @@ describeIf('/api/setup/* routes', () => {
       expect((await readSetupState(pool)).messagingRoute).toBe('slack');
     });
 
+    // The Setup page calls it on load (PR 4), so web chat goes to the setup guide from the
+    // first message.
+    it('POST /api/setup/start starts Setup, keeps what is saved, and never reopens a finished one', async () => {
+      expect((await readSetupState(pool)).phase).toBeNull();
+      const res = await app.inject({ method: 'POST', url: '/api/setup/start', headers: AUTH_HEADER });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ inSetup: true });
+      expect(await readSetupState(pool)).toMatchObject({ phase: 'in_progress', setupFor: null });
+      await updateSetupState(pool, { setupFor: 'self' });
+      await app.inject({ method: 'POST', url: '/api/setup/start', headers: AUTH_HEADER });
+      expect((await readSetupState(pool)).setupFor).toBe('self');
+      await markSetupComplete(pool);
+      const after = await app.inject({ method: 'POST', url: '/api/setup/start', headers: AUTH_HEADER });
+      expect(after.json()).toEqual({ inSetup: false });
+      expect((await readSetupState(pool)).phase).toBe('complete');
+    });
+
+    it('POST /api/setup/start needs auth', async () => {
+      const res = await app.inject({ method: 'POST', url: '/api/setup/start' });
+      expect(res.statusCode).toBe(401);
+      expect((await readSetupState(pool)).phase).toBeNull();
+    });
+
     it('PUT /api/setup/state refuses a bad body and saves nothing', async () => {
       const res = await app.inject({ method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER, payload: { messagingRoute: 'fax' } });
       expect(res.statusCode).toBe(400);
