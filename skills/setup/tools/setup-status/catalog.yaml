@@ -50,7 +50,7 @@ tasks:
     handoff_path: /channels
     completion_check:
       type: email_channel_ready
-    credential_how_to: "Get your Nylas API key at dashboard-v3.nylas.com (a production application used only by this Curia; the free tier works). In Settings → Channels → Email, install the channel and save the API key, then add Curia's own mailbox under Email accounts with Connect with Google once mailbox sign-in is set up (or paste a grant ID from the Nylas dashboard), enable the channel and restart. Your own Gmail accounts are connected separately, by signing in with Google (see Mailbox sign-in)."
+    credential_how_to: "Get your Nylas API key at dashboard-v3.nylas.com (an application used only by this Curia: a sandbox suits a single install, with Nylas's built-in Google connector and up to 5 connected accounts; use a production application for more, or for your own Google app). In Settings → Channels → Email, install the channel and save the API key, then add Curia's own mailbox under Email accounts with Connect with Google once mailbox sign-in is set up (or paste a grant ID from the Nylas dashboard), enable the channel and restart. Your own Gmail accounts are connected separately, by signing in with Google (see Mailbox sign-in)."
     docs_url: /channels/email-setup
 
   - id: mailbox_signin
@@ -61,7 +61,7 @@ tasks:
     handoff_path: /settings/email-calendar
     completion_check:
       type: nylas_signin_ready
-    credential_how_to: "Needs the Nylas API key (Settings → Channels → Email) and APP_ORIGIN set to this console's public https:// address. In Settings → Behaviour → Email & Calendar, use Detect to find the Nylas region, Register callback to have Curia register its own sign-in callback with Nylas (it uses the saved API key), and paste your Google Cloud OAuth client id and secret to create the Google connector. In Google Cloud, add only the Nylas redirect URI shown there (https://api.us.nylas.com/v3/connect/callback, or the eu one) to the OAuth client. Curia's own callback does not go into Google. After the API key or region is first saved or changed, restart Curia once; Check should then read Ready."
+    credential_how_to: "Needs the Nylas API key (Settings → Channels → Email) and APP_ORIGIN set to this console's public https:// address. In Settings → Behaviour → Email & Calendar, the Nylas panel finds the region and registers Curia's sign-in callback with Nylas on its first check (it uses the saved API key). A sandbox application needs nothing more: it uses Nylas's built-in Google connector. A production application needs a Google connector: paste your Google Cloud OAuth client id and secret there, and in Google Cloud add only the Nylas redirect URI shown (https://api.us.nylas.com/v3/connect/callback, or the eu one) to the OAuth client. Curia's own callback does not go into Google. After the API key or region is first saved or changed, restart Curia once; Check should then read Ready."
     docs_url: /get-started/curia-email
 
   - id: principal_mailboxes
@@ -72,7 +72,7 @@ tasks:
     handoff_path: /settings/email-calendar
     completion_check:
       type: principal_mailbox_ready
-    credential_how_to: "In the console under Settings → Behaviour → Email & Calendar, finish the Nylas sign-in setup at the top of the page, then add each Gmail account with Sign in with Google (no grant ID to copy). Give each a short id and a label, check the address, and pick the default. Once sign-in reads Ready, changes apply without a restart. If sign-in is not available (for example there is no public https APP_ORIGIN), use Paste a grant ID instead: connect the account in the Nylas dashboard, paste its grant ID here, and run Test."
+    credential_how_to: "In the console under Settings → Behaviour → Email & Calendar, finish the Nylas sign-in setup at the top of the page, then add each Gmail account with Connect with Google (no address or grant ID to type: Google supplies the address, and an address already connected is reconnected). Pick the default. Once sign-in reads Ready, changes apply without a restart. If sign-in is not available (for example there is no public https APP_ORIGIN), use Paste a grant ID instead: connect the account in the Nylas dashboard, paste its grant ID here, and run Test."
     docs_url: /get-started/principal-email-calendar
 
   - id: signal
