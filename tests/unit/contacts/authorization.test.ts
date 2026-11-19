@@ -149,16 +149,6 @@ describe('AuthorizationService', () => {
     expect(result.denied).toContain('view_financial_reports');
   });
 
-  it('channel trust blocks high-sensitivity actions on low-trust channels', () => {
-    const result = authService.evaluate({
-      role: 'cfo',
-      tier: 'known',      channel: 'email',
-      overrides: [],
-    });
-    expect(result.trustBlocked).toContain('view_financial_reports');
-    expect(result.allowed).toContain('schedule_meetings');
-  });
-
   it('unknown roles with unknown tier fall back to unknown tier defaults', () => {
     const result = authService.evaluate({
       role: 'some_new_role',

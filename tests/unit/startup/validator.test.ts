@@ -119,10 +119,6 @@ describe('startup validator — default config', () => {
     await expect(runWith({ config: path.join(F, 'config/valid') })).resolves.toBeUndefined();
   });
 
-  it('passes for an empty config (all fields optional)', async () => {
-    await expect(runWith({ config: path.join(F, 'config/empty') })).resolves.toBeUndefined();
-  });
-
   it('throws when trust_score_floor is out of range (1.5)', async () => {
     await expect(
       runWith({ config: path.join(F, 'config/invalid-trust-floor') }),

@@ -327,20 +327,6 @@ describe('classifyPair — structural: exact normalized name match', () => {
     expect(result).not.toBeNull();
     expect(result!.type).toBe('structural');
   });
-
-  it('classifies as fuzzy on similar but not identical names (no shared variants)', () => {
-    // "Natalia Perez" variants: ["natalia perez", "perez natalia", "n perez"]
-    // "Nathan Pierce" variants: ["nathan pierce", "pierce nathan", "n pierce"]
-    // No shared exact normalized variants → fuzzy (high JW but not exact-match structural)
-    const a = makeContact({ id: 'c1', displayName: 'Natalia Perez' });
-    const b = makeContact({ id: 'c2', displayName: 'Nathan Pierce' });
-
-    const result = classifyPair(a, [], b, []);
-    // Not an exact normalized match → fuzzy or null (but not structural)
-    if (result !== null) {
-      expect(result.type).toBe('fuzzy');
-    }
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -348,21 +334,6 @@ describe('classifyPair — structural: exact normalized name match', () => {
 // ---------------------------------------------------------------------------
 
 describe('classifyPair — fuzzy: name similarity', () => {
-  it('classifies similar names as fuzzy when they share no exact normalized variant', () => {
-    // "Natalia Perez" and "Nathan Pierce" have similar sound but no shared exact variants:
-    //   Natalia variants: ["natalia perez", "perez natalia", "n perez"]
-    //   Nathan  variants: ["nathan pierce", "pierce nathan", "n pierce"]
-    // None of these are identical → not structural; high JW → fuzzy (if above 0.7 threshold)
-    const a = makeContact({ id: 'c1', displayName: 'Natalia Perez' });
-    const b = makeContact({ id: 'c2', displayName: 'Nathan Pierce' });
-
-    const result = classifyPair(a, [], b, []);
-    // Must not be structural (no shared exact variant)
-    if (result !== null) {
-      expect(result.type).toBe('fuzzy');
-    }
-  });
-
   it('returns null for contacts below the scoring threshold', () => {
     const a = makeContact({ id: 'c1', displayName: 'Alice Johnson' });
     const b = makeContact({ id: 'c2', displayName: 'Zhao Wei' });
@@ -372,24 +343,17 @@ describe('classifyPair — fuzzy: name similarity', () => {
     expect(result).toBeNull();
   });
 
-  it('includes the original DedupService score and reason in fuzzy results', () => {
+  it('returns a fuzzy match with a score and reason for similar names', () => {
     // Use names with no shared exact variants for a genuine fuzzy result.
     // "Natalia Perez" vs "Nathan Pierce" — no shared variants, but JW similar.
     const a = makeContact({ id: 'c1', displayName: 'Natalia Perez' });
     const b = makeContact({ id: 'c2', displayName: 'Nathan Pierce' });
 
     const result = classifyPair(a, [], b, []);
-    if (result === null) {
-      // Score below threshold — the test still passes (we're checking the shape when it does match)
-      return;
-    }
-    // If a result exists, it must be fuzzy (not structural)
-    expect(result.type).toBe('fuzzy');
-    if (result.type === 'fuzzy') {
-      expect(result.score).toBeGreaterThan(0);
-      expect(result.score).toBeLessThanOrEqual(1);
-      expect(result.reason).toBeTruthy();
-    }
+    if (result?.type !== 'fuzzy') throw new Error(`Expected a fuzzy match, got ${result?.type ?? 'null'}`);
+    expect(result.score).toBeGreaterThan(0);
+    expect(result.score).toBeLessThanOrEqual(1);
+    expect(result.reason).toBeTruthy();
   });
 });
 

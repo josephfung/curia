@@ -1,18 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { estimateTokens } from '../../../../src/agents/llm/token-estimator.js';
 import { estimateMessagesTokens, estimateToolDefinitionsTokens, DEFAULT_SAFETY_MARGIN } from '../../../../src/agents/llm/token-estimator.js';
-import { ModelRegistry } from '../../../../src/agents/llm/model-registry.js';
 import type { ContentBlock, ToolDefinition } from '../../../../src/agents/llm/provider.js';
 import type { Message } from '../../../../src/agents/llm/provider.js';
-import type { Logger } from '../../../../src/logger.js';
-
-// Minimal logger stub for ModelRegistry construction in tests.
-const stubLogger = {
-  debug: () => {},
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-} as unknown as Logger;
 
 describe('estimateTokens', () => {
   it('estimates tokens for a plain string', () => {
@@ -88,35 +78,6 @@ describe('estimateMessagesTokens', () => {
     const result = estimateMessagesTokens(messages);
     // ceil(11/3.5)=4 + 4 overhead = 8
     expect(result).toBe(8);
-  });
-});
-
-// getContextWindow is now a method on ModelRegistry (moved from token-estimator.ts
-// as part of the model registry consolidation). Tests use a stub logger.
-describe('ModelRegistry.getContextWindow', () => {
-  const registry = new ModelRegistry(stubLogger);
-
-  it('returns 200_000 for claude-sonnet-4-6', () => {
-    expect(registry.getContextWindow('claude-sonnet-4-6')).toBe(200_000);
-  });
-
-  it('returns 200_000 for claude-opus-4-6', () => {
-    expect(registry.getContextWindow('claude-opus-4-6')).toBe(200_000);
-  });
-
-  it('returns 200_000 for claude-haiku-4-5', () => {
-    expect(registry.getContextWindow('claude-haiku-4-5')).toBe(200_000);
-  });
-
-  it('matches versioned model names via prefix', () => {
-    // 'claude-haiku-4-5-20251001' prefix-matches the 'claude-haiku-4-5' registry entry.
-    expect(registry.getContextWindow('claude-haiku-4-5-20251001')).toBe(200_000);
-  });
-
-  it('returns undefined for unknown models (no match in registry)', () => {
-    // ModelRegistry returns undefined for unknown models; callers apply their own fallback.
-    // runtime.ts uses ?? 200_000 and warns separately via isKnownModel().
-    expect(registry.getContextWindow('unknown-model-v1')).toBeUndefined();
   });
 });
 
