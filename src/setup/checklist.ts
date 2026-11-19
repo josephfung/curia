@@ -118,7 +118,7 @@ export interface SetupCheckDeps {
   phoneAppBlocker: () => string | null;
   /**
    * Signal calls (#1672), set in the deployment, not the console: `disabled` when
-   * SIGNAL_VOICE_CALLS_ENABLED is off, `not_wired` when it is on but no call bridge was built
+   * SIGNAL_VOICE_CALLS_ENABLED is off, `not_wired` when it is on but no call bridge started
    * this boot (no SIGNAL_PULSE_SOCKET_PATH, or Signal or voice not set up), `ready` otherwise.
    */
   signalCalls: () => 'ready' | 'disabled' | 'not_wired';
@@ -137,7 +137,7 @@ export interface SetupChecklistTask {
   handoff_path?: string;
   optional: boolean;
   status: 'done' | 'pending';
-  /** One line for the step's form: what is missing or what is being waited on. */
+  /** On every pending task: one line for the step's form, what is missing or awaited. */
   detail?: string;
   /** Saved, but takes effect only after a restart. */
   restart_required?: true;
@@ -260,12 +260,17 @@ export async function evaluateChecklist(catalog: CatalogTask[], deps: SetupCheck
         return { done: false, restartRequired: r.reason === 'restart_required', detail: r.detail };
       }
       case 'principal_mailbox_ready':
-        return { done: (await deps.principalMailboxReady()) === 'ready' };
+        return (await deps.principalMailboxReady()) === 'ready'
+          ? { done: true }
+          : { done: false, detail: "None of the principal's mailboxes is connected and passing its check yet." };
       case 'browser_ready':
-        return { done: deps.browserReady() };
+        return deps.browserReady()
+          ? { done: true }
+          : { done: false, detail: "The browser container isn't running." };
       case 'vault_secrets_all': {
         const present = await Promise.all(check.keys.map((k) => deps.secretPresent(k)));
-        return { done: present.every(Boolean) };
+        const missing = check.keys.filter((_, i) => !present[i]);
+        return missing.length === 0 ? { done: true } : { done: false, detail: `Not saved yet: ${missing.join(', ')}.` };
       }
       case 'always_available':
         return { done: true };
@@ -279,7 +284,9 @@ export async function evaluateChecklist(catalog: CatalogTask[], deps: SetupCheck
       ...rest,
       optional: optional === true,
       status: r.done ? 'done' : 'pending',
-      ...(r.detail && !r.done ? { detail: r.detail } : {}),
+      // Every pending task says why, for the Setup page and the setup guide alike. A check
+      // that gives no reason gets a plain one rather than none.
+      ...(!r.done ? { detail: r.detail ?? 'Not set up yet.' } : {}),
       ...(r.restartRequired ? { restart_required: true as const } : {}),
       ...(check.type === 'vault_secrets_all' ? { vault_keys: check.keys, done_means: 'credentials_saved' as const } : {}),
     };

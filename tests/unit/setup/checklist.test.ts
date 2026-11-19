@@ -220,6 +220,22 @@ describe('evaluateChecklist', () => {
     expect(task(result, 'web_research').optional_upgrade?.configured).toBe(true);
   });
 
+  it('gives every pending task a detail, including the optional extras on a new install', async () => {
+    const result = await evaluateChecklist(catalog, deps({
+      identityConfigured: async () => false,
+      emailChannelStatus: async () => 'not_configured',
+    }, { setupFor: null, messagingRoute: null, voiceRoute: null }));
+    const pending = result.tasks.filter((t) => t.status === 'pending');
+    expect(pending.map((t) => t.id)).toEqual(expect.arrayContaining(['principal_mailboxes', 'web_browser', 'google_workspace', 'who']));
+    for (const t of pending) expect(t.detail, t.id).toBeTruthy();
+    expect(task(result, 'google_workspace').detail).toMatch(/curia_google_email/);
+  });
+
+  it('gives a task no detail once it is done', async () => {
+    const result = await evaluateChecklist(catalog, deps());
+    for (const t of result.tasks.filter((x) => x.status === 'done')) expect(t, t.id).not.toHaveProperty('detail');
+  });
+
   it('never exposes the completion check', async () => {
     const result = await evaluateChecklist(catalog, deps());
     for (const t of result.tasks) expect(t).not.toHaveProperty('completion_check');

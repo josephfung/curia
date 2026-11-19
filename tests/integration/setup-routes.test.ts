@@ -26,6 +26,7 @@ import { EmbeddingService } from '../../src/memory/embedding.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
 import { markSetupComplete, readSetupState, updateSetupState } from '../../src/setup/setup-state.js';
 import type { SetupChecklist } from '../../src/setup/checklist.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const { Pool } = pg;
 
@@ -69,6 +70,9 @@ describeIf('/api/setup/* routes', () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
+    // Every hook below deletes rows (principal contacts, setup_state): refuse anything but
+    // the isolated test database before the first of them runs.
+    await requireCuriaTestDatabase(pool);
     await pool.query('SELECT 1 FROM contacts LIMIT 0');
 
     // Other test files (notably ceo-bootstrap.test.ts) may leave a principal contact
