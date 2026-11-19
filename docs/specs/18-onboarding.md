@@ -143,7 +143,7 @@ check is always done.
 | Working style | A tone (one of the four tone templates) and an independence level: Draft only, Ask first (the default) or Spot-check, at scores 65, 75 and 85. Each saves when picked. They are a starting point: the principal is offered them in the first conversation and can change them | `PUT /api/identity` (`tone.style` only, `changedBy: 'working_style'`, which doesn't tick Curia's name); `PUT /api/autonomy` |
 | Google Workspace | Curia's Google address and the OAuth client ID and secret. "Sign in as Curia" shows as coming soon (#2683) | `PUT /api/vault/secrets/{curia_google_email,google_oauth_client_id,google_oauth_client_secret}` |
 | Higher search limit | The Tavily key, with links to tavily.com and the curia-docs limits page | `PUT /api/vault/secrets/tavily_api_key` |
-| Capabilities | Switches over the registry (below). Meetings always on; Email triage off and locked ("<principal> turns this on during onboarding") | `POST /api/registry/:kind/:name/{install-enable,disable}` |
+| Capabilities | Switches over the registry (below). Meetings always on; Email triage off and locked ("Left for <principal> to choose, later in Settings") | `POST /api/registry/:kind/:name/{install-enable,disable}` |
 
 ### Capabilities
 
@@ -158,8 +158,8 @@ description, the agents, skill bundles and standalone tools it covers, and an op
 | Meeting debriefs | `meeting-debrief` agent | |
 | Web research | `research-analyst` agent, `web` bundle | |
 | Projects and tasks | `tasks` bundle | |
-| Diagnostics | `diagnostics` agent and bundle (opt-in on a new install, #1356) | |
-| Email triage | `ceo-inbox` agent, `ceo-inbox` and `learning` bundles | Off in Setup: the principal turns it on during onboarding |
+| Diagnostics | `diagnostics` agent and bundle (opt-in on a new install, #1356: reads the audit log and working records; `powerful` tier) | |
+| Email triage | `ceo-inbox` agent, `ceo-inbox` and `learning` bundles | Off in Setup: it acts on the principal's inbox, so it is left for them to choose afterwards |
 
 - A switch shows on, off, "Partly on" (some entries on: switching sets them all), or "Not
   available on this install" (an entry missing or with a broken manifest).

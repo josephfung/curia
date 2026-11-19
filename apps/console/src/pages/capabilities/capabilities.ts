@@ -17,8 +17,8 @@ export interface Capability {
   tools: readonly string[];
   /**
    * Always on: the onboarding sessions run on it, so it has no switch anywhere.
-   * Off in Setup: the principal turns it on during onboarding, so the Setup page shows it
-   * off and locked; Settings can switch it.
+   * Off in Setup: it acts on the principal's own inbox, so it is left for them to choose
+   * after Setup; the Setup page shows it off and locked, and Settings can switch it.
    */
   lock?: 'always-on' | 'principal-in-onboarding';
 }
@@ -46,7 +46,7 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     id: 'diagnostics', label: 'Diagnostics',
-    description: (p) => `${p} can ask Curia why something didn’t work, and get a plain answer. Reads Curia’s own audit log.`,
+    description: (p) => `${p} can ask Curia why something didn’t work, and get a plain answer. It reads Curia’s audit log and working records (conversation memory, held messages, approvals), and uses Curia’s most capable model, which costs more.`,
     agents: ['diagnostics'], bundles: ['diagnostics'], tools: [],
   },
   {
@@ -85,8 +85,11 @@ export type CapabilityState =
   | { kind: 'off' }
   /** Some members on, some off: switching sets them all one way. */
   | { kind: 'partly'; off: string[] }
-  /** A member this server doesn't have (not on disk, or its manifest is broken). */
-  | { kind: 'unavailable'; missing: string[] };
+  /**
+   * A member this server doesn't have (not on disk, or its manifest is broken). `anyOn`: some
+   * of the rest are still on, and can be turned off.
+   */
+  | { kind: 'unavailable'; missing: string[]; anyOn: boolean };
 
 export function capabilityState(cap: Capability, lists: RegistryLists): CapabilityState {
   const all = members(cap);
@@ -94,7 +97,10 @@ export function capabilityState(cap: Capability, lists: RegistryLists): Capabili
     const e = find(lists, m);
     return !e || e.state === 'ghost' || e.manifestError !== undefined;
   }).map((m) => m.name);
-  if (missing.length > 0) return { kind: 'unavailable', missing };
+  if (missing.length > 0) {
+    const anyOn = all.some((m) => find(lists, m)?.state === 'enabled');
+    return { kind: 'unavailable', missing, anyOn };
+  }
   const off = all.filter((m) => find(lists, m)!.state !== 'enabled').map((m) => m.name);
   if (off.length === 0) return { kind: 'on' };
   if (off.length === all.length) return { kind: 'off' };
@@ -148,4 +154,26 @@ export function offWarning(cap: Capability, lists: RegistryLists): string | null
   if (pins.length === 0) return null;
   const lines = pins.map((p) => `• ${p.agent} also uses ${p.loses}`);
   return `Turning off ${cap.label} also takes these away from other parts of Curia:\n${lines.join('\n')}\n\nTurn it off anyway?`;
+}
+
+/**
+ * Other capabilities this one's agents pin (a bundle, or a bundle's tool or a standalone tool
+ * directly) that are not on: turned on alone, the agent would boot without those tools. E.g.
+ * Meeting debriefs files follow-ups with Projects and tasks' tools.
+ */
+export function neededCapabilities(cap: Capability, lists: RegistryLists): Capability[] {
+  const pins = new Set<string>();
+  for (const name of cap.agents) {
+    for (const pin of lists.agents.find((a) => a.name === name)?.metadata?.pinnedTools ?? []) pins.add(pin);
+  }
+  if (pins.size === 0) return [];
+  return CAPABILITIES.filter((other) => {
+    if (other.id === cap.id || capabilityState(other, lists).kind === 'on') return false;
+    const covers = [
+      ...other.bundles,
+      ...other.tools,
+      ...other.bundles.flatMap((b) => lists.skills.find((s) => s.name === b)?.metadata?.tools ?? []),
+    ];
+    return covers.some((name) => pins.has(name));
+  });
 }

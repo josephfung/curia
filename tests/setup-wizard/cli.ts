@@ -462,7 +462,7 @@ async function walkThroughSetup(page: Page, baseUrl: string, secret: string, cur
   await saveAndContinue(page);
 
   await expectExtra(page, 'capabilities', 'Capabilities');
-  // Meetings is always on, and the principal turns on email triage during onboarding.
+  // Meetings is always on; email triage is left for the principal, so it is locked in Setup.
   for (const locked of ['Meetings', 'Email triage']) {
     if (await page.getByRole('switch', { name: locked }).isEnabled()) throw new Error(`${locked} can be switched in Setup`);
   }
