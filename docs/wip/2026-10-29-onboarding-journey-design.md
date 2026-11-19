@@ -197,9 +197,10 @@ checked 2026-11-01):
   (`src/index.ts:1134-1169`); they must pick up the new grant without the operator restarting
   anything. How (hot rebind, or a controlled self-restart after the session) is the builder's
   call, but no operator action is allowed.
-- **What the operator configures in Nylas:** a non-Sandbox application (Sandbox scopes are
-  fixed); a connector for the principal's provider; and Curia's callback URL under hosted
-  authentication. There is no client-id config: Curia derives the client id from the Nylas
+- **What the operator configures in Nylas:** an application (a Sandbox works for a single
+  install: its built-in Google connector grants the scopes Curia needs, up to 5 accounts;
+  #2361); a connector for the principal's provider, unless the Sandbox's built-in one is used;
+  and Curia's callback URL under hosted authentication. There is no client-id config: Curia derives the client id from the Nylas
   application itself (`GET /v3/applications`) with the saved API key, and the region is selectable
   (us or eu) or detected. Console setup registers the callback and creates the connector from the API key.
 - **Google.** The operator brings their own Google Cloud project and OAuth client (Nylas's shared
