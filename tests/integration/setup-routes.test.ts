@@ -887,24 +887,25 @@ describeIf('/api/setup/* routes', () => {
     });
 
     it('the first save on a new install starts Setup; a later save never moves the phase', async () => {
-      let state = await updateSetupState(pool, { setupFor: 'other' }, false);
+      let state = await updateSetupState(pool, { setupFor: 'other' });
       expect(state).toMatchObject({ phase: 'in_progress', setupFor: 'other' });
-      state = await updateSetupState(pool, { messagingRoute: 'signal' }, true);
+      state = await updateSetupState(pool, { messagingRoute: 'signal' });
       expect(state).toMatchObject({ phase: 'in_progress', setupFor: 'other', messagingRoute: 'signal' });
       await markSetupComplete(pool);
-      state = await updateSetupState(pool, { voiceRoute: 'app' }, false);
+      state = await updateSetupState(pool, { voiceRoute: 'app' });
       expect(state.phase).toBe('complete');
       expect(state.completedAt).toBeInstanceOf(Date);
     });
 
-    it('a save on an install that predates the Setup page leaves the phase empty', async () => {
-      const state = await updateSetupState(pool, { messagingRoute: 'app' }, true);
-      expect(state.phase).toBeNull();
+    it('a save on an install that predates the Setup page leaves it complete', async () => {
+      await pool.query(`INSERT INTO setup_state (id, phase) VALUES (1, 'complete')`);
+      const state = await updateSetupState(pool, { messagingRoute: 'app' });
+      expect(state.phase).toBe('complete');
     });
 
     it('null clears a field and a missing field is left alone', async () => {
-      await updateSetupState(pool, { operatorName: 'Sam', operatorEmail: 'sam@example.com' }, false);
-      const state = await updateSetupState(pool, { operatorName: null }, false);
+      await updateSetupState(pool, { operatorName: 'Sam', operatorEmail: 'sam@example.com' });
+      const state = await updateSetupState(pool, { operatorName: null });
       expect(state).toMatchObject({ operatorName: null, operatorEmail: 'sam@example.com' });
     });
 

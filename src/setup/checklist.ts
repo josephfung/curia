@@ -81,6 +81,11 @@ export function parseCatalog(raw: string): CatalogTask[] {
     if (!check || !CHECK_TYPES.has(String(check.type))) {
       throw new Error(`setup catalog task ${task.id} has an unknown completion_check type '${String(check?.type)}'`);
     }
+    // An empty key list would read done without checking anything.
+    const keys = (check as { keys?: unknown }).keys;
+    if (check.type === 'vault_secrets_all' && !(Array.isArray(keys) && keys.length > 0 && keys.every((k) => typeof k === 'string' && k !== ''))) {
+      throw new Error(`setup catalog task ${task.id} needs a non-empty list of vault keys`);
+    }
     if (seen.has(task.id)) throw new Error(`setup catalog has a duplicate task id '${task.id}'`);
     seen.add(task.id);
   }
@@ -111,8 +116,12 @@ export interface SetupCheckDeps {
   principalHasIdentity: (channel: 'signal' | 'sms' | 'slack') => Promise<boolean>;
   /** Null when the phone app can be installed and push works; otherwise the reason it cannot. */
   phoneAppBlocker: () => string | null;
-  /** SIGNAL_VOICE_CALLS_ENABLED: read at boot, set in the deployment, not the console. */
-  signalVoiceCallsEnabled: boolean;
+  /**
+   * Signal calls (#1672), set in the deployment, not the console: `disabled` when
+   * SIGNAL_VOICE_CALLS_ENABLED is off, `not_wired` when it is on but no call bridge was built
+   * this boot (no SIGNAL_PULSE_SOCKET_PATH, or Signal or voice not set up), `ready` otherwise.
+   */
+  signalCalls: () => 'ready' | 'disabled' | 'not_wired';
   /** Vault first, then the upper-cased env var, as tools resolve secrets. */
   secretPresent: (name: string) => Promise<boolean>;
   browserReady: () => boolean;
@@ -166,7 +175,9 @@ async function guarded(deps: SetupCheckDeps, id: string, fn: () => Promise<Check
   try {
     return await fn();
   } catch (err) {
-    deps.logger.warn({ errName: err instanceof Error ? err.name : typeof err, err, taskId: id }, 'setup checklist: check failed — reporting pending');
+    // A TypeError or ReferenceError is a bug, not an outage: it would read "try again" forever.
+    const bug = err instanceof TypeError || err instanceof ReferenceError;
+    deps.logger[bug ? 'error' : 'warn']({ errName: err instanceof Error ? err.name : typeof err, err, taskId: id }, 'setup checklist: check failed — reporting pending');
     return { done: false, detail: 'Could not check this right now. Try again in a moment.' };
   }
 }
@@ -197,15 +208,18 @@ async function checkVoice(deps: SetupCheckDeps, route: VoiceRoute | null): Promi
   const voice = channelResult(await deps.channelStatus('voice'), 'Voice');
   if (route === 'app') return voice ?? { done: true };
   // Signal calls run on the voice runtime too, so both channels must be up (#1672).
-  if (!deps.signalVoiceCallsEnabled) {
+  const calls = deps.signalCalls();
+  if (calls === 'disabled') {
     return { done: false, detail: 'Signal calls are turned off on this server (SIGNAL_VOICE_CALLS_ENABLED).' };
   }
   if (voice) return voice;
   const signal = channelResult(await deps.channelStatus('signal'), 'Signal');
   if (signal) return signal;
-  return (await deps.principalHasIdentity('signal'))
+  if (!(await deps.principalHasIdentity('signal'))) return { done: false, detail: "Add the principal's Signal number." };
+  // Both channels run but nothing answers calls: the bridge needs the audio socket too.
+  return calls === 'ready'
     ? { done: true }
-    : { done: false, detail: "Add the principal's Signal number." };
+    : { done: false, detail: 'Signal calls are not connected on this server (SIGNAL_PULSE_SOCKET_PATH).' };
 }
 
 /** Evaluate every catalog task. Never throws for a single failing check. */

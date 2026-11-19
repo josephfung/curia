@@ -33,7 +33,7 @@ function deps(overrides: Partial<SetupCheckDeps> = {}, state: Partial<SetupState
     channelStatus: async () => 'running',
     principalHasIdentity: async () => true,
     phoneAppBlocker: () => null,
-    signalVoiceCallsEnabled: true,
+    signalCalls: () => 'ready',
     secretPresent: async () => false,
     browserReady: () => false,
     logger: createSilentLogger(),
@@ -75,6 +75,10 @@ describe('parseCatalog', () => {
   it('refuses a duplicate id', () => {
     const raw = 'tasks:\n  - id: x\n    completion_check: { type: always_available }\n  - id: x\n    completion_check: { type: always_available }\n';
     expect(() => parseCatalog(raw)).toThrow(/duplicate/);
+  });
+
+  it.each([['missing', ''], ['empty', '\n      keys: []']])('refuses a vault_secrets_all task with %s keys', (_n, keys) => {
+    expect(() => parseCatalog(`tasks:\n  - id: x\n    completion_check:\n      type: vault_secrets_all${keys}\n`)).toThrow(/vault keys/);
   });
 
   it('refuses a file without a tasks list', () => {
@@ -167,7 +171,7 @@ describe('evaluateChecklist', () => {
     });
 
     it('signal: says when Signal calls are turned off on the server', async () => {
-      const result = await evaluateChecklist(catalog, deps({ signalVoiceCallsEnabled: false }, { voiceRoute: 'signal' }));
+      const result = await evaluateChecklist(catalog, deps({ signalCalls: () => 'disabled' }, { voiceRoute: 'signal' }));
       expect(task(result, 'voice').detail).toMatch(/SIGNAL_VOICE_CALLS_ENABLED/);
     });
 
@@ -177,6 +181,12 @@ describe('evaluateChecklist', () => {
       }, { voiceRoute: 'signal' }));
       expect(task(result, 'voice').status).toBe('pending');
       expect(task(result, 'voice').detail).toMatch(/Signal/);
+    });
+
+    it('signal: pending when calls are on but nothing answers them (no call bridge)', async () => {
+      const result = await evaluateChecklist(catalog, deps({ signalCalls: () => 'not_wired' }, { voiceRoute: 'signal' }));
+      expect(result.setupComplete).toBe(false);
+      expect(task(result, 'voice').detail).toMatch(/SIGNAL_PULSE_SOCKET_PATH/);
     });
 
     it('signal: done with both channels running and the principal on Signal', async () => {

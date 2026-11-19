@@ -4,9 +4,8 @@
 -- Kept out of the knowledge graph on purpose: the operator's name and email are
 -- setup and admin records, not something Curia knows about the principal's world.
 --
--- phase: NULL on an install that predates the Setup page (it is treated as done
--- once the office identity is configured), 'in_progress' from the first Setup
--- save on a new install, 'complete' once Start onboarding is pressed.
+-- phase: 'in_progress' on a new install until Start onboarding, then 'complete'.
+-- No row means a new install that has saved nothing yet: also in Setup.
 
 -- Up Migration
 
@@ -21,6 +20,14 @@ CREATE TABLE setup_state (
   completed_at TIMESTAMPTZ,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- An install that predates the Setup page is never put through it. Decided once,
+-- here: one with a saved office identity or a principal is already set up. A new
+-- install has neither when its migrations run.
+INSERT INTO setup_state (id, phase)
+SELECT 1, 'complete'
+WHERE EXISTS (SELECT 1 FROM office_identity_versions WHERE changed_by IN ('wizard', 'api'))
+   OR EXISTS (SELECT 1 FROM contacts WHERE system_role = 'principal');
 
 -- Down Migration
 
