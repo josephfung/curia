@@ -4,21 +4,16 @@ import { EMPTY_SETUP_STATE, isInSetup } from '../../../src/setup/setup-state.js'
 import { parseStateUpdate } from '../../../src/channels/http/routes/setup.js';
 
 describe('isInSetup', () => {
-  it('a brand-new install (nothing saved, no identity) is in Setup', () => {
-    expect(isInSetup(EMPTY_SETUP_STATE, false)).toBe(true);
+  it('a brand-new install that has saved nothing is in Setup', () => {
+    expect(isInSetup(EMPTY_SETUP_STATE)).toBe(true);
   });
 
-  it('an install that predates the Setup page (no phase, identity configured) never is', () => {
-    expect(isInSetup(EMPTY_SETUP_STATE, true)).toBe(false);
+  it('stays in Setup until Start onboarding', () => {
+    expect(isInSetup({ ...EMPTY_SETUP_STATE, phase: 'in_progress' })).toBe(true);
   });
 
-  it('stays in Setup after Curia\'s name is saved, until Start onboarding', () => {
-    expect(isInSetup({ ...EMPTY_SETUP_STATE, phase: 'in_progress' }, true)).toBe(true);
-  });
-
-  it('is out of Setup once complete', () => {
-    expect(isInSetup({ ...EMPTY_SETUP_STATE, phase: 'complete' }, true)).toBe(false);
-    expect(isInSetup({ ...EMPTY_SETUP_STATE, phase: 'complete' }, false)).toBe(false);
+  it('is out of Setup once complete (also how migration 130 marks older installs)', () => {
+    expect(isInSetup({ ...EMPTY_SETUP_STATE, phase: 'complete' })).toBe(false);
   });
 });
 

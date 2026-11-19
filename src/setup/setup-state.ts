@@ -11,7 +11,7 @@ export const MESSAGING_ROUTES: readonly MessagingRoute[] = ['app', 'signal', 'sm
 export const VOICE_ROUTES: readonly VoiceRoute[] = ['app', 'signal'];
 
 export interface SetupState {
-  /** Null on an install that predates the Setup page. */
+  /** Null until the first save on a new install. Migration 130 marks older installs complete. */
   phase: SetupPhaseValue | null;
   setupFor: SetupFor | null;
   operatorName: string | null;
@@ -84,33 +84,19 @@ const COLUMNS: Record<keyof SetupStateUpdate, string> = {
   voiceRoute: 'voice_route',
 };
 
-/**
- * Save Setup page fields. The first save on a new install (phase not set and the office
- * identity not yet configured) also marks Setup in progress, so the page stays the landing
- * page until Start onboarding even after Curia's name is saved. An install that predates
- * the Setup page keeps a null phase.
- */
-export async function updateSetupState(
-  db: SetupStateQueryable,
-  update: SetupStateUpdate,
-  identityConfigured: boolean,
-): Promise<SetupState> {
+/** Save Setup page fields. The first save on a new install creates the row, in progress. */
+export async function updateSetupState(db: SetupStateQueryable, update: SetupStateUpdate): Promise<SetupState> {
   const fields = (Object.keys(COLUMNS) as Array<keyof SetupStateUpdate>).filter((k) => update[k] !== undefined);
   const columns = fields.map((k) => COLUMNS[k]);
   const values = fields.map((k) => update[k]);
-  const startPhase = identityConfigured ? null : 'in_progress';
   const insertColumns = ['id', 'phase', ...columns].join(', ');
-  const placeholders = ['1', '$1', ...columns.map((_, i) => `$${i + 2}`)].join(', ');
-  const sets = [
-    ...columns.map((c, i) => `${c} = $${i + 2}`),
-    // Never moves a phase that is already set: 'complete' stays complete.
-    'phase = COALESCE(setup_state.phase, EXCLUDED.phase)',
-    'updated_at = now()',
-  ].join(', ');
+  const placeholders = ['1', "'in_progress'", ...columns.map((_, i) => `$${i + 1}`)].join(', ');
+  // The phase is never changed here: 'complete' stays complete.
+  const sets = [...columns.map((c, i) => `${c} = $${i + 1}`), 'updated_at = now()'].join(', ');
   await db.query(
     `INSERT INTO setup_state (${insertColumns}) VALUES (${placeholders})
      ON CONFLICT (id) DO UPDATE SET ${sets}`,
-    [startPhase, ...values],
+    values,
   );
   return readSetupState(db);
 }
@@ -126,12 +112,9 @@ export async function markSetupComplete(db: SetupStateQueryable): Promise<void> 
 
 /**
  * Whether the console should show the Setup page and the server should treat web chat as
- * the operator's (PR 2). True on a new install until Start onboarding. An install that
- * predates the Setup page (phase null, identity configured) is never in Setup, even when
- * its checklist is incomplete.
+ * the operator's (PR 2): from a new install's first load until Start onboarding. Migration
+ * 130 marked installs that predate the Setup page complete, so they never are.
  */
-export function isInSetup(state: SetupState, identityConfigured: boolean): boolean {
-  if (state.phase === 'complete') return false;
-  if (state.phase === 'in_progress') return true;
-  return !identityConfigured;
+export function isInSetup(state: SetupState): boolean {
+  return state.phase !== 'complete';
 }

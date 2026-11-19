@@ -3283,7 +3283,8 @@ async function main(): Promise<void> {
       if (installabilityWarning(config.appOrigin)) return 'The Curia app needs Curia on an https address with a real hostname.';
       return vapidSetup.configured ? null : 'Push notifications are not set up on this server.';
     },
-    signalVoiceCallsEnabled: config.signalVoiceCallsEnabled,
+    // Read at call time: the bridge is assigned later in boot, and is only built when calls can work.
+    signalCalls: () => (!config.signalVoiceCallsEnabled ? 'disabled' : signalCallBridge ? 'ready' : 'not_wired'),
     secretPresent: async (name) => (await secretsService.get(name)) !== null || !!process.env[name.toUpperCase()],
     browserReady: () => browserService?.browserContext != null,
     logger,

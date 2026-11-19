@@ -408,7 +408,7 @@ export async function setupRoutes(
         externalAdaptersPending,
         bootStartedAt,
         // #2358: the console shows the Setup page while this is true.
-        inSetup: isInSetup(setupState, identityConfigured),
+        inSetup: isInSetup(setupState),
         setup: publicState(setupState),
       });
     } catch (err) {
@@ -516,15 +516,14 @@ export async function setupRoutes(
   // -- PUT /api/setup/state --
   //
   // Saves the Setup page's own fields (#2358). Partial: a field left out is unchanged, and
-  // null clears it. The first save on a new install marks Setup in progress.
+  // null clears it.
   app.put<{ Body: unknown }>('/api/setup/state', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     const parsed = parseStateUpdate(request.body);
     if ('error' in parsed) return reply.status(400).send({ error: parsed.error });
     try {
-      const identityConfigured = await isIdentityConfigured(pool);
-      const state = await updateSetupState(pool, parsed.update, identityConfigured);
-      return reply.send({ inSetup: isInSetup(state, identityConfigured), setup: publicState(state) });
+      const state = await updateSetupState(pool, parsed.update);
+      return reply.send({ inSetup: isInSetup(state), setup: publicState(state) });
     } catch (err) {
       logger.error({ err }, 'PUT /api/setup/state: failed to save');
       return reply.status(500).send({ error: 'Failed to save. Check server logs.' });
