@@ -13,7 +13,7 @@
 
 import { isInSetup, readSetupState } from '../../../setup/setup-state.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import type { OfficeIdentityService } from '../../../identity/service.js';
 import type { OfficeIdentity } from '../../../identity/types.js';
 import { DETAIL_BANDS, LENGTH_ROWS, LENGTH_ROW_LABELS } from '../../../identity/length.js';
@@ -31,11 +31,13 @@ import { assertSecret, CONSOLE_RATE, type SessionStore } from '../session-auth.j
 /**
  * Returns true if the office identity has ever been explicitly configured via the
  * wizard or API. A fresh deployment only has file_load versions and returns false.
+ * A 'working_style' save (the Setup page's tone, #2358) doesn't count: it sets no name,
+ * so it must not tick Curia's name, the Setup step this answers.
  *
  * Shared with the /api/setup/status route so both endpoints answer the same question
  * the same way; "configured" is a single concept, not a per-route opinion.
  */
-export async function isIdentityConfigured(pool: Pool): Promise<boolean> {
+export async function isIdentityConfigured(pool: Pick<Pool, 'query'> | PoolClient): Promise<boolean> {
   const result = await pool.query<{ configured: boolean }>(
     `SELECT EXISTS (
        SELECT 1 FROM office_identity_versions
@@ -119,8 +121,9 @@ export async function identityRoutes(
     // (explicit confirmation step, separate from tone/persona edits).
 
     try {
-      // Accept 'wizard' or 'api' as the source; default to 'api' for direct API callers.
-      const VALID_CHANGED_BY = ['api', 'wizard'] as const;
+      // Accept 'wizard', 'api' or 'working_style' (the Setup page's tone, which
+      // isIdentityConfigured doesn't count) as the source; default to 'api' for direct API callers.
+      const VALID_CHANGED_BY = ['api', 'wizard', 'working_style'] as const;
       type ChangedBy = typeof VALID_CHANGED_BY[number];
       const changedBy: ChangedBy = VALID_CHANGED_BY.includes(body.changedBy as ChangedBy)
         ? (body.changedBy as ChangedBy)

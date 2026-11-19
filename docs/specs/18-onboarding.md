@@ -140,7 +140,7 @@ check is always done.
 
 | Extra | Saves | Through |
 |-------|-------|---------|
-| Working style | A tone (one of the four tone templates) and an independence level: Draft only, Ask first (the default) or Spot-check, at scores 65, 75 and 85. Each saves when picked. They are a starting point: the principal is offered them in the first conversation and can change them | `PUT /api/identity` (`changedBy: 'wizard'`, `tone.style` only) and `POST /api/identity/reload`; `PUT /api/autonomy` |
+| Working style | A tone (one of the four tone templates) and an independence level: Draft only, Ask first (the default) or Spot-check, at scores 65, 75 and 85. Each saves when picked. They are a starting point: the principal is offered them in the first conversation and can change them | `PUT /api/identity` (`tone.style` only, `changedBy: 'working_style'`, which doesn't tick Curia's name); `PUT /api/autonomy` |
 | Google Workspace | Curia's Google address and the OAuth client ID and secret. "Sign in as Curia" shows as coming soon (#2683) | `PUT /api/vault/secrets/{curia_google_email,google_oauth_client_id,google_oauth_client_secret}` |
 | Higher search limit | The Tavily key, with links to tavily.com and the curia-docs limits page | `PUT /api/vault/secrets/tavily_api_key` |
 

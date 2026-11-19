@@ -396,15 +396,21 @@ export function VaultKeysForm(props: {
   valuesRef.current = values;
   const running = useRef<Promise<boolean> | null>(null);
 
-  const reload = useCallback(async (): Promise<void> => {
+  /** Re-reads which keys are saved. Returns the failure, if any, for the caller to word. */
+  const reload = useCallback(async (): Promise<string | null> => {
     try {
       setConfigured(await loadConfiguredKeys());
+      return null;
     } catch (err) {
-      setMessage({ kind: 'error', text: err instanceof Error ? err.message : 'Could not read the saved keys.' });
+      return err instanceof Error ? err.message : 'unknown error';
     }
   }, []);
 
-  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    void reload().then((failure) => {
+      if (failure) setMessage({ kind: 'error', text: `Couldn’t read which keys are saved: ${failure}` });
+    });
+  }, [reload]);
 
   async function saveTyped(): Promise<boolean> {
     // Check every typed value first, so a bad one saves nothing. `submitted` is the text as
@@ -438,16 +444,18 @@ export function VaultKeysForm(props: {
         }
         savedAny = true;
       }
-      setMessage({ kind: 'ok', text: 'Saved.' });
+      // The save stands even when the re-read fails: say both, never just the failure.
+      const failure = await reload();
+      setMessage({ kind: 'ok', text: failure ? `Saved, but couldn’t re-read which keys are saved: ${failure}` : 'Saved.' });
+      await onChanged();
       return true;
     } catch (err) {
       setMessage({ kind: 'error', text: err instanceof Error ? err.message : 'Could not save.' });
-      return false;
-    } finally {
       if (savedAny) {
         await reload();
         await onChanged();
       }
+      return false;
     }
   }
 
