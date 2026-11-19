@@ -1016,13 +1016,13 @@ describeIf('/api/setup/* routes', () => {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
-        await client.query('DELETE FROM setup_state');
-        await client.query('DELETE FROM office_identity_current');
-        await client.query('DELETE FROM office_identity_versions');
+        // As if nothing were set up yet (rolled back below; no row is deleted but Setup's own).
+        await client.query('DELETE FROM setup_state WHERE id = 1');
+        await client.query(`UPDATE office_identity_versions SET changed_by = 'system_default' WHERE changed_by IN ('wizard', 'api')`);
         await client.query(`UPDATE contacts SET system_role = NULL WHERE system_role = 'principal'`);
         expect(await startSetup(client)).toMatchObject({ phase: 'in_progress', setupFor: null });
         // A principal a script created, and no row: nothing changes.
-        await client.query('DELETE FROM setup_state');
+        await client.query('DELETE FROM setup_state WHERE id = 1');
         await client.query(
           `INSERT INTO contacts (id, display_name, role, tier, kind, system_role, created_at, updated_at)
            VALUES (gen_random_uuid(), $1, 'ceo', 'principal', 'principal', 'principal', now(), now())`,
