@@ -129,8 +129,8 @@ importers:
         specifier: ^9.0.0
         version: 9.0.0(@types/pg@8.23.1)(pg@8.23.1)
       nylas:
-        specifier: ^8.4.0
-        version: 8.4.0
+        specifier: ^8.5.0
+        version: 8.5.0
       onnxruntime-node:
         specifier: 1.30.0
         version: 1.30.0
@@ -4583,8 +4583,8 @@ packages:
       chokidar:
         optional: true
 
-  nylas@8.4.0:
-    resolution: {integrity: sha512-74ynMqZoARRfU4nyPeofalSUrtpwG8gTxuTwh6XN9xKYHOPITT0S+HljcTi08O6nu3fSBYoQ1vMYMWjzmrRojg==}
+  nylas@8.5.0:
+    resolution: {integrity: sha512-TIiFpqwCjiu2Y6CSxuKZNaDL8xW8bN6hVKRwM+yR5a5vtrBQoYZol7GG1fJ5g4fw8B0W+OidRiNP8QrQhT3TaA==}
     engines: {node: '>=18'}
 
   object-assign@4.1.1:
@@ -10509,7 +10509,7 @@ snapshots:
     optionalDependencies:
       chokidar: 5.0.0
 
-  nylas@8.4.0:
+  nylas@8.5.0:
     dependencies:
       change-case: 4.1.2
       form-data-encoder: 4.1.0
