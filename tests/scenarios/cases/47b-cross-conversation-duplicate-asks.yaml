@@ -19,11 +19,12 @@ description: >
   sync. The Signal reply, to the principal, says the sync was already booked from the email
   and either asks whether they want another one or confirms it is done.
 tags: [cross-conversation, turn-awareness, calendar, signal, real-delegation]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 delegation: real
-# In the release gate: the incident path, which no stubbed case can reach (README, "Which
-# real-delegation cases gate a release").
-# 5 runs: its critical behavior split across runs on the 2026-11-16 gate, so one run cannot
-# tell a flake from a regression. The default is 1 (tests/scenarios/README.md, "The gate").
+# 5 runs when run: its critical behavior split across runs on the 2026-11-16 gate, so one run
+# cannot tell a flake from a regression.
 runs: 5
 timeout_seconds: 600
 autonomy: { score: 85, gating: band }

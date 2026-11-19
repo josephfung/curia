@@ -23,7 +23,7 @@ describe('CHANNEL_CATALOG', () => {
     expect(email.isToggleable).toBe(true);
     // Only the API key: each mailbox's grant and address live on its email account (#2409).
     expect(email.requiredSecretKeys).toEqual(['nylas_api_key']);
-    expect(email.credentialFields.map(f => f.key)).toEqual(['nylas_api_key']);
+    expect(email.credentialFields.map(f => f.key)).toEqual(['nylas_api_key', 'nylas_region']);
 
     const signal = getChannelDescriptor('signal')!;
     expect(signal.isToggleable).toBe(true);

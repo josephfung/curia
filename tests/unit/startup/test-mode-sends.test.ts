@@ -127,7 +127,7 @@ function threadMessage(over: Partial<NylasMessage> = {}): NylasMessage {
 /** The principal asking on a live turn: what makes a principal-mailbox send principal-directed. */
 const LIVE_PRINCIPAL = {
   liveTurn: true,
-  taskMetadata: { originator: { contactId: 'principal-1', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-11-07T10:00:00.000Z' } },
+  taskMetadata: { originator: { contactId: 'principal-1', systemRole: 'principal', authenticated: true, channel: 'signal', initiatedAt: '2026-11-07T10:00:00.000Z' } },
 };
 
 describe('createRecordingOutboundGateway', () => {

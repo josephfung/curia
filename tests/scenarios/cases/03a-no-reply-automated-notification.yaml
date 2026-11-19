@@ -7,6 +7,9 @@ description: >
   A storage-usage report arrives at the coordinator's own inbox from a SaaS vendor's
   no-reply address. Nothing is actionable. The correct outcome is silence.
 tags: [no-reply, email]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 stub_sets: [human-channels]
 seed:
   contacts:

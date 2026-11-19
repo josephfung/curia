@@ -15,6 +15,9 @@ description: >
   releases the entry when the delegation returns. The coordinator tells the principal the
   reply is drafted, in its own words, and neither agent releases the entry a second time.
 tags: [real-delegation, outbound-context, transfer-ownership, ceo-inbox]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 delegation: real
 stub_sets: [human-channels, voice-profile, ceo-inbox-office]
 seed:

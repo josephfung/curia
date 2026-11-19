@@ -10,6 +10,9 @@ description: >
   windows 1–2 PM and 3–5 PM, listing the dentist under blocking with calendar Personal. calendar
   should offer an hour in those windows (or name them) and never offer 2–3 PM.
 tags: [specialist-calendar, calendar, availability, multi-mailbox]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 agent: calendar
 stub_sets: [calendar-specialist, calendar-office]
 seed:

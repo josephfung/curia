@@ -19,6 +19,7 @@ async function senderBlock(opts: {
   resolved: boolean;
   identityVerified?: boolean;
   metadata?: Record<string, unknown>;
+  principal?: boolean;
 }): Promise<string> {
   const bus = new EventBus(createLogger('error'));
   const provider: LLMProvider & { chat: ReturnType<typeof vi.fn> } = {
@@ -53,8 +54,8 @@ async function senderBlock(opts: {
           contactId: 'contact-1',
           displayName: 'Sam Lee',
           role: null,
-          systemRole: null,
-          tier: 'known' as const,
+          systemRole: opts.principal ? 'principal' as const : null,
+          tier: opts.principal ? 'principal' as const : 'known' as const,
           kind: 'person' as const,
           verified: opts.identityVerified ?? false,
           kgNodeId: null,
@@ -115,5 +116,29 @@ describe('sender context: identity and authentication are separate facts', () =>
     expect(block).toContain(IDENTITY_NOT_VERIFIED);
     expect(block).toContain('Message authentication: passed (SPF/DKIM/DMARC for this message)');
     expect(block).not.toContain('senderVerified');
+  });
+});
+
+// GHSA-p49r-jqh2-v668: a message that matches the principal's number or address without the channel
+// proving it keeps the principal's identity but not their authority. The coordinator is told, so it
+// says a confirmation is waiting instead of asking the principal to repeat themselves.
+describe('sender context: an unauthenticated principal match', () => {
+  const LINE = 'This message matches the principal\'s address, but its channel did not prove they sent it.';
+  const principalOriginator = (channel: string, authenticated: boolean) => ({
+    originator: { contactId: 'contact-1', systemRole: 'principal', channel, initiatedAt: '2026-11-17T12:00:00Z', tier: 'principal', authenticated },
+  });
+
+  it.each([
+    ['sms', principalOriginator('sms', false)],
+    ['email', { ...principalOriginator('email', false), senderVerified: false }],
+  ])('says so on %s', async (channelId, metadata) => {
+    const block = await senderBlock({ channelId, resolved: true, identityVerified: true, principal: true, metadata });
+    expect(block).toContain(LINE);
+    expect(block).toContain('don\'t ask them to repeat the request');
+  });
+
+  it('says nothing of it for an authenticated principal', async () => {
+    const block = await senderBlock({ channelId: 'signal', resolved: true, identityVerified: true, principal: true, metadata: principalOriginator('signal', true) });
+    expect(block).not.toContain(LINE);
   });
 });

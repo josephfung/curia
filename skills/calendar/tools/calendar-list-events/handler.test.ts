@@ -214,7 +214,7 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
         timeMax: '2026-05-26T23:59:59Z',
       },
       caller: { contactId: callerId, role: 'ceo', channel: 'signal' },
-      taskMetadata: { originator: { systemRole: 'principal' } },
+      taskMetadata: { originator: { systemRole: 'principal', authenticated: true } },
       contactService,
       calendarRouter: singleMailboxRouter({
         listEvents: vi.fn().mockResolvedValue([]),
@@ -224,6 +224,28 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
     expect(contactService!.getCalendarsForContact).toHaveBeenCalledWith(principalId);
     expect(contactService!.getCalendarsForContact).not.toHaveBeenCalledWith(callerId);
     expect(result.success).toBe(true);
+  });
+
+  // GHSA-p49r-jqh2-v668: looking up another contact's calendar is the principal's authority. An
+  // unauthenticated principal match (SMS, or a forged email From) may not: an email reply goes to
+  // everyone on the thread, so a forged From that CCs someone would read the calendar out to them.
+  it('refuses the contactId override for an unauthenticated principal (SMS)', async () => {
+    const handler = new CalendarListEventsHandler();
+    const principalId = 'deadbeef-0000-0000-0000-000000000001';
+    const contactService = {
+      getCalendarsForContact: vi.fn().mockResolvedValue([{ nylasCalendarId: 'cal-principal' }]),
+    } as unknown as ToolContext['contactService'];
+
+    const result = await handler.execute(makeCtx({
+      input: { contactId: principalId, timeMin: '2026-05-26T00:00:00Z', timeMax: '2026-05-26T23:59:59Z' },
+      caller: { contactId: principalId, role: 'ceo', channel: 'sms' },
+      taskMetadata: { originator: { systemRole: 'principal', authenticated: false, channel: 'sms' } },
+      contactService,
+      calendarRouter: singleMailboxRouter({ listEvents: vi.fn().mockResolvedValue([]) }),
+    }));
+
+    expect(result.success).toBe(false);
+    expect(contactService!.getCalendarsForContact).not.toHaveBeenCalled();
   });
 
   it('rejects contactId override for non-principal, non-system callers', async () => {

@@ -19,6 +19,7 @@ description: >
   the Acme debrief task, clear only the Acme meeting's outbound context, and return a
   short confirmation that says the email is on its way, not that it is done.
 tags: [specialist-meeting-debrief, meeting-debrief, delegated-mode]
+runs: 5
 agent: meeting-debrief
 stub_sets: [meeting-debrief-office]
 seed:

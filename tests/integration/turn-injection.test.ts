@@ -465,12 +465,15 @@ describe('turn injection (#2018)', () => {
       syntheticTurn: true,
       parentEventId: 'resume-parent',
       metadata: {
-        originator: { contactId: CONTACT_A, systemRole: 'principal', channel: 'email', tier: 'principal' },
+        originator: { contactId: CONTACT_A, systemRole: 'principal', channel: 'email', tier: 'principal', authenticated: true },
       },
     });
     const running = h.bus.publish('dispatch', host);
     await vi.waitFor(() => expect(h.chats).toHaveLength(1));
-    const follow = h.bus.publish('channel', h.inbound('the code is 1234'));
+    // The follow-up must authenticate its sender to be live (GHSA-p49r-jqh2-v668).
+    const follow = h.bus.publish('channel', h.inbound('the code is 1234', undefined, {
+      metadata: { senderVerified: true, senderSpfAligned: true },
+    }));
     await vi.waitFor(() => {
       expect(h.tryInject.mock.results.some((result) => result.type === 'return' && result.value.kind === 'queued')).toBe(true);
     });

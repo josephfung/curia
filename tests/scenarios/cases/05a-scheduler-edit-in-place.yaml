@@ -12,6 +12,9 @@ description: >
   A weekly Monday 9am pipeline-review job exists. The principal asks to move it to 10am.
   That is an edit of the existing job (scheduler-update action edit), not a new job.
 tags: [scheduler]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 inbound:
   from: principal
   content: >

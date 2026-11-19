@@ -17,6 +17,7 @@ description: >
   and leaves it in the inbox marked read; archives the newsletter; and marks the personal
   note read with the 📌 Seen label, leaving it in the inbox. It drafts no replies.
 tags: [specialist-ceo-inbox, ceo-inbox, triage]
+runs: 5
 agent: ceo-inbox
 timeout_seconds: 420
 stub_sets: [ceo-inbox-mailroom]

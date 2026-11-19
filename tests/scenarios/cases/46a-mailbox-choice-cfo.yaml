@@ -8,6 +8,9 @@ description: >
   with evidence: every message to the CFO went from work and the CFO is on the work domain.
   ceo-inbox should compose again in work and say nothing about which account it used.
 tags: [ceo-inbox, delegated-mode, specialist, specialist-ceo-inbox, mailbox-choice, multi-mailbox]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 agent: ceo-inbox
 stub_sets: [ceo-inbox-office]
 seed:

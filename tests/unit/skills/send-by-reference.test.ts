@@ -935,7 +935,7 @@ describe('sms-send to a phone-only contact through the execution layer (#2447)',
       taskMetadata: {
         originator: {
           contactId: h.principalId,
-          systemRole: 'principal',
+          systemRole: 'principal', authenticated: true,
           channel: 'signal',
           initiatedAt: new Date().toISOString(),
           tier: 'known' as const,

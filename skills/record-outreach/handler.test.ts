@@ -7,7 +7,7 @@ import type { TaskOutreachInput, TaskOutreachRepo, TaskOutreachRow } from '../..
 
 const log = pino({ level: 'silent' });
 const TASK_ID = '11111111-1111-4111-8111-111111111111';
-const principal = { contactId: 'p', systemRole: 'principal', channel: 'email', initiatedAt: '2026-10-26T00:00:00Z', tier: 'principal' };
+const principal = { contactId: 'p', systemRole: 'principal', authenticated: true, channel: 'email', initiatedAt: '2026-10-26T00:00:00Z', tier: 'principal' };
 const outsider = { contactId: 'o', systemRole: null, channel: 'email', initiatedAt: '2026-10-26T00:00:00Z', tier: 'known' };
 
 function makeOutreach() {

@@ -22,6 +22,9 @@ description: >
   the verification satisfied, reads the renewal notice and tells the principal what it
   says, without questioning the code or the channel it came on.
 tags: [verification, signin, browser]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 stub_sets: [human-channels]
 seed:
   verifications:

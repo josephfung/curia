@@ -7,6 +7,7 @@ import { parseProxyConfig } from './browser/proxy-config.js';
 import { AUTONOMY_GATINGS, type AutonomyGating } from './autonomy/band-policy.js';
 import type { VerificationConfig } from './verification/types.js';
 import { registrableDomain } from './verification/domain.js';
+import type { NylasRegion } from './nylas/region.js';
 import type { TierConfig } from './agents/llm/model-router.js';
 import { FALLBACK_CHANNELS, REACH_CHANNELS, type ReachChannel } from './agents/principal-reach.js';
 
@@ -63,6 +64,8 @@ export interface Config {
   // Unset → the web-browser skill launches Chrome in-process (#2541).
   browserCdpUrl: string | undefined;
   nylasApiKey: string | undefined;
+  /** Nylas data-center region (channel.email.nylas_region ▸ NYLAS_REGION); selects the API host. Default 'us'. */
+  nylasRegion: NylasRegion;
   nylasPollingIntervalMs: number;
   // principal's Signal phone number in E.164 format (e.g. "+14155551234").
   // Used by OutboundGateway to exempt principal-bound Signal messages from the autonomy gate.
@@ -2134,6 +2137,7 @@ export function loadConfig(): Config {
     timezone,
     browserCdpUrl,
     nylasApiKey: undefined,
+    nylasRegion: 'us',
     nylasPollingIntervalMs,
     ceoSignalNumber: process.env.CEO_SIGNAL_NUMBER?.trim() || undefined,
     // .trim() prevents a whitespace-only value (e.g. "  ") from activating the

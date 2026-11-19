@@ -20,7 +20,25 @@ export interface MailboxOutageNotifierDeps {
    * it is not counted as sent and the next failing probe tries again. Absent: assumed delivered.
    */
   canDeliver?: () => boolean;
+  /**
+   * A fresh 7-day sign-in link that reconnects this mailbox, or null when sign-in is not ready
+   * (the email then keeps the grant-paste wording). Called once per alert, auth failures only.
+   * The link goes in the email alone: never in a log or the canary detail.
+   */
+  mintReconnectLink?: (mailboxId: string, label: string) => Promise<string | null>;
+  /** How long the alert waits for mintReconnectLink. Default MINT_RECONNECT_LINK_TIMEOUT_MS. */
+  mintTimeoutMs?: number;
   logger: Logger;
+}
+
+/** The mint reads the registry and the DB; a stall past this sends the grant-paste wording. */
+export const MINT_RECONNECT_LINK_TIMEOUT_MS = 10_000;
+
+class MintTimeoutError extends Error {
+  constructor() {
+    super('Minting the reconnect link timed out');
+    this.name = 'MintTimeoutError';
+  }
 }
 
 export class MailboxOutageNotifier {
@@ -54,6 +72,27 @@ export class MailboxOutageNotifier {
       return;
     }
 
+    // A mint failure must never stop the alert: any problem, a stall included, falls back to the
+    // grant-paste wording. A mint that finishes after the deadline leaves an unused link that expires.
+    let reconnectLink: string | null = null;
+    if (opts.authFailure && this.deps.mintReconnectLink) {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        const deadline = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new MintTimeoutError()), this.deps.mintTimeoutMs ?? MINT_RECONNECT_LINK_TIMEOUT_MS);
+        });
+        const mint = this.deps.mintReconnectLink(mailboxId, label);
+        // A late rejection after the deadline won is already handled here, never unhandled.
+        mint.catch(() => undefined);
+        reconnectLink = await Promise.race([mint, deadline]);
+      } catch (err) {
+        // Error name only: the message could carry a token or address.
+        this.log.warn({ mailboxId, errorName: err instanceof Error ? err.name : 'UnknownError' }, 'Could not mint a reconnect link for the outage alert; sending the grant-paste wording');
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    }
+
     const sent = await this.deps.gateway.sendNotification({
       notificationType: 'principal_mailbox_outage',
       ceoEmail,
@@ -64,7 +103,14 @@ export class MailboxOutageNotifier {
         'Mail and calendar for that account are not being read or written until it is reachable again.',
         ...(opts.authFailure
           ? [
-            "Nylas refused the connection, which usually means it was revoked or expired: reconnect the account in Nylas, then use Edit on the mailbox to paste its new grant ID in the console (Settings → Behaviour → Email & Calendar).",
+            ...(reconnectLink
+              ? [
+                'Nylas refused the connection, which usually means the sign-in was revoked or expired. Sign in again with this link (valid for 7 days, works once):',
+                reconnectLink,
+              ]
+              : [
+                "Nylas refused the connection, which usually means it was revoked or expired: reconnect the account in Nylas, then use Edit on the mailbox to paste its new grant ID in the console (Settings → Behaviour → Email & Calendar).",
+              ]),
             'If the account no longer exists, remove the mailbox there so Curia stops checking it.',
           ]
           : [

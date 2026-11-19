@@ -9,6 +9,9 @@ description: >
   invites Sam. The coordinator completes the task and sends the principal one message with
   the booked time.
 tags: [task-wake, meeting-debrief, calendar]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 stub_sets: [human-channels]
 seed:
   contacts:

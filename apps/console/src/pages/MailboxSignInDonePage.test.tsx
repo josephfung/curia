@@ -1,0 +1,178 @@
+// @vitest-environment happy-dom
+// Mailbox sign-in result page (#2361): one distinct message per outcome, and the restart wait.
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { MAILBOX_SIGNIN_OUTCOMES } from '../../../../src/nylas/signin-outcome.js';
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const { default: MailboxSignInDonePage, resultMessage, SIGNIN_RESULTS } = await import('./MailboxSignInDonePage.js');
+
+let root: Root | null = null;
+let host: HTMLElement;
+const fetchMock = vi.fn();
+
+async function mount(search: string, props: { pollIntervalMs?: number; maxWaitMs?: number } = {}) {
+  window.history.replaceState({}, '', `/mailbox-signin/done${search}`);
+  host = document.createElement('div');
+  document.body.appendChild(host);
+  root = createRoot(host);
+  await act(async () => { root!.render(<MailboxSignInDonePage {...props} />); });
+}
+
+// Fake time: advances inside act and flushes each mocked response, so a slow CI worker cannot
+// reorder the polls the tests count.
+async function wait(ms: number) {
+  await act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+}
+
+beforeEach(() => { vi.useFakeTimers(); fetchMock.mockReset(); vi.stubGlobal('fetch', fetchMock); });
+afterEach(() => {
+  if (root) act(() => root!.unmount());
+  root = null;
+  host?.remove();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+describe('MailboxSignInDonePage', () => {
+  it('knows every outcome the server can send, plus the start route results', () => {
+    for (const o of MAILBOX_SIGNIN_OUTCOMES) expect(SIGNIN_RESULTS).toContain(o);
+    for (const r of ['not_found', 'used']) expect(SIGNIN_RESULTS).toContain(r);
+  });
+
+  it('gives every result a distinct message', () => {
+    const msgs = SIGNIN_RESULTS.map(r => resultMessage(r, 'principal').body);
+    expect(new Set(msgs).size).toBe(msgs.length);
+    expect(resultMessage('nonsense', 'principal').body).not.toBe('');
+    expect(msgs).not.toContain(resultMessage('nonsense', 'principal').body);
+  });
+
+  it('names the Trusted-app fix for admin_blocked', async () => {
+    await mount('?result=admin_blocked&target=principal&restart=0');
+    expect(host.textContent).toContain("ask your Google Workspace admin to mark Curia's app as Trusted");
+  });
+
+  it('explains the Nylas connected-account limit for account_limit', async () => {
+    await mount('?result=account_limit&target=principal&restart=0');
+    expect(host.textContent).toContain("Nylas's account limit is reached. A Nylas sandbox allows 5 connected accounts.");
+    expect(host.textContent).toContain('Remove an unused mailbox, or move to a production Nylas application.');
+  });
+
+  it('explains wrong_account and missing_scopes', async () => {
+    await mount('?result=wrong_account&target=principal&restart=0');
+    expect(host.textContent).toContain('different Google account');
+    expect(host.textContent).toContain('set to Internal');
+    expect(host.textContent).toContain('audience to External');
+    act(() => root!.unmount()); host.remove();
+    await mount('?result=missing_scopes&target=curia&restart=0');
+    expect(host.textContent).toContain('mail and calendar');
+  });
+
+  it('shows the generic message for an unknown or missing result', async () => {
+    await mount('?result=<script>');
+    expect(host.textContent).toContain('Something went wrong');
+    expect(host.querySelector('script')).toBeNull();
+  });
+
+  it('on restart=1 shows the restart line and polls /api/health until it answers', async () => {
+    fetchMock.mockImplementationOnce(async () => { throw new Error('down'); })
+      .mockImplementation(async () => new Response(JSON.stringify({ uptime_s: 3 }), { status: 200 }));
+    await mount('?result=connected&target=curia&restart=1', { pollIntervalMs: 5, maxWaitMs: 1000 });
+    expect(host.textContent).toContain('Curia is restarting to start using this mailbox');
+    await wait(60);
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/health');
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(host.textContent).toContain('Curia is back');
+    // M: the restart alone doesn't prove the mailbox runs, so the page points at where to check.
+    expect(host.textContent).toContain('Curia is back. Check Channels → Email to confirm the mailbox is running.');
+  });
+
+  it('does not declare success while the old process keeps answering', async () => {
+    let up = 100;
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ uptime_s: (up += 1) }), { status: 200 }));
+    await mount('?result=connected&target=curia&restart=1', { pollIntervalMs: 5, maxWaitMs: 1000 });
+    await wait(5); await wait(5); await wait(5);
+    expect(fetchMock.mock.calls.length).toBe(3);
+    expect(host.textContent).not.toContain('Curia is back');
+    // The process restarted: uptime drops below the first sample.
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ uptime_s: 2 }), { status: 200 }));
+    await wait(5);
+    expect(host.textContent).toContain('Curia is back');
+  });
+
+  it('does not trust an ok answer that has no uptime_s', async () => {
+    fetchMock.mockImplementation(async () => new Response('{}', { status: 200 }));
+    await mount('?result=connected&target=curia&restart=1', { pollIntervalMs: 5, maxWaitMs: 1000 });
+    await wait(50);
+    expect(host.textContent).not.toContain('Curia is back');
+  });
+
+  it('counts a non-ok answer followed by an ok one as a restart', async () => {
+    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ uptime_s: 50 }), { status: 200 }))
+      .mockImplementationOnce(async () => new Response('{}', { status: 503 }))
+      .mockImplementation(async () => new Response(JSON.stringify({ uptime_s: 51 }), { status: 200 }));
+    await mount('?result=connected&target=curia&restart=1', { pollIntervalMs: 5, maxWaitMs: 1000 });
+    await wait(60);
+    expect(host.textContent).toContain('Curia is back');
+  });
+
+  it('stops polling after the bound and says to refresh', async () => {
+    fetchMock.mockRejectedValue(new Error('down'));
+    await mount('?result=connected&target=curia&restart=1', { pollIntervalMs: 5, maxWaitMs: 30 });
+    await wait(80);
+    expect(host.textContent).toContain('refresh');
+    const n = fetchMock.mock.calls.length;
+    await wait(40);
+    expect(fetchMock.mock.calls.length).toBe(n);
+  });
+
+  it('times out on the deadline even when a health request never answers, and aborts it', async () => {
+    let signal: AbortSignal | undefined;
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Promise(() => { /* never answers */ });
+    });
+    await mount('?result=connected&target=curia&restart=1', { pollIntervalMs: 5, maxWaitMs: 50 });
+    await wait(10);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain('Curia is restarting');
+    await wait(50);
+    expect(host.textContent).toContain('refresh');
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it('aborts the active health request on unmount', async () => {
+    let signal: AbortSignal | undefined;
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Promise(() => { /* never answers */ });
+    });
+    await mount('?result=connected&target=curia&restart=1', { pollIntervalMs: 5, maxWaitMs: 1000 });
+    await wait(10);
+    act(() => root!.unmount()); root = null;
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it('tells a cancelled or wrong-account user the link is used and to ask for a fresh one', async () => {
+    for (const r of ['cancelled', 'wrong_account', 'org_internal']) {
+      const m = resultMessage(r, 'principal').body;
+      expect(m).toContain('now used');
+      expect(m).toContain('fresh sign-in link');
+      expect(m).not.toContain('Open the link again');
+    }
+  });
+
+  it('sends an org_internal user to the operator to set the audience to External', () => {
+    const m = resultMessage('org_internal', 'principal').body;
+    expect(m).toContain('audience to External');
+    expect(m).not.toContain('Sign in with an account from that organization');
+  });
+
+  it('does not poll without restart=1', async () => {
+    await mount('?result=connected&target=principal&restart=0', { pollIntervalMs: 5 });
+    await wait(30);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

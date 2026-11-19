@@ -34,6 +34,8 @@ export const CHANNEL_CATALOG: ChannelDescriptor[] = [
     // Enable gate also requires one such account to resolve — see index.ts (#2409).
     credentialFields: [
       { key: 'nylas_api_key', label: 'Nylas API key', secret: true, envFallback: 'NYLAS_API_KEY' },
+      // Optional: the data-center region the Nylas application lives in. Absent means 'us'.
+      { key: 'nylas_region', label: 'Nylas region (us or eu)', secret: false, envFallback: 'NYLAS_REGION' },
     ],
     requiredSecretKeys: ['nylas_api_key'],
   },

@@ -24,7 +24,7 @@ import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, re
 import { createVerificationRuntime } from './verification/index.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
-import { hasLivePushSubscription, WebPushService } from './channels/web/push-service.js';
+import { WebPushService } from './channels/web/push-service.js';
 import { loadVapidSetup, logVapidReadiness } from './channels/web/vapid.js';
 import { configuredReachChannels, reachChannelsFor } from './agents/principal-reach.js';
 import { resolveMemoryRetentionSnapshot } from './channels/http/routes/memory-retention.js';
@@ -97,6 +97,13 @@ import { closeDedupTasksForMergedContact } from './contacts/dedup-tasks.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
 import { createContactDuplicateDetected, createContactElevated, createContactMerged } from './bus/events.js';
 import { NylasClient } from './channels/email/nylas-client.js';
+import { nylasApiUri } from './nylas/region.js';
+import { checkNylasSignIn, createNylasSignInReaders, type NylasSignInReadiness } from './nylas/signin-readiness.js';
+import { MailboxSignInService, MailboxSignInUnavailableError, MAX_SIGNIN_TTL_MINUTES } from './nylas/mailbox-signin-service.js';
+import { handleMailboxSignInCallback, type MailboxSignInCallbackQuery } from './nylas/mailbox-signin-callback.js';
+import { MailboxSignInResumeSubscriber } from './nylas/mailbox-signin-resume-subscriber.js';
+import { NylasAppClient } from './nylas/app-client.js';
+import { createLiveGrantLookup } from './nylas/live-grant-lookup.js';
 import { CalendarRouter, calendarRouterEnabled } from './channels/calendar/calendar-router.js';
 import { PrincipalMailboxStore } from './principal-mailboxes/store.js';
 import { PrincipalMailboxes } from './principal-mailboxes/service.js';
@@ -280,6 +287,10 @@ import {
 } from './registry/reconcile.js';
 import type { Discovery, RegistryRow } from './registry/types.js';
 import { CHANNEL_CATALOG, type ChannelDescriptor } from './channels/catalog.js';
+import { evaluateChecklist, loadCatalog, type CatalogTask, type RouteChannel, type SetupCheckDeps, type SetupChecklist } from './setup/checklist.js';
+import { readSetupState } from './setup/setup-state.js';
+import { isIdentityConfigured } from './channels/http/routes/identity.js';
+import { installabilityWarning } from './channels/http/pairing.js';
 import { channelCredentialStatus } from './channels/credential-resolver.js';
 import { ChannelRegistryRepo } from './registry/channel-registry-repo.js';
 import { ChannelRegistryService } from './registry/channel-registry-service.js';
@@ -1109,7 +1120,7 @@ async function main(): Promise<void> {
     logger.warn('No email accounts resolved — email channel disabled. Add an account via the console (Settings → Channels → Email).');
   } else {
     for (const account of resolvedEmailAccounts) {
-      nylasClientMap.set(account.name, new NylasClient(config.nylasApiKey, account.nylasGrantId, logger));
+      nylasClientMap.set(account.name, new NylasClient(config.nylasApiKey, account.nylasGrantId, logger, undefined, nylasApiUri(config.nylasRegion)));
     }
     logger.info(
       { accounts: [...nylasClientMap.keys()] },
@@ -1261,6 +1272,7 @@ async function main(): Promise<void> {
     store: principalMailboxStore,
     secrets: secretsService,
     apiKey: () => config.nylasApiKey,
+    apiUri: () => nylasApiUri(config.nylasRegion),
     logger,
     principalEmailIdentities: mailboxPrincipalId
       ? async () => {
@@ -1288,7 +1300,7 @@ async function main(): Promise<void> {
         return () => migrateFlatPrincipalMailbox({
           store: principalMailboxStore,
           secrets: secretsService,
-          lookupGrant: (grantId) => new NylasClient(nylasApiKey, grantId, logger).getGrant(),
+          lookupGrant: (grantId) => new NylasClient(nylasApiKey, grantId, logger, undefined, nylasApiUri(config.nylasRegion)).getGrant(),
           isVerifiedPrincipalEmail: principalId
             ? async (address) => {
                 const found = await contactService.getContactWithIdentities(principalId);
@@ -1357,6 +1369,18 @@ async function main(): Promise<void> {
   // without one the process is in setup-required mode and the routes are not mounted.
   // Without a Nylas API key the routes still list and remove, but add and test answer 503.
   const principalMailboxApiKey = config.nylasApiKey;
+  // Live Nylas key and region (vault, then env), shared with sign-in readiness (#2361). The admin's
+  // grant lookup reads through them so a key saved after boot works for hosted sign-in (R7).
+  const nylasSignInReaders = createNylasSignInReaders({ secrets: secretsService, env: process.env, logger });
+  // The key and region the mailboxes are served with. A live key or region that differs reads
+  // restart_required (R11): sign-in readiness, the callback, and the admin's add and reconnect
+  // (through liveGrantLookup, before anything is written) all wait for one restart.
+  const nylasBoot = { apiKey: config.nylasApiKey, region: config.nylasRegion };
+  const liveGrantLookup = createLiveGrantLookup({
+    ...nylasSignInReaders,
+    boot: nylasBoot,
+    lookup: (apiKey, apiUri, grantId) => new NylasClient(apiKey, grantId, logger, undefined, apiUri).getGrant(),
+  });
   const mailboxCalendarHooks = principalContact && principalMailboxApiKey
     ? createMailboxCalendarHooks({
         contacts: contactService,
@@ -1421,10 +1445,8 @@ async function main(): Promise<void> {
         curiaAccountAddresses: async () => (await emailAccountsRepo.list()).map(a => a.selfEmail),
         // F6: a principal mailbox may never reuse one of Curia's own account grants.
         curiaAccountGrantIds,
-        lookupGrant: (grantId) => {
-          if (!principalMailboxApiKey) return Promise.reject(new Error('No Nylas API key configured'));
-          return new NylasClient(principalMailboxApiKey, grantId, logger).getGrant();
-        },
+        // Read live (R7): the sign-in callback adds through this admin with a key saved after boot.
+        lookupGrant: liveGrantLookup,
         isFallbackActive: () => principalMailboxes.isFallbackActive(),
         // Scoped inbox rules on removal (task 27). The working-docs repo is built further down;
         // the adapter reads it only when a removal runs, after boot.
@@ -2294,7 +2316,7 @@ async function main(): Promise<void> {
       relayBudget: new RelayBudget({ perHour: resolveRelayBudgetConfig(yamlConfig.autonomy).perHour }),
       // Sends from the principal's own mailbox (#2474). Its own entry, never in nylasClients;
       // the grant is read per call so a re-sign-in applies without a restart.
-      principalMailbox: createPrincipalMailboxResolver({ mailboxes: principalMailboxes, logger }),
+      principalMailbox: createPrincipalMailboxResolver({ mailboxes: principalMailboxes, logger, apiUri: () => nylasApiUri(config.nylasRegion) }),
       // The mailboxes a principal draft may be found in (#2475, D6); the send level is that mailbox's own.
       principalMailboxIds: async () => (await principalMailboxes.list()).map((m) => m.id),
       principalEmailAddresses: () => principalMailboxes.principalEmailAddresses(),
@@ -2935,6 +2957,28 @@ async function main(): Promise<void> {
           // Delivered only by the primary ('curia') adapter once it has subscribed (start() runs
           // after the health service): until then an alert is not counted as sent, and retried.
           canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
+          // A 7-day sign-in link for the failing mailbox (#2361). mailboxSignInService is built
+          // later in boot; the canary only calls this after boot, so the reference is live then.
+          mintReconnectLink: async (mailboxId, label) => {
+            const address = (await principalMailboxes.list()).find((m) => m.id === mailboxId)?.address;
+            if (!address) return null;
+            try {
+              const { url } = await mailboxSignInService.mintForOperator({
+                target: 'principal',
+                expectedEmail: address,
+                label,
+                ttlMinutes: MAX_SIGNIN_TTL_MINUTES,
+              });
+              return url;
+            } catch (err) {
+              // Sign-in not set up (no https origin, no key): keep the grant-paste wording.
+              if (err instanceof MailboxSignInUnavailableError) {
+                logger.info({ mailboxId, reason: err.reason }, 'Reconnect link not offered in the outage alert: sign-in is not ready');
+                return null;
+              }
+              throw err;
+            }
+          },
           logger,
         })
       : undefined,
@@ -3147,7 +3191,109 @@ async function main(): Promise<void> {
     }
     return triageServicesCache;
   };
-  const executionLayer = new ExecutionLayer(toolRegistry, logger, { triageServices, bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, calendarRouter, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, principalMailboxes, cardUseRepo, cardUseService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, principalMailboxReady: () => healthService.principalMailboxReady(), curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime, turnActivity,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
+  // Mailbox sign-in readiness (#2361). Reads the Nylas key and region live on every call; a key or
+  // region saved or changed after boot reads restart_required until one restart (R11), since the
+  // mailboxes are served with the boot values. It asks Nylas, so it is a network call.
+  const nylasSignInReadiness = (): Promise<NylasSignInReadiness> =>
+    checkNylasSignIn({ ...nylasSignInReaders, appOrigin: config.appOrigin, boot: nylasBoot, logger });
+  // Single-use mailbox sign-in links (#2361). The principal's address comes from their designated
+  // primary verified email (read at mint time, so a change applies without a restart), never from a
+  // model; the link is only minted while readiness holds.
+  const mailboxSignInService = new MailboxSignInService({
+    pool,
+    logger,
+    appOrigin: config.appOrigin,
+    readiness: nylasSignInReadiness,
+    principalEmails: () => ({
+      primary: findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier ?? null,
+      all: principalIdentities.filter((i) => i.channel === 'email').map((i) => i.channelIdentifier),
+    }),
+    // R8: an agent-minted Curia link only while Curia has no email account at all (enabled or not).
+    hasCuriaMailbox: async () => (await emailAccountsRepo.list()).length > 0,
+    // R9: no principal sign-in while the flat mailbox is served as the deferred-migration fallback.
+    isFallbackActive: () => principalMailboxes.isFallbackActive(),
+  });
+  // The hosted-auth callback (#2361): exchanges the code with the live key and region, and writes
+  // through the same registries as the console. The principal side needs the principal admin, so
+  // in setup-required mode a principal sign-in is refused; Curia's own mailbox still works.
+  const mailboxSignInCallback = (query: MailboxSignInCallbackQuery) => handleMailboxSignInCallback(query, {
+    signIn: mailboxSignInService,
+    readApiKey: nylasSignInReaders.readApiKey,
+    readRegion: nylasSignInReaders.readRegion,
+    boot: nylasBoot,
+    appOrigin: config.appOrigin,
+    makeClient: (apiKey, apiUri) => new NylasAppClient({ apiKey, apiUri, logger }),
+    principalStore: principalMailboxStore,
+    ...(principalMailboxAdmin ? { principalAdmin: principalMailboxAdmin } : {}),
+    emailAccounts: emailAccountsRepo,
+    secrets: secretsService,
+    bus,
+    // SIGTERM, as POST /api/system/restart does: shutdown() drains the email adapters before exit,
+    // and the supervisor brings the process back with Curia's new mailbox.
+    scheduleRestart: (delayMs) => {
+      setTimeout(() => process.kill(process.pid, 'SIGTERM'), delayMs);
+    },
+    logger,
+  });
+  // One info line at boot when sign-in is unavailable. Fire-and-forget: boot never waits on Nylas,
+  // and an unreachable Nylas is a reason to report, not an error.
+  void nylasSignInReadiness().then((r) => {
+    if (!r.ready) logger.info({ reason: r.reason }, `mailbox sign-in unavailable: ${r.reason}`);
+  }).catch((err: unknown) => {
+    logger.warn({ errName: err instanceof Error ? err.name : typeof err }, 'mailbox sign-in readiness check failed at boot');
+  });
+  // The Setup checklist (#2358): one computation for the console's Setup page and the setup
+  // agent's setup-status tool. The catalog stays with the setup skill; it is read once.
+  const setupCatalogPath = path.resolve(import.meta.dirname, '../skills/setup/tools/setup-status/catalog.yaml');
+  let setupCatalog: Promise<CatalogTask[]> | undefined;
+  // Filled by the startup loop below as each adapter's start() returns, so a channel reads
+  // running only once it can serve: an adapter that exists but has not started (boot still
+  // awaiting email's first poll, or setup-required mode, which starts none) does not count.
+  const startedChannels = new Set<RouteChannel | 'signal_calls'>();
+  const setupCheckDeps: SetupCheckDeps = {
+    state: () => readSetupState(pool),
+    principal: async () => {
+      const p = await contactService.findContactBySystemRole('principal');
+      return p ? { displayName: p.displayName, primaryEmail: p.primaryEmail, timezone: p.timezone } : null;
+    },
+    identityConfigured: () => isIdentityConfigured(pool),
+    emailChannelStatus,
+    nylasSignInReadiness,
+    principalMailboxReady: () => healthService.principalMailboxReady(),
+    channelStatus: async (channel) => {
+      if (startedChannels.has(channel)) return 'running';
+      const descriptor = CHANNEL_CATALOG.find((d) => d.name === channel);
+      // Same rule as email (#2409): enabled and its Enable gate passes, but not started this boot.
+      if (!descriptor || !((await channelRegistryRepo.getRow(channel))?.enabled ?? false)) return 'not_configured';
+      return (await channelCredentialStatusFn(descriptor)).requiredResolvable ? 'restart_required' : 'not_configured';
+    },
+    principalHasIdentity: async (channel) => {
+      // Read live, not from the boot snapshot: the Setup page adds these before the restart.
+      const p = await contactService.findContactBySystemRole('principal');
+      if (!p) return false;
+      const identities = await contactService.getIdentitiesForContact(p.id);
+      return identities.some((i) => i.channel === channel && i.verified && i.status === 'active');
+    },
+    phoneAppBlocker: () => {
+      if (!config.appOrigin) return 'Set APP_ORIGIN to the https address of this Curia.';
+      if (installabilityWarning(config.appOrigin)) return 'The Curia app needs Curia on an https address with a real hostname.';
+      return vapidSetup.configured ? null : 'Push notifications are not set up on this server.';
+    },
+    // Read at call time: the bridge is assigned later in boot, and is only built when calls can work.
+    signalCalls: () => (!config.signalVoiceCallsEnabled ? 'disabled' : startedChannels.has('signal_calls') ? 'ready' : 'not_wired'),
+    secretPresent: async (name) => (await secretsService.get(name)) !== null || !!process.env[name.toUpperCase()],
+    browserReady: () => browserService?.browserContext != null,
+    logger,
+  };
+  const setupChecklist = async (): Promise<SetupChecklist> => {
+    // A failed read is not cached, so a fixed file is picked up on the next call.
+    setupCatalog ??= loadCatalog(setupCatalogPath).catch((err: unknown) => {
+      setupCatalog = undefined;
+      throw err;
+    });
+    return evaluateChecklist(await setupCatalog, setupCheckDeps);
+  };
+  const executionLayer =new ExecutionLayer(toolRegistry, logger, { triageServices, bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, calendarRouter, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, principalMailboxes, cardUseRepo, cardUseService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, setupChecklist, mailboxSignIn: mailboxSignInService, curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime, turnActivity,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
     findInFlight: (targetAgent: string, originConversationId: string) =>
       findInFlightPendingDelegation(pool, { targetAgent, originConversationId }),
     acquireRunning: (params: Parameters<typeof acquireRunningDelegation>[1]) =>
@@ -3782,7 +3928,7 @@ async function main(): Promise<void> {
             principalEmails: () =>
               principalIdentities.filter((id) => id.channel === 'email').map((id) => id.channelIdentifier),
             // Every live mailbox, resolved per call so a replaced grant applies without a restart.
-            mailbox: config.nylasApiKey ? new MultiPrincipalMailbox(principalMailboxes, logger) : undefined,
+            mailbox: config.nylasApiKey ? new MultiPrincipalMailbox(principalMailboxes, logger, undefined, undefined, () => nylasApiUri(config.nylasRegion)) : undefined,
             logger,
           }),
           contacts: contactService,
@@ -3864,6 +4010,35 @@ async function main(): Promise<void> {
     (taskEventId, routing) => dispatcher.registerExternalTaskRouting(taskEventId, routing),
   );
   secretCaptureResumeSubscriber.start();
+
+  // Resume-after-sign-in (#2361): mailbox_signin.finished → a synthetic agent.task in the
+  // conversation the link came from. admin_blocked also notifies the principal with the Google
+  // client id to trust, read from the Nylas Google connector with the live key.
+  const mailboxSignInResumeSubscriber = new MailboxSignInResumeSubscriber({
+    bus,
+    logger,
+    registerRouting: (taskEventId, routing) => dispatcher.registerExternalTaskRouting(taskEventId, routing),
+    googleClientId: async () => {
+      const apiKey = await nylasSignInReaders.readApiKey();
+      if (!apiKey) return undefined;
+      const apiUri = nylasApiUri(await nylasSignInReaders.readRegion());
+      const connectors = await new NylasAppClient({ apiKey, apiUri, logger }).listConnectors();
+      return connectors.find((c) => c.provider === 'google')?.clientId;
+    },
+    ...(outboundGateway
+      ? {
+          notifier: {
+            gateway: outboundGateway,
+            principalEmail: () =>
+              findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
+              ?? (principalEmail.current || undefined),
+            // As for the outage notifier: a notice published before an adapter delivers reaches no one.
+            canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
+          },
+        }
+      : {}),
+  });
+  mailboxSignInResumeSubscriber.start();
 
   // Resume-after-card-decision (#1358): re-enters the agent parked mid-checkout when the
   // principal answers a card-use confirmation outside the requesting conversation.
@@ -4076,19 +4251,27 @@ async function main(): Promise<void> {
     mcpRegistryService,
     secretsService,
     secretCaptureService,
+    mailboxSignIn: {
+      service: mailboxSignInService,
+      readiness: nylasSignInReadiness,
+      readApiKey: nylasSignInReaders.readApiKey,
+      callback: mailboxSignInCallback,
+      boot: nylasBoot,
+    },
     principalMailboxConsole: principalMailboxAdmin
       ? {
           mailboxes: principalMailboxes,
           store: principalMailboxStore,
           admin: principalMailboxAdmin,
           lookupGrant: principalMailboxApiKey
-            ? (grantId: string) => new NylasClient(principalMailboxApiKey, grantId, logger).getGrant()
+            ? (grantId: string) => new NylasClient(principalMailboxApiKey, grantId, logger, undefined, nylasApiUri(config.nylasRegion)).getGrant()
             : undefined,
         }
       : undefined,
     principalFallbackActive: () => principalMailboxes.isFallbackActive(),
     livePrincipalMailboxIds: async () => (await principalMailboxStore.listLive()).map((m) => m.id),
     setupRequiredAtBoot,
+    setupChecklist,
     bootStartedAt,
     // Powers POST /api/setup/suggest-name (wizard starter-name suggestion, #799).
     infraLlmService,
@@ -4342,6 +4525,7 @@ async function main(): Promise<void> {
     // the RPC client's exponential backoff will retry until the socket is available.
     if (signalAdapter && !setupRequiredAtBoot) {
       await signalAdapter.start();
+      startedChannels.add('signal');
       logger.info('Signal channel adapter started');
     } else if (signalAdapter && setupRequiredAtBoot) {
       logger.warn('SETUP-REQUIRED mode: skipping Signal adapter startup — restart after setup to enable');
@@ -4349,6 +4533,7 @@ async function main(): Promise<void> {
 
     if (slackAdapter && !setupRequiredAtBoot) {
       await slackAdapter.start();
+      startedChannels.add('slack');
       logger.info('Slack channel adapter started');
     } else if (slackAdapter && setupRequiredAtBoot) {
       logger.warn('SETUP-REQUIRED mode: skipping Slack adapter startup — restart after setup to enable');
@@ -4356,6 +4541,7 @@ async function main(): Promise<void> {
 
     if (smsAdapter && !setupRequiredAtBoot) {
       await smsAdapter.start();
+      startedChannels.add('sms');
       logger.info('SMS channel adapter started');
     } else if (smsAdapter && setupRequiredAtBoot) {
       logger.warn('SETUP-REQUIRED mode: skipping SMS adapter startup — restart after setup to enable');
@@ -4363,6 +4549,7 @@ async function main(): Promise<void> {
 
     if (voiceAdapter && !setupRequiredAtBoot) {
       await voiceAdapter.start();
+      startedChannels.add('voice');
       logger.info('Voice channel adapter started');
     } else if (voiceAdapter && setupRequiredAtBoot) {
       logger.warn('SETUP-REQUIRED mode: skipping Voice adapter startup — restart after setup to enable');
@@ -4375,6 +4562,7 @@ async function main(): Promise<void> {
     // so answering a call would be answering with nobody home).
     if (signalCallBridge && !setupRequiredAtBoot) {
       signalCallBridge.start();
+      startedChannels.add('signal_calls');
       logger.info('Signal voice-call bridge started');
     } else if (signalCallBridge && setupRequiredAtBoot) {
       logger.warn('SETUP-REQUIRED mode: skipping Signal voice-call bridge startup — restart after setup to enable');

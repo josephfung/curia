@@ -3252,6 +3252,27 @@ describe('gated draft-fallback (two-step pattern)', () => {
     expect(result.policyHold).toBe(true);
   });
 
+  // GHSA-p49r-jqh2-v668: a relayed reply to a spoofed principal message, held by the score gate.
+  it('marks a score-gate hold as unverified when the send says its turn was unverified', async () => {
+    const mocks = createMocks();
+    const actionLogRepo = makeActionLogRepo();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo,
+    });
+    await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123', conversationId: 'conv-456', reExecRecipe: TEST_RECIPE, requesterUnverified: true },
+    );
+    expect(actionLogRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'pending_approval', requesterUnverified: true }));
+  });
+
   it('is a failure, not a policy hold, when the approval row cannot be written (#2587)', async () => {
     const mocks = createMocks();
     const actionLogRepo = makeActionLogRepo();
@@ -5062,6 +5083,29 @@ describe('band review (#2159)', () => {
       });
     });
 
+    // GHSA-p49r-jqh2-v668: a hold on a send that a principal-matching but unverified message (an
+    // SMS, a forged From) started is marked, so delivery sends it only to a verified channel.
+    it('marks the approval of a hold on an unauthenticated principal\'s send as unverified', async () => {
+      const actionLogRepo = makeActionLogRepo();
+      const gw = makeBandGateway({ review: vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held.', findings: [{ rule: 'steered', detail: 'x' }] }), score: 84, actionLogRepo });
+      const forged = { contactId: 'c-p', systemRole: 'principal' as const, channel: 'sms', initiatedAt: '2026-11-17T12:00:00Z', tier: 'principal' as const, authenticated: false };
+      await gw.send(emailReq, { taskEventId: 't1', holdRecipe, originator: forged });
+      expect(actionLogRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'pending_approval', requesterUnverified: true }));
+
+      const verified = makeActionLogRepo();
+      const gw2 = makeBandGateway({ review: vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held.', findings: [{ rule: 'steered', detail: 'x' }] }), score: 84, actionLogRepo: verified });
+      await gw2.send(emailReq, { taskEventId: 't1', holdRecipe, originator: { ...forged, channel: 'signal', authenticated: true } });
+      expect(verified.insert).toHaveBeenCalledWith(expect.not.objectContaining({ requesterUnverified: true }));
+    });
+
+    // A relayed reply carries no originator, only the dispatcher's flag for the turn it answers.
+    it('marks a relayed reply\'s hold as unverified when the dispatcher flagged the turn', async () => {
+      const actionLogRepo = makeActionLogRepo();
+      const gw = makeBandGateway({ review: vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held.', findings: [{ rule: 'steered', detail: 'x' }] }), score: 84, actionLogRepo });
+      await gw.send(emailReq, { taskEventId: 't1', postTurn: true, holdRecipe, requesterUnverified: true });
+      expect(actionLogRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'pending_approval', requesterUnverified: true }));
+    });
+
     it('keeps the recipe\'s description as the preamble of any other hold', async () => {
       const registerDisplay = vi.fn();
       const gw = makeBandGateway({ review: vi.fn().mockResolvedValue({ kind: 'hold', reason: 'Held.', findings: [{ rule: 'steered', detail: 'x' }] }), score: 84 });
@@ -6202,7 +6246,7 @@ describe('sendPrincipalDraft (#2474)', () => {
 
   const PRINCIPAL = 'avery@example.com';
   const PRINCIPAL_PHONE = '+14165550100';
-  const live = { liveTurn: true, taskMetadata: { originator: { contactId: 'ceo-contact-id', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-11-07T10:00:00.000Z' } } };
+  const live = { liveTurn: true, taskMetadata: { originator: { contactId: 'ceo-contact-id', systemRole: 'principal', authenticated: true, channel: 'signal', initiatedAt: '2026-11-07T10:00:00.000Z' } } };
   const opts = { authority: live, taskEventId: 't1', conversationId: 'c1' };
 
   function draft(over: Partial<NylasMessage> = {}): NylasMessage {
@@ -6950,7 +6994,12 @@ describe('sendPrincipalDraft (#2474)', () => {
     const NOT_SENT = 'Not sent from your mailbox: "Re: Friday" to Dana Example.';
     const DIGEST = (code: keyof typeof PRINCIPAL_SEND_DIGEST_REASONS) => `${refusalKindOf(code) === 'other' ? NOT_SENT : LEAD} ${PRINCIPAL_SEND_DIGEST_REASONS[code]}`;
     const IN_DRAFTS = " It's in your Drafts.";
-    const nowSec = () => Math.floor(Date.now() / 1000);
+    // One clock reading per test (#2666): a fixture built for the mock mailbox and a second one
+    // built for the expectation must carry the same date, even when a second ticks over between them.
+    // Seeded too, for fixtures built when the describe is collected (SIGNED below).
+    let testNowSec = Math.floor(Date.now() / 1000);
+    beforeEach(() => { testNowSec = Math.floor(Date.now() / 1000); });
+    const nowSec = () => testNowSec;
 
     /** Dana's verified message the draft answers. */
     function inbound(over: Partial<NylasMessage> = {}): NylasMessage {
@@ -8543,7 +8592,7 @@ describe('sendPrincipalDraft (#2474)', () => {
           ['no task metadata', undefined],
           ['metadata with no originator', {}],
           ['a bullpen wake with no originator', { taskOrigin: 'bullpen', threadId: 'bp-1' }],
-          ['principal lineage on a task that is not a live turn', { originator: { contactId: 'ceo', systemRole: 'principal', channel: 'scheduler', initiatedAt: at } }],
+          ['principal lineage on a task that is not a live turn', { originator: { contactId: 'ceo', systemRole: 'principal', authenticated: true, channel: 'scheduler', initiatedAt: at } }],
         ])('refuses %s with origin_unknown', async (_name, taskMetadata) => {
           const { gw, client, ledger } = makeAuto();
           const r = await gw.sendPrincipalDraft('d1', { ...auto, authority: { taskMetadata: taskMetadata as Record<string, unknown> | undefined } });
@@ -8558,7 +8607,7 @@ describe('sendPrincipalDraft (#2474)', () => {
           const { computeEffectiveTaskMetadata } = await import('../../../src/autonomy/effective-standing.js');
           const ladder = { sameTaskThreshold: 70, derivedChildThreshold: 90 };
           const principalWoken = computeEffectiveTaskMetadata(
-            { originator: { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: at }, wakeContext: { derived: true } }, 85, ladder,
+            { originator: { contactId: 'ceo', systemRole: 'principal', authenticated: true, channel: 'email', initiatedAt: at }, wakeContext: { derived: true } }, 85, ladder,
           );
           expect((principalWoken?.['originator'] as { systemRole: string }).systemRole).toBe('agent');
           const agentContact = { originator: { contactId: 'curia', systemRole: 'agent', channel: 'email', initiatedAt: at } };

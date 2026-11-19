@@ -287,14 +287,44 @@ describe('ApprovalExpirySweep safety net (#2159)', () => {
   it('falls through to the next channel when email delivery fails', async () => {
     const { sweep, deliver } = makeSweep({
       undeliveredRows: [makeRow({ id: 9, shortRef: 'late-ref' })],
-      deliverResults: [{ delivered: false, reason: 'send_failed', available: ['signal', 'sms'] }],
-      availableChannels: ['signal', 'sms', 'email'],
+      deliverResults: [{ delivered: false, reason: 'send_failed', available: ['signal', 'slack'] }],
+      availableChannels: ['signal', 'slack', 'email'],
     });
 
     const result = await sweep.tick();
 
     expect(deliver.mock.calls.map((c) => c[1])).toEqual(['email', 'signal']);
     expect(result.safetyNetDelivered).toBe(1);
+  });
+
+  // GHSA-p49r-jqh2-v668: an unverified request refuses email; the safety net moves on to a verified channel.
+  it('moves past email to a verified channel for an unverified request', async () => {
+    const { sweep, deliver } = makeSweep({
+      undeliveredRows: [makeRow({ id: 9, shortRef: 'late-ref', requesterUnverified: true })],
+      deliverResults: [{ delivered: false, reason: 'verified_channel_required', available: ['signal'] }],
+      availableChannels: ['signal', 'email'],
+    });
+
+    const result = await sweep.tick();
+
+    expect(deliver.mock.calls.map((c) => c[1])).toEqual(['email', 'signal']);
+    expect(result.safetyNetDelivered).toBe(1);
+  });
+
+  it('stops at the hourly cap for unverified requests', async () => {
+    const { sweep, deliver } = makeSweep({
+      undeliveredRows: [makeRow({ id: 9, shortRef: 'late-ref', requesterUnverified: true })],
+      deliverResults: [
+        { delivered: false, reason: 'verified_channel_required', available: ['signal'] },
+        { delivered: false, reason: 'rate_limited', available: [] },
+      ],
+      availableChannels: ['signal', 'slack', 'email'],
+    });
+
+    const result = await sweep.tick();
+
+    expect(deliver.mock.calls.map((c) => c[1])).toEqual(['email', 'signal']);
+    expect(result.safetyNetDelivered).toBe(0);
   });
 
   // Review fix: ApprovalDelivery drops a channel that failed once from `available` for the

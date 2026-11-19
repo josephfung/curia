@@ -1,0 +1,188 @@
+name: Behavior gate (weekly)
+
+# Runs the scenario suite's release gate (tests/scenarios/README.md, "The gate") on main
+# every Sunday, so a behavior regression shows up within a week of the PR that caused it
+# instead of at release time. Also run by hand (workflow_dispatch), e.g. on a release
+# commit that the latest Sunday run did not cover (docs/dev/behavior-tests.md).
+#
+# Every run bills real model calls (about $1 for the gate at the time of writing), so there
+# is no pull_request or push trigger. The keys live in the `behavior-tests` environment,
+# which only main may use, and are their own keys with a monthly credit limit, separate
+# from production's.
+#
+# The database is a fresh pgvector service: migrations, the two LLM keys in the vault, then
+# tests/scenarios/ci-setup.ts for the scenario principal and the opt-in agents. The agents
+# never reach a real mailbox, calendar or phone: the scenario harness stubs every external
+# tool, and no channel credentials exist here.
+on:
+  workflow_dispatch:
+  schedule:
+    # Sunday about 11:00 UTC (6 or 7 a.m. Eastern), so the result is waiting at the start of
+    # the day. Off the hour: GitHub delays, and can drop, scheduled runs at the top of the hour.
+    - cron: '23 11 * * 0'
+
+permissions:
+  contents: read
+
+# One gate at a time: two would bill twice for the same answer.
+concurrency:
+  group: behavior-gate
+  cancel-in-progress: false
+
+env:
+  # Pinned issue the summary is posted to (one comment per run).
+  TRACKING_ISSUE: '2663'
+  # The production deployment's standard tier (curia-deploy's local.yaml).
+  GATE_MODEL: deepseek/deepseek-v4.1-flash
+
+jobs:
+  gate:
+    name: Scenario release gate
+    # The environment only admits main; this skips a dispatch from another branch cleanly
+    # instead of failing it at the environment check.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: behavior-tests
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      issues: write # the summary comment on the tracking issue
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        # Authenticated pull (#2095), as in ci.yml and dast.yml; see the comment there.
+        # tests/unit/ci/docker-publish-dockerhub-login.test.ts pins it.
+        credentials: ${{ secrets.DOCKERHUB_USERNAME && secrets.DOCKERHUB_TOKEN && fromJSON(format('{{"username":{0},"password":{1}}}', toJSON(secrets.DOCKERHUB_USERNAME), toJSON(secrets.DOCKERHUB_TOKEN))) || fromJSON('{}') }}
+        env:
+          POSTGRES_DB: curia_scenarios
+          POSTGRES_USER: curia
+          POSTGRES_PASSWORD: curia_scenarios
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U curia"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://curia:curia_scenarios@localhost:5432/curia_scenarios
+
+    # Explicit `shell: bash` is what adds pipefail; the unspecified default is plain `bash -e`.
+    # Without it, `cli.ts | tee` takes tee's exit status and a failed gate reports green.
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Model-driven agents run in this job; keep the token out of .git/config. The suite
+          # only needs local git (rev-parse, status).
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+        with:
+          node-version-file: ".nvmrc"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Rebuild esbuild
+        run: pnpm rebuild esbuild
+
+      # The seed step and the suite must share one key. Ephemeral database: nothing to protect.
+      - name: Generate vault encryption key
+        run: echo "SECRET_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+
+      - name: Run database migrations
+        run: pnpm exec tsx node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir src/db/migrations --migration-file-language sql
+
+      # LLM keys are read from the vault only (#911). The keys are in this step's env alone.
+      # tsx directly: `pnpm run seed-vault` reads a .env that CI does not have.
+      # The seeder skips an empty value and exits 0, and a missing OpenAI key only turns
+      # entity memory off without a word, so refuse here instead of running a degraded gate.
+      - name: Seed the vault
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ] || [ -z "$OPENAI_API_KEY" ]; then
+            echo "::error::BEHAVIOR_TESTS_OPENROUTER_API_KEY or BEHAVIOR_TESTS_OPENAI_API_KEY is empty in the behavior-tests environment"
+            exit 1
+          fi
+          pnpm exec tsx scripts/seed-vault.ts
+        env:
+          SEED_VAULT_ONLY: openrouter_api_key,openai_api_key
+          OPENROUTER_API_KEY: ${{ secrets.BEHAVIOR_TESTS_OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.BEHAVIOR_TESTS_OPENAI_API_KEY }}
+
+      - name: Create the scenario principal and enable the opt-in agents
+        run: pnpm exec tsx tests/scenarios/ci-setup.ts
+
+      # Production's judges for content filtering and band review (curia-deploy's local.yaml).
+      # The defaults are Claude models, and there is no Anthropic key here. local.yaml is
+      # gitignored, so the suite's commit line stays clean.
+      - name: Point the gate judges at OpenRouter
+        run: |
+          cat > config/local.yaml <<'EOF'
+          filter:
+            llmJudge:
+              model: google/gemini-3.1-flash-lite
+          escalation:
+            judge:
+              model: google/gemini-3.1-flash-lite
+          EOF
+
+      # CURIA_RELEASE_GATE=1 makes the principal check strict. Coverage goes to a scratch copy
+      # so the run does not dirty the tree (a -dirty commit does not count as a gate result).
+      - name: Run the gate
+        run: |
+          cp tests/scenarios/stub-coverage.json "$RUNNER_TEMP/stub-coverage.json"
+          pnpm exec tsx tests/scenarios/cli.ts --model "$GATE_MODEL" --coverage "$RUNNER_TEMP/stub-coverage.json" 2>&1 | tee "$RUNNER_TEMP/gate.log"
+        env:
+          CURIA_RELEASE_GATE: '1'
+
+      - name: Write the summary
+        if: always()
+        run: |
+          {
+            echo "### Behavior gate: ${{ job.status == 'success' && 'passed' || 'FAILED' }}"
+            echo
+            echo "Commit \`${GITHUB_SHA}\` · [run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
+            echo
+            echo '```'
+            if grep -q '^-- Summary --$' "$RUNNER_TEMP/gate.log" 2>/dev/null; then
+              # The stack's boot warnings print before the summary; a degraded run must say so.
+              sed -n '/^-- Summary --$/q;p' "$RUNNER_TEMP/gate.log" | grep -F '[WARN]' || true
+              sed -n '/^-- Summary --$/,$p' "$RUNNER_TEMP/gate.log"
+            else
+              # It stopped before the summary (boot, setup or a refusal): show how it ended.
+              tail -n 40 "$RUNNER_TEMP/gate.log" 2>/dev/null || echo "(no gate output: an earlier step failed)"
+            fi
+            echo '```'
+          } > "$RUNNER_TEMP/summary.md"
+          cat "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post the summary to the tracking issue
+        if: always()
+        run: gh issue comment "$TRACKING_ISSUE" --body-file "$RUNNER_TEMP/summary.md"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Every run's transcripts, for triage and for comparing against the next run, with the
+      # suite's output and the stack's log (createLogger writes curia.log outside production).
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: behavior-gate-results
+          path: |
+            tests/scenarios/results/*.json
+            ${{ runner.temp }}/gate.log
+            curia.log
+          if-no-files-found: warn
+          retention-days: 90

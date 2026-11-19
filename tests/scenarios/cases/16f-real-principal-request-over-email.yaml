@@ -14,6 +14,7 @@ description: >
   runs. The specialist treats the request as the principal's: it reads the calendar and
   answers rather than declining or asking who is asking. The coordinator answers once.
 tags: [real-delegation, delegation, calendar, requester-identity]
+runs: 5
 delegation: real
 stub_sets: [human-channels, calendar-office]
 inbound:

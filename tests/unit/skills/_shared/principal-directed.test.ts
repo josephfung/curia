@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { isPrincipalDirectedSend, originatorOption, relayDeferredData, RELAY_DEFERRED_NOTE } from '../../../../src/skills/_shared/principal-directed.js';
 
 function originator(systemRole: 'principal' | 'agent' | 'system' | null) {
-  return { originator: { contactId: 'c1', systemRole, channel: 'signal', initiatedAt: '2026-09-17T14:00:00Z', tier: null } };
+  // Signal authenticates the sender, so a principal originator here carries authority (GHSA-p49r-jqh2-v668).
+  return { originator: { contactId: 'c1', systemRole, channel: 'signal', initiatedAt: '2026-09-17T14:00:00Z', tier: null, authenticated: true } };
 }
 
 describe('isPrincipalDirectedSend (#1870)', () => {

@@ -8,6 +8,9 @@ description: >
   The principal asks the coordinator to email them the venue details for an offsite so they
   have them in their inbox. The coordinator sends from its own account with email-send.
 tags: [email, recipient]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 stub_sets: [human-channels]
 inbound:
   from: principal

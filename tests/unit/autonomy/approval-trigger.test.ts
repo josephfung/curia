@@ -324,6 +324,33 @@ describe('ApprovalTriggerService.request()', () => {
     expect(approvalDelivery.registerDisplay).not.toHaveBeenCalled();
   });
 
+  // GHSA-p49r-jqh2-v668: each SMS is a new task, so a repeat of the same unverified request
+  // ("did you do it?") joins the confirmation already pending instead of pinging again.
+  it('joins an unverified request pending from another task', async () => {
+    const repo = makeMockRepo({
+      findPendingUnverifiedBySkill: vi.fn().mockResolvedValue({ shortRef: 'sms-1' }),
+    } as Partial<ActionLogRepo>);
+    const { service, approvalDelivery } = makeService(repo);
+
+    const result = await service.request({ ...BASE_OPTS, taskId: 'task-2', requesterUnverified: true });
+
+    expect(result).toEqual({ created: false, reason: 'duplicate', existingShortRef: 'sms-1' });
+    expect(repo.findPendingUnverifiedBySkill).toHaveBeenCalledWith(BASE_OPTS.toolName, BASE_OPTS.input);
+    expect(repo.insert).not.toHaveBeenCalled();
+    expect(approvalDelivery.registerDisplay).not.toHaveBeenCalled();
+  });
+
+  it('does not join across tasks for a verified request', async () => {
+    const findPendingUnverifiedBySkill = vi.fn().mockResolvedValue({ shortRef: 'sms-1' });
+    const repo = makeMockRepo({ findPendingUnverifiedBySkill } as Partial<ActionLogRepo>);
+    const { service } = makeService(repo);
+
+    const result = await service.request(BASE_OPTS);
+
+    expect(result.created).toBe(true);
+    expect(findPendingUnverifiedBySkill).not.toHaveBeenCalled();
+  });
+
   it('still creates the approval when the digest mention fails to queue', async () => {
     const repo = makeMockRepo();
     const { service, logger } = makeService(repo, { publishThrows: true });

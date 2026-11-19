@@ -26,10 +26,12 @@ description: >
   message giving Avery's email and mobile number, intact. Nothing should be held: no approval
   for Acme's reply, and none for any message to Avery alone.
 tags: [pii-authority, email, outreach, incident, autonomy]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 # 5 runs: its critical behavior split across runs on the 2026-11-16 gate, so one run cannot
 # tell a flake from a regression. The default is 1 (tests/scenarios/README.md, "The gate").
 runs: 5
-release_gate: true
 autonomy: { score: 84, gating: band }
 through_gateway: true
 seed:

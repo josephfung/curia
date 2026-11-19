@@ -113,7 +113,7 @@ describe('Dispatcher awaiting answers (#2333)', () => {
       channelId: 'email',
       senderId: 'principal@example.com',
       content: 'Yes, share it with Dana.',
-      metadata: { nylasThreadId: 'thread-9' },
+      metadata: { nylasThreadId: 'thread-9', senderVerified: true, senderSpfAligned: true },
     }));
     expect(source.awaitingAnswers).toHaveBeenCalledWith({ replyThreadId: 'thread-9' });
     expect(tasks[0]!.payload.awaitingAnswers).toEqual([ask]);

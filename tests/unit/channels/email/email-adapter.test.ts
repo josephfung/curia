@@ -982,7 +982,68 @@ describe('EmailAdapter — sendWithGatedDraftFallback gated-fallback', () => {
     await triggerOutbound(makeOutboundEventWithTask('email:thread-abc', 'task-evt-2'));
     const options = vi.mocked(mocks.outboundGateway.send).mock.calls.at(-1)![1] as Record<string, unknown>;
     expect(options).not.toHaveProperty('reportedToPrincipal');
+    expect(options).not.toHaveProperty('requesterUnverified');
 
+    // GHSA-p49r-jqh2-v668: the dispatcher's flag for a forged-From principal turn reaches the gateway.
+    await triggerOutbound(createOutboundMessage({
+      conversationId: 'email:thread-abc',
+      channelId: 'email',
+      content: 'Here is my reply.',
+      parentEventId: 'response-3',
+      taskEventId: 'task-evt-3',
+      recipientId: CEO_EMAIL,
+      requesterUnverified: true,
+    }));
+    expect(mocks.outboundGateway.send).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ requesterUnverified: true }),
+    );
+
+    await adapter.stop();
+  });
+
+  // GHSA-p49r-jqh2-v668: a forged-From email that CCs someone else must not have its reply
+  // (which may carry the principal's calendar or inbox) reach them. The reply goes to the
+  // turn's sender only: the address that matched the principal.
+  it('replies to the sender only on an unverified principal turn, never reply-all', async () => {
+    const adapter = makeAdapter(mocks);
+    await adapter.start();
+
+    const forged = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      to: [{ email: SELF_EMAIL }, { email: 'other@example.com' }],
+      cc: [{ email: 'attacker@example.com' }],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([forged]);
+
+    await triggerOutbound(createOutboundMessage({
+      conversationId: 'email:thread-abc',
+      channelId: 'email',
+      content: 'Your calendar this week: ...',
+      parentEventId: 'response-1',
+      taskEventId: 'task-evt-1',
+      recipientId: CEO_EMAIL,
+      requesterUnverified: true,
+    }));
+    const request = vi.mocked(mocks.outboundGateway.send).mock.calls.at(-1)![0] as unknown as Record<string, unknown>;
+    expect(request['to']).toBe(CEO_EMAIL);
+    expect(request).not.toHaveProperty('additionalTo');
+    expect(request).not.toHaveProperty('cc');
+
+    await adapter.stop();
+  });
+
+  it('sends nothing on an unverified principal turn with no sender to reply to', async () => {
+    const adapter = makeAdapter(mocks);
+    await adapter.start();
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMockMessage({ from: [{ email: CEO_EMAIL }], to: [{ email: SELF_EMAIL }], cc: [{ email: 'attacker@example.com' }] }),
+    ]);
+    await triggerOutbound(createOutboundMessage({
+      conversationId: 'email:thread-abc', channelId: 'email', content: 'x', parentEventId: 'response-1',
+      taskEventId: 'task-evt-1', requesterUnverified: true,
+    }));
+    expect(mocks.outboundGateway.send).not.toHaveBeenCalled();
     await adapter.stop();
   });
 

@@ -1,11 +1,11 @@
 {
   "name": "setup-defer",
-  "description": "Record or clear a setup-wizard task deferral. Use when the principal says they want to skip a setup task for now. Deferred tasks resurface as 'pending (deferred)' on the next setup-status call — never as done. Use action 'resume' to clear a deferral when the principal is ready to tackle it.",
+  "description": "Record or clear the deferral of an optional Setup extra. Use when the operator wants to leave an optional extra for later. Required steps cannot be deferred: they block Start onboarding. Deferred extras show as 'deferred' on the next setup-status call \u2014 never as done. Use action 'resume' to clear a deferral.",
   "version": "0.1.3",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
-    "task_id": "string (catalog task id, e.g. 'email', 'signal', 'web_research', 'persona', 'debrief')",
+    "task_id": "string (the id of an optional extra from setup-status, e.g. 'google_workspace', 'web_research', 'working_style')",
     "action": "string ('defer' to skip a task, 'resume' to un-skip it)"
   },
   "outputs": {
@@ -17,6 +17,10 @@
   "permissions": [],
   "secrets": [],
   "timeout": 15000,
-  "capabilities": ["entityMemory"],
-  "allowed_callers": ["setup-wizard"]
+  "capabilities": [
+    "entityMemory"
+  ],
+  "allowed_callers": [
+    "setup-wizard"
+  ]
 }

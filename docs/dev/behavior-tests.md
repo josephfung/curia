@@ -11,7 +11,7 @@ These rules came out of the v0.45.0 release gate. Most of its failures were the 
 | **Purpose** | Catch regressions in behavior that would hurt the principal | Steer development of fuzzy behavior (finesse, judgment) |
 | **Size** | Small: only the behaviors that matter | As large as is useful |
 | **Checks** | Deterministic first; judged only where nothing else works | Rates per layer (decision, voice); judged where needed |
-| **Runs** | Against a pass-rate threshold: once per case, or 5 runs where a critical behavior is nondeterministic (`tests/scenarios/README.md`, "The gate") | A slice of cases while iterating; the full set at checkpoints |
+| **Runs** | Each case 5 times, against a pass rate: every run (`pass_rate: 1`) for safety cases, 4 of 5 for the rest (`tests/scenarios/README.md`, "The gate") | A slice of cases while iterating; the full set at checkpoints |
 | **Blocks** | A release, when a case falls below its threshold | Nothing |
 
 A case is `release_gate: false` unless it belongs in the gate. Most new cases are evals or on-demand checks.
@@ -43,6 +43,8 @@ Every run bills real model calls (CLAUDE.md "Testing").
 - Report the spend afterwards.
 
 The gate runs on `main` and at release, never as a mid-branch "did anything else break" check.
+
+**The weekly run.** `.github/workflows/behavior-gate.yml` runs the gate on `main` every Sunday at about 11:20 UTC, on a fresh database (`tests/scenarios/ci-setup.ts`), and posts its summary on the pinned tracking issue, #2663. A red run is triaged as below. Its transcripts are the run's `behavior-gate-results` artifact, and are the baseline to compare the next run against. At release, if `main` has not moved since the latest weekly run, that run is the behavior gate; otherwise dispatch the workflow on the release commit (Actions → Behavior gate (weekly) → Run workflow). It uses its own OpenRouter and OpenAI keys, in the `behavior-tests` environment, each with a monthly credit limit.
 
 ## Triage
 

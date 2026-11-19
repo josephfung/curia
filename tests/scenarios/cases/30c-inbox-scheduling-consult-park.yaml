@@ -13,6 +13,9 @@ description: >
   bullpen (participants: calendar), labels the email ⏳ In Progress, marks it read, leaves
   it in the inbox, and schedules the consult-timeout safety wake.
 tags: [specialist-ceo-inbox, ceo-inbox, triage, scheduling]
+# On demand since the 2026-11-17 gate trim: the gate keeps safety and core-job cases only
+# (docs/dev/behavior-tests.md, "What belongs in the gate").
+release_gate: false
 agent: ceo-inbox
 timeout_seconds: 420
 stub_sets: [ceo-inbox-mailroom]
