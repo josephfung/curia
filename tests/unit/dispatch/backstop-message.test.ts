@@ -149,9 +149,13 @@ describe('viewerSeesDetail', () => {
       expect(viewerSeesDetail(dm({ channelId: 'web', originatorContactId: PRINCIPAL, originatorAuthenticated: false }), other, PRINCIPAL)).toBe(true);
     });
 
-    it('CLI and SMS principals see details unstamped', () => {
+    it('a CLI principal sees details unstamped', () => {
       expect(viewerSeesDetail(dm({ channelId: 'cli', originatorContactId: PRINCIPAL, originatorAuthenticated: false }), other, PRINCIPAL)).toBe(true);
-      expect(viewerSeesDetail(dm({ channelId: 'sms', originatorContactId: PRINCIPAL, originatorAuthenticated: false }), other, PRINCIPAL)).toBe(true);
+    });
+
+    // GHSA-p49r-jqh2-v668: an SMS from the principal's number may be spoofed.
+    it('an SMS principal does not see details', () => {
+      expect(viewerSeesDetail(dm({ channelId: 'sms', originatorContactId: PRINCIPAL, originatorAuthenticated: false }), other, PRINCIPAL)).toBe(false);
     });
 
     it('an unauthenticated other root of the same contact is a different person', () => {

@@ -218,7 +218,7 @@ describe('ContactLinkIdentityHandler', () => {
   // any source, after the same duplicate and provenance checks.
   describe('re-stating an unverified address on a live principal turn', () => {
     const PRINCIPAL_METADATA = {
-      originator: { contactId: 'principal-contact', systemRole: 'principal', channel: 'http', initiatedAt: '2026-11-05T15:00:00Z', tier: 'principal' },
+      originator: { contactId: 'principal-contact', systemRole: 'principal', authenticated: true, channel: 'http', initiatedAt: '2026-11-05T15:00:00Z', tier: 'principal' },
     };
     const LIVE: Partial<ToolContext> = {
       identifierSources: sourcesFrom('Can you verify them as office@acme.example, then try the drafts again'),

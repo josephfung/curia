@@ -39,6 +39,8 @@ import { CHANNEL_CATALOG } from '../../catalog.js';
 import { emailAccountGrantSecretName, isPerAccountEmailGrantKey } from '../../email/email-account-secrets.js';
 import type { EmailAccountsRepo } from '../../email/email-accounts-repo.js';
 import { actorFromRequest } from './sessions.js';
+import { parseNylasRegion } from '../../../nylas/region.js';
+import { NYLAS_REGION_SECRET } from '../../../nylas/signin-readiness.js';
 import { isPlatformVaultKey, platformKeyLabel } from '../../../secrets/platform-keys.js';
 import { StaleCardEditError, type PersonalSecretWrite, type SecretMetadata, type UserSecretDetailsPatch } from '../../../secrets/secrets-service.js';
 import {
@@ -798,6 +800,11 @@ export async function vaultRoutes(
     // A value that is not an address would register nothing.
     if (name === FLAT_EMAIL_KEY && !PRINCIPAL_EMAIL_RE.test(value.trim())) {
       return reply.status(400).send({ error: `${FLAT_EMAIL_KEY} must be an email address.` });
+    }
+    // An unknown region would be ignored at boot and by sign-in (US used instead), pointing the key
+    // at the wrong data center. Refused here, as PUT /api/registry/nylas/region does.
+    if (name === NYLAS_REGION_SECRET && parseNylasRegion(value) === null) {
+      return reply.status(400).send({ error: `${NYLAS_REGION_SECRET} must be 'us' or 'eu'.` });
     }
     // A per-mailbox grant is set only through the principal-mailboxes routes, which check the
     // grant is Google's, is for that mailbox's address and is not another mailbox's (#2475).

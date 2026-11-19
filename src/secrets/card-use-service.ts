@@ -59,6 +59,12 @@ export interface CardUseRequestContext {
   taskEventId: string;
   conversationId: string;
   origin: CaptureOrigin;
+  /**
+   * The turn matched the principal without the channel proving it (an SMS, or email failing
+   * sender checks): the approval goes only to a verified channel, under the hourly cap
+   * (GHSA-p49r-jqh2-v668).
+   */
+  requesterUnverified?: boolean;
 }
 
 export interface CardUseRequestResult {
@@ -140,6 +146,7 @@ export class CardUseService implements CardUseCapability {
       expiresInMs: CARD_USE_APPROVAL_TTL_MS,
       taskId: ctx.taskEventId,
       conversationId: ctx.conversationId,
+      ...(ctx.requesterUnverified === true ? { requesterUnverified: true } : {}),
       // Unused: the reason above replaces the score-based preamble.
       currentScore: 0,
       requiredScore: 90,

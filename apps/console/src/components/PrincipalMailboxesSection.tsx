@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '../api.js';
+import { ConnectWithGoogle } from './ConnectWithGoogle.js';
 // Dependency-free server module (only imports state-keys.ts), safe in the browser bundle.
 import { MAILBOX_ID_RE, RESERVED_MAILBOX_IDS } from '../../../../src/principal-mailboxes/types.js';
 
@@ -443,6 +444,11 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
             <span className="mailbox-row-actions">
               <button type="button" className="btn btn-secondary btn-sm" disabled={locked}
                 onClick={() => setEditing({ id: m.id, label: m.label, grantId: '' })}>Edit</button>
+              {/* Pinned to this mailbox's own address, so a mailbox other than the primary can be reconnected. */}
+              {m.address && (
+                <ConnectWithGoogle target="principal" address={m.address} disabled={locked}
+                  buttonText="Reconnect with Google" hideUnlessReady />
+              )}
               {!m.isDefault && (
                 <button type="button" className="btn btn-secondary btn-sm" disabled={locked}
                   onClick={() => void makeDefaultMailbox(m.id)}>Make default</button>
@@ -476,6 +482,12 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
 
       {!migrating && (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+        {/* No address: the operator signs in with any Google account; a new address is added as a
+            mailbox (and to the principal's contact), a known one is reconnected. */}
+        <ConnectWithGoogle target="principal" disabled={readOnly} />
+        <details>
+        <summary>Paste a grant ID instead</summary>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
         <input type="text" placeholder="mailbox id (e.g. work)" value={id} aria-label="Mailbox id" disabled={readOnly}
           aria-describedby={idError ? 'mailbox-id-help mailbox-id-error' : 'mailbox-id-help'}
           aria-invalid={idError !== null}
@@ -512,6 +524,8 @@ export function PrincipalMailboxesSection({ readOnly = false }: { readOnly?: boo
         {addBlocker && (
           <p id="mailbox-add-blocker" className="settings-page-sub mailbox-id-help">{addBlocker}</p>
         )}
+        </div>
+        </details>
       </div>
       )}
     </div>

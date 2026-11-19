@@ -11,7 +11,7 @@
 
 import type { Logger } from '../logger.js';
 import type { ChannelIdentity, TaskOriginator } from '../contacts/types.js';
-import { isLivePrincipalTurn } from '../contacts/principal.js';
+import { hasPrincipalAuthority, isLivePrincipalTurn } from '../contacts/principal.js';
 import { isNonOrgDomain } from '../contacts/non-org-domains.js';
 import { boundTaskFromMetadata } from '../agents/resumable-task.js';
 import { registrableDomain } from '../verification/domain.js';
@@ -186,7 +186,8 @@ export class TaskOutreachService implements TaskOutreachCapability {
       summary,
       // Confirmed only for an explicit act the principal directed (#2312). Task 3 links an
       // unconfirmed row weakly, so a backstop guess or an outsider-steered turn adds no authority.
-      confirmed: entry.backstop !== true && scope.originator.systemRole === 'principal',
+      // A forged From or spoofed SMS number is not the principal directing it (GHSA-p49r-jqh2-v668).
+      confirmed: entry.backstop !== true && hasPrincipalAuthority(scope.originator),
     });
   }
 

@@ -29,6 +29,7 @@ function baseConfig(): Config {
     timezone: 'UTC',
     browserCdpUrl: undefined,
     nylasApiKey: undefined,
+    nylasRegion: 'us',
     nylasPollingIntervalMs: 30000,
     ceoSignalNumber: undefined,
     signalSocketPath: undefined,
@@ -179,6 +180,7 @@ describe('applyChannelVaultSecrets', () => {
     const readKeys = secrets.get.mock.calls.map(c => c[0]).sort();
     expect(readKeys).toEqual([
       'channel.email.nylas_api_key',
+      'channel.email.nylas_region',
       'channel.signal.phone_number',
       'channel.signal.socket_path',
       'channel.slack.app_token',
@@ -216,3 +218,60 @@ describe('applyChannelVaultSecrets', () => {
 // The AC1 gate/adapter agreement coverage (formerly here, using the deleted resolveChannelAccounts
 // YAML/env resolver) was rebuilt for the per-account table+vault model in
 // ./email/resolve-email-accounts.agreement.test.ts (#1101 Task 7).
+
+describe('applyChannelVaultSecrets nylasRegion', () => {
+  it('reads the vault value, then env, defaulting to us', async () => {
+    const fromVault = baseConfig();
+    await applyChannelVaultSecrets(fromVault, fakeSecrets({ 'channel.email.nylas_region': 'EU' }), {}, logger);
+    expect(fromVault.nylasRegion).toBe('eu');
+
+    const fromEnv = baseConfig();
+    await applyChannelVaultSecrets(fromEnv, fakeSecrets({}), { NYLAS_REGION: 'eu' }, logger);
+    expect(fromEnv.nylasRegion).toBe('eu');
+
+    const unset = baseConfig();
+    await applyChannelVaultSecrets(unset, fakeSecrets({}), {}, logger);
+    expect(unset.nylasRegion).toBe('us');
+  });
+
+  it('warns and falls back to us when no source holds a valid value', async () => {
+    const config = baseConfig();
+    config.nylasRegion = 'us';
+    const warn = vi.fn();
+    const spyLogger = { warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as typeof logger;
+    await applyChannelVaultSecrets(config, fakeSecrets({ 'channel.email.nylas_region': 'apac' }), { NYLAS_REGION: 'mars' }, spyLogger);
+    expect(config.nylasRegion).toBe('us');
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('skips an invalid vault value for a valid env value', async () => {
+    const config = baseConfig();
+    await applyChannelVaultSecrets(config, fakeSecrets({ 'channel.email.nylas_region': 'apac' }), { NYLAS_REGION: 'eu' }, logger);
+    expect(config.nylasRegion).toBe('eu');
+  });
+
+  it('skips invalid vault and env values for a valid config value', async () => {
+    const config = baseConfig();
+    config.nylasRegion = 'eu';
+    await applyChannelVaultSecrets(config, fakeSecrets({ 'channel.email.nylas_region': 'apac' }), { NYLAS_REGION: 'mars' }, logger);
+    expect(config.nylasRegion).toBe('eu');
+  });
+
+  it('keeps a valid vault value over env', async () => {
+    const config = baseConfig();
+    await applyChannelVaultSecrets(config, fakeSecrets({ 'channel.email.nylas_region': 'eu' }), { NYLAS_REGION: 'us' }, logger);
+    expect(config.nylasRegion).toBe('eu');
+  });
+
+  it('never logs the rejected value', async () => {
+    const config = baseConfig();
+    const warn = vi.fn();
+    const spyLogger = { warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as typeof logger;
+    await applyChannelVaultSecrets(config, fakeSecrets({ 'channel.email.nylas_region': 'nyk_pasted_key' }), {}, spyLogger);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ setting: 'channel.email.nylas_region', rejectedSources: ['vault'], using: 'us' }),
+      expect.any(String),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('nyk_pasted_key');
+  });
+});

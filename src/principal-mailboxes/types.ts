@@ -54,3 +54,18 @@ export class MissingNylasApiKeyError extends Error {
     this.name = 'MissingNylasApiKeyError';
   }
 }
+
+/**
+ * The live Nylas key or region differs from the boot values (#2361, R11). The mailboxes are
+ * served with the boot values, so a grant checked with the live ones is refused until a restart.
+ */
+export class NylasRestartRequiredError extends Error {
+  constructor() {
+    super('The Nylas API key or region changed since Curia started');
+    this.name = 'NylasRestartRequiredError';
+  }
+}
+
+/** What the operator is told when an add or reconnect waits for that restart. */
+export const NYLAS_RESTART_REQUIRED_DETAIL =
+  'The Nylas API key or region changed since Curia started; restart Curia, then try again';

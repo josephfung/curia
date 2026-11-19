@@ -19,9 +19,11 @@ export function createPrincipalMailboxResolver(deps: {
   mailboxes: Pick<PrincipalMailboxes, 'credentials'>;
   logger: Logger;
   createClient?: (apiKey: string, grantId: string) => NylasClient;
+  /** The Nylas region's API host; unset keeps the SDK default (US). */
+  apiUri?: () => string;
 }): PrincipalMailboxResolver {
   const { mailboxes, logger } = deps;
-  const createClient = deps.createClient ?? ((key: string, grant: string) => new NylasClient(key, grant, logger));
+  const createClient = deps.createClient ?? ((key: string, grant: string) => new NylasClient(key, grant, logger, undefined, deps.apiUri?.()));
   const cached = new Map<string, { key: string; grantId: string; client: NylasClient }>();
 
   return async (mailboxId) => {

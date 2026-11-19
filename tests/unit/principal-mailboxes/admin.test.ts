@@ -3,7 +3,7 @@ import pino from 'pino';
 import { HOME_CALENDAR_PENDING_WARNING, NO_HOME_CALENDAR_WARNING, PrincipalMailboxAdmin } from '../../../src/principal-mailboxes/admin.js';
 import { createMailboxCalendarHooks } from '../../../src/principal-mailboxes/calendar-hooks.js';
 import type { PrincipalMailboxStore } from '../../../src/principal-mailboxes/store.js';
-import { RemovedMailboxError, type PrincipalMailboxRecord } from '../../../src/principal-mailboxes/types.js';
+import { NylasRestartRequiredError, RemovedMailboxError, type PrincipalMailboxRecord } from '../../../src/principal-mailboxes/types.js';
 import { principalMailboxGrantSecretName } from '../../../src/principal-mailboxes/secrets.js';
 import { dropLegacyDefaultKey } from '../../../src/principal-mailboxes/migrate-config-keys.js';
 import { createSendLevelReader } from '../../../src/skills/principal-send/send-level.js';
@@ -30,6 +30,8 @@ function setup(opts: {
   curiaGrants?: string[];
   rulesDoc?: { read(): Promise<string | null>; write(s: string): Promise<void> };
   calendars?: ConstructorParameters<typeof PrincipalMailboxAdmin>[0]['calendars'];
+  /** Every lookup throws this instead of reading `grants`. */
+  lookupError?: Error;
 } = {}) {
   const records: PrincipalMailboxRecord[] = [...(opts.records ?? [])];
   const identities: Identity[] = [...(opts.identities ?? [])];
@@ -92,6 +94,7 @@ function setup(opts: {
     principalContactId: PRINCIPAL,
     curiaAccountAddresses: async () => opts.curia ?? [],
     lookupGrant: vi.fn(async (g: string) => {
+      if (opts.lookupError) throw opts.lookupError;
       const found = grants[g];
       if (!found) throw new Error('unreadable');
       return found;
@@ -151,6 +154,16 @@ describe('PrincipalMailboxAdmin.add', () => {
   it('refuses a grant that cannot be read', async () => {
     const { admin } = setup();
     expect(await admin.add({ id: 'work', label: 'Work', grantId: 'nope' })).toMatchObject({ refusal: 'grant_unreadable' });
+  });
+
+  it('refuses with restart_required, writing nothing, when the Nylas key or region changed since boot (R11)', async () => {
+    const { admin, secretStore, store, contacts } = setup({ lookupError: new NylasRestartRequiredError() });
+    const r = await admin.add({ id: 'work', label: 'Work', grantId: 'g' });
+    expect(r).toMatchObject({ ok: false, refusal: 'restart_required' });
+    expect((r as { detail: string }).detail).toMatch(/restart Curia/);
+    expect(secretStore.set).not.toHaveBeenCalled();
+    expect(store.insert).not.toHaveBeenCalled();
+    expect(contacts.linkIdentity).not.toHaveBeenCalled();
   });
 
   it('refuses a non-google grant', async () => {
@@ -444,6 +457,12 @@ describe('PrincipalMailboxAdmin.replaceGrant (R29)', () => {
     const { admin } = setup({ records: [rec({ id: 'old', removedAt: new Date(), isDefault: false })], grants: { g: google('pat@gmail.com') } });
     await expect(admin.replaceGrant('nope', 'g')).rejects.toThrow(/Unknown/);
     await expect(admin.replaceGrant('old', 'g')).rejects.toThrow(/removed/);
+  });
+
+  it('refuses with restart_required, writing nothing, when the Nylas key or region changed since boot (R11)', async () => {
+    const { admin, secretStore } = setup({ records: [rec()], lookupError: new NylasRestartRequiredError() });
+    expect(await admin.replaceGrant('personal', 'g')).toMatchObject({ ok: false, refusal: 'restart_required' });
+    expect(secretStore.set).not.toHaveBeenCalled();
   });
 
   it('refuses an unreadable grant without logging its id', async () => {

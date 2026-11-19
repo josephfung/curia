@@ -16,10 +16,11 @@ import type { SkillRegistry } from './skill-registry.js';
 import type { ToolRegistry } from './registry.js';
 import type { Logger } from '../logger.js';
 import { formatActivatedSkillInstructionBlock } from './skill-instruction-format.js';
+import { agentMayCallTool, skillReservedForOtherAgents } from './skill-activation.js';
 
 export type PinReferentKind = 'skill' | 'tool';
 
-export type UnresolvedPinReason = 'not_found' | 'member_tools_missing';
+export type UnresolvedPinReason = 'not_found' | 'member_tools_missing' | 'caller_not_allowed';
 
 /** A pin that did not fully resolve against the live registries. */
 export interface UnresolvedPin {
@@ -27,6 +28,11 @@ export interface UnresolvedPin {
   reason: UnresolvedPinReason;
   /** Present when reason is member_tools_missing — tools absent from ToolRegistry. */
   missingTools?: string[];
+  /**
+   * Present when reason is caller_not_allowed — tools the agent was NOT given because
+   * their allowed_callers excludes it (#2646). The execution layer would refuse every call.
+   */
+  withheldTools?: string[];
 }
 
 export interface PinResolution {
@@ -80,6 +86,12 @@ export function resolvePinnedSkills(
   let heartbeatEligible = false;
   let documentWorkspaceEnabled = false;
 
+  // Without an agent name there is no caller to check, so only the system-only rule applies.
+  // assembleAgent always passes the name; the rule lives in agentMayCallTool so pins,
+  // activation and discovery cannot drift apart (#2646).
+  const callerMayNotUse = (name: string): boolean =>
+    agentName !== undefined && !agentMayCallTool(toolRegistry, name, agentName);
+
   const pushTool = (name: string, via: string): boolean => {
     if (seenTools.has(name)) return true;
     if (!toolRegistry.get(name)) {
@@ -97,18 +109,42 @@ export function resolvePinnedSkills(
   for (const pin of pinnedSkills) {
     const skill = skillRegistry.get(pin);
     if (skill) {
-      resolvedSkills.push(pin);
-      resolvedPins.push({ pin, kind: 'skill' });
+      // A bundle none of whose tools the agent may call belongs to other agents. Pinning it
+      // would add no tools and splice in instructions written for its owner, which is exactly
+      // what activation refuses (skillReservedForOtherAgents), so the pin does not resolve (#2646).
+      const reservedForOthers =
+        agentName !== undefined && skillReservedForOtherAgents(skill, toolRegistry, agentName);
+      if (!reservedForOthers) {
+        resolvedSkills.push(pin);
+        resolvedPins.push({ pin, kind: 'skill' });
+      }
       const missingTools: string[] = [];
+      const withheldTools: string[] = [];
       for (const t of skill.manifest.tools) {
         // A tool only the system may call (allowed_callers: ["system"]) is never offered to an
         // agent through a bundle. card-use-confirm lives in `web` so it ships with its siblings.
-        if (isSystemOnlyTool(toolRegistry, t)) continue;
+        // When the whole bundle is dropped below, though, name them: otherwise a bundle of
+        // nothing but system-only tools vanishes with no gap for either reporter.
+        if (isSystemOnlyTool(toolRegistry, t)) {
+          if (reservedForOthers) withheldTools.push(t);
+          continue;
+        }
+        // A member the agent may not call is withheld too: handing over the definition only
+        // teaches the model a call that fails every time (#2646). Unloaded tools are a
+        // different gap (missingTools), so check registration first.
+        if (toolRegistry.get(t) && callerMayNotUse(t)) {
+          withheldTools.push(t);
+          continue;
+        }
         if (!pushTool(t, pin)) missingTools.push(t);
       }
       if (missingTools.length > 0) {
         unresolvedPins.push({ pin, reason: 'member_tools_missing', missingTools });
       }
+      if (withheldTools.length > 0) {
+        unresolvedPins.push({ pin, reason: 'caller_not_allowed', withheldTools });
+      }
+      if (reservedForOthers) continue;
       // Prefer the shared formatter when the skill has progressive-disclosure
       // files so pinned imports get the references index. Native instruction
       // blocks without references stay as the raw body (no activation wrapper).
@@ -151,6 +187,10 @@ export function resolvePinnedSkills(
     // First-class tool pin (ADR-032 polymorphic pins). Resolves to exactly this
     // tool — never the owning bundle's siblings.
     if (toolRegistry.get(pin) && !isSystemOnlyTool(toolRegistry, pin)) {
+      if (callerMayNotUse(pin)) {
+        unresolvedPins.push({ pin, reason: 'caller_not_allowed', withheldTools: [pin] });
+        continue;
+      }
       resolvedPins.push({ pin, kind: 'tool' });
       pushTool(pin, pin);
       logger?.debug?.(
@@ -192,16 +232,45 @@ export function reportScheduledPinGaps(
   hasSchedule: boolean,
   logger: Logger,
 ): void {
-  if (!hasSchedule || resolution.unresolvedPins.length === 0) return;
+  // A pin that lost only some tools to allowed_callers is a misdeclared pin that
+  // reportWithheldPinTools warns about. One that lost every tool (it is not in resolvedPins)
+  // leaves the agent running blind, which is what this error exists to catch.
+  const resolved = new Set(resolution.resolvedPins.map((r) => r.pin));
+  const gaps = resolution.unresolvedPins.filter(
+    (p) => p.reason !== 'caller_not_allowed' || !resolved.has(p.pin),
+  );
+  if (!hasSchedule || gaps.length === 0) return;
 
   // Error-level so log-based alerting / monitoring catches the gap — warn alone
   // is what let deploy agents run blind for hours (#1501 / curia-deploy#181).
   logger.error(
     {
       agent: agentName,
-      unresolvedPins: resolution.unresolvedPins,
+      unresolvedPins: gaps,
     },
     'Scheduled agent has unresolved pinned skills — toolset is reduced vs declared pins',
+  );
+}
+
+/**
+ * Warn, once per agent, about pinned tools withheld because allowed_callers excludes the
+ * agent (#2646). Without it a misconfigured pin is only visible as a failed call at run
+ * time: prod's social-media agent hit "restricted to agents" on calendar-list-events every
+ * run. The fix is in the agent's pin list (or delegate to the owning agent), so name both.
+ */
+export function reportWithheldPinTools(
+  agentName: string,
+  resolution: PinResolution,
+  logger: Logger,
+): void {
+  const withheld = resolution.unresolvedPins
+    .filter((p) => p.reason === 'caller_not_allowed' && p.withheldTools && p.withheldTools.length > 0)
+    .map((p) => ({ pin: p.pin, tools: p.withheldTools! }));
+  if (withheld.length === 0) return;
+
+  logger.warn(
+    { agent: agentName, withheldTools: withheld },
+    'Pinned tools withheld from agent: allowed_callers excludes it. Remove the pin or delegate to the owning agent',
   );
 }
 

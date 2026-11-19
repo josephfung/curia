@@ -28,7 +28,7 @@ export class ActionLogRepo {
    *
    *  `approvalNumber` is allocated by insert() for pending approvals only (#2159 Phase 3) and is
    *  NULL everywhere else. It is $17 so every earlier param keeps its position; `disclosure_ask`
-   *  (#2312) was added after it as $18. */
+   *  (#2312) was added after it as $18, and `requester_unverified` (GHSA-p49r-jqh2-v668) as $19. */
   private insertColumnsAndParams(
     row: ActionLogInsert,
     approvalNumber: number | null = null,
@@ -37,8 +37,9 @@ export class ActionLogRepo {
       columns:
         '(task_id, conversation_id, skill_name, action_risk, outcome, task_summary, ' +
         'payload, expires_at, short_ref, description, parent_action_id, ' +
-        'competence_flag, commitment_flag, compatibility, scored_by, send_resolution, approval_number, disclosure_ask)',
-      values: 'VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)',
+        'competence_flag, commitment_flag, compatibility, scored_by, send_resolution, approval_number, disclosure_ask, ' +
+        'requester_unverified)',
+      values: 'VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)',
       params: [
         row.taskId,
         row.conversationId ?? null,
@@ -60,6 +61,7 @@ export class ActionLogRepo {
         row.sendResolution && row.sendResolution.length > 0 ? JSON.stringify(row.sendResolution) : null,
         approvalNumber,
         row.disclosureAsk ? JSON.stringify(row.disclosureAsk) : null,
+        row.requesterUnverified === true,
       ],
     };
   }
@@ -405,6 +407,29 @@ export class ActionLogRepo {
          AND payload::jsonb = $3::jsonb
        LIMIT 1`,
       [taskId, toolName, JSON.stringify(payload)],
+    );
+    if (result.rows.length === 0) return null;
+    return mapRow(result.rows[0]);
+  }
+
+  /**
+   * Find a pending unverified-request row (GHSA-p49r-jqh2-v668) with this skill and payload,
+   * on any task. Each SMS or forged email is a task of its own, so a repeat of the same request
+   * is matched across tasks to join the confirmation already pending.
+   */
+  async findPendingUnverifiedBySkill(
+    toolName: string,
+    payload: Record<string, unknown>,
+  ): Promise<ActionLogRow | null> {
+    const result = await this.pool.query(
+      `SELECT * FROM autonomy_action_log
+       WHERE requester_unverified = true
+         AND skill_name = $1
+         AND outcome = 'pending_approval'
+         AND expires_at > now()
+         AND payload::jsonb = $2::jsonb
+       LIMIT 1`,
+      [toolName, JSON.stringify(payload)],
     );
     if (result.rows.length === 0) return null;
     return mapRow(result.rows[0]);
@@ -1048,6 +1073,7 @@ function mapRow(row: Record<string, unknown>): ActionLogRow {
     description: row.description as string | null,
     sendResolution: readSendResolution(row.send_resolution),
     disclosureAsk: readDisclosureAsk(row.disclosure_ask),
+    requesterUnverified: row.requester_unverified === true,
     createdAt: new Date(row.created_at as string),
   };
 }

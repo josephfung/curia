@@ -1,33 +1,24 @@
 {
   "name": "setup-status",
-  "description": "Return the setup catalog with each task's live-derived status (done / pending / deferred / always_available). Call this at the start of every setup session and after any credential is captured. Never guess at setup state — always call this.",
+  "description": "Return the Setup checklist: each step's live status (done / pending / deferred), a one-line detail for pending steps, and setup_complete. It is the same checklist the console's Setup page shows. Call this at the start of every setup session and after any change. Never guess at setup state \u2014 always call this.",
   "version": "0.4.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {},
   "outputs": {
-    "tasks": "CatalogTaskWithStatus[] — catalog tasks with status, tier, handoff surface, credential_how_to, docs_url; restart_required: true when the task is configured but Curia must restart before it works; done_means: \"credentials_saved\" on key-based tasks (those with vault_keys), where done means the keys are saved, not that the channel or integration is enabled or running",
+    "setup_complete": "boolean \u2014 every required step is done; unlocks Start onboarding",
+    "missing": "string[] \u2014 ids of required steps not yet done",
+    "tasks": "tasks with status, optional (true for optional extras), detail (why a pending step is pending), handoff surface, credential_how_to, docs_url; restart_required: true when the step is saved but Curia must restart before it works; done_means: \"credentials_saved\" on key-based tasks (those with vault_keys), where done means the keys are saved, not that the integration is running",
     "summary": "{ total: number, done: number, pending: number, deferred: number }"
   },
   "permissions": [],
-  "secrets": [
-    "channel.signal.socket_path",
-    "channel.signal.phone_number",
-    "channel.slack.bot_token",
-    "channel.slack.app_token",
-    "channel.sms.api_key",
-    "channel.sms.from_number",
-    "channel.sms.webhook_public_key",
-    "channel.voice.livekit_url",
-    "channel.voice.livekit_api_key",
-    "channel.voice.livekit_api_secret",
-    "channel.voice.deepgram_api_key",
-    "channel.voice.cartesia_api_key",
-    "channel.voice.cartesia_voice_id",
-    "tavily_api_key"
-  ],
+  "secrets": [],
   "timeout": 15000,
-  "capabilities": ["entityMemory", "schedulerService", "officeIdentityService"],
-  "optional_capabilities": ["phoneAppReady", "emailChannelStatus", "principalMailboxReady", "browserService", "mailboxDirectory"],
-  "allowed_callers": ["setup-wizard"]
+  "capabilities": [
+    "entityMemory",
+    "setupChecklist"
+  ],
+  "allowed_callers": [
+    "setup-wizard"
+  ]
 }

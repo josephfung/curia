@@ -71,6 +71,8 @@ const SELF_AUTHED_API_PREFIXES = [
   // Secret-capture routes are token-authed (the single-use token in the URL is the
   // capability), so they bypass bearer auth and self-authorize via the token (#971).
   '/api/secret-capture',
+  // Mailbox sign-in links are token-authed the same way (#2361): the single-use token is the capability.
+  '/api/mailbox-signin',
   // The onboarding wizard runs in the browser with the same curia_session cookie /
   // x-web-bootstrap-secret pair as the identity routes.
   '/api/setup',

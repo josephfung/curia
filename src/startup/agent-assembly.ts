@@ -41,6 +41,7 @@ import type { SkillRegistry } from '../skills/skill-registry.js';
 import {
   appendSkillInstructions,
   reportScheduledPinGaps,
+  reportWithheldPinTools,
   resolvePinnedSkills,
   type PinResolution,
 } from '../skills/pin-resolution.js';
@@ -419,6 +420,7 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
     (agentConfig.schedule?.length ?? 0) > 0,
     logger,
   );
+  reportWithheldPinTools(agentConfig.name, pinResolution, logger);
 
   let systemPrompt = interpolateAgentSystemPrompt(agentConfig, ctx);
   // Inject pinned skill instruction blocks (e.g. tasks / documents discipline).

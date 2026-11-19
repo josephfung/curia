@@ -599,7 +599,7 @@ export class HealthService {
         name,
         status: 'fail',
         detail: authFailure
-          ? `Mailbox "${view.label}" grant auth failed (401/403) — reconnect it in Nylas, then use Edit on it to paste its new grant ID in the console (Settings → Behaviour → Email & Calendar)`
+          ? `Mailbox "${view.label}" grant auth failed (401/403) — reconnect it from Settings → Email & Calendar (Connect with Google; without Google sign-in, reconnect the account in the Nylas dashboard and paste the new grant ID there)`
           : errName === 'TimeoutError'
             ? `Mailbox "${view.label}" probe timed out after ${MAILBOX_PROBE_TIMEOUT_MS / 1000} s — check Nylas connectivity`
             : `Mailbox "${view.label}" probe failed (${errName}) — check Nylas connectivity`,

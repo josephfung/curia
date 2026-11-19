@@ -1662,9 +1662,10 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     // a snapshot appears here.
     for (const assembled of agents) {
       for (const pin of assembled.pinResolution.unresolvedPins) {
+        const tools = pin.missingTools ?? pin.withheldTools;
         warnings.push(
           `${assembled.agentConfig.name}: pin '${pin.pin}' unresolved (${pin.reason}` +
-          `${pin.missingTools ? `: ${pin.missingTools.join(', ')}` : ''})`,
+          `${tools ? `: ${tools.join(', ')}` : ''})`,
         );
       }
     }

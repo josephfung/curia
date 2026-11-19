@@ -67,7 +67,7 @@ function makeCtx(overrides: {
       : {
           originator: {
             contactId: 'ceo-contact-id',
-            systemRole: 'principal' as const,
+            systemRole: 'principal' as const, authenticated: true,
             channel: 'signal',
             initiatedAt: new Date().toISOString(),
           },

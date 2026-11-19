@@ -87,6 +87,20 @@ describe('card-use-request', () => {
     expect(setShortRef).toHaveBeenCalledWith('req-1', 'abcd1234');
   });
 
+  // GHSA-p49r-jqh2-v668: a card use started from a message that matched the principal without
+  // the channel proving it is delivered only on a verified channel, under the hourly cap.
+  it('marks the approval when the turn is an unauthenticated principal match', async () => {
+    const { ctx, request } = setup();
+    const unverified = { ...ctx(GOOD_INPUT), taskMetadata: { originator: { contactId: 'p', systemRole: 'principal', channel: 'sms', initiatedAt: '2026-11-17T12:00:00Z', authenticated: false } } } as ToolContext;
+    await new CardUseRequestHandler().execute(unverified);
+    expect(request.mock.calls[0]![0]).toMatchObject({ requesterUnverified: true });
+
+    const { ctx: ctx2, request: request2 } = setup();
+    const verified = { ...ctx2(GOOD_INPUT), taskMetadata: { originator: { contactId: 'p', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-11-17T12:00:00Z', authenticated: true } } } as ToolContext;
+    await new CardUseRequestHandler().execute(verified);
+    expect(request2.mock.calls[0]![0]).not.toHaveProperty('requesterUnverified', true);
+  });
+
   it('returns the approval ref, number, local expiry and masked card', async () => {
     const { ctx } = setup();
     const result = await new CardUseRequestHandler().execute(ctx(GOOD_INPUT));

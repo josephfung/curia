@@ -34,7 +34,7 @@ const SET: SpotCheckSet = {
   deliveries: [{ channel: 'email', messageId: 'm1', threadId: 'th1', at: '2026-10-19T07:05:00.000Z' }],
 };
 
-const PRINCIPAL = { originator: { systemRole: 'principal' } };
+const PRINCIPAL = { originator: { systemRole: 'principal', authenticated: true } };
 
 /**
  * The dispatcher's trusted stamp of the pairs the principal typed (F2). By default a test's

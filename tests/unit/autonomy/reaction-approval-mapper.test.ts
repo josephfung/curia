@@ -145,7 +145,9 @@ describe('ReactionApprovalMapper', () => {
       expect.objectContaining({
         humanApproved: true,
         liveTurn: true,
-        taskMetadata: { originator: expect.objectContaining({ contactId: 'principal-1', systemRole: 'principal' }) },
+        // Slack authenticates the reactor, so the replay carries the principal's authority
+        // (GHSA-p49r-jqh2-v668).
+        taskMetadata: { originator: expect.objectContaining({ contactId: 'principal-1', systemRole: 'principal', authenticated: true }) },
       }),
     );
     expect(bus.publish).toHaveBeenCalledWith(

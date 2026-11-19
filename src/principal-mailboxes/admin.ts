@@ -12,6 +12,8 @@ import { grantLookupFailureDetail, grantSafeErrorFields, mayCarryGrantId } from 
 import type { MailboxCalendarHooks } from './calendar-hooks.js';
 import {
   MAILBOX_ID_RE,
+  NYLAS_RESTART_REQUIRED_DETAIL,
+  NylasRestartRequiredError,
   RESERVED_MAILBOX_IDS,
   RemovedMailboxError,
   UnknownMailboxError,
@@ -27,9 +29,10 @@ export type AddMailboxRefusal =
   | 'address_in_use'
   | 'curia_account_address'
   | 'grant_unreadable'
-  | 'address_is_another_contact';
+  | 'address_is_another_contact'
+  | 'restart_required';
 
-export type ReplaceGrantRefusal = 'grant_unreadable' | 'not_google' | 'address_mismatch' | 'grant_in_use';
+export type ReplaceGrantRefusal = 'grant_unreadable' | 'not_google' | 'address_mismatch' | 'grant_in_use' | 'restart_required';
 
 export interface RemovalPreview {
   mailbox: PrincipalMailboxView;
@@ -154,6 +157,11 @@ export class PrincipalMailboxAdmin {
     try {
       grant = await this.deps.lookupGrant(grantId);
     } catch (err) {
+      // R11: the key or region changed since boot; nothing is written until a restart.
+      if (err instanceof NylasRestartRequiredError) {
+        this.log.warn({ mailboxId: id, reason: 'restart_required' }, 'Mailbox add refused: the Nylas key or region changed since boot');
+        return refuse('restart_required', NYLAS_RESTART_REQUIRED_DETAIL);
+      }
       // Class name only: a lookup error's message could carry the grant id.
       this.log.warn({ ...grantSafeErrorFields(err), mailboxId: id }, 'Could not read the Nylas grant for a new mailbox');
       return refuse('grant_unreadable', grantLookupFailureDetail(err));
@@ -276,6 +284,10 @@ export class PrincipalMailboxAdmin {
     try {
       grant = await this.deps.lookupGrant(grantId);
     } catch (err) {
+      if (err instanceof NylasRestartRequiredError) {
+        this.log.warn({ mailboxId: id, reason: 'restart_required' }, 'Grant replacement refused: the Nylas key or region changed since boot');
+        return refuse('restart_required', NYLAS_RESTART_REQUIRED_DETAIL);
+      }
       // Class name only: a lookup error's message could carry the grant id.
       this.log.warn({ ...grantSafeErrorFields(err), mailboxId: id }, 'Could not read the replacement Nylas grant');
       return refuse('grant_unreadable', grantLookupFailureDetail(err));

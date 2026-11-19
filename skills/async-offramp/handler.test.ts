@@ -48,7 +48,7 @@ function makeCtx(
     taskMetadata: {
       originator: {
         contactId: 'ceo-1',
-        systemRole: 'principal',
+        systemRole: 'principal', authenticated: true,
         channel: 'voice',
         initiatedAt: '2026-07-28T12:00:00.000Z',
         tier: 'known',
@@ -101,7 +101,7 @@ describe('AsyncOfframpHandler', () => {
       voiceOfframp: true,
       followUpChannel: 'email',
       sourceVoiceConversationId: 'voice:session-abc',
-      originator: { contactId: 'ceo-1', systemRole: 'principal' },
+      originator: { contactId: 'ceo-1', systemRole: 'principal', authenticated: true },
     });
     expect(task.parentEventId).toBe('voice-session-abc');
   });
