@@ -2,9 +2,9 @@
 // live check from the Setup checklist. Messaging and Voice also save the route the operator
 // picks, which their checks read. Credentials are entered on the Settings page each step
 // links to; the steps' own forms replace those links in a later PR.
-import { useState, type JSX } from 'react';
+import { useEffect, useRef, useState, type JSX } from 'react';
 import { saveSetupFields, type MessagingRoute, type SetupFields, type VoiceRoute } from './setup-api.js';
-import { atSentenceStart, type ChecklistTask } from './setup-steps.js';
+import { atSentenceStart, createLatestSaver, type ChecklistTask } from './setup-steps.js';
 import { ChoiceGroup, StatusLine, StepFooter } from './setup-ui.js';
 
 const DOCS_ORIGIN = 'https://docs.meetcuria.com';
@@ -86,21 +86,42 @@ const MESSAGING_SETTINGS: Record<MessagingRoute, { path: string; label: string }
 export function MessagingStep({ task, principal, fields, onSaved, onContinue, onHelp }: RouteStepProps): JSX.Element {
   const [route, setRoute] = useState<MessagingRoute | null>(fields.messagingRoute);
   const [error, setError] = useState<string | null>(null);
+  // Picks not yet saved. While any is pending the screen shows the newest pick; otherwise it
+  // follows what is stored, so a failed save shows the stored route again. The step stays
+  // mounted across refreshes, so keyboard focus is never lost mid-choice.
+  const pending = useRef(0);
+  const stored = useRef(fields.messagingRoute);
+  stored.current = fields.messagingRoute;
+  useEffect(() => {
+    if (pending.current === 0) setRoute(fields.messagingRoute);
+  }, [fields.messagingRoute]);
+  // One save at a time, the newest choice last (see createLatestSaver).
+  const save = useRef(createLatestSaver(async (next: MessagingRoute) => {
+    // Voice follows messaging until the operator picks it: Signal for Signal, else the app.
+    await saveSetupFields({
+      messagingRoute: next,
+      ...(fields.voiceRoute === null ? { voiceRoute: next === 'signal' ? 'signal' : 'app' } : {}),
+    });
+  })).current;
 
   async function pick(next: MessagingRoute): Promise<void> {
     setRoute(next);
     setError(null);
+    pending.current++;
+    let failed = false;
     try {
-      // Voice follows messaging until the operator picks it: Signal for Signal, else the app.
-      await saveSetupFields({
-        messagingRoute: next,
-        ...(fields.voiceRoute === null ? { voiceRoute: next === 'signal' ? 'signal' : 'app' } : {}),
-      });
-      await onSaved();
+      await save(next);
     } catch (err) {
-      setRoute(fields.messagingRoute);
+      failed = true;
       setError(err instanceof Error ? err.message : 'Could not save.');
+    } finally {
+      pending.current--;
     }
+    if (pending.current > 0) return;
+    // Re-read the checklist and the stored route. After a failure the screen shows what is
+    // stored, even when that didn't change (so the effect above wouldn't fire).
+    await onSaved();
+    if (failed) setRoute(stored.current);
   }
 
   return (
@@ -126,18 +147,39 @@ export function MessagingStep({ task, principal, fields, onSaved, onContinue, on
 export function VoiceStep({ task, principal, fields, onSaved, onContinue, onHelp }: RouteStepProps): JSX.Element {
   const [route, setRoute] = useState<VoiceRoute | null>(fields.voiceRoute);
   const [error, setError] = useState<string | null>(null);
+  // Picks not yet saved. While any is pending the screen shows the newest pick; otherwise it
+  // follows what is stored, so a failed save shows the stored route again. The step stays
+  // mounted across refreshes, so keyboard focus is never lost mid-choice.
+  const pending = useRef(0);
+  const stored = useRef(fields.voiceRoute);
+  stored.current = fields.voiceRoute;
+  useEffect(() => {
+    if (pending.current === 0) setRoute(fields.voiceRoute);
+  }, [fields.voiceRoute]);
+  // One save at a time, the newest choice last (see createLatestSaver).
+  const save = useRef(createLatestSaver(async (next: VoiceRoute) => {
+    await saveSetupFields({ voiceRoute: next });
+  })).current;
 
   async function pick(next: VoiceRoute | 'phone'): Promise<void> {
     if (next === 'phone') return; // Shown as coming soon; never selectable.
     setRoute(next);
     setError(null);
+    pending.current++;
+    let failed = false;
     try {
-      await saveSetupFields({ voiceRoute: next });
-      await onSaved();
+      await save(next);
     } catch (err) {
-      setRoute(fields.voiceRoute);
+      failed = true;
       setError(err instanceof Error ? err.message : 'Could not save.');
+    } finally {
+      pending.current--;
     }
+    if (pending.current > 0) return;
+    // Re-read the checklist and the stored route. After a failure the screen shows what is
+    // stored, even when that didn't change (so the effect above wouldn't fire).
+    await onSaved();
+    if (failed) setRoute(stored.current);
   }
 
   return (
