@@ -1,0 +1,412 @@
+<!doctype html>
+<!-- Setup page mockup for #2358 (2026-11-19). Static design reference: open in a browser and click through the steps.
+     Names, addresses and numbers are made up. Not shipped code. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Curia Setup Checklist</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+/* Layout: one Setup page. Left = the checklist (step names + a mark). Right = the open step's form. Tokens from apps/console/src/styles/app.css. */
+:root {
+  --bg: #F5F4F1; --sunken: #ECEAE5; --card: #FFFFFF;
+  --border: rgba(28,28,30,0.10); --border-soft: rgba(28,28,30,0.06); --input-bd: rgba(28,28,30,0.16);
+  --fg: #1C1C1E; --muted: #6F6E6B; --subtle: #8E8C87;
+  --primary: #1C1C1E; --primary-fg: #FFFFFF;
+  --teal: #1A6B5E; --teal-soft: rgba(26,107,94,0.08);
+  --amber: #9A5F22;
+  --sans: Manrope, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #111111; --sunken: #0A0A0A; --card: #1E1E1E;
+  --border: rgba(255,255,255,0.10); --border-soft: rgba(255,255,255,0.06); --input-bd: rgba(255,255,255,0.15);
+  --fg: #FAFAFA; --muted: #ADADAD; --subtle: #858586;
+  --primary: #DEDEDE; --primary-fg: #1E1E1E;
+  --teal: #5FB8A8; --teal-soft: rgba(95,184,168,0.10);
+  --amber: #E0A66C;
+  color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --bg: #111111; --sunken: #0A0A0A; --card: #1E1E1E;
+  --border: rgba(255,255,255,0.10); --border-soft: rgba(255,255,255,0.06); --input-bd: rgba(255,255,255,0.15);
+  --fg: #FAFAFA; --muted: #ADADAD; --subtle: #858586;
+  --primary: #DEDEDE; --primary-fg: #1E1E1E;
+  --teal: #5FB8A8; --teal-soft: rgba(95,184,168,0.10);
+  --amber: #E0A66C;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 14px; line-height: 1.55; margin: 0; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+
+.mock { padding: 8px 16px; font-size: 12px; color: var(--subtle); border-bottom: 1px dashed var(--border); }
+
+.page { max-width: 1240px; margin: 0 auto; padding-block: 32px 64px; padding-inline: 24px; display: grid; grid-template-columns: 240px minmax(0, 620px); gap: 40px; justify-content: center; }
+
+/* Checklist */
+.steps h1 { font-size: 18px; font-weight: 700; margin: 0 0 2px; letter-spacing: -0.01em; }
+.steps .sub { font-size: 12.5px; color: var(--muted); margin: 0 0 20px; }
+.group { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--subtle); font-weight: 700; margin: 18px 0 4px; padding-left: 10px; }
+.group:first-of-type { margin-top: 0; }
+.step { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 0; padding: 7px 10px; border-radius: 7px; cursor: pointer; font-size: 13.5px; color: var(--fg); }
+.step:hover { background: var(--sunken); }
+.step[aria-current="step"] { background: var(--card); box-shadow: 0 0 0 1px var(--border); font-weight: 600; }
+.step .dot { width: 16px; height: 16px; flex: none; border-radius: 50%; border: 1.5px solid var(--input-bd); display: grid; place-items: center; }
+.step.done .dot { background: var(--teal); border-color: var(--teal); color: var(--primary-fg); }
+.step.done .dot svg { width: 10px; height: 10px; }
+.step.attn .dot { border-color: var(--amber); }
+.step.attn .dot::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
+.step.locked { color: var(--muted); }
+.step .opt { margin-left: auto; font-size: 11px; color: var(--subtle); font-weight: 400; }
+
+/* Pane */
+.pane { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px 32px; min-width: 0; align-self: start; }
+.pane .eyebrow { font-size: 12px; color: var(--subtle); margin-bottom: 6px; }
+.pane h2 { font-size: 20px; font-weight: 700; margin: 0 0 6px; letter-spacing: -0.01em; text-wrap: balance; }
+.pane .lede { color: var(--muted); margin: 0 0 22px; max-width: 58ch; }
+.fields { display: flex; flex-direction: column; gap: 14px; max-width: 460px; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field label { font-size: 12.5px; font-weight: 600; }
+.field .hint { font-size: 12px; color: var(--subtle); font-weight: 400; }
+.field input, .field select, .field textarea { background: var(--bg); border: 1px solid var(--input-bd); border-radius: 7px; padding: 8px 10px; width: 100%; }
+.field textarea { min-height: 64px; resize: vertical; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+.choices { display: flex; flex-direction: column; gap: 8px; max-width: 520px; margin-bottom: 20px; }
+.choice { display: flex; gap: 12px; align-items: flex-start; text-align: left; background: var(--card); border: 1px solid var(--input-bd); border-radius: 9px; padding: 12px 14px; cursor: pointer; }
+.choice[aria-checked="true"] { border-color: var(--teal); background: var(--teal-soft); box-shadow: 0 0 0 1px var(--teal); }
+.choice .radio { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--input-bd); flex: none; margin-top: 2px; display: grid; place-items: center; }
+.choice[aria-checked="true"] .radio { border-color: var(--teal); }
+.choice[aria-checked="true"] .radio::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--teal); }
+.choice b { display: block; font-weight: 600; font-size: 14px; }
+.choice span.d { display: block; font-size: 12.5px; color: var(--muted); }
+.choice .tag { font-size: 11px; color: var(--teal); font-weight: 600; margin-left: 6px; }
+
+.status { font-size: 13px; display: flex; align-items: center; gap: 8px; margin: 18px 0 0; color: var(--muted); }
+.status.ok { color: var(--teal); }
+.status.attn { color: var(--amber); }
+.status svg { width: 14px; height: 14px; flex: none; }
+
+.note { font-size: 12.5px; color: var(--muted); background: var(--sunken); border-radius: 8px; padding: 10px 12px; max-width: 520px; margin-top: 18px; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill { border: 1px solid var(--input-bd); border-radius: 999px; padding: 4px 12px; font-size: 12.5px; background: var(--card); cursor: pointer; }
+.pill[aria-pressed="true"] { border-color: var(--teal); color: var(--teal); background: var(--teal-soft); }
+
+.foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--border-soft); }
+.btn { font-size: 13px; font-weight: 600; padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); cursor: pointer; }
+.btn.primary { background: var(--primary); color: var(--primary-fg); border-color: var(--primary); }
+.btn[disabled] { opacity: .45; cursor: not-allowed; }
+.link { background: none; border: 0; padding: 0; color: var(--muted); font-size: 12.5px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.foot .help { margin-left: auto; }
+
+/* Setup guide drawer: the existing chat thread + composer, in a side panel */
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 360px; background: var(--bg); border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; z-index: 5; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+body.guide-open { padding-right: 360px; }
+.page.guide-open { grid-template-columns: 210px minmax(0, 1fr); gap: 28px; }
+.page.guide-open .pane { padding: 24px 26px; }
+.drawer-h .steps-btn { display: none; }
+@media (max-width: 1180px) {
+  .page.guide-open { grid-template-columns: minmax(0, 1fr); }
+  .page.guide-open .steps { display: none; }
+  .page.guide-open .drawer-h .steps-btn { display: inline-block; }
+}
+.page.guide-open .foot .help { display: none; }
+.drawer-h > div { flex: 1; min-width: 0; }
+.caps { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.cap { display: flex; gap: 16px; align-items: center; padding: 13px 16px; }
+.cap + .cap { border-top: 1px solid var(--border-soft); }
+.cap > div { flex: 1; min-width: 0; }
+.cap b { display: block; font-weight: 600; font-size: 14px; }
+.cap span.d { display: block; font-size: 12.5px; color: var(--muted); }
+.cap .fixed { font-size: 11.5px; color: var(--subtle); white-space: nowrap; }
+.switch { position: relative; width: 36px; height: 20px; flex: none; border-radius: 999px; border: 0; background: var(--input-bd); cursor: pointer; padding: 0; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--card); transition: transform .15s; }
+.switch[aria-checked="true"] { background: var(--teal); }
+.switch[aria-checked="true"]::after { transform: translateX(16px); }
+.switch[disabled] { opacity: .5; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) { .switch::after { transition: none; } }
+.drawer-h .steps-btn { font-size: 12px; font-weight: 600; background: var(--sunken); border: 0; border-radius: 6px; padding: 4px 9px; cursor: pointer; white-space: nowrap; }
+.drawer-h .x { margin-left: 0; }
+.drawer-h { display: flex; align-items: flex-start; gap: 10px; padding: 16px 16px 12px; border-bottom: 1px solid var(--border-soft); }
+.drawer-h b { display: block; font-size: 14px; }
+.drawer-h span { display: block; font-size: 12px; color: var(--muted); }
+.drawer-h .x { background: none; border: 0; font-size: 20px; line-height: 1; color: var(--muted); cursor: pointer; padding: 0 4px; }
+.msgs { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.ctx { align-self: center; font-size: 11.5px; color: var(--subtle); }
+.bubble { max-width: 88%; padding: 9px 12px; border-radius: 14px; font-size: 13.5px; }
+.bubble p { margin: 0; }
+.bubble p + p { margin-top: 8px; }
+.bubble.me { align-self: flex-end; background: var(--primary); color: var(--primary-fg); border-bottom-right-radius: 4px; }
+.bubble.ai { align-self: flex-start; background: var(--card); border: 1px solid var(--border-soft); border-bottom-left-radius: 4px; }
+.bubble .link { color: var(--teal); }
+.composer { border-top: 1px solid var(--border-soft); padding: 12px 16px; display: flex; gap: 8px; align-items: flex-end; }
+.composer textarea { flex: 1; min-width: 0; resize: none; min-height: 40px; max-height: 120px; background: var(--card); border: 1px solid var(--input-bd); border-radius: 10px; padding: 9px 12px; }
+.composer .btn { padding: 9px 14px; }
+@media (max-width: 760px) {
+  .page.guide-open { grid-template-columns: minmax(0, 1fr); }
+  body.guide-open { padding-right: 0; }
+  .drawer { position: fixed; inset: 0; width: auto; height: auto; min-height: 0; border-radius: 0; border: 0; z-index: 10; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .page { grid-template-columns: minmax(0, 1fr); gap: 20px; padding-inline: 16px; padding-block: 20px 40px; }
+  .pane { padding: 20px 18px; }
+  .row2 { grid-template-columns: 1fr; }
+  .foot .help { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<div class="mock">Mockup for #2358 · one Setup page in the console. Click any step on the left.</div>
+
+<div class="page">
+  <nav class="steps" aria-label="Setup steps">
+    <h1>Set up Curia</h1>
+    <p class="sub" id="count">6 of 9 done</p>
+    <div id="list"></div>
+  </nav>
+  <aside class="drawer" id="drawer" aria-label="Setup guide">
+    <div class="drawer-h">
+      <div><b>Setup guide</b><span>Curia’s here to help you navigate the setup.</span></div>
+      <button type="button" class="steps-btn" id="show-steps">Steps</button>
+      <button type="button" class="x" id="close-guide" aria-label="Close setup guide">×</button>
+    </div>
+    <div class="msgs">
+      <div class="ctx">Now on: Messaging</div>
+      <div class="bubble me"><p>Dana has an iPhone and doesn't like installing apps. Which messaging option should I pick?</p></div>
+      <div class="bubble ai">
+        <p>Does Dana already use Signal? If so, pick Signal. There's nothing new to install, and Dana can call Curia there too. You'll need a phone number for Curia and a Signal server, which takes about 30 minutes.</p>
+        <p>Text messages work on any phone with no app. But texts can't carry calls, so Dana would still need the Curia app or Signal for voice.</p>
+        <p>The Curia app is the quickest for Dana: one link, and it installs from the browser. There's no App Store step.</p>
+      </div>
+      <div class="bubble me"><p>Dana uses Signal with the team.</p></div>
+      <div class="bubble ai">
+        <p>Then pick Signal in the form. It asks for Curia's Signal number and Dana's. Voice will default to Signal calls to match.</p>
+        <p>I can't test it until you apply and restart at the end, so the step shows "Saved" until then. <button type="button" class="link">Signal setup guide</button></p>
+      </div>
+    </div>
+    <form class="composer" id="composer">
+      <textarea id="guide-input" rows="1" placeholder="Ask about this step…" aria-label="Message the setup guide"></textarea>
+      <button type="submit" class="btn primary">Send</button>
+    </form>
+  </aside>
+  <section class="pane" id="pane" aria-live="polite"></section>
+</div>
+
+<script>
+(function () {
+  var CHECK = '<svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.5 3.6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  var OK = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M5 8.2 7 10.2 11 5.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  var WARN = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.5v4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="11.2" r=".9" fill="currentColor"/></svg>';
+
+  var msgRoute = 'app', voiceRoute = 'app', forWhom = 'else', toneSel = 'Warm & professional';
+
+  function f(label, val, hint, type) {
+    return '<div class="field"><label>' + label + (hint ? ' <span class="hint">' + hint + '</span>' : '') + '</label>' +
+      '<input type="' + (type || 'text') + '" value="' + val + '"></div>';
+  }
+  function secret(label) { return '<div class="field"><label>' + label + '</label><input type="password" value="saved-secret-value"></div>'; }
+  function choice(group, id, title, desc, sel, tag) {
+    return '<button type="button" role="radio" class="choice" data-group="' + group + '" data-id="' + id + '" aria-checked="' + (sel === id) + '"><span class="radio"></span><span><b>' + title + (tag ? '<span class="tag">' + tag + '</span>' : '') + '</b><span class="d">' + desc + '</span></span></button>';
+  }
+  function ok(t) { return '<p class="status ok">' + OK + t + '</p>'; }
+  function attn(t) { return '<p class="status attn">' + WARN + t + '</p>'; }
+
+  var steps = [
+    { g: 'Basics', id: 'who', name: 'Who it’s for', st: 'done', body: function () {
+      return '<h2>Who are you setting Curia up for?</h2><p class="lede">This decides how Curia talks to you during setup and who it greets when it’s done.</p>' +
+        '<div class="choices" role="radiogroup">' +
+        choice('who', 'self', 'Myself', 'You’ll set it up, then go straight into your first conversation.', forWhom) +
+        choice('who', 'else', 'Someone else', 'An executive you work for. You set things up; they get an invitation when you’re ready.', forWhom) +
+        '</div>' +
+        (forWhom === 'else'
+          ? '<div class="field" style="margin-bottom:8px"><label>About you</label><span class="hint">Curia treats you as its operator: the person who looks after setup and admin. Later, it will bring admin and support questions to you rather than to the person it works for.</span></div><div class="fields"><div class="row2">' + f('Your name', 'Sam Reyes') + f('Your email', 'sam@okafor-ventures.com', '', 'email') + '</div></div>' +
+            '<div class="field" style="margin:22px 0 8px"><label>Who Curia will work for</label><span class="hint">They can correct any of these later.</span></div>'
+          : '<div class="field" style="margin-bottom:8px"><label>About you</label></div>') +
+        '<div class="fields"><div class="row2">' + f('Full name', 'Dana Okafor') + f('Title', 'Chief Executive Officer', '(optional)') + '</div>' +
+        f('Email', 'dana@okafor-ventures.com', '', 'email') +
+        '<div class="row2"><div class="field"><label>Timezone</label><select><option>America/Toronto</option></select></div>' + f('Pronouns', 'she/her', '(optional)') + '</div></div>';
+    } },
+    { g: 'Basics', id: 'curia', name: 'Curia’s name', st: 'done', body: function () {
+      return '<h2>What should Curia be called?</h2><p class="lede">Used in emails and messages Curia sends.</p>' +
+        '<div class="fields">' + f('Name', 'Morgan Hale') + f('Title', 'Executive Assistant to Dana Okafor') +
+        '<div class="field"><label>Email signature <span class="hint">(optional)</span></label><textarea>Morgan Hale\nExecutive Assistant to Dana Okafor</textarea></div></div>';
+    } },
+    { g: 'Curia’s channels', id: 'email', name: 'Email', st: 'done', body: function () {
+      return '<h2>Curia’s own email</h2><p class="lede">A dedicated Google mailbox Curia sends and receives from. Add your Nylas API key, then sign in to Curia’s mailbox.</p>' +
+        '<div class="fields">' + secret('Nylas API key') + '</div>' + ok('Nylas connected. Region detected: US.') +
+        '<div class="foot" style="border:0;margin-top:14px;padding-top:0"><button type="button" class="btn">Connect with Google</button><button type="button" class="link">Paste a grant ID instead</button></div>' +
+        ok('Connected: curia@okafor-ventures.com. Mail received 3 minutes ago.');
+    } },
+    { g: 'Curia’s channels', id: 'msg', name: 'Messaging', st: 'cur', body: function () {
+      var extra = msgRoute === 'app'
+        ? '<div class="note">Nothing else to set up here. Dana installs the app from the link you’ll send when you start onboarding.</div>' + ok('Ready. HTTPS and notifications are working.')
+        : msgRoute === 'signal'
+          ? '<div class="fields">' + f('Curia’s Signal number', '+1 416 555 0142', '', 'tel') + f('Dana’s Signal number', '', '', 'tel') + '</div>' + attn('Add Dana’s number to finish. Nothing is sent to Dana.')
+          : msgRoute === 'slack'
+          ? '<div class="fields">' + secret('Slack bot token') + secret('Slack app-level token') + f('Dana’s Slack member ID', '', '(U…)') + '</div>' + attn('Add Dana’s member ID to finish. Nothing is sent to Dana.')
+          : '<div class="fields">' + secret('Telnyx API key') + f('Curia’s number', '+1 416 555 0188', '', 'tel') + secret('Webhook public key') + f('Dana’s mobile', '', '', 'tel') + '</div>' + attn('Add Dana’s number to finish. Nothing is sent to Dana.');
+      return '<h2>How should Curia message Dana?</h2><p class="lede">Pick the one Dana will use day to day. You can add more later.</p>' +
+        '<div class="choices" role="radiogroup">' +
+        choice('msg', 'app', 'Curia app', 'Installs on Dana’s phone from a link. No phone number needed.', msgRoute, 'Recommended') +
+        choice('msg', 'signal', 'Signal', 'For someone who already uses Signal. Needs a number for Curia.', msgRoute) +
+        choice('msg', 'sms', 'Text message (SMS)', 'Works on any phone. Needs a Telnyx number.', msgRoute) +
+        choice('msg', 'slack', 'Slack', 'For someone who lives in Slack. Needs Curia’s Slack app in their workspace.', msgRoute) +
+        '</div>' + extra;
+    } },
+    { g: 'Curia’s channels', id: 'voice', name: 'Voice', st: 'attn', body: function () {
+      return '<h2>How will Dana talk to Curia?</h2><p class="lede">Voice is required, so Dana can choose a call or chat for any session.</p>' +
+        (msgRoute === 'sms' || msgRoute === 'slack' ? '<div class="note" style="margin:0 0 16px">' + (msgRoute === 'sms' ? 'Text messages' : 'Slack') + ' can’t carry calls, so Dana will call Curia in the Curia app or on Signal.</div>' : '') +
+        '<div class="choices" role="radiogroup">' +
+        choice('voice', 'app', 'In the Curia app', 'Dana taps to call from the phone app or the console.', voiceRoute, msgRoute === 'app' ? 'Matches messaging' : '') +
+        choice('voice', 'signal', 'Signal call', 'Dana calls Curia’s Signal number.', voiceRoute, msgRoute === 'signal' ? 'Matches messaging' : '') +
+        '</div><div class="fields">' + secret('Deepgram API key') + secret('Cartesia API key') +
+        '<div class="field"><label>Curia’s voice</label><select><option>Harbour (default)</option><option>Linden</option><option>Mercer</option></select><span class="hint">Dana can pick another in the first conversation.</span></div></div>' +
+        attn('Keys saved. Voice turns on when you apply and restart at the end.');
+    } },
+    { g: 'Dana’s accounts', id: 'signin', name: 'Email & calendar', st: 'todo', body: function () {
+      return '<h2>Dana’s email and calendar</h2><p class="lede">' + (forWhom === 'self' ? 'Connect your Google account now, or during your first conversation.' : 'Dana connects their own Google account during the first conversation. If Dana is with you, you can connect it now.') + ' This uses the Nylas key from the Email step.</p>' +
+        ok('Region: US') + ok('Callback registered') + ok('Google connector: built in (Nylas sandbox)') +
+        '<div class="foot" style="border:0;margin-top:16px;padding-top:0"><button type="button" class="btn">Connect with Google</button></div>' +
+        '<div class="note">A production Nylas app with no Google connector asks for your Google Cloud client ID and secret here. They go to Nylas; Curia doesn\u2019t keep them.</div>';
+    } },
+    { g: 'Finish', id: 'apply', name: 'Apply & restart', st: 'todo', body: function () {
+      return '<h2>Apply and restart</h2><p class="lede">Curia restarts once to turn on everything you’ve set up, then checks each step again. It takes about a minute.</p>' +
+        '<div class="foot" style="border:0;margin-top:0;padding-top:0"><button type="button" class="btn primary">Apply and restart</button></div>';
+    } },
+    { g: 'Finish', id: 'start', name: 'Start onboarding', st: 'locked', body: function () {
+      var left = steps.filter(function (s) { return !s.optional && s.id !== 'start' && s.st !== 'done'; });
+      return '<h2>Start onboarding</h2><p class="lede">When you start, you get a link to send Dana. It installs Curia on Dana’s phone and lasts 48 hours. Curia then says hello and offers a first conversation.</p>' +
+        '<div class="note">Finish ' + left.map(function (s) { return s.name.toLowerCase(); }).join(', ') + ' first.</div>' +
+        '<div class="foot" style="border:0;margin-top:16px;padding-top:0"><button type="button" class="btn primary" disabled>Start onboarding</button></div>';
+    } }
+  ];
+
+  var extras = [
+    { id: 'style', name: 'Working style', body: function () {
+      return '<h2>Working style</h2><p class="lede">Leave the defaults and Dana chooses these in the first conversation. Anything you set here is offered to Dana as a starting point.</p>' +
+        '<div class="fields"><div class="field"><label>Tone</label><div class="pills">' +
+        ['Warm & professional', 'Brief & direct', 'Formal', 'Friendly'].map(function (t) { return '<button type="button" class="pill" data-tone="' + t + '" aria-pressed="' + (t === toneSel) + '">' + t + '</button>'; }).join('') +
+        '</div></div><div class="field"><label>Independence</label><select><option>Ask first (default)</option><option>Draft only</option><option>Spot-check</option></select></div></div>' ;
+    } },
+    { id: 'workspace', name: 'Google Workspace', body: '<h2>Google Workspace</h2><p class="lede">Lets Curia work in Google Docs, Sheets, Slides and Drive from its own Google account, and share files with Dana.</p>' +
+      '<div class="fields">' + f('Curia’s Google address', 'curia@okafor-ventures.com', '', 'email') +
+      '<div class="field"><label>OAuth client ID <span class="hint">from Google Cloud</span></label><input type="text" value=""></div>' +
+      '<div class="field"><label>OAuth client secret</label><input type="password" value=""></div></div>' +
+      '<div class="note">You can use the same Google Cloud project as Dana’s email &amp; calendar. Add Curia’s callback to its redirect URIs.</div>' +
+      '<div class="foot" style="border:0;margin-top:16px;padding-top:0"><button type="button" class="btn">Sign in as Curia</button><button type="button" class="link">Guide: Google Cloud setup</button></div>' },
+    { id: 'search', name: 'Higher search limit', body: '<h2>Higher web search limit</h2><p class="lede">Web search works without a key, but only a few dozen searches an hour. A free key from <a href="https://tavily.com" target="_blank" rel="noopener">Tavily</a> raises the limit. <button type="button" class="link">Learn more about the limits</button></p><div class="fields">' + '<div class="field"><label>Tavily API key <span class="hint">starts with tvly-</span></label><input type="password" value=""></div></div>' }
+  ];
+
+  var caps = [
+    { id: 'meetings', name: 'Meetings', d: 'Agendas before a meeting, notes during it, minutes after. Dana\u2019s onboarding sessions run on this.', on: true, fixed: 'Always on' },
+    { id: 'debrief', name: 'Meeting debriefs', d: 'After a meeting, Curia asks Dana a few quick questions and files the follow-ups.', on: true },
+    { id: 'research', name: 'Web research', d: 'Searches and reads the web, and hands bigger questions to a research analyst who writes up the findings.', on: true },
+    { id: 'projects', name: 'Projects and tasks', d: 'Keeps track of work Dana hands off, and follows up until it\u2019s done.', on: true },
+    { id: 'diagnostics', name: 'Diagnostics', d: 'Dana can ask Curia why something didn\u2019t work, and get a plain answer.', on: true },
+    { id: 'triage', name: 'Email triage', d: 'Sorts and labels Dana\u2019s inbox, and archives what doesn\u2019t need attention.', on: false, fixed: 'Dana turns this on during onboarding' }
+  ];
+  extras.push({ id: 'capabilities', name: 'Capabilities', body: function () {
+    return '<h2>Capabilities</h2><p class="lede">What Curia can do for Dana. Most people keep the defaults. You can change these later in Settings.</p>' +
+      '<div class="caps">' + caps.map(function (c) {
+        return '<div class="cap"><div><b>' + c.name + '</b><span class="d">' + c.d + '</span></div>' +
+          (c.fixed ? '<span class="fixed">' + c.fixed + '</span>' : '') +
+          '<button type="button" class="switch" role="switch" data-cap="' + c.id + '" aria-checked="' + c.on + '" aria-label="' + c.name + '"' + (c.fixed ? ' disabled' : '') + '></button></div>';
+      }).join('') + '</div>';
+  } });
+
+  var current = 'msg';
+
+  function renderList() {
+    var html = '', lastG = '';
+    steps.forEach(function (s) {
+      if (s.g !== lastG) { html += '<div class="group">' + s.g + '</div>'; lastG = s.g; }
+      var cls = s.st === 'done' ? 'done' : s.st === 'attn' ? 'attn' : s.st === 'locked' ? 'locked' : '';
+      html += '<button type="button" class="step ' + cls + '" data-step="' + s.id + '"' + (current === s.id ? ' aria-current="step"' : '') + '><span class="dot">' + (s.st === 'done' ? CHECK : '') + '</span>' + s.name + '</button>';
+    });
+    html += '<div class="group">Optional extras</div>';
+    extras.forEach(function (e) {
+      html += '<button type="button" class="step" data-step="' + e.id + '"' + (current === e.id ? ' aria-current="step"' : '') + '><span class="dot"></span>' + e.name + '</button>';
+    });
+    document.getElementById('list').innerHTML = html;
+    var req = steps.filter(function (s) { return !s.optional && s.id !== 'start'; });
+    document.getElementById('count').textContent = req.filter(function (s) { return s.st === 'done'; }).length + ' of ' + req.length + ' required steps done';
+  }
+
+  function renderPane() {
+    var s = steps.find(function (x) { return x.id === current; });
+    var e = extras.find(function (x) { return x.id === current; });
+    var idx = steps.indexOf(s);
+    var body = s ? s.body() : (typeof e.body === 'function' ? e.body() : e.body);
+    var nav = s && s.id !== 'start'
+      ? '<div class="foot"><button type="button" class="btn primary" data-next="1">Save and continue</button><button type="button" class="link help">Need help? Ask the setup guide</button></div>'
+      : '<div class="foot"><button type="button" class="link help">Need help? Ask the setup guide</button></div>';
+    var eyebrow = s ? 'Step ' + (idx + 1) + ' of ' + steps.length + ' · ' + s.g : 'Optional extra';
+    document.getElementById('pane').innerHTML = '<div class="eyebrow">' + eyebrow + '</div>' + body + nav;
+  }
+
+  // When the open step changes while the guide is open, drop a marker into the
+  // thread so the conversation keeps pace with the form (client-side only).
+  var lastMarked = 'msg';
+  function markStep() {
+    if (drawer.hidden || current === lastMarked) return;
+    var s = steps.find(function (x) { return x.id === current; }) || extras.find(function (x) { return x.id === current; });
+    var msgs = drawer.querySelector('.msgs');
+    var d = document.createElement('div');
+    d.className = 'ctx';
+    d.textContent = 'Now on: ' + s.name;
+    msgs.appendChild(d);
+    msgs.scrollTop = msgs.scrollHeight;
+    lastMarked = current;
+  }
+
+  function render() { renderList(); renderPane(); markStep(); }
+
+  var drawer = document.getElementById('drawer');
+  var page = document.querySelector('.page');
+  function setGuide(open) {
+    drawer.hidden = !open;
+    page.classList.toggle('guide-open', open);
+    document.body.classList.toggle('guide-open', open);
+    if (open) markStep();
+  }
+  document.getElementById('close-guide').addEventListener('click', function () { setGuide(false); });
+  document.getElementById('show-steps').addEventListener('click', function () { setGuide(false); });
+  document.getElementById('composer').addEventListener('submit', function (ev) { ev.preventDefault(); });
+  setGuide(window.innerWidth > 760);
+
+  document.addEventListener('click', function (ev) {
+    if (ev.target.closest('.foot .help')) {
+      var s = steps.find(function (x) { return x.id === current; }) || extras.find(function (x) { return x.id === current; });
+      var input = document.getElementById('guide-input');
+      input.value = 'I’m on the ' + s.name + ' step. ';
+      setGuide(true);
+      input.focus();
+      return;
+    }
+    var sw = ev.target.closest('[data-cap]');
+    if (sw && !sw.disabled) {
+      var c = caps.find(function (x) { return x.id === sw.dataset.cap; });
+      c.on = !c.on; render(); return;
+    }
+    var t = ev.target.closest('[data-step],[data-group],[data-tone],[data-next]');
+    if (!t) return;
+    if (t.dataset.step) { current = t.dataset.step; }
+    else if (t.dataset.group === 'msg') { msgRoute = t.dataset.id; if (msgRoute !== 'sms') voiceRoute = msgRoute === 'signal' ? 'signal' : 'app'; }
+    else if (t.dataset.group === 'voice') { voiceRoute = t.dataset.id; }
+    else if (t.dataset.group === 'who') { forWhom = t.dataset.id; }
+    else if (t.dataset.tone) { toneSel = t.dataset.tone; }
+    else if (t.dataset.next) {
+      var i = steps.findIndex(function (x) { return x.id === current; });
+      if (i >= 0 && i < steps.length - 1) current = steps[i + 1].id;
+    }
+    render();
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
