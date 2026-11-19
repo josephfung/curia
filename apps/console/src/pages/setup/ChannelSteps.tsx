@@ -4,7 +4,7 @@
 // links to; the steps' own forms replace those links in a later PR.
 import { useState, type JSX } from 'react';
 import { saveSetupFields, type MessagingRoute, type SetupFields, type VoiceRoute } from './setup-api.js';
-import type { ChecklistTask } from './setup-steps.js';
+import { atSentenceStart, type ChecklistTask } from './setup-steps.js';
 import { ChoiceGroup, StatusLine, StepFooter } from './setup-ui.js';
 
 const DOCS_ORIGIN = 'https://docs.meetcuria.com';
@@ -52,7 +52,7 @@ export function EmailStep({ task, onContinue, onHelp }: StepProps): JSX.Element 
 export function SignInStep({ task, principal, onContinue, onHelp }: StepProps): JSX.Element {
   return (
     <div>
-      <h2>{principal === 'your principal' ? 'Your principal’s email and calendar' : `${principal}’s email and calendar`}</h2>
+      <h2>{atSentenceStart(principal)}’s email and calendar</h2>
       <p className="setup-lede">
         Lets {principal} connect their own Google account by signing in, with no grant IDs to copy. It uses the Nylas key from the Email step.
         A connected mailbox isn’t needed to finish Setup: {principal} can connect it in the first conversation.
@@ -149,9 +149,9 @@ export function VoiceStep({ task, principal, fields, onSaved, onContinue, onHelp
         value={route}
         onChange={(next) => void pick(next)}
         options={[
-          { value: 'app', title: 'In the Curia app', description: `${principal} taps to call from the phone app or the console.`,
+          { value: 'app', title: 'In the Curia app', description: `${atSentenceStart(principal)} taps to call from the phone app or the console.`,
             tag: fields.messagingRoute === 'app' ? 'Matches messaging' : undefined },
-          { value: 'signal', title: 'Signal call', description: `${principal} calls Curia’s Signal number.`,
+          { value: 'signal', title: 'Signal call', description: `${atSentenceStart(principal)} calls Curia’s Signal number.`,
             tag: fields.messagingRoute === 'signal' ? 'Matches messaging' : undefined },
           // Telnyx phone calls are out of scope for #2358; shown so the gap is visible, not explained.
           { value: 'phone', title: 'Phone', description: 'Call Curia on a dedicated phone line (coming soon).', disabled: true },

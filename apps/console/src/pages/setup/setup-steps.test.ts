@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  atSentenceStart,
   firstName,
   firstOpenStep,
   groupLabel,
@@ -91,6 +92,11 @@ describe('names', () => {
     expect(principalLabel(null)).toBe('your principal');
     expect(groupLabel('accounts', 'Dana')).toBe('Dana’s accounts');
     expect(groupLabel('accounts', null)).toBe('Your principal’s accounts');
+  });
+
+  it('capitalizes the label at the start of a sentence, and leaves a name alone', () => {
+    expect(atSentenceStart('your principal')).toBe('Your principal');
+    expect(atSentenceStart('Dana')).toBe('Dana');
   });
 
   it('lists what is left in step order', () => {
