@@ -14,8 +14,9 @@ import { assertSecret, CONSOLE_RATE, hashToken, readSessionCookie, type SessionS
 import { writeSseHead } from '../console-sessions.js';
 import { markdownToHtml } from '../../../format/markdown-to-html.js';
 import { fetchChatHistoryPage } from '../chat-history-page.js';
-import { getOrCreateWebThread, readClientMessageId } from '../web-thread.js';
-import { readSetupStep } from '../../../setup/setup-guide.js';
+import { getOrCreateWebThread, readClientMessageId, readWebThreadAndSetupPhase } from '../web-thread.js';
+import { readSetupStep, SETUP_GUIDE_METADATA_KEY } from '../../../setup/setup-guide.js';
+import { routesWebChatToSetupGuide } from '../../../setup/setup-state.js';
 
 export interface ChatRouteOptions {
   pool: Pool;
@@ -106,9 +107,15 @@ export async function chatRoutes(
       return reply.status(400).send({ error: 'Missing required field: message (non-empty string)' });
     }
 
+    // The thread and the Setup phase come from one snapshot (#2358), so the message is bound
+    // to one side of Start onboarding at acceptance: the Setup thread and the setup guide, or
+    // the principal's thread and the coordinator. Routing never re-reads the phase later.
     let conversationId: string;
+    let setupGuide: boolean;
     try {
-      conversationId = await getOrCreateWebThread(pool);
+      const snapshot = await readWebThreadAndSetupPhase(pool);
+      conversationId = snapshot.conversationId;
+      setupGuide = routesWebChatToSetupGuide(snapshot.setupPhase);
     } catch (err) {
       logger.error({ err }, 'chat thread lookup failed');
       return reply.status(503).send({ error: 'Chat is temporarily unavailable. Please try again.' });
@@ -123,7 +130,7 @@ export async function chatRoutes(
     const clientMessageId = readClientMessageId(body.clientMessageId);
     // The Setup page's open step (#2358), for the setup guide. A catalog id or a step id:
     // anything else is dropped, not refused, so a stale client never loses a message.
-    const setupStep = readSetupStep(body.setupStep);
+    const setupStep = setupGuide ? readSetupStep(body.setupStep) : null;
 
     // stagePublish persists the inbound without waiting for the agent turn.
     // The echo goes out before deliver(), so other devices see the question
@@ -137,7 +144,11 @@ export async function chatRoutes(
         content: body.message,
         // Tag with structural channel trust level — session-cookie auth earns medium trust,
         // same as bearer token auth on the API channel. Required for messageTrustScore computation.
-        metadata: { trustLevel: 'medium', ...(setupStep ? { setupStep } : {}) },
+        metadata: {
+          trustLevel: 'medium',
+          ...(setupGuide ? { [SETUP_GUIDE_METADATA_KEY]: true } : {}),
+          ...(setupStep ? { setupStep } : {}),
+        },
       }));
     } catch (publishErr) {
       // Log the real error server-side (full context) but return a fixed,

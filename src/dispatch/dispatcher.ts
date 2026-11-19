@@ -2,7 +2,7 @@ import type { EventBus } from '../bus/bus.js';
 import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent, ToolResultEvent, OutboundBlockedEvent, AuthorizationDecisionEvent } from '../bus/events.js';
 import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplicate, createOutboundNoReply, createPrincipalReport, createContactResolved, createContactUnknown, createMessageRejected, createConversationCheckpoint, createAuthorizationDecision } from '../bus/events.js';
 import type { Logger } from '../logger.js';
-import { NO_SETUP_STEP, readSetupStep, SETUP_GUIDE_AGENT_ID } from '../setup/setup-guide.js';
+import { NO_SETUP_STEP, readSetupStep, SETUP_GUIDE_AGENT_ID, SETUP_GUIDE_METADATA_KEY } from '../setup/setup-guide.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import {
   summarizeAuthorizationDecision,
@@ -181,11 +181,6 @@ export interface DispatcherConfig {
   auditLogRepo?: Pick<AuditLogRepo, 'findToolResultsForTasks'>;
   /** Milliseconds of inactivity before conversation.checkpoint fires. Default: 600000. */
   conversationCheckpointDebounceMs?: number;
-  /**
-   * True while a new install is in Setup (#2358): web chat is then the operator's, so it
-   * goes to the setup guide instead of the coordinator. Absent means never.
-   */
-  setupGuideActive?: () => Promise<boolean>;
   /** Weights for messageTrustScore computation. Defaults to DEFAULT_TRUST_WEIGHTS if omitted. */
   trustScorerWeights?: TrustScorerWeights;
   /** In-memory rate limiter. When provided, enforces global and per-sender message rate limits.
@@ -438,7 +433,6 @@ export class Dispatcher {
   /** Key: `${conversationId}:${agentId}` — reset on every agent.response */
   private checkpointTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private pool: DbPool | undefined;
-  private setupGuideActive?: () => Promise<boolean>;
   private auditLogRepo: DispatcherConfig['auditLogRepo'];
   private conversationCheckpointDebounceMs: number;
   private maxMessageBytes: number;
@@ -470,7 +464,6 @@ export class Dispatcher {
     this.injectionScanner = config.injectionScanner;
     this.rateLimiter = config.rateLimiter;
     this.pool = config.pool;
-    this.setupGuideActive = config.setupGuideActive;
     this.auditLogRepo = config.auditLogRepo;
     this.conversationCheckpointDebounceMs = config.conversationCheckpointDebounceMs ?? 600_000;
     this.trustScorerWeights = config.trustScorerWeights ?? DEFAULT_TRUST_WEIGHTS;
@@ -1407,7 +1400,10 @@ export class Dispatcher {
 
     // During Setup (#2358) web chat is the operator asking the setup guide for help, not the
     // principal: it skips the coordinator and everything built for a principal turn below.
-    const setupGuide = await this.routesToSetupGuide(payload.channelId, payload.conversationId);
+    // Decided by the chat route when it accepted the message (one snapshot of the thread and
+    // the Setup phase), never re-read here: a message accepted just before Start onboarding
+    // must not reach the coordinator, whose turns feed extraction.
+    const setupGuide = payload.channelId === 'web' && payload.metadata?.[SETUP_GUIDE_METADATA_KEY] === true;
     // Every setup guide turn carries a step, NO_SETUP_STEP when the client named none: the
     // runtime's "[Setup page: ...]" line is how the agent knows it is talking to the operator.
     const setupStep = setupGuide ? (readSetupStep(payload.metadata?.['setupStep']) ?? NO_SETUP_STEP) : null;
@@ -2965,20 +2961,6 @@ export class Dispatcher {
       contentBlockSalvage: true,
     });
     await this.bus.publish('dispatch', outbound);
-  }
-
-  /**
-   * Whether this inbound goes to the setup guide (#2358): web chat while Setup runs. A
-   * failed read routes to the coordinator, as on any install that is not in Setup, and logs.
-   */
-  private async routesToSetupGuide(channelId: string, conversationId: string): Promise<boolean> {
-    if (channelId !== 'web' || !this.setupGuideActive) return false;
-    try {
-      return await this.setupGuideActive();
-    } catch (err) {
-      this.logger.error({ err, conversationId }, 'Could not read whether Setup is running — routing web chat to the coordinator');
-      return false;
-    }
   }
 
   private scheduleCheckpoint(conversationId: string, agentId: string, channelId: string): void {

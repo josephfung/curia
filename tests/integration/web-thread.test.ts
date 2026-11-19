@@ -1,9 +1,9 @@
 // The shared web thread is one Postgres row. These cases use the real server
 // so a typo in the adoption query or the insert race cannot hide behind a stub.
 // Skips when DATABASE_URL is unset. CI migrates before the suite.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import pg from 'pg';
-import { clearWebThreadCache, getOrCreateWebThread, rotateWebThread } from '../../src/channels/http/web-thread.js';
+import { clearWebThreadCache, getOrCreateWebThread, readWebThreadAndSetupPhase, rotateWebThread, type WebThreadQueryable } from '../../src/channels/http/web-thread.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const { Pool } = pg;
@@ -23,6 +23,8 @@ describeIf('web thread (integration)', () => {
     'wt-race-b',
     'wt-rotated',
     'wt-rotated-fresh',
+    'wt-before-race',
+    'wt-after-race',
   ];
 
   beforeAll(async () => {
@@ -113,5 +115,52 @@ describeIf('web thread (integration)', () => {
     await expect(rotateWebThread(pool, { newId: () => 'wt-rotated-fresh' })).resolves.toBe('wt-rotated-fresh');
     const stored = await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1');
     expect(stored.rows[0]?.conversation_id).toBe('wt-rotated-fresh');
+  });
+
+  // A cold-cache read that saw the old row must not overwrite a rotation that finished
+  // while it ran (#2358, CodeRabbit on #2687).
+  it('a read in flight during a rotation returns, and keeps, the new id', async () => {
+    await rotateWebThread(pool, { newId: () => 'wt-before-race' });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let held = false;
+    // One wrapper for both callers: the cache is keyed by the pool object.
+    const slow: WebThreadQueryable = {
+      query: async (sql, params) => {
+        const result = await pool.query(sql, params as unknown[]);
+        if (!held && sql.includes('SELECT conversation_id FROM web_thread')) {
+          held = true;
+          await gate;
+        }
+        return result;
+      },
+    };
+    clearWebThreadCache(slow);
+    const inFlight = getOrCreateWebThread(slow);
+    await vi.waitFor(() => expect(held).toBe(true));
+    await rotateWebThread(slow, { newId: () => 'wt-after-race' });
+    release();
+    await expect(inFlight).resolves.toBe('wt-after-race');
+    await expect(getOrCreateWebThread(slow)).resolves.toBe('wt-after-race');
+  });
+
+  it('reads the thread and the Setup phase together', async () => {
+    const saved = (await pool.query('SELECT * FROM setup_state WHERE id = 1')).rows[0] as Record<string, unknown> | undefined;
+    try {
+      await pool.query('DELETE FROM setup_state WHERE id = 1');
+      await rotateWebThread(pool, { newId: () => 'wt-after-race' });
+      await expect(readWebThreadAndSetupPhase(pool)).resolves.toEqual({ conversationId: 'wt-after-race', setupPhase: null });
+      await pool.query(`INSERT INTO setup_state (id, phase) VALUES (1, 'in_progress')`);
+      await expect(readWebThreadAndSetupPhase(pool)).resolves.toEqual({ conversationId: 'wt-after-race', setupPhase: 'in_progress' });
+    } finally {
+      await pool.query('DELETE FROM setup_state WHERE id = 1');
+      if (saved) {
+        const cols = Object.keys(saved);
+        await pool.query(
+          `INSERT INTO setup_state (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`,
+          cols.map((c) => saved[c]),
+        );
+      }
+    }
   });
 });
