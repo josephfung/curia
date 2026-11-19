@@ -126,9 +126,9 @@ export function MessagingStep({ task, principal, fields, onSaved, onContinue, on
 export function VoiceStep({ task, principal, fields, onSaved, onContinue, onHelp }: RouteStepProps): JSX.Element {
   const [route, setRoute] = useState<VoiceRoute | null>(fields.voiceRoute);
   const [error, setError] = useState<string | null>(null);
-  const textOnly = fields.messagingRoute === 'sms' || fields.messagingRoute === 'slack';
 
-  async function pick(next: VoiceRoute): Promise<void> {
+  async function pick(next: VoiceRoute | 'phone'): Promise<void> {
+    if (next === 'phone') return; // Shown as coming soon; never selectable.
     setRoute(next);
     setError(null);
     try {
@@ -144,11 +144,6 @@ export function VoiceStep({ task, principal, fields, onSaved, onContinue, onHelp
     <div>
       <h2>How will {principal} talk to Curia?</h2>
       <p className="setup-lede">Voice is required, so {principal} can choose a call or chat for any session.</p>
-      {textOnly && (
-        <div className="setup-note">
-          {fields.messagingRoute === 'sms' ? 'Text messages' : 'Slack'} can’t carry calls, so {principal} will call Curia in the Curia app or on Signal.
-        </div>
-      )}
       <ChoiceGroup
         label="Voice route"
         value={route}
@@ -158,6 +153,8 @@ export function VoiceStep({ task, principal, fields, onSaved, onContinue, onHelp
             tag: fields.messagingRoute === 'app' ? 'Matches messaging' : undefined },
           { value: 'signal', title: 'Signal call', description: `${principal} calls Curia’s Signal number.`,
             tag: fields.messagingRoute === 'signal' ? 'Matches messaging' : undefined },
+          // Telnyx phone calls are out of scope for #2358; shown so the gap is visible, not explained.
+          { value: 'phone', title: 'Phone', description: 'Call Curia on a dedicated phone line (coming soon).', disabled: true },
         ]}
       />
       {error && <p className="setup-status attention" role="alert">{error}</p>}
