@@ -867,6 +867,14 @@ describeIf('/api/setup/* routes', () => {
       expect(row.rows[0]?.title).toBe('CEO');
     });
 
+    it('GET principal returns the primary email after a correction, not the first one linked (#2358)', async () => {
+      await appSetupMode.inject({ method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER, payload: { name: 'Profile Owner' } });
+      await appSetupMode.inject({ method: 'POST', url: '/api/setup/principal/profile', headers: AUTH_HEADER, payload: { timezone: 'America/Toronto', email: 'old-address@example.com' } });
+      await appSetupMode.inject({ method: 'POST', url: '/api/setup/principal/profile', headers: AUTH_HEADER, payload: { timezone: 'America/Toronto', email: 'new-address@example.com' } });
+      const res = await appSetupMode.inject({ method: 'GET', url: '/api/setup/principal', headers: AUTH_HEADER });
+      expect(res.json().email).toBe('new-address@example.com');
+    });
+
     it('POST profile leaves omitted optional fields untouched', async () => {
       const created = await appSetupMode.inject({
         method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER, payload: { name: 'Partial' },
