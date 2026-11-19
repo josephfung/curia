@@ -43,6 +43,8 @@ export function resultMessage(result: string, target: Target | null): ResultMess
       return { ok: false, title: 'Permissions missing', body: 'Google did not grant everything Curia needs. When Google asks, leave both the mail and calendar boxes ticked, then try again.' };
     case 'not_google':
       return { ok: false, title: 'Not a Google account', body: 'Only Google accounts can be connected this way. Sign in with a Google account.' };
+    case 'account_limit':
+      return { ok: false, title: 'Account limit reached', body: "Nylas's account limit is reached. A Nylas sandbox allows 5 connected accounts. Remove an unused mailbox, or move to a production Nylas application." };
     case 'refused':
       return { ok: false, title: 'Not connected', body: 'Curia could not accept this mailbox. Check the address and the console settings, then try again.' };
     case 'failed':
