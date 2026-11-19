@@ -93,9 +93,9 @@ export default function SetupPage(): JSX.Element {
       case 'email':
         return <EmailStep task={taskFor('email')} principal={principal} onContinue={goNext} />;
       case 'messaging':
-        return <MessagingStep key={`messaging-${fields.messagingRoute ?? ''}`} task={taskFor('messaging')} principal={principal} fields={fields} onSaved={refresh} onContinue={goNext} />;
+        return <MessagingStep key="messaging" task={taskFor('messaging')} principal={principal} fields={fields} onSaved={refresh} onContinue={goNext} />;
       case 'voice':
-        return <VoiceStep key={`voice-${fields.voiceRoute ?? ''}`} task={taskFor('voice')} principal={principal} fields={fields} onSaved={refresh} onContinue={goNext} />;
+        return <VoiceStep key="voice" task={taskFor('voice')} principal={principal} fields={fields} onSaved={refresh} onContinue={goNext} />;
       case 'mailbox_signin':
         return <SignInStep task={taskFor('mailbox_signin')} principal={principal} onContinue={goNext} />;
       case 'apply':

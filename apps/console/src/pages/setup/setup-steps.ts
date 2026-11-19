@@ -148,3 +148,34 @@ export function setupRedirect(pathname: string, session: { inSetup: boolean | nu
   if (session.inSetup) return OPEN_DURING_SETUP.some((p) => underPrefix(pathname, p)) ? null : '/setup';
   return underPrefix(pathname, '/setup') ? '/' : null;
 }
+
+// ── Route saves ──────────────────────────────────────────────────────────────
+
+/**
+ * Runs saves one at a time, latest choice wins. A choice made while a save is in flight
+ * waits; if several arrive, only the newest is saved next. So two quick picks can never
+ * land out of order and leave an older route stored (#2358, CodeRabbit on #2688).
+ * A failed save drops anything queued behind it: the caller shows the error and the
+ * stored value is re-read.
+ */
+export function createLatestSaver<T>(save: (value: T) => Promise<void>): (value: T) => Promise<void> {
+  let running: Promise<void> | null = null;
+  let queued: { value: T } | null = null;
+  return async (value: T): Promise<void> => {
+    queued = { value };
+    if (running) return running;
+    running = (async () => {
+      try {
+        while (queued) {
+          const next: T = queued.value;
+          queued = null;
+          await save(next);
+        }
+      } finally {
+        queued = null;
+        running = null;
+      }
+    })();
+    return running;
+  };
+}

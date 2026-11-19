@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   atSentenceStart,
+  createLatestSaver,
   firstName,
   firstOpenStep,
   groupLabel,
@@ -130,5 +131,60 @@ describe('setupRedirect (the first-load gate)', () => {
 
   it.each(['/setup', '/chat', '/'])('stays on %s when Setup is unknown (a failed, throttled or mid-restart check)', (path) => {
     expect(setupRedirect(path, { inSetup: null })).toBeNull();
+  });
+});
+
+describe('createLatestSaver (route saves)', () => {
+  /** A save that waits until released, recording each value as it starts and ends. */
+  function gatedSave() {
+    const started: string[] = [];
+    const finished: string[] = [];
+    const releases: Array<() => void> = [];
+    const save = async (v: string): Promise<void> => {
+      started.push(v);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      finished.push(v);
+    };
+    return { save, started, finished, releaseNext: () => releases.shift()?.() };
+  }
+  const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  it('never runs two saves at once, and saves the newest pick last', async () => {
+    const g = gatedSave();
+    const submit = createLatestSaver(g.save);
+    const a = submit('signal');
+    const b = submit('sms');
+    const c = submit('slack');
+    await tick();
+    expect(g.started).toEqual(['signal']);
+    g.releaseNext();
+    await tick();
+    // 'sms' was superseded while 'signal' was saving: only the newest pick goes next.
+    expect(g.started).toEqual(['signal', 'slack']);
+    g.releaseNext();
+    await Promise.all([a, b, c]);
+    expect(g.finished).toEqual(['signal', 'slack']);
+  });
+
+  it('starts fresh after a run finishes', async () => {
+    const saved: string[] = [];
+    const submit = createLatestSaver(async (v: string) => { saved.push(v); });
+    await submit('app');
+    await submit('signal');
+    expect(saved).toEqual(['app', 'signal']);
+  });
+
+  it('drops queued picks after a failed save and reports the failure to every waiter', async () => {
+    let calls = 0;
+    const submit = createLatestSaver(async () => {
+      calls++;
+      await tick();
+      throw new Error('500');
+    });
+    const a = submit('signal');
+    const b = submit('sms');
+    await expect(a).rejects.toThrow('500');
+    await expect(b).rejects.toThrow('500');
+    expect(calls).toBe(1);
   });
 });
