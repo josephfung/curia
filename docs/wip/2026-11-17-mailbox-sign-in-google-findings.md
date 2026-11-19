@@ -114,7 +114,12 @@ named in #2361 is now migrated into the registry on boot, so the callback should
   call also returns the region and the registered callback URIs.
 - `POST /v3/applications/redirect-uris` registers Curia's callback.
 - `POST /v3/connectors` creates the Google connector from the GCP client id and secret. This isn't
-  allowed on Sandbox apps.
+  allowed on Sandbox apps, and isn't needed there: a Sandbox app ships with Nylas's own Google
+  connector, which grants every scope Curia asks for. Hosted auth works through it.
+
+*Corrected 2026-11-18, after the first deploy:* a Sandbox app suits a single install. Its limit is 5
+connected accounts (grants), across Curia's mailboxes and the principal's. A production application
+is for more than 5 accounts, or for sign-in through your own Google app.
 - `/v3/connect/auth` and `/v3/connect/token` run hosted auth, with the **API key as `client_secret`**.
 - `GET /v3/grants?email=` and `DELETE /v3/grants/{id}` find and remove grants.
 - The region can be found by probing `GET /v3/applications` on US, then EU. Today the
@@ -146,7 +151,8 @@ client, so **no Curia code is needed** to answer Q1 and Q2.
 
 **Setup (once):**
 
-1. A non-Sandbox Nylas app, with a Google connector built from a new GCP project's **Web** OAuth client.
+1. A production Nylas app, with a Google connector built from a new GCP project's **Web** OAuth client.
+   (The run tests your own Google app; a Sandbox app's built-in connector is Nylas's, not yours.)
 2. On the consent screen: External, **In production** (not Testing), unverified. Scopes: `gmail.modify`,
    `gmail.compose`, `calendar`, `calendar.events`.
 
