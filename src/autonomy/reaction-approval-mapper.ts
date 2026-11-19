@@ -21,6 +21,7 @@ import type { Logger } from '../logger.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import type { ChannelIdentity } from '../contacts/types.js';
 import { isPrincipalIdentity } from '../contacts/principal-recipient.js';
+import { inboundSenderAuthenticated } from '../dispatch/outbound-entry-access.js';
 import type { ActionLogRepo } from './action-log-repo.js';
 import { RESOLVED_BY, type ActionLogRow } from './action-log-types.js';
 import type { ExecutionLayer } from '../skills/execution.js';
@@ -396,9 +397,17 @@ export class ReactionApprovalMapper {
         conversationId: row.conversationId ?? undefined,
         liveTurn: true,
         // The reactor was checked against the principal's identities above. systemRole makes the
-        // replay a live principal turn, so a queued elevated skill passes its gate (#2495).
+        // replay a live principal turn, so a queued elevated skill passes its gate (#2495). Only
+        // Signal and Slack publish reactions today, and both authenticate the reactor; the channel
+        // decides, so a reaction on a channel that does not carries no authority
+        // (GHSA-p49r-jqh2-v668).
         taskMetadata: {
-          originator: { contactId: deciderId, systemRole: 'principal', channel: channelId },
+          originator: {
+            contactId: deciderId,
+            systemRole: 'principal',
+            channel: channelId,
+            authenticated: inboundSenderAuthenticated(channelId, undefined),
+          },
         },
       },
     );

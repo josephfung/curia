@@ -144,6 +144,11 @@ has made a one-click step during Setup.
 
 ## Phase 1 — Setup (the operator)
 
+> **Reworked 2026-11-19 (#2358).** The `/setup` form and the setup checklist become one Setup page in
+> the console, with the setup agent as a help panel beside it and a Capabilities page. #2358's
+> description is the current spec for this phase until this section is rewritten. Mockup:
+> [`setup-page-mockup.html`](2026-10-29-onboarding-journey-design/setup-page-mockup.html).
+
 ### 1a. Install (~5 minutes)
 
 What's needed: Docker with Compose, an LLM key, and **a domain or HTTPS route** to the host.
@@ -185,8 +190,10 @@ checked 2026-11-01):
 - **How the sign-in works** (Nylas v3 hosted authentication). Curia mints a single-use link to
   Nylas's `/v3/connect/auth` with a `state` token and a `login_hint` of the principal's address.
   The principal signs in with their provider; Nylas redirects to a callback on the Curia server;
-  Curia exchanges the code for a grant id, stores it as `ceo_nylas_grant_id`, and emits a
-  one-time "connected" event. The pattern copies secret capture (`src/secrets/secret-capture-service.ts`:
+  Curia exchanges the code for a grant id, writes it to the `principal_mailboxes` registry (not the
+  retired flat `ceo_nylas_grant_id` key), and emits a one-time `principal_mailbox.connected` event
+  (built in #2361). Curia's own mailbox uses the same flow and connector; its callback writes an
+  `email_accounts` row instead, then restarts Curia. The pattern copies secret capture (`src/secrets/secret-capture-service.ts`:
   single-use token, public bearer-exempt route, an event that resumes the agent). The callback
   must be reachable from the principal's phone, which is one more reason HTTPS is an install
   requirement.
@@ -195,9 +202,12 @@ checked 2026-11-01):
   (`src/index.ts:1134-1169`); they must pick up the new grant without the operator restarting
   anything. How (hot rebind, or a controlled self-restart after the session) is the builder's
   call, but no operator action is allowed.
-- **What the operator configures in Nylas:** a non-Sandbox application (Sandbox scopes are
-  fixed); its client id, which Curia doesn't hold today (new config, with the region's API URL);
-  a connector for the principal's provider; and Curia's callback URL under hosted authentication.
+- **What the operator configures in Nylas:** an application (a Sandbox works for a single
+  install: its built-in Google connector grants the scopes Curia needs, up to 5 accounts;
+  #2361); a connector for the principal's provider, unless the Sandbox's built-in one is used;
+  and Curia's callback URL under hosted authentication. There is no client-id config: Curia derives the client id from the Nylas
+  application itself (`GET /v3/applications`) with the saved API key, and the region is selectable
+  (us or eu) or detected. Console setup registers the callback and creates the connector from the API key.
 - **Google.** The operator brings their own Google Cloud project and OAuth client (Nylas's shared
   Google app needs a paid annual plan). Curia needs `gmail.modify` and `gmail.compose`, which
   Google classes as *restricted*. Verifying an app for restricted scopes needs a paid security
@@ -209,9 +219,10 @@ checked 2026-11-01):
      once, and the guide and Curia both warn them it's coming.
   3. **Never "Testing" status:** refresh tokens expire after 7 days and the grant breaks weekly.
 
-  Still unverified: whether Google keeps allowing restricted scopes on an unverified production
-  app indefinitely, and whether a Workspace admin's controls on unconfigured apps would block it.
-  The #2361 guide must confirm both with a real run.
+  Evidence so far (2026-11-17, see `2026-11-17-mailbox-sign-in-google-findings.md`): an External,
+  In-production, unverified app holding a restricted scope kept working past 7 days. Still open: the
+  same with the Gmail scopes, and whether a Workspace admin's controls on unconfigured apps would
+  block it (the callback reports `admin_blocked` and `org_internal` with what to ask the admin).
 - **Microsoft 365 (follow-up, not this milestone).** For the record: a multi-tenant app
   registration with delegated `Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite` and
   `offline_access`; its client secret lasts at most 24 months and grants break when it expires;

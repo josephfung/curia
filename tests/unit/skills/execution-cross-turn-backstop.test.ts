@@ -403,9 +403,11 @@ describe('ExecutionLayer cross-turn backstop (#2588)', () => {
         expect(text).toContain('contact-message on "Alice Example" at ');
       });
 
-      it('the principal on SMS sees the details unstamped', async () => {
+      // GHSA-p49r-jqh2-v668: an SMS from the principal's number may be spoofed, like a forged From.
+      it('the principal on SMS gets the generic line', async () => {
         const text = await holdSeenBy(BOB, PRINCIPAL, 'sms', { conversationId: 'sms:+15551234567' });
-        expect(text).toContain('contact-message on "Alice Example" at ');
+        expect(text).toContain(GENERIC);
+        expect(text).not.toContain('Alice Example');
       });
 
       it("the principal's turn sees a forged principal turn's action as someone else's", async () => {

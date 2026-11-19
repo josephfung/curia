@@ -23,7 +23,7 @@ const PRINCIPAL_ID = '33333333-3333-4333-8333-333333333333';
 const CONTACT_ID = '44444444-4444-4444-8444-444444444444';
 
 const principalOriginator: TaskOriginator = {
-  contactId: PRINCIPAL_ID, systemRole: 'principal', channel: 'email', initiatedAt: '2026-10-26T00:00:00Z', tier: 'principal',
+  contactId: PRINCIPAL_ID, systemRole: 'principal', authenticated: true, channel: 'email', initiatedAt: '2026-10-26T00:00:00Z', tier: 'principal',
 };
 const outsiderOriginator: TaskOriginator = {
   contactId: CONTACT_ID, systemRole: null, channel: 'email', initiatedAt: '2026-10-26T00:00:00Z', tier: 'known',
@@ -147,6 +147,15 @@ describe('TaskOutreachService confirmed (#2312)', () => {
     const { service, record } = makeService();
     await service.recordForTurn(principalTask, { via: 'phone', summary: 'Called' });
     expect(record).toHaveBeenLastCalledWith(expect.objectContaining({ confirmed: true }));
+  });
+
+  // GHSA-p49r-jqh2-v668: a forged From or spoofed SMS number is the principal's identity
+  // without the principal's authority, so its acts are not confirmed.
+  it('an explicit act on an unauthenticated principal turn is not confirmed', async () => {
+    const { service, record } = makeService();
+    const forged = { ...principalTask, taskMetadata: { ...principalTask.taskMetadata, originator: { ...principalOriginator, channel: 'sms', authenticated: false } } };
+    await service.recordForTurn(forged, { via: 'phone', summary: 'Called' });
+    expect(record).toHaveBeenLastCalledWith(expect.objectContaining({ confirmed: false }));
   });
 
   it('a backstop row is never confirmed, even on a principal turn', async () => {

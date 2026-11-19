@@ -60,10 +60,12 @@ import { channelRegistryRoutes } from './routes/channel-registry.js';
 import { mcpRegistryRoutes } from './routes/mcp-registry.js';
 import { vaultRoutes } from './routes/vault.js';
 import { emailAccountsRoutes } from './routes/email-accounts.js';
+import { nylasSetupRoutes } from './routes/nylas-setup.js';
 import { principalMailboxesRoutes } from './routes/principal-mailboxes.js';
 import { EmailAccountsRepo } from '../email/email-accounts-repo.js';
 import { SecretUsageRepo } from '../../secrets/secret-usage-repo.js';
 import { secretCaptureRoutes } from './routes/secret-capture.js';
+import { mailboxSignInRoutes, type MailboxSignInRouteOptions } from './routes/mailbox-signin.js';
 import { setupRoutes } from './routes/setup.js';
 import { smsWebhookRoutes } from '../sms/webhook-route.js';
 import { SmsWebhookBridge } from '../sms/webhook-bridge.js';
@@ -102,6 +104,20 @@ function createFallbackHealthService(pool: Pool, logger: Logger): HealthService 
     },
     config: DEFAULT_HEALTH_CONFIG,
   } as never);
+}
+
+/**
+ * Exit the process after `delayMs` so the supervisor boots it fresh: the setup wizard's restart
+ * and the Curia-mailbox sign-in (#2361) use it.
+ *
+ * No .unref() on the timer: the whole point of this scheduled exit is to be the forcing function
+ * that brings the process down. .unref() would let Node exit early (defeating the explicit exit),
+ * or — worse — let the process hang if some other ref is keeping the loop alive and the timer
+ * never fires. The delays used are short enough that the active ref doesn't meaningfully prolong
+ * a healthy shutdown.
+ */
+export function scheduleProcessExit(delayMs: number): void {
+  setTimeout(() => process.exit(0), delayMs);
 }
 
 export interface HttpAdapterConfig {
@@ -151,6 +167,18 @@ export interface HttpAdapterConfig {
   /** Backs the public /api/secret-capture/* routes (one-time tokenized secret capture, #971).
    *  Token-authed, so mounted independently of the bootstrap secret. */
   secretCaptureService?: import('../../secrets/secret-capture-service.js').SecretCaptureService;
+  /** Backs the public /api/mailbox-signin/* routes (mailbox sign-in through Nylas hosted auth, #2361).
+   *  Token-authed, so mounted independently of the bootstrap secret. */
+  mailboxSignIn?: {
+    service: MailboxSignInRouteOptions['signIn'] & { pruneExpired(): Promise<number> }
+      & Pick<import('../../nylas/mailbox-signin-service.js').MailboxSignInService, 'mint' | 'mintForOperator'>;
+    readiness: MailboxSignInRouteOptions['readiness'];
+    readApiKey: MailboxSignInRouteOptions['readApiKey'];
+    /** The bound callback logic (handleMailboxSignInCallback). Absent: the callback answers failed. */
+    callback?: MailboxSignInRouteOptions['callback'];
+    /** The boot-time Nylas key and region, so the console's readiness shows restart_required (R11). */
+    boot?: import('../../nylas/signin-readiness.js').NylasBootConfig;
+  };
   /**
    * True when the process booted without a principal contact and is running in
    * setup-required mode (email + Signal adapters are skipped until restart).
@@ -165,6 +193,8 @@ export interface HttpAdapterConfig {
    * the supervisor brings the new process up). Exposed via GET /api/setup/status.
    */
   bootStartedAt: string;
+  /** The Setup checklist (#2358), for GET /api/setup/checklist and POST /api/setup/complete. */
+  setupChecklist?: () => Promise<import('../../setup/checklist.js').SetupChecklist>;
   /**
    * Constrained LLM access for POST /api/setup/suggest-name (wizard starter-name
    * suggestion, #799). Optional — the endpoint degrades to "unavailable" when absent.
@@ -228,6 +258,8 @@ export class HttpAdapter implements Channel {
   private app: FastifyInstance;
   private config: HttpAdapterConfig;
   private eventRouter: EventRouter;
+  /** The 60 s session / capture-token / sign-in-token sweep; cleared in stop(). */
+  private pruneInterval: NodeJS.Timeout | undefined;
 
   constructor(config: HttpAdapterConfig) {
     this.config = config;
@@ -370,7 +402,8 @@ export class HttpAdapter implements Channel {
     // query against the same pool, piling up work and exhausting connections — the same
     // overlap the sessions guard prevents for its own DELETE.
     let isPruningCaptureTokens = false;
-    const pruneInterval = setInterval(() => {
+    let isPruningSignInTokens = false;
+    this.pruneInterval = setInterval(() => {
       const now = Date.now();
       for (const [tokenHash, entry] of sessions) {
         const expiresAt = sessionExpiresAt(entry);
@@ -389,6 +422,17 @@ export class HttpAdapter implements Channel {
           .finally(() => { isPruningCaptureTokens = false; });
       }
 
+      // Same sweep for mailbox sign-in tokens (#2361), guarded on its own.
+      const signInSvc = this.config.mailboxSignIn?.service;
+      if (signInSvc && !isPruningSignInTokens) {
+        isPruningSignInTokens = true;
+        signInSvc.pruneExpired()
+          .catch((err: unknown) => {
+            logger.error({ err }, 'Mailbox sign-in token prune failed');
+          })
+          .finally(() => { isPruningSignInTokens = false; });
+      }
+
       if (isPruning) return;
       isPruning = true;
       pool.query('DELETE FROM sessions WHERE expires_at < NOW()')
@@ -397,7 +441,7 @@ export class HttpAdapter implements Channel {
         })
         .finally(() => { isPruning = false; });
     }, 60_000);
-    pruneInterval.unref();
+    this.pruneInterval.unref();
 
     await this.app.register(healthRoutes, {
       healthService: this.config.healthService ?? createFallbackHealthService(pool, logger),
@@ -480,20 +524,11 @@ export class HttpAdapter implements Channel {
         // Inject the actual exit trigger here rather than have setup.ts call
         // process.exit directly; this keeps the route handler unit-testable
         // and keeps the "kill the process" capability narrowly scoped.
-        //
-        // No .unref() on the timer: the whole point of this scheduled exit is
-        // to be the forcing function that brings the process down so the
-        // supervisor can boot it fresh. .unref() would let Node exit early
-        // (defeating the explicit exit), or — worse — let the process hang
-        // if some other ref is keeping the loop alive and the timer never
-        // fires. The 500ms delay is short enough that the active ref doesn't
-        // meaningfully prolong a healthy shutdown.
-        scheduleProcessExit: (delayMs) => {
-          setTimeout(() => process.exit(0), delayMs);
-        },
+        scheduleProcessExit,
         infraLlmService: this.config.infraLlmService,
         contactService: this.config.contactService,
         entityMemory: this.config.entityMemory,
+        setupChecklist: this.config.setupChecklist,
       });
     }
 
@@ -634,6 +669,20 @@ export class HttpAdapter implements Channel {
       });
     }
 
+    // Nylas mailbox sign-in setup from the API key (#2361): region, callback URL, Google connector.
+    if (webAppBootstrapSecret && this.config.secretsService) {
+      await this.app.register(nylasSetupRoutes, {
+        secretsService: this.config.secretsService,
+        appOrigin,
+        webAppBootstrapSecret,
+        sessions,
+        bus,
+        logger,
+        ...(this.config.mailboxSignIn ? { signIn: this.config.mailboxSignIn.service } : {}),
+        ...(this.config.mailboxSignIn?.boot ? { boot: this.config.mailboxSignIn.boot } : {}),
+      });
+    }
+
     // Principal mailboxes (#2475): list, add, relabel, default and removal for the console.
     if (webAppBootstrapSecret && this.config.principalMailboxConsole) {
       await this.app.register(principalMailboxesRoutes, {
@@ -739,6 +788,18 @@ export class HttpAdapter implements Channel {
       });
     }
 
+    // Mailbox sign-in routes (#2361) — public, token-authed, bearer-exempt like secret capture.
+    if (this.config.mailboxSignIn) {
+      await this.app.register(mailboxSignInRoutes, {
+        signIn: this.config.mailboxSignIn.service,
+        readiness: this.config.mailboxSignIn.readiness,
+        readApiKey: this.config.mailboxSignIn.readApiKey,
+        ...(this.config.mailboxSignIn.callback ? { callback: this.config.mailboxSignIn.callback } : {}),
+        appOrigin: this.config.appOrigin,
+        logger,
+      });
+    }
+
     // Telnyx SMS webhook — always mounted; SmsAdapter installs the handler on start.
     // Authenticates via Ed25519 (bearer-exempt above). Returns 503 when SMS is not started.
     await this.app.register(smsWebhookRoutes, {
@@ -760,6 +821,11 @@ export class HttpAdapter implements Channel {
   }
 
   async stop(): Promise<void> {
+    // unref() only lets the process exit; without this the sweeps keep running after stop().
+    if (this.pruneInterval !== undefined) {
+      clearInterval(this.pruneInterval);
+      this.pruneInterval = undefined;
+    }
     await this.app.close();
     this.config.logger.info('HTTP API stopped');
   }

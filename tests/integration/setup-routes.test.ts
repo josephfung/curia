@@ -24,6 +24,9 @@ import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { KnowledgeGraphStore } from '../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../src/memory/embedding.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
+import { markSetupComplete, readSetupState, updateSetupState } from '../../src/setup/setup-state.js';
+import type { SetupChecklist } from '../../src/setup/checklist.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const { Pool } = pg;
 
@@ -67,6 +70,9 @@ describeIf('/api/setup/* routes', () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
+    // Every hook below deletes rows (principal contacts, setup_state): refuse anything but
+    // the isolated test database before the first of them runs.
+    await requireCuriaTestDatabase(pool);
     await pool.query('SELECT 1 FROM contacts LIMIT 0');
 
     // Other test files (notably ceo-bootstrap.test.ts) may leave a principal contact
@@ -838,6 +844,126 @@ describeIf('/api/setup/* routes', () => {
         `SELECT preferred_name, primary_email FROM contacts WHERE id = $1`, [contactId],
       );
       expect(row.rows[0]).toMatchObject({ preferred_name: null, primary_email: null });
+    });
+  });
+
+  // #2358: the Setup page's own state, its checklist and Start onboarding.
+  describe('Setup page state', () => {
+    let app: FastifyInstance;
+    let checklist: SetupChecklist = { tasks: [], setupComplete: false, missing: ['email'] };
+    let savedRow: Record<string, unknown> | undefined;
+
+    beforeAll(async () => {
+      // Keep whatever row a working database has, and put it back afterwards.
+      savedRow = (await pool.query('SELECT * FROM setup_state WHERE id = 1')).rows[0];
+      app = Fastify();
+      await app.register(rateLimit, { max: 1000, timeWindow: '1 minute', allowList: () => true });
+      await app.register(setupRoutes, {
+        webAppBootstrapSecret: TEST_SECRET,
+        sessions,
+        pool,
+        logger,
+        setupRequiredAtBoot: false,
+        bootStartedAt: bootStartedAtNormalMode,
+        scheduleProcessExit: () => {},
+        contactService: ContactService.createWithPostgres(pool, undefined, logger),
+        entityMemory: undefined,
+        setupChecklist: async () => checklist,
+      });
+      await app.ready();
+    });
+
+    beforeEach(async () => {
+      await pool.query('DELETE FROM setup_state WHERE id = 1');
+      checklist = { tasks: [], setupComplete: false, missing: ['email'] };
+    });
+
+    afterAll(async () => {
+      await app.close();
+      await pool.query('DELETE FROM setup_state WHERE id = 1');
+      if (savedRow) {
+        const cols = Object.keys(savedRow);
+        await pool.query(
+          `INSERT INTO setup_state (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`,
+          cols.map((c) => savedRow![c]),
+        );
+      }
+    });
+
+    it('the first save on a new install starts Setup; a later save never moves the phase', async () => {
+      let state = await updateSetupState(pool, { setupFor: 'other' });
+      expect(state).toMatchObject({ phase: 'in_progress', setupFor: 'other' });
+      state = await updateSetupState(pool, { messagingRoute: 'signal' });
+      expect(state).toMatchObject({ phase: 'in_progress', setupFor: 'other', messagingRoute: 'signal' });
+      await markSetupComplete(pool);
+      state = await updateSetupState(pool, { voiceRoute: 'app' });
+      expect(state.phase).toBe('complete');
+      expect(state.completedAt).toBeInstanceOf(Date);
+    });
+
+    it('a save on an install that predates the Setup page leaves it complete', async () => {
+      await pool.query(`INSERT INTO setup_state (id, phase) VALUES (1, 'complete')`);
+      const state = await updateSetupState(pool, { messagingRoute: 'app' });
+      expect(state.phase).toBe('complete');
+    });
+
+    it('null clears a field and a missing field is left alone', async () => {
+      await updateSetupState(pool, { operatorName: 'Sam', operatorEmail: 'sam@example.com' });
+      const state = await updateSetupState(pool, { operatorName: null });
+      expect(state).toMatchObject({ operatorName: null, operatorEmail: 'sam@example.com' });
+    });
+
+    it('PUT /api/setup/state saves and returns the state', async () => {
+      const res = await app.inject({
+        method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER,
+        payload: { setupFor: 'other', operatorName: 'Sam', operatorEmail: 'Sam@Example.com', messagingRoute: 'slack', voiceRoute: 'app' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().setup).toMatchObject({
+        setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com', messagingRoute: 'slack', voiceRoute: 'app',
+      });
+      expect((await readSetupState(pool)).messagingRoute).toBe('slack');
+    });
+
+    it('PUT /api/setup/state refuses a bad body and saves nothing', async () => {
+      const res = await app.inject({ method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER, payload: { messagingRoute: 'fax' } });
+      expect(res.statusCode).toBe(400);
+      expect((await readSetupState(pool)).messagingRoute).toBeNull();
+    });
+
+    it('GET /api/setup/status reports inSetup and the saved fields', async () => {
+      await pool.query(`INSERT INTO setup_state (id, phase, setup_for) VALUES (1, 'in_progress', 'self')`);
+      const res = await app.inject({ method: 'GET', url: '/api/setup/status', headers: AUTH_HEADER });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ inSetup: true, setup: { setupFor: 'self' } });
+    });
+
+    it('GET /api/setup/checklist returns the checklist', async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/setup/checklist', headers: AUTH_HEADER });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ tasks: [], setupComplete: false, missing: ['email'] });
+    });
+
+    it('POST /api/setup/complete is refused with the missing steps until setup is complete', async () => {
+      await pool.query(`INSERT INTO setup_state (id, phase) VALUES (1, 'in_progress')`);
+      const refused = await app.inject({ method: 'POST', url: '/api/setup/complete', headers: AUTH_HEADER });
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json().missing).toEqual(['email']);
+      expect((await readSetupState(pool)).phase).toBe('in_progress');
+
+      checklist = { tasks: [], setupComplete: true, missing: [] };
+      const ok = await app.inject({ method: 'POST', url: '/api/setup/complete', headers: AUTH_HEADER });
+      expect(ok.statusCode).toBe(200);
+      expect((await readSetupState(pool)).phase).toBe('complete');
+    });
+
+    it.each([
+      ['GET', '/api/setup/checklist'],
+      ['PUT', '/api/setup/state'],
+      ['POST', '/api/setup/complete'],
+    ] as const)('%s %s needs auth', async (method, url) => {
+      const res = await app.inject({ method, url, payload: method === 'PUT' ? { setupFor: 'self' } : undefined });
+      expect(res.statusCode).toBe(401);
     });
   });
 });

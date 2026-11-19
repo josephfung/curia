@@ -61,6 +61,7 @@ import { parsePrincipalBacklog, renderBacklogLine } from './prompts/backlog-line
 import { parseAwaitingAnswers, renderAwaitingAnswers } from './prompts/awaiting-answers.js';
 import { parsePriorTurnActions, renderPriorTurnActions } from './prompts/prior-turn-actions.js';
 import { renderSenderFacts, renderSenderLine, UNRESOLVED_SENDER_HEAD } from './prompts/sender-line.js';
+import { isUnauthenticatedPrincipal } from '../contacts/principal.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
 import { createDbUnavailableAgentError, isDbUnavailableError } from '../db/resilience.js';
@@ -1449,6 +1450,8 @@ export class AgentRuntime {
         identityVerified: senderCtx.verified,
         messageAuthenticated: taskEvent.payload.metadata?.senderVerified,
         messageAuthentication: taskEvent.payload.metadata?.senderAuthentication,
+        // From the dispatcher-stamped originator, never a channel-supplied one (GHSA-p49r-jqh2-v668).
+        principalUnauthenticated: isUnauthenticatedPrincipal(taskEvent.payload.metadata),
       })}`;
 
       // Insert after system prompt (index 0) but before history

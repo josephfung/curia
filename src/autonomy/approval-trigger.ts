@@ -278,6 +278,12 @@ export class ApprovalTriggerService {
     sendResolution?: readonly SendRecipientPin[];
     /** How long the approval stays answerable. Default 24 hours; a card-use request asks for 30 minutes. */
     expiresInMs?: number;
+    /**
+     * Raised on a turn that matched the principal without the channel proving it (an SMS, or
+     * email failing sender checks). Delivered only on a verified channel, under an hourly cap
+     * (GHSA-p49r-jqh2-v668).
+     */
+    requesterUnverified?: boolean;
   }): Promise<ApprovalRequestResult> {
     const { taskId, conversationId, toolName, actionRisk, input, currentScore, requiredScore } = opts;
     const shown = opts.displayInput ?? input;
@@ -303,7 +309,9 @@ export class ApprovalTriggerService {
         return { created: false, reason: 'duplicate', existingShortRef };
       }
     }
-    const existing = await this.actionLogRepo.findPendingByTaskAndSkill(taskId, toolName, input);
+    // An unverified request is a task per message: a repeat on a new task joins the pending one.
+    const existing = await this.actionLogRepo.findPendingByTaskAndSkill(taskId, toolName, input)
+      ?? (opts.requesterUnverified === true ? await this.actionLogRepo.findPendingUnverifiedBySkill(toolName, input) : null);
     if (existing) {
       const existingShortRef = existing.shortRef ?? 'unknown';
       if (!existing.shortRef) {
@@ -348,6 +356,7 @@ export class ApprovalTriggerService {
           shortRef,
           description,
           sendResolution: opts.sendResolution ? [...opts.sendResolution] : undefined,
+          ...(opts.requesterUnverified === true ? { requesterUnverified: true } : {}),
         });
         break; // Insert succeeded
       } catch (err) {

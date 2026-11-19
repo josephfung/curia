@@ -566,7 +566,10 @@ before routing (#2227, `src/contacts/principal-acquaintance.ts`). Two fields dri
 
 - `inbound.email.sender_verified: true` is the adapter's `senderVerified` (SPF, DKIM and
   DMARC pass). The check runs only when it is set. Unset leaves it out of the metadata, so
-  existing cases never meet the rule.
+  existing cases never meet the rule. The principal's own email is the exception: it is
+  verified unless the case sets `sender_verified: false`, since the principal's mail passes
+  those checks and an unverified principal email carries none of the principal's authority
+  (GHSA-p49r-jqh2-v668; `inboundSenderVerified` in `harness.ts`).
 - `principal_wrote: true` on a seeded email contact means the principal has sent them mail:
   the run's stand-in for the principal's Sent folder answers yes for that address.
 
@@ -775,7 +778,7 @@ tool's real handler.
 
 **Approval channels.** Avery has verified email and Signal, and approval delivery prefers
 Signal, so a held send's approval goes out on Signal. A case about another channel lists the
-ones its approvals may use in `approval_channels` (`signal`, `sms`, `web`, `slack`, `email`),
+ones its approvals may use in `approval_channels` (`signal`, `web`, `slack`, `email`; never `sms`),
 as if Avery had verified identities on those alone: `deliver-approval` lists only them, and a
 call on any other gets production's `channel_unavailable`, naming the channels left. 34o, a
 reply on the approval email's thread, sets `[email]`. Through-gateway cases only, since other

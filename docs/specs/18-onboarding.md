@@ -246,8 +246,16 @@ The v0.2.0 prompt replaces the fixed 4-turn interview script with an
    config-store).
 
 The catalog of setup tasks (`skills/setup/tools/setup-status/catalog.yaml`) is owned
-by the skill bundle. The agent can show the full menu on request and can
-resume deferred tasks in any subsequent session.
+by the skill bundle. Since #2358 it lists the operator's Setup steps only: required
+steps (Who it's for, Curia's name, Email, Messaging, Voice, Email & calendar) and
+optional extras. `src/setup/checklist.ts` runs each task's check, and both the console
+(`GET /api/setup/checklist`) and `setup-status` read that one computation, including
+`setup_complete`: true when every required step is done, which unlocks Start
+onboarding (`POST /api/setup/complete`). Only optional extras can be deferred. Who
+Setup is for, the operator's details, the chosen messaging and voice routes and the
+Setup phase are kept in the `setup_state` table (migration 130), not the knowledge
+graph. The agent can show the full menu on request and can resume deferred extras in
+any subsequent session.
 
 A task can carry an `optional_upgrade`: a credential that improves something that
 already works. Web research is the one example (#2445). It reports done with no key,
@@ -258,8 +266,8 @@ limited, using the same one-time capture link as other keys.
 
 ### Skills pinned to setup-wizard
 
-- `setup-status` — read-only; returns the catalog with each task's live status
-- `setup-defer` — write; persists or clears deferrals for catalog tasks
+- `setup-status` — read-only; returns the Setup checklist with each task's live status and `setup_complete`
+- `setup-defer` — write; persists or clears deferrals of optional extras
 - `behavioral-preferences-update` (appends to `OfficeIdentity.behavioralPreferences`)
 - `scheduler-create`, `scheduler-list`, `scheduler-cancel`
 - `tool-registry`

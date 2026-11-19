@@ -1,156 +1,135 @@
 # skills/setup-status/catalog.yaml
-# Setup-wizard task catalog. Owned here — not a core module.
-# Each completion_check type is implemented in handler.ts.
+# The Setup checklist (#2358): the console's Setup page and the setup agent both read it,
+# through src/setup/checklist.ts, which implements each completion_check type.
+# Every task is required unless it says `optional: true`; setup_complete is true when every
+# required task is done. Order is the Setup page's order.
+#
+# Principal content (persona, tone, debrief, how Curia refers to the principal, inbox
+# sending) is not here: the principal sets it during onboarding, not the operator.
 tasks:
-  - id: persona
-    label: "Assistant persona & preferences"
-    value_prop: "Tune standing preferences and behavioral guidelines — takes one conversation turn, no credentials."
+  - id: who
+    label: "Who it's for"
+    value_prop: "Who Curia works for: their name, email and timezone, and, when you are setting it up for someone else, your details as its operator."
     tier: instant
-    handoff: in-chat
+    handoff: console
+    handoff_path: /setup
     completion_check:
-      type: behavioral_preferences
-    credential_how_to: null
-    docs_url: null
+      type: principal_basics
+    credential_how_to: "On the Setup page, choose Myself or Someone else. For someone else, add your name and email as the operator, then the principal's name, email and timezone."
+    docs_url: /get-started/check-your-setup
 
-  - id: principal_profile
-    label: "How Curia refers to you"
-    value_prop: "Your preferred name, pronouns and title, so emails written on your behalf never guess — takes one conversation turn, no credentials."
+  - id: curia_name
+    label: "Curia's name"
+    value_prop: "The name, title and email signature Curia uses when it writes and speaks."
     tier: instant
-    handoff: in-chat
+    handoff: console
+    handoff_path: /setup
     completion_check:
-      type: principal_profile
-    credential_how_to: "Tell Curia what to call you, your pronouns and your title; it saves them on your contact. You can also set them in the console under Contacts → your principal."
-    docs_url: /core-concepts/how-curia-refers-to-you
+      type: office_identity_configured
+    credential_how_to: "On the Setup page, save Curia's name, title and email signature. You can change them later under Settings → Behaviour → Personality."
+    docs_url: /get-started/check-your-setup
 
-  - id: debrief
-    label: "Scheduled debrief"
-    value_prop: "Regular digest at end of day or end of week — takes one conversation turn, no credentials."
-    tier: instant
-    handoff: in-chat
+  - id: email
+    label: "Email"
+    value_prop: "Curia's own mailbox, so it can send and receive email."
+    tier: heavy
+    handoff: console
+    handoff_path: /setup
     completion_check:
-      type: scheduler_has_active_debrief
-    credential_how_to: null
-    docs_url: null
+      type: email_channel_ready
+    credential_how_to: "Get your Nylas API key at dashboard-v3.nylas.com (an application used only by this Curia: a sandbox suits a single install, with Nylas's built-in Google connector and up to 5 connected accounts; use a production application for more, or for your own Google app). Paste the key in the Email step, then Connect with Google for Curia's own mailbox (or paste a grant ID from the Nylas dashboard). Curia's mailbox starts after the restart."
+    docs_url: /get-started/curia-email
 
-  - id: capability_tour
-    label: "Capability tour"
-    value_prop: "See what is ready to use right now — zero setup needed."
+  - id: messaging
+    label: "Messaging"
+    value_prop: "How Curia messages the principal: the Curia app, Signal, text message or Slack."
+    tier: medium
+    handoff: console
+    handoff_path: /setup
+    completion_check:
+      type: messaging_route_ready
+    credential_how_to: "In the Messaging step, choose one route. The Curia app needs Curia on an https address with a real hostname and push notifications set up. Signal needs Curia's Signal number (a signal-cli daemon Curia can reach) and the principal's. Text message needs a Telnyx API key, Curia's number, the webhook public key and the principal's mobile. Slack needs the bot token, the app-level token and the principal's Slack member ID. Channels other than the app start after the restart."
+    docs_url: /get-started/reach-your-principal
+
+  - id: voice
+    label: "Voice"
+    value_prop: "How the principal talks to Curia: in the Curia app or by Signal call."
+    tier: medium
+    handoff: console
+    handoff_path: /setup
+    completion_check:
+      type: voice_route_ready
+    credential_how_to: "In the Voice step, choose the Curia app or a Signal call, then add the LiveKit, Deepgram and Cartesia keys and pick Curia's spoken voice. Signal calls also need the Signal channel and SIGNAL_VOICE_CALLS_ENABLED=true on the server. Voice starts after the restart."
+    docs_url: /get-started/voice
+
+  - id: mailbox_signin
+    label: "Email & calendar"
+    value_prop: "Lets the principal connect their own Gmail accounts by signing in with Google, with no grant IDs to copy."
+    tier: heavy
+    handoff: console
+    handoff_path: /setup
+    completion_check:
+      type: nylas_signin_ready
+    credential_how_to: "Uses the Nylas API key from the Email step and APP_ORIGIN set to this console's public https:// address. The Email & calendar step finds the region and registers Curia's sign-in callback with Nylas on its first check. A sandbox application needs nothing more: it uses Nylas's built-in Google connector. A production application needs a Google connector: paste your Google Cloud OAuth client id and secret there, and in Google Cloud add only the Nylas redirect URI shown (https://api.us.nylas.com/v3/connect/callback, or the eu one) to the OAuth client. After the API key or region is first saved or changed, restart Curia once."
+    docs_url: /get-started/principal-email-calendar
+
+  # ── Optional extras: never block setup_complete ──────────────────────────
+
+  - id: working_style
+    label: "Working style"
+    value_prop: "A starting tone and level of independence. The principal is offered them in the first conversation and can change them."
     tier: instant
-    handoff: in-chat
+    handoff: console
+    handoff_path: /setup
+    optional: true
     completion_check:
       type: always_available
     credential_how_to: null
-    docs_url: null
-
-  - id: email
-    label: "Email (Nylas)"
-    value_prop: "Lets Curia read, draft, and send email on your behalf — unlocks ceo-inbox."
-    tier: heavy
-    handoff: console
-    handoff_path: /channels
-    completion_check:
-      type: email_channel_ready
-    credential_how_to: "Get your Nylas API key at app.nylas.com (free tier works) and connect Curia's mailbox there to get its grant ID. In Settings → Channels → Email, install the channel, save the API key, add the mailbox under Email accounts (name, address, grant ID), then enable the channel and restart."
-    docs_url: /channels/email-setup
+    docs_url: /get-started/check-your-setup
 
   - id: principal_mailboxes
     label: "Principal mailboxes and calendars"
-    value_prop: "Connect your own Gmail accounts (work and personal, say) so Curia can triage your inboxes, draft and send mail, and book on your calendars."
+    value_prop: "The principal's own Gmail accounts, so Curia can triage their inboxes, draft and send mail, and book on their calendars."
     tier: heavy
     handoff: console
     handoff_path: /settings/email-calendar
-    completion_check:
-      type: principal_mailbox_ready
-    credential_how_to: "In Nylas, connect each Gmail account and copy its grant ID. In the console under Settings → Behaviour → Email & Calendar, add each mailbox (a short id, a label, the grant ID), use Test to confirm the address, and pick the default. Changes apply without a restart."
-    docs_url: /get-started/principal-email-calendar
-
-  - id: signal
-    label: "Signal"
-    value_prop: "Private, end-to-end encrypted messaging — Curia's highest-trust channel."
-    tier: medium
-    handoff: console
-    handoff_path: /channels
-    completion_check:
-      type: vault_secrets_all
-      keys:
-        - channel.signal.socket_path
-        - channel.signal.phone_number
-    credential_how_to: "Run signal-cli as a JSON-RPC daemon on a Unix socket Curia can reach (the shipped docker-compose.yml does not include it) and register Curia's Signal number with it, then enter the socket path and that number in Settings → Channels → Signal. After enabling, open Contacts → your principal and add your Signal number as a channel identity so outbound principal detection works."
-    docs_url: /channels/signal-setup
-
-  - id: slack
-    label: "Slack"
-    value_prop: "Let your team DM and @mention your agent in Slack — medium-trust workspace messaging."
-    tier: medium
-    handoff: console
-    handoff_path: /channels
-    completion_check:
-      type: vault_secrets_all
-      keys:
-        - channel.slack.bot_token
-        - channel.slack.app_token
-    credential_how_to: "Import Curia's Slack app manifest, name the bot after your office identity, install it into your workspace, then enter the bot token and app-level token in Settings → Channels → Slack. After enabling, open Contacts → your principal and add your Slack user ID (U…) as a channel identity so DMs to you skip the outbound judge."
-    docs_url: /channels/slack-setup
-
-  - id: sms
-    label: "SMS"
-    value_prop: "Two-way text messaging on a dedicated Telnyx office DID — medium-trust SMS for the principal and third parties."
-    tier: medium
-    handoff: console
-    handoff_path: /channels
-    completion_check:
-      type: vault_secrets_all
-      keys:
-        - channel.sms.api_key
-        - channel.sms.from_number
-        - channel.sms.webhook_public_key
-    credential_how_to: "Create a Telnyx account (complete Low-Volume Mixed 10DLC for a US long code, or use a Canadian DID outside 10DLC), buy a voice+SMS number, point the Messaging Profile webhook at https://<your-host>/api/webhooks/telnyx/sms, then enter the API key, office DID, and webhook public key in Settings → Channels → SMS. After enabling, open Contacts → your principal and add your personal mobile as an sms channel identity (and optionally CRM phone) so outbound principal detection works. Do not port consumer apps like TextNow as the office DID. Carrier STOP is enforced by Telnyx; Curia records natural-language opt-out as a contact KG fact."
-    docs_url: /channels/sms-setup
-
-  - id: voice
-    label: "Voice (console)"
-    value_prop: "Live duplex spoken conversation from the web console via WebRTC."
-    tier: medium
-    handoff: console
-    handoff_path: /channels
-    completion_check:
-      type: vault_secrets_all
-      keys:
-        - channel.voice.livekit_url
-        - channel.voice.livekit_api_key
-        - channel.voice.livekit_api_secret
-        - channel.voice.deepgram_api_key
-        - channel.voice.cartesia_api_key
-        - channel.voice.cartesia_voice_id
-    credential_how_to: "Run a self-hosted LiveKit server (see docs/dev/voice-setup.md), create Deepgram and Cartesia API keys, and pick a Cartesia voice id from play.cartesia.ai, then enter the browser LiveKit signaling URL (wss://…) plus API key/secret, Deepgram and Cartesia keys, and the Cartesia voice ID in Settings → Channels → Voice. Server-side room admin uses channels.voice.livekit_management_url in YAML (compose default http://livekit:7880) — not the public signaling URL. Enable the channel and restart."
-    docs_url: /channels/voice-setup
-
-  - id: phone_app
-    label: "Phone app"
-    value_prop: "Install Curia on your phone, pair it, and hear from it when the chat is closed."
-    tier: medium
-    handoff: console
-    handoff_path: /system/devices
     optional: true
     completion_check:
-      type: paired_push_subscription
-    credential_how_to: "Needs Curia on an https:// address with a hostname. On a computer, open Settings → System → Devices and show a pairing code. On the phone, open the link or type the code, add Curia to your home screen, then turn on notifications. On http://, a bare IP, or a LAN name, the phone gets the plain mobile site and this task cannot finish."
-    docs_url: /channels/phone-app
+      type: principal_mailbox_ready
+    credential_how_to: "Under Settings → Behaviour → Email & Calendar, add each Gmail account with Connect with Google, with the principal beside you, or leave it for onboarding. If sign-in is not available, use Paste a grant ID instead."
+    docs_url: /get-started/principal-email-calendar
+
+  - id: google_workspace
+    label: "Google Workspace"
+    value_prop: "Lets Curia work in Google Docs, Sheets, Slides and Drive under its own Google account."
+    tier: heavy
+    handoff: console
+    handoff_path: /setup
+    optional: true
+    completion_check:
+      type: vault_secrets_all
+      keys:
+        - curia_google_email
+        - google_oauth_client_id
+        - google_oauth_client_secret
+    credential_how_to: "Add Curia's Google address and an OAuth client ID and secret from Google Cloud (the project from Email & calendar can be reused), then sign in as Curia."
+    docs_url: /get-started/google-docs
 
   - id: web_research
-    label: "Web research"
-    value_prop: "Live web search for research tasks and news monitoring — works out of the box, no key needed."
+    label: "Higher web search limit"
+    value_prop: "Live web search works out of the box; a Tavily key raises the hourly limit."
     tier: instant
-    handoff: in-chat
+    handoff: console
+    handoff_path: /setup
+    optional: true
     completion_check:
       type: always_available
-    # Keyless Tavily search is free but capped per hour (#2445). The key raises the cap;
-    # setup never asks for it — the wizard offers it on request.
+    # Keyless Tavily search is free but capped per hour (#2445). The key raises the cap.
     optional_upgrade:
       keys:
         - tavily_api_key
       value_prop: "Raises the web search limit — keyless search is capped at a few dozen searches an hour."
-      credential_how_to: "Get a free API key at tavily.com (1,000 searches a month, no card). I'll send you a secure link to enter it, or add it in the console under Settings → Tools → web."
+      credential_how_to: "Get a free API key at tavily.com (1,000 searches a month, no card) and paste it in the Higher web search limit extra, or under Settings → Tools → web."
     credential_how_to: null
     docs_url: /integrations/tavily
 
@@ -158,22 +137,22 @@ tasks:
     label: "Web browser"
     value_prop: "Lets Curia use pages that need JavaScript, sign-ins or forms — runs in its own container, no key needed."
     tier: instant
-    handoff: in-chat
+    handoff: console
+    handoff_path: /setup
+    optional: true
     completion_check:
       type: browser_ready
     credential_how_to: "The shipped docker-compose.yml runs the browser as the `browser` service: start it with `docker compose up -d browser`, and check it with `docker compose logs browser`. An install whose docker-compose.yml predates that service has none: add it by following \"Upgrading from an older install\" in the web browser docs. Ordinary sites work; bot-protected sites may block it, especially from a datacenter IP."
     docs_url: /integrations/web-browser
 
-  - id: inbox_sending
-    label: "Replies from your mailbox"
-    value_prop: "Choose whether Curia sends routine replies from your mailbox for you: off, on request, routine or all."
+  - id: capabilities
+    label: "Capabilities"
+    value_prop: "Turn Curia's capabilities on or off: meetings, debriefs, web research, projects and tasks, diagnostics and email triage."
     tier: instant
-    handoff: in-chat
+    handoff: console
+    handoff_path: /setup
     optional: true
     completion_check:
-      type: config_store_set
-      namespace: ceo_inbox
-      key: sending
-      valid_as: send_level
+      type: always_available
     credential_how_to: null
-    docs_url: /core-concepts/inbox-sending
+    docs_url: /get-started/check-your-setup

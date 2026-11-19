@@ -52,7 +52,7 @@ exact: `tests/unit/config.google-workspace-allowlist.test.ts` fails on any chang
 3. Fill in the app name and contact email.
 4. Add scopes: Drive, Sheets, Docs.
    Omit Calendar and Gmail — see Step 1.
-5. Under **Test users**, add Curia's Gmail address.
+5. Under **Test users**, add Curia's Gmail address (only needed until you publish the app, below).
 
 > **Existing deployments:** narrowing `--tools` does not revoke anything already
 > granted. Existing tokens keep working (upstream scope checks are
@@ -62,9 +62,14 @@ exact: `tests/unit/config.google-workspace-allowlist.test.ts` fails on any chang
 > Step 5. Do this at the next convenient window; nothing breaks if you don't —
 > there is simply no caller for those scopes (#1853, #1957).
 
-> The app can stay in "Testing" mode. If you want non-expiring tokens without having
-> to re-add test users, publish the app (Publish App button). Publishing does not make
-> the app publicly listed — it just removes the 7-day test-token expiry.
+> **Don't leave the app in "Testing".** Refresh tokens issued to a Testing app expire after
+> 7 days, so Curia's Drive access would break weekly. Publish the app (Publish App button, status
+> **In production**). Publishing does not list it publicly. It stays unverified, which is fine for
+> an app with a handful of known users: you click through the "unverified app" screen once.
+> An unverified production app kept a restricted scope working past 7 days in prod (2026-11-17).
+>
+> **Upgrading:** a token issued while the app was in Testing keeps its 7-day expiry even after you
+> publish. Publish the app, re-authorize to get a new token, then replace the deployed token cache.
 
 #### Step 3 — Create OAuth credentials
 

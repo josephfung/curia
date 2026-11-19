@@ -17,7 +17,7 @@ const noopBus = { publish: async () => {}, subscribe: () => {} } as unknown as E
 
 const PRINCIPAL: TaskOriginator = {
   contactId: 'ceo', systemRole: 'principal', channel: 'email',
-  initiatedAt: '2026-06-23T00:00:00.000Z', tier: 'principal',
+  initiatedAt: '2026-06-23T00:00:00.000Z', tier: 'principal', authenticated: true,
 };
 const SYSTEM: TaskOriginator = {
   contactId: 'system', systemRole: 'system', channel: 'declarative',

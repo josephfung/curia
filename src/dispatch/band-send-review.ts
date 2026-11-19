@@ -48,9 +48,10 @@
 // Detected personal data (#2312): `disclosure` is added to the questions, and the judge rules
 // each item directed / inferred / unsupported and whether the recipient asked. Code decides
 // who had the authority to direct it, from trusted state (never the judge's word):
-//   principal — the drafting turn's originator, or the bound or root task's, is the principal;
-//               so is a strong reply-to-task link to a task the principal directed. Through
-//               a task or a link only, a directed ruling counts as inferred.
+//   principal — the drafting turn's originator, or the bound or root task's, is the principal,
+//               authenticated by its channel (a forged From or spoofed SMS number is not,
+//               GHSA-p49r-jqh2-v668); so is a strong reply-to-task link to a task the principal
+//               directed. Through a task or a link only, a directed ruling counts as inferred.
 //   trusted   — the originator was stamped trusted, is trusted now, and authenticated
 //   directed  + principal → send          directed + trusted → hold for the principal (any score)
 //   inferred  + principal → send at 80+, hold below
@@ -98,6 +99,7 @@ import type {
   BriefAnswers, BriefDetectedItem, BriefQuestion, BriefVerdict, CopiedParty, DisclosureRuling, SendAuthority, SendStakes,
 } from '../autonomy/judge-brief.js';
 import type { ContactTier } from '../contacts/types.js';
+import { hasPrincipalAuthority } from '../contacts/principal.js';
 import { isSpotCheckOrAbove, type FailOpenLimiter } from '../autonomy/band-policy.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { FilterFinding } from './outbound-filter.js';
@@ -717,12 +719,13 @@ export class BandSendReview {
     linkCovers: boolean,
   ): Promise<{ who: Authority; trusted: boolean }> {
     if (!a) return { who: 'none', trusted: false };
-    // `liveTurn` is context for the judge only. Code trusts the stamped role: stampOriginator
-    // sets systemRole 'principal' only from the resolved sender, and a wake carries the
-    // originator its job was created with.
-    if (a.originator?.systemRole === 'principal') return { who: 'principal', trusted: false };
+    // `liveTurn` is context for the judge only. Code trusts the stamped originator:
+    // stampOriginator sets systemRole 'principal' from the resolved sender and `authenticated`
+    // from the channel, and a wake carries the originator its job was created with. A principal
+    // match the channel did not authenticate has no authority here (GHSA-p49r-jqh2-v668).
+    if (hasPrincipalAuthority(a.originator)) return { who: 'principal', trusted: false };
     // Only an exact 'strong' counts; the collector already dropped a malformed link.
-    const task = [a.boundTask?.originator, a.rootTask?.originator].some((o) => o?.systemRole === 'principal')
+    const task = [a.boundTask?.originator, a.rootTask?.originator].some(hasPrincipalAuthority)
       || (linkCovers && a.linkedTask?.strength === 'strong' && linkToPrincipalTask(a));
     return { who: task ? 'principal-task' : 'none', trusted: await this.trustedOriginator(a.originator, rulings) };
   }
@@ -1189,7 +1192,7 @@ function askTaskTitle(a: SendAuthority | undefined, who: Authority, linkCovers: 
   // it, otherwise the root.
   const raw = viaLink
     ? a?.linkedTask?.title ?? a?.linkedTask?.root?.title
-    : a?.boundTask?.originator?.systemRole === 'principal' ? a.boundTask.title : a?.rootTask?.title;
+    : hasPrincipalAuthority(a?.boundTask?.originator) ? a?.boundTask?.title : a?.rootTask?.title;
   const title = raw?.replace(/\s+/g, ' ').replace(/"/g, '\'').trim();
   if (!title) return undefined;
   return title.length > TASK_TITLE_MAX ? `${title.slice(0, TASK_TITLE_MAX - 1).trimEnd()}…` : title;
@@ -1201,7 +1204,7 @@ export { describePiiLabels };
 /** The link is to a task the principal directed: its own originator, or its project root's. */
 function linkToPrincipalTask(a: SendAuthority | undefined): boolean {
   const l = a?.linkedTask;
-  return l?.originator?.systemRole === 'principal' || l?.root?.originator?.systemRole === 'principal';
+  return hasPrincipalAuthority(l?.originator) || hasPrincipalAuthority(l?.root?.originator);
 }
 
 /** A channel id as an address: the last `<addr>` when written with a display name, lowercased. */

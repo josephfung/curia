@@ -311,7 +311,7 @@ describe('SignalSendHandler', () => {
     const ctx = makeCtx({ input: { recipient: BOB_ID, message: 'hello' }, gateway });
     Object.assign(ctx, {
       taskMetadata: {
-        originator: { contactId: 'p1', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-09-17T14:00:00Z', tier: 'principal' },
+        originator: { contactId: 'p1', systemRole: 'principal', authenticated: true, channel: 'signal', initiatedAt: '2026-09-17T14:00:00Z', tier: 'principal' },
       },
       liveTurn: true,
     });

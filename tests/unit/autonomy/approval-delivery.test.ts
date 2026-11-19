@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ApprovalDelivery } from '../../../src/autonomy/approval-delivery.js';
 import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
-import type { ActionLogRow } from '../../../src/autonomy/action-log-types.js';
+import type { ActionLogRow, ResolveResult } from '../../../src/autonomy/action-log-types.js';
 import type { OutboundGateway } from '../../../src/skills/outbound-gateway.js';
 import type { ChannelIdentity, PrincipalEmailRef } from '../../../src/contacts/types.js';
 import type { Logger } from '../../../src/logger.js';
@@ -28,6 +28,7 @@ function makeRow(overrides: Partial<ActionLogRow> = {}): ActionLogRow {
 
 function makeDelivery(opts: {
   row?: ActionLogRow | null;
+  resolve?: ResolveResult;
   claimed?: boolean;
   sendResult?: { success: boolean; messageId?: string; blockedReason?: string };
   sendThrows?: boolean;
@@ -37,6 +38,11 @@ function makeDelivery(opts: {
 } = {}) {
   const repo = {
     findPendingByShortRef: vi.fn().mockResolvedValue(opts.row === undefined ? makeRow() : opts.row),
+    findPendingByApprovalNumber: vi.fn().mockResolvedValue(opts.row === undefined ? makeRow() : opts.row),
+    findAllPending: vi.fn().mockResolvedValue(opts.row === null ? [] : [opts.row ?? makeRow()]),
+    resolvePending: vi.fn().mockResolvedValue(opts.resolve ?? (opts.row === null
+      ? { found: false, reason: 'not_found', error: 'No pending approval requests' }
+      : { found: true, row: opts.row ?? makeRow() })),
     claimNotification: vi.fn().mockResolvedValue(opts.claimed ?? true),
     releaseNotification: vi.fn().mockResolvedValue(undefined),
     bindDeliveryMessage: vi.fn().mockResolvedValue(true),
@@ -62,7 +68,9 @@ function makeDelivery(opts: {
 }
 
 describe('ApprovalDelivery.availableChannels', () => {
-  it('lists verified, active channels in the order signal, sms, slack, email', async () => {
+  // SMS never carries an approval (GHSA-p49r-jqh2-v668): a texted "approve 3" cannot approve, since
+  // SMS does not authenticate the sender, so an approval there could not be answered there.
+  it('lists verified, active channels in the order signal, web, slack, email, never sms', async () => {
     const { delivery } = makeDelivery({
       identities: [
         identity('email', 'principal@example.com'),
@@ -71,10 +79,10 @@ describe('ApprovalDelivery.availableChannels', () => {
         identity('signal', '+15550001111', { verified: false }),
       ],
     });
-    expect(await delivery.availableChannels()).toEqual(['sms', 'slack', 'email']);
+    expect(await delivery.availableChannels()).toEqual(['slack', 'email']);
   });
 
-  it('offers the phone app between SMS and Slack when a device can receive it', async () => {
+  it('offers the phone app between Signal and Slack when a device can receive it', async () => {
     const { delivery } = makeDelivery({
       identities: [
         identity('sms', '+15550002222'),
@@ -82,7 +90,7 @@ describe('ApprovalDelivery.availableChannels', () => {
       ],
       webReachable: () => true,
     });
-    expect(await delivery.availableChannels()).toEqual(['sms', 'web', 'slack', 'email']);
+    expect(await delivery.availableChannels()).toEqual(['web', 'slack', 'email']);
   });
 
   it('counts email when only the principal email ref is bound', async () => {
@@ -340,5 +348,126 @@ describe('ApprovalDelivery.deliver', () => {
     expect(first).toMatchObject({ reason: 'send_failed', available: ['slack'] });
     expect(second).toMatchObject({ reason: 'send_failed', available: [] });
     expect(logger.error).toHaveBeenCalledWith(expect.objectContaining({ shortRef: 'abcd1234' }), expect.stringContaining('every channel'));
+  });
+});
+
+// GHSA-p49r-jqh2-v668: an approval raised on a turn that only claims to be the principal (an SMS,
+// or email failing sender checks) goes only where the principal is proven, and a spoofer cannot
+// flood those channels.
+describe('ApprovalDelivery — unverified requests', () => {
+  const unverified = makeRow({ requesterUnverified: true });
+
+  it('refuses email for an unverified request, naming the verified channels left', async () => {
+    const { delivery, send } = makeDelivery({ row: unverified, webReachable: () => true });
+    await expect(delivery.deliver('abcd1234', 'email')).resolves.toEqual({
+      delivered: false, reason: 'verified_channel_required', available: ['signal', 'web', 'slack'],
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('delivers an unverified request on Signal, saying it could not be verified', async () => {
+    const { delivery, send } = makeDelivery({ row: unverified });
+    await expect(delivery.deliver('abcd1234', 'signal')).resolves.toEqual({ delivered: true, channel: 'signal' });
+    expect(send.mock.calls[0]![0].message).toContain("can't prove you sent it");
+  });
+
+  it('holds a 4th unverified request in an hour for the digest, with one notice per window', async () => {
+    vi.useFakeTimers({ now: new Date('2026-11-17T12:00:00Z') });
+    try {
+      const { delivery, send, repo } = makeDelivery({ row: unverified });
+      for (let i = 0; i < 3; i++) await expect(delivery.deliver('abcd1234', 'signal')).resolves.toMatchObject({ delivered: true });
+      expect(send).toHaveBeenCalledTimes(3);
+
+      await expect(delivery.deliver('abcd1234', 'signal')).resolves.toEqual({ delivered: false, reason: 'rate_limited', available: [] });
+      expect(repo.claimNotification).toHaveBeenCalledTimes(3);
+      expect(send).toHaveBeenCalledTimes(4);
+      expect(send.mock.calls[3]![0]).toMatchObject({ channel: 'signal', recipient: '+15550001111' });
+      expect(send.mock.calls[3]![0].message).toContain('waiting');
+
+      await expect(delivery.deliver('abcd1234', 'signal')).resolves.toMatchObject({ reason: 'rate_limited' });
+      expect(send).toHaveBeenCalledTimes(4);
+
+      // An hour after the first, the window has room again.
+      vi.advanceTimersByTime(60 * 60 * 1000 + 1);
+      await expect(delivery.deliver('abcd1234', 'signal')).resolves.toMatchObject({ delivered: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('counts redeliveries against the same cap', async () => {
+    const { delivery } = makeDelivery({ row: makeRow({ notificationSentAt: new Date(), approvalNumber: 3 }) });
+    for (let i = 0; i < 3; i++) await expect(delivery.redeliverForVerification('3', 'sms')).resolves.toMatchObject({ delivered: true });
+    await expect(delivery.redeliverForVerification('3', 'sms')).resolves.toMatchObject({ delivered: false, reason: 'rate_limited' });
+  });
+
+  it('never caps a request that did not come from an unverified channel', async () => {
+    const { delivery } = makeDelivery();
+    for (let i = 0; i < 5; i++) await expect(delivery.deliver('abcd1234', 'email')).resolves.toEqual({ delivered: true, channel: 'email' });
+  });
+
+  describe('redeliverForVerification', () => {
+    it('re-sends an already delivered approval on the first verified channel, with the warning', async () => {
+      const { delivery, send, repo } = makeDelivery({ row: makeRow({ notificationSentAt: new Date(), approvalNumber: 3 }) });
+      await expect(delivery.redeliverForVerification('abcd1234', 'sms')).resolves.toEqual({ delivered: true, channel: 'signal' });
+      expect(repo.claimNotification).not.toHaveBeenCalled();
+      expect(send.mock.calls[0]![0].message).toContain('Someone answered approval 3 from your SMS number, which can\'t be verified.');
+    });
+
+    it('names the channel the answer came from, not SMS for everything that is not email', async () => {
+      const { delivery, send } = makeDelivery({ row: makeRow({ notificationSentAt: new Date(), approvalNumber: 3 }) });
+      await delivery.redeliverForVerification('3', 'voice');
+      expect(send.mock.calls[0]![0].message).toContain('from your phone number (caller ID), which can\'t be verified.');
+    });
+
+    it('resolves the reference as approve-action does', async () => {
+      const { delivery, repo } = makeDelivery({ row: makeRow({ notificationSentAt: new Date(), approvalNumber: 3 }) });
+      await delivery.redeliverForVerification('3', 'email');
+      expect(repo.resolvePending).toHaveBeenCalledWith('3');
+    });
+
+    it('takes the sole pending approval when the answer named none', async () => {
+      const { delivery, repo, send } = makeDelivery({ row: makeRow({ notificationSentAt: new Date(), approvalNumber: 3 }) });
+      await expect(delivery.redeliverForVerification('', 'sms')).resolves.toEqual({ delivered: true, channel: 'signal' });
+      expect(repo.resolvePending).toHaveBeenCalledWith(undefined);
+      expect(send.mock.calls[0]![0].message).toContain('approval 3');
+    });
+
+    it('reports several pending approvals as ambiguous, not as none', async () => {
+      const pending = [makeRow({ approvalNumber: 3 }), makeRow({ id: 43, approvalNumber: 4 })];
+      const { delivery, send } = makeDelivery({ resolve: { found: false, reason: 'ambiguous', error: 'Multiple pending requests', pending } });
+      await expect(delivery.redeliverForVerification('', 'sms')).resolves.toMatchObject({ delivered: false, reason: 'ambiguous' });
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    // An approval not yet delivered (held by the cap, or not sent yet) is claimed, so it counts as
+    // delivered: approve-action takes it, and the safety net does not send it a second time.
+    it('claims an undelivered approval before re-sending it', async () => {
+      const { delivery, repo, send } = makeDelivery({ row: makeRow({ requesterUnverified: true, approvalNumber: 3 }) });
+      await expect(delivery.redeliverForVerification('3', 'sms')).resolves.toEqual({ delivered: true, channel: 'signal' });
+      expect(repo.claimNotification).toHaveBeenCalledWith(42);
+      expect(repo.claimNotification.mock.invocationCallOrder[0]!).toBeLessThan(send.mock.invocationCallOrder[0]!);
+    });
+
+    it('gives the claim and the hourly slot back when the re-send throws', async () => {
+      const { delivery, repo } = makeDelivery({ row: makeRow({ approvalNumber: 3 }), sendThrows: true });
+      for (let i = 0; i < 4; i++) {
+        await expect(delivery.redeliverForVerification('3', 'sms')).resolves.toMatchObject({ delivered: false, reason: 'send_failed' });
+      }
+      expect(repo.releaseNotification).toHaveBeenCalledTimes(4);
+    });
+
+    it('reports no verified channel when the principal has none', async () => {
+      const { delivery, send } = makeDelivery({ identities: [identity('email', 'principal@example.com')] });
+      await expect(delivery.redeliverForVerification('abcd1234', 'email')).resolves.toEqual({
+        delivered: false, reason: 'verified_channel_required', available: [],
+      });
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('reports a resolved or unknown approval as not found', async () => {
+      const { delivery } = makeDelivery({ row: null });
+      await expect(delivery.redeliverForVerification('zz', 'sms')).resolves.toMatchObject({ delivered: false, reason: 'not_found' });
+    });
   });
 });
