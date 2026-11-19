@@ -106,7 +106,7 @@ async function sendEmail(
     content: overrides.content ?? `Subject: Re: Appointment\n\n${BODY}\n\nOn Mon, Curia wrote:\n> Do you have Tuesday?`,
     metadata: {
       subject: 'Re: Appointment',
-      senderVerified: true,
+      senderVerified: true, senderSpfAligned: true,
       curiaRole: 'to',
       otherRecipientCount: 0,
       primaryRecipientEmails: [],
@@ -404,6 +404,16 @@ describe('Dispatcher outreach link (#2312)', () => {
   it('a principal turn never calls the matcher', async () => {
     const h = harness({ sender: 'principal' });
     await sendEmail(h, { senderId: 'ceo@example.com' });
+    expect(h.match).not.toHaveBeenCalled();
+    expect(h.tasks[0]!.payload.metadata?.['linkedTask']).toBeUndefined();
+  });
+
+  // GHSA-p49r-jqh2-v668: a forged From of the principal's address has no live turn, but it is
+  // still the principal's identity, never a counterparty replying to outreach.
+  it('an unverified principal email never calls the matcher either', async () => {
+    const h = harness({ sender: 'principal' });
+    await sendEmail(h, { senderId: 'ceo@example.com', metadata: { senderVerified: false } });
+    expect(h.tasks[0]!.payload.liveTurn).toBe(false);
     expect(h.match).not.toHaveBeenCalled();
     expect(h.tasks[0]!.payload.metadata?.['linkedTask']).toBeUndefined();
   });

@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { isPrincipalDirectedMailboxSend } from '../../../../src/skills/principal-send/authority.js';
 
-function principalMeta(channel: string, authenticated?: boolean): Record<string, unknown> {
+// Left out, the flag defaults to what the dispatcher stamps for a channel that always
+// authenticates; email has to say (GHSA-p49r-jqh2-v668).
+function principalMeta(channel: string, authenticated: boolean | undefined = channel === 'email' ? undefined : true): Record<string, unknown> {
   return {
     originator: {
       contactId: 'ceo-contact-id',

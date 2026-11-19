@@ -57,6 +57,7 @@ describe('bypassesBearerAuth', () => {
     '/api/identity/me',
     '/api/setup/status',
     '/api/secret-capture/:token',
+    '/api/mailbox-signin/start/:token',
     '/api/webhooks/telnyx/sms',
   ])('lets %s through to its own auth', (url) => {
     expect(bypassesBearerAuth(url)).toBe(true);
@@ -73,6 +74,7 @@ describe('bypassesBearerAuth', () => {
     '/api/push-export',
     '/api/tasks-summary',
     '/api/contacts.csv',
+    '/api/mailbox-signinx',
     '/*',
   ])('enforces bearer auth on %s', (url) => {
     expect(bypassesBearerAuth(url)).toBe(false);

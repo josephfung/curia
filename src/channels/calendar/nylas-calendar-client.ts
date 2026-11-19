@@ -263,7 +263,7 @@ export interface CreateEventInput {
 // module resolution. We work around this by importing the default and casting once.
 // TODO: Remove if Nylas ships proper ESM type declarations.
 
-const NylasSDK = NylasDefault as unknown as new (config: { apiKey: string }) => NylasCalendarLike;
+const NylasSDK = NylasDefault as unknown as new (config: { apiKey: string; apiUri?: string }) => NylasCalendarLike;
 
 // ---------------------------------------------------------------------------
 // NylasCalendarClient
@@ -293,8 +293,9 @@ export class NylasCalendarClient {
   private readonly grantId: string;
   private readonly log: Logger;
 
-  constructor(apiKey: string, grantId: string, logger: Logger) {
-    this.nylas = new NylasSDK({ apiKey });
+  /** `apiUri` selects the Nylas region's API host; unset keeps the SDK default (US). */
+  constructor(apiKey: string, grantId: string, logger: Logger, apiUri?: string) {
+    this.nylas = new NylasSDK({ apiKey, ...(apiUri === undefined ? {} : { apiUri }) });
     this.grantId = grantId;
     this.log = logger.child({ component: 'nylas-calendar-client' });
   }

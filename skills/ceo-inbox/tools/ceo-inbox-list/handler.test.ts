@@ -942,7 +942,7 @@ describe('CeoInboxListHandler — triage mode (#2475)', () => {
     return r.data as TriageData;
   };
   const drainTurn = { originator: { systemRole: 'system' }, boundTask: { taskId: 't1', tags: ['inbox-drain'], createdBy: 'heartbeat' } };
-  const principalTurn = { liveTurn: true, taskMetadata: { originator: { systemRole: 'principal', channel: 'signal' } } } as Partial<ToolContext>;
+  const principalTurn = { liveTurn: true, taskMetadata: { originator: { systemRole: 'principal', authenticated: true, channel: 'signal' } } } as Partial<ToolContext>;
 
   it('round-robins across due mailboxes', async () => {
     const t = setup({

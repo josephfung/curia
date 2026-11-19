@@ -158,6 +158,7 @@ const CONTACT_EMAILS: Record<string, string> = {
  */
 const ONE_TO_ONE_EMAIL = {
   senderVerified: true,
+  senderSpfAligned: true,
   curiaRole: 'to',
   primaryRecipientEmails: [],
   participants: [
@@ -172,6 +173,7 @@ const UNVERIFIED_EMAIL = { ...ONE_TO_ONE_EMAIL, senderVerified: false };
 /** The same email with a third party cc'd: not one-to-one. */
 const CC_EMAIL = {
   senderVerified: true,
+  senderSpfAligned: true,
   curiaRole: 'to',
   primaryRecipientEmails: [],
   participants: [

@@ -25,7 +25,8 @@ function ctx(
     timezone,
     workingDocs: repo,
     taskMetadata: voiceSessionId
-      ? { voiceSessionId, originator: { systemRole: callerRole, contactId: 'c-1', channel: 'voice' } }
+      // A principal on console voice or a Signal call is authenticated (GHSA-p49r-jqh2-v668).
+      ? { voiceSessionId, originator: { systemRole: callerRole, contactId: 'c-1', channel: 'voice', authenticated: callerRole === 'principal' } }
       : undefined,
   } as unknown as ToolContext;
 }

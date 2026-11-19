@@ -30,6 +30,7 @@ function baseConfig(): Config {
     timezone: 'UTC',
     browserCdpUrl: undefined,
     nylasApiKey: undefined,
+    nylasRegion: 'us',
     nylasPollingIntervalMs: 30000,
     ceoSignalNumber: undefined,
     signalSocketPath: undefined,

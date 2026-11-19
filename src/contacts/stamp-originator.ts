@@ -21,8 +21,9 @@ export interface StampOriginatorInput {
   senderId: string;
   /**
    * The originating message authenticated its sender (#2312) — the caller computes it from the
-   * channel and its adapter metadata (inboundSenderAuthenticated). Required so no caller can
-   * forget it; voice always passes false.
+   * channel and its adapter metadata (inboundSenderAuthenticated), or per voice transport
+   * (voice/caller-context.ts). Required so no caller can forget it: it decides whether a
+   * principal match carries the principal's authority (GHSA-p49r-jqh2-v668).
    */
   authenticated: boolean;
   /** Optional fixed timestamp for tests; defaults to now. */
@@ -32,8 +33,9 @@ export interface StampOriginatorInput {
 export interface StampOriginatorResult {
   originator: TaskOriginator;
   /**
-   * Live-principal-turn signal (#1126). True iff the originator resolved to the principal.
-   * Sole satisfier of the `elevated` skill gate when paired with principal lineage.
+   * Live-principal-turn signal (#1126). True iff the originator resolved to the principal AND the
+   * inbound authenticated them (GHSA-p49r-jqh2-v668). Sole satisfier of the `elevated` skill gate
+   * when paired with principal lineage.
    */
   liveTurn: boolean;
 }
@@ -67,10 +69,13 @@ export function stampOriginator(input: StampOriginatorInput): StampOriginatorRes
         authenticated: input.authenticated,
       };
 
-  // The LIVE PRINCIPAL TURN signal (#1126) is `true` iff this inbound resolved to the principal.
-  // It is the sole satisfier of the `elevated` skill gate. Callers stamp it as a DISTINCT field
-  // on the agent.task payload (dispatcher) or session caller context (voice) — never inside a
-  // metadata bag that could be persisted into wakeable state.
-  const liveTurn = originator.systemRole === 'principal';
+  // The LIVE PRINCIPAL TURN signal (#1126) is `true` iff this inbound resolved to the principal
+  // and its channel authenticated the sender. A forged email From or a spoofed SMS number resolves
+  // to the principal too: it keeps the identity (systemRole) but gets no live turn and, through
+  // hasPrincipalAuthority, no principal authority (GHSA-p49r-jqh2-v668). It is the sole satisfier
+  // of the `elevated` skill gate. Callers stamp it as a DISTINCT field on the agent.task payload
+  // (dispatcher) or session caller context (voice) — never inside a metadata bag that could be
+  // persisted into wakeable state.
+  const liveTurn = originator.systemRole === 'principal' && input.authenticated;
   return { originator, liveTurn };
 }

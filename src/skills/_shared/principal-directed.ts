@@ -105,3 +105,7 @@ export function refuseOutsiderDigestAccess(ctx: Pick<ToolContext, 'taskMetadata'
     ? { success: false, error: DIGEST_OUTSIDER_REFUSAL }
     : null;
 }
+
+/** email-reply's refusal of an explicit cc on a sender-only reply (GHSA-p49r-jqh2-v668). */
+export const SENDER_ONLY_CC_REFUSAL =
+  'This message could not be verified as the principal\'s, so a reply goes only to the original sender: cc is not allowed. Nothing was sent.';

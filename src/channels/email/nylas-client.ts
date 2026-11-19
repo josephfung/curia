@@ -135,7 +135,7 @@ interface NylasLike {
  * The Nylas default export is a class constructor at runtime.
  * Cast it through unknown so TypeScript treats it as constructable.
  */
-const NylasSDK = NylasDefault as unknown as new (config: { apiKey: string; timeout?: number }) => NylasLike;
+const NylasSDK = NylasDefault as unknown as new (config: { apiKey: string; apiUri?: string; timeout?: number }) => NylasLike;
 
 // ---------------------------------------------------------------------------
 // Our own simplified message shape — normalized from the Nylas SDK's Message
@@ -279,10 +279,12 @@ export class NylasClient {
   /**
    * `timeoutMs` caps every request this client makes (the SDK default is 90s). The SDK
    * config takes seconds. Leave it unset for the long-lived channel clients.
+   * `apiUri` selects the Nylas region's API host; unset keeps the SDK default (US).
    */
-  constructor(apiKey: string, grantId: string, logger: Logger, timeoutMs?: number) {
+  constructor(apiKey: string, grantId: string, logger: Logger, timeoutMs?: number, apiUri?: string) {
     this.nylas = new NylasSDK({
       apiKey,
+      ...(apiUri === undefined ? {} : { apiUri }),
       ...(timeoutMs === undefined ? {} : { timeout: timeoutMs / 1000 }),
     });
     this.grantId = grantId;

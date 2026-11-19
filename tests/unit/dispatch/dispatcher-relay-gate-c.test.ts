@@ -270,6 +270,16 @@ describe('relaySendOptions (#2159)', () => {
     expect(relaySendOptions(event, 'U1')).toMatchObject({ reportedToPrincipal: 'Provider asked for your number.' });
   });
 
+  // GHSA-p49r-jqh2-v668: the dispatcher's flag for an unverified principal turn reaches the gateway.
+  it('passes the dispatcher\'s unverified-requester flag through', () => {
+    const event = createOutboundMessage({
+      conversationId: 'sms:+14155551234', channelId: 'sms', content: 'x', recipientId: '+14155551234', parentEventId: 'r', requesterUnverified: true,
+    });
+    expect(relaySendOptions(event, '+14155551234')).toMatchObject({ requesterUnverified: true });
+    const plain = createOutboundMessage({ conversationId: 'slack:C1', channelId: 'slack', content: 'x', recipientId: 'U1', parentEventId: 'r' });
+    expect(relaySendOptions(plain, 'U1')).not.toHaveProperty('requesterUnverified');
+  });
+
   it('carries the principal\'s approval of an approved relay as humanApproved', () => {
     const event = createOutboundMessage({
       conversationId: 'slack:C1', channelId: 'slack', content: 'x', recipientId: 'U1', parentEventId: 'r', principalApproved: true,

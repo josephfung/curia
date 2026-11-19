@@ -1209,6 +1209,52 @@ describe('BandSendReview', () => {
       });
     });
 
+    // GHSA-p49r-jqh2-v668: a forged email From or a spoofed SMS number resolves to the principal,
+    // but its channel did not authenticate it. It has no principal authority, as the drafting
+    // turn, the bound or root task, or a linked task: a directed item bounces like an outsider's.
+    describe('an unauthenticated principal originator', () => {
+      const forged = (channel: 'sms' | 'email'): Originator => ({ ...principal, channel, authenticated: false });
+
+      it.each(['sms', 'email'] as const)('gives a %s drafting turn no authority: a directed item bounces', async (channel) => {
+        const { svc } = make([withRulings(ruling('directed'))], { evidence: { authority: { originator: forged(channel), liveTurn: false } } });
+        const d = await svc.review(pii);
+        expect(d.kind).toBe('bounce');
+        if (d.kind === 'bounce') expect(d.findings.map((f) => f.rule)).toEqual(['pii-not-authorized']);
+      });
+
+      it('gives one with a leaked live flag no authority either', async () => {
+        const { svc } = make([withRulings(ruling('directed'))], { evidence: { authority: { originator: forged('sms'), liveTurn: true } } });
+        expect((await svc.review(pii)).kind).toBe('bounce');
+      });
+
+      it('gives a bound or root task it originated no principal-task authority', async () => {
+        for (const authority of [
+          { originator: curia, liveTurn: false, boundTask: { taskId: 't', title: 'x', description: null, originator: forged('sms') } },
+          { ...standing, rootTask: { ...standing.rootTask!, originator: forged('email') } },
+        ] satisfies SendAuthority[]) {
+          const { svc } = make([withRulings(ruling('inferred'))], { evidence: { authority } });
+          expect((await svc.review(pii)).kind).toBe('bounce');
+        }
+      });
+
+      it('gives a strong link to a task it originated no authority', async () => {
+        const authority: SendAuthority = {
+          originator: outsider, liveTurn: false,
+          linkedTask: {
+            taskId: 't-link', title: 'Book physio', originator: forged('email'), linkKind: 'org-domain', strength: 'strong',
+            counterparty: { addresses: ['joel@example.com'], contactIds: [], domains: [] },
+          },
+        };
+        const { svc } = make([withRulings(ruling('inferred'))], { evidence: { authority } });
+        expect((await svc.review(pii)).kind).not.toBe('send');
+      });
+
+      it('keeps an authenticated principal email drafting turn directing the send', async () => {
+        const { svc } = make([directedOnly(ruling('directed'))], { evidence: { authority: { originator: { ...principal, channel: 'email', authenticated: true }, liveTurn: true } } });
+        await expect(svc.review({ ...pii, principalDirected: true })).resolves.toEqual({ kind: 'send', signals: {} });
+      });
+    });
+
     it('bounces an item the judge called directed when an outsider originated the work, naming only the label', async () => {
       const { svc } = make([withRulings(ruling('directed'))], { evidence: { authority: fromOutsider } });
       const d = await svc.review(pii);

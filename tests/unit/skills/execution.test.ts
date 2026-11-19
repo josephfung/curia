@@ -545,7 +545,7 @@ describe('ExecutionLayer', () => {
         taskMetadata: {
           originator: {
             contactId: 'primary-user',
-            systemRole: 'principal' as const,
+            systemRole: 'principal' as const, authenticated: true,
             channel: 'cli',
             initiatedAt: new Date().toISOString(),
           },
@@ -672,7 +672,7 @@ describe('ExecutionLayer', () => {
         taskMetadata: {
           originator: {
             contactId: 'primary-user',
-            systemRole: 'principal' as const,
+            systemRole: 'principal' as const, authenticated: true,
             channel: 'cli',
             initiatedAt: new Date().toISOString(),
           },

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { MailboxOutageNotifier } from '../../../src/health/mailbox-outage-notifier.js';
+import { MailboxOutageNotifier, MINT_RECONNECT_LINK_TIMEOUT_MS } from '../../../src/health/mailbox-outage-notifier.js';
 
 function make(email: string | null = 'owner@example.com', sent = true) {
   const sendNotification = vi.fn().mockResolvedValue(sent);
@@ -95,5 +95,77 @@ describe('MailboxOutageNotifier', () => {
     delivering = true;
     await n.record('work', 'Work', false);
     expect(sendNotification).toHaveBeenCalledTimes(1);
+  });
+
+  describe('reconnect link (#2361)', () => {
+    const URL_ = 'https://curia.example.com/api/mailbox-signin/start/abc123';
+    function withLink(mint: (id: string, label: string) => Promise<string | null>, mintTimeoutMs?: number) {
+      const sendNotification = vi.fn().mockResolvedValue(true);
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      const n = new MailboxOutageNotifier({
+        gateway: { sendNotification },
+        principalEmail: () => 'owner@example.com',
+        mintReconnectLink: mint,
+        ...(mintTimeoutMs !== undefined ? { mintTimeoutMs } : {}),
+        logger: logger as never,
+      });
+      return { n, sendNotification, logger };
+    }
+
+    it('an auth failure carries a sign-in link minted for that mailbox', async () => {
+      const mint = vi.fn().mockResolvedValue(URL_);
+      const { n, sendNotification } = withLink(mint);
+      await n.record('work', 'Work', false, { authFailure: true });
+      expect(mint).toHaveBeenCalledWith('work', 'Work');
+      const body = sendNotification.mock.calls[0]![0].body as string;
+      expect(body).toContain(URL_);
+      expect(body).toContain('7 days');
+      expect(body).not.toContain('paste its new grant ID');
+    });
+
+    it('a non-auth failure mints and shows no link', async () => {
+      const mint = vi.fn().mockResolvedValue(URL_);
+      const { n, sendNotification } = withLink(mint);
+      await n.record('work', 'Work', false, { authFailure: false });
+      expect(mint).not.toHaveBeenCalled();
+      expect(sendNotification.mock.calls[0]![0].body).not.toContain('mailbox-signin');
+    });
+
+    it('keeps the grant-paste wording when sign-in is not ready (null)', async () => {
+      const { n, sendNotification } = withLink(vi.fn().mockResolvedValue(null));
+      await n.record('work', 'Work', false, { authFailure: true });
+      const body = sendNotification.mock.calls[0]![0].body as string;
+      expect(body).toContain('use Edit on the mailbox to paste its new grant ID');
+      expect(body).not.toContain('mailbox-signin');
+    });
+
+    it('a mint failure never stops the alert, and logs the error name only', async () => {
+      const { n, sendNotification, logger } = withLink(vi.fn().mockRejectedValue(new TypeError('secret-token-xyz')));
+      await n.record('work', 'Work', false, { authFailure: true });
+      expect(sendNotification).toHaveBeenCalledTimes(1);
+      expect(sendNotification.mock.calls[0]![0].body).toContain('paste its new grant ID');
+      expect(logger.warn).toHaveBeenCalledWith(expect.objectContaining({ mailboxId: 'work', errorName: 'TypeError' }), expect.any(String));
+      expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('secret-token-xyz');
+    });
+
+    it('a stalled mint does not hold the alert: past the deadline it sends the grant-paste wording', async () => {
+      const { n, sendNotification, logger } = withLink(() => new Promise<string | null>(() => {}), 20);
+      await n.record('work', 'Work', false, { authFailure: true });
+      expect(sendNotification).toHaveBeenCalledTimes(1);
+      expect(sendNotification.mock.calls[0]![0].body).toContain('paste its new grant ID');
+      expect(logger.warn).toHaveBeenCalledWith(expect.objectContaining({ mailboxId: 'work', errorName: 'MintTimeoutError' }), expect.any(String));
+    });
+
+    it('defaults the mint deadline to 10 s', () => {
+      expect(MINT_RECONNECT_LINK_TIMEOUT_MS).toBe(10_000);
+    });
+
+    it('does not mint again for later failures in the same episode', async () => {
+      const mint = vi.fn().mockResolvedValue(URL_);
+      const { n } = withLink(mint);
+      await n.record('work', 'Work', false, { authFailure: true });
+      await n.record('work', 'Work', false, { authFailure: true });
+      expect(mint).toHaveBeenCalledTimes(1);
+    });
   });
 });

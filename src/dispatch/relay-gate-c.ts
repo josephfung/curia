@@ -177,6 +177,7 @@ export function relaySendOptions(
   postTurn: true;
   humanApproved?: true;
   reportedToPrincipal?: string;
+  requesterUnverified?: true;
   holdRecipe: { toolName: string; partialPayload: Record<string, unknown>; description: string };
 } {
   const p = outbound.payload;
@@ -184,6 +185,8 @@ export function relaySendOptions(
     postTurn: true,
     ...(p.principalApproved === true ? { humanApproved: true as const } : {}),
     ...(p.reportedToPrincipal ? { reportedToPrincipal: p.reportedToPrincipal } : {}),
+    // A reply to an unverified principal match: a hold's approval is marked so (GHSA-p49r-jqh2-v668).
+    ...(p.requesterUnverified === true ? { requesterUnverified: true as const } : {}),
     holdRecipe: {
       toolName: RELAY_GATE_C_ACTION,
       partialPayload: buildRelayApprovalInput({
