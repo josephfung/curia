@@ -20,8 +20,9 @@
 //   5. Checks Start onboarding is locked (the channel steps can't pass on a plain-http test
 //      install with no keys).
 //   6. Opens the optional extras from the step list and walks them: a tone and an
-//      independence level, Google Workspace's keys and a Tavily key. The last extra's Save
-//      and continue returns to Start onboarding. Then reads the saved state back over the API.
+//      independence level, Google Workspace's keys, a Tavily key, and Capabilities (Meeting
+//      debriefs off; Meetings and Email triage locked). The last extra's Save and continue
+//      returns to Start onboarding. Then reads the saved state back over the API.
 //
 // Exits 1 on any failure, leaving a screenshot and the server log path in the output.
 // The database is dropped afterwards (Ctrl-C included) unless --keep-db; one left by a
@@ -459,6 +460,15 @@ async function walkThroughSetup(page: Page, baseUrl: string, secret: string, cur
   await expectExtra(page, 'web_research', 'Higher web search limit');
   await fillForm(page, { 'Tavily API key': INPUT.tavilyKey }, 'Saved.');
   await saveAndContinue(page);
+
+  await expectExtra(page, 'capabilities', 'Capabilities');
+  // Meetings is always on, and the principal turns on email triage during onboarding.
+  for (const locked of ['Meetings', 'Email triage']) {
+    if (await page.getByRole('switch', { name: locked }).isEnabled()) throw new Error(`${locked} can be switched in Setup`);
+  }
+  await page.getByRole('switch', { name: 'Meeting debriefs', checked: true }).click();
+  await page.getByText('Meeting debriefs off. It applies when you apply and restart.').waitFor({ timeout: STEP_TIMEOUT_MS });
+  await saveAndContinue(page);
   await expectStep(page, 8, 'start', 'Start onboarding');
   out('  ✓ optional extras saved; the last returned to Start onboarding');
 }
@@ -508,7 +518,7 @@ async function verifySavedState(baseUrl: string, secret: string, curia: CuriaPro
     if (!res.ok) throw new Error(`GET ${route} returned ${res.status}`);
     return await res.json() as T;
   };
-  const [identity, status, principal, checklist, channels, vault, autonomy] = await Promise.all([
+  const [identity, status, principal, checklist, channels, vault, autonomy, agents] = await Promise.all([
     get<IdentityResponse>('/api/identity'),
     get<StatusResponse>('/api/setup/status'),
     get<PrincipalResponse>('/api/setup/principal'),
@@ -516,6 +526,7 @@ async function verifySavedState(baseUrl: string, secret: string, curia: CuriaPro
     get<{ channels: Array<{ name: string; state: string }> }>('/api/registry/channels'),
     get<{ configured_keys: string[] }>('/api/vault/status'),
     get<{ autonomy: { score: number } | null }>('/api/autonomy'),
+    get<{ agents: Array<{ name: string; state: string }> }>('/api/registry/agents'),
   ]);
   const problems: string[] = [];
   const expect = (label: string, actual: unknown, expected: unknown): void => {
@@ -559,6 +570,10 @@ async function verifySavedState(baseUrl: string, secret: string, curia: CuriaPro
     expect(`vault: ${key}`, vault.configured_keys.includes(key), true);
   }
   expect('checklist: Google Workspace', done('google_workspace'), 'done');
+  // Capabilities: Meeting debriefs switched off (its agent), the rest left alone.
+  const agentState = (name: string) => agents.agents.find((a) => a.name === name)?.state;
+  expect('capability: Meeting debriefs off', agentState('meeting-debrief'), 'installed');
+  expect('capability: Web research left on', agentState('research-analyst'), 'enabled');
   if (principal.contactId) {
     const ids = await get<{ identities: Array<{ channel: string; channelIdentifier: string }> }>(`/api/contacts/${principal.contactId}/identities`);
     expect('principal mobile linked as E.164', ids.identities.some((i) => i.channel === 'sms' && i.channelIdentifier === INPUT.principalMobile), true);

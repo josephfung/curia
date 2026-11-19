@@ -1,0 +1,99 @@
+// Capabilities (#2358 section 4): a capability's state, the order its entries switch in, and
+// the warning before turning off what other agents use.
+import { describe, it, expect } from 'vitest';
+import type { RegistryEntry } from '../registry-rows.js';
+import { CAPABILITIES, capabilityState, offWarning, outsidePins, switchPlan } from './capabilities.js';
+
+/** RegistryLists, but editable, so a test can vary one entry. */
+interface Lists { agents: RegistryEntry[]; skills: RegistryEntry[]; tools: RegistryEntry[] }
+
+function entry(kind: RegistryEntry['kind'], name: string, state: RegistryEntry['state'], meta: Partial<NonNullable<RegistryEntry['metadata']>> = {}): RegistryEntry {
+  return {
+    name, kind, state, installedAt: null, installedBy: null, enabledAt: null, enabledBy: null,
+    metadata: { name, description: '', version: '0.1.0', ...meta },
+  };
+}
+
+const cap = (id: string) => CAPABILITIES.find((c) => c.id === id)!;
+
+function lists(over: { research?: RegistryEntry['state']; web?: RegistryEntry['state']; coordinatorPinsWeb?: boolean } = {}): Lists {
+  return {
+    agents: [
+      entry('agent', 'research-analyst', over.research ?? 'enabled', { pinnedTools: ['web-search', 'web-fetch'] }),
+      entry('agent', 'coordinator', 'enabled', { pinnedTools: over.coordinatorPinsWeb === false ? ['tasks'] : ['web', 'tasks'] }),
+      entry('agent', 'contacts', 'enabled', { pinnedTools: ['tasks'] }),
+      entry('agent', 'diagnostics', 'installed', { pinnedTools: ['diagnostics'] }),
+    ],
+    skills: [
+      entry('skill', 'web', over.web ?? 'enabled', { tools: ['web-search', 'web-fetch'] }),
+      entry('skill', 'tasks', 'enabled', { tools: ['task-create'] }),
+      entry('skill', 'diagnostics', 'uninstalled', { tools: ['audit-query'] }),
+    ],
+    tools: [],
+  };
+}
+
+describe('the catalog', () => {
+  it('lists the six capabilities, Meetings locked on and Email triage off in Setup', () => {
+    expect(CAPABILITIES.map((c) => c.id)).toEqual(['meetings', 'debriefs', 'research', 'tasks', 'diagnostics', 'triage']);
+    expect(cap('meetings').lock).toBe('always-on');
+    expect(cap('triage').lock).toBe('principal-in-onboarding');
+    expect(cap('research').description('Dana')).toContain('research analyst');
+  });
+});
+
+describe('capabilityState', () => {
+  it('is on, off or partly, from every entry it covers', () => {
+    expect(capabilityState(cap('research'), lists())).toEqual({ kind: 'on' });
+    expect(capabilityState(cap('research'), lists({ research: 'installed', web: 'installed' }))).toEqual({ kind: 'off' });
+    expect(capabilityState(cap('research'), lists({ research: 'installed' }))).toEqual({ kind: 'partly', off: ['research-analyst'] });
+  });
+
+  it('is unavailable when the server lacks an entry or its manifest is broken', () => {
+    expect(capabilityState(cap('debriefs'), lists())).toEqual({ kind: 'unavailable', missing: ['meeting-debrief'] });
+    const broken = lists();
+    broken.skills[0] = { ...broken.skills[0]!, manifestError: 'bad yaml' };
+    expect(capabilityState(cap('research'), broken).kind).toBe('unavailable');
+  });
+});
+
+describe('switchPlan', () => {
+  it('turns on what it pins before the agent, and only what is off', () => {
+    expect(switchPlan(cap('diagnostics'), true, lists())).toEqual([
+      { kind: 'skills', name: 'diagnostics', action: 'install-enable' },
+      { kind: 'agents', name: 'diagnostics', action: 'install-enable' },
+    ]);
+  });
+
+  it('turns the agent off before what it pins, skipping what is already off', () => {
+    expect(switchPlan(cap('research'), false, lists())).toEqual([
+      { kind: 'agents', name: 'research-analyst', action: 'disable' },
+      { kind: 'skills', name: 'web', action: 'disable' },
+    ]);
+    expect(switchPlan(cap('diagnostics'), false, lists())).toEqual([]);
+  });
+});
+
+describe('outsidePins and the warning', () => {
+  it('names enabled agents outside the capability that pin its bundles', () => {
+    expect(outsidePins(cap('research'), lists())).toEqual([{ agent: 'coordinator', loses: 'web' }]);
+    expect(outsidePins(cap('tasks'), lists())).toEqual([
+      { agent: 'coordinator', loses: 'tasks' },
+      { agent: 'contacts', loses: 'tasks' },
+    ]);
+    expect(offWarning(cap('research'), lists())).toContain('• coordinator also uses web');
+  });
+
+  it('counts a bundle tool an outside agent pins directly, and ignores the capability’s own agents', () => {
+    const l = lists({ coordinatorPinsWeb: false });
+    l.agents.push(entry('agent', 'calendar', 'enabled', { pinnedTools: ['web-fetch'] }));
+    expect(outsidePins(cap('research'), l)).toEqual([{ agent: 'calendar', loses: 'web-fetch' }]);
+  });
+
+  it('has nothing to warn about when no other agent uses it, or the other agent is off', () => {
+    expect(offWarning(cap('diagnostics'), lists())).toBeNull();
+    const l = lists();
+    l.agents = l.agents.map((a) => (a.name === 'coordinator' ? { ...a, state: 'installed' as const } : a));
+    expect(offWarning(cap('research'), l)).toBeNull();
+  });
+});

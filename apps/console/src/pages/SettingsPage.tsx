@@ -290,6 +290,8 @@ const SECTION_GROUPS = {
       // The principal's own mailboxes and calendars (#2475); Curia's own are Channels → Email.
       { id: 'email-calendar', label: 'Email & Calendar', href: '/settings/email-calendar' },
       { id: 'autonomy',     label: 'Autonomy',     href: '/settings/autonomy' },
+      // What Curia can do, as switches over the registry (#2358).
+      { id: 'capabilities', label: 'Capabilities', href: '/settings/capabilities' },
     ],
   },
   system: {

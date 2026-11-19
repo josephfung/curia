@@ -49,7 +49,7 @@ describe('the steps', () => {
 
 describe('the optional extras', () => {
   it('follow the steps, in the catalog’s ids, and come from the URL too', () => {
-    expect(EXTRAS.map((s) => s.id)).toEqual(['working_style', 'google_workspace', 'web_research']);
+    expect(EXTRAS.map((s) => s.id)).toEqual(['working_style', 'google_workspace', 'web_research', 'capabilities']);
     expect(isStepId('google_workspace')).toBe(true);
     expect(isExtra('web_research')).toBe(true);
     expect(isExtra('voice')).toBe(false);
@@ -59,7 +59,8 @@ describe('the optional extras', () => {
   it('walk forward, and the last returns to Start onboarding', () => {
     expect(nextStep('working_style')).toBe('google_workspace');
     expect(nextStep('google_workspace')).toBe('web_research');
-    expect(nextStep('web_research')).toBe('start');
+    expect(nextStep('web_research')).toBe('capabilities');
+    expect(nextStep('capabilities')).toBe('start');
   });
 
   it('are never counted as left to do, nor where a returning operator lands', () => {
@@ -76,6 +77,7 @@ describe('the optional extras', () => {
     ]);
     // Working style's check is always done, so it says nothing: never ticked.
     expect(stepMark('working_style', unset)).toBe('todo');
+    expect(stepMark('capabilities', checklist([task('capabilities', 'done', { optional: true })]))).toBe('todo');
     expect(stepMark('google_workspace', unset)).toBe('todo');
     // Keyless search is done too; only the key ticks it.
     expect(stepMark('web_research', unset)).toBe('todo');

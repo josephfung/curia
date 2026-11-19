@@ -23,6 +23,7 @@ const PersonalityPage = lazy(() => import('./pages/PersonalitySettingsPage'));
 const GhostwritingPage = lazy(() => import('./pages/GhostwritingSettingsPage'));
 const PosturePage = lazy(() => import('./pages/PostureSettingsPage'));
 const EmailCalendarPage = lazy(() => import('./pages/EmailCalendarSettingsPage'));
+const CapabilitiesPage = lazy(() => import('./pages/capabilities/CapabilitiesSettingsPage'));
 const RetentionPage = lazy(() => import('./pages/RetentionSettingsPage'));
 const DevicesPage = lazy(() => import('./pages/DevicesSettingsPage'));
 const AboutPage = lazy(() => import('./pages/AboutSettingsPage'));
@@ -154,6 +155,12 @@ const autonomyRoute = createRoute({
   getParentRoute: () => settingsRoute,
   path: '/autonomy',
   component: AutonomyPage,
+});
+
+const capabilitiesRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/capabilities',
+  component: CapabilitiesPage,
 });
 
 // Settings → System: this install. Bare /system opens About.
@@ -368,6 +375,7 @@ const routeTree = rootRoute.addChildren([
       postureRoute,
       emailCalendarRoute,
       autonomyRoute,
+      capabilitiesRoute,
       assistantRedirect,
       workspaceRedirect,
       skillsSettingsRedirect,

@@ -4022,6 +4022,32 @@ table.records-table tbody tr.active td { background: transparent; }
 }
 .setup-foot .setup-help { margin-left: auto; }
 
+/* Capabilities (#2358): switches over the registry, on the Setup page and in Settings. */
+.caps {
+  display: flex; flex-direction: column; border: 1px solid var(--app-border); border-radius: 10px;
+  overflow: hidden; background: var(--app-card); margin-bottom: 14px;
+}
+.cap { display: flex; gap: 16px; align-items: center; padding: 13px 16px; }
+.cap + .cap { border-top: 1px solid var(--app-border); }
+.cap > div { flex: 1; min-width: 0; }
+.cap b { display: block; font-weight: 600; font-size: 14px; }
+.cap-desc { display: block; font-size: 12.5px; color: var(--app-fg-muted); }
+.cap-fixed { font-size: 11.5px; color: var(--app-fg-subtle); text-align: right; max-width: 14em; }
+.caps > .setup-status, .caps > .setup-hint { margin: 0; padding: 10px 16px; border-top: 1px solid var(--app-border); }
+.cap-switch {
+  position: relative; width: 36px; height: 20px; flex: none; border-radius: 999px; border: 0;
+  background: var(--app-input-bd); cursor: pointer; padding: 0;
+}
+.cap-switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--app-card); transition: transform .15s;
+}
+.cap-switch[aria-checked="true"] { background: var(--app-teal); }
+.cap-switch[aria-checked="true"]::after { transform: translateX(16px); }
+.cap-switch:disabled { opacity: .5; cursor: not-allowed; }
+.cap-switch:focus-visible { outline: 2px solid var(--app-teal); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .cap-switch::after { transition: none; } }
+
 /* The setup guide: a full-height column docked to the right, on the page background, past
    one thin line, so it reads as part of the console and stays across steps. The page makes
    room for it. Below 1180px the step list hides behind the guide's Steps button (which

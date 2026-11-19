@@ -9,6 +9,7 @@ import { createLatestSaver, type ChecklistTask } from './setup-steps.js';
 import { ChoiceGroup } from './setup-ui.js';
 import { VaultKeysForm, type FieldGroupHandle, type VaultFieldSpec } from './ChannelForms.js';
 import { DOCS_ORIGIN, SaveAndContinue, useSaveAndContinue } from './ChannelSteps.js';
+import { CapabilitiesSection } from '../capabilities/CapabilitiesSection.js';
 
 interface ExtraProps {
   task: ChecklistTask | undefined;
@@ -289,6 +290,20 @@ export function WebSearchStep({ task, onSaved, onContinue, onHelp }: ExtraProps)
           ? 'Curia’s web searches use this key.'
           : 'Without it, searches stop for a while when the hourly limit is reached.'}
       </p>
+      <SaveAndContinue save={save} onHelp={onHelp} />
+    </div>
+  );
+}
+
+export function CapabilitiesStep({ principal, onSaved, onContinue, onHelp }: ExtraProps): JSX.Element {
+  const save = useSaveAndContinue(onContinue);
+  return (
+    <div>
+      <h2>Capabilities</h2>
+      <p className="setup-lede">
+        What Curia can do for {principal}. Most people keep the defaults. You can change these later in Settings → Capabilities.
+      </p>
+      <CapabilitiesSection principal={principal} place="setup" onChanged={() => void onSaved()} />
       <SaveAndContinue save={save} onHelp={onHelp} />
     </div>
   );
