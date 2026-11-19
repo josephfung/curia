@@ -3246,14 +3246,10 @@ async function main(): Promise<void> {
   // agent's setup-status tool. The catalog stays with the setup skill; it is read once.
   const setupCatalogPath = path.resolve(import.meta.dirname, '../skills/setup/tools/setup-status/catalog.yaml');
   let setupCatalog: Promise<CatalogTask[]> | undefined;
-  // Read at call time: the adapters below are assigned later in boot, and in setup-required
-  // mode none of them start.
-  const channelStarted: Record<RouteChannel, () => boolean> = {
-    signal: () => !!signalAdapter,
-    sms: () => !!smsAdapter,
-    slack: () => !!slackAdapter,
-    voice: () => !!voiceAdapter,
-  };
+  // Filled by the startup loop below as each adapter's start() returns, so a channel reads
+  // running only once it can serve: an adapter that exists but has not started (boot still
+  // awaiting email's first poll, or setup-required mode, which starts none) does not count.
+  const startedChannels = new Set<RouteChannel | 'signal_calls'>();
   const setupCheckDeps: SetupCheckDeps = {
     state: () => readSetupState(pool),
     principal: async () => {
@@ -3265,7 +3261,7 @@ async function main(): Promise<void> {
     nylasSignInReadiness,
     principalMailboxReady: () => healthService.principalMailboxReady(),
     channelStatus: async (channel) => {
-      if (channelStarted[channel]() && !setupRequiredAtBoot) return 'running';
+      if (startedChannels.has(channel)) return 'running';
       const descriptor = CHANNEL_CATALOG.find((d) => d.name === channel);
       // Same rule as email (#2409): enabled and its Enable gate passes, but not started this boot.
       if (!descriptor || !((await channelRegistryRepo.getRow(channel))?.enabled ?? false)) return 'not_configured';
@@ -3284,7 +3280,7 @@ async function main(): Promise<void> {
       return vapidSetup.configured ? null : 'Push notifications are not set up on this server.';
     },
     // Read at call time: the bridge is assigned later in boot, and is only built when calls can work.
-    signalCalls: () => (!config.signalVoiceCallsEnabled ? 'disabled' : signalCallBridge ? 'ready' : 'not_wired'),
+    signalCalls: () => (!config.signalVoiceCallsEnabled ? 'disabled' : startedChannels.has('signal_calls') ? 'ready' : 'not_wired'),
     secretPresent: async (name) => (await secretsService.get(name)) !== null || !!process.env[name.toUpperCase()],
     browserReady: () => browserService?.browserContext != null,
     logger,
@@ -4529,6 +4525,7 @@ async function main(): Promise<void> {
     // the RPC client's exponential backoff will retry until the socket is available.
     if (signalAdapter && !setupRequiredAtBoot) {
       await signalAdapter.start();
+      startedChannels.add('signal');
       logger.info('Signal channel adapter started');
     } else if (signalAdapter && setupRequiredAtBoot) {
       logger.warn('SETUP-REQUIRED mode: skipping Signal adapter startup — restart after setup to enable');
@@ -4536,6 +4533,7 @@ async function main(): Promise<void> {
 
     if (slackAdapter && !setupRequiredAtBoot) {
       await slackAdapter.start();
+      startedChannels.add('slack');
       logger.info('Slack channel adapter started');
     } else if (slackAdapter && setupRequiredAtBoot) {
       logger.warn('SETUP-REQUIRED mode: skipping Slack adapter startup — restart after setup to enable');
@@ -4543,6 +4541,7 @@ async function main(): Promise<void> {
 
     if (smsAdapter && !setupRequiredAtBoot) {
       await smsAdapter.start();
+      startedChannels.add('sms');
       logger.info('SMS channel adapter started');
     } else if (smsAdapter && setupRequiredAtBoot) {
       logger.warn('SETUP-REQUIRED mode: skipping SMS adapter startup — restart after setup to enable');
@@ -4550,6 +4549,7 @@ async function main(): Promise<void> {
 
     if (voiceAdapter && !setupRequiredAtBoot) {
       await voiceAdapter.start();
+      startedChannels.add('voice');
       logger.info('Voice channel adapter started');
     } else if (voiceAdapter && setupRequiredAtBoot) {
       logger.warn('SETUP-REQUIRED mode: skipping Voice adapter startup — restart after setup to enable');
@@ -4562,6 +4562,7 @@ async function main(): Promise<void> {
     // so answering a call would be answering with nobody home).
     if (signalCallBridge && !setupRequiredAtBoot) {
       signalCallBridge.start();
+      startedChannels.add('signal_calls');
       logger.info('Signal voice-call bridge started');
     } else if (signalCallBridge && setupRequiredAtBoot) {
       logger.warn('SETUP-REQUIRED mode: skipping Signal voice-call bridge startup — restart after setup to enable');
