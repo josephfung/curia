@@ -90,8 +90,13 @@ export function CuriaNameStep({ principalName, onSaved, onContinue, onHelp }: Pr
       });
       if (!put.ok) throw new Error(await errorMessage(put));
       const reload = await apiFetch('/api/identity/reload', { method: 'POST' });
-      if (!reload.ok) throw new Error(await errorMessage(reload));
+      // The new version is stored even when the reload fails: say so, rather than that
+      // the save failed. A restart (Apply & restart) loads it.
       await onSaved();
+      if (!reload.ok) {
+        setError(`Saved, but Curia isn’t using it yet: ${await errorMessage(reload)}. Apply & restart will load it.`);
+        return;
+      }
       onContinue();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save.');

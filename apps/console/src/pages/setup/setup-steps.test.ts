@@ -99,14 +99,14 @@ describe('names', () => {
 });
 
 describe('setupRedirect (the first-load gate)', () => {
-  const inSetup = { configured: false, inSetup: true };
-  const done = { configured: true, inSetup: false };
+  const inSetup = { inSetup: true };
+  const done = { inSetup: false };
 
   it.each(['/', '/chat', '/kg', '/tasks'])('sends %s to Setup while Setup runs', (path) => {
     expect(setupRedirect(path, inSetup)).toBe('/setup');
   });
 
-  it.each(['/setup', '/channels', '/settings/email-calendar', '/system/devices', '/contacts', '/mailbox-signin/done'])(
+  it.each(['/setup', '/channels', '/settings/email-calendar', '/system/devices', '/contacts'])(
     'keeps %s open while Setup runs: a step links there',
     (path) => {
       expect(setupRedirect(path, inSetup)).toBeNull();
@@ -122,12 +122,7 @@ describe('setupRedirect (the first-load gate)', () => {
     expect(setupRedirect('/chat', done)).toBeNull();
   });
 
-  it('falls back to the older configured flag when the server does not report inSetup', () => {
-    expect(setupRedirect('/chat', { configured: false, inSetup: null })).toBe('/setup');
-    expect(setupRedirect('/chat', { configured: true, inSetup: null })).toBeNull();
-  });
-
-  it('keeps an existing install that predates the Setup page out of it, even unconfigured', () => {
-    expect(setupRedirect('/', { configured: false, inSetup: false })).toBeNull();
+  it.each(['/setup', '/chat', '/'])('stays on %s when Setup is unknown (a failed, throttled or mid-restart check)', (path) => {
+    expect(setupRedirect(path, { inSetup: null })).toBeNull();
   });
 });

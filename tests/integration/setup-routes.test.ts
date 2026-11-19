@@ -838,6 +838,23 @@ describeIf('/api/setup/* routes', () => {
       expect(fact.rows[0]!.value).toBe('Mon–Fri, 8:00 AM–4:00 PM');
     });
 
+    it('POST profile clears title and pronouns sent as null or blank (#2358)', async () => {
+      await appSetupMode.inject({ method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER, payload: { name: 'Profile Owner' } });
+      await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal/profile', headers: AUTH_HEADER,
+        payload: { timezone: 'America/Toronto', title: 'CEO', pronouns: 'she/her' },
+      });
+      const cleared = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal/profile', headers: AUTH_HEADER,
+        payload: { timezone: 'America/Toronto', title: null, pronouns: '  ' },
+      });
+      expect(cleared.statusCode).toBe(200);
+      const row = await pool.query<{ title: string | null; pronouns: string | null }>(
+        `SELECT title, pronouns FROM contacts WHERE system_role = 'principal'`,
+      );
+      expect(row.rows[0]).toEqual({ title: null, pronouns: null });
+    });
+
     it('POST profile leaves omitted optional fields untouched', async () => {
       const created = await appSetupMode.inject({
         method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER, payload: { name: 'Partial' },

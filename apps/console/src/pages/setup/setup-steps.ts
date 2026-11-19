@@ -125,7 +125,7 @@ export function stepsLeft(checklist: Checklist | null): StepDef[] {
  */
 const OPEN_DURING_SETUP = [
   '/setup', '/settings', '/system', '/channels', '/tools', '/agents', '/mcp-skills', '/secrets',
-  '/contacts', '/mailbox-signin',
+  '/contacts',
 ];
 
 function underPrefix(pathname: string, prefix: string): boolean {
@@ -134,11 +134,12 @@ function underPrefix(pathname: string, prefix: string): boolean {
 
 /**
  * Where the console should send a signed-in operator, or null to stay. `inSetup` comes
- * from GET /api/identity; `configured` is the older first-run flag, kept as a fallback for
- * a server that predates `inSetup`.
+ * from GET /api/identity. Unknown (the call failed, was rate-limited, or the server is
+ * restarting) means stay put: a failed check must never move an operator into or out of
+ * Setup mid-step.
  */
-export function setupRedirect(pathname: string, session: { configured: boolean; inSetup: boolean | null }): '/setup' | '/' | null {
-  const inSetup = session.inSetup ?? !session.configured;
-  if (inSetup) return OPEN_DURING_SETUP.some((p) => underPrefix(pathname, p)) ? null : '/setup';
+export function setupRedirect(pathname: string, session: { inSetup: boolean | null }): '/setup' | '/' | null {
+  if (session.inSetup === null) return null;
+  if (session.inSetup) return OPEN_DURING_SETUP.some((p) => underPrefix(pathname, p)) ? null : '/setup';
   return underPrefix(pathname, '/setup') ? '/' : null;
 }

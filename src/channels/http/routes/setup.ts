@@ -298,11 +298,12 @@ export async function setupRoutes(
     }
     const preferredName =
       typeof body.preferredName === 'string' && body.preferredName.trim() ? body.preferredName.trim() : undefined;
-    const title =
-      typeof body.title === 'string' && body.title.trim() ? body.title.trim() : undefined;
-    // The Setup page's Who it's for step (#2358). updateContactFields validates the value.
-    const pronouns =
-      typeof body.pronouns === 'string' && body.pronouns.trim() ? body.pronouns.trim() : undefined;
+    // Title and pronouns (#2358): absent leaves the value as it is; null or a blank string
+    // clears it, so clearing the field on the Setup page really clears it.
+    const clearable = (v: unknown): string | null | undefined =>
+      v === undefined ? undefined : typeof v === 'string' && v.trim() ? v.trim() : null;
+    const title = clearable(body.title);
+    const pronouns = clearable(body.pronouns);
 
     let workingHoursValue: string | undefined;
     if (body.workingHours !== undefined && body.workingHours !== null) {
