@@ -145,6 +145,13 @@ export async function checkNylasSignIn(deps: CheckNylasSignInDeps): Promise<Nyla
     } catch (err) {
       connectorErr = err;
     }
+    if (facts.environment === 'sandbox' && !checks.googleConnector) {
+      // A sandbox's Google connector is built in and can't be created, so its absence from the
+      // listing (or a failed listing) must not block sign-in. Logged so a real gap stays visible.
+      deps.logger.info({ listed: connectorErr === undefined }, 'Nylas sign-in: sandbox Google connector not listed; treating it as built in');
+      checks.googleConnector = true;
+      connectorErr = undefined;
+    }
     if (!checks.callbackRegistered) {
       if (connectorErr !== undefined) logConnectorFailure(deps.logger, connectorErr);
       return notReady('callback_unregistered', 'Register the sign-in callback URL with Nylas.', facts);

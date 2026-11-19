@@ -98,6 +98,14 @@ describe('checkNylasSignIn', () => {
     });
   });
 
+  it('a sandbox whose built-in connector is not listed, or whose listing fails, is still ready', async () => {
+    for (const o of [{ connectors: [] }, { connectorsError: new NylasAppError('x', 503) }]) {
+      expect(await run({ environment: 'sandbox', ...o })).toMatchObject({
+        ready: true, environment: 'sandbox', checks: { callbackRegistered: true, googleConnector: true },
+      });
+    }
+  });
+
   it.each([['production', 'production'], [null, 'production'], ['staging', 'production']] as const)(
     'environment %s reads as %s',
     async (raw, want) => {
