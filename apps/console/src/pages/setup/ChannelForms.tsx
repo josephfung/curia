@@ -356,3 +356,140 @@ export function PrincipalIdentityField(props: {
     </div>
   );
 }
+
+export interface VaultFieldSpec {
+  /** The vault key, saved as is (e.g. tavily_api_key). */
+  key: string;
+  label: string;
+  hint?: string;
+  placeholder?: string;
+  /** Shown as typed (an address), not masked. Masked by default. */
+  plain?: boolean;
+  /** An email address: refused before anything is saved when it doesn't look like one. */
+  email?: boolean;
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+async function loadConfiguredKeys(): Promise<Set<string>> {
+  const res = await apiFetch('/api/vault/status');
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return new Set((await res.json() as { configured_keys: string[] }).configured_keys);
+}
+
+/**
+ * Vault keys an optional extra asks for (Google Workspace, the Tavily key), with no channel to
+ * turn on. Like ChannelCredentialsForm: no Save button, a field saves when the operator leaves
+ * it, and the step's Save and continue saves what is still typed (flush). A saved key shows as
+ * saved and is left alone unless a new value is typed.
+ */
+export function VaultKeysForm(props: {
+  fields: readonly VaultFieldSpec[];
+  onChanged: () => Promise<void>;
+  ref?: Ref<FieldGroupHandle>;
+}): JSX.Element {
+  const { fields, onChanged } = props;
+  const [configured, setConfigured] = useState<Set<string>>(new Set());
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const valuesRef = useRef(values);
+  valuesRef.current = values;
+  const running = useRef<Promise<boolean> | null>(null);
+
+  const reload = useCallback(async (): Promise<void> => {
+    try {
+      setConfigured(await loadConfiguredKeys());
+    } catch (err) {
+      setMessage({ kind: 'error', text: err instanceof Error ? err.message : 'Could not read the saved keys.' });
+    }
+  }, []);
+
+  useEffect(() => { void reload(); }, [reload]);
+
+  async function saveTyped(): Promise<boolean> {
+    // Check every typed value first, so a bad one saves nothing. `submitted` is the text as
+    // typed: the field is cleared after its save only if it still holds exactly that.
+    const typed: Array<{ f: VaultFieldSpec; value: string; submitted: string }> = [];
+    for (const f of fields) {
+      const submitted = valuesRef.current[f.key] ?? '';
+      const value = submitted.trim();
+      if (!value) continue;
+      if (f.email && !EMAIL_RE.test(value)) {
+        setMessage({ kind: 'error', text: `${f.label}: enter an email address, like curia@example.com.` });
+        return false;
+      }
+      typed.push({ f, value, submitted });
+    }
+    if (typed.length === 0) return true;
+    let savedAny = false;
+    try {
+      // One field at a time, so a failure names the field.
+      for (const { f, value, submitted } of typed) {
+        const res = await apiFetch(`/api/vault/secrets/${encodeURIComponent(f.key)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value }),
+        });
+        if (!res.ok) throw new Error(`${f.label}: ${await errorMessage(res)}`);
+        // Never keep a saved key in component state, unless it was retyped while the save ran.
+        if (valuesRef.current[f.key] === submitted) {
+          valuesRef.current = { ...valuesRef.current, [f.key]: '' };
+          setValues((v) => (v[f.key] === submitted ? { ...v, [f.key]: '' } : v));
+        }
+        savedAny = true;
+      }
+      setMessage({ kind: 'ok', text: 'Saved.' });
+      return true;
+    } catch (err) {
+      setMessage({ kind: 'error', text: err instanceof Error ? err.message : 'Could not save.' });
+      return false;
+    } finally {
+      if (savedAny) {
+        await reload();
+        await onChanged();
+      }
+    }
+  }
+
+  async function flush(): Promise<boolean> {
+    while (running.current) await running.current;
+    running.current = saveTyped();
+    try {
+      return await running.current;
+    } finally {
+      running.current = null;
+    }
+  }
+
+  useImperativeHandle(props.ref, () => ({ flush }));
+
+  return (
+    <div className="setup-fields">
+      {fields.map((f) => (
+        <label key={f.key} className="setup-field">
+          <span className="setup-field-label">
+            {f.label}{' '}
+            {configured.has(f.key) ? <span className="setup-hint setup-saved">Saved</span> : f.hint && <span className="setup-hint">{f.hint}</span>}
+          </span>
+          <input
+            type={f.plain ? (f.email ? 'email' : 'text') : 'password'}
+            autoComplete="off"
+            value={values[f.key] ?? ''}
+            placeholder={configured.has(f.key) ? 'Saved. Type a new value to replace it.' : f.placeholder}
+            onChange={(e) => {
+              const value = e.target.value;
+              valuesRef.current = { ...valuesRef.current, [f.key]: value };
+              setValues((v) => ({ ...v, [f.key]: value }));
+            }}
+            onBlur={() => { if (Object.values(valuesRef.current).some((v) => v.trim())) void flush(); }}
+          />
+        </label>
+      ))}
+      {message && (
+        <p className={`setup-status ${message.kind === 'ok' ? 'ok' : 'attention'}`} role={message.kind === 'error' ? 'alert' : 'status'}>
+          {message.text}
+        </p>
+      )}
+    </div>
+  );
+}

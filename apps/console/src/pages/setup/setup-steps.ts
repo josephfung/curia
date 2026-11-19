@@ -12,6 +12,8 @@ export interface ChecklistTask {
   handoff_path?: string;
   credential_how_to: string | null;
   docs_url: string | null;
+  /** An optional key that raises a limit (web_research's Tavily key). */
+  optional_upgrade?: { vault_keys: string[]; configured: boolean };
 }
 
 export interface Checklist {
@@ -23,9 +25,13 @@ export interface Checklist {
 
 export type StepId =
   | 'who' | 'curia_name' | 'email' | 'messaging' | 'voice' | 'mailbox_signin'
-  | 'apply' | 'start';
+  | 'apply' | 'start'
+  | ExtraId;
 
-export type StepGroup = 'basics' | 'channels' | 'accounts' | 'finish';
+/** The optional extras: listed after Start onboarding, never numbered, never required. */
+export type ExtraId = 'working_style' | 'google_workspace' | 'web_research';
+
+export type StepGroup = 'basics' | 'channels' | 'accounts' | 'finish' | 'extras';
 
 export interface StepDef {
   id: StepId;
@@ -45,7 +51,19 @@ export const STEPS: readonly StepDef[] = [
   { id: 'start', group: 'finish', name: 'Start onboarding' },
 ];
 
-const STEP_IDS: ReadonlySet<string> = new Set(STEPS.map((s) => s.id));
+/** In order, after the steps. A catalog task's id doubles as the extra's id. */
+export const EXTRAS: readonly StepDef[] = [
+  { id: 'working_style', group: 'extras', name: 'Working style' },
+  { id: 'google_workspace', group: 'extras', name: 'Google Workspace' },
+  { id: 'web_research', group: 'extras', name: 'Higher search limit' },
+];
+
+const STEP_IDS: ReadonlySet<string> = new Set([...STEPS, ...EXTRAS].map((s) => s.id));
+const EXTRA_IDS: ReadonlySet<string> = new Set(EXTRAS.map((s) => s.id));
+
+export function isExtra(step: StepId): step is ExtraId {
+  return EXTRA_IDS.has(step);
+}
 
 export function isStepId(value: unknown): value is StepId {
   return typeof value === 'string' && STEP_IDS.has(value);
@@ -58,6 +76,7 @@ export function groupLabel(group: StepGroup, principalFirstName: string | null):
     case 'channels': return 'Curia’s channels';
     case 'accounts': return principalFirstName ? `${principalFirstName}’s accounts` : 'Your principal’s accounts';
     case 'finish': return 'Finish';
+    case 'extras': return 'Optional extras';
   }
 }
 
@@ -70,6 +89,7 @@ export type StepMark = 'done' | 'attention' | 'todo' | 'locked';
  */
 export function stepMark(step: StepId, checklist: Checklist | null): StepMark {
   if (!checklist) return step === 'start' ? 'locked' : 'todo';
+  if (isExtra(step)) return extraMark(step, checklist);
   if (step === 'start') return checklist.setupComplete ? 'todo' : 'locked';
   if (step === 'apply') {
     if (checklist.tasks.some((t) => !t.optional && t.restart_required)) return 'attention';
@@ -79,6 +99,20 @@ export function stepMark(step: StepId, checklist: Checklist | null): StepMark {
   if (!task) return 'todo';
   if (task.status === 'done') return 'done';
   return task.restart_required ? 'attention' : 'todo';
+}
+
+/**
+ * An extra is ticked only once it has something set up: Google Workspace's keys, or the
+ * Tavily key. Working style is never ticked: its check is always done (the defaults are
+ * fine), so a tick would say nothing about whether the operator chose anything.
+ */
+function extraMark(step: ExtraId, checklist: Checklist): StepMark {
+  const task = checklist.tasks.find((t) => t.id === step);
+  switch (step) {
+    case 'working_style': return 'todo';
+    case 'google_workspace': return task?.status === 'done' ? 'done' : 'todo';
+    case 'web_research': return task?.optional_upgrade?.configured ? 'done' : 'todo';
+  }
 }
 
 /**
@@ -92,8 +126,15 @@ export function firstOpenStep(checklist: Checklist | null): StepId {
   return open ? open.id : 'start';
 }
 
-/** The step after this one, for Save and continue. Null after the last. */
+/**
+ * The step after this one, for Save and continue. Null after Start onboarding, which has no
+ * such button. The extras run in order, and the last goes back to Start onboarding.
+ */
 export function nextStep(step: StepId): StepId | null {
+  if (isExtra(step)) {
+    const i = EXTRAS.findIndex((s) => s.id === step);
+    return EXTRAS[i + 1]?.id ?? 'start';
+  }
   const i = STEPS.findIndex((s) => s.id === step);
   return STEPS[i + 1]?.id ?? null;
 }
