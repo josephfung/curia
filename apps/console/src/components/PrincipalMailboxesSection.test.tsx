@@ -585,19 +585,18 @@ describe('PrincipalMailboxesSection: Connect with Google (#2361)', () => {
     expect(JSON.parse(mint.init!.body as string)).toEqual({ target: 'principal', address: 'boss@acme.com' });
   });
 
-  it('top-level connect passes a typed address, trimmed, while row reconnects stay pinned', async () => {
+  it('top-level connect sends no address and has no address input, while row reconnects stay pinned', async () => {
     mocks.respond = (path) => {
       if (path === signinPath) return json({ ready: true });
       if (path === '/api/registry/nylas/signin-links') return json({ url: `${window.location.origin}/api/mailbox-signin/start/abc`, expiresAt: 'x' });
       return json({ mailboxes: [{ id: 'work', label: 'Work', address: 'boss@acme.com', isDefault: true }] });
     };
     await mount();
-    await type('Google account address', '  second@gmail.com ');
+    expect(container.querySelector('[aria-label="Google account address"]')).toBeNull();
     await act(async () => { connectBtn().click(); });
     await settle();
     const mint = mocks.calls.find(c => c.path === '/api/registry/nylas/signin-links')!;
-    expect(JSON.parse(mint.init!.body as string)).toEqual({ target: 'principal', address: 'second@gmail.com' });
-    // The row's own button is unaffected by the typed address.
+    expect(JSON.parse(mint.init!.body as string)).toEqual({ target: 'principal' });
     mocks.calls.length = 0;
     const reconnect = [...container.querySelectorAll('button')].find(b => b.textContent === 'Reconnect with Google') as HTMLButtonElement;
     await act(async () => { reconnect.click(); });
@@ -606,28 +605,13 @@ describe('PrincipalMailboxesSection: Connect with Google (#2361)', () => {
     expect(JSON.parse(row.init!.body as string)).toEqual({ target: 'principal', address: 'boss@acme.com' });
   });
 
-  it('a blank address input sends no address', async () => {
-    mocks.respond = (path) => {
-      if (path === signinPath) return json({ ready: true });
-      if (path === '/api/registry/nylas/signin-links') return json({ url: `${window.location.origin}/api/mailbox-signin/start/abc`, expiresAt: 'x' });
-      return json({ mailboxes: [] });
-    };
-    await mount();
-    await type('Google account address', '   ');
-    await act(async () => { connectBtn().click(); });
-    await settle();
-    const mint = mocks.calls.find(c => c.path === '/api/registry/nylas/signin-links')!;
-    expect(JSON.parse(mint.init!.body as string)).toEqual({ target: 'principal' });
-  });
-
-  it('shows the server refusal for an address', async () => {
+  it('shows the server refusal for a sign-in link', async () => {
     mocks.respond = (path) => {
       if (path === signinPath) return json({ ready: true });
       if (path === '/api/registry/nylas/signin-links') return json({ error: 'That address is not allowed.' }, 422);
       return json({ mailboxes: [] });
     };
     await mount();
-    await type('Google account address', 'x@gmail.com');
     await act(async () => { connectBtn().click(); });
     await settle();
     expect(assign).not.toHaveBeenCalled();
