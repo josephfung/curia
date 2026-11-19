@@ -58,6 +58,12 @@ export default function SetupPage(): JSX.Element {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
+  // Without ?step, land on the first open step once, and pin it in the URL: a later refresh
+  // (a step saved, or a check changing) must not move the operator to another step.
+  useEffect(() => {
+    if (!search.step && data) void navigate({ to: '/setup', search: { step: firstOpenStep(data.checklist) }, replace: true });
+  }, [search.step, data, navigate]);
+
   const current: StepId = search.step ?? firstOpenStep(data?.checklist ?? null);
   const goTo = useCallback((step: StepId) => {
     void navigate({ to: '/setup', search: { step } });

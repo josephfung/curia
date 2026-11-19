@@ -5,7 +5,8 @@ import { apiFetch } from '../../api.js';
 import { makeMessage, mergeLiveTail, nextReconnectDelayMs, parseSseEvent, pickRecoveredReply } from './chat-utils.js';
 import type { Message, HistoryMessage, SseEvent } from './types.js';
 
-// Onboarding kickoff — set by the setup wizard page after form submission.
+// Onboarding kickoff. Its only writer was the old setup wizard (removed in #2358); what the
+// principal's first conversation starts with is #2360's, so nothing sets it today.
 const ONBOARDING_KICKOFF_KEY = 'curia:onboarding:welcome-banner-pending';
 const LEGACY_CONVERSATION_KEY = 'curia:chat:conversationId';
 const KICKOFF_TEXT = 'Just finished setup — say hi!';

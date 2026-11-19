@@ -1,7 +1,7 @@
 import { useState, type FormEvent, type JSX } from 'react';
 import { detectBrowserTimezone, validatePrincipalName, validateProfileEmail } from '../wizard-utils.js';
 import { postJson, saveSetupFields, type PrincipalInfo, type SetupFields, type SetupFor } from './setup-api.js';
-import { Choice, StepFooter } from './setup-ui.js';
+import { ChoiceGroup, StepFooter } from './setup-ui.js';
 
 // IANA zones for the timezone picker; a short fallback list where the browser can't list them.
 const IANA_ZONES: string[] = typeof (Intl as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf === 'function'
@@ -80,12 +80,15 @@ export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Prop
     <form onSubmit={(e) => void save(e)} noValidate>
       <h2>Who are you setting Curia up for?</h2>
       <p className="setup-lede">This decides how Curia talks to you during setup and who it greets when it’s done.</p>
-      <div className="setup-choices" role="radiogroup" aria-label="Who Curia is for">
-        <Choice checked={setupFor === 'self'} onSelect={() => setSetupFor('self')} title="Myself"
-          description="You’ll set it up, then go straight into your first conversation." />
-        <Choice checked={other} onSelect={() => setSetupFor('other')} title="Someone else"
-          description="An executive you work for. You set things up; they get an invitation when you’re ready." />
-      </div>
+      <ChoiceGroup
+        label="Who Curia is for"
+        value={setupFor}
+        onChange={setSetupFor}
+        options={[
+          { value: 'self', title: 'Myself', description: 'You’ll set it up, then go straight into your first conversation.' },
+          { value: 'other', title: 'Someone else', description: 'An executive you work for. You set things up; they get an invitation when you’re ready.' },
+        ]}
+      />
 
       {other && (
         <>
