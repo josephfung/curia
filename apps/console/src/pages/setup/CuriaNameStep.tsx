@@ -117,7 +117,7 @@ export function CuriaNameStep({ principalName, onSaved, onContinue, onHelp }: Pr
         <label className="setup-field">Title
           <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} disabled={!loaded} />
         </label>
-        <label className="setup-field">Email signature <span className="setup-hint">(optional)</span>
+        <label className="setup-field"><span className="setup-field-label">Email signature <span className="setup-hint">(optional)</span></span>
           <textarea value={signature} onChange={(e) => setSignature(e.target.value)} rows={3} disabled={!loaded} />
         </label>
       </div>

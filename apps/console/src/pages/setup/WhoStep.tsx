@@ -120,7 +120,7 @@ export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Prop
               <label className="setup-field">Full name
                 <input id="setup-principal-name" type="text" value={name} onChange={(e) => setName(e.target.value)} />
               </label>
-              <label className="setup-field">Title <span className="setup-hint">(optional)</span>
+              <label className="setup-field"><span className="setup-field-label">Title <span className="setup-hint">(optional)</span></span>
                 <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} />
               </label>
             </div>
@@ -134,7 +134,7 @@ export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Prop
                   {IANA_ZONES.map((z) => <option key={z} value={z}>{z}</option>)}
                 </select>
               </label>
-              <label className="setup-field">Pronouns <span className="setup-hint">(optional)</span>
+              <label className="setup-field"><span className="setup-field-label">Pronouns <span className="setup-hint">(optional)</span></span>
                 <input type="text" value={pronouns} onChange={(e) => setPronouns(e.target.value)} placeholder="she/her" />
               </label>
             </div>

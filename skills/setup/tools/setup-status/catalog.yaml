@@ -59,7 +59,7 @@ tasks:
     handoff_path: /setup
     completion_check:
       type: voice_route_ready
-    credential_how_to: "In the Voice step, choose the Curia app or a Signal call, then add the LiveKit, Deepgram and Cartesia keys and pick Curia's spoken voice. Signal calls also need the Signal channel and SIGNAL_VOICE_CALLS_ENABLED=true on the server. Voice starts after the restart."
+    credential_how_to: "In the Voice step, choose the Curia app or a Signal call, then add the Deepgram and Cartesia keys and pick Curia's spoken voice. LiveKit comes with Curia itself (set up when it's installed), so it needs nothing here. Signal calls also need the Signal channel and SIGNAL_VOICE_CALLS_ENABLED=true on the server. Voice starts after the restart."
     docs_url: /get-started/voice
 
   - id: mailbox_signin

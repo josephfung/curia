@@ -8,9 +8,9 @@ import { ChoiceGroup } from './setup-ui.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type Route = 'app' | 'signal' | 'sms';
+type Route = 'app' | 'signal' | 'sms' | 'phone';
 
-function Harness({ initial }: { initial: Route | null }): JSX.Element {
+function Harness({ initial, withPhone = false }: { initial: Route | null; withPhone?: boolean }): JSX.Element {
   const [value, setValue] = useState<Route | null>(initial);
   return (
     <ChoiceGroup<Route>
@@ -21,6 +21,7 @@ function Harness({ initial }: { initial: Route | null }): JSX.Element {
         { value: 'app', title: 'Curia app', description: 'a' },
         { value: 'signal', title: 'Signal', description: 's' },
         { value: 'sms', title: 'Text message', description: 't' },
+        ...(withPhone ? [{ value: 'phone' as const, title: 'Phone', description: 'coming soon', disabled: true }] : []),
       ]}
     />
   );
@@ -29,11 +30,11 @@ function Harness({ initial }: { initial: Route | null }): JSX.Element {
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;
 
-function mount(initial: Route | null): void {
+function mount(initial: Route | null, withPhone = false): void {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
-  act(() => root!.render(<Harness initial={initial} />));
+  act(() => root!.render(<Harness initial={initial} withPhone={withPhone} />));
 }
 
 afterEach(() => {
@@ -81,5 +82,17 @@ describe('ChoiceGroup', () => {
     mount('app');
     press(radios()[0]!, 'a');
     expect(checked()[0]).toMatch(/^Curia app/);
+  });
+
+  it('shows a disabled option that the arrow keys skip and a click cannot select', () => {
+    mount('sms', true);
+    const phone = radios()[3]!;
+    expect(phone.getAttribute('aria-disabled')).toBe('true');
+    expect(phone.tabIndex).toBe(-1);
+    press(radios()[2]!, 'ArrowDown');
+    expect(checked()[0]).toMatch(/^Curia app/);
+    act(() => { phone.click(); });
+    expect(checked()[0]).toMatch(/^Curia app/);
+    expect(phone.getAttribute('aria-checked')).toBe('false');
   });
 });
