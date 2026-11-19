@@ -66,9 +66,14 @@ function useSavedChoice<T extends string>(
   latestSave.current = save;
   const latestReload = useRef(reload);
   latestReload.current = reload;
-  const saver = useRef(createLatestSaver((next: T) => latestSave.current(next))).current;
   // The last value known to be stored, for when a re-read fails.
   const confirmed = useRef<T | null>(null);
+  // Each write is confirmed as it lands, not when the queue drains: a later queued write that
+  // fails must not hide an earlier one that was stored.
+  const saver = useRef(createLatestSaver(async (next: T) => {
+    await latestSave.current(next);
+    confirmed.current = next;
+  })).current;
   // Bumped by each pick and load: an older read must not overwrite a newer pick.
   const seq = useRef(0);
   const running = useRef(new Set<Promise<boolean>>());
@@ -96,7 +101,6 @@ function useSavedChoice<T extends string>(
   async function attempt(next: T, gen: number): Promise<boolean> {
     try {
       await saver(next);
-      confirmed.current = next;
       return true;
     } catch (err) {
       const text = `Couldn’t save ${describe(next)}: ${err instanceof Error ? err.message : 'unknown error'}`;
