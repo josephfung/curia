@@ -1,15 +1,28 @@
 // apps/console/src/pages/chat/ChatComposer.tsx
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { IconSend } from '../../components/Icons.js';
 
 interface ChatComposerProps {
   disabled: boolean;
   onSend: (text: string) => void;
+  /**
+   * Text to put in the composer, unsent, and focus (the Setup page's "Need help?" link,
+   * #2358). `seq` changes for each new draft, so the same text can be offered again.
+   */
+  draft?: { text: string; seq: number };
 }
 
-export function ChatComposer({ disabled, onSend }: ChatComposerProps) {
+export function ChatComposer({ disabled, onSend, draft }: ChatComposerProps) {
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!draft) return;
+    setValue(draft.text);
+    textareaRef.current?.focus();
+    // Only a new draft (seq) replaces what is typed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft?.seq]);
 
   function submit() {
     const text = value.trim();

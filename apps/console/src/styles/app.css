@@ -4022,9 +4022,50 @@ table.records-table tbody tr.active td { background: transparent; }
 }
 .setup-foot .setup-help { margin-left: auto; }
 
+/* The setup guide: a full-height column docked to the right, on the page background, past
+   one thin line, so it reads as part of the console and stays across steps. The page makes
+   room for it. Below 1180px the step list hides behind the guide's Steps button (which
+   closes the guide); on a phone the guide is full-screen. */
+.setup-page.guide-open {
+  max-width: none; margin: 0; padding-right: calc(var(--setup-guide-w) + 24px);
+  grid-template-columns: 210px minmax(0, 620px); gap: 28px;
+}
+.setup-page { --setup-guide-w: 360px; }
+.setup-guide {
+  position: fixed; top: 0; right: 0; bottom: 0; width: var(--setup-guide-w); z-index: 5;
+  display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  background: var(--app-bg); border-left: 1px solid var(--app-border);
+  padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.setup-guide-head {
+  display: flex; align-items: flex-start; gap: 10px; padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--app-border);
+}
+.setup-guide-head > div { flex: 1; min-width: 0; }
+.setup-guide-head b { display: block; font-size: 14px; }
+.setup-guide-head span { display: block; font-size: 12px; color: var(--app-fg-muted); }
+.setup-guide-steps {
+  display: none; font-size: 12px; font-weight: 600; background: var(--app-bg-sunken); border: 0;
+  border-radius: 6px; padding: 4px 9px; cursor: pointer; white-space: nowrap; color: var(--app-fg);
+}
+.setup-guide-close {
+  background: none; border: 0; font-size: 20px; line-height: 1; color: var(--app-fg-muted);
+  cursor: pointer; padding: 0 4px;
+}
+/* The chat's own thread and composer, in a narrow column: drop the centring padding. */
+.setup-guide .chat-messages { padding: 16px; }
+.setup-guide .chat-composer { padding: 12px 16px; }
+@media (max-width: 1180px) {
+  .setup-page.guide-open { grid-template-columns: minmax(0, 620px); }
+  .setup-page.guide-open .setup-steps { display: none; }
+  .setup-guide-steps { display: inline-block; }
+}
+
 @media (max-width: 760px) {
   .setup-page { grid-template-columns: minmax(0, 1fr); gap: 20px; padding: 20px 16px 40px; }
   .setup-pane { padding: 20px 18px; }
   .setup-row2 { grid-template-columns: 1fr; }
   .setup-foot .setup-help { margin-left: 0; }
+  .setup-page.guide-open { padding-right: 16px; }
+  .setup-guide { width: auto; left: 0; z-index: 10; border-left: 0; }
 }

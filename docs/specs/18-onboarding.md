@@ -144,7 +144,30 @@ check is always done.
 | Google Workspace | Curia's Google address and the OAuth client ID and secret. "Sign in as Curia" shows as coming soon (#2683) | `PUT /api/vault/secrets/{curia_google_email,google_oauth_client_id,google_oauth_client_secret}` |
 | Higher search limit | The Tavily key, with links to tavily.com and the curia-docs limits page | `PUT /api/vault/secrets/tavily_api_key` |
 
-Capabilities, the last extra, and the setup guide panel follow in a later #2358 PR.
+Capabilities, the last extra, follows in a later #2358 PR.
+
+### The setup guide panel
+
+The setup agent as a help panel; it never drives Setup.
+
+- **Layout.** A full-height column docked to the right edge (`SetupGuidePanel`), on the page
+  background past one thin line; the page makes room for it. Below 1,180px wide the step list
+  hides while it is open, and its Steps button closes it; on a phone it is full-screen.
+- **When it opens.** By itself on a first run (`isFirstRun`: nothing saved yet), except on a
+  phone; closed when an operator comes back. Each step's "Need help? Ask the setup guide"
+  opens it with "I'm on the <step> step." in the composer, focused and unsent. The link is
+  hidden while the panel is open.
+- **No new chat endpoints or components.** It renders `ChatThread`, `ChatComposer` and
+  `useChatSession` over `/api/chat/*`. `useChatSession({ setupStep })` sends the open step as
+  `setupStep` on `POST /api/chat/messages`; the server keeps it only while Setup runs and the
+  setup agent reads it as a `[Setup page: ...]` line. `ChatComposer` takes a `draft`.
+- **Step markers.** When the open step changes, a "Now on: <step>" line appears in the
+  thread. They live in the panel only, not in the saved history.
+- **Setup starts when the page opens.** `POST /api/setup/start` creates the Setup row as
+  in progress (it never reopens a finished Setup), so web chat reaches the setup guide from
+  the first message, before anything is saved. A database a script set up has no row and
+  never opens the page, so its web chat stays with the coordinator. If the call fails, the
+  panel says its messages may reach Curia's usual chat.
 
 ### Out of scope
 

@@ -89,8 +89,10 @@ function historyPage(path: string): { messages: Row[]; hasMore: boolean } {
   return { messages: older.slice(-limit), hasMore: older.length > limit };
 }
 
+let probeSetupStep: string | null = null;
+
 function Probe(): ReactElement {
-  const current = useChatSession();
+  const current = useChatSession({ setupStep: probeSetupStep });
   session = current;
   return (
     <div>
@@ -170,6 +172,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.clearAllMocks();
   localStorage.removeItem('curia:onboarding:welcome-banner-pending');
+  probeSetupStep = null;
 });
 
 describe('useChatSession catch-up', () => {
@@ -407,6 +410,33 @@ async function liveTurn(question: string, reply: string): Promise<void> {
   });
   await flush();
 }
+
+// #2358: the Setup page's guide sends the open step with each message.
+describe('useChatSession setupStep', () => {
+  function postedBodies(): Array<Record<string, unknown>> {
+    return apiFetch.mock.calls
+      .filter(([path]) => String(path) === '/api/chat/messages')
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+  }
+
+  it('sends the open step, and the step open at send time', async () => {
+    probeSetupStep = 'email';
+    await mount();
+    await act(async () => { latestSource().open(); });
+    await liveTurn('which key?', 'the Nylas one');
+    probeSetupStep = 'voice';
+    await act(async () => { root!.render(<Probe />); });
+    await sendText('and here?');
+    expect(postedBodies().map((b) => b['setupStep'])).toEqual(['email', 'voice']);
+  });
+
+  it('sends no step outside the Setup page', async () => {
+    await mount();
+    await act(async () => { latestSource().open(); });
+    await sendText('hello');
+    expect(postedBodies()[0]).not.toHaveProperty('setupStep');
+  });
+});
 
 describe('useChatSession reconnect', () => {
   it('reconnects after a stream error and catches up on open', async () => {

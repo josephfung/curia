@@ -1,7 +1,8 @@
 // The Setup page (#2358): the console's landing page on a new install until Start
-// onboarding. A step list on the left, the open step's form on the right. Each step can be
-// opened directly; Save and continue walks them in order. Step status comes from the Setup
-// checklist the setup agent also reads (GET /api/setup/checklist).
+// onboarding. A step list on the left, the open step's form in the middle, and the setup
+// guide's chat docked on the right when open. Each step can be opened directly; Save and
+// continue walks them in order. Step status comes from the Setup checklist the setup agent
+// also reads (GET /api/setup/checklist).
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import {
@@ -9,6 +10,7 @@ import {
   fetchChecklist,
   fetchPrincipal,
   fetchSetupFields,
+  startSetup,
   type PrincipalInfo,
   type SetupFields,
 } from './setup-api.js';
@@ -18,6 +20,7 @@ import {
   firstOpenStep,
   groupLabel,
   isExtra,
+  isFirstRun,
   nextStep,
   principalLabel,
   stepMark,
@@ -30,6 +33,13 @@ import { CuriaNameStep } from './CuriaNameStep.js';
 import { EmailStep, MessagingStep, SignInStep, VoiceStep } from './ChannelSteps.js';
 import { ApplyStep, StartStep } from './FinishSteps.js';
 import { GoogleWorkspaceStep, WebSearchStep, WorkingStyleStep } from './ExtraSteps.js';
+import { SetupGuidePanel } from './SetupGuidePanel.js';
+
+/** A phone: the guide would cover the whole page, so it doesn't open by itself there. */
+function isPhoneWidth(): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    && window.matchMedia('(max-width: 760px)').matches;
+}
 
 interface Loaded {
   checklist: Checklist;
@@ -61,6 +71,27 @@ export default function SetupPage(): JSX.Element {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
+  // Opening the Setup page starts Setup (POST /api/setup/start), so web chat goes to the
+  // setup guide from the first message, before anything is saved.
+  const [startError, setStartError] = useState<string | null>(null);
+  useEffect(() => {
+    startSetup().catch((err: unknown) => {
+      console.error('[SetupPage] could not start Setup:', err);
+      setStartError(err instanceof Error ? err.message : 'unknown error');
+    });
+  }, []);
+
+  // The guide: open by itself on a first run (not on a phone), closed when an operator comes
+  // back to Setup. Decided once, on the first load.
+  const [guideOpen, setGuideOpen] = useState(false);
+  const guideDecided = useRef(false);
+  const [draft, setDraft] = useState<{ text: string; seq: number } | undefined>(undefined);
+  useEffect(() => {
+    if (!data || guideDecided.current) return;
+    guideDecided.current = true;
+    if (isFirstRun(data.checklist, data.fields) && !isPhoneWidth()) setGuideOpen(true);
+  }, [data]);
+
   // Without ?step, land on the first open step once, and pin it in the URL: a later refresh
   // (a step saved, or a check changing) must not move the operator to another step.
   useEffect(() => {
@@ -85,38 +116,44 @@ export default function SetupPage(): JSX.Element {
   const taskFor = (id: string) => checklist?.tasks.find((t) => t.id === id);
   const index = STEPS.findIndex((s) => s.id === current);
   const step = [...STEPS, ...EXTRAS].find((s) => s.id === current)!;
+  // "Need help?" opens the guide with the step named in the composer. While the guide is
+  // open the link is hidden: the guide already follows the open step.
+  const help = guideOpen ? undefined : (): void => {
+    setDraft((d) => ({ text: `I’m on the ${step.name} step. `, seq: (d?.seq ?? 0) + 1 }));
+    setGuideOpen(true);
+  };
 
   function renderStep(): JSX.Element {
     if (!data) return <p className="setup-lede">{loadError ?? 'Loading…'}</p>;
     switch (current) {
       case 'who':
-        return <WhoStep key="who" fields={data.fields} principal={data.principal} onSaved={refresh} onContinue={goNext} />;
+        return <WhoStep key="who" fields={data.fields} principal={data.principal} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'curia_name':
-        return <CuriaNameStep key="curia_name" principalName={data.principal.displayName} onSaved={refresh} onContinue={goNext} />;
+        return <CuriaNameStep key="curia_name" principalName={data.principal.displayName} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'email':
-        return <EmailStep task={taskFor('email')} principal={principal} onSaved={refresh} onContinue={goNext} />;
+        return <EmailStep task={taskFor('email')} principal={principal} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'messaging':
-        return <MessagingStep key="messaging" task={taskFor('messaging')} principal={principal} fields={fields} contactId={data.principal.contactId} onSaved={refresh} onContinue={goNext} />;
+        return <MessagingStep key="messaging" task={taskFor('messaging')} principal={principal} fields={fields} contactId={data.principal.contactId} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'voice':
-        return <VoiceStep key="voice" task={taskFor('voice')} principal={principal} fields={fields} contactId={data.principal.contactId} onSaved={refresh} onContinue={goNext} />;
+        return <VoiceStep key="voice" task={taskFor('voice')} principal={principal} fields={fields} contactId={data.principal.contactId} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'mailbox_signin':
-        return <SignInStep task={taskFor('mailbox_signin')} principal={principal} onSaved={refresh} onContinue={goNext} />;
+        return <SignInStep task={taskFor('mailbox_signin')} principal={principal} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'apply':
-        return <ApplyStep checklist={checklist} onSaved={refresh} onContinue={goNext} />;
+        return <ApplyStep checklist={checklist} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'start':
-        return <StartStep checklist={checklist} principal={principal} onRefresh={refresh} />;
+        return <StartStep checklist={checklist} principal={principal} onRefresh={refresh} onHelp={help} />;
       case 'working_style':
-        return <WorkingStyleStep key="working_style" task={taskFor('working_style')} principal={principal} onSaved={refresh} onContinue={goNext} />;
+        return <WorkingStyleStep key="working_style" task={taskFor('working_style')} principal={principal} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'google_workspace':
-        return <GoogleWorkspaceStep key="google_workspace" task={taskFor('google_workspace')} principal={principal} onSaved={refresh} onContinue={goNext} />;
+        return <GoogleWorkspaceStep key="google_workspace" task={taskFor('google_workspace')} principal={principal} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'web_research':
-        return <WebSearchStep key="web_research" task={taskFor('web_research')} principal={principal} onSaved={refresh} onContinue={goNext} />;
+        return <WebSearchStep key="web_research" task={taskFor('web_research')} principal={principal} onSaved={refresh} onContinue={goNext} onHelp={help} />;
     }
   }
 
   let lastGroup: string | null = null;
   return (
-    <div className="setup-page">
+    <div className={`setup-page${guideOpen ? ' guide-open' : ''}`}>
       <nav className="setup-steps" aria-label="Setup steps">
         <h1>Set up Curia</h1>
         <p className="setup-count">{data ? `${doneCount} of ${required.length} required steps done` : ' '}</p>
@@ -149,6 +186,16 @@ export default function SetupPage(): JSX.Element {
         {loadError && data && <p className="setup-status attention" role="alert">{loadError}</p>}
         {renderStep()}
       </section>
+      {guideOpen && (
+        <SetupGuidePanel
+          step={current}
+          stepName={step.name}
+          draft={draft}
+          startError={startError}
+          onClose={() => setGuideOpen(false)}
+          onShowSteps={() => setGuideOpen(false)}
+        />
+      )}
     </div>
   );
 }

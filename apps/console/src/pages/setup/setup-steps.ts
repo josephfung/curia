@@ -127,6 +127,15 @@ export function firstOpenStep(checklist: Checklist | null): StepId {
 }
 
 /**
+ * A first run: nothing on the Setup page saved yet (no Who it's for, no required step done).
+ * The setup guide opens by itself then; an operator coming back finds it closed.
+ */
+export function isFirstRun(checklist: Checklist, fields: { setupFor: string | null }): boolean {
+  if (fields.setupFor !== null) return false;
+  return !checklist.tasks.some((t) => !t.optional && t.status === 'done');
+}
+
+/**
  * The step after this one, for Save and continue. Null after Start onboarding, which has no
  * such button. The extras run in order, and the last goes back to Start onboarding.
  */
