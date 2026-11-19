@@ -29,7 +29,7 @@ export type StepId =
   | ExtraId;
 
 /** The optional extras: listed after Start onboarding, never numbered, never required. */
-export type ExtraId = 'working_style' | 'google_workspace' | 'web_research';
+export type ExtraId = 'working_style' | 'google_workspace' | 'web_research' | 'capabilities';
 
 export type StepGroup = 'basics' | 'channels' | 'accounts' | 'finish' | 'extras';
 
@@ -56,6 +56,7 @@ export const EXTRAS: readonly StepDef[] = [
   { id: 'working_style', group: 'extras', name: 'Working style' },
   { id: 'google_workspace', group: 'extras', name: 'Google Workspace' },
   { id: 'web_research', group: 'extras', name: 'Higher search limit' },
+  { id: 'capabilities', group: 'extras', name: 'Capabilities' },
 ];
 
 const STEP_IDS: ReadonlySet<string> = new Set([...STEPS, ...EXTRAS].map((s) => s.id));
@@ -103,13 +104,16 @@ export function stepMark(step: StepId, checklist: Checklist | null): StepMark {
 
 /**
  * An extra is ticked only once it has something set up: Google Workspace's keys, or the
- * Tavily key. Working style is never ticked: its check is always done (the defaults are
- * fine), so a tick would say nothing about whether the operator chose anything.
+ * Tavily key. Working style and Capabilities are never ticked: their checks are always done
+ * (the defaults are fine), so a tick would say nothing about whether the operator chose
+ * anything.
  */
 function extraMark(step: ExtraId, checklist: Checklist): StepMark {
   const task = checklist.tasks.find((t) => t.id === step);
   switch (step) {
-    case 'working_style': return 'todo';
+    case 'working_style':
+    case 'capabilities':
+      return 'todo';
     case 'google_workspace': return task?.status === 'done' ? 'done' : 'todo';
     case 'web_research': return task?.optional_upgrade?.configured ? 'done' : 'todo';
   }

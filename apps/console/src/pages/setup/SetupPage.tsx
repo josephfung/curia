@@ -32,7 +32,7 @@ import { WhoStep } from './WhoStep.js';
 import { CuriaNameStep } from './CuriaNameStep.js';
 import { EmailStep, MessagingStep, SignInStep, VoiceStep } from './ChannelSteps.js';
 import { ApplyStep, StartStep } from './FinishSteps.js';
-import { GoogleWorkspaceStep, WebSearchStep, WorkingStyleStep } from './ExtraSteps.js';
+import { CapabilitiesStep, GoogleWorkspaceStep, WebSearchStep, WorkingStyleStep } from './ExtraSteps.js';
 import { SetupGuidePanel } from './SetupGuidePanel.js';
 
 const PHONE_QUERY = '(max-width: 760px)';
@@ -199,6 +199,8 @@ export default function SetupPage(): JSX.Element {
         return <GoogleWorkspaceStep key="google_workspace" task={taskFor('google_workspace')} principal={principal} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'web_research':
         return <WebSearchStep key="web_research" task={taskFor('web_research')} principal={principal} onSaved={refresh} onContinue={goNext} onHelp={help} />;
+      case 'capabilities':
+        return <CapabilitiesStep key="capabilities" task={taskFor('capabilities')} principal={principal} onSaved={refresh} onContinue={goNext} onHelp={help} />;
     }
   }
 
