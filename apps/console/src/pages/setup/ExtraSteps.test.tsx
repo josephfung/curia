@@ -113,6 +113,24 @@ describe('VaultKeysForm', () => {
     expect(document.querySelector('[role="alert"]')!.textContent).toContain('enter an email address');
   });
 
+  it('says a key saved even when re-reading the saved keys fails', async () => {
+    let statusFails = false;
+    stubFetch((method, path) => {
+      if (path === '/api/vault/status') return statusFails ? { status: 500, body: { error: 'status down' } } : { status: 200, body: { configured_keys: [] } };
+      if (method === 'PUT') return { status: 200, body: { ok: true } };
+      return undefined;
+    });
+    const ref = createRef<FieldGroupHandle>();
+    await render(<VaultKeysForm ref={ref} fields={GOOGLE} onChanged={vi.fn(async () => {})} />);
+    statusFails = true;
+    type('OAuth client secret', 'shh');
+    let ok = false;
+    await act(async () => { ok = await ref.current!.flush(); });
+    expect(ok).toBe(true);
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(document.querySelector('[role="status"]')!.textContent).toBe('Saved, but couldn’t re-read which keys are saved: status down');
+  });
+
   it('names the field that failed, and lets the step move on with nothing typed', async () => {
     stubFetch((method, path) => {
       if (path === '/api/vault/status') return { status: 200, body: { configured_keys: [] } };
@@ -151,7 +169,7 @@ describe('Working style', () => {
     expect(independenceFor(10)).toBeNull();
   });
 
-  function server(opts: { failAutonomy?: boolean } = {}) {
+  function server(opts: { failAutonomy?: boolean; failAutonomyRead?: () => boolean } = {}) {
     const state = { identity: structuredClone(identity), score: 75 };
     const writes: Array<{ path: string; body: unknown }> = [];
     const calls = stubFetch((method, path, body) => {
@@ -161,8 +179,10 @@ describe('Working style', () => {
         state.identity = (body as { identity: typeof identity }).identity;
         return { status: 200, body: { updated: true } };
       }
-      if (path === '/api/identity/reload') return { status: 200, body: {} };
-      if (path === '/api/autonomy' && method === 'GET') return { status: 200, body: { autonomy: { score: state.score } } };
+      if (path === '/api/autonomy' && method === 'GET') {
+        if (opts.failAutonomyRead?.()) return { status: 503, body: { error: 'restarting' } };
+        return { status: 200, body: { autonomy: { score: state.score } } };
+      }
       if (path === '/api/autonomy' && method === 'PUT') {
         writes.push({ path, body });
         if (opts.failAutonomy) return { status: 429, body: { error: 'Too Many Requests' } };
@@ -187,7 +207,7 @@ describe('Working style', () => {
     await render(<WorkingStyleStep task={undefined} principal="Dana" onSaved={onSaved} onContinue={vi.fn()} />);
     await click(radio('Tone', 'Crisp & direct'));
     expect(writes).toHaveLength(1);
-    expect(writes[0]!.body).toMatchObject({ changedBy: 'wizard' });
+    expect(writes[0]!.body).toMatchObject({ changedBy: 'working_style' });
     expect(state.identity).toEqual({ ...identity, tone: { style: crisp.text, verbosity: 40 } });
     expect(onSaved).toHaveBeenCalled();
   });
@@ -204,7 +224,45 @@ describe('Working style', () => {
     server({ failAutonomy: true });
     await render(<WorkingStyleStep task={undefined} principal="Dana" onSaved={vi.fn(async () => {})} onContinue={vi.fn()} />);
     await click(radio('Independence', 'Draft only'));
-    expect(document.querySelector('[role="alert"]')!.textContent).toBe('Too Many Requests');
+    expect(document.querySelector('[role="alert"]')!.textContent).toBe('Couldn’t save Draft only: Too Many Requests');
     expect(radio('Independence', 'Ask first').getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('falls back to the last stored choice when re-reading it fails too', async () => {
+    let readFails = false;
+    server({ failAutonomy: true, failAutonomyRead: () => readFails });
+    await render(<WorkingStyleStep task={undefined} principal="Dana" onSaved={vi.fn(async () => {})} onContinue={vi.fn()} />);
+    readFails = true;
+    await click(radio('Independence', 'Draft only'));
+    expect(document.querySelector('[role="alert"]')!.textContent)
+      .toBe('Couldn’t save Draft only: Too Many Requests. Couldn’t re-read the stored choice either: restarting');
+    expect(radio('Independence', 'Ask first').getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('Save and continue waits for a pick’s save, and stays on the step when it failed', async () => {
+    server({ failAutonomy: true });
+    const onContinue = vi.fn();
+    await render(<WorkingStyleStep task={undefined} principal="Dana" onSaved={vi.fn(async () => {})} onContinue={onContinue} />);
+    // Pick, then Save and continue before the save has answered.
+    await act(async () => {
+      radio('Independence', 'Spot-check').click();
+      (Array.from(document.querySelectorAll('button')).find((b) => b.textContent === 'Save and continue') as HTMLElement).click();
+    });
+    await settle();
+    expect(onContinue).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="alert"]')!.textContent).toContain('Couldn’t save Spot-check');
+  });
+
+  it('Save and continue moves on once the picks have saved', async () => {
+    const { state } = server();
+    const onContinue = vi.fn();
+    await render(<WorkingStyleStep task={undefined} principal="Dana" onSaved={vi.fn(async () => {})} onContinue={onContinue} />);
+    await act(async () => {
+      radio('Tone', 'Formal').click();
+      (Array.from(document.querySelectorAll('button')).find((b) => b.textContent === 'Save and continue') as HTMLElement).click();
+    });
+    await settle();
+    expect(onContinue).toHaveBeenCalledOnce();
+    expect(state.identity.tone.style).toBe(STYLE_TEMPLATES.find((t) => t.id === 'formal')!.text);
   });
 });

@@ -420,7 +420,7 @@ async function walkThroughSetup(page: Page, baseUrl: string, secret: string, cur
   // The optional extras: opened from the step list, never numbered.
   await page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: 'Working style' }).click();
   await expectExtra(page, 'working_style', 'Working style');
-  // Each choice saves when picked; wait for it to stick before picking the next.
+  // Each choice saves when picked; Save and continue waits for both saves to land.
   await page.getByRole('radio', { name: /Crisp & direct/ }).click();
   await page.getByRole('radio', { name: /Crisp & direct/, checked: true }).waitFor({ timeout: STEP_TIMEOUT_MS });
   await page.getByRole('radio', { name: /Spot-check/ }).click();

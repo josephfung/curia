@@ -197,6 +197,22 @@ describe('PUT /api/identity — session cookie auth', () => {
 
     await app.close();
   });
+  // #2358: the Setup page's tone save is recorded as such, so it doesn't count as Curia's name.
+  it.each(['wizard', 'working_style', 'api'])('records changedBy %s as given', async (changedBy) => {
+    const identityService = createMockIdentityService();
+    const app = Fastify();
+    await app.register(cookie);
+    await app.register(identityRoutes, { identityService, webAppBootstrapSecret: SECRET, sessions, pool: { query: vi.fn() } as unknown as Pool });
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/identity',
+      headers: { 'x-web-bootstrap-secret': SECRET, 'content-type': 'application/json' },
+      body: JSON.stringify({ identity: MOCK_IDENTITY, changedBy }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(identityService.update).toHaveBeenCalledWith(MOCK_IDENTITY, changedBy, undefined);
+    await app.close();
+  });
 });
 
 // #2358: the router reads GET /api/identity on every navigation, so it takes the console-wide

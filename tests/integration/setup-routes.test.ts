@@ -29,6 +29,7 @@ import type { SetupChecklist } from '../../src/setup/checklist.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 import { completeSetup } from '../../src/setup/complete-setup.js';
 import { lockSetupSingletons } from './setup-singletons-lock.js';
+import { isIdentityConfigured } from '../../src/channels/http/routes/identity.js';
 
 const { Pool } = pg;
 
@@ -559,6 +560,32 @@ describeIf('/api/setup/* routes', () => {
         url: '/api/setup/status',
       });
       expect(res.statusCode).toBe(401);
+    });
+  });
+
+  // Curia's name is ticked by isIdentityConfigured. The Working style extra saves only a tone,
+  // so its save must not tick it (#2358). In a transaction that is rolled back, so the shared
+  // test database keeps its identity rows.
+  describe('isIdentityConfigured', () => {
+    it('counts a wizard or api save, not a Working style tone save', async () => {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM office_identity_current');
+        await client.query('DELETE FROM office_identity_versions');
+        const insert = (version: number, changedBy: string) => client.query(
+          `INSERT INTO office_identity_versions (version, config, changed_by) VALUES ($1, '{}'::jsonb, $2)`,
+          [version, changedBy],
+        );
+        await insert(1, 'system_default');
+        await insert(2, 'working_style');
+        expect(await isIdentityConfigured(client)).toBe(false);
+        await insert(3, 'wizard');
+        expect(await isIdentityConfigured(client)).toBe(true);
+      } finally {
+        await client.query('ROLLBACK');
+        client.release();
+      }
     });
   });
 

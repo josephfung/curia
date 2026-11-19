@@ -7,7 +7,7 @@ import { errorMessage } from '../../components/settings/ConfigHistory.js';
 import { STYLE_TEMPLATES, type LocalIdentity } from '../wizard-utils.js';
 import { createLatestSaver, type ChecklistTask } from './setup-steps.js';
 import { ChoiceGroup } from './setup-ui.js';
-import { VaultKeysForm, type VaultFieldSpec } from './ChannelForms.js';
+import { VaultKeysForm, type FieldGroupHandle, type VaultFieldSpec } from './ChannelForms.js';
 import { DOCS_ORIGIN, SaveAndContinue, useSaveAndContinue } from './ChannelSteps.js';
 
 interface ExtraProps {
@@ -27,6 +27,12 @@ export const INDEPENDENCE_SCORES: Record<Independence, number> = {
   'spot-check': 85,
 };
 
+const INDEPENDENCE_LABELS: Record<Independence, string> = {
+  'draft-only': 'Draft only',
+  'approval-required': 'Ask first',
+  'spot-check': 'Spot-check',
+};
+
 /** The Independence choice a stored score shows as; null for Full or Restricted. */
 export function independenceFor(score: number): Independence | null {
   const band = bandForScore(score);
@@ -44,42 +50,84 @@ function soundsLike(text: string): string {
 }
 
 /**
- * A choice saved as soon as it is picked, newest last (createLatestSaver). A failed save
- * shows its error and the stored value again.
+ * A choice saved as soon as it is picked, newest last (createLatestSaver). A failed save says
+ * so and shows the stored choice again: re-read, or, when that fails too, the last one known
+ * to be stored. `handle.flush` waits for the saves still running and is false when the last
+ * failed, so Save and continue stays on the step.
  */
-function useSavedChoice<T extends string>(save: (value: T) => Promise<void>, reload: () => Promise<T | null>) {
+function useSavedChoice<T extends string>(
+  describe: (value: T) => string,
+  save: (value: T) => Promise<void>,
+  reload: () => Promise<T | null>,
+) {
   const [value, setValue] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const latestSave = useRef(save);
   latestSave.current = save;
+  const latestReload = useRef(reload);
+  latestReload.current = reload;
   const saver = useRef(createLatestSaver((next: T) => latestSave.current(next))).current;
-  const pending = useRef(0);
+  // The last value known to be stored, for when a re-read fails.
+  const confirmed = useRef<T | null>(null);
+  // Bumped by each pick and load: an older read must not overwrite a newer pick.
+  const seq = useRef(0);
+  const running = useRef(new Set<Promise<boolean>>());
+  const lastFailed = useRef(false);
 
-  const load = useCallback(async () => {
-    try {
-      setValue(await reload());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load.');
-    }
-    // reload is defined per render by the caller; load once per mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  /** Reads the stored choice. Throws, leaving the screen alone, when the read fails. */
+  const load = useCallback(async (): Promise<void> => {
+    const mine = ++seq.current;
+    const stored = await latestReload.current();
+    confirmed.current = stored;
+    if (mine === seq.current) setValue(stored);
   }, []);
-  useEffect(() => { void load(); }, [load]);
 
-  async function pick(next: T): Promise<void> {
-    setValue(next);
-    setError(null);
-    pending.current++;
+  useEffect(() => {
+    load().catch((err: unknown) => {
+      setError(`Couldn’t read the stored choice: ${err instanceof Error ? err.message : 'unknown error'}`);
+    });
+  }, [load]);
+
+  async function attempt(next: T): Promise<boolean> {
     try {
       await saver(next);
+      confirmed.current = next;
+      return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not save.');
-      if (pending.current === 1) await load();
-    } finally {
-      pending.current--;
+      const text = `Couldn’t save ${describe(next)}: ${err instanceof Error ? err.message : 'unknown error'}`;
+      // Only the newest pick reverts; an older one failing is covered by the newer.
+      if (running.current.size > 1) { setError(text); return false; }
+      try {
+        await load();
+        setError(text);
+      } catch (loadErr) {
+        seq.current++;
+        setValue(confirmed.current);
+        setError(`${text}. Couldn’t re-read the stored choice either: ${loadErr instanceof Error ? loadErr.message : 'unknown error'}`);
+      }
+      return false;
     }
   }
-  return { value, error, pick };
+
+  function pick(next: T): void {
+    seq.current++;
+    setValue(next);
+    setError(null);
+    const p = attempt(next);
+    running.current.add(p);
+    void p.then((ok) => {
+      running.current.delete(p);
+      if (running.current.size === 0) lastFailed.current = !ok;
+    });
+  }
+
+  const handle: FieldGroupHandle = {
+    flush: async () => {
+      while (running.current.size > 0) await Promise.all(running.current);
+      return !lastFailed.current;
+    },
+  };
+  return { value, error, pick, handle };
 }
 
 async function readIdentity(): Promise<LocalIdentity> {
@@ -96,7 +144,7 @@ async function readAutonomyScore(): Promise<number | null> {
 
 export function WorkingStyleStep({ principal, onSaved, onContinue, onHelp }: ExtraProps): JSX.Element {
   const save = useSaveAndContinue(onContinue);
-  const tone = useSavedChoice<string>(async (id) => {
+  const tone = useSavedChoice<string>((id) => STYLE_TEMPLATES.find((t) => t.id === id)?.label ?? id, async (id) => {
     const template = STYLE_TEMPLATES.find((t) => t.id === id);
     if (!template) return;
     // Re-read and change only the tone's style, so Curia's name and anything set elsewhere stay.
@@ -106,18 +154,17 @@ export function WorkingStyleStep({ principal, onSaved, onContinue, onHelp }: Ext
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         identity: { ...existing, tone: { ...existing.tone, style: template.text } },
-        changedBy: 'wizard',
+        // Not 'wizard': a tone sets no name, so it must not tick Curia's name (isIdentityConfigured).
+        changedBy: 'working_style',
         note: 'Working style from the Setup page: a starting point for the principal',
       }),
     });
     if (!put.ok) throw new Error(await errorMessage(put));
-    // The PUT already made it live; the reload only re-reads it, so its failure is logged.
-    const reload = await apiFetch('/api/identity/reload', { method: 'POST' });
-    if (!reload.ok) console.error('[WorkingStyleStep] identity reload after the tone save failed:', await errorMessage(reload));
+    // No reload: the PUT makes the new tone live (OfficeIdentityService.update).
     await onSaved();
   }, async () => toneFor((await readIdentity()).tone.style));
 
-  const independence = useSavedChoice<Independence>(async (band) => {
+  const independence = useSavedChoice<Independence>((band) => INDEPENDENCE_LABELS[band], async (band) => {
     const res = await apiFetch('/api/autonomy', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -132,6 +179,10 @@ export function WorkingStyleStep({ principal, onSaved, onContinue, onHelp }: Ext
     const score = await readAutonomyScore();
     return score === null ? null : independenceFor(score);
   });
+  // Save and continue waits for both choices' saves, and stays on the step if one failed.
+  // The handles read refs only, so registering this render's copies is enough.
+  save.register('tone')(tone.handle);
+  save.register('independence')(independence.handle);
 
   return (
     <div>
@@ -147,7 +198,7 @@ export function WorkingStyleStep({ principal, onSaved, onContinue, onHelp }: Ext
       <ChoiceGroup
         label="Tone"
         value={tone.value}
-        onChange={(next) => void tone.pick(next)}
+        onChange={(next) => tone.pick(next)}
         options={STYLE_TEMPLATES.map((t) => ({
           value: t.id, title: t.label, description: soundsLike(t.text), tag: t.id === 'warm' ? 'Default' : undefined,
         }))}
@@ -160,7 +211,7 @@ export function WorkingStyleStep({ principal, onSaved, onContinue, onHelp }: Ext
       <ChoiceGroup
         label="Independence"
         value={independence.value}
-        onChange={(next) => void independence.pick(next)}
+        onChange={(next) => independence.pick(next)}
         options={[
           { value: 'draft-only', title: 'Draft only', description: `Curia prepares drafts and summaries; ${principal} sends, schedules and commits.` },
           { value: 'approval-required', title: 'Ask first', description: `Curia carries out ${principal}’s instructions, and asks before acting on its own initiative.`, tag: 'Default' },
