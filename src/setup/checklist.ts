@@ -150,6 +150,8 @@ export interface SetupChecklistTask {
 }
 
 export interface SetupChecklist {
+  /** Who Setup is for (step 1), so the setup guide knows whom it is talking to. */
+  setupFor: SetupState['setupFor'];
   tasks: SetupChecklistTask[];
   /** Every required task is done. Unlocks Start onboarding; does not start it. */
   setupComplete: boolean;
@@ -303,5 +305,5 @@ export async function evaluateChecklist(catalog: CatalogTask[], deps: SetupCheck
   }));
 
   const missing = tasks.filter((t) => !t.optional && t.status !== 'done').map((t) => t.id);
-  return { tasks, setupComplete: missing.length === 0, missing };
+  return { setupFor: state.setupFor, tasks, setupComplete: missing.length === 0, missing };
 }

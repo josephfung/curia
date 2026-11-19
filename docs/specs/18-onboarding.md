@@ -264,18 +264,40 @@ upgrade with a `configured` flag. The wizard never asks for an upgrade key durin
 setup. It offers the key on request, or after search reports it is temporarily
 limited, using the same one-time capture link as other keys.
 
+### The setup guide (#2358)
+
+Since #2358 the `setup-wizard` agent is a setup guide: it explains, compares options and
+troubleshoots from `setup-status`, and never records anything about the principal. The
+instant wins above (persona, debrief, pronouns, the tour) moved to onboarding (#2360).
+
+- **On the Setup page.** While the `setup_state` phase is `in_progress` (from the Setup
+  page's first save until Start onboarding), the dispatcher sends `web` chat to the setup
+  guide instead of the coordinator, with none of the principal-turn extras (turn guidance,
+  backlog, live lanes). `POST /api/chat/messages` takes an optional `setupStep` (the open
+  step's catalog id, or `apply` / `start`); the runtime heads the turn with a
+  "[Setup page: ...]" line naming it (`none` when the client sent none), so the agent knows
+  it is talking to the operator. A database with no `setup_state` row (a scripted install)
+  keeps web chat with the coordinator.
+- **Kept out of the principal's memory.** The dispatcher schedules no conversation
+  checkpoint for a setup guide turn on `web`, so fact and relationship extraction never
+  read the Setup chat. Start onboarding (`POST /api/setup/complete`) moves the shared web
+  thread to a new conversation (`rotateWebThread`), so the principal never opens on it; the
+  Setup chat stays in `working_memory` and the audit log.
+- **After Setup** the coordinator still delegates "help me set up X" to it, and relays its
+  answer.
+
 ### Skills pinned to setup-wizard
 
-- `setup-status` — read-only; returns the Setup checklist with each task's live status and `setup_complete`
+- `setup-status` — read-only; returns the Setup checklist with each task's live status, `setup_for` and `setup_complete`
 - `setup-defer` — write; persists or clears deferrals of optional extras
-- `behavioral-preferences-update` (appends to `OfficeIdentity.behavioralPreferences`)
-- `scheduler-create`, `scheduler-list`, `scheduler-cancel`
-- `tool-registry`
-- `memory-store`
-- `executive-profile-update`
+- `system-secret-capture-request` — a one-time link for a one-key secret
+- `tool-registry` — read-only
+- `mailbox-signin-link` — a single-use mailbox sign-in link
 
-Pinning prevents reliance on dynamic discovery; `allow_discovery: false`
-and `inject_specialists: false` keep the agent focused.
+It has no tool that writes preferences, memory, the executive profile, contacts or
+schedules (`tests/unit/agents/setup-guide-tools.test.ts`). Pinning prevents reliance on
+dynamic discovery; `allow_discovery: false` and `inject_specialists: false` keep the agent
+focused.
 
 ### `behavioral-preferences-update` skill
 

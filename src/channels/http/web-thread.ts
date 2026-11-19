@@ -18,7 +18,8 @@ function conversationIdOf(row: Record<string, unknown> | undefined): string | nu
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-// The row is written once and then only read. A process-local cache skips the
+// The row is written once and then only read, until Start onboarding rotates it
+// (rotateWebThread, which updates this cache too). A process-local cache skips the
 // SELECT on later messages. Keyed by pool so tests with a fresh stub do not
 // share an id. Rows written before migration 090 have a NULL channel_id and
 // are not adopted; an upgrade from that era starts a new thread.
@@ -82,6 +83,25 @@ export async function getOrCreateWebThread(
   if (!resolved) throw new Error('web_thread insert lost the race and the row is missing');
   threadIds.set(pool, resolved);
   return resolved;
+}
+
+/**
+ * Start a new shared thread (#2358). Start onboarding calls this so the principal's first
+ * conversation never opens on the operator's Setup chat. The old conversation stays in
+ * working_memory and the audit log; only the pointer moves. Returns the new id.
+ */
+export async function rotateWebThread(
+  pool: WebThreadQueryable,
+  opts?: { newId?: () => string },
+): Promise<string> {
+  const next = (opts?.newId ?? randomUUID)();
+  await pool.query(
+    `INSERT INTO web_thread (id, conversation_id) VALUES (1, $1)
+     ON CONFLICT (id) DO UPDATE SET conversation_id = EXCLUDED.conversation_id, created_at = now()`,
+    [next],
+  );
+  threadIds.set(pool, next);
+  return next;
 }
 
 /** A client message id is an opaque token the sender uses to ignore its own echo. */

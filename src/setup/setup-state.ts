@@ -118,3 +118,13 @@ export async function markSetupComplete(db: SetupStateQueryable): Promise<void> 
 export function isInSetup(state: SetupState): boolean {
   return state.phase !== 'complete';
 }
+
+/**
+ * Whether web chat goes to the setup guide (#2358): only once the Setup page has saved
+ * something, so the phase reads in_progress. Stricter than isInSetup on purpose: a database
+ * whose principal was created by a script after migrations (tests, scenario runs) has no
+ * row, and its web chat stays with the coordinator.
+ */
+export function routesWebChatToSetupGuide(state: SetupState): boolean {
+  return state.phase === 'in_progress';
+}

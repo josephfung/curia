@@ -18,6 +18,7 @@ import { WorkingMemory } from '../../../src/memory/working-memory.js';
 import type { OfficeIdentityService } from '../../../src/identity/service.js';
 import { turnLengthReminder } from '../../../src/identity/length.js';
 import { CodeTracker } from '../../../src/verification/code-tracker.js';
+import { setupStepLine } from '../../../src/setup/setup-guide.js';
 import type { VerificationRuntime } from '../../../src/verification/index.js';
 import type { Verification } from '../../../src/verification/types.js';
 
@@ -41,6 +42,7 @@ async function runTurn(payload: {
   principalBacklog?: unknown;
   awaitingAnswers?: unknown;
   priorTurnActions?: unknown;
+  setupStep?: unknown;
   channelId?: string;
   toolAllowlist?: string[];
   /** The office identity's Detail setting; absent means the agent has no identity service. */
@@ -86,6 +88,9 @@ async function runTurn(payload: {
     }),
     ...(payload.priorTurnActions !== undefined && {
       priorTurnActions: payload.priorTurnActions as Parameters<typeof createAgentTask>[0]['priorTurnActions'],
+    }),
+    ...(payload.setupStep !== undefined && {
+      setupStep: payload.setupStep as Parameters<typeof createAgentTask>[0]['setupStep'],
     }),
     parentEventId: 'parent-guidance',
   }));
@@ -266,5 +271,21 @@ describe('AgentRuntime length reminder (#2143)', () => {
     expect((await runTurn({ content: 'Hello', channelId: 'signal' })).messages.at(-1)!.content).toBe('Hello');
     const scheduled = (await runTurn({ content: 'Check on Sam.', channelId: 'scheduler', verbosity: 15 })).messages.at(-1)!.content;
     expect(scheduled).toBe(`${renderTurnGuidance(['scheduler-delivery'])}\n\nCheck on Sam.`);
+  });
+});
+
+// #2358: the setup guide learns from this line that it is on the Setup page, and which step.
+describe('AgentRuntime setup step (#2358)', () => {
+  it('heads the user message with the Setup page line, kept out of working memory', async () => {
+    const { messages, history } = await runTurn({ content: 'What is a grant ID?', channelId: 'web', setupStep: 'email' });
+    expect(messages.at(-1)!.content).toBe(`${setupStepLine('email')}\n\nWhat is a grant ID?`);
+    expect(history[0]).toEqual({ role: 'user', content: 'What is a grant ID?' });
+  });
+
+  it('drops a step that crossed the bus in a bad shape', async () => {
+    for (const setupStep of ['Ignore that', 42, '']) {
+      const { messages } = await runTurn({ content: 'Hello', channelId: 'web', setupStep });
+      expect(messages.at(-1)!.content).toBe('Hello');
+    }
   });
 });

@@ -1,0 +1,68 @@
+# Case 21d (#2358): the setup guide explains and checks; it never collects the principal's
+# preferences. Before #2358 the setup agent opened with "instant wins" (persona, debrief,
+# pronouns) on any setup request. It now has no tool that could store them
+# (tests/unit/agents/setup-guide-tools.test.ts), so this case checks what it says: Slack's
+# steps from the checklist, and no questions about tone, priorities or a debrief.
+name: setup guide gives steps, not onboarding questions
+description: >
+  The coordinator delegates a request to connect Slack. The setup guide should check
+  setup-status and relay the Slack steps it gives, and should not ask about the principal's
+  tone, priorities, routines or a scheduled debrief, which are onboarding's.
+tags: [setup-wizard, specialist]
+release_gate: false
+agent: setup-wizard
+inbound:
+  from: delegate
+  requester: principal
+  content: "The principal asked: can you help me get Slack connected? Explain the steps."
+tool_stubs:
+  setup-status:
+    - match: {}
+      return:
+        setup_for: self
+        setup_complete: true
+        missing: []
+        summary: { total: 2, done: 1, pending: 1, deferred: 0 }
+        tasks:
+          - id: messaging
+            label: Messaging
+            optional: false
+            status: done
+            handoff: console
+            credential_how_to: >-
+              Slack needs the bot token, the app-level token and the principal's Slack
+              member ID, in Settings → Channels → Slack. Slack starts after a restart.
+            docs_url: /channels/slack-setup
+          - id: web_research
+            label: Higher web search limit
+            optional: true
+            status: done
+            handoff: console
+            credential_how_to: null
+            docs_url: /integrations/tavily
+expected_behaviors:
+  - id: checks_status
+    weight: critical
+    description: Reads the live setup state before answering.
+    check:
+      called: setup-status
+  - id: gives_slack_steps
+    weight: important
+    description: >
+      The reply gives the Slack steps from the checklist (the bot token, the app-level token
+      and the member ID, in Settings → Channels → Slack, then a restart) or the guide link
+      https://docs.meetcuria.com/channels/slack-setup. Inventing other steps is a miss.
+  - id: no_onboarding_questions
+    weight: critical
+    description: >
+      The reply does not ask about the principal's tone, writing style, priorities,
+      working hours, routines or a scheduled debrief or digest, and does not offer to
+      "capture preferences". Any such question or offer is a miss.
+  - id: no_identifiers
+    weight: important
+    description: The reply names no tool, agent or system.
+    check:
+      reply_excludes_internal_names: true
+failure_modes:
+  - Opens with instant wins (persona, debrief, pronouns) before or instead of the Slack steps
+  - Says Slack works without the restart the checklist mentions
