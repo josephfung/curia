@@ -105,7 +105,7 @@ export default function SecretCapturePage() {
       if (res.status === 410) { setValue(''); setCard(EMPTY_CARD_FORM); setView({ kind: 'gone' }); return; }
       if (res.status === 404) { setValue(''); setCard(EMPTY_CARD_FORM); setView({ kind: 'notfound' }); return; }
       // Parse the error body only when it's actually JSON, with an explicit fall-through to
-      // the generic message — mirrors WizardPage's extractError() convention (no console).
+      // the generic message (no console).
       let data: { error?: string } = {};
       if (res.headers.get('content-type')?.includes('application/json')) {
         try { data = (await res.json()) as { error?: string }; } catch { /* fall through to fallback */ }
