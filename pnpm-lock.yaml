@@ -61,7 +61,7 @@ importers:
         version: 10.1.8
       '@ghostery/adblocker-playwright':
         specifier: ^2.20.3
-        version: 2.20.3(playwright@1.64.1)
+        version: 2.20.3(playwright@1.65.0)
       '@huggingface/tokenizers':
         specifier: ^0.2.0
         version: 0.2.0
@@ -156,8 +156,8 @@ importers:
         specifier: ^10.4.0
         version: 10.4.0
       playwright:
-        specifier: 1.64.1
-        version: 1.64.1
+        specifier: 1.65.0
+        version: 1.65.0
       sanitize-html:
         specifier: ^2.18.1
         version: 2.18.1
@@ -227,7 +227,7 @@ importers:
         version: 13.2.0
       promptfoo:
         specifier: ^0.125.1
-        version: 0.125.1(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@1.3.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.1)(zod@4.6.7))(zod@4.6.7))(@aws-sdk/credential-provider-node@3.972.94)(@aws-sdk/credential-providers@3.1161.0)(@cfworker/json-schema@4.1.1)(@huggingface/transformers@4.3.0(@types/node@26.6.6))(@ibm-cloud/watsonx-ai@1.7.16)(@langfuse/client@5.11.1(@opentelemetry/api@1.10.0))(@openai/agents@0.11.8(@aws-sdk/credential-provider-node@3.972.94)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.23.0)(zod@4.6.7))(@openai/codex-sdk@0.156.1)(@slack/web-api@8.3.0)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(@types/json-schema@7.0.15)(@types/node@26.6.6)(@types/pg@8.23.1)(ibm-cloud-sdk-core@5.6.2)(pg@8.23.1)(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1))(playwright@1.64.1)(puppeteer-extra-plugin-stealth@2.11.2(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1)))(socks@2.8.10)
+        version: 0.125.1(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@1.3.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.1)(zod@4.6.7))(zod@4.6.7))(@aws-sdk/credential-provider-node@3.972.94)(@aws-sdk/credential-providers@3.1161.0)(@cfworker/json-schema@4.1.1)(@huggingface/transformers@4.3.0(@types/node@26.6.6))(@ibm-cloud/watsonx-ai@1.7.16)(@langfuse/client@5.11.1(@opentelemetry/api@1.10.0))(@openai/agents@0.11.8(@aws-sdk/credential-provider-node@3.972.94)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.23.0)(zod@4.6.7))(@openai/codex-sdk@0.156.1)(@slack/web-api@8.3.0)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(@types/json-schema@7.0.15)(@types/node@26.6.6)(@types/pg@8.23.1)(ibm-cloud-sdk-core@5.6.2)(pg@8.23.1)(playwright-extra@4.3.6(playwright-core@1.65.0)(playwright@1.65.0))(playwright@1.65.0)(puppeteer-extra-plugin-stealth@2.11.2(playwright-extra@4.3.6(playwright-core@1.65.0)(playwright@1.65.0)))(socks@2.8.10)
       semver:
         specifier: ^7.8.6
         version: 7.8.6
@@ -4926,8 +4926,8 @@ packages:
   platform@1.3.6:
     resolution: {integrity: sha512-fnWVljUchTro6RiCFvCXBbNhJc2NijN7oIQxbwsyL0buWJPG85v81ehlHI9fXrJsMNgTofEoWIQeClKpgxFLrg==}
 
-  playwright-core@1.64.1:
-    resolution: {integrity: sha512-BC4s8y6SEVA6Q1rSxZTto8hI1KUI3xXlHGZgvGqP4IqPdI/a6FX9H29IDNz7vKo9l21b6LfYosScPL6M3xxyDQ==}
+  playwright-core@1.65.0:
+    resolution: {integrity: sha512-vNSKgH6YqtN7cdT/L334zo0a+YwkrpicyrHJlWWPIm/Q+Nn2SWInil01oT0mbu96U4GgoRtCYQD9CzJQgju+lA==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -4943,8 +4943,8 @@ packages:
       playwright-core:
         optional: true
 
-  playwright@1.64.1:
-    resolution: {integrity: sha512-HCrVhHr5QQuwYoswEUGTb7gGp522yflbv/ST8nF4sFWGuLjQCt17Q/EubpGGSNKYn1tsTCPZxqHhHCfVURu7UA==}
+  playwright@1.65.0:
+    resolution: {integrity: sha512-F3AMWcR44qMBt4kq+6Kb6mX7bjGXshktKFOPULd7reED6ZJWevjbNRqysP7q+AATE9kdPEZBibex1BYsvpVoeA==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -7095,11 +7095,11 @@ snapshots:
 
   '@ghostery/adblocker-extended-selectors@2.20.3': {}
 
-  '@ghostery/adblocker-playwright@2.20.3(playwright@1.64.1)':
+  '@ghostery/adblocker-playwright@2.20.3(playwright@1.65.0)':
     dependencies:
       '@ghostery/adblocker': 2.20.3
       '@ghostery/adblocker-content': 2.20.3
-      playwright: 1.64.1
+      playwright: 1.65.0
       tldts-experimental: 7.4.19
 
   '@ghostery/adblocker@2.20.3':
@@ -10866,21 +10866,21 @@ snapshots:
   platform@1.3.6:
     optional: true
 
-  playwright-core@1.64.1: {}
+  playwright-core@1.65.0: {}
 
-  playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1):
+  playwright-extra@4.3.6(playwright-core@1.65.0)(playwright@1.65.0):
     dependencies:
       debug: 4.4.3
     optionalDependencies:
-      playwright: 1.64.1
-      playwright-core: 1.64.1
+      playwright: 1.65.0
+      playwright-core: 1.65.0
     transitivePeerDependencies:
       - supports-color
     optional: true
 
-  playwright@1.64.1:
+  playwright@1.65.0:
     dependencies:
-      playwright-core: 1.64.1
+      playwright-core: 1.65.0
 
   pngjs@5.0.0: {}
 
@@ -10930,7 +10930,7 @@ snapshots:
 
   promise-limit@2.7.0: {}
 
-  promptfoo@0.125.1(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@1.3.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.1)(zod@4.6.7))(zod@4.6.7))(@aws-sdk/credential-provider-node@3.972.94)(@aws-sdk/credential-providers@3.1161.0)(@cfworker/json-schema@4.1.1)(@huggingface/transformers@4.3.0(@types/node@26.6.6))(@ibm-cloud/watsonx-ai@1.7.16)(@langfuse/client@5.11.1(@opentelemetry/api@1.10.0))(@openai/agents@0.11.8(@aws-sdk/credential-provider-node@3.972.94)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.23.0)(zod@4.6.7))(@openai/codex-sdk@0.156.1)(@slack/web-api@8.3.0)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(@types/json-schema@7.0.15)(@types/node@26.6.6)(@types/pg@8.23.1)(ibm-cloud-sdk-core@5.6.2)(pg@8.23.1)(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1))(playwright@1.64.1)(puppeteer-extra-plugin-stealth@2.11.2(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1)))(socks@2.8.10):
+  promptfoo@0.125.1(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@1.3.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.1)(zod@4.6.7))(zod@4.6.7))(@aws-sdk/credential-provider-node@3.972.94)(@aws-sdk/credential-providers@3.1161.0)(@cfworker/json-schema@4.1.1)(@huggingface/transformers@4.3.0(@types/node@26.6.6))(@ibm-cloud/watsonx-ai@1.7.16)(@langfuse/client@5.11.1(@opentelemetry/api@1.10.0))(@openai/agents@0.11.8(@aws-sdk/credential-provider-node@3.972.94)(@cfworker/json-schema@4.1.1)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(ws@8.23.0)(zod@4.6.7))(@openai/codex-sdk@0.156.1)(@slack/web-api@8.3.0)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.5)(@types/json-schema@7.0.15)(@types/node@26.6.6)(@types/pg@8.23.1)(ibm-cloud-sdk-core@5.6.2)(pg@8.23.1)(playwright-extra@4.3.6(playwright-core@1.65.0)(playwright@1.65.0))(playwright@1.65.0)(puppeteer-extra-plugin-stealth@2.11.2(playwright-extra@4.3.6(playwright-core@1.65.0)(playwright@1.65.0)))(socks@2.8.10):
     dependencies:
       '@anthropic-ai/sdk': 0.133.0(zod@4.6.7)
       '@apidevtools/json-schema-ref-parser': 16.0.5(@types/json-schema@7.0.15)
@@ -11039,9 +11039,9 @@ snapshots:
       node-sql-parser: 5.4.0
       pdf-parse: 2.4.5
       pem: 1.14.8
-      playwright: 1.64.1
-      playwright-extra: 4.3.6(playwright-core@1.64.1)(playwright@1.64.1)
-      puppeteer-extra-plugin-stealth: 2.11.2(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1))
+      playwright: 1.65.0
+      playwright-extra: 4.3.6(playwright-core@1.65.0)(playwright@1.65.0)
+      puppeteer-extra-plugin-stealth: 2.11.2(playwright-extra@4.3.6(playwright-core@1.65.0)(playwright@1.65.0))
       read-excel-file: 9.3.14
       sharp: 0.35.5(@types/node@26.6.6)
     transitivePeerDependencies:
@@ -11148,48 +11148,48 @@ snapshots:
 
   punycode@2.3.1: {}
 
-  puppeteer-extra-plugin-stealth@2.11.2(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1)):
+  puppeteer-extra-plugin-stealth@2.11.2(playwright-extra@4.3.6(playwright-core@1.65.0)(playwright@1.65.0)):
     dependencies:
       debug: 4.4.3
-      puppeteer-extra-plugin: 3.2.3(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1))
-      puppeteer-extra-plugin-user-preferences: 2.4.1(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1))
+      puppeteer-extra-plugin: 3.2.3(playwright-extra@4.3.6(playwright-core@1.65.0)(playwright@1.65.0))
+      puppeteer-extra-plugin-user-preferences: 2.4.1(playwright-extra@4.3.6(playwright-core@1.65.0)(playwright@1.65.0))
     optionalDependencies:
-      playwright-extra: 4.3.6(playwright-core@1.64.1)(playwright@1.64.1)
+      playwright-extra: 4.3.6(playwright-core@1.65.0)(playwright@1.65.0)
     transitivePeerDependencies:
       - supports-color
     optional: true
 
-  puppeteer-extra-plugin-user-data-dir@2.4.1(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1)):
+  puppeteer-extra-plugin-user-data-dir@2.4.1(playwright-extra@4.3.6(playwright-core@1.65.0)(playwright@1.65.0)):
     dependencies:
       debug: 4.4.3
       fs-extra: 10.1.0
-      puppeteer-extra-plugin: 3.2.3(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1))
+      puppeteer-extra-plugin: 3.2.3(playwright-extra@4.3.6(playwright-core@1.65.0)(playwright@1.65.0))
       rimraf: 3.0.2
     optionalDependencies:
-      playwright-extra: 4.3.6(playwright-core@1.64.1)(playwright@1.64.1)
+      playwright-extra: 4.3.6(playwright-core@1.65.0)(playwright@1.65.0)
     transitivePeerDependencies:
       - supports-color
     optional: true
 
-  puppeteer-extra-plugin-user-preferences@2.4.1(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1)):
+  puppeteer-extra-plugin-user-preferences@2.4.1(playwright-extra@4.3.6(playwright-core@1.65.0)(playwright@1.65.0)):
     dependencies:
       debug: 4.4.3
       deepmerge: 4.3.1
-      puppeteer-extra-plugin: 3.2.3(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1))
-      puppeteer-extra-plugin-user-data-dir: 2.4.1(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1))
+      puppeteer-extra-plugin: 3.2.3(playwright-extra@4.3.6(playwright-core@1.65.0)(playwright@1.65.0))
+      puppeteer-extra-plugin-user-data-dir: 2.4.1(playwright-extra@4.3.6(playwright-core@1.65.0)(playwright@1.65.0))
     optionalDependencies:
-      playwright-extra: 4.3.6(playwright-core@1.64.1)(playwright@1.64.1)
+      playwright-extra: 4.3.6(playwright-core@1.65.0)(playwright@1.65.0)
     transitivePeerDependencies:
       - supports-color
     optional: true
 
-  puppeteer-extra-plugin@3.2.3(playwright-extra@4.3.6(playwright-core@1.64.1)(playwright@1.64.1)):
+  puppeteer-extra-plugin@3.2.3(playwright-extra@4.3.6(playwright-core@1.65.0)(playwright@1.65.0)):
     dependencies:
       '@types/debug': 4.1.13
       debug: 4.4.3
       merge-deep: 3.0.3
     optionalDependencies:
-      playwright-extra: 4.3.6(playwright-core@1.64.1)(playwright@1.64.1)
+      playwright-extra: 4.3.6(playwright-core@1.65.0)(playwright@1.65.0)
     transitivePeerDependencies:
       - supports-color
     optional: true
