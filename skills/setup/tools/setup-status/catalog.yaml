@@ -154,5 +154,5 @@ tasks:
     optional: true
     completion_check:
       type: always_available
-    credential_how_to: "Optional: in the Capabilities extra on the Setup page, or later under Settings → Capabilities, switch each capability on or off. Meetings is always on, and the principal turns on email triage during onboarding. Changes apply at the next restart."
+    credential_how_to: "Optional: in the Capabilities extra on the Setup page, or later under Settings → Capabilities, switch each capability on or off. Meetings is always on; email triage is left for the principal to choose, later in Settings. Changes apply at the next restart."
     docs_url: /get-started/check-your-setup

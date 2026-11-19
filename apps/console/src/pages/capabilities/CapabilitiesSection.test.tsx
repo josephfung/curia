@@ -21,7 +21,7 @@ function registry(): Record<'agents' | 'skills' | 'tools', RegistryEntry[]> {
   return {
     agents: [
       entry('agent', 'coordinator', 'enabled', { pinnedTools: ['web', 'tasks'] }),
-      entry('agent', 'meeting-debrief', 'enabled'),
+      entry('agent', 'meeting-debrief', 'enabled', { pinnedTools: ['task-create'] }),
       entry('agent', 'research-analyst', 'enabled'),
       entry('agent', 'diagnostics', 'installed', { pinnedTools: ['diagnostics'] }),
       entry('agent', 'ceo-inbox', 'installed'),
@@ -29,7 +29,7 @@ function registry(): Record<'agents' | 'skills' | 'tools', RegistryEntry[]> {
     skills: [
       entry('skill', 'meetings', 'enabled'),
       entry('skill', 'web', 'enabled', { tools: ['web-search'] }),
-      entry('skill', 'tasks', 'enabled'),
+      entry('skill', 'tasks', 'enabled', { tools: ['task-create'] }),
       entry('skill', 'diagnostics', 'uninstalled'),
       entry('skill', 'ceo-inbox', 'uninstalled'),
       entry('skill', 'learning', 'uninstalled'),
@@ -38,8 +38,9 @@ function registry(): Record<'agents' | 'skills' | 'tools', RegistryEntry[]> {
   };
 }
 
-function stub(opts: { failOn?: string } = {}) {
+function stub(opts: { failOn?: string; edit?: (reg: ReturnType<typeof registry>) => void } = {}) {
   const reg = registry();
+  opts.edit?.(reg);
   const posts: string[] = [];
   vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
     const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -132,6 +133,98 @@ describe('CapabilitiesSection', () => {
     expect(sw('Email triage').getAttribute('aria-checked')).toBe('false');
   });
 
+  it('turning one on also turns on what its agent needs, once asked', async () => {
+    const off = (reg: ReturnType<typeof registry>) => {
+      reg.agents.find((e) => e.name === 'meeting-debrief')!.state = 'installed';
+      reg.skills.find((e) => e.name === 'tasks')!.state = 'installed';
+    };
+    const { posts } = stub({ edit: off });
+    const confirm = await render('settings');
+    await click('Meeting debriefs');
+    expect(confirm.mock.calls[0]![0]).toBe('Meeting debriefs needs Projects and tasks, which is off. Turn it on too?');
+    expect(posts).toEqual(['install-enable skills/tasks', 'install-enable agents/meeting-debrief']);
+    expect(host!.querySelector('[role="status"]')!.textContent).toBe('Meeting debriefs on, with Projects and tasks. It applies after a restart.');
+  });
+
+  it('says when an on capability needs one that is off, and shows locked ones as they really are', async () => {
+    stub({ edit: (reg) => {
+      reg.skills.find((e) => e.name === 'tasks')!.state = 'installed';
+      reg.skills.find((e) => e.name === 'meetings')!.state = 'installed';
+    } });
+    await render('setup');
+    expect(host!.textContent).toContain('Needs Projects and tasks');
+    // Meetings' lock never claims it is on: its bundle is off here, its tools on.
+    expect(sw('Meetings').getAttribute('aria-checked')).toBe('mixed');
+    expect(sw('Meetings').disabled).toBe(true);
+    expect(sw('Meeting debriefs').getAttribute('aria-describedby')).toBe('cap-debriefs-state cap-debriefs-desc');
+  });
+
+  it('in Setup, shows Email triage as it really is, still locked', async () => {
+    stub({ edit: (reg) => {
+      reg.agents.find((e) => e.name === 'ceo-inbox')!.state = 'enabled';
+      for (const b of ['ceo-inbox', 'learning']) reg.skills.find((e) => e.name === b)!.state = 'enabled';
+    } });
+    await render('setup');
+    expect(sw('Email triage').getAttribute('aria-checked')).toBe('true');
+    expect(sw('Email triage').disabled).toBe(true);
+  });
+
+  it('a switch left partly on by a failed turn-off finishes turning it off', async () => {
+    let failWeb = true;
+    const posts: string[] = [];
+    const reg = registry();
+    vi.stubGlobal('fetch', vi.fn(async (path: string, _init?: RequestInit) => {
+      const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+      const list = /^\/api\/registry\/(agents|skills|tools)$/.exec(path);
+      if (list) return json(200, { [list[1]!]: reg[list[1] as 'agents'] });
+      const act = /^\/api\/registry\/(agents|skills|tools)\/([^/]+)\/(install-enable|disable)$/.exec(path)!;
+      posts.push(`${act[3]} ${act[1]}/${act[2]}`);
+      if (act[2] === 'web' && failWeb) return json(500, { error: 'Operation failed. Check server logs.' });
+      reg[act[1] as 'agents'].find((x) => x.name === act[2])!.state = act[3] === 'disable' ? 'installed' : 'enabled';
+      return json(200, {});
+    }));
+    await render('settings');
+    await click('Web research');
+    expect(host!.querySelector('[role="alert"]')!.textContent).toContain('Part of it changed');
+    expect(sw('Web research').getAttribute('aria-checked')).toBe('mixed');
+    failWeb = false;
+    posts.length = 0;
+    await click('Web research');
+    // Off again (the coordinator warning is confirmed), never back on.
+    expect(posts).toEqual(['disable skills/web']);
+    expect(sw('Web research').getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('names what is missing, and lets the rest that still runs be turned off', async () => {
+    const { posts } = stub({ edit: (reg) => {
+      reg.agents.find((e) => e.name === 'ceo-inbox')!.state = 'enabled';
+      reg.skills.find((e) => e.name === 'ceo-inbox')!.state = 'enabled';
+      reg.skills.find((e) => e.name === 'learning')!.manifestError = 'bad yaml';
+    } });
+    await render('settings');
+    expect(host!.textContent).toContain('Not available: learning is missing or broken. The rest is on');
+    expect(sw('Email triage').getAttribute('aria-checked')).toBe('mixed');
+    await click('Email triage');
+    expect(posts).toEqual(['disable agents/ceo-inbox', 'disable skills/ceo-inbox']);
+  });
+
+  it('a failed re-read after a switch keeps its outcome and locks the stale switches', async () => {
+    const { reg } = stub();
+    let calls = 0;
+    const real = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+      if (path === '/api/registry/skills' && ++calls > 1) return new Response(JSON.stringify({ error: 'db down' }), { status: 500, headers: { 'content-type': 'application/json' } });
+      return real(path, init);
+    }));
+    void reg;
+    await render('settings');
+    await click('Meeting debriefs');
+    expect(host!.querySelector('[role="alert"]')!.textContent)
+      .toBe('Meeting debriefs off. It applies after a restart. Couldn’t read Curia’s capabilities: db down Reload the page to see where things are.');
+    expect(host!.querySelectorAll('[role="switch"]').length).toBe(6);
+    expect(sw('Web research').disabled).toBe(true);
+  });
+
   it('in Setup, keeps Meetings on and Email triage off, both locked', async () => {
     stub();
     await render('setup');
@@ -139,6 +232,6 @@ describe('CapabilitiesSection', () => {
     expect(sw('Meetings').getAttribute('aria-checked')).toBe('true');
     expect(sw('Email triage').disabled).toBe(true);
     expect(sw('Email triage').getAttribute('aria-checked')).toBe('false');
-    expect(host!.textContent).toContain('Dana turns this on during onboarding');
+    expect(host!.textContent).toContain('Left for Dana to choose, later in Settings');
   });
 });

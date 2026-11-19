@@ -2,7 +2,7 @@
 // the warning before turning off what other agents use.
 import { describe, it, expect } from 'vitest';
 import type { RegistryEntry } from '../registry-rows.js';
-import { CAPABILITIES, capabilityState, offWarning, outsidePins, switchPlan } from './capabilities.js';
+import { CAPABILITIES, capabilityState, neededCapabilities, offWarning, outsidePins, switchPlan } from './capabilities.js';
 
 /** RegistryLists, but editable, so a test can vary one entry. */
 interface Lists { agents: RegistryEntry[]; skills: RegistryEntry[]; tools: RegistryEntry[] }
@@ -50,10 +50,10 @@ describe('capabilityState', () => {
   });
 
   it('is unavailable when the server lacks an entry or its manifest is broken', () => {
-    expect(capabilityState(cap('debriefs'), lists())).toEqual({ kind: 'unavailable', missing: ['meeting-debrief'] });
+    expect(capabilityState(cap('debriefs'), lists())).toEqual({ kind: 'unavailable', missing: ['meeting-debrief'], anyOn: false });
     const broken = lists();
     broken.skills[0] = { ...broken.skills[0]!, manifestError: 'bad yaml' };
-    expect(capabilityState(cap('research'), broken).kind).toBe('unavailable');
+    expect(capabilityState(cap('research'), broken)).toEqual({ kind: 'unavailable', missing: ['web'], anyOn: true });
   });
 });
 
@@ -95,5 +95,19 @@ describe('outsidePins and the warning', () => {
     const l = lists();
     l.agents = l.agents.map((a) => (a.name === 'coordinator' ? { ...a, state: 'installed' as const } : a));
     expect(offWarning(cap('research'), l)).toBeNull();
+  });
+});
+
+describe('neededCapabilities', () => {
+  it('names an off capability whose tools the agent pins, by bundle or tool by tool', () => {
+    const l = lists();
+    l.agents.push(entry('agent', 'meeting-debrief', 'installed', { pinnedTools: ['task-create'] }));
+    l.agents.push(entry('agent', 'ceo-inbox', 'installed', { pinnedTools: ['tasks', 'ceo-inbox'] }));
+    expect(neededCapabilities(cap('debriefs'), l)).toEqual([]);
+    l.skills[1] = { ...l.skills[1]!, state: 'installed' };
+    expect(neededCapabilities(cap('debriefs'), l).map((c) => c.id)).toEqual(['tasks']);
+    // Its own bundles don't count.
+    expect(neededCapabilities(cap('triage'), l).map((c) => c.id)).toEqual(['tasks']);
+    expect(neededCapabilities(cap('research'), l)).toEqual([]);
   });
 });
