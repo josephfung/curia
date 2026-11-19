@@ -73,13 +73,18 @@ function useSavedChoice<T extends string>(
   const seq = useRef(0);
   const running = useRef(new Set<Promise<boolean>>());
   const lastFailed = useRef(false);
+  // Which pick is newest: it alone recovers after a failure (overlapping picks share one
+  // save run, so they fail together).
+  const pickGen = useRef(0);
 
   /** Reads the stored choice. Throws, leaving the screen alone, when the read fails. */
   const load = useCallback(async (): Promise<void> => {
     const mine = ++seq.current;
     const stored = await latestReload.current();
+    // A read that a pick overtook is stale for both: a confirmed save must not be undone.
+    if (mine !== seq.current) return;
     confirmed.current = stored;
-    if (mine === seq.current) setValue(stored);
+    setValue(stored);
   }, []);
 
   useEffect(() => {
@@ -88,15 +93,15 @@ function useSavedChoice<T extends string>(
     });
   }, [load]);
 
-  async function attempt(next: T): Promise<boolean> {
+  async function attempt(next: T, gen: number): Promise<boolean> {
     try {
       await saver(next);
       confirmed.current = next;
       return true;
     } catch (err) {
       const text = `Couldn’t save ${describe(next)}: ${err instanceof Error ? err.message : 'unknown error'}`;
-      // Only the newest pick reverts; an older one failing is covered by the newer.
-      if (running.current.size > 1) { setError(text); return false; }
+      // Only the newest pick recovers; an older one failing is covered by the newer.
+      if (gen !== pickGen.current) return false;
       try {
         await load();
         setError(text);
@@ -113,7 +118,7 @@ function useSavedChoice<T extends string>(
     seq.current++;
     setValue(next);
     setError(null);
-    const p = attempt(next);
+    const p = attempt(next, ++pickGen.current);
     running.current.add(p);
     void p.then((ok) => {
       running.current.delete(p);
@@ -199,6 +204,8 @@ export function WorkingStyleStep({ principal, onSaved, onContinue, onHelp }: Ext
         label="Tone"
         value={tone.value}
         onChange={(next) => tone.pick(next)}
+        // While Save and continue waits, a new pick would start a save it no longer waits for.
+        disabled={save.saving}
         options={STYLE_TEMPLATES.map((t) => ({
           value: t.id, title: t.label, description: soundsLike(t.text), tag: t.id === 'warm' ? 'Default' : undefined,
         }))}
@@ -212,6 +219,7 @@ export function WorkingStyleStep({ principal, onSaved, onContinue, onHelp }: Ext
         label="Independence"
         value={independence.value}
         onChange={(next) => independence.pick(next)}
+        disabled={save.saving}
         options={[
           { value: 'draft-only', title: 'Draft only', description: `Curia prepares drafts and summaries; ${principal} sends, schedules and commits.` },
           { value: 'approval-required', title: 'Ask first', description: `Curia carries out ${principal}’s instructions, and asks before acting on its own initiative.`, tag: 'Default' },

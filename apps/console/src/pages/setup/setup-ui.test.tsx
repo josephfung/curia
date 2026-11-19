@@ -10,10 +10,11 @@ import { ChoiceGroup } from './setup-ui.js';
 
 type Route = 'app' | 'signal' | 'sms' | 'phone';
 
-function Harness({ initial, withPhone = false }: { initial: Route | null; withPhone?: boolean }): JSX.Element {
+function Harness({ initial, withPhone = false, disabled = false }: { initial: Route | null; withPhone?: boolean; disabled?: boolean }): JSX.Element {
   const [value, setValue] = useState<Route | null>(initial);
   return (
     <ChoiceGroup<Route>
+      disabled={disabled}
       label="Messaging route"
       value={value}
       onChange={setValue}
@@ -30,11 +31,11 @@ function Harness({ initial, withPhone = false }: { initial: Route | null; withPh
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;
 
-function mount(initial: Route | null, withPhone = false): void {
+function mount(initial: Route | null, withPhone = false, disabled = false): void {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
-  act(() => root!.render(<Harness initial={initial} withPhone={withPhone} />));
+  act(() => root!.render(<Harness initial={initial} withPhone={withPhone} disabled={disabled} />));
 }
 
 afterEach(() => {
@@ -94,5 +95,15 @@ describe('ChoiceGroup', () => {
     act(() => { phone.click(); });
     expect(checked()[0]).toMatch(/^Curia app/);
     expect(phone.getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('while disabled, keeps showing the checked card but takes no click or key', () => {
+    mount('signal', false, true);
+    const [app, signal] = radios();
+    expect(signal!.getAttribute('aria-checked')).toBe('true');
+    expect(app!.getAttribute('aria-disabled')).toBe('true');
+    act(() => { app!.click(); });
+    press(signal!, 'ArrowDown');
+    expect(checked()[0]).toMatch(/^Signal/);
   });
 });

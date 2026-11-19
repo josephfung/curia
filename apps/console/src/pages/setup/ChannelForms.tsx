@@ -460,13 +460,23 @@ export function VaultKeysForm(props: {
   }
 
   async function flush(): Promise<boolean> {
-    while (running.current) await running.current;
-    running.current = saveTyped();
-    try {
-      return await running.current;
-    } finally {
-      running.current = null;
+    // A value typed while a save ran is kept for the next save; save again until nothing
+    // typed is left, so Save and continue never moves on past it. Bounded: someone typing
+    // through every save is told to wait rather than looped forever.
+    for (let pass = 0; pass < 5; pass++) {
+      while (running.current) await running.current;
+      running.current = saveTyped();
+      let ok: boolean;
+      try {
+        ok = await running.current;
+      } finally {
+        running.current = null;
+      }
+      if (!ok) return false;
+      if (!Object.values(valuesRef.current).some((v) => v.trim())) return true;
     }
+    setMessage({ kind: 'error', text: 'Still saving what you typed. Try again in a moment.' });
+    return false;
   }
 
   useImperativeHandle(props.ref, () => ({ flush }));
