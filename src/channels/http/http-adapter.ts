@@ -193,6 +193,8 @@ export interface HttpAdapterConfig {
    * the supervisor brings the new process up). Exposed via GET /api/setup/status.
    */
   bootStartedAt: string;
+  /** The Setup checklist (#2358), for GET /api/setup/checklist and POST /api/setup/complete. */
+  setupChecklist?: () => Promise<import('../../setup/checklist.js').SetupChecklist>;
   /**
    * Constrained LLM access for POST /api/setup/suggest-name (wizard starter-name
    * suggestion, #799). Optional — the endpoint degrades to "unavailable" when absent.
@@ -526,6 +528,7 @@ export class HttpAdapter implements Channel {
         infraLlmService: this.config.infraLlmService,
         contactService: this.config.contactService,
         entityMemory: this.config.entityMemory,
+        setupChecklist: this.config.setupChecklist,
       });
     }
 

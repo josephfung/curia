@@ -10,6 +10,9 @@
 //   GET  /api/setup/status    — does the system need setup? what's done so far?
 //   POST /api/setup/restart   — terminate the process so the supervisor brings
 //                               it back into normal (non-setup-required) mode
+//   GET  /api/setup/checklist — the Setup checklist and setup_complete (#2358)
+//   PUT  /api/setup/state     — who Setup is for, the operator, the routes (#2358)
+//   POST /api/setup/complete  — Start onboarding: Setup is over (#2358)
 //
 // All routes require session cookie or x-web-bootstrap-secret authentication
 // (same pattern as identity routes). Routes are only registered when
@@ -26,6 +29,17 @@ import { parseSuggestedFirstName, SUGGEST_NAME_PROMPT } from './suggest-name.js'
 import type { ContactService } from '../../../contacts/contact-service.js';
 import type { EntityMemory } from '../../../memory/entity-memory.js';
 import { validateWorkingHours, serializeWorkingHours } from '../../../contacts/working-hours.js';
+import type { SetupChecklist } from '../../../setup/checklist.js';
+import {
+  isInSetup,
+  markSetupComplete,
+  MESSAGING_ROUTES,
+  readSetupState,
+  updateSetupState,
+  VOICE_ROUTES,
+  type SetupState,
+  type SetupStateUpdate,
+} from '../../../setup/setup-state.js';
 
 export interface SetupRouteOptions {
   webAppBootstrapSecret: string;
@@ -65,6 +79,8 @@ export interface SetupRouteOptions {
    * nice-to-have, never a setup blocker.
    */
   infraLlmService?: InfraLlmService;
+  /** The Setup checklist (#2358). Absent: the checklist and complete routes answer 503. */
+  setupChecklist?: () => Promise<SetupChecklist>;
 }
 
 // Match identity.ts: tighter rate limit on auth-sensitive routes (10/min vs the
@@ -72,6 +88,8 @@ export interface SetupRouteOptions {
 // abused at high rate. assertSecret throttling happens upstream of this on
 // outright failed auth, but valid-credential abuse needs its own cap.
 const AUTH_RATE = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
+// The Setup page re-reads the checklist after every save and while a restart lands.
+const CHECKLIST_RATE = { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } };
 
 const MAX_DISPLAY_NAME_LENGTH = 200;
 
@@ -94,6 +112,7 @@ export async function setupRoutes(
     bootStartedAt,
     scheduleProcessExit,
     infraLlmService,
+    setupChecklist,
   } = options;
 
   // Delay before process.exit so Fastify can finish flushing the 200 response.
@@ -381,12 +400,16 @@ export async function setupRoutes(
       const identityConfigured = await isIdentityConfigured(pool);
       const externalAdaptersPending =
         setupRequiredAtBoot && principalExists && identityConfigured;
+      const setupState = await readSetupState(pool);
 
       return reply.send({
         principalExists,
         identityConfigured,
         externalAdaptersPending,
         bootStartedAt,
+        // #2358: the console shows the Setup page while this is true.
+        inSetup: isInSetup(setupState, identityConfigured),
+        setup: publicState(setupState),
       });
     } catch (err) {
       logger.error({ err }, 'GET /api/setup/status: failed to compute setup status');
@@ -471,6 +494,66 @@ export async function setupRoutes(
     return reply.send({ restarting: true, exitDelayMs: RESTART_EXIT_DELAY_MS });
   });
 
+  // -- GET /api/setup/checklist --
+  //
+  // The Setup checklist (#2358): each step's live status, a one-line detail for a pending
+  // step, and setup_complete. The same computation the setup agent's setup-status tool reads.
+  // Some checks are network calls (Nylas), so this is separate from /api/setup/status,
+  // which the restart poll hits every two seconds.
+  app.get('/api/setup/checklist', CHECKLIST_RATE, async (request, reply) => {
+    if (!requireAuth(request, reply)) return;
+    if (!setupChecklist) {
+      return reply.status(503).send({ error: 'The Setup checklist is not available on this server.' });
+    }
+    try {
+      return reply.send(await setupChecklist());
+    } catch (err) {
+      logger.error({ err }, 'GET /api/setup/checklist: failed to compute the checklist');
+      return reply.status(500).send({ error: 'Failed to compute the Setup checklist. Check server logs.' });
+    }
+  });
+
+  // -- PUT /api/setup/state --
+  //
+  // Saves the Setup page's own fields (#2358). Partial: a field left out is unchanged, and
+  // null clears it. The first save on a new install marks Setup in progress.
+  app.put<{ Body: unknown }>('/api/setup/state', AUTH_RATE, async (request, reply) => {
+    if (!requireAuth(request, reply)) return;
+    const parsed = parseStateUpdate(request.body);
+    if ('error' in parsed) return reply.status(400).send({ error: parsed.error });
+    try {
+      const identityConfigured = await isIdentityConfigured(pool);
+      const state = await updateSetupState(pool, parsed.update, identityConfigured);
+      return reply.send({ inSetup: isInSetup(state, identityConfigured), setup: publicState(state) });
+    } catch (err) {
+      logger.error({ err }, 'PUT /api/setup/state: failed to save');
+      return reply.status(500).send({ error: 'Failed to save. Check server logs.' });
+    }
+  });
+
+  // -- POST /api/setup/complete --
+  //
+  // Start onboarding (#2358): Setup is over, and the console stops showing the Setup page.
+  // Refused with the missing steps until setup_complete. What onboarding then does is #2360.
+  app.post('/api/setup/complete', AUTH_RATE, async (request, reply) => {
+    if (!requireAuth(request, reply)) return;
+    if (!setupChecklist) {
+      return reply.status(503).send({ error: 'The Setup checklist is not available on this server.' });
+    }
+    try {
+      const checklist = await setupChecklist();
+      if (!checklist.setupComplete) {
+        return reply.status(409).send({ error: 'Setup is not finished yet.', missing: checklist.missing });
+      }
+      await markSetupComplete(pool);
+      logger.info('Setup complete: Start onboarding pressed');
+      return reply.send({ inSetup: false });
+    } catch (err) {
+      logger.error({ err }, 'POST /api/setup/complete: failed');
+      return reply.status(500).send({ error: 'Failed to finish Setup. Check server logs.' });
+    }
+  });
+
   // -- POST /api/setup/suggest-name --
   //
   // One-shot LLM call that proposes a starter first name for the assistant,
@@ -522,4 +605,76 @@ export async function setupRoutes(
 
     return reply.send({ name });
   });
+}
+
+/** The state as the console sees it. The phase is summarized by `inSetup`. */
+function publicState(state: SetupState): {
+  setupFor: SetupState['setupFor'];
+  operatorName: string | null;
+  operatorEmail: string | null;
+  messagingRoute: SetupState['messagingRoute'];
+  voiceRoute: SetupState['voiceRoute'];
+  completedAt: string | null;
+} {
+  return {
+    setupFor: state.setupFor,
+    operatorName: state.operatorName,
+    operatorEmail: state.operatorEmail,
+    messagingRoute: state.messagingRoute,
+    voiceRoute: state.voiceRoute,
+    completedAt: state.completedAt ? state.completedAt.toISOString() : null,
+  };
+}
+
+/** Validates a PUT /api/setup/state body. Unknown fields are refused, not ignored. */
+export function parseStateUpdate(body: unknown): { update: SetupStateUpdate } | { error: string } {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return { error: 'Expected a JSON object.' };
+  }
+  const input = body as Record<string, unknown>;
+  const known = ['setupFor', 'operatorName', 'operatorEmail', 'messagingRoute', 'voiceRoute'];
+  const unknown = Object.keys(input).filter((k) => !known.includes(k));
+  if (unknown.length > 0) return { error: `Unknown field: ${unknown.join(', ')}.` };
+
+  const update: SetupStateUpdate = {};
+  const oneOf = <T extends string>(field: string, allowed: readonly T[]): T | null | undefined | { error: string } => {
+    const v = input[field];
+    if (v === undefined || v === null) return v;
+    if (typeof v === 'string' && (allowed as readonly string[]).includes(v)) return v as T;
+    return { error: `${field} must be one of ${allowed.join(', ')}.` };
+  };
+  const text = (field: string): string | null | undefined | { error: string } => {
+    const v = input[field];
+    if (v === undefined || v === null) return v;
+    if (typeof v !== 'string') return { error: `${field} must be a string.` };
+    const trimmed = v.trim();
+    if (trimmed.length > MAX_DISPLAY_NAME_LENGTH) return { error: `${field} is too long.` };
+    return trimmed === '' ? null : trimmed;
+  };
+
+  const setupFor = oneOf('setupFor', ['self', 'other'] as const);
+  if (typeof setupFor === 'object' && setupFor !== null) return setupFor;
+  if (setupFor !== undefined) update.setupFor = setupFor;
+
+  const messagingRoute = oneOf('messagingRoute', MESSAGING_ROUTES);
+  if (typeof messagingRoute === 'object' && messagingRoute !== null) return messagingRoute;
+  if (messagingRoute !== undefined) update.messagingRoute = messagingRoute;
+
+  const voiceRoute = oneOf('voiceRoute', VOICE_ROUTES);
+  if (typeof voiceRoute === 'object' && voiceRoute !== null) return voiceRoute;
+  if (voiceRoute !== undefined) update.voiceRoute = voiceRoute;
+
+  const operatorName = text('operatorName');
+  if (typeof operatorName === 'object' && operatorName !== null) return operatorName;
+  if (operatorName !== undefined) update.operatorName = operatorName;
+
+  const operatorEmail = text('operatorEmail');
+  if (typeof operatorEmail === 'object' && operatorEmail !== null) return operatorEmail;
+  if (typeof operatorEmail === 'string' && !EMAIL_RE.test(operatorEmail)) {
+    return { error: 'operatorEmail is not an email address.' };
+  }
+  if (operatorEmail !== undefined) update.operatorEmail = operatorEmail?.toLowerCase() ?? null;
+
+  if (Object.keys(update).length === 0) return { error: 'Nothing to save.' };
+  return { update };
 }

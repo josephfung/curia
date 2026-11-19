@@ -24,7 +24,7 @@ import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, re
 import { createVerificationRuntime } from './verification/index.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
-import { hasLivePushSubscription, WebPushService } from './channels/web/push-service.js';
+import { WebPushService } from './channels/web/push-service.js';
 import { loadVapidSetup, logVapidReadiness } from './channels/web/vapid.js';
 import { configuredReachChannels, reachChannelsFor } from './agents/principal-reach.js';
 import { resolveMemoryRetentionSnapshot } from './channels/http/routes/memory-retention.js';
@@ -287,6 +287,10 @@ import {
 } from './registry/reconcile.js';
 import type { Discovery, RegistryRow } from './registry/types.js';
 import { CHANNEL_CATALOG, type ChannelDescriptor } from './channels/catalog.js';
+import { evaluateChecklist, loadCatalog, type CatalogTask, type RouteChannel, type SetupCheckDeps, type SetupChecklist } from './setup/checklist.js';
+import { readSetupState } from './setup/setup-state.js';
+import { isIdentityConfigured } from './channels/http/routes/identity.js';
+import { installabilityWarning } from './channels/http/pairing.js';
 import { channelCredentialStatus } from './channels/credential-resolver.js';
 import { ChannelRegistryRepo } from './registry/channel-registry-repo.js';
 import { ChannelRegistryService } from './registry/channel-registry-service.js';
@@ -3238,7 +3242,61 @@ async function main(): Promise<void> {
   }).catch((err: unknown) => {
     logger.warn({ errName: err instanceof Error ? err.name : typeof err }, 'mailbox sign-in readiness check failed at boot');
   });
-  const executionLayer = new ExecutionLayer(toolRegistry, logger, { triageServices, bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, calendarRouter, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, principalMailboxes, cardUseRepo, cardUseService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, phoneAppReady: () => hasLivePushSubscription(pool, vapidSetup.configured), emailChannelStatus, principalMailboxReady: () => healthService.principalMailboxReady(), nylasSignInReadiness, mailboxSignIn: mailboxSignInService, curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime, turnActivity,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
+  // The Setup checklist (#2358): one computation for the console's Setup page and the setup
+  // agent's setup-status tool. The catalog stays with the setup skill; it is read once.
+  const setupCatalogPath = path.resolve(import.meta.dirname, '../skills/setup/tools/setup-status/catalog.yaml');
+  let setupCatalog: Promise<CatalogTask[]> | undefined;
+  // Read at call time: the adapters below are assigned later in boot, and in setup-required
+  // mode none of them start.
+  const channelStarted: Record<RouteChannel, () => boolean> = {
+    signal: () => !!signalAdapter,
+    sms: () => !!smsAdapter,
+    slack: () => !!slackAdapter,
+    voice: () => !!voiceAdapter,
+  };
+  const setupCheckDeps: SetupCheckDeps = {
+    state: () => readSetupState(pool),
+    principal: async () => {
+      const p = await contactService.findContactBySystemRole('principal');
+      return p ? { displayName: p.displayName, primaryEmail: p.primaryEmail, timezone: p.timezone } : null;
+    },
+    identityConfigured: () => isIdentityConfigured(pool),
+    emailChannelStatus,
+    nylasSignInReadiness,
+    principalMailboxReady: () => healthService.principalMailboxReady(),
+    channelStatus: async (channel) => {
+      if (channelStarted[channel]() && !setupRequiredAtBoot) return 'running';
+      const descriptor = CHANNEL_CATALOG.find((d) => d.name === channel);
+      // Same rule as email (#2409): enabled and its Enable gate passes, but not started this boot.
+      if (!descriptor || !((await channelRegistryRepo.getRow(channel))?.enabled ?? false)) return 'not_configured';
+      return (await channelCredentialStatusFn(descriptor)).requiredResolvable ? 'restart_required' : 'not_configured';
+    },
+    principalHasIdentity: async (channel) => {
+      // Read live, not from the boot snapshot: the Setup page adds these before the restart.
+      const p = await contactService.findContactBySystemRole('principal');
+      if (!p) return false;
+      const identities = await contactService.getIdentitiesForContact(p.id);
+      return identities.some((i) => i.channel === channel && i.verified && i.status === 'active');
+    },
+    phoneAppBlocker: () => {
+      if (!config.appOrigin) return 'Set APP_ORIGIN to the https address of this Curia.';
+      if (installabilityWarning(config.appOrigin)) return 'The Curia app needs Curia on an https address with a real hostname.';
+      return vapidSetup.configured ? null : 'Push notifications are not set up on this server.';
+    },
+    signalVoiceCallsEnabled: config.signalVoiceCallsEnabled,
+    secretPresent: async (name) => (await secretsService.get(name)) !== null || !!process.env[name.toUpperCase()],
+    browserReady: () => browserService?.browserContext != null,
+    logger,
+  };
+  const setupChecklist = async (): Promise<SetupChecklist> => {
+    // A failed read is not cached, so a fixed file is picked up on the next call.
+    setupCatalog ??= loadCatalog(setupCatalogPath).catch((err: unknown) => {
+      setupCatalog = undefined;
+      throw err;
+    });
+    return evaluateChecklist(await setupCatalog, setupCheckDeps);
+  };
+  const executionLayer =new ExecutionLayer(toolRegistry, logger, { triageServices, bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, calendarRouter, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, principalMailboxes, cardUseRepo, cardUseService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, gating: autonomyGating, sendEvidence, actionLogRepo, approvalDelivery, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, voiceSessions: voiceSessionStore, setupChecklist, mailboxSignIn: mailboxSignInService, curiaEmailAddresses, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, taskOutreach, disclosureDecisions, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, verification: verificationRuntime, turnActivity,       ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
     findInFlight: (targetAgent: string, originConversationId: string) =>
       findInFlightPendingDelegation(pool, { targetAgent, originConversationId }),
     acquireRunning: (params: Parameters<typeof acquireRunningDelegation>[1]) =>
@@ -4216,6 +4274,7 @@ async function main(): Promise<void> {
     principalFallbackActive: () => principalMailboxes.isFallbackActive(),
     livePrincipalMailboxIds: async () => (await principalMailboxStore.listLive()).map((m) => m.id),
     setupRequiredAtBoot,
+    setupChecklist,
     bootStartedAt,
     // Powers POST /api/setup/suggest-name (wizard starter-name suggestion, #799).
     infraLlmService,
