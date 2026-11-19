@@ -46,6 +46,25 @@ const NYLAS_KEY_FIELD: readonly FieldSpec[] = [{ key: 'nylas_api_key', label: 'N
 export function EmailStep({ task, onSaved, onContinue, onHelp }: StepProps): JSX.Element {
   const [error, setError] = useState<string | null>(null);
 
+  // Connect with Google adds Curia's mailbox on the server, then restarts Curia, without
+  // turning the channel on. So on arrival turn it on if the key and a mailbox are both
+  // there; the step's check then reads restart_required, not "add the key".
+  const taskDone = task?.status === 'done';
+  useEffect(() => {
+    if (taskDone) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        if (await turnOnChannelIfReady('email') && !cancelled) await onSaved();
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Could not turn on email.');
+      }
+    })();
+    return () => { cancelled = true; };
+    // Once per arrival; mailboxChanged covers changes made on this step.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // A mailbox added or connected: the channel turns on once it has both the key and a mailbox.
   async function mailboxChanged(): Promise<void> {
     setError(null);
@@ -124,12 +143,12 @@ const MESSAGING_CHOICES: Array<{ id: MessagingRoute; title: string; desc: (p: st
 // Settings page's). Keys are src/channels/catalog.ts's.
 const ROUTE_FIELDS: Record<Exclude<MessagingRoute, 'app'>, readonly FieldSpec[]> = {
   signal: [
-    { key: 'phone_number', label: 'Curia’s Signal number', placeholder: '+1 416 555 0142' },
+    { key: 'phone_number', label: 'Curia’s Signal number', placeholder: '+14165550142', phone: true },
     { key: 'socket_path', label: 'Signal server socket', hint: 'where signal-cli listens', placeholder: '/var/run/signal-cli/socket' },
   ],
   sms: [
     { key: 'api_key', label: 'Telnyx API key' },
-    { key: 'from_number', label: 'Curia’s number', placeholder: '+1 416 555 0188' },
+    { key: 'from_number', label: 'Curia’s number', placeholder: '+14165550188', phone: true },
     { key: 'webhook_public_key', label: 'Telnyx webhook public key' },
   ],
   slack: [
@@ -139,8 +158,8 @@ const ROUTE_FIELDS: Record<Exclude<MessagingRoute, 'app'>, readonly FieldSpec[]>
 };
 
 const IDENTITY_LABEL: Record<Exclude<MessagingRoute, 'app'>, { noun: string; placeholder: string }> = {
-  signal: { noun: 'Signal number', placeholder: '+1 416 555 0100' },
-  sms: { noun: 'mobile number', placeholder: '+1 416 555 0100' },
+  signal: { noun: 'Signal number', placeholder: '+14165550100' },
+  sms: { noun: 'mobile number', placeholder: '+14165550100' },
   slack: { noun: 'Slack member ID', placeholder: 'U0123ABCD' },
 };
 
@@ -258,7 +277,14 @@ export function VoiceStep({ task, principal, fields, contactId, onSaved, onConti
         ]}
       />
       {error && <p className="setup-status attention" role="alert">{error}</p>}
-      {route && <ChannelCredentialsForm channel="voice" fields={VOICE_FIELDS} onChanged={onSaved} />}
+      {route && (
+        <ChannelCredentialsForm
+          channel="voice"
+          fields={VOICE_FIELDS}
+          incompleteNote="Saved. Voice also needs LiveKit’s keys, which come with Curia’s install; this install doesn’t have them yet."
+          onChanged={onSaved}
+        />
+      )}
       {/* A Signal call needs the Signal channel itself; Messaging collects it when that is
           Signal too, so ask here only when it isn't. */}
       {route === 'signal' && fields.messagingRoute !== 'signal' && (
@@ -269,7 +295,7 @@ export function VoiceStep({ task, principal, fields, contactId, onSaved, onConti
           contactId={contactId}
           channel="signal"
           label={`${atSentenceStart(principal)}’s Signal number`}
-          placeholder="+1 416 555 0100"
+          placeholder="+14165550100"
           onChanged={onSaved}
         />
       )}

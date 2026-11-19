@@ -19,6 +19,20 @@ export interface FieldSpec {
   label: string;
   hint?: string;
   placeholder?: string;
+  /** A phone number: saved as E.164 (see normalizePhone). */
+  phone?: boolean;
+}
+
+/**
+ * A phone number as the channels compare and send it: E.164, "+14165550100". Spaces, dashes,
+ * dots and brackets an operator types are dropped; anything else is refused, because Signal,
+ * Telnyx and the principal match compare the stored string exactly.
+ */
+export function normalizePhone(raw: string): { value: string } | { error: string } {
+  const value = raw.replace(/[\s().-]/g, '');
+  return /^\+[1-9]\d{6,14}$/.test(value)
+    ? { value }
+    : { error: 'Enter the number with its country code, like +14165550100.' };
 }
 
 async function loadChannel(channel: string): Promise<ChannelEntry> {
@@ -58,7 +72,10 @@ export function ChannelCredentialsForm(props: {
   channel: string;
   fields: readonly FieldSpec[];
   submitLabel?: string;
-  /** Shown after a save that left the channel off (e.g. email still needs a mailbox). */
+  /**
+   * Shown when every field on this form is saved but the channel still can't turn on: what
+   * else it needs, that this page doesn't ask for (email: a mailbox; voice: LiveKit's keys).
+   */
   incompleteNote?: string;
   onChanged: () => Promise<void>;
 }): JSX.Element {
@@ -88,11 +105,20 @@ export function ChannelCredentialsForm(props: {
     e.preventDefault();
     setBusy(true);
     setMessage(null);
+    let savedAny = false;
     try {
-      // One field at a time, so a failure names the field and nothing after it is half-saved.
+      // Check every typed number first, so a bad one saves nothing.
+      const typed: Array<{ f: FieldSpec; value: string }> = [];
       for (const f of fields) {
-        const value = (values[f.key] ?? '').trim();
-        if (!value) continue;
+        const raw = (values[f.key] ?? '').trim();
+        if (!raw) continue;
+        if (!f.phone) { typed.push({ f, value: raw }); continue; }
+        const phone = normalizePhone(raw);
+        if ('error' in phone) throw new Error(`${f.label}: ${phone.error}`);
+        typed.push({ f, value: phone.value });
+      }
+      // One field at a time, so a failure names the field and nothing after it is half-saved.
+      for (const { f, value } of typed) {
         const res = await apiFetch(`/api/vault/secrets/${encodeURIComponent(`channel.${channel}.${f.key}`)}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -101,20 +127,28 @@ export function ChannelCredentialsForm(props: {
         if (!res.ok) throw new Error(`${f.label}: ${await errorMessage(res)}`);
         // Never keep a saved credential in component state.
         setValues((v) => ({ ...v, [f.key]: '' }));
+        savedAny = true;
       }
-      const wasOn = (await reload())?.state === 'enabled';
+      const before = await loadChannel(channel);
       const on = await turnOnChannelIfReady(channel);
-      await reload();
+      const after = await reload();
+      // The step's own fields all saved but still off: something this page doesn't ask for is
+      // missing, and the step says what (incompleteNote); otherwise one of its fields is.
+      const ownFieldsSaved = fields.every((f) => after?.credentialFields.find((c) => c.key === f.key)?.configured === true);
       setMessage({
         kind: 'ok',
-        text: wasOn ? 'Saved. Changes apply when you apply and restart.'
+        text: before.state === 'enabled' ? 'Saved. Changes apply when you apply and restart.'
           : on ? 'Saved and turned on. It starts when you apply and restart.'
-          : props.incompleteNote ?? 'Saved. Add the rest to turn it on.',
+          : ownFieldsSaved && props.incompleteNote ? props.incompleteNote
+          : 'Saved. Add the rest to turn it on.',
       });
       await onChanged();
     } catch (err) {
-      setMessage({ kind: 'error', text: err instanceof Error ? err.message : 'Could not save.' });
+      const text = err instanceof Error ? err.message : 'Could not save.';
+      // A save that landed before a later step failed (turning the channel on) is still saved.
+      setMessage({ kind: 'error', text: savedAny ? `Saved, but couldn’t turn it on: ${text}` : text });
       await reload();
+      if (savedAny) await onChanged();
     } finally {
       setBusy(false);
     }
@@ -193,13 +227,24 @@ export function PrincipalIdentityField(props: {
   async function link(e: FormEvent): Promise<void> {
     e.preventDefault();
     if (!contactId || !value.trim()) return;
-    setBusy(true);
     setError(null);
+    let identifier = value.trim();
+    if (channel !== 'slack') {
+      const phone = normalizePhone(identifier);
+      if ('error' in phone) { setError(phone.error); return; }
+      identifier = phone.value;
+    }
+    if (linked.some((i) => i.channelIdentifier === identifier)) {
+      setValue('');
+      setError('Already saved.');
+      return;
+    }
+    setBusy(true);
     try {
       const res = await apiFetch(`/api/contacts/${encodeURIComponent(contactId)}/identities`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel, channelIdentifier: value.trim() }),
+        body: JSON.stringify({ channel, channelIdentifier: identifier }),
       });
       if (!res.ok) throw new Error(await errorMessage(res));
       setValue('');
