@@ -2,9 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   atSentenceStart,
   createLatestSaver,
+  EXTRAS,
   firstName,
   firstOpenStep,
   groupLabel,
+  isExtra,
   isStepId,
   nextStep,
   principalLabel,
@@ -42,6 +44,48 @@ describe('the steps', () => {
     expect(nextStep('who')).toBe('curia_name');
     expect(nextStep('apply')).toBe('start');
     expect(nextStep('start')).toBeNull();
+  });
+});
+
+describe('the optional extras', () => {
+  it('follow the steps, in the catalog’s ids, and come from the URL too', () => {
+    expect(EXTRAS.map((s) => s.id)).toEqual(['working_style', 'google_workspace', 'web_research']);
+    expect(isStepId('google_workspace')).toBe(true);
+    expect(isExtra('web_research')).toBe(true);
+    expect(isExtra('voice')).toBe(false);
+    expect(groupLabel('extras', 'Dana')).toBe('Optional extras');
+  });
+
+  it('walk forward, and the last returns to Start onboarding', () => {
+    expect(nextStep('working_style')).toBe('google_workspace');
+    expect(nextStep('google_workspace')).toBe('web_research');
+    expect(nextStep('web_research')).toBe('start');
+  });
+
+  it('are never counted as left to do, nor where a returning operator lands', () => {
+    const c = checklist([...ALL_DONE.tasks, task('google_workspace', 'pending', { optional: true })]);
+    expect(firstOpenStep(c)).toBe('start');
+    expect(stepsLeft(c)).toEqual([]);
+  });
+
+  it('are ticked only once something is set up', () => {
+    const unset = checklist([
+      task('working_style', 'done', { optional: true }),
+      task('google_workspace', 'pending', { optional: true }),
+      task('web_research', 'done', { optional: true, optional_upgrade: { vault_keys: ['tavily_api_key'], configured: false } }),
+    ]);
+    // Working style's check is always done, so it says nothing: never ticked.
+    expect(stepMark('working_style', unset)).toBe('todo');
+    expect(stepMark('google_workspace', unset)).toBe('todo');
+    // Keyless search is done too; only the key ticks it.
+    expect(stepMark('web_research', unset)).toBe('todo');
+    const set = checklist([
+      task('google_workspace', 'done', { optional: true }),
+      task('web_research', 'done', { optional: true, optional_upgrade: { vault_keys: ['tavily_api_key'], configured: true } }),
+    ]);
+    expect(stepMark('google_workspace', set)).toBe('done');
+    expect(stepMark('web_research', set)).toBe('done');
+    expect(stepMark('google_workspace', null)).toBe('todo');
   });
 });
 

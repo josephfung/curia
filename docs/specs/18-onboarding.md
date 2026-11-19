@@ -127,9 +127,24 @@ not done, or locked. Status shows as one line inside the open step.
 | Start onboarding | Locked until `setupComplete`, listing what's left. Ends Setup and loads the console afresh, so no chat stream stays on the Setup thread | `POST /api/setup/complete` (rotates the web thread) |
 
 Every field a step needs is on the step, so an operator never has to leave Setup. A channel
-is turned on as soon as its required credentials resolve; it starts at Apply & restart. The
-optional extras (Working style, Google Workspace, the Tavily key, Capabilities) and the setup
-guide panel follow in later #2358 PRs.
+is turned on as soon as its required credentials resolve; it starts at Apply & restart.
+
+### Optional extras
+
+Listed under "Optional extras" after Start onboarding, unnumbered ("Optional extra" in the
+eyebrow), and never counted toward the required steps or `setupComplete`. Save and continue
+walks them in order; the last returns to Start onboarding. An extra is ticked only once
+something is set up: Google Workspace when its three keys are saved, the search limit when
+the Tavily key is (`optional_upgrade.configured`). Working style is never ticked, since its
+check is always done.
+
+| Extra | Saves | Through |
+|-------|-------|---------|
+| Working style | A tone (one of the four tone templates) and an independence level: Draft only, Ask first (the default) or Spot-check, at scores 65, 75 and 85. Each saves when picked. They are a starting point: the principal is offered them in the first conversation and can change them | `PUT /api/identity` (`changedBy: 'wizard'`, `tone.style` only) and `POST /api/identity/reload`; `PUT /api/autonomy` |
+| Google Workspace | Curia's Google address and the OAuth client ID and secret. "Sign in as Curia" shows as coming soon (#2683) | `PUT /api/vault/secrets/{curia_google_email,google_oauth_client_id,google_oauth_client_secret}` |
+| Higher search limit | The Tavily key, with links to tavily.com and the curia-docs limits page | `PUT /api/vault/secrets/tavily_api_key` |
+
+Capabilities, the last extra, and the setup guide panel follow in a later #2358 PR.
 
 ### Out of scope
 

@@ -84,7 +84,7 @@ tasks:
     optional: true
     completion_check:
       type: always_available
-    credential_how_to: null
+    credential_how_to: "Optional: in the Working style extra on the Setup page, pick a tone and how much Curia does before checking in. Each choice saves when picked. Leave them and the defaults apply until the principal chooses in their first conversation."
     docs_url: /get-started/check-your-setup
 
   - id: principal_mailboxes
@@ -112,7 +112,7 @@ tasks:
         - curia_google_email
         - google_oauth_client_id
         - google_oauth_client_secret
-    credential_how_to: "Add Curia's Google address and an OAuth client ID and secret from Google Cloud (the project from Email & calendar can be reused), then sign in as Curia."
+    credential_how_to: "In the Google Workspace extra on the Setup page, add Curia's Google address and an OAuth client ID and secret from Google Cloud (the project from Email & calendar can be reused). Signing in as Curia still follows the Google Workspace guide."
     docs_url: /get-started/google-docs
 
   - id: web_research

@@ -13,9 +13,11 @@ import {
   type SetupFields,
 } from './setup-api.js';
 import {
+  EXTRAS,
   firstName,
   firstOpenStep,
   groupLabel,
+  isExtra,
   nextStep,
   principalLabel,
   stepMark,
@@ -27,6 +29,7 @@ import { WhoStep } from './WhoStep.js';
 import { CuriaNameStep } from './CuriaNameStep.js';
 import { EmailStep, MessagingStep, SignInStep, VoiceStep } from './ChannelSteps.js';
 import { ApplyStep, StartStep } from './FinishSteps.js';
+import { GoogleWorkspaceStep, WebSearchStep, WorkingStyleStep } from './ExtraSteps.js';
 
 interface Loaded {
   checklist: Checklist;
@@ -81,7 +84,7 @@ export default function SetupPage(): JSX.Element {
   const doneCount = required.filter((s) => stepMark(s.id, checklist) === 'done').length;
   const taskFor = (id: string) => checklist?.tasks.find((t) => t.id === id);
   const index = STEPS.findIndex((s) => s.id === current);
-  const step = STEPS[index]!;
+  const step = [...STEPS, ...EXTRAS].find((s) => s.id === current)!;
 
   function renderStep(): JSX.Element {
     if (!data) return <p className="setup-lede">{loadError ?? 'Loading…'}</p>;
@@ -102,6 +105,12 @@ export default function SetupPage(): JSX.Element {
         return <ApplyStep checklist={checklist} onSaved={refresh} onContinue={goNext} />;
       case 'start':
         return <StartStep checklist={checklist} principal={principal} onRefresh={refresh} />;
+      case 'working_style':
+        return <WorkingStyleStep key="working_style" task={taskFor('working_style')} principal={principal} onSaved={refresh} onContinue={goNext} />;
+      case 'google_workspace':
+        return <GoogleWorkspaceStep key="google_workspace" task={taskFor('google_workspace')} principal={principal} onSaved={refresh} onContinue={goNext} />;
+      case 'web_research':
+        return <WebSearchStep key="web_research" task={taskFor('web_research')} principal={principal} onSaved={refresh} onContinue={goNext} />;
     }
   }
 
@@ -111,7 +120,7 @@ export default function SetupPage(): JSX.Element {
       <nav className="setup-steps" aria-label="Setup steps">
         <h1>Set up Curia</h1>
         <p className="setup-count">{data ? `${doneCount} of ${required.length} required steps done` : ' '}</p>
-        {STEPS.map((s) => {
+        {[...STEPS, ...EXTRAS].map((s) => {
           const label = groupLabel(s.group, principalFirst);
           const heading = label !== lastGroup ? <div className="setup-group" key={`g-${s.group}`}>{label}</div> : null;
           lastGroup = label;
@@ -134,7 +143,9 @@ export default function SetupPage(): JSX.Element {
         })}
       </nav>
       <section className="setup-pane" aria-live="polite">
-        <div className="setup-eyebrow">Step {index + 1} of {STEPS.length} · {groupLabel(step.group, principalFirst)}</div>
+        <div className="setup-eyebrow">
+          {isExtra(current) ? 'Optional extra' : `Step ${index + 1} of ${STEPS.length} · ${groupLabel(step.group, principalFirst)}`}
+        </div>
         {loadError && data && <p className="setup-status attention" role="alert">{loadError}</p>}
         {renderStep()}
       </section>

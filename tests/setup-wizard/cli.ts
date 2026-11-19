@@ -18,7 +18,10 @@
 //      (Docker's restart policy brings it back in production), so the script restarts it
 //      once, then waits for the page to say every step was checked again.
 //   5. Checks Start onboarding is locked (the channel steps can't pass on a plain-http test
-//      install with no keys), then reads the saved state back over the API.
+//      install with no keys).
+//   6. Opens the optional extras from the step list and walks them: a tone and an
+//      independence level, Google Workspace's keys and a Tavily key. The last extra's Save
+//      and continue returns to Start onboarding. Then reads the saved state back over the API.
 //
 // Exits 1 on any failure, leaving a screenshot and the server log path in the output.
 // The database is dropped afterwards (Ctrl-C included) unless --keep-db; one left by a
@@ -83,6 +86,11 @@ const INPUT = {
   deepgramKey: 'walkthrough-deepgram',
   cartesiaKey: 'walkthrough-cartesia',
   cartesiaVoice: 'walkthrough-voice-id',
+  // Optional extras (#2358, PR 3c). Nothing signs in to Google or searches with these.
+  curiaGoogleEmail: 'curia-walkthrough@example.com',
+  googleClientId: 'walkthrough.apps.googleusercontent.com',
+  googleClientSecret: 'walkthrough-google-secret',
+  tavilyKey: 'tvly-walkthrough-placeholder',
 } as const;
 
 const out = (line: string): void => { process.stdout.write(`${line}\n`); };
@@ -408,12 +416,48 @@ async function walkThroughSetup(page: Page, baseUrl: string, secret: string, cur
   }
   await page.getByText(/^Finish .* first\.$/).waitFor({ timeout: STEP_TIMEOUT_MS });
   out('  ✓ Start onboarding is locked and lists what’s left');
+
+  // The optional extras: opened from the step list, never numbered.
+  await page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: 'Working style' }).click();
+  await expectExtra(page, 'working_style', 'Working style');
+  // Each choice saves when picked; wait for it to stick before picking the next.
+  await page.getByRole('radio', { name: /Crisp & direct/ }).click();
+  await page.getByRole('radio', { name: /Crisp & direct/, checked: true }).waitFor({ timeout: STEP_TIMEOUT_MS });
+  await page.getByRole('radio', { name: /Spot-check/ }).click();
+  await page.getByRole('radio', { name: /Spot-check/, checked: true }).waitFor({ timeout: STEP_TIMEOUT_MS });
+  await saveAndContinue(page);
+
+  await expectExtra(page, 'google_workspace', 'Google Workspace');
+  await fillForm(page, {
+    'Curia’s Google address': INPUT.curiaGoogleEmail,
+    'OAuth client ID': INPUT.googleClientId,
+    'OAuth client secret': INPUT.googleClientSecret,
+  }, 'Saved.');
+  await saveAndContinue(page);
+
+  await expectExtra(page, 'web_research', 'Higher web search limit');
+  await fillForm(page, { 'Tavily API key': INPUT.tavilyKey }, 'Saved.');
+  await saveAndContinue(page);
+  await expectStep(page, 8, 'start', 'Start onboarding');
+  out('  ✓ optional extras saved; the last returned to Start onboarding');
+}
+
+async function expectExtra(page: Page, id: string, heading: string): Promise<void> {
+  try {
+    await page.waitForURL(url => url.pathname === '/setup' && url.searchParams.get('step') === id, { timeout: STEP_TIMEOUT_MS });
+    await page.getByText(/^Optional extra$/).waitFor({ timeout: STEP_TIMEOUT_MS });
+    await page.getByRole('heading', { name: heading }).waitFor({ timeout: STEP_TIMEOUT_MS });
+  } catch (e) {
+    const firstLine = (e instanceof Error ? e.message : String(e)).split('\n')[0];
+    throw new Error(`did not reach the "${heading}" extra — still on ${new URL(page.url()).search || page.url()}. ${firstLine}`);
+  }
+  out(`  ✓ extra: ${heading}`);
 }
 
 interface IdentityResponse {
   configured: boolean;
   inSetup?: boolean;
-  identity: { assistant: { name: string; title: string } };
+  identity: { assistant: { name: string; title: string }; tone: { style: string } };
 }
 interface StatusResponse {
   principalExists: boolean;
@@ -443,13 +487,14 @@ async function verifySavedState(baseUrl: string, secret: string, curia: CuriaPro
     if (!res.ok) throw new Error(`GET ${route} returned ${res.status}`);
     return await res.json() as T;
   };
-  const [identity, status, principal, checklist, channels, vault] = await Promise.all([
+  const [identity, status, principal, checklist, channels, vault, autonomy] = await Promise.all([
     get<IdentityResponse>('/api/identity'),
     get<StatusResponse>('/api/setup/status'),
     get<PrincipalResponse>('/api/setup/principal'),
     get<ChecklistResponse>('/api/setup/checklist'),
     get<{ channels: Array<{ name: string; state: string }> }>('/api/registry/channels'),
     get<{ configured_keys: string[] }>('/api/vault/status'),
+    get<{ autonomy: { score: number } | null }>('/api/autonomy'),
   ]);
   const problems: string[] = [];
   const expect = (label: string, actual: unknown, expected: unknown): void => {
@@ -486,6 +531,13 @@ async function verifySavedState(baseUrl: string, secret: string, curia: CuriaPro
     'channel.voice.deepgram_api_key', 'channel.voice.cartesia_api_key', 'channel.voice.cartesia_voice_id']) {
     expect(`vault: ${key}`, vault.configured_keys.includes(key), true);
   }
+  // The optional extras (#2358, PR 3c): Crisp & direct is a template, Spot-check is 85.
+  expect('tone: Crisp & direct', identity.identity.tone.style.startsWith('Crisp and direct.'), true);
+  expect('independence: Spot-check', autonomy.autonomy?.score, 85);
+  for (const key of ['curia_google_email', 'google_oauth_client_id', 'google_oauth_client_secret', 'tavily_api_key']) {
+    expect(`vault: ${key}`, vault.configured_keys.includes(key), true);
+  }
+  expect('checklist: Google Workspace', done('google_workspace'), 'done');
   if (principal.contactId) {
     const ids = await get<{ identities: Array<{ channel: string; channelIdentifier: string }> }>(`/api/contacts/${principal.contactId}/identities`);
     expect('principal mobile linked as E.164', ids.identities.some((i) => i.channel === 'sms' && i.channelIdentifier === INPUT.principalMobile), true);

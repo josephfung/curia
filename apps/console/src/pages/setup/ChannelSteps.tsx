@@ -10,7 +10,7 @@ import { atSentenceStart, createLatestSaver, type ChecklistTask } from './setup-
 import { ChoiceGroup, StatusLine, StepFooter } from './setup-ui.js';
 import { ChannelCredentialsForm, PrincipalIdentityField, turnOnChannelIfReady, type FieldGroupHandle, type FieldSpec } from './ChannelForms.js';
 
-const DOCS_ORIGIN = 'https://docs.meetcuria.com';
+export const DOCS_ORIGIN = 'https://docs.meetcuria.com';
 
 interface StepProps {
   task: ChecklistTask | undefined;
@@ -25,7 +25,7 @@ interface StepProps {
  * every field group on the step (they also save when the operator leaves a field), and moves
  * on only when all of them saved. A failure stays on the step, with the error under its field.
  */
-function useSaveAndContinue(onContinue: () => void) {
+export function useSaveAndContinue(onContinue: () => void) {
   const groups = useRef(new Map<string, FieldGroupHandle>());
   const [saving, setSaving] = useState(false);
   const register = (name: string) => (handle: FieldGroupHandle | null) => {
@@ -46,7 +46,7 @@ function useSaveAndContinue(onContinue: () => void) {
   return { register, saveAndContinue, saving };
 }
 
-function SaveAndContinue(props: { save: ReturnType<typeof useSaveAndContinue>; onHelp?: () => void }): JSX.Element {
+export function SaveAndContinue(props: { save: ReturnType<typeof useSaveAndContinue>; onHelp?: () => void }): JSX.Element {
   return (
     <StepFooter
       primary={props.save.saving ? 'Saving…' : 'Save and continue'}
