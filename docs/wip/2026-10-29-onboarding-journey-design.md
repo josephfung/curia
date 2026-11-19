@@ -144,6 +144,11 @@ has made a one-click step during Setup.
 
 ## Phase 1 — Setup (the operator)
 
+> **Reworked 2026-11-19 (#2358).** The `/setup` form and the setup checklist become one Setup page in
+> the console, with the setup agent as a help panel beside it and a Capabilities page. #2358's
+> description is the current spec for this phase until this section is rewritten. Mockup:
+> [`setup-page-mockup.html`](2026-10-29-onboarding-journey-design/setup-page-mockup.html).
+
 ### 1a. Install (~5 minutes)
 
 What's needed: Docker with Compose, an LLM key, and **a domain or HTTPS route** to the host.
