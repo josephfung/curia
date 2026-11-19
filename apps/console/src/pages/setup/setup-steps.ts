@@ -109,6 +109,11 @@ export function principalLabel(fullName: string | null | undefined): string {
   return firstName(fullName) ?? 'your principal';
 }
 
+/** The same label at the start of a sentence: "Your principal", or the name unchanged. */
+export function atSentenceStart(label: string): string {
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
 /** Steps the Start onboarding note lists as left to do, in order. */
 export function stepsLeft(checklist: Checklist | null): StepDef[] {
   if (!checklist) return STEPS.filter((s) => s.id !== 'apply' && s.id !== 'start');
