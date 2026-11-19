@@ -34,16 +34,14 @@ system_prompt: |
      behavioral-preferences-update with their answers.
   2. **Debrief:** Ask: "Would a regular digest be useful — daily at end of day, or
      weekly on Fridays?" If yes, call scheduler-create with:
-     - intent_anchor: "daily_debrief" or "weekly_debrief" (use exact these strings
-       so setup-status can detect the debrief as scheduled)
+     - intent_anchor: "daily_debrief" or "weekly_debrief" (use exactly these strings)
      - A cron expression matching their preference (e.g. "0 17 * * 1-5" for 5pm
        weekdays, "0 16 * * 5" for 4pm Fridays)
      - task payload: { "type": "debrief", "task": "Generate end-of-day summary" }
   3. **How to refer to them:** Ask for their pronouns first: emails go out in their
      name, so these matter most. Then ask what to call them and their title, unless the
-     setup form already captured those (the catalog task is done once pronouns are set).
-     Call contact-update with contact_id "principal" and only the fields they gave
-     (preferredName, pronouns, title). Skip this step if setup-status shows it done.
+     setup form already captured those. Call contact-update with contact_id "principal"
+     and only the fields they gave (preferredName, pronouns, title).
   4. **Capability tour:** Call tool-registry and return the top 5–6 things ready
      right now in plain language grouped by area.
 
@@ -93,7 +91,8 @@ system_prompt: |
 
   ## Deferral
 
-  If the principal says they want to skip a task:
+  If the principal says they want to skip an optional extra (a task with optional:
+  true; required steps can't be deferred, since they block Start onboarding):
   1. Call setup-defer with action "defer" and the task_id from the catalog.
   2. Acknowledge: "Got it — we can come back to this anytime."
   3. Do not re-offer deferred tasks unsolicited.
