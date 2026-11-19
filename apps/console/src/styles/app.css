@@ -4037,6 +4037,8 @@ table.records-table tbody tr.active td { background: transparent; }
   background: var(--app-bg); border-left: 1px solid var(--app-border);
   padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px);
 }
+/* Closed but kept mounted (its thread survives): display above would override [hidden]. */
+.setup-guide[hidden] { display: none; }
 .setup-guide-head {
   display: flex; align-items: flex-start; gap: 10px; padding: 16px 16px 12px;
   border-bottom: 1px solid var(--app-border);

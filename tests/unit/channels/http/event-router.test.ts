@@ -332,3 +332,23 @@ describe('EventRouter web reply push', () => {
     expect(seen).toEqual([]);
   });
 });
+
+// #2358: an open stream never ends on its own, and the server's close waits for it, so a
+// console tab open at Apply & restart kept the restart from finishing.
+describe('EventRouter.closeAllStreams', () => {
+  it('ends every chat and Ant Farm stream, keeps going past one that throws, and forgets them', () => {
+    const { router } = makeRouter();
+    const ended: string[] = [];
+    const res = (name: string, fail = false) => ({
+      write: () => true,
+      end: () => { if (fail) throw new Error('socket gone'); ended.push(name); },
+    }) as unknown as ServerResponse;
+    router.addSseClient({ res: res('chat-1'), conversationId: 'c1' });
+    router.addSseClient({ res: res('broken', true), conversationId: 'c1' });
+    router.addAntfarmClient({ res: res('antfarm') });
+    expect(router.closeAllStreams()).toBe(2);
+    expect(ended).toEqual(['chat-1', 'antfarm']);
+    expect(router.hasAnyChatListener()).toBe(false);
+    expect(router.closeAllStreams()).toBe(0);
+  });
+});

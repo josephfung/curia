@@ -24,7 +24,7 @@ import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { KnowledgeGraphStore } from '../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../src/memory/embedding.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
-import { markSetupComplete, readSetupState, updateSetupState } from '../../src/setup/setup-state.js';
+import { markSetupComplete, readSetupState, startSetup, updateSetupState } from '../../src/setup/setup-state.js';
 import type { SetupChecklist } from '../../src/setup/checklist.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 import { completeSetup } from '../../src/setup/complete-setup.js';
@@ -1009,19 +1009,41 @@ describeIf('/api/setup/* routes', () => {
     });
 
     // The Setup page calls it on load (PR 4), so web chat goes to the setup guide from the
-    // first message.
-    it('POST /api/setup/start starts Setup, keeps what is saved, and never reopens a finished one', async () => {
-      expect((await readSetupState(pool)).phase).toBeNull();
+    // first message. Whether it starts Setup depends on the whole database (any principal,
+    // any saved identity), which other test files share, so that part runs on a cleared
+    // copy inside a transaction that is rolled back.
+    it('startSetup starts Setup only on a database with nothing set up', async () => {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM setup_state');
+        await client.query('DELETE FROM office_identity_current');
+        await client.query('DELETE FROM office_identity_versions');
+        await client.query(`UPDATE contacts SET system_role = NULL WHERE system_role = 'principal'`);
+        expect(await startSetup(client)).toMatchObject({ phase: 'in_progress', setupFor: null });
+        // A principal a script created, and no row: nothing changes.
+        await client.query('DELETE FROM setup_state');
+        await client.query(
+          `INSERT INTO contacts (id, display_name, role, tier, kind, system_role, created_at, updated_at)
+           VALUES (gen_random_uuid(), $1, 'ceo', 'principal', 'principal', 'principal', now(), now())`,
+          [`${TEST_LABEL_PREFIX} ScriptPrincipal`],
+        );
+        expect((await startSetup(client)).phase).toBeNull();
+      } finally {
+        await client.query('ROLLBACK');
+        client.release();
+      }
+    });
+
+    it('POST /api/setup/start keeps what is saved, and never reopens a finished Setup', async () => {
+      await updateSetupState(pool, { setupFor: 'self' });
       const res = await app.inject({ method: 'POST', url: '/api/setup/start', headers: AUTH_HEADER });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ inSetup: true });
-      expect(await readSetupState(pool)).toMatchObject({ phase: 'in_progress', setupFor: null });
-      await updateSetupState(pool, { setupFor: 'self' });
-      await app.inject({ method: 'POST', url: '/api/setup/start', headers: AUTH_HEADER });
-      expect((await readSetupState(pool)).setupFor).toBe('self');
+      expect(res.json()).toEqual({ inSetup: true, setupGuide: true });
+      expect(await readSetupState(pool)).toMatchObject({ phase: 'in_progress', setupFor: 'self' });
       await markSetupComplete(pool);
       const after = await app.inject({ method: 'POST', url: '/api/setup/start', headers: AUTH_HEADER });
-      expect(after.json()).toEqual({ inSetup: false });
+      expect(after.json()).toEqual({ inSetup: false, setupGuide: false });
       expect((await readSetupState(pool)).phase).toBe('complete');
     });
 

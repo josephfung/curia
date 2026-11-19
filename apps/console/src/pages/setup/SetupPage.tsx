@@ -35,10 +35,25 @@ import { ApplyStep, StartStep } from './FinishSteps.js';
 import { GoogleWorkspaceStep, WebSearchStep, WorkingStyleStep } from './ExtraSteps.js';
 import { SetupGuidePanel } from './SetupGuidePanel.js';
 
-/** A phone: the guide would cover the whole page, so it doesn't open by itself there. */
+const PHONE_QUERY = '(max-width: 760px)';
+
+/** A phone: the guide is full-screen there, so it doesn't open by itself. */
 function isPhoneWidth(): boolean {
   return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-    && window.matchMedia('(max-width: 760px)').matches;
+    && window.matchMedia(PHONE_QUERY).matches;
+}
+
+/** isPhoneWidth, kept current as the window resizes. */
+function usePhoneWidth(): boolean {
+  const [phone, setPhone] = useState(isPhoneWidth);
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia(PHONE_QUERY);
+    const onChange = (): void => setPhone(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return phone;
 }
 
 interface Loaded {
@@ -55,6 +70,24 @@ export default function SetupPage(): JSX.Element {
   // Only the newest load may set state: a slow response must not overwrite a newer one.
   const loadSeq = useRef(0);
 
+  // Opening the Setup page starts Setup (POST /api/setup/start), so web chat goes to the
+  // setup guide from the first message, before anything is saved. Until it does, the guide
+  // says so; a failed call is retried with each refresh (any save, or a step's check).
+  const [guideNotice, setGuideNotice] = useState<string | null>(null);
+  const guideReady = useRef(false);
+  const ensureGuide = useCallback(async (): Promise<void> => {
+    if (guideReady.current) return;
+    try {
+      const { setupGuide } = await startSetup();
+      guideReady.current = setupGuide;
+      setGuideNotice(setupGuide ? null
+        : 'This install was set up outside the Setup page, so messages here go to Curia’s usual chat, not the setup guide.');
+    } catch (err) {
+      console.error('[SetupPage] could not start Setup:', err);
+      setGuideNotice(`Couldn’t start Setup (${err instanceof Error ? err.message : 'unknown error'}), so messages here may reach Curia’s usual chat instead of the setup guide.`);
+    }
+  }, []);
+
   const refresh = useCallback(async (): Promise<void> => {
     const seq = ++loadSeq.current;
     try {
@@ -62,28 +95,38 @@ export default function SetupPage(): JSX.Element {
       if (seq !== loadSeq.current) return;
       setData({ checklist, fields, principal });
       setLoadError(null);
+      void ensureGuide();
     } catch (err) {
       if (seq !== loadSeq.current) return;
       console.error('[SetupPage] failed to load the Setup checklist:', err);
       setLoadError(err instanceof Error ? err.message : 'Could not load Setup.');
     }
-  }, []);
+  }, [ensureGuide]);
 
+  useEffect(() => { void ensureGuide(); }, [ensureGuide]);
   useEffect(() => { void refresh(); }, [refresh]);
 
-  // Opening the Setup page starts Setup (POST /api/setup/start), so web chat goes to the
-  // setup guide from the first message, before anything is saved.
-  const [startError, setStartError] = useState<string | null>(null);
-  useEffect(() => {
-    startSetup().catch((err: unknown) => {
-      console.error('[SetupPage] could not start Setup:', err);
-      setStartError(err instanceof Error ? err.message : 'unknown error');
-    });
-  }, []);
-
   // The guide: open by itself on a first run (not on a phone), closed when an operator comes
-  // back to Setup. Decided once, on the first load.
+  // back to Setup. Decided once, on the first load. Once opened it stays mounted, hidden when
+  // closed, so its thread, step markers and anything half-typed survive a close.
   const [guideOpen, setGuideOpen] = useState(false);
+  const [guideMounted, setGuideMounted] = useState(false);
+  useEffect(() => { if (guideOpen) setGuideMounted(true); }, [guideOpen]);
+  const phone = usePhoneWidth();
+  const stepsRef = useRef<HTMLElement>(null);
+  const paneRef = useRef<HTMLElement>(null);
+  // Closing the guide unmounts nothing but hides the focused element: move focus to the open
+  // step's heading, or (Steps, below 1180px) to the open step in the list.
+  function closeGuide(focus: 'step' | 'steps'): void {
+    setGuideOpen(false);
+    requestAnimationFrame(() => {
+      const target = focus === 'steps'
+        ? stepsRef.current?.querySelector<HTMLElement>('[aria-current="step"]')
+        : paneRef.current?.querySelector<HTMLElement>('h2');
+      if (target && focus === 'step') target.tabIndex = -1;
+      target?.focus();
+    });
+  }
   const guideDecided = useRef(false);
   const [draft, setDraft] = useState<{ text: string; seq: number } | undefined>(undefined);
   useEffect(() => {
@@ -154,7 +197,8 @@ export default function SetupPage(): JSX.Element {
   let lastGroup: string | null = null;
   return (
     <div className={`setup-page${guideOpen ? ' guide-open' : ''}`}>
-      <nav className="setup-steps" aria-label="Setup steps">
+      {/* On a phone the open guide covers the page: what is behind it leaves the tab order. */}
+      <nav className="setup-steps" aria-label="Setup steps" ref={stepsRef} inert={guideOpen && phone}>
         <h1>Set up Curia</h1>
         <p className="setup-count">{data ? `${doneCount} of ${required.length} required steps done` : ' '}</p>
         {[...STEPS, ...EXTRAS].map((s) => {
@@ -179,21 +223,22 @@ export default function SetupPage(): JSX.Element {
           );
         })}
       </nav>
-      <section className="setup-pane" aria-live="polite">
+      <section className="setup-pane" aria-live="polite" ref={paneRef} inert={guideOpen && phone}>
         <div className="setup-eyebrow">
           {isExtra(current) ? 'Optional extra' : `Step ${index + 1} of ${STEPS.length} · ${groupLabel(step.group, principalFirst)}`}
         </div>
         {loadError && data && <p className="setup-status attention" role="alert">{loadError}</p>}
         {renderStep()}
       </section>
-      {guideOpen && (
+      {guideMounted && (
         <SetupGuidePanel
+          hidden={!guideOpen}
           step={current}
           stepName={step.name}
           draft={draft}
-          startError={startError}
-          onClose={() => setGuideOpen(false)}
-          onShowSteps={() => setGuideOpen(false)}
+          notice={guideNotice}
+          onClose={() => closeGuide('step')}
+          onShowSteps={() => closeGuide('steps')}
         />
       )}
     </div>

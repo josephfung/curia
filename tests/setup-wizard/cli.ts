@@ -345,7 +345,7 @@ async function walkThroughSetup(page: Page, baseUrl: string, secret: string, cur
   const guide = page.getByRole('complementary', { name: 'Setup guide' });
   await guide.waitFor({ timeout: STEP_TIMEOUT_MS });
   await guide.getByRole('button', { name: 'Close setup guide' }).click();
-  await guide.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await guide.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   out('  ✓ the setup guide opened by itself on a first run, and closes');
   await page.getByRole('radio', { name: /Someone else/ }).click();
   await page.getByLabel('Your name').fill(INPUT.operatorName);

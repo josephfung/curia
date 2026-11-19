@@ -1,13 +1,24 @@
 // @vitest-environment happy-dom
 // The setup guide panel (#2358, PR 4): step markers in the thread, the composer draft the
 // "Need help?" link fills, and when the guide opens by itself.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { ChatComposer } from '../chat/ChatComposer.js';
 import type { Message } from '../chat/types.js';
-import { withStepMarkers } from './SetupGuidePanel.js';
+import { SetupGuidePanel, withStepMarkers } from './SetupGuidePanel.js';
 import { isFirstRun, type Checklist, type ChecklistTask } from './setup-steps.js';
+
+// The panel's own logic, over a stand-in chat session (useChatSession has its own tests).
+const chat = vi.hoisted(() => ({
+  state: { messages: [] as Message[], loadingHistory: false },
+}));
+vi.mock('../chat/useChatSession.js', () => ({
+  useChatSession: () => ({
+    messages: chat.state.messages, sending: false, hasMore: false, loadingHistory: chat.state.loadingHistory,
+    connectionError: null, send: async () => {}, loadMore: async () => {},
+  }),
+}));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -38,8 +49,9 @@ describe('isFirstRun', () => {
   const checklist = (tasks: ChecklistTask[]): Checklist => ({ setupFor: null, tasks, setupComplete: false, missing: [] });
 
   it('is a first run until anything is saved', () => {
-    expect(isFirstRun(checklist([task('who', 'pending'), task('working_style', 'done', true)]), { setupFor: null })).toBe(true);
     // Optional extras that are always done don't count.
+    expect(isFirstRun(checklist([task('who', 'pending'), task('working_style', 'done', true)]), { setupFor: null })).toBe(true);
+    // Anything saved does.
     expect(isFirstRun(checklist([task('who', 'pending')]), { setupFor: 'other' })).toBe(false);
     expect(isFirstRun(checklist([task('curia_name', 'done')]), { setupFor: null })).toBe(false);
   });
@@ -81,5 +93,61 @@ describe('ChatComposer draft', () => {
     // The same link clicked again offers the text again.
     render({ text: 'I’m on the Email step. ', seq: 2 });
     expect(box().value).toBe('I’m on the Email step. ');
+  });
+});
+
+describe('SetupGuidePanel', () => {
+  let root: Root | null = null;
+  let host: HTMLDivElement | null = null;
+  afterEach(() => {
+    act(() => root?.unmount());
+    host?.remove();
+    root = null;
+    host = null;
+    chat.state = { messages: [], loadingHistory: false };
+  });
+
+  function render(step: 'email' | 'voice' | 'apply', extra: { notice?: string; onClose?: () => void } = {}): void {
+    if (!root) {
+      host = document.createElement('div');
+      document.body.appendChild(host);
+      root = createRoot(host);
+    }
+    const names = { email: 'Email', voice: 'Voice', apply: 'Apply & restart' };
+    act(() => root!.render(
+      <SetupGuidePanel hidden={false} step={step} stepName={names[step]} notice={extra.notice}
+        onClose={extra.onClose ?? (() => {})} onShowSteps={() => {}} />,
+    ));
+  }
+  // ChatThread scrolls with scrollTo, which happy-dom lacks.
+  Element.prototype.scrollTo ??= function scrollTo() {};
+  const lines = () => Array.from(host!.querySelectorAll('.msg-bubble')).map((b) => b.textContent);
+
+  it('marks a step change after the message that was last', () => {
+    chat.state.messages = [msg('a', 'which key?')];
+    render('email');
+    render('voice');
+    chat.state.messages = [msg('a', 'which key?'), msg('b', 'and this one?')];
+    render('voice');
+    expect(lines()).toEqual(['which key?', 'Now on: Voice', 'and this one?']);
+  });
+
+  it('records no marker while the history is still loading', () => {
+    chat.state = { messages: [], loadingHistory: true };
+    render('email');
+    render('voice');
+    chat.state = { messages: [msg('a', 'older question')], loadingHistory: false };
+    render('voice');
+    expect(lines()).toEqual(['older question']);
+  });
+
+  it('closes on Escape and shows why messages may not reach the guide', () => {
+    const onClose = vi.fn();
+    render('email', { notice: 'Couldn’t start Setup (HTTP 500).', onClose });
+    expect(host!.querySelector('[role="alert"]')!.textContent).toBe('Couldn’t start Setup (HTTP 500).');
+    act(() => {
+      host!.querySelector('textarea')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });

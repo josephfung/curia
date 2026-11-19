@@ -465,6 +465,27 @@ export class EventRouter {
     };
   }
 
+  /**
+   * Ends every open SSE stream (chat and Ant Farm), for shutdown. A stream never ends on its
+   * own, and the HTTP server's close waits for open requests, so one open console tab kept a
+   * restart from finishing (#2358: the Setup page's guide is often open at Apply & restart).
+   * Browsers' EventSource reconnects to the new process. Returns how many were ended.
+   */
+  closeAllStreams(): number {
+    let ended = 0;
+    for (const client of [...this.sseClients, ...this.antfarmClients]) {
+      try {
+        client.res.end();
+        ended++;
+      } catch (err) {
+        this.logger.warn({ err }, 'SSE stream could not be ended at shutdown');
+      }
+    }
+    this.sseClients.clear();
+    this.antfarmClients.clear();
+    return ended;
+  }
+
   /** Register an Ant Farm SSE client. Returns a cleanup function. */
   addAntfarmClient(client: Pick<AntfarmClient, 'res'>): () => void {
     const entry: AntfarmClient = {

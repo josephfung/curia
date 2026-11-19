@@ -164,10 +164,12 @@ The setup agent as a help panel; it never drives Setup.
 - **Step markers.** When the open step changes, a "Now on: <step>" line appears in the
   thread. They live in the panel only, not in the saved history.
 - **Setup starts when the page opens.** `POST /api/setup/start` creates the Setup row as
-  in progress (it never reopens a finished Setup), so web chat reaches the setup guide from
-  the first message, before anything is saved. A database a script set up has no row and
-  never opens the page, so its web chat stays with the coordinator. If the call fails, the
-  panel says its messages may reach Curia's usual chat.
+  in progress, so web chat reaches the setup guide from the first message, before anything
+  is saved. It does so only on a database with nothing set up (no principal, no saved office
+  identity: migration 130's test), and never reopens a finished Setup. A database whose
+  principal a script created has no row, and its web chat stays with the coordinator even
+  when the console is opened on it. If the call fails, the panel says its messages may
+  reach Curia's usual chat.
 
 ### Out of scope
 

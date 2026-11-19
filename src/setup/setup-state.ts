@@ -103,11 +103,21 @@ export async function updateSetupState(db: SetupStateQueryable, update: SetupSta
 
 /**
  * The Setup page opened (#2358, PR 4): Setup has started, so web chat goes to the setup guide
- * from the first message. Creates the row as in_progress; a row already there (in progress or
- * complete) is left exactly as it is. Idempotent.
+ * from the first message. Creates the row as in_progress, but only on a database that has
+ * nothing set up yet: no principal and no saved office identity, the same test migration 130
+ * used to mark older installs complete. A database whose principal a script created after
+ * the migrations (the KG demo, scenario runs, a data-only restore) has no row and must keep
+ * its web chat with the coordinator even when the console is opened on it. A row already
+ * there (in progress or complete) is left exactly as it is. Idempotent.
  */
 export async function startSetup(db: SetupStateQueryable): Promise<SetupState> {
-  await db.query(`INSERT INTO setup_state (id, phase) VALUES (1, 'in_progress') ON CONFLICT (id) DO NOTHING`);
+  await db.query(
+    `INSERT INTO setup_state (id, phase)
+     SELECT 1, 'in_progress'
+     WHERE NOT EXISTS (SELECT 1 FROM office_identity_versions WHERE changed_by IN ('wizard', 'api'))
+       AND NOT EXISTS (SELECT 1 FROM contacts WHERE system_role = 'principal')
+     ON CONFLICT (id) DO NOTHING`,
+  );
   return readSetupState(db);
 }
 
@@ -130,10 +140,11 @@ export function isInSetup(state: SetupState): boolean {
 }
 
 /**
- * Whether web chat goes to the setup guide (#2358): only once the Setup page has saved
- * something, so the phase reads in_progress. Stricter than isInSetup on purpose: a database
- * whose principal was created by a script after migrations (tests, scenario runs) has no
- * row, and its web chat stays with the coordinator.
+ * Whether web chat goes to the setup guide (#2358): only once the phase reads in_progress,
+ * which the Setup page sets when it opens on a database with nothing set up (startSetup) or
+ * when it saves something. Stricter than isInSetup on purpose: a database whose principal was
+ * created by a script after migrations (tests, scenario runs) has no row, and its web chat
+ * stays with the coordinator, even when the console is opened on it.
  */
 export function routesWebChatToSetupGuide(phase: SetupState['phase'] | string | null): boolean {
   return phase === 'in_progress';
