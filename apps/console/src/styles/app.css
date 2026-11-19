@@ -1461,6 +1461,34 @@ a.dash-num-link:focus-visible, .dash-num-link:has(.dash-num-open:focus-visible) 
   }
 }
 
+/* Nylas sign-in setup steps (#2361): settings-kv rows whose label carries a step
+   marker (its number, or ✓ once done) and whose value holds that step's status,
+   controls and messages. */
+.nylas-step-mark {
+  width: 18px; height: 18px; border-radius: 50%;
+  display: inline-grid; place-items: center; flex: none;
+  font-size: 11px; font-weight: 700;
+  background: var(--app-muted); color: var(--app-fg-muted);
+}
+.nylas-step-mark.done { background: var(--app-teal-soft); color: var(--app-teal); }
+.nylas-step-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.nylas-step-body p { margin: 0; line-height: 1.45; }
+.nylas-step-note { font-size: 13px; color: var(--app-fg-muted); }
+.nylas-step-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.nylas-step-inline select { width: auto; padding: 4px 8px; font-size: 13px; }
+.settings-kv-row dd code.nylas-step-code { overflow-wrap: anywhere; }
+.nylas-connector-form { display: flex; flex-direction: column; gap: 12px; margin-top: 4px; }
+.nylas-step-label {
+  font-size: 11px; color: var(--app-fg-muted);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  font-weight: 600;
+}
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
 /* ── 12. Responsive ──────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .settings-shell { flex-direction: column; }

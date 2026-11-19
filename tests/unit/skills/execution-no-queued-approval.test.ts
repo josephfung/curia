@@ -122,7 +122,7 @@ describe('gate blocks on ceo-inbox-send-draft queue no approval (#2474)', () => 
     const { layer, execute, publish } = setup('ceo-inbox-send-draft', 65);
     const principal = {
       taskEventId: 'task-1',
-      taskMetadata: { originator: { contactId: 'p-1', systemRole: 'principal', channel: 'signal', initiatedAt: new Date().toISOString(), tier: 'principal' } },
+      taskMetadata: { originator: { contactId: 'p-1', systemRole: 'principal', authenticated: true, channel: 'signal', initiatedAt: new Date().toISOString(), tier: 'principal' } },
     };
     await layer.invoke('ceo-inbox-send-draft', { draft_id: 'd-1' }, undefined, principal);
     expect(execute).toHaveBeenCalledOnce();
@@ -137,7 +137,7 @@ describe('gate blocks on ceo-inbox-send-draft queue no approval (#2474)', () => 
       taskEventId: 'task-1',
       taskMetadata: {
         wakeContext: { derived: false },
-        originator: { contactId: 'p-1', systemRole: 'principal', channel: 'signal', initiatedAt: new Date().toISOString(), tier: 'principal' },
+        originator: { contactId: 'p-1', systemRole: 'principal', authenticated: true, channel: 'signal', initiatedAt: new Date().toISOString(), tier: 'principal' },
       },
     };
     const result = await layer.invoke('ceo-inbox-send-draft', { draft_id: 'd-1' }, undefined, woken);

@@ -105,6 +105,9 @@ export class CalendarListEventsHandler implements ToolHandler {
         // Use trusted originator metadata, not caller shape, to avoid misclassifying
         // agent-originated delegated tasks (which can have non-UUID contactIds) as system.
         const callerIsSystem = isSystemOriginated(ctx.taskMetadata);
+        // The principal's authority, not just their identity (GHSA-p49r-jqh2-v668): an email
+        // reply goes to everyone on the thread, so a forged From that CCs someone must not get
+        // another contact's calendar read out to them.
         const callerIsPrincipal = isPrincipalOriginated(ctx.taskMetadata);
         if (!callerIsSystem && !callerIsPrincipal) {
           return {

@@ -682,7 +682,7 @@ describe('autonomy gates', () => {
       taskMetadata: {
         originator: {
           contactId: 'primary-user',
-          systemRole: 'principal' as const,
+          systemRole: 'principal' as const, authenticated: true,
           channel: 'cli',
           initiatedAt: new Date().toISOString(),
         },
@@ -742,7 +742,7 @@ describe('autonomy gates', () => {
       taskMetadata: {
         originator: {
           contactId: 'ceo-contact-id',
-          systemRole: 'principal' as const,
+          systemRole: 'principal' as const, authenticated: true,
           channel: 'email',
           initiatedAt: new Date().toISOString(),
         },
@@ -768,7 +768,7 @@ describe('autonomy gates', () => {
       taskMetadata: {
         originator: {
           contactId: 'ceo-contact-id',
-          systemRole: 'principal' as const,
+          systemRole: 'principal' as const, authenticated: true,
           channel: 'email',
           initiatedAt: new Date().toISOString(),
         },
@@ -817,7 +817,7 @@ describe('autonomy gates', () => {
 
   describe('bypass ladder — woken/derived tasks', () => {
     const principalLineage = {
-      contactId: 'ceo-id', systemRole: 'principal' as const, channel: 'email',
+      contactId: 'ceo-id', systemRole: 'principal' as const, authenticated: true, channel: 'email',
       initiatedAt: '2026-06-23T00:00:00.000Z', tier: 'principal' as const,
     };
     const systemLineage = {
@@ -842,6 +842,159 @@ describe('autonomy gates', () => {
 
       expect(result.success).toBe(true);
       expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
+    // GHSA-p49r-jqh2-v668: the ladder demotes the wake to agent for the gate, but the approval it
+    // files still came from an unverified principal request, so it goes only to a verified channel.
+    it.each([
+      ['Gate A', 'medium', 59],
+      ['Gate B', 'high', 69],
+    ] as const)('%s keeps the unverified-requester flag when the ladder demotes an unverified principal wake', async (_gate, risk, score) => {
+      const registry = new ToolRegistry();
+      registry.register(makeRiskyManifest('calendar-create-event', risk), makeHandler('should not run'));
+      const trigger = makeApprovalTrigger({ created: true, shortRef: 'a3f7c12b', approvalNumber: 3 });
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(score), approvalTrigger: trigger });
+
+      const result = await layer.invoke('calendar-create-event', {}, undefined, {
+        taskEventId: 'task-1',
+        taskMetadata: { originator: { ...principalLineage, channel: 'sms', authenticated: false }, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(false);
+      expect(trigger.request).toHaveBeenCalledWith(expect.objectContaining({ requesterUnverified: true }));
+    });
+
+    // A held email-reply from an unverified principal request answers the sender only, through the
+    // approved replay too: the replay runs on the approver's verified turn, so the stored input
+    // must carry the restriction. A verified request keeps the full recipient set.
+    it.each([
+      ['an unverified', false, true],
+      ['a verified', true, undefined],
+    ] as const)('stores sender_only on a held email-reply from %s principal request', async (_label, authenticated, expected) => {
+      const registry = new ToolRegistry();
+      registry.register(makeRiskyManifest('email-reply', 'medium'), makeHandler('should not run'));
+      const trigger = makeApprovalTrigger({ created: true, shortRef: 'a3f7c12b', approvalNumber: 3 });
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(59), approvalTrigger: trigger });
+
+      const result = await layer.invoke('email-reply', { reply_to_message_id: 'm-1', body: 'hi' }, undefined, {
+        taskEventId: 'task-1',
+        // A wake, so the ladder demotes both to the same gate (a live verified turn bypasses it).
+        taskMetadata: { originator: { ...principalLineage, channel: authenticated ? 'email' : 'sms', authenticated }, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(false);
+      const filed = vi.mocked(trigger.request).mock.calls[0]![0];
+      expect(filed.input['sender_only']).toBe(expected);
+    });
+
+    // A derived child below its threshold runs as agent, so the handler cannot see the unverified
+    // principal lineage on ctx.taskMetadata. The restriction has to reach it on the input.
+    it.each([
+      ['an unverified', false, true],
+      ['a verified', true, undefined],
+    ] as const)('passes sender_only to an email-reply that runs on a demoted derived wake of %s principal request', async (_label, authenticated, expected) => {
+      const registry = new ToolRegistry();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+      // 80 clears medium (70) but is below the derived-child threshold (90), so the ladder demotes.
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(80) });
+
+      const result = await layer.invoke('email-reply', { reply_to_message_id: 'm-1', body: 'hi' }, undefined, {
+        taskEventId: 'task-1',
+        taskMetadata: { originator: { ...principalLineage, channel: authenticated ? 'email' : 'sms', authenticated }, wakeContext: { derived: true } },
+      });
+
+      expect(result.success).toBe(true);
+      const ctx = vi.mocked(handler.execute).mock.calls[0]![0];
+      expect((ctx.taskMetadata as { originator: { systemRole: string } }).originator.systemRole).toBe('agent');
+      expect(ctx.input['sender_only']).toBe(expected);
+    });
+
+    // `delegate` forwards the demoted originator to the specialist, with no wake marker. The
+    // ladder's `ladderedFrom` is what still says the request came from an unverified principal match.
+    it.each([
+      ['an unverified', false, true],
+      ['a verified', true, undefined],
+    ] as const)('passes sender_only to a specialist\'s email-reply delegated from a demoted wake of %s principal request', async (_label, authenticated, expected) => {
+      const registry = new ToolRegistry();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(80) });
+
+      const result = await layer.invoke('email-reply', { reply_to_message_id: 'm-1', body: 'hi' }, undefined, {
+        taskEventId: 'task-2',
+        taskMetadata: {
+          originator: { ...principalLineage, channel: authenticated ? 'email' : 'sms', authenticated, systemRole: 'agent', tier: null, ladderedFrom: 'principal' },
+        },
+      });
+
+      expect(result.success).toBe(true);
+      const ctx = vi.mocked(handler.execute).mock.calls[0]![0];
+      expect(ctx.input['sender_only']).toBe(expected);
+    });
+
+    // A held sender-only reply with an explicit cc could never run: the handler refuses that
+    // combination on the approved replay. Refuse it up front instead of filing a dead approval.
+    it.each([
+      ['a non-empty string', 'bob@example.com'],
+      ['an array', ['bob@example.com']],
+      ['null', null],
+    ] as const)('refuses a sender-only email-reply whose cc is %s before any gate files an approval', async (_label, cc) => {
+      const registry = new ToolRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+      const trigger = makeApprovalTrigger({ created: true, shortRef: 'a3f7c12b', approvalNumber: 3 });
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(59), approvalTrigger: trigger });
+
+      const result = await layer.invoke('email-reply', { reply_to_message_id: 'm-1', body: 'hi', cc }, undefined, {
+        taskEventId: 'task-2',
+        taskMetadata: {
+          originator: { ...principalLineage, channel: 'sms', authenticated: false, systemRole: 'agent', tier: null, ladderedFrom: 'principal' },
+        },
+      });
+
+      expect(result.success).toBe(false);
+      expect(trigger.request).not.toHaveBeenCalled();
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('refuses a sender-only email-reply with an explicit cc before any gate files an approval', async () => {
+      const registry = new ToolRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+      const trigger = makeApprovalTrigger({ created: true, shortRef: 'a3f7c12b', approvalNumber: 3 });
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(59), approvalTrigger: trigger });
+
+      const result = await layer.invoke('email-reply', { reply_to_message_id: 'm-1', body: 'hi', cc: 'bob@example.com' }, undefined, {
+        taskEventId: 'task-2',
+        taskMetadata: {
+          originator: { ...principalLineage, channel: 'sms', authenticated: false, systemRole: 'agent', tier: null, ladderedFrom: 'principal' },
+        },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/cc is not allowed/);
+      expect(trigger.request).not.toHaveBeenCalled();
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an empty cc', ''],
+      ['no cc', undefined],
+    ] as const)('still holds a sender-only email-reply with %s for approval', async (_label, cc) => {
+      const registry = new ToolRegistry();
+      registry.register(makeRiskyManifest('email-reply', 'medium'), makeHandler('should not run'));
+      const trigger = makeApprovalTrigger({ created: true, shortRef: 'a3f7c12b', approvalNumber: 3 });
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(59), approvalTrigger: trigger });
+
+      await layer.invoke('email-reply', { reply_to_message_id: 'm-1', body: 'hi', ...(cc !== undefined ? { cc } : {}) }, undefined, {
+        taskEventId: 'task-2',
+        taskMetadata: {
+          originator: { ...principalLineage, channel: 'sms', authenticated: false, systemRole: 'agent', tier: null, ladderedFrom: 'principal' },
+        },
+      });
+
+      expect(trigger.request).toHaveBeenCalledOnce();
     });
 
     it('same-task wake of a principal task LOSES the bypass at score < 70 (propose-only)', async () => {
@@ -1766,7 +1919,7 @@ describe('autonomy gates', () => {
         taskMetadata: {
           originator: {
             contactId: 'ceo-id',
-            systemRole: 'principal' as const,
+            systemRole: 'principal' as const, authenticated: true,
             channel: 'email',
             initiatedAt: new Date().toISOString(),
             tier: 'principal',
@@ -2767,6 +2920,7 @@ describe('autonomy gates', () => {
               systemRole,
               channel: 'internal',
               initiatedAt: new Date().toISOString(),
+              ...(systemRole === 'principal' ? { authenticated: true } : {}),
             },
           },
         };
@@ -3089,7 +3243,7 @@ describe('autonomy gates', () => {
 
     const principalOriginator = {
       contactId: 'principal-1',
-      systemRole: 'principal',
+      systemRole: 'principal', authenticated: true,
       channel: 'email',
       initiatedAt: '2026-09-24T12:00:00.000Z',
       tier: 'principal',
@@ -3639,7 +3793,7 @@ describe('humanApproved on InvokeOptions', () => {
       taskMetadata: {
         originator: {
           contactId: 'primary-user',
-          systemRole: 'principal' as const,
+          systemRole: 'principal' as const, authenticated: true,
           channel: 'cli',
           initiatedAt: new Date().toISOString(),
         },
@@ -5296,7 +5450,7 @@ describe('spot-check pool — execution layer (#2159 Phase 3)', () => {
       taskEventId: 'task-2',
       liveTurn: true,
       taskMetadata: {
-        originator: { contactId: 'primary-user', systemRole: 'principal' as const, channel: 'cli', initiatedAt: new Date().toISOString() },
+        originator: { contactId: 'primary-user', systemRole: 'principal' as const, authenticated: true, channel: 'cli', initiatedAt: new Date().toISOString() },
       },
     })).success).toBe(true);
     expect((await layer.invoke('email-send', {}, undefined, agentTurn)).success).toBe(true);

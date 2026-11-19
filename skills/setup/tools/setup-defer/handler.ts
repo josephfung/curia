@@ -4,24 +4,18 @@
 // as a JSON array under setup_wizard/deferrals. Rewriting the whole array on
 // each call sidesteps config-store's no-delete limitation.
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { join } from 'node:path';
 import { ConfigStore } from '../../../../src/memory/config-store.js';
+import { loadCatalog } from '../../../../src/setup/checklist.js';
 
 // Config-store namespace and key for wizard deferrals — matches what
 // setup-status reads to determine which tasks are deferred.
 const NAMESPACE = 'setup_wizard';
 const KEY = 'deferrals';
 
-// Canonical task IDs from catalog.yaml. Validated here so out-of-catalog
-// deferrals fail fast rather than silently being stored and never matched.
-// Keep in sync with skills/setup/tools/setup-status/catalog.yaml when tasks are added/removed.
-const VALID_TASK_IDS = new Set([
-  'persona',
-  'debrief',
-  'capability_tour',
-  'email',
-  'signal',
-  'web_research',
-]);
+// The Setup checklist's catalog (#2358). Only optional extras can be left for later:
+// required steps block Start onboarding. Read from the catalog itself so the ids can't drift.
+const CATALOG_PATH = join(import.meta.dirname, '../setup-status/catalog.yaml');
 
 export class SetupDeferHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -38,14 +32,27 @@ export class SetupDeferHandler implements ToolHandler {
     if (!tid) {
       return { success: false, error: 'task_id must be a non-empty string.' };
     }
-    if (!VALID_TASK_IDS.has(tid)) {
-      return {
-        success: false,
-        error: `task_id must be one of: ${[...VALID_TASK_IDS].join(', ')}.`,
-      };
-    }
     if (action !== 'defer' && action !== 'resume') {
       return { success: false, error: 'action must be "defer" or "resume".' };
+    }
+
+    let catalog;
+    try {
+      catalog = await loadCatalog(CATALOG_PATH);
+    } catch (err) {
+      ctx.log.error({ err }, 'setup-defer: could not read the setup catalog');
+      return { success: false, error: 'Could not read the setup catalog.' };
+    }
+    const task = catalog.find((t) => t.id === tid);
+    const optionalIds = catalog.filter((t) => t.optional).map((t) => t.id);
+    if (task && !task.optional) {
+      return {
+        success: false,
+        error: `"${tid}" is a required step: it can't be deferred, because Start onboarding stays locked until it is done. Optional extras that can be: ${optionalIds.join(', ')}.`,
+      };
+    }
+    if (!task) {
+      return { success: false, error: `task_id must be one of: ${optionalIds.join(', ')}.` };
     }
 
     const configStore = new ConfigStore(ctx.entityMemory, ctx.log);

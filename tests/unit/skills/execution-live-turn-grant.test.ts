@@ -36,7 +36,7 @@ function makeManifest(overrides: Partial<ToolManifest> = {}): ToolManifest {
 const principalMetadata = {
   originator: {
     contactId: 'ceo-1',
-    systemRole: 'principal' as const,
+    systemRole: 'principal' as const, authenticated: true,
     channel: 'voice',
     initiatedAt: '2026-11-06T12:00:00.000Z',
   },
@@ -219,7 +219,7 @@ describe('elevated gate under a live-turn grant (#2495)', () => {
       humanApproved: true,
       liveTurn: true,
       taskEventId: 'task-1',
-      taskMetadata: { originator: { contactId: 'ceo-1', systemRole: 'principal', channel: 'slack' } },
+      taskMetadata: { originator: { contactId: 'ceo-1', systemRole: 'principal', authenticated: true, channel: 'slack' } },
     });
     expect(result.success).toBe(true);
     expect(execute).toHaveBeenCalledOnce();

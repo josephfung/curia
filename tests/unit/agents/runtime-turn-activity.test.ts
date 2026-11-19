@@ -106,7 +106,8 @@ describe('runtime turn activity (#2588)', () => {
   });
 
   describe("turn-start note of the person's other turns", () => {
-    const ORIGINATOR = { contactId: CONTACT, channel: 'sms', systemRole: null, tier: 'known' };
+    // Signal authenticates its sender (it was SMS until GHSA-p49r-jqh2-v668 stopped counting SMS).
+    const ORIGINATOR = { contactId: CONTACT, channel: 'signal', systemRole: null, tier: 'known', authenticated: true };
     const HEADING = '## Your other recent turns with this person';
 
     /** A running root of the same contact, registered as if another conversation's turn were live. */
@@ -115,10 +116,10 @@ describe('runtime turn activity (#2588)', () => {
         taskEventId: 'other-root',
         agentId: 'coordinator',
         conversationId: 'conv-other',
-        channelId: 'sms',
+        channelId: 'signal',
         parentEventId: undefined,
-        // As the dispatcher stamps them: the sender's text and a clean scan.
-        metadata: { inboundSenderText: 'book the 9am flight to Montreal', inboundScanFindingCount: 0 },
+        // As the dispatcher stamps them: the sender's text, a clean scan and an authenticated sender.
+        metadata: { inboundSenderText: 'book the 9am flight to Montreal', inboundScanFindingCount: 0, originator: ORIGINATOR },
         startedAt: Date.now() - 60_000,
         originatorContactId: CONTACT,
         originatorResolved: true,
@@ -138,7 +139,7 @@ describe('runtime turn activity (#2588)', () => {
       seedOtherTurn(registry);
       const chat = vi.fn(() => Promise.resolve(text('ok')));
       const { bus } = build({ id: 'mock', chat }, registry);
-      await bus.publish('dispatch', task('the 9am flight', { channelId: 'sms', metadata: { originator: ORIGINATOR } }));
+      await bus.publish('dispatch', task('the 9am flight', { channelId: 'signal', conversationId: 'signal:+15550001', metadata: { originator: ORIGINATOR } }));
       const system = systemPromptOf(chat);
       expect(system).toContain(HEADING);
       expect(system).toContain('turn_id other-root');
@@ -164,7 +165,7 @@ describe('runtime turn activity (#2588)', () => {
       const registry = new TurnActivityRegistry({ logger });
       const chat = vi.fn(() => Promise.resolve(text('ok')));
       const { bus } = build({ id: 'mock', chat }, registry);
-      await bus.publish('dispatch', task('hello', { channelId: 'sms', metadata: { originator: ORIGINATOR } }));
+      await bus.publish('dispatch', task('hello', { channelId: 'signal', conversationId: 'signal:+15550001', metadata: { originator: ORIGINATOR } }));
       expect(systemPromptOf(chat)).not.toContain(HEADING);
     });
 
@@ -177,7 +178,7 @@ describe('runtime turn activity (#2588)', () => {
       });
       const chat = vi.fn(() => Promise.resolve(text('ok')));
       const { bus, errorSpy } = build({ id: 'mock', chat }, registry);
-      const event = task('hello', { channelId: 'sms', metadata: { originator: ORIGINATOR } });
+      const event = task('hello', { channelId: 'signal', conversationId: 'signal:+15550001', metadata: { originator: ORIGINATOR } });
       await bus.publish('dispatch', event);
       expect(chat).toHaveBeenCalled();
       expect(systemPromptOf(chat)).not.toContain(HEADING);

@@ -248,6 +248,8 @@ export async function approveFromConsole(
     channel: 'web',
     initiatedAt: now.toISOString(),
     tier: 'principal',
+    // The console session proves who is approving (GHSA-p49r-jqh2-v668).
+    authenticated: true,
   };
   const reResult = await deps.executionLayer.invoke(
     row.toolName,

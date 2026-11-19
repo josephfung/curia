@@ -203,6 +203,8 @@ describeIfDb('Stage 2.5 end to end: signal-send → gateway → audit_log (#1870
         channel: 'signal',
         initiatedAt: new Date().toISOString(),
         tier: systemRole === 'principal' ? 'principal' : null,
+        // Signal authenticates the sender, so a principal turn on it carries authority.
+        authenticated: systemRole === 'principal',
       },
     };
   }

@@ -115,13 +115,15 @@ describe('TurnActivityRegistry originator authentication', () => {
     expect(start(registry, 'm', { metadata: originator(true) }).originatorAuthenticated).toBe(true);
   });
 
-  it('isAuthenticatedRoot counts an authenticated stamp, and SMS, web and CLI by channel', () => {
+  it('isAuthenticatedRoot counts an authenticated stamp, and web and CLI by channel', () => {
     const { registry } = setup();
     expect(isAuthenticatedRoot(start(registry, 'sig', { channelId: 'signal', metadata: originator(true) }))).toBe(true);
     expect(isAuthenticatedRoot(start(registry, 'forged', { channelId: 'email', metadata: originator(false) }))).toBe(false);
-    for (const channelId of ['sms', 'web', 'cli']) {
+    for (const channelId of ['web', 'cli']) {
       expect(isAuthenticatedRoot(start(registry, `c-${channelId}`, { channelId, metadata: originator(false) }))).toBe(true);
     }
+    // GHSA-p49r-jqh2-v668: SMS caller ids are spoofable, so an SMS root is not authenticated.
+    expect(isAuthenticatedRoot(start(registry, 'c-sms', { channelId: 'sms', metadata: originator(false) }))).toBe(false);
     expect(isAuthenticatedRoot(registry.ensureRoot('voice', { ...VOICE_SEED, conversationId: 'call-x' }))).toBe(false);
   });
 });

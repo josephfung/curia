@@ -538,7 +538,7 @@ describe('MemoryStoreHandler', () => {
           { entity: 'The Principal', field: 'timezone', value: 'Europe/London', source: 'test' },
         ),
         liveTurn: true,
-        taskMetadata: { originator: { contactId: 'contact-p', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-11-14T12:00:00Z', tier: null } },
+        taskMetadata: { originator: { contactId: 'contact-p', systemRole: 'principal', authenticated: true, channel: 'signal', initiatedAt: '2026-11-14T12:00:00Z', tier: null } },
       } as unknown as ToolContext;
 
       const result = await handler.execute(ctx);

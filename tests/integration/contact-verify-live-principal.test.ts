@@ -35,6 +35,7 @@ const principalOriginator = {
   channel: 'http',
   initiatedAt: '2026-11-05T15:00:00.000Z',
   tier: 'principal' as const,
+  authenticated: true,
 };
 
 function lastToolResult(messages: Message[]): string {

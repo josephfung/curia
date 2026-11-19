@@ -40,6 +40,7 @@ const principalOriginator = {
   systemRole: 'principal' as const,
   channel: 'voice',
   initiatedAt: '2026-11-06T12:00:00.000Z',
+  authenticated: true,
 };
 
 function manifest(overrides: Partial<ToolManifest> & Pick<ToolManifest, 'name'>): ToolManifest {

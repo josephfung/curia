@@ -7,6 +7,7 @@ import type { CardBrand } from '../secrets/structured-secret-schema.js';
 import type { CaptureOrigin } from '../secrets/secret-capture-service.js';
 import type { ReasoningEffort } from '../agents/llm/sampling-options.js';
 import type { ReasoningWatchdogRecord } from '../agents/llm/reasoning-watchdog.js';
+import type { MailboxSignInOutcome } from '../nylas/signin-outcome.js';
 
 // -- Base event shape --
 // Every event on the bus shares these fields; parentEventId forms the causal chain.
@@ -274,6 +275,13 @@ interface OutboundMessagePayload {
    * that Curia told the principal; it is never part of the outbound text.
    */
   reportedToPrincipal?: string;
+  /**
+   * True when the turn this replies to was started by a message that matched the principal on
+   * a channel that did not prove it (a forged email From, an SMS; GHSA-p49r-jqh2-v668). Set
+   * only by the dispatcher from the task's stamped originator. Adapters hand it to the gateway,
+   * which marks any approval the reply's hold raises as unverified.
+   */
+  requesterUnverified?: boolean;
 }
 
 // OutboundDeliveredPayload — emitted by OutboundGateway after a successful
@@ -423,6 +431,8 @@ interface OutboundNoReplyPayload {
 //   - 'database_unavailable': principal alert that Postgres has been unreachable for >5 minutes (#1381)
 //   - 'principal_mailbox_outage': principal alert that a principal mailbox failed its health canary (#2475)
 //   - 'inbox_triage_paused': principal alert that inbox triage hit its daily batch ceiling; once a day (#2475)
+//   - 'mailbox_signin_admin_blocked': principal alert that a Google Workspace admin policy blocked a
+//                           hosted mailbox sign-in, naming the OAuth client id to trust (#2361)
 //   - 'principal_note':     no longer emitted (#2159: notes go to the digest queue); kept for historical audit rows
 export interface OutboundNotificationPayload {
   notificationType:
@@ -436,6 +446,7 @@ export interface OutboundNotificationPayload {
     | 'database_unavailable'  // Postgres unreachable beyond escalation threshold (#1381)
     | 'principal_mailbox_outage' // a principal mailbox failed its health canary; once per outage (#2475)
     | 'inbox_triage_paused'      // inbox triage hit its daily batch ceiling; once a local day (#2475)
+    | 'mailbox_signin_admin_blocked' // a Workspace admin policy blocked a mailbox sign-in (#2361)
     | 'principal_note';       // no longer emitted (#2159); kept for historical audit rows
   /** Recipient email for this notification (always the principal email today). */
   ceoEmail: string;
@@ -1023,6 +1034,11 @@ interface SecretAccessedPayload {
 // secret (`details`). Audit-only:
 // nothing subscribes to act on it. Carries the key NAME and what happened — NEVER a value.
 //
+// The `nylas_*` actions (#2361) record console actions taken WITH a vault credential rather than
+// on a secret's value: `nylas_region` writes the region setting (secretName is that key),
+// `nylas_callback` and `nylas_connector` use the Nylas API key (secretName is its key name) to
+// register the sign-in callback / create the Google connector. No value of any kind is carried.
+//
 // Two-stage, like document.console_action and operator.session. `requested` is published
 // BEFORE the vault is touched, and the console refuses the change if it cannot be recorded.
 // `completed` follows a successful write. There is no `failed` stage: a vault write that
@@ -1030,11 +1046,12 @@ interface SecretAccessedPayload {
 // not happen or whose outcome is unknown — never one known to have happened.
 interface SecretChangedPayload {
   secretName: string;
-  action: 'set' | 'delete' | 'details';
+  action: 'set' | 'delete' | 'details' | 'nylas_region' | 'nylas_callback' | 'nylas_connector';
   stage: 'requested' | 'completed';
-  /** A console session, or the bootstrap-secret header with no cookie. */
-  initiatedBy: 'session' | 'bootstrap_secret';
-  /** sessions.id of the actor. Absent when initiatedBy is bootstrap_secret. */
+  /** A console session, the bootstrap-secret header with no cookie, or a single-use hosted
+   *  sign-in link redeemed at the Nylas callback (#2361: Curia's own mailbox grant). */
+  initiatedBy: 'session' | 'bootstrap_secret' | 'signin_callback';
+  /** sessions.id of the actor. Absent unless initiatedBy is session. */
   actorSessionId?: string;
   /** A delete that went ahead although an enabled component requires the key. */
   force?: boolean;
@@ -1053,9 +1070,10 @@ interface PrincipalMailboxChangedPayload {
   mailboxId: string;
   action: 'add' | 'relabel' | 'set_default' | 'replace_grant' | 'remove';
   stage: 'requested' | 'completed';
-  /** A console session, or the bootstrap-secret header with no cookie. */
-  initiatedBy: 'session' | 'bootstrap_secret';
-  /** sessions.id of the actor. Absent when initiatedBy is bootstrap_secret. */
+  /** A console session, the bootstrap-secret header with no cookie, or a single-use hosted
+   *  sign-in link redeemed at the Nylas callback (#2361; no session, the link is the capability). */
+  initiatedBy: 'session' | 'bootstrap_secret' | 'signin_callback';
+  /** sessions.id of the actor. Absent unless initiatedBy is session. */
   actorSessionId?: string;
   /** remove: whether the principal still owns the address. */
   stillOwned?: boolean;
@@ -1067,6 +1085,37 @@ interface PrincipalMailboxChangedPayload {
   cleanupIncomplete?: string[];
   /** completed: the change committed but a follow-up copy is pending. */
   warning?: boolean;
+}
+
+// PrincipalMailboxConnectedPayload — the first-ever principal mailbox registry row was created
+// through Nylas hosted sign-in (#2361). It does not fire for a reconnect or a second mailbox; those
+// end in mailbox_signin.finished. Audit-only. Carries the mailbox id — NEVER a grant id or an address.
+interface PrincipalMailboxConnectedPayload {
+  mailboxId: string;
+}
+
+// MailboxSignInFinishedPayload — a hosted sign-in ended, whatever the outcome (#2361). A resume
+// subscriber turns it into a synthetic agent.task so the agent that asked for the sign-in can
+// continue. Carries the outcome and routing context — NEVER a grant id or an address. The origin
+// fields mirror SecretCapturedPayload and are round-tripped opaquely; all are optional because a
+// sign-in started from the console has no agent to resume.
+interface MailboxSignInFinishedPayload {
+  /** Whose mailbox the sign-in was for: the principal's, or Curia's own. */
+  target: 'principal' | 'curia';
+  outcome: MailboxSignInOutcome;
+  /** The principal mailbox id, when the sign-in resolved one. Never an address. */
+  mailboxId?: string;
+  /** True when Curia's own mailbox was connected and the process exits in a few seconds to pick it
+   *  up. The resume subscriber then does not resume the agent (the turn would be cut by the exit);
+   *  the console's done page tells the operator instead. Absent means no restart. */
+  restartScheduled?: boolean;
+  conversationId?: string;
+  channelId?: string;
+  agentId?: string;
+  taskEventId?: string;   // originating agent.task event id — threaded as parentEventId on resume
+  originator?: Record<string, unknown>;  // TaskOriginator that started the chain (preserved on resume)
+  /** Base64 delegate resume_token, as on secret.captured. Carries no secret. */
+  resumeToken?: string;
 }
 
 // SecretCapturedPayload — emitted when a user submits a value to a one-time capture link and
@@ -2027,6 +2076,21 @@ export interface PrincipalMailboxChangedEvent extends BaseEvent {
   payload: PrincipalMailboxChangedPayload;
 }
 
+export interface PrincipalMailboxConnectedEvent extends BaseEvent {
+  type: 'principal_mailbox.connected';
+  sourceLayer: 'system';
+  payload: PrincipalMailboxConnectedPayload;
+}
+
+// MailboxSignInFinishedEvent — published by the sign-in callback (trusted system infra) when a
+// hosted sign-in ends (#2361). parentEventId traces to the originating agent.task. Never carries
+// a grant id or an address.
+export interface MailboxSignInFinishedEvent extends BaseEvent {
+  type: 'mailbox_signin.finished';
+  sourceLayer: 'system';
+  payload: MailboxSignInFinishedPayload;
+}
+
 // SecretCapturedEvent — published by the capture endpoint (trusted system infra) when a
 // one-time link is redeemed (#972). sourceLayer 'system' because the capture endpoint
 // self-authorizes via the token and writes to the vault, like the scheduler emitting its
@@ -2345,6 +2409,8 @@ export type BusEvent =
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
   | SecretChangedEvent       // #2453: console set/delete of a vault secret (name only, never value)
   | PrincipalMailboxChangedEvent // #2475: console add/relabel/default/grant/remove of a principal mailbox
+  | PrincipalMailboxConnectedEvent // #2361: a mailbox connected through Hosted Auth (id only)
+  | MailboxSignInFinishedEvent // #2361: a hosted sign-in ended (outcome + routing, never a grant id)
   | SecretCapturedEvent      // #972: one-time capture link redeemed (name/routing only, never value)
   | CardUseRequestedEvent    // #1358: saved-card use requested (brand/last4/site/amount, never the number)
   | CardUseDecidedEvent      // #1358: saved-card use approved, denied or expired
@@ -3017,6 +3083,34 @@ export function createPrincipalMailboxChanged(payload: PrincipalMailboxChangedPa
     type: 'principal_mailbox.changed',
     sourceLayer: 'system',
     payload,
+  };
+}
+
+export function createPrincipalMailboxConnected(
+  payload: PrincipalMailboxConnectedPayload,
+  parentEventId?: string,
+): PrincipalMailboxConnectedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'principal_mailbox.connected',
+    sourceLayer: 'system',
+    payload,
+    parentEventId,
+  };
+}
+
+export function createMailboxSignInFinished(
+  payload: MailboxSignInFinishedPayload,
+  parentEventId?: string,
+): MailboxSignInFinishedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'mailbox_signin.finished',
+    sourceLayer: 'system',
+    payload,
+    parentEventId,
   };
 }
 

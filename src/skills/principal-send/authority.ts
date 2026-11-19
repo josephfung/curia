@@ -11,8 +11,9 @@ export interface SendAuthorityInput {
 
 /**
  * Live principal turn, not an approval replay, and an email-originated turn only if its sender
- * was verified (TaskOriginator.authenticated). Voice/Signal/Slack/web/CLI count as today; SMS
- * spoofing is an accepted risk.
+ * was verified (TaskOriginator.authenticated). A live principal turn already requires an
+ * authenticated inbound (GHSA-p49r-jqh2-v668), so SMS and unverified email never get here; the
+ * email check below stays as defence in depth.
  *
  * Fail-closed: anything not proven (no metadata, no flag, an unverified email sender) is not
  * principal-directed, so the send is treated as autonomous and PR 1 refuses it.

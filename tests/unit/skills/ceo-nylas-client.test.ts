@@ -474,3 +474,19 @@ describe('CeoNylasClient.listFolders (pagination)', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('CeoNylasClient region', () => {
+  it('uses the given apiUri as the base for grant requests', async () => {
+    const fetchSpy = mockFetchSuccess([]);
+    const client = new CeoNylasClient('key', 'grant-eu', logger, undefined, 'https://api.eu.nylas.com');
+    await client.listFolders();
+    expect(String(fetchSpy.mock.calls[0]![0])).toMatch(/^https:\/\/api\.eu\.nylas\.com\/v3\/grants\/grant-eu\//);
+  });
+
+  it('defaults to the US API', async () => {
+    const fetchSpy = mockFetchSuccess([]);
+    const client = new CeoNylasClient('key', 'grant-us', logger);
+    await client.listFolders();
+    expect(String(fetchSpy.mock.calls[0]![0])).toMatch(/^https:\/\/api\.us\.nylas\.com\/v3\/grants\/grant-us\//);
+  });
+});

@@ -329,7 +329,7 @@ describe('Scheduler task-wake disposition (#1951)', () => {
     it('reads every entry for a principal-started wake', async () => {
       const getActiveWithReplies = vi.fn().mockResolvedValue([reply]);
       schedulerWith({ getActiveWithReplies });
-      await fire({ originator: { ...outsider(PRINCIPAL), systemRole: 'principal' } });
+      await fire({ originator: { ...outsider(PRINCIPAL), systemRole: 'principal', authenticated: true } });
       expect(getActiveWithReplies).toHaveBeenCalledWith('meeting-debrief', { taskId: 'task-abc' });
     });
 

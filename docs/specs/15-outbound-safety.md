@@ -67,7 +67,7 @@ Authority-aware PII disclosure, [ADR-054](../adr/054-authority-aware-pii-disclos
 
 **Band flow: detect → judge per item → policy table → act.** `PiiRedactor.detect(content, channel, ctx)` returns the items that would have been redacted (`id`, `label`, span, matched text) from the subject, the body and, for email replies, the quoted thread. `apply` is the old redaction, kept for tier gating and fallbacks. The recipient set for the principal-only bypass is the filter's own, with Curia's mailboxes excluded, so "To: principal, cc: third party" is no longer exempt (both modes). Under band, nothing is cut, no token is delivered, and a stray `[REDACTED: …]` in a body or subject is itself a defect (bounce, then block). The agent's error or success note names the labels, never the values; `outbound_context.content_preview` stores what was delivered; `outbound.delivered` stores the redacted copy, and in `disclosed` the labels (and fields, quote included) of details that went out as written. If the judge fails, an item in the message's own text is treated as unsupported (fail closed): at 80+ the draft bounces, below 80 it holds, and a recheck holds. A send whose only items are in the quoted thread fails as any send does without its judge: at 80+ it goes out without the quote, as a capped `sent_without_review` send; below 80 it holds.
 
-**Authority.** The judge's `directed`/`inferred` rulings count only for an authority code confirms from the stamped originator (tier, system role, channel, `authenticated`), the live turn, the task and root task, and the reply link. Authenticated means Signal (texts and calls), Slack, the web console (a logged-in principal session, chat and voice), or email with `senderVerified`; SMS, the local CLI and caller-id voice never count (`inboundSenderAuthenticated`, `voice/caller-context.ts`). A trusted contact's explicit directive is held for the principal at any score: the trusted tier grants no `send_on_behalf`.
+**Authority.** The judge's `directed`/`inferred` rulings count only for an authority code confirms from the stamped originator (tier, system role, channel, `authenticated`), the live turn, the task and root task, and the reply link. Authenticated means Signal (texts and calls), Slack, the web console (a logged-in principal session, chat and voice), the local CLI, or email with `senderVerified` and an SPF pass aligned with the From domain (`senderSpfAligned`); SMS and caller-id voice never count (`inboundSenderAuthenticated`, `voice/caller-context.ts`). The principal's authority, through the drafting turn, the bound or root task, or a linked task, requires a principal originator with `authenticated === true` (`hasPrincipalAuthority`). An unauthenticated principal match (a forged From, any SMS) has no authority, so a directed item from it bounces like an outsider's (GHSA-p49r-jqh2-v668; [spec 14](14-autonomy-engine.md#unverified-principal-requests)). A trusted contact's explicit directive is held for the principal at any score: the trusted tier grants no `send_on_behalf`.
 
 **Outreach links.** `task_outreach` rows (migration 107) record whom Curia contacted for a task: domains, addresses, contact ids, the contact given on a form, a one-line summary, `confirmed`, a 30-day expiry, closed with the task. Writers are task-bound email/other sends, the coordinator-only `record-outreach` tool (forms, calls), and a `web-browser` backstop that records an unconfirmed skeleton row when a task-bound turn types the principal's or Curia's address or number into a page. Only explicit acts on principal-originated turns set `confirmed`. For a non-principal email the dispatcher matches, in order, address, known contact, and the organization domain (a deny list of freemail, shared-tenant and private-suffix hosts excluded on both sides), preferring the newest confirmed row; a fast-tier model check over up to ten open rows is the weak fallback. Auto-generated mail is skipped, and channel-supplied `linkedTask`/`boundTask` are stripped. The link is **strong** only for a direct match, an authenticated sender and a confirmed row; everything else is **weak**. The reply turn answers and the task is not woken; only a strong link also adds a progress note to the task (a weak link stamps the turn's metadata and the coordinator's block only). The link carries the task as context and judge evidence, never a tier change, and the sender's address is learned onto the row only after a strong link or the principal's yes. Link authority applies only when every non-principal recipient is a linked counterparty.
 
@@ -324,8 +324,8 @@ value — so the secret does not re-leak into the `outbound.blocked` audit event
   counts only when all of these hold, else nothing is released (fail closed, with a warn):
   the drafting turn is a live turn, its stamped originator is the principal, and the channel
   authenticated the sender (`originator.authenticated`: Signal texts and calls, Slack, the web
-  console's chat and voice, or email with `senderVerified`; a forged email From, an SMS or the
-  local CLI does not count); the text is the raw `inbound.message` the turn answered (a delegated turn's root
+  console's chat and voice, the local CLI, or email with `senderVerified` and an SPF pass aligned
+  with the From domain; a forged email From or an SMS does not count); the text is the raw `inbound.message` the turn answered (a delegated turn's root
   inbound) plus drained follow-ups, each of which its own channel must have authenticated (turn
   lanes inject by contact, so a forged From mid-turn would otherwise join), never the
   dispatcher-assembled task content with its outbound-context and participant preambles; and
@@ -460,9 +460,12 @@ For skills declared with `sensitivity: elevated`, the execution layer requires a
 `CallerContext` confirming the instruction came from the real CEO before proceeding. This guards
 against prompt injection attacks that attempt to trigger high-consequence actions.
 
-The verification mechanism is a cross-channel challenge/response: if a request arrives via a
-lower-trust channel (email), the system sends a challenge via a higher-trust channel (Signal or
-CLI) and waits for confirmation before executing.
+The verification mechanism is a cross-channel confirmation (GHSA-p49r-jqh2-v668). The elevated gate
+requires a live principal turn, which only an authenticated inbound gets. When a request matches
+the principal on a channel that does not authenticate the sender (SMS, or email failing SPF, DKIM
+or DMARC or whose SPF pass is not aligned with the From domain), the execution layer files an approval marked `requester_unverified`. Delivery sends it
+only to a verified channel (Signal, Slack or the phone app), at most 3 an hour, and the action
+runs when the principal approves it there. See [spec 14](14-autonomy-engine.md#unverified-principal-requests).
 
 Trust levels used for gating: see [06-audit-and-security.md](06-audit-and-security.md#trust-gated-actions).
 
