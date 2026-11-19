@@ -1050,4 +1050,63 @@ describeIf('/api/setup/* routes', () => {
       expect(res.statusCode).toBe(401);
     });
   });
+
+  // #2358: the Setup page re-reads after every save, so its reads take the console-wide read
+  // limit and its saves 30/min. Restart keeps 10. The real limiter, no bypass.
+  describe('rate limits', () => {
+    let limited: FastifyInstance;
+    let unlock: (() => Promise<void>) | undefined;
+    let savedRow: Record<string, unknown> | undefined;
+
+    beforeAll(async () => {
+      unlock = await lockSetupSingletons(DATABASE_URL!);
+      savedRow = (await pool.query('SELECT * FROM setup_state WHERE id = 1')).rows[0];
+      limited = Fastify();
+      await limited.register(rateLimit, { max: 1000, timeWindow: '1 minute' });
+      await limited.register(setupRoutes, {
+        webAppBootstrapSecret: TEST_SECRET, sessions, pool, logger,
+        setupRequiredAtBoot: false, bootStartedAt: bootStartedAtNormalMode,
+        scheduleProcessExit: () => {},
+        contactService: ContactService.createWithPostgres(pool, undefined, logger),
+        entityMemory: undefined,
+      });
+      await limited.ready();
+    });
+
+    afterAll(async () => {
+      try {
+        await limited.close();
+        await pool.query('DELETE FROM setup_state WHERE id = 1');
+        if (savedRow) {
+          const cols = Object.keys(savedRow);
+          await pool.query(
+            `INSERT INTO setup_state (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`,
+            cols.map((c) => savedRow![c]),
+          );
+        }
+      } finally {
+        await unlock?.();
+      }
+    });
+
+    const hit = async (method: 'GET' | 'PUT' | 'POST', url: string, n: number, payload?: object) => {
+      const codes: number[] = [];
+      for (let i = 0; i < n; i++) codes.push((await limited.inject({ method, url, headers: AUTH_HEADER, payload })).statusCode);
+      return codes;
+    };
+
+    it.each(['/api/setup/status', '/api/setup/principal'])('serves 30 reads of %s in a minute', async (url) => {
+      expect((await hit('GET', url, 30)).filter((c) => c === 429)).toEqual([]);
+    });
+
+    it('takes 30 saves of the Setup state in a minute, and refuses the 31st', async () => {
+      const codes = await hit('PUT', '/api/setup/state', 31, { setupFor: 'self' });
+      expect(codes.slice(0, 30).filter((c) => c === 429)).toEqual([]);
+      expect(codes[30]).toBe(429);
+    });
+
+    it('keeps restart at 10 a minute', async () => {
+      expect((await hit('POST', '/api/setup/restart', 11)).at(-1)).toBe(429);
+    });
+  });
 });
