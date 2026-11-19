@@ -28,6 +28,7 @@ import { markSetupComplete, readSetupState, updateSetupState } from '../../src/s
 import type { SetupChecklist } from '../../src/setup/checklist.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 import { completeSetup } from '../../src/setup/complete-setup.js';
+import { lockSetupSingletons } from './setup-singletons-lock.js';
 
 const { Pool } = pg;
 
@@ -854,8 +855,11 @@ describeIf('/api/setup/* routes', () => {
     let checklist: SetupChecklist = { setupFor: null, tasks: [], setupComplete: false, missing: ['email'] };
     let savedRow: Record<string, unknown> | undefined;
     let savedThread: string | undefined;
+    // web-thread.test.ts rewrites the same single rows (#2358): one suite at a time.
+    let unlock: (() => Promise<void>) | undefined;
 
     beforeAll(async () => {
+      unlock = await lockSetupSingletons(DATABASE_URL!);
       // Keep whatever row a working database has, and put it back afterwards.
       savedRow = (await pool.query('SELECT * FROM setup_state WHERE id = 1')).rows[0];
       // Start onboarding rotates the shared web thread; put a working database's back after.
@@ -883,16 +887,20 @@ describeIf('/api/setup/* routes', () => {
     });
 
     afterAll(async () => {
-      await app.close();
-      await pool.query('DELETE FROM setup_state WHERE id = 1');
-      await pool.query('DELETE FROM web_thread WHERE id = 1');
-      if (savedThread) await pool.query('INSERT INTO web_thread (id, conversation_id) VALUES (1, $1)', [savedThread]);
-      if (savedRow) {
-        const cols = Object.keys(savedRow);
-        await pool.query(
-          `INSERT INTO setup_state (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`,
-          cols.map((c) => savedRow![c]),
-        );
+      try {
+        await app.close();
+        await pool.query('DELETE FROM setup_state WHERE id = 1');
+        await pool.query('DELETE FROM web_thread WHERE id = 1');
+        if (savedThread) await pool.query('INSERT INTO web_thread (id, conversation_id) VALUES (1, $1)', [savedThread]);
+        if (savedRow) {
+          const cols = Object.keys(savedRow);
+          await pool.query(
+            `INSERT INTO setup_state (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`,
+            cols.map((c) => savedRow![c]),
+          );
+        }
+      } finally {
+        await unlock?.();
       }
     });
 

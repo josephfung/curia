@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import pg from 'pg';
 import { clearWebThreadCache, getOrCreateWebThread, readWebThreadAndSetupPhase, rotateWebThread, type WebThreadQueryable } from '../../src/channels/http/web-thread.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
+import { lockSetupSingletons } from './setup-singletons-lock.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -13,6 +14,8 @@ const describeIf = DATABASE_URL ? describe : describe.skip;
 describeIf('web thread (integration)', () => {
   let pool: pg.Pool;
   let verified = false;
+  // setup-routes.test.ts rewrites the same single rows (#2358): one suite at a time.
+  let unlock: (() => Promise<void>) | undefined;
   const conversations = [
     'wt-web-old',
     'wt-web-new',
@@ -31,6 +34,7 @@ describeIf('web thread (integration)', () => {
     pool = new Pool({ connectionString: DATABASE_URL });
     await requireCuriaTestDatabase(pool);
     verified = true;
+    unlock = await lockSetupSingletons(DATABASE_URL!);
     await pool.query('DELETE FROM web_thread WHERE id = 1');
     await pool.query('DELETE FROM working_memory WHERE conversation_id = ANY($1::text[])', [conversations]);
     clearWebThreadCache(pool);
@@ -56,6 +60,7 @@ describeIf('web thread (integration)', () => {
         await pool.query('DELETE FROM working_memory WHERE conversation_id = ANY($1::text[])', [conversations]);
       }
     } finally {
+      await unlock?.();
       await pool.end();
     }
   });
