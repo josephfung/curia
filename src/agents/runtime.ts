@@ -4,7 +4,7 @@ import {
   runStreamingToolLoop,
   type StreamingTurnOpenStreamParams,
 } from './llm/streaming-turn.js';
-import { readSetupStep, setupStepLine } from '../setup/setup-guide.js';
+import { NO_SETUP_STEP, readSetupStep, SETUP_GUIDE_AGENT_ID, setupStepLine } from '../setup/setup-guide.js';
 import type { EventBus } from '../bus/bus.js';
 import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, createDelegationTimedOut, createDelegationRequesterContext, createDelegationPrincipalNote, createAgentTaskInputInjected, isInjectionDrainPoint, type AgentResponseFailureReason, type AgentTaskEvent, type InjectionDrainPoint } from '../bus/events.js';
 import { holderFromAgentTask, isLanedTurnShape, originatorIsSystem, type TurnLanes } from '../dispatch/turn-lanes.js';
@@ -909,7 +909,11 @@ export class AgentRuntime {
     );
     let promptContent = turnGuidance ? `${turnGuidance}\n\n${originalContent}` : originalContent;
     // The Setup page's open step (#2358), for the setup guide. Prompt only, like the guidance.
-    const setupStep = readSetupStep(taskEvent.payload.setupStep);
+    // A setup guide turn on web is always the Setup page: the dispatcher sets the step, and a
+    // turn that resumes after a sign-in or a key capture (created by its resume subscriber,
+    // not the dispatcher) gets NO_SETUP_STEP, so the agent never answers it as a delegation.
+    const setupStep = readSetupStep(taskEvent.payload.setupStep)
+      ?? (agentId === SETUP_GUIDE_AGENT_ID && taskEvent.payload.channelId === 'web' ? NO_SETUP_STEP : null);
     if (setupStep) promptContent = `${setupStepLine(setupStep)}\n\n${promptContent}`;
     // A content-block rewrite's account of what its turn already did (#2615). Prompt only, like
     // the turn guidance: working memory stores originalContent, so this tool output is never
