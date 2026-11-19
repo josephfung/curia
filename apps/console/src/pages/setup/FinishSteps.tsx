@@ -9,7 +9,6 @@ import {
   RESTART_POLL_INTERVAL_MS,
   RESTART_TIMEOUT_MS,
 } from '../system-utils.js';
-import { postJson } from './setup-api.js';
 import { stepsLeft, type Checklist } from './setup-steps.js';
 import { StatusLine, StepFooter } from './setup-ui.js';
 
@@ -134,7 +133,12 @@ export function ApplyStep(props: {
  * page, and the principal's first conversation starts on a fresh web thread (#2687). A full
  * page load follows, so no open chat stream stays on the operator's Setup thread.
  */
-export function StartStep(props: { checklist: Checklist | null; principal: string; onHelp?: () => void }): JSX.Element {
+export function StartStep(props: {
+  checklist: Checklist | null;
+  principal: string;
+  onRefresh: () => Promise<void>;
+  onHelp?: () => void;
+}): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const ready = props.checklist?.setupComplete === true;
@@ -144,7 +148,16 @@ export function StartStep(props: { checklist: Checklist | null; principal: strin
     setStarting(true);
     setError(null);
     try {
-      await postJson('/api/setup/complete', {});
+      const res = await apiFetch('/api/setup/complete', { method: 'POST' });
+      if (res.status === 409) {
+        // A live check changed since the page loaded: re-read the checklist, so the step
+        // list and the note show what is missing now, and the button locks again.
+        setError('Something stopped passing since this page loaded. The steps below show what’s left.');
+        await props.onRefresh();
+        setStarting(false);
+        return;
+      }
+      if (!res.ok) throw new Error(await errorMessage(res));
       window.location.assign('/');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not start onboarding.');

@@ -62,8 +62,9 @@ export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Prop
       await postJson('/api/setup/principal/profile', {
         timezone: timezone.trim(),
         email: email.trim(),
-        ...(title.trim() ? { title: title.trim() } : {}),
-        ...(pronouns.trim() ? { pronouns: pronouns.trim() } : {}),
+        // Always sent: a blank clears the stored value.
+        title: title.trim() || null,
+        pronouns: pronouns.trim() || null,
       });
       await onSaved();
       onContinue();

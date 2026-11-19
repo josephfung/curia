@@ -95,7 +95,7 @@ export default function SetupPage(): JSX.Element {
       case 'apply':
         return <ApplyStep checklist={checklist} onSaved={refresh} onContinue={goNext} />;
       case 'start':
-        return <StartStep checklist={checklist} principal={principal} />;
+        return <StartStep checklist={checklist} principal={principal} onRefresh={refresh} />;
     }
   }
 
