@@ -271,9 +271,12 @@ troubleshoots from `setup-status`, and never records anything about the principa
 instant wins above (persona, debrief, pronouns, the tour) moved to onboarding (#2360).
 
 - **On the Setup page.** While the `setup_state` phase is `in_progress` (from the Setup
-  page's first save until Start onboarding), the dispatcher sends `web` chat to the setup
-  guide instead of the coordinator, with none of the principal-turn extras (turn guidance,
-  backlog, live lanes). `POST /api/chat/messages` takes an optional `setupStep` (the open
+  page's first save until Start onboarding), `web` chat goes to the setup guide instead of
+  the coordinator, with none of the principal-turn extras (turn guidance, backlog, live
+  lanes). The chat route decides when it accepts the message, from one snapshot of the
+  shared thread and the phase (`readWebThreadAndSetupPhase`), and stamps the inbound; the
+  dispatcher routes on that stamp, read only on `web`. A message accepted just before Start
+  onboarding therefore stays on the Setup thread with the setup guide. `POST /api/chat/messages` takes an optional `setupStep` (the open
   step's catalog id, or `apply` / `start`); the runtime heads the turn with a
   "[Setup page: ...]" line naming it (`none` when the client sent none), so the agent knows
   it is talking to the operator. A database with no `setup_state` row (a scripted install)
@@ -281,8 +284,10 @@ instant wins above (persona, debrief, pronouns, the tour) moved to onboarding (#
 - **Kept out of the principal's memory.** The dispatcher schedules no conversation
   checkpoint for a setup guide turn on `web`, so fact and relationship extraction never
   read the Setup chat. Start onboarding (`POST /api/setup/complete`) moves the shared web
-  thread to a new conversation (`rotateWebThread`), so the principal never opens on it; the
-  Setup chat stays in `working_memory` and the audit log.
+  thread to a new conversation and marks Setup complete in one transaction under a row
+  lock (`completeSetup`), so the thread rotates once however often it is pressed. The
+  principal never opens on the Setup chat, which stays in `working_memory` and the audit
+  log. Thread reads that started before a rotation never cache the old id.
 - **After Setup** the coordinator still delegates "help me set up X" to it, and relays its
   answer.
 

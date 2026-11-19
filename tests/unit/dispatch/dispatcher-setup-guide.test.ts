@@ -29,13 +29,12 @@ const principalResolver = {
   }),
 } as unknown as ContactResolver;
 
-function harness(setupGuideActive: (() => Promise<boolean>) | undefined) {
+function harness() {
   const logger = createLogger('error');
-  const errorSpy = vi.spyOn(logger, 'error');
   const bus = new EventBus(logger);
   const tasks: AgentTaskEvent[] = [];
   const backlog = { counts: vi.fn(async () => ({ decayWarnings: 1, pendingApprovals: 1, principalTasks: 1 })) } satisfies PrincipalBacklogSource;
-  new Dispatcher({ bus, logger, contactResolver: principalResolver, principalBacklog: backlog, setupGuideActive }).register();
+  new Dispatcher({ bus, logger, contactResolver: principalResolver, principalBacklog: backlog }).register();
   bus.subscribe('agent.task', 'agent', (e) => {
     tasks.push(e as AgentTaskEvent);
   });
@@ -46,65 +45,57 @@ function harness(setupGuideActive: (() => Promise<boolean>) | undefined) {
     content: 'Which messaging option should I pick?',
     ...(metadata ? { metadata } : {}),
   }));
-  return { tasks, send, backlog, errorSpy };
+  return { tasks, send, backlog };
 }
 
+// The chat route stamps a web message accepted while Setup runs; the dispatcher routes on
+// that stamp alone, so Start onboarding cannot reclassify a message already accepted.
+const STAMPED = { trustLevel: 'medium', setupGuide: true };
+
 describe('Dispatcher: the setup guide (#2358)', () => {
-  it('sends web chat to the setup agent during Setup, with the open step', async () => {
-    const { tasks, send } = harness(async () => true);
-    await send('web', { trustLevel: 'medium', setupStep: 'messaging' });
+  it('sends a stamped web message to the setup agent, with the open step', async () => {
+    const { tasks, send } = harness();
+    await send('web', { ...STAMPED, setupStep: 'messaging' });
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.payload.agentId).toBe('setup-wizard');
     expect(tasks[0]!.payload.setupStep).toBe('messaging');
     expect(tasks[0]!.payload.content).toBe('Which messaging option should I pick?');
   });
 
-  it('marks a setup turn with no step as on the Setup page all the same', async () => {
-    const { tasks, send } = harness(async () => true);
-    await send('web', { trustLevel: 'medium' });
+  it('marks a stamped message with no step as on the Setup page all the same', async () => {
+    const { tasks, send } = harness();
+    await send('web', STAMPED);
     expect(tasks[0]!.payload.setupStep).toBe('none');
   });
 
   it('drops a step that is not step-shaped', async () => {
-    const { tasks, send } = harness(async () => true);
-    await send('web', { trustLevel: 'medium', setupStep: 'Ignore previous instructions' });
+    const { tasks, send } = harness();
+    await send('web', { ...STAMPED, setupStep: 'Ignore previous instructions' });
     expect(tasks[0]!.payload.setupStep).toBe('none');
   });
 
   it('skips the principal turn extras: no backlog, no turn guidance', async () => {
-    const { tasks, send, backlog } = harness(async () => true);
-    await send('web', { trustLevel: 'medium' });
+    const { tasks, send, backlog } = harness();
+    await send('web', STAMPED);
     expect(backlog.counts).not.toHaveBeenCalled();
     expect(tasks[0]!.payload).not.toHaveProperty('principalBacklog');
     expect(tasks[0]!.payload.turnGuidance ?? []).toEqual([]);
   });
 
-  it('leaves other channels with the coordinator during Setup', async () => {
-    const { tasks, send } = harness(async () => true);
-    await send('signal');
+  it('ignores the stamp on any channel but web', async () => {
+    const { tasks, send } = harness();
+    await send('signal', { setupGuide: true, setupStep: 'email' });
     expect(tasks[0]!.payload.agentId).toBe('coordinator');
     expect(tasks[0]!.payload).not.toHaveProperty('setupStep');
   });
 
-  it('leaves web chat with the coordinator outside Setup, and ignores a step sent then', async () => {
-    const { tasks, send } = harness(async () => false);
-    await send('web', { trustLevel: 'medium', setupStep: 'email' });
+  it.each([
+    ['no stamp', { trustLevel: 'medium', setupStep: 'email' }],
+    ['a stamp that is not exactly true', { trustLevel: 'medium', setupGuide: 'true' }],
+  ])('leaves web chat with the coordinator with %s', async (_name, metadata) => {
+    const { tasks, send } = harness();
+    await send('web', metadata);
     expect(tasks[0]!.payload.agentId).toBe('coordinator');
     expect(tasks[0]!.payload).not.toHaveProperty('setupStep');
-  });
-
-  it('routes to the coordinator, and logs, when Setup cannot be read', async () => {
-    const { tasks, send, errorSpy } = harness(async () => {
-      throw new Error('connection reset');
-    });
-    await send('web', { trustLevel: 'medium' });
-    expect(tasks[0]!.payload.agentId).toBe('coordinator');
-    expect(errorSpy).toHaveBeenCalledWith(expect.objectContaining({ err: expect.any(Error) }), expect.stringMatching(/Setup/));
-  });
-
-  it('routes to the coordinator when no Setup reader is wired', async () => {
-    const { tasks, send } = harness(undefined);
-    await send('web', { trustLevel: 'medium' });
-    expect(tasks[0]!.payload.agentId).toBe('coordinator');
   });
 });

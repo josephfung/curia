@@ -125,6 +125,6 @@ export function isInSetup(state: SetupState): boolean {
  * whose principal was created by a script after migrations (tests, scenario runs) has no
  * row, and its web chat stays with the coordinator.
  */
-export function routesWebChatToSetupGuide(state: SetupState): boolean {
-  return state.phase === 'in_progress';
+export function routesWebChatToSetupGuide(phase: SetupState['phase'] | string | null): boolean {
+  return phase === 'in_progress';
 }

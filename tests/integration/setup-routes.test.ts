@@ -27,6 +27,7 @@ import { MemoryValidator } from '../../src/memory/validation.js';
 import { markSetupComplete, readSetupState, updateSetupState } from '../../src/setup/setup-state.js';
 import type { SetupChecklist } from '../../src/setup/checklist.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
+import { completeSetup } from '../../src/setup/complete-setup.js';
 
 const { Pool } = pg;
 
@@ -965,6 +966,29 @@ describeIf('/api/setup/* routes', () => {
       const after = await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1');
       expect(after.rows[0]?.conversation_id).toBeTruthy();
       expect(after.rows[0]?.conversation_id).not.toBe(threadBefore);
+    });
+
+    it('a repeated Start onboarding leaves the principal on their thread', async () => {
+      await pool.query(`INSERT INTO setup_state (id, phase) VALUES (1, 'in_progress')`);
+      checklist = { setupFor: null, tasks: [], setupComplete: true, missing: [] };
+      const first = await app.inject({ method: 'POST', url: '/api/setup/complete', headers: AUTH_HEADER });
+      expect(first.statusCode).toBe(200);
+      const thread = (await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1')).rows[0]?.conversation_id;
+      const again = await app.inject({ method: 'POST', url: '/api/setup/complete', headers: AUTH_HEADER });
+      expect(again.statusCode).toBe(200);
+      expect((await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1')).rows[0]?.conversation_id).toBe(thread);
+    });
+
+    it('two Start onboarding requests at once rotate the thread once', async () => {
+      await pool.query(`INSERT INTO setup_state (id, phase) VALUES (1, 'in_progress')`);
+      const results = await Promise.all([
+        completeSetup(pool, logger, { newId: () => 'race-a' }),
+        completeSetup(pool, logger, { newId: () => 'race-b' }),
+      ]);
+      expect(results.filter((r) => r.rotated)).toHaveLength(1);
+      const thread = (await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1')).rows[0]?.conversation_id;
+      expect(['race-a', 'race-b']).toContain(thread);
+      expect((await readSetupState(pool)).phase).toBe('complete');
     });
 
     it.each([

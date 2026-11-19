@@ -7,6 +7,13 @@
 /** The agent that answers web chat during Setup. */
 export const SETUP_GUIDE_AGENT_ID = 'setup-wizard';
 
+/**
+ * Set by the chat route on a web inbound accepted while Setup runs: the dispatcher routes on
+ * it, so a message accepted just before Start onboarding still reaches the setup guide.
+ * Only the web channel's own route sets it, and the dispatcher reads it only on `web`.
+ */
+export const SETUP_GUIDE_METADATA_KEY = 'setupGuide';
+
 // A catalog task id or one of the Setup page's own steps (apply, start): lower-case words.
 const SETUP_STEP_RE = /^[a-z][a-z_]{0,39}$/;
 

@@ -30,10 +30,9 @@ import type { ContactService } from '../../../contacts/contact-service.js';
 import type { EntityMemory } from '../../../memory/entity-memory.js';
 import { validateWorkingHours, serializeWorkingHours } from '../../../contacts/working-hours.js';
 import type { SetupChecklist } from '../../../setup/checklist.js';
-import { rotateWebThread } from '../web-thread.js';
+import { completeSetup } from '../../../setup/complete-setup.js';
 import {
   isInSetup,
-  markSetupComplete,
   MESSAGING_ROUTES,
   readSetupState,
   updateSetupState,
@@ -535,9 +534,9 @@ export async function setupRoutes(
   //
   // Start onboarding (#2358): Setup is over, and the console stops showing the Setup page.
   // Refused with the missing steps until setup_complete. What onboarding then does is #2360.
-  // The shared web thread moves to a new conversation first, so the principal never opens
-  // on the operator's Setup chat. Rotating before marking complete means a failure leaves
-  // Setup in progress and the operator can press it again; rotating twice is harmless.
+  // The shared web thread moves to a new conversation, so the principal never opens on the
+  // operator's Setup chat. completeSetup does both in one locked transaction: a repeated or
+  // concurrent request after the first commits leaves the thread where it is.
   app.post('/api/setup/complete', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     if (!setupChecklist) {
@@ -548,9 +547,8 @@ export async function setupRoutes(
       if (!checklist.setupComplete) {
         return reply.status(409).send({ error: 'Setup is not finished yet.', missing: checklist.missing });
       }
-      await rotateWebThread(pool);
-      await markSetupComplete(pool);
-      logger.info('Setup complete: Start onboarding pressed; the web thread was rotated');
+      const { rotated } = await completeSetup(pool, logger);
+      if (rotated) logger.info('Setup complete: Start onboarding pressed; the web thread was rotated');
       return reply.send({ inSetup: false });
     } catch (err) {
       logger.error({ err }, 'POST /api/setup/complete: failed');

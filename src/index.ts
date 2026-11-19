@@ -288,7 +288,7 @@ import {
 import type { Discovery, RegistryRow } from './registry/types.js';
 import { CHANNEL_CATALOG, type ChannelDescriptor } from './channels/catalog.js';
 import { evaluateChecklist, loadCatalog, type CatalogTask, type RouteChannel, type SetupCheckDeps, type SetupChecklist } from './setup/checklist.js';
-import { readSetupState, routesWebChatToSetupGuide } from './setup/setup-state.js';
+import { readSetupState } from './setup/setup-state.js';
 import { isIdentityConfigured } from './channels/http/routes/identity.js';
 import { installabilityWarning } from './channels/http/pairing.js';
 import { channelCredentialStatus } from './channels/credential-resolver.js';
@@ -3907,8 +3907,6 @@ async function main(): Promise<void> {
     // A content-block rewrite is told what its drafting turn already did (#2615).
     auditLogRepo,
     conversationCheckpointDebounceMs: yamlConfig.dispatch?.conversationCheckpointDebounceMs,
-    // #2358: web chat goes to the setup guide while the Setup page is in progress.
-    setupGuideActive: async () => routesWebChatToSetupGuide(await readSetupState(pool)),
     trustScorerWeights,
     maxMessageBytes: yamlConfig.channels?.max_message_bytes ?? 102_400,
     confidencePipeline,
