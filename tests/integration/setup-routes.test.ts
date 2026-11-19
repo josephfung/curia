@@ -726,7 +726,7 @@ describeIf('/api/setup/* routes', () => {
         method: 'GET', url: '/api/setup/principal', headers: AUTH_HEADER,
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toMatchObject({ exists: false, displayName: null });
+      expect(res.json()).toMatchObject({ exists: false, contactId: null, pronouns: null, displayName: null });
     });
 
     it('GET /api/setup/principal returns the persisted profile', async () => {
@@ -741,6 +741,7 @@ describeIf('/api/setup/* routes', () => {
           email: 'owner@example.com',
           preferredName: 'Owner',
           title: 'CEO',
+          pronouns: 'they/them',
           workingHours: { start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5] },
         },
       });
@@ -749,8 +750,12 @@ describeIf('/api/setup/* routes', () => {
         method: 'GET', url: '/api/setup/principal', headers: AUTH_HEADER,
       });
       expect(res.statusCode).toBe(200);
+      const contact = await pool.query<{ id: string }>(`SELECT id FROM contacts WHERE system_role = 'principal'`);
       expect(res.json()).toMatchObject({
         exists: true,
+        // The Setup page (#2358) links channel ids to this contact, and edits the pronouns.
+        contactId: contact.rows[0]!.id,
+        pronouns: 'they/them',
         displayName: 'Profile Owner',
         timezone: 'America/Vancouver',
         preferredName: 'Owner',

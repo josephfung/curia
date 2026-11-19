@@ -28,6 +28,30 @@ function createMockIdentityService(): OfficeIdentityService {
 
 const SECRET = 'test-bootstrap-secret';
 
+// #2358: the console's first-load gate reads inSetup from this route.
+describe('GET /api/identity — inSetup', () => {
+  const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
+
+  it.each([
+    ['a new install that has saved nothing', [], true],
+    ['Setup in progress', [{ phase: 'in_progress' }], true],
+    ['Setup complete, or an install that predates the Setup page (migration 130)', [{ phase: 'complete' }], false],
+  ])('%s', async (_name, setupRows, inSetup) => {
+    const pool = {
+      query: vi.fn(async (sql: string) => (sql.includes('FROM setup_state')
+        ? { rows: setupRows }
+        : { rows: [{ configured: true }] })),
+    } as unknown as Pool;
+    const app = Fastify();
+    await app.register(cookie);
+    await app.register(identityRoutes, { identityService: createMockIdentityService(), webAppBootstrapSecret: SECRET, sessions, pool });
+    const res = await app.inject({ method: 'GET', url: '/api/identity', headers: { 'x-web-bootstrap-secret': SECRET } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().inSetup).toBe(inSetup);
+    await app.close();
+  });
+});
+
 describe('GET /api/identity — configured flag', () => {
   const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
 

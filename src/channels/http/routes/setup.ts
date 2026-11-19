@@ -212,8 +212,8 @@ export async function setupRoutes(
       const principal = await contactService.findContactBySystemRole('principal');
       if (!principal) {
         return reply.send({
-          exists: false, displayName: null, timezone: null,
-          preferredName: null, title: null, email: null, workingHours: null,
+          exists: false, contactId: null, displayName: null, timezone: null,
+          preferredName: null, title: null, pronouns: null, email: null, workingHours: null,
         });
       }
       const withIdentities = await contactService.getContactWithIdentities(principal.id);
@@ -238,10 +238,13 @@ export async function setupRoutes(
 
       return reply.send({
         exists: true,
+        // The Setup page links the principal's channel ids to this contact (#2358).
+        contactId: principal.id,
         displayName: principal.displayName,
         timezone: principal.timezone ?? null,
         preferredName: principal.preferredName ?? null,
         title: principal.title ?? null,
+        pronouns: principal.pronouns ?? null,
         email,
         workingHours,
       });
@@ -264,7 +267,7 @@ export async function setupRoutes(
 
     const body = (request.body ?? {}) as {
       timezone?: unknown; email?: unknown; preferredName?: unknown;
-      title?: unknown; workingHours?: unknown;
+      title?: unknown; pronouns?: unknown; workingHours?: unknown;
     };
 
     // timezone is required and must be a real IANA zone (same guard as config.ts).
@@ -297,6 +300,9 @@ export async function setupRoutes(
       typeof body.preferredName === 'string' && body.preferredName.trim() ? body.preferredName.trim() : undefined;
     const title =
       typeof body.title === 'string' && body.title.trim() ? body.title.trim() : undefined;
+    // The Setup page's Who it's for step (#2358). updateContactFields validates the value.
+    const pronouns =
+      typeof body.pronouns === 'string' && body.pronouns.trim() ? body.pronouns.trim() : undefined;
 
     let workingHoursValue: string | undefined;
     if (body.workingHours !== undefined && body.workingHours !== null) {
@@ -335,6 +341,7 @@ export async function setupRoutes(
         timezone,
         ...(preferredName !== undefined ? { preferredName } : {}),
         ...(title !== undefined ? { title } : {}),
+        ...(pronouns !== undefined ? { pronouns } : {}),
         ...(email !== undefined ? { primaryEmail: email } : {}),
       });
 
