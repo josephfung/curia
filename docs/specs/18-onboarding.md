@@ -161,16 +161,21 @@ description, the agents, skill bundles and standalone tools it covers, and an op
 | Diagnostics | `diagnostics` agent and bundle (opt-in on a new install, #1356: reads the audit log and working records; `powerful` tier) | |
 | Email triage | `ceo-inbox` agent, `ceo-inbox` and `learning` bundles | Off in Setup: it acts on the principal's inbox, so it is left for them to choose afterwards |
 
-- A switch shows on, off, "Partly on" (some entries on, or a bundle tool turned off alone:
-  switching sets them all), or "Not available" (an entry missing or with a broken manifest).
-  It is a tri-state checkbox drawn as a switch, so "Partly on" reads as mixed.
+- A switch shows on, off, "Partly on" (some entries on, or a bundle tool switched alone, on
+  under a disabled bundle or off under an enabled one: switching sets them all), or "Not
+  available" (an entry missing or with a broken manifest). It is a tri-state checkbox drawn
+  as a switch, so "Partly on" reads as mixed.
 - Turning on enables what the capability pins before its agents, and re-enables a bundle
-  whose tools were turned off alone; turning off disables the agents first.
+  whose tools were turned off alone; turning off disables the agents first, and turns off a
+  tool left on alone under a disabled bundle. Calls run one at a time through the existing
+  `/api/registry` routes; a failure stops there and says whether part of it changed.
 - Turning on also offers to turn on the capabilities its agents need: those its agents pin,
   and those the catalog lists (`needs`: Meeting debriefs and Email triage need Projects and
   tasks, even when a bundle manifest can't be read). A needed one that isn't available stops
-  the switch with a message. An on capability whose needs are off says "Needs ...". Calls run one at a time through the existing `/api/registry` routes; a
-  failure stops there and says whether part of it changed.
+  the switch with a message. An on capability whose needs are off says "Needs ...".
+- Only catalog entries are switched. An agent's pins outside the catalog (Meeting debriefs'
+  `calendar-list-events`, say) are left as they are, so turning a capability on doesn't
+  guarantee everything its agents pin is on.
 - Before turning off, enabled agents outside the capability that pin one of its bundles (or
   a bundle tool directly) are named, and the operator confirms. Web research and Projects
   and tasks always warn: the coordinator pins `web` and `tasks`.

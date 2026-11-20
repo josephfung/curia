@@ -270,6 +270,7 @@ One list of switches, the last optional extra and **Settings → Behaviour → C
 capability is a group of agents, skill bundles and tools from a small catalog, switched together
 through the registry. Turning one on enables what it pins before its agents, and offers to turn
 on the capabilities its agents need (Meeting debriefs and Email triage need Projects and tasks).
+Only catalog entries are switched: an agent's pins outside the catalog are left as they are.
 Turning one off disables its agents first; if an enabled agent outside it pins one of its
 bundles, the operator is told which and can turn it off anyway, leaving that agent without
 those tools:
