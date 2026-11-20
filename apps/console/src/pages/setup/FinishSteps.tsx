@@ -168,7 +168,7 @@ export function StartStep(props: {
   return (
     <div>
       <h2>Start onboarding</h2>
-      <p className="setup-lede">Starting hands Curia to {props.principal}. Curia then says hello and offers a first conversation.</p>
+      <p className="setup-lede">Starting ends Setup and hands Curia to {props.principal}: the console opens on their own, fresh conversation.</p>
       {!ready && left.length > 0 && (
         <div className="setup-note">Finish {left.map((s) => s.name.toLowerCase()).join(', ')} first.</div>
       )}
