@@ -23,7 +23,7 @@ async function mount(search: string) {
 }
 async function wait(ms: number) { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); }
 
-beforeEach(() => { vi.useFakeTimers(); fetchMock.mockReset(); vi.stubGlobal('fetch', fetchMock); window.sessionStorage.clear(); });
+beforeEach(() => { vi.useFakeTimers(); fetchMock.mockReset(); vi.stubGlobal('fetch', fetchMock); });
 afterEach(() => {
   if (root) act(() => root!.unmount());
   root = null;
@@ -76,14 +76,29 @@ describe('GoogleWorkspaceSignInDonePage', () => {
     expect(host.textContent).toMatch(/Curia is back/);
   });
 
-  it('notices it on a refresh after the restart: the first load’s time is kept', async () => {
-    // The page first loaded a minute before this load; the new process booted between the two.
-    window.sessionStorage.setItem('curia:restart-wait:/google-workspace/done?result=signed_in&restart=1', String(performance.timeOrigin - 60_000));
-    const uptime = Math.ceil((Date.now() - performance.timeOrigin) / 1000) + 30;
-    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ uptime_s: uptime }), { status: 200 }));
-    await mount('?result=signed_in&restart=1');
-    await wait(15);
-    expect(host.textContent).toMatch(/Curia is back/);
+  describe('with the old process’s start in the URL (since)', () => {
+    const OLD = '2026-11-20T10:00:00.000Z';
+    const NEW = '2026-11-20T10:01:30.000Z';
+    const health = (startedAt: string) => async () => new Response(JSON.stringify({ uptime_s: 86_400, started_at: startedAt }), { status: 200 });
+
+    it('is back as soon as a process with another start answers, even on its first poll', async () => {
+      fetchMock.mockImplementation(health(NEW));
+      await mount(`?result=signed_in&restart=1&since=${encodeURIComponent(OLD)}`);
+      await wait(15);
+      expect(host.textContent).toMatch(/Curia is back/);
+    });
+
+    it('keeps waiting while the old process answers, even after a failed poll', async () => {
+      let call = 0;
+      fetchMock.mockImplementation(async () => {
+        call++;
+        if (call === 1) throw new Error('blip');
+        return health(OLD)();
+      });
+      await mount(`?result=signed_in&restart=1&since=${encodeURIComponent(OLD)}`);
+      await wait(60);
+      expect(host.textContent).toMatch(/restarting/);
+    });
   });
 
   it('keeps waiting while only the old process answers', async () => {

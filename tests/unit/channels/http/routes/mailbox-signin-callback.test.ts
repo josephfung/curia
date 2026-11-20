@@ -7,7 +7,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { mailboxSignInRoutes, type MailboxSignInRouteOptions } from '../../../../../src/channels/http/routes/mailbox-signin.js';
 import { createSilentLogger } from '../../../../../src/logger.js';
 
-async function build(callback: MailboxSignInRouteOptions['callback']): Promise<FastifyInstance> {
+async function build(callback: MailboxSignInRouteOptions['callback'], processStartedAt?: string): Promise<FastifyInstance> {
   const app = Fastify();
   await app.register(mailboxSignInRoutes, {
     signIn: { peek: async () => 'not_found' as const },
@@ -16,6 +16,7 @@ async function build(callback: MailboxSignInRouteOptions['callback']): Promise<F
     appOrigin: 'https://curia.example.com',
     logger: createSilentLogger(),
     ...(callback ? { callback } : {}),
+    ...(processStartedAt ? { processStartedAt } : {}),
   });
   return app;
 }
@@ -33,6 +34,12 @@ describe('GET /api/mailbox-signin/callback', () => {
     expect(res.headers.location).toBe('/mailbox-signin/done?result=connected&target=curia&restart=1');
     expect(res.headers.location).not.toContain('STATE_RAW');
     expect(res.headers.location).not.toContain('CODE_RAW');
+  });
+
+  it('with a restart, adds this process’s start (since) for the done page to wait on (#2697)', async () => {
+    app = await build(vi.fn(async () => ({ outcome: 'connected' as const, target: 'curia' as const, restartScheduled: true })), '2026-11-20T10:00:00.000Z');
+    const res = await app.inject({ method: 'GET', url: '/api/mailbox-signin/callback?state=S&code=C' });
+    expect(res.headers.location).toBe('/mailbox-signin/done?result=connected&target=curia&restart=1&since=2026-11-20T10%3A00%3A00.000Z');
   });
 
   it('passes error and error_description, ignores non-string and unknown params', async () => {

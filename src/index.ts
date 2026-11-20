@@ -4305,6 +4305,7 @@ async function main(): Promise<void> {
     setupRequiredAtBoot,
     setupChecklist,
     bootStartedAt,
+    processStartedAt: healthService.startedAtIso,
     // Powers POST /api/setup/suggest-name (wizard starter-name suggestion, #799).
     infraLlmService,
     // Powers principal profile endpoints in setup routes (#392). Undefined when

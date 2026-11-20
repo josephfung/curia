@@ -27,6 +27,8 @@ export interface GoogleWorkspaceSignInRouteOptions {
   sessions: SessionStore;
   /** The real pino logger. Fastify is created with `logger: false`, so request.log is a no-op. */
   logger: Logger;
+  /** GET /api/health's started_at for this process: sent to the done page with a restart. */
+  processStartedAt?: string;
 }
 
 /**
@@ -44,8 +46,11 @@ function errFields(err: unknown): Record<string, unknown> {
   };
 }
 
-function donePage(r: WorkspaceCallbackResult): string {
+/** The done page: outcome and restart flag, plus, with a restart, this process's start
+ *  (`since`), which the page waits to see change. Never the state or the code. */
+function donePage(r: WorkspaceCallbackResult, processStartedAt?: string): string {
   const params = new URLSearchParams({ result: r.outcome, restart: r.restartScheduled ? '1' : '0' });
+  if (r.restartScheduled && processStartedAt) params.set('since', processStartedAt);
   return `/google-workspace/done?${params.toString()}`;
 }
 
@@ -65,7 +70,7 @@ export async function googleWorkspaceSignInRoutes(
   app: FastifyInstance,
   options: GoogleWorkspaceSignInRouteOptions,
 ): Promise<void> {
-  const { service, webAppBootstrapSecret, sessions } = options;
+  const { service, webAppBootstrapSecret, sessions, processStartedAt } = options;
   const log = options.logger.child({ component: 'google-workspace-signin' });
   const AUTH_RATE = { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } };
   // The callback is unauthenticated, so cap abuse per IP. No-op without @fastify/rate-limit.
@@ -105,7 +110,7 @@ export async function googleWorkspaceSignInRoutes(
   // the catch makes sure the visitor still lands on the done page, never a 500.
   app.get('/api/google-workspace/callback', CALLBACK_RATE, async (request, reply) => {
     try {
-      return reply.redirect(donePage(await service.handleCallback(callbackQuery(request.query))));
+      return reply.redirect(donePage(await service.handleCallback(callbackQuery(request.query)), processStartedAt));
     } catch (err) {
       // Never the query, which holds the state and the code; the error's own message has neither.
       log.error(errFields(err), 'GET /api/google-workspace/callback failed');

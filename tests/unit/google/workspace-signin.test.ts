@@ -158,15 +158,22 @@ describe('GoogleWorkspaceSignInService.status', () => {
     expect(refreshes).toBe(0);
   });
 
-  it('refreshes with the saved client and secret, not the file’s', async () => {
-    await writeWorkspaceToken('curia@example.com', { ...saved, client_secret: 'stale-secret' }, home);
+  it('token_rejected when the secret was rotated since the sign-in: workspace-mcp still has the old one', async () => {
+    await writeWorkspaceToken('curia@example.com', { ...saved, client_secret: 'old-secret' }, home);
+    expect(await service().status()).toMatchObject({ state: 'token_rejected', detail: expect.stringMatching(/secret changed/) });
+    expect(refreshes).toBe(0);
+  });
+
+  it('refreshes with the saved client and secret when the file agrees', async () => {
+    await writeWorkspaceToken('curia@example.com', saved, home);
     let sent: URLSearchParams | null = null;
     const s = new GoogleWorkspaceSignInService({
       pool: pool as never, logger: createSilentLogger(), appOrigin: 'https://curia.example.com',
       readSettings: async () => SETTINGS, home, now: () => now,
       fetchImpl: (async (_u: unknown, init?: RequestInit) => { sent = new URLSearchParams(String(init?.body)); return answer(); }) as typeof fetch,
     });
-    await s.status();
+    expect((await s.status()).state).toBe('signed_in');
+    expect(sent!.get('client_id')).toBe('client-1');
     expect(sent!.get('client_secret')).toBe('secret-1');
   });
 
@@ -177,7 +184,8 @@ describe('GoogleWorkspaceSignInService.status', () => {
   });
 
   it('asks Google again when the secret changes', async () => {
-    await writeWorkspaceToken('curia@example.com', saved, home);
+    // A token file without a stored secret (hand-made): only the saved secret is used.
+    await writeWorkspaceToken('curia@example.com', { ...saved, client_secret: '' }, home);
     let settings = SETTINGS;
     const s = new GoogleWorkspaceSignInService({
       pool: pool as never, logger: createSilentLogger(), appOrigin: 'https://curia.example.com',

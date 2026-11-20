@@ -60,30 +60,19 @@ const POLL_INTERVAL_MS = 2000;
 const MAX_WAIT_MS = 120_000;
 
 /**
- * When this result page first loaded, kept across refreshes of the same URL (sessionStorage):
- * a refresh after the restart must not move the mark past the new process's boot. Falls back
- * to this load's own start when storage is unavailable (a private window, blocked storage).
- */
-function firstLoadOrigin(): number {
-  const key = `curia:restart-wait:${window.location.pathname}${window.location.search}`;
-  try {
-    const stored = Number(window.sessionStorage.getItem(key));
-    if (Number.isFinite(stored) && stored > 0) return stored;
-    window.sessionStorage.setItem(key, String(performance.timeOrigin));
-  } catch (err) {
-    console.error('[useRestartWait] session storage unavailable; using this load’s start:', err);
-  }
-  return performance.timeOrigin;
-}
-
-/**
  * Waits for a restart Curia scheduled after a sign-in: 'waiting' until a new process answers
  * /api/health, then 'back', or 'timeout' after maxWaitMs. Inert when `restart` is false. Shared
  * with the Google Workspace done page (#2683).
+ *
+ * `since` is the old process's start (/api/health `started_at`), which the callback puts in
+ * the page's URL (#2697). With it, done means a healthy answer from a process that started at
+ * another time: exact across a refresh, a page that loads after the restart, and a second
+ * sign-in in the same tab. Without it (an older server, or a health answer without
+ * started_at), the uptime heuristics below decide.
  */
 export function useRestartWait(
   restart: boolean,
-  { pollIntervalMs = POLL_INTERVAL_MS, maxWaitMs = MAX_WAIT_MS }: { pollIntervalMs?: number; maxWaitMs?: number } = {},
+  { pollIntervalMs = POLL_INTERVAL_MS, maxWaitMs = MAX_WAIT_MS, since = null }: { pollIntervalMs?: number; maxWaitMs?: number; since?: string | null } = {},
 ): RestartState {
   const [restartState, setRestartState] = useState<RestartState>('waiting');
 
@@ -107,7 +96,6 @@ export function useRestartWait(
     // process). An ok answer with no usable uptime_s is not trusted on its own.
     let firstUptime: number | null = null;
     let sawFailure = false;
-    const loadedAt = firstLoadOrigin();
     const poll = async () => {
       const ctrl = new AbortController();
       inFlight = ctrl;
@@ -115,21 +103,25 @@ export function useRestartWait(
         const res = await fetch('/api/health', { signal: ctrl.signal });
         if (res.ok) {
           let uptime: number | null = null;
+          let startedAt: string | null = null;
           try {
-            const body = await res.json() as { uptime_s?: unknown };
+            const body = await res.json() as { uptime_s?: unknown; started_at?: unknown };
             if (typeof body.uptime_s === 'number' && body.uptime_s >= 0) uptime = body.uptime_s;
+            if (typeof body.started_at === 'string' && body.started_at !== '') startedAt = body.started_at;
           } catch {
             // A body that is not JSON carries no uptime: treated as not trustworthy below.
             // (An abort mid-body also lands here; the cancelled check below ends the poll.)
           }
           if (cancelled) return;
-          // A process that booted after this page first loaded is the new one: the old one
-          // served the sign-in that redirected here, so it booted before. This catches a restart
-          // that finished before the first poll, or before a refresh of this page, which the
-          // other two tests never see (#2697).
-          const bootedAfterPageLoad = uptime !== null && Date.now() - uptime * 1000 > loadedAt;
-          const restarted = bootedAfterPageLoad || (uptime !== null && firstUptime !== null && uptime < firstUptime);
-          if (sawFailure || restarted) {
+          // The exact test when both sides carry a start time; a failure in between proves nothing.
+          const exact = since !== null && startedAt !== null;
+          // Fallback: a process that booted after this load started is the new one (the old one
+          // served the sign-in that redirected here), or one younger than the first sample.
+          const bootedAfterPageLoad = uptime !== null && Date.now() - uptime * 1000 > performance.timeOrigin;
+          const restarted = exact
+            ? startedAt !== since
+            : sawFailure || bootedAfterPageLoad || (uptime !== null && firstUptime !== null && uptime < firstUptime);
+          if (restarted) {
             cancelled = true;
             clearTimeout(deadline);
             setRestartState('back');
@@ -153,7 +145,7 @@ export function useRestartWait(
       if (timer) clearTimeout(timer);
       inFlight?.abort();
     };
-  }, [restart, pollIntervalMs, maxWaitMs]);
+  }, [restart, pollIntervalMs, maxWaitMs, since]);
   return restartState;
 }
 
@@ -167,7 +159,7 @@ export default function MailboxSignInDonePage(
   const target: Target | null = rawTarget === 'principal' || rawTarget === 'curia' ? rawTarget : null;
   const msg = resultMessage(result, target);
   const restart = params.get('restart') === '1' && msg.ok;
-  const restartState = useRestartWait(restart, { pollIntervalMs, maxWaitMs });
+  const restartState = useRestartWait(restart, { pollIntervalMs, maxWaitMs, since: params.get('since') });
 
   return (
     <div className="login-root">

@@ -196,6 +196,9 @@ export interface HttpAdapterConfig {
    * the supervisor brings the new process up). Exposed via GET /api/setup/status.
    */
   bootStartedAt: string;
+  /** The health service's process start (GET /api/health started_at). A sign-in callback that
+   *  schedules a restart puts it in the done page's URL, so the page can tell the new process. */
+  processStartedAt?: string;
   /** The Setup checklist (#2358), for GET /api/setup/checklist and POST /api/setup/complete. */
   setupChecklist?: () => Promise<import('../../setup/checklist.js').SetupChecklist>;
   /**
@@ -811,6 +814,7 @@ export class HttpAdapter implements Channel {
         readApiKey: this.config.mailboxSignIn.readApiKey,
         ...(this.config.mailboxSignIn.callback ? { callback: this.config.mailboxSignIn.callback } : {}),
         appOrigin: this.config.appOrigin,
+        ...(this.config.processStartedAt ? { processStartedAt: this.config.processStartedAt } : {}),
         logger,
       });
     }
@@ -821,6 +825,7 @@ export class HttpAdapter implements Channel {
         service: this.config.googleWorkspaceSignIn,
         webAppBootstrapSecret,
         sessions,
+        ...(this.config.processStartedAt ? { processStartedAt: this.config.processStartedAt } : {}),
         logger,
       });
     }
