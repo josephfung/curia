@@ -32,7 +32,7 @@ interface StepProps {
 
 /**
  * The step's one button (#2358, owner review): Save and continue saves anything still typed in
- * every field group on the step (they also save when the operator leaves a field), and moves
+ * every field group on the step (each group also has its own Save button, #2683), and moves
  * on only when all of them saved. A failure stays on the step, with the error under its field.
  */
 export function useSaveAndContinue(onContinue: () => void) {

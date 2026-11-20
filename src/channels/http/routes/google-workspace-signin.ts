@@ -29,12 +29,18 @@ export interface GoogleWorkspaceSignInRouteOptions {
   logger: Logger;
 }
 
-/** Enough to diagnose a local failure (errno code, pg/fs message) without the request's query. */
+/**
+ * Enough to diagnose a local failure without the request's query. A file-system error is
+ * logged by its errno code alone: its message carries the token file's path, which names
+ * Curia's Google address. Other errors (pg, a bug) keep their message.
+ */
 function errFields(err: unknown): Record<string, unknown> {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  const fsError = typeof (err as NodeJS.ErrnoException | undefined)?.syscall === 'string';
   return {
     errName: err instanceof Error ? err.name : typeof err,
-    code: (err as NodeJS.ErrnoException | undefined)?.code,
-    errMessage: err instanceof Error ? err.message.slice(0, 300) : undefined,
+    code,
+    ...(err instanceof Error && !fsError ? { errMessage: err.message.slice(0, 300) } : {}),
   };
 }
 

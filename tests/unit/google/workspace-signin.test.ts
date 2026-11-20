@@ -102,7 +102,7 @@ describe('GoogleWorkspaceSignInService.status', () => {
   }
 
   const saved: WorkspaceTokenFile = {
-    token: 'old', refresh_token: '1//r', token_uri: GOOGLE_TOKEN_URL, client_id: 'client-1', client_secret: 'secret-1', scopes: SCOPES, expiry: null,
+    token: 'old', refresh_token: 'fake-refresh', token_uri: GOOGLE_TOKEN_URL, client_id: 'client-1', client_secret: 'secret-1', scopes: SCOPES, expiry: null,
   };
 
   beforeEach(async () => {

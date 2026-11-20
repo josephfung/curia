@@ -52,8 +52,8 @@ describeIf('GoogleWorkspaceSignInService', () => {
         return new Response(JSON.stringify({ error: 'invalid_grant' }), { status: exchange.status });
       }
       return new Response(JSON.stringify({
-        access_token: 'ya29.access',
-        ...(exchange.refresh === false ? {} : { refresh_token: '1//refresh' }),
+        access_token: 'fake-access-token',
+        ...(exchange.refresh === false ? {} : { refresh_token: 'fake-refresh-token' }),
         expires_in: 3599,
         scope: exchange.scope ?? ALL_SCOPES,
         id_token: idToken({ email: exchange.email ?? 'curia@example.com', email_verified: true, aud: exchange.aud ?? SETTINGS.clientId }),
@@ -156,8 +156,8 @@ describeIf('GoogleWorkspaceSignInService', () => {
 
     const token = await readWorkspaceToken('Curia@Example.com', home);
     expect(token).toMatchObject({
-      token: 'ya29.access',
-      refresh_token: '1//refresh',
+      token: 'fake-access-token',
+      refresh_token: 'fake-refresh-token',
       token_uri: GOOGLE_TOKEN_URL,
       client_id: SETTINGS.clientId,
       client_secret: SETTINGS.clientSecret,
