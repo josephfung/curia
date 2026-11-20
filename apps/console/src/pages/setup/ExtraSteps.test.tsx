@@ -315,6 +315,32 @@ describe('Working style', () => {
     expect(document.querySelector('[role="alert"]')).toBeNull();
   });
 
+  it('Save and continue moves on when a newer pick saved before an older failed pick’s re-read finished', async () => {
+    server();
+    const realFetch = globalThis.fetch;
+    let puts = 0;
+    let gets = 0;
+    let releaseRead: () => void = () => {};
+    const readGate = new Promise<void>((r) => { releaseRead = r; });
+    const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      if (path === '/api/autonomy' && method === 'PUT' && ++puts === 1) return json(429, { error: 'Too Many Requests' });
+      if (path === '/api/autonomy' && method === 'GET' && ++gets === 2) await readGate;
+      return realFetch(path, init);
+    }));
+    const onContinue = vi.fn();
+    await render(<WorkingStyleStep task={undefined} principal="Dana" onSaved={vi.fn(async () => {})} onContinue={onContinue} />);
+    await click(radio('Independence', 'Draft only'));
+    // Spot-check saves while Draft only's re-read is still out; then the re-read lands.
+    await click(radio('Independence', 'Spot-check'));
+    await act(async () => { releaseRead(); });
+    await settle();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    await click(Array.from(document.querySelectorAll('button')).find((b) => b.textContent === 'Save and continue')!);
+    expect(onContinue).toHaveBeenCalled();
+  });
+
   it('a slow first read never undoes a pick that saved', async () => {
     let releaseRead: () => void = () => {};
     const readGate = new Promise<void>((r) => { releaseRead = r; });
