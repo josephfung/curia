@@ -192,6 +192,10 @@ export function GoogleWorkspaceStep({ task, principal, onSaved, onContinue, onHe
   const save = useSaveAndContinue(onContinue);
   // Bumped when a field saves, so the sign-in panel checks again.
   const [fieldsVersion, setFieldsVersion] = useState(0);
+  // Every field filled in, typed or saved: Sign in as Curia saves what is typed, then starts.
+  const [filled, setFilled] = useState(false);
+  const fieldsRef = useRef<FieldGroupHandle | null>(null);
+  const registerFields = save.register('google');
   const done = task?.status === 'done';
   return (
     <div>
@@ -201,9 +205,10 @@ export function GoogleWorkspaceStep({ task, principal, onSaved, onContinue, onHe
         In the first conversation Curia delivers its drafts to {principal} as Google Docs, so this step is needed to finish Setup.
       </p>
       <VaultKeysForm
-        ref={save.register('google')}
+        ref={(handle) => { registerFields(handle); fieldsRef.current = handle; }}
         fields={GOOGLE_FIELDS}
         onChanged={async () => { setFieldsVersion((v) => v + 1); await onSaved(); }}
+        onFilledChange={setFilled}
       />
       <div className="setup-note">
         You can reuse the Google Cloud project and Web application OAuth client from {principal}’s email &amp; calendar.
@@ -212,6 +217,8 @@ export function GoogleWorkspaceStep({ task, principal, onSaved, onContinue, onHe
       </div>
       <GoogleWorkspaceSignIn
         refreshKey={fieldsVersion}
+        fieldsFilled={filled}
+        beforeSignIn={() => fieldsRef.current?.flush() ?? Promise.resolve(true)}
         // The checklist caches nothing the panel doesn't: when they disagree, re-read it.
         onStatus={(state) => { if ((state === 'signed_in') !== done) void onSaved(); }}
       />

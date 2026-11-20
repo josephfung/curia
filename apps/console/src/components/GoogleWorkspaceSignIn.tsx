@@ -47,11 +47,15 @@ export function statusLine(s: Status): { text: string; ok: boolean } {
   }
 }
 
-export function GoogleWorkspaceSignIn({ refreshKey, onStatus }: {
+export function GoogleWorkspaceSignIn({ refreshKey, onStatus, fieldsFilled, beforeSignIn }: {
   /** Change to re-check, e.g. after the fields above were saved. */
   refreshKey?: number | string;
   /** Told each state read, so a parent step can refresh its checklist. */
   onStatus?: (state: SignInState) => void;
+  /** The form above has every field filled in, typed or saved: the button may start. */
+  fieldsFilled?: boolean;
+  /** Saves what is typed above before going to Google. False: stay here (its error shows). */
+  beforeSignIn?: () => Promise<boolean>;
 }): JSX.Element {
   const [status, setStatus] = useState<Status | null>(null);
   const [busy, setBusy] = useState(false);
@@ -89,6 +93,10 @@ export function GoogleWorkspaceSignIn({ refreshKey, onStatus }: {
     setBusy(true);
     setErr(null);
     try {
+      if (beforeSignIn && !(await beforeSignIn())) {
+        setBusy(false);
+        return;
+      }
       const res = await apiFetch('/api/google-workspace/signin', { method: 'POST' });
       if (!res.ok) throw new Error(await errorText(res));
       const d = await res.json() as { url?: string };
@@ -119,9 +127,13 @@ export function GoogleWorkspaceSignIn({ refreshKey, onStatus }: {
   }
 
   const callbackUrl = status?.callbackUrl ?? null;
-  const line = status ? statusLine(status) : null;
+  // Typed but unsaved fields count: the click saves them first (beforeSignIn).
+  const readyToSave = status?.state === 'not_configured' && fieldsFilled === true;
+  const line = status
+    ? (readyToSave ? { ok: false, text: 'Ready: Sign in as Curia saves these details first.' } : statusLine(status))
+    : null;
   const signedIn = status?.state === 'signed_in';
-  const canStart = status !== null && status.state !== 'not_configured' && callbackUrl !== null;
+  const canStart = status !== null && callbackUrl !== null && (status.state !== 'not_configured' || readyToSave);
 
   return (
     <div className="gws-signin">

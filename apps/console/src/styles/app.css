@@ -3972,6 +3972,8 @@ table.records-table tbody tr.active td { background: transparent; }
 .setup-pane h2 { font-size: 20px; font-weight: 700; margin: 0 0 6px; letter-spacing: -0.01em; text-wrap: balance; }
 .setup-lede { color: var(--app-fg-muted); margin: 0 0 22px; max-width: 58ch; }
 .setup-fields { display: flex; flex-direction: column; gap: 14px; max-width: 460px; }
+/* A field group's own Save button (#2683): left-aligned, natural width. */
+.setup-save-row { display: flex; }
 .setup-field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; font-weight: 600; }
 .setup-field input, .setup-field select, .setup-field textarea { font-weight: 400; width: 100%; }
 .setup-hint { font-size: 12px; color: var(--app-fg-subtle); font-weight: 400; }
