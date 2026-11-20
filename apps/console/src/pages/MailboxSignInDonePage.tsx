@@ -60,6 +60,23 @@ const POLL_INTERVAL_MS = 2000;
 const MAX_WAIT_MS = 120_000;
 
 /**
+ * When this result page first loaded, kept across refreshes of the same URL (sessionStorage):
+ * a refresh after the restart must not move the mark past the new process's boot. Falls back
+ * to this load's own start when storage is unavailable (a private window, blocked storage).
+ */
+function firstLoadOrigin(): number {
+  const key = `curia:restart-wait:${window.location.pathname}${window.location.search}`;
+  try {
+    const stored = Number(window.sessionStorage.getItem(key));
+    if (Number.isFinite(stored) && stored > 0) return stored;
+    window.sessionStorage.setItem(key, String(performance.timeOrigin));
+  } catch (err) {
+    console.error('[useRestartWait] session storage unavailable; using this load’s start:', err);
+  }
+  return performance.timeOrigin;
+}
+
+/**
  * Waits for a restart Curia scheduled after a sign-in: 'waiting' until a new process answers
  * /api/health, then 'back', or 'timeout' after maxWaitMs. Inert when `restart` is false. Shared
  * with the Google Workspace done page (#2683).
@@ -90,6 +107,7 @@ export function useRestartWait(
     // process). An ok answer with no usable uptime_s is not trusted on its own.
     let firstUptime: number | null = null;
     let sawFailure = false;
+    const loadedAt = firstLoadOrigin();
     const poll = async () => {
       const ctrl = new AbortController();
       inFlight = ctrl;
@@ -105,11 +123,11 @@ export function useRestartWait(
             // (An abort mid-body also lands here; the cancelled check below ends the poll.)
           }
           if (cancelled) return;
-          // A process that booted after this page started loading is the new one: the old one
+          // A process that booted after this page first loaded is the new one: the old one
           // served the sign-in that redirected here, so it booted before. This catches a restart
-          // that finished before the first poll, which the other two tests never see (#2697).
-          const bootedAfterPageLoad = uptime !== null
-            && Date.now() - uptime * 1000 > performance.timeOrigin;
+          // that finished before the first poll, or before a refresh of this page, which the
+          // other two tests never see (#2697).
+          const bootedAfterPageLoad = uptime !== null && Date.now() - uptime * 1000 > loadedAt;
           const restarted = bootedAfterPageLoad || (uptime !== null && firstUptime !== null && uptime < firstUptime);
           if (sawFailure || restarted) {
             cancelled = true;

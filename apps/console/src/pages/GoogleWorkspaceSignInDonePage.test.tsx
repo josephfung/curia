@@ -23,7 +23,7 @@ async function mount(search: string) {
 }
 async function wait(ms: number) { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); }
 
-beforeEach(() => { vi.useFakeTimers(); fetchMock.mockReset(); vi.stubGlobal('fetch', fetchMock); });
+beforeEach(() => { vi.useFakeTimers(); fetchMock.mockReset(); vi.stubGlobal('fetch', fetchMock); window.sessionStorage.clear(); });
 afterEach(() => {
   if (root) act(() => root!.unmount());
   root = null;
@@ -71,6 +71,16 @@ describe('GoogleWorkspaceSignInDonePage', () => {
   it('notices a restart that finished before the first poll (#2697 review)', async () => {
     // Only the new process ever answers: it booted after this page loaded.
     fetchMock.mockImplementation(async () => new Response(JSON.stringify({ uptime_s: 0 }), { status: 200 }));
+    await mount('?result=signed_in&restart=1');
+    await wait(15);
+    expect(host.textContent).toMatch(/Curia is back/);
+  });
+
+  it('notices it on a refresh after the restart: the first load’s time is kept', async () => {
+    // The page first loaded a minute before this load; the new process booted between the two.
+    window.sessionStorage.setItem('curia:restart-wait:/google-workspace/done?result=signed_in&restart=1', String(performance.timeOrigin - 60_000));
+    const uptime = Math.ceil((Date.now() - performance.timeOrigin) / 1000) + 30;
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ uptime_s: uptime }), { status: 200 }));
     await mount('?result=signed_in&restart=1');
     await wait(15);
     expect(host.textContent).toMatch(/Curia is back/);
