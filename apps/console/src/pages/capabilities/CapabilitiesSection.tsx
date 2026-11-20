@@ -48,8 +48,22 @@ export function CapabilitiesSection(props: {
   // switch that stopped part way) finishes that, instead of reversing it.
   const [lastWanted, setLastWanted] = useState<Partial<Record<CapabilityId, boolean>>>({});
   const running = useRef<Promise<boolean> | null>(null);
+  // Capabilities whose last switch failed. Save and continue stays once on them, after the
+  // request has finished too, and says so; pressed again it leaves them as they are, so a
+  // failure that can't be fixed here (a missing key) never traps the step.
+  const failed = useRef(new Set<CapabilityId>());
   useImperativeHandle(props.ref, () => ({
-    flush: async () => (running.current ? running.current : true),
+    flush: async () => {
+      if (running.current) await running.current;
+      if (failed.current.size === 0) return true;
+      const names = CAPABILITIES.filter((c) => failed.current.has(c.id)).map((c) => c.label).join(' and ');
+      failed.current.clear();
+      setMessage((m) => ({
+        kind: 'error',
+        text: `${m?.kind === 'error' ? `${m.text} ` : ''}${names} didn’t switch. Try it again, or Save and continue again to leave it as it is.`,
+      }));
+      return false;
+    },
   }));
 
   /** Re-reads the registry. Returns the failure, if any, so a flip's own message isn't lost. */
@@ -66,17 +80,22 @@ export function CapabilitiesSection(props: {
   }, [reload]);
 
   function flip(cap: Capability, on: boolean): void {
-    const p = runFlip(cap, on);
+    const p = runFlip(cap, on).then((ok) => {
+      // null: declined or not loaded, so nothing changed and an earlier failure stands.
+      if (ok === true) failed.current.delete(cap.id);
+      if (ok === false) failed.current.add(cap.id);
+      return ok !== false;
+    });
     running.current = p;
     void p.finally(() => { if (running.current === p) running.current = null; });
   }
 
-  /** True when the switch finished (or was declined), false when it failed. */
-  async function runFlip(cap: Capability, on: boolean): Promise<boolean> {
-    if (!lists) return true;
+  /** True when the switch finished, false when it failed, null when declined or not loaded. */
+  async function runFlip(cap: Capability, on: boolean): Promise<boolean | null> {
+    if (!lists) return null;
     if (!on) {
       const warning = offWarning(cap, lists);
-      if (warning && !confirm(warning)) return true;
+      if (warning && !confirm(warning)) return null;
     }
     // Turning on: what its agents pin from capabilities that are off is turned on first.
     const needs = on ? neededCapabilities(cap, lists) : [];
@@ -88,7 +107,7 @@ export function CapabilitiesSection(props: {
     }
     if (needs.length > 0) {
       const names = needs.map((n) => n.label).join(' and ');
-      if (!confirm(`${cap.label} needs ${names}, which ${needs.length > 1 ? 'are' : 'is'} off. Turn ${needs.length > 1 ? 'them' : 'it'} on too?`)) return true;
+      if (!confirm(`${cap.label} needs ${names}, which ${needs.length > 1 ? 'are' : 'is'} off. Turn ${needs.length > 1 ? 'them' : 'it'} on too?`)) return null;
     }
     setLastWanted((w) => ({ ...w, [cap.id]: on }));
     setBusy(cap.id);
