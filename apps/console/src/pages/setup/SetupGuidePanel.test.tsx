@@ -1,13 +1,12 @@
 // @vitest-environment happy-dom
 // The setup guide panel (#2358, PR 4): step markers in the thread, the composer draft the
-// "Need help?" link fills, and when the guide opens by itself.
+// "Need help?" link fills, and the greeting on an empty thread.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { ChatComposer } from '../chat/ChatComposer.js';
 import type { Message } from '../chat/types.js';
-import { SetupGuidePanel, withStepMarkers } from './SetupGuidePanel.js';
-import { isFirstRun, type Checklist, type ChecklistTask } from './setup-steps.js';
+import { SETUP_GUIDE_GREETING, SetupGuidePanel, withStepMarkers } from './SetupGuidePanel.js';
 
 // The panel's own logic, over a stand-in chat session (useChatSession has its own tests).
 const chat = vi.hoisted(() => ({
@@ -40,20 +39,6 @@ describe('withStepMarkers', () => {
   it('keeps a marker whose message is no longer loaded, at the top', () => {
     const out = withStepMarkers([msg('x', 'newer')], [{ id: 'm', text: 'Now on: Email', afterId: 'gone' }]);
     expect(out.map((m) => m.text)).toEqual(['Now on: Email', 'newer']);
-  });
-});
-
-describe('isFirstRun', () => {
-  const task = (id: string, status: 'done' | 'pending', optional = false): ChecklistTask =>
-    ({ id, label: id, optional, status, credential_how_to: null, docs_url: null });
-  const checklist = (tasks: ChecklistTask[]): Checklist => ({ setupFor: null, tasks, setupComplete: false, missing: [] });
-
-  it('is a first run until anything is saved', () => {
-    // Optional extras that are always done don't count.
-    expect(isFirstRun(checklist([task('who', 'pending'), task('working_style', 'done', true)]), { setupFor: null })).toBe(true);
-    // Anything saved does.
-    expect(isFirstRun(checklist([task('who', 'pending')]), { setupFor: 'other' })).toBe(false);
-    expect(isFirstRun(checklist([task('curia_name', 'done')]), { setupFor: null })).toBe(false);
   });
 });
 
@@ -147,6 +132,18 @@ describe('SetupGuidePanel', () => {
     chat.state = { messages: [msg('a', 'older question')], loadingHistory: false };
     render('voice');
     expect(lines()).toEqual(['older question']);
+  });
+
+  it('greets on an empty thread once the history has loaded, and keeps the greeting at the top', () => {
+    chat.state = { messages: [], loadingHistory: true };
+    render('email');
+    expect(lines()).toEqual([]);
+    chat.state = { messages: [], loadingHistory: false };
+    render('email');
+    expect(lines()).toEqual([SETUP_GUIDE_GREETING.text]);
+    chat.state.messages = [msg('a', 'which key?')];
+    render('email');
+    expect(lines()).toEqual([SETUP_GUIDE_GREETING.text, 'which key?']);
   });
 
   it('scrolls to the newest message when it opens again', () => {

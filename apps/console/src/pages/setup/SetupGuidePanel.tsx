@@ -32,6 +32,16 @@ export function withStepMarkers(messages: readonly Message[], markers: readonly 
   return out;
 }
 
+/**
+ * The guide's opening line on a thread with no history, so the panel doesn't open blank. It
+ * lives in the panel only: never saved, never sent to the model.
+ */
+export const SETUP_GUIDE_GREETING: Message = {
+  id: 'setup-guide-greeting',
+  kind: 'agent',
+  text: 'As you go through Setup, ask me anything: what a step is for, where to find a key, or which option to pick.',
+};
+
 export function SetupGuidePanel(props: {
   /** Closed: kept mounted (its thread, markers and draft survive) but not shown. */
   hidden: boolean;
@@ -61,6 +71,12 @@ export function SetupGuidePanel(props: {
   }, [props.hidden]);
   const historyPending = useRef(true);
   historyPending.current = loadingHistory && messages.length === 0;
+  // Greet once the history has loaded empty, and keep the greeting at the top after the
+  // first message, so it doesn't vanish mid-conversation.
+  const [greet, setGreet] = useState(false);
+  useEffect(() => {
+    if (!loadingHistory && messages.length === 0 && !hasMore) setGreet(true);
+  }, [loadingHistory, messages.length, hasMore]);
 
   // A marker each time the open step changes. None before the history has loaded: it would
   // sit above messages it came after.
@@ -89,7 +105,7 @@ export function SetupGuidePanel(props: {
       </div>
       {props.notice && <div className="chat-connection" role="alert">{props.notice}</div>}
       {connectionError && <div className="chat-connection" role="status">{connectionError}</div>}
-      <ChatThread messages={withStepMarkers(messages, markers)} hasMore={hasMore} loadingHistory={loadingHistory} loadMore={loadMore} />
+      <ChatThread messages={[...(greet ? [SETUP_GUIDE_GREETING] : []), ...withStepMarkers(messages, markers)]} hasMore={hasMore} loadingHistory={loadingHistory} loadMore={loadMore} />
       <ChatComposer disabled={sending} onSend={(text) => void send(text)} draft={props.draft} />
     </aside>
   );
