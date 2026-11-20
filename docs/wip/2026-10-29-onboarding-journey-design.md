@@ -1,7 +1,7 @@
 # Getting started: Setup, then Onboarding — design
 
 **Status:** Draft, 2026-10-29; revised 2026-11-01 after principal and operator feedback (see
-*What changed in this revision*)
+*What changed in this revision*); Phase 1 rewritten 2026-11-19 to match the Setup page (#2358)
 **Scope:** how people get started with Curia, end to end: the operator's setup, the principal's
 onboarding, the docs that describe both, and the setup tooling
 **Related:**
@@ -71,12 +71,12 @@ The end state:
 |---|---|---|
 | **Who** | The **operator**: whoever installs and runs Curia (an EA, IT, a technical friend, or the principal themselves) | The **principal**: the executive Curia works for |
 | **What** | Install Curia, then connect its channels and services, and make the decisions that come with them | Shape how Curia works with them, connect their own email and calendar, confirm what Curia learns, then keep tuning |
-| **Where** | The installer, the console's `/setup` form, the setup checklist, the setup agent | Conversations with Curia (voice or chat), Google Docs, email |
-| **Done when** | Every Setup item is complete and verified | The principal has confirmed the deep-dive drafts and agreed a weekly session |
+| **Where** | The installer, the console's Setup page, the setup guide beside it | Conversations with Curia (voice or chat), Google Docs, email |
+| **Done when** | Every required Setup step is complete and verified, and the operator presses Start onboarding | The principal has confirmed the deep-dive drafts and agreed a weekly session |
 
 **Terminology.**
-- *Setup* is the operator's phase, matching the code that already carries the name (the `/setup`
-  form, the setup agent, `setup-status` and its catalog). Nothing is renamed.
+- *Setup* is the operator's phase, matching the code that carries the name (the console's Setup
+  page at `/setup`, the setup agent, `setup-status` and its catalog).
 - *Getting started* is the umbrella, matching curia-docs' existing `get-started/` section.
 - *Deployment* keeps its narrower meaning in the docs: server topology and self-hosting
   (`get-started/deployment.mdx`), one step inside Setup.
@@ -144,9 +144,10 @@ has made a one-click step during Setup.
 
 ## Phase 1 — Setup (the operator)
 
-> **Reworked 2026-11-19 (#2358).** The `/setup` form and the setup checklist become one Setup page in
-> the console, with the setup agent as a help panel beside it and a Capabilities page. #2358's
-> description is the current spec for this phase until this section is rewritten. Mockup:
+> **Rewritten 2026-11-19 (#2358),** to match what shipped. The `/setup` form and the setup
+> checklist became one **Setup page** in the console, with the setup agent as a help panel
+> beside it and a Capabilities page. Spec 18 (*Setup page*) has the routes and the details;
+> this section keeps the design. Mockup:
 > [`setup-page-mockup.html`](2026-10-29-onboarding-journey-design/setup-page-mockup.html).
 
 ### 1a. Install (~5 minutes)
@@ -156,31 +157,53 @@ What's needed: Docker with Compose, an LLM key, and **a domain or HTTPS route** 
 HTTPS is a stated requirement: the PWA installs only on a trusted HTTPS origin (ADR-055 §1), and
 the principal's mailbox sign-in needs an HTTPS callback (see *1b*). The installer already asks
 the topology question (local, domain or proxy). The local option stays, labelled try-out only.
+LiveKit, which voice runs on, comes with the install; seeding its keys there is #2689.
 
-### 1b. Connect Curia (~1–2 hours, at the operator's pace; can span days)
+### 1b. The Setup page (~1–2 hours, at the operator's pace; can span days)
 
-| Item | Required for onboarding | Default route | Alternatives | The operator decides |
-|---|---|---|---|---|
-| **Curia's own email** | Yes | Nylas grant for a dedicated mailbox | — | The address |
-| **Messaging to the principal** | Yes | PWA, ready for the principal to install from the invitation link | Signal, SMS (Telnyx) | Which route the principal will use |
-| **Voice** | Yes | LiveKit (bundled) + Deepgram + Cartesia | — | Curia's spoken voice (Cartesia voice id) |
-| **Principal mailbox sign-in** | Yes | Nylas hosted authentication: the operator configures the connector once, the principal signs in during onboarding | — | Nothing: Google only in this milestone |
-| **Google Docs access** | Yes | Curia's own Google account, through the Google Workspace tools | — | Which Google account Curia works from |
-| **Curia's name** | Yes | Set in `/setup` | — | The name |
+A new install's console opens on the Setup page, and stays there until **Start onboarding**:
+every page but Setup and the Settings pages it may need redirects to it. An install that
+predates it never sees it. The page is a step list on the left and the open step on the right;
+any step can be opened, and **Save and continue** walks them in order. Every field a step needs
+is on the step, so the operator never has to leave Setup. Fields save when the operator leaves
+them; there is one button per step.
 
-Each row in the docs carries an honest time and cost estimate, with a date stamp. Verify vendor
-pricing at write time; don't copy numbers from memory.
+| Step | Required | What the operator does | Done when |
+|---|---|---|---|
+| **Who it's for** | Yes | Myself or someone else; for someone else, their own name and email; the principal's name, title, email, timezone and pronouns | The principal's basics are saved |
+| **Curia's name** | Yes | Name, title and email signature (a first name is suggested) | Saved from the console |
+| **Email** (Curia's own) | Yes | The Nylas API key, then Connect with Google for Curia's mailbox, or a pasted grant ID | The email channel's key and mailbox are in, and it is on |
+| **Messaging** | Yes | One route: the Curia app (PWA, default), Signal, text message (Telnyx) or Slack, with that route's keys and the principal's id on it, linked to their contact. Nothing is sent to the principal | That route's check passes |
+| **Voice** | Yes | The Curia app or a Signal call (Phone is shown as coming soon); the Deepgram and Cartesia keys and Curia's spoken voice | The voice route's check passes |
+| **Email & calendar** (the principal's) | Yes | The same Nylas key, the sign-in checks, and Connect with Google for the principal when they're beside the operator | Sign-in is ready (the #2682 checks): the principal can connect in their first conversation |
+| **Apply & restart** | — | One restart turns on everything saved, and every step is checked again | — |
+| **Start onboarding** | — | Locked until every required step is done; lists what's left | Ends Setup (2.1) |
+
+**Optional extras** follow, unnumbered, and never block Start onboarding:
+
+- **Working style.** A tone (one of the four tone templates) and an independence level (Draft
+  only, Ask first, Spot-check). Leave them and the defaults apply. Anything set is a starting
+  point the principal is offered in the first conversation (2.2). Setting a tone doesn't count
+  as naming Curia.
+- **Google Workspace.** Curia's Google address and the OAuth client ID and secret. "Sign in as
+  Curia" from the console is #2683; until then the guide covers it.
+- **Higher search limit.** The Tavily key. Web search works without one, capped per hour.
+- **Capabilities.** Switches for what Curia can do (see *Capabilities* below).
 
 **"Ready" for messaging means ready for the principal,** not tested on them. The operator
 can't pair the principal's phone, and Setup must not message the principal before the
-invitation. So the PWA route counts as done when HTTPS and push are working and an invitation
-link can be generated; the principal installs the app from that link (2.1). Signal and SMS count as done when the
-channel is healthy and the principal's number is linked to their contact. A principal on Signal
-or SMS usually doesn't need the PWA.
+invitation. So the Curia app route counts as done when HTTPS and push are working; the
+principal installs the app from the invitation link (2.1). Signal, SMS and Slack count as done
+when the channel is ready and the principal's id on it is linked to their contact. Phone
+numbers are stored as E.164, since the channels compare them exactly.
 
 **Why voice stays required** even though the principal can onboard by chat: the principal is
 offered voice or chat for every session, and the offer has to be real. A principal who picks
 voice must not be told it isn't set up.
+
+**Channels start at Apply & restart.** A channel is turned on as soon as its required keys are
+in, and starts when Curia restarts. The page tells the operator what else a channel needs when
+it can't turn on (Voice: LiveKit's keys, from the install).
 
 **Principal mailbox sign-in** replaces the hand-made grant. The principal grants access
 themselves, during the first conversation, through a link Curia sends. For that to be one click
@@ -190,28 +213,22 @@ checked 2026-11-01):
 - **How the sign-in works** (Nylas v3 hosted authentication). Curia mints a single-use link to
   Nylas's `/v3/connect/auth` with a `state` token and a `login_hint` of the principal's address.
   The principal signs in with their provider; Nylas redirects to a callback on the Curia server;
-  Curia exchanges the code for a grant id, writes it to the `principal_mailboxes` registry (not the
-  retired flat `ceo_nylas_grant_id` key), and emits a one-time `principal_mailbox.connected` event
-  (built in #2361). Curia's own mailbox uses the same flow and connector; its callback writes an
-  `email_accounts` row instead, then restarts Curia. The pattern copies secret capture (`src/secrets/secret-capture-service.ts`:
-  single-use token, public bearer-exempt route, an event that resumes the agent). The callback
-  must be reachable from the principal's phone, which is one more reason HTTPS is an install
-  requirement.
-- **No restart.** The principal is mid-conversation when the grant arrives. Today calendar, the
-  dispatcher's principal mailbox and the health canary bind the grant at boot
-  (`src/index.ts:1134-1169`); they must pick up the new grant without the operator restarting
-  anything. How (hot rebind, or a controlled self-restart after the session) is the builder's
-  call, but no operator action is allowed.
+  Curia exchanges the code for a grant id, writes it to the `principal_mailboxes` registry, and
+  emits a one-time `principal_mailbox.connected` event (built in #2361). Curia's own mailbox
+  uses the same flow and connector (Connect with Google on the Email step); its callback writes
+  an `email_accounts` row instead, then restarts Curia. The callback must be reachable from the
+  principal's phone, which is one more reason HTTPS is an install requirement.
+- **No restart for the principal.** The principal is mid-conversation when the grant arrives,
+  so the services that use it pick it up without the operator doing anything.
 - **What the operator configures in Nylas:** an application (a Sandbox works for a single
-  install: its built-in Google connector grants the scopes Curia needs, up to 5 accounts;
-  #2361); a connector for the principal's provider, unless the Sandbox's built-in one is used;
-  and Curia's callback URL under hosted authentication. There is no client-id config: Curia derives the client id from the Nylas
-  application itself (`GET /v3/applications`) with the saved API key, and the region is selectable
-  (us or eu) or detected. Console setup registers the callback and creates the connector from the API key.
-- **Google.** The operator brings their own Google Cloud project and OAuth client (Nylas's shared
-  Google app needs a paid annual plan). Curia needs `gmail.modify` and `gmail.compose`, which
-  Google classes as *restricted*. Verifying an app for restricted scopes needs a paid security
-  assessment, so for one executive the guide recommends, in order:
+  install: its built-in Google connector grants the scopes Curia needs, up to 5 accounts); a
+  connector for the principal's provider, unless the Sandbox's built-in one is used; and Curia's
+  callback, which the Email & calendar step registers from the API key on its first check. The
+  client id is read from the application, and the region is detected.
+- **Google.** The operator brings their own Google Cloud project and OAuth client (Nylas's
+  shared Google app needs a paid annual plan). Curia needs `gmail.modify` and `gmail.compose`,
+  which Google classes as *restricted*. Verifying an app for restricted scopes needs a paid
+  security assessment, so for one executive the guide recommends, in order:
   1. **Principal on Google Workspace:** create the project inside the principal's organisation
      (their admin may need to) and set it to **Internal**. No verification, no warning screen.
   2. **Otherwise:** External, publishing status **In production**, left unverified under
@@ -220,9 +237,10 @@ checked 2026-11-01):
   3. **Never "Testing" status:** refresh tokens expire after 7 days and the grant breaks weekly.
 
   Evidence so far (2026-11-17, see `2026-11-17-mailbox-sign-in-google-findings.md`): an External,
-  In-production, unverified app holding a restricted scope kept working past 7 days. Still open: the
-  same with the Gmail scopes, and whether a Workspace admin's controls on unconfigured apps would
-  block it (the callback reports `admin_blocked` and `org_internal` with what to ask the admin).
+  In-production, unverified app holding a restricted scope kept working past 7 days. Still open:
+  the same with the Gmail scopes, and whether a Workspace admin's controls on unconfigured apps
+  would block it (the callback reports `admin_blocked` and `org_internal` with what to ask the
+  admin).
 - **Microsoft 365 (follow-up, not this milestone).** For the record: a multi-tenant app
   registration with delegated `Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite` and
   `offline_access`; its client secret lasts at most 24 months and grants break when it expires;
@@ -231,73 +249,80 @@ checked 2026-11-01):
 - **Cost.** A second Nylas account fits within Nylas's lower plans (from $15/month for 10
   accounts, checked 2026-11-01). Whether the free plan allows custom connectors is unverified.
 
-`setup-status` counts this item done when the connector and callback are configured and a test
-link resolves, not when a grant exists: the grant is the principal's to give. On an existing
-install that already has a hand-made grant, the item counts as done. *(Builder's call.)*
+The Email & calendar step counts as done when sign-in is ready, not when a grant exists: the
+grant is the principal's to give.
 
-**Google Docs access.** Curia already creates and shares Drive files through the Google
-Workspace tools (`skills/google-workspace/references/drive-files.md`; the principal always gets
-`writer`). Setup now treats this as required: the deep-dive drafts are delivered as Google Docs.
-The setup catalog gets an entry for it, which it lacks today.
+**Google Docs access is optional in Setup.** The deep-dive drafts are delivered as Google Docs
+(2.4), so a principal who will review that way needs it before then, but it doesn't block
+Start onboarding: it became the Google Workspace extra, and its sign-in (#2683) isn't in the
+console yet.
 
-**Readiness.** `setup-status` reports `setup_complete` when every required item is complete and
-verified (not just configured). It doesn't start Onboarding by itself: it unlocks the console's
-**Start onboarding** step, and the operator decides when to press it (2.1). There is no partial
-start and no "voice later" path: until Setup is complete, the step stays locked, Curia doesn't
-contact the principal, and the console checklist and the setup agent show the operator what's
-left. Voice is never auto-deferred.
+**Readiness.** One `setup_complete` flag (`src/setup/checklist.ts`, read by both the page and
+the setup agent's `setup-status`) is true when every required step is done and verified, not
+just configured. It doesn't start Onboarding by itself: it unlocks **Start onboarding**, and the
+operator decides when to press it (2.1). There is no partial start and no "voice later" path:
+until Setup is complete, the step stays locked and Curia doesn't contact the principal. Only
+optional extras can be deferred.
 
-### The setup agent
+### Capabilities
 
-The setup-wizard agent becomes the operator's guide through Setup, and only Setup. It:
+One list of switches, the last optional extra and **Settings → Behaviour → Capabilities**. Each
+capability is a group of agents, skill bundles and tools from a small catalog, switched together
+through the registry so a pinned bundle is never left off under an enabled agent:
 
-- opens by asking **"Are you setting up Curia for yourself, or for someone else?"** and tailors
-  the conversation to the answer. For someone else, it talks about "your principal" (by name once
-  `/setup` has it) and explains what they'll experience. For yourself, it keeps to "you" and
-  skips the hand-off explanations;
-- walks the operator through each item in *1b*, using `setup-status` for what's done;
-- helps with the decisions that belong to the operator: which messaging route, whether to enable
-  Signal or SMS as well, Curia's name and spoken voice, which Google account Curia uses;
-- hands off credential entry to the console, as today;
-- never claims an item works without a live `setup-status` check, as today;
-- ends by confirming Setup is complete and explaining the next step: when the operator is ready,
-  **Start onboarding** in the console gives them a link to send the principal, valid for 48
-  hours, so they should send it when the principal can act on it. Someone setting Curia up for
-  themselves is offered the first conversation straight away, and pairs their own phone the
-  usual way.
+| Capability | On a new install | In Setup |
+|---|---|---|
+| Meetings | On | Always on: the onboarding sessions run on it |
+| Meeting debriefs | On | Switchable |
+| Web research | On | Switchable |
+| Projects and tasks | On | Switchable |
+| Diagnostics | Off: it reads Curia's audit log and working records, so it's opt-in | Switchable |
+| Email triage | Off | Locked: it acts on the principal's inbox, so it's theirs to choose (*Triage switch*) |
 
-It no longer offers "instant wins", persona capture, or anything about the principal's tone,
-autonomy or priorities. That content moves into Onboarding's first conversation.
+Turning one off names the other parts of Curia that use the same pieces and asks first; turning
+one on also turns on what its agents need. Changes apply at the next restart: in Setup, at Apply
+& restart.
+
+### The setup guide
+
+The setup agent is the operator's help panel through Setup, and only Setup. It never drives
+Setup: the page does.
+
+- **Where.** A full-height column docked to the right of the Setup page, on the console's own
+  chat (no new chat components or endpoints). It opens by itself on a first run and is closed
+  when an operator comes back. Each step's **Need help? Ask the setup guide** opens it with the
+  step named in the composer, and a "Now on: <step>" line marks each step change. The open step
+  goes with each message, and the agent reads it.
+- **What it does.** It opens by acknowledging whether Curia is being set up for the operator or
+  someone else (from Who it's for); explains options and trade-offs (which messaging route,
+  Curia's name and spoken voice, which Google account Curia uses); troubleshoots with
+  `setup-status`; never claims a step works without a live check; and ends by explaining Start
+  onboarding and its link, valid for 48 hours, so the operator sends it when the principal can
+  act on it. Someone setting Curia up for themselves is offered the first conversation straight
+  away.
+- **What it doesn't.** No "instant wins", persona capture, or anything about the principal's
+  tone, autonomy or priorities: that is Onboarding's first conversation. It has no memory,
+  preference, contact or scheduler write tools.
 
 ### Who the console is talking to
 
 The console, and the phone app with it, shares one chat thread, and every console chat is
 treated as the principal (`src/channels/http/routes/chat.ts`). That matches the journey: **during
 Setup the console is the operator's, and afterwards it is the principal's.** No operator identity
-is added (#2365 stays off the critical path). Two rules keep the hand-over clean:
+is added (#2365 stays off the critical path). Three rules keep the hand-over clean:
 
-- **Setup chat is not the principal speaking.** While Setup is incomplete, console chat goes to
-  the setup agent, and nothing said there is stored as the principal's preference, priority or
-  fact.
-- **The principal starts with a clean thread.** When the operator starts onboarding for someone
-  else, the setup conversation is moved out of the shared thread (kept in the audit log), so the principal's
-  first view of the console or phone app is their own. *(Builder's call.)*
+- **Setup chat goes to the setup agent.** Opening the Setup page starts Setup, so from the
+  first message web chat goes to the setup agent, decided on the server. A database whose
+  principal a script created never starts it, and keeps the coordinator.
+- **Setup chat is not the principal speaking.** Nothing said there is stored as the principal's
+  preference, priority or fact: the setup agent has no write tools, and relationship extraction
+  skips those turns.
+- **The principal starts with a clean thread.** Start onboarding replaces the shared thread's
+  conversation id, so the principal's first view of the console or phone app is their own. The
+  setup conversation stays in working memory and the audit log.
 
 After the hand-over, an operator who still uses the console is working in the principal's
-thread. The Setup docs say so, and point operators at the settings pages and checklist instead
-of chat.
-
-### The `/setup` form
-
-The form keeps what the operator legitimately knows:
-
-- the operator's own details;
-- the principal's name, email and timezone, which Curia needs in order to work for them;
-- Curia's name.
-
-Its **Tone & style** and **Autonomy & preferences** steps move to Onboarding. Until the
-principal's first conversation, Curia runs on the existing defaults (`DEFAULT_OFFICE_IDENTITY`,
-autonomy 75).
+thread. The Setup docs say so, and point operators at the settings pages instead of chat.
 
 ## Phase 2 — Onboarding (the principal)
 
@@ -692,6 +717,10 @@ pages are written.
 | Triage switch | Off on a fresh install; on after "what to expect", by voice or chat | Joseph (switch); builder's call (chat too) |
 | Priorities scope | Coordinator, voice, recap, weekly session; no specialist pinning | Joseph |
 | Operator role | Design issue only (#2365) | Joseph |
+| Setup surface | One Setup page in the console: every field on its step, one Save and continue per step, fields save on leaving them; the setup agent is a help panel beside it (#2358) | Joseph |
+| Google Docs in Setup | An optional extra, not required: its sign-in isn't in the console yet (#2683) | builder's call |
+| Working style in Setup | Optional extra; a starting point the principal is offered, never a decision for them | Joseph |
+| Capabilities | Switches in Setup and Settings; Meetings always on; Email triage locked in Setup; Diagnostics off by default | Joseph |
 
 ## Work breakdown
 
@@ -702,7 +731,7 @@ Tracked in milestone **v0.48 - Onboarding Journey** (#29).
 | #2356 **Getting-started docs: Setup, then Onboarding** | Retitled. Two-phase framing replaces "install, then desk"; the curia-docs restructure in *How the docs tell it*; Appendix A fixes. The Setup half can ship before the features, describing today's behaviour; Onboarding pages land with the features. | — | L → XL |
 | #2357 Installer: HTTPS-first, voice on by default | Closing message points at the Setup checklist; wording only. | — | L |
 | #2341 PWA | Adds the operator-generated invitation link and the ADR-055 amendment (or a small follow-up issue if #2341 is already in flight). | — | XXL |
-| #2358 **Setup status: `setup_complete`, Setup-only setup agent and `/setup` form** | One readiness flag over all required items, replacing `kickoff_ready` / `sessions_ready`; adds `principal_mailbox` (sign-in configured) and Google Docs entries. Also reworks the setup agent around the *1b* items and operator decisions (opening with "for yourself or for someone else?"), keeps setup chat out of the principal's memory, and removes the form's Tone & style and Autonomy steps. | — | M → L |
+| #2358 **The Setup page** (was "Setup status, Setup-only setup agent and `/setup` form") | Grew into the console's Setup page: one readiness flag over the required steps (`setup_state`, the shared checklist); every step's fields inline; optional extras (Working style, Google Workspace, Tavily key, Capabilities); the setup agent reworked as a help panel docked beside the page, with setup chat kept out of the principal's memory and a clean thread at hand-over. Shipped as PRs #2686, #2687, #2688, #2690, #2691, #2693 and Capabilities. | — | M → XXL |
 | #2359 Console and PWA calls load the parked agenda | Unchanged. | — | S |
 | #2360 **Onboarding program** | Rewritten: the console's Start onboarding step and Curia's greeting; one first conversation by voice or chat with multiple-choice style, autonomy and preferences; review-format choice; review session that adapts; check-ins; weekly session. Absorbs chat sessions (#2364) and the setup agent's onboarding content. | #2358, #2359, #2361, and #2341 for the default route (Signal or SMS work without it) | XL → XXL; consider splitting the weekly session out |
 | #2361 **Principal mailbox sign-in** | Rewritten: Nylas hosted authentication (Google connector) with a callback on the Curia server, picking up the grant without a restart, an operator Setup guide, the in-conversation link, and the "connected" event. Replaces the hand-made grant guide. | #2358 | M → L |
