@@ -40,6 +40,8 @@ describeIf('GoogleWorkspaceSignInService', () => {
   const hashes: string[] = [];
   let calls: Array<{ url: string; body: URLSearchParams }> = [];
   let restarts: number[] = [];
+  let serverEnabled = false;
+  let enableFails = false;
 
   function fakeFetch(exchange: Exchange): typeof fetch {
     return (async (input: string | URL | Request, init?: RequestInit) => {
@@ -68,6 +70,13 @@ describeIf('GoogleWorkspaceSignInService', () => {
       scheduleRestart: (ms) => { restarts.push(ms); },
       fetchImpl: fakeFetch(exchange),
       home,
+      mcpServer: {
+        isEnabled: async () => serverEnabled,
+        enable: async () => {
+          if (enableFails) throw new Error('vault read failed');
+          serverEnabled = true;
+        },
+      },
     });
   }
 
@@ -90,6 +99,8 @@ describeIf('GoogleWorkspaceSignInService', () => {
     home = await fs.mkdtemp(path.join(os.tmpdir(), 'curia-gws-'));
     calls = [];
     restarts = [];
+    serverEnabled = false;
+    enableFails = false;
   });
 
   afterEach(async () => {
@@ -143,7 +154,7 @@ describeIf('GoogleWorkspaceSignInService', () => {
     expect(exchange.body.get('code_verifier')).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(exchange.body.get('redirect_uri')).toBe(`${ORIGIN}/api/google-workspace/callback`);
 
-    const token = await readWorkspaceToken('curia@example.com', home);
+    const token = await readWorkspaceToken('Curia@Example.com', home);
     expect(token).toMatchObject({
       token: 'ya29.access',
       refresh_token: '1//refresh',
@@ -153,8 +164,30 @@ describeIf('GoogleWorkspaceSignInService', () => {
     });
     expect(token!.scopes).toEqual(expect.arrayContaining([...WORKSPACE_REQUIRED_SCOPES]));
     expect(token!.expiry).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$/);
-    const stat = await fs.stat(path.join(home, '.google_workspace_mcp', 'credentials', 'curia@example.com.json'));
+    const stat = await fs.stat(path.join(home, '.google_workspace_mcp', 'credentials', 'Curia@Example.com.json'));
     expect(stat.mode & 0o777).toBe(0o600);
+  });
+
+  it('turns the google-workspace MCP server on: a new install enrols it off', async () => {
+    const service = makeService();
+    const { state } = await begin(service);
+    expect((await service.handleCallback({ state, code: 'auth-code' })).outcome).toBe('signed_in');
+    expect(serverEnabled).toBe(true);
+  });
+
+  it('still saves the sign-in and restarts when the server cannot be turned on', async () => {
+    enableFails = true;
+    const service = makeService();
+    const { state } = await begin(service);
+    expect(await service.handleCallback({ state, code: 'auth-code' })).toEqual({ outcome: 'signed_in', restartScheduled: true });
+    expect(await readWorkspaceToken('Curia@Example.com', home)).not.toBeNull();
+  });
+
+  it('leaves the server alone on a refused sign-in', async () => {
+    const service = makeService({ email: 'someone.else@example.com' });
+    const { state } = await begin(service);
+    await service.handleCallback({ state, code: 'auth-code' });
+    expect(serverEnabled).toBe(false);
   });
 
   it('spends the state once: a second callback with it reads used and exchanges nothing', async () => {
@@ -193,7 +226,7 @@ describeIf('GoogleWorkspaceSignInService', () => {
     const { state } = await begin(service);
     expect(await service.handleCallback({ state, code: 'auth-code' })).toEqual({ outcome: 'wrong_account', restartScheduled: false });
     expect(calls.some((c) => c.url === GOOGLE_REVOKE_URL)).toBe(true);
-    expect(await readWorkspaceToken('curia@example.com', home)).toBeNull();
+    expect(await readWorkspaceToken('Curia@Example.com', home)).toBeNull();
     expect(restarts).toHaveLength(0);
   });
 
@@ -201,15 +234,16 @@ describeIf('GoogleWorkspaceSignInService', () => {
     const service = makeService({ scope: `openid ${WORKSPACE_REQUIRED_SCOPES[0]} ${WORKSPACE_REQUIRED_SCOPES[1]}` });
     const { state } = await begin(service);
     expect((await service.handleCallback({ state, code: 'auth-code' })).outcome).toBe('missing_scopes');
-    expect(calls.some((c) => c.url === GOOGLE_REVOKE_URL)).toBe(true);
-    expect(await readWorkspaceToken('curia@example.com', home)).toBeNull();
+    // Curia's own account: revoking would end the sign-in it may already hold.
+    expect(calls.some((c) => c.url === GOOGLE_REVOKE_URL)).toBe(false);
+    expect(await readWorkspaceToken('Curia@Example.com', home)).toBeNull();
   });
 
   it('refuses an ID token issued to another client', async () => {
     const service = makeService({ aud: 'other-client' });
     const { state } = await begin(service);
     expect((await service.handleCallback({ state, code: 'auth-code' })).outcome).toBe('failed');
-    expect(await readWorkspaceToken('curia@example.com', home)).toBeNull();
+    expect(await readWorkspaceToken('Curia@Example.com', home)).toBeNull();
   });
 
   it('fails when Google rejects the code, and when no refresh token comes back', async () => {
@@ -220,7 +254,7 @@ describeIf('GoogleWorkspaceSignInService', () => {
     const noRefresh = makeService({ refresh: false });
     const b = await begin(noRefresh);
     expect((await noRefresh.handleCallback({ state: b.state, code: 'auth-code' })).outcome).toBe('failed');
-    expect(await readWorkspaceToken('curia@example.com', home)).toBeNull();
+    expect(await readWorkspaceToken('Curia@Example.com', home)).toBeNull();
   });
 
   it('reads not_ready when the settings were removed between start and callback', async () => {

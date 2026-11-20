@@ -32,7 +32,7 @@ export function workspaceResultMessage(result: string): ResultMessage {
     case 'not_ready':
       return { ok: false, title: 'Settings missing', body: 'Curia’s Google address, the OAuth client ID or the secret is missing, or APP_ORIGIN is not set. Check the Google Workspace step, then sign in again.' };
     case 'failed':
-      return { ok: false, title: 'Sign-in failed', body: `Something went wrong while saving the sign-in. Check that this page’s address is in the OAuth client’s authorized redirect URIs. ${AGAIN}` };
+      return { ok: false, title: 'Sign-in failed', body: `Something went wrong finishing the sign-in, so nothing was saved. Curia’s server log says why. ${AGAIN}` };
     default:
       return { ok: false, title: 'Something went wrong', body: `Curia could not tell how the sign-in ended. ${AGAIN}` };
   }

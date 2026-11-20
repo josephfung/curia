@@ -236,6 +236,13 @@ describe('evaluateChecklist', () => {
       expect(task(result, 'google_workspace').status).toBe('done');
     });
 
+    it('is not done while the google-workspace MCP server is turned off', async () => {
+      const result = await evaluateChecklist(catalog, deps({
+        googleWorkspaceSignIn: async () => ({ state: 'signed_in', serverEnabled: false }),
+      }));
+      expect(task(result, 'google_workspace')).toMatchObject({ status: 'pending', detail: expect.stringMatching(/MCP Skills/) });
+    });
+
     it('names the missing settings', async () => {
       const result = await evaluateChecklist(catalog, deps({
         googleWorkspaceSignIn: async () => ({ state: 'not_configured', missing: ['Curia’s Google address', 'the OAuth client secret'] }),

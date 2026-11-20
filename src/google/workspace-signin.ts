@@ -5,9 +5,10 @@
 // sends the browser to the public callback with `state` and `code`; handleCallback() claims the
 // state once, exchanges the code, checks the account is Curia's saved Google address and that
 // Drive, Docs and Sheets were granted, then writes the token where the google-workspace MCP
-// server reads it (workspace-token-file.ts) and schedules a graceful restart, as Curia's own
-// mailbox sign-in does (#2681): it starts a server that was skipped at boot and drops any token
-// the running one had cached for a stale sign-in.
+// server reads it (workspace-token-file.ts), turns the google-workspace MCP server on in the
+// registry (a new install enrols it off, since its keys did not exist at first boot), and
+// schedules a graceful restart, as Curia's own mailbox sign-in does (#2681): it starts a server
+// that was skipped at boot and drops any token the running one had cached for a stale sign-in.
 //
 // status() is the live check behind the Setup checklist's google_workspace step and the panel:
 // it refreshes the saved token against Google, so an install signed in by hand reads done too.
@@ -67,6 +68,9 @@ export const WORKSPACE_STATUS_CACHE_MS = 10 * 60_000;
 
 export const WORKSPACE_CALLBACK_PATH = '/api/google-workspace/callback';
 
+/** The MCP server this sign-in is for: config/skills.yaml's entry name. */
+export const GOOGLE_WORKSPACE_MCP_SERVER = 'google-workspace';
+
 export interface WorkspaceSettings {
   email: string | null;
   clientId: string | null;
@@ -78,7 +82,9 @@ export type WorkspaceSignInStatus =
   | { state: 'not_configured'; missing: string[] }
   | { state: 'not_signed_in' }
   | { state: 'token_rejected'; detail: string }
-  | { state: 'signed_in' };
+  // `serverEnabled: false`: the token works, but the google-workspace MCP server is off in the
+  // registry, so Curia has no Workspace tools. Absent when the registry was not asked.
+  | { state: 'signed_in'; serverEnabled?: boolean };
 
 export type WorkspaceUnavailableReason = 'not_configured' | 'origin_unusable';
 
@@ -118,6 +124,12 @@ export interface WorkspaceSignInServiceDeps {
   readSettings: () => Promise<WorkspaceSettings>;
   /** Starts the graceful shutdown (SIGTERM) after the delay. Absent: no restart is scheduled. */
   scheduleRestart?: (delayMs: number) => void;
+  /** The google-workspace MCP server's registry switch: read by status(), turned on by a sign-in.
+   *  Absent: neither is done (tests, or a boot without the registry). */
+  mcpServer?: {
+    isEnabled: () => Promise<boolean>;
+    enable: () => Promise<void>;
+  };
   /** Test seams. */
   fetchImpl?: typeof fetch;
   home?: string;
@@ -251,6 +263,8 @@ export class GoogleWorkspaceSignInService {
 
     // The state is spent from here on: any refusal below needs a fresh click.
     if (query.error !== undefined) {
+      // Google's error is a fixed code (admin_policy_enforced, invalid_scope, …), never a secret.
+      if (query.error !== 'access_denied') log.warn({ googleError: query.error.slice(0, 64) }, 'google workspace sign-in: Google returned an error');
       return done(query.error === 'access_denied' ? 'cancelled' : 'failed');
     }
     if (!query.code) return done('failed');
@@ -258,7 +272,10 @@ export class GoogleWorkspaceSignInService {
     const settings = await this.deps.readSettings();
     const redirectUri = this.callbackUrl();
     if (missingSettings(settings).length > 0 || redirectUri === null) return done('not_ready');
-    const expected = settings.email!.trim().toLowerCase();
+    // Compared lowercased (Google's address is), but the file is named by the address exactly as
+    // saved: workspace-mcp gets that string as user_google_email and never lowercases it.
+    const savedEmail = settings.email!.trim();
+    const expected = savedEmail.toLowerCase();
 
     const tokens = await this.tokenRequest({
       grant_type: 'authorization_code',
@@ -277,24 +294,24 @@ export class GoogleWorkspaceSignInService {
     const claims = idTokenClaims(body.id_token);
     if (claims.email === null || claims.aud !== settings.clientId) {
       log.warn({ hasEmail: claims.email !== null, audMatches: claims.aud === settings.clientId }, 'google workspace sign-in: ID token did not identify the account');
-      await this.revoke(body);
       return done('failed');
     }
     if (claims.email !== expected || !claims.emailVerified) {
+      // Someone else's grant: revoke it so a stray sign-in leaves nothing live behind.
       log.warn({ emailVerified: claims.emailVerified }, 'google workspace sign-in refused: not Curia’s Google address');
       await this.revoke(body);
       return done('wrong_account');
     }
     const lacking = missingWorkspaceScopes(body.scope);
     if (lacking.length > 0) {
+      // Curia's own account: no revoke. Google revokes the whole grant for the user and client,
+      // which would also end the working sign-in the token file may already hold.
       log.warn({ missingScopes: lacking }, 'google workspace sign-in refused: scopes not granted');
-      await this.revoke(body);
       return done('missing_scopes');
     }
     if (!body.refresh_token || !body.access_token) {
       // prompt=consent always returns one; without it the MCP server would stop working within the hour.
       log.error({ hasRefreshToken: !!body.refresh_token, hasAccessToken: !!body.access_token }, 'google workspace sign-in: Google returned no refresh token');
-      await this.revoke(body);
       return done('failed');
     }
 
@@ -310,12 +327,25 @@ export class GoogleWorkspaceSignInService {
         : null,
     };
     try {
-      await writeWorkspaceToken(expected, file, this.deps.home);
+      await writeWorkspaceToken(savedEmail, file, this.deps.home);
     } catch (err) {
       log.error({ errName: err instanceof Error ? err.name : typeof err, code: (err as NodeJS.ErrnoException).code }, 'google workspace sign-in: could not write the token file');
       return done('failed');
     }
     this.statusCache = null;
+
+    // Signing in is the operator asking for Workspace, so the server is switched on too. A failure
+    // here still leaves a good token: status() then reads "server off" and says how to fix it.
+    if (this.deps.mcpServer) {
+      try {
+        if (!(await this.deps.mcpServer.isEnabled())) {
+          await this.deps.mcpServer.enable();
+          log.info('google workspace sign-in: turned the google-workspace MCP server on');
+        }
+      } catch (err) {
+        log.error({ errName: err instanceof Error ? err.name : typeof err, errMessage: err instanceof Error ? err.message : undefined }, 'google workspace sign-in: could not turn the google-workspace MCP server on; enable it under Settings → MCP Skills');
+      }
+    }
 
     let restartScheduled = false;
     if (this.deps.scheduleRestart) {
@@ -339,20 +369,29 @@ export class GoogleWorkspaceSignInService {
     const missing = missingSettings(settings);
     if (missing.length > 0) return { state: 'not_configured', missing };
 
-    const email = settings.email!.trim().toLowerCase();
+    // The exact saved string, as workspace-mcp names the file (see handleCallback).
+    const email = settings.email!.trim();
     let mtimeMs: number;
     try {
       mtimeMs = (await fs.stat(workspaceCredentialPath(email, this.deps.home))).mtimeMs;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'not_signed_in' };
-      throw err;
+      this.deps.logger.error({ errName: err instanceof Error ? err.name : typeof err, code: (err as NodeJS.ErrnoException).code }, 'google workspace: could not stat the saved token file');
+      return { state: 'token_rejected', detail: 'Curia can’t read its saved Google sign-in (file permissions). Fix the credentials directory’s owner, or sign in as Curia again.' };
     }
     const key = `${email}|${settings.clientId}|${mtimeMs}`;
     if (this.statusCache && this.statusCache.key === key && this.now() - this.statusCache.at < WORKSPACE_STATUS_CACHE_MS) {
-      return this.statusCache.status;
+      return this.withServerState(this.statusCache.status);
     }
 
-    const saved = await readWorkspaceToken(email, this.deps.home);
+    let saved: WorkspaceTokenFile | null;
+    try {
+      saved = await readWorkspaceToken(email, this.deps.home);
+    } catch (err) {
+      // Unreadable (permissions) or corrupt: waiting will not fix it, a fresh sign-in will.
+      this.deps.logger.error({ errName: err instanceof Error ? err.name : typeof err, code: (err as NodeJS.ErrnoException).code }, 'google workspace: could not read the saved token file');
+      return { state: 'token_rejected', detail: 'Curia can’t read its saved Google sign-in (file permissions, or a damaged file). Sign in as Curia again.' };
+    }
     if (!saved?.refresh_token) return { state: 'not_signed_in' };
 
     // Refresh with the client the token was minted for, as workspace-mcp does.
@@ -369,13 +408,24 @@ export class GoogleWorkspaceSignInService {
       status = lacking.length === 0
         ? { state: 'signed_in' }
         : { state: 'token_rejected', detail: 'The saved sign-in does not cover Drive, Docs and Sheets. Sign in as Curia again and leave every box ticked.' };
-    } else if (result.kind === 'rejected' && result.error !== undefined && REJECTED_ERRORS[result.error]) {
-      status = { state: 'token_rejected', detail: REJECTED_ERRORS[result.error]! };
+    } else if (result.kind === 'rejected' && result.error !== undefined && (REJECTED_ERRORS[result.error] || result.status === 400 || result.status === 401)) {
+      // Any 400/401 with an error code is Google refusing this sign-in (deleted_client, …), not an outage.
+      status = {
+        state: 'token_rejected',
+        detail: REJECTED_ERRORS[result.error] ?? `Google refused the saved sign-in (${result.error.slice(0, 64)}). Check the OAuth client, then sign in as Curia again.`,
+      };
     } else {
-      throw new WorkspaceCheckUnavailableError(`Google did not answer the sign-in check (${result.kind === 'rejected' ? `HTTP ${result.status}${result.error ? ` ${result.error}` : ''}` : 'network error'}).`);
+      throw new WorkspaceCheckUnavailableError(`Google could not complete the sign-in check (${result.kind === 'rejected' ? `HTTP ${result.status}${result.error ? ` ${result.error}` : ''}` : 'network error'}).`);
     }
     this.statusCache = { key, at: this.now(), status };
-    return status;
+    return this.withServerState(status);
+  }
+
+  /** Adds the registry switch to a signed_in result. Read every time (a local query), never cached:
+   *  the operator can flip it under Settings without touching the token. */
+  private async withServerState(status: WorkspaceSignInStatus): Promise<WorkspaceSignInStatus> {
+    if (status.state !== 'signed_in' || !this.deps.mcpServer) return status;
+    return { state: 'signed_in', serverEnabled: await this.deps.mcpServer.isEnabled() };
   }
 
   /** Delete states lapsed or spent over an hour ago. Returns the number removed. */

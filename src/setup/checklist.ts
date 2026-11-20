@@ -269,7 +269,10 @@ export async function evaluateChecklist(catalog: CatalogTask[], deps: SetupCheck
       case 'google_workspace_signed_in': {
         const r = await deps.googleWorkspaceSignIn();
         switch (r.state) {
-          case 'signed_in': return { done: true };
+          case 'signed_in':
+            return r.serverEnabled === false
+              ? { done: false, detail: 'Signed in, but the google-workspace MCP server is turned off. Enable it under Settings → MCP Skills.' }
+              : { done: true };
           case 'not_configured': return { done: false, detail: `Add ${r.missing.join(', ')}.` };
           case 'not_signed_in': return { done: false, detail: 'Sign in as Curia with Google.' };
           case 'token_rejected': return { done: false, detail: r.detail };
