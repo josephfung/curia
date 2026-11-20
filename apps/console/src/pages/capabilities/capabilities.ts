@@ -1,7 +1,7 @@
 // Capabilities (#2358 section 4): plain-language switches over the registry. A capability
-// is a group of agents, skill bundles and standalone tools that are switched together, so a
-// pinned bundle is never left off under an enabled agent. The list lives here, not in the
-// page. Pure: no React, no fetch.
+// is a group of agents, skill bundles and standalone tools that are switched together: what
+// it pins before its agents on the way on, its agents first on the way off. The list lives
+// here, not in the page. Pure: no React, no fetch.
 import type { RegistryEntry } from '../registry-rows.js';
 
 export type CapabilityId = 'meetings' | 'debriefs' | 'research' | 'tasks' | 'diagnostics' | 'triage';
@@ -21,6 +21,11 @@ export interface Capability {
    * after Setup; the Setup page shows it off and locked, and Settings can switch it.
    */
   lock?: 'always-on' | 'principal-in-onboarding';
+  /**
+   * Capabilities its agents can't work without, known here so the dependency holds even when
+   * a bundle's manifest can't be read to find it from the pins.
+   */
+  needs?: readonly CapabilityId[];
 }
 
 export const CAPABILITIES: readonly Capability[] = [
@@ -32,7 +37,7 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     id: 'debriefs', label: 'Meeting debriefs',
     description: (p) => `After a meeting, Curia asks ${p} a few quick questions and files the follow-ups.`,
-    agents: ['meeting-debrief'], bundles: [], tools: [],
+    agents: ['meeting-debrief'], bundles: [], tools: [], needs: ['tasks'],
   },
   {
     id: 'research', label: 'Web research',
@@ -52,7 +57,7 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     id: 'triage', label: 'Email triage', lock: 'principal-in-onboarding',
     description: (p) => `Sorts and labels ${p}’s inbox, and archives what doesn’t need attention.`,
-    agents: ['ceo-inbox'], bundles: ['ceo-inbox', 'learning'], tools: [],
+    agents: ['ceo-inbox'], bundles: ['ceo-inbox', 'learning'], tools: [], needs: ['tasks'],
   },
 ];
 
@@ -102,23 +107,38 @@ export function capabilityState(cap: Capability, lists: RegistryLists): Capabili
     return { kind: 'unavailable', missing, anyOn };
   }
   const off = all.filter((m) => find(lists, m)!.state !== 'enabled').map((m) => m.name);
-  if (off.length === 0) return { kind: 'on' };
   if (off.length === all.length) return { kind: 'off' };
+  // A tool turned off on its own inside an enabled bundle leaves the capability partly on.
+  for (const bundle of cap.bundles) {
+    if (find(lists, { kind: 'skills', name: bundle })!.state === 'enabled') off.push(...bundleToolsOff(bundle, lists));
+  }
+  if (off.length === 0) return { kind: 'on' };
   return { kind: 'partly', off };
+}
+
+/** Member tools of a bundle that are installed but not enabled (the registry can disable one alone). */
+function bundleToolsOff(bundle: string, lists: RegistryLists): string[] {
+  const names = lists.skills.find((s) => s.name === bundle)?.metadata?.tools ?? [];
+  return names.filter((t) => {
+    const state = lists.tools.find((e) => e.name === t)?.state;
+    return state !== undefined && state !== 'enabled' && state !== 'ghost';
+  });
 }
 
 /**
  * The registry calls that switch a capability, in order. On: bundles and tools first, then
  * agents, so an agent is never enabled over a missing pin. Off: agents first, then what they
  * pin. A member already in the wanted state is skipped; one never installed has nothing to
- * disable.
+ * disable. An enabled bundle with a tool turned off alone is enabled again, which turns its
+ * tools back on.
  */
 export function switchPlan(cap: Capability, on: boolean, lists: RegistryLists): Array<Member & { action: 'install-enable' | 'disable' }> {
   const ordered = on ? members(cap) : [...members(cap)].reverse();
   const plan: Array<Member & { action: 'install-enable' | 'disable' }> = [];
   for (const m of ordered) {
     const state = find(lists, m)?.state;
-    if (on && state !== 'enabled') plan.push({ ...m, action: 'install-enable' });
+    const repair = m.kind === 'skills' && state === 'enabled' && bundleToolsOff(m.name, lists).length > 0;
+    if (on && (state !== 'enabled' || repair)) plan.push({ ...m, action: 'install-enable' });
     if (!on && state === 'enabled') plan.push({ ...m, action: 'disable' });
   }
   return plan;
@@ -158,17 +178,18 @@ export function offWarning(cap: Capability, lists: RegistryLists): string | null
 
 /**
  * Other capabilities this one's agents pin (a bundle, or a bundle's tool or a standalone tool
- * directly) that are not on: turned on alone, the agent would boot without those tools. E.g.
- * Meeting debriefs files follow-ups with Projects and tasks' tools.
+ * directly) or the catalog says it needs, that are not on: turned on alone, the agent would
+ * boot without those tools. E.g. Meeting debriefs files follow-ups with Projects and tasks'
+ * tools. An unavailable one is included, so the page can say it can't be turned on.
  */
 export function neededCapabilities(cap: Capability, lists: RegistryLists): Capability[] {
   const pins = new Set<string>();
   for (const name of cap.agents) {
     for (const pin of lists.agents.find((a) => a.name === name)?.metadata?.pinnedTools ?? []) pins.add(pin);
   }
-  if (pins.size === 0) return [];
   return CAPABILITIES.filter((other) => {
     if (other.id === cap.id || capabilityState(other, lists).kind === 'on') return false;
+    if (cap.needs?.includes(other.id)) return true;
     const covers = [
       ...other.bundles,
       ...other.tools,

@@ -80,6 +80,12 @@ export function CapabilitiesSection(props: {
     }
     // Turning on: what its agents pin from capabilities that are off is turned on first.
     const needs = on ? neededCapabilities(cap, lists) : [];
+    const unavailable = needs.filter((n) => capabilityState(n, lists).kind === 'unavailable');
+    if (unavailable.length > 0) {
+      const names = unavailable.map((n) => n.label).join(' and ');
+      setMessage({ kind: 'error', text: `Couldn’t turn ${cap.label} on: it needs ${names}, which ${unavailable.length > 1 ? 'aren’t' : 'isn’t'} available on this install.` });
+      return false;
+    }
     if (needs.length > 0) {
       const names = needs.map((n) => n.label).join(' and ');
       if (!confirm(`${cap.label} needs ${names}, which ${needs.length > 1 ? 'are' : 'is'} off. Turn ${needs.length > 1 ? 'them' : 'it'} on too?`)) return true;
@@ -150,9 +156,10 @@ export function CapabilitiesSection(props: {
               <span className="cap-desc" id={descId}>{cap.description(principal)}</span>
             </div>
             {fixed && <span className="cap-fixed" id={fixedId}>{fixed}</span>}
+            {/* A tri-state checkbox, drawn as a switch: role="switch" has no partly-on state. */}
             <button
               type="button"
-              role="switch"
+              role="checkbox"
               className="cap-switch"
               aria-checked={mixed ? 'mixed' : on}
               aria-label={cap.label}
