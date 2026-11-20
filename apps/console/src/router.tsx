@@ -40,6 +40,7 @@ const McpToolsPage = lazy(() => import('./pages/McpToolsPage'));
 const SetupPage = lazy(() => import('./pages/setup/SetupPage'));
 const SecretCapturePage = lazy(() => import('./pages/SecretCapturePage'));
 const MailboxSignInDonePage = lazy(() => import('./pages/MailboxSignInDonePage'));
+const GoogleWorkspaceSignInDonePage = lazy(() => import('./pages/GoogleWorkspaceSignInDonePage'));
 const PairPage = lazy(() => import('./pages/PairPage'));
 const ContactsPage = lazy(() => import('./pages/ContactsPage'));
 const JobsPage = lazy(() => import('./pages/JobsPage'));
@@ -261,6 +262,13 @@ const mailboxSignInDoneRoute = createRoute({
   component: MailboxSignInDonePage,
 });
 
+// Public Google Workspace sign-in result page (#2683): same shape, outcome-only query string.
+const googleWorkspaceSignInDoneRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/google-workspace/done',
+  component: GoogleWorkspaceSignInDonePage,
+});
+
 const contactsRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: '/contacts',
@@ -386,6 +394,7 @@ const routeTree = rootRoute.addChildren([
   pairRoute,
   secretCaptureRoute,
   mailboxSignInDoneRoute,
+  googleWorkspaceSignInDoneRoute,
 ]);
 
 export const router = createRouter({ routeTree });

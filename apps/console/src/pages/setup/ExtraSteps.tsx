@@ -1,5 +1,6 @@
-// The Setup page's optional extras (#2358, PR 3c): Working style, Google Workspace and the
-// higher web search limit. None of them blocks Start onboarding.
+// The Setup page's optional extras (#2358, PR 3c): Working style, the higher web search limit
+// and Capabilities. None of them blocks Start onboarding. (Google Workspace was one until
+// #2683 made it a required step; it lives in ChannelSteps.tsx now.)
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { apiFetch } from '../../api.js';
 import { bandForScore, type AutonomyBand } from '../../autonomy-bands.js';
@@ -239,35 +240,6 @@ export function WorkingStyleStep({ principal, onSaved, onContinue, onHelp }: Ext
         ]}
       />
       {independence.error && <p className="setup-status attention" role="alert">{independence.error}</p>}
-      <SaveAndContinue save={save} onHelp={onHelp} />
-    </div>
-  );
-}
-
-const GOOGLE_FIELDS: readonly VaultFieldSpec[] = [
-  { key: 'curia_google_email', label: 'Curia’s Google address', placeholder: 'curia@example.com', plain: true, email: true },
-  { key: 'google_oauth_client_id', label: 'OAuth client ID', hint: 'from Google Cloud', plain: true },
-  { key: 'google_oauth_client_secret', label: 'OAuth client secret' },
-];
-
-export function GoogleWorkspaceStep({ task, principal, onSaved, onContinue, onHelp }: ExtraProps): JSX.Element {
-  const save = useSaveAndContinue(onContinue);
-  return (
-    <div>
-      <h2>Google Workspace</h2>
-      <p className="setup-lede">
-        Lets Curia work in Google Docs, Sheets, Slides and Drive from its own Google account, and share files with {principal}.
-      </p>
-      <VaultKeysForm ref={save.register('google')} fields={GOOGLE_FIELDS} onChanged={onSaved} />
-      <div className="setup-note">You can use the same Google Cloud project as {principal}’s email &amp; calendar.</div>
-      <div className="setup-actions">
-        {/* Signing in from the console is #2683; shown so the next step is visible. */}
-        <button type="button" className="btn" disabled>Sign in as Curia (coming soon)</button>
-        {task?.docs_url && (
-          <a className="setup-link" href={`${DOCS_ORIGIN}${task.docs_url}`} target="_blank" rel="noopener noreferrer">Guide: Google Cloud setup</a>
-        )}
-      </div>
-      <p className="setup-hint">Until then, the guide covers signing in as Curia.</p>
       <SaveAndContinue save={save} onHelp={onHelp} />
     </div>
   );

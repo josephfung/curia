@@ -8,6 +8,7 @@ import * as yaml from 'js-yaml';
 import type { Logger } from '../logger.js';
 import type { EmailChannelStatus, PrincipalMailboxReadiness } from '../skills/types.js';
 import type { NylasSignInReadiness } from '../nylas/signin-readiness.js';
+import type { WorkspaceSignInStatus } from '../google/workspace-signin.js';
 import type { MessagingRoute, SetupState, VoiceRoute } from './setup-state.js';
 
 // ── Catalog ────────────────────────────────────────────────────────────────
@@ -24,6 +25,8 @@ export type CompletionCheck =
   | { type: 'voice_route_ready' }
   // Mailbox sign-in through Nylas is usable: key, https origin, callback and Google connector (#2361).
   | { type: 'nylas_signin_ready' }
+  // Curia is signed in to Google Workspace and Google still accepts the saved token (#2683).
+  | { type: 'google_workspace_signed_in' }
   // At least one live principal mailbox whose last health canary passed (#2475).
   | { type: 'principal_mailbox_ready' }
   | { type: 'browser_ready' }
@@ -32,7 +35,7 @@ export type CompletionCheck =
 
 const CHECK_TYPES: ReadonlySet<string> = new Set([
   'principal_basics', 'office_identity_configured', 'email_channel_ready', 'messaging_route_ready',
-  'voice_route_ready', 'nylas_signin_ready', 'principal_mailbox_ready', 'browser_ready',
+  'voice_route_ready', 'nylas_signin_ready', 'google_workspace_signed_in', 'principal_mailbox_ready', 'browser_ready',
   'vault_secrets_all', 'always_available',
 ]);
 
@@ -110,6 +113,8 @@ export interface SetupCheckDeps {
   identityConfigured: () => Promise<boolean>;
   emailChannelStatus: () => Promise<EmailChannelStatus>;
   nylasSignInReadiness: () => Promise<NylasSignInReadiness>;
+  /** The live Google Workspace sign-in check; throws when Google cannot be asked. */
+  googleWorkspaceSignIn: () => Promise<WorkspaceSignInStatus>;
   principalMailboxReady: () => Promise<PrincipalMailboxReadiness>;
   channelStatus: (channel: RouteChannel) => Promise<ChannelRunStatus>;
   /** The principal has a verified identity on this channel (Signal number, mobile, Slack member id). */
@@ -260,6 +265,16 @@ export async function evaluateChecklist(catalog: CatalogTask[], deps: SetupCheck
         const r = await deps.nylasSignInReadiness();
         if (r.ready) return { done: true };
         return { done: false, restartRequired: r.reason === 'restart_required', detail: r.detail };
+      }
+      case 'google_workspace_signed_in': {
+        const r = await deps.googleWorkspaceSignIn();
+        switch (r.state) {
+          case 'signed_in': return { done: true };
+          case 'not_configured': return { done: false, detail: `Add ${r.missing.join(', ')}.` };
+          case 'not_signed_in': return { done: false, detail: 'Sign in as Curia with Google.' };
+          case 'token_rejected': return { done: false, detail: r.detail };
+        }
+        break;
       }
       case 'principal_mailbox_ready':
         return (await deps.principalMailboxReady()) === 'ready'

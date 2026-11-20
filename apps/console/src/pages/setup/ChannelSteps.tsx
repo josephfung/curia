@@ -1,14 +1,24 @@
-// The channel steps (#2358): Email, Messaging, Voice, and Email & calendar. Each takes its
-// credentials inline (ChannelForms.tsx) and shows its live check from the Setup checklist.
+// The channel steps (#2358): Email, Messaging, Voice, and the Business Apps steps, Email &
+// calendar and Google Workspace (#2683). Each takes its credentials inline (ChannelForms.tsx)
+// and shows its live check from the Setup checklist.
 // Messaging and Voice also save the route the operator picks, which their checks read.
 import { useEffect, useRef, useState, type JSX } from 'react';
 import { ConnectWithGoogle } from '../../components/ConnectWithGoogle.js';
 import { EmailAccountsSection } from '../../components/EmailAccountsSection.js';
 import { NylasSignInSetupSection } from '../../components/NylasSignInSetupSection.js';
+import { GoogleWorkspaceSignIn } from '../../components/GoogleWorkspaceSignIn.js';
 import { saveSetupFields, type MessagingRoute, type SetupFields, type VoiceRoute } from './setup-api.js';
 import { atSentenceStart, sharedLatestSaver, type ChecklistTask } from './setup-steps.js';
 import { ChoiceGroup, StatusLine, StepFooter } from './setup-ui.js';
-import { ChannelCredentialsForm, PrincipalIdentityField, turnOnChannelIfReady, type FieldGroupHandle, type FieldSpec } from './ChannelForms.js';
+import {
+  ChannelCredentialsForm,
+  PrincipalIdentityField,
+  turnOnChannelIfReady,
+  VaultKeysForm,
+  type FieldGroupHandle,
+  type FieldSpec,
+  type VaultFieldSpec,
+} from './ChannelForms.js';
 
 export const DOCS_ORIGIN = 'https://docs.meetcuria.com';
 
@@ -162,6 +172,53 @@ export function SignInStep({ task, principal, onSaved, onContinue, onHelp }: Ste
         <ConnectWithGoogle target="principal" hideUnlessReady />
       </div>
       <TaskStatus task={task} />
+      <SaveAndContinue save={save} onHelp={onHelp} />
+    </div>
+  );
+}
+
+const GOOGLE_FIELDS: readonly VaultFieldSpec[] = [
+  { key: 'curia_google_email', label: 'Curia’s Google address', placeholder: 'curia@example.com', plain: true, email: true },
+  { key: 'google_oauth_client_id', label: 'OAuth client ID', hint: 'from Google Cloud', plain: true },
+  { key: 'google_oauth_client_secret', label: 'OAuth client secret' },
+];
+
+/**
+ * Curia's own Google account for Docs, Sheets and Drive (#2683). Required: the deep dive in the
+ * principal's first conversation delivers its drafts as Google Docs. Done means signed in and
+ * Google still accepting the token, so the step's own sign-in line is its status.
+ */
+export function GoogleWorkspaceStep({ task, principal, onSaved, onContinue, onHelp }: StepProps): JSX.Element {
+  const save = useSaveAndContinue(onContinue);
+  // Bumped when a field saves, so the sign-in panel checks again.
+  const [fieldsVersion, setFieldsVersion] = useState(0);
+  const done = task?.status === 'done';
+  return (
+    <div>
+      <h2>Google Workspace</h2>
+      <p className="setup-lede">
+        Lets Curia work in Google Docs, Sheets and Drive from its own Google account, and share files with {principal}.
+        In the first conversation Curia delivers its drafts to {principal} as Google Docs, so this step is needed to finish Setup.
+      </p>
+      <VaultKeysForm
+        ref={save.register('google')}
+        fields={GOOGLE_FIELDS}
+        onChanged={async () => { setFieldsVersion((v) => v + 1); await onSaved(); }}
+      />
+      <div className="setup-note">
+        You can reuse the Google Cloud project from {principal}’s email &amp; calendar. Enable the Drive, Docs and Sheets
+        APIs there, and use a Web application OAuth client.
+      </div>
+      <GoogleWorkspaceSignIn
+        refreshKey={fieldsVersion}
+        // The checklist caches nothing the panel doesn't: when they disagree, re-read it.
+        onStatus={(state) => { if ((state === 'signed_in') !== done) void onSaved(); }}
+      />
+      {task?.docs_url && (
+        <div className="setup-actions">
+          <a className="setup-link" href={`${DOCS_ORIGIN}${task.docs_url}`} target="_blank" rel="noopener noreferrer">Guide: Google Cloud setup</a>
+        </div>
+      )}
       <SaveAndContinue save={save} onHelp={onHelp} />
     </div>
   );

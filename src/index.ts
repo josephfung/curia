@@ -102,6 +102,7 @@ import { checkNylasSignIn, createNylasSignInReaders, type NylasSignInReadiness }
 import { MailboxSignInService, MailboxSignInUnavailableError, MAX_SIGNIN_TTL_MINUTES } from './nylas/mailbox-signin-service.js';
 import { handleMailboxSignInCallback, type MailboxSignInCallbackQuery } from './nylas/mailbox-signin-callback.js';
 import { MailboxSignInResumeSubscriber } from './nylas/mailbox-signin-resume-subscriber.js';
+import { GoogleWorkspaceSignInService, WORKSPACE_SECRET_KEYS } from './google/workspace-signin.js';
 import { NylasAppClient } from './nylas/app-client.js';
 import { createLiveGrantLookup } from './nylas/live-grant-lookup.js';
 import { CalendarRouter, calendarRouterEnabled } from './channels/calendar/calendar-router.js';
@@ -3242,6 +3243,26 @@ async function main(): Promise<void> {
   }).catch((err: unknown) => {
     logger.warn({ errName: err instanceof Error ? err.name : typeof err }, 'mailbox sign-in readiness check failed at boot');
   });
+  // "Sign in as Curia" for Google Workspace (#2683). The three values are read from the vault
+  // live, as the MCP loader reads them at spawn (vault only, no env fallback). A sign-in schedules
+  // the same graceful restart as Curia's mailbox sign-in, so the google-workspace MCP server
+  // starts (or restarts) with the new token.
+  const googleWorkspaceSignIn = new GoogleWorkspaceSignInService({
+    pool,
+    logger,
+    appOrigin: config.appOrigin,
+    readSettings: async () => {
+      const [email, clientId, clientSecret] = await Promise.all([
+        secretsService.get(WORKSPACE_SECRET_KEYS.email),
+        secretsService.get(WORKSPACE_SECRET_KEYS.clientId),
+        secretsService.get(WORKSPACE_SECRET_KEYS.clientSecret),
+      ]);
+      return { email, clientId, clientSecret };
+    },
+    scheduleRestart: (delayMs) => {
+      setTimeout(() => process.kill(process.pid, 'SIGTERM'), delayMs);
+    },
+  });
   // The Setup checklist (#2358): one computation for the console's Setup page and the setup
   // agent's setup-status tool. The catalog stays with the setup skill; it is read once.
   const setupCatalogPath = path.resolve(import.meta.dirname, '../skills/setup/tools/setup-status/catalog.yaml');
@@ -3259,6 +3280,7 @@ async function main(): Promise<void> {
     identityConfigured: () => isIdentityConfigured(pool),
     emailChannelStatus,
     nylasSignInReadiness,
+    googleWorkspaceSignIn: () => googleWorkspaceSignIn.status(),
     principalMailboxReady: () => healthService.principalMailboxReady(),
     channelStatus: async (channel) => {
       if (startedChannels.has(channel)) return 'running';
@@ -4258,6 +4280,7 @@ async function main(): Promise<void> {
       callback: mailboxSignInCallback,
       boot: nylasBoot,
     },
+    googleWorkspaceSignIn,
     principalMailboxConsole: principalMailboxAdmin
       ? {
           mailboxes: principalMailboxes,

@@ -5,7 +5,7 @@
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
-    "task_id": "string (the id of an optional extra from setup-status, e.g. 'google_workspace', 'web_research', 'working_style')",
+    "task_id": "string (the id of an optional extra from setup-status, e.g. 'web_browser', 'web_research', 'working_style')",
     "action": "string ('defer' to skip a task, 'resume' to un-skip it)"
   },
   "outputs": {

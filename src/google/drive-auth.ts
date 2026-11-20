@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import { google } from 'googleapis';
+import { workspaceCredentialPath } from './workspace-token-file.js';
 
 // Keyed by resolved tokenCachePath so multiple identities in the same process
 // each get their own cached client (and tests with different paths stay isolated).
@@ -26,14 +25,8 @@ export async function getDriveClient(
   if (!clientSecret) throw new Error('GOOGLE_OAUTH_CLIENT_SECRET is not set');
   if (!email) throw new Error('CURIA_GOOGLE_EMAIL is not set');
 
-  const tokenCachePath =
-    options?.tokenCachePath ??
-    path.join(
-      os.homedir(),
-      '.google_workspace_mcp',
-      'credentials',
-      `${email}.json`,
-    );
+  // workspace-mcp's own file name: the address URL-encoded (curia+docs@ → curia%2Bdocs@).
+  const tokenCachePath = options?.tokenCachePath ?? workspaceCredentialPath(email);
 
   const cached = clientCache.get(tokenCachePath);
   if (cached) return cached;

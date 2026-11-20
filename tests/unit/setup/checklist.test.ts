@@ -9,7 +9,7 @@ import { createSilentLogger } from '../../../src/logger.js';
 
 const CATALOG_PATH = join(import.meta.dirname, '../../../skills/setup/tools/setup-status/catalog.yaml');
 const catalog = parseCatalog(readFileSync(CATALOG_PATH, 'utf-8'));
-const REQUIRED = ['who', 'curia_name', 'email', 'messaging', 'voice', 'mailbox_signin'];
+const REQUIRED = ['who', 'curia_name', 'email', 'messaging', 'voice', 'mailbox_signin', 'google_workspace'];
 
 const COMPLETE_STATE: SetupState = {
   ...EMPTY_SETUP_STATE,
@@ -29,6 +29,7 @@ function deps(overrides: Partial<SetupCheckDeps> = {}, state: Partial<SetupState
     identityConfigured: async () => true,
     emailChannelStatus: async () => 'running',
     nylasSignInReadiness: async () => ({ ready: true, applicationId: 'app', region: 'us' }),
+    googleWorkspaceSignIn: async () => ({ state: 'signed_in' }),
     principalMailboxReady: async () => 'pending',
     channelStatus: async () => 'running',
     principalHasIdentity: async () => true,
@@ -92,7 +93,6 @@ describe('evaluateChecklist', () => {
     expect(result.setupComplete).toBe(true);
     expect(result.missing).toEqual([]);
     expect(task(result, 'principal_mailboxes').status).toBe('pending');
-    expect(task(result, 'google_workspace').status).toBe('pending');
   });
 
   const missingCases: Array<[string, Partial<SetupCheckDeps>, Partial<SetupState>]> = [
@@ -102,6 +102,7 @@ describe('evaluateChecklist', () => {
     ['messaging', {}, { messagingRoute: null }],
     ['voice', {}, { voiceRoute: null }],
     ['mailbox_signin', { nylasSignInReadiness: async () => ({ ready: false, reason: 'no_api_key', detail: 'Add the key.' }) }, {}],
+    ['google_workspace', { googleWorkspaceSignIn: async () => ({ state: 'not_signed_in' }) }, {}],
   ];
   it.each(missingCases)('is incomplete when %s is not done, and says why', async (id, override, state) => {
     const result = await evaluateChecklist(catalog, deps(override, state));
@@ -214,21 +215,59 @@ describe('evaluateChecklist', () => {
     expect(task(result, 'mailbox_signin')).toMatchObject({ restart_required: true, detail: 'Restart.' });
   });
 
-  it('reports optional key-based extras with their keys and the upgrade state', async () => {
+  it('reports the optional upgrade state', async () => {
     const result = await evaluateChecklist(catalog, deps({ secretPresent: async (k) => k === 'tavily_api_key' }));
-    expect(task(result, 'google_workspace')).toMatchObject({ status: 'pending', done_means: 'credentials_saved', optional: true });
     expect(task(result, 'web_research').optional_upgrade?.configured).toBe(true);
+  });
+
+  describe('Google Workspace (#2683)', () => {
+    it('is required, and done only on the live sign-in check, not on saved keys', async () => {
+      const result = await evaluateChecklist(catalog, deps({
+        secretPresent: async () => true,
+        googleWorkspaceSignIn: async () => ({ state: 'not_signed_in' }),
+      }));
+      expect(task(result, 'google_workspace')).toMatchObject({ status: 'pending', optional: false, detail: 'Sign in as Curia with Google.' });
+      expect(task(result, 'google_workspace')).not.toHaveProperty('done_means');
+      expect(result.setupComplete).toBe(false);
+    });
+
+    it('reads done for an install whose saved token Google still accepts', async () => {
+      const result = await evaluateChecklist(catalog, deps());
+      expect(task(result, 'google_workspace').status).toBe('done');
+    });
+
+    it('names the missing settings', async () => {
+      const result = await evaluateChecklist(catalog, deps({
+        googleWorkspaceSignIn: async () => ({ state: 'not_configured', missing: ['Curia’s Google address', 'the OAuth client secret'] }),
+      }));
+      expect(task(result, 'google_workspace').detail).toBe('Add Curia’s Google address, the OAuth client secret.');
+    });
+
+    it('passes on why Google rejected the token', async () => {
+      const result = await evaluateChecklist(catalog, deps({
+        googleWorkspaceSignIn: async () => ({ state: 'token_rejected', detail: 'Sign in again.' }),
+      }));
+      expect(task(result, 'google_workspace')).toMatchObject({ status: 'pending', detail: 'Sign in again.' });
+    });
+
+    it('reads pending, not done, when Google cannot be asked', async () => {
+      const result = await evaluateChecklist(catalog, deps({
+        googleWorkspaceSignIn: async () => { throw new Error('unreachable'); },
+      }));
+      expect(task(result, 'google_workspace').detail).toMatch(/Could not check/);
+      expect(result.missing).toEqual(['google_workspace']);
+    });
   });
 
   it('gives every pending task a detail, including the optional extras on a new install', async () => {
     const result = await evaluateChecklist(catalog, deps({
       identityConfigured: async () => false,
       emailChannelStatus: async () => 'not_configured',
+      googleWorkspaceSignIn: async () => ({ state: 'not_configured', missing: ['Curia’s Google address'] }),
     }, { setupFor: null, messagingRoute: null, voiceRoute: null }));
     const pending = result.tasks.filter((t) => t.status === 'pending');
     expect(pending.map((t) => t.id)).toEqual(expect.arrayContaining(['principal_mailboxes', 'web_browser', 'google_workspace', 'who']));
     for (const t of pending) expect(t.detail, t.id).toBeTruthy();
-    expect(task(result, 'google_workspace').detail).toMatch(/curia_google_email/);
   });
 
   it('gives a task no detail once it is done', async () => {
