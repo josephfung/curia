@@ -105,7 +105,12 @@ export function useRestartWait(
             // (An abort mid-body also lands here; the cancelled check below ends the poll.)
           }
           if (cancelled) return;
-          const restarted = uptime !== null && firstUptime !== null && uptime < firstUptime;
+          // A process that booted after this page started loading is the new one: the old one
+          // served the sign-in that redirected here, so it booted before. This catches a restart
+          // that finished before the first poll, which the other two tests never see (#2697).
+          const bootedAfterPageLoad = uptime !== null
+            && Date.now() - uptime * 1000 > performance.timeOrigin;
+          const restarted = bootedAfterPageLoad || (uptime !== null && firstUptime !== null && uptime < firstUptime);
           if (sawFailure || restarted) {
             cancelled = true;
             clearTimeout(deadline);
