@@ -113,8 +113,8 @@ export default function SetupPage(): JSX.Element {
   useEffect(() => { void ensureGuide(); }, [ensureGuide]);
   useEffect(() => { void refresh(); }, [refresh]);
 
-  // The guide starts closed: the steps explain themselves, and it is there when asked for
-  // (Need help?, or its button). Once opened it stays mounted, hidden when closed, so its
+  // The guide starts closed: the steps explain themselves, and each step's Need help? opens
+  // it. Once opened it stays mounted, hidden when closed, so its
   // thread, step markers and anything half-typed survive a close.
   const [guideOpen, setGuideOpen] = useState(false);
   const [guideMounted, setGuideMounted] = useState(false);
