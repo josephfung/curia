@@ -91,4 +91,13 @@ describe('getDriveClient — token cache', () => {
     const b = await getDriveClient({ tokenCachePath });
     expect(a).toBe(b);
   });
+
+  it('builds a new client when the client secret is rotated, rather than reusing the old one (#2697)', async () => {
+    await fs.writeFile(tokenCachePath, validTokenJson);
+    const first = await getDriveClient({ tokenCachePath, clientId: 'cid', clientSecret: 'old-secret', email: 'curia@test.com' });
+    expect(await getDriveClient({ tokenCachePath, clientId: 'cid', clientSecret: 'old-secret', email: 'curia@test.com' })).toBe(first);
+    const rotated = await getDriveClient({ tokenCachePath, clientId: 'cid', clientSecret: 'new-secret', email: 'curia@test.com' });
+    expect(rotated).not.toBe(first);
+    expect((rotated as unknown as { clientSecret: string }).clientSecret).toBe('new-secret');
+  });
 });
