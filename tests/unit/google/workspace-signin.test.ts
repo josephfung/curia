@@ -183,19 +183,26 @@ describe('GoogleWorkspaceSignInService.status', () => {
     await expect(service().status()).rejects.toThrow(WorkspaceCheckUnavailableError);
   });
 
-  it('asks Google again when the secret changes', async () => {
-    // A token file without a stored secret (hand-made): only the saved secret is used.
-    await writeWorkspaceToken('curia@example.com', { ...saved, client_secret: '' }, home);
+  it.each([
+    ['client ID', { client_id: '' }],
+    ['secret', { client_secret: '' }],
+  ])('token_rejected when the file is missing its %s: workspace-mcp refreshes with the file’s', async (_n, missing) => {
+    await writeWorkspaceToken('curia@example.com', { ...saved, ...missing }, home);
+    expect(await service().status()).toMatchObject({ state: 'token_rejected', detail: expect.stringMatching(/missing its OAuth client details/) });
+    expect(refreshes).toBe(0);
+  });
+
+  it('does not reuse a cached signed_in after the saved secret changes', async () => {
+    await writeWorkspaceToken('curia@example.com', saved, home);
     let settings = SETTINGS;
     const s = new GoogleWorkspaceSignInService({
       pool: pool as never, logger: createSilentLogger(), appOrigin: 'https://curia.example.com',
       readSettings: async () => settings, home, now: () => now,
       fetchImpl: (async () => { refreshes++; return answer(); }) as typeof fetch,
     });
-    await s.status();
+    expect((await s.status()).state).toBe('signed_in');
     settings = { ...SETTINGS, clientSecret: 'secret-2' };
-    await s.status();
-    expect(refreshes).toBe(2);
+    expect(await s.status()).toMatchObject({ state: 'token_rejected', detail: expect.stringMatching(/secret changed/) });
   });
 
   it('token_rejected when the grant lacks a scope', async () => {
