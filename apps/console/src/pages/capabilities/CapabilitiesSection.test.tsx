@@ -6,6 +6,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { RegistryEntry } from '../registry-rows.js';
+import type { FieldGroupHandle } from '../setup/ChannelForms.js';
 import { CapabilitiesSection } from './CapabilitiesSection.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -63,11 +64,11 @@ function stub(opts: { failOn?: string; edit?: (reg: ReturnType<typeof registry>)
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;
 
-async function render(place: 'setup' | 'settings', confirm = vi.fn((_text: string) => true)) {
+async function render(place: 'setup' | 'settings', confirm = vi.fn((_text: string) => true), ref?: { current: FieldGroupHandle | null }) {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
-  await act(async () => { root!.render(<CapabilitiesSection principal="Dana" place={place} confirm={confirm} />); });
+  await act(async () => { root!.render(<CapabilitiesSection principal="Dana" place={place} confirm={confirm} ref={ref} />); });
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
   return confirm;
 }
@@ -218,6 +219,36 @@ describe('CapabilitiesSection', () => {
     expect(sw('Email triage').getAttribute('aria-checked')).toBe('mixed');
     await click('Email triage');
     expect(posts).toEqual(['disable agents/ceo-inbox', 'disable skills/ceo-inbox']);
+  });
+
+  it('Save and continue stays once after a failed switch, says so, and goes on when pressed again', async () => {
+    stub({ failOn: 'diagnostics' });
+    const ref: { current: FieldGroupHandle | null } = { current: null };
+    await render('setup', undefined, ref);
+    expect(await ref.current!.flush()).toBe(true);
+    await click('Diagnostics');
+    let held: boolean | undefined;
+    await act(async () => { held = await ref.current!.flush(); });
+    expect(held).toBe(false);
+    expect(host!.querySelector('[role="alert"]')!.textContent).toContain('Diagnostics didn’t switch. Try it again, or Save and continue again to leave it as it is.');
+    expect(await ref.current!.flush()).toBe(true);
+  });
+
+  it('a successful retry clears the failure', async () => {
+    // The first registry call fails; the stub's own fetch handles the rest.
+    let fail = true;
+    stub();
+    const real = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+      if (fail && init?.method === 'POST') { fail = false; return new Response(JSON.stringify({ error: 'busy' }), { status: 500, headers: { 'content-type': 'application/json' } }); }
+      return real(path, init);
+    }));
+    const ref: { current: FieldGroupHandle | null } = { current: null };
+    await render('setup', undefined, ref);
+    await click('Diagnostics');
+    await click('Diagnostics');
+    expect(sw('Diagnostics').getAttribute('aria-checked')).toBe('true');
+    expect(await ref.current!.flush()).toBe(true);
   });
 
   it('a failed re-read after a switch keeps its outcome and locks the stale switches', async () => {
