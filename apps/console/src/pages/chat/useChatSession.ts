@@ -46,6 +46,8 @@ interface ChatSession {
   sending: boolean;
   hasMore: boolean;
   loadingHistory: boolean;
+  /** The first history request has come back (empty or not). False until then, and after a failed one. */
+  historyLoaded: boolean;
   connectionError: string | null;
   send: (text: string) => Promise<void>;
   loadMore: () => Promise<void>;
@@ -108,6 +110,7 @@ export function useChatSession(options: ChatSessionOptions = {}): ChatSession {
   const [sending, setSending] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
   // isSending and isLoadingMore are refs so their guards are immune to stale
@@ -361,6 +364,7 @@ export function useChatSession(options: ChatSessionOptions = {}): ChatSession {
         throw new Error(`initial history fetch returned ${res.status}`);
       }
       const data = (await res.json()) as HistoryResponse;
+      setHistoryLoaded(true);
       if (data.messages.length === 0) return false;
       const loaded = historyToMessages(data.messages);
       // The stream opens after this load, so the only rows already on screen
@@ -696,5 +700,5 @@ export function useChatSession(options: ChatSessionOptions = {}): ChatSession {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return { messages, sending, hasMore, loadingHistory, connectionError, send, loadMore };
+  return { messages, sending, hasMore, loadingHistory, historyLoaded, connectionError, send, loadMore };
 }

@@ -56,7 +56,7 @@ export function SetupGuidePanel(props: {
   onShowSteps: () => void;
 }): JSX.Element {
   const { step, stepName } = props;
-  const { messages, sending, hasMore, loadingHistory, connectionError, send, loadMore } = useChatSession({ setupStep: step });
+  const { messages, sending, hasMore, loadingHistory, historyLoaded, connectionError, send, loadMore } = useChatSession({ setupStep: step });
   const [markers, setMarkers] = useState<StepMarker[]>([]);
   const lastStep = useRef(step);
   const lastMessageId = useRef<string | null>(null);
@@ -70,13 +70,13 @@ export function SetupGuidePanel(props: {
     if (thread) thread.scrollTop = thread.scrollHeight;
   }, [props.hidden]);
   const historyPending = useRef(true);
-  historyPending.current = loadingHistory && messages.length === 0;
-  // Greet once the history has loaded empty, and keep the greeting at the top after the
-  // first message, so it doesn't vanish mid-conversation.
+  historyPending.current = !historyLoaded && messages.length === 0;
+  // Greet once the first history request has come back empty (not before it has run), and
+  // keep the greeting at the top after the first message, so it doesn't vanish mid-conversation.
   const [greet, setGreet] = useState(false);
   useEffect(() => {
-    if (!loadingHistory && messages.length === 0 && !hasMore) setGreet(true);
-  }, [loadingHistory, messages.length, hasMore]);
+    if (historyLoaded && messages.length === 0 && !hasMore) setGreet(true);
+  }, [historyLoaded, messages.length, hasMore]);
 
   // A marker each time the open step changes. None before the history has loaded: it would
   // sit above messages it came after.
