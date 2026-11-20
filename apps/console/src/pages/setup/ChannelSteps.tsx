@@ -206,8 +206,9 @@ export function GoogleWorkspaceStep({ task, principal, onSaved, onContinue, onHe
         onChanged={async () => { setFieldsVersion((v) => v + 1); await onSaved(); }}
       />
       <div className="setup-note">
-        You can reuse the Google Cloud project from {principal}’s email &amp; calendar. Enable the Drive, Docs and Sheets
-        APIs there, and use a Web application OAuth client.
+        You can reuse the Google Cloud project and Web application OAuth client from {principal}’s email &amp; calendar.
+        Enable the Drive, Docs and Sheets APIs there. Google shows a client secret only once, so on that client
+        choose <b>Add secret</b> and paste the new one here; keep the old secret, which Nylas still uses.
       </div>
       <GoogleWorkspaceSignIn
         refreshKey={fieldsVersion}

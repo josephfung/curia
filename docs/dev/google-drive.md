@@ -89,7 +89,9 @@ the console. The manual flow is kept as a fallback.
    step: `<APP_ORIGIN>/api/google-workspace/callback` (e.g.
    `https://curia.example.com/api/google-workspace/callback`). Google accepts https, or
    plain http for `localhost` only, so APP_ORIGIN must be one of those.
-4. Note the **Client ID** and **Client Secret**.
+4. Note the **Client ID** and **Client Secret**. Google shows a secret only once, at
+   creation. When reusing the Nylas connector's client, choose **Add secret** on it and use
+   the new secret for Curia; leave the original in place, since Nylas still uses it.
 
 #### Step 4 — Save the OAuth values
 
