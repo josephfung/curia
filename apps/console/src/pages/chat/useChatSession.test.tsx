@@ -430,6 +430,19 @@ describe('useChatSession setupStep', () => {
     expect(postedBodies().map((b) => b['setupStep'])).toEqual(['email', 'voice']);
   });
 
+  it('sends the step open when Send was pressed, not when the stream finished opening', async () => {
+    probeSetupStep = 'email';
+    await mount();
+    // The stream isn't open yet, so send() waits for it; the operator moves on meanwhile.
+    let sent: Promise<void> = Promise.resolve();
+    await act(async () => { sent = session!.send('which key?'); });
+    probeSetupStep = 'voice';
+    await act(async () => { root!.render(<Probe />); });
+    await act(async () => { latestSource().open(); });
+    await act(async () => { await sent; });
+    expect(postedBodies()[0]!['setupStep']).toBe('email');
+  });
+
   it('sends no step outside the Setup page', async () => {
     await mount();
     await act(async () => { latestSource().open(); });

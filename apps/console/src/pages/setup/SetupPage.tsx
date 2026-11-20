@@ -75,8 +75,16 @@ export default function SetupPage(): JSX.Element {
   // says so; a failed call is retried with each refresh (any save, or a step's check).
   const [guideNotice, setGuideNotice] = useState<string | null>(null);
   const guideReady = useRef(false);
+  // One start at a time: a mount call and a refresh call overlapping must not let the older
+  // one's failure land after the newer one's success.
+  const starting = useRef<Promise<void> | null>(null);
   const ensureGuide = useCallback(async (): Promise<void> => {
     if (guideReady.current) return;
+    if (starting.current) return starting.current;
+    starting.current = startOnce().finally(() => { starting.current = null; });
+    return starting.current;
+  }, []);
+  async function startOnce(): Promise<void> {
     try {
       const { setupGuide } = await startSetup();
       guideReady.current = setupGuide;
@@ -86,7 +94,7 @@ export default function SetupPage(): JSX.Element {
       console.error('[SetupPage] could not start Setup:', err);
       setGuideNotice(`Couldn’t start Setup (${err instanceof Error ? err.message : 'unknown error'}), so messages here may reach Curia’s usual chat instead of the setup guide.`);
     }
-  }, []);
+  }
 
   const refresh = useCallback(async (): Promise<void> => {
     const seq = ++loadSeq.current;

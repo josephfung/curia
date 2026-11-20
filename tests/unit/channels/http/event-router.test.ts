@@ -233,11 +233,13 @@ describe('EventRouter Ant Farm SSE', () => {
   it('drops a slow antfarm client when its pending buffer is full', () => {
     const { router } = makeRouter();
     let writeCount = 0;
+    let ended = false;
     const res = {
       write: (_chunk: string, _cb?: () => void) => {
         writeCount += 1;
         return true;
       },
+      end: () => { ended = true; },
     };
 
     router.addAntfarmClient({ res: res as unknown as ServerResponse });
@@ -257,6 +259,8 @@ describe('EventRouter Ant Farm SSE', () => {
 
     router.broadcastToAntfarm(directives);
     expect(writeCount).toBe(firstPassWrites);
+    // Dropped and ended: an open dropped stream would keep a restart waiting (#2358).
+    expect(ended).toBe(true);
   });
 });
 
@@ -350,5 +354,18 @@ describe('EventRouter.closeAllStreams', () => {
     expect(ended).toEqual(['chat-1', 'antfarm']);
     expect(router.hasAnyChatListener()).toBe(false);
     expect(router.closeAllStreams()).toBe(0);
+  });
+});
+
+describe('EventRouter streams at shutdown', () => {
+  it('ends a stream that registers after the shutdown sweep, chat or Ant Farm', () => {
+    const { router } = makeRouter();
+    router.closeAllStreams();
+    const ended: string[] = [];
+    const res = (name: string) => ({ write: () => true, end: () => { ended.push(name); } }) as unknown as ServerResponse;
+    router.addSseClient({ res: res('late-chat'), conversationId: 'c1' });
+    router.addAntfarmClient({ res: res('late-antfarm') });
+    expect(ended).toEqual(['late-chat', 'late-antfarm']);
+    expect(router.hasAnyChatListener()).toBe(false);
   });
 });

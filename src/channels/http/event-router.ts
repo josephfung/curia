@@ -165,6 +165,8 @@ export class EventRouter {
   private pendingResponses = new Map<string, PendingResponse>();
   /** Active SSE connections */
   private sseClients = new Set<SseClient>();
+  /** Set by closeAllStreams: shutting down, so a stream that registers late is ended at once. */
+  private closing = false;
   /** Ant Farm live-stream clients — separate from console chat SSE (no cross-talk). */
   private antfarmClients = new Set<AntfarmClient>();
 
@@ -456,6 +458,10 @@ export class EventRouter {
 
   /** Register an SSE client. Returns a cleanup function. */
   addSseClient(client: SseClient): () => void {
+    if (this.closing) {
+      this.endStream(client.res, 'Late SSE stream could not be ended at shutdown');
+      return () => {};
+    }
     if (client.lastSeen === undefined) client.lastSeen = Date.now();
     this.sseClients.add(client);
     this.logger.debug({ conversationId: client.conversationId }, 'SSE client connected');
@@ -472,22 +478,34 @@ export class EventRouter {
    * Browsers' EventSource reconnects to the new process. Returns how many were ended.
    */
   closeAllStreams(): number {
+    // From here on a stream that registers (its request was mid-flight) is ended at once.
+    this.closing = true;
     let ended = 0;
     for (const client of [...this.sseClients, ...this.antfarmClients]) {
-      try {
-        client.res.end();
-        ended++;
-      } catch (err) {
-        this.logger.warn({ err }, 'SSE stream could not be ended at shutdown');
-      }
+      if (this.endStream(client.res, 'SSE stream could not be ended at shutdown')) ended++;
     }
     this.sseClients.clear();
     this.antfarmClients.clear();
     return ended;
   }
 
+  /** Ends one stream's response. False (and logged) when it couldn't. */
+  private endStream(res: ServerResponse, failure: string): boolean {
+    try {
+      res.end();
+      return true;
+    } catch (err) {
+      this.logger.warn({ err }, failure);
+      return false;
+    }
+  }
+
   /** Register an Ant Farm SSE client. Returns a cleanup function. */
   addAntfarmClient(client: Pick<AntfarmClient, 'res'>): () => void {
+    if (this.closing) {
+      this.endStream(client.res, 'Late Ant Farm SSE stream could not be ended at shutdown');
+      return () => {};
+    }
     const entry: AntfarmClient = {
       res: client.res,
       pendingWrites: 0,
@@ -528,6 +546,8 @@ export class EventRouter {
       for (const directive of directives) {
         if (client.pendingWrites >= ANT_FARM_MAX_CLIENT_BUFFER) {
           this.antfarmClients.delete(client);
+          // End it too: a dropped stream left open would keep a restart waiting (#2358).
+          this.endStream(client.res, 'Dropped Ant Farm SSE stream could not be ended');
           this.logger.warn('Dropped slow Ant Farm SSE client — pending buffer full');
           break;
         }
