@@ -83,7 +83,7 @@ tasks:
     # Done means signed in and Google still accepts the token, not just saved keys.
     completion_check:
       type: google_workspace_signed_in
-    credential_how_to: "In Google Cloud (the project from Email & calendar can be reused), enable the Drive, Docs and Sheets APIs and use a Web application OAuth client, with the callback URL shown in the Google Workspace step added to its authorized redirect URIs. Paste Curia's Google address, the client ID and the secret in that step, then Sign in as Curia with Curia's own Google account and allow every permission. Curia restarts once to start using it."
+    credential_how_to: "In Google Cloud (the project from Email & calendar can be reused), enable the Drive, Docs and Sheets APIs and use a Web application OAuth client (the Email & calendar one can be reused: Google shows a secret only once, so add a second secret to it for Curia and keep the old one for Nylas), with the callback URL shown in the Google Workspace step added to its authorized redirect URIs. Paste Curia's Google address, the client ID and the secret in that step, then Sign in as Curia with Curia's own Google account and allow every permission. Curia restarts once to start using it."
     docs_url: /get-started/google-docs
 
   # ── Optional extras: never block setup_complete ──────────────────────────
