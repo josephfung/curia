@@ -66,6 +66,7 @@ import { EmailAccountsRepo } from '../email/email-accounts-repo.js';
 import { SecretUsageRepo } from '../../secrets/secret-usage-repo.js';
 import { secretCaptureRoutes } from './routes/secret-capture.js';
 import { mailboxSignInRoutes, type MailboxSignInRouteOptions } from './routes/mailbox-signin.js';
+import { googleWorkspaceSignInRoutes } from './routes/google-workspace-signin.js';
 import { setupRoutes } from './routes/setup.js';
 import { smsWebhookRoutes } from '../sms/webhook-route.js';
 import { SmsWebhookBridge } from '../sms/webhook-bridge.js';
@@ -179,6 +180,8 @@ export interface HttpAdapterConfig {
     /** The boot-time Nylas key and region, so the console's readiness shows restart_required (R11). */
     boot?: import('../../nylas/signin-readiness.js').NylasBootConfig;
   };
+  /** Backs /api/google-workspace/* ("Sign in as Curia" with Google Workspace, #2683). */
+  googleWorkspaceSignIn?: import('../../google/workspace-signin.js').GoogleWorkspaceSignInService;
   /**
    * True when the process booted without a principal contact and is running in
    * setup-required mode (email + Signal adapters are skipped until restart).
@@ -403,6 +406,7 @@ export class HttpAdapter implements Channel {
     // overlap the sessions guard prevents for its own DELETE.
     let isPruningCaptureTokens = false;
     let isPruningSignInTokens = false;
+    let isPruningWorkspaceStates = false;
     this.pruneInterval = setInterval(() => {
       const now = Date.now();
       for (const [tokenHash, entry] of sessions) {
@@ -431,6 +435,17 @@ export class HttpAdapter implements Channel {
             logger.error({ err }, 'Mailbox sign-in token prune failed');
           })
           .finally(() => { isPruningSignInTokens = false; });
+      }
+
+      // And Google Workspace sign-in states (#2683).
+      const workspaceSvc = this.config.googleWorkspaceSignIn;
+      if (workspaceSvc && !isPruningWorkspaceStates) {
+        isPruningWorkspaceStates = true;
+        workspaceSvc.pruneExpired()
+          .catch((err: unknown) => {
+            logger.error({ err }, 'Google Workspace sign-in state prune failed');
+          })
+          .finally(() => { isPruningWorkspaceStates = false; });
       }
 
       if (isPruning) return;
@@ -796,6 +811,16 @@ export class HttpAdapter implements Channel {
         readApiKey: this.config.mailboxSignIn.readApiKey,
         ...(this.config.mailboxSignIn.callback ? { callback: this.config.mailboxSignIn.callback } : {}),
         appOrigin: this.config.appOrigin,
+        logger,
+      });
+    }
+
+    // Google Workspace sign-in (#2683): two console routes and the public OAuth callback.
+    if (webAppBootstrapSecret && this.config.googleWorkspaceSignIn) {
+      await this.app.register(googleWorkspaceSignInRoutes, {
+        service: this.config.googleWorkspaceSignIn,
+        webAppBootstrapSecret,
+        sessions,
         logger,
       });
     }

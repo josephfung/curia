@@ -4,6 +4,7 @@ import { Sidebar } from '../components/Sidebar.js';
 import { Topbar } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
+import { GoogleWorkspaceSignIn } from '../components/GoogleWorkspaceSignIn.js';
 
 type McpState = 'uninstalled' | 'installed' | 'enabled';
 
@@ -172,6 +173,14 @@ function McpDrawer({ entry, onClose, onChanged }: { entry: McpEntry; onClose: ()
                   <SecretRow key={field.key} field={field} onSaved={onChanged} />
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* The same sign-in the Setup page's Google Workspace step has (#2683). */}
+          {entry.name === 'google-workspace' && (
+            <div className="form-field">
+              <label>Sign in as Curia</label>
+              <GoogleWorkspaceSignIn refreshKey={entry.secretFields.map((f) => `${f.key}:${f.configured}`).join(',')} />
             </div>
           )}
 

@@ -16,7 +16,6 @@ import {
 } from './setup-api.js';
 import {
   EXTRAS,
-  firstName,
   firstOpenStep,
   groupLabel,
   isExtra,
@@ -29,9 +28,9 @@ import {
 } from './setup-steps.js';
 import { WhoStep } from './WhoStep.js';
 import { CuriaNameStep } from './CuriaNameStep.js';
-import { EmailStep, MessagingStep, SignInStep, VoiceStep } from './ChannelSteps.js';
+import { EmailStep, GoogleWorkspaceStep, MessagingStep, SignInStep, VoiceStep } from './ChannelSteps.js';
 import { ApplyStep, StartStep } from './FinishSteps.js';
-import { CapabilitiesStep, GoogleWorkspaceStep, WebSearchStep, WorkingStyleStep } from './ExtraSteps.js';
+import { CapabilitiesStep, WebSearchStep, WorkingStyleStep } from './ExtraSteps.js';
 import { SetupGuidePanel } from './SetupGuidePanel.js';
 
 const PHONE_QUERY = '(max-width: 760px)';
@@ -154,7 +153,6 @@ export default function SetupPage(): JSX.Element {
   const checklist = data?.checklist ?? null;
   const fields = data?.fields ?? EMPTY_SETUP_FIELDS;
   const principal = principalLabel(data?.principal.displayName);
-  const principalFirst = firstName(data?.principal.displayName);
   const required = STEPS.filter((s) => s.id !== 'apply' && s.id !== 'start');
   const doneCount = required.filter((s) => stepMark(s.id, checklist) === 'done').length;
   const taskFor = (id: string) => checklist?.tasks.find((t) => t.id === id);
@@ -182,14 +180,14 @@ export default function SetupPage(): JSX.Element {
         return <VoiceStep key="voice" task={taskFor('voice')} principal={principal} fields={fields} contactId={data.principal.contactId} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'mailbox_signin':
         return <SignInStep task={taskFor('mailbox_signin')} principal={principal} onSaved={refresh} onContinue={goNext} onHelp={help} />;
+      case 'google_workspace':
+        return <GoogleWorkspaceStep key="google_workspace" task={taskFor('google_workspace')} principal={principal} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'apply':
         return <ApplyStep checklist={checklist} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'start':
         return <StartStep checklist={checklist} principal={principal} onRefresh={refresh} onHelp={help} />;
       case 'working_style':
         return <WorkingStyleStep key="working_style" task={taskFor('working_style')} principal={principal} onSaved={refresh} onContinue={goNext} onHelp={help} />;
-      case 'google_workspace':
-        return <GoogleWorkspaceStep key="google_workspace" task={taskFor('google_workspace')} principal={principal} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'web_research':
         return <WebSearchStep key="web_research" task={taskFor('web_research')} principal={principal} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'capabilities':
@@ -205,7 +203,7 @@ export default function SetupPage(): JSX.Element {
         <h1>Set up Curia</h1>
         <p className="setup-count">{data ? `${doneCount} of ${required.length} required steps done` : ' '}</p>
         {[...STEPS, ...EXTRAS].map((s) => {
-          const label = groupLabel(s.group, principalFirst);
+          const label = groupLabel(s.group);
           const heading = label !== lastGroup ? <div className="setup-group" key={`g-${s.group}`}>{label}</div> : null;
           lastGroup = label;
           const mark = stepMark(s.id, checklist);
@@ -228,7 +226,7 @@ export default function SetupPage(): JSX.Element {
       </nav>
       <section className="setup-pane" aria-live="polite" ref={paneRef} inert={guideOpen && phone}>
         <div className="setup-eyebrow">
-          {isExtra(current) ? 'Optional extra' : `Step ${index + 1} of ${STEPS.length} · ${groupLabel(step.group, principalFirst)}`}
+          {isExtra(current) ? 'Optional extra' : `Step ${index + 1} of ${STEPS.length} · ${groupLabel(step.group)}`}
         </div>
         {loadError && data && <p className="setup-status attention" role="alert">{loadError}</p>}
         {renderStep()}

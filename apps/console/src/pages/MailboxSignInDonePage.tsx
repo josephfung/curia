@@ -54,22 +54,20 @@ export function resultMessage(result: string, target: Target | null): ResultMess
   }
 }
 
-type RestartState = 'waiting' | 'back' | 'timeout';
+export type RestartState = 'waiting' | 'back' | 'timeout';
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_WAIT_MS = 120_000;
 
-export default function MailboxSignInDonePage(
+/**
+ * Waits for a restart Curia scheduled after a sign-in: 'waiting' until a new process answers
+ * /api/health, then 'back', or 'timeout' after maxWaitMs. Inert when `restart` is false. Shared
+ * with the Google Workspace done page (#2683).
+ */
+export function useRestartWait(
+  restart: boolean,
   { pollIntervalMs = POLL_INTERVAL_MS, maxWaitMs = MAX_WAIT_MS }: { pollIntervalMs?: number; maxWaitMs?: number } = {},
-) {
-  const params = new URLSearchParams(window.location.search);
-  const rawResult = params.get('result') ?? '';
-  const result = SIGNIN_RESULTS.includes(rawResult) ? rawResult : 'unknown';
-  const rawTarget = params.get('target');
-  const target: Target | null = rawTarget === 'principal' || rawTarget === 'curia' ? rawTarget : null;
-  const msg = resultMessage(result, target);
-  const restart = params.get('restart') === '1' && msg.ok;
-
+): RestartState {
   const [restartState, setRestartState] = useState<RestartState>('waiting');
 
   useEffect(() => {
@@ -133,6 +131,20 @@ export default function MailboxSignInDonePage(
       inFlight?.abort();
     };
   }, [restart, pollIntervalMs, maxWaitMs]);
+  return restartState;
+}
+
+export default function MailboxSignInDonePage(
+  { pollIntervalMs, maxWaitMs }: { pollIntervalMs?: number; maxWaitMs?: number } = {},
+) {
+  const params = new URLSearchParams(window.location.search);
+  const rawResult = params.get('result') ?? '';
+  const result = SIGNIN_RESULTS.includes(rawResult) ? rawResult : 'unknown';
+  const rawTarget = params.get('target');
+  const target: Target | null = rawTarget === 'principal' || rawTarget === 'curia' ? rawTarget : null;
+  const msg = resultMessage(result, target);
+  const restart = params.get('restart') === '1' && msg.ok;
+  const restartState = useRestartWait(restart, { pollIntervalMs, maxWaitMs });
 
   return (
     <div className="login-root">

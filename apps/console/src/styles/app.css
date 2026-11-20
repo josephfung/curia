@@ -4007,6 +4007,12 @@ table.records-table tbody tr.active td { background: transparent; }
 }
 .setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; }
 .setup-actions .btn { text-decoration: none; }
+/* Google Workspace sign-in (#2683): the callback URL to paste into Google Cloud. */
+.gws-callback { display: flex; align-items: center; gap: 8px; max-width: 520px; margin-top: 8px; }
+.gws-callback code {
+  flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12.5px;
+  background: var(--app-bg-sunken); border-radius: 6px; padding: 6px 8px;
+}
 .setup-saved { color: var(--app-teal); }
 .setup-inline { display: flex; gap: 8px; align-items: center; }
 .setup-inline input { flex: 1; min-width: 0; }

@@ -28,11 +28,20 @@ function checklist(tasks: ChecklistTask[]): Checklist {
   return { setupFor: 'other', tasks, setupComplete: missing.length === 0, missing };
 }
 
-const ALL_DONE = checklist(['who', 'curia_name', 'email', 'messaging', 'voice', 'mailbox_signin'].map((id) => task(id, 'done')));
+const ALL_DONE = checklist(['who', 'curia_name', 'email', 'messaging', 'voice', 'mailbox_signin', 'google_workspace'].map((id) => task(id, 'done')));
 
 describe('the steps', () => {
   it('run in the Setup page order, Finish last', () => {
-    expect(STEPS.map((s) => s.id)).toEqual(['who', 'curia_name', 'email', 'messaging', 'voice', 'mailbox_signin', 'apply', 'start']);
+    expect(STEPS.map((s) => s.id)).toEqual(['who', 'curia_name', 'email', 'messaging', 'voice', 'mailbox_signin', 'google_workspace', 'apply', 'start']);
+  });
+
+  it('put Google Workspace in Business Apps, right after Email & calendar, as a required step (#2683)', () => {
+    expect(STEPS.find((s) => s.id === 'google_workspace')).toMatchObject({ group: 'accounts', name: 'Google Workspace' });
+    expect(nextStep('mailbox_signin')).toBe('google_workspace');
+    expect(nextStep('google_workspace')).toBe('apply');
+    expect(isExtra('google_workspace')).toBe(false);
+    expect(stepsLeft(checklist([...ALL_DONE.tasks.filter((t) => t.id !== 'google_workspace'), task('google_workspace', 'pending')])).map((s) => s.id))
+      .toEqual(['google_workspace']);
   });
 
   it('accept only known step ids from the URL', () => {
@@ -50,22 +59,21 @@ describe('the steps', () => {
 
 describe('the optional extras', () => {
   it('follow the steps, in the catalog’s ids, and come from the URL too', () => {
-    expect(EXTRAS.map((s) => s.id)).toEqual(['working_style', 'google_workspace', 'web_research', 'capabilities']);
-    expect(isStepId('google_workspace')).toBe(true);
+    expect(EXTRAS.map((s) => s.id)).toEqual(['working_style', 'web_research', 'capabilities']);
+    expect(isStepId('web_research')).toBe(true);
     expect(isExtra('web_research')).toBe(true);
     expect(isExtra('voice')).toBe(false);
-    expect(groupLabel('extras', 'Dana')).toBe('Optional extras');
+    expect(groupLabel('extras')).toBe('Optional extras');
   });
 
   it('walk forward, and the last returns to Start onboarding', () => {
-    expect(nextStep('working_style')).toBe('google_workspace');
-    expect(nextStep('google_workspace')).toBe('web_research');
+    expect(nextStep('working_style')).toBe('web_research');
     expect(nextStep('web_research')).toBe('capabilities');
     expect(nextStep('capabilities')).toBe('start');
   });
 
   it('are never counted as left to do, nor where a returning operator lands', () => {
-    const c = checklist([...ALL_DONE.tasks, task('google_workspace', 'pending', { optional: true })]);
+    const c = checklist([...ALL_DONE.tasks, task('web_browser', 'pending', { optional: true })]);
     expect(firstOpenStep(c)).toBe('start');
     expect(stepsLeft(c)).toEqual([]);
   });
@@ -73,22 +81,18 @@ describe('the optional extras', () => {
   it('are ticked only once something is set up', () => {
     const unset = checklist([
       task('working_style', 'done', { optional: true }),
-      task('google_workspace', 'pending', { optional: true }),
       task('web_research', 'done', { optional: true, optional_upgrade: { vault_keys: ['tavily_api_key'], configured: false } }),
     ]);
     // Working style's check is always done, so it says nothing: never ticked.
     expect(stepMark('working_style', unset)).toBe('todo');
     expect(stepMark('capabilities', checklist([task('capabilities', 'done', { optional: true })]))).toBe('todo');
-    expect(stepMark('google_workspace', unset)).toBe('todo');
     // Keyless search is done too; only the key ticks it.
     expect(stepMark('web_research', unset)).toBe('todo');
     const set = checklist([
-      task('google_workspace', 'done', { optional: true }),
       task('web_research', 'done', { optional: true, optional_upgrade: { vault_keys: ['tavily_api_key'], configured: true } }),
     ]);
-    expect(stepMark('google_workspace', set)).toBe('done');
     expect(stepMark('web_research', set)).toBe('done');
-    expect(stepMark('google_workspace', null)).toBe('todo');
+    expect(stepMark('web_research', null)).toBe('todo');
   });
 });
 
@@ -118,7 +122,7 @@ describe('firstOpenStep', () => {
   });
 
   it('lands on a step that waits for a restart: it is not done yet', () => {
-    const c = checklist(['who', 'curia_name', 'email', 'messaging', 'voice', 'mailbox_signin'].map((id) =>
+    const c = checklist(['who', 'curia_name', 'email', 'messaging', 'voice', 'mailbox_signin', 'google_workspace'].map((id) =>
       task(id, id === 'voice' ? 'pending' : 'done', id === 'voice' ? { restart_required: true } : {})));
     expect(firstOpenStep(c)).toBe('voice');
   });
@@ -138,8 +142,8 @@ describe('names', () => {
     expect(firstName('Dana Okafor')).toBe('Dana');
     expect(firstName('  ')).toBeNull();
     expect(principalLabel(null)).toBe('your principal');
-    expect(groupLabel('accounts', 'Dana')).toBe('Dana’s accounts');
-    expect(groupLabel('accounts', null)).toBe('Your principal’s accounts');
+    // Business Apps, not the principal's accounts: it holds Curia's Google Workspace too (#2683).
+    expect(groupLabel('accounts')).toBe('Business Apps');
   });
 
   it('capitalizes the label at the start of a sentence, and leaves a name alone', () => {

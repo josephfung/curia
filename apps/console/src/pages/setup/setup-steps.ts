@@ -24,12 +24,12 @@ export interface Checklist {
 }
 
 export type StepId =
-  | 'who' | 'curia_name' | 'email' | 'messaging' | 'voice' | 'mailbox_signin'
+  | 'who' | 'curia_name' | 'email' | 'messaging' | 'voice' | 'mailbox_signin' | 'google_workspace'
   | 'apply' | 'start'
   | ExtraId;
 
 /** The optional extras: listed after Start onboarding, never numbered, never required. */
-export type ExtraId = 'working_style' | 'google_workspace' | 'web_research' | 'capabilities';
+export type ExtraId = 'working_style' | 'web_research' | 'capabilities';
 
 export type StepGroup = 'basics' | 'channels' | 'accounts' | 'finish' | 'extras';
 
@@ -47,6 +47,8 @@ export const STEPS: readonly StepDef[] = [
   { id: 'messaging', group: 'channels', name: 'Messaging' },
   { id: 'voice', group: 'channels', name: 'Voice' },
   { id: 'mailbox_signin', group: 'accounts', name: 'Email & calendar' },
+  // Required since #2683: the onboarding deep dive delivers its drafts as Google Docs.
+  { id: 'google_workspace', group: 'accounts', name: 'Google Workspace' },
   { id: 'apply', group: 'finish', name: 'Apply & restart' },
   { id: 'start', group: 'finish', name: 'Start onboarding' },
 ];
@@ -54,7 +56,6 @@ export const STEPS: readonly StepDef[] = [
 /** In order, after the steps. A catalog task's id doubles as the extra's id. */
 export const EXTRAS: readonly StepDef[] = [
   { id: 'working_style', group: 'extras', name: 'Working style' },
-  { id: 'google_workspace', group: 'extras', name: 'Google Workspace' },
   { id: 'web_research', group: 'extras', name: 'Higher search limit' },
   { id: 'capabilities', group: 'extras', name: 'Capabilities' },
 ];
@@ -70,12 +71,15 @@ export function isStepId(value: unknown): value is StepId {
   return typeof value === 'string' && STEP_IDS.has(value);
 }
 
-/** The group heading. The accounts group is named after the principal once known. */
-export function groupLabel(group: StepGroup, principalFirstName: string | null): string {
+/**
+ * The group heading. The accounts group is Business Apps: the principal's email and calendar,
+ * Curia's Google Workspace, and later other business applications Curia is authorized for.
+ */
+export function groupLabel(group: StepGroup): string {
   switch (group) {
     case 'basics': return 'Basics';
     case 'channels': return 'Curia’s channels';
-    case 'accounts': return principalFirstName ? `${principalFirstName}’s accounts` : 'Your principal’s accounts';
+    case 'accounts': return 'Business Apps';
     case 'finish': return 'Finish';
     case 'extras': return 'Optional extras';
   }
@@ -103,8 +107,7 @@ export function stepMark(step: StepId, checklist: Checklist | null): StepMark {
 }
 
 /**
- * An extra is ticked only once it has something set up: Google Workspace's keys, or the
- * Tavily key. Working style and Capabilities are never ticked: their checks are always done
+ * An extra is ticked only once it has something set up: the Tavily key. Working style and Capabilities are never ticked: their checks are always done
  * (the defaults are fine), so a tick would say nothing about whether the operator chose
  * anything.
  */
@@ -114,7 +117,6 @@ function extraMark(step: ExtraId, checklist: Checklist): StepMark {
     case 'working_style':
     case 'capabilities':
       return 'todo';
-    case 'google_workspace': return task?.status === 'done' ? 'done' : 'todo';
     case 'web_research': return task?.optional_upgrade?.configured ? 'done' : 'todo';
   }
 }

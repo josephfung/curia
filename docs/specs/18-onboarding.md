@@ -113,7 +113,9 @@ onboarding, and an install that predates it never sees it. Design and mockup:
 
 The step list shows each step's mark from the Setup checklist (`GET /api/setup/checklist`,
 the same computation as the setup agent's `setup-status`): done, waiting for a restart,
-not done, or locked. Status shows as one line inside the open step.
+not done, or locked. Status shows as one line inside the open step. The steps are grouped
+Basics, Curia's channels, Business Apps (Email & calendar and Google Workspace, and later any
+other business application Curia is authorized for) and Finish.
 
 | Step | Saves | Through |
 |------|-------|---------|
@@ -123,6 +125,7 @@ not done, or locked. Status shows as one line inside the open step.
 | Messaging | The route (the Curia app, Signal, SMS or Slack), that route's credentials, and the principal's id on it (Signal number, mobile, Slack member id), linked to their contact. Nothing is sent to the principal | `PUT /api/setup/state`, the vault, the channel routes, `POST /api/contacts/:id/identities` |
 | Voice | The route (the app or a Signal call; Phone shows as coming soon), the Deepgram and Cartesia keys and Curia's voice. LiveKit's keys come with the install (#2689). A Signal call also takes Signal's credentials and the principal's number when messaging isn't Signal | `PUT /api/setup/state`, the vault, the channel routes |
 | Email & calendar | The Nylas API key again (the same key, so the step stands alone), the Nylas sign-in checks, and Connect with Google for the principal | the vault, `/api/registry/nylas/*` |
+| Google Workspace | Curia's Google address and the OAuth client ID and secret, then Sign in as Curia (#2683). Required: the deep dive delivers its drafts as Google Docs (#2362). Done means Google accepts the saved token (a live refresh), so an install signed in by hand reads done. A sign-in restarts Curia once | `PUT /api/vault/secrets/{curia_google_email,google_oauth_client_id,google_oauth_client_secret}`, `/api/google-workspace/{status,signin}`, then Google's redirect to the public `/api/google-workspace/callback` and `/google-workspace/done` |
 | Apply & restart | One restart turns on everything saved; every step is checked again | `POST /api/system/restart`, then `GET /api/system` until `bootedAt` changes |
 | Start onboarding | Locked until `setupComplete`, listing what's left. Ends Setup and loads the console afresh, so no chat stream stays on the Setup thread | `POST /api/setup/complete` (rotates the web thread) |
 
@@ -134,14 +137,12 @@ is turned on as soon as its required credentials resolve; it starts at Apply & r
 Listed under "Optional extras" after Start onboarding, unnumbered ("Optional extra" in the
 eyebrow), and never counted toward the required steps or `setupComplete`. Save and continue
 walks them in order; the last returns to Start onboarding. An extra is ticked only once
-something is set up: Google Workspace when its three keys are saved, the search limit when
-the Tavily key is (`optional_upgrade.configured`). Working style is never ticked, since its
+something is set up: the search limit when the Tavily key is (`optional_upgrade.configured`). Working style is never ticked, since its
 check is always done.
 
 | Extra | Saves | Through |
 |-------|-------|---------|
 | Working style | A tone (one of the four tone templates) and an independence level: Draft only, Ask first (the default) or Spot-check, at scores 65, 75 and 85. Each saves when picked. They are a starting point: the principal is offered them in the first conversation and can change them | `PUT /api/identity` (`tone.style` only, `changedBy: 'working_style'`, which doesn't tick Curia's name); `PUT /api/autonomy` |
-| Google Workspace | Curia's Google address and the OAuth client ID and secret. "Sign in as Curia" shows as coming soon (#2683) | `PUT /api/vault/secrets/{curia_google_email,google_oauth_client_id,google_oauth_client_secret}` |
 | Higher search limit | The Tavily key, with links to tavily.com and the curia-docs limits page | `PUT /api/vault/secrets/tavily_api_key` |
 | Capabilities | Switches over the registry (below). Meetings always on; Email triage off and locked ("Left for <principal> to choose, later in Settings") | `POST /api/registry/:kind/:name/{install-enable,disable}` |
 

@@ -55,7 +55,7 @@ const CHECKLIST: SetupChecklist = {
   tasks: [
     checklistTask('email', 'pending'),
     checklistTask('voice', 'done'),
-    checklistTask('google_workspace', 'pending', true),
+    checklistTask('web_browser', 'pending', true),
   ],
   setupComplete: false,
   missing: ['email'],
@@ -74,10 +74,10 @@ describe('SetupStatusHandler', () => {
   });
 
   it('marks a deferred optional extra as deferred', async () => {
-    const result = await new SetupStatusHandler().execute(ctx(CHECKLIST, '["google_workspace"]'));
+    const result = await new SetupStatusHandler().execute(ctx(CHECKLIST, '["web_browser"]'));
     if (!result.success) throw new Error(result.error);
     const tasks = (result.data as { tasks: Array<{ id: string; status: string }> }).tasks;
-    expect(tasks.find((t) => t.id === 'google_workspace')?.status).toBe('deferred');
+    expect(tasks.find((t) => t.id === 'web_browser')?.status).toBe('deferred');
   });
 
   it('ignores a deferral stored for a required step: required steps cannot be deferred', async () => {

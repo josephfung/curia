@@ -73,6 +73,9 @@ const SELF_AUTHED_API_PREFIXES = [
   '/api/secret-capture',
   // Mailbox sign-in links are token-authed the same way (#2361): the single-use token is the capability.
   '/api/mailbox-signin',
+  // Google Workspace sign-in (#2683): status and start self-auth via assertSecret; the callback
+  // is authorized by its single-use OAuth state alone.
+  '/api/google-workspace',
   // The onboarding wizard runs in the browser with the same curia_session cookie /
   // x-web-bootstrap-secret pair as the identity routes.
   '/api/setup',
