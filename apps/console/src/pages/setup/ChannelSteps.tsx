@@ -6,7 +6,7 @@ import { ConnectWithGoogle } from '../../components/ConnectWithGoogle.js';
 import { EmailAccountsSection } from '../../components/EmailAccountsSection.js';
 import { NylasSignInSetupSection } from '../../components/NylasSignInSetupSection.js';
 import { saveSetupFields, type MessagingRoute, type SetupFields, type VoiceRoute } from './setup-api.js';
-import { atSentenceStart, createLatestSaver, type ChecklistTask } from './setup-steps.js';
+import { atSentenceStart, sharedLatestSaver, type ChecklistTask } from './setup-steps.js';
 import { ChoiceGroup, StatusLine, StepFooter } from './setup-ui.js';
 import { ChannelCredentialsForm, PrincipalIdentityField, turnOnChannelIfReady, type FieldGroupHandle, type FieldSpec } from './ChannelForms.js';
 
@@ -208,8 +208,10 @@ const IDENTITY_LABEL: Record<Exclude<MessagingRoute, 'app'>, { noun: string; pla
  * The route saved one pick at a time, newest last (createLatestSaver). While a pick is
  * unsaved the screen shows it; otherwise it follows what is stored, so a failed save shows
  * the stored route again. The step stays mounted across refreshes, so keyboard focus holds.
+ * The save queue outlives the step (`sharedLatestSaver` under `key`), so picks made either
+ * side of a visit to another step still save in order.
  */
-function useRoute<T extends string>(storedRoute: T | null, save: (next: T) => Promise<void>, onSaved: () => Promise<void>) {
+function useRoute<T extends string>(key: string, storedRoute: T | null, save: (next: T) => Promise<void>, onSaved: () => Promise<void>) {
   const [route, setRoute] = useState<T | null>(storedRoute);
   const [error, setError] = useState<string | null>(null);
   const pending = useRef(0);
@@ -218,7 +220,7 @@ function useRoute<T extends string>(storedRoute: T | null, save: (next: T) => Pr
   // The latest save, not the first render's: Messaging's reads the current voice route.
   const latestSave = useRef(save);
   latestSave.current = save;
-  const saver = useRef(createLatestSaver((next: T) => latestSave.current(next))).current;
+  const saver = sharedLatestSaver(key, (next: T) => latestSave.current(next));
   useEffect(() => {
     if (pending.current === 0) setRoute(storedRoute);
   }, [storedRoute]);
@@ -246,7 +248,7 @@ function useRoute<T extends string>(storedRoute: T | null, save: (next: T) => Pr
 }
 
 export function MessagingStep({ task, principal, fields, contactId, onSaved, onContinue, onHelp }: RouteStepProps): JSX.Element {
-  const { route, error, pick } = useRoute<MessagingRoute>(fields.messagingRoute, async (next) => {
+  const { route, error, pick } = useRoute<MessagingRoute>('messaging-route', fields.messagingRoute, async (next) => {
     // Voice follows messaging until the operator picks it: Signal for Signal, else the app.
     await saveSetupFields({
       messagingRoute: next,
@@ -298,7 +300,7 @@ const VOICE_FIELDS: readonly FieldSpec[] = [
 ];
 
 export function VoiceStep({ task, principal, fields, contactId, onSaved, onContinue, onHelp }: RouteStepProps): JSX.Element {
-  const { route, error, pick } = useRoute<VoiceRoute>(fields.voiceRoute, async (next) => {
+  const { route, error, pick } = useRoute<VoiceRoute>('voice-route', fields.voiceRoute, async (next) => {
     await saveSetupFields({ voiceRoute: next });
   }, onSaved);
   const save = useSaveAndContinue(onContinue);

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   atSentenceStart,
   createLatestSaver,
+  sharedLatestSaver,
   EXTRAS,
   firstName,
   firstOpenStep,
@@ -232,5 +233,31 @@ describe('createLatestSaver (route saves)', () => {
     await expect(a).rejects.toThrow('500');
     await expect(b).rejects.toThrow('500');
     expect(calls).toBe(1);
+  });
+});
+
+describe('sharedLatestSaver (a step that remounts)', () => {
+  const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  it('keeps one queue per key across mounts, and runs each value with the newest mount’s save', async () => {
+    const order: string[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    // First mount: its save of "signal" is slow.
+    const first = sharedLatestSaver<string>('test-route', async (v) => { await gate; order.push(`first:${v}`); });
+    const slow = first('signal');
+    await tick();
+    // The step remounts (another step opened, then this one again); "sms" is picked.
+    const second = sharedLatestSaver<string>('test-route', async (v) => { order.push(`second:${v}`); });
+    expect(second).toBe(first);
+    const fast = second('sms');
+    release();
+    await Promise.all([slow, fast]);
+    // "sms" waited for "signal" and saved last, through the newest mount's save.
+    expect(order).toEqual(['first:signal', 'second:sms']);
+  });
+
+  it('keeps separate queues for separate keys', () => {
+    expect(sharedLatestSaver<string>('test-a', async () => {})).not.toBe(sharedLatestSaver<string>('test-b', async () => {}));
   });
 });

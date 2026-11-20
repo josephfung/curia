@@ -280,6 +280,41 @@ describe('Working style', () => {
     expect(document.querySelector('[role="alert"]')!.textContent).toContain('Couldn’t save Spot-check');
   });
 
+  it('a pick made while a failed save re-reads is kept, even when the re-read then fails', async () => {
+    // The first save fails; its recovery re-read hangs; Spot-check is picked meanwhile and saves
+    // slowly; the re-read then fails. Recovery must not put the old choice back over Spot-check.
+    const { state } = server();
+    const realFetch = globalThis.fetch;
+    let puts = 0;
+    let gets = 0;
+    let releaseRead: () => void = () => {};
+    const readGate = new Promise<void>((r) => { releaseRead = r; });
+    let releaseSave: () => void = () => {};
+    const saveGate = new Promise<void>((r) => { releaseSave = r; });
+    const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      if (path === '/api/autonomy' && method === 'PUT' && ++puts === 1) return json(429, { error: 'Too Many Requests' });
+      if (path === '/api/autonomy' && method === 'PUT') await saveGate;
+      // The page's first read passes; the recovery re-read waits, then fails.
+      if (path === '/api/autonomy' && method === 'GET' && ++gets === 2) {
+        await readGate;
+        return json(503, { error: 'restarting' });
+      }
+      return realFetch(path, init);
+    }));
+    await render(<WorkingStyleStep task={undefined} principal="Dana" onSaved={vi.fn(async () => {})} onContinue={vi.fn()} />);
+    await click(radio('Independence', 'Draft only'));
+    await click(radio('Independence', 'Spot-check'));
+    await act(async () => { releaseRead(); });
+    await settle();
+    await act(async () => { releaseSave(); });
+    await settle();
+    expect(state.score).toBe(85);
+    expect(radio('Independence', 'Spot-check').getAttribute('aria-checked')).toBe('true');
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it('a slow first read never undoes a pick that saved', async () => {
     let releaseRead: () => void = () => {};
     const readGate = new Promise<void>((r) => { releaseRead = r; });
