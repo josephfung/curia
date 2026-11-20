@@ -152,6 +152,44 @@ describe('GoogleWorkspaceSignInService.status', () => {
     expect(refreshes).toBe(0);
   });
 
+  it('token_rejected for a token minted with another OAuth client, without asking Google', async () => {
+    await writeWorkspaceToken('curia@example.com', { ...saved, client_id: 'old-client' }, home);
+    expect(await service().status()).toMatchObject({ state: 'token_rejected', detail: expect.stringMatching(/different OAuth client/) });
+    expect(refreshes).toBe(0);
+  });
+
+  it('refreshes with the saved client and secret, not the file’s', async () => {
+    await writeWorkspaceToken('curia@example.com', { ...saved, client_secret: 'stale-secret' }, home);
+    let sent: URLSearchParams | null = null;
+    const s = new GoogleWorkspaceSignInService({
+      pool: pool as never, logger: createSilentLogger(), appOrigin: 'https://curia.example.com',
+      readSettings: async () => SETTINGS, home, now: () => now,
+      fetchImpl: (async (_u: unknown, init?: RequestInit) => { sent = new URLSearchParams(String(init?.body)); return answer(); }) as typeof fetch,
+    });
+    await s.status();
+    expect(sent!.get('client_secret')).toBe('secret-1');
+  });
+
+  it('never reads a 200 without an access token as signed in', async () => {
+    await writeWorkspaceToken('curia@example.com', saved, home);
+    answer = () => new Response('<html>proxy</html>', { status: 200 });
+    await expect(service().status()).rejects.toThrow(WorkspaceCheckUnavailableError);
+  });
+
+  it('asks Google again when the secret changes', async () => {
+    await writeWorkspaceToken('curia@example.com', saved, home);
+    let settings = SETTINGS;
+    const s = new GoogleWorkspaceSignInService({
+      pool: pool as never, logger: createSilentLogger(), appOrigin: 'https://curia.example.com',
+      readSettings: async () => settings, home, now: () => now,
+      fetchImpl: (async () => { refreshes++; return answer(); }) as typeof fetch,
+    });
+    await s.status();
+    settings = { ...SETTINGS, clientSecret: 'secret-2' };
+    await s.status();
+    expect(refreshes).toBe(2);
+  });
+
   it('token_rejected when the grant lacks a scope', async () => {
     await writeWorkspaceToken('curia@example.com', saved, home);
     answer = () => new Response(JSON.stringify({ access_token: 'n', scope: SCOPES[0] }), { status: 200 });

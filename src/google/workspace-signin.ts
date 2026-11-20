@@ -379,7 +379,9 @@ export class GoogleWorkspaceSignInService {
       this.deps.logger.error({ errName: err instanceof Error ? err.name : typeof err, code: (err as NodeJS.ErrnoException).code }, 'google workspace: could not stat the saved token file');
       return { state: 'token_rejected', detail: 'Curia can’t read its saved Google sign-in (file permissions). Fix the credentials directory’s owner, or sign in as Curia again.' };
     }
-    const key = `${email}|${settings.clientId}|${mtimeMs}`;
+    // Any of the three changing asks Google again: a new secret, too, can turn a good check bad.
+    const secretTag = createHash('sha256').update(settings.clientSecret!.trim()).digest('hex').slice(0, 16);
+    const key = `${email}|${settings.clientId!.trim()}|${secretTag}|${mtimeMs}`;
     if (this.statusCache && this.statusCache.key === key && this.now() - this.statusCache.at < WORKSPACE_STATUS_CACHE_MS) {
       return this.withServerState(this.statusCache.status);
     }
@@ -394,14 +396,22 @@ export class GoogleWorkspaceSignInService {
     }
     if (!saved?.refresh_token) return { state: 'not_signed_in' };
 
-    // Refresh with the client the token was minted for, as workspace-mcp does.
+    let status: WorkspaceSignInStatus;
+
+    // workspace-mcp refreshes with the client in the file; drive-download-file with the saved
+    // one. A token minted for another client works for one consumer and not the other, so it is
+    // rejected, and the check refreshes with the saved client, as both must.
+    if (saved.client_id && saved.client_id !== settings.clientId!.trim()) {
+      status = { state: 'token_rejected', detail: 'The saved sign-in was made with a different OAuth client than the one saved now. Sign in as Curia again.' };
+      this.statusCache = { key, at: this.now(), status };
+      return status;
+    }
     const result = await this.tokenRequest({
       grant_type: 'refresh_token',
       refresh_token: saved.refresh_token,
-      client_id: saved.client_id || settings.clientId!,
-      client_secret: saved.client_secret || settings.clientSecret!,
+      client_id: settings.clientId!.trim(),
+      client_secret: settings.clientSecret!.trim(),
     });
-    let status: WorkspaceSignInStatus;
     if (result.kind === 'ok') {
       // Google omits `scope` on some refreshes; then the stored list is what was granted.
       const lacking = missingWorkspaceScopes(result.body.scope ?? (Array.isArray(saved.scopes) ? saved.scopes.join(' ') : ''));
@@ -476,7 +486,13 @@ export class GoogleWorkspaceSignInService {
       // A non-JSON answer (a proxy page, a truncated body): no error code to report, only the status.
       this.deps.logger.warn({ status: res.status, errName: err instanceof Error ? err.name : typeof err }, 'google workspace: token endpoint answered non-JSON');
     }
-    if (res.ok) return { kind: 'ok', body };
+    // A 200 without an access token (an HTML page, a truncated body) proves nothing: it is an
+    // unusable answer, never a working sign-in.
+    if (res.ok && typeof body.access_token === 'string' && body.access_token !== '') return { kind: 'ok', body };
+    if (res.ok) {
+      this.deps.logger.warn({ status: res.status }, 'google workspace: token endpoint answered 200 without an access token');
+      return { kind: 'unreachable' };
+    }
     return { kind: 'rejected', status: res.status, error: typeof body.error === 'string' ? body.error : undefined };
   }
 

@@ -129,8 +129,9 @@ ticked. Google sends the browser back to Curia's callback, which:
 
 - spends the single-use OAuth `state` (15 minutes, hashed in
   `google_workspace_signin_states`, with a PKCE verifier);
-- refuses a different Google account (`wrong_account`) or a grant missing Drive, Docs or
-  Sheets (`missing_scopes`), and revokes that grant;
+- refuses a different Google account (`wrong_account`, and revokes that stranger's grant)
+  or a grant missing Drive, Docs or Sheets (`missing_scopes`, not revoked: Google revokes the
+  whole grant for the account and client, which would also end a working saved sign-in);
 - writes the token to `~/.google_workspace_mcp/credentials/<address>.json`, where the MCP
   server reads it (no copying), and restarts Curia once so the server starts with it.
 
@@ -143,7 +144,9 @@ by hand reads signed in without signing in again.
 complete the flow locally, where you have a browser, and copy the token cache to the VPS.
 This uses workspace-mcp's own `http://localhost:8000/oauth2callback` redirect, so it needs a
 Desktop app client, or that URI on a Web client. A script at `scripts/gdrive-auth.py`
-handles the flow.
+handles the flow. Copying the token does not turn the google-workspace MCP server on (the
+console sign-in does): enable it under Settings → MCP Skills before restarting, or the step
+stays pending with "the google-workspace MCP server is turned off".
 
 **Prerequisites:**
 - `uv` installed locally (`curl -LsSf https://astral.sh/uv/install.sh | sh`)

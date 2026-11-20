@@ -180,7 +180,8 @@ function McpDrawer({ entry, onClose, onChanged }: { entry: McpEntry; onClose: ()
           {entry.name === 'google-workspace' && (
             <div className="form-field">
               <label>Sign in as Curia</label>
-              <GoogleWorkspaceSignIn refreshKey={entry.secretFields.map((f) => `${f.key}:${f.configured}`).join(',')} />
+              {/* The state too: enabling or disabling the server changes what the panel says. */}
+              <GoogleWorkspaceSignIn refreshKey={`${entry.state}|${entry.secretFields.map((f) => `${f.key}:${f.configured}`).join(',')}`} />
             </div>
           )}
 

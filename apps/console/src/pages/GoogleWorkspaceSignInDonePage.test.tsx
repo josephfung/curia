@@ -68,6 +68,21 @@ describe('GoogleWorkspaceSignInDonePage', () => {
     expect(host.querySelector('a')?.getAttribute('href')).toBe('/setup?step=google_workspace');
   });
 
+  it('notices a restart that finished before the first poll (#2697 review)', async () => {
+    // Only the new process ever answers: it booted after this page loaded.
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ uptime_s: 0 }), { status: 200 }));
+    await mount('?result=signed_in&restart=1');
+    await wait(15);
+    expect(host.textContent).toMatch(/Curia is back/);
+  });
+
+  it('keeps waiting while only the old process answers', async () => {
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ uptime_s: 86_400 }), { status: 200 }));
+    await mount('?result=signed_in&restart=1');
+    await wait(50);
+    expect(host.textContent).toMatch(/restarting/);
+  });
+
   it('links back straight away after a refusal', async () => {
     await mount('?result=cancelled&restart=0');
     expect(host.textContent).toMatch(/Sign-in cancelled/);
