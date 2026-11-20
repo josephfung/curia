@@ -20,7 +20,6 @@ import {
   firstOpenStep,
   groupLabel,
   isExtra,
-  isFirstRun,
   nextStep,
   principalLabel,
   stepMark,
@@ -114,9 +113,9 @@ export default function SetupPage(): JSX.Element {
   useEffect(() => { void ensureGuide(); }, [ensureGuide]);
   useEffect(() => { void refresh(); }, [refresh]);
 
-  // The guide: open by itself on a first run (not on a phone), closed when an operator comes
-  // back to Setup. Decided once, on the first load. Once opened it stays mounted, hidden when
-  // closed, so its thread, step markers and anything half-typed survive a close.
+  // The guide starts closed: the steps explain themselves, and it is there when asked for
+  // (Need help?, or its button). Once opened it stays mounted, hidden when closed, so its
+  // thread, step markers and anything half-typed survive a close.
   const [guideOpen, setGuideOpen] = useState(false);
   const [guideMounted, setGuideMounted] = useState(false);
   useEffect(() => { if (guideOpen) setGuideMounted(true); }, [guideOpen]);
@@ -135,13 +134,7 @@ export default function SetupPage(): JSX.Element {
       target?.focus();
     });
   }
-  const guideDecided = useRef(false);
   const [draft, setDraft] = useState<{ text: string; seq: number } | undefined>(undefined);
-  useEffect(() => {
-    if (!data || guideDecided.current) return;
-    guideDecided.current = true;
-    if (isFirstRun(data.checklist, data.fields) && !isPhoneWidth()) setGuideOpen(true);
-  }, [data]);
 
   // Without ?step, land on the first open step once, and pin it in the URL: a later refresh
   // (a step saved, or a check changing) must not move the operator to another step.

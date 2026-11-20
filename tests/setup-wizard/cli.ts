@@ -342,12 +342,10 @@ async function walkThroughSetup(page: Page, baseUrl: string, secret: string, cur
   await page.getByRole('button', { name: 'Sign in' }).click();
   // A new install is in Setup, so the router sends the operator to the Setup page.
   await expectStep(page, 1, 'who', 'Who are you setting Curia up for?');
-  // A first run: the setup guide opens by itself (nothing is sent to it: the model key is fake).
+  // The setup guide starts closed, even on a first run.
   const guide = page.getByRole('complementary', { name: 'Setup guide' });
-  await guide.waitFor({ timeout: STEP_TIMEOUT_MS });
-  await guide.getByRole('button', { name: 'Close setup guide' }).click();
-  await guide.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
-  out('  ✓ the setup guide opened by itself on a first run, and closes');
+  if (await guide.isVisible()) throw new Error('the setup guide opened by itself');
+  out('  ✓ the setup guide starts closed');
   await page.getByRole('radio', { name: /Someone else/ }).click();
   await page.getByLabel('Your name').fill(INPUT.operatorName);
   await page.getByLabel('Your email').fill(INPUT.operatorEmail);
@@ -374,8 +372,10 @@ async function walkThroughSetup(page: Page, baseUrl: string, secret: string, cur
   } catch {
     throw new Error(`the guide's composer holds "${await composer.inputValue()}", not the step`);
   }
+  // Its thread is empty, so it opens on the greeting.
+  await guide.getByText('As you go through Setup, ask me anything', { exact: false }).waitFor({ timeout: STEP_TIMEOUT_MS });
   await guide.getByRole('button', { name: 'Close setup guide' }).click();
-  out('  ✓ Need help? opened the guide with the step in its composer');
+  out('  ✓ Need help? opened the guide on its greeting, with the step in its composer');
   await page.locator('#setup-curia-name').fill(INPUT.assistantName);
   await page.getByLabel('Title').fill(INPUT.assistantTitle);
   await saveAndContinue(page);

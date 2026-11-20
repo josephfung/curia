@@ -188,8 +188,9 @@ The setup agent as a help panel; it never drives Setup.
 - **Layout.** A full-height column docked to the right edge (`SetupGuidePanel`), on the page
   background past one thin line; the page makes room for it. Below 1,180px wide the step list
   hides while it is open, and its Steps button closes it; on a phone it is full-screen.
-- **When it opens.** By itself on a first run (`isFirstRun`: nothing saved yet), except on a
-  phone; closed when an operator comes back. Each step's "Need help? Ask the setup guide"
+- **When it opens.** Only when asked: it starts closed, since the steps explain themselves.
+  An empty thread opens on a greeting that lives in the panel only (never saved, never sent
+  to the model). Each step's "Need help? Ask the setup guide"
   opens it with "I'm on the <step> step." in the composer, focused and unsent. The link is
   hidden while the panel is open.
 - **No new chat endpoints or components.** It renders `ChatThread`, `ChatComposer` and

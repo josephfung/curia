@@ -294,8 +294,8 @@ The setup agent is the operator's help panel through Setup, and only Setup. It n
 Setup: the page does.
 
 - **Where.** A full-height column docked to the right of the Setup page, on the console's own
-  chat (no new chat components or endpoints). It opens by itself on a first run and is closed
-  when an operator comes back. Each step's **Need help? Ask the setup guide** opens it with the
+  chat (no new chat components or endpoints). It starts closed (the steps explain themselves)
+  and greets on an empty thread. Each step's **Need help? Ask the setup guide** opens it with the
   step named in the composer, and a "Now on: <step>" line marks each step change. The open step
   goes with each message, and the agent reads it.
 - **What it does.** It opens by acknowledging whether Curia is being set up for the operator or
