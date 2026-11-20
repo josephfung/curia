@@ -302,7 +302,7 @@ export function CapabilitiesStep({ principal, onSaved, onContinue, onHelp }: Ext
       <h2>Capabilities</h2>
       <p className="setup-lede">
         What Curia can do for {principal}. Most people keep the defaults. A change applies at Apply &amp; restart
-        (or the next restart, if you’ve been through it), and you can change these later in Settings → Capabilities.
+        (or the next restart, if you’ve been through it), and you can change these later in Settings → Behaviour → Capabilities.
       </p>
       <CapabilitiesSection ref={save.register('capabilities')} principal={principal} place="setup" onChanged={() => void onSaved()} />
       <SaveAndContinue save={save} onHelp={onHelp} />
