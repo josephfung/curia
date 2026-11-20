@@ -56,6 +56,15 @@ describe('capabilityState', () => {
     expect(capabilityState(cap('research'), broken)).toEqual({ kind: 'unavailable', missing: ['web'], anyOn: true });
   });
 
+  it('counts a tool on inside a readable bundle as on, when the rest is missing or off', () => {
+    // research-analyst missing, web disabled, web-search on alone: the switch can still turn it off.
+    const l = lists({ web: 'installed' });
+    l.agents = l.agents.filter((a) => a.name !== 'research-analyst');
+    l.tools = [entry('tool', 'web-search', 'enabled'), entry('tool', 'web-fetch', 'installed')];
+    expect(capabilityState(cap('research'), l)).toEqual({ kind: 'unavailable', missing: ['research-analyst'], anyOn: true });
+    expect(switchPlan(cap('research'), false, l)).toEqual([{ kind: 'tools', name: 'web-search', action: 'disable' }]);
+  });
+
   it('is partly on when a tool inside an enabled bundle was turned off alone', () => {
     const l = lists();
     l.tools = [entry('tool', 'web-search', 'installed'), entry('tool', 'web-fetch', 'enabled')];

@@ -5,7 +5,7 @@ import { apiFetch } from '../../api.js';
 import { bandForScore, type AutonomyBand } from '../../autonomy-bands.js';
 import { errorMessage } from '../../components/settings/ConfigHistory.js';
 import { STYLE_TEMPLATES, type LocalIdentity } from '../wizard-utils.js';
-import { createLatestSaver, type ChecklistTask } from './setup-steps.js';
+import { sharedLatestSaver, type ChecklistTask } from './setup-steps.js';
 import { ChoiceGroup } from './setup-ui.js';
 import { VaultKeysForm, type FieldGroupHandle, type VaultFieldSpec } from './ChannelForms.js';
 import { DOCS_ORIGIN, SaveAndContinue, useSaveAndContinue } from './ChannelSteps.js';
@@ -54,9 +54,11 @@ function soundsLike(text: string): string {
  * A choice saved as soon as it is picked, newest last (createLatestSaver). A failed save says
  * so and shows the stored choice again: re-read, or, when that fails too, the last one known
  * to be stored. `handle.flush` waits for the saves still running and is false when the last
- * failed, so Save and continue stays on the step.
+ * failed, so Save and continue stays on the step. The save queue outlives the step
+ * (`sharedLatestSaver` under `key`), so picks either side of a visit to another step save in order.
  */
 function useSavedChoice<T extends string>(
+  key: string,
   describe: (value: T) => string,
   save: (value: T) => Promise<void>,
   reload: () => Promise<T | null>,
@@ -71,10 +73,10 @@ function useSavedChoice<T extends string>(
   const confirmed = useRef<T | null>(null);
   // Each write is confirmed as it lands, not when the queue drains: a later queued write that
   // fails must not hide an earlier one that was stored.
-  const saver = useRef(createLatestSaver(async (next: T) => {
+  const saver = sharedLatestSaver(key, async (next: T) => {
     await latestSave.current(next);
     confirmed.current = next;
-  })).current;
+  });
   // Bumped by each pick and load: an older read must not overwrite a newer pick.
   const seq = useRef(0);
   const running = useRef(new Set<Promise<boolean>>());
@@ -109,8 +111,10 @@ function useSavedChoice<T extends string>(
       if (gen !== pickGen.current) return false;
       try {
         await load();
-        setError(text);
+        // A pick made while the re-read ran is newer: its own save says how it went.
+        if (gen === pickGen.current) setError(text);
       } catch (loadErr) {
+        if (gen !== pickGen.current) return false;
         seq.current++;
         setValue(confirmed.current);
         setError(`${text}. Couldn’t re-read the stored choice either: ${loadErr instanceof Error ? loadErr.message : 'unknown error'}`);
@@ -154,7 +158,7 @@ async function readAutonomyScore(): Promise<number | null> {
 
 export function WorkingStyleStep({ principal, onSaved, onContinue, onHelp }: ExtraProps): JSX.Element {
   const save = useSaveAndContinue(onContinue);
-  const tone = useSavedChoice<string>((id) => STYLE_TEMPLATES.find((t) => t.id === id)?.label ?? id, async (id) => {
+  const tone = useSavedChoice<string>('working-style-tone', (id) => STYLE_TEMPLATES.find((t) => t.id === id)?.label ?? id, async (id) => {
     const template = STYLE_TEMPLATES.find((t) => t.id === id);
     if (!template) return;
     // Re-read and change only the tone's style, so Curia's name and anything set elsewhere stay.
@@ -174,7 +178,7 @@ export function WorkingStyleStep({ principal, onSaved, onContinue, onHelp }: Ext
     await onSaved();
   }, async () => toneFor((await readIdentity()).tone.style));
 
-  const independence = useSavedChoice<Independence>((band) => INDEPENDENCE_LABELS[band], async (band) => {
+  const independence = useSavedChoice<Independence>('working-style-independence', (band) => INDEPENDENCE_LABELS[band], async (band) => {
     const res = await apiFetch('/api/autonomy', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

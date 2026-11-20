@@ -224,3 +224,28 @@ export function createLatestSaver<T>(save: (value: T) => Promise<void>): (value:
     return running;
   };
 }
+
+interface SharedSaver<T> {
+  /** The newest mount's save; the queue calls it when a value's turn comes. */
+  save: (value: T) => Promise<void>;
+  run: (value: T) => Promise<void>;
+}
+const sharedSavers = new Map<string, SharedSaver<never>>();
+
+/**
+ * createLatestSaver for one stored value, shared by every mount of the step that saves it. A
+ * step remounts when the operator opens another step and comes back; a queue of its own would
+ * let a pick made after coming back save while the one before is still running, and the slow
+ * older save land last (CodeRabbit on #2688). Each call makes `save` the one the queue uses.
+ */
+export function sharedLatestSaver<T>(key: string, save: (value: T) => Promise<void>): (value: T) => Promise<void> {
+  let entry = sharedSavers.get(key) as SharedSaver<T> | undefined;
+  if (!entry) {
+    const fresh: SharedSaver<T> = { save, run: async () => {} };
+    fresh.run = createLatestSaver((value: T) => fresh.save(value));
+    sharedSavers.set(key, fresh as unknown as SharedSaver<never>);
+    entry = fresh;
+  }
+  entry.save = save;
+  return entry.run;
+}

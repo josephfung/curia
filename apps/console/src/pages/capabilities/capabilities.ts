@@ -103,7 +103,8 @@ export function capabilityState(cap: Capability, lists: RegistryLists): Capabili
     return !e || e.state === 'ghost' || e.manifestError !== undefined;
   }).map((m) => m.name);
   if (missing.length > 0) {
-    const anyOn = all.some((m) => find(lists, m)?.state === 'enabled');
+    // A tool on inside a readable bundle counts too, so it can still be turned off here.
+    const anyOn = all.some((m) => find(lists, m)?.state === 'enabled') || cap.bundles.some((b) => bundleTools(b, lists, true).length > 0);
     return { kind: 'unavailable', missing, anyOn };
   }
   const off = all.filter((m) => find(lists, m)!.state !== 'enabled').map((m) => m.name);
