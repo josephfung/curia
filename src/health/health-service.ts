@@ -153,6 +153,11 @@ export class HealthService {
   // `(svc as unknown as { tracker: LlmOutcomeTracker }).tracker`.
   private readonly tracker = new LlmOutcomeTracker();
   private readonly startedAt = new Date();
+
+  /** This process's start, as GET /api/health reports it (started_at). */
+  get startedAtIso(): string {
+    return this.startedAt.toISOString();
+  }
   /** Reverse map: model string → tier, built from modelRoutingConfig in start(). */
   private modelToTier = new Map<string, TrackerKey>();
   /** Last canary outcome per live mailbox id and the grant it probed (#2475); feeds the setup
@@ -299,6 +304,7 @@ export class HealthService {
     return {
       status,
       uptime_s,
+      started_at: this.startedAt.toISOString(),
       checks,
       ...(kg?.reason ? { details: { knowledge_graph: kg.reason } } : {}),
     };

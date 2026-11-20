@@ -29,10 +29,11 @@ function fakeService(over: Partial<Service> = {}): Service {
 describe('google workspace sign-in routes', () => {
   let app: FastifyInstance;
 
-  async function build(service: Service): Promise<FastifyInstance> {
+  async function build(service: Service, processStartedAt?: string): Promise<FastifyInstance> {
     app = Fastify() as unknown as FastifyInstance;
     await app.register(googleWorkspaceSignInRoutes, {
       service, webAppBootstrapSecret: BOOTSTRAP, sessions: new Map(), logger: pino({ level: 'silent' }),
+      ...(processStartedAt ? { processStartedAt } : {}),
     });
     return app;
   }
@@ -88,6 +89,18 @@ describe('google workspace sign-in routes', () => {
     expect(res.statusCode).toBe(302);
     expect(res.headers.location).toBe('/google-workspace/done?result=wrong_account&restart=0');
     expect(service.handleCallback).toHaveBeenCalledWith({ state: 's1', code: 'c1' });
+  });
+
+  it('callback: with a restart, sends this process’s start so the page can tell the new one (#2697)', async () => {
+    await build(fakeService(), '2026-11-20T10:00:00.000Z');
+    const res = await app.inject({ method: 'GET', url: '/api/google-workspace/callback?state=s&code=c' });
+    expect(res.headers.location).toBe('/google-workspace/done?result=signed_in&restart=1&since=2026-11-20T10%3A00%3A00.000Z');
+  });
+
+  it('callback: no since without a restart', async () => {
+    await build(fakeService({ handleCallback: vi.fn(async () => ({ outcome: 'cancelled' as const, restartScheduled: false })) }), '2026-11-20T10:00:00.000Z');
+    const res = await app.inject({ method: 'GET', url: '/api/google-workspace/callback?state=s&code=c' });
+    expect(res.headers.location).toBe('/google-workspace/done?result=cancelled&restart=0');
   });
 
   it('callback: a repeated parameter is dropped, not passed as an array', async () => {

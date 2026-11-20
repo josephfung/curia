@@ -398,11 +398,19 @@ export class GoogleWorkspaceSignInService {
 
     let status: WorkspaceSignInStatus;
 
-    // workspace-mcp refreshes with the client in the file; drive-download-file with the saved
-    // one. A token minted for another client works for one consumer and not the other, so it is
-    // rejected, and the check refreshes with the saved client, as both must.
-    if (saved.client_id && saved.client_id !== settings.clientId!.trim()) {
-      status = { state: 'token_rejected', detail: 'The saved sign-in was made with a different OAuth client than the one saved now. Sign in as Curia again.' };
+    // workspace-mcp refreshes with the client ID and secret in the file; drive-download-file
+    // with the saved ones. When they differ (another client, or a secret rotated since), one
+    // consumer works and the other may not, so the sign-in is rejected until it is redone with
+    // the saved client; past this point both agree, and the check refreshes with them.
+    const clientDiffers = !!saved.client_id && saved.client_id !== settings.clientId!.trim();
+    const secretDiffers = !!saved.client_secret && saved.client_secret !== settings.clientSecret!.trim();
+    if (clientDiffers || secretDiffers) {
+      status = {
+        state: 'token_rejected',
+        detail: clientDiffers
+          ? 'The saved sign-in was made with a different OAuth client than the one saved now. Sign in as Curia again.'
+          : 'The OAuth client secret changed since Curia signed in. Sign in as Curia again so every part of Curia uses the new secret.',
+      };
       this.statusCache = { key, at: this.now(), status };
       return status;
     }

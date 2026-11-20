@@ -46,7 +46,7 @@ export default function GoogleWorkspaceSignInDonePage(
   const result = (WORKSPACE_SIGNIN_OUTCOMES as readonly string[]).includes(raw) ? raw : 'unknown';
   const msg = workspaceResultMessage(result);
   const restart = params.get('restart') === '1' && msg.ok;
-  const restartState = useRestartWait(restart, { pollIntervalMs, maxWaitMs });
+  const restartState = useRestartWait(restart, { pollIntervalMs, maxWaitMs, since: params.get('since') });
 
   return (
     <div className="login-root">

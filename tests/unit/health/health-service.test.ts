@@ -35,6 +35,9 @@ describe('HealthService.getStatus()', () => {
     expect(result.checks.db).toBe('ok');
     expect(result.checks.bus).toBe('ok');
     expect(result.uptime_s).toBeGreaterThanOrEqual(0);
+    // The process's start, which a sign-in done page waits to see change (#2697).
+    expect(result.started_at).toBe(svc.startedAtIso);
+    expect(Number.isNaN(Date.parse(result.started_at!))).toBe(false);
   });
 
   it('principal_mailbox_triage: skipped without a heartbeat, ok, or a failure that degrades (R67)', async () => {
