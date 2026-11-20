@@ -15,6 +15,8 @@ interface Status {
   state: SignInState;
   detail?: string;
   missing?: string[];
+  /** On signed_in: false when the google-workspace MCP server is turned off. */
+  serverEnabled?: boolean;
   callbackUrl: string | null;
 }
 
@@ -34,7 +36,10 @@ async function errorText(res: Response): Promise<string> {
 /** The one line under the button for each state. */
 export function statusLine(s: Status): { text: string; ok: boolean } {
   switch (s.state) {
-    case 'signed_in': return { ok: true, text: 'Signed in as Curia. Google accepts the saved sign-in.' };
+    case 'signed_in':
+      return s.serverEnabled === false
+        ? { ok: false, text: 'Signed in, but the google-workspace MCP server is turned off. Enable it under Settings → MCP Skills.' }
+        : { ok: true, text: 'Signed in as Curia. Google accepts the saved sign-in.' };
     case 'not_signed_in': return { ok: false, text: 'Not signed in yet.' };
     case 'token_rejected': return { ok: false, text: s.detail ?? 'Google rejected the saved sign-in. Sign in as Curia again.' };
     case 'not_configured': return { ok: false, text: `Save ${(s.missing ?? []).join(', ') || 'the fields above'} first.` };
@@ -88,7 +93,11 @@ export function GoogleWorkspaceSignIn({ refreshKey, onStatus }: {
       if (!res.ok) throw new Error(await errorText(res));
       const d = await res.json() as { url?: string };
       let google = false;
-      try { google = !!d.url && new URL(d.url).origin === GOOGLE_CONSENT_ORIGIN; } catch { /* malformed: refused below */ }
+      try {
+        google = !!d.url && new URL(d.url).origin === GOOGLE_CONSENT_ORIGIN;
+      } catch (parseErr) {
+        console.error('[GoogleWorkspaceSignIn] malformed sign-in URL from the server:', parseErr);
+      }
       if (!google) throw new Error('The server did not return a Google sign-in address.');
       window.location.assign(d.url!);
     } catch (e) {

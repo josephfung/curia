@@ -29,6 +29,15 @@ export interface GoogleWorkspaceSignInRouteOptions {
   logger: Logger;
 }
 
+/** Enough to diagnose a local failure (errno code, pg/fs message) without the request's query. */
+function errFields(err: unknown): Record<string, unknown> {
+  return {
+    errName: err instanceof Error ? err.name : typeof err,
+    code: (err as NodeJS.ErrnoException | undefined)?.code,
+    errMessage: err instanceof Error ? err.message.slice(0, 300) : undefined,
+  };
+}
+
 function donePage(r: WorkspaceCallbackResult): string {
   const params = new URLSearchParams({ result: r.outcome, restart: r.restartScheduled ? '1' : '0' });
   return `/google-workspace/done?${params.toString()}`;
@@ -62,9 +71,8 @@ export async function googleWorkspaceSignInRoutes(
     try {
       return reply.send({ ...(await service.status()), callbackUrl });
     } catch (err) {
-      if (!(err instanceof WorkspaceCheckUnavailableError)) {
-        log.error({ errName: err instanceof Error ? err.name : typeof err }, 'GET /api/google-workspace/status failed');
-      }
+      if (err instanceof WorkspaceCheckUnavailableError) log.warn({ errMessage: err.message }, 'google workspace status: Google could not be asked');
+      else log.error(errFields(err), 'GET /api/google-workspace/status failed');
       return reply.send({
         state: 'unknown',
         detail: err instanceof WorkspaceCheckUnavailableError ? err.message : 'Could not check the sign-in right now. Try again in a moment.',
@@ -82,7 +90,7 @@ export async function googleWorkspaceSignInRoutes(
       if (err instanceof WorkspaceSignInUnavailableError) {
         return reply.status(409).send({ error: err.detail, reason: err.reason });
       }
-      log.error({ errName: err instanceof Error ? err.name : typeof err }, 'POST /api/google-workspace/signin failed');
+      log.error(errFields(err), 'POST /api/google-workspace/signin failed');
       return reply.status(500).send({ error: 'Could not start the sign-in. Check the server logs.' });
     }
   });
@@ -93,8 +101,8 @@ export async function googleWorkspaceSignInRoutes(
     try {
       return reply.redirect(donePage(await service.handleCallback(callbackQuery(request.query))));
     } catch (err) {
-      // Name only: never the query, which holds the state and the code.
-      log.error({ errName: err instanceof Error ? err.name : typeof err }, 'GET /api/google-workspace/callback failed');
+      // Never the query, which holds the state and the code; the error's own message has neither.
+      log.error(errFields(err), 'GET /api/google-workspace/callback failed');
       return reply.redirect(donePage({ outcome: 'failed', restartScheduled: false }));
     }
   });

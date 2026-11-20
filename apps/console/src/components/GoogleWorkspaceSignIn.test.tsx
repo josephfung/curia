@@ -70,6 +70,12 @@ describe('GoogleWorkspaceSignIn', () => {
     expect(seen).toEqual([state]);
   });
 
+  it('says when the token works but the MCP server is turned off', async () => {
+    statusThen({ state: 'signed_in', serverEnabled: false });
+    await mount();
+    expect(text()).toMatch(/google-workspace MCP server is turned off/);
+  });
+
   it('keeps the button off until the fields are saved, naming what is missing', async () => {
     statusThen({ state: 'not_configured', missing: ['the OAuth client ID'] });
     await mount();

@@ -138,10 +138,39 @@ describe('GoogleWorkspaceSignInService.status', () => {
     expect(await service().status()).toMatchObject({ state: 'token_rejected', detail: expect.stringMatching(/Sign in as Curia again/) });
   });
 
+  it('token_rejected for any other 400/401 Google refusal, naming the code', async () => {
+    await writeWorkspaceToken('curia@example.com', saved, home);
+    answer = () => new Response(JSON.stringify({ error: 'deleted_client' }), { status: 401 });
+    expect(await service().status()).toMatchObject({ state: 'token_rejected', detail: expect.stringMatching(/deleted_client/) });
+  });
+
+  it('token_rejected, not "try again", for a damaged token file', async () => {
+    const file = workspaceCredentialPath('curia@example.com', home);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, '{not json');
+    expect(await service().status()).toMatchObject({ state: 'token_rejected', detail: expect.stringMatching(/can’t read/) });
+    expect(refreshes).toBe(0);
+  });
+
   it('token_rejected when the grant lacks a scope', async () => {
     await writeWorkspaceToken('curia@example.com', saved, home);
     answer = () => new Response(JSON.stringify({ access_token: 'n', scope: SCOPES[0] }), { status: 200 });
     expect((await service().status()).state).toBe('token_rejected');
+  });
+
+  it('adds the MCP server switch to signed_in, read fresh even from the cache', async () => {
+    await writeWorkspaceToken('curia@example.com', saved, home);
+    let enabled = false;
+    const s = new GoogleWorkspaceSignInService({
+      pool: pool as never, logger: createSilentLogger(), appOrigin: 'https://curia.example.com',
+      readSettings: async () => SETTINGS, home, now: () => now,
+      fetchImpl: (async () => { refreshes++; return answer(); }) as typeof fetch,
+      mcpServer: { isEnabled: async () => enabled, enable: async () => { enabled = true; } },
+    });
+    expect(await s.status()).toEqual({ state: 'signed_in', serverEnabled: false });
+    enabled = true;
+    expect(await s.status()).toEqual({ state: 'signed_in', serverEnabled: true });
+    expect(refreshes).toBe(1);
   });
 
   it('throws, rather than guessing, when Google does not answer', async () => {

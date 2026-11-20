@@ -102,7 +102,7 @@ import { checkNylasSignIn, createNylasSignInReaders, type NylasSignInReadiness }
 import { MailboxSignInService, MailboxSignInUnavailableError, MAX_SIGNIN_TTL_MINUTES } from './nylas/mailbox-signin-service.js';
 import { handleMailboxSignInCallback, type MailboxSignInCallbackQuery } from './nylas/mailbox-signin-callback.js';
 import { MailboxSignInResumeSubscriber } from './nylas/mailbox-signin-resume-subscriber.js';
-import { GoogleWorkspaceSignInService, WORKSPACE_SECRET_KEYS } from './google/workspace-signin.js';
+import { GOOGLE_WORKSPACE_MCP_SERVER, GoogleWorkspaceSignInService, WORKSPACE_SECRET_KEYS } from './google/workspace-signin.js';
 import { NylasAppClient } from './nylas/app-client.js';
 import { createLiveGrantLookup } from './nylas/live-grant-lookup.js';
 import { CalendarRouter, calendarRouterEnabled } from './channels/calendar/calendar-router.js';
@@ -3261,6 +3261,15 @@ async function main(): Promise<void> {
     },
     scheduleRestart: (delayMs) => {
       setTimeout(() => process.kill(process.pid, 'SIGTERM'), delayMs);
+    },
+    // A new install enrols the server off (no keys at first boot) and nothing turns it on later.
+    mcpServer: {
+      isEnabled: async () => (await mcpRegistryService.enabledServerNames()).has(GOOGLE_WORKSPACE_MCP_SERVER),
+      enable: async () => {
+        const entry = (await mcpRegistryService.list()).find((e) => e.name === GOOGLE_WORKSPACE_MCP_SERVER);
+        if (entry?.state === 'uninstalled') await mcpRegistryService.install(GOOGLE_WORKSPACE_MCP_SERVER, 'google_workspace_signin');
+        await mcpRegistryService.enable(GOOGLE_WORKSPACE_MCP_SERVER, 'google_workspace_signin');
+      },
     },
   });
   // The Setup checklist (#2358): one computation for the console's Setup page and the setup
