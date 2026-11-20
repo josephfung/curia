@@ -128,5 +128,43 @@ describe('antfarm routes', () => {
 
       await app.close();
     });
+
+    // #2358: a stream the router ended (dropped as slow, or at shutdown) must not be written
+    // to again: Node reports a write after end() as an async error, past the catch.
+    it('stops the heartbeat, without writing, once the router has ended the stream', async () => {
+      const cleanup = vi.fn();
+      let pings = 0;
+      const eventRouter = {
+        addAntfarmClient: vi.fn().mockImplementation((client: { res: { write: (...args: unknown[]) => boolean; end: () => void } }) => {
+          const originalWrite = client.res.write.bind(client.res);
+          vi.spyOn(client.res, 'write').mockImplementation((chunk: unknown, ...args: unknown[]) => {
+            if (typeof chunk === 'string' && chunk.startsWith(':ping')) pings++;
+            return originalWrite(chunk, ...args);
+          });
+          client.res.end();
+          return cleanup;
+        }),
+      } as unknown as EventRouter;
+      const app = Fastify({ forceCloseConnections: true });
+      await app.register(antfarmRoutes, {
+        auditLogRepo: { findTimeline: vi.fn() } as unknown as AuditLogRepo,
+        eventRouter,
+        webAppBootstrapSecret: TEST_SECRET,
+        sessions: new Map(),
+        logger: createLogger(),
+      });
+      await app.ready();
+      await app.listen({ port: 0, host: '127.0.0.1' });
+      const addr = app.server.address() as AddressInfo;
+      await new Promise<void>((resolve) => {
+        const req = http.request({ hostname: '127.0.0.1', port: addr.port, path: '/api/antfarm/stream', headers: AUTH_HEADER }, () => resolve());
+        req.on('error', () => resolve());
+        req.end();
+      });
+      vi.advanceTimersByTime(30000);
+      expect(pings).toBe(0);
+      expect(cleanup).toHaveBeenCalled();
+      await app.close();
+    });
   });
 });

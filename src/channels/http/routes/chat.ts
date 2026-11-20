@@ -242,6 +242,13 @@ export async function chatRoutes(
     // so a half-open phone socket would look healthy. The client reconnects
     // if this stops arriving.
     const heartbeat = setInterval(() => {
+      // Ended at shutdown (or a late registration): a write after end() errors
+      // asynchronously, past this catch, so stop here instead (#2358).
+      if (reply.raw.writableEnded) {
+        clearInterval(heartbeat);
+        cleanup();
+        return;
+      }
       try {
         reply.raw.write('data: {"type":"ping"}\n\n');
       } catch (err) {
