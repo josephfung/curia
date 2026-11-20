@@ -61,6 +61,14 @@ describe('capabilityState', () => {
     l.tools = [entry('tool', 'web-search', 'installed'), entry('tool', 'web-fetch', 'enabled')];
     expect(capabilityState(cap('research'), l)).toEqual({ kind: 'partly', off: ['web-search'] });
   });
+
+  it('is partly on when a tool was turned on alone under a disabled bundle', () => {
+    const l = lists({ research: 'installed', web: 'installed' });
+    l.tools = [entry('tool', 'web-search', 'enabled'), entry('tool', 'web-fetch', 'installed')];
+    expect(capabilityState(cap('research'), l)).toEqual({ kind: 'partly', off: ['web', 'research-analyst'] });
+    l.tools[0] = entry('tool', 'web-search', 'installed');
+    expect(capabilityState(cap('research'), l)).toEqual({ kind: 'off' });
+  });
 });
 
 describe('switchPlan', () => {
@@ -83,6 +91,12 @@ describe('switchPlan', () => {
     const l = lists();
     l.tools = [entry('tool', 'web-search', 'installed'), entry('tool', 'web-fetch', 'enabled')];
     expect(switchPlan(cap('research'), true, l)).toEqual([{ kind: 'skills', name: 'web', action: 'install-enable' }]);
+  });
+
+  it('turns off a tool left on alone under a disabled bundle', () => {
+    const l = lists({ research: 'installed', web: 'installed' });
+    l.tools = [entry('tool', 'web-search', 'enabled'), entry('tool', 'web-fetch', 'installed')];
+    expect(switchPlan(cap('research'), false, l)).toEqual([{ kind: 'tools', name: 'web-search', action: 'disable' }]);
   });
 });
 

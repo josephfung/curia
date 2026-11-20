@@ -107,21 +107,27 @@ export function capabilityState(cap: Capability, lists: RegistryLists): Capabili
     return { kind: 'unavailable', missing, anyOn };
   }
   const off = all.filter((m) => find(lists, m)!.state !== 'enabled').map((m) => m.name);
-  if (off.length === all.length) return { kind: 'off' };
-  // A tool turned off on its own inside an enabled bundle leaves the capability partly on.
+  // The registry switches a bundle's tools one by one too, so a bundle's state alone can be
+  // wrong either way: a tool left on under a disabled bundle, or off under an enabled one.
+  const strayOn = cap.bundles.filter((b) => !bundleEnabled(b, lists)).flatMap((b) => bundleTools(b, lists, true));
+  if (off.length === all.length && strayOn.length === 0) return { kind: 'off' };
   for (const bundle of cap.bundles) {
-    if (find(lists, { kind: 'skills', name: bundle })!.state === 'enabled') off.push(...bundleToolsOff(bundle, lists));
+    if (bundleEnabled(bundle, lists)) off.push(...bundleTools(bundle, lists, false));
   }
   if (off.length === 0) return { kind: 'on' };
   return { kind: 'partly', off };
 }
 
-/** Member tools of a bundle that are installed but not enabled (the registry can disable one alone). */
-function bundleToolsOff(bundle: string, lists: RegistryLists): string[] {
+function bundleEnabled(bundle: string, lists: RegistryLists): boolean {
+  return lists.skills.find((s) => s.name === bundle)?.state === 'enabled';
+}
+
+/** A bundle's member tools that are enabled (`on`), or installed and not enabled. */
+function bundleTools(bundle: string, lists: RegistryLists, on: boolean): string[] {
   const names = lists.skills.find((s) => s.name === bundle)?.metadata?.tools ?? [];
   return names.filter((t) => {
     const state = lists.tools.find((e) => e.name === t)?.state;
-    return state !== undefined && state !== 'enabled' && state !== 'ghost';
+    return on ? state === 'enabled' : state !== undefined && state !== 'enabled' && state !== 'ghost';
   });
 }
 
@@ -130,16 +136,19 @@ function bundleToolsOff(bundle: string, lists: RegistryLists): string[] {
  * agents, so an agent is never enabled over a missing pin. Off: agents first, then what they
  * pin. A member already in the wanted state is skipped; one never installed has nothing to
  * disable. An enabled bundle with a tool turned off alone is enabled again, which turns its
- * tools back on.
+ * tools back on; a tool left on alone under a disabled bundle is turned off directly.
  */
 export function switchPlan(cap: Capability, on: boolean, lists: RegistryLists): Array<Member & { action: 'install-enable' | 'disable' }> {
   const ordered = on ? members(cap) : [...members(cap)].reverse();
   const plan: Array<Member & { action: 'install-enable' | 'disable' }> = [];
   for (const m of ordered) {
     const state = find(lists, m)?.state;
-    const repair = m.kind === 'skills' && state === 'enabled' && bundleToolsOff(m.name, lists).length > 0;
+    const repair = m.kind === 'skills' && state === 'enabled' && bundleTools(m.name, lists, false).length > 0;
     if (on && (state !== 'enabled' || repair)) plan.push({ ...m, action: 'install-enable' });
     if (!on && state === 'enabled') plan.push({ ...m, action: 'disable' });
+    if (!on && m.kind === 'skills' && state !== 'enabled') {
+      for (const tool of bundleTools(m.name, lists, true)) plan.push({ kind: 'tools', name: tool, action: 'disable' });
+    }
   }
   return plan;
 }
