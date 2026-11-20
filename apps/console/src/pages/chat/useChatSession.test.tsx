@@ -99,6 +99,7 @@ function Probe(): ReactElement {
       <p data-testid="error">{current.connectionError ?? ''}</p>
       <p data-testid="sending">{current.sending ? 'yes' : 'no'}</p>
       <p data-testid="has-more">{current.hasMore ? 'yes' : 'no'}</p>
+      <p data-testid="history-loaded">{current.historyLoaded ? 'yes' : 'no'}</p>
       <ul>
         {current.messages.map((message) => (
           <li key={message.id} data-id={message.id} data-kind={message.kind}>{message.text}</li>
@@ -173,6 +174,31 @@ afterEach(() => {
   vi.clearAllMocks();
   localStorage.removeItem('curia:onboarding:welcome-banner-pending');
   probeSetupStep = null;
+});
+
+describe('useChatSession historyLoaded', () => {
+  const loaded = () => container?.querySelector('[data-testid="history-loaded"]')?.textContent;
+
+  it('is false until the first history request comes back, empty or not', async () => {
+    let answer: (() => void) | null = null;
+    history = [];
+    const real = apiFetch.getMockImplementation()!;
+    apiFetch.mockImplementation((path: string) => (String(path).startsWith('/api/chat/history')
+      ? new Promise((resolve) => { answer = () => resolve(real(path)); })
+      : real(path)));
+    await mount();
+    expect(loaded()).toBe('no');
+    await act(async () => { answer!(); });
+    await flush();
+    expect(loaded()).toBe('yes');
+    expect(texts()).toEqual([]);
+  });
+
+  it('stays false when the first history request fails', async () => {
+    historyStatus = 503;
+    await mount();
+    expect(loaded()).toBe('no');
+  });
 });
 
 describe('useChatSession catch-up', () => {

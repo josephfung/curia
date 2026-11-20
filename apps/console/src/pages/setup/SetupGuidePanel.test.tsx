@@ -10,11 +10,11 @@ import { SETUP_GUIDE_GREETING, SetupGuidePanel, withStepMarkers } from './SetupG
 
 // The panel's own logic, over a stand-in chat session (useChatSession has its own tests).
 const chat = vi.hoisted(() => ({
-  state: { messages: [] as Message[], loadingHistory: false },
+  state: { messages: [] as Message[], loadingHistory: false, historyLoaded: true },
 }));
 vi.mock('../chat/useChatSession.js', () => ({
   useChatSession: () => ({
-    messages: chat.state.messages, sending: false, hasMore: false, loadingHistory: chat.state.loadingHistory,
+    messages: chat.state.messages, sending: false, hasMore: false, loadingHistory: chat.state.loadingHistory, historyLoaded: chat.state.historyLoaded,
     connectionError: null, send: async () => {}, loadMore: async () => {},
   }),
 }));
@@ -97,7 +97,7 @@ describe('SetupGuidePanel', () => {
     host?.remove();
     root = null;
     host = null;
-    chat.state = { messages: [], loadingHistory: false };
+    chat.state = { messages: [], loadingHistory: false, historyLoaded: true };
   });
 
   function render(step: 'email' | 'voice' | 'apply', extra: { notice?: string; onClose?: () => void; hidden?: boolean } = {}): void {
@@ -125,20 +125,34 @@ describe('SetupGuidePanel', () => {
     expect(lines()).toEqual(['which key?', 'Now on: Voice', 'and this one?']);
   });
 
-  it('records no marker while the history is still loading', () => {
-    chat.state = { messages: [], loadingHistory: true };
+  // The hook's real state before its first history request: not loading, nothing loaded.
+  const beforeHistory = () => ({ messages: [] as Message[], loadingHistory: false, historyLoaded: false });
+
+  it('records no marker before the history has loaded', () => {
+    chat.state = beforeHistory();
     render('email');
     render('voice');
-    chat.state = { messages: [msg('a', 'older question')], loadingHistory: false };
+    chat.state = { messages: [msg('a', 'older question')], loadingHistory: false, historyLoaded: true };
     render('voice');
     expect(lines()).toEqual(['older question']);
   });
 
-  it('greets on an empty thread once the history has loaded, and keeps the greeting at the top', () => {
-    chat.state = { messages: [], loadingHistory: true };
+  it('shows no greeting before the history has loaded, nor above a thread that has one', () => {
+    chat.state = beforeHistory();
     render('email');
     expect(lines()).toEqual([]);
-    chat.state = { messages: [], loadingHistory: false };
+    chat.state = { ...beforeHistory(), loadingHistory: true };
+    render('email');
+    chat.state = { messages: [msg('a', 'older question')], loadingHistory: false, historyLoaded: true };
+    render('email');
+    expect(lines()).toEqual(['older question']);
+  });
+
+  it('greets on an empty thread once the history has loaded, and keeps the greeting at the top', () => {
+    chat.state = beforeHistory();
+    render('email');
+    expect(lines()).toEqual([]);
+    chat.state = { messages: [], loadingHistory: false, historyLoaded: true };
     render('email');
     expect(lines()).toEqual([SETUP_GUIDE_GREETING.text]);
     chat.state.messages = [msg('a', 'which key?')];
