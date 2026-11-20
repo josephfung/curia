@@ -90,9 +90,17 @@ describe('ChatComposer draft', () => {
     });
     render({ text: 'I’m on the Email step. ', seq: 1 });
     expect(box().value).toBe('I’m on the Email step. Which key?');
-    // The same link clicked again offers the text again.
-    render({ text: 'I’m on the Email step. ', seq: 2 });
-    expect(box().value).toBe('I’m on the Email step. ');
+    // A new draft never replaces what is typed (Need help? after a close keeps the question)…
+    render({ text: 'I’m on the Voice step. ', seq: 2 });
+    expect(box().value).toBe('I’m on the Email step. Which key?');
+    // …but fills an empty composer.
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+      setter.call(box(), '');
+      box().dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    render({ text: 'I’m on the Voice step. ', seq: 3 });
+    expect(box().value).toBe('I’m on the Voice step. ');
   });
 });
 
@@ -107,7 +115,7 @@ describe('SetupGuidePanel', () => {
     chat.state = { messages: [], loadingHistory: false };
   });
 
-  function render(step: 'email' | 'voice' | 'apply', extra: { notice?: string; onClose?: () => void } = {}): void {
+  function render(step: 'email' | 'voice' | 'apply', extra: { notice?: string; onClose?: () => void; hidden?: boolean } = {}): void {
     if (!root) {
       host = document.createElement('div');
       document.body.appendChild(host);
@@ -115,7 +123,7 @@ describe('SetupGuidePanel', () => {
     }
     const names = { email: 'Email', voice: 'Voice', apply: 'Apply & restart' };
     act(() => root!.render(
-      <SetupGuidePanel hidden={false} step={step} stepName={names[step]} notice={extra.notice}
+      <SetupGuidePanel hidden={extra.hidden ?? false} step={step} stepName={names[step]} notice={extra.notice}
         onClose={extra.onClose ?? (() => {})} onShowSteps={() => {}} />,
     ));
   }
@@ -139,6 +147,16 @@ describe('SetupGuidePanel', () => {
     chat.state = { messages: [msg('a', 'older question')], loadingHistory: false };
     render('voice');
     expect(lines()).toEqual(['older question']);
+  });
+
+  it('scrolls to the newest message when it opens again', () => {
+    chat.state.messages = [msg('a', 'which key?')];
+    render('email', { hidden: true });
+    const thread = host!.querySelector<HTMLElement>('.chat-messages')!;
+    Object.defineProperty(thread, 'scrollHeight', { configurable: true, value: 900 });
+    thread.scrollTop = 0;
+    render('email', { hidden: false });
+    expect(thread.scrollTop).toBe(900);
   });
 
   it('closes on Escape and shows why messages may not reach the guide', () => {

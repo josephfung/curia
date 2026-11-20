@@ -51,6 +51,14 @@ export function SetupGuidePanel(props: {
   const lastStep = useRef(step);
   const lastMessageId = useRef<string | null>(null);
   lastMessageId.current = messages.at(-1)?.id ?? null;
+  const asideRef = useRef<HTMLElement>(null);
+  // A reply that arrived while closed was scrolled to in a hidden thread, which does nothing:
+  // bring the newest message into view each time the panel opens again.
+  useEffect(() => {
+    if (props.hidden) return;
+    const thread = asideRef.current?.querySelector<HTMLElement>('.chat-messages');
+    if (thread) thread.scrollTop = thread.scrollHeight;
+  }, [props.hidden]);
   const historyPending = useRef(true);
   historyPending.current = loadingHistory && messages.length === 0;
 
@@ -65,6 +73,7 @@ export function SetupGuidePanel(props: {
 
   return (
     <aside
+      ref={asideRef}
       className="setup-guide"
       aria-label="Setup guide"
       hidden={props.hidden}

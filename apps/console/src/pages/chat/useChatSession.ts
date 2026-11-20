@@ -417,6 +417,8 @@ export function useChatSession(options: ChatSessionOptions = {}): ChatSession {
   }, [hasMore]);
 
   async function send(text: string): Promise<void> {
+    // The step open when the message was sent, not when the connection finished opening.
+    const stepAtSend = setupStep.current;
     if (isSending.current || text.trim().length === 0) return;
 
     let convId: string;
@@ -545,7 +547,7 @@ export function useChatSession(options: ChatSessionOptions = {}): ChatSession {
       const res = await apiFetch('/api/chat/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, clientMessageId, ...(setupStep.current ? { setupStep: setupStep.current } : {}) }),
+        body: JSON.stringify({ message: text, clientMessageId, ...(stepAtSend ? { setupStep: stepAtSend } : {}) }),
       });
 
       if (!res.ok) {
