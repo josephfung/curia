@@ -398,19 +398,22 @@ export class GoogleWorkspaceSignInService {
 
     let status: WorkspaceSignInStatus;
 
-    // workspace-mcp refreshes with the client ID and secret in the file; drive-download-file
-    // with the saved ones. When they differ (another client, or a secret rotated since), one
-    // consumer works and the other may not, so the sign-in is rejected until it is redone with
-    // the saved client; past this point both agree, and the check refreshes with them.
-    const clientDiffers = !!saved.client_id && saved.client_id !== settings.clientId!.trim();
-    const secretDiffers = !!saved.client_secret && saved.client_secret !== settings.clientSecret!.trim();
-    if (clientDiffers || secretDiffers) {
-      status = {
-        state: 'token_rejected',
-        detail: clientDiffers
-          ? 'The saved sign-in was made with a different OAuth client than the one saved now. Sign in as Curia again.'
-          : 'The OAuth client secret changed since Curia signed in. Sign in as Curia again so every part of Curia uses the new secret.',
-      };
+    // workspace-mcp refreshes with the client ID and secret in the file (its docstring: "refresh
+    // uses embedded client info"; a missing one loads as None); drive-download-file with the
+    // saved ones. Unless the file holds exactly the saved pair, one consumer may fail, so the
+    // sign-in is rejected until it is redone; past this point both agree, and the check
+    // refreshes with them.
+    const fileClientId = typeof saved.client_id === 'string' ? saved.client_id.trim() : '';
+    const fileSecret = typeof saved.client_secret === 'string' ? saved.client_secret.trim() : '';
+    const problem = fileClientId === '' || fileSecret === ''
+      ? 'The saved sign-in is missing its OAuth client details. Sign in as Curia again.'
+      : fileClientId !== settings.clientId!.trim()
+        ? 'The saved sign-in was made with a different OAuth client than the one saved now. Sign in as Curia again.'
+        : fileSecret !== settings.clientSecret!.trim()
+          ? 'The OAuth client secret changed since Curia signed in. Sign in as Curia again so every part of Curia uses the new secret.'
+          : null;
+    if (problem !== null) {
+      status = { state: 'token_rejected', detail: problem };
       this.statusCache = { key, at: this.now(), status };
       return status;
     }
