@@ -72,7 +72,7 @@ async function render(place: 'setup' | 'settings', confirm = vi.fn((_text: strin
   return confirm;
 }
 
-const sw = (label: string) => host!.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${label}"]`)!;
+const sw = (label: string) => host!.querySelector<HTMLButtonElement>(`[role="checkbox"][aria-label="${label}"]`)!;
 
 async function click(label: string): Promise<void> {
   await act(async () => { sw(label).click(); });
@@ -144,6 +144,18 @@ describe('CapabilitiesSection', () => {
     expect(confirm.mock.calls[0]![0]).toBe('Meeting debriefs needs Projects and tasks, which is off. Turn it on too?');
     expect(posts).toEqual(['install-enable skills/tasks', 'install-enable agents/meeting-debrief']);
     expect(host!.querySelector('[role="status"]')!.textContent).toBe('Meeting debriefs on, with Projects and tasks. It applies after a restart.');
+  });
+
+  it('won’t turn one on when what it needs isn’t available on this install', async () => {
+    const { posts } = stub({ edit: (reg) => {
+      reg.agents.find((e) => e.name === 'meeting-debrief')!.state = 'installed';
+      reg.skills = reg.skills.filter((e) => e.name !== 'tasks');
+    } });
+    const confirm = await render('settings');
+    await click('Meeting debriefs');
+    expect(confirm).not.toHaveBeenCalled();
+    expect(posts).toEqual([]);
+    expect(host!.querySelector('[role="alert"]')!.textContent).toBe('Couldn’t turn Meeting debriefs on: it needs Projects and tasks, which isn’t available on this install.');
   });
 
   it('says when an on capability needs one that is off, and shows locked ones as they really are', async () => {
@@ -221,7 +233,7 @@ describe('CapabilitiesSection', () => {
     await click('Meeting debriefs');
     expect(host!.querySelector('[role="alert"]')!.textContent)
       .toBe('Meeting debriefs off. It applies after a restart. Couldn’t read Curia’s capabilities: db down Reload the page to see where things are.');
-    expect(host!.querySelectorAll('[role="switch"]').length).toBe(6);
+    expect(host!.querySelectorAll('[role="checkbox"]').length).toBe(6);
     expect(sw('Web research').disabled).toBe(true);
   });
 

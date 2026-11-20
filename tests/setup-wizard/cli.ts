@@ -464,9 +464,9 @@ async function walkThroughSetup(page: Page, baseUrl: string, secret: string, cur
   await expectExtra(page, 'capabilities', 'Capabilities');
   // Meetings is always on; email triage is left for the principal, so it is locked in Setup.
   for (const locked of ['Meetings', 'Email triage']) {
-    if (await page.getByRole('switch', { name: locked }).isEnabled()) throw new Error(`${locked} can be switched in Setup`);
+    if (await page.getByRole('checkbox', { name: locked }).isEnabled()) throw new Error(`${locked} can be switched in Setup`);
   }
-  await page.getByRole('switch', { name: 'Meeting debriefs', checked: true }).click();
+  await page.getByRole('checkbox', { name: 'Meeting debriefs', checked: true }).click();
   await page.getByText('Meeting debriefs off. It applies when you apply and restart.').waitFor({ timeout: STEP_TIMEOUT_MS });
   await saveAndContinue(page);
   await expectStep(page, 8, 'start', 'Start onboarding');

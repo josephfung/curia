@@ -55,6 +55,12 @@ describe('capabilityState', () => {
     broken.skills[0] = { ...broken.skills[0]!, manifestError: 'bad yaml' };
     expect(capabilityState(cap('research'), broken)).toEqual({ kind: 'unavailable', missing: ['web'], anyOn: true });
   });
+
+  it('is partly on when a tool inside an enabled bundle was turned off alone', () => {
+    const l = lists();
+    l.tools = [entry('tool', 'web-search', 'installed'), entry('tool', 'web-fetch', 'enabled')];
+    expect(capabilityState(cap('research'), l)).toEqual({ kind: 'partly', off: ['web-search'] });
+  });
 });
 
 describe('switchPlan', () => {
@@ -71,6 +77,12 @@ describe('switchPlan', () => {
       { kind: 'skills', name: 'web', action: 'disable' },
     ]);
     expect(switchPlan(cap('diagnostics'), false, lists())).toEqual([]);
+  });
+
+  it('enables a bundle again when one of its tools was turned off alone', () => {
+    const l = lists();
+    l.tools = [entry('tool', 'web-search', 'installed'), entry('tool', 'web-fetch', 'enabled')];
+    expect(switchPlan(cap('research'), true, l)).toEqual([{ kind: 'skills', name: 'web', action: 'install-enable' }]);
   });
 });
 
@@ -109,5 +121,14 @@ describe('neededCapabilities', () => {
     // Its own bundles don't count.
     expect(neededCapabilities(cap('triage'), l).map((c) => c.id)).toEqual(['tasks']);
     expect(neededCapabilities(cap('research'), l)).toEqual([]);
+  });
+
+  it('keeps the catalog’s needs when a bundle’s manifest can’t be read, and names it unavailable', () => {
+    const l = lists();
+    l.agents.push(entry('agent', 'meeting-debrief', 'installed', { pinnedTools: ['task-create'] }));
+    l.skills[1] = { ...l.skills[1]!, metadata: null, manifestError: 'bad yaml' };
+    const needs = neededCapabilities(cap('debriefs'), l);
+    expect(needs.map((c) => c.id)).toEqual(['tasks']);
+    expect(capabilityState(needs[0]!, l).kind).toBe('unavailable');
   });
 });

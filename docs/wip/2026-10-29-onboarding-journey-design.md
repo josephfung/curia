@@ -268,7 +268,11 @@ optional extras can be deferred.
 
 One list of switches, the last optional extra and **Settings → Behaviour → Capabilities**. Each
 capability is a group of agents, skill bundles and tools from a small catalog, switched together
-through the registry so a pinned bundle is never left off under an enabled agent:
+through the registry. Turning one on enables what it pins before its agents, and offers to turn
+on the capabilities its agents need (Meeting debriefs and Email triage need Projects and tasks).
+Turning one off disables its agents first; if an enabled agent outside it pins one of its
+bundles, the operator is told which and can turn it off anyway, leaving that agent without
+those tools:
 
 | Capability | On a new install | In Setup |
 |---|---|---|
