@@ -127,11 +127,14 @@ function useSavedChoice<T extends string>(
     seq.current++;
     setValue(next);
     setError(null);
-    const p = attempt(next, ++pickGen.current);
+    const gen = ++pickGen.current;
+    const p = attempt(next, gen);
     running.current.add(p);
     void p.then((ok) => {
       running.current.delete(p);
-      if (running.current.size === 0) lastFailed.current = !ok;
+      // Only the newest pick's outcome counts: an older one that failed, settling after a newer
+      // one saved, must not keep Save and continue on the step with nothing on screen.
+      if (gen === pickGen.current) lastFailed.current = !ok;
     });
   }
 
