@@ -25,11 +25,11 @@ let container: HTMLElement;
 const assign = vi.fn();
 
 async function settle(ms = 20) { await act(async () => { await new Promise(r => setTimeout(r, ms)); }); }
-async function mount(onStatus?: (s: string) => void) {
+async function mount(onStatus?: (s: string) => void, props: { fieldsFilled?: boolean; beforeSignIn?: () => Promise<boolean> } = {}) {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
-  await act(async () => { root!.render(<GoogleWorkspaceSignIn onStatus={onStatus} />); });
+  await act(async () => { root!.render(<GoogleWorkspaceSignIn onStatus={onStatus} {...props} />); });
   await settle();
 }
 const button = () => [...container.querySelectorAll('button')].find(b => b.textContent?.startsWith('Sign in as Curia')) as HTMLButtonElement;
@@ -81,6 +81,28 @@ describe('GoogleWorkspaceSignIn', () => {
     await mount();
     expect(button().disabled).toBe(true);
     expect(text()).toMatch(/Save the OAuth client ID first/);
+  });
+
+  it('turns the button on once every field is filled in, and saves them before going to Google (#2683)', async () => {
+    const url = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=x';
+    const order: string[] = [];
+    statusThen({ state: 'not_configured', missing: ['the OAuth client ID'] }, () => { order.push('signin'); return json({ url }); });
+    await mount(undefined, { fieldsFilled: true, beforeSignIn: async () => { order.push('save'); return true; } });
+    expect(button().disabled).toBe(false);
+    expect(text()).toMatch(/saves these details first/);
+    await act(async () => { button().click(); });
+    await settle();
+    expect(order).toEqual(['save', 'signin']);
+    expect(assign).toHaveBeenCalledWith(url);
+  });
+
+  it('stays here when saving the fields fails', async () => {
+    statusThen({ state: 'not_configured', missing: ['the OAuth client ID'] }, () => json({ url: 'https://accounts.google.com/x' }));
+    await mount(undefined, { fieldsFilled: true, beforeSignIn: async () => false });
+    await act(async () => { button().click(); });
+    await settle();
+    expect(assign).not.toHaveBeenCalled();
+    expect(button().disabled).toBe(false);
   });
 
   it('keeps the button off without a usable APP_ORIGIN, and says so', async () => {

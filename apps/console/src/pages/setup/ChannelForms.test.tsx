@@ -78,14 +78,12 @@ function type(label: string, value: string): void {
   });
 }
 
-/** Leaves the last input, which saves what is typed (there is no Save button). */
+const saveButton = (): HTMLButtonElement =>
+  Array.from(document.querySelectorAll('button')).find((b) => b.textContent === 'Save' || b.textContent === 'Saving…')!;
+
+/** Clicks the group's Save button, which saves what is typed (#2683). */
 async function save(): Promise<void> {
-  const inputs = Array.from(document.querySelectorAll('input'));
-  await act(async () => {
-    const last = inputs.at(-1)!;
-    last.focus();
-    last.blur();
-  });
+  await act(async () => { saveButton().click(); });
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 }
 
@@ -98,6 +96,29 @@ afterEach(() => {
 });
 
 describe('ChannelCredentialsForm', () => {
+  it('saves nothing when a field loses focus, and keeps Save off until something is typed (#2683)', async () => {
+    const server: FakeServer = { calls: [], resolvable: false, state: 'uninstalled' };
+    stubFetch(server);
+    await mount();
+    expect(saveButton().disabled).toBe(true);
+    type('Telnyx API key', 'KEY_1');
+    expect(saveButton().disabled).toBe(false);
+    const input = document.querySelector('input')!;
+    await act(async () => { input.focus(); input.blur(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(server.calls.some((c) => c.startsWith('PUT'))).toBe(false);
+  });
+
+  it('saves on Enter: the group is a form', async () => {
+    const server: FakeServer = { calls: [], resolvable: false, state: 'uninstalled' };
+    stubFetch(server);
+    await mount();
+    type('Telnyx API key', 'KEY_1');
+    await act(async () => { document.querySelector('form')!.requestSubmit(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(server.calls.filter((c) => c.startsWith('PUT'))).toHaveLength(1);
+  });
+
   it('saves only the fields typed in, and leaves the channel off while it is incomplete', async () => {
     const server: FakeServer = { calls: [], resolvable: false, state: 'uninstalled' };
     stubFetch(server);

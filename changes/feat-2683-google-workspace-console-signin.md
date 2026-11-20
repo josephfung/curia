@@ -5,3 +5,4 @@
 ### Changed
 
 - **Setup: Google Workspace** — now a required step under Business Apps, done only when signed in. (#2683)
+- **Setup forms** — key fields save with a Save button or Enter, no longer on leaving a field. (#2683)

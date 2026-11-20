@@ -1,7 +1,7 @@
 // The channel steps' inline forms (#2358, PR 3b): a channel's credentials, saved to the
 // vault and the channel turned on, and the principal's id on a channel, linked to their
 // contact. Built on the routes Settings → Channels and Contacts use.
-import { useCallback, useEffect, useImperativeHandle, useRef, useState, type JSX, type Ref } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type FormEvent, type JSX, type Ref } from 'react';
 import { apiFetch } from '../../api.js';
 import { errorMessage } from '../../components/settings/ConfigHistory.js';
 
@@ -62,6 +62,28 @@ export async function turnOnChannelIfReady(channel: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * A field group's own Save button (#2683, owner review): nothing saves when a field loses
+ * focus, which surprised operators and fired whenever a password manager filled a field.
+ * The group is a real <form>, so Enter saves too, and the step's Save and continue still
+ * saves anything typed before moving on.
+ */
+function SaveButton({ dirty, saving }: { dirty: boolean; saving: boolean }): JSX.Element {
+  return (
+    <div className="setup-save-row">
+      <button type="submit" className="btn btn-sm" disabled={!dirty || saving}>{saving ? 'Saving…' : 'Save'}</button>
+    </div>
+  );
+}
+
+/** A form's submit: save, never navigate. */
+function submitWith(flush: () => Promise<boolean>) {
+  return (e: FormEvent<HTMLFormElement>): void => {
+    e.preventDefault();
+    void flush();
+  };
+}
+
 /** What a step's field group gives the step: save anything still typed. */
 export interface FieldGroupHandle {
   /** Saves what is typed and not yet saved. False when anything failed (its error shows). */
@@ -70,8 +92,8 @@ export interface FieldGroupHandle {
 
 /**
  * A channel's credentials as Setup asks for them: the listed fields only, in this order.
- * There is no Save button (#2358, owner review): a field saves when the operator leaves it,
- * and the step's Save and continue saves whatever is still typed (flush). A field already
+ * The group's Save button (or Enter) saves what is typed, and so does the step's Save and
+ * continue (flush). Nothing saves when a field loses focus (#2683). A field already
  * saved shows as saved and is left alone unless a new value is typed. Once every required
  * credential resolves, the channel is installed and turned on; it starts at Apply & restart.
  */
@@ -93,8 +115,9 @@ export function ChannelCredentialsForm(props: {
   // The latest typed values, for a save that runs after the render that typed them.
   const valuesRef = useRef(values);
   valuesRef.current = values;
-  // One save at a time: a blur and Save and continue can both ask.
+  // One save at a time: the Save button and Save and continue can both ask.
   const running = useRef<Promise<boolean> | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const reload = useCallback(async (): Promise<ChannelEntry | null> => {
     try {
@@ -197,17 +220,20 @@ export function ChannelCredentialsForm(props: {
   async function flush(): Promise<boolean> {
     while (running.current) await running.current;
     running.current = saveTyped();
+    setSaving(true);
     try {
       return await running.current;
     } finally {
       running.current = null;
+      setSaving(false);
     }
   }
 
   useImperativeHandle(props.ref, () => ({ flush }));
 
+  const dirty = Object.values(values).some((v) => v.trim() !== '');
   return (
-    <div className="setup-fields">
+    <form className="setup-fields" onSubmit={submitWith(flush)} noValidate>
       {fields.map((f) => (
         <label key={f.key} className="setup-field">
           <span className="setup-field-label">
@@ -224,17 +250,16 @@ export function ChannelCredentialsForm(props: {
               valuesRef.current = { ...valuesRef.current, [f.key]: value };
               setValues((v) => ({ ...v, [f.key]: value }));
             }}
-            // Leaving any field saves everything typed in the group.
-            onBlur={() => { if (Object.values(valuesRef.current).some((v) => v.trim())) void flush(); }}
           />
         </label>
       ))}
+      <SaveButton dirty={dirty} saving={saving} />
       {message && (
         <p className={`setup-status ${message.kind === 'ok' ? 'ok' : 'attention'}`} role={message.kind === 'error' ? 'alert' : 'status'}>
           {message.text}
         </p>
       )}
-    </div>
+    </form>
   );
 }
 
@@ -248,7 +273,7 @@ interface Identity {
 /**
  * The principal's id on one channel (Signal number, mobile, Slack member id), linked to
  * their contact as a principal-stated identity. Nothing is sent to it. Like the credentials,
- * it saves when the operator leaves the field, and on the step's Save and continue.
+ * it saves with its Save button (or Enter), and on the step's Save and continue.
  */
 export function PrincipalIdentityField(props: {
   contactId: string | null;
@@ -265,6 +290,7 @@ export function PrincipalIdentityField(props: {
   const valueRef = useRef(value);
   valueRef.current = value;
   const running = useRef<Promise<boolean> | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const reload = useCallback(async () => {
     if (!contactId) return;
@@ -324,10 +350,12 @@ export function PrincipalIdentityField(props: {
   async function flush(): Promise<boolean> {
     while (running.current) await running.current;
     running.current = link();
+    setSaving(true);
     try {
       return await running.current;
     } finally {
       running.current = null;
+      setSaving(false);
     }
   }
 
@@ -337,7 +365,7 @@ export function PrincipalIdentityField(props: {
     return <p className="setup-hint">Save Who it’s for first: this links to the principal’s contact.</p>;
   }
   return (
-    <div className="setup-fields setup-identity">
+    <form className="setup-fields setup-identity" onSubmit={submitWith(flush)} noValidate>
       <label className="setup-field">
         <span className="setup-field-label">
           {props.label}{' '}
@@ -349,11 +377,11 @@ export function PrincipalIdentityField(props: {
           value={value}
           placeholder={linked.length > 0 ? 'Type another to add it' : props.placeholder}
           onChange={(e) => { valueRef.current = e.target.value; setValue(e.target.value); }}
-          onBlur={() => { if (valueRef.current.trim()) void flush(); }}
         />
       </label>
+      <SaveButton dirty={value.trim() !== ''} saving={saving} />
       {error && <p className="setup-status attention" role="alert">{error}</p>}
-    </div>
+    </form>
   );
 }
 
@@ -378,18 +406,20 @@ async function loadConfiguredKeys(): Promise<Set<string>> {
 }
 
 /**
- * Vault keys an optional extra asks for (Google Workspace, the Tavily key), with no channel to
- * turn on. Like ChannelCredentialsForm: no Save button, a field saves when the operator leaves
- * it, and the step's Save and continue saves what is still typed (flush). A saved key shows as
- * saved and is left alone unless a new value is typed.
+ * Vault keys a step asks for (Google Workspace, the Tavily key), with no channel to turn on.
+ * Like ChannelCredentialsForm: the Save button (or Enter) and the step's Save and continue save
+ * what is typed (flush). A saved key shows as saved and is left alone unless a new value is typed.
  */
 export function VaultKeysForm(props: {
   fields: readonly VaultFieldSpec[];
   onChanged: () => Promise<void>;
+  /** Told whether every field is filled in, typed or already saved (Google Workspace's sign-in button). */
+  onFilledChange?: (filled: boolean) => void;
   ref?: Ref<FieldGroupHandle>;
 }): JSX.Element {
-  const { fields, onChanged } = props;
+  const { fields, onChanged, onFilledChange } = props;
   const [configured, setConfigured] = useState<Set<string>>(new Set());
+  const [saving, setSaving] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const valuesRef = useRef(values);
@@ -460,6 +490,15 @@ export function VaultKeysForm(props: {
   }
 
   async function flush(): Promise<boolean> {
+    setSaving(true);
+    try {
+      return await flushPasses();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function flushPasses(): Promise<boolean> {
     // A value typed while a save ran is kept for the next save; save again until nothing
     // typed is left, so Save and continue never moves on past it. Bounded: someone typing
     // through every save is told to wait rather than looped forever.
@@ -481,8 +520,14 @@ export function VaultKeysForm(props: {
 
   useImperativeHandle(props.ref, () => ({ flush }));
 
+  const filled = fields.every((f) => configured.has(f.key) || (values[f.key] ?? '').trim() !== '');
+  const onFilledRef = useRef(onFilledChange);
+  onFilledRef.current = onFilledChange;
+  useEffect(() => { onFilledRef.current?.(filled); }, [filled]);
+
+  const dirty = Object.values(values).some((v) => v.trim() !== '');
   return (
-    <div className="setup-fields">
+    <form className="setup-fields" onSubmit={submitWith(flush)} noValidate>
       {fields.map((f) => (
         <label key={f.key} className="setup-field">
           <span className="setup-field-label">
@@ -499,15 +544,15 @@ export function VaultKeysForm(props: {
               valuesRef.current = { ...valuesRef.current, [f.key]: value };
               setValues((v) => ({ ...v, [f.key]: value }));
             }}
-            onBlur={() => { if (Object.values(valuesRef.current).some((v) => v.trim())) void flush(); }}
           />
         </label>
       ))}
+      <SaveButton dirty={dirty} saving={saving} />
       {message && (
         <p className={`setup-status ${message.kind === 'ok' ? 'ok' : 'attention'}`} role={message.kind === 'error' ? 'alert' : 'status'}>
           {message.text}
         </p>
       )}
-    </div>
+    </form>
   );
 }
