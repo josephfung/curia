@@ -665,21 +665,106 @@ resolve_env_file() {
   printf '%s' "$env"
 }
 
-# Prompt for deployment topology. Echoes one of: local | domain | proxy.
+# Map a menu answer to a topology name: 1/empty/unknown -> domain, 2 -> proxy,
+# 3 -> local. HTTPS is the default, so anything unrecognised lands on domain.
+topology_for_choice() {
+  case "$1" in
+    2) echo "proxy" ;;
+    3) echo "local" ;;
+    *) echo "domain" ;;
+  esac
+}
+
+# Prompt for deployment topology. Echoes one of: domain | proxy | local.
 # Runs interactively; not unit-tested (requires a TTY and user input).
 choose_topology() {
-  echo "" >&2
-  echo "How will you reach Curia?" >&2
-  echo "  1  Local / evaluation        (http://localhost:3000, no TLS)" >&2
-  echo "  2  Public domain + HTTPS      (automatic Let's Encrypt via Caddy)" >&2
-  echo "  3  Public IP / my own proxy   (http on :3000, terminate TLS upstream)" >&2
+  {
+    echo ""
+    echo "How will people reach Curia?"
+    echo "  1  My domain, with HTTPS set up for me   (recommended)"
+    echo "     Curia gets its own certificate. Needs a domain pointing at this"
+    echo "     server and ports 80 and 443 open."
+    echo "  2  My domain, behind HTTPS I already run"
+    echo "     For servers that already have nginx, Traefik, Cloudflare Tunnel or"
+    echo "     similar in front. Curia listens on port 3000 behind it."
+    echo "  3  Just this computer, to try it out"
+    echo "     No phone app; onboarding then needs Signal or SMS."
+    echo "Not sure? Choose 1."
+  } >&2
+  local c
   read -rp "Choice [1]: " c
-  c="${c:-1}"
-  case "$c" in
-    2) echo "domain" ;;
-    3) echo "proxy" ;;
-    *) echo "local" ;;
+  topology_for_choice "$c"
+}
+
+# Normalize a proxy address to scheme://host[:port]. Lowercases the scheme and
+# drops one trailing slash. Returns 1 for anything else: no http(s):// scheme,
+# whitespace, a path beyond "/", a query or fragment, or an empty host.
+normalize_origin() {
+  local v="$1" scheme rest
+  case "$v" in
+    [Hh][Tt][Tt][Pp][Ss]://*) scheme="https"; rest="${v#????????}" ;;
+    [Hh][Tt][Tt][Pp]://*)     scheme="http";  rest="${v#???????}" ;;
+    *) return 1 ;;
   esac
+  rest="${rest%/}"
+  [[ -n "$rest" ]] || return 1
+  case "$rest" in
+    *[[:space:]]*|*/*|*\?*|*\#*) return 1 ;;
+  esac
+  printf '%s://%s' "$scheme" "$rest"
+}
+
+# Browser-facing LiveKit base URL (never ending in /rtc: livekit-client appends it).
+#   livekit_browser_url <topology> <domain_or_origin>
+livekit_browser_url() {
+  local topology="$1" value="${2:-}"
+  case "$topology" in
+    domain) printf 'wss://%s' "$value" ;;
+    proxy)
+      case "$value" in
+        https://*) printf 'wss://%s' "${value#https://}" ;;
+        http://*)  printf 'ws://%s' "${value#http://}" ;;
+        *)         printf 'ws://localhost:7880' ;;
+      esac ;;
+    *) printf 'ws://localhost:7880' ;;
+  esac
+}
+
+# 0 when something accepts a TCP connection on 127.0.0.1:<port> (1 s bound).
+port_listening() {
+  local port="$1"
+  ( exec 3<>"/dev/tcp/127.0.0.1/$port" ) 2>/dev/null &
+  local pid=$! i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null; return $?; }
+    sleep 0.1
+  done
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  return 1
+}
+
+# Ask for the public address a user's own proxy serves Curia on. Echoes the
+# normalized origin, or nothing for Enter (localhost testing). Re-asks on invalid.
+prompt_proxy_origin() {
+  local ans norm
+  echo "" >&2
+  while true; do
+    echo "Public address your proxy serves Curia on (e.g. https://curia.example.com)." >&2
+    read -rp "Press Enter to keep localhost for testing: " ans
+    if [[ -z "$ans" ]]; then
+      hint "Using ws://localhost:7880 for calls; this is for testing only."
+      return 0
+    fi
+    if norm="$(normalize_origin "$ans")"; then
+      if [[ "$norm" == http://* ]]; then
+        warn "The phone app needs https. $norm will work for the browser only."
+      fi
+      printf '%s' "$norm"
+      return 0
+    fi
+    warn "Enter the address as https://host or https://host:port, with no path."
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -737,9 +822,10 @@ fresh_install() {
   anthropic="$(prompt_anthropic_key)"
 
   # Prompt for topology only on a fresh install (no COMPOSE_FILE/DOMAIN yet).
-  local topology
-  topology="$(choose_topology)"
-  case "$topology" in
+  # TOPOLOGY and PROXY_ORIGIN are read by later steps (LiveKit seeding).
+  TOPOLOGY="$(choose_topology)"
+  PROXY_ORIGIN=""
+  case "$TOPOLOGY" in
     domain)
       # Require a non-empty domain — the TLS overlay and the summary URL are
       # both useless without one, and Caddy cannot request a certificate.
@@ -758,6 +844,10 @@ fresh_install() {
       # Expose DOMAIN as a shell variable so print_summary can build the HTTPS URL.
       # shellcheck disable=SC2034  # read by print_summary (sourced from setup-common.sh)
       DOMAIN="$dom"
+      if port_listening 80 || port_listening 443; then
+        warn "Something is already using port 80 or 443 on this machine."
+        hint "If nginx, Traefik or similar already serves HTTPS here, re-run and choose option 2."
+      fi
       # Best-effort DNS warning; never blocks the install.
       if ! getent hosts "$dom" >/dev/null 2>&1; then
         if command -v host >/dev/null 2>&1; then
@@ -772,7 +862,13 @@ fresh_install() {
       # Evaluation on this machine: http://localhost:3000 only.
       set_env_var "$env" HTTP_BIND 127.0.0.1
       ;;
-    *) : ;;  # proxy: base compose only, HTTP on :3000 on every interface
+    *)
+      # proxy: base compose only, HTTP on :3000 on every interface.
+      PROXY_ORIGIN="$(prompt_proxy_origin)"
+      if [[ -n "$PROXY_ORIGIN" && -z "$(env_value "$env" APP_ORIGIN)" ]]; then
+        set_env_var "$env" APP_ORIGIN "$PROXY_ORIGIN"
+      fi
+      ;;
   esac
 
   # Start Postgres and wait for it to be ready before running migrations.

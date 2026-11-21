@@ -1288,6 +1288,34 @@ _assert_var "empty shell LIVEKIT_KEYS: not written" "$(grep -c '^LIVEKIT_KEYS=' 
 _assert_var "empty shell LIVEKIT_KEYS: warns" "$([[ "$_lk_w" == *LIVEKIT_KEYS* ]] && echo ok)" "ok"
 rm -f "$_lk_env"
 
+# --- install.sh: topology ---
+
+echo ""
+echo "=== install.sh: topology ==="
+
+_assert_var "topology: empty -> domain" "$(topology_for_choice "")" "domain"
+_assert_var "topology: 1 -> domain" "$(topology_for_choice 1)" "domain"
+_assert_var "topology: 2 -> proxy" "$(topology_for_choice 2)" "proxy"
+_assert_var "topology: 3 -> local" "$(topology_for_choice 3)" "local"
+_assert_var "topology: unknown -> domain" "$(topology_for_choice x)" "domain"
+
+_assert_var "normalize_origin strips trailing slash" "$(normalize_origin 'https://curia.example.com/')" "https://curia.example.com"
+_assert_var "normalize_origin lowercases scheme" "$(normalize_origin 'HTTPS://h.example.com:8443')" "https://h.example.com:8443"
+_assert_var "normalize_origin keeps http host:port" "$(normalize_origin 'http://10.0.0.5:3000')" "http://10.0.0.5:3000"
+for _no_bad in 'curia.example.com' 'https://h.example.com/curia' 'https://h .com' 'https://' 'https://h.com?x=1' 'https://h.com#f'; do
+    if normalize_origin "$_no_bad" >/dev/null 2>&1; then _no_rc=0; else _no_rc=1; fi
+    _assert_var "normalize_origin rejects '$_no_bad'" "$_no_rc" "1"
+done
+
+_assert_var "livekit url: domain" "$(livekit_browser_url domain curia.example.com)" "wss://curia.example.com"
+_assert_var "livekit url: proxy https" "$(livekit_browser_url proxy https://h.example.com:8443)" "wss://h.example.com:8443"
+_assert_var "livekit url: proxy http" "$(livekit_browser_url proxy http://10.0.0.5:3000)" "ws://10.0.0.5:3000"
+_assert_var "livekit url: proxy empty" "$(livekit_browser_url proxy '')" "ws://localhost:7880"
+_assert_var "livekit url: local" "$(livekit_browser_url local '')" "ws://localhost:7880"
+for _lu in "$(livekit_browser_url domain d.com)" "$(livekit_browser_url proxy https://h.com)" "$(livekit_browser_url local '')"; do
+    _assert_var "livekit url never ends in /rtc ($_lu)" "$([[ "$_lu" == */rtc ]] && echo bad || echo ok)" "ok"
+done
+
 # --- Results ---
 
 echo ""
