@@ -430,7 +430,8 @@ describe('DocWriteHandler', () => {
         expect(data.action).toBe('section-deleted');
         expect(data.document?.version).toBe(4);
       }
-      expect(deleteSection).toHaveBeenCalledWith(PATH, { section: 'Board mail', expectedSectionVersion: 2 });
+      // expectedVersion: the version read for the console-only check (#2360).
+      expect(deleteSection).toHaveBeenCalledWith(PATH, { section: 'Board mail', expectedSectionVersion: 2, expectedVersion: 3 });
       // The folder's log.md (which the read mock reports as existing) gets an entry.
       expect(repo.append).toHaveBeenCalledWith('/projects/x/log.md', expect.objectContaining({
         content: expect.stringContaining('section-delete'),
@@ -699,6 +700,27 @@ describe('DocWriteHandler', () => {
       const kept = await new DocWriteHandler().execute(ctxFor(
         { path: PATH, mode: 'replace', body: 'x', expected_version: 1, frontmatter: { editable_by: 'console' } }, keep, true));
       expect(kept.success).toBe(true);
+    });
+
+    // An ordinary document read at version 1 that the console marks before the write lands
+    // must not take the write: every mode is bound to the version the check passed.
+    it('binds every write to the version the console-only check read', async () => {
+      const ordinary = makeDoc({ path: '/meetings/notes/brief.md', version: 1 });
+      for (const input of [
+        { mode: 'append', content: 'x', expected_version: 2 },
+        { mode: 'replace', body: 'x', expected_version: 2 },
+      ]) {
+        const repo = repoWith(ordinary);
+        const result = await new DocWriteHandler().execute(ctxFor({ path: ordinary.path, ...input }, repo));
+        expect(result.success, input.mode).toBe(true);
+        if (result.success) expect((result.data as { conflict?: boolean; version?: number })).toMatchObject({ conflict: true, version: 1 });
+        expect(writes(repo), input.mode).toBe(0);
+      }
+      for (const [mode, fn] of [['section-edit', 'editSection'], ['section-delete', 'deleteSection']] as const) {
+        const repo = repoWith(ordinary);
+        await new DocWriteHandler().execute(ctxFor({ path: ordinary.path, mode, section: 'Style', content: 'x' }, repo));
+        expect(repo[fn], mode).toHaveBeenCalledWith(ordinary.path, expect.objectContaining({ expectedVersion: 1 }));
+      }
     });
 
     it('leaves ordinary documents alone', async () => {

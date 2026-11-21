@@ -216,6 +216,16 @@ export class DocWriteHandler implements ToolHandler {
       if (consoleOnlyError) {
         return { success: false, error: consoleOnlyError };
       }
+      // Every write below is bound to `existing`, the version the check above passed (#2360):
+      // a document the console marked in between is a version conflict, never a write. So
+      // append and replace refuse an expected_version other than the one read here, and the
+      // section modes pass it to the repo, which checks it under the row lock.
+      const staleExpected = existing !== null && typeof input.expected_version === 'number'
+        && (input.mode === 'append' || input.mode === 'replace')
+        && input.expected_version !== existing.version;
+      if (staleExpected) {
+        return { success: true, data: mapWriteConflict({ ok: false, conflict: true, document: existing }, timezone) };
+      }
       let result;
 
       switch (input.mode) {
@@ -323,6 +333,7 @@ export class DocWriteHandler implements ToolHandler {
             content: input.content,
             mode: 'replace',
             expectedSectionVersion: input.expected_section_version,
+            expectedVersion: existing.version,
             ...(associatedTaskId ? { taskId: associatedTaskId } : {}),
           });
           if (!result.ok) {
@@ -350,6 +361,7 @@ export class DocWriteHandler implements ToolHandler {
           const deleted = await repo.deleteSection(normalized, {
             section: input.section.trim(),
             expectedSectionVersion: input.expected_section_version,
+            expectedVersion: existing.version,
           });
           if ('missingSection' in deleted) {
             // An error, not a no-op success: the agent must not confirm a removal that
