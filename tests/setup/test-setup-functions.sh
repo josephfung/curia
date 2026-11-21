@@ -1218,6 +1218,60 @@ unset -f curl
 INSTALL_DIR="$_saved_install_dir"
 rm -rf "$_fa_dir"
 
+# --- setup-common: livekit helpers ---
+
+echo ""
+echo "=== setup-common: livekit helpers ==="
+
+_lk_k1="$(gen_livekit_keys)"; _lk_k2="$(gen_livekit_keys)"
+_assert_var "gen_livekit_keys format" \
+    "$([[ "$_lk_k1" =~ ^API[A-Za-z0-9]{12}:\ [0-9a-f]{64}$ ]] && echo ok)" "ok"
+_assert_var "gen_livekit_keys differs per call" "$([[ "$_lk_k1" != "$_lk_k2" ]] && echo ok)" "ok"
+
+_assert_var "seed from LIVEKIT_KEYS" "$(livekit_seed_keys 'APIabc: s3cr3t' '')" "APIabc s3cr3t"
+_assert_var "seed from quoted LIVEKIT_KEYS" "$(livekit_seed_keys '"APIabc: s3cr3t"' '')" "APIabc s3cr3t"
+_assert_var "seed from LIVEKIT_KEYS with extra spaces" "$(livekit_seed_keys '  APIabc :   s3cr3t ' '--dev')" "APIabc s3cr3t"
+_assert_var "seed from --keys" "$(livekit_seed_keys '' '--config /x --keys "APIk: sec"')" "APIk sec"
+_assert_var "seed from --keys=" "$(livekit_seed_keys '' "--config /x --keys='APIk: sec'")" "APIk sec"
+_assert_var "seed from --dev" "$(livekit_seed_keys '' '--dev --bind 0.0.0.0')" "devkey secret"
+_assert_var "seed from empty command" "$(livekit_seed_keys '' '')" "devkey secret"
+_lk_rc=0; _lk_out="$(livekit_seed_keys '' '--config /etc/livekit.yaml')" || _lk_rc=$?
+_assert_var "seed unknown: empty output" "$_lk_out" ""
+_assert_var "seed unknown: rc 1" "$_lk_rc" "1"
+
+_assert_var "command for local" "$(livekit_command_for local)" "--config /etc/livekit.local.yaml --node-ip 127.0.0.1"
+_assert_var "command for public" "$(livekit_command_for public)" "--config /etc/livekit.yaml"
+
+_lk_env="$(mktemp)"
+cp "$TEST_DIR/../../.env.example" "$_lk_env"
+unset LIVEKIT_KEYS LIVEKIT_COMMAND COMPOSE_PROFILES
+ensure_livekit_env "$_lk_env" local
+_assert_var "fresh: COMPOSE_PROFILES" "$(env_value "$_lk_env" COMPOSE_PROFILES)" "voice"
+_assert_var "fresh: LIVEKIT_KEYS format" \
+    "$([[ "$(env_value "$_lk_env" LIVEKIT_KEYS)" =~ ^API[A-Za-z0-9]{12}:\ [0-9a-f]{64}$ ]] && echo ok)" "ok"
+_assert_var "fresh: LIVEKIT_KEYS is double-quoted" \
+    "$(grep -cE '^LIVEKIT_KEYS="API[A-Za-z0-9]{12}: [0-9a-f]{64}"$' "$_lk_env")" "1"
+_assert_var "fresh: LIVEKIT_COMMAND" "$(env_value "$_lk_env" LIVEKIT_COMMAND)" "$(livekit_command_for local)"
+
+printf 'LIVEKIT_KEYS="APIold: oldsecret"\nLIVEKIT_COMMAND=--config /mine.yaml\n' > "$_lk_env"
+ensure_livekit_env "$_lk_env" public
+_assert_var "keeps existing LIVEKIT_KEYS" "$(env_value "$_lk_env" LIVEKIT_KEYS)" "APIold: oldsecret"
+_assert_var "keeps operator LIVEKIT_COMMAND" "$(env_value "$_lk_env" LIVEKIT_COMMAND)" "--config /mine.yaml"
+
+: > "$_lk_env"
+LIVEKIT_COMMAND="--dev" LIVEKIT_KEYS="APIsh: shsecret" ensure_livekit_env "$_lk_env" public
+_assert_var "shell LIVEKIT_COMMAND blocks the write" "$(grep -c '^LIVEKIT_COMMAND=' "$_lk_env")" "0"
+_assert_var "shell LIVEKIT_KEYS blocks the write" "$(grep -c '^LIVEKIT_KEYS=' "$_lk_env")" "0"
+
+printf 'COMPOSE_PROFILES=signal\n' > "$_lk_env"
+ensure_livekit_env "$_lk_env" public
+_assert_var "appends voice to profiles" "$(env_value "$_lk_env" COMPOSE_PROFILES)" "signal,voice"
+printf 'COMPOSE_PROFILES=voice,x\n' > "$_lk_env"
+ensure_livekit_env "$_lk_env" public
+_assert_var "profiles already with voice unchanged" "$(env_value "$_lk_env" COMPOSE_PROFILES)" "voice,x"
+_assert_var "public: LIVEKIT_COMMAND" "$(env_value "$_lk_env" LIVEKIT_COMMAND)" "--config /etc/livekit.yaml"
+rm -f "$_lk_env"
+
 # --- Results ---
 
 echo ""

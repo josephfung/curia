@@ -32,6 +32,131 @@ gen_secret_b64() { head -c 32 /dev/urandom | base64 | tr -d '\n'; }
 # No openssl dependency.
 gen_secret_hex() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 
+# --- .env helpers (shared by install.sh and scripts/setup.sh) ---
+
+# Set KEY=VALUE in the .env file at path $1.
+#   - If the key already exists (commented or uncommented), replace that line.
+#   - If the key is absent, append it.
+# Uses awk for a portable in-place edit that avoids sed -i portability issues
+# between GNU and BSD sed.
+set_env_var() {
+  local env="$1" key="$2" val="$3"
+  if grep -qE "^#?[[:space:]]*${key}=" "$env"; then
+    local tmp
+    tmp="$(mktemp)"
+    awk -v k="$key" -v v="$val" '
+      $0 ~ "^#?[[:space:]]*"k"=" && !done { print k"="v; done=1; next }
+      { print }
+      END { if (!done) print k"="v }' "$env" > "$tmp"
+    mv "$tmp" "$env"
+  else
+    printf '\n%s=%s\n' "$key" "$val" >> "$env"
+  fi
+}
+
+# Echo the value of KEY from an env file (last assignment wins), or nothing when
+# the key is absent or the file is missing. Follows Compose's .env value rules
+# for the shapes a *_BIND or COMPOSE_FILE value takes: a "..." or '...' value is
+# what the quotes hold, anything after the closing quote (e.g. `# note`) is
+# dropped; an unquoted value ends at a ` #` inline comment, blanks around it
+# trimmed. So HTTP_BIND="127.0.0.1" # note reads as 127.0.0.1. ${VAR}
+# interpolation inside .env is not resolved (is_unresolved flags it). Always returns 0: this script runs
+# under `set -euo pipefail`, where grep's no-match status would abort the
+# installer from inside `x="$(env_value ...)"`.
+env_value() {
+  local env="$1" key="$2" v rest q
+  v="$({ grep -E "^${key}=" "$env" 2>/dev/null || true; } | tail -n 1 | cut -d= -f2-)"
+  case "$v" in
+    \"*|\'*)
+      q="${v:0:1}"; rest="${v:1}"
+      # Unterminated quote: keep the raw value, as before.
+      [[ "$rest" == *"$q"* ]] && v="${rest%%"$q"*}"
+      ;;
+    *)
+      v="${v%%[[:blank:]]#*}"
+      v="${v%"${v##*[![:blank:]]}"}"
+      v="${v#"${v%%[![:blank:]]*}"}"
+      ;;
+  esac
+  printf '%s' "$v"
+}
+
+# Echo VAR as Compose resolves it: the shell's value when the shell sets it
+# (even to empty, which Compose also prefers over .env), else the .env value.
+compose_var() {
+  local env="$1" key="$2"
+  if [[ -n "${!key+set}" ]]; then printf '%s' "${!key}"; else env_value "$env" "$key"; fi
+}
+
+# 12 alphanumeric characters, no openssl. `cut` drains its input, so no SIGPIPE
+# under pipefail. 48 random bytes give ~64 alnum characters after filtering.
+gen_livekit_keys() {
+  local id
+  id="$(head -c 48 /dev/urandom | base64 | LC_ALL=C tr -dc 'A-Za-z0-9' | cut -c1-12)"
+  printf 'API%s: %s' "$id" "$(gen_secret_hex)"
+}
+
+# Echo "<key> <secret>" for the keys LiveKit will run on, or return 1 with no
+# output when they cannot be known. $1 = LIVEKIT_KEYS value, $2 = LIVEKIT_COMMAND.
+# Order: LIVEKIT_KEYS ("k: s", quotes and spaces tolerated), then --keys in the
+# command, then --dev (or an empty command) -> devkey/secret.
+livekit_seed_keys() {
+  local keys="$1" cmd="$2" k s
+  if [[ -z "$keys" ]]; then
+    case "$cmd" in
+      *--keys=*) keys="${cmd#*--keys=}" ;;
+      *--keys\ *) keys="${cmd#*--keys }" ;;
+    esac
+    if [[ -n "$keys" ]]; then
+      case "$keys" in
+        \"*) keys="${keys#\"}"; keys="${keys%%\"*}" ;;
+        \'*) keys="${keys#\'}"; keys="${keys%%\'*}" ;;
+        *) keys="${keys%% *}" ;;
+      esac
+    fi
+  fi
+  if [[ -n "$keys" ]]; then
+    keys="${keys#\"}"; keys="${keys%\"}"; keys="${keys#\'}"; keys="${keys%\'}"
+    k="${keys%%:*}"; s="${keys#*:}"
+    k="${k#"${k%%[![:space:]]*}"}"; k="${k%"${k##*[![:space:]]}"}"
+    s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"
+    [[ "$keys" == *:* && -n "$k" && -n "$s" ]] || return 1
+    printf '%s %s' "$k" "$s"
+    return 0
+  fi
+  if [[ -z "$cmd" || "$cmd" == *--dev* ]]; then
+    printf 'devkey secret'
+    return 0
+  fi
+  return 1
+}
+
+# LIVEKIT_COMMAND for a local (loopback-only, node-ip pinned) or public install.
+livekit_command_for() {
+  case "$1" in
+    local) printf '%s' '--config /etc/livekit.local.yaml --node-ip 127.0.0.1' ;;
+    *) printf '%s' '--config /etc/livekit.yaml' ;;
+  esac
+}
+
+# Enable the voice profile and give LiveKit generated keys in env file $1.
+# $2 = local|public. Existing operator values (shell or .env) are never replaced.
+ensure_livekit_env() {
+  local env="$1" mode="$2" profiles
+  profiles="$(env_value "$env" COMPOSE_PROFILES)"
+  if [[ -z "$profiles" ]]; then
+    set_env_var "$env" COMPOSE_PROFILES voice
+  elif [[ ",$profiles," != *,voice,* ]]; then
+    set_env_var "$env" COMPOSE_PROFILES "${profiles},voice"
+  fi
+  if [[ -z "$(compose_var "$env" LIVEKIT_KEYS)" ]]; then
+    set_env_var "$env" LIVEKIT_KEYS "\"$(gen_livekit_keys)\""
+  fi
+  if [[ -z "$(compose_var "$env" LIVEKIT_COMMAND)" ]]; then
+    set_env_var "$env" LIVEKIT_COMMAND "$(livekit_command_for "$mode")"
+  fi
+}
+
 # Returns 0 if key matches sk-ant-... format, 1 otherwise.
 validate_anthropic_key() {
     local key="$1"

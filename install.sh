@@ -184,26 +184,6 @@ detect_source_checkout() {
   grep -q '"name"[[:space:]]*:[[:space:]]*"curia"' "$d/package.json"
 }
 
-# Set KEY=VALUE in the .env file at path $1.
-#   - If the key already exists (commented or uncommented), replace that line.
-#   - If the key is absent, append it.
-# Uses awk for a portable in-place edit that avoids sed -i portability issues
-# between GNU and BSD sed.
-set_env_var() {
-  local env="$1" key="$2" val="$3"
-  if grep -qE "^#?[[:space:]]*${key}=" "$env"; then
-    local tmp
-    tmp="$(mktemp)"
-    awk -v k="$key" -v v="$val" '
-      $0 ~ "^#?[[:space:]]*"k"=" && !done { print k"="v; done=1; next }
-      { print }
-      END { if (!done) print k"="v }' "$env" > "$tmp"
-    mv "$tmp" "$env"
-  else
-    printf '\n%s=%s\n' "$key" "$val" >> "$env"
-  fi
-}
-
 # Returns 0 (true) only if the install at env file $1 is fully COMPLETE — i.e.
 # a prior fresh install ran all the way through migrations, vault seeding, a
 # healthy container, and wrote the SETUP_COMPLETE marker as its last step.
@@ -220,45 +200,11 @@ install_is_complete() {
   grep -q "^# SETUP_COMPLETE" "$env" 2>/dev/null
 }
 
-# Echo the value of KEY from an env file (last assignment wins), or nothing when
-# the key is absent or the file is missing. Follows Compose's .env value rules
-# for the shapes a *_BIND or COMPOSE_FILE value takes: a "..." or '...' value is
-# what the quotes hold, anything after the closing quote (e.g. `# note`) is
-# dropped; an unquoted value ends at a ` #` inline comment, blanks around it
-# trimmed. So HTTP_BIND="127.0.0.1" # note reads as 127.0.0.1. ${VAR}
-# interpolation inside .env is not resolved (is_unresolved flags it). Always returns 0: this script runs
-# under `set -euo pipefail`, where grep's no-match status would abort the
-# installer from inside `x="$(env_value ...)"`.
-env_value() {
-  local env="$1" key="$2" v rest q
-  v="$({ grep -E "^${key}=" "$env" 2>/dev/null || true; } | tail -n 1 | cut -d= -f2-)"
-  case "$v" in
-    \"*|\'*)
-      q="${v:0:1}"; rest="${v:1}"
-      # Unterminated quote: keep the raw value, as before.
-      [[ "$rest" == *"$q"* ]] && v="${rest%%"$q"*}"
-      ;;
-    *)
-      v="${v%%[[:blank:]]#*}"
-      v="${v%"${v##*[![:blank:]]}"}"
-      v="${v#"${v%%[![:blank:]]*}"}"
-      ;;
-  esac
-  printf '%s' "$v"
-}
-
 # Returns 0 when a value ($1) holds a ${...} reference that env_value leaves
 # unresolved, so a check keyed on it can't tell what Compose will use.
 is_unresolved() {
   # shellcheck disable=SC2016  # a literal ${, not an expansion
   [[ "$1" == *'${'* ]]
-}
-
-# Echo VAR as Compose resolves it: the shell's value when the shell sets it
-# (even to empty, which Compose also prefers over .env), else the .env value.
-compose_var() {
-  local env="$1" key="$2"
-  if [[ -n "${!key+set}" ]]; then printf '%s' "${!key}"; else env_value "$env" "$key"; fi
 }
 
 # Returns 0 when a *_BIND value ($1) names a loopback address. Empty is not
