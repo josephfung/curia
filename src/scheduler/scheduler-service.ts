@@ -1334,6 +1334,16 @@ export class SchedulerService {
    * 'busy' for that running wake, and 'none' otherwise (a wake already due, or none at all).
    */
   async runTaskWakeEarly(taskId: string, runAt: Date): Promise<'moved' | 'busy' | 'none'> {
+    // A busy run can complete between the move and the busy check, leaving a pending wake neither
+    // saw: the second pass moves it.
+    for (let pass = 0; pass < 2; pass++) {
+      const outcome = await this.tryRunTaskWakeEarly(taskId, runAt);
+      if (outcome !== 'none') return outcome;
+    }
+    return 'none';
+  }
+
+  private async tryRunTaskWakeEarly(taskId: string, runAt: Date): Promise<'moved' | 'busy' | 'none'> {
     const result = await this.pool.query(
       `UPDATE scheduled_jobs
           SET deferred_wake_at = CASE WHEN status = 'pending' THEN COALESCE(deferred_wake_at, run_at) ELSE $2 END,
