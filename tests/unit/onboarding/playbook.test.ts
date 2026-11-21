@@ -81,6 +81,8 @@ describe('seedPlaybook', () => {
     expect(await seedPlaybook(repo, logger)).toBe('created');
     expect(await seedPlaybook(repo, logger)).toBe('exists');
     expect(create).toHaveBeenCalledTimes(1);
+    // Console-only: doc-write refuses it (editable_by).
+    expect(create.mock.calls[0]![0]).toMatchObject({ frontmatter: { editable_by: 'console' } });
     expect(update).not.toHaveBeenCalled();
     expect(docs.get(PLAYBOOK_PATH)!.body).toContain('# First conversation');
   });

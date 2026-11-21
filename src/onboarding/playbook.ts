@@ -1,7 +1,8 @@
 // playbook.ts — the onboarding playbook: default file, parser and seeding (#2360).
 //
 // The default lives in config/onboarding/playbook.md. Each install gets its own copy at
-// PLAYBOOK_PATH (an OKF document the operator can edit); seeding never overwrites it.
+// PLAYBOOK_PATH (an OKF document the operator can edit in the console, seeded `editable_by:
+// console` so doc-write leaves it alone); seeding never overwrites it.
 // `#` headings are sessions, `##` headings are topics.
 
 import fs from 'node:fs';
@@ -12,14 +13,9 @@ import type { Logger } from '../logger.js';
 export type PlaybookTopic = { id: string; title: string; body: string; needsMailbox: boolean };
 export type PlaybookSession = { id: string; title: string; topics: PlaybookTopic[] };
 
-/** Onboarding's documents: doc-write guards this folder (#2360). */
-export const ONBOARDING_DOCS_PREFIX = '/meetings/onboarding/';
 export const PLAYBOOK_PATH = '/meetings/onboarding/playbook.md';
 export const RESEARCH_BRIEF_PATH = '/meetings/onboarding/research-brief.md';
-/**
- * Longest session or topic title kept. Topic titles become subtask titles, which ride into every
- * live principal turn, so an edited playbook cannot push a long text in there.
- */
+/** Longest session or topic title kept: topic titles become subtask titles. */
 export const PLAYBOOK_TITLE_MAX = 120;
 const ID_RE = /^[a-z0-9-]+$/;
 const PLAYBOOK_DOC_TYPE = 'onboarding-playbook';
@@ -37,7 +33,8 @@ function slugify(title: string): string {
 function parseHeading(raw: string): { id: string; title: string } {
   const declared = ID_COMMENT_RE.exec(raw)?.[1];
   const title = raw.replace(/<!--.*?-->/g, '').trim().slice(0, PLAYBOOK_TITLE_MAX).trim();
-  // Ids are only [a-z0-9-]: they become task tags and ride into turns. Anything else is slugified.
+  // Ids are only [a-z0-9-]: they become task tags and ride into live principal turns (the
+  // onboarding turn block names open topics by id). Anything else is slugified.
   const id = declared === undefined ? slugify(title) : ID_RE.test(declared) ? declared : slugify(declared);
   return { id, title };
 }
@@ -100,7 +97,8 @@ export async function seedPlaybook(
   if (await repo.read(PLAYBOOK_PATH)) return 'exists';
   const body = fs.readFileSync(defaultFile ?? defaultPlaybookFile(), 'utf-8');
   try {
-    await repo.create({ path: PLAYBOOK_PATH, type: PLAYBOOK_DOC_TYPE, body, taskId: null });
+    // Console-only: agents (which read untrusted mail) never write it; the operator edits it in the console.
+    await repo.create({ path: PLAYBOOK_PATH, type: PLAYBOOK_DOC_TYPE, frontmatter: { editable_by: 'console' }, body, taskId: null });
   } catch (err) {
     // A concurrent seed can win the race to the unique path; the playbook then exists, which is the goal.
     if (await repo.read(PLAYBOOK_PATH)) return 'exists';

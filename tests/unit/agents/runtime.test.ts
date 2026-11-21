@@ -3534,7 +3534,7 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       description: 'Onboarding progress',
       input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
     };
-    const BLOCK = '[Onboarding in progress — task t-1. Open topics this session: Tone (tone).]';
+    const BLOCK = '[Onboarding in progress — task t-1. Open topics this session: tone.]';
     const principal = {
       originator: {
         contactId: 'ceo', systemRole: 'principal', channel: 'web', initiatedAt: '2026-11-21T00:00:00.000Z', authenticated: true,

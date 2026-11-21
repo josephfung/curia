@@ -768,7 +768,7 @@ export function scopedOnboardingTurnContext(currentScope: CurrentScope): Onboard
   return {
     async forPrincipalTurn() {
       const onboarding = currentScope()?.onboarding;
-      return onboarding ? formatOnboardingTurnBlock(onboarding.taskId, onboarding.topics) : null;
+      return onboarding ? formatOnboardingTurnBlock(onboarding.taskId, onboarding.topics.map((t) => t.topicId)) : null;
     },
   };
 }

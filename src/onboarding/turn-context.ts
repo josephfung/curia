@@ -2,7 +2,7 @@
 //
 // An ordinary principal message carries no task id, so it would never restore the `onboarding`
 // skill. While the onboarding task is open, the coordinator runtime asks this source for a short
-// block naming the task and its open topics, and activates the skill for that turn. The turn is
+// block naming the task and its open topic ids, and activates the skill for that turn. The turn is
 // not bound to the task: anything else in the message is handled as usual.
 
 import type { ConfigStore } from '../memory/config-store.js';
@@ -16,28 +16,16 @@ export interface OnboardingTurnContextSource {
   forPrincipalTurn(now: Date): Promise<string | null>;
 }
 
-/** Longest topic title (or id) put in the block. */
-const TURN_TITLE_MAX = 120;
-
 /**
- * A topic title or id as the block shows it: one line, no brackets (they would close the block),
- * capped. Titles come from the playbook the operator edits, so they are data, not instructions.
+ * The block a live principal turn gets while onboarding is open. It names the open topics by id
+ * only: ids are [a-z0-9-] (the playbook parser enforces it), so no operator-written text reaches
+ * the principal's turn; titles and playbook text come from onboarding-progress status. Exported
+ * so the scenario harness serves the same text from a case's `seed.onboarding`.
  */
-function blockText(text: string): string {
-  return text.replace(/[\r\n]+/g, ' ').replace(/[[\]]/g, '').trim().slice(0, TURN_TITLE_MAX);
-}
-
-/**
- * The block a live principal turn gets while onboarding is open. Exported so the scenario
- * harness serves the same text from a case's `seed.onboarding`.
- */
-export function formatOnboardingTurnBlock(
-  taskId: string,
-  openTopics: ReadonlyArray<{ title: string; topicId: string }>,
-): string {
-  const topics = openTopics.map((t) => `${blockText(t.title)} (${blockText(t.topicId)})`).join(', ') || 'none';
+export function formatOnboardingTurnBlock(taskId: string, openTopicIds: readonly string[]): string {
+  const topics = openTopicIds.join(', ') || 'none';
   return `[Onboarding in progress — task ${taskId}. Open topics this session: ${topics}. `
-    + 'Use onboarding-progress with op: "status" to see and record progress. '
+    + 'Use onboarding-progress with op "status" to read them and record progress. '
     + 'Handle anything else the principal asks as usual.]';
 }
 
@@ -54,7 +42,7 @@ export function createOnboardingTurnContext(deps: {
         if (!parent) return null;
         const open = topicSubtasks(await listChildren(taskRepo, parent.id)).filter((s) => isOpenTask(s.task));
         await recordPrincipalTurn(configStore, logger, now);
-        return formatOnboardingTurnBlock(parent.id, open.map((s) => ({ title: s.task.title, topicId: s.topicId })));
+        return formatOnboardingTurnBlock(parent.id, open.map((s) => s.topicId));
       } catch (err) {
         // Fail open: a broken lookup must not break the principal's chat.
         logger.error({ err }, 'onboarding: turn context lookup failed — this turn proceeds without it');

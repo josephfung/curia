@@ -23,7 +23,7 @@ import {
 import { isUuid } from '../../../../src/util/uuid.js';
 import { isDurableDocPath, isSharedDocPath } from '../../../../src/memory/durable-doc-prefixes.js';
 import { PRINCIPAL_SEND_LEDGER_PREFIX } from '../../../../src/skills/principal-send/send-ledger.js';
-import { ONBOARDING_DOCS_PREFIX, PLAYBOOK_PATH } from '../../../../src/onboarding/playbook.js';
+import type { WorkingDocRow } from '../../../../src/db/working-docs-repo.js';
 
 const VALID_MODES = new Set(['create', 'append', 'replace', 'section-edit', 'section-delete']);
 
@@ -63,28 +63,43 @@ function sendLedgerPathWriteError(ctx: ToolContext, normalizedPath: string): str
   return `${PRINCIPAL_SEND_LEDGER_PREFIX}/ holds Curia's record of sends from the principal's mailbox, which only the send path writes. Leave it unchanged.`;
 }
 
+/** Frontmatter key marking a document only the console edits (#2360): `editable_by: console`. */
+export const EDITABLE_BY_KEY = 'editable_by';
+
+/** The document's `editable_by` value, the key matched case-insensitively; undefined when absent. */
+function editableBy(frontmatter: Record<string, unknown> | undefined): unknown {
+  if (!frontmatter) return undefined;
+  const key = Object.keys(frontmatter).find((k) => k.toLowerCase() === EDITABLE_BY_KEY);
+  return key === undefined ? undefined : frontmatter[key];
+}
+
 /**
- * Onboarding documents guard (#2360, security review M1). Topic titles in the playbook become
- * subtask titles that ride into every live principal turn, and the research brief feeds the first
- * conversation, while agents that read untrusted mail hold doc-write. So:
- *  - the playbook is the operator's: the console edits it (documents API, not this tool); here
- *    only a principal-approved re-execution may write it;
- *  - anything else under /meetings/onboarding/ (the research brief) is the coordinator's, which
- *    runs onboarding, or a principal-approved re-execution.
- * Compared case-insensitively, after normalization (fail closed). Returns an error, or null to allow.
+ * Console-only documents (#2360): a document whose frontmatter carries `editable_by` is edited in
+ * the console (the documents API, which does not use this tool), never by an agent. `console` is
+ * the only value; any other value is treated the same (fail closed). So:
+ *  - every mode on such a document is refused unless the write is a principal-approved
+ *    re-execution (`humanApproved`, the principal's own decision);
+ *  - no write here may add, change or remove the key, whoever calls (in create or replace, the
+ *    frontmatter given replaces the stored one, so leaving the key out removes it).
+ * Read from the live document, so an archived one no longer guards its path.
+ * Returns an error, or null to allow.
  */
-function onboardingPathWriteError(ctx: ToolContext, normalizedPath: string): string | null {
-  const path = normalizedPath.toLowerCase();
-  const prefix = ONBOARDING_DOCS_PREFIX.toLowerCase();
-  if (path !== prefix.slice(0, -1) && !path.startsWith(prefix)) return null;
-  if (ctx.humanApproved) return null;
-  if (path === PLAYBOOK_PATH.toLowerCase()) {
-    ctx.log.warn({ path: normalizedPath, agentId: ctx.agentId ?? null }, 'doc-write: refused a write to the onboarding playbook');
-    return `${PLAYBOOK_PATH} is the onboarding playbook, which the operator edits in the console. Leave it unchanged.`;
+function consoleOnlyWriteError(
+  ctx: ToolContext,
+  normalizedPath: string,
+  existing: WorkingDocRow | null,
+  frontmatter: Record<string, unknown> | undefined,
+): string | null {
+  const stored = editableBy(existing?.frontmatter);
+  if (frontmatter !== undefined && JSON.stringify(editableBy(frontmatter)) !== JSON.stringify(stored)) {
+    ctx.log.warn({ path: normalizedPath, agentId: ctx.agentId ?? null }, `doc-write: refused a write that sets, changes or removes ${EDITABLE_BY_KEY}`);
+    return stored === undefined
+      ? `doc-write cannot set ${EDITABLE_BY_KEY}: only the console marks a document console-only. Leave the key out.`
+      : `${normalizedPath} is console-only (${EDITABLE_BY_KEY}), and doc-write cannot change or remove that key. Leave it unchanged.`;
   }
-  if (ctx.agentId === 'coordinator') return null;
-  ctx.log.warn({ path: normalizedPath, agentId: ctx.agentId ?? null }, 'doc-write: refused an onboarding document write from an agent other than the coordinator');
-  return `${ONBOARDING_DOCS_PREFIX} holds onboarding's documents, which only the coordinator writes. Leave it unchanged.`;
+  if (stored === undefined || ctx.humanApproved) return null;
+  ctx.log.warn({ path: normalizedPath, agentId: ctx.agentId ?? null }, 'doc-write: refused a write to a console-only document');
+  return `${normalizedPath} is edited only in the console (${EDITABLE_BY_KEY}: console). Leave it unchanged; the principal or operator can edit it there.`;
 }
 
 /**
@@ -169,10 +184,6 @@ export class DocWriteHandler implements ToolHandler {
     if (sharedError) {
       return { success: false, error: sharedError };
     }
-    const onboardingError = onboardingPathWriteError(ctx, normalized);
-    if (onboardingError) {
-      return { success: false, error: onboardingError };
-    }
     const summary = typeof input.summary === 'string' ? input.summary : `${input.mode} ${normalized}`;
     const ttlWarning = ttlDaysFrontmatterWarning(normalized, input.frontmatter);
 
@@ -203,6 +214,17 @@ export class DocWriteHandler implements ToolHandler {
       }
 
       const repo = ctx.workingDocs!;
+      // Read once: the console-only check and every mode below use it.
+      const existing = await repo.read(normalized);
+      const consoleOnlyError = consoleOnlyWriteError(
+        ctx,
+        normalized,
+        existing,
+        input.mode === 'create' || input.mode === 'replace' ? input.frontmatter : undefined,
+      );
+      if (consoleOnlyError) {
+        return { success: false, error: consoleOnlyError };
+      }
       let result;
 
       switch (input.mode) {
@@ -210,7 +232,6 @@ export class DocWriteHandler implements ToolHandler {
           if (!input.type || typeof input.type !== 'string' || !input.type.trim()) {
             return { success: false, error: 'create mode requires type (string)' };
           }
-          const existing = await repo.read(normalized);
           if (existing) {
             return { success: false, error: `Document already exists at ${normalized} — use append, replace, or section-edit` };
           }
@@ -249,8 +270,7 @@ export class DocWriteHandler implements ToolHandler {
           if (input.expected_version === undefined || typeof input.expected_version !== 'number') {
             return { success: false, error: 'append mode requires expected_version (number)' };
           }
-          const current = await repo.read(normalized);
-          if (!current) {
+          if (!existing) {
             return { success: false, error: `Document not found at ${normalized} — use create mode first` };
           }
           result = await repo.append(normalized, {
@@ -274,8 +294,7 @@ export class DocWriteHandler implements ToolHandler {
           if (input.expected_version === undefined || typeof input.expected_version !== 'number') {
             return { success: false, error: 'replace mode requires expected_version (number)' };
           }
-          const current = await repo.read(normalized);
-          if (!current) {
+          if (!existing) {
             return { success: false, error: `Document not found at ${normalized} — use create mode first` };
           }
           result = await repo.update(normalized, {
@@ -305,8 +324,7 @@ export class DocWriteHandler implements ToolHandler {
           if (input.content === undefined || typeof input.content !== 'string') {
             return { success: false, error: 'section-edit mode requires content (string)' };
           }
-          const current = await repo.read(normalized);
-          if (!current) {
+          if (!existing) {
             return { success: false, error: `Document not found at ${normalized} — use create mode first` };
           }
           result = await repo.editSection(normalized, {
@@ -335,8 +353,7 @@ export class DocWriteHandler implements ToolHandler {
           if (!input.section || typeof input.section !== 'string' || !input.section.trim()) {
             return { success: false, error: 'section-delete mode requires section (string)' };
           }
-          const current = await repo.read(normalized);
-          if (!current) {
+          if (!existing) {
             return { success: false, error: `Document not found at ${normalized}` };
           }
           const deleted = await repo.deleteSection(normalized, {

@@ -133,8 +133,8 @@ describe('scoped views with overlapping runs', () => {
       context.run(onboarding, () => view.forPrincipalTurn(now)),
       context.run(run('B', []), () => view.forPrincipalTurn(now)),
     ]);
-    expect(a).toBe(formatOnboardingTurnBlock('6e0b0a2d-2360-4c00-8a00-00000000048a', [{ title: 'How I should sound', topicId: 'style' }]));
-    expect(a).toContain('task 6e0b0a2d-2360-4c00-8a00-00000000048a. Open topics this session: How I should sound (style).');
+    expect(a).toBe(formatOnboardingTurnBlock('6e0b0a2d-2360-4c00-8a00-00000000048a', ['style']));
+    expect(a).toContain('task 6e0b0a2d-2360-4c00-8a00-00000000048a. Open topics this session: style.');
     expect(b).toBeNull();
     expect(await view.forPrincipalTurn(now)).toBeNull();
   });

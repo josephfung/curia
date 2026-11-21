@@ -379,12 +379,14 @@ Only subtasks the onboarding program created count as topics (`created_by`), sin
 can tag any task. The whole `onboarding` config-store namespace is code-owned: the
 `config-store` tool refuses writes to it.
 
-`/meetings/onboarding/` is guarded the same way in `doc-write`, since agents that read
-untrusted mail hold it and topic titles ride into every live principal turn: the playbook is
-written only from the console (the documents API) or a principal-approved re-execution, and
-anything else there (the research brief) only by the coordinator. The parser keeps ids to
-`[a-z0-9-]` (slugifying anything else) and caps session and topic titles at 120 characters,
-and the turn block puts each title on one line with no brackets.
+The playbook is seeded with `editable_by: console` in its frontmatter. That is a general
+document setting, not an onboarding rule: `doc-write` refuses every mode on a document that
+carries it unless the write is a principal-approved re-execution, and refuses any write that
+adds, changes or removes the key, whoever calls. Agents that read untrusted mail hold
+`doc-write`, so only the console (the documents API, which does not use `doc-write` and keeps
+frontmatter as edited) changes the playbook. The research brief is an ordinary document. The
+parser keeps ids to `[a-z0-9-]` (slugifying anything else) and caps session and topic titles
+at 120 characters.
 
 ### Starting
 
@@ -495,8 +497,9 @@ principal contact the tasks are created open, and the heartbeat may wake them.
 restores the `onboarding` skill from the task's active skills. An ordinary principal message
 carries no task id, so while an onboarding task is open a live principal turn on any channel
 (including a voice `async-offramp` hand-off whose live-turn grant is active) gets the
-`onboarding` skill and a short block naming the task and its open topics
-(`src/onboarding/turn-context.ts`). Task-bound turns, Setup page turns and tool-allowlisted
+`onboarding` skill and a short block naming the task and its open topics by id only, so no
+operator-written text reaches the turn; titles and playbook text come from
+`onboarding-progress` `status` (`src/onboarding/turn-context.ts`). Task-bound turns, Setup page turns and tool-allowlisted
 turns do not. The turn is not bound to the task, so anything else in the message is handled
 as usual. A failed lookup, or an `onboarding` skill that cannot be activated, leaves the turn
 without the block. Nothing is added to the
