@@ -411,22 +411,44 @@ print_summary() {
 
 # Prints what to do after the installer finishes: finish on the Setup page (at
 # the address print_summary showed), the docs guide and, for installs reached
-# from other machines, the call ports (and a proxy's forwarding rules).
-#   print_next_steps <topology: domain | proxy | local>
+# from other machines with voice on, the call ports (and a proxy's forwarding
+# rules).
+#   print_next_steps <topology: domain | proxy | local> <voice: on | dev | off> [origin]
+# voice: on = LiveKit runs real keys; dev = it runs --dev's public devkey/secret,
+# so a proxy must not publish /rtc* yet; off = voice is not running. origin is a
+# proxy's public address: empty means a proxy kept on localhost for testing.
 print_next_steps() {
-    local topology="$1"
+    local topology="$1" voice="${2:-off}" origin="${3-}" reached=0
     echo "Finish setting up Curia in your browser at the address above."
     echo "Guide: https://docs.meetcuria.com/get-started/check-your-setup"
     echo "When every step is done, choose Start onboarding."
     case "$topology" in
-        domain|proxy)
-            echo ""
-            echo "Open these ports for calls: 7881/tcp, 7882/udp"
-            ;;
+        domain) reached=1 ;;
+        proxy) [[ -z "$origin" ]] || reached=1 ;;
     esac
-    if [[ "$topology" == proxy ]]; then
-        echo "Your proxy must forward / to port 3000 and /rtc* to 127.0.0.1:7880 on this host."
-        echo "A proxy on another machine also needs LIVEKIT_HTTP_BIND set (see docs/dev/voice-setup.md)."
+    if [[ $reached -eq 1 && "$voice" != off ]]; then
+        echo ""
+        echo "Open these ports for calls: 7881/tcp, 7882/udp"
+    fi
+    if [[ "$topology" == proxy && -n "$origin" ]]; then
+        if [[ "$voice" == on ]]; then
+            echo "Your proxy must forward / to port 3000 and /rtc* to 127.0.0.1:7880 on this host."
+            echo "A proxy on another machine also needs LIVEKIT_HTTP_BIND set (see docs/dev/voice-setup.md)."
+        else
+            echo "Your proxy must forward / to port 3000 on this host."
+        fi
+        if [[ "$voice" == dev ]]; then
+            echo "LiveKit runs --dev credentials (devkey/secret): Don't forward /rtc* to it, or set"
+            echo "LIVEKIT_HTTP_BIND, until it runs real keys (see docs/dev/voice-setup.md)."
+        fi
     fi
     echo ""
+}
+
+# Rerun of an interrupted install: seed-vault keeps any LiveKit value an earlier
+# run saved, even when this run offered another (e.g. a corrected domain).
+note_livekit_values_kept() {
+    echo "" >&2
+    warn "An earlier run may have saved LiveKit settings for Curia; those are kept, not replaced."
+    hint "If the address or keys changed since, check them under Settings → Channels → Voice."
 }

@@ -6,6 +6,9 @@
 #   curl -fsSL https://github.com/josephfung/curia/releases/latest/download/install.sh -o install.sh
 #   bash install.sh
 #
+#   A release's install.sh installs that release by default (its own tag is
+#   stamped into CURIA_INSTALLER_VERSION below when the release is built).
+#
 #   # Pin a specific release (config files AND image both come from it):
 #   CURIA_VERSION=v0.41.0 bash install.sh
 #   # Track the bleeding edge (main-branch config + :edge image; advanced/testing):
@@ -21,8 +24,10 @@
 #
 # What this script does:
 #   1. Checks for Docker + compose + curl.
-#   2. Fetches the matching release's docker-compose.yml, TLS overlay,
-#      .env.example, and Caddyfile next to install.sh (if not already present).
+#   2. Fetches the matching release's setup-common.sh on every run, checked
+#      against that release's SHA256SUMS before it replaces the copy on disk,
+#      and its docker-compose.yml, TLS overlay, .env.example, and Caddyfile next
+#      to install.sh (if not already present).
 #   3. Creates .env from the example, generating secrets for any placeholder values.
 #   4. Prompts for an Anthropic API key (format-validated, 3 retries).
 #   5. Asks how people will reach Curia: your domain with HTTPS set up for you
@@ -48,7 +53,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 #   edge              -> config from raw main branch  + image tag "edge"
 # Advanced override: CURIA_REF=<git-ref> forces the raw path for the config
 # fetch (does NOT set an image tag; .env.example's default applies).
-CURIA_VERSION="${CURIA_VERSION:-latest}"
+#
+# CURIA_INSTALLER_VERSION is the release this install.sh came from. The repo copy
+# leaves it empty; the release workflow stamps the tag into the published copy, so
+# a downloaded install.sh installs its own release unless CURIA_VERSION (or
+# CURIA_REF) says otherwise. Keep the line exactly as it is: release.yml matches it.
+CURIA_INSTALLER_VERSION=""
+CURIA_VERSION="${CURIA_VERSION:-${CURIA_INSTALLER_VERSION:-latest}}"
 
 GH_RELEASES="https://github.com/josephfung/curia/releases"
 RAW_REPO="https://raw.githubusercontent.com/josephfung/curia"
@@ -157,26 +168,95 @@ detect_source_checkout() {
   grep -q '"name"[[:space:]]*:[[:space:]]*"curia"' "$d/package.json"
 }
 
+# Echo the SHA-256 of file $1, or return 1 when the host has no tool for it.
+sha256_of() {
+  local out
+  if command -v sha256sum >/dev/null 2>&1; then out="$(sha256sum "$1")" || return 1
+  elif command -v shasum >/dev/null 2>&1; then out="$(shasum -a 256 "$1")" || return 1
+  else return 1; fi
+  printf '%s' "${out%% *}"
+}
+
+# Why the setup-common.sh on disk was kept instead of refreshed ("" = refreshed or
+# a source checkout). Read by the helper check below, so a stale kept copy is not
+# blamed on CURIA_VERSION.
+SETUP_COMMON_KEPT_REASON=""
+
+# Keep the setup-common.sh already in $1 after a refresh failed for reason $2,
+# with a warning, or stop when there is none. $3 = what to say about the cause.
+keep_setup_common_or_stop() {
+  local dest="$1" reason="$2" detail="$3"
+  if [[ -f "$dest" ]]; then
+    printf 'warning: %s; using the copy already in %s.\n' "$detail" "${dest%/*}" >&2
+    SETUP_COMMON_KEPT_REASON="$reason"
+    return 0
+  fi
+  printf 'error: %s, and install.sh needs it.\n' "$detail" >&2
+  printf 'hint:  check the network and CURIA_VERSION, then re-run install.sh.\n' >&2
+  exit 1
+}
+
+# Refresh scripts/setup-common.sh from the resolved release/ref. In release mode
+# the download goes to a temporary file and is checked against that release's
+# SHA256SUMS before it replaces the copy on disk: a mismatch stops the install
+# with the old copy untouched. When SHA256SUMS can't be fetched or there is no
+# sha256 tool, the existing copy is kept (with a warning), or with none the
+# install stops. Raw modes (edge, CURIA_REF) publish no SHA256SUMS: downloaded
+# as before, unchecked.
+refresh_setup_common() {
+  local dest="$SCRIPT_DIR/scripts/setup-common.sh" url tmp sums want got
+  url="$(bundle_asset_url scripts/setup-common.sh setup-common.sh)"
+  mkdir -p "$SCRIPT_DIR/scripts"
+  if [[ "$ASSET_MODE" != release ]]; then
+    download_to "$url" "$dest" && return 0
+    keep_setup_common_or_stop "$dest" "download failed" "could not download setup-common.sh from $url"
+    return 0
+  fi
+  tmp="$(mktemp "$dest.new.XXXXXX")" || { keep_setup_common_or_stop "$dest" "download failed" "could not create a temporary file in ${dest%/*}"; return 0; }
+  sums="$(mktemp "$dest.sums.XXXXXX")" || { rm -f "$tmp"; keep_setup_common_or_stop "$dest" "download failed" "could not create a temporary file in ${dest%/*}"; return 0; }
+  if ! download_to "$url" "$tmp"; then
+    rm -f "$tmp" "$sums"
+    keep_setup_common_or_stop "$dest" "download failed" "could not download setup-common.sh from $url"
+    return 0
+  fi
+  if ! download_to "${ASSET_BASE}/SHA256SUMS" "$sums"; then
+    rm -f "$tmp" "$sums"
+    keep_setup_common_or_stop "$dest" "could not be verified" \
+      "could not download ${ASSET_BASE}/SHA256SUMS to check setup-common.sh against"
+    return 0
+  fi
+  want="$(awk '$2 == "setup-common.sh" || $2 == "*setup-common.sh" { print $1; exit }' "$sums")"
+  rm -f "$sums"
+  if [[ -z "$want" ]]; then
+    rm -f "$tmp"
+    keep_setup_common_or_stop "$dest" "could not be verified" \
+      "${ASSET_BASE}/SHA256SUMS lists no setup-common.sh to check the download against"
+    return 0
+  fi
+  if ! got="$(sha256_of "$tmp")"; then
+    rm -f "$tmp"
+    keep_setup_common_or_stop "$dest" "could not be verified" \
+      "no sha256sum or shasum on this host to check setup-common.sh with"
+    return 0
+  fi
+  if [[ "$got" != "$want" ]]; then
+    rm -f "$tmp"
+    printf 'error: the downloaded setup-common.sh does not match %s/SHA256SUMS.\n' "$ASSET_BASE" >&2
+    printf 'hint:  nothing was replaced. Re-run install.sh; if this persists, report it:\n' >&2
+    printf 'hint:  https://github.com/josephfung/curia/issues\n' >&2
+    exit 1
+  fi
+  mv -f "$tmp" "$dest"
+}
+
 # install.sh needs the shared helpers in scripts/setup-common.sh, and the two
 # must come from the same release: an install made by an older release keeps an
 # older setup-common.sh that lacks helpers this script calls. So outside a source
-# checkout, refresh it from the resolved release/ref on every run. A failed
-# download keeps the file already there (with a warning); with none, stop.
+# checkout, refresh it from the resolved release/ref on every run.
 # NOTE: this runs before setup-common.sh is sourced (no error/hint helpers yet)
 # and before INSTALL_DIR is set below, so it prints inline and uses $SCRIPT_DIR.
 if ! detect_source_checkout "$SCRIPT_DIR"; then
-  mkdir -p "$SCRIPT_DIR/scripts"
-  if ! download_to "$(bundle_asset_url scripts/setup-common.sh setup-common.sh)" "$SCRIPT_DIR/scripts/setup-common.sh"; then
-    if [[ -f "$SCRIPT_DIR/scripts/setup-common.sh" ]]; then
-      printf 'warning: could not download setup-common.sh from %s; using the copy already in %s/scripts.\n' \
-        "$(bundle_asset_url scripts/setup-common.sh setup-common.sh)" "$SCRIPT_DIR" >&2
-    else
-      printf 'error: could not download setup-common.sh from %s, which install.sh needs.\n' \
-        "$(bundle_asset_url scripts/setup-common.sh setup-common.sh)" >&2
-      printf 'hint:  check the network and CURIA_VERSION, then re-run install.sh.\n' >&2
-      exit 1
-    fi
-  fi
+  refresh_setup_common
 fi
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/scripts/setup-common.sh"
@@ -185,8 +265,15 @@ source "$SCRIPT_DIR/scripts/setup-common.sh"
 # helpers existed) cannot run this installer. Plain printf: the error/hint
 # helpers just sourced may be that release's.
 for _helper in compose_var env_value set_env_var ensure_livekit_env livekit_seed_keys \
-    livekit_command_for print_next_steps; do
+    livekit_command_for print_next_steps note_livekit_values_kept; do
   if [[ "$(type -t "$_helper")" != function ]]; then
+    if [[ -n "$SETUP_COMMON_KEPT_REASON" ]]; then
+      # The refresh failed and the copy kept from an earlier run is too old.
+      printf 'error: setup-common.sh was not refreshed (%s), and the copy kept in %s/scripts is stale (it has no %s).\n' \
+        "$SETUP_COMMON_KEPT_REASON" "$SCRIPT_DIR" "$_helper" >&2
+      printf 'hint:  re-run install.sh when the network is back.\n' >&2
+      exit 1
+    fi
     printf 'error: CURIA_VERSION=%s predates this installer (its setup-common.sh has no %s).\n' \
       "$CURIA_VERSION" "$_helper" >&2
     printf "hint:  download that release's own installer and run it instead: %s\n" \
@@ -477,20 +564,46 @@ note_voice_off() {
   hint "  https://github.com/josephfung/curia/blob/main/docs/dev/voice-setup.md#turn-voice-on-for-an-existing-install"
 }
 
+# Echo the voice state the closing steps describe: off (the voice profile is not
+# enabled and livekit is not running), dev (LiveKit runs --dev's public
+# devkey/secret), or on (real keys). The running container's command is checked
+# first, as warn_public_livekit_dev does: one that was not recreated keeps its old
+# command. Falls back to LIVEKIT_COMMAND (shell, then .env; empty = --dev).
+livekit_next_steps_state() {
+  local env="$1" profiles cmd
+  profiles="$(compose_var "$env" COMPOSE_PROFILES)"
+  if [[ ",${profiles}," != *,voice,* ]] && ! service_running livekit; then
+    printf off; return 0
+  fi
+  cmd="$(live_command livekit)"
+  [[ -n "$cmd" ]] || cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
+  if livekit_command_is_dev "$cmd"; then printf dev; else printf on; fi
+}
+
 # Fresh install, before Postgres starts. The HTTPS topology, and a proxy with a
 # public address, put LiveKit signaling on the internet (the shipped Caddyfile
 # routes /rtc* to it; a proxy is told to). --dev's devkey/secret are public, so
 # anyone could then mint LiveKit tokens: stop rather than install that. An
 # empty command is the compose default, --dev. Reads TOPOLOGY and PROXY_ORIGIN.
+# On any topology, a --config command needs LIVEKIT_KEYS (the shipped configs
+# carry no keys): empty, e.g. set empty in the shell, LiveKit would crash-loop.
 # The command itself is never printed: it may carry --keys.
 require_livekit_real_keys() {
-  local env="$1"
+  local env="$1" cmd
+  cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
+  if [[ "$cmd" == *--config* && "$cmd" != *--keys* && -z "$(compose_var "$env" LIVEKIT_KEYS)" ]]; then
+    echo "" >&2
+    error "LIVEKIT_COMMAND runs LiveKit from a config file, but LIVEKIT_KEYS is empty, so LiveKit would not start."
+    hint "Set LIVEKIT_KEYS=\"<key>: <secret>\", or unset it in your shell to let the installer generate one."
+    hint "Then re-run install.sh. Postgres was not started."
+    exit 1
+  fi
   case "$TOPOLOGY" in
     domain) ;;
     proxy) [[ -n "$PROXY_ORIGIN" ]] || return 0 ;;
     *) return 0 ;;
   esac
-  livekit_command_is_dev "$(compose_var "$env" LIVEKIT_COMMAND)" || return 0
+  livekit_command_is_dev "$cmd" || return 0
   echo "" >&2
   error "LIVEKIT_COMMAND runs LiveKit with --dev credentials (devkey/secret), which this public install would expose."
   hint "Set real keys: unset LIVEKIT_COMMAND (in your shell and .env) to let the installer generate them,"
@@ -822,7 +935,9 @@ choose_topology() {
 
 # Normalize a proxy address to scheme://host[:port]. Lowercases the scheme and
 # drops one trailing slash. Returns 1 for anything else: no http(s):// scheme,
-# whitespace, a path beyond "/", a query or fragment, or an empty host.
+# a path beyond "/", a query or fragment, an empty host, or a host outside
+# [A-Za-z0-9.-] (userinfo, quotes, $, backticks; IPv6 literals included) or a
+# port that is not all digits. The value lands in .env and the vault.
 normalize_origin() {
   local v="$1" scheme rest
   case "$v" in
@@ -835,6 +950,7 @@ normalize_origin() {
   case "$rest" in
     *[[:space:]]*|*/*|*\?*|*\#*) return 1 ;;
   esac
+  [[ "$rest" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || return 1
   printf '%s://%s' "$scheme" "$rest"
 }
 
@@ -948,8 +1064,12 @@ fresh_install() {
   # Only generate a new encryption key if the current value is the template
   # placeholder or entirely absent/empty. A key that already exists must be
   # preserved — regenerating it makes any existing encrypted vault rows unreadable.
+  # A key already there means an earlier run of this install got this far, so the
+  # vault may already hold values seed-vault keeps (the LiveKit ones).
+  local rerun=1
   if grep -qE '^SECRET_ENCRYPTION_KEY=(replace-with|[[:space:]]*$)' "$env" 2>/dev/null \
       || ! grep -qE '^SECRET_ENCRYPTION_KEY=' "$env" 2>/dev/null; then
+    rerun=0
     local secret_key
     secret_key="$(gen_secret_b64)"
     set_env_var "$env" SECRET_ENCRYPTION_KEY "$secret_key"
@@ -982,7 +1102,8 @@ fresh_install() {
       ensure_https_app_origin "$env"
       # Kept as a shell variable for the LiveKit URL and the closing address below.
       DOMAIN="$dom"
-      if port_listening 80 || port_listening 443; then
+      # A rerun of an interrupted install finds its own Caddy on 80/443.
+      if { port_listening 80 || port_listening 443; } && ! service_running caddy; then
         warn "Something is already using port 80 or 443 on this machine."
         hint "If nginx, Traefik or similar already serves HTTPS here, re-run and choose option 2."
       fi
@@ -1029,7 +1150,8 @@ fresh_install() {
   # Seed the Voice channel's vault values to match what LiveKit runs on. The
   # keys are passed to the seed container only, like the other secrets, and
   # are never printed. seed-vault never replaces values already in the vault.
-  local lk_url lk_pair="" lk_rc=0
+  # lk_seed holds -e NAME flags only; the values travel in the environment.
+  local lk_url="" lk_key="" lk_secret="" lk_pair="" lk_rc=0
   local -a lk_seed=()
   if [[ $lk_on -eq 1 ]]; then
     retarget_livekit_command "$env" "$lk_mode"
@@ -1037,10 +1159,11 @@ fresh_install() {
     require_livekit_real_keys "$env"
 
     lk_url="$(livekit_browser_url "$TOPOLOGY" "$lk_value")"
-    lk_seed=(-e "SEED_LIVEKIT_URL=$lk_url")
+    lk_seed=(-e SEED_LIVEKIT_URL)
     lk_pair="$(livekit_seed_keys "$(compose_var "$env" LIVEKIT_KEYS)" "$(compose_var "$env" LIVEKIT_COMMAND)")" || lk_rc=$?
     if [[ $lk_rc -eq 0 ]]; then
-      lk_seed+=(-e "SEED_LIVEKIT_API_KEY=${lk_pair%% *}" -e "SEED_LIVEKIT_API_SECRET=${lk_pair#* }")
+      lk_key="${lk_pair%% *}"; lk_secret="${lk_pair#* }"
+      lk_seed+=(-e SEED_LIVEKIT_API_KEY -e SEED_LIVEKIT_API_SECRET)
     else
       warn "Could not tell which keys LiveKit's LIVEKIT_COMMAND uses, so they were not saved for Curia."
       hint "Enter the LiveKit API key and secret under Settings → Channels → Voice after setup."
@@ -1073,22 +1196,29 @@ fresh_install() {
   fi
 
   # Seed the encrypted vault with the freshly generated secrets. Secrets are
-  # passed as transient env vars so they never land on disk in plaintext.
+  # passed as transient env vars so they never land on disk in plaintext, and by
+  # name (-e NAME): the values are exported into a subshell for docker to read,
+  # never put on its command line, where `ps` would show them.
   # SEED_VAULT_VERIFY=1 makes seed-vault confirm required rows exist and exit
   # non-zero if any are missing — so a partial seed fails loudly here rather
   # than booting a half-configured instance with auth disabled.
   info "Seeding secrets vault (in-container)..."
-  if ! docker compose --project-directory "$INSTALL_DIR" run --rm \
-    -e "ANTHROPIC_API_KEY=$anthropic" \
-    -e "API_TOKEN=$api_token" \
-    -e "WEB_APP_BOOTSTRAP_SECRET=$boot_secret" \
-    ${lk_seed[@]+"${lk_seed[@]}"} \
-    -e SEED_VAULT_VERIFY=1 \
-    curia ./node_modules/.bin/tsx scripts/seed-vault.ts; then
+  if ! (
+    export ANTHROPIC_API_KEY="$anthropic" API_TOKEN="$api_token" WEB_APP_BOOTSTRAP_SECRET="$boot_secret" \
+      SEED_LIVEKIT_URL="$lk_url" SEED_LIVEKIT_API_KEY="$lk_key" SEED_LIVEKIT_API_SECRET="$lk_secret"
+    docker compose --project-directory "$INSTALL_DIR" run --rm \
+      -e ANTHROPIC_API_KEY -e API_TOKEN -e WEB_APP_BOOTSTRAP_SECRET \
+      ${lk_seed[@]+"${lk_seed[@]}"} \
+      -e SEED_VAULT_VERIFY=1 \
+      curia ./node_modules/.bin/tsx scripts/seed-vault.ts
+  ); then
     error "Vault seeding failed."
     hint "Check Docker logs: docker compose --project-directory \"$INSTALL_DIR\" logs curia"
     exit 1
   fi
+  # seed-vault keeps LiveKit values an earlier run saved, even when this run
+  # offered others (e.g. a corrected domain), and only its log says so.
+  if [[ $rerun -eq 1 && $lk_on -eq 1 ]]; then note_livekit_values_kept; fi
 
   # Bring the full stack up and wait for the app to become healthy.
   info "Starting Curia..."
@@ -1110,8 +1240,10 @@ fresh_install() {
   # this marker and takes the upgrade path instead of rotating secrets.
   printf '\n# SETUP_COMPLETE\n' >> "$env"
 
+  local voice_state=off
+  [[ $lk_on -eq 0 ]] || voice_state="$(livekit_next_steps_state "$env")"
   print_summary "$boot_secret" "$(setup_base_url "$TOPOLOGY" "$lk_value")"
-  print_next_steps "$TOPOLOGY"
+  print_next_steps "$TOPOLOGY" "$voice_state" "$PROXY_ORIGIN"
 }
 
 # ---------------------------------------------------------------------------
@@ -1194,7 +1326,7 @@ existing_install() {
   # Empty secret: print_summary then shows the "stored in the vault" branch
   # rather than a fresh secret (which we don't have on the upgrade path).
   print_summary "" "$(setup_base_url "$topology" "$origin")"
-  print_next_steps "$topology"
+  print_next_steps "$topology" "$(livekit_next_steps_state "$env")" "$origin"
 }
 
 # ---------------------------------------------------------------------------

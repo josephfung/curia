@@ -198,6 +198,19 @@ build_livekit_seed_env() {
     fi
 }
 
+# Run seed-vault with SEED_VAULT_VERIFY=1 and each KEY=VALUE argument in its
+# environment. The values are exported in a subshell (export is a builtin), so
+# they never appear on a command line, where `ps` would show them, and do not
+# outlive the call.
+run_seed_vault() {
+    (
+        local kv
+        for kv in "$@"; do export "$kv"; done
+        export SEED_VAULT_VERIFY=1
+        pnpm --prefix "$REPO_ROOT" run seed-vault
+    )
+}
+
 # Starts Postgres, runs migrations, starts the full stack, writes SETUP_COMPLETE marker.
 # Parses .env to get DATABASE_URL and HTTP_PORT for use at runtime. The bootstrap secret
 # is no longer stored in .env (#911) — it lives in the vault; only the full-setup path
@@ -284,13 +297,18 @@ run_infra() {
     seed_secret_env+=(${LIVEKIT_SEED_ENV[@]+"${LIVEKIT_SEED_ENV[@]}"})
     # ${arr[@]+"${arr[@]}"} expands safely to nothing when the array is empty, even under
     # `set -u` on bash 3.2 (macOS default), where a bare "${arr[@]}" is an unbound error.
-    if ! env ${seed_secret_env[@]+"${seed_secret_env[@]}"} SEED_VAULT_VERIFY=1 \
-         pnpm --prefix "$REPO_ROOT" run seed-vault; then
+    if ! run_seed_vault ${seed_secret_env[@]+"${seed_secret_env[@]}"}; then
         error "Vault seeding failed or required secrets are missing. See the output above."
         hint "If this is a resume after a failed first run, re-run full setup (option 3) to regenerate and seed the bootstrap secrets."
         exit 1
     fi
     success "Secrets vault seeded"
+    # seed-vault keeps LiveKit values an earlier run saved; say so when this run
+    # follows one (a resume, or a full reset that kept the vault).
+    if [[ ${#LIVEKIT_SEED_ENV[@]} -gt 0 ]] \
+        && [[ "$SETUP_MODE" == resume || -n "${PRESERVED_ENCRYPTION_KEY:-}" ]]; then
+        note_livekit_values_kept
+    fi
 
     info "Starting Curia..."
     if ! docker compose --project-directory "$REPO_ROOT" "${DEV_COMPOSE[@]}" up -d; then

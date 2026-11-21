@@ -1403,7 +1403,10 @@ _assert_var "topology: unknown -> domain" "$(topology_for_choice x)" "domain"
 _assert_var "normalize_origin strips trailing slash" "$(normalize_origin 'https://curia.example.com/')" "https://curia.example.com"
 _assert_var "normalize_origin lowercases scheme" "$(normalize_origin 'HTTPS://h.example.com:8443')" "https://h.example.com:8443"
 _assert_var "normalize_origin keeps http host:port" "$(normalize_origin 'http://10.0.0.5:3000')" "http://10.0.0.5:3000"
-for _no_bad in 'curia.example.com' 'https://h.example.com/curia' 'https://h .com' 'https://' 'https://h.com?x=1' 'https://h.com#f'; do
+_assert_var "normalize_origin keeps hyphens" "$(normalize_origin 'https://my-curia.example.com')" "https://my-curia.example.com"
+for _no_bad in 'curia.example.com' 'https://h.example.com/curia' 'https://h .com' 'https://' 'https://h.com?x=1' 'https://h.com#f' \
+    'https://user@h.example.com' 'https://h$x.example.com' 'https://h"x.example.com' 'https://h`id`.example.com' \
+    "https://h'x.example.com" 'https://h.example.com:' 'https://h.example.com:80a' 'https://h_x.example.com' 'https://h.example.com:1:2'; do
     if normalize_origin "$_no_bad" >/dev/null 2>&1; then _no_rc=0; else _no_rc=1; fi
     _assert_var "normalize_origin rejects '$_no_bad'" "$_no_rc" "1"
 done
@@ -1423,21 +1426,41 @@ echo ""
 echo "=== print_next_steps ==="
 
 _has() { [[ "$1" == *"$2"* ]] && echo yes || echo no; }
-_pns="$(print_next_steps domain 2>&1)" || true
+_pns="$(print_next_steps domain on 2>&1)" || true
 _assert_var "domain: setup step"       "$(_has "$_pns" 'Finish setting up Curia in your browser at the address above.')" yes
 _assert_var "domain: no second address" "$(_has "$_pns" '/setup')" no
 _assert_var "domain: docs guide"       "$(_has "$_pns" 'Guide: https://docs.meetcuria.com/get-started/check-your-setup')" yes
 _assert_var "domain: Start onboarding" "$(_has "$_pns" 'When every step is done, choose Start onboarding.')" yes
 _assert_var "domain: RTC ports"        "$(_has "$_pns" 'Open these ports for calls: 7881/tcp, 7882/udp')" yes
 _assert_var "domain: no proxy rule"    "$(_has "$_pns" '/rtc* to')" no
-_pns="$(print_next_steps proxy 2>&1)" || true
+_pns="$(print_next_steps proxy on https://p.example.com 2>&1)" || true
 _assert_var "proxy: forwarding line"   "$(_has "$_pns" 'Your proxy must forward / to port 3000 and /rtc* to 127.0.0.1:7880 on this host.')" yes
 _assert_var "proxy: off-host proxy note" "$(_has "$_pns" 'LIVEKIT_HTTP_BIND')" yes
 _assert_var "proxy: names the voice docs" "$(_has "$_pns" 'docs/dev/voice-setup.md')" yes
 _assert_var "proxy: RTC ports"         "$(_has "$_pns" '7881/tcp, 7882/udp')" yes
-_pns="$(print_next_steps local 2>&1)" || true
+_pns="$(print_next_steps local on 2>&1)" || true
 _assert_var "local: no RTC ports"      "$(_has "$_pns" '7881/tcp')" no
 _assert_var "local: no proxy rule"     "$(_has "$_pns" '/rtc*')" no
+# Voice left off (#2357): no call ports, no /rtc* rule.
+_pns="$(print_next_steps domain off 2>&1)" || true
+_assert_var "domain, voice off: no RTC ports" "$(_has "$_pns" '7881/tcp')" no
+_pns="$(print_next_steps proxy off https://p.example.com 2>&1)" || true
+_assert_var "proxy, voice off: forwards / to 3000" "$(_has "$_pns" 'Your proxy must forward / to port 3000 on this host.')" yes
+_assert_var "proxy, voice off: no /rtc* rule"      "$(_has "$_pns" '/rtc*')" no
+_assert_var "proxy, voice off: no RTC ports"       "$(_has "$_pns" '7881/tcp')" no
+_assert_var "proxy, voice off: no LIVEKIT_HTTP_BIND" "$(_has "$_pns" 'LIVEKIT_HTTP_BIND')" no
+# --dev (#2357): never tell a proxy to publish /rtc*; say to wait for real keys.
+_pns="$(print_next_steps proxy dev https://p.example.com 2>&1)" || true
+_assert_var "proxy, --dev: no /rtc* forwarding rule" "$(_has "$_pns" '/rtc* to 127.0.0.1:7880')" no
+_assert_var "proxy, --dev: no LIVEKIT_HTTP_BIND advice" "$(_has "$_pns" 'also needs LIVEKIT_HTTP_BIND')" no
+_assert_var "proxy, --dev: warns not to publish /rtc*" "$(_has "$_pns" "Don't forward /rtc*")" yes
+_assert_var "proxy, --dev: until real keys are set" "$(_has "$_pns" 'real keys')" yes
+_assert_var "proxy, --dev: forwards / to 3000" "$(_has "$_pns" 'Your proxy must forward / to port 3000 on this host.')" yes
+# A proxy kept on localhost (no public origin): nothing to forward for calls.
+_pns="$(print_next_steps proxy on '' 2>&1)" || true
+_assert_var "proxy, no origin: no /rtc* rule"  "$(_has "$_pns" '/rtc*')" no
+_assert_var "proxy, no origin: no RTC ports"   "$(_has "$_pns" '7881/tcp')" no
+_assert_var "proxy, no origin: no LIVEKIT_HTTP_BIND" "$(_has "$_pns" 'LIVEKIT_HTTP_BIND')" no
 
 _assert_var "setup url: domain"        "$(setup_base_url domain c.example.com 2>&1 || true)" "https://c.example.com"
 _assert_var "setup url: proxy origin"  "$(setup_base_url proxy https://p.example.com 2>&1 || true)" "https://p.example.com"
@@ -1530,7 +1553,8 @@ _assert_rk() {
     ) >/dev/null 2>&1; then got=ok; else got=stopped; fi
     _assert_var "real keys: $6" "$got" "$5"
 }
-_RK_REAL='LIVEKIT_COMMAND=--config /etc/livekit.yaml\n'
+# ensure_livekit_env has written LIVEKIT_KEYS by the time this check runs.
+_RK_REAL='LIVEKIT_COMMAND=--config /etc/livekit.yaml\nLIVEKIT_KEYS="k: s"\n'
 _RK_DEV='LIVEKIT_COMMAND=--dev --bind 0.0.0.0\n'
 _assert_rk domain ''                  "$_RK_REAL" -       ok      "domain, real config"
 _assert_rk domain ''                  "$_RK_DEV"  -       stopped "domain, --dev in .env"
@@ -1543,6 +1567,31 @@ _assert_rk proxy  ''                  "$_RK_DEV"  -       ok      "proxy for loc
 _assert_rk local  ''                  "$_RK_DEV"  -       ok      "local, operator's own --dev"
 _rk_out="$( unset LIVEKIT_COMMAND; TOPOLOGY=domain; PROXY_ORIGIN=""; printf '%b' "$_RK_DEV" > "$_rk_env"; require_livekit_real_keys "$_rk_env" 2>&1 )" || true
 _assert_var "real keys: says how to fix" "$(_has "$_rk_out" 'LIVEKIT_KEYS')" yes
+# A --config command needs LIVEKIT_KEYS (the shipped configs carry none), on any
+# topology: an empty value (set empty in the shell) would crash-loop LiveKit.
+# $1 topology, $2 .env contents, $3 shell LIVEKIT_KEYS ("-" = unset), $4 want, $5 desc
+_assert_rkk() {
+    local got
+    printf '%b' "$2" > "$_rk_env"
+    if (
+      unset LIVEKIT_COMMAND LIVEKIT_KEYS
+      [[ "$3" == - ]] || export LIVEKIT_KEYS="$3"
+      TOPOLOGY="$1"; PROXY_ORIGIN=""
+      require_livekit_real_keys "$_rk_env"
+    ) >/dev/null 2>&1; then got=ok; else got=stopped; fi
+    _assert_var "config keys: $5" "$got" "$4"
+}
+_RK_LOCAL='LIVEKIT_COMMAND=--config /etc/livekit.local.yaml --node-ip 127.0.0.1\n'
+_assert_rkk local  "$_RK_LOCAL"                     ''             stopped "local, --config, shell LIVEKIT_KEYS empty"
+_assert_rkk domain "$_RK_REAL"                      ''             stopped "domain, --config, shell LIVEKIT_KEYS empty"
+_assert_rkk proxy  "$_RK_REAL"                      ''             stopped "proxy on localhost, --config, keys empty"
+_assert_rkk local  "${_RK_LOCAL}LIVEKIT_KEYS=\"k: s\"\n" -          ok      "local, --config, keys in .env"
+_assert_rkk local  "$_RK_LOCAL"                     'k: s'         ok      "local, --config, keys in the shell"
+_assert_rkk local  'LIVEKIT_COMMAND=--config /x.yaml --keys "k: s"\n' '' ok "--config with --keys in the command"
+_assert_rkk local  'LIVEKIT_COMMAND=--dev\n'        ''             ok      "local --dev, keys empty (devkey)"
+_rk_out="$( unset LIVEKIT_COMMAND; export LIVEKIT_KEYS=""; TOPOLOGY=local; PROXY_ORIGIN=""; printf '%b' "$_RK_LOCAL" > "$_rk_env"; require_livekit_real_keys "$_rk_env" 2>&1 )" || true
+_assert_var "config keys: names LIVEKIT_KEYS" "$(_has "$_rk_out" 'LIVEKIT_KEYS is empty')" yes
+_assert_var "config keys: Postgres not started" "$(_has "$_rk_out" 'Postgres was not started')" yes
 rm -f "$_rk_env"
 
 # warn_public_livekit_dev: the TLS overlay routes /rtc* to LiveKit, so --dev is
@@ -1581,22 +1630,35 @@ echo "=== install.sh: fresh_install LiveKit seeding ==="
 _fi_dir="$(mktemp -d)"
 _fi_env="$_fi_dir/.env"
 _fi_calls="$_fi_dir/calls"
+_fi_seedenv="$_fi_dir/seedenv"
 # $1 topology, $2 stdin answers, $3 extra env contents. Leaves docker calls in
 # $_fi_calls and the run's output in $_fi_out; returns the run's status.
 _fi_run() {
     printf '%b' "DB_PASSWORD=your-db-password\n$3" > "$_fi_env"
     printf '%s' "${_FI_COMPOSE-$_FB_LK}" > "$_fi_dir/docker-compose.yml"
-    : > "$_fi_calls"
+    : > "$_fi_calls"; : > "$_fi_seedenv"
     local rc=0
     _fi_out="$(
       unset COMPOSE_FILE APP_ORIGIN HTTP_BIND DOMAIN COMPOSE_PROFILES LIVEKIT_KEYS LIVEKIT_COMMAND HTTP_PORT
       [[ -z "${_FI_SHELL_CMD+set}" ]] || export LIVEKIT_COMMAND="$_FI_SHELL_CMD"
       [[ -z "${_FI_SHELL_KEYS_EMPTY:-}" ]] || export LIVEKIT_KEYS=""
-      docker() { printf '%s\n' "$*" >> "$_fi_calls"; return 0; }
+      # Record the seed command environment as an external process sees it (exported only).
+      docker() {
+        printf '%s\n' "$*" >> "$_fi_calls"
+        case "$*" in (*seed-vault*)
+          local n
+          for n in SEED_LIVEKIT_URL SEED_LIVEKIT_API_KEY SEED_LIVEKIT_API_SECRET \
+              ANTHROPIC_API_KEY API_TOKEN WEB_APP_BOOTSTRAP_SECRET; do
+            printf '%s=%s\n' "$n" "$(printenv "$n" || true)" >> "$_fi_seedenv"
+          done ;;
+        esac
+        return 0
+      }
       wait_for_postgres() { :; }; wait_for_curia() { return 0; }
       check_postgres_exposure() { :; }; check_http_exposure() { :; }
       check_livekit_exposure() { :; }; note_missing_browser() { :; }
-      port_listening() { return 1; }; getent() { return 0; }
+      port_listening() { [[ -n "${_FI_PORTS_BUSY:-}" ]]; }; getent() { return 0; }
+      service_running() { [[ "$1" == caddy && -n "${_FI_CADDY_RUNNING:-}" ]]; }
       prompt_anthropic_key() { echo sk-ant-test; }
       choose_topology() { echo "$_FI_TOPOLOGY"; }
       INSTALL_DIR="$_fi_dir"
@@ -1606,39 +1668,71 @@ _fi_run() {
     return $rc
 }
 _seed_line() { grep 'seed-vault' "$_fi_calls" || true; }
+# Value the seed command's environment held for $1.
+_seed_env() { { grep "^$1=" "$_fi_seedenv" || true; } | cut -d= -f2-; }
 
 _fi_run domain "c.example.com" '' || true
 _fi_keys="$(env_value "$_fi_env" LIVEKIT_KEYS)"
 _fi_k="${_fi_keys%%:*}"; _fi_s="${_fi_keys#*: }"
 _assert_var "domain: voice profile on"        "$(env_value "$_fi_env" COMPOSE_PROFILES)" "voice"
 _assert_var "domain: public LiveKit command"  "$(env_value "$_fi_env" LIVEKIT_COMMAND)" "--config /etc/livekit.yaml"
-_assert_var "domain: seeds wss URL"           "$(_has "$(_seed_line)" '-e SEED_LIVEKIT_URL=wss://c.example.com ')" yes
-_assert_var "domain: seeds the generated key" "$(_has "$(_seed_line)" "-e SEED_LIVEKIT_API_KEY=$_fi_k ")" yes
-_assert_var "domain: seeds the generated secret" "$(_has "$(_seed_line)" "-e SEED_LIVEKIT_API_SECRET=$_fi_s ")" yes
+_assert_var "domain: seeds wss URL"           "$(_seed_env SEED_LIVEKIT_URL)" "wss://c.example.com"
+_assert_var "domain: seeds the generated key" "$(_seed_env SEED_LIVEKIT_API_KEY)" "$_fi_k"
+_assert_var "domain: seeds the generated secret" "$(_seed_env SEED_LIVEKIT_API_SECRET)" "$_fi_s"
+# Secrets reach docker by name (-e NAME), never as values on its command line.
+for _fi_n in SEED_LIVEKIT_URL SEED_LIVEKIT_API_KEY SEED_LIVEKIT_API_SECRET ANTHROPIC_API_KEY API_TOKEN WEB_APP_BOOTSTRAP_SECRET; do
+    _assert_var "domain: -e $_fi_n by name" "$(_has "$(_seed_line) " "-e $_fi_n ")" yes
+    _assert_var "domain: no $_fi_n= on the command line" "$(_has "$(_seed_line)" "$_fi_n=")" no
+done
+_assert_var "domain: anthropic key in the seed env" "$(_seed_env ANTHROPIC_API_KEY)" "sk-ant-test"
+_assert_var "domain: api token in the seed env" "$([[ -n "$(_seed_env API_TOKEN)" ]] && echo yes || echo no)" yes
+_assert_var "domain: no secret on any docker command line" \
+    "$(grep -cE "sk-ant-test|$_fi_s|$(_seed_env API_TOKEN)" "$_fi_calls" | tr -d ' ')" "0"
+_assert_var "domain: fresh run gives no kept-values note" "$(_has "$_fi_out" 'An earlier run')" no
 _assert_var "domain: secret never printed"    "$(_has "$_fi_out" "$_fi_s")" no
 _assert_var "domain: key never printed"       "$(_has "$_fi_out" "$_fi_k")" no
 _assert_var "domain: next steps printed"      "$(_has "$_fi_out" 'https://c.example.com/setup')" yes
 
 _fi_run local "" '' || true
 _assert_var "local: loopback LiveKit command" "$(env_value "$_fi_env" LIVEKIT_COMMAND)" "--config /etc/livekit.local.yaml --node-ip 127.0.0.1"
-_assert_var "local: seeds ws://localhost:7880" "$(_has "$(_seed_line)" '-e SEED_LIVEKIT_URL=ws://localhost:7880 ')" yes
+_assert_var "local: seeds ws://localhost:7880" "$(_seed_env SEED_LIVEKIT_URL)" "ws://localhost:7880"
 _assert_var "local: next steps on localhost" "$(_has "$_fi_out" 'http://localhost:3000/setup')" yes
 
 _fi_run proxy "" '' || true
 _assert_var "proxy, no origin: loopback LiveKit command" "$(env_value "$_fi_env" LIVEKIT_COMMAND)" "--config /etc/livekit.local.yaml --node-ip 127.0.0.1"
 _fi_run proxy "https://p.example.com" '' || true
 _assert_var "proxy with origin: public LiveKit command" "$(env_value "$_fi_env" LIVEKIT_COMMAND)" "--config /etc/livekit.yaml"
-_assert_var "proxy with origin: seeds wss URL" "$(_has "$(_seed_line)" '-e SEED_LIVEKIT_URL=wss://p.example.com ')" yes
+_assert_var "proxy with origin: seeds wss URL" "$(_seed_env SEED_LIVEKIT_URL)" "wss://p.example.com"
 _assert_var "proxy with origin: next steps on the origin" "$(_has "$_fi_out" 'https://p.example.com/setup')" yes
 _assert_var "proxy with origin: forwarding rule" "$(_has "$_fi_out" '/rtc* to 127.0.0.1:7880')" yes
+_fi_run proxy "" '' || true
+_assert_var "proxy, no origin: no /rtc* rule" "$(_has "$_fi_out" '/rtc*')" no
+# Ports 80/443 busy: warn, unless it is this install's own Caddy (a rerun).
+_FI_PORTS_BUSY=1
+_fi_run domain "c.example.com" '' || true
+_assert_var "ports busy, no Caddy: warns" "$(_has "$_fi_out" 'already using port 80 or 443')" yes
+_FI_CADDY_RUNNING=1
+_fi_run domain "c.example.com" '' || true
+_assert_var "ports busy, own Caddy running: no warning" "$(_has "$_fi_out" 'already using port 80 or 443')" no
+unset _FI_PORTS_BUSY _FI_CADDY_RUNNING
+# A rerun of an interrupted install (the vault key was already written): values an
+# earlier run seeded are kept, so say where to change them.
+_fi_run domain "c.example.com" 'SECRET_ENCRYPTION_KEY=from-an-earlier-run\n' || true
+_assert_var "rerun: kept-values note" "$(_has "$_fi_out" 'An earlier run')" yes
+_assert_var "rerun: says where to change them" "$(_has "$_fi_out" 'Settings → Channels → Voice')" yes
+_assert_var "rerun: vault key kept" "$(env_value "$_fi_env" SECRET_ENCRYPTION_KEY)" "from-an-earlier-run"
+_FI_COMPOSE="$_FB_OLD"
+_fi_run domain "c.example.com" 'SECRET_ENCRYPTION_KEY=from-an-earlier-run\n' || true
+unset _FI_COMPOSE
+_assert_var "rerun, voice off: no kept-values note" "$(_has "$_fi_out" 'An earlier run')" no
 
-# Keys LiveKit's command hides (an operator --config without LIVEKIT_KEYS): URL only, with a warning.
-_FI_SHELL_CMD="--config /mine.yaml"
+# Keys LiveKit's command hides (an operator key file, no LIVEKIT_KEYS): URL only, with a warning.
+_FI_SHELL_CMD="--key-file /etc/lk-keys.yaml"
 _FI_SHELL_KEYS_EMPTY=1
 _fi_rc=0; _fi_run local "" '' || _fi_rc=$?
 unset _FI_SHELL_CMD _FI_SHELL_KEYS_EMPTY
 _assert_var "unknown keys: install continues" "$_fi_rc" "0"
-_assert_var "unknown keys: URL still seeded"  "$(_has "$(_seed_line)" 'SEED_LIVEKIT_URL=')" yes
+_assert_var "unknown keys: URL still seeded"  "$(_seed_env SEED_LIVEKIT_URL)" "ws://localhost:7880"
 _assert_var "unknown keys: no key seeded"     "$(_has "$(_seed_line)" 'SEED_LIVEKIT_API_KEY')" no
 _assert_var "unknown keys: warns where to enter them" "$(_has "$_fi_out" 'Settings → Channels → Voice')" yes
 
@@ -1654,7 +1748,13 @@ _FI_SHELL_CMD="--dev"; _FI_SHELL_KEYS_EMPTY=1
 _fi_rc=0; _fi_run local "" '' || _fi_rc=$?
 unset _FI_SHELL_CMD _FI_SHELL_KEYS_EMPTY
 _assert_var "local + operator --dev: continues"     "$_fi_rc" "0"
-_assert_var "local + --dev: seeds devkey"           "$(_has "$(_seed_line)" '-e SEED_LIVEKIT_API_KEY=devkey ')" yes
+_assert_var "local + --dev: seeds devkey"           "$(_seed_env SEED_LIVEKIT_API_KEY)" "devkey"
+# A --config command with LIVEKIT_KEYS set empty in the shell: stop before Postgres.
+_FI_SHELL_CMD="--config /mine.yaml"; _FI_SHELL_KEYS_EMPTY=1
+_fi_rc=0; _fi_run local "" '' || _fi_rc=$?
+unset _FI_SHELL_CMD _FI_SHELL_KEYS_EMPTY
+_assert_var "local + --config, keys empty: stops"   "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+_assert_var "local + --config, keys empty: Postgres never started" "$(grep -c 'up -d postgres' "$_fi_calls" | tr -d ' ')" "0"
 
 # An older release's compose file (no LiveKit config mount, or only a comment
 # naming it): voice stays off rather than crash-looping LiveKit.
@@ -1666,6 +1766,7 @@ for _fi_c in "$_FB_OLD" "$_FB_COMMENT"; do
     _assert_var "no LiveKit mount: no voice profile"      "$(grep -c '^COMPOSE_PROFILES=' "$_fi_env" | tr -d ' ')" "0"
     _assert_var "no LiveKit mount: no LIVEKIT_ values"    "$(grep -c '^LIVEKIT_' "$_fi_env" | tr -d ' ')" "0"
     _assert_var "no LiveKit mount: nothing LiveKit seeded" "$(_has "$(_seed_line)" 'SEED_LIVEKIT')" no
+    _assert_var "no LiveKit mount: no call ports"         "$(_has "$_fi_out" '7881/tcp')" no
     _assert_var "no LiveKit mount: says voice is off"     "$(_has "$_fi_out" 'Voice (LiveKit) is off')" yes
     _assert_var "no LiveKit mount: names the voice docs"  "$(_has "$_fi_out" 'voice-setup')" yes
 done
@@ -1713,11 +1814,27 @@ echo "=== install.sh: setup-common.sh refresh ==="
 _SC_NEW="$TEST_DIR/../../scripts/setup-common.sh"
 _SC_OLD="$TEST_DIR/fixtures/setup-common-pre-2357.sh"
 _sc_dir="$(mktemp -d)"
+_sc_files="$(mktemp -d)"
+# The current helpers with one extra line: tells "kept" from "replaced" apart.
+_SC_NEW2="$_sc_files/setup-common-new2.sh"
+{ cat "$_SC_NEW"; echo '# another build'; } > "$_SC_NEW2"
+_sc_sha() {
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+    else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
 # $1 existing setup-common.sh ("" = none), $2 what the download returns ("fail" = fails),
 # $3 "checkout" to make the dir a source checkout. Sets _sc_rc, _sc_out, _sc_curl.
+# _SC_SUMS: what SHA256SUMS serves: auto (the served file's hash, default) | bad | fail.
+# _SC_VERSION: CURIA_VERSION (default v0.46.0; "-" = unset). _SC_REF: CURIA_REF.
+# _SC_STAMP: stamp install.sh's CURIA_INSTALLER_VERSION as release.yml does.
 _sc_run() {
     rm -rf "$_sc_dir"; mkdir -p "$_sc_dir/scripts"
-    cp "$TEST_DIR/../../install.sh" "$_sc_dir/install.sh"
+    if [[ -n "${_SC_STAMP:-}" ]]; then
+        sed 's/^CURIA_INSTALLER_VERSION=""$/CURIA_INSTALLER_VERSION="'"$_SC_STAMP"'"/' \
+            "$TEST_DIR/../../install.sh" > "$_sc_dir/install.sh"
+    else
+        cp "$TEST_DIR/../../install.sh" "$_sc_dir/install.sh"
+    fi
     [[ -z "$1" ]] || cp "$1" "$_sc_dir/scripts/setup-common.sh"
     if [[ "${3:-}" == checkout ]]; then
         mkdir -p "$_sc_dir/.git" "$_sc_dir/src"; printf '{"name":"curia"}' > "$_sc_dir/package.json"
@@ -1725,16 +1842,30 @@ _sc_run() {
     _sc_rc=0; _sc_curl="$_sc_dir/curl-calls"; : > "$_sc_curl"
     _sc_out="$(
       exec 2>"$_sc_dir/stderr"
-      unset CURIA_REF
+      unset CURIA_REF CURIA_VERSION
       # This harness already loaded the current helpers; start without them.
       unset -f compose_var env_value set_env_var ensure_livekit_env livekit_seed_keys \
-          livekit_command_for print_next_steps
-      CURIA_VERSION=v0.46.0
+          livekit_command_for print_next_steps note_livekit_values_kept
+      [[ "${_SC_VERSION-v0.46.0}" == - ]] || CURIA_VERSION="${_SC_VERSION-v0.46.0}"
+      [[ -z "${_SC_REF:-}" ]] || CURIA_REF="$_SC_REF"
       _sc_serve="$2"
       curl() {
-          local o="" a
+          local o="" u="" a
           for a in "$@"; do printf '%s ' "$a" >> "$_sc_curl"; done; echo >> "$_sc_curl"
-          while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && o="$2"; shift; done
+          while [[ $# -gt 0 ]]; do
+              case "$1" in (-o) o="$2"; shift ;; (http*) u="$1" ;; esac
+              shift
+          done
+          case "$u" in
+            (*/SHA256SUMS)
+              case "${_SC_SUMS:-auto}" in
+                (fail) return 22 ;;
+                (bad) printf '%064d  setup-common.sh\n' 0 > "$o" ;;
+                (*) [[ "$_sc_serve" != fail ]] || return 22
+                   printf '%064d  install.sh\n%s  setup-common.sh\n' 1 "$(_sc_sha "$_sc_serve")" > "$o" ;;
+              esac
+              return 0 ;;
+          esac
           [[ "$_sc_serve" != fail ]] || return 22
           cp "$_sc_serve" "$o"
       }
@@ -1752,6 +1883,70 @@ _assert_var "old setup-common.sh, new download: file replaced" \
     "$(cmp -s "$_sc_dir/scripts/setup-common.sh" "$_SC_NEW" && echo same)" "same"
 _assert_var "downloads this release's setup-common.sh" \
     "$(_has "$(< "$_sc_curl")" 'releases/download/v0.46.0/setup-common.sh')" yes
+_assert_var "verifies it against this release's SHA256SUMS" \
+    "$(_has "$(< "$_sc_curl")" 'releases/download/v0.46.0/SHA256SUMS')" yes
+_assert_var "verified: no temporary files left" \
+    "$(find "$_sc_dir/scripts" -type f | wc -l | tr -d ' ')" "1"
+
+# A download that does not match the release's SHA256SUMS is refused,
+# and the existing copy is left as it was.
+_SC_SUMS=bad
+_sc_run "$_SC_NEW" "$_SC_NEW2"
+_assert_var "checksum mismatch: exit 1" "$_sc_rc" "1"
+_assert_var "checksum mismatch: says so" "$(_has "$_sc_err" 'does not match')" yes
+_assert_var "checksum mismatch: existing file not replaced" \
+    "$(cmp -s "$_sc_dir/scripts/setup-common.sh" "$_SC_NEW" && echo same)" "same"
+_assert_var "checksum mismatch: no temporary files left" \
+    "$(find "$_sc_dir/scripts" -type f | wc -l | tr -d ' ')" "1"
+_sc_run "" "$_SC_NEW2"
+_assert_var "checksum mismatch, no file: exit 1" "$_sc_rc" "1"
+_assert_var "checksum mismatch, no file: nothing installed" "$([[ -f "$_sc_dir/scripts/setup-common.sh" ]] && echo yes || echo no)" no
+# SHA256SUMS cannot be fetched: keep the existing copy (warn), or stop with none.
+_SC_SUMS=fail
+_sc_run "$_SC_NEW" "$_SC_NEW2"
+_assert_var "sums unavailable, file present: continues" "$_sc_rc" "0"
+_assert_var "sums unavailable, file present: warns" "$(_has "$_sc_err" 'SHA256SUMS')" yes
+_assert_var "sums unavailable, file present: file kept" \
+    "$(cmp -s "$_sc_dir/scripts/setup-common.sh" "$_SC_NEW" && echo same)" "same"
+_sc_run "" "$_SC_NEW2"
+_assert_var "sums unavailable, no file: exit 1" "$_sc_rc" "1"
+_assert_var "sums unavailable, no file: nothing installed" "$([[ -f "$_sc_dir/scripts/setup-common.sh" ]] && echo yes || echo no)" no
+_sc_run "$_SC_OLD" "$_SC_NEW"
+_assert_var "sums unavailable, stale copy: exit 1" "$_sc_rc" "1"
+_assert_var "sums unavailable, stale copy: not blamed on CURIA_VERSION" "$(_has "$_sc_err" 'predates')" no
+_assert_var "sums unavailable, stale copy: says it could not be verified" "$(_has "$_sc_err" 'could not be verified')" yes
+unset _SC_SUMS
+# Raw modes (edge, CURIA_REF) have no SHA256SUMS: downloaded as before.
+_SC_VERSION=edge
+_sc_run "$_SC_OLD" "$_SC_NEW"
+unset _SC_VERSION
+_assert_var "edge: replaced without a checksum" \
+    "$(cmp -s "$_sc_dir/scripts/setup-common.sh" "$_SC_NEW" && echo same)" "same"
+_assert_var "edge: no SHA256SUMS fetched" "$(_has "$(< "$_sc_curl")" 'SHA256SUMS')" no
+
+# The released install.sh is stamped with its own tag (release.yml), and fetches
+# that release's setup-common.sh unless CURIA_VERSION / CURIA_REF says otherwise.
+_assert_var "repo install.sh: CURIA_INSTALLER_VERSION is empty" \
+    "$(grep -c '^CURIA_INSTALLER_VERSION=""$' "$TEST_DIR/../../install.sh" | tr -d ' ')" "1"
+_SC_STAMP=v0.47.0; _SC_VERSION=-
+_sc_run "$_SC_NEW" "$_SC_NEW"
+_assert_var "stamped, CURIA_VERSION unset: that release's setup-common.sh" \
+    "$(_has "$(< "$_sc_curl")" 'releases/download/v0.47.0/setup-common.sh')" yes
+_assert_var "stamped, CURIA_VERSION unset: that release's SHA256SUMS" \
+    "$(_has "$(< "$_sc_curl")" 'releases/download/v0.47.0/SHA256SUMS')" yes
+_SC_VERSION=v0.46.0
+_sc_run "$_SC_NEW" "$_SC_NEW"
+_assert_var "stamped, explicit CURIA_VERSION wins" \
+    "$(_has "$(< "$_sc_curl")" 'releases/download/v0.46.0/setup-common.sh')" yes
+_SC_VERSION=-; _SC_REF=abc123
+_sc_run "$_SC_NEW" "$_SC_NEW"
+_assert_var "stamped, CURIA_REF wins" \
+    "$(_has "$(< "$_sc_curl")" 'raw.githubusercontent.com/josephfung/curia/abc123/scripts/setup-common.sh')" yes
+unset _SC_STAMP _SC_REF
+_sc_run "$_SC_NEW" "$_SC_NEW"
+unset _SC_VERSION
+_assert_var "unstamped, CURIA_VERSION unset: latest" \
+    "$(_has "$(< "$_sc_curl")" 'releases/latest/download/setup-common.sh')" yes
 
 _sc_run "$_SC_OLD" "$_SC_OLD"
 _assert_var "download is an older release's file: exit 1" "$_sc_rc" "1"
@@ -1759,6 +1954,15 @@ _assert_var "older release: says the version predates this installer" \
     "$(_has "$_sc_err" 'CURIA_VERSION=v0.46.0 predates this installer')" yes
 _assert_var "older release: points at that release's own installer" \
     "$(_has "$_sc_err" 'releases/download/v0.46.0/install.sh')" yes
+
+# Download fails and the kept copy is an older one: say the download failed, not
+# that CURIA_VERSION predates the installer.
+_sc_run "$_SC_OLD" fail
+_assert_var "download fails, stale copy: exit 1" "$_sc_rc" "1"
+_assert_var "download fails, stale copy: not blamed on CURIA_VERSION" "$(_has "$_sc_err" 'predates')" no
+_assert_var "download fails, stale copy: says the download failed" "$(_has "$_sc_err" 'download failed')" yes
+_assert_var "download fails, stale copy: kept copy is stale" "$(_has "$_sc_err" 'stale')" yes
+_assert_var "download fails, stale copy: re-run when the network is back" "$(_has "$_sc_err" 'network is back')" yes
 
 _sc_run "$_SC_NEW" fail
 _assert_var "download fails, file present: continues" "$_sc_rc" "0"
@@ -1778,7 +1982,117 @@ _assert_var "source checkout: file left as is" \
 rm -rf "$_sc_dir/.git"; printf 'gitdir: /elsewhere\n' > "$_sc_dir/.git"
 _assert_var "worktree (.git file) is a source checkout" \
     "$(detect_source_checkout "$_sc_dir" && echo yes || echo no)" yes
-rm -rf "$_sc_dir"
+rm -rf "$_sc_dir" "$_sc_files"
+
+# --- install.sh: existing_install closing steps follow the live LiveKit (#2357) ---
+
+echo ""
+echo "=== install.sh: existing_install next steps ==="
+
+_ei_dir="$(mktemp -d)"
+_ei_env="$_ei_dir/.env"
+# $1 .env contents, $2 live livekit command, $3 livekit running (1/""). Sets _ei_out.
+_ei_run() {
+    printf '%b' "$1" > "$_ei_env"
+    _ei_out="$(
+      unset COMPOSE_FILE APP_ORIGIN HTTP_BIND DOMAIN COMPOSE_PROFILES LIVEKIT_KEYS LIVEKIT_COMMAND HTTP_PORT
+      _ei_cmd="$2"; _ei_running="$3"
+      docker() { return 0; }
+      wait_for_postgres() { :; }; wait_for_curia() { return 0; }
+      check_postgres_exposure() { :; }; check_http_exposure() { :; }
+      check_livekit_exposure() { :; }; note_livekit_signaling() { :; }
+      note_missing_browser() { :; }; note_voice_off() { :; }
+      live_command() { if [[ "$1" == livekit ]]; then printf '%s' "$_ei_cmd"; fi; }
+      service_running() { [[ "$1" == livekit && -n "$_ei_running" ]]; }
+      INSTALL_DIR="$_ei_dir"
+      existing_install "$_ei_env" 2>&1
+    )" || true
+}
+_EI_PROXY='APP_ORIGIN=https://p.example.com\n'
+_EI_DONE='\n# SETUP_COMPLETE\n'
+# A pre-#2357 proxy install with voice on and LIVEKIT_COMMAND unset runs --dev.
+_ei_run "${_EI_PROXY}COMPOSE_PROFILES=voice${_EI_DONE}" '--dev --bind 0.0.0.0' 1
+_assert_var "upgrade, proxy, live --dev: no /rtc* rule"  "$(_has "$_ei_out" '/rtc* to 127.0.0.1:7880')" no
+_assert_var "upgrade, proxy, live --dev: no LIVEKIT_HTTP_BIND advice" "$(_has "$_ei_out" 'also needs LIVEKIT_HTTP_BIND')" no
+_assert_var "upgrade, proxy, live --dev: warns" "$(_has "$_ei_out" "Don't forward /rtc*")" yes
+# Not running: LIVEKIT_COMMAND (unset = the --dev default) decides.
+_ei_run "${_EI_PROXY}COMPOSE_PROFILES=voice${_EI_DONE}" '' ''
+_assert_var "upgrade, proxy, default command: no /rtc* rule" "$(_has "$_ei_out" '/rtc* to 127.0.0.1:7880')" no
+_assert_var "upgrade, proxy, default command: warns" "$(_has "$_ei_out" "Don't forward /rtc*")" yes
+# .env says real keys, but the running container was not recreated: still --dev.
+_ei_run "${_EI_PROXY}COMPOSE_PROFILES=voice\nLIVEKIT_COMMAND=--config /etc/livekit.yaml${_EI_DONE}" '--dev' 1
+_assert_var "upgrade, proxy, live --dev beats .env: no /rtc* rule" "$(_has "$_ei_out" '/rtc* to 127.0.0.1:7880')" no
+# Real keys live: the forwarding rule and the bind advice.
+_ei_run "${_EI_PROXY}COMPOSE_PROFILES=voice\nLIVEKIT_COMMAND=--config /etc/livekit.yaml${_EI_DONE}" '--config /etc/livekit.yaml' 1
+_assert_var "upgrade, proxy, real keys: /rtc* rule" "$(_has "$_ei_out" '/rtc* to 127.0.0.1:7880')" yes
+_assert_var "upgrade, proxy, real keys: LIVEKIT_HTTP_BIND advice" "$(_has "$_ei_out" 'LIVEKIT_HTTP_BIND')" yes
+_assert_var "upgrade, proxy, real keys: call ports" "$(_has "$_ei_out" '7881/tcp')" yes
+# Voice off: neither the call ports nor any /rtc* line.
+_ei_run "${_EI_PROXY}${_EI_DONE}" '' ''
+_assert_var "upgrade, proxy, voice off: no /rtc*" "$(_has "$_ei_out" '/rtc*')" no
+_assert_var "upgrade, proxy, voice off: no call ports" "$(_has "$_ei_out" '7881/tcp')" no
+_ei_run "${_TLS_CF}DOMAIN=x.example${_EI_DONE}" '' ''
+_assert_var "upgrade, HTTPS, voice off: no call ports" "$(_has "$_ei_out" '7881/tcp')" no
+_ei_run "${_TLS_CF}DOMAIN=x.example\nCOMPOSE_PROFILES=voice\nLIVEKIT_COMMAND=--config /etc/livekit.yaml${_EI_DONE}" '--config /etc/livekit.yaml' 1
+_assert_var "upgrade, HTTPS, voice on: call ports" "$(_has "$_ei_out" '7881/tcp')" yes
+rm -rf "$_ei_dir"
+
+# --- .env.example: ensure_livekit_env rewrites only the placeholders ---
+# set_env_var replaces the first line matching "#? KEY=", so no prose line may
+# start like a placeholder.
+
+echo ""
+echo "=== .env.example: LiveKit placeholders ==="
+
+_ee_src="$TEST_DIR/../../.env.example"
+for _ee_k in LIVEKIT_COMMAND LIVEKIT_KEYS COMPOSE_PROFILES; do
+    _assert_var ".env.example: one '# $_ee_k=' line" \
+        "$(grep -cE "^#?[[:space:]]*${_ee_k}=" "$_ee_src" | tr -d ' ')" "1"
+done
+_ee="$(mktemp)"
+for _ee_mode in public local; do
+    cp "$_ee_src" "$_ee"
+    ( unset COMPOSE_PROFILES LIVEKIT_KEYS LIVEKIT_COMMAND; ensure_livekit_env "$_ee" "$_ee_mode" ) >/dev/null 2>&1
+    _assert_var ".env.example ($_ee_mode): prose stays a comment" \
+        "$(grep 'Local installs use' "$_ee" | cut -c1)" "#"
+    _assert_var ".env.example ($_ee_mode): command written" "$(env_value "$_ee" LIVEKIT_COMMAND)" "$(livekit_command_for "$_ee_mode")"
+    _assert_var ".env.example ($_ee_mode): profile written" "$(env_value "$_ee" COMPOSE_PROFILES)" "voice"
+    _assert_var ".env.example ($_ee_mode): keys written" "$([[ -n "$(env_value "$_ee" LIVEKIT_KEYS)" ]] && echo yes || echo no)" yes
+    _assert_var ".env.example ($_ee_mode): only the three placeholders changed" \
+        "$(diff "$_ee_src" "$_ee" | grep -c '^<' | tr -d ' ')" "3"
+done
+rm -f "$_ee"
+
+# --- setup.sh: seed-vault gets its secrets through the environment (#2357) ---
+
+echo ""
+echo "=== setup.sh: run_seed_vault ==="
+
+_rs_dir="$(mktemp -d)"
+_rs_rc=0
+(
+  pnpm() {
+      printf '%s\n' "$*" > "$_rs_dir/args"
+      printf 'API_TOKEN=%s\nSECRET=%s\nVERIFY=%s\n' "$(printenv API_TOKEN || true)" \
+          "$(printenv SEED_LIVEKIT_API_SECRET || true)" "$(printenv SEED_VAULT_VERIFY || true)" > "$_rs_dir/env"
+  }
+  REPO_ROOT=/repo
+  run_seed_vault "API_TOKEN=tok-value-123" "SEED_LIVEKIT_API_SECRET=sec-value-456"
+  printf '%s' "$(printenv API_TOKEN || echo unset)" > "$_rs_dir/after"
+) || _rs_rc=$?
+_assert_var "run_seed_vault: ok" "$_rs_rc" "0"
+_assert_var "run_seed_vault: runs seed-vault" "$(_has "$(< "$_rs_dir/args")" 'run seed-vault')" yes
+_assert_var "run_seed_vault: no values on the command line" "$(grep -cE 'tok-value|sec-value' "$_rs_dir/args" | tr -d ' ')" "0"
+_assert_var "run_seed_vault: API_TOKEN in its env" "$(grep '^API_TOKEN=' "$_rs_dir/env" | cut -d= -f2-)" "tok-value-123"
+_assert_var "run_seed_vault: LiveKit secret in its env" "$(grep '^SECRET=' "$_rs_dir/env" | cut -d= -f2-)" "sec-value-456"
+_assert_var "run_seed_vault: SEED_VAULT_VERIFY=1" "$(grep '^VERIFY=' "$_rs_dir/env" | cut -d= -f2-)" "1"
+_assert_var "run_seed_vault: nothing left exported" "$(< "$_rs_dir/after")" "unset"
+rm -rf "$_rs_dir"
+
+# --- setup-common: note_livekit_values_kept ---
+_nk="$(note_livekit_values_kept 2>&1)"
+_assert_var "kept note: an earlier run" "$(_has "$_nk" 'An earlier run')" yes
+_assert_var "kept note: where to change them" "$(_has "$_nk" 'Settings → Channels → Voice')" yes
 
 # --- Results ---
 
