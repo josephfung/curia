@@ -92,6 +92,8 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
     principalHasIdentity: async () => true,
     appOrigin: undefined,
     scheduleProcessExit: vi.fn(),
+    loadedAtBoot: () => true,
+    persistentStore: true,
     logger,
   });
   const run = (input: Record<string, unknown>, extra: Partial<ToolContext> = {}) =>

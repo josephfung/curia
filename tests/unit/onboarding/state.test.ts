@@ -77,8 +77,10 @@ describe('findOpenOnboardingTask', () => {
     const listTasks = vi.fn(async () => rows as never);
     const found = await findOpenOnboardingTask({ listTasks });
     expect(found?.id).toBe('parent');
-    const filters = (listTasks.mock.calls[0] as unknown[])[0] as { tag: string; statuses: string[] };
+    const filters = (listTasks.mock.calls[0] as unknown[])[0] as { tag: string; statuses: string[]; createdBy: string };
     expect(filters.tag).toBe('onboarding');
+    // Filtered in the query, so model-tagged tasks cannot crowd the parent off the page.
+    expect(filters.createdBy).toBe('onboarding');
     expect(filters.statuses).not.toContain('done');
     expect(filters.statuses).not.toContain('cancelled');
   });

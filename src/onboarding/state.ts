@@ -68,22 +68,42 @@ function isOnboardingState(v: object): v is OnboardingState {
   );
 }
 
+/**
+ * Write the onboarding state. Throws when the store soft-rejects the write ({stored:false}), so a
+ * caller never goes on as if a state it depends on were recorded.
+ */
 export async function writeOnboardingState(
   store: Pick<ConfigStore, 'set'>,
   s: OnboardingState,
 ): Promise<void> {
-  await store.set(ONBOARDING_NAMESPACE, ONBOARDING_STATE_KEY, JSON.stringify(s));
+  await writeOnboardingStateRaw(store, JSON.stringify(s));
 }
+
+/** Write a raw state value (a failed start restores the one it read). Throws on {stored:false}. */
+export async function writeOnboardingStateRaw(store: Pick<ConfigStore, 'set'>, raw: string): Promise<void> {
+  const { stored } = await store.set(ONBOARDING_NAMESPACE, ONBOARDING_STATE_KEY, raw);
+  if (!stored) throw new Error('onboarding: the config store rejected the onboarding state write');
+}
+
+/** Read the raw state value, unparsed (null when missing), so a failed start can restore it. */
+export function readOnboardingStateRaw(store: Pick<ConfigStore, 'get'>): Promise<string | null> {
+  return store.get(ONBOARDING_NAMESPACE, ONBOARDING_STATE_KEY);
+}
+
+/** Upper bound on the open onboarding rows read: the parent plus its open program-created subtasks. */
+const OPEN_ONBOARDING_LIMIT = 500;
 
 /** The open parent onboarding task: tagged `onboarding`, no parent, created by the onboarding program, non-terminal. */
 export async function findOpenOnboardingTask(
   taskRepo: Pick<TaskRepo, 'listTasks'>,
 ): Promise<TaskRow | null> {
+  // The model can tag any task `onboarding`, so the tag alone proves nothing: createdBy must match.
+  // Filtered in the query, so tasks the model tagged cannot crowd the parent off the page.
   const rows = await taskRepo.listTasks({
     tag: ONBOARDING_TASK_TAG,
     statuses: OPEN_STATUSES,
-    limit: 100,
+    createdBy: ONBOARDING_CREATED_BY,
+    limit: OPEN_ONBOARDING_LIMIT,
   });
-  // The model can tag any task `onboarding`, so the tag alone proves nothing: createdBy must match.
   return rows.find((t) => !t.parentTaskId && t.createdBy === ONBOARDING_CREATED_BY) ?? null;
 }

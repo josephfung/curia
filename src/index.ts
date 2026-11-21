@@ -3493,6 +3493,11 @@ async function main(): Promise<void> {
     principalHasIdentity: setupCheckDeps.principalHasIdentity,
     appOrigin: config.appOrigin,
     scheduleProcessExit,
+    // Agents and skill bundles load only at boot: what this process lacks needs a restart.
+    loadedAtBoot: (kind, name) =>
+      kind === 'agent' ? agentRegistry.has(name) : kind === 'skill' ? skillRegistry.get(name) !== undefined : false,
+    // triageConfig is in memory when the knowledge graph is off: Start is refused then.
+    persistentStore: entityMemory !== undefined,
     logger,
   });
   executionLayer.setOnboardingService(onboardingService);
@@ -3796,8 +3801,9 @@ async function main(): Promise<void> {
       scheduler: schedulerService,
       tz: triageTz,
       logger,
-      // Onboarding triage hold (#2360). A missing key is no hold. triageConfig is the config store
-      // (an in-memory stand-in only when there is no entity memory, where nothing sets a hold).
+      // Onboarding triage hold (#2360). A missing key is no hold. triageConfig is the config store,
+      // or an in-memory stand-in when the knowledge graph is off; onboarding refuses to start then
+      // (no_persistent_store), so the stand-in never holds a hold that a restart would drop.
       held: () => isTriageHeld(triageConfig, logger),
       sweepDedupe: () => triageDedupe.sweep(),
       sentObserveFailing: async (ids) => {

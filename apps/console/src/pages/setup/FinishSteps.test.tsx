@@ -125,4 +125,21 @@ describe('StartStep — Start onboarding', () => {
     expect(logged).toHaveBeenCalledOnce();
     logged.mockRestore();
   });
+
+  it('started_invitation_unaudited reads as started, with the Devices hint', async () => {
+    stubStart(() => ({ status: 500, body: { code: 'started_invitation_unaudited', error: 'x', taskId: 't1', restartScheduled: false } }));
+    await render('other', 'app');
+    await clickButton('Start onboarding');
+    expect(host!.textContent).toContain('Onboarding started.');
+    const alert = host!.querySelector('[role="alert"]')!;
+    expect(alert.textContent).toContain('Create a new invitation link from Devices.');
+    expect(alert.querySelector('a')?.getAttribute('href')).toBe('/system/devices');
+  });
+
+  it('start_in_progress reads like already_started', async () => {
+    stubStart(() => ({ status: 409, body: { ok: false, code: 'start_in_progress' } }));
+    await render('other', 'signal');
+    await clickButton('Start onboarding');
+    expect(host!.textContent).toContain('Onboarding has already started.');
+  });
 });

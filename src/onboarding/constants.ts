@@ -19,6 +19,13 @@ export const ONBOARDING_BANDS = [65, 75, 85] as const;
  */
 export const RESTART_WAKE_DELAY_SECONDS = 60;
 
+/**
+ * A principal start that restarts Curia exits this long after the tool returns, so the turn that
+ * called it can tell the principal it will be back. Shorter than RESTART_WAKE_DELAY_SECONDS, so
+ * the resume wake still fires on the new process.
+ */
+export const PRINCIPAL_RESTART_EXIT_DELAY_SECONDS = 15;
+
 /** created_by of the parent onboarding task. A tag alone is spoofable by the model; this is not. */
 export const ONBOARDING_CREATED_BY = 'onboarding';
 

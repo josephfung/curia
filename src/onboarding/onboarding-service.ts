@@ -6,13 +6,13 @@
 // No message is sent from here: on Signal, SMS and Slack the parent task is woken with a
 // "Send the greeting" note and the coordinator composes it; on the app route the greeting
 // waits for the invitation to be redeemed. A principal who asks for onboarding is already
-// talking to Curia, so their start neither rotates the thread nor reaches out: the greeting
-// counts as sent.
+// talking to Curia, so their start does not reach out (the greeting counts as sent), and it
+// rotates the web thread only when they asked from another channel.
 //
 // Idempotency: the whole start runs under a transaction-scoped advisory lock, so two presses
 // (double click, two tabs) serialize and the second sees the first's committed task and
 // answers already_started. Task rows are written through TaskRepo on other pool connections
-// (autocommit), so a failure part-way cancels the tasks this start created rather than
+// (autocommit), so a failure part-way, or a failed COMMIT, undoes what this start did rather than
 // leaving an open onboarding task that would block a retry.
 
 import { randomUUID } from 'node:crypto';
@@ -39,13 +39,20 @@ import { readPlaybook, type PlaybookSession } from './playbook.js';
 import {
   findOpenOnboardingTask,
   readOnboardingState,
+  readOnboardingStateRaw,
   writeOnboardingState,
+  writeOnboardingStateRaw,
   ONBOARDING_TASK_TAG,
   type OnboardingState,
 } from './state.js';
-import { isTriageHeld, releaseTriageHold, setTriageHold } from './triage-hold.js';
+import { isTriageHeld, releaseTriageHold, setTriageHold, writeTriageHold } from './triage-hold.js';
 import { RECURRING_SESSION, topicSubtasks } from './subtasks.js';
-import { FIRST_CONVERSATION_SESSION, ONBOARDING_CREATED_BY, RESTART_WAKE_DELAY_SECONDS } from './constants.js';
+import {
+  FIRST_CONVERSATION_SESSION,
+  ONBOARDING_CREATED_BY,
+  PRINCIPAL_RESTART_EXIT_DELAY_SECONDS,
+  RESTART_WAKE_DELAY_SECONDS,
+} from './constants.js';
 
 /** Signals that the install is already in use, so starting onboarding needs confirming. */
 export const WORKING_PRINCIPAL_SIGNALS = {
@@ -69,10 +76,15 @@ const OPEN_SESSION_LOCK_KEY = 'onboarding:open-session';
 const START_LOCK_TIMEOUT = '10s';
 /** Delay before the restart exit, so the HTTP reply flushes first (as setupRoutes does). */
 const RESTART_EXIT_DELAY_MS = 500;
+/** Postgres lock_not_available: the advisory lock wait hit START_LOCK_TIMEOUT. */
+const LOCK_NOT_AVAILABLE = '55P03';
+/** The channel id of the principal's web app conversation. */
+const WEB_CHANNEL_ID = 'web';
 const GREETING_NOTE = 'Send the greeting';
 /** A principal start that restarts Curia wakes the parent with this, so the conversation resumes. */
 export const RESTART_RESUME_NOTE =
-  'Curia restarted to switch on email triage (held): continue the first conversation where it left off';
+  'Curia restarted to switch on email triage (held): continue the first conversation where it left off. ' +
+  "If your last message to the principal didn't go out, apologise briefly for the pause";
 /** Every onboarding task: the coordinator's, owned by Curia, created by the onboarding program. */
 const TASK_BASE = {
   agentId: 'coordinator',
@@ -97,7 +109,17 @@ export type StartResult =
   | { ok: true; taskId: string; invitation: StartedInvitation | null; restartScheduled: boolean }
   | {
       ok: false;
-      code: 'already_started' | 'confirm_working_principal' | 'setup_incomplete' | 'route_unreachable';
+      /**
+       * `start_in_progress`: another start held the lock past its timeout. `no_persistent_store`:
+       * the knowledge graph is off, so the run state and the triage hold would not survive a restart.
+       */
+      code:
+        | 'already_started'
+        | 'start_in_progress'
+        | 'confirm_working_principal'
+        | 'setup_incomplete'
+        | 'no_persistent_store'
+        | 'route_unreachable';
       signals?: string[];
     };
 
@@ -106,9 +128,30 @@ export type StartedInvitation = { id: string; url: string; expiresAt: string };
 
 /**
  * `actor: 'principal'` is the principal asking in conversation: no invitation, no greeting wake,
- * no web-thread rotation (it would wipe the conversation they are in), and the greeting counts as sent.
+ * and the greeting counts as sent. `channelId` is the channel of their turn: the web thread is
+ * rotated (so their first app view is not the operator's Setup chat) unless it is `web`, where
+ * rotating would wipe the conversation they are in. Unknown → not rotated.
  */
-export type StartOptions = { actor: 'operator' | 'principal'; confirmWorkingPrincipal?: boolean };
+export type StartOptions = {
+  actor: 'operator' | 'principal';
+  confirmWorkingPrincipal?: boolean;
+  channelId?: string;
+};
+
+/** What a start changed, so a failure (part-way, or at COMMIT) can put it back. */
+type StartUndo = {
+  created: string[];
+  mintedId: string | null;
+  /** The hold before this start, restored on undo. */
+  priorHeld: boolean;
+  /** This start newly enabled the Email triage agent: the hold stays on after an undo. */
+  enabledTriageAgent: boolean;
+  /** The raw run state before this start; null when there was none. */
+  priorStateRaw: string | null;
+  stateWritten: boolean;
+};
+
+type LockedStart = { result: StartResult; rotatedTo: string | null; undo: StartUndo | null };
 
 export type OpenSessionResult =
   | { ok: true; session: PlaybookSession; createdSubtasks: number }
@@ -121,7 +164,7 @@ function topicSubtaskTags(sessionId: string, topicId: string): string[] {
 
 export interface OnboardingServiceDeps {
   pool: Pool;
-  taskRepo: Pick<TaskRepo, 'createTask' | 'listTasks' | 'setActiveSkillsBlock' | 'updateTask'>;
+  taskRepo: Pick<TaskRepo, 'createTask' | 'getTask' | 'listTasks' | 'setActiveSkillsBlock' | 'updateTask'>;
   registry: Pick<RegistryService, 'list' | 'installAndEnable'>;
   scheduler: Pick<SchedulerService, 'enqueueTaskWake'>;
   /** The config store the inbox heartbeat reads the triage hold from. */
@@ -134,6 +177,17 @@ export interface OnboardingServiceDeps {
   appOrigin: string | undefined;
   /** Exits the process so the supervisor restarts it (setupRoutes' mechanism). */
   scheduleProcessExit: (delayMs: number) => void;
+  /**
+   * Whether this process loaded the agent or skill bundle at boot. Agents and bundles load only at
+   * startup, so anything onboarding needs that is not loaded here needs a restart, whether this
+   * start enabled it or an earlier one did.
+   */
+  loadedAtBoot: (kind: RegistryKind, name: string) => boolean;
+  /**
+   * Whether `configStore` persists (the knowledge graph is on). Without it the run state and the
+   * triage hold are lost at the restart Start may trigger, so Start is refused.
+   */
+  persistentStore: boolean;
   logger: Logger;
   /** Defaults to the pairing-invitations mint on `pool`. */
   mintInvitation?: (origin: string) => Promise<Pick<MintedInvitation, 'id' | 'pairUrl' | 'expiresAt'>>;
@@ -167,11 +221,13 @@ export class OnboardingService {
       this.deps.principalName(),
       isTriageHeld(configStore, logger),
     ]);
-    // Started once a start has run, even after its task is done: the alert must not come back.
-    const started = task !== null || state !== null;
+    // Started while an onboarding task is open, or once one completed: the alert must not come
+    // back. A cancelled onboarding (or a failed start's) is not started, so Start is offered again.
+    const completedTaskId = task === null && state !== null ? await this.completedTaskId(state.taskId) : null;
+    const started = task !== null || completedTaskId !== null;
     return {
       started,
-      taskId: task?.id ?? state?.taskId ?? null,
+      taskId: task?.id ?? completedTaskId,
       // Only an install whose Setup finished on the Setup page (completed_at set there, not by
       // migration 130), so installs that predate the page never see it.
       showDashboardAlert: !started && setup.phase === 'complete' && setup.completedAt !== null,
@@ -181,6 +237,12 @@ export class OnboardingService {
       principalName,
       triageHeld,
     };
+  }
+
+  /** `taskId` when that task is done (onboarding completed), else null. */
+  private async completedTaskId(taskId: string): Promise<string | null> {
+    const row = await this.deps.taskRepo.getTask(taskId);
+    return row?.status === 'done' ? row.id : null;
   }
 
   /** Stop an invitation Start minted (a caller whose audit of it failed). True when it was live. */
@@ -252,15 +314,33 @@ export class OnboardingService {
 
   async start(opts: StartOptions): Promise<StartResult> {
     const { pool, logger } = this.deps;
-    const locked = await this.inLockedTransaction(START_LOCK_KEY, (client) => this.startLocked(client, opts));
+    let locked: LockedStart;
+    try {
+      locked = await this.inLockedTransaction(
+        START_LOCK_KEY,
+        (client) => this.startLocked(client, opts),
+        // A failed COMMIT rolls back the rotation, but not what went through other connections.
+        async (out) => {
+          if (out.undo) await this.undoFailedStart(out.undo);
+        },
+      );
+    } catch (err) {
+      if (isLockTimeout(err)) {
+        logger.warn('onboarding: another start held the lock past its timeout — refusing this one');
+        return { ok: false, code: 'start_in_progress' };
+      }
+      throw err;
+    }
     const { result, rotatedTo } = locked;
 
     // Only after the commit: a rolled-back rotation must never reach the cache.
     if (rotatedTo) noteWebThreadRotated(pool, rotatedTo);
     if (result.ok && result.restartScheduled) {
-      logger.warn({ taskId: result.taskId }, 'onboarding: capabilities enabled, scheduling a restart');
+      // A principal start leaves the calling turn time to say Curia will be back.
+      const delayMs = opts.actor === 'principal' ? PRINCIPAL_RESTART_EXIT_DELAY_SECONDS * 1000 : RESTART_EXIT_DELAY_MS;
+      logger.warn({ taskId: result.taskId, delayMs }, 'onboarding: capabilities need loading, scheduling a restart');
       try {
-        this.deps.scheduleProcessExit(RESTART_EXIT_DELAY_MS);
+        this.deps.scheduleProcessExit(delayMs);
       } catch (err) {
         // The wakes are queued and fire on the next boot whenever it happens.
         logger.error({ err }, 'onboarding: scheduleProcessExit threw — the restart will not occur');
@@ -271,18 +351,25 @@ export class OnboardingService {
 
   /**
    * Run `fn` in a transaction holding a transaction-scoped advisory lock on `key`, so concurrent
-   * callers serialize. Task rows written through TaskRepo use other connections (autocommit).
+   * callers serialize. Task rows written through TaskRepo use other connections (autocommit), so
+   * when `fn` succeeded but COMMIT failed, `onCommitFailure` gets its result to undo them.
    */
-  private async inLockedTransaction<T>(key: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  private async inLockedTransaction<T>(
+    key: string,
+    fn: (client: PoolClient) => Promise<T>,
+    onCommitFailure?: (out: T) => Promise<void>,
+  ): Promise<T> {
     const client = await this.deps.pool.connect();
     // Set when ROLLBACK fails: the connection may still hold the lock, so destroy it.
     let discard: Error | undefined;
+    let produced: { out: T } | null = null;
     try {
       await client.query('BEGIN');
       await client.query(`SELECT set_config('lock_timeout', $1, true)`, [START_LOCK_TIMEOUT]);
       // Same key hashing as KnowledgeGraphStore.withAdvisoryLock; held until COMMIT/ROLLBACK.
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [key]);
       const out = await fn(client);
+      produced = { out };
       await client.query('COMMIT');
       return out;
     } catch (err) {
@@ -292,24 +379,30 @@ export class OnboardingService {
         discard = rollbackErr instanceof Error ? rollbackErr : new Error(String(rollbackErr));
         this.deps.logger.error({ err: rollbackErr, key }, 'onboarding: rollback failed — discarding the connection');
       }
+      if (produced && onCommitFailure) {
+        this.deps.logger.error({ err, key }, 'onboarding: COMMIT failed — undoing what went through other connections');
+        await onCommitFailure(produced.out);
+      }
       throw err;
     } finally {
       client.release(discard);
     }
   }
 
-  private async startLocked(
-    client: PoolClient,
-    opts: StartOptions,
-  ): Promise<{ result: StartResult; rotatedTo: string | null }> {
+  private async startLocked(client: PoolClient, opts: StartOptions): Promise<LockedStart> {
     const { pool, taskRepo, configStore, logger } = this.deps;
-    const refuse = (code: Extract<StartResult, { ok: false }>['code'], signals?: string[]) => ({
+    const refuse = (code: Extract<StartResult, { ok: false }>['code'], signals?: string[]): LockedStart => ({
       result: { ok: false as const, code, ...(signals ? { signals } : {}) },
       rotatedTo: null,
+      undo: null,
     });
 
     const setup = await readSetupState(pool);
     if (setup.phase !== 'complete') return refuse('setup_incomplete');
+    if (!this.deps.persistentStore) {
+      logger.warn('onboarding: the knowledge graph is off — the run state would not survive a restart, refusing Start');
+      return refuse('no_persistent_store');
+    }
     if (await findOpenOnboardingTask(taskRepo)) return refuse('already_started');
 
     const signals = await this.workingPrincipalSignals(setup.completedAt);
@@ -327,11 +420,20 @@ export class OnboardingService {
     // On Signal, SMS and Slack the parent wakes to send the greeting; the app route waits for redemption.
     const greetOnWake = reach !== null && reach.route !== 'app';
 
-    await setTriageHold(configStore);
-    const created: string[] = [];
-    let mintedId: string | null = null;
+    // Read before changing anything, so a failed start puts them back.
+    const undo: StartUndo = {
+      created: [],
+      mintedId: null,
+      priorHeld: await isTriageHeld(configStore, logger),
+      enabledTriageAgent: false,
+      priorStateRaw: await readOnboardingStateRaw(configStore),
+      stateWritten: false,
+    };
     try {
-      const restartScheduled = await this.enableRequiredEntries();
+      await setTriageHold(configStore);
+      undo.enabledTriageAgent = await this.enableRequiredEntries();
+      // Whatever this process did not load at boot needs a restart, whoever enabled it.
+      const restartScheduled = REQUIRED_ENTRIES.some(({ kind, name }) => !this.deps.loadedAtBoot(kind, name));
       const principalName = await this.principalDisplayName();
       const sessions = await this.playbook();
 
@@ -340,11 +442,13 @@ export class OnboardingService {
       const parentNote = greetOnWake
         ? GREETING_NOTE
         : inConversation && restartScheduled ? RESTART_RESUME_NOTE : undefined;
-      const { parent, homework } = await this.createTaskTree(principalName, sessions, parentNote, created);
+      const { parent, homework } = await this.createTaskTree(principalName, sessions, parentNote, undo.created);
 
-      // Rotating would wipe the conversation a principal start comes from.
+      // Rotating would wipe the conversation a principal start comes from, so only when they
+      // asked from another channel (their first app view must not be the operator's Setup chat).
       let rotatedTo: string | null = null;
-      if (!inConversation) {
+      const rotate = !inConversation || (opts.channelId !== undefined && opts.channelId !== WEB_CHANNEL_ID);
+      if (rotate) {
         rotatedTo = this.newId();
         await rotateWebThreadRow(client, rotatedTo);
       }
@@ -352,11 +456,20 @@ export class OnboardingService {
       let invitation: StartedInvitation | null = null;
       if (reach?.route === 'app') {
         const minted = await this.mint(reach.origin);
-        mintedId = minted.id;
+        undo.mintedId = minted.id;
         invitation = { id: minted.id, url: minted.pairUrl, expiresAt: minted.expiresAt };
       }
 
+      // After a restart the wakes run on the new process.
       const startedAt = this.now();
+      const runAt = restartScheduled
+        ? new Date(startedAt.getTime() + RESTART_WAKE_DELAY_SECONDS * 1000)
+        : startedAt;
+      await this.wake(homework.id, runAt);
+      if (parentNote) await this.wake(parent.id, runAt);
+
+      // Last, once the wakes are queued: a start that failed leaves no state saying it started.
+      undo.stateWritten = true;
       await writeOnboardingState(configStore, {
         taskId: parent.id,
         startedAt: startedAt.toISOString(),
@@ -369,20 +482,13 @@ export class OnboardingService {
         operatorNotified: [],
       });
 
-      // Last, so nothing wakes for a start that failed. After a restart the wakes run on the new process.
-      const runAt = restartScheduled
-        ? new Date(startedAt.getTime() + RESTART_WAKE_DELAY_SECONDS * 1000)
-        : startedAt;
-      await this.wake(homework.id, runAt);
-      if (parentNote) await this.wake(parent.id, runAt);
-
       logger.info(
-        { taskId: parent.id, actor: opts.actor, route, subtasks: created.length - 2, restartScheduled },
+        { taskId: parent.id, actor: opts.actor, route, subtasks: undo.created.length - 2, restartScheduled, rotated: rotate },
         'onboarding: started',
       );
-      return { result: { ok: true, taskId: parent.id, invitation, restartScheduled }, rotatedTo };
+      return { result: { ok: true, taskId: parent.id, invitation, restartScheduled }, rotatedTo, undo };
     } catch (err) {
-      await this.undoFailedStart(created, mintedId);
+      await this.undoFailedStart(undo);
       throw err;
     }
   }
@@ -427,11 +533,14 @@ export class OnboardingService {
     return { route };
   }
 
-  /** Enable what onboarding needs. True when anything was newly enabled (a restart loads it). */
+  /**
+   * Enable what onboarding needs. Returns whether this call newly enabled the Email triage agent
+   * (a failed start then keeps triage held: a mailbox nobody was told about must not start).
+   */
   private async enableRequiredEntries(): Promise<boolean> {
     const { registry } = this.deps;
     const enabledByKind = new Map<RegistryKind, Set<string>>();
-    let newlyEnabled = false;
+    let enabledTriageAgent = false;
     for (const { kind, name } of REQUIRED_ENTRIES) {
       let enabled = enabledByKind.get(kind);
       if (!enabled) {
@@ -441,9 +550,9 @@ export class OnboardingService {
       if (enabled.has(name)) continue;
       await registry.installAndEnable(kind, name, ONBOARDING_CREATED_BY);
       enabled.add(name);
-      newlyEnabled = true;
+      if (kind === 'agent' && name === EMAIL_TRIAGE_AGENT) enabledTriageAgent = true;
     }
-    return newlyEnabled;
+    return enabledTriageAgent;
   }
 
   private async createTaskTree(
@@ -548,39 +657,55 @@ export class OnboardingService {
   }
 
   /**
-   * A start that failed part-way: cancel the tasks it created so a retry can start again, and
-   * lift the triage hold so a mailbox already being triaged is not left held with no onboarding,
-   * and stop the invitation it minted so no 48-hour credential outlives a failed start.
-   * Registry entries it enabled stay enabled (harmless, and a retry skips them).
+   * A start that failed part-way, or whose COMMIT failed: stop the invitation it minted so no
+   * 48-hour credential outlives it, put the triage hold back as it was (kept on if this start
+   * newly enabled Email triage), restore the run state it overwrote, and cancel the tasks it
+   * created so a retry can start again. With no earlier state, the new one is left pointing at a
+   * cancelled task, which status reads as not started. Registry entries it enabled stay enabled;
+   * a retry restarts Curia if this process has not loaded them. Never throws.
    */
-  private async undoFailedStart(taskIds: string[], mintedInvitationId: string | null): Promise<void> {
-    if (mintedInvitationId) {
+  private async undoFailedStart(undo: StartUndo): Promise<void> {
+    const { configStore, logger } = this.deps;
+    if (undo.mintedId) {
       try {
-        await this.stop(mintedInvitationId);
+        await this.stop(undo.mintedId);
       } catch (err) {
-        this.deps.logger.error(
-          { err, pairingInvitationId: mintedInvitationId },
+        logger.error(
+          { err, pairingInvitationId: undo.mintedId },
           'onboarding: failed to stop the invitation from a failed start — it stays live until it expires',
         );
       }
     }
+    const held = undo.priorHeld || undo.enabledTriageAgent;
     try {
-      await releaseTriageHold(this.deps.configStore);
+      await writeTriageHold(configStore, held);
     } catch (err) {
-      this.deps.logger.error({ err }, 'onboarding: failed to release the triage hold after a failed start');
+      logger.error({ err, held }, 'onboarding: failed to restore the triage hold after a failed start');
+    }
+    if (undo.stateWritten && undo.priorStateRaw !== null) {
+      try {
+        await writeOnboardingStateRaw(configStore, undo.priorStateRaw);
+      } catch (err) {
+        logger.error({ err }, 'onboarding: failed to restore the run state after a failed start');
+      }
     }
     // Children first, then the parent (created first), so no open child outlives it.
-    for (const taskId of [...taskIds].reverse()) {
+    for (const taskId of [...undo.created].reverse()) {
       try {
         await this.deps.taskRepo.updateTask(taskId, {
           status: 'cancelled',
           progressNote: 'Onboarding start failed part-way; cancelled.',
         });
       } catch (err) {
-        this.deps.logger.error({ err, taskId }, 'onboarding: failed to cancel a task from a failed start');
+        logger.error({ err, taskId }, 'onboarding: failed to cancel a task from a failed start');
       }
     }
   }
+}
+
+/** Whether `err` is Postgres lock_not_available (the advisory lock wait timed out). */
+function isLockTimeout(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === LOCK_NOT_AVAILABLE;
 }
 
 function homeworkDescription(principalName: string): string {

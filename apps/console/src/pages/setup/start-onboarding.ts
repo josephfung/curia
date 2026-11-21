@@ -101,6 +101,8 @@ export type StartFlow =
        * `unknown`: its start time couldn't be read beforehand, so its return can't be told.
        */
       restart: 'none' | 'waiting' | 'back' | 'slow' | 'unknown';
+      /** The invitation was minted but could not be audited, so it was stopped: create one from Devices. */
+      invitationStopped?: boolean;
     }
   /** Another start got there first. */
   | { kind: 'already_started' }
@@ -155,6 +157,24 @@ type StartBody =
   | { ok: true; taskId: string; invitation: StartedInvitation | null; restartScheduled: boolean }
   | { ok: false; code: string; signals?: string[] };
 
+/** The 500 when onboarding started but its invitation could not be audited (and was stopped). */
+const STARTED_INVITATION_UNAUDITED = 'started_invitation_unaudited';
+
+/** A 500 body saying onboarding started without its invitation; null for any other 500. */
+async function startedWithoutInvitation(res: Response): Promise<{ restartScheduled: boolean } | null> {
+  let body: unknown;
+  try {
+    body = await res.clone().json();
+  } catch (err) {
+    console.error('[onboarding] Start answered 500 with a body that is not JSON:', err);
+    return null;
+  }
+  if (typeof body !== 'object' || body === null) return null;
+  const b = body as Record<string, unknown>;
+  if (b.code !== STARTED_INVITATION_UNAUDITED) return null;
+  return { restartScheduled: b.restartScheduled === true };
+}
+
 /**
  * The start flow. `onSetupIncomplete` re-reads whatever shows Setup's missing steps (the
  * checklist on the Setup page); `onAlreadyStarted` refreshes whatever shows the status.
@@ -190,12 +210,22 @@ export function useStartOnboarding(opts: {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ confirmWorkingPrincipal }),
       });
-      if (res.status !== 200 && res.status !== 409) throw new Error(await errorMessage(res));
-      const body = await res.json() as StartBody;
+      let body: StartBody;
+      if (res.status === 500) {
+        // Onboarding started; only the invitation link was stopped. Render it as started.
+        const started = await startedWithoutInvitation(res);
+        if (!started) throw new Error(await errorMessage(res));
+        body = { ok: true, taskId: '', invitation: null, restartScheduled: started.restartScheduled };
+      } else {
+        if (res.status !== 200 && res.status !== 409) throw new Error(await errorMessage(res));
+        body = await res.json() as StartBody;
+      }
+      const invitationStopped = res.status === 500;
       if (!body.ok) {
         if (body.code === 'confirm_working_principal') {
           setFlow({ kind: 'confirm', signals: body.signals ?? [] });
-        } else if (body.code === 'already_started') {
+        } else if (body.code === 'already_started' || body.code === 'start_in_progress') {
+          // start_in_progress: another start (a second tab) holds the lock; the status shows its outcome.
           setFlow({ kind: 'already_started' });
           await onAlreadyStarted?.();
         } else if (body.code === 'route_unreachable') {
@@ -203,13 +233,15 @@ export function useStartOnboarding(opts: {
         } else if (body.code === 'setup_incomplete') {
           setFlow({ kind: 'failed', message: 'Setup isn’t finished: something stopped passing. The Setup steps show what’s left.' });
           await onSetupIncomplete?.();
+        } else if (body.code === 'no_persistent_store') {
+          setFlow({ kind: 'failed', message: 'Curia’s knowledge graph is off, so onboarding can’t keep its progress. Turn it back on, restart Curia, then start onboarding again.' });
         } else {
           throw new Error(`Could not start onboarding (${body.code}).`);
         }
         return;
       }
       const restart = !body.restartScheduled ? 'none' : previousBootedAt === null ? 'unknown' : 'waiting';
-      setFlow({ kind: 'started', invitation: body.invitation, restart });
+      setFlow({ kind: 'started', invitation: body.invitation, restart, ...(invitationStopped ? { invitationStopped } : {}) });
       if (restart === 'waiting' && previousBootedAt !== null) {
         const controller = new AbortController();
         abort.current = controller;

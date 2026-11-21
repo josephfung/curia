@@ -245,6 +245,11 @@ export function OnboardingStarted(props: {
         </>
       )}
       {hello && <p>{hello}</p>}
+      {flow.invitationStopped && (
+        <p className="setup-status attention" role="alert">
+          The invitation link couldn’t be recorded, so it was stopped. Create a new invitation link from <Link to="/system/devices">Devices</Link>.
+        </p>
+      )}
       {flow.restart === 'waiting' && <StatusLine kind="neutral">Curia is restarting to switch on Email triage, held for now… this page reconnects by itself.</StatusLine>}
       {flow.restart === 'back' && <StatusLine kind="ok">Curia restarted.</StatusLine>}
       {flow.restart === 'slow' && <p className="setup-status attention" role="alert">{RESTART_SLOW}</p>}

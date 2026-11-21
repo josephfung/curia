@@ -392,6 +392,8 @@ Start is refused, with a code the console explains, when:
 |---|---|---|
 | `setup_incomplete` | Setup is not finished | re-reads the checklist |
 | `already_started` | an onboarding task is open | says so |
+| `start_in_progress` | another start held the lock past its 10-second timeout | treats it as `already_started` and refreshes |
+| `no_persistent_store` | the knowledge graph is off, so the run state and the hold would not survive a restart | says to turn it back on |
 | `confirm_working_principal` | the install already looks in use: Email triage is on, or the principal has tasks from before Setup finished | asks to confirm, then starts with `confirmWorkingPrincipal` |
 | `route_unreachable` | no messaging route, `APP_ORIGIN` unset for the Curia app, or no verified principal identity on Signal, SMS or Slack | links Channels and the principal's contact |
 
@@ -400,24 +402,36 @@ sees `already_started`), Start:
 
 1. **Holds triage** (below).
 2. **Enables what onboarding needs:** the Email triage agent (`ceo-inbox`) and the `ceo-inbox`,
-   `learning` and `tasks` bundles. If anything was newly enabled, Curia restarts after it
-   replies, and the wakes below are set a minute ahead so they fire on the new process. The
-   console waits for the restart as Apply & restart does.
+   `learning` and `tasks` bundles. If the running process did not load any of them at boot
+   (whether this start or an earlier one enabled it), Curia restarts after it replies, and the
+   wakes below are set a minute ahead so they fire on the new process. The console waits for
+   the restart as Apply & restart does.
 3. **Creates the task tree** from the playbook's First conversation session, with the
    `onboarding` skill active on the parent and the homework task.
-4. **Rotates the web thread**, so the principal's first view is clean (an operator start only).
+4. **Rotates the web thread**, so the principal's first view is clean: on an operator start, or
+   a principal start from any channel but the web app (where it would wipe their conversation).
 5. **Reaches the principal** on the Setup route. The Curia app: mints the 48-hour invitation,
    shown once with copyable wording that mentions the 48 hours; the greeting goes out when it
    is redeemed (`pairing.invitation_redeemed`). Signal, SMS or Slack: the parent task wakes
    with "Send the greeting" and the coordinator writes it. There is no email invitation.
-6. **Records the run state and wakes the homework.**
+6. **Wakes the homework, then records the run state**, last, so a failed start leaves no state
+   saying it started.
 
-A failure part-way cancels the tasks this start created and stops a minted invitation, so a
-retry is not blocked. An invitation whose audit record fails is stopped too.
+A failure part-way, or a failed COMMIT, undoes the start: the tasks it created are cancelled,
+a minted invitation is stopped, the triage hold goes back to what it was (kept on if this
+start newly enabled Email triage) and an earlier run state is restored. An invitation whose
+audit record fails is stopped too; the console then shows onboarding as started
+(`started_invitation_unaudited`) and points at Devices for a new link. Every console start,
+and every release of the hold from the console, is recorded as a `config.change` naming the
+console session.
 
-A principal's own start reaches no one and rotates nothing (they are already in the
-conversation), and the greeting counts as sent. If it restarted Curia, the parent wakes
-afterwards to pick the conversation back up.
+A principal's own start reaches no one, and the greeting counts as sent. If it restarts
+Curia, the exit waits 15 seconds so the turn can say Curia will be back, and the parent wakes
+afterwards to pick the conversation back up (apologising if its last message did not go out).
+
+**Started** (`GET /api/onboarding/status`) means an onboarding task is open, or the run
+state's task completed. A cancelled onboarding is not started: the dashboard alert returns
+and Start can run again.
 
 ### Homework
 

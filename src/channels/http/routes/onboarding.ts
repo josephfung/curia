@@ -8,7 +8,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Logger } from '../../../logger.js';
 import type { EventBus } from '../../../bus/bus.js';
-import { createOperatorSession } from '../../../bus/events.js';
+import { createConfigChange, createOperatorSession } from '../../../bus/events.js';
 import { assertSecret, CONSOLE_RATE, type SessionStore } from '../session-auth.js';
 import { actorFromRequest } from './sessions.js';
 import type { OnboardingService } from '../../../onboarding/onboarding-service.js';
@@ -23,6 +23,21 @@ export interface OnboardingRouteOptions {
 
 // Start mints a 48-hour credential and creates tasks: the auth-sensitive limit setupRoutes uses.
 const START_RATE = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
+
+/**
+ * The audit record of a console onboarding change: config.change, as office identity and the
+ * executive profile record theirs. `version` is 1 for "on" (started, held) and 0 for "off".
+ */
+function onboardingChange(configType: 'onboarding' | 'onboarding_triage_hold', on: boolean, summary: string, actorSessionId?: string) {
+  return createConfigChange({
+    config_type: configType,
+    version: on ? 1 : 0,
+    previous_version: on ? 0 : 1,
+    changed_by: 'api',
+    ...(actorSessionId ? { note: `console session ${actorSessionId}` } : { note: 'console access key' }),
+    diff_summary: summary,
+  });
+}
 
 export async function onboardingRoutes(app: FastifyInstance, options: OnboardingRouteOptions): Promise<void> {
   const { webAppBootstrapSecret, sessions, bus, logger, onboarding } = options;
@@ -63,6 +78,12 @@ export async function onboardingRoutes(app: FastifyInstance, options: Onboarding
       return reply.status(500).send({ error: 'Failed to start onboarding. Check server logs.' });
     }
     if (!result.ok) return reply.status(409).send(result);
+    // Onboarding started: recorded on every route. It happened, so a miss is logged, not an error.
+    try {
+      await bus.publish('system', onboardingChange('onboarding', true, `Onboarding started from the console (task ${result.taskId})`, actor.actorSessionId));
+    } catch (err) {
+      logger.error({ err, taskId: result.taskId }, 'onboarding: start audit write failed — onboarding did start');
+    }
     if (result.invitation) {
       // The same audit record the console's own invitation mint writes.
       try {
@@ -81,11 +102,14 @@ export async function onboardingRoutes(app: FastifyInstance, options: Onboarding
         } catch (stopErr) {
           logger.error({ err: stopErr, pairingInvitationId }, 'onboarding: failed to stop an unaudited invitation link');
         }
+        // A distinct code: onboarding did start (and may be restarting Curia), only the link is gone.
         return reply.status(500).send({
+          code: 'started_invitation_unaudited',
           error:
             'Onboarding started, but the invitation could not be recorded, so the link was stopped. ' +
             'Create a new invitation link from Devices.',
           taskId: result.taskId,
+          restartScheduled: result.restartScheduled,
         });
       }
     }
@@ -94,6 +118,14 @@ export async function onboardingRoutes(app: FastifyInstance, options: Onboarding
 
   app.delete('/api/onboarding/triage-hold', START_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
+    // Recorded before the change: an unrecordable release is refused, so no release goes unaudited.
+    const actor = actorFromRequest(request, sessions);
+    try {
+      await bus.publish('system', onboardingChange('onboarding_triage_hold', false, 'Email triage hold released from the console', actor.actorSessionId));
+    } catch (err) {
+      logger.error({ err }, 'onboarding: triage hold release audit write failed — hold kept');
+      return reply.status(500).send({ error: 'Nothing was changed: the release could not be audited, so it was not made. Check the server logs.' });
+    }
     try {
       await onboarding.releaseTriageHold();
       logger.info('onboarding: triage hold released from the console');

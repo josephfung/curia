@@ -32,16 +32,18 @@ export async function isTriageHeld(store: Pick<ConfigStore, 'get'>, logger?: Log
   }
 }
 
-async function writeHold(store: Pick<ConfigStore, 'set'>, held: boolean): Promise<void> {
-  await store.set(ONBOARDING_NAMESPACE, TRIAGE_HOLD_KEY, JSON.stringify({ held }));
+/** Write the hold. Throws when the store soft-rejects the write ({stored:false}): never fail open. */
+export async function writeTriageHold(store: Pick<ConfigStore, 'set'>, held: boolean): Promise<void> {
+  const { stored } = await store.set(ONBOARDING_NAMESPACE, TRIAGE_HOLD_KEY, JSON.stringify({ held }));
+  if (!stored) throw new Error(`onboarding: the config store rejected the triage hold write (held: ${held})`);
 }
 
 /** Hold triage. */
 export function setTriageHold(store: Pick<ConfigStore, 'set'>): Promise<void> {
-  return writeHold(store, true);
+  return writeTriageHold(store, true);
 }
 
 /** Release the hold; triage resumes on the next heartbeat tick. */
 export function releaseTriageHold(store: Pick<ConfigStore, 'set'>): Promise<void> {
-  return writeHold(store, false);
+  return writeTriageHold(store, false);
 }

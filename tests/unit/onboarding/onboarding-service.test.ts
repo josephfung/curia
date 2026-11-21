@@ -39,6 +39,11 @@ function makeHarness(opts: {
   priorCeoTasks?: boolean;
   hasIdentity?: boolean;
   appOrigin?: string;
+  /** What this process loaded at boot; defaults to what is enabled when the harness is built. */
+  loaded?: Partial<Record<RegistryKind, string[]>>;
+  /** Make a transaction statement fail (COMMIT, the lock). */
+  txFail?: (sql: string) => Error | undefined;
+  persistentStore?: boolean;
 } = {}) {
   const setup: SetupRow = {
     phase: 'complete',
@@ -59,6 +64,8 @@ function makeHarness(opts: {
     connect: vi.fn(async () => ({
       query: vi.fn(async (sql: string) => {
         txQueries.push(sql);
+        const fail = opts.txFail?.(sql);
+        if (fail) throw fail;
         return { rows: [] };
       }),
       release: vi.fn(),
@@ -85,8 +92,13 @@ function makeHarness(opts: {
     listTasks: vi.fn(async (f: { tag?: string; statuses?: string[] }) =>
       tasks.filter((t) => (!f.tag || t.tags.includes(f.tag)) && (!f.statuses || f.statuses.includes(t.status))),
     ),
+    getTask: vi.fn(async (id: string) => tasks.find((t) => t.id === id) ?? null),
     setActiveSkillsBlock: vi.fn(async () => ({ task: tasks[0]!, block: { skills: [] } })),
-    updateTask: vi.fn(async () => null),
+    updateTask: vi.fn(async (id: string, u: { status?: string }) => {
+      const row = tasks.find((t) => t.id === id);
+      if (row && u.status) (row as { status: string }).status = u.status;
+      return row ?? null;
+    }),
   };
 
   const enabled = new Map<RegistryKind, Set<string>>(
@@ -101,6 +113,9 @@ function makeHarness(opts: {
       return { name, kind, state: 'enabled' } as RegistryEntry;
     }),
   };
+
+  const loaded = opts.loaded ?? opts.enabled ?? {};
+  const loadedAtBoot = (kind: RegistryKind, name: string) => (loaded[kind] ?? []).includes(name);
 
   const scheduler = { enqueueTaskWake: vi.fn(async () => ({ jobId: 'job' })) };
   const store = new Map<string, string>();
@@ -132,6 +147,8 @@ function makeHarness(opts: {
     mintInvitation,
     stopInvitation,
     scheduleProcessExit,
+    loadedAtBoot,
+    persistentStore: opts.persistentStore ?? true,
     logger,
   };
   return { service: new OnboardingService(deps), tasks, taskRepo, registry, scheduler, configStore, mintInvitation, stopInvitation, scheduleProcessExit, txQueries };
@@ -226,15 +243,74 @@ describe('OnboardingService.start', () => {
     expect(parentCall[0].progressNote).toBe('Send the greeting');
   });
 
-  it('a start that fails after minting stops the invitation, cancels its tasks and lifts the hold', async () => {
-    const h = makeHarness();
+  it('a start that fails after minting stops the invitation, cancels its tasks, restores the hold and records no state', async () => {
+    const h = makeHarness({ enabled: ALL_REQUIRED_ENABLED });
     h.scheduler.enqueueTaskWake.mockRejectedValueOnce(new Error('scheduler down'));
-    await expect(h.service.start({ actor: 'operator' })).rejects.toThrow('scheduler down');
+    await expect(h.service.start({ actor: 'operator', confirmWorkingPrincipal: true })).rejects.toThrow('scheduler down');
     expect(h.mintInvitation).toHaveBeenCalledTimes(1);
     expect(h.stopInvitation).toHaveBeenCalledWith('inv-1');
     expect(h.taskRepo.updateTask).toHaveBeenCalledTimes(h.tasks.length);
     expect(await isTriageHeld(h.configStore)).toBe(false);
+    expect(await readOnboardingState(h.configStore)).toBeNull();
     expect(h.scheduleProcessExit).not.toHaveBeenCalled();
+    // The alert comes back: a failed start is not a start.
+    expect(await h.service.status()).toMatchObject({ started: false, showDashboardAlert: true });
+  });
+
+  it('a failed start keeps an earlier hold, and keeps triage held when it newly enabled Email triage', async () => {
+    const prior = makeHarness({ enabled: ALL_REQUIRED_ENABLED });
+    await prior.configStore.set('onboarding', 'triage_hold', JSON.stringify({ held: true }));
+    prior.scheduler.enqueueTaskWake.mockRejectedValueOnce(new Error('scheduler down'));
+    await expect(prior.service.start({ actor: 'operator', confirmWorkingPrincipal: true })).rejects.toThrow('scheduler down');
+    expect(await isTriageHeld(prior.configStore)).toBe(true);
+
+    const fresh = makeHarness();
+    fresh.scheduler.enqueueTaskWake.mockRejectedValueOnce(new Error('scheduler down'));
+    await expect(fresh.service.start({ actor: 'operator', confirmWorkingPrincipal: true })).rejects.toThrow('scheduler down');
+    expect(fresh.registry.installAndEnable).toHaveBeenCalledWith('agent', 'ceo-inbox', 'onboarding');
+    expect(await isTriageHeld(fresh.configStore)).toBe(true);
+  });
+
+  it('a failed COMMIT undoes the start: tasks cancelled, invitation stopped, earlier state restored', async () => {
+    const h = makeHarness({ enabled: ALL_REQUIRED_ENABLED, txFail: (sql) => (sql === 'COMMIT' ? new Error('commit lost') : undefined) });
+    const earlier = { taskId: 'old-task', startedAt: '2026-11-01T00:00:00.000Z', route: 'app', greetingSentAt: null, followUpsSent: 0, lastFollowUpAt: null, lastPrincipalTurnAt: null, idleNudgeSentAt: null, operatorNotified: [] };
+    await h.configStore.set('onboarding', 'state', JSON.stringify(earlier));
+    await expect(h.service.start({ actor: 'operator', confirmWorkingPrincipal: true })).rejects.toThrow('commit lost');
+    expect(h.stopInvitation).toHaveBeenCalledWith('inv-1');
+    expect(h.tasks.every((t) => t.status === 'cancelled')).toBe(true);
+    expect(await readOnboardingState(h.configStore)).toEqual(earlier);
+    expect(await isTriageHeld(h.configStore)).toBe(false);
+    expect(h.scheduleProcessExit).not.toHaveBeenCalled();
+  });
+
+  it('a retry whose entries an earlier start enabled, but this process never loaded, still restarts', async () => {
+    const h = makeHarness({ enabled: ALL_REQUIRED_ENABLED, loaded: {} });
+    const result = await h.service.start({ actor: 'operator', confirmWorkingPrincipal: true });
+    if (!result.ok) throw new Error(`expected ok, got ${result.code}`);
+    expect(h.registry.installAndEnable).not.toHaveBeenCalled();
+    expect(result.restartScheduled).toBe(true);
+    expect(h.scheduleProcessExit).toHaveBeenCalledWith(500);
+  });
+
+  it('answers start_in_progress when another start holds the lock past its timeout', async () => {
+    const lockTimeout = Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' });
+    const h = makeHarness({ txFail: (sql) => (sql.includes('pg_advisory_xact_lock') ? lockTimeout : undefined) });
+    expect(await h.service.start({ actor: 'operator' })).toEqual({ ok: false, code: 'start_in_progress' });
+    expect(h.taskRepo.createTask).not.toHaveBeenCalled();
+  });
+
+  it('refuses without a persistent config store (knowledge graph off)', async () => {
+    const h = makeHarness({ persistentStore: false });
+    expect(await h.service.start({ actor: 'operator' })).toEqual({ ok: false, code: 'no_persistent_store' });
+    expect(h.taskRepo.createTask).not.toHaveBeenCalled();
+    expect(await isTriageHeld(h.configStore)).toBe(false);
+  });
+
+  it('fails the start, and undoes it, when the store soft-rejects the hold', async () => {
+    const h = makeHarness({ enabled: ALL_REQUIRED_ENABLED });
+    h.configStore.set.mockResolvedValueOnce({ stored: false, action: 'rejected' });
+    await expect(h.service.start({ actor: 'operator', confirmWorkingPrincipal: true })).rejects.toThrow(/rejected the triage hold/);
+    expect(h.taskRepo.createTask).not.toHaveBeenCalled();
   });
 
   it('a principal start mints no invitation, wakes no greeting, keeps the web thread and counts the greeting as sent', async () => {
@@ -268,11 +344,22 @@ describe('OnboardingService.start', () => {
     expect((await readOnboardingState(h.configStore))?.route).toBeNull();
   });
 
-  it('a principal start that restarts Curia wakes the parent to resume the conversation', async () => {
+  it('a principal start from another channel rotates the web thread; one from the web app does not', async () => {
+    const signal = makeHarness({ enabled: ALL_REQUIRED_ENABLED });
+    await signal.service.start({ actor: 'principal', confirmWorkingPrincipal: true, channelId: 'signal' });
+    expect(signal.txQueries.some((q) => q.includes('web_thread'))).toBe(true);
+
+    const web = makeHarness({ enabled: ALL_REQUIRED_ENABLED });
+    await web.service.start({ actor: 'principal', confirmWorkingPrincipal: true, channelId: 'web' });
+    expect(web.txQueries.some((q) => q.includes('web_thread'))).toBe(false);
+  });
+
+  it('a principal start that restarts Curia exits after 15 seconds and wakes the parent to resume the conversation', async () => {
     const h = makeHarness({ setup: { messaging_route: 'signal' } });
     const result = await h.service.start({ actor: 'principal', confirmWorkingPrincipal: true });
     if (!result.ok) throw new Error(`expected ok, got ${result.code}`);
     expect(result.restartScheduled).toBe(true);
+    expect(h.scheduleProcessExit).toHaveBeenCalledWith(15_000);
     const wakes = h.scheduler.enqueueTaskWake.mock.calls.map((c) => (c as unknown[])[0] as { taskId: string; runAt: Date });
     const parentWake = wakes.find((w) => w.taskId === result.taskId);
     expect(parentWake?.runAt.getTime()).toBeGreaterThan(Date.now());
@@ -300,5 +387,18 @@ describe('OnboardingService.status', () => {
     expect(await h.service.status()).toMatchObject({ showDashboardAlert: true, triageHeld: false });
     await h.service.start({ actor: 'operator' });
     expect(await h.service.status()).toMatchObject({ started: true, showDashboardAlert: false, triageHeld: true });
+  });
+
+  it('a cancelled onboarding is not started (the alert returns); a completed one stays started', async () => {
+    const h = makeHarness({ enabled: ALL_REQUIRED_ENABLED });
+    const result = await h.service.start({ actor: 'operator', confirmWorkingPrincipal: true });
+    if (!result.ok) throw new Error('expected ok');
+    const parent = h.tasks.find((t) => t.id === result.taskId)! as { status: string };
+
+    parent.status = 'cancelled';
+    expect(await h.service.status()).toMatchObject({ started: false, taskId: null, showDashboardAlert: true });
+
+    parent.status = 'done';
+    expect(await h.service.status()).toMatchObject({ started: true, taskId: result.taskId, showDashboardAlert: false });
   });
 });
