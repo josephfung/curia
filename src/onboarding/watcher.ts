@@ -1,5 +1,6 @@
-// watcher.ts — the onboarding watcher: capped greeting follow-ups, one idle nudge, and the
-// expired-invitation notice (#2360). A tick with no open onboarding task is one cheap query.
+// watcher.ts — the onboarding watcher: a re-wake when no greeting was recorded, capped greeting
+// follow-ups, one idle nudge, and the expired-invitation notice (#2360). A tick with no open
+// onboarding task is one cheap query.
 
 import type { TaskRepo } from '../db/task-repo.js';
 import type { Logger } from '../logger.js';
@@ -10,7 +11,7 @@ import {
   GREETING_FOLLOWUPS,
   WATCHER_INTERVAL_MINUTES,
 } from './constants.js';
-import { decideNext } from './followup-policy.js';
+import { decideNext, type WatcherFacts, type WatcherInvitation } from './followup-policy.js';
 import { notifyOperatorOnce } from './notify-operator-once.js';
 import { findOpenOnboardingTask, type OnboardingState, readOnboardingState, writeOnboardingState } from './state.js';
 import { isOpenTask, listChildren, topicSubtasks } from './subtasks.js';
@@ -22,9 +23,18 @@ export interface OnboardingWatcherOptions {
   configStore: Pick<ConfigStore, 'get' | 'set'>;
   logger: Logger;
   /** The current phone-app invitation; null when none exists. */
-  readInvitation: () => Promise<{ expiresAt: Date; createdAt: Date; redeemed: boolean } | null>;
+  readInvitation: () => Promise<{ expiresAt: Date; createdAt: Date; redeemed: boolean; redeemedAt: Date | null } | null>;
+  /**
+   * Whether the onboarding task's next session is booked (see {@link isNextSessionBooked}).
+   * Absent → never booked.
+   */
+  nextSessionBooked?: (taskId: string, now: Date) => Promise<boolean>;
   intervalMinutes?: number;
 }
+
+/** Wake note when no greeting was recorded a gap after it was due. */
+export const GREETING_NOT_RECORDED_NOTE =
+  "The greeting hasn't been recorded as sent: send it now if it wasn't, then record it with onboarding-progress op greeting_sent";
 
 export class OnboardingWatcher {
   private handle: NodeJS.Timeout | null = null;
@@ -61,30 +71,46 @@ export class OnboardingWatcher {
 
       // The current invitation may predate this run (cancel + restart, or minted from Devices): it
       // counts only on the app route and when minted at or after the run started.
-      let invitation: { expiresAt: Date; redeemed: boolean } | null = null;
+      let invitation: WatcherInvitation | null = null;
       if (state.route === 'app') {
         const inv = await this.o.readInvitation();
         if (inv !== null && inv.createdAt.getTime() >= Date.parse(state.startedAt)) invitation = inv;
       }
       const openTopicsRemain = await this.openFirstConversationTopics(task.id);
-      const action = decideNext(state, now, invitation, openTopicsRemain);
+      // Only the idle nudge reads it, and only with open topics.
+      const nextSessionBooked = openTopicsRemain && this.o.nextSessionBooked
+        ? await this.o.nextSessionBooked(task.id, now)
+        : false;
+      const facts: WatcherFacts = { openTopicsRemain, nextSessionBooked };
+      const action = decideNext(state, now, invitation, facts);
       if (action === 'wait') return;
 
       const deps = { taskRepo: this.o.taskRepo, logger: this.o.logger, configStore: this.o.configStore };
+      const stillApplies = (s: OnboardingState) => decideNext(s, now, invitation, facts) === action;
       switch (action) {
+        case 'greeting_nudge':
+          if (!(await this.updateState(stillApplies, (s) => ({ ...s, greetingNudgedAt: now.toISOString() })))) break;
+          await noteAndWakeCoordinator(this.o, task, GREETING_NOT_RECORDED_NOTE);
+          break;
         case 'send_followup': {
           const n = state.followUpsSent + 1;
           // State first: a failed write must not leave a sent follow-up uncounted (the cap would slip).
-          if (!(await this.updateState((s) => decideNext(s, now, invitation, openTopicsRemain) === action, (s) => ({ ...s, followUpsSent: s.followUpsSent + 1, lastFollowUpAt: now.toISOString() })))) break;
+          if (!(await this.updateState(stillApplies, (s) => ({ ...s, followUpsSent: s.followUpsSent + 1, lastFollowUpAt: now.toISOString() })))) break;
           await noteAndWakeCoordinator(this.o, task, `Send follow-up ${n} of ${GREETING_FOLLOWUPS}`);
           break;
         }
         case 'idle_nudge':
-          if (!(await this.updateState((s) => decideNext(s, now, invitation, openTopicsRemain) === action, (s) => ({ ...s, idleNudgeSentAt: now.toISOString() })))) break;
+          if (!(await this.updateState(stillApplies, (s) => ({ ...s, idleNudgeSentAt: now.toISOString() })))) break;
           await noteAndWakeCoordinator(this.o, task, 'Principal went quiet mid-conversation: one gentle nudge');
           break;
         case 'notify_greeting_unanswered':
-          await notifyOperatorOnce(deps, task.id, 'greeting_unanswered');
+          // Either no reply after every follow-up, or no greeting recorded even after the re-wake.
+          await notifyOperatorOnce(
+            deps,
+            task.id,
+            'greeting_unanswered',
+            state.greetingSentAt === null ? { reason: 'greeting_not_recorded' } : undefined,
+          );
           break;
         case 'notify_invitation_expired':
           await notifyOperatorOnce(deps, task.id, 'invitation_expired');
@@ -115,4 +141,28 @@ export class OnboardingWatcher {
     await writeOnboardingState(this.o.configStore, change(latest));
     return true;
   }
+}
+
+/**
+ * Whether the onboarding task's next session is booked: a pending wake of the task set for later
+ * than `now` (a session booked with no calendar, or a deferral), or a pending agenda it owns (a
+ * session on the calendar). The idle nudge is skipped then: the quiet was agreed.
+ */
+export async function isNextSessionBooked(
+  deps: {
+    pool: { query: (sql: string, params: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }> };
+    listPendingAgendas: (now: Date) => Promise<ReadonlyArray<{ ownerTaskId: string | null }>>;
+  },
+  taskId: string,
+  now: Date,
+): Promise<boolean> {
+  const { rows } = await deps.pool.query(
+    `SELECT EXISTS (
+       SELECT 1 FROM scheduled_jobs
+       WHERE task_id = $1 AND status = 'pending' AND COALESCE(next_run_at, run_at) > $2
+     ) AS booked`,
+    [taskId, now],
+  );
+  if (rows[0]?.['booked'] === true) return true;
+  return (await deps.listPendingAgendas(now)).some((a) => a.ownerTaskId === taskId);
 }

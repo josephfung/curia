@@ -479,6 +479,7 @@ export class OnboardingService {
         lastFollowUpAt: null,
         lastPrincipalTurnAt: null,
         idleNudgeSentAt: null,
+        greetingNudgedAt: null,
         operatorNotified: [],
       });
 

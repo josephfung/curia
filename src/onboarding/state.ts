@@ -27,6 +27,8 @@ export type OnboardingState = {
   lastFollowUpAt: string | null;
   lastPrincipalTurnAt: string | null;
   idleNudgeSentAt: string | null;
+  /** When the watcher re-woke the task because no greeting was recorded (optional: absent → never). */
+  greetingNudgedAt?: string | null;
   operatorNotified: OperatorEvent[];
 };
 
@@ -63,6 +65,7 @@ function isOnboardingState(v: object): v is OnboardingState {
     isNullableString(o.lastFollowUpAt) &&
     isNullableString(o.lastPrincipalTurnAt) &&
     isNullableString(o.idleNudgeSentAt) &&
+    (o.greetingNudgedAt === undefined || isNullableString(o.greetingNudgedAt)) &&
     Array.isArray(o.operatorNotified) &&
     o.operatorNotified.every((e) => typeof e === 'string' && (OPERATOR_EVENTS as readonly string[]).includes(e))
   );

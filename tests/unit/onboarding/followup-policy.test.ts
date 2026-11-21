@@ -57,7 +57,7 @@ describe('decideNext', () => {
 
   it('never follows up after the principal replied', () => {
     const s = state({ lastPrincipalTurnAt: after(1).toISOString() });
-    expect(decideNext(s, after(GREETING_FOLLOWUP_GAP_HOURS * 5), null, false)).toBe('wait');
+    expect(decideNext(s, after(GREETING_FOLLOWUP_GAP_HOURS * 5), null, { openTopicsRemain: false })).toBe('wait');
   });
 
   it('treats a reply from before the greeting as no reply', () => {
@@ -68,20 +68,46 @@ describe('decideNext', () => {
   it('nudges once when the principal goes quiet with topics open', () => {
     const replied = after(1);
     const s = state({ lastPrincipalTurnAt: replied.toISOString() });
-    expect(decideNext(s, after(CHAT_IDLE_NUDGE_HOURS - 1, replied), null, true)).toBe('wait');
-    expect(decideNext(s, after(CHAT_IDLE_NUDGE_HOURS, replied), null, true)).toBe('idle_nudge');
-    expect(decideNext(s, after(CHAT_IDLE_NUDGE_HOURS, replied), null, false)).toBe('wait');
+    expect(decideNext(s, after(CHAT_IDLE_NUDGE_HOURS - 1, replied), null, { openTopicsRemain: true })).toBe('wait');
+    expect(decideNext(s, after(CHAT_IDLE_NUDGE_HOURS, replied), null, { openTopicsRemain: true })).toBe('idle_nudge');
+    expect(decideNext(s, after(CHAT_IDLE_NUDGE_HOURS, replied), null, { openTopicsRemain: false })).toBe('wait');
     const nudged = { ...s, idleNudgeSentAt: after(CHAT_IDLE_NUDGE_HOURS, replied).toISOString() };
-    expect(decideNext(nudged, after(CHAT_IDLE_NUDGE_HOURS * 3, replied), null, true)).toBe('wait');
+    expect(decideNext(nudged, after(CHAT_IDLE_NUDGE_HOURS * 3, replied), null, { openTopicsRemain: true })).toBe('wait');
   });
 
   it('nudges again after a newer principal turn', () => {
     const replied = after(10);
     const s = state({ lastPrincipalTurnAt: replied.toISOString(), idleNudgeSentAt: after(5).toISOString() });
-    expect(decideNext(s, after(CHAT_IDLE_NUDGE_HOURS, replied), null, true)).toBe('idle_nudge');
+    expect(decideNext(s, after(CHAT_IDLE_NUDGE_HOURS, replied), null, { openTopicsRemain: true })).toBe('idle_nudge');
   });
 
-  it('waits before the greeting is sent', () => {
-    expect(decideNext(state({ greetingSentAt: null }), after(500), null, true)).toBe('wait');
+  it('skips the idle nudge when the next session is booked (a deferral, or a session that ended)', () => {
+    const replied = after(1);
+    const s = state({ lastPrincipalTurnAt: replied.toISOString() });
+    expect(decideNext(s, after(CHAT_IDLE_NUDGE_HOURS, replied), null, { openTopicsRemain: true, nextSessionBooked: true })).toBe('wait');
+  });
+
+  it('app route: waits for the greeting until the invitation is redeemed', () => {
+    expect(decideNext(state({ greetingSentAt: null }), after(500), null, { openTopicsRemain: true })).toBe('wait');
+    const unredeemed = { expiresAt: after(1000), redeemed: false, redeemedAt: null };
+    expect(decideNext(state({ greetingSentAt: null }), after(500), unredeemed)).toBe('wait');
+  });
+
+  it('app route: no greeting recorded a gap after redemption → one re-wake, then the operator', () => {
+    const redeemed = { expiresAt: after(48), redeemed: true, redeemedAt: after(2) };
+    const s = state({ greetingSentAt: null });
+    expect(decideNext(s, after(GREETING_FOLLOWUP_GAP_HOURS + 1), redeemed)).toBe('wait');
+    expect(decideNext(s, after(GREETING_FOLLOWUP_GAP_HOURS + 2), redeemed)).toBe('greeting_nudge');
+    const nudged = { ...s, greetingNudgedAt: after(GREETING_FOLLOWUP_GAP_HOURS + 2).toISOString() };
+    expect(decideNext(nudged, after(GREETING_FOLLOWUP_GAP_HOURS * 2 + 1), redeemed)).toBe('wait');
+    expect(decideNext(nudged, after(GREETING_FOLLOWUP_GAP_HOURS * 2 + 2), redeemed)).toBe('notify_greeting_unanswered');
+    expect(decideNext({ ...nudged, operatorNotified: ['greeting_unanswered'] }, after(500), redeemed)).toBe('wait');
+  });
+
+  it('messaging route: no greeting recorded a gap after the start → one re-wake', () => {
+    const s = state({ route: 'signal', greetingSentAt: null });
+    expect(decideNext(s, after(GREETING_FOLLOWUP_GAP_HOURS - 1), null)).toBe('wait');
+    expect(decideNext(s, after(GREETING_FOLLOWUP_GAP_HOURS), null)).toBe('greeting_nudge');
+    expect(decideNext(state({ route: null, greetingSentAt: null }), after(500), null)).toBe('wait');
   });
 });

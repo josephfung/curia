@@ -300,7 +300,9 @@ export async function pairingRoutes(
       }
       try {
         // #2360: wakes onboarding to send the greeting. The sign-in already happened, so a failed
-        // publish is logged, not surfaced; the onboarding watcher is the backstop.
+        // publish is logged, not surfaced. The onboarding watcher is the backstop: with no greeting
+        // recorded 48 hours after redemption it wakes the onboarding task once to send it, then
+        // tells the operator (greeting_unanswered).
         await bus.publish('system', createPairingInvitationRedeemed({ invitationId: redeemed.id, deviceName: name }));
       } catch (err) {
         logger.error({ err, ...logRef }, 'pairing.invitation_redeemed could not be published');

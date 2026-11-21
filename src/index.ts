@@ -259,7 +259,7 @@ import { inMemoryTriageConfig, TriageState, TRIAGE_NAMESPACE } from './principal
 import { isTriageHeld } from './onboarding/triage-hold.js';
 import { OnboardingService } from './onboarding/onboarding-service.js';
 import { noteAndWakeCoordinator, OnboardingSubscribers } from './onboarding/subscribers.js';
-import { OnboardingWatcher } from './onboarding/watcher.js';
+import { isNextSessionBooked, OnboardingWatcher } from './onboarding/watcher.js';
 import { isOpenTask } from './onboarding/subtasks.js';
 import { readCurrentInvitationTiming } from './channels/http/pairing-invitations.js';
 import { createOnboardingTurnContext } from './onboarding/turn-context.js';
@@ -3893,6 +3893,8 @@ async function main(): Promise<void> {
     configStore: triageConfig,
     logger,
     readInvitation: () => readCurrentInvitationTiming(pool),
+    nextSessionBooked: (taskId, now) =>
+      isNextSessionBooked({ pool, listPendingAgendas: (at) => agendaStore.listPending(at) }, taskId, now),
   });
   onboardingWatcher.start();
 

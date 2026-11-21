@@ -182,9 +182,9 @@ export async function readCurrentInvitation(pool: PairingQueryable): Promise<Inv
  */
 export async function readCurrentInvitationTiming(
   pool: PairingQueryable,
-): Promise<{ createdAt: Date; expiresAt: Date; redeemed: boolean } | null> {
+): Promise<{ createdAt: Date; expiresAt: Date; redeemed: boolean; redeemedAt: Date | null } | null> {
   const result = await pool.query(
-    `SELECT created_at, expires_at, (redeemed_at IS NOT NULL) AS redeemed
+    `SELECT created_at, expires_at, redeemed_at, (redeemed_at IS NOT NULL) AS redeemed
      FROM pairing_invitations
      WHERE superseded_at IS NULL
      LIMIT 1`,
@@ -195,6 +195,7 @@ export async function readCurrentInvitationTiming(
     createdAt: new Date(asIso(row['created_at'], 'created_at')),
     expiresAt: new Date(asIso(row['expires_at'], 'expires_at')),
     redeemed: row['redeemed'] === true,
+    redeemedAt: row['redeemed_at'] == null ? null : new Date(asIso(row['redeemed_at'], 'redeemed_at')),
   };
 }
 

@@ -372,7 +372,7 @@ install never gets a greeting, research or a triage change unless someone starts
 | Playbook | The install's copy, editable in Documents. Seeded when Setup starts (`POST /api/setup/start`) and again at Start if missing; never overwritten | OKF `/meetings/onboarding/playbook.md` |
 | Research brief | What the homework found, each item with its source and marked unconfirmed until the principal confirms, corrects or drops it | OKF `/meetings/onboarding/research-brief.md` |
 | Onboarding task | The coordinator's, owned by Curia, tagged `onboarding`, `created_by` `onboarding`. One subtask per topic, tagged `onboarding:topic:<id>` and `onboarding:session:<id>`, plus a homework subtask. Progress notes are what has happened | `tasks` |
-| Run state | The task id, the route, greeting and follow-up times, the principal's last turn, the idle nudge, the operator notices sent | config store `onboarding/state` |
+| Run state | The task id, the route, greeting and follow-up times, the greeting re-wake, the principal's last turn, the idle nudge, the operator notices sent | config store `onboarding/state` |
 | Triage hold | `{"held": true}` while triage waits for the inbox topic | config store `onboarding/triage_hold` |
 
 Only subtasks the onboarding program created count as topics (`created_by`), since the model
@@ -453,8 +453,14 @@ settings:
 
 - **Follow-ups:** with no principal turn since the greeting, up to 2 follow-ups 48 hours
   apart, then the operator notice `greeting_unanswered`.
+- **Greeting not recorded:** with no greeting recorded 48 hours after it was due (the start on
+  Signal, SMS or Slack; the invitation's redemption on the app), the parent wakes once to send
+  it if it did not go out and record it (`greeting_sent`); 48 hours after that wake, the
+  operator notice `greeting_unanswered`.
 - **Idle nudge:** when the principal goes quiet for 4 hours with First conversation topics
-  still open, one nudge per silence; open topics carry to the next session.
+  still open, one nudge per silence; open topics carry to the next session. No nudge while
+  the next session is booked (a pending wake of the onboarding task set for later, or a
+  pending agenda it owns): a deferral or a session that ended is agreed quiet.
 - **Expired invitation:** an unredeemed invitation past its 48 hours is the operator notice
   `invitation_expired`.
 
