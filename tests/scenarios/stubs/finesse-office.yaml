@@ -27,6 +27,13 @@ memory-store:
 memory-confirm:
   - match: {}
     return: { action: confirmed, nodeId: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000f3, label: (confirmed) }
+# The contacts specialist checks how a person is connected before writing. No case seeds a
+# relationship, so the real read answers with none, which is what this says. A stub, not a
+# passthrough: the read needs entity memory, which a machine without the ONNX runtime lacks
+# (an Intel Mac), and there it was refused, so the case measured the harness.
+query-relationships:
+  - match: {}
+    return: { relationships: [], count: 0 }
 # A reminder Curia sets itself ("check again early next week"): the right call in 54a.
 scheduler-create:
   - match: {}
