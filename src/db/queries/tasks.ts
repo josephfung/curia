@@ -130,6 +130,8 @@ export interface SelectHeartbeatOptions {
  *     blocker done/cancelled or no blocker, no pending/running wake,
  *     updated_at older than staleWaitThresholdHours.
  *
+ *  Onboarding tasks (created_by 'onboarding', #2360) are never candidates on either path.
+ *
  *  Results are deduplicated to one task per effective agent (most-overdue first).
  */
 export async function selectHeartbeatCandidates(
@@ -156,6 +158,10 @@ export async function selectHeartbeatCandidates(
          -- A wake that stayed open through its disposition turn is flagged and
          -- must not be revived. A person closes, cancels, or reschedules it (#1951).
          AND NOT ('needs-disposition' = ANY(t.tags))
+         -- Onboarding tasks (#2360) run on their own cadence (the onboarding watcher, the
+         -- principal's replies): a disposition wake would greet outside the follow-up cap or
+         -- close topics without the principal.
+         AND t.created_by IS DISTINCT FROM 'onboarding'
          AND (t.blocked_by_task_id IS NULL OR EXISTS (
                SELECT 1 FROM tasks b
                WHERE b.id = t.blocked_by_task_id AND b.status IN ('done','cancelled')))

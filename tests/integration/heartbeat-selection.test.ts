@@ -24,13 +24,15 @@ async function seedTask(
     /** Lineage to stamp on tasks.originator (#1125). */
     originator?: Record<string, unknown> | null;
     tags?: string[];
+    /** tasks.created_by. Default 'test'. */
+    createdBy?: string;
   },
 ): Promise<string> {
   const { rows } = await pool.query(
     `INSERT INTO tasks
        (agent_id, title, intent_anchor, status, progress, error_budget, owner,
         blocked_by_task_id, parent_task_id, priority, source, source_agent_id, created_by, tags, updated_at, originator)
-     VALUES ($1,$2,$3,$4,'{}'::jsonb,'{}'::jsonb,$5,$6,$11,50,$9,$7,'test',$12::text[],$8,$10::jsonb)
+     VALUES ($1,$2,$3,$4,'{}'::jsonb,'{}'::jsonb,$5,$6,$11,50,$9,$7,$13,$12::text[],$8,$10::jsonb)
      RETURNING id`,
     [
       opts.sourceAgentId ?? 'coordinator',
@@ -45,6 +47,7 @@ async function seedTask(
       opts.originator ? JSON.stringify(opts.originator) : null,
       opts.parentTaskId ?? null,
       opts.tags ?? [],
+      opts.createdBy ?? 'test',
     ],
   );
   const [row] = rows as Array<{ id: string }>;
@@ -117,6 +120,21 @@ describeIf('selectHeartbeatCandidates', () => {
     });
     const got = await selectHeartbeatCandidates(pool, opts);
     expect(got.map((c) => c.id)).not.toContain(id);
+  });
+
+  it('skips an idle onboarding task: the onboarding program sets its own cadence (#2360)', async () => {
+    const onboarding = await seedTask(pool, {
+      title: 'onboarding parent',
+      status: 'open',
+      sourceAgentId: 'coordinator',
+      updatedAt: hoursAgo(10),
+      tags: ['onboarding'],
+      createdBy: 'onboarding',
+    });
+    const other = await seedTask(pool, { title: 'other', status: 'open', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(10) });
+    const got = await selectHeartbeatCandidates(pool, opts);
+    expect(got.map((c) => c.id)).not.toContain(onboarding);
+    expect(got.map((c) => c.id)).toContain(other);
   });
 
   it('skips a task that already has a pending wake', async () => {

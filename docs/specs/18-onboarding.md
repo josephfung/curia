@@ -444,6 +444,11 @@ settings:
 - **Expired invitation:** an unredeemed invitation past its 48 hours is the operator notice
   `invitation_expired`.
 
+The backlog heartbeat never wakes an onboarding task (`created_by` `onboarding`): onboarding
+moves only on the watcher, events and the principal's replies, so an idle parent or topic is
+never pushed to a disposition (a greeting outside the cap, a topic closed without the
+principal).
+
 ### Running a session
 
 **How a turn picks up onboarding.** A task wake (greeting, follow-up, nudge, a booked session)
