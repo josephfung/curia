@@ -257,6 +257,8 @@ import { inMemoryTriageConfig, TriageState, TRIAGE_NAMESPACE } from './principal
 import { isTriageHeld } from './onboarding/triage-hold.js';
 import { OnboardingService } from './onboarding/onboarding-service.js';
 import { OnboardingSubscribers } from './onboarding/subscribers.js';
+import { OnboardingWatcher } from './onboarding/watcher.js';
+import { readCurrentInvitation } from './channels/http/pairing-invitations.js';
 import { createOnboardingTurnContext } from './onboarding/turn-context.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
 import { unreadCandidateProbe } from './principal-mailboxes/triage-candidate.js';
@@ -3874,6 +3876,20 @@ async function main(): Promise<void> {
     googleClientId: googleOAuthClientId,
   }).start();
 
+  // Onboarding watcher (#2360): greeting follow-ups, the idle nudge and the expired-invitation notice.
+  // A tick with no open onboarding task is one query, so installs that never onboard see nothing.
+  const onboardingWatcher = new OnboardingWatcher({
+    taskRepo,
+    scheduler: schedulerService,
+    configStore: triageConfig,
+    logger,
+    readInvitation: async () => {
+      const inv = await readCurrentInvitation(pool);
+      return inv === null ? null : { expiresAt: new Date(inv.expiresAt), redeemed: inv.state === 'redeemed' };
+    },
+  });
+  onboardingWatcher.start();
+
   let meetingRecovery: MeetingPipelineRecovery | undefined;
   if (workingDocsRepo) {
     const deliverableKgPromotionSubscriber = new DeliverableKgPromotionSubscriber({
@@ -4469,6 +4485,11 @@ async function main(): Promise<void> {
       backlogHeartbeat.stop();
     } catch (err) {
       logger.error({ err }, 'Error stopping backlog heartbeat during shutdown');
+    }
+    try {
+      onboardingWatcher.stop();
+    } catch (err) {
+      logger.error({ err }, 'Error stopping onboarding watcher during shutdown');
     }
     try {
       inboxHeartbeat?.stop();

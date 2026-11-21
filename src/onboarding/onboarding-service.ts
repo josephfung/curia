@@ -45,7 +45,7 @@ import {
 } from './state.js';
 import { releaseTriageHold, setTriageHold } from './triage-hold.js';
 import { RECURRING_SESSION, topicSubtasks } from './subtasks.js';
-import { ONBOARDING_CREATED_BY, RESTART_WAKE_DELAY_SECONDS } from './constants.js';
+import { FIRST_CONVERSATION_SESSION, ONBOARDING_CREATED_BY, RESTART_WAKE_DELAY_SECONDS } from './constants.js';
 
 /** Signals that the install is already in use, so starting onboarding needs confirming. */
 export const WORKING_PRINCIPAL_SIGNALS = {
@@ -54,7 +54,6 @@ export const WORKING_PRINCIPAL_SIGNALS = {
 } as const;
 
 /** The playbook session whose topics become the onboarding task's subtasks. */
-const FIRST_CONVERSATION_SESSION = 'first-conversation';
 const ONBOARDING_SKILL = 'onboarding';
 const EMAIL_TRIAGE_AGENT = 'ceo-inbox';
 /** What onboarding needs enabled: the Email triage agent and the skills onboarding writes through. */

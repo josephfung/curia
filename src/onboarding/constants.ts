@@ -23,3 +23,6 @@ export const RESTART_WAKE_DELAY_SECONDS = 60;
 
 /** created_by of the parent onboarding task. A tag alone is spoofable by the model; this is not. */
 export const ONBOARDING_CREATED_BY = 'onboarding';
+
+/** The session id of the first conversation (the playbook's opening session). */
+export const FIRST_CONVERSATION_SESSION = 'first-conversation';

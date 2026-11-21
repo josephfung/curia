@@ -97,22 +97,31 @@ export class OnboardingSubscribers {
     );
   }
 
-  private async noteAndWake(task: TaskRow, note: string): Promise<void> {
-    await this.o.taskRepo.updateTask(task.id, { progressNote: note });
-    try {
-      await this.o.scheduler.enqueueTaskWake({
-        taskId: task.id,
-        agentId: 'coordinator',
-        runAt: new Date(),
-        createdBy: ONBOARDING_CREATED_BY,
-        originator: makeSystemOriginator(),
-      });
-    } catch (err) {
-      if (isPgUniqueViolation(err)) {
-        this.o.logger.debug({ taskId: task.id }, 'onboarding: a wake is already pending');
-        return;
-      }
-      throw err;
+  private noteAndWake(task: TaskRow, note: string): Promise<void> {
+    return noteAndWakeCoordinator(this.o, task, note);
+  }
+}
+
+/** Add a progress note to the onboarding task and wake the coordinator now; a pending wake (23505) is as good. */
+export async function noteAndWakeCoordinator(
+  o: Pick<OnboardingSubscribersOptions, 'taskRepo' | 'scheduler' | 'logger'>,
+  task: Pick<TaskRow, 'id'>,
+  note: string,
+): Promise<void> {
+  await o.taskRepo.updateTask(task.id, { progressNote: note });
+  try {
+    await o.scheduler.enqueueTaskWake({
+      taskId: task.id,
+      agentId: 'coordinator',
+      runAt: new Date(),
+      createdBy: ONBOARDING_CREATED_BY,
+      originator: makeSystemOriginator(),
+    });
+  } catch (err) {
+    if (isPgUniqueViolation(err)) {
+      o.logger.debug({ taskId: task.id }, 'onboarding: a wake is already pending');
+      return;
     }
+    throw err;
   }
 }
