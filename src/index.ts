@@ -297,6 +297,7 @@ import {
 } from './registry/reconcile.js';
 import type { Discovery, RegistryRow } from './registry/types.js';
 import { CHANNEL_CATALOG, type ChannelDescriptor } from './channels/catalog.js';
+import { probeLiveKit } from './setup/livekit-probe.js';
 import { evaluateChecklist, loadCatalog, type CatalogTask, type RouteChannel, type SetupCheckDeps, type SetupChecklist } from './setup/checklist.js';
 import { readSetupState } from './setup/setup-state.js';
 import { isIdentityConfigured } from './channels/http/routes/identity.js';
@@ -3323,6 +3324,7 @@ async function main(): Promise<void> {
     signalCalls: () => (!config.signalVoiceCallsEnabled ? 'disabled' : startedChannels.has('signal_calls') ? 'ready' : 'not_wired'),
     secretPresent: async (name) => (await secretsService.get(name)) !== null || !!process.env[name.toUpperCase()],
     browserReady: () => browserService?.browserContext != null,
+    livekitProbe: () => probeLiveKit({ getSecret: (n) => secretsService.get(n), managementUrl: config.voiceLivekitManagementUrl, logger }),
     logger,
   };
   const setupChecklist = async (): Promise<SetupChecklist> => {

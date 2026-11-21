@@ -56,6 +56,7 @@ export function toLiveKitHttpUrl(livekitManagementUrl: string): string {
  */
 export async function listVoiceRooms(
   config: LiveKitTokenConfig & { livekitManagementUrl: string },
+  requestTimeoutSec = 5,
 ): Promise<unknown[]> {
   // Bound the SDK request itself — Promise.race in checkVoice only stops waiting;
   // without requestTimeout a dead LiveKit host keeps sockets open (#1567 review).
@@ -63,7 +64,7 @@ export async function listVoiceRooms(
     toLiveKitHttpUrl(config.livekitManagementUrl),
     config.apiKey,
     config.apiSecret,
-    { requestTimeout: 5 },
+    { requestTimeout: requestTimeoutSec },
   );
   return client.listRooms();
 }

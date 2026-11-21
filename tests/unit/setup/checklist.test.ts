@@ -37,6 +37,7 @@ function deps(overrides: Partial<SetupCheckDeps> = {}, state: Partial<SetupState
     signalCalls: () => 'ready',
     secretPresent: async () => false,
     browserReady: () => false,
+    livekitProbe: async () => 'ok',
     logger: createSilentLogger(),
     ...overrides,
   };
@@ -193,6 +194,45 @@ describe('evaluateChecklist', () => {
     it('signal: done with both channels running and the principal on Signal', async () => {
       const result = await evaluateChecklist(catalog, deps({}, { voiceRoute: 'signal' }));
       expect(task(result, 'voice').status).toBe('done');
+    });
+
+    it('voice reads LiveKit not running when the probe is unreachable, even with every channel running', async () => {
+      const result = await evaluateChecklist(catalog, deps({ livekitProbe: async () => 'unreachable' }));
+      expect(task(result, 'voice').status).toBe('pending');
+      expect(task(result, 'voice').detail).toContain("LiveKit isn't running");
+      expect(task(result, 'voice').detail).toContain('docker compose up -d livekit');
+    });
+
+    it('voice reads rejected keys', async () => {
+      const result = await evaluateChecklist(catalog, deps({ livekitProbe: async () => 'rejected' }));
+      expect(task(result, 'voice').status).toBe('pending');
+      expect(task(result, 'voice').detail).toContain('rejected');
+    });
+
+    it('voice reads missing LiveKit keys', async () => {
+      const result = await evaluateChecklist(catalog, deps({ livekitProbe: async () => 'no_keys' }));
+      expect(task(result, 'voice').status).toBe('pending');
+      expect(task(result, 'voice').detail).toContain("LiveKit's keys");
+    });
+
+    it('voice probe applies to the Signal route too', async () => {
+      const result = await evaluateChecklist(catalog, deps({ livekitProbe: async () => 'unreachable' }, { voiceRoute: 'signal' }));
+      expect(task(result, 'voice').status).toBe('pending');
+      expect(task(result, 'voice').detail).toContain("LiveKit isn't running");
+    });
+
+    it('voice is restart_required when LiveKit answers and the channel is saved but not started', async () => {
+      const result = await evaluateChecklist(catalog, deps({
+        livekitProbe: async () => 'ok',
+        channelStatus: async (c) => (c === 'voice' ? 'restart_required' : 'running'),
+      }));
+      expect(task(result, 'voice')).toMatchObject({ status: 'pending', restart_required: true });
+    });
+
+    it('no route chosen: the probe is not called', async () => {
+      let called = false;
+      await evaluateChecklist(catalog, deps({ livekitProbe: async () => { called = true; return 'ok'; } }, { voiceRoute: null }));
+      expect(called).toBe(false);
     });
   });
 

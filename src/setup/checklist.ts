@@ -9,6 +9,7 @@ import type { Logger } from '../logger.js';
 import type { EmailChannelStatus, PrincipalMailboxReadiness } from '../skills/types.js';
 import type { NylasSignInReadiness } from '../nylas/signin-readiness.js';
 import type { WorkspaceSignInStatus } from '../google/workspace-signin.js';
+import type { LiveKitProbeResult } from './livekit-probe.js';
 import type { MessagingRoute, SetupState, VoiceRoute } from './setup-state.js';
 
 // ── Catalog ────────────────────────────────────────────────────────────────
@@ -130,6 +131,8 @@ export interface SetupCheckDeps {
   /** Vault first, then the upper-cased env var, as tools resolve secrets. */
   secretPresent: (name: string) => Promise<boolean>;
   browserReady: () => boolean;
+  /** Asks LiveKit itself, with the saved keys, whether it answers. */
+  livekitProbe: () => Promise<LiveKitProbeResult>;
   logger: Logger;
 }
 
@@ -212,6 +215,13 @@ async function checkMessaging(deps: SetupCheckDeps, route: MessagingRoute | null
 
 async function checkVoice(deps: SetupCheckDeps, route: VoiceRoute | null): Promise<CheckResult> {
   if (!route) return { done: false, detail: 'Choose how the principal will talk to Curia.' };
+  // A started channel and saved keys do not mean LiveKit is up (#2357).
+  const livekit = await deps.livekitProbe();
+  if (livekit === 'no_keys') {
+    return { done: false, detail: "LiveKit's keys aren't saved. They come with Curia's install; re-run the installer or enter them under Settings → Channels → Voice." };
+  }
+  if (livekit === 'unreachable') return { done: false, detail: "LiveKit isn't running. On the server, run: docker compose up -d livekit" };
+  if (livekit === 'rejected') return { done: false, detail: "LiveKit rejected the saved keys. They must match LIVEKIT_KEYS in the install's .env." };
   const voice = channelResult(await deps.channelStatus('voice'), 'Voice');
   if (route === 'app') return voice ?? { done: true };
   // Signal calls run on the voice runtime too, so both channels must be up (#1672).
