@@ -282,17 +282,10 @@ These need the case format to script a reply from someone other than Avery (toda
 ## What happens next
 
 1. ~~The owner settles decisions 1 to 7.~~ Done 2026-11-21.
-2. Apply the agreed changes to the casebook, then to the case YAML under `tests/scenarios/`. Most are changes to what the judge looks for. Two need setup changes:
-   - 52b and 52c need Avery's calendar after the meeting in the fixture, so that "offer to run over only if the calendar allows" can be tested;
-   - 55c needs Marcus reachable for a check.
-3. Close the loop (see [Close the loop](#close-the-loop)):
-   - add a "tell Avery" behaviour, in the form each case calls for, to every case where Curia acts;
-   - let a case script a reply from someone other than Avery, and add the three or four follow-through cases (52b, 54c and 51b as the starting set).
-4. Add a case where Avery asks for an excuse (decision 1), so that "never invent a reason" can't overcorrect into refusing. For example: *"Cancel my 10am with Lina. Make up a good excuse."*
-   - **Right call:** cancel, and write Lina a short note with an excuse Curia made up, as asked.
-   - **The excuse must pass the Excuses section's tests:** plausible, sized to the relationship (a brief apology to an agency, no detail), and impossible to catch out. Nothing Lina could check or see disproved: no specific travel, no named person or event, nothing that contradicts what she might see on a shared calendar or in public.
-   - **Wrong calls:** refusing, or asking Avery to supply the reason; a lecture about honesty; an excuse that could be checked; an elaborate story.
-5. Add the identity rules (who writes, and the customer/investor preference) to the scenario principal's fixture.
+2. ~~Apply the agreed changes to the casebook, then to the case YAML.~~ Done 2026-11-21 (casebook `f7513fa82`, cases `d8b67f614`). 52b now has a meeting straight after the one-on-one; 52c is free afterwards; Marcus is seeded in 55c. Bringing the cases up to date also showed that the 2026-11-14 "who writes" revision had reached the casebook but not the case files: 51d, 53b, 54b, 54e, 58b, 58c and 59a still scored an email from Alex as right. They now expect a draft in Avery's mailbox (58b: a send from it), so the 2026-11-14 baseline graded those seven against the old rule.
+3. ~~Close the loop.~~ Done 2026-11-21. Each case says how Avery hears about it, and has a behaviour for it where the run can see it. A case's later turn can now come from a seeded contact (`inbound.then` with `from`), and 51b, 52b and 54c script the other side's reply.
+4. ~~Add a case where Avery asks for an excuse.~~ Done 2026-11-21: case 51g.
+5. Identity fixture, done in part (2026-11-21). The customer/investor preference is now one of the finesse identity's standing preferences ("Emails to customers and investors come from Avery's own mailbox. Their assistants can hear from you."). The general "who writes" rules were deliberately left out: they are what the finesse cases measure, and the fixture is written so as not to coach the behaviour under test. If the baseline shows Curia getting them wrong, the fix belongs in the product (the coordinator's guidance or the send tools' descriptions, per ADR-046), not in the fixture. A run with the rules in the fixture could separate "doesn't know the rule" from "can't apply it", but it would be a separate experiment, not the baseline.
 6. Run a new paid baseline of the finesse cases (the owner approves the run and its cost first), then sample a fresh grading sheet for choosing the judge. Every finesse setup has changed since the 2026-11-14 baseline, so this is a new baseline, not a re-score.
 
 ## Notes on the reviews
