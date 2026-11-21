@@ -99,6 +99,20 @@ describe('OnboardingSubscribers', () => {
     expect(t.scheduler.enqueueTaskWake).not.toHaveBeenCalled();
   });
 
+  it('a foreign link redeemed before Start, delivered late, adds no note', async () => {
+    const t = await setup({ open: true, state: { invitationId: 'run-link' } });
+    const late = { ...redeemed(), timestamp: new Date('2026-11-20T09:59:59.000Z') };
+    await t.fire(late);
+    expect(t.taskRepo.updateTask).not.toHaveBeenCalled();
+    expect(t.scheduler.enqueueTaskWake).not.toHaveBeenCalled();
+  });
+
+  it("the run's own link counts whenever its event is dated", async () => {
+    const t = await setup({ open: true, state: { invitationId: 'inv1' } });
+    await t.fire({ ...redeemed(), timestamp: new Date('2026-11-20T09:59:59.000Z') });
+    expect(t.taskRepo.updateTask).toHaveBeenCalledTimes(1);
+  });
+
   it('mailbox connected notes the task and wakes it once', async () => {
     const t = await setup({ open: true });
     await t.fire(connected());

@@ -39,7 +39,7 @@ export class OnboardingSubscribers {
     const { bus } = this.o;
     bus.subscribe('pairing.invitation_redeemed', 'system', (event: BusEvent) => {
       if (event.type !== 'pairing.invitation_redeemed') return;
-      return this.guard(event.type, () => this.onInvitationRedeemed(event.payload.invitationId));
+      return this.guard(event.type, () => this.onInvitationRedeemed(event.payload.invitationId, event.timestamp));
     });
     bus.subscribe('principal_mailbox.connected', 'system', (event: BusEvent) => {
       if (event.type !== 'principal_mailbox.connected') return;
@@ -64,19 +64,22 @@ export class OnboardingSubscribers {
 
   /**
    * The app greeting is due only on an app-route run that has not greeted yet. A link redeemed now
-   * is the run's own (state.invitationId) or a replacement minted from Devices after Start (Start
-   * superseded every earlier link), and either counts, as in the watcher's isRunInvitation. A phone
-   * paired during a Signal, SMS or Slack run is just a new device.
+   * counts if it is the run's own (state.invitationId) or was redeemed after Start (a replacement
+   * minted from Devices), as in the watcher's isRunInvitation; the event is published at redemption,
+   * so its timestamp dates it. A link redeemed before Start belongs to no run. A phone paired during a
+   * Signal, SMS or Slack run is just a new device.
    */
-  private async onInvitationRedeemed(invitationId: string): Promise<void> {
+  private async onInvitationRedeemed(invitationId: string, redeemedAt: Date): Promise<void> {
     const task = await findOpenOnboardingTask(this.o.taskRepo);
     if (!task) return;
     const state = await readOnboardingState(this.o.configStore, this.o.logger);
     if (state === null || state.taskId !== task.id || state.route !== 'app') return;
     // Already greeted (a second device, or a replay): nothing to say again.
     if (state.greetingSentAt !== null) return;
+    const runInvitation = invitationId === state.invitationId;
+    if (!runInvitation && redeemedAt.getTime() < Date.parse(state.startedAt)) return;
     this.o.logger.debug(
-      { taskId: task.id, runInvitation: invitationId === state.invitationId },
+      { taskId: task.id, runInvitation },
       'onboarding: phone app paired before the greeting',
     );
     await this.noteAndWake(task, 'Phone app paired: send the greeting in the app');
