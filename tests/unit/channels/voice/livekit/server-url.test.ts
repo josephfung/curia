@@ -16,6 +16,7 @@ describe('resolveLiveKitServerUrl', () => {
       managementUrl: 'http://livekit:7880',
       browserUrl: 'wss://curia.example.com',
       logger: createSilentLogger(),
+      inContainer: () => false,
       lookup,
     });
     expect(lookup).toHaveBeenCalledWith('livekit');
@@ -27,6 +28,7 @@ describe('resolveLiveKitServerUrl', () => {
       managementUrl: 'http://livekit:7880',
       browserUrl: 'ws://localhost:7880',
       logger: createSilentLogger(),
+      inContainer: () => false,
       lookup: async () => ({ address: '172.18.0.3', family: 4 }),
     });
     expect(result.joinUrl).not.toBe('ws://localhost:7880');
@@ -40,6 +42,7 @@ describe('resolveLiveKitServerUrl', () => {
       managementUrl: 'http://livekit:7880',
       browserUrl: 'ws://localhost:7880',
       logger,
+      inContainer: () => false,
       lookup: notFound,
     });
     expect(result).toEqual({ managementUrl: 'http://localhost:7880', joinUrl: 'ws://localhost:7880' });
@@ -54,6 +57,7 @@ describe('resolveLiveKitServerUrl', () => {
       managementUrl: 'http://livekit:7880',
       browserUrl: 'wss://curia.example.com',
       logger: createSilentLogger(),
+      inContainer: () => false,
       lookup: notFound,
     });
     expect(result).toEqual({ managementUrl: 'https://curia.example.com', joinUrl: 'wss://curia.example.com' });
@@ -64,6 +68,7 @@ describe('resolveLiveKitServerUrl', () => {
       managementUrl: 'http://livekit:7880',
       browserUrl: 'ws://localhost:7880',
       logger: createSilentLogger(),
+      inContainer: () => false,
       lookup: () => Promise.reject(Object.assign(new Error('getaddrinfo EAI_AGAIN livekit'), { code: 'EAI_AGAIN' })),
     });
     expect(result.managementUrl).toBe('http://localhost:7880');
@@ -75,6 +80,7 @@ describe('resolveLiveKitServerUrl', () => {
       managementUrl: 'http://livekit:7880',
       browserUrl: undefined,
       logger: createSilentLogger(),
+      inContainer: () => false,
       lookup,
     });
     expect(result).toEqual({ managementUrl: 'http://livekit:7880', joinUrl: 'ws://livekit:7880' });
@@ -87,6 +93,7 @@ describe('resolveLiveKitServerUrl', () => {
       managementUrl: 'http://[::1]:7880',
       browserUrl: 'ws://localhost:7880',
       logger: createSilentLogger(),
+      inContainer: () => false,
       lookup,
     });
     expect(lookup).toHaveBeenCalledWith('::1');
@@ -99,9 +106,38 @@ describe('resolveLiveKitServerUrl', () => {
       managementUrl: 'not a url',
       browserUrl: 'ws://localhost:7880',
       logger,
+      inContainer: () => false,
       lookup: vi.fn(),
     });
     expect(result.managementUrl).toBe('not a url');
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('in a container, keeps the management URL even when it does not resolve (livekit not up yet)', async () => {
+    const lookup = vi.fn(notFound);
+    const logger = createSilentLogger();
+    const warn = vi.spyOn(logger, 'warn');
+    const result = await resolveLiveKitServerUrl({
+      managementUrl: 'http://livekit:7880',
+      browserUrl: 'ws://localhost:7880',
+      logger,
+      inContainer: () => true,
+      lookup,
+    });
+    expect(result).toEqual({ managementUrl: 'http://livekit:7880', joinUrl: 'ws://livekit:7880' });
+    expect(lookup).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('on the host, a lookup that does not answer in time counts as unresolvable', async () => {
+    const result = await resolveLiveKitServerUrl({
+      managementUrl: 'http://livekit:7880',
+      browserUrl: 'ws://localhost:7880',
+      logger: createSilentLogger(),
+      inContainer: () => false,
+      lookup: () => new Promise(() => {}),
+      lookupTimeoutMs: 20,
+    });
+    expect(result).toEqual({ managementUrl: 'http://localhost:7880', joinUrl: 'ws://localhost:7880' });
   });
 });

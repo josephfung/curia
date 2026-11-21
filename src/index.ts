@@ -500,6 +500,7 @@ async function main(): Promise<void> {
   // Which address Curia's own end uses for LiveKit (#2357): the server-side join,
   // RoomService, /api/health and the Setup probe all read it. A host-run Curia can't
   // resolve the compose name (livekit), so it falls back to the browser-facing URL.
+  // In a container the configured URL is always kept (livekit may just not be up yet).
   const livekitServer = await resolveLiveKitServerUrl({
     managementUrl: config.voiceLivekitManagementUrl,
     browserUrl: config.voiceLivekitUrl,
