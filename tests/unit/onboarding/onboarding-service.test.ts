@@ -271,6 +271,17 @@ describe('OnboardingService.start', () => {
     expect(await isTriageHeld(fresh.configStore)).toBe(true);
   });
 
+  it('a start where a later enable throws still leaves triage held', async () => {
+    const h = makeHarness();
+    h.registry.installAndEnable.mockImplementation(async (kind: string, name: string) => {
+      if (!(kind === 'agent' && name === 'ceo-inbox')) throw new Error('enable failed');
+      return { name, kind, state: 'enabled' } as never;
+    });
+    await expect(h.service.start({ actor: 'operator', confirmWorkingPrincipal: true })).rejects.toThrow('enable failed');
+    expect(h.registry.installAndEnable).toHaveBeenCalledWith('agent', 'ceo-inbox', 'onboarding');
+    expect(await isTriageHeld(h.configStore)).toBe(true);
+  });
+
   it('a failed COMMIT undoes the start: tasks cancelled, invitation stopped, earlier state restored', async () => {
     const h = makeHarness({ enabled: ALL_REQUIRED_ENABLED, txFail: (sql) => (sql === 'COMMIT' ? new Error('commit lost') : undefined) });
     const earlier = { taskId: 'old-task', startedAt: '2026-11-01T00:00:00.000Z', route: 'app', greetingSentAt: null, followUpsSent: 0, lastFollowUpAt: null, lastPrincipalTurnAt: null, idleNudgeSentAt: null, operatorNotified: [] };

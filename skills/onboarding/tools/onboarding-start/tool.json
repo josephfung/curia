@@ -1,10 +1,12 @@
 {
   "name": "onboarding-start",
-  "description": "Start onboarding because the principal asked for it (\"can we do the onboarding?\"). Creates the onboarding task and its first-conversation topics, holds inbox triage until they hear what to expect, and starts the research homework. Sends nothing: carry on the conversation yourself. Use only when the principal asks; onboarding never starts on its own.",
+  "description": "Start Curia's own onboarding with the principal (Curia learning how they like to work) because they asked for it (\"can we do the onboarding?\"). Never for onboarding a new employee, hire, contractor or client. Creates the onboarding task and its first-conversation topics, holds inbox triage until they hear what to expect, and starts the research homework. Sends nothing: carry on the conversation yourself. Use only when the principal asks; onboarding never starts on its own. If onboarding was already completed this refuses; set `redo` only after the principal has explicitly confirmed they want to redo Curia's onboarding from the start.",
   "version": "0.1.0",
   "sensitivity": "elevated",
   "action_risk": "low",
-  "inputs": {},
+  "inputs": {
+    "redo": "boolean? (true only after the principal explicitly confirmed redoing onboarding from the start; needed when it was already completed)"
+  },
   "outputs": {
     "taskId": "string (the onboarding task id)",
     "restartScheduled": "boolean (true when Curia restarts in a moment to load what onboarding needs)",
@@ -13,6 +15,6 @@
   "permissions": [],
   "secrets": [],
   "timeout": 30000,
-  "capabilities": ["onboardingService"],
+  "capabilities": ["onboardingService", "taskRepo"],
   "allowed_callers": ["coordinator"]
 }

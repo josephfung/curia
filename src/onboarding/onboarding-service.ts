@@ -431,7 +431,7 @@ export class OnboardingService {
     };
     try {
       await setTriageHold(configStore);
-      undo.enabledTriageAgent = await this.enableRequiredEntries();
+      await this.enableRequiredEntries(undo);
       // Whatever this process did not load at boot needs a restart, whoever enabled it.
       const restartScheduled = REQUIRED_ENTRIES.some(({ kind, name }) => !this.deps.loadedAtBoot(kind, name));
       const principalName = await this.principalDisplayName();
@@ -535,13 +535,13 @@ export class OnboardingService {
   }
 
   /**
-   * Enable what onboarding needs. Returns whether this call newly enabled the Email triage agent
-   * (a failed start then keeps triage held: a mailbox nobody was told about must not start).
+   * Enable what onboarding needs. Flags `undo.enabledTriageAgent` the moment this call newly
+   * enables the Email triage agent, so a later enable that throws still keeps triage held (a
+   * mailbox nobody was told about must not start).
    */
-  private async enableRequiredEntries(): Promise<boolean> {
+  private async enableRequiredEntries(undo: StartUndo): Promise<void> {
     const { registry } = this.deps;
     const enabledByKind = new Map<RegistryKind, Set<string>>();
-    let enabledTriageAgent = false;
     for (const { kind, name } of REQUIRED_ENTRIES) {
       let enabled = enabledByKind.get(kind);
       if (!enabled) {
@@ -551,9 +551,8 @@ export class OnboardingService {
       if (enabled.has(name)) continue;
       await registry.installAndEnable(kind, name, ONBOARDING_CREATED_BY);
       enabled.add(name);
-      if (kind === 'agent' && name === EMAIL_TRIAGE_AGENT) enabledTriageAgent = true;
+      if (kind === 'agent' && name === EMAIL_TRIAGE_AGENT) undo.enabledTriageAgent = true;
     }
-    return enabledTriageAgent;
   }
 
   private async createTaskTree(

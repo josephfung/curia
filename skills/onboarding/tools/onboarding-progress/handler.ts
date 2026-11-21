@@ -110,7 +110,13 @@ async function completeIfDone({ repo, parent, ctx }: Deps): Promise<boolean> {
 async function status(deps: Deps): Promise<ToolResult> {
   const { svc, repo, parent, ctx } = deps;
   // A completion that failed after the last topic_done is retried here.
-  const onboardingComplete = await completeIfDone(deps);
+  // A failure here must not hide the topics: report not complete and carry on.
+  let onboardingComplete = false;
+  try {
+    onboardingComplete = await completeIfDone(deps);
+  } catch (err) {
+    ctx.log.warn({ err, taskId: parent.id }, 'onboarding: completing the onboarding task failed during status — topics still returned');
+  }
   const [playbook, children, name, state, setup, mailboxConnected] = await Promise.all([
     svc.playbook(),
     listChildren(repo, parent.id),

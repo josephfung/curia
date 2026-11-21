@@ -54,7 +54,7 @@ export interface AgendaEventSyncOptions {
 export const CANCELLED_NOTE = 'Session event cancelled: ask once when to do it instead';
 export const NUDGE_NOTE = 'Session starting: nudge the principal (call, or open it in chat)';
 export const NO_SHOW_NOTE =
-  'Missed session: one "missed you, when suits better?", unless the session happened in chat (then settle its agenda)';
+  'Missed session: send one "missed you, when suits better?" and book the answer, unless the session happened in chat (then send nothing).';
 export const UNREADABLE_NOTE =
   "Can't read this session's calendar event (calendar access may have been removed): check with the principal how to proceed";
 export const UNTIMED_NOTE =

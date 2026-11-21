@@ -159,7 +159,11 @@ export async function isNextSessionBooked(
   const { rows } = await deps.pool.query(
     `SELECT EXISTS (
        SELECT 1 FROM scheduled_jobs
-       WHERE task_id = $1 AND status = 'pending' AND COALESCE(next_run_at, run_at) > $2
+       WHERE task_id = $1 AND (
+         (status = 'pending' AND COALESCE(next_run_at, run_at) > $2)
+         -- task-update wake_at from inside the task's own wake run is parked here until it ends
+         OR (status = 'running' AND deferred_wake_at > $2)
+       )
      ) AS booked`,
     [taskId, now],
   );

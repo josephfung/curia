@@ -177,6 +177,21 @@ describe('onboarding-progress', () => {
     expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('done');
   });
 
+  it('status still returns the topics when completing the onboarding task fails', async () => {
+    const w = makeWorld();
+    await w.run({ op: 'open_session', session_id: 'first-conversation' });
+    await w.run({ op: 'open_session', session_id: 'ongoing-rhythm' });
+    await w.run({ op: 'topic_done', topic_id: 'hello', outcome: 'done', note: 'ok' });
+    await w.run({ op: 'topic_done', topic_id: 'inbox-expectations', outcome: 'done', note: 'ok' });
+    w.taskRepo.completeTask.mockImplementation(async (id: string) => {
+      if (id === 'parent') throw new Error('db blip');
+      return w.tasks.find((t) => t.id === id)!;
+    });
+    await w.run({ op: 'topic_done', topic_id: 'propose-rhythm', outcome: 'done', note: 'ok' });
+    const status = await w.run({ op: 'status' });
+    expect(status).toMatchObject({ success: true, data: { onboardingComplete: false } });
+  });
+
   it('does not complete the parent while the ongoing-rhythm session has not been opened', async () => {
     const w = makeWorld();
     await w.run({ op: 'open_session', session_id: 'first-conversation' });

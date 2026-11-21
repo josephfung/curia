@@ -162,6 +162,14 @@ describe('isNextSessionBooked', () => {
     expect((p.query.mock.calls[0] as unknown[])[1]).toEqual(['t1', now]);
   });
 
+  it('counts the wake_at a booking sets with task-update, including one deferred while its own wake runs', async () => {
+    const p = pool(true);
+    await isNextSessionBooked({ pool: p, listPendingAgendas: async () => [] }, 't1', now);
+    const sql = (p.query.mock.calls[0] as unknown[])[0] as string;
+    expect(sql).toContain("status = 'pending'");
+    expect(sql).toContain("status = 'running' AND deferred_wake_at > $2");
+  });
+
   it('is booked by a pending agenda the task owns, and not by another task\'s', async () => {
     expect(await isNextSessionBooked({ pool: pool(false), listPendingAgendas: async () => [{ ownerTaskId: 't1' }] }, 't1', now)).toBe(true);
     expect(await isNextSessionBooked({ pool: pool(false), listPendingAgendas: async () => [{ ownerTaskId: 'other' }, { ownerTaskId: null }] }, 't1', now)).toBe(false);

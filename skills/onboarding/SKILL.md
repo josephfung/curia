@@ -88,11 +88,13 @@ A request in the middle of onboarding (research a trip, a question about a meeti
 - A named day ("can we do Thursday?"): book it, confirm in one line, do not push.
 - A vague "later": offer two concrete times, once. If it is still vague, let it go; the follow-ups are scheduled for you.
 - The principal goes quiet mid-session: open topics carry to the next session. Do not chase beyond the one nudge you are woken for.
-- A missed session: one "Missed you. When suits better?", and book the answer. If the session happened in chat instead of the call, it was not missed: send nothing. Parking the next session's agenda (same `owner_task_id`) closes the old one.
+- A missed session: send one "missed you, when suits better?" and book the answer. If the session happened in chat instead of the call, it was not missed: send nothing. Parking the next session's agenda (same `owner_task_id`) closes the old one.
 
 ## Booking the next session
 
 At the end of each session agree the next one, and book only that one: a busy event on the principal's calendar, the principal the only attendee, titled for the session. With no calendar connected yet, create a scheduler job at the agreed time plus a nudge before it, and turn it into an event once the calendar connects. Never book a session they did not agree to, and never more than one at a time. The ongoing-rhythm topic may end with no regular session.
+
+Whenever you book the next session, calendar event or not, also set the onboarding task's wake time to the agreed session time with `task-update` (`wake_at`). That is how the idle nudge knows the quiet was agreed.
 
 ## Operator notices
 

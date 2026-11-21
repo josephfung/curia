@@ -440,6 +440,12 @@ afterwards to pick the conversation back up (apologising if its last message did
 state's task completed. A cancelled onboarding is not started: the dashboard alert returns
 and Start can run again.
 
+**Not re-run by accident.** The coordinator's `onboarding-start` skill is for Curia's own onboarding
+with the principal, never for onboarding a new hire, contractor or client. When a completed
+onboarding exists (a done parent task, `created_by` `onboarding`, tagged `onboarding`) it
+refuses unless called with `redo: true`, which is set only after the principal explicitly
+confirmed redoing it from the start. The console's operator start is unchanged.
+
 ### Homework
 
 The homework task researches the principal's professional public footprint (company, role,
@@ -543,7 +549,10 @@ instead of switching it on mid-conversation.
 
 At the end of each session Curia and the principal agree the next one, and only that one is
 booked: a busy event on the principal's calendar with the principal the only attendee, or,
-with no calendar yet, a scheduler job.
+with no calendar yet, a scheduler job. Either way the onboarding task's own wake time is also
+set to the agreed session time (`task-update` `wake_at`), which is what the idle-nudge check
+reads as "next session booked": a pending (or, mid-wake, deferred) wake of the parent task, or a
+pending agenda it owns.
 
 **An agenda follows its event.** This is general to any calendar-tied agenda, not only
 onboarding's. `meeting-agenda-park` takes `calendar_event_id`, `calendar_id` and
@@ -558,7 +567,7 @@ agenda's event by id:
 | Unreadable (access refused, or its calendar no longer routes to a mailbox) | the owner task wakes once to check with the principal; the event is not read again |
 | All-day (no timed start and end) | the owner task wakes once to ask when to hold the session; the event is not read again |
 | Starting within 15 minutes | the owner task wakes once to nudge the principal |
-| Ended 30 minutes ago, nothing loaded | a no-show: the owner task wakes once. Onboarding sends one "Missed you. When suits better?" and books the answer, unless the session happened in chat |
+| Ended 30 minutes ago, nothing loaded | a no-show: the owner task wakes once. Onboarding sends one "missed you, when suits better?" and books the answer, unless the session happened in chat (then nothing is sent) |
 
 Only an open coordinator task is woken (any other owner is logged as a warning), since the
 console can edit agenda frontmatter. Any other read failure is retried next sweep. Each
