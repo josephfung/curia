@@ -58,9 +58,10 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
       notes.set(id, note);
       return t;
     }),
-    updateTask: vi.fn(async (id: string, u: { tags?: string[] }) => {
+    updateTask: vi.fn(async (id: string, u: { tags?: string[]; status?: string }) => {
       const t = tasks.find((x) => x.id === id)!;
       if (u.tags) t.tags = u.tags;
+      if (u.status) t.status = u.status as TaskRow['status'];
       return t;
     }),
     setActiveSkillsBlock: vi.fn(),
@@ -137,6 +138,42 @@ describe('onboarding-progress', () => {
 
     const last = await w.run({ op: 'topic_done', topic_id: 'inbox-expectations', outcome: 'done', note: 'Labels on.' });
     expect(last.success).toBe(true);
+    expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('done');
+  });
+
+  it('completes on the topics alone: an open homework task is cancelled, a model-parented task is left', async () => {
+    const w = makeWorld();
+    w.tasks.push(task({ id: 'homework', parentTaskId: 'parent', tags: ['onboarding', 'onboarding:homework'] }));
+    w.tasks.push(task({ id: 'side', parentTaskId: 'parent', createdBy: 'coordinator', tags: [] }));
+    await w.run({ op: 'open_session', session_id: 'first-conversation' });
+    await w.run({ op: 'open_session', session_id: 'ongoing-rhythm' });
+    for (const topic of ['hello', 'inbox-expectations', 'propose-rhythm']) {
+      await w.run({ op: 'topic_done', topic_id: topic, outcome: 'done', note: 'ok' });
+    }
+    expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('done');
+    expect(w.tasks.find((t) => t.id === 'homework')!.status).toBe('cancelled');
+    expect(w.tasks.find((t) => t.id === 'side')!.status).toBe('open');
+  });
+
+  it('a completion that fails on the last topic_done is retried by status', async () => {
+    const w = makeWorld();
+    await w.run({ op: 'open_session', session_id: 'first-conversation' });
+    await w.run({ op: 'open_session', session_id: 'ongoing-rhythm' });
+    await w.run({ op: 'topic_done', topic_id: 'hello', outcome: 'done', note: 'ok' });
+    await w.run({ op: 'topic_done', topic_id: 'inbox-expectations', outcome: 'done', note: 'ok' });
+    const real = w.taskRepo.completeTask.getMockImplementation()!;
+    w.taskRepo.completeTask.mockImplementation(async (id: string, note?: string) => {
+      if (id === 'parent') throw new Error('db blip');
+      return real(id, note);
+    });
+    const last = await w.run({ op: 'topic_done', topic_id: 'propose-rhythm', outcome: 'done', note: 'ok' });
+    expect(last).toMatchObject({ success: true, data: { onboardingComplete: false } });
+    expect(w.sub('propose-rhythm').status).toBe('done');
+    expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('open');
+
+    w.taskRepo.completeTask.mockImplementation(real);
+    const status = await w.run({ op: 'status' });
+    expect(status).toMatchObject({ success: true, data: { onboardingComplete: true } });
     expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('done');
   });
 

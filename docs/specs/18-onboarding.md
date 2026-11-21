@@ -489,7 +489,7 @@ confirmed in one line; a vague "later" gets two concrete times, once.
 
 | Tool | Does | Risk |
 |---|---|---|
-| `onboarding-progress` | `status` (open and done topics with their playbook text, mailbox connected, greeting sent, who Setup was for, the operator's name); `open_session` (create a later session's topics; idempotent); `topic_done` (done or declined, with a note); `greeting_sent`; `operator_notice`. Onboarding completes when every subtask is done and the Ongoing rhythm topics exist | low |
+| `onboarding-progress` | `status` (open and done topics with their playbook text, mailbox connected, greeting sent, who Setup was for, the operator's name); `open_session` (create a later session's topics; idempotent); `topic_done` (done or declined, with a note); `greeting_sent`; `operator_notice`. Onboarding completes when the Ongoing rhythm topics exist and every topic subtask is closed, checked after each `topic_done` and on every `status` | low |
 | `office-tone-update` | Writes `tone.style` and/or `tone.verbosity` (0 to 100). No other agent writes tone | low |
 | `onboarding-triage-release` | Lifts the triage hold, live. Refused until the inbox topic is done; a declined topic leaves triage held | low |
 | `onboarding-start` | A start the principal asked for | low |
@@ -566,9 +566,12 @@ the conversation.
 
 ### Done
 
-The onboarding task completes when every subtask is done (completed or declined, in any
-order) and the Ongoing rhythm session has been opened; its last topic agrees an ongoing
-rhythm, which may be none. The principal can stop it ("stop the onboarding"), or it can be
+The onboarding task completes when the Ongoing rhythm session has been opened and every
+onboarding topic subtask is closed (completed or declined, in any order); its last topic
+agrees an ongoing rhythm, which may be none. Only topic subtasks count: an open homework task
+is cancelled then, and tasks the model parented under onboarding stay as they are. The check
+runs after each `topic_done` and again on every `status`, so a completion that failed once is
+retried. The principal can stop it ("stop the onboarding"), or it can be
 cancelled from the console's task view; triage stays held until switched on.
 
 ### Scenario cases

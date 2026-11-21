@@ -2,8 +2,10 @@
 //
 // The coordinator's view of, and writes to, the onboarding task: which topics are open, opening a
 // later session's topics, marking a topic done or declined, recording the greeting, and operator
-// notices. Only subtasks the onboarding program created count; onboarding completes when the
-// ongoing-rhythm session's topics, and every other subtask, are done.
+// notices. Only subtasks the onboarding program created count; onboarding completes once the
+// ongoing-rhythm session is opened and every onboarding topic subtask is closed (done or declined).
+// Completion is checked after each topic_done and again on every status, so a completion that
+// failed once is retried; an open homework task is cancelled then.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { OnboardingService } from '../../../../src/onboarding/onboarding-service.js';
@@ -11,6 +13,7 @@ import type { PlaybookSession, PlaybookTopic } from '../../../../src/onboarding/
 import type { TaskRepo } from '../../../../src/db/task-repo.js';
 import type { TaskRow } from '../../../../src/db/queries/tasks.js';
 import { findOpenOnboardingTask } from '../../../../src/onboarding/state.js';
+import { ONBOARDING_CREATED_BY } from '../../../../src/onboarding/constants.js';
 import { notifyOperator, OPERATOR_EVENTS, type OperatorEvent } from '../../../../src/onboarding/notify-operator.js';
 import {
   DECLINED_TAG,
@@ -25,6 +28,7 @@ import {
 const OPS = ['status', 'open_session', 'topic_done', 'greeting_sent', 'operator_notice'] as const;
 const OUTCOMES = ['done', 'declined'] as const;
 const NOTE_MAX = 2000;
+const HOMEWORK_TAG = 'onboarding:homework';
 
 type Deps = { svc: OnboardingService; repo: TaskRepo; parent: TaskRow; ctx: ToolContext };
 
@@ -83,7 +87,30 @@ function describeTopic(sub: TopicSubtask, index: Map<string, PlaybookTopic>, nam
   };
 }
 
-async function status({ svc, repo, parent, ctx }: Deps): Promise<ToolResult> {
+/**
+ * Complete the onboarding task if it is done: the ongoing-rhythm session opened and every
+ * onboarding topic subtask closed. Other children (homework, tasks the model parented here) do not
+ * hold it open; an open homework task is cancelled. Idempotent: a parent already closed is left.
+ * Returns whether onboarding is complete.
+ */
+async function completeIfDone({ repo, parent, ctx }: Deps): Promise<boolean> {
+  const children = await listChildren(repo, parent.id);
+  const topics = topicSubtasks(children);
+  if (!topics.some((t) => t.sessionId === ONGOING_RHYTHM_SESSION)) return false;
+  if (topics.some((t) => isOpenTask(t.task))) return false;
+  for (const child of children) {
+    if (child.createdBy !== ONBOARDING_CREATED_BY || !child.tags.includes(HOMEWORK_TAG) || !isOpenTask(child)) continue;
+    await repo.updateTask(child.id, { status: 'cancelled', progressNote: 'Onboarding complete: homework closed.' }, ctx.agentId);
+  }
+  await repo.completeTask(parent.id, 'Onboarding complete: every topic is done.', ctx.agentId);
+  ctx.log.info({ taskId: parent.id }, 'onboarding: complete');
+  return true;
+}
+
+async function status(deps: Deps): Promise<ToolResult> {
+  const { svc, repo, parent, ctx } = deps;
+  // A completion that failed after the last topic_done is retried here.
+  const onboardingComplete = await completeIfDone(deps);
   const [playbook, children, name, state, setup, mailboxConnected] = await Promise.all([
     svc.playbook(),
     listChildren(repo, parent.id),
@@ -121,6 +148,7 @@ async function status({ svc, repo, parent, ctx }: Deps): Promise<ToolResult> {
       greetingSent: state?.greetingSentAt != null,
       setupFor: setup.setupFor,
       operatorName: setup.operatorName,
+      onboardingComplete,
     },
   };
 }
@@ -144,7 +172,8 @@ async function openSession({ svc, repo, parent }: Deps, input: Record<string, un
   };
 }
 
-async function topicDone({ repo, parent, ctx }: Deps, input: Record<string, unknown>): Promise<ToolResult> {
+async function topicDone(deps: Deps, input: Record<string, unknown>): Promise<ToolResult> {
+  const { repo, parent, ctx } = deps;
   const topicId = str(input.topic_id);
   const sessionId = str(input.session_id);
   const outcome = input.outcome;
@@ -174,13 +203,19 @@ async function topicDone({ repo, parent, ctx }: Deps, input: Record<string, unkn
   if (tags.length !== sub.task.tags.length) await repo.updateTask(sub.task.id, { tags }, ctx.agentId);
   await repo.completeTask(sub.task.id, outcome === 'declined' ? `Declined: ${text}` : text, ctx.agentId);
 
-  // Done means every subtask is done; the ongoing-rhythm session is the last one opened.
-  const children = await listChildren(repo, parent.id);
-  const rhythm = topicSubtasks(children).filter((s) => s.sessionId === ONGOING_RHYTHM_SESSION);
-  const onboardingComplete = rhythm.length > 0 && children.every((c) => !isOpenTask(c));
-  if (onboardingComplete) {
-    await repo.completeTask(parent.id, 'Onboarding complete: every topic is done.', ctx.agentId);
-    ctx.log.info({ taskId: parent.id }, 'onboarding: complete');
+  // The topic is closed whatever happens next: a failed completion is retried on the next status.
+  let onboardingComplete = false;
+  try {
+    onboardingComplete = await completeIfDone(deps);
+  } catch (err) {
+    ctx.log.error({ err, taskId: parent.id }, 'onboarding: completing the onboarding task failed — status retries it');
+    return {
+      success: true,
+      data: {
+        topicId, sessionId: sub.sessionId, outcome, onboardingComplete: false,
+        completionPending: 'Every topic is closed, but the onboarding task could not be completed. Call op status to retry.',
+      },
+    };
   }
   return { success: true, data: { topicId, sessionId: sub.sessionId, outcome, onboardingComplete } };
 }
