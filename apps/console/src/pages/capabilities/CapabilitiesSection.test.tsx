@@ -290,6 +290,20 @@ describe('CapabilitiesSection', () => {
     expect(host!.querySelector('[role="status"]')!.textContent).toBe('Email triage on.');
   });
 
+  it('says when it can’t read whether onboarding holds Email triage, and still shows the switches', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    stub();
+    const real = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+      if (path === '/api/onboarding/status') return new Response(JSON.stringify({ error: 'db down' }), { status: 500, headers: { 'content-type': 'application/json' } });
+      return real(path, init);
+    }));
+    await render('settings');
+    expect(host!.querySelector('[role="alert"]')!.textContent).toBe('Couldn’t read whether onboarding holds Email triage: db down');
+    expect(sw('Web research').getAttribute('aria-checked')).toBe('true');
+    logged.mockRestore();
+  });
+
   it('in Setup, keeps Meetings on and Email triage off, both locked', async () => {
     stub();
     await render('setup');

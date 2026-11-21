@@ -1,5 +1,6 @@
 // The Finish steps (#2358): Apply & restart, and Start onboarding or Not right now (#2360).
 import { useEffect, useRef, useState, type JSX } from 'react';
+import { Link } from '@tanstack/react-router';
 import { apiFetch } from '../../api.js';
 import { Modal } from '../../components/Modal.js';
 import { errorMessage } from '../../components/settings/ConfigHistory.js';
@@ -20,6 +21,7 @@ import {
   notRightNowText,
   readBootedAt,
   RESTART_SLOW,
+  ROUTE_LABEL,
   signalText,
   useStartOnboarding,
   type StartFlow,
@@ -159,6 +161,28 @@ export function WorkingPrincipalDialog(props: {
 }
 
 /**
+ * Why Start failed. Refused as unreachable on Signal, SMS or Slack, it links the places to fix it:
+ * Setup is over by then, so the Setup page's Messaging step is gone.
+ */
+export function StartFailure(props: {
+  flow: Extract<StartFlow, { kind: 'failed' }>;
+  principal: string;
+  className: string;
+}): JSX.Element {
+  const { flow, principal } = props;
+  const route = flow.unreachable;
+  if (!route || route === 'app') return <p className={props.className} role="alert">{flow.message}</p>;
+  const label = ROUTE_LABEL[route];
+  return (
+    <p className={props.className} role="alert">
+      Curia can’t reach {principal} on {label} yet. Check that the {label} channel is on
+      in <Link to="/channels" search={{ channel: route }}>Channels</Link> and that {principal}’s {label} details
+      are on their <Link to="/contacts">contact</Link>.
+    </p>
+  );
+}
+
+/**
  * What Start did: the invitation link with wording to send (the app route), or what Curia sent
  * (the others), and, when Start restarts Curia, the wait for it to come back.
  */
@@ -224,6 +248,7 @@ export function OnboardingStarted(props: {
       {flow.restart === 'waiting' && <StatusLine kind="neutral">Curia is restarting to switch on Email triage, held for now… this page reconnects by itself.</StatusLine>}
       {flow.restart === 'back' && <StatusLine kind="ok">Curia restarted.</StatusLine>}
       {flow.restart === 'slow' && <p className="setup-status attention" role="alert">{RESTART_SLOW}</p>}
+      {flow.restart === 'unknown' && <StatusLine kind="neutral">Curia is restarting to switch on Email triage, held for now. Give it a minute; if the console doesn’t respond, reload the page.</StatusLine>}
       <div className="setup-foot">
         <button type="button" className="btn btn-primary" disabled={flow.restart === 'waiting'} onClick={props.onContinue}>
           {props.continueLabel}
@@ -251,7 +276,7 @@ export function StartStep(props: {
   const [notNow, setNotNow] = useState(false);
   const ready = props.checklist?.setupComplete === true;
   const left = stepsLeft(props.checklist);
-  const { flow, start, cancel } = useStartOnboarding({ principal: props.principal, onSetupIncomplete: props.onRefresh });
+  const { flow, start, cancel } = useStartOnboarding({ principal: props.principal, route: props.route, onSetupIncomplete: props.onRefresh });
   const busy = finishing !== null || flow.kind === 'working';
 
   /** POST /api/setup/complete. True when Setup is over; otherwise the step says why. */
@@ -313,7 +338,7 @@ export function StartStep(props: {
       )}
       {flow.kind === 'already_started' && <StatusLine kind="ok">Onboarding has already started.</StatusLine>}
       {error && <p className="setup-status attention" role="alert">{error}</p>}
-      {flow.kind === 'failed' && <p className="setup-status attention" role="alert">{flow.message}</p>}
+      {flow.kind === 'failed' && <StartFailure flow={flow} principal={props.principal} className="setup-status attention" />}
       {flow.kind === 'confirm' && (
         <WorkingPrincipalDialog
           signals={flow.signals}

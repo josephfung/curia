@@ -56,10 +56,17 @@ export async function waitForRestart(previousBootedAt: string, signal: AbortSign
     try {
       const res = await apiFetch('/api/system', { signal });
       let body: unknown = null;
-      try { body = await res.json(); } catch { body = null; }
+      try {
+        body = await res.json();
+      } catch {
+        // Expected mid-restart: a proxy error page is not JSON. parseSystemPollResponse reads a
+        // null body as malformed, and the poll goes on.
+        body = null;
+      }
       fetched = parseSystemPollResponse(res.status, body);
     } catch {
-      // The server is down mid-restart (or the wait was aborted): keep polling until the deadline.
+      // Expected mid-restart: the server is down (or the wait was aborted). Logging every refused
+      // poll would flood the console; the deadline reports a restart that never lands.
       fetched = { kind: 'transport_error' };
     }
     if (signal.aborted) return false;
@@ -67,8 +74,9 @@ export async function waitForRestart(previousBootedAt: string, signal: AbortSign
     if (decision.kind === 'succeeded') return true;
     if (decision.kind === 'timeout') return false;
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, RESTART_POLL_INTERVAL_MS);
-      signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+      const onAbort = (): void => { clearTimeout(timer); resolve(); };
+      const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, RESTART_POLL_INTERVAL_MS);
+      signal.addEventListener('abort', onAbort, { once: true });
     });
   }
   return false;
@@ -88,12 +96,16 @@ export type StartFlow =
   | {
       kind: 'started';
       invitation: StartedInvitation | null;
-      /** Start restarts Curia to switch on Email triage: waiting, back, or not back in time. */
-      restart: 'none' | 'waiting' | 'back' | 'slow';
+      /**
+       * Start restarts Curia to switch on Email triage: waiting, back, or not back in time.
+       * `unknown`: its start time couldn't be read beforehand, so its return can't be told.
+       */
+      restart: 'none' | 'waiting' | 'back' | 'slow' | 'unknown';
     }
   /** Another start got there first. */
   | { kind: 'already_started' }
-  | { kind: 'failed'; message: string };
+  /** `unreachable`: Curia can't reach the principal on this Setup route (the page links the fix). */
+  | { kind: 'failed'; message: string; unreachable?: MessagingRoute | null };
 
 /** What a working-principal signal means, for the confirmation. */
 export function signalText(signal: string, principal: string): string {
@@ -118,7 +130,21 @@ export function invitationMessage(url: string, setupFor: SetupFor | null, princi
   return `Hi ${principal}, this link installs Curia on your phone and signs you in. Open it in Safari or Chrome. It works once and is valid for 48 hours: ${url}`;
 }
 
-const ROUTE_LABEL: Record<Exclude<MessagingRoute, 'app'>, string> = { signal: 'Signal', sms: 'SMS', slack: 'Slack' };
+export const ROUTE_LABEL: Record<Exclude<MessagingRoute, 'app'>, string> = { signal: 'Signal', sms: 'SMS', slack: 'Slack' };
+
+/**
+ * Why Start was refused with route_unreachable, as one line. Setup is over by then, so it points
+ * at places that still exist (Channels, the principal's contact), never the Setup page; the page
+ * turns the Channels and contact words into links on Signal, SMS and Slack.
+ */
+export function unreachableText(route: MessagingRoute | null, principal: string): string {
+  if (route === 'app') {
+    return 'Curia can’t make the phone app invitation yet: its address (APP_ORIGIN) isn’t set. Set it, restart Curia, then start onboarding again.';
+  }
+  if (route === null) return `Curia doesn’t know how to reach ${principal}: no messaging route was chosen in Setup.`;
+  const label = ROUTE_LABEL[route];
+  return `Curia can’t reach ${principal} on ${label} yet. Check that the ${label} channel is on in Channels and that ${principal}’s ${label} details are on their contact.`;
+}
 
 /** What Curia did on a messaging route other than the app. */
 export function helloText(route: MessagingRoute | null): string | null {
@@ -135,6 +161,8 @@ type StartBody =
  */
 export function useStartOnboarding(opts: {
   principal: string;
+  /** The messaging route from Setup, for the route_unreachable advice. */
+  route: MessagingRoute | null;
   onSetupIncomplete?: () => Promise<void>;
   onAlreadyStarted?: () => Promise<void>;
 }): { flow: StartFlow; start: (confirmWorkingPrincipal: boolean) => Promise<void>; cancel: () => void } {
@@ -142,7 +170,7 @@ export function useStartOnboarding(opts: {
   const posting = useRef(false);
   const abort = useRef<AbortController | null>(null);
   useEffect(() => () => abort.current?.abort(), []);
-  const { principal, onSetupIncomplete, onAlreadyStarted } = opts;
+  const { principal, route, onSetupIncomplete, onAlreadyStarted } = opts;
 
   const start = useCallback(async (confirmWorkingPrincipal: boolean): Promise<void> => {
     if (posting.current) return;
@@ -150,7 +178,13 @@ export function useStartOnboarding(opts: {
     setFlow({ kind: 'working' });
     try {
       // Read before starting: Start may restart Curia, and only a new bootedAt says it's back.
-      const previousBootedAt = await readBootedAt();
+      // A failed read doesn't block Start; a restart then can't be watched (restart: 'unknown').
+      let previousBootedAt: string | null = null;
+      try {
+        previousBootedAt = await readBootedAt();
+      } catch (err) {
+        console.error('[onboarding] could not read the server’s start time before Start:', err);
+      }
       const res = await apiFetch('/api/onboarding/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -165,7 +199,7 @@ export function useStartOnboarding(opts: {
           setFlow({ kind: 'already_started' });
           await onAlreadyStarted?.();
         } else if (body.code === 'route_unreachable') {
-          setFlow({ kind: 'failed', message: `Curia can’t reach ${principal} on the messaging route from Setup yet. Check the Messaging step.` });
+          setFlow({ kind: 'failed', message: unreachableText(route, principal), unreachable: route });
         } else if (body.code === 'setup_incomplete') {
           setFlow({ kind: 'failed', message: 'Setup isn’t finished: something stopped passing. The Setup steps show what’s left.' });
           await onSetupIncomplete?.();
@@ -174,8 +208,9 @@ export function useStartOnboarding(opts: {
         }
         return;
       }
-      setFlow({ kind: 'started', invitation: body.invitation, restart: body.restartScheduled ? 'waiting' : 'none' });
-      if (body.restartScheduled) {
+      const restart = !body.restartScheduled ? 'none' : previousBootedAt === null ? 'unknown' : 'waiting';
+      setFlow({ kind: 'started', invitation: body.invitation, restart });
+      if (restart === 'waiting' && previousBootedAt !== null) {
         const controller = new AbortController();
         abort.current = controller;
         const back = await waitForRestart(previousBootedAt, controller.signal);
@@ -187,7 +222,7 @@ export function useStartOnboarding(opts: {
     } finally {
       posting.current = false;
     }
-  }, [principal, onSetupIncomplete, onAlreadyStarted]);
+  }, [principal, route, onSetupIncomplete, onAlreadyStarted]);
 
   const cancel = useCallback(() => setFlow({ kind: 'idle' }), []);
   return { flow, start, cancel };

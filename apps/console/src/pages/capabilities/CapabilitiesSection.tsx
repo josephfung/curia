@@ -31,14 +31,16 @@ async function loadLists(): Promise<RegistryLists> {
 
 /**
  * Whether onboarding holds Email triage (#2360). Only its label and what its switch does depend
- * on it, so a failed read is logged and reads as not held: the registry state still shows.
+ * on it, so a failed read doesn't hide the registry: it is logged, reads as not held, and the
+ * section says so.
  */
-async function loadTriageHeld(): Promise<boolean> {
+async function loadTriageHeld(): Promise<{ held: boolean; error: string | null }> {
   try {
-    return (await fetchOnboardingStatus()).triageHeld === true;
+    return { held: (await fetchOnboardingStatus()).triageHeld === true, error: null };
   } catch (err) {
     console.error('[CapabilitiesSection] could not read the onboarding status:', err);
-    return false;
+    const why = err instanceof Error ? err.message : 'unknown error';
+    return { held: false, error: `Couldn’t read whether onboarding holds Email triage: ${why}` };
   }
 }
 
@@ -57,6 +59,7 @@ export function CapabilitiesSection(props: {
   const confirm = props.confirm ?? ((text: string) => window.confirm(text));
   const [lists, setLists] = useState<RegistryLists | null>(null);
   const [triageHeld, setTriageHeld] = useState(false);
+  const [heldError, setHeldError] = useState<string | null>(null);
   const [busy, setBusy] = useState<CapabilityId | null>(null);
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   // The direction each capability was last switched, so a click on one left partly on (a
@@ -86,7 +89,8 @@ export function CapabilitiesSection(props: {
     try {
       const [next, held] = await Promise.all([loadLists(), loadTriageHeld()]);
       setLists(next);
-      setTriageHeld(held);
+      setTriageHeld(held.held);
+      setHeldError(held.error);
       return null;
     } catch (err) {
       return `Couldn’t read Curia’s capabilities: ${err instanceof Error ? err.message : 'unknown error'}`;
@@ -220,6 +224,7 @@ export function CapabilitiesSection(props: {
         );
       })}
       {!lists && !message && <p className="setup-hint">Loading…</p>}
+      {heldError && <p className="setup-status attention" role="alert">{heldError}</p>}
       {message && (
         <p className={`setup-status ${message.kind === 'ok' ? 'ok' : 'attention'}`} role={message.kind === 'error' ? 'alert' : 'status'}>
           {message.text}
