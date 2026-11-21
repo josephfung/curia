@@ -24,7 +24,10 @@ import type { RegistryKind } from '../registry/types.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { ConfigStore } from '../memory/config-store.js';
 import type { MintedInvitation } from '../channels/http/pairing-invitations.js';
-import { mintInvitation as mintPairingInvitation } from '../channels/http/pairing-invitations.js';
+import {
+  mintInvitation as mintPairingInvitation,
+  stopInvitation as stopPairingInvitation,
+} from '../channels/http/pairing-invitations.js';
 import { choosePairOrigin } from '../channels/http/pairing.js';
 import { noteWebThreadRotated, rotateWebThreadRow } from '../channels/http/web-thread.js';
 import { replaceActiveSkillsBlock } from '../db/active-skills-progress.js';
@@ -70,12 +73,15 @@ export type OnboardingStatus = {
 };
 
 export type StartResult =
-  | { ok: true; taskId: string; invitation: { url: string; expiresAt: string } | null; restartScheduled: boolean }
+  | { ok: true; taskId: string; invitation: StartedInvitation | null; restartScheduled: boolean }
   | {
       ok: false;
       code: 'already_started' | 'confirm_working_principal' | 'setup_incomplete' | 'route_unreachable';
       signals?: string[];
     };
+
+/** The phone app invitation Start minted; `id` lets a caller stop it (e.g. its audit failed). */
+export type StartedInvitation = { id: string; url: string; expiresAt: string };
 
 export type StartOptions = { actor: 'operator' | 'principal'; confirmWorkingPrincipal?: boolean };
 
@@ -96,7 +102,9 @@ export interface OnboardingServiceDeps {
   scheduleProcessExit: (delayMs: number) => void;
   logger: Logger;
   /** Defaults to the pairing-invitations mint on `pool`. */
-  mintInvitation?: (origin: string) => Promise<Pick<MintedInvitation, 'pairUrl' | 'expiresAt'>>;
+  mintInvitation?: (origin: string) => Promise<Pick<MintedInvitation, 'id' | 'pairUrl' | 'expiresAt'>>;
+  /** Defaults to the pairing-invitations stop-by-id on `pool`. */
+  stopInvitation?: (id: string) => Promise<boolean>;
   now?: () => Date;
   newId?: () => string;
 }
@@ -106,12 +114,14 @@ type Reach = { route: 'app'; origin: string } | { route: Exclude<MessagingRoute,
 export class OnboardingService {
   private readonly now: () => Date;
   private readonly newId: () => string;
-  private readonly mint: (origin: string) => Promise<Pick<MintedInvitation, 'pairUrl' | 'expiresAt'>>;
+  private readonly mint: (origin: string) => Promise<Pick<MintedInvitation, 'id' | 'pairUrl' | 'expiresAt'>>;
+  private readonly stop: (id: string) => Promise<boolean>;
 
   constructor(private readonly deps: OnboardingServiceDeps) {
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? randomUUID;
     this.mint = deps.mintInvitation ?? ((origin) => mintPairingInvitation(deps.pool, origin));
+    this.stop = deps.stopInvitation ?? ((id) => stopPairingInvitation(deps.pool, id));
   }
 
   async status(): Promise<OnboardingStatus> {
@@ -135,6 +145,11 @@ export class OnboardingService {
       setupFor: setup.setupFor,
       principalName,
     };
+  }
+
+  /** Stop an invitation Start minted (a caller whose audit of it failed). True when it was live. */
+  stopInvitation(id: string): Promise<boolean> {
+    return this.stop(id);
   }
 
   /** Release the triage hold (the console does this when Email triage is switched on). */
@@ -206,6 +221,7 @@ export class OnboardingService {
 
     await setTriageHold(configStore);
     const created: string[] = [];
+    let mintedId: string | null = null;
     try {
       const restartScheduled = await this.enableRequiredEntries();
       const principalName = (await this.deps.principalName())?.trim() || 'the principal';
@@ -216,10 +232,11 @@ export class OnboardingService {
       const rotatedTo = this.newId();
       await rotateWebThreadRow(client, rotatedTo);
 
-      let invitation: { url: string; expiresAt: string } | null = null;
+      let invitation: StartedInvitation | null = null;
       if (reach.route === 'app') {
         const minted = await this.mint(reach.origin);
-        invitation = { url: minted.pairUrl, expiresAt: minted.expiresAt };
+        mintedId = minted.id;
+        invitation = { id: minted.id, url: minted.pairUrl, expiresAt: minted.expiresAt };
       }
 
       const startedAt = this.now();
@@ -248,7 +265,7 @@ export class OnboardingService {
       );
       return { result: { ok: true, taskId: parent.id, invitation, restartScheduled }, rotatedTo };
     } catch (err) {
-      await this.undoFailedStart(created);
+      await this.undoFailedStart(created, mintedId);
       throw err;
     }
   }
@@ -399,10 +416,21 @@ export class OnboardingService {
 
   /**
    * A start that failed part-way: cancel the tasks it created so a retry can start again, and
-   * lift the triage hold so a mailbox already being triaged is not left held with no onboarding.
+   * lift the triage hold so a mailbox already being triaged is not left held with no onboarding,
+   * and stop the invitation it minted so no 48-hour credential outlives a failed start.
    * Registry entries it enabled stay enabled (harmless, and a retry skips them).
    */
-  private async undoFailedStart(taskIds: string[]): Promise<void> {
+  private async undoFailedStart(taskIds: string[], mintedInvitationId: string | null): Promise<void> {
+    if (mintedInvitationId) {
+      try {
+        await this.stop(mintedInvitationId);
+      } catch (err) {
+        this.deps.logger.error(
+          { err, pairingInvitationId: mintedInvitationId },
+          'onboarding: failed to stop the invitation from a failed start — it stays live until it expires',
+        );
+      }
+    }
     try {
       await releaseTriageHold(this.deps.configStore);
     } catch (err) {

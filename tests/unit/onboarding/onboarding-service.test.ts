@@ -113,7 +113,8 @@ function makeHarness(opts: {
     read: vi.fn(async () => ({ body: PLAYBOOK })),
     create: vi.fn(),
   } as unknown as WorkingDocsRepo;
-  const mintInvitation = vi.fn(async () => ({ pairUrl: 'https://curia.example.com/pair#c=tok', expiresAt: '2026-11-22T12:00:00.000Z' }));
+  const mintInvitation = vi.fn(async () => ({ id: 'inv-1', pairUrl: 'https://curia.example.com/pair#c=tok', expiresAt: '2026-11-22T12:00:00.000Z' }));
+  const stopInvitation = vi.fn(async () => true);
   const scheduleProcessExit = vi.fn();
 
   const deps: OnboardingServiceDeps = {
@@ -127,10 +128,11 @@ function makeHarness(opts: {
     principalHasIdentity: async () => opts.hasIdentity ?? true,
     appOrigin: 'appOrigin' in opts ? opts.appOrigin : 'https://curia.example.com',
     mintInvitation,
+    stopInvitation,
     scheduleProcessExit,
     logger,
   };
-  return { service: new OnboardingService(deps), tasks, taskRepo, registry, scheduler, configStore, mintInvitation, scheduleProcessExit, txQueries };
+  return { service: new OnboardingService(deps), tasks, taskRepo, registry, scheduler, configStore, mintInvitation, stopInvitation, scheduleProcessExit, txQueries };
 }
 
 describe('OnboardingService.start', () => {
@@ -201,7 +203,7 @@ describe('OnboardingService.start', () => {
     const h = makeHarness({ enabled: { agent: ['ceo-inbox'], skill: ['ceo-inbox', 'learning', 'tasks'] } });
     const result = await h.service.start({ actor: 'operator', confirmWorkingPrincipal: true });
     if (!result.ok) throw new Error('expected ok');
-    expect(result.invitation).toEqual({ url: 'https://curia.example.com/pair#c=tok', expiresAt: '2026-11-22T12:00:00.000Z' });
+    expect(result.invitation).toEqual({ id: 'inv-1', url: 'https://curia.example.com/pair#c=tok', expiresAt: '2026-11-22T12:00:00.000Z' });
     expect(result.restartScheduled).toBe(false);
     expect(h.scheduleProcessExit).not.toHaveBeenCalled();
     const homework = h.tasks.find((t) => t.tags.includes('onboarding:homework'))!;
@@ -220,6 +222,17 @@ describe('OnboardingService.start', () => {
     expect(woken).toContain(result.taskId);
     const parentCall = h.taskRepo.createTask.mock.calls.find(([p]) => !p.parentTaskId)!;
     expect(parentCall[0].progressNote).toBe('Send the greeting');
+  });
+
+  it('a start that fails after minting stops the invitation, cancels its tasks and lifts the hold', async () => {
+    const h = makeHarness();
+    h.scheduler.enqueueTaskWake.mockRejectedValueOnce(new Error('scheduler down'));
+    await expect(h.service.start({ actor: 'operator' })).rejects.toThrow('scheduler down');
+    expect(h.mintInvitation).toHaveBeenCalledTimes(1);
+    expect(h.stopInvitation).toHaveBeenCalledWith('inv-1');
+    expect(h.taskRepo.updateTask).toHaveBeenCalledTimes(h.tasks.length);
+    expect(await isTriageHeld(h.configStore)).toBe(false);
+    expect(h.scheduleProcessExit).not.toHaveBeenCalled();
   });
 
   it('refuses before creating anything when the principal has no verified id on the route', async () => {

@@ -18,7 +18,7 @@ export interface OnboardingRouteOptions {
   sessions: SessionStore;
   bus: EventBus;
   logger: Logger;
-  onboarding: Pick<OnboardingService, 'status' | 'start' | 'releaseTriageHold'>;
+  onboarding: Pick<OnboardingService, 'status' | 'start' | 'releaseTriageHold' | 'stopInvitation'>;
 }
 
 // Start mints a 48-hour credential and creates tasks: the auth-sensitive limit setupRoutes uses.
@@ -43,6 +43,12 @@ export async function onboardingRoutes(app: FastifyInstance, options: Onboarding
 
   app.post<{ Body: unknown }>('/api/onboarding/start', START_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
+    // Start can mint a 48-hour invitation, which is minted only from a signed-in console session,
+    // never from the access-key header alone, so the audit names a session (ADR-055).
+    const actor = actorFromRequest(request, sessions);
+    if (actor.initiatedBy !== 'session' || !actor.actorSessionId) {
+      return reply.status(401).send({ error: 'Sign in to the console to create an invitation link.' });
+    }
     const body = request.body;
     const confirm =
       typeof body === 'object' && body !== null ? (body as Record<string, unknown>).confirmWorkingPrincipal : undefined;
@@ -63,11 +69,24 @@ export async function onboardingRoutes(app: FastifyInstance, options: Onboarding
         await bus.publish('system', createOperatorSession({
           action: 'invite',
           stage: 'completed',
-          ...actorFromRequest(request, sessions),
+          initiatedBy: 'session',
+          actorSessionId: actor.actorSessionId,
         }));
       } catch (err) {
-        // Onboarding has started and the link is live; the audit row is what is missing.
-        logger.error({ err, taskId: result.taskId }, 'onboarding: invitation minted but the audit could not be recorded');
+        // An unaudited invitation must not stay live: stop it, as the pairing route does.
+        const pairingInvitationId = result.invitation.id;
+        logger.error({ err, taskId: result.taskId, pairingInvitationId }, 'onboarding: invitation audit failed — link stopped');
+        try {
+          await onboarding.stopInvitation(pairingInvitationId);
+        } catch (stopErr) {
+          logger.error({ err: stopErr, pairingInvitationId }, 'onboarding: failed to stop an unaudited invitation link');
+        }
+        return reply.status(500).send({
+          error:
+            'Onboarding started, but the invitation could not be recorded, so the link was stopped. ' +
+            'Create a new invitation link from Devices.',
+          taskId: result.taskId,
+        });
       }
     }
     return reply.send(result);

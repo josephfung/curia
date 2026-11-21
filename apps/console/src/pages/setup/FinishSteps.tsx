@@ -129,9 +129,9 @@ export function ApplyStep(props: {
 }
 
 /**
- * Locked until every required step is done. Starting ends Setup: the console leaves this
- * page, and the principal's first conversation starts on a fresh web thread (#2687). A full
- * page load follows, so no open chat stream stays on the operator's Setup thread.
+ * Locked until every required step is done. This finishes Setup (POST /api/setup/complete):
+ * the console leaves this page. The web thread is no longer rotated here; starting onboarding
+ * (POST /api/onboarding/start, #2360) rotates it. A full page load follows.
  */
 export function StartStep(props: {
   checklist: Checklist | null;
