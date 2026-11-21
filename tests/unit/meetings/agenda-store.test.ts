@@ -35,6 +35,72 @@ describe('AgendaStore supersede', () => {
   });
 });
 
+describe('AgendaStore concurrent parks for one owner', () => {
+  it('leaves the newest agenda pending when two parks for the same owner run at once', async () => {
+    const store = new AgendaStore(memoryWorkingDocsRepo(NOW), createSilentLogger());
+    const [a, b] = await Promise.all([
+      store.park(input({ ownerTaskId: OWNER, title: 'A' }), NOW),
+      store.park(input({ ownerTaskId: OWNER, title: 'B' }), NOW),
+    ]);
+    const pending = (await store.listPending(NOW)).map((x) => x.agendaId);
+    // Queued: A parks first, then B supersedes it. Never zero pending.
+    expect(pending).toEqual([b.agendaId]);
+    expect(await store.get(a.agendaId)).toBeNull();
+  });
+
+  it('a failed park does not block the next park for the owner', async () => {
+    const repo = memoryWorkingDocsRepo(NOW);
+    const create = repo.create.bind(repo);
+    let fail = true;
+    (repo as { create: typeof repo.create }).create = async (p) => {
+      if (fail) { fail = false; throw new Error('db down'); }
+      return create(p);
+    };
+    const store = new AgendaStore(repo, createSilentLogger());
+    const [first, second] = await Promise.allSettled([
+      store.park(input({ ownerTaskId: OWNER }), NOW),
+      store.park(input({ ownerTaskId: OWNER }), NOW),
+    ]);
+    expect(first.status).toBe('rejected');
+    expect(second.status).toBe('fulfilled');
+  });
+});
+
+describe('AgendaStore close when the archive step fails', () => {
+  it('returns the closed agenda, and the next cull archives it', async () => {
+    const repo = memoryWorkingDocsRepo(NOW);
+    const store = new AgendaStore(repo, createSilentLogger());
+    const parked = await store.park(input({ ownerTaskId: OWNER, calendarEventId: 'evt-1', calendarId: 'cal-1' }), NOW);
+    const softDelete = repo.softDeleteAtVersion.bind(repo);
+    (repo as { softDeleteAtVersion: typeof repo.softDeleteAtVersion }).softDeleteAtVersion = async () => {
+      throw new Error('archive failed');
+    };
+
+    const closed = await store.close(parked.agendaId, { eventState: 'cancelled' });
+
+    expect(closed?.status).toBe('done');
+    expect(closed?.eventState).toBe('cancelled');
+    expect(await store.listPending(NOW)).toEqual([]);
+    (repo as { softDeleteAtVersion: typeof repo.softDeleteAtVersion }).softDeleteAtVersion = softDelete;
+    expect(await store.cullExpired(NOW)).toBe(1);
+    expect(await store.get(parked.agendaId)).toBeNull();
+  });
+
+  it('the cull leaves a done agenda a call still holds to settle', async () => {
+    const repo = memoryWorkingDocsRepo(NOW);
+    const store = new AgendaStore(repo, createSilentLogger());
+    const parked = await store.park(input(), NOW);
+    const locked = await store.lock(parked.agendaId, 's-1', NOW);
+    expect(locked.ok).toBe(true);
+    const held = (await store.get(parked.agendaId))!;
+    // As settle leaves it between its done write and its archive.
+    await repo.update(held.path, { frontmatter: { ...(await repo.read(held.path))!.frontmatter, status: 'done' }, expectedVersion: held.version });
+
+    expect(await store.cullExpired(NOW)).toBe(0);
+    expect(await store.settle(parked.agendaId, 's-1', { kind: 'done' })).toBe('settled');
+  });
+});
+
 describe('parseAgendaDoc event fields', () => {
   it('ignores a non-UUID owner and an event id without its calendar', async () => {
     const repo = memoryWorkingDocsRepo(NOW);
