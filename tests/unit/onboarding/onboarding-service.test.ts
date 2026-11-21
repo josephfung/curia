@@ -232,6 +232,7 @@ describe('OnboardingService.start', () => {
     const result = await h.service.start({ actor: 'operator', confirmWorkingPrincipal: true });
     if (!result.ok) throw new Error('expected ok');
     expect(result.invitation).toEqual({ id: 'inv-1', url: 'https://curia.example.com/pair#c=tok', expiresAt: '2026-11-22T12:00:00.000Z' });
+    expect((await readOnboardingState(h.configStore))?.invitationId).toBe('inv-1');
     expect(result.restartScheduled).toBe(false);
     expect(h.scheduleProcessExit).not.toHaveBeenCalled();
     const homework = h.tasks.find((t) => t.tags.includes('onboarding:homework'))!;

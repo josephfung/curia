@@ -16,6 +16,7 @@ const baseState: OnboardingState = {
   lastFollowUpAt: null,
   lastPrincipalTurnAt: null,
   idleNudgeSentAt: null,
+  invitationId: 'inv-run',
   operatorNotified: [],
 };
 const later = new Date(START.getTime() + GREETING_FOLLOWUP_GAP_HOURS * 3_600_000);
@@ -25,7 +26,7 @@ const openTopic = {
   tags: ['onboarding', 'onboarding:topic:style', 'onboarding:session:first-conversation'],
 };
 
-type Invitation = { expiresAt: Date; createdAt: Date; redeemed: boolean; redeemedAt?: Date | null };
+type Invitation = { id: string; expiresAt: Date; redeemed: boolean; redeemedAt?: Date | null };
 
 function setup(opts: {
   open: boolean;
@@ -132,7 +133,7 @@ describe('OnboardingWatcher.tick', () => {
     const t = setup({
       open: true,
       state: { greetingSentAt: null },
-      invitation: { createdAt: START, expiresAt: new Date(START.getTime() + 48 * 3_600_000), redeemed: true, redeemedAt },
+      invitation: { id: 'inv-run', expiresAt: new Date(START.getTime() + 48 * 3_600_000), redeemed: true, redeemedAt },
     });
     await t.seed();
     const due = new Date(redeemedAt.getTime() + GREETING_FOLLOWUP_GAP_HOURS * 3_600_000);
@@ -158,25 +159,37 @@ describe('OnboardingWatcher.tick', () => {
   });
 
   describe('invitation staleness', () => {
-    const expired = (createdAt: Date) => ({ expiresAt: new Date(createdAt.getTime() + 1000), createdAt, redeemed: false });
+    const expired = (id: string) => ({ id, expiresAt: new Date(START.getTime() + 1000), redeemed: false });
     const preGreeting = { greetingSentAt: null };
 
-    it('notifies for an expired invitation minted during this run', async () => {
-      const t = setup({ open: true, state: preGreeting, invitation: expired(new Date(START.getTime() + 1000)) });
+    it("notifies for this run's expired invitation, known by its id", async () => {
+      const t = setup({ open: true, state: preGreeting, invitation: expired('inv-run') });
       await t.seed();
       await t.watcher.tick(later);
       expect((await readOnboardingState(t.configStore))?.operatorNotified).toContain('invitation_expired');
     });
 
-    it('ignores an invitation minted before this run started', async () => {
-      const t = setup({ open: true, state: preGreeting, invitation: expired(new Date(START.getTime() - 3_600_000)) });
+    it('ignores an unused invitation that is not the one this run minted', async () => {
+      const t = setup({ open: true, state: preGreeting, invitation: expired('inv-other') });
       await t.seed();
       await t.watcher.tick(later);
       expect((await readOnboardingState(t.configStore))?.operatorNotified).toEqual([]);
     });
 
+    it('a replacement link redeemed during the run dates the greeting', async () => {
+      const redeemedAt = new Date(START.getTime() + 3_600_000);
+      const t = setup({
+        open: true,
+        state: preGreeting,
+        invitation: { id: 'inv-replacement', expiresAt: new Date(START.getTime() + 48 * 3_600_000), redeemed: true, redeemedAt },
+      });
+      await t.seed();
+      await t.watcher.tick(new Date(redeemedAt.getTime() + GREETING_FOLLOWUP_GAP_HOURS * 3_600_000));
+      expect(t.taskRepo.updateTask).toHaveBeenCalledWith('t1', { progressNote: GREETING_NOT_RECORDED_NOTE });
+    });
+
     it('ignores the invitation off the app route', async () => {
-      const t = setup({ open: true, state: { ...preGreeting, route: 'signal' }, invitation: expired(new Date(START.getTime() + 1000)) });
+      const t = setup({ open: true, state: { ...preGreeting, route: 'signal' }, invitation: expired('inv-run') });
       await t.seed();
       await t.watcher.tick(later);
       expect(t.readInvitation).not.toHaveBeenCalled();

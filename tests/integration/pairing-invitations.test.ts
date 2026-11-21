@@ -135,7 +135,8 @@ describeIf('pairing invitations (integration)', () => {
     await expect(readCurrentInvitationTiming(pool)).resolves.toBeNull();
     const minted = await mintInvitation(pool, 'https://curia.example.com');
     const waiting = await readCurrentInvitationTiming(pool);
-    expect(waiting).toMatchObject({ redeemed: false, redeemedAt: null });
+    // The id is what onboarding keeps to know its own link.
+    expect(waiting).toMatchObject({ id: minted.id, redeemed: false, redeemedAt: null });
     const hours = (waiting!.expiresAt.getTime() - waiting!.createdAt.getTime()) / 3_600_000;
     expect(hours).toBeCloseTo(48, 1);
 

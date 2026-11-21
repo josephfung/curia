@@ -492,6 +492,8 @@ export class OnboardingService {
         lastPrincipalTurnAt: null,
         idleNudgeSentAt: null,
         greetingNudgedAt: null,
+        // The watcher knows this run's link by its id (see OnboardingWatcher.tick).
+        invitationId: invitation?.id ?? null,
         operatorNotified: [],
       }));
 

@@ -33,7 +33,7 @@ export interface OnboardingWatcherOptions {
   stateLock: OnboardingStateLock;
   logger: Logger;
   /** The current phone-app invitation; null when none exists. */
-  readInvitation: () => Promise<{ expiresAt: Date; createdAt: Date; redeemed: boolean; redeemedAt: Date | null } | null>;
+  readInvitation: () => Promise<{ id: string; expiresAt: Date; redeemed: boolean; redeemedAt: Date | null } | null>;
   /**
    * Whether the onboarding task's next session is booked (see {@link isNextSessionBooked}).
    * Absent → never booked.
@@ -81,12 +81,10 @@ export class OnboardingWatcher {
       const state = await readOnboardingState(this.o.configStore, this.o.logger);
       if (state === null || state.taskId !== task.id) return;
 
-      // The current invitation may predate this run (cancel + restart, or minted from Devices): it
-      // counts only on the app route and when minted at or after the run started.
       let invitation: WatcherInvitation | null = null;
       if (state.route === 'app') {
         const inv = await this.o.readInvitation();
-        if (inv !== null && inv.createdAt.getTime() >= Date.parse(state.startedAt)) invitation = inv;
+        if (inv !== null && isRunInvitation(state, inv)) invitation = inv;
       }
       const openTopicsRemain = this.openFirstConversationTopics(children);
       // Only the idle nudge reads it, and only with open topics.
@@ -175,6 +173,21 @@ export class OnboardingWatcher {
     const { written } = await updateOnboardingState(this.o, (latest) => (stillApplies(latest) ? change(latest) : null));
     return written;
   }
+}
+
+/**
+ * Whether the current invitation is this run's link, on the app route. It is when it is the one
+ * Start minted (state.invitationId). A replacement minted from Devices after Start counts only once
+ * it was redeemed after the run started: its redemption is when the app greeting falls due, while
+ * an unused replacement is the operator's own and raises no expired-invitation notice. Every link
+ * minted before Start was superseded by Start's own.
+ */
+function isRunInvitation(
+  state: OnboardingState,
+  inv: { id: string; redeemed: boolean; redeemedAt: Date | null },
+): boolean {
+  if (state.invitationId && inv.id === state.invitationId) return true;
+  return inv.redeemed && inv.redeemedAt !== null && inv.redeemedAt.getTime() >= Date.parse(state.startedAt);
 }
 
 /**
