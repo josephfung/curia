@@ -216,10 +216,12 @@ export class DocWriteHandler implements ToolHandler {
       if (consoleOnlyError) {
         return { success: false, error: consoleOnlyError };
       }
-      // Every write below is bound to `existing`, the version the check above passed (#2360):
-      // a document the console marked in between is a version conflict, never a write. So
-      // append and replace refuse an expected_version other than the one read here, and the
-      // section modes pass it to the repo, which checks it under the row lock.
+      // Every write below is bound to `existing`, the document and version the check above
+      // passed (#2360): a document the console marked in between, or archived and re-created at
+      // this path (a new id, back at version 1), is a conflict, never a write. So append and
+      // replace refuse an expected_version other than the one read here, and every mode passes
+      // the read's id (and, for the section modes, its version) to the repo, which checks them
+      // in the write.
       const staleExpected = existing !== null && typeof input.expected_version === 'number'
         && (input.mode === 'append' || input.mode === 'replace')
         && input.expected_version !== existing.version;
@@ -277,6 +279,7 @@ export class DocWriteHandler implements ToolHandler {
           result = await repo.append(normalized, {
             content: input.content,
             expectedVersion: input.expected_version,
+            expectedId: existing.id,
             ...(associatedTaskId ? { taskId: associatedTaskId } : {}),
           });
           if (!result.ok) {
@@ -303,6 +306,7 @@ export class DocWriteHandler implements ToolHandler {
             frontmatter: input.frontmatter,
             body: input.body,
             expectedVersion: input.expected_version,
+            expectedId: existing.id,
             ...(associatedTaskId ? { taskId: associatedTaskId } : {}),
           });
           if (!result.ok) {
@@ -334,6 +338,7 @@ export class DocWriteHandler implements ToolHandler {
             mode: 'replace',
             expectedSectionVersion: input.expected_section_version,
             expectedVersion: existing.version,
+            expectedId: existing.id,
             ...(associatedTaskId ? { taskId: associatedTaskId } : {}),
           });
           if (!result.ok) {
@@ -362,6 +367,7 @@ export class DocWriteHandler implements ToolHandler {
             section: input.section.trim(),
             expectedSectionVersion: input.expected_section_version,
             expectedVersion: existing.version,
+            expectedId: existing.id,
           });
           if ('missingSection' in deleted) {
             // An error, not a no-op success: the agent must not confirm a removal that
