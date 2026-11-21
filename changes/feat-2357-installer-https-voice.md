@@ -12,3 +12,7 @@
 - **Voice calls** — Curia joins rooms over the internal LiveKit address, so local calls work. (#2357)
 
 - **Installer upgrades** — `install.sh` refreshes `setup-common.sh` each run; too-old pinned releases name their own installer. (#2357)
+
+### Security
+
+- **Installer** — `install.sh` checks its downloaded `setup-common.sh` against the release's `SHA256SUMS`. (#2357)
