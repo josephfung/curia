@@ -1,0 +1,21 @@
+{
+  "name": "office-tone-update",
+  "description": "Set the assistant's tone style and/or verbosity (0 terse to 100 thorough); give at least one. Requires principal authorization.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "capabilities": [
+    "officeIdentityService"
+  ],
+  "inputs": {
+    "style": "string? (max 800 chars)",
+    "verbosity": "number? (integer 0-100)"
+  },
+  "outputs": {
+    "style": "string",
+    "verbosity": "number"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "action_risk": "low"
+}

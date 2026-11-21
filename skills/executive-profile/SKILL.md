@@ -7,4 +7,5 @@ tools:
   - executive-profile-get
   - executive-profile-update
   - behavioral-preferences-update
+  - office-tone-update
 ---

@@ -5,6 +5,8 @@
 // Upserts autonomy_config and appends to autonomy_history.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { findOpenOnboardingTask } from '../../../../src/onboarding/state.js';
+import { ONBOARDING_BANDS } from '../../../../src/onboarding/constants.js';
 
 export class SetAutonomyHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -26,6 +28,25 @@ export class SetAutonomyHandler implements ToolHandler {
 
     // Round to nearest integer — tolerate minor float imprecision from the LLM
     const intScore = Math.round(parsedScore);
+
+    // While the onboarding program is open the principal chooses among its three bands.
+    // If the lookup itself throws we log a warn and apply no band limit: the principal
+    // explicitly asked for this score and authorization already gates the tool, so blocking
+    // autonomy changes on a lookup failure would be worse than letting one through.
+    if (ctx.taskRepo) {
+      let onboardingOpen = false;
+      try {
+        onboardingOpen = (await findOpenOnboardingTask(ctx.taskRepo)) !== null;
+      } catch (err) {
+        ctx.log.warn({ err }, 'set-autonomy: onboarding task lookup failed; applying no band limit');
+      }
+      if (onboardingOpen && !(ONBOARDING_BANDS as readonly number[]).includes(intScore)) {
+        return {
+          success: false,
+          error: 'During onboarding the independence level is 65 (Draft only), 75 (Ask first) or 85 (Spot-check).',
+        };
+      }
+    }
 
     // Prefer contactId over role for the audit identifier — contactId is a unique, stable
     // identifier while role is a broad category (multiple callers can share a role).

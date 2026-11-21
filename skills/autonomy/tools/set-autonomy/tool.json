@@ -18,7 +18,8 @@
   "timeout": 10000,
   "action_risk": "high",
   "capabilities": [
-    "autonomyService"
+    "autonomyService",
+    "taskRepo"
   ],
   "allowed_callers": ["coordinator"]
 }
