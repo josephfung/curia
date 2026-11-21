@@ -273,20 +273,27 @@ export class AgendaStore {
    * and is logged rather than failing the park.
    */
   private async supersedeOwnedBy(ownerTaskId: string, keepAgendaId: string): Promise<void> {
+    let rows: WorkingDocRow[];
     try {
-      const rows = await this.repo.listByPrefix(AGENDA_PREFIX);
-      for (const row of rows) {
-        if (!row.path.startsWith(AGENDA_PREFIX)) continue;
-        const doc = parseAgendaDoc(row, this.logger);
-        if (!doc || doc.agendaId === keepAgendaId) continue;
-        if (doc.status !== 'pending' || doc.ownerTaskId !== ownerTaskId) continue;
+      rows = await this.repo.listByPrefix(AGENDA_PREFIX);
+    } catch (err) {
+      this.logger.error({ err, ownerTaskId, keepAgendaId }, 'agenda-store: listing agendas to supersede failed');
+      return;
+    }
+    // Per agenda: one that fails to close does not keep the others open.
+    for (const row of rows) {
+      if (!row.path.startsWith(AGENDA_PREFIX)) continue;
+      const doc = parseAgendaDoc(row, this.logger);
+      if (!doc || doc.agendaId === keepAgendaId) continue;
+      if (doc.status !== 'pending' || doc.ownerTaskId !== ownerTaskId) continue;
+      try {
         const closed = await this.close(doc.agendaId, {});
         if (closed) {
           this.logger.info({ agendaId: doc.agendaId, supersededBy: keepAgendaId }, 'agenda-store: superseded agenda closed');
         }
+      } catch (err) {
+        this.logger.error({ err, agendaId: doc.agendaId, ownerTaskId, keepAgendaId }, 'agenda-store: closing a superseded agenda failed');
       }
-    } catch (err) {
-      this.logger.error({ err, ownerTaskId, keepAgendaId }, 'agenda-store: closing superseded agendas failed');
     }
   }
 
@@ -306,7 +313,10 @@ export class AgendaStore {
     for (const row of rows) {
       if (!row.path.startsWith(AGENDA_PREFIX)) continue;
       const doc = parseAgendaDoc(row, this.logger);
-      if (!doc) continue;
+      if (!doc) {
+        this.logger.warn({ path: row.path }, 'agenda-store: agenda document did not parse — left out of the pending list');
+        continue;
+      }
       if (doc.status !== 'pending' || isExpired(doc, now)) continue;
       pending.push(doc);
     }

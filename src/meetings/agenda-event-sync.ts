@@ -2,14 +2,17 @@
 //
 // No webhooks: each sweep re-reads every pending event-tied agenda's event by id.
 // Moved → the agenda's scheduled_for follows. Cancelled or gone → the agenda is
-// closed and the owner task wakes once to ask when instead. Access refused → the
-// owner wakes once and the event is not read again. About to start → the owner wakes once to nudge
+// closed and the owner task wakes once to ask when instead. Access refused, an
+// unroutable calendar, or an event with no timed start and end → the owner wakes
+// once and the event is not read again. About to start → the owner wakes once to nudge
 // the principal. Ended with nothing loaded → the owner wakes once about the
 // no-show. Bookkeeping is written before each wake, so a failed write never
 // repeats a wake. General to any calendar-tied agenda, not only onboarding.
 
 import type { Logger } from '../logger.js';
-import { grantSafeErrorFields } from '../principal-mailboxes/error-fields.js';
+import { grantSafeErrorFields, mayCarryGrantId } from '../principal-mailboxes/error-fields.js';
+import { CalendarRouteError, type CalendarRouter } from '../channels/calendar/calendar-router.js';
+import { nylasStatus } from '../channels/email/nylas-message-id.js';
 import type { AgendaStore } from './agenda-store.js';
 import {
   AGENDA_EVENT_SYNC_INTERVAL_MINUTES,
@@ -24,16 +27,24 @@ export interface AgendaCalendarEvent {
   status: 'confirmed' | 'cancelled';
 }
 
-/** `getEvent` result when the calendar refused access (401/403): the grant was revoked or is invalid. */
+/**
+ * `getEvent` result when the event can never be read: access refused (401/403, the grant was
+ * revoked or is invalid) or the calendar no longer routes to a mailbox.
+ */
 export const EVENT_UNREADABLE = 'unreadable' as const;
+/** `getEvent` result for an event with no timed start and end (an all-day event). */
+export const EVENT_UNTIMED = 'untimed' as const;
+
+export type AgendaEventRead = AgendaCalendarEvent | null | typeof EVENT_UNREADABLE | typeof EVENT_UNTIMED;
 
 export interface AgendaEventSyncOptions {
   store: Pick<AgendaStore, 'listPending' | 'reschedule' | 'markEvent' | 'close'>;
   /**
-   * The event; null when the calendar says it does not exist; EVENT_UNREADABLE
-   * when access was refused. Any other failure throws and is retried next sweep.
+   * The event; null when the calendar says it does not exist; EVENT_UNREADABLE when it can never
+   * be read; EVENT_UNTIMED when it has no timed start and end. Any other failure throws and is
+   * retried next sweep.
    */
-  getEvent: (calendarId: string, eventId: string) => Promise<AgendaCalendarEvent | null | typeof EVENT_UNREADABLE>;
+  getEvent: (calendarId: string, eventId: string) => Promise<AgendaEventRead>;
   /** Add a progress note to the owner task and wake it. */
   wakeOwner: (taskId: string, note: string) => Promise<void>;
   logger: Logger;
@@ -42,9 +53,49 @@ export interface AgendaEventSyncOptions {
 
 export const CANCELLED_NOTE = 'Session event cancelled: ask once when to do it instead';
 export const NUDGE_NOTE = 'Session starting: nudge the principal (call, or open it in chat)';
-export const NO_SHOW_NOTE = 'Missed session: one "missed you, when suits better?"';
+export const NO_SHOW_NOTE =
+  'Missed session: one "missed you, when suits better?", unless the session happened in chat (then settle its agenda)';
 export const UNREADABLE_NOTE =
   "Can't read this session's calendar event (calendar access may have been removed): check with the principal how to proceed";
+export const UNTIMED_NOTE =
+  "This session's calendar event has no start and end time (an all-day event?): check with the principal when to hold it";
+
+/**
+ * Read an agenda's event through the calendar router. A calendar that no longer routes (its
+ * mailbox removed, or unregistered) and a refused grant are EVENT_UNREADABLE; a gone event is
+ * null; anything else (network, rate limit, a route that may resolve shortly) throws.
+ */
+export async function readAgendaEvent(
+  router: Pick<CalendarRouter, 'route'>,
+  calendarId: string,
+  eventId: string,
+): Promise<AgendaEventRead> {
+  let routed: Awaited<ReturnType<CalendarRouter['route']>>;
+  try {
+    routed = await router.route(calendarId);
+  } catch (err) {
+    // owner_unconfirmed is a listing failure that may clear; every other route error is permanent.
+    if (err instanceof CalendarRouteError && err.code !== 'owner_unconfirmed') return EVENT_UNREADABLE;
+    throw err;
+  }
+  let event: Awaited<ReturnType<typeof routed.client.getEvent>>;
+  try {
+    event = await routed.client.getEvent(routed.calendarId, eventId);
+  } catch (err) {
+    const status = nylasStatus(err);
+    // A 404 means the event is gone (deleted), which the sync treats as cancelled.
+    if (status === 404) return null;
+    // 401/403: access refused (grant revoked or invalid). Reported once, not retried forever.
+    if (status === 401 || status === 403) return EVENT_UNREADABLE;
+    throw err;
+  }
+  if (event.startTime === null || event.endTime === null) return EVENT_UNTIMED;
+  return {
+    start: new Date(event.startTime * 1000),
+    end: new Date(event.endTime * 1000),
+    status: event.status === 'cancelled' ? 'cancelled' : 'confirmed',
+  };
+}
 
 const MINUTE_MS = 60_000;
 
@@ -95,19 +146,24 @@ export class AgendaEventSync {
   }
 
   private async syncOne(agenda: AgendaDoc, calendarId: string, eventId: string, now: Date): Promise<void> {
-    let event: AgendaCalendarEvent | null | typeof EVENT_UNREADABLE;
+    let event: AgendaEventRead;
     try {
       event = await this.o.getEvent(calendarId, eventId);
     } catch (err) {
-      // Unreadable this time (network, rate limit, no calendar connected): try again next sweep.
-      // Class and status only: a Nylas error can carry the grant id (R20).
-      this.o.logger.warn({ ...grantSafeErrorFields(err), agendaId: agenda.agendaId }, 'agenda event sync: could not read the event, skipping this sweep');
+      // Unreadable this time (network, rate limit): try again next sweep. The message is logged
+      // only for an error that cannot carry a Nylas grant id (R20).
+      const message = err instanceof Error && !mayCarryGrantId(err) ? { errMessage: err.message } : {};
+      this.o.logger.warn(
+        { ...grantSafeErrorFields(err), ...message, agendaId: agenda.agendaId },
+        'agenda event sync: could not read the event, skipping this sweep',
+      );
       return;
     }
 
-    if (event === EVENT_UNREADABLE) {
+    // Never readable as a session time: told once, then not read again.
+    if (event === EVENT_UNREADABLE || event === EVENT_UNTIMED) {
       const marked = await this.o.store.markEvent(agenda.agendaId, { eventState: 'unreadable' });
-      if (marked) await this.wake(agenda, UNREADABLE_NOTE);
+      if (marked) await this.wake(agenda, event === EVENT_UNTIMED ? UNTIMED_NOTE : UNREADABLE_NOTE);
       return;
     }
 

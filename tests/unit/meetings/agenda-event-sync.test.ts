@@ -2,17 +2,22 @@ import { describe, expect, it, vi } from 'vitest';
 import { createSilentLogger } from '../../../src/logger.js';
 import {
   AgendaEventSync,
-  type AgendaCalendarEvent,
   CANCELLED_NOTE,
+  type AgendaEventRead,
   EVENT_UNREADABLE,
+  EVENT_UNTIMED,
   NO_SHOW_NOTE,
   NUDGE_NOTE,
+  readAgendaEvent,
   UNREADABLE_NOTE,
+  UNTIMED_NOTE,
 } from '../../../src/meetings/agenda-event-sync.js';
+import { CalendarRouteError } from '../../../src/channels/calendar/calendar-router.js';
 import { prepareSessionAgendas } from '../../../src/meetings/session-agendas.js';
 import { memoryWorkingDocsRepo } from './memory-working-docs-repo.js';
 import { AgendaStore } from '../../../src/meetings/agenda-store.js';
 import type { AgendaHistoryEntry } from '../../../src/meetings/types.js';
+import type { CalendarRouter } from '../../../src/channels/calendar/calendar-router.js';
 
 const NOW = new Date('2026-11-20T15:00:00.000Z');
 const MIN = 60_000;
@@ -32,7 +37,7 @@ async function setup(opts: { start: Date; end?: Date; scheduledFor?: Date | null
     calendarId: 'cal-1',
     ownerTaskId: opts.owner === undefined ? OWNER : opts.owner,
   }, NOW);
-  let event: AgendaCalendarEvent | null | Error | typeof EVENT_UNREADABLE = {
+  let event: AgendaEventRead | Error = {
     start: opts.start,
     end: opts.end ?? new Date(opts.start.getTime() + 30 * MIN),
     status: 'confirmed',
@@ -49,7 +54,7 @@ async function setup(opts: { start: Date; end?: Date; scheduledFor?: Date | null
     sync,
     wakeOwner,
     getEvent,
-    setEvent: (next: AgendaCalendarEvent | null | Error | typeof EVENT_UNREADABLE) => { event = next; },
+    setEvent: (next: AgendaEventRead | Error) => { event = next; },
   };
 }
 
@@ -124,6 +129,18 @@ describe('AgendaEventSync', () => {
     expect((await t.store.get(t.agendaId))!.eventState).toBe('unreadable');
   });
 
+  it('an all-day event wakes the owner once to ask when, and is not read again', async () => {
+    const t = await setup({ start: new Date(NOW.getTime() + 3 * 60 * MIN) });
+    t.setEvent(EVENT_UNTIMED);
+
+    await t.sync.tick(NOW);
+    await t.sync.tick(new Date(NOW.getTime() + 15 * MIN));
+
+    expect(t.wakeOwner).toHaveBeenCalledTimes(1);
+    expect(t.wakeOwner).toHaveBeenCalledWith(OWNER, UNTIMED_NOTE);
+    expect(t.getEvent).toHaveBeenCalledTimes(1);
+  });
+
   it('nudges once when the session is about to start', async () => {
     const start = new Date(NOW.getTime() + 10 * MIN);
     const t = await setup({ start });
@@ -194,5 +211,36 @@ describe('AgendaEventSync', () => {
 
     expect(t.wakeOwner).not.toHaveBeenCalled();
     expect(await t.store.get(t.agendaId)).toBeNull();
+  });
+});
+
+describe('readAgendaEvent', () => {
+  const routerWith = (getEvent: () => Promise<unknown>, routeErr?: Error) => ({
+    route: vi.fn(async () => {
+      if (routeErr) throw routeErr;
+      return { mailboxId: 'm1', calendarId: 'cal-1', client: { getEvent }, placedBy: 'owner' };
+    }),
+  }) as unknown as Pick<CalendarRouter, 'route'>;
+  const status = (code: number) => Object.assign(new Error('nylas'), { statusCode: code });
+
+  it('reads a timed event', async () => {
+    const r = routerWith(async () => ({ startTime: 1_700_000_000, endTime: 1_700_001_800, status: 'confirmed' }));
+    expect(await readAgendaEvent(r, 'cal-1', 'evt-1')).toEqual({
+      start: new Date(1_700_000_000_000), end: new Date(1_700_001_800_000), status: 'confirmed',
+    });
+  });
+
+  it('an all-day event is untimed; a gone event is null; refused access is unreadable', async () => {
+    expect(await readAgendaEvent(routerWith(async () => ({ startTime: null, endTime: null, status: 'confirmed' })), 'c', 'e')).toBe(EVENT_UNTIMED);
+    expect(await readAgendaEvent(routerWith(async () => { throw status(404); }), 'c', 'e')).toBeNull();
+    expect(await readAgendaEvent(routerWith(async () => { throw status(403); }), 'c', 'e')).toBe(EVENT_UNREADABLE);
+    await expect(readAgendaEvent(routerWith(async () => { throw status(503); }), 'c', 'e')).rejects.toThrow('nylas');
+  });
+
+  it('a calendar that no longer routes is unreadable; an unconfirmed owner is retried', async () => {
+    const removed = new CalendarRouteError('mailbox_removed', 'gone');
+    expect(await readAgendaEvent(routerWith(async () => null, removed), 'c', 'e')).toBe(EVENT_UNREADABLE);
+    const unconfirmed = new CalendarRouteError('owner_unconfirmed', 'try again');
+    await expect(readAgendaEvent(routerWith(async () => null, unconfirmed), 'c', 'e')).rejects.toThrow('try again');
   });
 });
