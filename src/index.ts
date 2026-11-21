@@ -256,6 +256,7 @@ import { readTriageCadences, type Cadence } from './principal-mailboxes/triage-c
 import { inMemoryTriageConfig, TriageState, TRIAGE_NAMESPACE } from './principal-mailboxes/triage-state.js';
 import { isTriageHeld } from './onboarding/triage-hold.js';
 import { OnboardingService } from './onboarding/onboarding-service.js';
+import { OnboardingSubscribers } from './onboarding/subscribers.js';
 import { createOnboardingTurnContext } from './onboarding/turn-context.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
 import { unreadCandidateProbe } from './principal-mailboxes/triage-candidate.js';
@@ -3853,6 +3854,25 @@ async function main(): Promise<void> {
   });
   planFrontierSubscriber.start();
 
+  // The Google OAuth client id on the Nylas Google connector, read with the live key; undefined when
+  // unknown. Shared by the onboarding blocked-sign-in notice and the sign-in resume subscriber.
+  const googleOAuthClientId = async (): Promise<string | undefined> => {
+    const apiKey = await nylasSignInReaders.readApiKey();
+    if (!apiKey) return undefined;
+    const apiUri = nylasApiUri(await nylasSignInReaders.readRegion());
+    const connectors = await new NylasAppClient({ apiKey, apiUri, logger }).listConnectors();
+    return connectors.find((c) => c.provider === 'google')?.clientId;
+  };
+
+  // Onboarding (#2360): pairing, mailbox connection and blocked sign-ins wake the onboarding program.
+  new OnboardingSubscribers({
+    bus,
+    taskRepo,
+    scheduler: schedulerService,
+    configStore: triageConfig,
+    logger,
+    googleClientId: googleOAuthClientId,
+  }).start();
 
   let meetingRecovery: MeetingPipelineRecovery | undefined;
   if (workingDocsRepo) {
@@ -4079,13 +4099,7 @@ async function main(): Promise<void> {
     bus,
     logger,
     registerRouting: (taskEventId, routing) => dispatcher.registerExternalTaskRouting(taskEventId, routing),
-    googleClientId: async () => {
-      const apiKey = await nylasSignInReaders.readApiKey();
-      if (!apiKey) return undefined;
-      const apiUri = nylasApiUri(await nylasSignInReaders.readRegion());
-      const connectors = await new NylasAppClient({ apiKey, apiUri, logger }).listConnectors();
-      return connectors.find((c) => c.provider === 'google')?.clientId;
-    },
+    googleClientId: googleOAuthClientId,
     ...(outboundGateway
       ? {
           notifier: {
