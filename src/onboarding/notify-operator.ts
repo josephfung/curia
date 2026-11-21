@@ -35,9 +35,12 @@ export async function notifyOperator(
     deps.logger.error({ err, taskId, event }, 'onboarding: failed to record operator notice');
     return false;
   }
-  deps.logger.warn({ taskId, event, details }, 'onboarding: operator notice');
+  // Detail values can carry model-supplied text, so logs and audit get the key names only
+  // (review checklist: ids and counts, not content). Delivering the details is #2365's job.
+  const detailKeys = details ? Object.keys(details) : [];
+  deps.logger.warn({ taskId, event, detailKeys }, 'onboarding: operator notice');
   try {
-    deps.audit?.({ type: 'onboarding.operator_notice', taskId, event, details });
+    deps.audit?.({ type: 'onboarding.operator_notice', taskId, event, detailKeys });
   } catch (err) {
     // Best-effort: the notice is already on the task; a failed audit must not report it unrecorded.
     deps.logger.error({ err, taskId, event }, 'onboarding: operator notice audit failed — the notice is recorded on the task');

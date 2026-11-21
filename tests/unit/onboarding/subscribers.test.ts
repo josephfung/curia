@@ -99,7 +99,7 @@ describe('OnboardingSubscribers', () => {
     await expect(t.fire(connected())).resolves.toBeUndefined();
   });
 
-  it('a blocked sign-in notifies the operator once, with the client id', async () => {
+  it('a blocked sign-in notifies the operator once, logging detail keys but not values', async () => {
     warn.mockClear();
     const t = await setup({ open: true });
     await t.fire(blocked());
@@ -108,9 +108,10 @@ describe('OnboardingSubscribers', () => {
     expect(t.taskRepo.updateTask).toHaveBeenCalledWith('t1', { progressNote: 'Operator notice: mailbox_signin_blocked' });
     expect(t.scheduler.enqueueTaskWake).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'mailbox_signin_blocked', details: { outcome: 'admin_blocked', clientId: 'client-123' } }),
+      expect.objectContaining({ event: 'mailbox_signin_blocked', detailKeys: ['outcome', 'clientId'] }),
       'onboarding: operator notice',
     );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('client-123');
     const saved = JSON.parse(t.data.get('onboarding/state')!) as OnboardingState;
     expect(saved.operatorNotified).toContain('mailbox_signin_blocked');
   });
