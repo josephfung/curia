@@ -1321,21 +1321,26 @@ export class SchedulerService {
   }
 
   /**
-   * Run a task's pending wake at `runAt` without losing the time it was booked for (#2360): a
-   * pending task-wake due later than `runAt` moves to it, and its booked time is parked on
-   * deferred_wake_at. The run's completion (or a failed run's re-arm) then arms that time again on
-   * the same row, as for a task that rescheduled itself from inside its own wake (#1938); a new
-   * wake_at set during the run replaces it. Updating in place keeps
-   * scheduled_jobs_one_active_wake_per_task_uq satisfied. Returns whether a wake moved.
+   * Run a task's wake at `runAt` without losing the time it was booked for (#2360), so a note added
+   * by an event is read before the next booked run. A pending task-wake due later than `runAt` moves
+   * to it, and its booked time is parked on deferred_wake_at. The run's completion (or a failed
+   * run's re-arm) then arms that time again on the same row, as for a task that rescheduled itself
+   * from inside its own wake (#1938); a new wake_at set during the run replaces it. A running wake
+   * with nothing deferred gets deferred_wake_at = `runAt`, so its completion re-arms it for one more
+   * run that reads the note (the running one may have started before it). A running wake that
+   * already holds a deferred time is left alone: one row cannot hold both. Updating in place keeps
+   * scheduled_jobs_one_active_wake_per_task_uq satisfied. Returns whether a wake changed.
    */
   async runTaskWakeEarly(taskId: string, runAt: Date): Promise<boolean> {
     const result = await this.pool.query(
       `UPDATE scheduled_jobs
-          SET deferred_wake_at = COALESCE(deferred_wake_at, run_at), run_at = $2, next_run_at = $2
+          SET deferred_wake_at = CASE WHEN status = 'pending' THEN COALESCE(deferred_wake_at, run_at) ELSE $2 END,
+              run_at = CASE WHEN status = 'pending' THEN $2 ELSE run_at END,
+              next_run_at = CASE WHEN status = 'pending' THEN $2 ELSE next_run_at END
         WHERE task_id = $1
           AND task_payload->>'type' = 'task-wake'
-          AND status = 'pending'
-          AND run_at > $2`,
+          AND cron_expr IS NULL
+          AND ((status = 'pending' AND run_at > $2) OR (status = 'running' AND deferred_wake_at IS NULL))`,
       [taskId, runAt],
     );
     return (result.rowCount ?? 0) > 0;

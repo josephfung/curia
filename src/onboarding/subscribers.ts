@@ -143,7 +143,7 @@ export async function noteAndWakeCoordinator(
     const now = new Date();
     const movedEarly = await o.scheduler.runTaskWakeEarly(task.id, now);
     o.logger.debug({ taskId: task.id, movedEarly }, movedEarly
-      ? 'onboarding: the booked wake runs now and keeps its booked time'
-      : 'a coordinator wake is already pending');
+      ? 'onboarding: the active wake runs now (or once more) and keeps its booked time'
+      : 'a coordinator wake is already due');
   }
 }
