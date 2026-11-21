@@ -1106,6 +1106,8 @@ a.dash-num-link:focus-visible, .dash-num-link:has(.dash-num-open:focus-visible) 
   font-size: 12px;
 }
 .invite-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Starting onboarding (#2360): the message to send with the invitation link. */
+.onboarding-message { margin: 0; font-size: 13px; color: var(--app-fg-muted); overflow-wrap: anywhere; }
 .pair-steps {
   margin: 0;
   padding-left: 1.2em;

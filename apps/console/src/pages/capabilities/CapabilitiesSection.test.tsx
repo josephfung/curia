@@ -39,12 +39,19 @@ function registry(): Record<'agents' | 'skills' | 'tools', RegistryEntry[]> {
   };
 }
 
-function stub(opts: { failOn?: string; edit?: (reg: ReturnType<typeof registry>) => void } = {}) {
+function stub(opts: { failOn?: string; held?: boolean; edit?: (reg: ReturnType<typeof registry>) => void } = {}) {
   const reg = registry();
   opts.edit?.(reg);
   const posts: string[] = [];
+  let held = opts.held ?? false;
   vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
     const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    if (path === '/api/onboarding/status') return json(200, { triageHeld: held });
+    if (path === '/api/onboarding/triage-hold' && init?.method === 'DELETE') {
+      posts.push('release triage hold');
+      held = false;
+      return json(200, { held: false });
+    }
     const list = /^\/api\/registry\/(agents|skills|tools)$/.exec(path);
     if (list) return json(200, { [list[1]!]: reg[list[1] as 'agents'] });
     const act = /^\/api\/registry\/(agents|skills|tools)\/([^/]+)\/(install-enable|disable)$/.exec(path);
@@ -188,6 +195,7 @@ describe('CapabilitiesSection', () => {
     const reg = registry();
     vi.stubGlobal('fetch', vi.fn(async (path: string, _init?: RequestInit) => {
       const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+      if (path === '/api/onboarding/status') return json(200, { triageHeld: false });
       const list = /^\/api\/registry\/(agents|skills|tools)$/.exec(path);
       if (list) return json(200, { [list[1]!]: reg[list[1] as 'agents'] });
       const act = /^\/api\/registry\/(agents|skills|tools)\/([^/]+)\/(install-enable|disable)$/.exec(path)!;
@@ -266,6 +274,20 @@ describe('CapabilitiesSection', () => {
       .toBe('Meeting debriefs off. It applies after a restart. Couldn’t read Curia’s capabilities: db down Reload the page to see where things are.');
     expect(host!.querySelectorAll('[role="checkbox"]').length).toBe(6);
     expect(sw('Web research').disabled).toBe(true);
+  });
+
+  it('shows Email triage held by onboarding as held, and switching it on releases the hold', async () => {
+    const { posts } = stub({ held: true, edit: (reg) => {
+      reg.agents.find((e) => e.name === 'ceo-inbox')!.state = 'enabled';
+      for (const b of ['ceo-inbox', 'learning']) reg.skills.find((e) => e.name === b)!.state = 'enabled';
+    } });
+    await render('settings');
+    expect(host!.textContent).toContain('Held until Dana hears what to expect');
+    expect(sw('Email triage').getAttribute('aria-checked')).toBe('false');
+    await click('Email triage');
+    expect(posts).toEqual(['release triage hold']);
+    expect(sw('Email triage').getAttribute('aria-checked')).toBe('true');
+    expect(host!.querySelector('[role="status"]')!.textContent).toBe('Email triage on.');
   });
 
   it('in Setup, keeps Meetings on and Email triage off, both locked', async () => {

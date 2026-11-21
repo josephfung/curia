@@ -1,7 +1,9 @@
-// The Finish steps (#2358): Apply & restart, and Start onboarding.
+// The Finish steps (#2358): Apply & restart, and Start onboarding or Not right now (#2360).
 import { useEffect, useRef, useState, type JSX } from 'react';
 import { apiFetch } from '../../api.js';
+import { Modal } from '../../components/Modal.js';
 import { errorMessage } from '../../components/settings/ConfigHistory.js';
+import { invitationSummary } from '../devices/invitation-state.js';
 import {
   evaluateRestartPoll,
   parseSystemPollResponse,
@@ -9,22 +11,25 @@ import {
   RESTART_POLL_INTERVAL_MS,
   RESTART_TIMEOUT_MS,
 } from '../system-utils.js';
+import type { MessagingRoute, SetupFor } from './setup-api.js';
 import { stepsLeft, type Checklist } from './setup-steps.js';
 import { StatusLine, StepFooter } from './setup-ui.js';
+import {
+  helloText,
+  invitationMessage,
+  notRightNowText,
+  readBootedAt,
+  RESTART_SLOW,
+  signalText,
+  useStartOnboarding,
+  type StartFlow,
+} from './start-onboarding.js';
 
 type RestartUi =
   | { kind: 'idle' }
   | { kind: 'restarting'; previousBootedAt: string; startedAtMs: number }
   | { kind: 'done' }
   | { kind: 'failed'; message: string };
-
-async function readBootedAt(signal?: AbortSignal): Promise<string> {
-  const res = await apiFetch('/api/system', signal ? { signal } : undefined);
-  if (!res.ok) throw new Error(await errorMessage(res));
-  const parsed = parseSystemPollResponse(res.status, await res.json() as unknown);
-  if (parsed.kind !== 'ok') throw new Error('Could not read the server’s start time.');
-  return parsed.snapshot.bootedAt;
-}
 
 /**
  * One restart turns on everything saved, then every step is checked again. Polls
@@ -128,57 +133,222 @@ export function ApplyStep(props: {
   );
 }
 
+/** Before starting on an install that already looks in use: what was seen, and a confirm. */
+export function WorkingPrincipalDialog(props: {
+  signals: string[];
+  principal: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}): JSX.Element {
+  return (
+    <Modal
+      title="Start onboarding anyway?"
+      onClose={props.onCancel}
+      footer={(
+        <>
+          <button type="button" className="btn" data-autofocus onClick={props.onCancel}>Cancel</button>
+          <button type="button" className="btn btn-primary" onClick={props.onConfirm}>Start onboarding</button>
+        </>
+      )}
+    >
+      <p>Curia already looks in use:</p>
+      <ul>{props.signals.map((s) => <li key={s}>{signalText(s, props.principal)}</li>)}</ul>
+      <p>Starting onboarding holds Email triage until {props.principal} hears what to expect.</p>
+    </Modal>
+  );
+}
+
 /**
- * Locked until every required step is done. This finishes Setup (POST /api/setup/complete):
- * the console leaves this page. The web thread is no longer rotated here; starting onboarding
- * (POST /api/onboarding/start, #2360) rotates it. A full page load follows.
+ * What Start did: the invitation link with wording to send (the app route), or what Curia sent
+ * (the others), and, when Start restarts Curia, the wait for it to come back.
+ */
+export function OnboardingStarted(props: {
+  flow: Extract<StartFlow, { kind: 'started' }>;
+  route: MessagingRoute | null;
+  setupFor: SetupFor | null;
+  principal: string;
+  continueLabel: string;
+  onContinue: () => void;
+}): JSX.Element {
+  const { flow, principal, setupFor } = props;
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const invitation = flow.invitation;
+  const self = setupFor === 'self';
+  const message = invitation ? invitationMessage(invitation.url, setupFor, principal) : null;
+  const hello = invitation ? null : helloText(props.route);
+
+  async function copy(text: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+    } catch (err) {
+      console.error('[onboarding] copy failed:', err);
+      setCopyError('Could not copy it. Select it and copy it by hand.');
+    }
+  }
+
+  return (
+    <div className="onboarding-started">
+      <StatusLine kind="ok">Onboarding started.</StatusLine>
+      {invitation && message && (
+        <>
+          <p>
+            {self
+              ? 'This invitation is for you: open it on your phone to install Curia and sign in. Curia says hello once you’re in. The link is valid for 48 hours.'
+              : `Send ${principal} this invitation, in a text or a message. It installs Curia on their phone, and Curia says hello once they’re in. The link is valid for 48 hours.`}
+          </p>
+          <div className="pair-code">
+            <input
+              className="invite-link"
+              aria-label="Invitation link"
+              readOnly
+              value={invitation.url}
+              onFocus={(event) => event.currentTarget.select()}
+            />
+            {!self && <p className="onboarding-message">{message}</p>}
+            <div className="invite-actions">
+              <button type="button" className="btn btn-primary" onClick={() => { void copy(self ? invitation.url : message); }}>
+                {copied ? 'Copied ✓' : self ? 'Copy link' : 'Copy message'}
+              </button>
+            </div>
+            <p className="device-meta">
+              {invitationSummary({ id: '', state: 'waiting', expiresAt: invitation.expiresAt, redeemedAt: null, deviceName: null })}.
+              {' '}This is the only time the link is shown. If you lose it, create a new one from Devices.
+            </p>
+          </div>
+          {copyError && <p className="setup-status attention" role="alert">{copyError}</p>}
+        </>
+      )}
+      {hello && <p>{hello}</p>}
+      {flow.restart === 'waiting' && <StatusLine kind="neutral">Curia is restarting to switch on Email triage, held for now… this page reconnects by itself.</StatusLine>}
+      {flow.restart === 'back' && <StatusLine kind="ok">Curia restarted.</StatusLine>}
+      {flow.restart === 'slow' && <p className="setup-status attention" role="alert">{RESTART_SLOW}</p>}
+      <div className="setup-foot">
+        <button type="button" className="btn btn-primary" disabled={flow.restart === 'waiting'} onClick={props.onContinue}>
+          {props.continueLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Locked until every required step is done. Both choices finish Setup (POST /api/setup/complete):
+ * Start onboarding then starts it (POST /api/onboarding/start, which rotates the web thread);
+ * Not right now asks first, and leaves it for the dashboard alert. A full page load follows.
  */
 export function StartStep(props: {
   checklist: Checklist | null;
   principal: string;
+  setupFor: SetupFor | null;
+  route: MessagingRoute | null;
   onRefresh: () => Promise<void>;
   onHelp?: () => void;
 }): JSX.Element {
   const [error, setError] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
+  const [finishing, setFinishing] = useState<'start' | 'later' | null>(null);
+  const [notNow, setNotNow] = useState(false);
   const ready = props.checklist?.setupComplete === true;
   const left = stepsLeft(props.checklist);
+  const { flow, start, cancel } = useStartOnboarding({ principal: props.principal, onSetupIncomplete: props.onRefresh });
+  const busy = finishing !== null || flow.kind === 'working';
 
-  async function start(): Promise<void> {
-    setStarting(true);
+  /** POST /api/setup/complete. True when Setup is over; otherwise the step says why. */
+  async function finishSetup(choice: 'start' | 'later'): Promise<boolean> {
+    setFinishing(choice);
     setError(null);
     try {
       const res = await apiFetch('/api/setup/complete', { method: 'POST' });
       if (res.status === 409) {
         // A live check changed since the page loaded: re-read the checklist, so the step
-        // list and the note show what is missing now, and the button locks again.
+        // list and the note show what is missing now, and the buttons lock again.
         setError('Something stopped passing since this page loaded. The steps below show what’s left.');
         await props.onRefresh();
-        setStarting(false);
-        return;
+        return false;
       }
       if (!res.ok) throw new Error(await errorMessage(res));
-      window.location.assign('/');
+      return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not start onboarding.');
-      setStarting(false);
+      setError(err instanceof Error ? err.message : 'Could not finish Setup.');
+      return false;
+    } finally {
+      setFinishing(null);
     }
+  }
+
+  async function startOnboarding(): Promise<void> {
+    if (await finishSetup('start')) await start(false);
+  }
+
+  async function notRightNow(): Promise<void> {
+    setNotNow(false);
+    if (await finishSetup('later')) window.location.assign('/');
+  }
+
+  if (flow.kind === 'started') {
+    return (
+      <div>
+        <h2>Start onboarding</h2>
+        <OnboardingStarted
+          flow={flow}
+          route={props.route}
+          setupFor={props.setupFor}
+          principal={props.principal}
+          continueLabel="Open the console"
+          onContinue={() => window.location.assign('/')}
+        />
+      </div>
+    );
   }
 
   return (
     <div>
       <h2>Start onboarding</h2>
-      <p className="setup-lede">Starting ends Setup and hands Curia to {props.principal}: the console opens on their own, fresh conversation.</p>
+      <p className="setup-lede">
+        Onboarding is {props.setupFor === 'self' ? 'your' : `${props.principal}’s`} first conversation with Curia. Start it now, or later from the dashboard. Either way, this ends Setup.
+      </p>
       {!ready && left.length > 0 && (
         <div className="setup-note">Finish {left.map((s) => s.name.toLowerCase()).join(', ')} first.</div>
       )}
+      {flow.kind === 'already_started' && <StatusLine kind="ok">Onboarding has already started.</StatusLine>}
       {error && <p className="setup-status attention" role="alert">{error}</p>}
-      <StepFooter
-        primary={starting ? 'Starting…' : 'Start onboarding'}
-        primaryDisabled={!ready || starting}
-        onPrimary={() => void start()}
-        onHelp={props.onHelp}
-      />
+      {flow.kind === 'failed' && <p className="setup-status attention" role="alert">{flow.message}</p>}
+      {flow.kind === 'confirm' && (
+        <WorkingPrincipalDialog
+          signals={flow.signals}
+          principal={props.principal}
+          onConfirm={() => void start(true)}
+          onCancel={cancel}
+        />
+      )}
+      {notNow && (
+        <Modal
+          title="Not right now?"
+          onClose={() => setNotNow(false)}
+          footer={(
+            <>
+              <button type="button" className="btn" data-autofocus onClick={() => setNotNow(false)}>Back</button>
+              <button type="button" className="btn btn-primary" onClick={() => void notRightNow()}>Finish Setup</button>
+            </>
+          )}
+        >
+          <p>{notRightNowText(props.setupFor, props.principal)}</p>
+        </Modal>
+      )}
+      {flow.kind === 'already_started' ? (
+        <StepFooter primary="Open the console" onPrimary={() => window.location.assign('/')} onHelp={props.onHelp} />
+      ) : (
+        <StepFooter
+          primary={busy && finishing !== 'later' ? 'Starting…' : 'Start onboarding'}
+          primaryDisabled={!ready || busy}
+          onPrimary={() => void startOnboarding()}
+          secondary={finishing === 'later' ? 'Finishing…' : 'Not right now'}
+          secondaryDisabled={!ready || busy}
+          onSecondary={() => setNotNow(true)}
+          onHelp={props.onHelp}
+        />
+      )}
     </div>
   );
 }

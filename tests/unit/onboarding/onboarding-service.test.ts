@@ -297,8 +297,8 @@ describe('OnboardingService.status', () => {
 
   it('shows the alert after Setup completed and before onboarding starts', async () => {
     const h = makeHarness();
-    expect((await h.service.status()).showDashboardAlert).toBe(true);
+    expect(await h.service.status()).toMatchObject({ showDashboardAlert: true, triageHeld: false });
     await h.service.start({ actor: 'operator' });
-    expect(await h.service.status()).toMatchObject({ started: true, showDashboardAlert: false });
+    expect(await h.service.status()).toMatchObject({ started: true, showDashboardAlert: false, triageHeld: true });
   });
 });

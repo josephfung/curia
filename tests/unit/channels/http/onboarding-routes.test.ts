@@ -78,3 +78,17 @@ describe('POST /api/onboarding/start', () => {
     await app.close();
   });
 });
+
+describe('GET /api/onboarding/status', () => {
+  it('answers with the service status, including whether Email triage is held', async () => {
+    const { app, onboarding } = await appWith();
+    onboarding.status.mockResolvedValue({
+      started: true, taskId: 'task-1', showDashboardAlert: false, workingPrincipalSignals: [],
+      route: 'app', setupFor: 'other', principalName: 'Avery Example', triageHeld: true,
+    });
+    const res = await app.inject({ method: 'GET', url: '/api/onboarding/status', headers: SESSION_HEADERS });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ started: true, triageHeld: true });
+    await app.close();
+  });
+});

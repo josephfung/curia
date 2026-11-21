@@ -43,7 +43,7 @@ import {
   ONBOARDING_TASK_TAG,
   type OnboardingState,
 } from './state.js';
-import { releaseTriageHold, setTriageHold } from './triage-hold.js';
+import { isTriageHeld, releaseTriageHold, setTriageHold } from './triage-hold.js';
 import { RECURRING_SESSION, topicSubtasks } from './subtasks.js';
 import { FIRST_CONVERSATION_SESSION, ONBOARDING_CREATED_BY, RESTART_WAKE_DELAY_SECONDS } from './constants.js';
 
@@ -89,6 +89,8 @@ export type OnboardingStatus = {
   route: MessagingRoute | null;
   setupFor: SetupFor | null;
   principalName: string | null;
+  /** Email triage is held until the principal hears what to expect (Capabilities shows it). */
+  triageHeld: boolean;
 };
 
 export type StartResult =
@@ -158,11 +160,12 @@ export class OnboardingService {
 
   async status(): Promise<OnboardingStatus> {
     const { pool, taskRepo, configStore, logger } = this.deps;
-    const [setup, task, state, principalName] = await Promise.all([
+    const [setup, task, state, principalName, triageHeld] = await Promise.all([
       readSetupState(pool),
       findOpenOnboardingTask(taskRepo),
       readOnboardingState(configStore, logger),
       this.deps.principalName(),
+      isTriageHeld(configStore, logger),
     ]);
     // Started once a start has run, even after its task is done: the alert must not come back.
     const started = task !== null || state !== null;
@@ -176,6 +179,7 @@ export class OnboardingService {
       route: setup.messagingRoute,
       setupFor: setup.setupFor,
       principalName,
+      triageHeld,
     };
   }
 
