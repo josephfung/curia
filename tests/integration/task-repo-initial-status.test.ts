@@ -14,6 +14,9 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
 
 const PREFIX = 'TaskRepoStatus Test';
+// The heartbeat selector reads every curia task in the database and keeps one candidate per
+// agent. A source agent of this suite's own keeps unrelated open tasks out of that agent's slot.
+const HEARTBEAT_AGENT = 'task-repo-status-heartbeat';
 const logger = pino({ level: 'silent' });
 const noopBus = { publish: async () => {}, subscribe: () => {} } as unknown as EventBus;
 
@@ -81,17 +84,19 @@ describeIf('TaskRepo.createTask initial status (#2360)', () => {
 
   it('a task created waiting on a contact is never a heartbeat candidate', async () => {
     const waiting = await repo.createTask({
-      agentId: 'coordinator', title: `${PREFIX} parked`, source: 'scheduler', sourceAgentId: 'coordinator',
+      agentId: 'coordinator', title: `${PREFIX} parked`, source: 'scheduler', sourceAgentId: HEARTBEAT_AGENT,
       status: 'waiting', waitingOnContactId: contactId,
     });
     const open = await repo.createTask({
-      agentId: 'coordinator', title: `${PREFIX} idle`, source: 'scheduler', sourceAgentId: 'coordinator',
+      agentId: 'coordinator', title: `${PREFIX} idle`, source: 'scheduler', sourceAgentId: HEARTBEAT_AGENT,
     });
-    // Age both past the idle and stale-wait thresholds.
-    await pool.query(`UPDATE tasks SET updated_at = now() - interval '60 hours' WHERE id = ANY($1::uuid[])`, [[waiting.id, open.id]]);
+    // Age both past the idle and stale-wait thresholds. The waiting task is the older, so it
+    // would take the agent's one slot if it were a candidate at all.
+    await pool.query(`UPDATE tasks SET updated_at = now() - interval '70 hours' WHERE id = $1`, [waiting.id]);
+    await pool.query(`UPDATE tasks SET updated_at = now() - interval '60 hours' WHERE id = $1`, [open.id]);
     const got = (await selectHeartbeatCandidates(pool, {
-      eligibleAgents: ['coordinator'], idleThresholdHours: 4, staleWaitThresholdHours: 48, maxWakes: 50,
-    })).map((c) => c.id);
+      eligibleAgents: [HEARTBEAT_AGENT], idleThresholdHours: 4, staleWaitThresholdHours: 48, maxWakes: 50,
+    })).filter((c) => c.agentId === HEARTBEAT_AGENT).map((c) => c.id);
     expect(got).not.toContain(waiting.id);
     expect(got).toContain(open.id);
   });
