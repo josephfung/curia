@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Pool } from 'pg';
 import pino from 'pino';
-import { OnboardingService, type OnboardingServiceDeps } from '../../../src/onboarding/onboarding-service.js';
+import { OnboardingService, RESTART_RESUME_NOTE, type OnboardingServiceDeps } from '../../../src/onboarding/onboarding-service.js';
 import type { TaskRow } from '../../../src/db/queries/tasks.js';
 import type { CreateTaskParams } from '../../../src/db/task-repo.js';
 import type { RegistryEntry, RegistryKind } from '../../../src/registry/types.js';
@@ -28,6 +28,8 @@ const PLAYBOOK = [
   'Drafts.',
 ].join('\n');
 const FIRST_CONVERSATION_TOPICS = 3;
+/** Everything Start enables already on: no restart. */
+const ALL_REQUIRED_ENABLED = { agent: ['ceo-inbox'], skill: ['ceo-inbox', 'learning', 'tasks'] };
 
 type SetupRow = { phase: string | null; completed_at: Date | null; messaging_route: MessagingRoute | null; setup_for: string | null };
 
@@ -237,7 +239,7 @@ describe('OnboardingService.start', () => {
 
   it('a principal start mints no invitation, wakes no greeting, keeps the web thread and counts the greeting as sent', async () => {
     // App route with no APP_ORIGIN: an operator start would refuse, but the principal is already here.
-    const h = makeHarness({ appOrigin: undefined });
+    const h = makeHarness({ appOrigin: undefined, enabled: ALL_REQUIRED_ENABLED });
     const result = await h.service.start({ actor: 'principal', confirmWorkingPrincipal: true });
     if (!result.ok) throw new Error(`expected ok, got ${result.code}`);
     expect(result.invitation).toBeNull();
@@ -254,6 +256,28 @@ describe('OnboardingService.start', () => {
     expect(state).toMatchObject({ taskId: result.taskId, route: 'app' });
     expect(state?.greetingSentAt).not.toBeNull();
     expect(await isTriageHeld(h.configStore)).toBe(true);
+  });
+
+  it('a principal start on an install with no messaging route starts and records a null route; an operator start is refused', async () => {
+    const operator = makeHarness({ setup: { messaging_route: null } });
+    expect(await operator.service.start({ actor: 'operator', confirmWorkingPrincipal: true })).toEqual({ ok: false, code: 'route_unreachable' });
+
+    const h = makeHarness({ setup: { messaging_route: null }, enabled: ALL_REQUIRED_ENABLED });
+    const result = await h.service.start({ actor: 'principal', confirmWorkingPrincipal: true });
+    expect(result.ok).toBe(true);
+    expect((await readOnboardingState(h.configStore))?.route).toBeNull();
+  });
+
+  it('a principal start that restarts Curia wakes the parent to resume the conversation', async () => {
+    const h = makeHarness({ setup: { messaging_route: 'signal' } });
+    const result = await h.service.start({ actor: 'principal', confirmWorkingPrincipal: true });
+    if (!result.ok) throw new Error(`expected ok, got ${result.code}`);
+    expect(result.restartScheduled).toBe(true);
+    const wakes = h.scheduler.enqueueTaskWake.mock.calls.map((c) => (c as unknown[])[0] as { taskId: string; runAt: Date });
+    const parentWake = wakes.find((w) => w.taskId === result.taskId);
+    expect(parentWake?.runAt.getTime()).toBeGreaterThan(Date.now());
+    const parentCall = h.taskRepo.createTask.mock.calls.find(([p]) => !p.parentTaskId)!;
+    expect(parentCall[0].progressNote).toBe(RESTART_RESUME_NOTE);
   });
 
   it('refuses before creating anything when the principal has no verified id on the route', async () => {

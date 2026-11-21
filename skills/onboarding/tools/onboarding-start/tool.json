@@ -7,7 +7,8 @@
   "inputs": {},
   "outputs": {
     "taskId": "string (the onboarding task id)",
-    "restartScheduled": "boolean (true when Curia restarts in a moment to load what onboarding needs)"
+    "restartScheduled": "boolean (true when Curia restarts in a moment to load what onboarding needs)",
+    "instruction": "string? (when restarting: what to tell the principal first)"
   },
   "permissions": [],
   "secrets": [],

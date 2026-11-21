@@ -20,7 +20,8 @@ const OPEN_STATUSES = ['open', 'in_progress', 'waiting', 'blocked'];
 export type OnboardingState = {
   taskId: string;
   startedAt: string;
-  route: MessagingRoute;
+  /** Null only for a principal-initiated start on an install with no messaging route (pre-Setup installs). */
+  route: MessagingRoute | null;
   greetingSentAt: string | null;
   followUpsSent: number;
   lastFollowUpAt: string | null;
@@ -56,7 +57,7 @@ function isOnboardingState(v: object): v is OnboardingState {
   return (
     typeof o.taskId === 'string' &&
     typeof o.startedAt === 'string' &&
-    typeof o.route === 'string' && (MESSAGING_ROUTES as readonly string[]).includes(o.route) &&
+    (o.route === null || (typeof o.route === 'string' && (MESSAGING_ROUTES as readonly string[]).includes(o.route))) &&
     isNullableString(o.greetingSentAt) &&
     typeof o.followUpsSent === 'number' && Number.isFinite(o.followUpsSent) &&
     isNullableString(o.lastFollowUpAt) &&

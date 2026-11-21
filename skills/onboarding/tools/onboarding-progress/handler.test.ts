@@ -58,7 +58,11 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
       notes.set(id, note);
       return t;
     }),
-    updateTask: vi.fn(async () => null),
+    updateTask: vi.fn(async (id: string, u: { tags?: string[] }) => {
+      const t = tasks.find((x) => x.id === id)!;
+      if (u.tags) t.tags = u.tags;
+      return t;
+    }),
     setActiveSkillsBlock: vi.fn(),
   };
   const store = new Map<string, string>();
@@ -69,7 +73,14 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
       return { stored: true, action: 'set' };
     }),
   };
-  const pool = { connect: vi.fn(async () => ({ query: vi.fn(async () => ({ rows: [] })), release: vi.fn() })) };
+  const setupRow = {
+    phase: 'complete', completed_at: null, messaging_route: 'signal', setup_for: 'other',
+    operator_name: 'Jordan Operator', operator_email: null, voice_route: null,
+  };
+  const pool = {
+    query: vi.fn(async () => ({ rows: [setupRow] })),
+    connect: vi.fn(async () => ({ query: vi.fn(async () => ({ rows: [] })), release: vi.fn() })),
+  };
   const service = new OnboardingService({
     pool: pool as unknown as Pool,
     taskRepo: taskRepo as unknown as OnboardingServiceDeps['taskRepo'],
@@ -83,13 +94,14 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
     scheduleProcessExit: vi.fn(),
     logger,
   });
-  const run = (input: Record<string, unknown>) =>
+  const run = (input: Record<string, unknown>, extra: Partial<ToolContext> = {}) =>
     new OnboardingProgressHandler().execute({
       input,
       log: logger,
       agentId: 'coordinator',
       onboardingService: service,
       taskRepo,
+      ...extra,
     } as unknown as ToolContext);
   const sub = (topicId: string) => tasks.find((t) => t.tags.includes(`onboarding:topic:${topicId}`))!;
   return { run, tasks, taskRepo, notes, sub };
@@ -98,9 +110,9 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
 describe('onboarding-progress', () => {
   it('open_session creates the session subtasks once', async () => {
     const w = makeWorld();
-    const first = await w.run({ action: 'open_session', session_id: 'first-conversation' });
+    const first = await w.run({ op: 'open_session', session_id: 'first-conversation' });
     expect(first.success).toBe(true);
-    const second = await w.run({ action: 'open_session', session_id: 'first-conversation' });
+    const second = await w.run({ op: 'open_session', session_id: 'first-conversation' });
     expect(second.success).toBe(true);
     expect(w.taskRepo.createTask).toHaveBeenCalledTimes(2);
     expect(w.sub('hello').tags).toEqual(['onboarding', 'onboarding:topic:hello', 'onboarding:session:first-conversation']);
@@ -108,38 +120,38 @@ describe('onboarding-progress', () => {
 
   it('topic_done completes the subtask, and the last open ongoing-rhythm subtask completes the parent', async () => {
     const w = makeWorld();
-    await w.run({ action: 'open_session', session_id: 'first-conversation' });
-    await w.run({ action: 'open_session', session_id: 'ongoing-rhythm' });
+    await w.run({ op: 'open_session', session_id: 'first-conversation' });
+    await w.run({ op: 'open_session', session_id: 'ongoing-rhythm' });
 
-    const hello = await w.run({ action: 'topic_done', topic_id: 'hello', outcome: 'done', note: 'Prefers chat.' });
+    const hello = await w.run({ op: 'topic_done', topic_id: 'hello', outcome: 'done', note: 'Prefers chat.' });
     expect(hello.success).toBe(true);
     expect(w.sub('hello').status).toBe('done');
     expect(w.notes.get(w.sub('hello').id)).toContain('Prefers chat.');
 
     // The rhythm topic is done, but an inbox topic is still open: the parent stays open.
-    await w.run({ action: 'topic_done', topic_id: 'propose-rhythm', outcome: 'declined', note: 'No weekly session.' });
+    await w.run({ op: 'topic_done', topic_id: 'propose-rhythm', outcome: 'declined', note: 'No weekly session.' });
     expect(w.notes.get(w.sub('propose-rhythm').id)).toMatch(/declined/i);
     expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('open');
 
-    const last = await w.run({ action: 'topic_done', topic_id: 'inbox-expectations', outcome: 'done', note: 'Labels on.' });
+    const last = await w.run({ op: 'topic_done', topic_id: 'inbox-expectations', outcome: 'done', note: 'Labels on.' });
     expect(last.success).toBe(true);
     expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('done');
   });
 
   it('does not complete the parent while the ongoing-rhythm session has not been opened', async () => {
     const w = makeWorld();
-    await w.run({ action: 'open_session', session_id: 'first-conversation' });
-    await w.run({ action: 'topic_done', topic_id: 'hello', outcome: 'done', note: 'ok' });
-    await w.run({ action: 'topic_done', topic_id: 'inbox-expectations', outcome: 'done', note: 'ok' });
+    await w.run({ op: 'open_session', session_id: 'first-conversation' });
+    await w.run({ op: 'topic_done', topic_id: 'hello', outcome: 'done', note: 'ok' });
+    await w.run({ op: 'topic_done', topic_id: 'inbox-expectations', outcome: 'done', note: 'ok' });
     expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('open');
   });
 
   it('an unknown topic_id fails naming the open topic ids; a topic tag not created by onboarding does not count', async () => {
     const w = makeWorld();
-    await w.run({ action: 'open_session', session_id: 'first-conversation' });
+    await w.run({ op: 'open_session', session_id: 'first-conversation' });
     w.tasks.push(task({ id: 'spoof', parentTaskId: 'parent', createdBy: 'coordinator', tags: ['onboarding', 'onboarding:topic:spoof'] }));
 
-    const result = await w.run({ action: 'topic_done', topic_id: 'spoof', outcome: 'done', note: 'x' });
+    const result = await w.run({ op: 'topic_done', topic_id: 'spoof', outcome: 'done', note: 'x' });
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error).toContain('hello');
@@ -149,18 +161,34 @@ describe('onboarding-progress', () => {
 
   it('topic_done refuses when there is no open onboarding task', async () => {
     const w = makeWorld({ withParent: false });
-    const result = await w.run({ action: 'topic_done', topic_id: 'hello', outcome: 'done', note: 'x' });
+    const result = await w.run({ op: 'topic_done', topic_id: 'hello', outcome: 'done', note: 'x' });
     expect(result.success).toBe(false);
     expect(w.taskRepo.completeTask).not.toHaveBeenCalled();
   });
 
-  it('status fills in the principal name', async () => {
+  it('status fills in the principal name and gives who Setup was for', async () => {
     const w = makeWorld();
-    await w.run({ action: 'open_session', session_id: 'first-conversation' });
-    const result = await w.run({ action: 'status' });
+    await w.run({ op: 'open_session', session_id: 'first-conversation' });
+    const result = await w.run({ op: 'status' });
     if (!result.success) throw new Error(result.error);
     const text = JSON.stringify(result.data);
     expect(text).toContain('Avery Example');
     expect(text).not.toContain('{principal}');
+    expect(result.data).toMatchObject({ setupFor: 'other', operatorName: 'Jordan Operator' });
+  });
+
+  it('status reads an unreadable mailbox directory as not connected', async () => {
+    const w = makeWorld();
+    const mailboxDirectory = { list: vi.fn(async () => { throw new Error('directory down'); }) };
+    const result = await w.run({ op: 'status' }, { mailboxDirectory } as Partial<ToolContext>);
+    if (!result.success) throw new Error(result.error);
+    expect(result.data).toMatchObject({ mailboxConnected: false });
+  });
+
+  it('a declined topic is tagged declined', async () => {
+    const w = makeWorld();
+    await w.run({ op: 'open_session', session_id: 'first-conversation' });
+    await w.run({ op: 'topic_done', topic_id: 'inbox-expectations', outcome: 'declined', note: 'Not now.' });
+    expect(w.sub('inbox-expectations').tags).toContain('onboarding:declined');
   });
 });

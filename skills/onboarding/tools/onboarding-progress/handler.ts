@@ -13,14 +13,16 @@ import type { TaskRow } from '../../../../src/db/queries/tasks.js';
 import { findOpenOnboardingTask } from '../../../../src/onboarding/state.js';
 import { notifyOperator, OPERATOR_EVENTS, type OperatorEvent } from '../../../../src/onboarding/notify-operator.js';
 import {
+  DECLINED_TAG,
   isOpenTask,
   listChildren,
   ONGOING_RHYTHM_SESSION,
+  RECURRING_SESSION,
   topicSubtasks,
   type TopicSubtask,
 } from '../../../../src/onboarding/subtasks.js';
 
-const ACTIONS = ['status', 'open_session', 'topic_done', 'greeting_sent', 'operator_notice'] as const;
+const OPS = ['status', 'open_session', 'topic_done', 'greeting_sent', 'operator_notice'] as const;
 const OUTCOMES = ['done', 'declined'] as const;
 const NOTE_MAX = 2000;
 
@@ -49,15 +51,15 @@ export class OnboardingProgressHandler implements ToolHandler {
     const repo = ctx.taskRepo;
     if (!svc || !repo) return fail('onboarding-progress requires the onboardingService and taskRepo capabilities');
     const input = (ctx.input ?? {}) as Record<string, unknown>;
-    const action = input.action;
-    if (typeof action !== 'string' || !(ACTIONS as readonly string[]).includes(action)) {
-      return fail(`action must be one of: ${ACTIONS.join(', ')}`);
+    const op = input.op;
+    if (typeof op !== 'string' || !(OPS as readonly string[]).includes(op)) {
+      return fail(`op must be one of: ${OPS.join(', ')}`);
     }
     try {
       const parent = await findOpenOnboardingTask(repo);
       if (!parent) return fail('No onboarding is under way: there is no open onboarding task.');
       const deps: Deps = { svc, repo, parent, ctx };
-      switch (action) {
+      switch (op) {
         case 'status': return await status(deps);
         case 'open_session': return await openSession(deps, input);
         case 'topic_done': return await topicDone(deps, input);
@@ -65,7 +67,7 @@ export class OnboardingProgressHandler implements ToolHandler {
         default: return await operatorNotice(deps, input);
       }
     } catch (err) {
-      ctx.log.error({ err, action }, 'onboarding-progress failed');
+      ctx.log.error({ err, op }, 'onboarding-progress failed');
       return fail(err instanceof Error ? err.message : String(err));
     }
   }
@@ -82,12 +84,16 @@ function describeTopic(sub: TopicSubtask, index: Map<string, PlaybookTopic>, nam
 }
 
 async function status({ svc, repo, parent, ctx }: Deps): Promise<ToolResult> {
-  const [sessions, children, name, state] = await Promise.all([
+  const [playbook, children, name, state, setup, mailboxConnected] = await Promise.all([
     svc.playbook(),
     listChildren(repo, parent.id),
     svc.principalDisplayName(),
     svc.readState(),
+    svc.setupContext(),
+    isMailboxConnected(ctx),
   ]);
+  // The weekly section is for recurring sessions after onboarding, not onboarding topics.
+  const sessions = playbook.filter((s) => s.id !== RECURRING_SESSION);
   const subs = topicSubtasks(children);
   const index = topicIndex(sessions);
   // Playbook sessions in order, then any session a subtask names that the playbook no longer has.
@@ -95,7 +101,6 @@ async function status({ svc, repo, parent, ctx }: Deps): Promise<ToolResult> {
   for (const sub of subs) {
     if (sub.sessionId && !known.some((s) => s.id === sub.sessionId)) known.push({ id: sub.sessionId, title: sub.sessionId });
   }
-  const mailboxConnected = ctx.mailboxDirectory ? (await ctx.mailboxDirectory.list()).length > 0 : false;
   return {
     success: true,
     data: {
@@ -114,6 +119,8 @@ async function status({ svc, repo, parent, ctx }: Deps): Promise<ToolResult> {
       }),
       mailboxConnected,
       greetingSent: state?.greetingSentAt != null,
+      setupFor: setup.setupFor,
+      operatorName: setup.operatorName,
     },
   };
 }
@@ -159,6 +166,12 @@ async function topicDone({ repo, parent, ctx }: Deps, input: Record<string, unkn
   }
   const sub = matches[0]!;
   const text = note.slice(0, NOTE_MAX);
+  // Recorded before completing, so a declined topic can never read as done (triage release checks it).
+  const declined = outcome === 'declined';
+  const tags = declined
+    ? [...new Set([...sub.task.tags, DECLINED_TAG])]
+    : sub.task.tags.filter((t) => t !== DECLINED_TAG);
+  if (tags.length !== sub.task.tags.length) await repo.updateTask(sub.task.id, { tags }, ctx.agentId);
   await repo.completeTask(sub.task.id, outcome === 'declined' ? `Declined: ${text}` : text, ctx.agentId);
 
   // Done means every subtask is done; the ongoing-rhythm session is the last one opened.
@@ -170,6 +183,17 @@ async function topicDone({ repo, parent, ctx }: Deps, input: Record<string, unkn
     ctx.log.info({ taskId: parent.id }, 'onboarding: complete');
   }
   return { success: true, data: { topicId, sessionId: sub.sessionId, outcome, onboardingComplete } };
+}
+
+/** Whether any principal mailbox is connected. A directory error reads as not connected. */
+async function isMailboxConnected(ctx: ToolContext): Promise<boolean> {
+  if (!ctx.mailboxDirectory) return false;
+  try {
+    return (await ctx.mailboxDirectory.list()).length > 0;
+  } catch (err) {
+    ctx.log.warn({ err }, 'onboarding-progress: mailbox directory unreadable — reporting no mailbox connected');
+    return false;
+  }
 }
 
 async function greetingSent({ svc }: Deps): Promise<ToolResult> {

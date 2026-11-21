@@ -1,6 +1,6 @@
 {
   "name": "onboarding-triage-release",
-  "description": "Start triaging the principal's inbox now that they know what to expect. Lifts the onboarding hold on inbox triage, live, with no restart. Refused until the inbox-expectations onboarding topic is marked done. Only when the principal is present and agrees.",
+  "description": "Start triaging the principal's inbox now that they know what to expect. Lifts the onboarding hold on inbox triage, live, with no restart. Refused until the inbox-expectations onboarding topic is marked done; a declined topic leaves triage held. Only when the principal is present and agrees.",
   "version": "0.1.0",
   "sensitivity": "elevated",
   "action_risk": "low",

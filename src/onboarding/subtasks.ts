@@ -16,6 +16,10 @@ const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
 export const INBOX_EXPECTATIONS_TOPIC = 'inbox-expectations';
 /** The last session: onboarding completes once its topics, and every other subtask, are done. */
 export const ONGOING_RHYTHM_SESSION = 'ongoing-rhythm';
+/** The recurring session after onboarding: never opened as onboarding subtasks. */
+export const RECURRING_SESSION = 'weekly';
+/** Tag on a topic subtask the principal declined (completed, but nothing was applied). */
+export const DECLINED_TAG = 'onboarding:declined';
 /** Upper bound on children read for one onboarding task; the default playbook has under 25. */
 const CHILD_LIMIT = 500;
 

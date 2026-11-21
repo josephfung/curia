@@ -13,13 +13,13 @@ tools:
 
 Onboarding is you adapting to the principal, not the principal being onboarded. Learn how they like to work, tell them plainly what they will notice, then show you understood something real about their week. The principal's question throughout is "how much work before I can trust this?"
 
-The onboarding task's subtasks are the topics. The playbook (`/meetings/onboarding/playbook.md`) says what each topic needs to learn and how you adapt. `onboarding-progress` with `status` gives the open topics with their playbook text; start there.
+The onboarding task's subtasks are the topics. The playbook (`/meetings/onboarding/playbook.md`) says what each topic needs to learn and how you adapt. `onboarding-progress` with op `status` gives the open topics with their playbook text, who Setup was for (`setupFor`) and the operator's name (`operatorName`); start there. The playbook's Weekly section is for recurring sessions after onboarding, never onboarding topics.
 
 ## The greeting
 
-One short message on the principal's channel, then record it with `onboarding-progress` `greeting_sent`:
+One short message on the principal's channel, then record it with `onboarding-progress` op `greeting_sent`:
 
-- who you are, and who set you up (the operator's name, or "you" when they set you up themselves);
+- who you are, and who set you up: `operatorName` from `status`, or "you" when `setupFor` is `self` (with no operator name, say you were set up for them);
 - a first conversation of about half an hour, so you can learn how they like to work;
 - how to do it: reply here to chat, or tap to call (or call on Signal) for voice.
 
@@ -30,7 +30,7 @@ Nothing else. Never mention the research.
 - Take one topic at a time. The playbook order is a default: the principal can take topics in any order. Only topics marked `needsMailbox` wait for a connected mailbox.
 - Ask mostly multiple choice: numbered options, with "something else" as the escape. No more than a few questions before a read-back.
 - After each topic, read back what you heard in a line or two.
-- Before a later session (review, check-in, ongoing rhythm), call `open_session` with its id.
+- Before a later session (review, check-in, ongoing rhythm), call op `open_session` with its id.
 
 ## Preparing a voice session
 
@@ -38,7 +38,7 @@ Park the agenda with `meeting-agenda-park`: the open topics as `topics`, and in 
 
 ## Applying choices
 
-Apply each choice as soon as the principal confirms it, then mark the topic done with `topic_done`, outcome `done` and a note of what was chosen and applied. A topic the principal declines or skips is `declined`, with the reason. Never mark a topic done before its choice is applied.
+Apply each choice as soon as the principal confirms it, then mark the topic done with op `topic_done`, outcome `done` and a note of what was chosen and applied. A topic the principal declines or skips is `declined`, with the reason. Never mark a topic done before its choice is applied.
 
 - Tone: `office-tone-update`, then show two lines in the new style and offer one round of tweaks.
 - Independence: `set-autonomy` with 65 (Draft only), 75 (Ask first, recommended) or 85 (Spot-check). Nothing else while onboarding is open. If a level or tone was picked in Setup, present it as the current setting and ask keep or change.
@@ -62,13 +62,13 @@ Open from the brief: "I did a bit of homework. Here's what I found. What did I g
 
 Say why you need it and what you will and will not do with it, then get the link with `mailbox-signin-link`. If it is not in your tools, find it with `tool-registry` ("connect gmail"). If a mailbox is already connected, confirm which account instead.
 
-If the sign-in fails or is abandoned, say why in plain words, record `operator_notice` `mailbox_signin_blocked` with the outcome, leave the topic open and carry on with topics that do not need the mailbox. When the mailbox connects later, pick up the connect step, the inbox topic and the first look.
+If the sign-in fails or is abandoned, say why in plain words, leave the topic open and carry on with topics that do not need the mailbox. When the mailbox connects later, pick up the connect step, the inbox topic and the first look.
 
 ## What you'll notice in your inbox
 
 Build it from the current settings so you never promise behaviour you will not show. Explain the six categories and what each looks like in the mailbox (Seen and Cleared mail is marked read and leaves the inbox; drafts appear in Drafts), the choices that exist (labels in Gmail on or off: `config-store` `ceo_inbox/decision_tagging`; send or only draft: `ceo_inbox/sending`), and the calendar holds and sessions you will book. Close with "From tomorrow morning you'll see…".
 
-Mark the topic done, then call `onboarding-triage-release`. Triage is held until then: never label, archive, draft or send in the principal's mailbox on your own before it.
+Mark the topic done, then call `onboarding-triage-release`. Triage is held until then: never label, archive, draft or send in the principal's mailbox on your own before it. If the principal declines the topic, triage stays held; tell them they can switch Email triage on in Settings whenever they like.
 
 ## First look
 
@@ -91,12 +91,12 @@ A request in the middle of onboarding (research a trip, a question about a meeti
 
 ## Booking the next session
 
-At the end of each session agree the next one, and book only that one: a busy event on the principal's calendar, the principal the only attendee, titled for the session. Never book a session they did not agree to, and never more than one at a time. The ongoing-rhythm topic may end with no regular session.
+At the end of each session agree the next one, and book only that one: a busy event on the principal's calendar, the principal the only attendee, titled for the session. With no calendar connected yet, create a scheduler job at the agreed time plus a nudge before it, and turn it into an event once the calendar connects. Never book a session they did not agree to, and never more than one at a time. The ongoing-rhythm topic may end with no regular session.
 
 ## Operator notices
 
-Use `operator_notice` when the operator has to act: `greeting_unanswered`, `invitation_expired`, `web_search_failed`, `mailbox_signin_blocked`. When the principal set you up themselves, tell them directly in the conversation instead.
+Raise op `operator_notice` only for trouble the code cannot see, such as `web_search_failed` when search fails during the homework. Unanswered greetings, expired invitations and blocked mailbox sign-ins are raised for you. The notice is recorded either way; when `setupFor` is `self`, also tell the principal directly in the conversation, since they are the operator.
 
 ## Starting and stopping
 
-Call `onboarding-start` only when the principal asks to do the onboarding; it never starts on its own. If they say "stop the onboarding", cancel the onboarding task; inbox triage stays held until they switch it on.
+Call `onboarding-start` only when the principal asks to do the onboarding; it never starts on its own. If its result says Curia is restarting, first tell the principal you'll be back in a few seconds; the conversation resumes after the restart. If they say "stop the onboarding", cancel the onboarding task; inbox triage stays held until they switch it on.

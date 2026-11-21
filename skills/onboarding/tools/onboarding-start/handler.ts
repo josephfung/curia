@@ -8,7 +8,6 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 const REFUSALS: Record<string, string> = {
   already_started: 'Onboarding is already under way.',
   setup_incomplete: "Setup isn't finished yet. Onboarding can start once the operator completes Setup.",
-  route_unreachable: 'Setup has no messaging route for the principal, so onboarding cannot start. The operator can set one in Setup.',
 };
 
 export class OnboardingStartHandler implements ToolHandler {
@@ -21,7 +20,20 @@ export class OnboardingStartHandler implements ToolHandler {
       if (!result.ok) {
         return { success: false, error: REFUSALS[result.code] ?? `Onboarding could not start (${result.code}).` };
       }
-      return { success: true, data: { taskId: result.taskId, restartScheduled: result.restartScheduled } };
+      return {
+        success: true,
+        data: {
+          taskId: result.taskId,
+          restartScheduled: result.restartScheduled,
+          ...(result.restartScheduled
+            ? {
+                instruction:
+                  "Curia restarts in a moment to switch on email triage (held). Before anything else, tell the " +
+                  "principal you'll be back in a few seconds. The conversation resumes on its own after the restart.",
+              }
+            : {}),
+        },
+      };
     } catch (err) {
       ctx.log.error({ err }, 'onboarding-start failed');
       return { success: false, error: err instanceof Error ? err.message : String(err) };

@@ -7,13 +7,13 @@ import type { ListTasksFilters } from '../../../../src/db/task-repo.js';
 
 const logger = pino({ level: 'silent' });
 
-function makeWorld(inboxStatus: string) {
+function makeWorld(inboxStatus: string, extraTags: string[] = []) {
   const tasks = [
     { id: 'parent', status: 'open', tags: ['onboarding'], parentTaskId: null, createdBy: 'onboarding' },
     {
       id: 'inbox',
       status: inboxStatus,
-      tags: ['onboarding', 'onboarding:topic:inbox-expectations', 'onboarding:session:first-conversation'],
+      tags: ['onboarding', 'onboarding:topic:inbox-expectations', 'onboarding:session:first-conversation', ...extraTags],
       parentTaskId: 'parent',
       createdBy: 'onboarding',
     },
@@ -40,6 +40,13 @@ function makeWorld(inboxStatus: string) {
 describe('onboarding-triage-release', () => {
   it('refuses while the inbox-expectations topic is not done', async () => {
     const w = makeWorld('open');
+    const result = await w.run();
+    expect(result.success).toBe(false);
+    expect(w.onboardingService.releaseTriageHold).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the inbox-expectations topic was declined', async () => {
+    const w = makeWorld('done', ['onboarding:declined']);
     const result = await w.run();
     expect(result.success).toBe(false);
     expect(w.onboardingService.releaseTriageHold).not.toHaveBeenCalled();

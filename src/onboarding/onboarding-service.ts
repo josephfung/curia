@@ -44,7 +44,7 @@ import {
   type OnboardingState,
 } from './state.js';
 import { releaseTriageHold, setTriageHold } from './triage-hold.js';
-import { topicSubtasks } from './subtasks.js';
+import { RECURRING_SESSION, topicSubtasks } from './subtasks.js';
 import { ONBOARDING_CREATED_BY, RESTART_WAKE_DELAY_SECONDS } from './constants.js';
 
 /** Signals that the install is already in use, so starting onboarding needs confirming. */
@@ -71,6 +71,9 @@ const START_LOCK_TIMEOUT = '10s';
 /** Delay before the restart exit, so the HTTP reply flushes first (as setupRoutes does). */
 const RESTART_EXIT_DELAY_MS = 500;
 const GREETING_NOTE = 'Send the greeting';
+/** A principal start that restarts Curia wakes the parent with this, so the conversation resumes. */
+export const RESTART_RESUME_NOTE =
+  'Curia restarted to switch on email triage (held): continue the first conversation where it left off';
 /** Every onboarding task: the coordinator's, owned by Curia, created by the onboarding program. */
 const TASK_BASE = {
   agentId: 'coordinator',
@@ -197,6 +200,12 @@ export class OnboardingService {
     return readPlaybook(this.deps.workingDocsRepo, this.deps.logger);
   }
 
+  /** Who Setup was for and the operator's name, as Setup recorded them (null on pre-Setup installs). */
+  async setupContext(): Promise<{ setupFor: SetupFor | null; operatorName: string | null }> {
+    const setup = await readSetupState(this.deps.pool);
+    return { setupFor: setup.setupFor, operatorName: setup.operatorName?.trim() || null };
+  }
+
   /** The onboarding run state, or null before any start. */
   readState(): Promise<OnboardingState | null> {
     return readOnboardingState(this.deps.configStore, this.deps.logger);
@@ -223,7 +232,7 @@ export class OnboardingService {
    */
   async openSession(parent: TaskRow, sessionId: string): Promise<OpenSessionResult> {
     return this.inLockedTransaction(OPEN_SESSION_LOCK_KEY, async () => {
-      const sessions = await this.playbook();
+      const sessions = (await this.playbook()).filter((s) => s.id !== RECURRING_SESSION);
       const session = sessions.find((s) => s.id === sessionId);
       if (!session) return { ok: false, code: 'unknown_session', sessionIds: sessions.map((s) => s.id) };
       const existing = await this.deps.taskRepo.listTasks({
@@ -310,11 +319,8 @@ export class OnboardingService {
       reach = await this.resolveReach(setup.messagingRoute);
       if (!reach) return refuse('route_unreachable');
     }
+    // A pre-Setup install (migration 130) has no messaging route; a principal start records none.
     const route = reach?.route ?? setup.messagingRoute;
-    if (!route) {
-      logger.warn('onboarding: no messaging route chosen in Setup — cannot start');
-      return refuse('route_unreachable');
-    }
     // On Signal, SMS and Slack the parent wakes to send the greeting; the app route waits for redemption.
     const greetOnWake = reach !== null && reach.route !== 'app';
 
@@ -326,7 +332,12 @@ export class OnboardingService {
       const principalName = await this.principalDisplayName();
       const sessions = await this.playbook();
 
-      const { parent, homework } = await this.createTaskTree(principalName, sessions, greetOnWake, created);
+      // The parent wakes to greet (operator start, messaging route) or, when a principal start
+      // restarts Curia mid-conversation, to pick the conversation back up.
+      const parentNote = greetOnWake
+        ? GREETING_NOTE
+        : inConversation && restartScheduled ? RESTART_RESUME_NOTE : undefined;
+      const { parent, homework } = await this.createTaskTree(principalName, sessions, parentNote, created);
 
       // Rotating would wipe the conversation a principal start comes from.
       let rotatedTo: string | null = null;
@@ -360,7 +371,7 @@ export class OnboardingService {
         ? new Date(startedAt.getTime() + RESTART_WAKE_DELAY_SECONDS * 1000)
         : startedAt;
       await this.wake(homework.id, runAt);
-      if (greetOnWake) await this.wake(parent.id, runAt);
+      if (parentNote) await this.wake(parent.id, runAt);
 
       logger.info(
         { taskId: parent.id, actor: opts.actor, route, subtasks: created.length - 2, restartScheduled },
@@ -435,7 +446,7 @@ export class OnboardingService {
   private async createTaskTree(
     principalName: string,
     sessions: PlaybookSession[],
-    greetOnWake: boolean,
+    progressNote: string | undefined,
     created: string[],
   ): Promise<{ parent: TaskRow; homework: TaskRow }> {
     const { taskRepo, logger } = this.deps;
@@ -448,7 +459,7 @@ export class OnboardingService {
         `/meetings/onboarding/playbook.md.`,
       tags: [ONBOARDING_TASK_TAG],
       originator: makeSystemOriginator(),
-      ...(greetOnWake ? { progressNote: GREETING_NOTE } : {}),
+      ...(progressNote ? { progressNote } : {}),
     });
     created.push(parent.id);
     await this.activateOnboardingSkill(parent.id);

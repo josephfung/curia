@@ -42,6 +42,12 @@ describe('onboarding state', () => {
     expect(await readOnboardingState(store)).toEqual(sample);
   });
 
+  it('accepts a null route (a principal start on an install with no messaging route)', async () => {
+    const store = fakeStore();
+    await writeOnboardingState(store, { ...sample, route: null });
+    expect((await readOnboardingState(store))?.route).toBeNull();
+  });
+
   it('returns null when absent and when the JSON is malformed', async () => {
     const store = fakeStore();
     expect(await readOnboardingState(store)).toBeNull();
