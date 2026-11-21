@@ -39,7 +39,7 @@ export class OnboardingSubscribers {
     const { bus } = this.o;
     bus.subscribe('pairing.invitation_redeemed', 'system', (event: BusEvent) => {
       if (event.type !== 'pairing.invitation_redeemed') return;
-      return this.guard(event.type, () => this.onInvitationRedeemed());
+      return this.guard(event.type, () => this.onInvitationRedeemed(event.payload.invitationId));
     });
     bus.subscribe('principal_mailbox.connected', 'system', (event: BusEvent) => {
       if (event.type !== 'principal_mailbox.connected') return;
@@ -62,12 +62,23 @@ export class OnboardingSubscribers {
     }
   }
 
-  private async onInvitationRedeemed(): Promise<void> {
+  /**
+   * The app greeting is due only on an app-route run that has not greeted yet. A link redeemed now
+   * is the run's own (state.invitationId) or a replacement minted from Devices after Start (Start
+   * superseded every earlier link), and either counts, as in the watcher's isRunInvitation. A phone
+   * paired during a Signal, SMS or Slack run is just a new device.
+   */
+  private async onInvitationRedeemed(invitationId: string): Promise<void> {
     const task = await findOpenOnboardingTask(this.o.taskRepo);
     if (!task) return;
     const state = await readOnboardingState(this.o.configStore, this.o.logger);
+    if (state === null || state.taskId !== task.id || state.route !== 'app') return;
     // Already greeted (a second device, or a replay): nothing to say again.
-    if (state === null || state.greetingSentAt !== null) return;
+    if (state.greetingSentAt !== null) return;
+    this.o.logger.debug(
+      { taskId: task.id, runInvitation: invitationId === state.invitationId },
+      'onboarding: phone app paired before the greeting',
+    );
     await this.noteAndWake(task, 'Phone app paired: send the greeting in the app');
   }
 

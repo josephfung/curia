@@ -85,6 +85,17 @@ describe('OnboardingSubscribers', () => {
     expect(t.scheduler.enqueueTaskWake).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['a Signal-route run', { route: 'signal' as const }],
+    ['a principal start with no route', { route: null }],
+    ['state from another run', { taskId: 'old-run' }],
+  ])('invitation redeemed during %s adds no app greeting note', async (_n, state) => {
+    const t = await setup({ open: true, state });
+    await t.fire(redeemed());
+    expect(t.taskRepo.updateTask).not.toHaveBeenCalled();
+    expect(t.scheduler.enqueueTaskWake).not.toHaveBeenCalled();
+  });
+
   it('mailbox connected notes the task and wakes it once', async () => {
     const t = await setup({ open: true });
     await t.fire(connected());
