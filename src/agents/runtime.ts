@@ -964,12 +964,16 @@ export class AgentRuntime {
     // The approvals the principal may be answering (#2333) lead the closing lines.
     const awaiting = renderAwaitingAnswers(parseAwaitingAnswers(taskEvent.payload.awaitingAnswers));
     const backlogLine = backlog ? renderBacklogLine(backlog) : null;
-    const turnGuidance = renderTurnGuidance(
+    const lengthReminder = this.lengthReminder(taskEvent);
+    // `extraLine` is system context decided later in the turn (the onboarding block): it joins
+    // the guidance's closing lines so it sits under the system header, not above it.
+    const renderGuidance = (extraLine: string | null): string | null => renderTurnGuidance(
       turnGuidanceKeys,
-      [awaiting, backlogLine].filter((line): line is string => line !== null).join('\n\n') || null,
-      this.lengthReminder(taskEvent),
+      [awaiting, backlogLine, extraLine].filter((line): line is string => line !== null).join('\n\n') || null,
+      lengthReminder,
       named,
     );
+    const turnGuidance = renderGuidance(null);
     let promptContent = turnGuidance ? `${turnGuidance}\n\n${originalContent}` : originalContent;
     // The Setup page's open step (#2358), for the setup guide. Prompt only, like the guidance.
     // A setup guide turn on web is always the Setup page: the dispatcher sets the step, and a
@@ -978,6 +982,8 @@ export class AgentRuntime {
     const setupStep = readSetupStep(taskEvent.payload.setupStep)
       ?? (agentId === SETUP_GUIDE_AGENT_ID && taskEvent.payload.channelId === 'web' ? NO_SETUP_STEP : null);
     if (setupStep) promptContent = `${setupStepLine(setupStep)}\n\n${promptContent}`;
+    // What heads promptContent so far, so the onboarding block can re-render the guidance in place.
+    const promptHead = (setupStep ? `${setupStepLine(setupStep)}\n\n` : '') + (turnGuidance ? `${turnGuidance}\n\n` : '');
     // A content-block rewrite's account of what its turn already did (#2615). Prompt only, like
     // the turn guidance: working memory stores originalContent, so this tool output is never
     // replayed into later turns. Re-validated: the payload crossed the bus.
@@ -1185,7 +1191,15 @@ export class AgentRuntime {
         skillOn = blocks.length > 0;
       }
       if (skillOn) {
-        promptContent = `${onboardingBlock}\n\n${promptContent}`;
+        // Inside the system-labelled turn guidance, never above it: a block ahead of the header
+        // reads as the sender's own text and the model loses track of the real message (#2360).
+        const rendered = renderGuidance(onboardingBlock);
+        if (rendered && promptContent.startsWith(promptHead)) {
+          const head = (setupStep ? `${setupStepLine(setupStep)}\n\n` : '') + `${rendered}\n\n`;
+          promptContent = head + promptContent.slice(promptHead.length);
+        } else {
+          logger.warn({ agentId }, 'Onboarding turn block left out: the prompt head was not as expected');
+        }
       } else {
         logger.warn({ agentId }, 'Onboarding turn block left out: the onboarding skill could not be activated');
       }

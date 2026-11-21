@@ -75,8 +75,10 @@ expected_behaviors:
   - id: offers_two_times
     weight: critical
     description: >
-      The reply offers exactly two concrete options, each a specific day and time (not "later
-      this week" or "whenever suits"), and asks the principal to pick one or name another.
+      The reply offers exactly two options, each naming a day and a clock time together (for
+      example "Tuesday, November 24 at 10:00"), not vague ones like "later this week" or
+      "whenever suits", and asks the principal to choose. A day plus a clock time in one phrase
+      counts as a concrete option.
   - id: short_and_unpushy
     weight: important
     description: The reply is at most 50 words and does not start an onboarding topic.
