@@ -306,3 +306,30 @@ the same pattern as `seccomp-chrome.json`. A pinned older `CURIA_VERSION` withou
 - An operator's `--config` with keys inside a file → seed the URL only and say so.
 - A rejected-keys state in the Voice check, separate from "not running".
 - Seeded URL is the base address (no `/rtc`), matching the client library and production.
+
+## Spike result (local call audio, 2026-11-21)
+
+Run on macOS Docker Desktop 29.9 (x86_64), `livekit/livekit-server:v1.13.4`. Two clients joined
+one room and each checked it received the other's audio: Chromium on the host (`livekit-client`
+2.23 → `ws://localhost:7880`) and `@livekit/rtc-node` 1.2.1 in a compose container
+(→ `ws://livekit:7880`).
+
+| LiveKit config | node IP advertised | Browser hears container | Container hears browser |
+|---|---|---|---|
+| shipped `livekit.yaml` (`use_external_ip: true`) + `--node-ip 127.0.0.1` | home public IP (`--node-ip` ignored) | no (pc connection failed) | no |
+| `use_external_ip: false`, no node IP | container IP 172.18.x | no | no |
+| **`use_external_ip: false` + `--node-ip 127.0.0.1`** | 127.0.0.1 | **yes** | **yes** |
+
+Findings that change the plan:
+
+- `--node-ip` does **not** override `use_external_ip: true`; LiveKit still advertises the STUN
+  address. Local installs therefore need a config file with `use_external_ip: false`.
+- Decision: ship a second file, `docker/livekit.local.yaml` (identical to `livekit.yaml` but
+  `use_external_ip: false`), mounted at `/etc/livekit.local.yaml`. Local `LIVEKIT_COMMAND` is
+  `--config /etc/livekit.local.yaml --node-ip 127.0.0.1`; public stays
+  `--config /etc/livekit.yaml`. Both files ship in the bundle.
+- The container reached media although LiveKit advertised 127.0.0.1, most likely through a
+  peer-reflexive pair from LiveKit's own checks to the container's address. Linux Docker was not
+  tested; the mechanism does not depend on Docker Desktop, but treat Linux as unverified.
+- Chromium needs the page on a secure origin (`http://localhost` counts) for the microphone; the
+  console already is one.
