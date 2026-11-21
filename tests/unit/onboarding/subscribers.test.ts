@@ -128,6 +128,22 @@ describe('OnboardingSubscribers', () => {
     await expect(t.fire(connected())).resolves.toBeUndefined();
   });
 
+  it('a wake that finished after the collision leaves none: a new one is enqueued', async () => {
+    const t = await setup({ open: true });
+    t.scheduler.enqueueTaskWake.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }));
+    t.scheduler.runTaskWakeEarly.mockResolvedValueOnce('none');
+    await t.fire(connected());
+    expect(t.scheduler.enqueueTaskWake).toHaveBeenCalledTimes(2);
+  });
+
+  it('a wake already due is enough: the second enqueue collides quietly', async () => {
+    const t = await setup({ open: true });
+    const dup = () => Object.assign(new Error('dup'), { code: '23505' });
+    t.scheduler.enqueueTaskWake.mockRejectedValueOnce(dup()).mockRejectedValueOnce(dup());
+    await expect(t.fire(connected())).resolves.toBeUndefined();
+    expect(t.scheduler.enqueueTaskWake).toHaveBeenCalledTimes(2);
+  });
+
   // The next session is booked for later: the mailbox's first look must not wait for it.
   it('mailbox connected while a later session is booked runs that wake now, keeping the booking', async () => {
     const t = await setup({ open: true });

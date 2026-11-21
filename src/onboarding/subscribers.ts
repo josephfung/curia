@@ -132,19 +132,32 @@ export async function noteAndWakeCoordinator(
   note: string,
 ): Promise<void> {
   await o.taskRepo.updateTask(task.id, { progressNote: note });
+  if (await enqueueWakeNow(o, task.id)) return;
+  const outcome = await o.scheduler.runTaskWakeEarly(task.id, new Date());
+  o.logger.debug({ taskId: task.id, outcome }, 'onboarding: a coordinator wake was already active');
+  if (outcome === 'busy') retryBusyWake(o, task.id, BUSY_WAKE_RETRIES);
+  // 'none': the active wake is due now, or it finished after the collision and left no wake (it may
+  // have read its notes before this one). Enqueue again; a collision now means a wake is due.
+  else if (outcome === 'none') await enqueueWakeNow(o, task.id);
+}
+
+/** Enqueue a coordinator wake for now; false when the task already has an active wake. */
+async function enqueueWakeNow(
+  o: Pick<OnboardingSubscribersOptions, 'scheduler'>,
+  taskId: string,
+): Promise<boolean> {
   try {
     await o.scheduler.enqueueTaskWake({
-      taskId: task.id,
+      taskId,
       agentId: 'coordinator',
       runAt: new Date(),
       createdBy: ONBOARDING_CREATED_BY,
       originator: makeSystemOriginator(),
     });
+    return true;
   } catch (err) {
     if (!isPgUniqueViolation(err)) throw err;
-    const outcome = await o.scheduler.runTaskWakeEarly(task.id, new Date());
-    o.logger.debug({ taskId: task.id, outcome }, 'onboarding: a coordinator wake was already active');
-    if (outcome === 'busy') retryBusyWake(o, task.id, BUSY_WAKE_RETRIES);
+    return false;
   }
 }
 
