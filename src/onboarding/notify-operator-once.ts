@@ -13,7 +13,7 @@ import { readOnboardingState, writeOnboardingState } from './state.js';
  * another field (greeting sent, a watcher update) is not clobbered by a stale caller snapshot.
  * The state is written first: a failed write skips the notice (logged), and a failed notice is
  * not retried, as notifyOperator never throws. No state, or state for another task: nothing is
- * sent. Returns whether a notice was sent. Never throws.
+ * sent. Returns whether a notice was recorded. Never throws.
  */
 export async function notifyOperatorOnce(
   deps: NotifyOperatorDeps & { configStore: Pick<ConfigStore, 'get' | 'set'> },
@@ -29,6 +29,5 @@ export async function notifyOperatorOnce(
     deps.logger.error({ err, taskId, event }, 'onboarding: could not record the operator notice in state; not sending it');
     return false;
   }
-  await notifyOperator(deps, taskId, event, details);
-  return true;
+  return notifyOperator(deps, taskId, event, details);
 }

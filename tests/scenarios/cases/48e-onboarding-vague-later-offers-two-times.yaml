@@ -76,7 +76,7 @@ expected_behaviors:
     weight: critical
     description: >
       The reply offers exactly two options, each naming a day and a clock time together (for
-      example "Tuesday, November 24 at 10:00"), not vague ones like "later this week" or
+      example a weekday name or date with "at 10:00"), not vague ones like "later this week" or
       "whenever suits", and asks the principal to choose. A day plus a clock time in one phrase
       counts as a concrete option.
   - id: short_and_unpushy

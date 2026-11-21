@@ -17,19 +17,30 @@ export type NotifyOperatorDeps = {
   audit?: (e: Record<string, unknown>) => void;
 };
 
-/** Record an operator notice on the onboarding task. Never throws. */
+/**
+ * Record an operator notice on the onboarding task. Never throws. Returns whether the notice was
+ * recorded (the task's progress note written); a failed write is logged and returns false. The
+ * audit call is best-effort: once the note is written the notice counts as recorded.
+ */
 export async function notifyOperator(
   deps: NotifyOperatorDeps,
   taskId: string,
   event: OperatorEvent,
   details?: Record<string, unknown>,
-): Promise<void> {
+): Promise<boolean> {
   // TODO(#2365): deliver to the operator once the operator role exists.
   try {
     await deps.taskRepo.updateTask(taskId, { progressNote: `Operator notice: ${event}` });
-    deps.logger.warn({ taskId, event, details }, 'onboarding: operator notice');
-    deps.audit?.({ type: 'onboarding.operator_notice', taskId, event, details });
   } catch (err) {
     deps.logger.error({ err, taskId, event }, 'onboarding: failed to record operator notice');
+    return false;
   }
+  deps.logger.warn({ taskId, event, details }, 'onboarding: operator notice');
+  try {
+    deps.audit?.({ type: 'onboarding.operator_notice', taskId, event, details });
+  } catch (err) {
+    // Best-effort: the notice is already on the task; a failed audit must not report it unrecorded.
+    deps.logger.error({ err, taskId, event }, 'onboarding: operator notice audit failed — the notice is recorded on the task');
+  }
+  return true;
 }

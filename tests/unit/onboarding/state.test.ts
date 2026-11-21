@@ -94,17 +94,27 @@ describe('notifyOperator', () => {
   it('writes a progress note and audits', async () => {
     const updateTask = vi.fn(async () => null);
     const audit = vi.fn();
-    await notifyOperator({ taskRepo: { updateTask }, logger, audit }, 't1', 'greeting_unanswered');
+    await expect(
+      notifyOperator({ taskRepo: { updateTask }, logger, audit }, 't1', 'greeting_unanswered'),
+    ).resolves.toBe(true);
     expect(updateTask).toHaveBeenCalledWith('t1', { progressNote: 'Operator notice: greeting_unanswered' });
     expect(audit).toHaveBeenCalledOnce();
   });
 
-  it('swallows an updateTask rejection and logs an error', async () => {
+  it('swallows an updateTask rejection, logs an error and reports it unrecorded', async () => {
     const error = vi.spyOn(logger, 'error');
     const updateTask = vi.fn(async () => { throw new Error('db down'); });
     await expect(
       notifyOperator({ taskRepo: { updateTask }, logger }, 't1', 'web_search_failed'),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
     expect(error).toHaveBeenCalled();
+  });
+
+  it('still reports the notice recorded when only the audit throws', async () => {
+    const updateTask = vi.fn(async () => null);
+    const audit = vi.fn(() => { throw new Error('audit down'); });
+    await expect(
+      notifyOperator({ taskRepo: { updateTask }, logger, audit }, 't1', 'web_search_failed'),
+    ).resolves.toBe(true);
   });
 });

@@ -252,6 +252,7 @@ async function operatorNotice({ repo, parent, ctx }: Deps, input: Record<string,
   if (details !== undefined && (typeof details !== 'object' || details === null || Array.isArray(details))) {
     return fail('details must be an object when given');
   }
-  await notifyOperator({ taskRepo: repo, logger: ctx.log }, parent.id, event as OperatorEvent, details as Record<string, unknown> | undefined);
+  const recorded = await notifyOperator({ taskRepo: repo, logger: ctx.log }, parent.id, event as OperatorEvent, details as Record<string, unknown> | undefined);
+  if (!recorded) return fail('The operator notice could not be recorded on the onboarding task. Try again shortly.');
   return { success: true, data: { recorded: true } };
 }

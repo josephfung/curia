@@ -22,7 +22,8 @@
     "operatorName": "string? (status: the operator's name from Setup, or null)",
     "topics": "array? (open_session: the session's topics with their status)",
     "createdSubtasks": "number? (open_session: how many topics were added now)",
-    "onboardingComplete": "boolean? (topic_done: true when this completed onboarding)",
+    "onboardingComplete": "boolean? (topic_done: true when this completed onboarding; status: true when onboarding is complete)",
+    "completionPending": "string? (topic_done: every topic is closed but the onboarding task could not be completed; call op status to retry)",
     "recorded": "boolean? (greeting_sent, operator_notice)"
   },
   "permissions": [],

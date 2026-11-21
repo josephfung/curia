@@ -251,4 +251,20 @@ describe('onboarding-progress', () => {
     await w.run({ op: 'topic_done', topic_id: 'inbox-expectations', outcome: 'declined', note: 'Not now.' });
     expect(w.sub('inbox-expectations').tags).toContain('onboarding:declined');
   });
+
+  it('operator_notice records the notice on the onboarding task', async () => {
+    const w = makeWorld();
+    const result = await w.run({ op: 'operator_notice', event: 'web_search_failed' });
+    expect(result).toEqual({ success: true, data: { recorded: true } });
+    expect(w.taskRepo.updateTask).toHaveBeenCalledWith('parent', { progressNote: 'Operator notice: web_search_failed' });
+  });
+
+  it('operator_notice fails when the notice could not be written', async () => {
+    const w = makeWorld();
+    w.taskRepo.updateTask.mockImplementation(async () => { throw new Error('db down'); });
+    const result = await w.run({ op: 'operator_notice', event: 'web_search_failed' });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toMatch(/could not be recorded/);
+  });
 });
