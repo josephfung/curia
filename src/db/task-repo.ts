@@ -85,6 +85,11 @@ export interface CreateTaskParams {
   tags?: string[];
   waitingOnContactId?: string;
   waitingOnText?: string;
+  /**
+   * Initial status: `open` (default), or `waiting` for a task created parked, e.g. on the
+   * contact in `waitingOnContactId` (selectHeartbeatCandidates skips those).
+   */
+  status?: 'open' | 'waiting';
   intentAnchor?: string;
   source?: 'ceo' | 'agent' | 'scheduler' | 'coordinator';
   sourceAgentId?: string;
@@ -279,6 +284,7 @@ export class TaskRepo {
       tags = [],
       waitingOnContactId,
       waitingOnText,
+      status = 'open',
       intentAnchor,
       source = 'agent',
       sourceAgentId,
@@ -310,14 +316,14 @@ export class TaskRepo {
     }
     const originatorJson = resolvedOriginator ? JSON.stringify(resolvedOriginator) : null;
 
-    // Always insert with 'open' status for skill-created tasks.
+    // 'open' unless the caller creates the task parked ('waiting').
     const taskInsertSql = `
       INSERT INTO tasks (
         agent_id, title, intent_anchor, description, status, progress, error_budget,
         owner, parent_task_id, blocked_by_task_id, priority, due_at, tags,
         waiting_on_contact_id, waiting_on_text, source, source_agent_id, created_by, originator
       )
-      VALUES ($1, $2, $3, $4, 'open', $18::jsonb, $17::jsonb,
+      VALUES ($1, $2, $3, $4, $19, $18::jsonb, $17::jsonb,
               $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
       RETURNING ${TASK_COLUMNS}
     `;
@@ -340,6 +346,7 @@ export class TaskRepo {
       originatorJson,
       errorBudgetJson,
       progressJson, // $18 — seeded progress (notes + optional escalation block)
+      status,       // $19 — initial status
     ];
 
     let row: DbTaskRow;
@@ -363,24 +370,24 @@ export class TaskRepo {
             owner, parent_task_id, blocked_by_task_id, priority, due_at, tags,
             waiting_on_contact_id, waiting_on_text, source, source_agent_id, created_by, originator
           )
-          VALUES ($1, $2, $3, $4, 'open', $18::jsonb, $17::jsonb,
+          VALUES ($1, $2, $3, $4, $19, $18::jsonb, $17::jsonb,
                   $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
           RETURNING ${TASK_COLUMNS}
         ),
         _wake_job AS (
           INSERT INTO scheduled_jobs (agent_id, run_at, task_payload, status, next_run_at, created_by, timezone, task_id, originator)
-          SELECT $19, $20, $23::jsonb, 'pending', $20, $21, $22, new_task.id, new_task.originator
+          SELECT $20, $21, $24::jsonb, 'pending', $21, $22, $23, new_task.id, new_task.originator
           FROM new_task
         )
         SELECT * FROM new_task
       `;
       const { rows } = await this.pool.query(cteSql, [
-        ...taskParams,     // $1–$18 (taskParams[17] = $18 = seeded progress)
-        agentId,           // $19 — scheduled_jobs.agent_id
-        wakeAt,            // $20 — run_at / next_run_at
-        resolvedCreatedBy, // $21 — created_by
-        this.timezone,     // $22 — timezone
-        // $23 — default envelope, or a delegation-retry envelope (#1893).
+        ...taskParams,     // $1–$19 (taskParams[17] = $18 = seeded progress, $19 = status)
+        agentId,           // $20 — scheduled_jobs.agent_id
+        wakeAt,            // $21 — run_at / next_run_at
+        resolvedCreatedBy, // $22 — created_by
+        this.timezone,     // $23 — timezone
+        // $24 — default envelope, or a delegation-retry envelope (#1893).
         JSON.stringify(wakePayload ?? { type: 'task-wake' }),
       ]);
       row = rows[0] as DbTaskRow | undefined
