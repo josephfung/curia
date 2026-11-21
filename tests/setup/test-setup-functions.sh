@@ -879,6 +879,8 @@ _assert_lk() {
 _assert_lk "voice not running"                 ''                                 ''                          quiet
 _assert_lk "unset, still public (not recreated)" ''                               $'0.0.0.0:7880\n[::]:7880'  recreate
 _assert_lk "unset, loopback"                   ''                                 '127.0.0.1:7880'            loopback-note
+_assert_lk "installer-managed local command, loopback" 'LIVEKIT_COMMAND=--config /etc/livekit.local.yaml --node-ip 127.0.0.1\n' '127.0.0.1:7880' quiet
+_assert_lk "installer-managed public command, loopback" 'LIVEKIT_COMMAND=--config /etc/livekit.yaml\n' '127.0.0.1:7880' quiet
 _assert_lk "LIVEKIT_HTTP_BIND=127.0.0.1 (proxied)" 'LIVEKIT_HTTP_BIND=127.0.0.1\n'  '127.0.0.1:7880'            quiet
 _assert_lk "loopback intent, still public (not recreated)" 'LIVEKIT_HTTP_BIND=127.0.0.1\n' $'0.0.0.0:7880\n[::]:7880' recreate
 _assert_lk "quoted loopback intent, still public" 'LIVEKIT_HTTP_BIND="127.0.0.1"\n' '0.0.0.0:7880'              recreate

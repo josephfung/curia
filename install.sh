@@ -580,6 +580,11 @@ note_livekit_signaling() {
   [[ -n "$bindings" ]] || return 0   # voice not running
   bindings_are_loopback "$bindings" || return 0
   [[ -z "$(compose_var "$env" LIVEKIT_HTTP_BIND)" ]] || return 0
+  # Installs whose LiveKit the installer set up (#2357) are loopback on purpose:
+  # browsers reach signaling through Caddy's /rtc* route or ws://localhost:7880.
+  local cmd
+  cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
+  [[ "$cmd" == "$(livekit_command_for local)" || "$cmd" == "$(livekit_command_for public)" ]] && return 0
   echo "" >&2
   warn "LiveKit signaling (7880) is published on loopback only (#2408)."
   hint "Browsers can no longer reach ws://<host>:7880 directly. If your Voice"
