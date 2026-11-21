@@ -4,7 +4,7 @@
 # then mark the topic done. Triage stays held: onboarding-triage-release belongs to the inbox
 # topic alone (design §8, docs/wip/2026-11-20-onboarding-program-design.md).
 #
-# One case per topic answer (48a style, 48b independence, 48c inbox): a case is one inbound
+# One case per topic answer (48a style, 48b independence): a case is one inbound
 # with no prior history, so the principal's message answers the topic on its own.
 #
 # seed.onboarding gives the principal turn production's onboarding block and the

@@ -1125,10 +1125,6 @@
       "unstubbed": null,
       "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
     },
-    "onboarding inbox topic releases triage after it": {
-      "unstubbed": null,
-      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
-    },
     "onboarding deferral to a named day books it": {
       "unstubbed": null,
       "reason": "New in #2360; not yet run (paid suite). The first run records coverage."

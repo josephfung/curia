@@ -598,9 +598,11 @@ cancelled from the console's task view; triage stays held until switched on.
 
 ### Scenario cases
 
-`tests/scenarios/cases/48a`–`48g` (tag `onboarding`, evals, not in the gate): the style,
-independence and inbox topics of the first conversation, a deferral to a named day, a vague
-"later", a no-show, and a side request. A case's `seed.onboarding` gives its principal turn
+`tests/scenarios/cases/48a`, `48b` and `48d`–`48g` (tag `onboarding`, evals, not in the
+gate): the style and independence topics of the first conversation, a deferral to a named day,
+a vague "later", a no-show, and a side request. The inbox topic has no case: the release tool
+refuses until the topic is done (code, unit-tested), and forgetting the release fails safe
+(triage stays held). A case's `seed.onboarding` gives its principal turn
 production's onboarding block and skill (the test-mode stack's `onboardingTurnContext`); the
 no-show wake restores the skill from `inbound.task.active_skills`. A vague "later" answered
 vaguely again is not covered: a case has no multi-turn history.
