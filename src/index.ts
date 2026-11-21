@@ -2552,8 +2552,9 @@ async function main(): Promise<void> {
       const voiceLlmProvider = new TelemetryLlmProvider(voiceBaseProvider, bus, logger, 'voice-turn', modelRegistry);
       // Curia's own end of the call joins over the internal signaling URL (the
       // compose-network address). The browser-facing URL (config.voiceLivekitUrl)
-      // stays on VoiceAdapter only: inside a container `ws://localhost:7880` is the
-      // container itself (#2357).
+      // still gates enabling voice (above) and is what VoiceAdapter hands browsers,
+      // but the runtime never dials it: inside a container `ws://localhost:7880` is
+      // the container itself (#2357).
       const voiceLivekitUrl = toLiveKitWsUrl(config.voiceLivekitManagementUrl);
       const voiceRuntime = new VoiceRuntime({
         bus,

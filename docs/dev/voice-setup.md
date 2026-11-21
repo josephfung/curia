@@ -49,25 +49,41 @@ Curia's own end of a call does not use that public URL. It joins over
 Upgrades leave LiveKit alone. When voice is off, `install.sh` prints a note
 pointing here. To turn it on for an install you already have:
 
-1. Fetch the current `docker-compose.yml`, `deploy/Caddyfile` and
-   `docker/livekit.yaml` from the release you run (the Caddyfile adds the `/rtc*`
-   route; skip it if you terminate TLS elsewhere).
-2. Generate a key and secret, then set in `.env`:
+1. Fetch the current `docker-compose.yml`, `deploy/Caddyfile`,
+   `docker/livekit.yaml` and `docker/livekit.local.yaml` from the release you run
+   (release assets `docker-compose.yml`, `Caddyfile`, `livekit.yaml` and
+   `livekit.local.yaml`). The Caddyfile adds the `/rtc*` route; skip it if you
+   terminate TLS elsewhere. Fetch both LiveKit files even on a public install: the
+   compose file mounts both, and a missing one makes Docker create an empty
+   directory in its place.
+2. Generate a key and secret. The key is `API` plus 12 letters or digits, the
+   secret 32 random bytes in hex:
+
+   ```bash
+   echo "API$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 12)"
+   openssl rand -hex 32
+   ```
+
+   Then set in `.env`:
 
    ```bash
    COMPOSE_PROFILES=voice
    LIVEKIT_KEYS="<api-key>: <api-secret>"
+   # Domain or public proxy install:
    LIVEKIT_COMMAND="--config /etc/livekit.yaml"
+   # Local install (only this machine reaches Curia) instead:
+   # LIVEKIT_COMMAND="--config /etc/livekit.local.yaml --node-ip 127.0.0.1"
    ```
 
    `LIVEKIT_KEYS` must hold the same pair you enter in the vault. Never use `--dev`
    here (see below).
 3. Start it: `docker compose up -d`.
 4. In **Settings → Channels → Voice**, enter `channel.voice.livekit_url`
-   (`wss://<your-domain>`), `channel.voice.livekit_api_key`,
-   `channel.voice.livekit_api_secret`, plus the Deepgram and Cartesia values, then
-   restart Curia.
-5. Open `7881/tcp` and `7882/udp` on the host firewall.
+   (`wss://<your-domain>`, or `ws://localhost:7880` on a local install),
+   `channel.voice.livekit_api_key`, `channel.voice.livekit_api_secret`, plus the
+   Deepgram and Cartesia values, then restart Curia.
+5. On a domain or public proxy install, open `7881/tcp` and `7882/udp` on the host
+   firewall.
 
 ## Start LiveKit with Docker Compose
 
