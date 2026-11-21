@@ -141,7 +141,7 @@ import { invokeVoiceToolAudited } from './channels/voice/voice-tool-audit.js';
 import { evaluateVoiceModelCapabilities } from './channels/voice/voice-model-capabilities.js';
 import { DeepgramSttProvider, CartesiaTtsProvider, SpeechMediaService } from './speech/index.js';
 import { LiveKitRoomSession } from './channels/voice/livekit/room-session.js';
-import { deleteVoiceRoom, listVoiceRooms } from './channels/voice/livekit/token.js';
+import { deleteVoiceRoom, listVoiceRooms, toLiveKitWsUrl } from './channels/voice/livekit/token.js';
 import { SignalCallBridge } from './channels/voice/signal/signal-call-bridge.js';
 import { AgendaEventSync, readAgendaEvent } from './meetings/agenda-event-sync.js';
 import { AgendaStore } from './meetings/agenda-store.js';
@@ -2550,7 +2550,11 @@ async function main(): Promise<void> {
       } else {
       // Wrap in telemetry so voice turns emit llm.call cost events like every other path.
       const voiceLlmProvider = new TelemetryLlmProvider(voiceBaseProvider, bus, logger, 'voice-turn', modelRegistry);
-      const voiceLivekitUrl = config.voiceLivekitUrl;
+      // Curia's own end of the call joins over the internal signaling URL (the
+      // compose-network address). The browser-facing URL (config.voiceLivekitUrl)
+      // stays on VoiceAdapter only: inside a container `ws://localhost:7880` is the
+      // container itself (#2357).
+      const voiceLivekitUrl = toLiveKitWsUrl(config.voiceLivekitManagementUrl);
       const voiceRuntime = new VoiceRuntime({
         bus,
         logger,

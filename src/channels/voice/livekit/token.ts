@@ -48,6 +48,17 @@ export function toLiveKitHttpUrl(livekitManagementUrl: string): string {
 }
 
 /**
+ * Inverse of `toLiveKitHttpUrl`: turn the internal management base
+ * (`http://livekit:7880`) into the WebSocket signaling URL Curia's own
+ * server-side participant joins with (#2357). `ws(s):` passes through.
+ */
+export function toLiveKitWsUrl(livekitManagementUrl: string): string {
+  return livekitManagementUrl
+    .replace(/^https:/i, 'wss:')
+    .replace(/^http:/i, 'ws:');
+}
+
+/**
  * Lightweight LiveKit management reachability probe for /api/health (#1567).
  *
  * `livekitManagementUrl` must be the server→LiveKit HTTP(S) base (e.g.
