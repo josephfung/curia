@@ -1650,6 +1650,8 @@ _fi_run() {
       # Record the seed command environment as an external process sees it (exported only).
       docker() {
         printf '%s\n' "$*" >> "$_fi_calls"
+        # An existing Postgres volume only when the test says so.
+        case "$*" in ("volume inspect "*) [[ -n "${_FI_PGDATA:-}" ]]; return ;; esac
         case "$*" in (*seed-vault*)
           local n
           for n in SEED_LIVEKIT_URL SEED_LIVEKIT_API_KEY SEED_LIVEKIT_API_SECRET \
@@ -1710,6 +1712,17 @@ _assert_var "db password: .env.example copy gets 64 hex" \
     "$([[ "$_fi_pw" =~ ^[0-9a-f]{64}$ ]] && echo yes || echo no)" yes
 _assert_var "db password: DATABASE_URL uses it" "$(_has "$(env_value "$_fi_env" DATABASE_URL)" ":$_fi_pw@")" yes
 _assert_var "db password: one DB_PASSWORD line" "$(grep -c '^DB_PASSWORD=' "$_fi_env" | tr -d ' ')" "1"
+# The placeholder is kept when this project's Postgres volume already exists: an
+# older interrupted install initialised it with that password.
+_FI_PGDATA=1
+_fi_run local "" '' || true
+unset _FI_PGDATA
+_assert_var "db password: placeholder kept when pgdata exists" "$(env_value "$_fi_env" DB_PASSWORD)" "your-db-password"
+_assert_var "db password: warns it is weak" "$(_has "$_fi_out" 'weak')" yes
+_assert_var "db password: checks this project's volume" \
+    "$(grep -c "^volume inspect $(basename "$_fi_dir" | tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -cd 'a-z0-9_-')_pgdata" "$_fi_calls" | tr -d ' ')" "1"
+_fi_run local "" '' || true
+_assert_var "db password: no warning without the volume" "$(_has "$_fi_out" 'weak')" no
 _FI_DB_PASSWORD=kept-from-an-earlier-run
 _fi_run local "" '' || true
 unset _FI_DB_PASSWORD
@@ -2123,6 +2136,21 @@ rm -rf "$_rs_dir"
 _nk="$(note_livekit_values_kept 2>&1)"
 _assert_var "kept note: an earlier run" "$(_has "$_nk" 'An earlier run')" yes
 _assert_var "kept note: where to change them" "$(_has "$_nk" 'Settings → Channels → Voice')" yes
+
+# --- install.sh: compose_project_name (as Compose derives it) ---
+
+echo ""
+echo "=== install.sh: compose_project_name ==="
+
+_cp_root="$(mktemp -d)"
+mkdir -p "$_cp_root/My Curia.Install" "$_cp_root/-_x"
+_cp_env="$(mktemp)"
+_cp() { ( unset COMPOSE_PROJECT_NAME; [[ "$3" == - ]] || export COMPOSE_PROJECT_NAME="$3"; INSTALL_DIR="$1"; printf '%b' "$2" > "$_cp_env"; compose_project_name "$_cp_env" ); }
+_assert_var "project name: dir basename, lowercased, invalid chars dropped" "$(_cp "$_cp_root/My Curia.Install" '' -)" "mycuriainstall"
+_assert_var "project name: leading - and _ dropped" "$(_cp "$_cp_root/-_x" '' -)" "x"
+_assert_var "project name: .env COMPOSE_PROJECT_NAME wins" "$(_cp "$_cp_root/-_x" 'COMPOSE_PROJECT_NAME=Prod_1\n' -)" "prod_1"
+_assert_var "project name: shell wins over .env" "$(_cp "$_cp_root/-_x" 'COMPOSE_PROJECT_NAME=prod\n' 'shell')" "shell"
+rm -rf "$_cp_root" "$_cp_env"
 
 # --- Results ---
 

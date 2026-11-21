@@ -827,6 +827,24 @@ retarget_livekit_command() {
   hint "under Settings → Channels → Voice after setup."
 }
 
+# Echo this install's Compose project name the way Compose derives it:
+# COMPOSE_PROJECT_NAME (shell, then .env), else the install dir's basename;
+# lowercased, characters outside [a-z0-9_-] dropped, leading - and _ trimmed.
+compose_project_name() {
+  local env="$1" name
+  name="$(compose_var "$env" COMPOSE_PROJECT_NAME)"
+  [[ -n "$name" ]] || name="${INSTALL_DIR%/}"; name="${name##*/}"
+  name="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -cd 'a-z0-9_-')"
+  while [[ "$name" == [-_]* ]]; do name="${name#?}"; done
+  printf '%s' "$name"
+}
+
+# Returns 0 when this install's Postgres volume (<project>_pgdata) exists, i.e.
+# Postgres was already initialised with whatever DB_PASSWORD was then in .env.
+pgdata_volume_exists() {
+  docker volume inspect "$(compose_project_name "$1")_pgdata" >/dev/null 2>&1
+}
+
 # Validate prereqs: Docker daemon up, compose plugin present, curl available.
 # The operator path deliberately does NOT require Node, pnpm, or openssl.
 check_prereqs() {
@@ -1041,10 +1059,20 @@ fresh_install() {
   # install (DB creds written on a prior interrupted run but the vault never
   # seeded): the Postgres volume was already initialised with that password, so
   # regenerating it would break authentication. Only generate when the value is
-  # absent or a shipped placeholder (.env.example's your-db-password included).
+  # absent or a shipped placeholder. .env.example's your-db-password is one too,
+  # except when this project's Postgres volume already exists: an older install,
+  # interrupted, initialised it with that password, so changing .env alone would
+  # lock the installer out of it.
   db_pass="$(env_value "$env" DB_PASSWORD)"
   case "$db_pass" in
-    ""|replace-*|your-db-password) db_pass="$(gen_secret_hex)" ;;
+    ""|replace-*) db_pass="$(gen_secret_hex)" ;;
+    your-db-password)
+      if pgdata_volume_exists "$env"; then
+        warn "Keeping DB_PASSWORD=your-db-password, the weak default from .env.example:"
+        hint "this install's Postgres volume was already set up with it."
+      else
+        db_pass="$(gen_secret_hex)"
+      fi ;;
   esac
   api_token="$(gen_secret_hex)"
   boot_secret="$(gen_secret_hex)"
