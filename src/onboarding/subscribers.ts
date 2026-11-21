@@ -1,8 +1,8 @@
 // subscribers.ts — pairing, mailbox connection and blocked sign-ins wake the onboarding program (#2360).
 //
 // Each handler acts only while an onboarding task is open (findOpenOnboardingTask), adds a progress
-// note saying what to do, and wakes the coordinator now. A duplicate wake (23505) means a wake is
-// already pending, which is as good. Handlers never throw: a bus handler error must not break the
+// note saying what to do, and wakes the coordinator now (see noteAndWakeCoordinator for a task that
+// already has a wake). Handlers never throw: a bus handler error must not break the
 // publisher (the pairing route, the sign-in callback).
 
 import type { EventBus } from '../bus/bus.js';
@@ -21,7 +21,7 @@ import { findOpenOnboardingTask, type OnboardingStateLock, readOnboardingState }
 export interface OnboardingSubscribersOptions {
   bus: EventBus;
   taskRepo: TaskRepo;
-  scheduler: Pick<SchedulerService, 'enqueueTaskWake'>;
+  scheduler: Pick<SchedulerService, 'enqueueTaskWake' | 'runTaskWakeEarly'>;
   configStore: Pick<ConfigStore, 'get' | 'set'>;
   /** The process's shared onboarding state lock (createOnboardingStateLock). */
   stateLock: OnboardingStateLock;
@@ -116,8 +116,10 @@ export class OnboardingSubscribers {
 }
 
 /**
- * Add a progress note to a task and wake the coordinator on it now; a pending wake (23505) is as
- * good.
+ * Add a progress note to a task and wake the coordinator on it now. A task has one active wake
+ * (23505 on a second). One due now or running is as good. One booked for later (the next session)
+ * is run now instead, keeping its booked time to arm again after this run, so the note is not left
+ * waiting for that session and the session is not moved.
  */
 export async function noteAndWakeCoordinator(
   o: Pick<OnboardingSubscribersOptions, 'taskRepo' | 'scheduler' | 'logger'>,
@@ -134,10 +136,11 @@ export async function noteAndWakeCoordinator(
       originator: makeSystemOriginator(),
     });
   } catch (err) {
-    if (isPgUniqueViolation(err)) {
-      o.logger.debug({ taskId: task.id }, 'a coordinator wake is already pending');
-      return;
-    }
-    throw err;
+    if (!isPgUniqueViolation(err)) throw err;
+    const now = new Date();
+    const movedEarly = await o.scheduler.runTaskWakeEarly(task.id, now);
+    o.logger.debug({ taskId: task.id, movedEarly }, movedEarly
+      ? 'onboarding: the booked wake runs now and keeps its booked time'
+      : 'a coordinator wake is already pending');
   }
 }

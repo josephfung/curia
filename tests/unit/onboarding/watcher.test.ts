@@ -55,7 +55,7 @@ function setup(opts: {
   const nextSessionBooked = vi.fn(async () => opts.booked ?? false);
   const watcher = new OnboardingWatcher({
     taskRepo: taskRepo as never,
-    scheduler: { enqueueTaskWake },
+    scheduler: { enqueueTaskWake, runTaskWakeEarly: vi.fn(async () => false) },
     configStore,
     stateLock: (fn) => fn(),
     logger,
@@ -214,6 +214,8 @@ describe('isNextSessionBooked', () => {
     const sql = (p.query.mock.calls[0] as unknown[])[0] as string;
     expect(sql).toContain("status = 'pending'");
     expect(sql).toContain("status = 'running' AND deferred_wake_at > $2");
+    // A booked wake running early (runTaskWakeEarly) keeps its booked time on deferred_wake_at.
+    expect(sql).toContain('GREATEST(COALESCE(next_run_at, run_at), deferred_wake_at) > $2');
   });
 
   it('is booked by a pending agenda the task owns, and not by another task\'s', async () => {

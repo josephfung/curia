@@ -27,7 +27,7 @@ import { noteAndWakeCoordinator } from './subscribers.js';
 
 export interface OnboardingWatcherOptions {
   taskRepo: TaskRepo;
-  scheduler: Pick<SchedulerService, 'enqueueTaskWake'>;
+  scheduler: Pick<SchedulerService, 'enqueueTaskWake' | 'runTaskWakeEarly'>;
   configStore: Pick<ConfigStore, 'get' | 'set'>;
   /** The process's shared onboarding state lock (createOnboardingStateLock). */
   stateLock: OnboardingStateLock;
@@ -207,7 +207,8 @@ export async function isNextSessionBooked(
     `SELECT EXISTS (
        SELECT 1 FROM scheduled_jobs
        WHERE task_id = $1 AND (
-         (status = 'pending' AND COALESCE(next_run_at, run_at) > $2)
+         -- deferred_wake_at on a pending wake: a booked wake running early (runTaskWakeEarly)
+         (status = 'pending' AND GREATEST(COALESCE(next_run_at, run_at), deferred_wake_at) > $2)
          -- task-update wake_at from inside the task's own wake run is parked here until it ends
          OR (status = 'running' AND deferred_wake_at > $2)
        )

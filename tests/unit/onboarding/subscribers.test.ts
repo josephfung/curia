@@ -41,7 +41,10 @@ async function setup(opts: { open: boolean; state?: Partial<OnboardingState>; go
     listTasks: vi.fn(async () => (opts.open ? [{ id: 't1', parentTaskId: null, createdBy: ONBOARDING_CREATED_BY }] : [])),
     updateTask: vi.fn(async () => ({})),
   };
-  const scheduler = { enqueueTaskWake: vi.fn(async (_p: { taskId: string; agentId: string }) => ({ jobId: 'j1' })) };
+  const scheduler = {
+    enqueueTaskWake: vi.fn(async (_p: { taskId: string; agentId: string }) => ({ jobId: 'j1' })),
+    runTaskWakeEarly: vi.fn(async (_id: string, _at: Date) => false),
+  };
   new OnboardingSubscribers({
     bus: bus as never,
     taskRepo: taskRepo as never,
@@ -109,6 +112,16 @@ describe('OnboardingSubscribers', () => {
     const t = await setup({ open: true });
     t.scheduler.enqueueTaskWake.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }));
     await expect(t.fire(connected())).resolves.toBeUndefined();
+  });
+
+  // The next session is booked for later: the mailbox's first look must not wait for it.
+  it('mailbox connected while a later session is booked runs that wake now, keeping the booking', async () => {
+    const t = await setup({ open: true });
+    t.scheduler.enqueueTaskWake.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }));
+    t.scheduler.runTaskWakeEarly.mockResolvedValueOnce(true);
+    await t.fire(connected());
+    expect(t.taskRepo.updateTask).toHaveBeenCalledWith('t1', expect.objectContaining({ progressNote: expect.stringContaining('Mailbox connected') }));
+    expect(t.scheduler.runTaskWakeEarly).toHaveBeenCalledWith('t1', expect.any(Date));
   });
 
   it('a blocked sign-in notifies the operator once, logging detail keys but not values', async () => {
