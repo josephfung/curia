@@ -1568,15 +1568,10 @@ export function scheduledJobTask(agentId: string, conversationId: string, conten
   });
 }
 
-/**
- * What Scheduler.fireJob publishes for a task's wake_at: the wake body, the task's intent anchor
- * and the bound-task metadata. A wake_at job carries no standing, so no wakeContext. It does carry
- * the task's stored originator: `system` for the inbox heartbeat's drain task (#2475).
- */
-/** A wake task's progress block: {} for a fresh task with no notes or skills (the heartbeat's new drain). */
 /** The skill production's onboarding turn context activates (src/agents/runtime.ts). */
 const ONBOARDING_SKILL = 'onboarding';
 
+/** A wake task's progress block: {} for a fresh task with no notes or skills (the heartbeat's new drain). */
 function wakeProgress(task: ScenarioWakeTask): Record<string, unknown> {
   return {
     ...(task.notes.length > 0 ? { notes: task.notes } : {}),
@@ -1585,6 +1580,11 @@ function wakeProgress(task: ScenarioWakeTask): Record<string, unknown> {
   };
 }
 
+/**
+ * What Scheduler.fireJob publishes for a task's wake_at: the wake body, the task's intent anchor
+ * and the bound-task metadata. A wake_at job carries no standing, so no wakeContext. It does carry
+ * the task's stored originator: `system` for the inbox heartbeat's drain task (#2475).
+ */
 export function taskWakeEvent(agentId: string, conversationId: string, content: string, task: ScenarioWakeTask): AgentTaskEvent {
   return createAgentTask({
     agentId,

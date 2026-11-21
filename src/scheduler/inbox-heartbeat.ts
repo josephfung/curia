@@ -342,6 +342,9 @@ export class InboxHeartbeat {
   }
 
   private async tickOnce(now: Date): Promise<InboxHeartbeatResult> {
+    // The dedupe sweep only deletes expired rows (no mailbox is touched), so it runs before the
+    // onboarding hold check: the table stays trimmed while triage is held.
+    await this.sweepOncePerDay(now);
     if (this.o.held) {
       let held: boolean;
       try {
@@ -349,7 +352,9 @@ export class InboxHeartbeat {
       } catch (err) {
         // Fail closed, like a malformed hold: if the hold cannot be read (config-store outage),
         // do not risk labelling a mailbox the principal was never told about. Retry next tick.
-        this.o.logger.error({ ...grantSafeErrorFields(err) }, 'InboxHeartbeat: could not read the triage hold; treating it as held this tick');
+        // The message is logged only for an error that cannot carry a Nylas grant id (R20).
+        const message = mayCarryGrantId(err) ? {} : { errMessage: blankQuotedValues((err as Error).message) };
+        this.o.logger.error({ ...grantSafeErrorFields(err), ...message }, 'InboxHeartbeat: could not read the triage hold; treating it as held this tick');
         return 'quiet';
       }
       if (held) {
@@ -358,7 +363,6 @@ export class InboxHeartbeat {
       }
     }
     // TriageState gates on TRIAGE_DAILY_CEILING, the one value the list tool also reads (BR-M2).
-    await this.sweepOncePerDay(now);
     const atCeiling = await this.o.state.ceilingReached(now);
 
     const mailboxes = await this.o.mailboxes.list();

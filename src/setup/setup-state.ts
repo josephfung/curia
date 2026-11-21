@@ -121,7 +121,7 @@ export async function startSetup(db: SetupStateQueryable): Promise<SetupState> {
   return readSetupState(db);
 }
 
-/** Start onboarding: Setup is over. Idempotent. */
+/** Setup is finished (Start onboarding or Not right now; POST /api/setup/complete). Idempotent. */
 export async function markSetupComplete(db: SetupStateQueryable): Promise<void> {
   await db.query(
     `INSERT INTO setup_state (id, phase, completed_at) VALUES (1, 'complete', now())

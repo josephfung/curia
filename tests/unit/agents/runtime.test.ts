@@ -3541,7 +3541,10 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       },
     };
 
-    async function runTurn(payload: { liveTurn?: boolean; liveTurnGrantId?: string; metadata?: Record<string, unknown> }) {
+    async function runTurn(
+      payload: { liveTurn?: boolean; liveTurnGrantId?: string; metadata?: Record<string, unknown> },
+      activation: unknown = { skill: 'onboarding', tools: ['onboarding-progress'], skippedTools: [], instructions: '## Onboarding\nWork the topics.' },
+    ) {
       const logger = createLogger('error');
       const bus = new EventBus(logger);
       bus.subscribe('agent.response', 'dispatch', () => {});
@@ -3565,12 +3568,7 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       const mockExecution = {
         invoke: vi.fn(),
         getToolDefinitions: vi.fn((names: string[]) => [progressToolDef].filter((d) => names.includes(d.name))),
-        resolveSkillActivationForAgent: vi.fn().mockReturnValue({
-          skill: 'onboarding',
-          tools: ['onboarding-progress'],
-          skippedTools: [],
-          instructions: '## Onboarding\nWork the topics.',
-        }),
+        resolveSkillActivationForAgent: vi.fn().mockReturnValue(activation),
       } as unknown as ExecutionLayer;
       new AgentRuntime({
         agentId: 'coordinator',
@@ -3610,6 +3608,13 @@ describe('AgentRuntime skill-activate (#1495)', () => {
       expect(r.tools).toContain('onboarding-progress');
       expect(r.system).toContain('[Activated skill: onboarding]');
       expect(r.user).toContain(BLOCK);
+    });
+
+    it('leaves the block out when the onboarding skill cannot be activated', async () => {
+      const r = await runTurn({ liveTurn: true, metadata: principal }, { error: 'not allowed' });
+      expect(r.forPrincipalTurn).toHaveBeenCalledTimes(1);
+      expect(r.tools).not.toContain('onboarding-progress');
+      expect(r.user).not.toContain('Onboarding in progress');
     });
 
     it.each([

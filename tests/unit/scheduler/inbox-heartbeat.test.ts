@@ -76,7 +76,18 @@ describe('InboxHeartbeat.tick', () => {
     const t = make({ extra: { held: async () => { throw new Error('db down'); } } });
     expect(await t.hb.tick(NOW)).toBe('quiet');
     expect(t.createTask).not.toHaveBeenCalled();
-    expect(t.log.error).toHaveBeenCalled();
+    expect(t.log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ errName: 'Error', errMessage: 'db down' }),
+      expect.stringContaining('could not read the triage hold'),
+    );
+  });
+
+  it('still sweeps expired dedupe rows while held (no mailbox is touched)', async () => {
+    const sweepDedupe = vi.fn(async () => 2);
+    const t = make({ extra: { held: async () => true, sweepDedupe } });
+    expect(await t.hb.tick(NOW)).toBe('quiet');
+    expect(sweepDedupe).toHaveBeenCalledTimes(1);
+    expect(t.hasUnreadSince).not.toHaveBeenCalled();
   });
 
   it('wakes as usual when the hold is released', async () => {

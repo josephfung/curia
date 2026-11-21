@@ -485,7 +485,8 @@ carries no task id, so while an onboarding task is open a live principal turn on
 `onboarding` skill and a short block naming the task and its open topics
 (`src/onboarding/turn-context.ts`). Task-bound turns, Setup page turns and tool-allowlisted
 turns do not. The turn is not bound to the task, so anything else in the message is handled
-as usual. A failed lookup leaves the turn without the block. Nothing is added to the
+as usual. A failed lookup, or an `onboarding` skill that cannot be activated, leaves the turn
+without the block. Nothing is added to the
 coordinator's always-on prompt.
 
 **The skill** (`skills/onboarding/SKILL.md`) has the coordinator take topics in any order,
@@ -503,7 +504,8 @@ confirmed in one line; a vague "later" gets two concrete times, once.
 
 All four are the coordinator's only (`allowed_callers`). While an onboarding task is open,
 `set-autonomy` accepts only 65 (Draft only), 75 (Ask first) and 85 (Spot-check); if the
-lookup fails it logs a warning and applies no limit.
+lookup fails, or the tool has no task repository to look in, it logs a warning and applies no
+limit.
 
 **Chat.** The coordinator runs the session in the principal's thread; a principal chat turn
 is already live, so principal-authorized writes apply without an approval prompt.
@@ -529,7 +531,8 @@ instead of switching it on mid-conversation.
 - While `onboarding/triage_hold` is held, the inbox heartbeat (the only thing that wakes
   scheduled triage) does nothing, so no mail is labelled, archived, drafted or sent before
   the principal has been told what to expect. Principal-directed mailbox actions are
-  unaffected. A hold that is malformed or cannot be read counts as held.
+  unaffected, and the heartbeat's daily sweep of expired dedupe rows (no mailbox touched)
+  still runs. A hold that is malformed or cannot be read counts as held.
 - A missing key means no hold, so installs that never start onboarding keep triaging.
 - `onboarding-triage-release` lifts it once the inbox topic is done; switching Email triage
   on in Capabilities lifts it too (`DELETE /api/onboarding/triage-hold`). Both are live.

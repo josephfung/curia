@@ -46,6 +46,8 @@ export class SetAutonomyHandler implements ToolHandler {
           error: 'During onboarding the independence level is 65 (Draft only), 75 (Ask first) or 85 (Spot-check).',
         };
       }
+    } else {
+      ctx.log.warn('set-autonomy: no taskRepo capability, so the onboarding band limit cannot be checked; applying none');
     }
 
     // Prefer contactId over role for the audit identifier — contactId is a unique, stable

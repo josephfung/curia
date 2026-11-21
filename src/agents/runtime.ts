@@ -560,20 +560,6 @@ export class AgentRuntime {
   }
 
   /**
-   * The note of the same person's other turns (#2588). Only a person's own inbound root turn
-   * reads it: the root task itself (not a wake or delegated task under it), not a synthetic
-   * turn (a hand-off recovery turn excepted: it re-runs the person's message), a laned turn
-   * shape on a human channel (so no scheduled job, internal or bullpen task), and a one-to-one
-   * audience (a group, a channel thread or a cc'd email gets no note), from a sender its
-   * channel authenticated or on SMS, web or CLI (isAuthenticatedRoot). Fail-open: an error is
-   * logged and the block omitted.
-   *
-   * `handoffDefs` is non-empty exactly when the block carries the `turn-handoff` guidance line:
-   * the tool's availability (no per-turn allowlist, an execution layer, a registered
-   * definition) is decided first and is part of that eligibility, so the line never shows
-   * while the tool is not offered. The runtime then adds those definitions to the turn.
-   */
-  /**
    * The onboarding block for this turn (#2360), or null. Asked only on a live principal turn
    * that is not task-bound, not a Setup page turn and not tool-allowlisted (an allowlisted
    * rewrite must not gain tools). Live is judged as the execution layer judges it: a voice
@@ -625,6 +611,20 @@ export class AgentRuntime {
     return instructionBlocks;
   }
 
+  /**
+   * The note of the same person's other turns (#2588). Only a person's own inbound root turn
+   * reads it: the root task itself (not a wake or delegated task under it), not a synthetic
+   * turn (a hand-off recovery turn excepted: it re-runs the person's message), a laned turn
+   * shape on a human channel (so no scheduled job, internal or bullpen task), and a one-to-one
+   * audience (a group, a channel thread or a cc'd email gets no note), from a sender its
+   * channel authenticated or on SMS, web or CLI (isAuthenticatedRoot). Fail-open: an error is
+   * logged and the block omitted.
+   *
+   * `handoffDefs` is non-empty exactly when the block carries the `turn-handoff` guidance line:
+   * the tool's availability (no per-turn allowlist, an execution layer, a registered
+   * definition) is decided first and is part of that eligibility, so the line never shows
+   * while the tool is not offered. The runtime then adds those definitions to the turn.
+   */
   private otherTurnsBlock(taskEvent: AgentTaskEvent): { text: string; handoffDefs: ToolDefinition[] } {
     const none = { text: '', handoffDefs: [] };
     const registry = this.config.turnActivity;
@@ -1175,12 +1175,19 @@ export class AgentRuntime {
     // instead. The block is prompt-only, like the turn guidance.
     const onboardingBlock = await this.onboardingTurnBlock(taskEvent, boundTaskCtx !== null, setupStep !== null);
     if (onboardingBlock) {
-      promptContent = `${onboardingBlock}\n\n${promptContent}`;
-      if (!pinnedSkillNames.has(ONBOARDING_SKILL_NAME)) {
+      // The block points at the skill's tools, so it goes in only when the skill is on this turn:
+      // pinned, or activated here (its instructions block comes back only on success).
+      let skillOn = pinnedSkillNames.has(ONBOARDING_SKILL_NAME);
+      if (!skillOn) {
         if (!workingToolDefs) workingToolDefs = [];
-        for (const block of this.activateSkillsForTurn([ONBOARDING_SKILL_NAME], workingToolDefs, 'Onboarding skill activation skipped')) {
-          effectiveSystemPrompt += `\n\n${block}`;
-        }
+        const blocks = this.activateSkillsForTurn([ONBOARDING_SKILL_NAME], workingToolDefs, 'Onboarding skill activation skipped');
+        for (const block of blocks) effectiveSystemPrompt += `\n\n${block}`;
+        skillOn = blocks.length > 0;
+      }
+      if (skillOn) {
+        promptContent = `${onboardingBlock}\n\n${promptContent}`;
+      } else {
+        logger.warn({ agentId }, 'Onboarding turn block left out: the onboarding skill could not be activated');
       }
     }
 
