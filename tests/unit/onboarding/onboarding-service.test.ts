@@ -290,6 +290,38 @@ describe('OnboardingService.start', () => {
     expect(await isTriageHeld(h.configStore)).toBe(true);
   });
 
+  it('keeps triage held when the Email triage enable committed but its read-back threw', async () => {
+    const h = makeHarness();
+    const enable = h.registry.installAndEnable.getMockImplementation()!;
+    h.registry.installAndEnable.mockImplementation(async (kind: RegistryKind, name: string) => {
+      const entry = await enable(kind, name);
+      // The enable committed; the entry read that follows it fails.
+      if (kind === 'agent') throw new Error('read-back failed');
+      return entry;
+    });
+    await expect(h.service.start({ actor: 'operator', confirmWorkingPrincipal: true })).rejects.toThrow('read-back failed');
+    expect(await isTriageHeld(h.configStore)).toBe(true);
+  });
+
+  it('keeps triage held when a failed Email triage enable leaves its state unreadable', async () => {
+    const h = makeHarness();
+    h.registry.installAndEnable.mockRejectedValue(new Error('enable failed'));
+    const list = h.registry.list.getMockImplementation()!;
+    h.registry.list.mockImplementation(async (kind: RegistryKind) => {
+      if (h.registry.installAndEnable.mock.calls.length > 0) throw new Error('registry unreadable');
+      return list(kind);
+    });
+    await expect(h.service.start({ actor: 'operator', confirmWorkingPrincipal: true })).rejects.toThrow('enable failed');
+    expect(await isTriageHeld(h.configStore)).toBe(true);
+  });
+
+  it('restores the hold when a failed Email triage enable left the agent disabled', async () => {
+    const h = makeHarness();
+    h.registry.installAndEnable.mockRejectedValue(new Error('secrets missing'));
+    await expect(h.service.start({ actor: 'operator', confirmWorkingPrincipal: true })).rejects.toThrow('secrets missing');
+    expect(await isTriageHeld(h.configStore)).toBe(false);
+  });
+
   it('a failed COMMIT undoes the start: tasks cancelled, invitation stopped, earlier state restored', async () => {
     const h = makeHarness({ enabled: ALL_REQUIRED_ENABLED, txFail: (sql) => (sql === 'COMMIT' ? new Error('commit lost') : undefined) });
     const earlier = { taskId: 'old-task', startedAt: '2026-11-01T00:00:00.000Z', route: 'app', greetingSentAt: null, followUpsSent: 0, lastFollowUpAt: null, lastPrincipalTurnAt: null, idleNudgeSentAt: null, operatorNotified: [] };

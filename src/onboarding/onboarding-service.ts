@@ -560,9 +560,29 @@ export class OnboardingService {
         enabledByKind.set(kind, enabled);
       }
       if (enabled.has(name)) continue;
-      await registry.installAndEnable(kind, name, ONBOARDING_CREATED_BY);
+      const isTriageAgent = kind === 'agent' && name === EMAIL_TRIAGE_AGENT;
+      // Flagged before the call: installAndEnable commits the enable and then reads the entry
+      // back, so a throw does not prove the agent stayed disabled. The flag is cleared only when
+      // a fresh read shows it is not enabled; when that cannot be read either, the hold stays.
+      if (isTriageAgent) undo.enabledTriageAgent = true;
+      try {
+        await registry.installAndEnable(kind, name, ONBOARDING_CREATED_BY);
+      } catch (err) {
+        if (isTriageAgent) undo.enabledTriageAgent = await this.triageAgentMayBeEnabled();
+        throw err;
+      }
       enabled.add(name);
-      if (kind === 'agent' && name === EMAIL_TRIAGE_AGENT) undo.enabledTriageAgent = true;
+    }
+  }
+
+  /** After a failed enable: false only when the registry shows the Email triage agent not enabled. */
+  private async triageAgentMayBeEnabled(): Promise<boolean> {
+    try {
+      const agents = await this.deps.registry.list('agent');
+      return agents.some((a) => a.name === EMAIL_TRIAGE_AGENT && a.state === 'enabled');
+    } catch (err) {
+      this.deps.logger.error({ err }, 'onboarding: could not read whether Email triage was enabled — keeping triage held');
+      return true;
     }
   }
 
