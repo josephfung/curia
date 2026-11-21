@@ -104,6 +104,12 @@ export interface EditSectionParams {
   /** Per-section optimistic version — independent of document version. */
   expectedSectionVersion?: number;
   /**
+   * Whole-document version, checked under the row lock: a caller that authorized the write
+   * against one version of the document (doc-write's console-only check, #2360) writes only
+   * that version, never a newer one. Optional; absent means any document version.
+   */
+  expectedVersion?: number;
+  /**
    * Claim ownership when the document currently has `task_id IS NULL`.
    * Existing owners are preserved (COALESCE semantics).
    */
@@ -114,6 +120,8 @@ export interface DeleteSectionParams {
   section: string;
   /** Per-section optimistic version, as for editSection. */
   expectedSectionVersion?: number;
+  /** Whole-document version, checked under the row lock, as for editSection. */
+  expectedVersion?: number;
 }
 
 /** editSection's results, plus a section that is not in the document (#2339). */
@@ -457,6 +465,10 @@ export class WorkingDocsRepo {
       }
 
       const locked = mapRow(lockedRow);
+      if (params.expectedVersion !== undefined && params.expectedVersion !== locked.version) {
+        await client.query('ROLLBACK');
+        return { ok: false, conflict: true, document: locked };
+      }
       // Counters key case-insensitively, the way headings match: a second
       // spelling of the same heading must read the same counter instead of
       // forking a parallel key a stale writer can hide behind (#2398).
@@ -563,6 +575,10 @@ export class WorkingDocsRepo {
       }
 
       const locked = mapRow(lockedRow);
+      if (params.expectedVersion !== undefined && params.expectedVersion !== locked.version) {
+        await client.query('ROLLBACK');
+        return { ok: false, conflict: true, document: locked };
+      }
       const removed = removeSection(locked.body, sectionKey);
       if (!removed) {
         await client.query('ROLLBACK');

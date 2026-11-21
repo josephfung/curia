@@ -433,6 +433,28 @@ describeIf('WorkingDocsRepo (integration)', () => {
       expect((await repo.read(path))!.body).toBe(replacedBody);
     });
 
+    // #2360: doc-write authorizes against one read of the document; the section write must
+    // refuse a newer version (the console marked it console-only in between).
+    it('refuses a section edit or delete when the document moved past expectedVersion', async () => {
+      const path = '/projects/sv-f/rules.md';
+      await repo.create({ path, type: 'agent-settings', body: RULES });
+      const read = (await repo.read(path))!;
+      const marked = await repo.update(path, { frontmatter: { editable_by: 'console' }, expectedVersion: read.version });
+      expect(marked.ok).toBe(true);
+
+      const edit = await repo.editSection(path, { section: 'Board mail', content: '- Status: x', expectedVersion: read.version });
+      expect(edit.ok).toBe(false);
+      if (!edit.ok) expect(edit.conflict).toBe(true);
+      const del = await repo.deleteSection(path, { section: 'Board mail', expectedVersion: read.version });
+      expect(del.ok).toBe(false);
+      if (!del.ok) expect('conflict' in del && del.conflict).toBe(true);
+      expect((await repo.read(path))!.body).toBe(RULES);
+
+      // The current version goes through.
+      const current = (await repo.read(path))!.version;
+      expect((await repo.editSection(path, { section: 'Board mail', content: '- Status: x', expectedVersion: current })).ok).toBe(true);
+    });
+
     it('checks a section delete against a counter stored under another spelling', async () => {
       const path = '/projects/sv-e/rules.md';
       await repo.create({ path, type: 'agent-settings', body: RULES });
