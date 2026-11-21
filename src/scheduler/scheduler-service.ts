@@ -1328,10 +1328,12 @@ export class SchedulerService {
    * from inside its own wake (#1938); a new wake_at set during the run replaces it. A running wake
    * with nothing deferred gets deferred_wake_at = `runAt`, so its completion re-arms it for one more
    * run that reads the note (the running one may have started before it). A running wake that
-   * already holds a deferred time is left alone: one row cannot hold both. Updating in place keeps
-   * scheduled_jobs_one_active_wake_per_task_uq satisfied. Returns whether a wake changed.
+   * already holds a deferred time is left alone, since one row cannot hold both, and reported as
+   * 'busy' so the caller can try again once it completes. Updating in place keeps
+   * scheduled_jobs_one_active_wake_per_task_uq satisfied. Returns 'moved' when a wake changed,
+   * 'busy' for that running wake, and 'none' otherwise (a wake already due, or none at all).
    */
-  async runTaskWakeEarly(taskId: string, runAt: Date): Promise<boolean> {
+  async runTaskWakeEarly(taskId: string, runAt: Date): Promise<'moved' | 'busy' | 'none'> {
     const result = await this.pool.query(
       `UPDATE scheduled_jobs
           SET deferred_wake_at = CASE WHEN status = 'pending' THEN COALESCE(deferred_wake_at, run_at) ELSE $2 END,
@@ -1343,7 +1345,16 @@ export class SchedulerService {
           AND ((status = 'pending' AND run_at > $2) OR (status = 'running' AND deferred_wake_at IS NULL))`,
       [taskId, runAt],
     );
-    return (result.rowCount ?? 0) > 0;
+    if ((result.rowCount ?? 0) > 0) return 'moved';
+    const busy = await this.pool.query(
+      `SELECT 1 FROM scheduled_jobs
+        WHERE task_id = $1
+          AND task_payload->>'type' = 'task-wake'
+          AND status = 'running'
+          AND deferred_wake_at IS NOT NULL`,
+      [taskId],
+    );
+    return (busy.rowCount ?? 0) > 0 ? 'busy' : 'none';
   }
 
   async enqueueTaskWake(params: {

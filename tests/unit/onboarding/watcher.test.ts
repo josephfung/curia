@@ -55,7 +55,7 @@ function setup(opts: {
   const nextSessionBooked = vi.fn(async () => opts.booked ?? false);
   const watcher = new OnboardingWatcher({
     taskRepo: taskRepo as never,
-    scheduler: { enqueueTaskWake, runTaskWakeEarly: vi.fn(async () => false) },
+    scheduler: { enqueueTaskWake, runTaskWakeEarly: vi.fn(async (): Promise<'moved' | 'busy' | 'none'> => 'none') },
     configStore,
     stateLock: (fn) => fn(),
     logger,

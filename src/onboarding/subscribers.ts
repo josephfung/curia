@@ -14,7 +14,7 @@ import type { TaskRow } from '../db/queries/tasks.js';
 import type { Logger } from '../logger.js';
 import type { ConfigStore } from '../memory/config-store.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
-import { ONBOARDING_CREATED_BY } from './constants.js';
+import { BUSY_WAKE_RETRIES, BUSY_WAKE_RETRY_SECONDS, ONBOARDING_CREATED_BY } from './constants.js';
 import { notifyOperatorOnce } from './notify-operator-once.js';
 import { findOpenOnboardingTask, type OnboardingStateLock, readOnboardingState } from './state.js';
 
@@ -120,9 +120,11 @@ export class OnboardingSubscribers {
 
 /**
  * Add a progress note to a task and wake the coordinator on it now. A task has one active wake
- * (23505 on a second). One due now or running is as good. One booked for later (the next session)
- * is run now instead, keeping its booked time to arm again after this run, so the note is not left
- * waiting for that session and the session is not moved.
+ * (23505 on a second). One due now is as good. One booked for later (the next session) is run now
+ * instead, keeping its booked time to arm again after this run, so the note is not left waiting for
+ * that session and the session is not moved. A running wake runs once more after it completes; if
+ * it already holds a booked time ('busy'), the move is retried in-process once that run has
+ * finished (best effort: a restart drops the retry, and the note waits for the booked run).
  */
 export async function noteAndWakeCoordinator(
   o: Pick<OnboardingSubscribersOptions, 'taskRepo' | 'scheduler' | 'logger'>,
@@ -140,10 +142,26 @@ export async function noteAndWakeCoordinator(
     });
   } catch (err) {
     if (!isPgUniqueViolation(err)) throw err;
-    const now = new Date();
-    const movedEarly = await o.scheduler.runTaskWakeEarly(task.id, now);
-    o.logger.debug({ taskId: task.id, movedEarly }, movedEarly
-      ? 'onboarding: the active wake runs now (or once more) and keeps its booked time'
-      : 'a coordinator wake is already due');
+    const outcome = await o.scheduler.runTaskWakeEarly(task.id, new Date());
+    o.logger.debug({ taskId: task.id, outcome }, 'onboarding: a coordinator wake was already active');
+    if (outcome === 'busy') retryBusyWake(o, task.id, BUSY_WAKE_RETRIES);
   }
+}
+
+function retryBusyWake(
+  o: Pick<OnboardingSubscribersOptions, 'scheduler' | 'logger'>,
+  taskId: string,
+  triesLeft: number,
+): void {
+  const timer = setTimeout(() => {
+    o.scheduler.runTaskWakeEarly(taskId, new Date()).then(
+      (outcome) => {
+        if (outcome === 'busy' && triesLeft > 1) return retryBusyWake(o, taskId, triesLeft - 1);
+        if (outcome === 'busy') o.logger.warn({ taskId }, 'onboarding: wake still running; the note waits for the booked run');
+        else o.logger.debug({ taskId, outcome }, 'onboarding: busy wake retried');
+      },
+      (err: unknown) => o.logger.error({ err, taskId }, 'onboarding: busy wake retry failed; the note waits for the booked run'),
+    );
+  }, BUSY_WAKE_RETRY_SECONDS * 1000);
+  timer.unref();
 }

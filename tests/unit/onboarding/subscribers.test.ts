@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import pino from 'pino';
 import { OnboardingSubscribers } from '../../../src/onboarding/subscribers.js';
 import { writeOnboardingState, type OnboardingState } from '../../../src/onboarding/state.js';
-import { ONBOARDING_CREATED_BY } from '../../../src/onboarding/constants.js';
+import { BUSY_WAKE_RETRY_SECONDS, ONBOARDING_CREATED_BY } from '../../../src/onboarding/constants.js';
 import {
   createMailboxSignInFinished,
   createPairingInvitationRedeemed,
@@ -43,7 +43,7 @@ async function setup(opts: { open: boolean; state?: Partial<OnboardingState>; go
   };
   const scheduler = {
     enqueueTaskWake: vi.fn(async (_p: { taskId: string; agentId: string }) => ({ jobId: 'j1' })),
-    runTaskWakeEarly: vi.fn(async (_id: string, _at: Date) => false),
+    runTaskWakeEarly: vi.fn(async (_id: string, _at: Date): Promise<'moved' | 'busy' | 'none'> => 'none'),
   };
   new OnboardingSubscribers({
     bus: bus as never,
@@ -132,10 +132,30 @@ describe('OnboardingSubscribers', () => {
   it('mailbox connected while a later session is booked runs that wake now, keeping the booking', async () => {
     const t = await setup({ open: true });
     t.scheduler.enqueueTaskWake.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }));
-    t.scheduler.runTaskWakeEarly.mockResolvedValueOnce(true);
+    t.scheduler.runTaskWakeEarly.mockResolvedValueOnce('moved');
     await t.fire(connected());
     expect(t.taskRepo.updateTask).toHaveBeenCalledWith('t1', expect.objectContaining({ progressNote: expect.stringContaining('Mailbox connected') }));
     expect(t.scheduler.runTaskWakeEarly).toHaveBeenCalledWith('t1', expect.any(Date));
+  });
+
+  it('a busy running wake is retried until it can be pulled forward', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = await setup({ open: true });
+      t.scheduler.enqueueTaskWake.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }));
+      t.scheduler.runTaskWakeEarly.mockResolvedValueOnce('busy').mockResolvedValueOnce('busy').mockResolvedValueOnce('moved');
+      await t.fire(connected());
+      expect(t.scheduler.runTaskWakeEarly).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(BUSY_WAKE_RETRY_SECONDS * 1000);
+      expect(t.scheduler.runTaskWakeEarly).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(BUSY_WAKE_RETRY_SECONDS * 1000);
+      expect(t.scheduler.runTaskWakeEarly).toHaveBeenCalledTimes(3);
+      // Moved: no further retries.
+      await vi.advanceTimersByTimeAsync(BUSY_WAKE_RETRY_SECONDS * 1000 * 5);
+      expect(t.scheduler.runTaskWakeEarly).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a blocked sign-in notifies the operator once, logging detail keys but not values', async () => {

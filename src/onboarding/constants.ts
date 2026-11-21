@@ -29,5 +29,12 @@ export const PRINCIPAL_RESTART_EXIT_DELAY_SECONDS = 15;
 /** created_by of the parent onboarding task. A tag alone is spoofable by the model; this is not. */
 export const ONBOARDING_CREATED_BY = 'onboarding';
 
+/**
+ * A note added while the task's wake runs with a booked time already parked waits for that run to
+ * finish, then pulls the booked wake forward (runTaskWakeEarly): retried this often, this many times.
+ */
+export const BUSY_WAKE_RETRY_SECONDS = 60;
+export const BUSY_WAKE_RETRIES = 10;
+
 /** The session id of the first conversation (the playbook's opening session). */
 export const FIRST_CONVERSATION_SESSION = 'first-conversation';

@@ -106,7 +106,7 @@ describeIf('SchedulerService.runTaskWakeEarly', () => {
     const task = await repo.createTask({ agentId: AGENT_ID, title: `${PREFIX} early`, source: 'coordinator', wakeAt: booked });
     // A target an hour out keeps other tests' pollers from claiming it.
     const target = new Date(Date.now() + 3_600_000);
-    expect(await svc.runTaskWakeEarly(task.id, target)).toBe(true);
+    expect(await svc.runTaskWakeEarly(task.id, target)).toBe('moved');
     const [early] = await rowOf(task.id);
     expect(early!.run_at.getTime()).toBe(target.getTime());
     expect(early!.deferred_wake_at?.getTime()).toBe(booked.getTime());
@@ -125,9 +125,9 @@ describeIf('SchedulerService.runTaskWakeEarly', () => {
     const [row] = await rowOf(task.id);
     await pool.query(`UPDATE scheduled_jobs SET status = 'running', run_started_at = now() WHERE id = $1`, [row!.id]);
     const target = new Date(Date.now() + 3_600_000);
-    expect(await svc.runTaskWakeEarly(task.id, target)).toBe(true);
-    // A second event while it still runs changes nothing more.
-    expect(await svc.runTaskWakeEarly(task.id, new Date(Date.now() + 7_200_000))).toBe(false);
+    expect(await svc.runTaskWakeEarly(task.id, target)).toBe('moved');
+    // A second event while it still runs, with that run now deferred, reports it busy.
+    expect(await svc.runTaskWakeEarly(task.id, new Date(Date.now() + 7_200_000))).toBe('busy');
     await svc.completeJobRun(row!.id, true);
     const [after] = await rowOf(task.id);
     expect(after).toMatchObject({ status: 'pending', deferred_wake_at: null });
@@ -137,7 +137,7 @@ describeIf('SchedulerService.runTaskWakeEarly', () => {
   it('leaves a wake due sooner alone', async () => {
     const soon = new Date(Date.now() + 1_800_000);
     const task = await repo.createTask({ agentId: AGENT_ID, title: `${PREFIX} early-soon`, source: 'coordinator', wakeAt: soon });
-    expect(await svc.runTaskWakeEarly(task.id, new Date(Date.now() + 3_600_000))).toBe(false);
+    expect(await svc.runTaskWakeEarly(task.id, new Date(Date.now() + 3_600_000))).toBe('none');
     expect((await rowOf(task.id))[0]!.deferred_wake_at).toBeNull();
   });
 });
