@@ -400,25 +400,77 @@ check_http_exposure() {
   hint "then run: docker compose --project-directory \"$INSTALL_DIR\" up -d curia"
 }
 
-# Warn when LiveKit signaling (7880) is published beyond loopback ($2,
-# `docker port` format) while the running container uses the --dev
-# credentials. The running container's command is checked, not .env: one that
-# was not recreated keeps its old command. Falls back to LIVEKIT_COMMAND
-# (shell, then .env) when the container cannot be inspected. Fresh and upgrade
-# paths both call this, after check_livekit_bind.
+# Warn when LiveKit signaling is public while the running container uses the
+# --dev credentials. Public means 7880 published beyond loopback ($2,
+# `docker port` format), or the TLS overlay is active with livekit running:
+# the shipped Caddyfile routes /rtc* to livekit:7880 over the compose network,
+# whatever 7880's host binding. The running container's command is checked,
+# not .env: one that was not recreated keeps its old command. Falls back to
+# LIVEKIT_COMMAND (shell, then .env) when the container cannot be inspected.
+# Fresh and upgrade paths both call this, after check_livekit_bind.
 warn_public_livekit_dev() {
-  local env="$1" bindings="$2" cmd
-  [[ -n "$bindings" ]] || return 0
-  bindings_are_loopback "$bindings" && return 0
+  local env="$1" bindings="$2" cmd via=""
+  if [[ -n "$bindings" ]] && ! bindings_are_loopback "$bindings"; then
+    via="port"
+  elif uses_tls_overlay "$(compose_var "$env" COMPOSE_FILE)" \
+    && { [[ -n "$bindings" ]] || service_running livekit; }; then
+    via="caddy"
+  fi
+  [[ -n "$via" ]] || return 0
   cmd="$(live_command livekit)"
   [[ -n "$cmd" ]] || cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
   livekit_command_is_dev "$cmd" || return 0
   echo "" >&2
-  warn "LiveKit signaling is public ($(echo "$bindings" | tr '\n' ' ')) and runs --dev credentials (devkey/secret)."
-  hint "Anyone who can reach 7880 can mint LiveKit tokens without Curia's auth."
+  if [[ "$via" == port ]]; then
+    warn "LiveKit signaling is public ($(echo "$bindings" | tr '\n' ' ')) and runs --dev credentials (devkey/secret)."
+    hint "Anyone who can reach 7880 can mint LiveKit tokens without Curia's auth."
+  else
+    warn "HTTPS install: LiveKit runs --dev credentials (devkey/secret), and the shipped Caddyfile routes /rtc* to it."
+    hint "Anyone who can reach this domain can then mint LiveKit tokens without Curia's auth."
+  fi
   hint "Set LIVEKIT_COMMAND to a real config with your own keys (docs/dev/voice-setup.md)"
   hint "and recreate it: docker compose --project-directory \"$INSTALL_DIR\" --profile voice up -d livekit"
-  hint "or remove LIVEKIT_HTTP_BIND from .env to keep signaling on loopback."
+  if [[ "$via" == port ]]; then
+    hint "or remove LIVEKIT_HTTP_BIND from .env to keep signaling on loopback."
+  fi
+}
+
+# Upgrade path: the installer never turns voice on for an existing install
+# (#2357), so say when it is off and where the steps are. Silent when the voice
+# profile is enabled (shell first, then .env, as Compose reads it) or livekit
+# runs anyway.
+note_voice_off() {
+  local env="$1" profiles
+  profiles="$(compose_var "$env" COMPOSE_PROFILES)"
+  [[ ",${profiles}," != *,voice,* ]] || return 0
+  service_running livekit && return 0
+  echo "" >&2
+  warn "Voice (LiveKit) is off on this install."
+  hint "New installs turn it on; upgrades leave it as it was. To turn it on here, see"
+  hint "the steps for an existing install in docs/dev/voice-setup.md:"
+  hint "  https://github.com/josephfung/curia/blob/main/docs/dev/voice-setup.md"
+}
+
+# Fresh install, before Postgres starts. The HTTPS topology, and a proxy with a
+# public address, put LiveKit signaling on the internet (the shipped Caddyfile
+# routes /rtc* to it; a proxy is told to). --dev's devkey/secret are public, so
+# anyone could then mint LiveKit tokens: stop rather than install that. An
+# empty command is the compose default, --dev. Reads TOPOLOGY and PROXY_ORIGIN.
+# The command itself is never printed: it may carry --keys.
+require_livekit_real_keys() {
+  local env="$1"
+  case "$TOPOLOGY" in
+    domain) ;;
+    proxy) [[ -n "$PROXY_ORIGIN" ]] || return 0 ;;
+    *) return 0 ;;
+  esac
+  livekit_command_is_dev "$(compose_var "$env" LIVEKIT_COMMAND)" || return 0
+  echo "" >&2
+  error "LIVEKIT_COMMAND runs LiveKit with --dev credentials (devkey/secret), which this public install would expose."
+  hint "Set real keys: unset LIVEKIT_COMMAND (in your shell and .env) to let the installer generate them,"
+  hint "or set LIVEKIT_COMMAND=--config /etc/livekit.yaml with your own LIVEKIT_KEYS=\"<key>: <secret>\"."
+  hint "Then re-run install.sh. Postgres was not started."
+  exit 1
 }
 
 # Since #2408 LiveKit signaling (7880) is published on loopback unless
@@ -619,7 +671,7 @@ check_prereqs() {
 }
 
 # Fetch the compose bundle (base compose file, TLS overlay, env template,
-# Caddyfile, and the browser container's seccomp profile) into the install dir,
+# Caddyfile, the browser container's seccomp profile and LiveKit's configs) into the install dir,
 # skipping files that are already present.
 # This lets an operator re-run install.sh safely without clobbering hand-edits.
 fetch_bundle() {
@@ -653,6 +705,18 @@ fetch_bundle() {
     info "Fetching $seccomp ..."
     fetch_asset "$seccomp" "seccomp-chrome.json"
   fi
+  # LiveKit's configs, the same way: only releases whose compose file mounts
+  # them (#2357) ship them. Each is keyed on its own mount, since livekit.yaml
+  # and livekit.local.yaml are separate files.
+  local lk
+  for lk in livekit.yaml livekit.local.yaml; do
+    if grep -qF "docker/$lk" "$INSTALL_DIR/docker-compose.yml" \
+      && [[ ! -f "$INSTALL_DIR/docker/$lk" ]]; then
+      mkdir -p "$INSTALL_DIR/docker"
+      info "Fetching docker/$lk ..."
+      fetch_asset "docker/$lk" "$lk"
+    fi
+  done
 }
 
 # Create .env from the template if it does not exist yet, then return its path.
@@ -728,6 +792,21 @@ livekit_browser_url() {
       esac ;;
     *) printf 'ws://localhost:7880' ;;
   esac
+}
+
+# Base URL people open Curia on, for the closing message (no trailing slash).
+#   setup_base_url <topology> <domain_or_origin>
+# domain -> https://<domain>; proxy -> its public origin; otherwise, or when
+# the value is empty, http://localhost:$HTTP_PORT (3000 by default).
+setup_base_url() {
+  local topology="$1" value="${2:-}"
+  if [[ -n "$value" ]]; then
+    case "$topology" in
+      domain) printf 'https://%s' "$value"; return 0 ;;
+      proxy)  printf '%s' "${value%/}"; return 0 ;;
+    esac
+  fi
+  printf 'http://localhost:%s' "${HTTP_PORT:-3000}"
 }
 
 # 0 when something accepts a TCP connection on 127.0.0.1:<port> (1 s bound).
@@ -871,6 +950,33 @@ fresh_install() {
       ;;
   esac
 
+  # Voice (#2357): turn the LiveKit profile on with generated keys. Installs
+  # only this machine reaches (local, or a proxy kept on localhost) pin
+  # LiveKit's node IP to loopback; the rest advertise their public address.
+  local lk_mode=public lk_value=""
+  case "$TOPOLOGY" in
+    local) lk_mode=local ;;
+    proxy) [[ -n "$PROXY_ORIGIN" ]] || lk_mode=local; lk_value="$PROXY_ORIGIN" ;;
+    domain) lk_value="$DOMAIN" ;;
+  esac
+  ensure_livekit_env "$env" "$lk_mode"
+  require_livekit_real_keys "$env"
+
+  # Seed the Voice channel's vault values to match what LiveKit runs on. The
+  # keys are passed to the seed container only, like the other secrets, and
+  # are never printed. seed-vault never replaces values already in the vault.
+  local lk_url lk_pair="" lk_rc=0
+  local -a lk_seed
+  lk_url="$(livekit_browser_url "$TOPOLOGY" "$lk_value")"
+  lk_seed=(-e "SEED_LIVEKIT_URL=$lk_url")
+  lk_pair="$(livekit_seed_keys "$(compose_var "$env" LIVEKIT_KEYS)" "$(compose_var "$env" LIVEKIT_COMMAND)")" || lk_rc=$?
+  if [[ $lk_rc -eq 0 ]]; then
+    lk_seed+=(-e "SEED_LIVEKIT_API_KEY=${lk_pair%% *}" -e "SEED_LIVEKIT_API_SECRET=${lk_pair#* }")
+  else
+    warn "Could not tell which keys LiveKit's LIVEKIT_COMMAND uses, so they were not saved for Curia."
+    hint "Enter the LiveKit API key and secret under Settings → Channels → Voice after setup."
+  fi
+
   # Start Postgres and wait for it to be ready before running migrations.
   info "Starting Postgres..."
   if ! docker compose --project-directory "$INSTALL_DIR" up -d postgres; then
@@ -901,6 +1007,7 @@ fresh_install() {
     -e "ANTHROPIC_API_KEY=$anthropic" \
     -e "API_TOKEN=$api_token" \
     -e "WEB_APP_BOOTSTRAP_SECRET=$boot_secret" \
+    "${lk_seed[@]}" \
     -e SEED_VAULT_VERIFY=1 \
     curia ./node_modules/.bin/tsx scripts/seed-vault.ts; then
     error "Vault seeding failed."
@@ -929,6 +1036,7 @@ fresh_install() {
   printf '\n# SETUP_COMPLETE\n' >> "$env"
 
   print_summary "$boot_secret"
+  print_next_steps "$(setup_base_url "$TOPOLOGY" "$lk_value")" "$TOPOLOGY"
 }
 
 # ---------------------------------------------------------------------------
@@ -990,6 +1098,7 @@ existing_install() {
   check_livekit_exposure "$env"
   note_livekit_signaling "$env"
   note_missing_browser "$env"
+  note_voice_off "$env"
 
   # Load the URL-shaping values from .env so print_summary shows the right
   # address for this existing install: DOMAIN (HTTPS topology) and a custom
@@ -1008,6 +1117,18 @@ existing_install() {
   # vault — use the console to retrieve it" branch rather than printing a
   # fresh secret (which we don't have on the upgrade path).
   print_summary ""
+
+  # Closing steps for the topology this install looks like: the TLS overlay is
+  # the HTTPS topology, an APP_ORIGIN without it is a user's own proxy, and
+  # anything else is local.
+  local topology origin
+  if uses_tls_overlay "$(compose_var "$env" COMPOSE_FILE)"; then
+    topology=domain; origin="$(env_value "$env" DOMAIN)"
+  else
+    origin="$(env_value "$env" APP_ORIGIN)"
+    if [[ -n "$origin" ]]; then topology=proxy; else topology=local; fi
+  fi
+  print_next_steps "$(setup_base_url "$topology" "$origin")" "$topology"
 }
 
 # ---------------------------------------------------------------------------

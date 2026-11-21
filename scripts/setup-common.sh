@@ -408,3 +408,24 @@ print_summary() {
     printf "╚%s╝\n" "$border"
     echo ""
 }
+
+# Prints what to do after the installer finishes: the Setup page, the docs
+# guide and, for installs reached from other machines, the call ports (and a
+# proxy's forwarding rules).
+#   print_next_steps <base url> <topology: domain | proxy | local>
+print_next_steps() {
+    local url="${1%/}" topology="$2"
+    echo "Finish setting up Curia in your browser: ${url}/setup"
+    echo "Guide: https://docs.meetcuria.com/get-started/check-your-setup"
+    echo "When every step is done, choose Start onboarding."
+    case "$topology" in
+        domain|proxy)
+            echo ""
+            echo "Open these ports for calls: 7881/tcp, 7882/udp"
+            ;;
+    esac
+    if [[ "$topology" == proxy ]]; then
+        echo "Your proxy must forward / to port 3000 and /rtc* to port 7880."
+    fi
+    echo ""
+}
