@@ -11,7 +11,7 @@ import {
 } from '../../../src/bus/events.js';
 
 const warn = vi.fn();
-const logger = Object.assign(pino({ level: 'silent' }), { warn }) as unknown as ReturnType<typeof pino>;
+const logger = Object.assign(pino({ level: 'silent' }), { warn });
 
 const baseState: OnboardingState = {
   taskId: 't1',
@@ -47,7 +47,7 @@ async function setup(opts: { open: boolean; state?: Partial<OnboardingState> }) 
     taskRepo: taskRepo as never,
     scheduler,
     configStore,
-    logger,
+    logger: logger as never,
     googleClientId: async () => 'client-123',
   }).start();
   const fire = async (e: BusEvent) => { await handlers.get(e.type)?.(e); };
