@@ -45,8 +45,9 @@ export class OnboardingSubscribers {
     });
     bus.subscribe('mailbox_signin.finished', 'system', (event: BusEvent) => {
       if (event.type !== 'mailbox_signin.finished') return;
-      const { outcome } = event.payload;
-      if (!BLOCKED_OUTCOMES.has(outcome)) return;
+      const { outcome, target } = event.payload;
+      // A blocked sign-in for Curia's own mailbox is not an onboarding notice.
+      if (target !== 'principal' || !BLOCKED_OUTCOMES.has(outcome)) return;
       return this.guard(event.type, () => this.onSignInBlocked(outcome));
     });
   }
@@ -82,8 +83,6 @@ export class OnboardingSubscribers {
   private async onSignInBlocked(outcome: string): Promise<void> {
     const task = await findOpenOnboardingTask(this.o.taskRepo);
     if (!task) return;
-    const state = await readOnboardingState(this.o.configStore, this.o.logger);
-    if (state === null) return;
     let clientId: string | undefined;
     try {
       clientId = await this.o.googleClientId?.();
@@ -92,7 +91,7 @@ export class OnboardingSubscribers {
     }
     await notifyOperatorOnce(
       { taskRepo: this.o.taskRepo, logger: this.o.logger, configStore: this.o.configStore },
-      state,
+      task.id,
       'mailbox_signin_blocked',
       { outcome, ...(clientId !== undefined ? { clientId } : {}) },
     );

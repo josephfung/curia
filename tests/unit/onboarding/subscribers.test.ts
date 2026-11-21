@@ -10,7 +10,8 @@ import {
   type BusEvent,
 } from '../../../src/bus/events.js';
 
-const logger = pino({ level: 'silent' });
+const warn = vi.fn();
+const logger = Object.assign(pino({ level: 'silent' }), { warn }) as unknown as ReturnType<typeof pino>;
 
 const baseState: OnboardingState = {
   taskId: 't1',
@@ -50,7 +51,7 @@ async function setup(opts: { open: boolean; state?: Partial<OnboardingState> }) 
     googleClientId: async () => 'client-123',
   }).start();
   const fire = async (e: BusEvent) => { await handlers.get(e.type)?.(e); };
-  return { fire, taskRepo, scheduler };
+  return { fire, taskRepo, scheduler, data };
 }
 
 const redeemed = () => createPairingInvitationRedeemed({ invitationId: 'inv1', deviceName: 'Pixel' });
@@ -99,12 +100,37 @@ describe('OnboardingSubscribers', () => {
   });
 
   it('a blocked sign-in notifies the operator once, with the client id', async () => {
+    warn.mockClear();
     const t = await setup({ open: true });
     await t.fire(blocked());
     await t.fire(blocked());
     expect(t.taskRepo.updateTask).toHaveBeenCalledTimes(1);
     expect(t.taskRepo.updateTask).toHaveBeenCalledWith('t1', { progressNote: 'Operator notice: mailbox_signin_blocked' });
     expect(t.scheduler.enqueueTaskWake).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'mailbox_signin_blocked', details: { outcome: 'admin_blocked', clientId: 'client-123' } }),
+      'onboarding: operator notice',
+    );
+    const saved = JSON.parse(t.data.get('onboarding/state')!) as OnboardingState;
+    expect(saved.operatorNotified).toContain('mailbox_signin_blocked');
+  });
+
+  it("a blocked sign-in for Curia's own mailbox is ignored", async () => {
+    const t = await setup({ open: true });
+    await t.fire(createMailboxSignInFinished({ target: 'curia', outcome: 'admin_blocked' }));
+    expect(t.taskRepo.updateTask).not.toHaveBeenCalled();
+  });
+
+  it('keeps a state change made while the client id was being read', async () => {
+    const t = await setup({ open: true });
+    await t.fire(blocked());
+    const saved = JSON.parse(t.data.get('onboarding/state')!) as OnboardingState;
+    expect(saved.greetingSentAt).toBeNull();
+    t.data.set('onboarding/state', JSON.stringify({ ...saved, operatorNotified: [], greetingSentAt: 'x' }));
+    await t.fire(blocked());
+    const after = JSON.parse(t.data.get('onboarding/state')!) as OnboardingState;
+    expect(after.greetingSentAt).toBe('x');
+    expect(after.operatorNotified).toContain('mailbox_signin_blocked');
   });
 
   it('a connected sign-in is not a blocked one', async () => {
