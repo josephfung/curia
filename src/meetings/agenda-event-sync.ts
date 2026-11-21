@@ -76,6 +76,9 @@ export const NO_SHOW_NOTE =
   'Missed session: send one "missed you, when suits better?" and book the answer, unless the session happened in chat (then send nothing).';
 export const UNREADABLE_NOTE =
   "Can't read this session's calendar event (calendar access may have been removed): check with the principal how to proceed";
+/** After EVENT_UNREACHABLE_GRACE_HOURS of a route error that usually clears (no_mailbox / needs_mailbox). */
+export const UNREACHABLE_NOTE =
+  "Can't reach this session's calendar event for a day: the principal's mailbox is disconnected, or a second mailbox needs choosing for the calendar. Check with the principal how to proceed";
 export const UNTIMED_NOTE =
   "This session's calendar event has no start and end time (an all-day event?): check with the principal when to hold it";
 
@@ -254,14 +257,15 @@ export class AgendaEventSync {
       return;
     }
     if (now.getTime() - sinceMs < EVENT_UNREACHABLE_GRACE_HOURS * 60 * MINUTE_MS) {
-      this.o.logger.warn(
+      // Warned once at the first failure; the sweeps inside the grace period are routine.
+      this.o.logger.info(
         { agendaId: agenda.agendaId, since: agenda.eventUnreachableSince },
         'agenda event sync: the event is still unreachable, skipping this sweep',
       );
       return;
     }
     const marked = await this.o.store.markEvent(agenda.agendaId, { eventState: 'unreadable', eventUnreachableSince: null });
-    if (marked) await this.wake(agenda, UNREADABLE_NOTE);
+    if (marked) await this.wake(agenda, UNREACHABLE_NOTE);
   }
 
   private async wake(agenda: AgendaDoc, note: string): Promise<void> {

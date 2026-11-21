@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { WorkingDocsRepo } from '../db/working-docs-repo.js';
 import type { Logger } from '../logger.js';
+import { EDITABLE_BY_CONSOLE, EDITABLE_BY_KEY, isConsoleOnlyMarked } from '../memory/console-only-docs.js';
 
 export type PlaybookTopic = { id: string; title: string; body: string; needsMailbox: boolean };
 export type PlaybookSession = { id: string; title: string; topics: PlaybookTopic[] };
@@ -88,20 +89,46 @@ function defaultPlaybookFile(): string {
   return found;
 }
 
-/** Create the install's playbook from the repo default if nothing is at PLAYBOOK_PATH. Never overwrites. */
+/**
+ * Make sure the install's playbook is a console-owned copy: create it from the repo default if
+ * nothing is at PLAYBOOK_PATH, and replace it with the default when it lacks `editable_by:
+ * console`. The playbook is always seeded with the mark and doc-write lets no agent remove it, so
+ * an unmarked playbook was planted (or predates the mark) and nothing in it is trusted. A marked
+ * playbook is never overwritten.
+ */
 export async function seedPlaybook(
   repo: WorkingDocsRepo,
   logger: Logger,
   defaultFile?: string,
-): Promise<'created' | 'exists'> {
-  if (await repo.read(PLAYBOOK_PATH)) return 'exists';
+): Promise<'created' | 'exists' | 'replaced'> {
+  const existing = await repo.read(PLAYBOOK_PATH);
+  if (existing && isConsoleOnlyMarked(existing.frontmatter)) return 'exists';
   const body = fs.readFileSync(defaultFile ?? defaultPlaybookFile(), 'utf-8');
+  // Console-only: agents (which read untrusted mail) never write it; the operator edits it in the console.
+  const frontmatter = { [EDITABLE_BY_KEY]: EDITABLE_BY_CONSOLE };
+  if (existing) {
+    logger.warn(
+      { path: PLAYBOOK_PATH },
+      `onboarding: the playbook is not marked ${EDITABLE_BY_KEY}: ${EDITABLE_BY_CONSOLE} — replacing it with the default`,
+    );
+    const replaced = await repo.update(PLAYBOOK_PATH, {
+      type: PLAYBOOK_DOC_TYPE,
+      frontmatter,
+      body,
+      expectedVersion: existing.version,
+    });
+    if (!replaced.ok) {
+      // Written meanwhile: the next read checks the mark again.
+      throw new Error(`onboarding: the unmarked playbook at ${PLAYBOOK_PATH} changed while it was being replaced`);
+    }
+    return 'replaced';
+  }
   try {
-    // Console-only: agents (which read untrusted mail) never write it; the operator edits it in the console.
-    await repo.create({ path: PLAYBOOK_PATH, type: PLAYBOOK_DOC_TYPE, frontmatter: { editable_by: 'console' }, body, taskId: null });
+    await repo.create({ path: PLAYBOOK_PATH, type: PLAYBOOK_DOC_TYPE, frontmatter, body, taskId: null });
   } catch (err) {
     // A concurrent seed can win the race to the unique path; the playbook then exists, which is the goal.
-    if (await repo.read(PLAYBOOK_PATH)) return 'exists';
+    const raced = await repo.read(PLAYBOOK_PATH);
+    if (raced && isConsoleOnlyMarked(raced.frontmatter)) return 'exists';
     logger.error({ err, path: PLAYBOOK_PATH }, 'onboarding: failed to seed the playbook');
     throw err;
   }
@@ -109,7 +136,7 @@ export async function seedPlaybook(
   return 'created';
 }
 
-/** The install's playbook, seeding it first if missing. */
+/** The install's playbook, seeding it first if missing (or replacing an unmarked one). */
 export async function readPlaybook(repo: WorkingDocsRepo, logger: Logger): Promise<PlaybookSession[]> {
   await seedPlaybook(repo, logger);
   const row = await repo.read(PLAYBOOK_PATH);

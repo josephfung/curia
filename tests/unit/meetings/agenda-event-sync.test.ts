@@ -10,6 +10,7 @@ import {
   NO_SHOW_NOTE,
   NUDGE_NOTE,
   readAgendaEvent,
+  UNREACHABLE_NOTE,
   UNREADABLE_NOTE,
   UNTIMED_NOTE,
 } from '../../../src/meetings/agenda-event-sync.js';
@@ -19,12 +20,13 @@ import { memoryWorkingDocsRepo } from './memory-working-docs-repo.js';
 import { AgendaStore } from '../../../src/meetings/agenda-store.js';
 import type { AgendaHistoryEntry } from '../../../src/meetings/types.js';
 import type { CalendarRouter } from '../../../src/channels/calendar/calendar-router.js';
+import type { Logger } from '../../../src/logger.js';
 
 const NOW = new Date('2026-11-20T15:00:00.000Z');
 const MIN = 60_000;
 const OWNER = '7e1f4c2a-5b3d-4e6f-8a9b-0c1d2e3f4a5b';
 
-async function setup(opts: { start: Date; end?: Date; scheduledFor?: Date | null; owner?: string | null }) {
+async function setup(opts: { start: Date; end?: Date; scheduledFor?: Date | null; owner?: string | null; logger?: Logger }) {
   const store = new AgendaStore(memoryWorkingDocsRepo(NOW), createSilentLogger());
   const parked = await store.park({
     title: 'Kickoff',
@@ -48,7 +50,7 @@ async function setup(opts: { start: Date; end?: Date; scheduledFor?: Date | null
     return event;
   });
   const wakeOwner = vi.fn(async () => {});
-  const sync = new AgendaEventSync({ store, getEvent, wakeOwner, logger: createSilentLogger() });
+  const sync = new AgendaEventSync({ store, getEvent, wakeOwner, logger: opts.logger ?? createSilentLogger() });
   return {
     store,
     agendaId: parked.agendaId,
@@ -146,6 +148,19 @@ describe('AgendaEventSync', () => {
       expect(t.wakeOwner).not.toHaveBeenCalled();
     });
 
+    it('warns on the first unreachable sweep, then logs the rest of the grace period at info', async () => {
+      const warn = vi.fn();
+      const info = vi.fn();
+      const logger = { ...createSilentLogger(), warn, info } as unknown as Logger;
+      const t = await setup({ start: new Date(NOW.getTime() + 48 * HOUR), logger });
+      t.setEvent(EVENT_UNREACHABLE);
+      await t.sync.tick(NOW);
+      await t.sync.tick(new Date(NOW.getTime() + 15 * MIN));
+      await t.sync.tick(new Date(NOW.getTime() + 30 * MIN));
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(info).toHaveBeenCalledTimes(2);
+    });
+
     it('marks the agenda unreadable and wakes the owner once after 24 hours of failing', async () => {
       const t = await setup({ start: new Date(NOW.getTime() + 48 * HOUR) });
       t.setEvent(EVENT_UNREACHABLE);
@@ -158,7 +173,9 @@ describe('AgendaEventSync', () => {
       await t.sync.tick(new Date(NOW.getTime() + 25 * HOUR));
 
       expect(t.wakeOwner).toHaveBeenCalledTimes(1);
-      expect(t.wakeOwner).toHaveBeenCalledWith(OWNER, UNREADABLE_NOTE);
+      // Names the cause (mailbox missing or to be chosen), not "access removed".
+      expect(t.wakeOwner).toHaveBeenCalledWith(OWNER, UNREACHABLE_NOTE);
+      expect(UNREACHABLE_NOTE).toMatch(/mailbox/);
       const agenda = (await t.store.get(t.agendaId))!;
       expect(agenda.eventState).toBe('unreadable');
       expect(agenda.eventUnreachableSince).toBeNull();

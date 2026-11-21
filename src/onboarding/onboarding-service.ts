@@ -316,7 +316,7 @@ export class OnboardingService {
         createdBy: ONBOARDING_CREATED_BY,
         limit: 200,
       });
-      const existingTopicIds = new Set(topicSubtasks(existing).map((s) => s.topicId));
+      const existingTopicIds = new Set(topicSubtasks(existing, this.deps.logger).map((s) => s.topicId));
       const parked = await this.parkedOnPrincipal();
       const createdSubtasks = await this.createSessionSubtasks(parent, session, parked, [], existingTopicIds);
       return { ok: true, session, createdSubtasks };

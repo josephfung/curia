@@ -40,7 +40,7 @@ export function createOnboardingTurnContext(deps: {
       try {
         const parent = await findOpenOnboardingTask(taskRepo);
         if (!parent) return null;
-        const open = topicSubtasks(await listChildren(taskRepo, parent.id)).filter((s) => isOpenTask(s.task));
+        const open = topicSubtasks(await listChildren(taskRepo, parent.id), logger).filter((s) => isOpenTask(s.task));
         await recordPrincipalTurn(configStore, logger, now);
         return formatOnboardingTurnBlock(parent.id, open.map((s) => s.topicId));
       } catch (err) {

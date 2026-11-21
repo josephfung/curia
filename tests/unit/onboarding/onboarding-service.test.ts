@@ -129,7 +129,7 @@ function makeHarness(opts: {
     }),
   };
   const workingDocsRepo = {
-    read: vi.fn(async () => ({ body: PLAYBOOK })),
+    read: vi.fn(async () => ({ body: PLAYBOOK, frontmatter: { editable_by: 'console' } })),
     create: vi.fn(),
   } as unknown as WorkingDocsRepo;
   const mintInvitation = vi.fn(async () => ({ id: 'inv-1', pairUrl: 'https://curia.example.com/pair#c=tok', expiresAt: '2026-11-22T12:00:00.000Z' }));

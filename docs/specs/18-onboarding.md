@@ -384,9 +384,12 @@ document setting, not an onboarding rule: `doc-write` refuses every mode on a do
 carries it unless the write is a principal-approved re-execution, and refuses any write that
 adds, changes or removes the key, whoever calls. Agents that read untrusted mail hold
 `doc-write`, so only the console (the documents API, which does not use `doc-write` and keeps
-frontmatter as edited) changes the playbook. The research brief is an ordinary document. The
-parser keeps ids to `[a-z0-9-]` (slugifying anything else) and caps session and topic titles
-at 120 characters.
+frontmatter as edited) changes the playbook. Since it is always seeded with the key and no
+agent can remove it, a playbook found without it was planted (or predates the key): reading or
+seeding it replaces it with the default, keeping nothing, and logs a warning. The research
+brief is an ordinary document. The parser keeps ids to `[a-z0-9-]` (slugifying anything else)
+and caps session and topic titles at 120 characters. Topic ids are read back from task tags,
+which a model can edit, so a topic whose tag id is not `[a-z0-9-]{1,64}` is ignored (warned).
 
 ### Starting
 
@@ -487,8 +490,9 @@ they are created `waiting` with `waiting_on_contact_id` set to the principal, wh
 only on the watcher, events and the principal's replies, so an idle parent or topic is never
 pushed to a disposition (a greeting outside the cap, a topic closed without the principal).
 Working a topic changes no status: `topic_done` completes it from `waiting`. The principal
-answering a message the parent's wake sent resumes the parent (`in_progress`, the general
-task-wake reply rule); the watcher sets it back to `waiting` on its next sweep. Without a
+answering a message a wake of the parent sent resumes it (`in_progress`, the general task-wake
+reply rule); the watcher sets it, or any onboarding task that waits on a contact and was
+resumed, back to `waiting` on its next sweep. Without a
 principal contact the tasks are created open, and the heartbeat may wake them.
 
 ### Running a session
@@ -575,7 +579,7 @@ agenda's event by id:
 | Moved | the agenda's `scheduled_for` follows |
 | Cancelled or gone | the agenda is closed, and the owner task wakes once to ask when instead |
 | Unreadable (access refused, or its calendar no longer routes to a mailbox) | the owner task wakes once to check with the principal; the event is not read again |
-| Unreachable (the principal's mailbox is missing, or a second mailbox needs a hint) | skipped each sweep, with the first failure time recorded in the agenda's `event_unreachable_since`; cleared when a read succeeds. After 24 hours of continuous failure it becomes Unreadable |
+| Unreachable (the principal's mailbox is missing, or a second mailbox needs a hint) | skipped each sweep, with the first failure time recorded in the agenda's `event_unreachable_since`; cleared when a read succeeds. The first failure is a warning, later sweeps info. After 24 hours of continuous failure it becomes Unreadable, and the owner task wakes once with a note naming the cause (the mailbox is disconnected, or one needs choosing) |
 | All-day (no timed start and end) | the owner task wakes once to ask when to hold the session; the event is not read again |
 | Starting within 15 minutes | the owner task wakes once to nudge the principal |
 | Ended 30 minutes ago, nothing loaded | a no-show: the owner task wakes once. Onboarding sends one "missed you, when suits better?" and books the answer, unless the session happened in chat (then nothing is sent) |

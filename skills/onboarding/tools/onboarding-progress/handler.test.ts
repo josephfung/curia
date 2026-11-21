@@ -91,7 +91,7 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
     registry: { list: vi.fn(), installAndEnable: vi.fn() },
     scheduler: { enqueueTaskWake: vi.fn() },
     configStore,
-    workingDocsRepo: { read: vi.fn(async () => ({ body: PLAYBOOK })), create: vi.fn() } as unknown as WorkingDocsRepo,
+    workingDocsRepo: { read: vi.fn(async () => ({ body: PLAYBOOK, frontmatter: { editable_by: 'console' } })), create: vi.fn() } as unknown as WorkingDocsRepo,
     principalName: async () => 'Avery Example',
     principalContactId: async () => PRINCIPAL_CONTACT_ID,
     principalHasIdentity: async () => true,

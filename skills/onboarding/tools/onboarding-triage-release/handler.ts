@@ -18,7 +18,7 @@ export class OnboardingTriageReleaseHandler implements ToolHandler {
     try {
       const parent = await findOpenOnboardingTask(repo);
       if (!parent) return { success: false, error: 'No onboarding is under way: there is no open onboarding task.' };
-      const inboxDone = topicSubtasks(await listChildren(repo, parent.id))
+      const inboxDone = topicSubtasks(await listChildren(repo, parent.id), ctx.log)
         // Declined means the principal did not hear it through: triage stays held.
         .some((s) => s.topicId === INBOX_EXPECTATIONS_TOPIC && s.task.status === 'done' && !s.task.tags.includes(DECLINED_TAG));
       if (!inboxDone) {

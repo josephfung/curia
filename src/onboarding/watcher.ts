@@ -2,13 +2,14 @@
 // follow-ups, one idle nudge, and the expired-invitation notice (#2360). A tick with no open
 // onboarding task is one cheap query.
 
-import type { TaskRepo } from '../db/task-repo.js';
+import { TaskTerminalStateError, type TaskRepo } from '../db/task-repo.js';
 import type { TaskRow } from '../db/queries/tasks.js';
 import type { Logger } from '../logger.js';
 import type { ConfigStore } from '../memory/config-store.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import {
   FIRST_CONVERSATION_SESSION,
+  ONBOARDING_CREATED_BY,
   GREETING_FOLLOWUPS,
   WATCHER_INTERVAL_MINUTES,
 } from './constants.js';
@@ -67,7 +68,8 @@ export class OnboardingWatcher {
     try {
       const task = await findOpenOnboardingTask(this.o.taskRepo);
       if (!task) return;
-      await this.keepWaitingOnPrincipal(task);
+      const children = await listChildren(this.o.taskRepo, task.id);
+      await this.keepWaitingOnPrincipal([task, ...children.filter((c) => c.createdBy === ONBOARDING_CREATED_BY)]);
       const state = await readOnboardingState(this.o.configStore, this.o.logger);
       if (state === null || state.taskId !== task.id) return;
 
@@ -78,7 +80,7 @@ export class OnboardingWatcher {
         const inv = await this.o.readInvitation();
         if (inv !== null && inv.createdAt.getTime() >= Date.parse(state.startedAt)) invitation = inv;
       }
-      const openTopicsRemain = await this.openFirstConversationTopics(task.id);
+      const openTopicsRemain = this.openFirstConversationTopics(children);
       // Only the idle nudge reads it, and only with open topics.
       const nextSessionBooked = openTopicsRemain && this.o.nextSessionBooked
         ? await this.o.nextSessionBooked(task.id, now)
@@ -124,23 +126,30 @@ export class OnboardingWatcher {
   }
 
   /**
-   * The onboarding task waits on the principal (created so), which keeps the backlog heartbeat off
-   * it. The principal answering a message bound to it (a task-wake reply) resumes it as in_progress,
-   * the general rule for a task whose contact answered; here the conversation goes on, so it waits
-   * again. Only when it names a contact to wait on. A failure is logged: the sweep goes on.
+   * The onboarding task and its topics wait on the principal (created so), which keeps the backlog
+   * heartbeat off them. The principal answering a message bound to one (a task-wake reply) resumes
+   * it as in_progress, the general rule for a task whose contact answered; here the conversation
+   * goes on, so it waits again. Applies to every onboarding-created task that names a contact to
+   * wait on and is open or in progress. One that ended meanwhile is skipped quietly; any other
+   * failure is logged and the sweep goes on.
    */
-  private async keepWaitingOnPrincipal(task: TaskRow): Promise<void> {
-    if (!task.waitingOnContactId || (task.status !== 'open' && task.status !== 'in_progress')) return;
-    try {
-      await this.o.taskRepo.updateTask(task.id, { status: 'waiting' });
-    } catch (err) {
-      this.o.logger.error({ err, taskId: task.id }, 'onboarding: could not set the onboarding task back to waiting on the principal');
+  private async keepWaitingOnPrincipal(tasks: readonly TaskRow[]): Promise<void> {
+    for (const task of tasks) {
+      if (!task.waitingOnContactId || (task.status !== 'open' && task.status !== 'in_progress')) continue;
+      try {
+        await this.o.taskRepo.updateTask(task.id, { status: 'waiting' }, undefined, { rejectStatuses: ['failed'] });
+      } catch (err) {
+        if (err instanceof TaskTerminalStateError) {
+          this.o.logger.debug({ taskId: task.id, status: err.status }, 'onboarding: task ended before it could wait again — skipped');
+          continue;
+        }
+        this.o.logger.error({ err, taskId: task.id }, 'onboarding: could not set an onboarding task back to waiting on the principal');
+      }
     }
   }
 
-  private async openFirstConversationTopics(taskId: string): Promise<boolean> {
-    const children = await listChildren(this.o.taskRepo, taskId);
-    return topicSubtasks(children).some((t) => t.sessionId === FIRST_CONVERSATION_SESSION && isOpenTask(t.task));
+  private openFirstConversationTopics(children: readonly TaskRow[]): boolean {
+    return topicSubtasks(children, this.o.logger).some((t) => t.sessionId === FIRST_CONVERSATION_SESSION && isOpenTask(t.task));
   }
 
   /**

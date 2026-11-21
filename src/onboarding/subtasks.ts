@@ -6,6 +6,7 @@
 
 import type { TaskRepo } from '../db/task-repo.js';
 import type { TaskRow } from '../db/queries/tasks.js';
+import type { Logger } from '../logger.js';
 import { ONBOARDING_CREATED_BY } from './constants.js';
 
 const TOPIC_TAG_PREFIX = 'onboarding:topic:';
@@ -20,6 +21,13 @@ export const ONGOING_RHYTHM_SESSION = 'ongoing-rhythm';
 export const RECURRING_SESSION = 'weekly';
 /** Tag on a topic subtask the principal declined (completed, but nothing was applied). */
 export const DECLINED_TAG = 'onboarding:declined';
+/**
+ * A topic id as the playbook parser produces it. Ids ride into live principal turns (the onboarding
+ * turn block), and the tag a model can rewrite with task-update is where they are read from, so
+ * they are checked here, at the point of use.
+ */
+const TOPIC_ID_RE = /^[a-z0-9-]{1,64}$/;
+
 /** Upper bound on children read for one onboarding task; the default playbook has under 25. */
 const CHILD_LIMIT = 500;
 
@@ -39,13 +47,20 @@ export function listChildren(taskRepo: Pick<TaskRepo, 'listTasks'>, parentTaskId
   return taskRepo.listTasks({ parentTaskId, limit: CHILD_LIMIT });
 }
 
-/** The children that are onboarding topic subtasks. */
-export function topicSubtasks(children: readonly TaskRow[]): TopicSubtask[] {
+/**
+ * The children that are onboarding topic subtasks. A topic tag whose id is not `[a-z0-9-]{1,64}`
+ * was not written by the program (a model can edit task tags): that subtask is dropped, with a warn.
+ */
+export function topicSubtasks(children: readonly TaskRow[], logger?: Pick<Logger, 'warn'>): TopicSubtask[] {
   const out: TopicSubtask[] = [];
   for (const task of children) {
     if (task.createdBy !== ONBOARDING_CREATED_BY) continue;
     const topicId = tagValue(task.tags, TOPIC_TAG_PREFIX);
     if (!topicId) continue;
+    if (!TOPIC_ID_RE.test(topicId)) {
+      logger?.warn({ taskId: task.id }, 'onboarding: topic subtask has an invalid topic id tag — ignored');
+      continue;
+    }
     out.push({ task, topicId, sessionId: tagValue(task.tags, SESSION_TAG_PREFIX) });
   }
   return out;

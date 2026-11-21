@@ -95,7 +95,7 @@ function describeTopic(sub: TopicSubtask, index: Map<string, PlaybookTopic>, nam
  */
 async function completeIfDone({ repo, parent, ctx }: Deps): Promise<boolean> {
   const children = await listChildren(repo, parent.id);
-  const topics = topicSubtasks(children);
+  const topics = topicSubtasks(children, ctx.log);
   if (!topics.some((t) => t.sessionId === ONGOING_RHYTHM_SESSION)) return false;
   if (topics.some((t) => isOpenTask(t.task))) return false;
   for (const child of children) {
@@ -127,7 +127,7 @@ async function status(deps: Deps): Promise<ToolResult> {
   ]);
   // The weekly section is for recurring sessions after onboarding, not onboarding topics.
   const sessions = playbook.filter((s) => s.id !== RECURRING_SESSION);
-  const subs = topicSubtasks(children);
+  const subs = topicSubtasks(children, ctx.log);
   const index = topicIndex(sessions);
   // Playbook sessions in order, then any session a subtask names that the playbook no longer has.
   const known = sessions.map((s) => ({ id: s.id, title: s.title }));
@@ -159,14 +159,14 @@ async function status(deps: Deps): Promise<ToolResult> {
   };
 }
 
-async function openSession({ svc, repo, parent }: Deps, input: Record<string, unknown>): Promise<ToolResult> {
+async function openSession({ svc, repo, parent, ctx }: Deps, input: Record<string, unknown>): Promise<ToolResult> {
   const sessionId = str(input.session_id);
   if (!sessionId) return fail('open_session requires session_id');
   const opened = await svc.openSession(parent, sessionId);
   if (!opened.ok) return fail(`Unknown session_id '${sessionId}'. Playbook sessions: ${opened.sessionIds.join(', ') || '(none)'}`);
   const [children, name] = await Promise.all([listChildren(repo, parent.id), svc.principalDisplayName()]);
   const index = topicIndex([opened.session]);
-  const subs = topicSubtasks(children).filter((s) => s.sessionId === opened.session.id);
+  const subs = topicSubtasks(children, ctx.log).filter((s) => s.sessionId === opened.session.id);
   return {
     success: true,
     data: {
@@ -190,7 +190,7 @@ async function topicDone(deps: Deps, input: Record<string, unknown>): Promise<To
   }
   if (!note) return fail('topic_done requires a note: what was chosen and applied, or why it was declined');
 
-  const open = topicSubtasks(await listChildren(repo, parent.id)).filter((s) => isOpenTask(s.task));
+  const open = topicSubtasks(await listChildren(repo, parent.id), ctx.log).filter((s) => isOpenTask(s.task));
   const matches = open.filter((s) => s.topicId === topicId && (!sessionId || s.sessionId === sessionId));
   if (matches.length === 0) {
     const valid = open.map((s) => `${s.topicId} (${s.sessionId ?? 'no session'})`);

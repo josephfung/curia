@@ -24,6 +24,7 @@ import { isUuid } from '../../../../src/util/uuid.js';
 import { isDurableDocPath, isSharedDocPath } from '../../../../src/memory/durable-doc-prefixes.js';
 import { PRINCIPAL_SEND_LEDGER_PREFIX } from '../../../../src/skills/principal-send/send-ledger.js';
 import type { WorkingDocRow } from '../../../../src/db/working-docs-repo.js';
+import { EDITABLE_BY_KEY, editableBy } from '../../../../src/memory/console-only-docs.js';
 
 const VALID_MODES = new Set(['create', 'append', 'replace', 'section-edit', 'section-delete']);
 
@@ -61,16 +62,6 @@ function sendLedgerPathWriteError(ctx: ToolContext, normalizedPath: string): str
   if (path !== prefix && !path.startsWith(`${prefix}/`)) return null;
   ctx.log.warn({ path: normalizedPath, agentId: ctx.agentId ?? null }, 'doc-write: refused a write to the principal-mailbox send ledger');
   return `${PRINCIPAL_SEND_LEDGER_PREFIX}/ holds Curia's record of sends from the principal's mailbox, which only the send path writes. Leave it unchanged.`;
-}
-
-/** Frontmatter key marking a document only the console edits (#2360): `editable_by: console`. */
-export const EDITABLE_BY_KEY = 'editable_by';
-
-/** The document's `editable_by` value, the key matched case-insensitively; undefined when absent. */
-function editableBy(frontmatter: Record<string, unknown> | undefined): unknown {
-  if (!frontmatter) return undefined;
-  const key = Object.keys(frontmatter).find((k) => k.toLowerCase() === EDITABLE_BY_KEY);
-  return key === undefined ? undefined : frontmatter[key];
 }
 
 /**

@@ -3,6 +3,7 @@ import pino from 'pino';
 import { GREETING_NOT_RECORDED_NOTE, isNextSessionBooked, OnboardingWatcher } from '../../../src/onboarding/watcher.js';
 import { readOnboardingState, writeOnboardingState, type OnboardingState } from '../../../src/onboarding/state.js';
 import { GREETING_FOLLOWUP_GAP_HOURS, ONBOARDING_CREATED_BY } from '../../../src/onboarding/constants.js';
+import { TaskTerminalStateError } from '../../../src/db/task-repo.js';
 
 const logger = pino({ level: 'silent' });
 const START = new Date('2026-11-20T10:00:00Z');
@@ -33,6 +34,8 @@ function setup(opts: {
   openTopic?: boolean;
   booked?: boolean;
   parent?: Partial<typeof parent> & { waitingOnContactId?: string | null };
+  topic?: Partial<typeof openTopic> & { waitingOnContactId?: string | null };
+  updateTask?: (id: string) => Promise<unknown>;
 }) {
   const data = new Map<string, string>();
   const get = vi.fn(async (ns: string, k: string) => data.get(`${ns}/${k}`) ?? null);
@@ -43,8 +46,8 @@ function setup(opts: {
   const configStore = { get, set };
   const taskRepo = {
     listTasks: vi.fn(async (f: { tag?: string; parentTaskId?: string }) =>
-      f.parentTaskId ? (opts.openTopic ? [openTopic] : []) : opts.open ? [{ ...parent, ...opts.parent }] : []),
-    updateTask: vi.fn(async () => undefined),
+      f.parentTaskId ? (opts.openTopic ? [{ ...openTopic, ...opts.topic }] : []) : opts.open ? [{ ...parent, ...opts.parent }] : []),
+    updateTask: vi.fn(opts.updateTask ?? (async () => undefined)),
   };
   const enqueueTaskWake = vi.fn(async () => ({ jobId: 'j1' }));
   const readInvitation = vi.fn(async () => (opts.invitation ? { redeemedAt: null, ...opts.invitation } : null));
@@ -72,13 +75,31 @@ describe('OnboardingWatcher.tick', () => {
   });
 
   it('sets a resumed onboarding task back to waiting on the principal, and leaves a waiting one alone', async () => {
-    const resumed = setup({ open: true, parent: { status: 'in_progress', waitingOnContactId: 'c-principal' } });
+    const resumed = setup({
+      open: true,
+      parent: { status: 'in_progress', waitingOnContactId: 'c-principal' },
+      openTopic: true,
+      topic: { status: 'in_progress', waitingOnContactId: 'c-principal' },
+    });
     await resumed.watcher.tick(START);
-    expect(resumed.taskRepo.updateTask).toHaveBeenCalledWith('t1', { status: 'waiting' });
+    const reparked = resumed.taskRepo.updateTask.mock.calls as unknown as Array<[string, unknown]>;
+    expect(reparked.map(([id, u]) => [id, u])).toEqual([['t1', { status: 'waiting' }], ['sub1', { status: 'waiting' }]]);
 
     const waiting = setup({ open: true, parent: { status: 'waiting', waitingOnContactId: 'c-principal' } });
     await waiting.watcher.tick(START);
     expect(waiting.taskRepo.updateTask).not.toHaveBeenCalled();
+  });
+
+  it('a task that ended mid-tick is skipped quietly, not logged as an error', async () => {
+    const t = setup({
+      open: true,
+      parent: { status: 'in_progress', waitingOnContactId: 'c-principal' },
+      updateTask: async () => { throw new TaskTerminalStateError('done'); },
+    });
+    const error = vi.spyOn(logger, 'error');
+    await t.watcher.tick(START);
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
   });
 
   it('a due follow-up writes state once and wakes once', async () => {
