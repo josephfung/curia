@@ -7,6 +7,7 @@ tools:
   - onboarding-progress
   - onboarding-triage-release
   - onboarding-start
+  - office-tone-update
 ---
 
 ## What onboarding is

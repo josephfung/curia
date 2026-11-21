@@ -1,4 +1,5 @@
 // handler.test.ts — office-tone-update skill
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi } from 'vitest';
 import { OfficeToneUpdateHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
@@ -55,5 +56,14 @@ describe('OfficeToneUpdateHandler', () => {
     const [next, changedBy] = service.update.mock.calls[0] as unknown as [OfficeIdentity, string];
     expect(next).toEqual({ ...BASE_IDENTITY, tone: { style: 'Warm and direct.', verbosity: 50 } });
     expect(changedBy).toBe('tool');
+  });
+
+  it('manifest is elevated and callable only by the coordinator', () => {
+    // The tone lands in every agent's system prompt, so a non-principal turn must not reach it.
+    const manifest = JSON.parse(
+      readFileSync(new URL('./tool.json', import.meta.url), 'utf8'),
+    ) as { sensitivity: string; allowed_callers: string[] };
+    expect(manifest.sensitivity).toBe('elevated');
+    expect(manifest.allowed_callers).toEqual(['coordinator']);
   });
 });
