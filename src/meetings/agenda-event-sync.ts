@@ -115,6 +115,9 @@ export async function readAgendaEvent(
     if (status === 401 || status === 403) return EVENT_UNREADABLE;
     throw err;
   }
+  // Cancellation outranks every other reading of the event: a cancelled all-day event is
+  // cancelled (agenda closed, owner told so), not untimed.
+  if (event.status === 'cancelled') return null;
   if (event.startTime === null || event.endTime === null) return EVENT_UNTIMED;
   return {
     start: new Date(event.startTime * 1000),
@@ -230,13 +233,12 @@ export class AgendaEventSync {
       return;
     }
 
-    if (
-      nowMs >= endMs + NO_SHOW_GRACE_MINUTES * MINUTE_MS
-      && current.status === 'pending'
-      && current.history.length === 0
-      && current.eventState !== 'no_show'
-    ) {
-      const marked = await this.o.store.markEvent(current.agendaId, { eventState: 'no_show' });
+    // Checked again on the document the write lands on: `current` was read before getEvent, and a
+    // call that loaded and settled the agenda meanwhile leaves history, which means it was no no-show.
+    const unattended = (doc: AgendaDoc): boolean =>
+      doc.status === 'pending' && doc.history.length === 0 && doc.eventState !== 'no_show';
+    if (nowMs >= endMs + NO_SHOW_GRACE_MINUTES * MINUTE_MS && unattended(current)) {
+      const marked = await this.o.store.markEvent(current.agendaId, { eventState: 'no_show' }, unattended);
       if (marked) await this.wake(current, NO_SHOW_NOTE);
     }
   }

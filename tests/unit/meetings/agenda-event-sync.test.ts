@@ -274,6 +274,35 @@ describe('AgendaEventSync', () => {
     expect((await t.store.get(t.agendaId))!.eventState).toBe('scheduled');
   });
 
+  it('does not record a no-show when a call loads and settles the agenda while the event is read', async () => {
+    const start = new Date(NOW.getTime() - 2 * 60 * MIN);
+    const t = await setup({ start, end: new Date(start.getTime() + 30 * MIN) });
+    const history: AgendaHistoryEntry = { sessionId: 's-1', date: start.toISOString(), topics: [{ topic: 'Week ahead', coverage: 'covered' }] };
+    // The sweep listed the agenda (no history yet); the call lands during getEvent.
+    t.getEvent.mockImplementationOnce(async () => {
+      expect((await t.store.lock(t.agendaId, 's-1', NOW)).ok).toBe(true);
+      await t.store.settle(t.agendaId, 's-1', { kind: 'return', history });
+      return { start, end: new Date(start.getTime() + 30 * MIN), status: 'confirmed' };
+    });
+
+    await t.sync.tick(NOW);
+
+    expect(t.wakeOwner).not.toHaveBeenCalled();
+    expect((await t.store.get(t.agendaId))!.eventState).toBe('scheduled');
+  });
+
+  it('does not preload an event-tied agenda parked without a start before the sync reads it', async () => {
+    const t = await setup({ start: new Date(NOW.getTime() + 3 * 60 * MIN), scheduledFor: null });
+
+    const before = await prepareSessionAgendas(t.store, { sessionId: 's-early', now: NOW, logger: createSilentLogger() });
+    expect(before.preload).toBeNull();
+    expect(before.agendas.index.map((a) => a.agendaId)).toEqual([t.agendaId]);
+
+    await t.sync.tick(NOW);
+    const after = await prepareSessionAgendas(t.store, { sessionId: 's-later', now: NOW, logger: createSilentLogger() });
+    expect(after.preload?.agendaId).toBe(t.agendaId);
+  });
+
   it('marks an agenda with no owner task but wakes nothing', async () => {
     const t = await setup({ start: new Date(NOW.getTime() + 3 * 60 * MIN), owner: null });
     t.setEvent(null);
@@ -306,6 +335,12 @@ describe('readAgendaEvent', () => {
     expect(await readAgendaEvent(routerWith(async () => { throw status(404); }), 'c', 'e')).toBeNull();
     expect(await readAgendaEvent(routerWith(async () => { throw status(403); }), 'c', 'e')).toBe(EVENT_UNREADABLE);
     await expect(readAgendaEvent(routerWith(async () => { throw status(503); }), 'c', 'e')).rejects.toThrow('nylas');
+  });
+
+  it('a cancelled event is gone (null) even with no timed start and end', async () => {
+    expect(await readAgendaEvent(routerWith(async () => ({ startTime: null, endTime: null, status: 'cancelled' })), 'c', 'e')).toBeNull();
+    expect(await readAgendaEvent(routerWith(async () => ({ startTime: 1_700_000_000, endTime: null, status: 'cancelled' })), 'c', 'e')).toBeNull();
+    expect(await readAgendaEvent(routerWith(async () => ({ startTime: 1_700_000_000, endTime: 1_700_001_800, status: 'cancelled' })), 'c', 'e')).toBeNull();
   });
 
   it('a missing mailbox or one needing a hint is unreachable, not unreadable', async () => {
