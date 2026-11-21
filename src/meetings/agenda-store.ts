@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import type { WorkingDocRow, WorkingDocsRepo } from '../db/working-docs-repo.js';
 import type { Logger } from '../logger.js';
+import { isUuid } from '../util/uuid.js';
 import type {
   AgendaDoc,
   AgendaEventState,
@@ -106,8 +107,14 @@ function parseHistory(value: unknown): AgendaHistoryEntry[] | null {
   return entries;
 }
 
-/** Parse a live agenda row. Returns null when the row is not an agenda document. */
-export function parseAgendaDoc(row: WorkingDocRow): AgendaDoc | null {
+/**
+ * Parse a live agenda row. Returns null when the row is not an agenda document.
+ *
+ * The event fields steer wakes, and the console can edit frontmatter, so they are
+ * re-checked here: an owner that is not a UUID, or a calendar event id without its
+ * calendar (or the reverse), reads as null rather than reaching the event sync.
+ */
+export function parseAgendaDoc(row: WorkingDocRow, logger?: Logger): AgendaDoc | null {
   const agendaId = agendaIdFromPath(row.path);
   if (!agendaId || row.type !== DOC_TYPE) return null;
   const fm = row.frontmatter;
@@ -128,12 +135,21 @@ export function parseAgendaDoc(row: WorkingDocRow): AgendaDoc | null {
   if (fm.in_call_session !== undefined && fm.in_call_session !== null && typeof fm.in_call_session !== 'string') {
     return null;
   }
-  const calendarEventId = optionalString(fm.calendar_event_id);
-  const calendarId = optionalString(fm.calendar_id);
-  const ownerTaskId = optionalString(fm.owner_task_id);
+  let calendarEventId = optionalString(fm.calendar_event_id);
+  let calendarId = optionalString(fm.calendar_id);
+  let ownerTaskId = optionalString(fm.owner_task_id);
   const nudgedAt = optionalString(fm.nudged_at);
   if (calendarEventId === undefined || calendarId === undefined || ownerTaskId === undefined || nudgedAt === undefined) {
     return null;
+  }
+  if (ownerTaskId !== null && !isUuid(ownerTaskId)) {
+    logger?.warn({ agendaId }, 'agenda-store: owner_task_id is not a UUID, ignoring it');
+    ownerTaskId = null;
+  }
+  if ((calendarEventId === null) !== (calendarId === null)) {
+    logger?.warn({ agendaId }, 'agenda-store: calendar_event_id and calendar_id must be set together, ignoring both');
+    calendarEventId = null;
+    calendarId = null;
   }
   const eventState = fm.event_state === undefined || fm.event_state === null ? null : fm.event_state;
   if (eventState !== null && !isEventState(eventState)) return null;
@@ -240,18 +256,44 @@ export class AgendaStore {
       body: input.context,
       taskId: null,
     });
-    const parsed = parseAgendaDoc(created);
+    const parsed = parseAgendaDoc(created, this.logger);
     if (!parsed) {
       throw new Error(`agenda-store: parked document at ${path} did not parse`);
     }
     this.logger.debug({ agendaId, now: now.toISOString() }, 'agenda-store: parked agenda');
+    if (parsed.ownerTaskId) await this.supersedeOwnedBy(parsed.ownerTaskId, agendaId);
     return parsed;
+  }
+
+  /**
+   * A new agenda for an owner task replaces that owner's earlier pending ones
+   * (a cancelled or missed session re-booked), so the old one can neither be
+   * preloaded onto an unrelated call nor keep the new one from preloading. Runs
+   * after the new agenda exists: a failure here leaves two agendas, never none,
+   * and is logged rather than failing the park.
+   */
+  private async supersedeOwnedBy(ownerTaskId: string, keepAgendaId: string): Promise<void> {
+    try {
+      const rows = await this.repo.listByPrefix(AGENDA_PREFIX);
+      for (const row of rows) {
+        if (!row.path.startsWith(AGENDA_PREFIX)) continue;
+        const doc = parseAgendaDoc(row, this.logger);
+        if (!doc || doc.agendaId === keepAgendaId) continue;
+        if (doc.status !== 'pending' || doc.ownerTaskId !== ownerTaskId) continue;
+        const closed = await this.close(doc.agendaId, {});
+        if (closed) {
+          this.logger.info({ agendaId: doc.agendaId, supersededBy: keepAgendaId }, 'agenda-store: superseded agenda closed');
+        }
+      }
+    } catch (err) {
+      this.logger.error({ err, ownerTaskId, keepAgendaId }, 'agenda-store: closing superseded agendas failed');
+    }
   }
 
   async get(agendaId: string): Promise<AgendaDoc | null> {
     const row = await this.repo.read(`${AGENDA_PREFIX}${agendaId}.md`);
     if (!row) return null;
-    const parsed = parseAgendaDoc(row);
+    const parsed = parseAgendaDoc(row, this.logger);
     if (!parsed) {
       this.logger.warn({ agendaId, path: row.path }, 'agenda-store: agenda document did not parse');
     }
@@ -263,7 +305,7 @@ export class AgendaStore {
     const pending: AgendaDoc[] = [];
     for (const row of rows) {
       if (!row.path.startsWith(AGENDA_PREFIX)) continue;
-      const doc = parseAgendaDoc(row);
+      const doc = parseAgendaDoc(row, this.logger);
       if (!doc) continue;
       if (doc.status !== 'pending' || isExpired(doc, now)) continue;
       pending.push(doc);
@@ -285,7 +327,7 @@ export class AgendaStore {
     const held: AgendaDoc[] = [];
     for (const row of rows) {
       if (!row.path.startsWith(AGENDA_PREFIX)) continue;
-      const doc = parseAgendaDoc(row);
+      const doc = parseAgendaDoc(row, this.logger);
       if (doc && doc.status === 'in_call' && doc.inCallSession === sessionId) held.push(doc);
     }
     return held;
@@ -297,7 +339,7 @@ export class AgendaStore {
     let archived = 0;
     for (const row of rows) {
       if (!row.path.startsWith(AGENDA_PREFIX)) continue;
-      const doc = parseAgendaDoc(row);
+      const doc = parseAgendaDoc(row, this.logger);
       if (!doc || doc.status !== 'pending' || !isExpired(doc, now)) continue;
       const result = await this.repo.softDeleteAtVersion(doc.path, doc.version);
       if (result?.ok) archived += 1;
@@ -320,7 +362,7 @@ export class AgendaStore {
       expectedVersion: doc.version,
     });
     if (!updated.ok) return { ok: false, reason: 'conflict' };
-    const parsed = parseAgendaDoc(updated.document);
+    const parsed = parseAgendaDoc(updated.document, this.logger);
     if (!parsed) return { ok: false, reason: 'conflict' };
     return { ok: true, agenda: parsed };
   }
@@ -353,6 +395,38 @@ export class AgendaStore {
   }
 
   /**
+   * Close a pending agenda without a call: status done, then archived, as
+   * `settle` does for `done`. Used when its event was cancelled (with
+   * `eventState: 'cancelled'`) or a new agenda for the same owner superseded
+   * it. Retries a version conflict. Returns the closed agenda, or null.
+   */
+  async close(agendaId: string, patch: AgendaEventPatch): Promise<AgendaDoc | null> {
+    for (let attempt = 0; attempt < SETTLE_ATTEMPTS; attempt++) {
+      const doc = await this.get(agendaId);
+      if (!doc || doc.status !== 'pending') return null;
+      const next: AgendaDoc = {
+        ...doc,
+        status: 'done',
+        ...(patch.eventState !== undefined ? { eventState: patch.eventState } : {}),
+      };
+      const updated = await this.repo.update(doc.path, {
+        type: DOC_TYPE,
+        frontmatter: frontmatterFor(next),
+        expectedVersion: doc.version,
+      });
+      if (!updated.ok) continue;
+      const archived = await this.repo.softDeleteAtVersion(doc.path, updated.document.version);
+      if (!archived?.ok) {
+        // Written as done but not archived (edited in between): it is no longer pending either way.
+        this.logger.warn({ agendaId }, 'agenda-store: closed agenda changed before archive');
+      }
+      return parseAgendaDoc(updated.document, this.logger);
+    }
+    this.logger.error({ agendaId }, 'agenda-store: close gave up after a version conflict');
+    return null;
+  }
+
+  /**
    * Write `change(doc)` over the current pending agenda. Returns the written
    * agenda, or null when it is gone, no longer pending, or still conflicting
    * after SETTLE_ATTEMPTS reads.
@@ -370,7 +444,7 @@ export class AgendaStore {
         expectedVersion: doc.version,
       });
       if (!updated.ok) continue;
-      return parseAgendaDoc(updated.document);
+      return parseAgendaDoc(updated.document, this.logger);
     }
     this.logger.error({ agendaId }, 'agenda-store: event update gave up after a version conflict');
     return null;

@@ -1,8 +1,9 @@
 // agenda-event-sync.ts — an agenda tied to a calendar event follows the event (#2360).
 //
 // No webhooks: each sweep re-reads every pending event-tied agenda's event by id.
-// Moved → the agenda's scheduled_for follows. Cancelled or gone → the owner task
-// wakes once to ask when instead. About to start → the owner wakes once to nudge
+// Moved → the agenda's scheduled_for follows. Cancelled or gone → the agenda is
+// closed and the owner task wakes once to ask when instead. Access refused → the
+// owner wakes once and the event is not read again. About to start → the owner wakes once to nudge
 // the principal. Ended with nothing loaded → the owner wakes once about the
 // no-show. Bookkeeping is written before each wake, so a failed write never
 // repeats a wake. General to any calendar-tied agenda, not only onboarding.
@@ -23,10 +24,16 @@ export interface AgendaCalendarEvent {
   status: 'confirmed' | 'cancelled';
 }
 
+/** `getEvent` result when the calendar refused access (401/403): the grant was revoked or is invalid. */
+export const EVENT_UNREADABLE = 'unreadable' as const;
+
 export interface AgendaEventSyncOptions {
-  store: Pick<AgendaStore, 'listPending' | 'reschedule' | 'markEvent'>;
-  /** The event, or null when the calendar says it does not exist. Any other failure throws. */
-  getEvent: (calendarId: string, eventId: string) => Promise<AgendaCalendarEvent | null>;
+  store: Pick<AgendaStore, 'listPending' | 'reschedule' | 'markEvent' | 'close'>;
+  /**
+   * The event; null when the calendar says it does not exist; EVENT_UNREADABLE
+   * when access was refused. Any other failure throws and is retried next sweep.
+   */
+  getEvent: (calendarId: string, eventId: string) => Promise<AgendaCalendarEvent | null | typeof EVENT_UNREADABLE>;
   /** Add a progress note to the owner task and wake it. */
   wakeOwner: (taskId: string, note: string) => Promise<void>;
   logger: Logger;
@@ -36,6 +43,8 @@ export interface AgendaEventSyncOptions {
 export const CANCELLED_NOTE = 'Session event cancelled: ask once when to do it instead';
 export const NUDGE_NOTE = 'Session starting: nudge the principal (call, or open it in chat)';
 export const NO_SHOW_NOTE = 'Missed session: one "missed you, when suits better?"';
+export const UNREADABLE_NOTE =
+  "Can't read this session's calendar event (calendar access may have been removed): check with the principal how to proceed";
 
 const MINUTE_MS = 60_000;
 
@@ -75,8 +84,8 @@ export class AgendaEventSync {
     }
     for (const agenda of pending) {
       if (!agenda.calendarEventId || !agenda.calendarId) continue;
-      // Cancellation was already handled: the owner asked for a new time, which books a new agenda.
-      if (agenda.eventState === 'cancelled') continue;
+      // Already reported: the owner was told once and the event is not read again.
+      if (agenda.eventState === 'cancelled' || agenda.eventState === 'unreadable') continue;
       try {
         await this.syncOne(agenda, agenda.calendarId, agenda.calendarEventId, now);
       } catch (err) {
@@ -86,7 +95,7 @@ export class AgendaEventSync {
   }
 
   private async syncOne(agenda: AgendaDoc, calendarId: string, eventId: string, now: Date): Promise<void> {
-    let event: AgendaCalendarEvent | null;
+    let event: AgendaCalendarEvent | null | typeof EVENT_UNREADABLE;
     try {
       event = await this.o.getEvent(calendarId, eventId);
     } catch (err) {
@@ -96,9 +105,16 @@ export class AgendaEventSync {
       return;
     }
 
+    if (event === EVENT_UNREADABLE) {
+      const marked = await this.o.store.markEvent(agenda.agendaId, { eventState: 'unreadable' });
+      if (marked) await this.wake(agenda, UNREADABLE_NOTE);
+      return;
+    }
+
     if (event === null || event.status === 'cancelled') {
-      const marked = await this.o.store.markEvent(agenda.agendaId, { eventState: 'cancelled' });
-      if (marked) await this.wake(agenda, CANCELLED_NOTE);
+      // Closed, not just marked: a pending cancelled agenda could preload onto an unrelated call.
+      const closed = await this.o.store.close(agenda.agendaId, { eventState: 'cancelled' });
+      if (closed) await this.wake(agenda, CANCELLED_NOTE);
       return;
     }
 

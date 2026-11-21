@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { WorkingDocRow, WorkingDocsRepo } from '../../../src/db/working-docs-repo.js';
 import { createSilentLogger } from '../../../src/logger.js';
 import {
   AgendaEventSync,
   type AgendaCalendarEvent,
   CANCELLED_NOTE,
+  EVENT_UNREADABLE,
   NO_SHOW_NOTE,
   NUDGE_NOTE,
+  UNREADABLE_NOTE,
 } from '../../../src/meetings/agenda-event-sync.js';
+import { prepareSessionAgendas } from '../../../src/meetings/session-agendas.js';
+import { memoryWorkingDocsRepo } from './memory-working-docs-repo.js';
 import { AgendaStore } from '../../../src/meetings/agenda-store.js';
 import type { AgendaHistoryEntry } from '../../../src/meetings/types.js';
 
@@ -15,43 +18,8 @@ const NOW = new Date('2026-11-20T15:00:00.000Z');
 const MIN = 60_000;
 const OWNER = '7e1f4c2a-5b3d-4e6f-8a9b-0c1d2e3f4a5b';
 
-/** In-memory stand-in for the working-docs table: enough of it for AgendaStore. */
-function memoryRepo(): WorkingDocsRepo {
-  const rows = new Map<string, WorkingDocRow>();
-  const row = (path: string, type: string, frontmatter: Record<string, unknown>, body: string, version: number): WorkingDocRow => ({
-    id: path, path, type, frontmatter, body, version, sectionVersions: {}, byteSize: body.length,
-    taskId: null, conversationId: null, agentId: null, createdAt: NOW.toISOString(), updatedAt: NOW.toISOString(), archivedAt: null,
-  });
-  const repo = {
-    async create(p: { path: string; type: string; frontmatter?: Record<string, unknown>; body?: string }) {
-      const created = row(p.path, p.type, structuredClone(p.frontmatter ?? {}), p.body ?? '', 1);
-      rows.set(p.path, created);
-      return created;
-    },
-    async read(path: string) {
-      return rows.get(path) ?? null;
-    },
-    async listByPrefix(prefix: string) {
-      return [...rows.values()].filter((r) => r.path.startsWith(prefix));
-    },
-    async update(path: string, p: { type?: string; frontmatter?: Record<string, unknown>; expectedVersion: number }) {
-      const current = rows.get(path)!;
-      if (current.version !== p.expectedVersion) return { ok: false as const, conflict: true as const, document: current };
-      const next = row(path, p.type ?? current.type, structuredClone(p.frontmatter ?? current.frontmatter), current.body, current.version + 1);
-      rows.set(path, next);
-      return { ok: true as const, document: next };
-    },
-    async softDeleteAtVersion(path: string) {
-      const current = rows.get(path);
-      rows.delete(path);
-      return current ? { ok: true as const, document: current } : null;
-    },
-  };
-  return repo as unknown as WorkingDocsRepo;
-}
-
 async function setup(opts: { start: Date; end?: Date; scheduledFor?: Date | null; owner?: string | null }) {
-  const store = new AgendaStore(memoryRepo(), createSilentLogger());
+  const store = new AgendaStore(memoryWorkingDocsRepo(NOW), createSilentLogger());
   const parked = await store.park({
     title: 'Kickoff',
     topics: ['Week ahead'],
@@ -64,7 +32,7 @@ async function setup(opts: { start: Date; end?: Date; scheduledFor?: Date | null
     calendarId: 'cal-1',
     ownerTaskId: opts.owner === undefined ? OWNER : opts.owner,
   }, NOW);
-  let event: AgendaCalendarEvent | null | Error = {
+  let event: AgendaCalendarEvent | null | Error | typeof EVENT_UNREADABLE = {
     start: opts.start,
     end: opts.end ?? new Date(opts.start.getTime() + 30 * MIN),
     status: 'confirmed',
@@ -81,7 +49,7 @@ async function setup(opts: { start: Date; end?: Date; scheduledFor?: Date | null
     sync,
     wakeOwner,
     getEvent,
-    setEvent: (next: AgendaCalendarEvent | null | Error) => { event = next; },
+    setEvent: (next: AgendaCalendarEvent | null | Error | typeof EVENT_UNREADABLE) => { event = next; },
   };
 }
 
@@ -107,7 +75,19 @@ describe('AgendaEventSync', () => {
 
     expect(t.wakeOwner).toHaveBeenCalledTimes(1);
     expect(t.wakeOwner).toHaveBeenCalledWith(OWNER, CANCELLED_NOTE);
-    expect((await t.store.get(t.agendaId))!.eventState).toBe('cancelled');
+    // Closed and archived, so it is no longer pending.
+    expect(await t.store.get(t.agendaId)).toBeNull();
+  });
+
+  it('does not preload a cancelled event-tied agenda onto a later call', async () => {
+    const t = await setup({ start: new Date(NOW.getTime() + 3 * 60 * MIN) });
+    t.setEvent(null);
+    await t.sync.tick(NOW);
+
+    const prepared = await prepareSessionAgendas(t.store, { sessionId: 's-later', now: new Date(NOW.getTime() + 60 * MIN), logger: createSilentLogger() });
+
+    expect(prepared.preload).toBeNull();
+    expect(prepared.agendas.index).toEqual([]);
   });
 
   it('treats a deleted event (not found) as cancelled', async () => {
@@ -121,14 +101,27 @@ describe('AgendaEventSync', () => {
     expect(t.wakeOwner).toHaveBeenCalledWith(OWNER, CANCELLED_NOTE);
   });
 
-  it('skips an agenda whose event could not be read, and leaves it for the next sweep', async () => {
+  it('skips an agenda whose event read failed transiently, and leaves it for the next sweep', async () => {
     const t = await setup({ start: new Date(NOW.getTime() + 3 * 60 * MIN) });
-    t.setEvent(new Error('grant revoked'));
+    t.setEvent(new Error('socket hang up'));
 
     await t.sync.tick(NOW);
 
     expect(t.wakeOwner).not.toHaveBeenCalled();
     expect((await t.store.get(t.agendaId))!.eventState).toBe('scheduled');
+  });
+
+  it('wakes the owner once when calendar access is refused, and stops reading the event', async () => {
+    const t = await setup({ start: new Date(NOW.getTime() + 3 * 60 * MIN) });
+    t.setEvent(EVENT_UNREADABLE);
+
+    await t.sync.tick(NOW);
+    await t.sync.tick(new Date(NOW.getTime() + 15 * MIN));
+
+    expect(t.wakeOwner).toHaveBeenCalledTimes(1);
+    expect(t.wakeOwner).toHaveBeenCalledWith(OWNER, UNREADABLE_NOTE);
+    expect(t.getEvent).toHaveBeenCalledTimes(1);
+    expect((await t.store.get(t.agendaId))!.eventState).toBe('unreadable');
   });
 
   it('nudges once when the session is about to start', async () => {
@@ -169,6 +162,16 @@ describe('AgendaEventSync', () => {
     expect((await t.store.get(t.agendaId))!.eventState).toBe('no_show');
   });
 
+  it('still preloads a no-show agenda onto a call 20 hours after the event', async () => {
+    const start = new Date(NOW.getTime() - 2 * 60 * MIN);
+    const t = await setup({ start, end: new Date(start.getTime() + 30 * MIN) });
+    await t.sync.tick(NOW);
+
+    const prepared = await prepareSessionAgendas(t.store, { sessionId: 's-late', now: new Date(start.getTime() + 20 * 60 * MIN), logger: createSilentLogger() });
+
+    expect(prepared.preload?.agendaId).toBe(t.agendaId);
+  });
+
   it('does not count a no-show when a call loaded the agenda', async () => {
     const start = new Date(NOW.getTime() - 2 * 60 * MIN);
     const t = await setup({ start, end: new Date(start.getTime() + 30 * MIN) });
@@ -190,6 +193,6 @@ describe('AgendaEventSync', () => {
     await t.sync.tick(NOW);
 
     expect(t.wakeOwner).not.toHaveBeenCalled();
-    expect((await t.store.get(t.agendaId))!.eventState).toBe('cancelled');
+    expect(await t.store.get(t.agendaId)).toBeNull();
   });
 });

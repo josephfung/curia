@@ -143,7 +143,7 @@ import { DeepgramSttProvider, CartesiaTtsProvider, SpeechMediaService } from './
 import { LiveKitRoomSession } from './channels/voice/livekit/room-session.js';
 import { deleteVoiceRoom, listVoiceRooms } from './channels/voice/livekit/token.js';
 import { SignalCallBridge } from './channels/voice/signal/signal-call-bridge.js';
-import { AgendaEventSync } from './meetings/agenda-event-sync.js';
+import { AgendaEventSync, EVENT_UNREADABLE } from './meetings/agenda-event-sync.js';
 import { nylasStatus } from './channels/email/nylas-message-id.js';
 import { AgendaStore } from './meetings/agenda-store.js';
 import { MinutesPipeline } from './meetings/minutes-pipeline.js';
@@ -3911,18 +3911,23 @@ async function main(): Promise<void> {
             status: event.status === 'cancelled' ? 'cancelled' : 'confirmed',
           };
         } catch (err) {
+          const status = nylasStatus(err);
           // A 404 means the event is gone (deleted), which the sync treats as cancelled.
-          if (nylasStatus(err) === 404) return null;
+          if (status === 404) return null;
+          // 401/403: access refused (grant revoked or invalid). Reported once, not retried forever.
+          if (status === 401 || status === 403) return EVENT_UNREADABLE;
           throw err;
         }
       },
       wakeOwner: async (taskId, note) => {
+        // The owner id comes from agenda frontmatter, which the console can edit: wake only an
+        // open coordinator task, never an arbitrary one.
         const task = await taskRepo.getTask(taskId);
-        if (!task || !isOpenTask(task)) {
-          logger.info({ taskId }, 'agenda event sync: owner task is gone or closed, not waking it');
+        if (!task || !isOpenTask(task) || task.agentId !== 'coordinator') {
+          logger.info({ taskId }, 'agenda event sync: owner is not an open coordinator task, not waking it');
           return;
         }
-        await noteAndWakeCoordinator({ taskRepo, scheduler: schedulerService, logger }, task, note);
+        await noteAndWakeCoordinator({ taskRepo, scheduler: schedulerService, logger }, task, note, 'meetings');
       },
       logger,
     });

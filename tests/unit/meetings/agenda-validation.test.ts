@@ -83,6 +83,13 @@ describe('isDue', () => {
     expect(isDue({ scheduledFor: start }, NOW)).toBe(false);
   });
 
+  it('never makes a cancelled or non-pending event-tied agenda due', () => {
+    const start = new Date(NOW.getTime() - 60 * 60 * 1000).toISOString();
+    expect(isDue({ scheduledFor: start, calendarEventId: 'evt-1', eventState: 'cancelled' }, NOW)).toBe(false);
+    expect(isDue({ scheduledFor: start, calendarEventId: 'evt-1', status: 'done' }, NOW)).toBe(false);
+    expect(isDue({ scheduledFor: start, calendarEventId: 'evt-1', eventState: 'no_show', status: 'pending' }, NOW)).toBe(true);
+  });
+
   it('does not make an event-tied agenda due more than 12 hours early', () => {
     const start = new Date(NOW.getTime() + 13 * 60 * 60 * 1000).toISOString();
     expect(isDue({ scheduledFor: start, calendarEventId: 'evt-1' }, NOW)).toBe(false);
