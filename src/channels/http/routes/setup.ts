@@ -44,6 +44,9 @@ import {
   type SetupStateUpdate,
 } from '../../../setup/setup-state.js';
 
+import { WorkingDocsRepo } from '../../../db/working-docs-repo.js';
+import { seedPlaybook } from '../../../onboarding/playbook.js';
+
 export interface SetupRouteOptions {
   webAppBootstrapSecret: string;
   sessions: SessionStore;
@@ -565,6 +568,15 @@ export async function setupRoutes(
     if (!requireAuth(request, reply)) return;
     try {
       const state = await startSetup(pool);
+      // Seed the onboarding playbook while Setup is running (#2360). Best-effort: a failure is
+      // logged and does not fail the route; starting onboarding seeds again if it is missing.
+      if (isInSetup(state)) {
+        try {
+          await seedPlaybook(new WorkingDocsRepo(pool, logger), logger);
+        } catch (err) {
+          logger.error({ err }, 'POST /api/setup/start: failed to seed the onboarding playbook');
+        }
+      }
       // setupGuide: whether web chat now reaches the setup guide, so the page can say when not.
       return reply.send({ inSetup: isInSetup(state), setupGuide: routesWebChatToSetupGuide(state.phase) });
     } catch (err) {
