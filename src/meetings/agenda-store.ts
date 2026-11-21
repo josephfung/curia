@@ -39,6 +39,7 @@ export type AgendaLockResult =
 export interface AgendaEventPatch {
   eventState?: AgendaEventState;
   nudgedAt?: string | null;
+  eventUnreachableSince?: string | null;
 }
 
 export type AgendaSettleOutcome =
@@ -139,7 +140,11 @@ export function parseAgendaDoc(row: WorkingDocRow, logger?: Logger): AgendaDoc |
   let calendarId = optionalString(fm.calendar_id);
   let ownerTaskId = optionalString(fm.owner_task_id);
   const nudgedAt = optionalString(fm.nudged_at);
-  if (calendarEventId === undefined || calendarId === undefined || ownerTaskId === undefined || nudgedAt === undefined) {
+  const eventUnreachableSince = optionalString(fm.event_unreachable_since);
+  if (
+    calendarEventId === undefined || calendarId === undefined || ownerTaskId === undefined
+    || nudgedAt === undefined || eventUnreachableSince === undefined
+  ) {
     return null;
   }
   if (ownerTaskId !== null && !isUuid(ownerTaskId)) {
@@ -172,6 +177,7 @@ export function parseAgendaDoc(row: WorkingDocRow, logger?: Logger): AgendaDoc |
     calendarId,
     ownerTaskId,
     nudgedAt,
+    eventUnreachableSince,
     eventState,
   };
 }
@@ -192,6 +198,7 @@ function frontmatterFor(doc: AgendaDoc): Record<string, unknown> {
     calendar_id: doc.calendarId,
     owner_task_id: doc.ownerTaskId,
     nudged_at: doc.nudgedAt,
+    event_unreachable_since: doc.eventUnreachableSince,
     event_state: doc.eventState,
   };
 }
@@ -247,6 +254,7 @@ export class AgendaStore {
       calendarId: input.calendarId ?? null,
       ownerTaskId: input.ownerTaskId ?? null,
       nudgedAt: null,
+      eventUnreachableSince: null,
       eventState: input.calendarEventId ? 'scheduled' : null,
     };
     const created = await this.repo.create({
@@ -401,6 +409,7 @@ export class AgendaStore {
       ...doc,
       ...(patch.eventState !== undefined ? { eventState: patch.eventState } : {}),
       ...(patch.nudgedAt !== undefined ? { nudgedAt: patch.nudgedAt } : {}),
+      ...(patch.eventUnreachableSince !== undefined ? { eventUnreachableSince: patch.eventUnreachableSince } : {}),
     }));
   }
 

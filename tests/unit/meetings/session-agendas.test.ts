@@ -32,6 +32,7 @@ function agenda(overrides: Partial<AgendaDoc> & { agendaId: string }): AgendaDoc
     calendarId: null,
     ownerTaskId: null,
     nudgedAt: null,
+    eventUnreachableSince: null,
     eventState: null,
     ...overrides,
   };

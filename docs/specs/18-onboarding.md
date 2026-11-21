@@ -565,12 +565,13 @@ agenda's event by id:
 | Moved | the agenda's `scheduled_for` follows |
 | Cancelled or gone | the agenda is closed, and the owner task wakes once to ask when instead |
 | Unreadable (access refused, or its calendar no longer routes to a mailbox) | the owner task wakes once to check with the principal; the event is not read again |
+| Unreachable (the principal's mailbox is missing, or a second mailbox needs a hint) | skipped each sweep, with the first failure time recorded in the agenda's `event_unreachable_since`; cleared when a read succeeds. After 24 hours of continuous failure it becomes Unreadable |
 | All-day (no timed start and end) | the owner task wakes once to ask when to hold the session; the event is not read again |
 | Starting within 15 minutes | the owner task wakes once to nudge the principal |
 | Ended 30 minutes ago, nothing loaded | a no-show: the owner task wakes once. Onboarding sends one "missed you, when suits better?" and books the answer, unless the session happened in chat (then nothing is sent) |
 
 Only an open coordinator task is woken (any other owner is logged as a warning), since the
-console can edit agenda frontmatter. Any other read failure is retried next sweep. Each
+console can edit agenda frontmatter. Any other read failure is retried next sweep. The 24-hour grace is `EVENT_UNREACHABLE_GRACE_HOURS` in `src/meetings/constants.ts`. Each
 step is recorded before its wake, so a failed write never repeats one. An event-tied agenda
 is due from 12 hours before its event until it is settled, instead of the ±12-hour window,
 so a late call still loads it (`expires_at` still bounds it); a cancelled one never is.

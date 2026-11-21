@@ -4,7 +4,9 @@
 // Moved → the agenda's scheduled_for follows. Cancelled or gone → the agenda is
 // closed and the owner task wakes once to ask when instead. Access refused, an
 // unroutable calendar, or an event with no timed start and end → the owner wakes
-// once and the event is not read again. About to start → the owner wakes once to nudge
+// once and the event is not read again. A route error that usually clears (a mailbox
+// reconnecting, or needing a hint) is skipped, and only after 24 hours of it in a row does
+// it count as unreadable. About to start → the owner wakes once to nudge
 // the principal. Ended with nothing loaded → the owner wakes once about the
 // no-show. Bookkeeping is written before each wake, so a failed write never
 // repeats a wake. General to any calendar-tied agenda, not only onboarding.
@@ -16,6 +18,7 @@ import { nylasStatus } from '../channels/email/nylas-message-id.js';
 import type { AgendaStore } from './agenda-store.js';
 import {
   AGENDA_EVENT_SYNC_INTERVAL_MINUTES,
+  EVENT_UNREACHABLE_GRACE_HOURS,
   NO_SHOW_GRACE_MINUTES,
   SESSION_NUDGE_LEAD_MINUTES,
 } from './constants.js';
@@ -35,13 +38,29 @@ export const EVENT_UNREADABLE = 'unreadable' as const;
 /** `getEvent` result for an event with no timed start and end (an all-day event). */
 export const EVENT_UNTIMED = 'untimed' as const;
 
-export type AgendaEventRead = AgendaCalendarEvent | null | typeof EVENT_UNREADABLE | typeof EVENT_UNTIMED;
+/**
+ * `getEvent` result when a route error that usually clears stopped the read: the principal's
+ * mailbox is briefly disconnected (`no_mailbox`), or a second mailbox now needs a hint
+ * (`needs_mailbox`). The sync skips the sweep and only gives up after a grace period.
+ */
+export const EVENT_UNREACHABLE = 'unreachable' as const;
+
+export type AgendaEventRead =
+  | AgendaCalendarEvent
+  | null
+  | typeof EVENT_UNREADABLE
+  | typeof EVENT_UNTIMED
+  | typeof EVENT_UNREACHABLE;
+
+/** Route errors that usually clear on their own; every other CalendarRouteError is permanent. */
+const TRANSIENT_ROUTE_CODES: readonly string[] = ['no_mailbox', 'needs_mailbox'];
 
 export interface AgendaEventSyncOptions {
   store: Pick<AgendaStore, 'listPending' | 'reschedule' | 'markEvent' | 'close'>;
   /**
    * The event; null when the calendar says it does not exist; EVENT_UNREADABLE when it can never
-   * be read; EVENT_UNTIMED when it has no timed start and end. Any other failure throws and is
+   * be read; EVENT_UNTIMED when it has no timed start and end; EVENT_UNREACHABLE when a
+   * usually-temporary route error stopped the read. Any other failure throws and is
    * retried next sweep.
    */
   getEvent: (calendarId: string, eventId: string) => Promise<AgendaEventRead>;
@@ -63,7 +82,7 @@ export const UNTIMED_NOTE =
 /**
  * Read an agenda's event through the calendar router. A calendar that no longer routes (its
  * mailbox removed, or unregistered) and a refused grant are EVENT_UNREADABLE; a gone event is
- * null; anything else (network, rate limit, a route that may resolve shortly) throws.
+ * null; a missing mailbox or one needing a hint is EVENT_UNREACHABLE (usually temporary); anything else (network, rate limit, a route that may resolve shortly) throws.
  */
 export async function readAgendaEvent(
   router: Pick<CalendarRouter, 'route'>,
@@ -74,8 +93,12 @@ export async function readAgendaEvent(
   try {
     routed = await router.route(calendarId);
   } catch (err) {
-    // owner_unconfirmed is a listing failure that may clear; every other route error is permanent.
-    if (err instanceof CalendarRouteError && err.code !== 'owner_unconfirmed') return EVENT_UNREADABLE;
+    if (err instanceof CalendarRouteError) {
+      // no_mailbox / needs_mailbox usually clear (a reconnect, a hint); the sync gives them a grace period.
+      if (TRANSIENT_ROUTE_CODES.includes(err.code)) return EVENT_UNREACHABLE;
+      // owner_unconfirmed is a listing failure that may clear; every other route error is permanent.
+      if (err.code !== 'owner_unconfirmed') return EVENT_UNREADABLE;
+    }
     throw err;
   }
   let event: Awaited<ReturnType<typeof routed.client.getEvent>>;
@@ -160,9 +183,14 @@ export class AgendaEventSync {
       return;
     }
 
+    if (event === EVENT_UNREACHABLE) {
+      await this.onUnreachable(agenda, now);
+      return;
+    }
+
     // Never readable as a session time: told once, then not read again.
     if (event === EVENT_UNREADABLE || event === EVENT_UNTIMED) {
-      const marked = await this.o.store.markEvent(agenda.agendaId, { eventState: 'unreadable' });
+      const marked = await this.o.store.markEvent(agenda.agendaId, { eventState: 'unreadable', eventUnreachableSince: null });
       if (marked) await this.wake(agenda, event === EVENT_UNTIMED ? UNTIMED_NOTE : UNREADABLE_NOTE);
       return;
     }
@@ -175,9 +203,15 @@ export class AgendaEventSync {
     }
 
     let current = agenda;
+    // Reachable again: the grace clock starts over.
+    if (agenda.eventUnreachableSince !== null) {
+      const cleared = await this.o.store.markEvent(agenda.agendaId, { eventUnreachableSince: null });
+      if (!cleared) return;
+      current = cleared;
+    }
     const scheduledAt = agenda.scheduledFor === null ? Number.NaN : Date.parse(agenda.scheduledFor);
     if (scheduledAt !== event.start.getTime()) {
-      const moved = await this.o.store.reschedule(agenda.agendaId, event.start);
+      const moved = await this.o.store.reschedule(current.agendaId, event.start);
       if (!moved) return;
       current = moved;
     }
@@ -202,6 +236,32 @@ export class AgendaEventSync {
       const marked = await this.o.store.markEvent(current.agendaId, { eventState: 'no_show' });
       if (marked) await this.wake(current, NO_SHOW_NOTE);
     }
+  }
+
+  /**
+   * A usually-temporary route error: record when it started and skip the sweep. Once it has
+   * lasted EVENT_UNREACHABLE_GRACE_HOURS, treat the event as unreadable (owner woken once).
+   */
+  private async onUnreachable(agenda: AgendaDoc, now: Date): Promise<void> {
+    const sinceMs = agenda.eventUnreachableSince === null ? Number.NaN : Date.parse(agenda.eventUnreachableSince);
+    if (Number.isNaN(sinceMs)) {
+      // First failure (or an unparseable since-time): start the clock now.
+      await this.o.store.markEvent(agenda.agendaId, { eventUnreachableSince: now.toISOString() });
+      this.o.logger.warn(
+        { agendaId: agenda.agendaId },
+        'agenda event sync: the event is unreachable (mailbox missing or needs a hint), skipping this sweep',
+      );
+      return;
+    }
+    if (now.getTime() - sinceMs < EVENT_UNREACHABLE_GRACE_HOURS * 60 * MINUTE_MS) {
+      this.o.logger.warn(
+        { agendaId: agenda.agendaId, since: agenda.eventUnreachableSince },
+        'agenda event sync: the event is still unreachable, skipping this sweep',
+      );
+      return;
+    }
+    const marked = await this.o.store.markEvent(agenda.agendaId, { eventState: 'unreadable', eventUnreachableSince: null });
+    if (marked) await this.wake(agenda, UNREADABLE_NOTE);
   }
 
   private async wake(agenda: AgendaDoc, note: string): Promise<void> {

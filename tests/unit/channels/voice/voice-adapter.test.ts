@@ -289,6 +289,7 @@ describe('VoiceAdapter', () => {
         calendarId: null,
         ownerTaskId: null,
         nudgedAt: null,
+        eventUnreachableSince: null,
         eventState: null,
       };
     }

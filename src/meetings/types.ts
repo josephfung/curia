@@ -44,6 +44,8 @@ export interface AgendaDoc extends AgendaSnapshot {
   ownerTaskId: string | null;
   /** ISO time the owner was woken to nudge the principal; cleared when the event moves later. */
   nudgedAt: string | null;
+  /** ISO time the event first became unreachable (a route error that is usually temporary); cleared on a successful read. */
+  eventUnreachableSince: string | null;
   eventState: AgendaEventState | null;
 }
 

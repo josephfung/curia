@@ -4,6 +4,7 @@ import {
   AgendaEventSync,
   CANCELLED_NOTE,
   type AgendaEventRead,
+  EVENT_UNREACHABLE,
   EVENT_UNREADABLE,
   EVENT_UNTIMED,
   NO_SHOW_NOTE,
@@ -129,6 +130,59 @@ describe('AgendaEventSync', () => {
     expect((await t.store.get(t.agendaId))!.eventState).toBe('unreadable');
   });
 
+  describe('a usually-temporary route error (EVENT_UNREACHABLE)', () => {
+    const HOUR = 60 * MIN;
+
+    it('is skipped and records when it started, without waking the owner', async () => {
+      const t = await setup({ start: new Date(NOW.getTime() + 3 * HOUR) });
+      t.setEvent(EVENT_UNREACHABLE);
+
+      await t.sync.tick(NOW);
+      await t.sync.tick(new Date(NOW.getTime() + 15 * MIN));
+
+      const agenda = (await t.store.get(t.agendaId))!;
+      expect(agenda.eventUnreachableSince).toBe(NOW.toISOString());
+      expect(agenda.eventState).toBe('scheduled');
+      expect(t.wakeOwner).not.toHaveBeenCalled();
+    });
+
+    it('marks the agenda unreadable and wakes the owner once after 24 hours of failing', async () => {
+      const t = await setup({ start: new Date(NOW.getTime() + 48 * HOUR) });
+      t.setEvent(EVENT_UNREACHABLE);
+      await t.sync.tick(NOW);
+
+      await t.sync.tick(new Date(NOW.getTime() + 24 * HOUR - MIN));
+      expect(t.wakeOwner).not.toHaveBeenCalled();
+
+      await t.sync.tick(new Date(NOW.getTime() + 24 * HOUR));
+      await t.sync.tick(new Date(NOW.getTime() + 25 * HOUR));
+
+      expect(t.wakeOwner).toHaveBeenCalledTimes(1);
+      expect(t.wakeOwner).toHaveBeenCalledWith(OWNER, UNREADABLE_NOTE);
+      const agenda = (await t.store.get(t.agendaId))!;
+      expect(agenda.eventState).toBe('unreadable');
+      expect(agenda.eventUnreachableSince).toBeNull();
+    });
+
+    it('clears the since-time when a later read succeeds, so the grace starts over', async () => {
+      const start = new Date(NOW.getTime() + 48 * HOUR);
+      const t = await setup({ start });
+      t.setEvent(EVENT_UNREACHABLE);
+      await t.sync.tick(NOW);
+      expect((await t.store.get(t.agendaId))!.eventUnreachableSince).toBe(NOW.toISOString());
+
+      t.setEvent({ start, end: new Date(start.getTime() + 30 * MIN), status: 'confirmed' });
+      await t.sync.tick(new Date(NOW.getTime() + 15 * MIN));
+      expect((await t.store.get(t.agendaId))!.eventUnreachableSince).toBeNull();
+
+      // Failing again 25 hours after the first failure is a fresh 24-hour window, not an expired one.
+      t.setEvent(EVENT_UNREACHABLE);
+      await t.sync.tick(new Date(NOW.getTime() + 25 * HOUR));
+      expect(t.wakeOwner).not.toHaveBeenCalled();
+      expect((await t.store.get(t.agendaId))!.eventState).toBe('scheduled');
+    });
+  });
+
   it('an all-day event wakes the owner once to ask when, and is not read again', async () => {
     const t = await setup({ start: new Date(NOW.getTime() + 3 * 60 * MIN) });
     t.setEvent(EVENT_UNTIMED);
@@ -235,6 +289,12 @@ describe('readAgendaEvent', () => {
     expect(await readAgendaEvent(routerWith(async () => { throw status(404); }), 'c', 'e')).toBeNull();
     expect(await readAgendaEvent(routerWith(async () => { throw status(403); }), 'c', 'e')).toBe(EVENT_UNREADABLE);
     await expect(readAgendaEvent(routerWith(async () => { throw status(503); }), 'c', 'e')).rejects.toThrow('nylas');
+  });
+
+  it('a missing mailbox or one needing a hint is unreachable, not unreadable', async () => {
+    for (const code of ['no_mailbox', 'needs_mailbox'] as const) {
+      expect(await readAgendaEvent(routerWith(async () => null, new CalendarRouteError(code, 'x')), 'c', 'e')).toBe(EVENT_UNREACHABLE);
+    }
   });
 
   it('a calendar that no longer routes is unreadable; an unconfirmed owner is retried', async () => {
