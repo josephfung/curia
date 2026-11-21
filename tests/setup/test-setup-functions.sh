@@ -196,6 +196,18 @@ assert_true  "WEB_APP_BOOTSTRAP placeholder left untouched" "$_tmp_env" "WEB_APP
 assert_true  "optional comment line preserved"            "$_tmp_env" "# NYLAS_API_KEY"
 assert_true  "non-substituted var preserved"              "$_tmp_env" "LOG_LEVEL=info"
 
+# LiveKit is on by default for source installs (#2357): voice profile, generated keys,
+# loopback command.
+assert_true  "COMPOSE_PROFILES=voice written"          "$_tmp_env" "COMPOSE_PROFILES=voice"
+assert_true  "LIVEKIT_KEYS generated"                  "$_tmp_env" 'LIVEKIT_KEYS="API'
+assert_true  "LIVEKIT_COMMAND is the local command"    "$_tmp_env" "LIVEKIT_COMMAND=$(livekit_command_for local)"
+
+# A preserved key (full reset) is kept, not regenerated.
+PRESERVED_LIVEKIT_KEYS="APIkeep: keepsecret"
+write_env
+assert_true  "preserved LIVEKIT_KEYS kept"             "$_tmp_env" 'LIVEKIT_KEYS="APIkeep: keepsecret"'
+PRESERVED_LIVEKIT_KEYS=""
+
 rm -f "$_tmp_example" "$_tmp_env"
 # Reset ENV_FILE/ENV_EXAMPLE to real paths after test
 ENV_FILE="$REPO_ROOT/.env"
@@ -263,6 +275,22 @@ if [[ $_opt3_rc -eq 0 ]] && [[ ! -f "$_menu_env" ]]; then
     PASS=$((PASS + 1))
 else
     echo "  ✗ option 3 + 'yes' should delete .env and set SETUP_MODE=full"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test option 3 (confirm) carries LIVEKIT_KEYS over into PRESERVED_LIVEKIT_KEYS
+printf 'DB_USER=curia\nLIVEKIT_KEYS="APIkeep: keepsecret"\n' > "$_menu_env"
+_opt3k_out=$(
+    ENV_FILE="$_menu_env"
+    PRESERVED_LIVEKIT_KEYS=""
+    handle_existing_env < <(printf "3\nyes\n") >/dev/null 2>&1
+    printf '%s' "$PRESERVED_LIVEKIT_KEYS"
+) || true
+if [[ "$_opt3k_out" == "APIkeep: keepsecret" ]]; then
+    echo "  ✓ full reset keeps LIVEKIT_KEYS"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ full reset should keep LIVEKIT_KEYS (got '${_opt3k_out}')"
     FAIL=$((FAIL + 1))
 fi
 
