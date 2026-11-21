@@ -38,7 +38,7 @@ pnpm scenarios --case "sweep-on-close" --model deepseek/deepseek-v4.1-flash
 |---|---|
 | `--model <id>` | Route every agent to this model (registry id). Default: the configured `model_routing`. |
 | `--reasoning-effort <e>` | Reasoning effort for agent turns (ADR-048): `low` sets every tier; `fast=none,standard=low` sets only the tiers named. Boot fails if a tier's model does not list the effort. The run header and results record the arm. |
-| `--case <text>` | Only cases whose name contains this text (case-insensitive). |
+| `--case <text>` | Only cases whose name contains this text (case-insensitive). Separate several with commas to pick any of them (`--case "51b,52c"`). |
 | `--tags a,b` | Only cases with one of these tags. |
 | `--runs <n>` | Runs per case, overriding the case's `runs` and the default of 1. Rarely needed: see [The gate](#the-gate). |
 | `--concurrency <n>` | Cases run at once (default 4). A case's own runs are always one at a time. |

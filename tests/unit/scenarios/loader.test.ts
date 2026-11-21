@@ -999,6 +999,8 @@ describe('selectRunCases', () => {
 
   it('filters by case name, case-insensitively', () => {
     expect(selectRunCases([plain, at84, at74], { caseFilter: 'PII AT' }).cases.map(c => c.name)).toEqual(['pii at 84', 'pii at 74']);
+    // Comma-separated parts pick any case matching one of them; blanks are ignored.
+    expect(selectRunCases([plain, at84, at74], { caseFilter: 'at 84, ,AT 74' }).cases.map(c => c.name)).toEqual(['pii at 84', 'pii at 74']);
   });
 });
 

@@ -1763,8 +1763,9 @@ export function selectRunCases(
 ): RunSelection {
   let cases = [...all];
   if (args.caseFilter !== undefined) {
-    const needle = args.caseFilter.toLowerCase();
-    cases = cases.filter(c => c.name.toLowerCase().includes(needle));
+    // Comma-separated: a case is picked when its name contains any one of the parts.
+    const needles = args.caseFilter.toLowerCase().split(',').map(n => n.trim()).filter(n => n !== '');
+    cases = cases.filter(c => needles.some(n => c.name.toLowerCase().includes(n)));
   }
   if (args.tags !== undefined) cases = cases.filter(c => c.tags.some(t => args.tags!.includes(t)));
   const selected = args.caseFilter !== undefined || args.tags !== undefined;
