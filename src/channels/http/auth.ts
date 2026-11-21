@@ -79,6 +79,9 @@ const SELF_AUTHED_API_PREFIXES = [
   // The onboarding wizard runs in the browser with the same curia_session cookie /
   // x-web-bootstrap-secret pair as the identity routes.
   '/api/setup',
+  // Starting onboarding (#2360): the console's dashboard alert and Start button, and the triage
+  // hold release, authenticate the same way (assertSecret).
+  '/api/onboarding',
   // Telnyx SMS webhooks authenticate via Ed25519 signature, not bearer token (ADR-036).
   '/api/webhooks/telnyx',
 ];

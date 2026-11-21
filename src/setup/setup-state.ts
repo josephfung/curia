@@ -121,7 +121,7 @@ export async function startSetup(db: SetupStateQueryable): Promise<SetupState> {
   return readSetupState(db);
 }
 
-/** Start onboarding: Setup is over. Idempotent. */
+/** Setup is finished (Start onboarding or Not right now; POST /api/setup/complete). Idempotent. */
 export async function markSetupComplete(db: SetupStateQueryable): Promise<void> {
   await db.query(
     `INSERT INTO setup_state (id, phase, completed_at) VALUES (1, 'complete', now())
@@ -132,7 +132,7 @@ export async function markSetupComplete(db: SetupStateQueryable): Promise<void> 
 
 /**
  * Whether the console should show the Setup page and the server should treat web chat as
- * the operator's (PR 2): from a new install's first load until Start onboarding. Migration
+ * the operator's (PR 2): from a new install's first load until Setup is finished. Migration
  * 130 marked installs that predate the Setup page complete, so they never are.
  */
 export function isInSetup(state: SetupState): boolean {

@@ -7,6 +7,7 @@ import { apiFetch } from '../../api.js';
 import { errorMessage } from '../../components/settings/ConfigHistory.js';
 import type { RegistryEntry } from '../registry-rows.js';
 import type { FieldGroupHandle } from '../setup/ChannelForms.js';
+import { fetchOnboardingStatus } from '../setup/start-onboarding.js';
 import {
   CAPABILITIES,
   capabilityState,
@@ -28,6 +29,21 @@ async function loadLists(): Promise<RegistryLists> {
   return { agents, skills, tools };
 }
 
+/**
+ * Whether onboarding holds Email triage (#2360). Only its label and what its switch does depend
+ * on it, so a failed read doesn't hide the registry: it is logged, reads as not held, and the
+ * section says so.
+ */
+async function loadTriageHeld(): Promise<{ held: boolean; error: string | null }> {
+  try {
+    return { held: (await fetchOnboardingStatus()).triageHeld === true, error: null };
+  } catch (err) {
+    console.error('[CapabilitiesSection] could not read the onboarding status:', err);
+    const why = err instanceof Error ? err.message : 'unknown error';
+    return { held: false, error: `Couldn’t read whether onboarding holds Email triage: ${why}` };
+  }
+}
+
 export function CapabilitiesSection(props: {
   /** How the descriptions name the principal ("Dana", or "your principal"). */
   principal: string;
@@ -42,6 +58,8 @@ export function CapabilitiesSection(props: {
   const { principal, place } = props;
   const confirm = props.confirm ?? ((text: string) => window.confirm(text));
   const [lists, setLists] = useState<RegistryLists | null>(null);
+  const [triageHeld, setTriageHeld] = useState(false);
+  const [heldError, setHeldError] = useState<string | null>(null);
   const [busy, setBusy] = useState<CapabilityId | null>(null);
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   // The direction each capability was last switched, so a click on one left partly on (a
@@ -69,7 +87,10 @@ export function CapabilitiesSection(props: {
   /** Re-reads the registry. Returns the failure, if any, so a flip's own message isn't lost. */
   const reload = useCallback(async (): Promise<string | null> => {
     try {
-      setLists(await loadLists());
+      const [next, held] = await Promise.all([loadLists(), loadTriageHeld()]);
+      setLists(next);
+      setTriageHeld(held.held);
+      setHeldError(held.error);
       return null;
     } catch (err) {
       return `Couldn’t read Curia’s capabilities: ${err instanceof Error ? err.message : 'unknown error'}`;
@@ -114,8 +135,15 @@ export function CapabilitiesSection(props: {
     setMessage(null);
     let done = 0;
     const plan = [...needs.flatMap((n) => switchPlan(n, true, lists)), ...switchPlan(cap, on, lists)];
+    // Switching held Email triage on releases the hold first: that part is live, no restart.
+    const release = cap.id === 'triage' && on && triageHeld;
     let result: { kind: 'ok' | 'error'; text: string };
     try {
+      if (release) {
+        const res = await apiFetch('/api/onboarding/triage-hold', { method: 'DELETE' });
+        if (!res.ok) throw new Error(`the hold: ${await errorMessage(res)}`);
+        done++;
+      }
       // One at a time, in the plan's order, so a failure leaves the safe side of it done.
       for (const step of plan) {
         const res = await apiFetch(`/api/registry/${step.kind}/${encodeURIComponent(step.name)}/${step.action}`, { method: 'POST' });
@@ -123,7 +151,8 @@ export function CapabilitiesSection(props: {
         done++;
       }
       const also = needs.length > 0 ? `, with ${needs.map((n) => n.label).join(' and ')}` : '';
-      result = { kind: 'ok', text: `${cap.label} ${on ? 'on' : 'off'}${also}. ${restartNote(place)}` };
+      const note = plan.length > 0 ? ` ${restartNote(place)}` : '';
+      result = { kind: 'ok', text: `${cap.label} ${on ? 'on' : 'off'}${also}.${note}` };
     } catch (err) {
       const text = err instanceof Error ? err.message : 'unknown error';
       result = {
@@ -148,11 +177,14 @@ export function CapabilitiesSection(props: {
       {CAPABILITIES.map((cap) => {
         const state = lists ? capabilityState(cap, lists) : null;
         // The real state always: a lock only stops the switch, it never says something is on.
-        const on = state?.kind === 'on';
+        const held = cap.id === 'triage' && triageHeld;
+        // Held: on in the registry, but doing nothing yet, so the switch reads off and turns it on.
+        const on = state?.kind === 'on' && !held;
         const lockedOff = cap.lock === 'principal-in-onboarding' && place === 'setup';
         const needs = lists && on ? neededCapabilities(cap, lists) : [];
         const fixed = state?.kind === 'unavailable'
           ? `Not available: ${state.missing.join(', ')} ${state.missing.length > 1 ? 'are' : 'is'} missing or broken${state.anyOn ? '. The rest is on' : ''}`
+          : held ? `Held until ${principal} hears what to expect`
           : state?.kind === 'partly' ? 'Partly on'
           : needs.length > 0 ? `Needs ${needs.map((n) => n.label).join(' and ')}`
           : cap.lock === 'always-on' ? 'Always on'
@@ -162,10 +194,12 @@ export function CapabilitiesSection(props: {
         const disabled = !state || busy !== null || cap.lock === 'always-on' || lockedOff
           || (state.kind === 'unavailable' && !unavailableOff);
         // Partly on: finish the last attempt's direction (on, if there wasn't one here).
-        const target = state?.kind === 'on' || unavailableOff ? false
+        const target = unavailableOff ? false
+          : held ? true
+          : state?.kind === 'on' ? false
           : state?.kind === 'partly' ? (lastWanted[cap.id] ?? true)
           : true;
-        const mixed = state?.kind === 'partly' || unavailableOff;
+        const mixed = (state?.kind === 'partly' && !held) || unavailableOff;
         const descId = `cap-${cap.id}-desc`;
         const fixedId = `cap-${cap.id}-state`;
         return (
@@ -190,6 +224,7 @@ export function CapabilitiesSection(props: {
         );
       })}
       {!lists && !message && <p className="setup-hint">Loading…</p>}
+      {heldError && <p className="setup-status attention" role="alert">{heldError}</p>}
       {message && (
         <p className={`setup-status ${message.kind === 'ok' ? 'ok' : 'attention'}`} role={message.kind === 'error' ? 'alert' : 'status'}>
           {message.text}

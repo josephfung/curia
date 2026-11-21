@@ -1116,6 +1116,30 @@
     "availability covers the personal calendar too": {
       "unstubbed": null,
       "reason": "New in #2475; not yet run (paid suite). The first run records coverage."
+    },
+    "onboarding style choice writes the tone": {
+      "unstubbed": null,
+      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
+    },
+    "onboarding independence ask first sets 75": {
+      "unstubbed": null,
+      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
+    },
+    "onboarding deferral to a named day books it": {
+      "unstubbed": null,
+      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
+    },
+    "onboarding vague later offers two times once": {
+      "unstubbed": null,
+      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
+    },
+    "onboarding no-show sends one missed-you": {
+      "unstubbed": null,
+      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
+    },
+    "onboarding side request becomes its own task": {
+      "unstubbed": null,
+      "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
     }
   }
 }

@@ -248,6 +248,7 @@ person, before `JUDGE_MODEL` changes.
 | Sign-in verifications (#2017) | the verification runtime's `open`, then backdated (and closed, for a non-pending `status`) | The coordinator's "## Sign-in verifications" block, the Dispatcher's code tracking and the ExecutionLayer see only the run's rows (`scopedVerification`, the `wrapVerification` stack option), and only the run's sessions read as alive (`browserSessionAlive`). Cases seeding one site never run at once (one pending row per site). Deleted after the run. |
 | The principal backlog (prompt trim PR 7) | `seed.backlog` counts | The Dispatcher's backlog line reads the run's own counts (`scopedPrincipalBacklog`), never the shared tables. A case stubs the list tools to show the items its counts promise. |
 | Pinned context (#2339) | `seed.pinned`: `/shared/` document text and config values by key, and entries whose read fails | Agents' `## Pinned context` block reads the run's own values (`scopedPinnedContextReader`, the `wrapPinnedContextReader` stack option), never the copied database's documents or settings. An entry the case does not name reads as not yet created or not set. A write is the case's to stub (`doc-write`, `config-store`). |
+| An onboarding under way (#2360) | `seed.onboarding`: the onboarding task's id and its open topics (`id`, `title`, `session`) | The coordinator's live principal turns get production's onboarding block (`formatOnboardingTurnBlock`) and the `onboarding` skill, from the run's own seed (`scopedOnboardingTurnContext`, the `onboardingTurnContext` stack option), never the database's tasks. Coordinator cases only. No task row is written: the case stubs `onboarding-progress`, and the pre-run check counts the skill's tools as offered. A task wake restores the skill instead through `inbound.task.active_skills`. |
 | Scheduler jobs | the `scheduler-list` stub, and `scheduler-get` (with a `job_id` match) for a job's full task | Never written to the database. Within a run, a later list or `scheduler-get` replays that run's stubbed creates, edits and cancels. |
 | The run's conversation | | `working_memory`, `conversation_checkpoints` and `conversation_resolved_entities` rows are deleted. |
 | Specialists' conversations (real delegation) | | The same rows for each `scenario-delegate-…` conversation. A specialist the run abandoned is cleaned again when it finishes. |
@@ -445,6 +446,10 @@ seed:
     configs:                              #   <namespace>/<key> → value
       ceo_inbox/decision_tagging: '{"enabled": true}'
     unavailable: [debrief/config]         #   reads that fail: the block shows them as unavailable
+  onboarding:                             # optional, coordinator only: an onboarding under way (#2360)
+    task: 6e0b0a2d-2360-4c00-8a00-00000000048a   # the onboarding task's id (a UUID)
+    topics:                               #   its open topics, as the block names them
+      - { id: style, title: How I should sound, session: first-conversation }
 inbound:
   from: principal                         # principal | bullpen | scheduler | task-wake | <contact key>
   channel: cli                            # principal only; default cli
@@ -463,6 +468,7 @@ inbound:
     intent: Collect both sets of comments, then summarize them.   # the intent anchor
     notes:                                #   progress.notes, oldest first
       - { at: "{{time:today-1 16:40}}", note: Priya replied; next, nudge Marcus. }
+    active_skills: [onboarding]           #   optional: progress.activeSkills, restored on the wake
 tool_stubs:
   delegate:
     - match: { agent: ceo-inbox }         # subset match; null = argument absent

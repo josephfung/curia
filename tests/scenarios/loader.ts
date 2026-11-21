@@ -41,6 +41,7 @@ import {
   type SeedDraftRecipient,
   type SeedMailParty,
   type SeedPinned,
+  type SeedOnboarding,
   type SeedPrincipalDraft,
   type SeedPrincipalMailbox,
   type SeedPrincipalThread,
@@ -85,7 +86,9 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
 }
 
 const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'pass_rate', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway', 'gated_tools', 'approval_channels'] as const;
-const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'tasks', 'outreach', 'pinned', 'principal_mailbox'] as const;
+const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'tasks', 'outreach', 'pinned', 'principal_mailbox', 'onboarding'] as const;
+const ONBOARDING_KEYS = ['task', 'topics'] as const;
+const ONBOARDING_TOPIC_KEYS = ['id', 'title', 'session'] as const;
 const PRINCIPAL_MAILBOX_KEYS = ['send_level', 'drafts', 'threads', 'expect_no_band_review'] as const;
 const PRINCIPAL_DRAFT_KEYS = ['id', 'thread', 'to', 'cc', 'subject', 'body', 'modified', 'by_curia'] as const;
 /** `by_curia` values (#2474 PR 2). PR 1's `true` is now `earlier`, and is refused so a stale case is not misread. */
@@ -121,7 +124,7 @@ const AUTONOMY_KEYS = ['score', 'gating'] as const;
 const AUTONOMY_GATINGS = ['band', 'tier'] as const;
 /** Envelope tokens that are not a seeded contact key or a literal address (types.ts: inbound.email.to). */
 const ENVELOPE_TOKENS = ['curia', 'principal'];
-const WAKE_TASK_KEYS = ['id', 'title', 'intent', 'notes', 'tags', 'originator'] as const;
+const WAKE_TASK_KEYS = ['id', 'title', 'intent', 'notes', 'tags', 'originator', 'active_skills'] as const;
 const WAKE_NOTE_KEYS = ['at', 'note'] as const;
 /**
  * A third party's fixture address or domain: under any `.test` name (RFC 6761 reserves the
@@ -632,6 +635,32 @@ function parseTasks(raw: Raw, file: string): SeedTask[] {
   });
 }
 
+/**
+ * `seed.onboarding` (#2360): `task` (a UUID) and `topics`, each `{ id, title, session }`. A
+ * topic id may repeat only across sessions, as the playbook allows.
+ */
+function parseOnboarding(raw: Raw, file: string): SeedOnboarding | undefined {
+  if (raw['onboarding'] === undefined) return undefined;
+  const block = mapping(raw, 'onboarding', file, 'seed');
+  onlyKeys(block, ONBOARDING_KEYS, file, 'seed.onboarding');
+  const taskId = str(block, 'task', file, 'seed.onboarding');
+  if (!UUID.test(taskId)) throw new CaseError(file, `seed.onboarding: 'task' must be a UUID`);
+  if (block['topics'] !== undefined && !Array.isArray(block['topics'])) {
+    throw new CaseError(file, `seed.onboarding: 'topics' must be a list`);
+  }
+  const seen = new Set<string>();
+  const topics = list(block, 'topics', file).map((t, i) => {
+    const where = `seed.onboarding.topics[${i}]`;
+    onlyKeys(t, ONBOARDING_TOPIC_KEYS, file, where);
+    const topic = { topicId: str(t, 'id', file, where), title: str(t, 'title', file, where), sessionId: str(t, 'session', file, where) };
+    const key = `${topic.sessionId}/${topic.topicId}`;
+    if (seen.has(key)) throw new CaseError(file, `${where}: topic '${topic.topicId}' is listed twice in session '${topic.sessionId}'`);
+    seen.add(key);
+    return topic;
+  });
+  return { taskId, topics };
+}
+
 function parseOutreach(raw: Raw, file: string): SeedOutreach[] {
   return list(raw, 'outreach', file).map((o, i) => {
     const where = `seed.outreach[${i}]`;
@@ -884,6 +913,7 @@ function parseWakeTask(raw: unknown, file: string): ScenarioWakeTask {
   }
   // Only the system lineage the inbox heartbeat stamps is modelled (#2475); other lineages come
   // from a live turn, which a wake does not have.
+  const activeSkills = strList(raw, 'active_skills', file, 'inbound.task');
   const originator = optStr(raw, 'originator', file, 'inbound.task');
   if (originator !== undefined && originator !== 'system') {
     throw new CaseError(file, `inbound.task: 'originator' must be 'system' (got '${originator}')`);
@@ -895,6 +925,7 @@ function parseWakeTask(raw: unknown, file: string): ScenarioWakeTask {
     notes,
     ...(tags.length > 0 ? { tags } : {}),
     ...(originator === 'system' ? { originator: 'system' as const } : {}),
+    ...(activeSkills.length > 0 ? { activeSkills } : {}),
   };
 }
 
@@ -1162,6 +1193,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
   onlyKeys(seedRaw, SEED_KEYS, file, 'seed');
   const backlog = parseBacklog(seedRaw, file);
   const pinned = parsePinned(seedRaw, file);
+  const onboarding = parseOnboarding(seedRaw, file);
   const principalMailbox = parsePrincipalMailbox(seedRaw, file);
   const seed = {
     contacts: parseContacts(seedRaw, file),
@@ -1171,6 +1203,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     tasks: parseTasks(seedRaw, file),
     outreach: parseOutreach(seedRaw, file),
     ...(pinned && { pinned }),
+    ...(onboarding && { onboarding }),
     ...(principalMailbox && { principalMailbox }),
     ...(backlog && { backlog }),
   };
@@ -1405,6 +1438,10 @@ function validateEnvelope(scenario: ScenarioCase, file: string): void {
  * stubbed one no specialist runs, so a check or stub scoped to one could never see a call.
  */
 function validateDelegation(scenario: ScenarioCase, file: string): void {
+  // Production gives the onboarding block to the coordinator's live principal turns only (#2360).
+  if (scenario.seed.onboarding && scenario.agent !== COORDINATOR) {
+    throw new CaseError(file, `seed.onboarding reaches the coordinator only; a case for '${scenario.agent}' never sees it`);
+  }
   const real = scenario.delegation === 'real';
   if (real && scenario.agent !== COORDINATOR) {
     // The coordinator is the agent that delegates; a case aimed at a specialist runs it alone.

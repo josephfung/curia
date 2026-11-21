@@ -62,7 +62,9 @@ import { parsePrincipalBacklog, renderBacklogLine } from './prompts/backlog-line
 import { parseAwaitingAnswers, renderAwaitingAnswers } from './prompts/awaiting-answers.js';
 import { parsePriorTurnActions, renderPriorTurnActions } from './prompts/prior-turn-actions.js';
 import { renderSenderFacts, renderSenderLine, UNRESOLVED_SENDER_HEAD } from './prompts/sender-line.js';
-import { isUnauthenticatedPrincipal } from '../contacts/principal.js';
+import { isLivePrincipalTurn, isUnauthenticatedPrincipal } from '../contacts/principal.js';
+import { isLiveTurnGrantActive } from '../autonomy/live-turn-grants.js';
+import type { OnboardingTurnContextSource } from '../onboarding/turn-context.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
 import { createDbUnavailableAgentError, isDbUnavailableError } from '../db/resilience.js';
@@ -403,7 +405,16 @@ export interface AgentConfig {
    * contact row — working memory does not keep tool results.
    */
   conversationEntities?: ConversationEntityState;
+  /**
+   * Onboarding context for live principal turns (#2360). The coordinator only: while the
+   * onboarding task is open, a live principal turn gets the `onboarding` skill and a block
+   * naming the task and its open topics.
+   */
+  onboardingTurnContext?: OnboardingTurnContextSource;
 }
+
+/** The skill a live principal turn activates while onboarding is open (#2360). */
+const ONBOARDING_SKILL_NAME = 'onboarding';
 
 // LLM retry backoff schedule (milliseconds). Three attempts with exponential backoff.
 const RETRY_BACKOFF_MS = [1000, 5000, 15000] as const;
@@ -546,6 +557,58 @@ export class AgentRuntime {
         'Turn activity registry failed to record a task start; continuing without it',
       );
     }
+  }
+
+  /**
+   * The onboarding block for this turn (#2360), or null. Asked only on a live principal turn
+   * that is not task-bound, not a Setup page turn and not tool-allowlisted (an allowlisted
+   * rewrite must not gain tools). Live is judged as the execution layer judges it: a voice
+   * hand-off whose grant lapsed is not live (#2495). The source fails open on its own.
+   */
+  private async onboardingTurnBlock(
+    taskEvent: AgentTaskEvent,
+    taskBound: boolean,
+    setupPageTurn: boolean,
+  ): Promise<string | null> {
+    const source = this.config.onboardingTurnContext;
+    if (!source || !this.config.executionLayer || taskBound || setupPageTurn) return null;
+    const { payload } = taskEvent;
+    if (payload.toolAllowlist !== undefined) return null;
+    const grantLapsed = payload.liveTurnGrantId !== undefined && !isLiveTurnGrantActive(payload.liveTurnGrantId);
+    if (grantLapsed || !isLivePrincipalTurn(payload.liveTurn, payload.metadata as Record<string, unknown> | undefined)) {
+      return null;
+    }
+    return source.forPrincipalTurn(new Date());
+  }
+
+  /**
+   * Activate skills for this turn: add each skill's tools to `workingToolDefs` (skipping names
+   * already there) and return its instruction blocks for the system prompt. A skill the agent
+   * may not activate is logged with `skipMessage` and skipped.
+   */
+  private activateSkillsForTurn(skillNames: string[], workingToolDefs: ToolDefinition[], skipMessage: string): string[] {
+    const { executionLayer, agentId, logger } = this.config;
+    if (!executionLayer) return [];
+    const instructionBlocks: string[] = [];
+    for (const skillName of skillNames) {
+      const resolved = executionLayer.resolveSkillActivationForAgent(skillName, agentId);
+      if ('error' in resolved) {
+        logger.warn({ agentId, skill: skillName, error: resolved.error }, skipMessage);
+        continue;
+      }
+      const currentNames = new Set(workingToolDefs.map((t) => t.name));
+      const newNames = resolved.tools.filter((n) => !currentNames.has(n));
+      if (newNames.length > 0) {
+        workingToolDefs.push(...executionLayer.getToolDefinitions(newNames));
+      }
+      const block = formatActivatedSkillInstructionBlock(
+        resolved.skill,
+        resolved.instructions,
+        { references: resolved.references, assets: resolved.assets },
+      );
+      if (block) instructionBlocks.push(block);
+    }
+    return instructionBlocks;
   }
 
   /**
@@ -901,12 +964,16 @@ export class AgentRuntime {
     // The approvals the principal may be answering (#2333) lead the closing lines.
     const awaiting = renderAwaitingAnswers(parseAwaitingAnswers(taskEvent.payload.awaitingAnswers));
     const backlogLine = backlog ? renderBacklogLine(backlog) : null;
-    const turnGuidance = renderTurnGuidance(
+    const lengthReminder = this.lengthReminder(taskEvent);
+    // `extraLine` is system context decided later in the turn (the onboarding block): it joins
+    // the guidance's closing lines so it sits under the system header, not above it.
+    const renderGuidance = (extraLine: string | null): string | null => renderTurnGuidance(
       turnGuidanceKeys,
-      [awaiting, backlogLine].filter((line): line is string => line !== null).join('\n\n') || null,
-      this.lengthReminder(taskEvent),
+      [awaiting, backlogLine, extraLine].filter((line): line is string => line !== null).join('\n\n') || null,
+      lengthReminder,
       named,
     );
+    const turnGuidance = renderGuidance(null);
     let promptContent = turnGuidance ? `${turnGuidance}\n\n${originalContent}` : originalContent;
     // The Setup page's open step (#2358), for the setup guide. Prompt only, like the guidance.
     // A setup guide turn on web is always the Setup page: the dispatcher sets the step, and a
@@ -915,6 +982,8 @@ export class AgentRuntime {
     const setupStep = readSetupStep(taskEvent.payload.setupStep)
       ?? (agentId === SETUP_GUIDE_AGENT_ID && taskEvent.payload.channelId === 'web' ? NO_SETUP_STEP : null);
     if (setupStep) promptContent = `${setupStepLine(setupStep)}\n\n${promptContent}`;
+    // What heads promptContent so far, so the onboarding block can re-render the guidance in place.
+    const promptHead = (setupStep ? `${setupStepLine(setupStep)}\n\n` : '') + (turnGuidance ? `${turnGuidance}\n\n` : '');
     // A content-block rewrite's account of what its turn already did (#2615). Prompt only, like
     // the turn guidance: working memory stores originalContent, so this tool output is never
     // replayed into later turns. Re-validated: the payload crossed the bus.
@@ -1074,25 +1143,7 @@ export class AgentRuntime {
       });
       if (wakeSkills.length > 0) {
         if (!workingToolDefs) workingToolDefs = [];
-        const instructionBlocks: string[] = [];
-        for (const skillName of wakeSkills) {
-          const resolved = executionLayer.resolveSkillActivationForAgent(skillName, agentId);
-          if ('error' in resolved) {
-            logger.warn({ agentId, skill: skillName, error: resolved.error }, 'Wake active-skill re-load skipped');
-            continue;
-          }
-          const currentNames = new Set(workingToolDefs.map((t) => t.name));
-          const newNames = resolved.tools.filter((n) => !currentNames.has(n));
-          if (newNames.length > 0) {
-            workingToolDefs.push(...executionLayer.getToolDefinitions(newNames));
-          }
-          const block = formatActivatedSkillInstructionBlock(
-            resolved.skill,
-            resolved.instructions,
-            { references: resolved.references, assets: resolved.assets },
-          );
-          if (block) instructionBlocks.push(block);
-        }
+        const instructionBlocks = this.activateSkillsForTurn(wakeSkills, workingToolDefs, 'Wake active-skill re-load skipped');
         for (const block of instructionBlocks) {
           effectiveSystemPrompt += `\n\n${block}`;
         }
@@ -1121,6 +1172,36 @@ export class AgentRuntime {
           { agentId, taskId: boundTaskCtx.taskId, activeSkills: wakeSkills },
           'Re-loaded task-active skills on wake',
         );
+      }
+    }
+
+    // Onboarding on a live principal turn (#2360, design §6): an ordinary principal message
+    // carries no task id, so while the onboarding task is open the turn gets the `onboarding`
+    // skill plus a short block naming the task. Task-bound turns restore the skill above
+    // instead. The block is prompt-only, like the turn guidance.
+    const onboardingBlock = await this.onboardingTurnBlock(taskEvent, boundTaskCtx !== null, setupStep !== null);
+    if (onboardingBlock) {
+      // The block points at the skill's tools, so it goes in only when the skill is on this turn:
+      // pinned, or activated here (its instructions block comes back only on success).
+      let skillOn = pinnedSkillNames.has(ONBOARDING_SKILL_NAME);
+      if (!skillOn) {
+        if (!workingToolDefs) workingToolDefs = [];
+        const blocks = this.activateSkillsForTurn([ONBOARDING_SKILL_NAME], workingToolDefs, 'Onboarding skill activation skipped');
+        for (const block of blocks) effectiveSystemPrompt += `\n\n${block}`;
+        skillOn = blocks.length > 0;
+      }
+      if (skillOn) {
+        // Inside the system-labelled turn guidance, never above it: a block ahead of the header
+        // reads as the sender's own text and the model loses track of the real message (#2360).
+        const rendered = renderGuidance(onboardingBlock);
+        if (rendered && promptContent.startsWith(promptHead)) {
+          const head = (setupStep ? `${setupStepLine(setupStep)}\n\n` : '') + `${rendered}\n\n`;
+          promptContent = head + promptContent.slice(promptHead.length);
+        } else {
+          logger.warn({ agentId }, 'Onboarding turn block left out: the prompt head was not as expected');
+        }
+      } else {
+        logger.warn({ agentId }, 'Onboarding turn block left out: the onboarding skill could not be activated');
       }
     }
 

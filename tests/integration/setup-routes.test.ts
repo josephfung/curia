@@ -931,7 +931,7 @@ describeIf('/api/setup/* routes', () => {
       unlock = await lockSetupSingletons(DATABASE_URL!);
       // Keep whatever row a working database has, and put it back afterwards.
       savedRow = (await pool.query('SELECT * FROM setup_state WHERE id = 1')).rows[0];
-      // Start onboarding rotates the shared web thread; put a working database's back after.
+      // A test writes the shared web thread; put a working database's back after.
       savedThread = (await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1')).rows[0]?.conversation_id;
       app = Fastify();
       await app.register(rateLimit, { max: 1000, timeWindow: '1 minute', allowList: () => true });
@@ -1079,37 +1079,22 @@ describeIf('/api/setup/* routes', () => {
       expect(refused.json().missing).toEqual(['email']);
       expect((await readSetupState(pool)).phase).toBe('in_progress');
 
-      const threadBefore = (await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1')).rows[0]?.conversation_id;
+      await pool.query(
+        `INSERT INTO web_thread (id, conversation_id) VALUES (1, 'setup-chat')
+         ON CONFLICT (id) DO UPDATE SET conversation_id = EXCLUDED.conversation_id`,
+      );
       checklist = { setupFor: null, tasks: [], setupComplete: true, missing: [] };
       const ok = await app.inject({ method: 'POST', url: '/api/setup/complete', headers: AUTH_HEADER });
       expect(ok.statusCode).toBe(200);
       expect((await readSetupState(pool)).phase).toBe('complete');
-      // The principal starts on a new thread (#2358): the pointer moved off the Setup chat.
+      // Finishing Setup leaves the thread alone (#2360): starting onboarding rotates it.
       const after = await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1');
-      expect(after.rows[0]?.conversation_id).toBeTruthy();
-      expect(after.rows[0]?.conversation_id).not.toBe(threadBefore);
+      expect(after.rows[0]?.conversation_id).toBe('setup-chat');
     });
 
-    it('a repeated Start onboarding leaves the principal on their thread', async () => {
+    it('finishing Setup twice is idempotent', async () => {
       await pool.query(`INSERT INTO setup_state (id, phase) VALUES (1, 'in_progress')`);
-      checklist = { setupFor: null, tasks: [], setupComplete: true, missing: [] };
-      const first = await app.inject({ method: 'POST', url: '/api/setup/complete', headers: AUTH_HEADER });
-      expect(first.statusCode).toBe(200);
-      const thread = (await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1')).rows[0]?.conversation_id;
-      const again = await app.inject({ method: 'POST', url: '/api/setup/complete', headers: AUTH_HEADER });
-      expect(again.statusCode).toBe(200);
-      expect((await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1')).rows[0]?.conversation_id).toBe(thread);
-    });
-
-    it('two Start onboarding requests at once rotate the thread once', async () => {
-      await pool.query(`INSERT INTO setup_state (id, phase) VALUES (1, 'in_progress')`);
-      const results = await Promise.all([
-        completeSetup(pool, logger, { newId: () => 'race-a' }),
-        completeSetup(pool, logger, { newId: () => 'race-b' }),
-      ]);
-      expect(results.filter((r) => r.rotated)).toHaveLength(1);
-      const thread = (await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1')).rows[0]?.conversation_id;
-      expect(['race-a', 'race-b']).toContain(thread);
+      await Promise.all([completeSetup(pool), completeSetup(pool)]);
       expect((await readSetupState(pool)).phase).toBe('complete');
     });
 

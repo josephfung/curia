@@ -56,6 +56,9 @@ describe('bypassesBearerAuth', () => {
     '/api/grant-recommendations',
     '/api/identity/me',
     '/api/setup/status',
+    '/api/onboarding/status',
+    '/api/onboarding/start',
+    '/api/onboarding/triage-hold',
     '/api/secret-capture/:token',
     '/api/mailbox-signin/start/:token',
     '/api/webhooks/telnyx/sms',
@@ -75,6 +78,7 @@ describe('bypassesBearerAuth', () => {
     '/api/tasks-summary',
     '/api/contacts.csv',
     '/api/mailbox-signinx',
+    '/api/onboarding-export',
     '/*',
   ])('enforces bearer auth on %s', (url) => {
     expect(bypassesBearerAuth(url)).toBe(false);
