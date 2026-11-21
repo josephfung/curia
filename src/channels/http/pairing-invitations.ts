@@ -176,6 +176,30 @@ export async function readCurrentInvitation(pool: PairingQueryable): Promise<Inv
 }
 
 /**
+ * The current invitation's timing, for a watcher that follows up on an unused or expired
+ * link: when it was minted, when it expires and whether (and when) it was redeemed. Kept
+ * apart from readCurrentInvitation so the route's response shape is unchanged.
+ */
+export async function readCurrentInvitationTiming(
+  pool: PairingQueryable,
+): Promise<{ createdAt: Date; expiresAt: Date; redeemed: boolean; redeemedAt: Date | null } | null> {
+  const result = await pool.query(
+    `SELECT created_at, expires_at, redeemed_at, (redeemed_at IS NOT NULL) AS redeemed
+     FROM pairing_invitations
+     WHERE superseded_at IS NULL
+     LIMIT 1`,
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    createdAt: new Date(asIso(row['created_at'], 'created_at')),
+    expiresAt: new Date(asIso(row['expires_at'], 'expires_at')),
+    redeemed: row['redeemed'] === true,
+    redeemedAt: row['redeemed_at'] == null ? null : new Date(asIso(row['redeemed_at'], 'redeemed_at')),
+  };
+}
+
+/**
  * Tell every signed-in device that an invitation was used. The phone that
  * just paired is the subject, so its own banner leaves the notice out.
  */
