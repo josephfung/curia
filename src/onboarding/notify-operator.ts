@@ -3,11 +3,13 @@
 import type { TaskRepo } from '../db/task-repo.js';
 import type { Logger } from '../logger.js';
 
-export type OperatorEvent =
-  | 'greeting_unanswered'
-  | 'invitation_expired'
-  | 'web_search_failed'
-  | 'mailbox_signin_blocked';
+export const OPERATOR_EVENTS = [
+  'greeting_unanswered',
+  'invitation_expired',
+  'web_search_failed',
+  'mailbox_signin_blocked',
+] as const;
+export type OperatorEvent = (typeof OPERATOR_EVENTS)[number];
 
 export type NotifyOperatorDeps = {
   taskRepo: Pick<TaskRepo, 'updateTask'>;

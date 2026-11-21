@@ -48,13 +48,25 @@ describe('onboarding state', () => {
     store.data.set('onboarding/state', '{not json');
     expect(await readOnboardingState(store, logger)).toBeNull();
   });
+
+  it.each([
+    { route: 'carrier-pigeon' },
+    { followUpsSent: 'two' },
+    { operatorNotified: ['made_up'] },
+    { taskId: 5 },
+  ])('returns null for a wrongly shaped state %j', async (patch) => {
+    const store = fakeStore();
+    store.data.set('onboarding/state', JSON.stringify({ ...sample, ...patch }));
+    expect(await readOnboardingState(store, logger)).toBeNull();
+  });
 });
 
 describe('findOpenOnboardingTask', () => {
   it('returns the open parent and ignores subtasks and terminal tasks', async () => {
     const rows = [
-      { id: 'sub', parentTaskId: 'p', status: 'open' },
-      { id: 'parent', status: 'in_progress' },
+      { id: 'sub', parentTaskId: 'p', status: 'open', createdBy: 'onboarding' },
+      { id: 'spoofed', status: 'open', createdBy: 'coordinator' },
+      { id: 'parent', status: 'in_progress', createdBy: 'onboarding' },
     ] as unknown as TaskRow[];
     const listTasks = vi.fn(async () => rows as never);
     const found = await findOpenOnboardingTask({ listTasks });

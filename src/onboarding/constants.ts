@@ -14,3 +14,6 @@ export const SESSION_NUDGE_LEAD_MINUTES = 15;
 export const WATCHER_INTERVAL_MINUTES = 15;
 /** Autonomy bands offered during onboarding. */
 export const ONBOARDING_BANDS = [65, 75, 85] as const;
+
+/** created_by of the parent onboarding task. A tag alone is spoofable by the model; this is not. */
+export const ONBOARDING_CREATED_BY = 'onboarding';
