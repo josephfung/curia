@@ -585,15 +585,19 @@ livekit_next_steps_state() {
 # routes /rtc* to it; a proxy is told to). --dev's devkey/secret are public, so
 # anyone could then mint LiveKit tokens: stop rather than install that. An
 # empty command is the compose default, --dev. Reads TOPOLOGY and PROXY_ORIGIN.
-# On any topology, a --config command needs LIVEKIT_KEYS (the shipped configs
-# carry no keys): empty, e.g. set empty in the shell, LiveKit would crash-loop.
+# On any topology, the installer's own --config commands (livekit_command_for,
+# the shipped keyless configs) need LIVEKIT_KEYS: empty, e.g. set empty in the
+# shell, LiveKit would crash-loop. An operator's own --config may keep its keys
+# in that file, which the installer can't read: fresh_install then seeds the
+# URL only and says where to enter the keys.
 # The command itself is never printed: it may carry --keys.
 require_livekit_real_keys() {
   local env="$1" cmd
   cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
-  if [[ "$cmd" == *--config* && "$cmd" != *--keys* && -z "$(compose_var "$env" LIVEKIT_KEYS)" ]]; then
+  if [[ "$cmd" == "$(livekit_command_for local)" || "$cmd" == "$(livekit_command_for public)" ]] \
+    && [[ -z "$(compose_var "$env" LIVEKIT_KEYS)" ]]; then
     echo "" >&2
-    error "LIVEKIT_COMMAND runs LiveKit from a config file, but LIVEKIT_KEYS is empty, so LiveKit would not start."
+    error "LIVEKIT_COMMAND runs LiveKit from the shipped config, which has no keys, but LIVEKIT_KEYS is empty."
     hint "Set LIVEKIT_KEYS=\"<key>: <secret>\", or unset it in your shell to let the installer generate one."
     hint "Then re-run install.sh. Postgres was not started."
     exit 1

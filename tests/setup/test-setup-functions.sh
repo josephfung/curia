@@ -1589,6 +1589,10 @@ _assert_rkk local  "${_RK_LOCAL}LIVEKIT_KEYS=\"k: s\"\n" -          ok      "loc
 _assert_rkk local  "$_RK_LOCAL"                     'k: s'         ok      "local, --config, keys in the shell"
 _assert_rkk local  'LIVEKIT_COMMAND=--config /x.yaml --keys "k: s"\n' '' ok "--config with --keys in the command"
 _assert_rkk local  'LIVEKIT_COMMAND=--dev\n'        ''             ok      "local --dev, keys empty (devkey)"
+# An operator's own config may carry its keys in a file the installer can't read:
+# only the installer's own (keyless, shipped) commands need LIVEKIT_KEYS.
+_assert_rkk local  'LIVEKIT_COMMAND=--config /etc/my-livekit.yaml\n' '' ok "local, operator --config, keys empty"
+_assert_rkk domain 'LIVEKIT_COMMAND=--config /etc/my-livekit.yaml\n' '' ok "domain, operator --config, keys empty"
 _rk_out="$( unset LIVEKIT_COMMAND; export LIVEKIT_KEYS=""; TOPOLOGY=local; PROXY_ORIGIN=""; printf '%b' "$_RK_LOCAL" > "$_rk_env"; require_livekit_real_keys "$_rk_env" 2>&1 )" || true
 _assert_var "config keys: names LIVEKIT_KEYS" "$(_has "$_rk_out" 'LIVEKIT_KEYS is empty')" yes
 _assert_var "config keys: Postgres not started" "$(_has "$_rk_out" 'Postgres was not started')" yes
@@ -1749,12 +1753,21 @@ _fi_rc=0; _fi_run local "" '' || _fi_rc=$?
 unset _FI_SHELL_CMD _FI_SHELL_KEYS_EMPTY
 _assert_var "local + operator --dev: continues"     "$_fi_rc" "0"
 _assert_var "local + --dev: seeds devkey"           "$(_seed_env SEED_LIVEKIT_API_KEY)" "devkey"
-# A --config command with LIVEKIT_KEYS set empty in the shell: stop before Postgres.
-_FI_SHELL_CMD="--config /mine.yaml"; _FI_SHELL_KEYS_EMPTY=1
+# The installer's own --config command with LIVEKIT_KEYS set empty in the shell:
+# the shipped config has no keys, so stop before Postgres.
+_FI_SHELL_CMD="$(livekit_command_for local)"; _FI_SHELL_KEYS_EMPTY=1
 _fi_rc=0; _fi_run local "" '' || _fi_rc=$?
 unset _FI_SHELL_CMD _FI_SHELL_KEYS_EMPTY
-_assert_var "local + --config, keys empty: stops"   "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
-_assert_var "local + --config, keys empty: Postgres never started" "$(grep -c 'up -d postgres' "$_fi_calls" | tr -d ' ')" "0"
+_assert_var "local + installer --config, keys empty: stops"   "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+_assert_var "local + installer --config, keys empty: Postgres never started" "$(grep -c 'up -d postgres' "$_fi_calls" | tr -d ' ')" "0"
+# An operator's own --config, keys empty: their file may hold the keys. URL only, with a warning.
+_FI_SHELL_CMD="--config /etc/my-livekit.yaml"; _FI_SHELL_KEYS_EMPTY=1
+_fi_rc=0; _fi_run local "" '' || _fi_rc=$?
+unset _FI_SHELL_CMD _FI_SHELL_KEYS_EMPTY
+_assert_var "local + operator --config, keys empty: continues" "$_fi_rc" "0"
+_assert_var "local + operator --config: URL seeded"   "$(_seed_env SEED_LIVEKIT_URL)" "ws://localhost:7880"
+_assert_var "local + operator --config: no key seeded" "$(_has "$(_seed_line)" 'SEED_LIVEKIT_API_KEY')" no
+_assert_var "local + operator --config: warns where to enter them" "$(_has "$_fi_out" 'Settings → Channels → Voice')" yes
 
 # An older release's compose file (no LiveKit config mount, or only a comment
 # naming it): voice stays off rather than crash-looping LiveKit.
