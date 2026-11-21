@@ -36,6 +36,32 @@ describe('probeLiveKit', () => {
     expect(await probeLiveKit({ getSecret, managementUrl, logger: createSilentLogger(), listRooms })).toBe('rejected');
   });
 
+  it('rejected on 403', async () => {
+    const listRooms = vi.fn().mockRejectedValue(Object.assign(new Error('forbidden'), { status: 403 }));
+    expect(await probeLiveKit({ getSecret, managementUrl, logger: createSilentLogger(), listRooms })).toBe('rejected');
+  });
+
+  it('unreachable on a 500, logged at warn', async () => {
+    const logger = createSilentLogger();
+    const warn = vi.spyOn(logger, 'warn');
+    const debug = vi.spyOn(logger, 'debug');
+    const listRooms = vi.fn().mockRejectedValue(Object.assign(new Error('internal error'), { status: 500 }));
+    expect(await probeLiveKit({ getSecret, managementUrl, logger, listRooms })).toBe('unreachable');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toMatchObject({ status: 500, managementUrl });
+    expect(debug).not.toHaveBeenCalled();
+  });
+
+  it('a connection error stays at debug', async () => {
+    const logger = createSilentLogger();
+    const warn = vi.spyOn(logger, 'warn');
+    const debug = vi.spyOn(logger, 'debug');
+    const listRooms = vi.fn().mockRejectedValue(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }));
+    expect(await probeLiveKit({ getSecret, managementUrl, logger, listRooms })).toBe('unreachable');
+    expect(debug).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('unreachable on a connection error', async () => {
     const listRooms = vi.fn().mockRejectedValue(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }));
     expect(await probeLiveKit({ getSecret, managementUrl, logger: createSilentLogger(), listRooms })).toBe('unreachable');

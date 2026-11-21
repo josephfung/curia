@@ -24,9 +24,19 @@ export async function probeLiveKit(deps: {
     await listRooms({ apiKey, apiSecret, livekitManagementUrl: deps.managementUrl }, PROBE_TIMEOUT_SEC);
     return 'ok';
   } catch (err) {
-    deps.logger.debug({ err, managementUrl: deps.managementUrl }, 'setup: LiveKit probe failed');
     // livekit-server-sdk's ServerError carries the HTTP status; a refused connection has none.
     const status = typeof err === 'object' && err !== null && 'status' in err ? (err as { status?: unknown }).status : undefined;
-    return status === 401 || status === 403 ? 'rejected' : 'unreachable';
+    if (status === 401 || status === 403) {
+      deps.logger.debug({ err, status, managementUrl: deps.managementUrl }, 'setup: LiveKit rejected the saved keys');
+      return 'rejected';
+    }
+    if (typeof status === 'number') {
+      // LiveKit answered, but with an error: not the expected "not running" case, so
+      // make it visible. Setup still reports it as unreachable.
+      deps.logger.warn({ err, status, managementUrl: deps.managementUrl }, 'setup: LiveKit probe got an error response');
+    } else {
+      deps.logger.debug({ err, managementUrl: deps.managementUrl }, 'setup: LiveKit probe failed');
+    }
+    return 'unreachable';
   }
 }
