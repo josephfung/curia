@@ -86,6 +86,10 @@ export function StepFooter(props: {
   /** True: the primary button submits the step's form. Otherwise it calls onPrimary. */
   submit?: boolean;
   onPrimary?: () => void;
+  /** A second, plain button beside the primary (e.g. "Not right now"). */
+  secondary?: string;
+  secondaryDisabled?: boolean;
+  onSecondary?: () => void;
   onHelp?: () => void;
 }): JSX.Element {
   return (
@@ -98,6 +102,11 @@ export function StepFooter(props: {
           onClick={props.submit ? undefined : props.onPrimary}
         >
           {props.primary}
+        </button>
+      )}
+      {props.secondary && (
+        <button type="button" className="btn" disabled={props.secondaryDisabled} onClick={props.onSecondary}>
+          {props.secondary}
         </button>
       )}
       {props.onHelp && (

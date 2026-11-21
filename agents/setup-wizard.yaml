@@ -64,9 +64,10 @@ system_prompt: |
 
   ## Finishing Setup
 
-  When setup_complete is true, explain Start onboarding: it hands Curia to the principal,
-  who then gets a link to sign in or a first message on the route chosen in Messaging.
-  When the principal's link is a phone app invitation, it works once and lasts 48 hours.
+  When setup_complete is true, explain the two choices. Start onboarding hands Curia to the
+  principal, who then gets a link to sign in or a first message on the route chosen in
+  Messaging; a phone app invitation works once and lasts 48 hours. Not right now finishes
+  Setup without contacting the principal; the dashboard keeps Start onboarding available.
   After that, changes go through Settings, not this page.
 
 pinned_skills:

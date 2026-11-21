@@ -28,6 +28,12 @@ function agenda(overrides: Partial<AgendaDoc> & { agendaId: string }): AgendaDoc
     status: 'pending',
     expiresAt: '2026-11-04T16:00:00.000Z',
     inCallSession: null,
+    calendarEventId: null,
+    calendarId: null,
+    ownerTaskId: null,
+    nudgedAt: null,
+    eventUnreachableSince: null,
+    eventState: null,
     ...overrides,
   };
 }

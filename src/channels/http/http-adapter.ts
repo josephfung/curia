@@ -68,6 +68,7 @@ import { secretCaptureRoutes } from './routes/secret-capture.js';
 import { mailboxSignInRoutes, type MailboxSignInRouteOptions } from './routes/mailbox-signin.js';
 import { googleWorkspaceSignInRoutes } from './routes/google-workspace-signin.js';
 import { setupRoutes } from './routes/setup.js';
+import { onboardingRoutes } from './routes/onboarding.js';
 import { smsWebhookRoutes } from '../sms/webhook-route.js';
 import { SmsWebhookBridge } from '../sms/webhook-bridge.js';
 import { voiceSessionRoutes } from '../voice/session-routes.js';
@@ -199,6 +200,8 @@ export interface HttpAdapterConfig {
   /** The health service's process start (GET /api/health started_at). A sign-in callback that
    *  schedules a restart puts it in the done page's URL, so the page can tell the new process. */
   processStartedAt?: string;
+  /** Backs /api/onboarding/* (#2360). Mounted only with the bootstrap secret. */
+  onboardingService?: import('../../onboarding/onboarding-service.js').OnboardingService;
   /** The Setup checklist (#2358), for GET /api/setup/checklist and POST /api/setup/complete. */
   setupChecklist?: () => Promise<import('../../setup/checklist.js').SetupChecklist>;
   /**
@@ -547,6 +550,17 @@ export class HttpAdapter implements Channel {
         contactService: this.config.contactService,
         entityMemory: this.config.entityMemory,
         setupChecklist: this.config.setupChecklist,
+      });
+    }
+
+    // Onboarding routes (#2360): status, start and the triage hold release, for the console.
+    if (webAppBootstrapSecret && this.config.onboardingService) {
+      await this.app.register(onboardingRoutes, {
+        webAppBootstrapSecret,
+        sessions,
+        bus,
+        logger,
+        onboarding: this.config.onboardingService,
       });
     }
 

@@ -19,7 +19,7 @@
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { EventBus } from '../../../bus/bus.js';
-import { createOperatorSession } from '../../../bus/events.js';
+import { createOperatorSession, createPairingInvitationRedeemed } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import { isUuid } from '../../../util/uuid.js';
 import { PAIRING_LIMIT_MESSAGE } from '../../../phone/phone-docs.js';
@@ -297,6 +297,15 @@ export async function pairingRoutes(
         // The pairing is audited and the Devices list shows the session, so a
         // missing banner is not worth failing a sign-in that already happened.
         logger.error({ err, ...logRef }, 'invitation pairing notice was not recorded');
+      }
+      try {
+        // #2360: wakes onboarding to send the greeting. The sign-in already happened, so a failed
+        // publish is logged, not surfaced. The onboarding watcher is the backstop: with no greeting
+        // recorded 48 hours after redemption it wakes the onboarding task once to send it, then
+        // tells the operator (greeting_unanswered).
+        await bus.publish('system', createPairingInvitationRedeemed({ invitationId: redeemed.id, deviceName: name }));
+      } catch (err) {
+        logger.error({ err, ...logRef }, 'pairing.invitation_redeemed could not be published');
       }
       logger.info({ ...logRef, sessionId: issued.id }, 'pairing invitation redeemed');
     }

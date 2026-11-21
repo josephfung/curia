@@ -139,7 +139,15 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
     /** The agents a stub's or check's `agent` names: undefined is the case's agent for a check, every run agent for a stub. */
     const agentsFor = (agent: string | undefined, forStub: boolean): string[] =>
       agent === undefined ? (forStub ? runAgents : [c.agent]) : agent === ANY_AGENT ? runAgents : [agent];
-    const reachable = (tool: string, agents: string[]): boolean => agents.some(a => byAgent.get(a)?.has(tool));
+    // A seed.onboarding case's principal turn is offered the onboarding skill's tools (#2360).
+    const reachable = (tool: string, agents: string[]): boolean => agents.some(a =>
+      byAgent.get(a)?.has(tool) || (a === COORDINATOR && c.seed.onboarding !== undefined && harness.onboardingTools.has(tool)));
+    if (c.seed.onboarding && harness.onboardingTools.size === 0) {
+      problems.push(`${c.name}: seeds onboarding, but this stack did not load the 'onboarding' skill`);
+    }
+    for (const skill of c.inbound.task?.activeSkills ?? []) {
+      if (!harness.stack.skillRegistry.get(skill)) problems.push(`${c.name}: inbound.task active_skills names '${skill}', which this stack did not load`);
+    }
     const unreachableBy = (agents: string[]): string => (agents.length === 1
       ? `${agents[0] === COORDINATOR ? 'the coordinator' : `'${agents[0]}'`} is neither offered nor can activate`
       : 'no agent in the run is offered or can activate');

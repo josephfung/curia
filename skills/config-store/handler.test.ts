@@ -768,6 +768,14 @@ describe('ConfigStoreHandler — code-owned ceo_inbox state and the triage caden
     expect(em.storeFact).not.toHaveBeenCalled();
   });
 
+  it.each(['state', 'triage_hold', 'anything'])('refuses every onboarding key (%s)', async (key) => {
+    const em = makeEntityMemory();
+    const r = await store(key, '{"held":true}', em, 'onboarding');
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain('state Curia keeps itself');
+    expect(em.storeFact).not.toHaveBeenCalled();
+  });
+
   it('leaves the same key names in other namespaces alone', async () => {
     expect((await store('triage.notes', 'x', makeEntityMemory(), 'my_notes')).success).toBe(true);
   });

@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { SCENARIO_PRINCIPAL } from './principal-fixture.js';
 import type { PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
 import type { PinnedContextReader } from '../../src/agents/pinned-context.js';
+import { formatOnboardingTurnBlock, type OnboardingTurnContextSource } from '../../src/onboarding/turn-context.js';
 import { encodeResumeToken } from '../../src/agents/resume-token.js';
 import { markdownToHtml } from '../../src/format/markdown-to-html.js';
 import { buildReplyQuote } from '../../src/skills/_shared/reply-quote.js';
@@ -47,7 +48,7 @@ import type { PrincipalSendEntry } from '../../src/skills/principal-send/send-le
 import type { SendLevel } from '../../src/skills/principal-send/send-level.js';
 import type { DraftParticipant, MailboxDraft } from '../shared/tool-state.js';
 import type {
-  GatewayOutcome, ScenarioCase, SeedContact, SeedMailParty, SeedOutreach, SeedPinned, SeedTask, SeedThreadMessage,
+  GatewayOutcome, ScenarioCase, SeedContact, SeedMailParty, SeedOnboarding, SeedOutreach, SeedPinned, SeedTask, SeedThreadMessage,
 } from './types.js';
 
 /**
@@ -92,6 +93,8 @@ export class SeedScope {
   backlog: PrincipalBacklogCounts | undefined;
   /** The run's pinned-context documents and settings (`seed.pinned`, #2339); none when unset. */
   pinned: SeedPinned | undefined;
+  /** The onboarding under way on the run's principal turns (`seed.onboarding`, #2360); none when unset. */
+  onboarding: SeedOnboarding | undefined;
   /** How many deliveries the run had when its `inbound.then` turn began (#2333); unset without one. */
   thenStartsAt: number | undefined;
   /**
@@ -200,6 +203,7 @@ export class SeedScope {
     this.principalWroteTo.clear();
     this.backlog = undefined;
     this.pinned = undefined;
+    this.onboarding = undefined;
     this.thenStartsAt = undefined;
     this.rootConversation = undefined;
     this.throughGateway = false;
@@ -754,6 +758,21 @@ export function scopedPinnedContextReader(real: PinnedContextReader, currentScop
   };
 }
 
+/**
+ * The coordinator's onboarding turn context (#2360): the calling run's `seed.onboarding`, in
+ * production's words (formatOnboardingTurnBlock), never an onboarding task in the database
+ * (test mode has no task repo). Null outside every run and for a run that seeds none. The
+ * runtime asks only on a live principal turn, as in production.
+ */
+export function scopedOnboardingTurnContext(currentScope: CurrentScope): OnboardingTurnContextSource {
+  return {
+    async forPrincipalTurn() {
+      const onboarding = currentScope()?.onboarding;
+      return onboarding ? formatOnboardingTurnBlock(onboarding.taskId, onboarding.topics.map((t) => t.topicId)) : null;
+    },
+  };
+}
+
 export function scopedBullpen(real: BullpenService, currentScope: CurrentScope): BullpenService {
   return Object.assign(Object.create(real) as BullpenService, {
     getPendingThreadsForAgent: async (agentId: string, windowMinutes: number) => {
@@ -807,6 +826,7 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
 
   scope.backlog = scenario.seed.backlog;
   scope.pinned = scenario.seed.pinned;
+  scope.onboarding = scenario.seed.onboarding;
   // The principal's own mailbox (#2474): in memory only, nothing to clean up.
   const mailbox = scenario.seed.principalMailbox;
   scope.sendLevel = mailbox?.sendLevel;

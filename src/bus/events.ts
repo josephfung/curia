@@ -1100,6 +1100,13 @@ interface PrincipalMailboxConnectedPayload {
   mailboxId: string;
 }
 
+// PairingInvitationRedeemedPayload — a phone redeemed the onboarding invitation link (#2360). Carries
+// the invitation id and the device's display name — NEVER the token or the session cookie.
+interface PairingInvitationRedeemedPayload {
+  invitationId: string;
+  deviceName: string;
+}
+
 // MailboxSignInFinishedPayload — a hosted sign-in ended, whatever the outcome (#2361). A resume
 // subscriber turns it into a synthetic agent.task so the agent that asked for the sign-in can
 // continue. Carries the outcome and routing context — NEVER a grant id or an address. The origin
@@ -2088,6 +2095,14 @@ export interface PrincipalMailboxConnectedEvent extends BaseEvent {
   payload: PrincipalMailboxConnectedPayload;
 }
 
+// PairingInvitationRedeemedEvent — published by the pairing route (trusted system infra) after a phone
+// signs in with an invitation link (#2360). The onboarding subscriber wakes the program on it.
+export interface PairingInvitationRedeemedEvent extends BaseEvent {
+  type: 'pairing.invitation_redeemed';
+  sourceLayer: 'system';
+  payload: PairingInvitationRedeemedPayload;
+}
+
 // MailboxSignInFinishedEvent — published by the sign-in callback (trusted system infra) when a
 // hosted sign-in ends (#2361). parentEventId traces to the originating agent.task. Never carries
 // a grant id or an address.
@@ -2416,6 +2431,7 @@ export type BusEvent =
   | SecretChangedEvent       // #2453: console set/delete of a vault secret (name only, never value)
   | PrincipalMailboxChangedEvent // #2475: console add/relabel/default/grant/remove of a principal mailbox
   | PrincipalMailboxConnectedEvent // #2361: a mailbox connected through Hosted Auth (id only)
+  | PairingInvitationRedeemedEvent // #2360: a phone redeemed the onboarding invitation link
   | MailboxSignInFinishedEvent // #2361: a hosted sign-in ended (outcome + routing, never a grant id)
   | SecretCapturedEvent      // #972: one-time capture link redeemed (name/routing only, never value)
   | CardUseRequestedEvent    // #1358: saved-card use requested (brand/last4/site/amount, never the number)
@@ -3100,6 +3116,20 @@ export function createPrincipalMailboxConnected(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'principal_mailbox.connected',
+    sourceLayer: 'system',
+    payload,
+    parentEventId,
+  };
+}
+
+export function createPairingInvitationRedeemed(
+  payload: PairingInvitationRedeemedPayload,
+  parentEventId?: string,
+): PairingInvitationRedeemedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'pairing.invitation_redeemed',
     sourceLayer: 'system',
     payload,
     parentEventId,

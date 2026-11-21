@@ -185,7 +185,7 @@ export default function SetupPage(): JSX.Element {
       case 'apply':
         return <ApplyStep checklist={checklist} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'start':
-        return <StartStep checklist={checklist} principal={principal} onRefresh={refresh} onHelp={help} />;
+        return <StartStep checklist={checklist} principal={principal} setupFor={fields.setupFor} route={fields.messagingRoute} onRefresh={refresh} onHelp={help} />;
       case 'working_style':
         return <WorkingStyleStep key="working_style" task={taskFor('working_style')} principal={principal} onSaved={refresh} onContinue={goNext} onHelp={help} />;
       case 'web_research':

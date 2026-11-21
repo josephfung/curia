@@ -7,7 +7,7 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
 export interface SessionInfo {
   valid: boolean;
   configured: boolean;
-  /** True on a new install until Start onboarding (#2358). Null when the server didn't say. */
+  /** True on a new install until Setup is finished (#2358). Null when the server didn't say. */
   inSetup: boolean | null;
 }
 

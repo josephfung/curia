@@ -1,22 +1,24 @@
 # 18 — Onboarding
 
 **Date:** 2026-06-01
-**Status:** Shipped (v0.32; Layer 2 expanded in v0.37; Layer 3 rewritten in v0.37)
+**Status:** Shipped (v0.32; Layer 2 expanded in v0.37; Layer 3 rewritten in v0.37; Layer 4 added in #2360)
 
 ## Goal
 
 Take a new contributor from `git clone` to a working, personalized Curia
-instance in one path with no detours. The onboarding flow spans three layers:
+instance in one path with no detours. The onboarding flow spans four layers:
 
 1. **Host bootstrap** — a single `pnpm run setup` command brings up Postgres,
    applies migrations, and starts the stack.
 2. **Setup page** (`/setup`, #2358) — the operator's checklist: who Curia is for,
-   Curia's name, its channels, Apply & restart, then Start onboarding.
+   Curia's name, its channels, Apply & restart, then Start onboarding or Not right now.
 3. **In-chat specialist** (`setup-wizard` agent) — an outcome-backward concierge
    that runs on first chat and whenever the principal asks for help setting up
    integrations; catalog-aware and deferral-aware.
+4. **Onboarding** (#2360) — Curia does its homework on the principal, greets them,
+   and learns how they like to work in a first conversation by chat or voice.
 
-The three layers are independent (each can be re-entered or skipped), but
+The layers are independent (each can be re-entered or skipped), but
 when run in sequence they constitute the end-to-end first-run experience.
 
 ---
@@ -91,8 +93,9 @@ is absent — that signals a previous run was interrupted partway.
 ## Layer 2 — The Setup page at `/setup` (#2358)
 
 A React route in the console app (`apps/console/src/pages/setup/`) that replaced the
-six-step form wizard. It is the console's landing page on a new install until Start
-onboarding, and an install that predates it never sees it. Design and mockup:
+six-step form wizard. It is the console's landing page on a new install until Setup is
+finished (Start onboarding or Not right now), and an install that predates it never sees
+it. Design and mockup:
 `docs/wip/2026-10-29-onboarding-journey-design.md` (Phase 1) and
 `docs/wip/2026-10-29-onboarding-journey-design/setup-page-mockup.html`.
 
@@ -102,8 +105,8 @@ onboarding, and an install that predates it never sees it. Design and mockup:
   topbar), behind the same auth guard as the rest of the console. `?step=<id>` opens one
   step directly; without it the page opens on the first required step that isn't done.
 - The first-load gate is `setupRedirect` (`pages/setup/setup-steps.ts`), fed by
-  `GET /api/identity`'s `inSetup` (true from a new install's first load until Start
-  onboarding; migration 130 marked older installs complete). While Setup runs, every page
+  `GET /api/identity`'s `inSetup` (true from a new install's first load until Setup is
+  finished; migration 130 marked older installs complete). While Setup runs, every page
   but the Setup page and the Settings pages its steps link to (`/settings`, `/system`,
   `/channels`, `/tools`, `/agents`, `/mcp-skills`, `/secrets`, `/contacts`) redirects to
   `/setup`; outside Setup, `/setup` redirects home. A server that predates `inSetup` falls
@@ -127,7 +130,7 @@ other business application Curia is authorized for) and Finish.
 | Email & calendar | The Nylas API key again (the same key, so the step stands alone), the Nylas sign-in checks, and Connect with Google for the principal | the vault, `/api/registry/nylas/*` |
 | Google Workspace | Curia's Google address and the OAuth client ID and secret, then Sign in as Curia (#2683). Required: the deep dive delivers its drafts as Google Docs (#2362). Done means Google accepts the saved token (a live refresh, with the saved OAuth client) and the google-workspace MCP server is enabled, so an install signed in by hand reads done once its server is on. The console sign-in enables the server itself. A sign-in restarts Curia once | `PUT /api/vault/secrets/{curia_google_email,google_oauth_client_id,google_oauth_client_secret}`, `/api/google-workspace/{status,signin}`, then Google's redirect to the public `/api/google-workspace/callback` and `/google-workspace/done` |
 | Apply & restart | One restart turns on everything saved; every step is checked again | `POST /api/system/restart`, then `GET /api/system` until `bootedAt` changes |
-| Start onboarding | Locked until `setupComplete`, listing what's left. Ends Setup and loads the console afresh, so no chat stream stays on the Setup thread | `POST /api/setup/complete` (rotates the web thread) |
+| Start onboarding | Locked until `setupComplete`, listing what's left. Two choices, and both end Setup. **Start onboarding** finishes Setup, then starts onboarding ([Layer 4](#layer-4--onboarding-2360)), which rotates the web thread so the principal never opens on the Setup chat; the step shows the invitation link with wording to send (the Curia app) or says Curia has said hello (Signal, SMS, Slack). **Not right now** asks for confirmation first, worded for who Setup is for ("It's required before Curia acts for them. … Curia won't contact them until you do"), then finishes Setup without starting onboarding: the thread is not rotated, and the dashboard shows an "Onboarding hasn't started" alert with a Start onboarding button until it has run. Either way the console then loads afresh | `POST /api/setup/complete` (marks Setup complete, nothing else); Start onboarding also `POST /api/onboarding/start` |
 
 Every field a step needs is on the step, so an operator never has to leave Setup. A channel
 is turned on as soon as its required credentials resolve; it starts at Apply & restart.
@@ -181,6 +184,9 @@ description, the agents, skill bundles and standalone tools it covers, and an op
   a bundle tool directly) are named, and the operator confirms. Web research and Projects
   and tasks always warn: the coordinator pins `web` and `tasks`.
 - Registry changes apply at the next restart: in Setup, at Apply & restart.
+- While onboarding holds Email triage ([Layer 4](#the-triage-hold)), its switch reads
+  "Held until <principal> hears what to expect" and shows off. Switching it on releases the
+  hold (`DELETE /api/onboarding/triage-hold`), live, with no restart.
 
 ### The setup guide panel
 
@@ -263,8 +269,9 @@ by the skill bundle. Since #2358 it lists the operator's Setup steps only: requi
 steps (Who it's for, Curia's name, Email, Messaging, Voice, Email & calendar) and
 optional extras. `src/setup/checklist.ts` runs each task's check, and both the console
 (`GET /api/setup/checklist`) and `setup-status` read that one computation, including
-`setup_complete`: true when every required step is done, which unlocks Start
-onboarding (`POST /api/setup/complete`). Only optional extras can be deferred. Who
+`setup_complete`: true when every required step is done, which unlocks the last step
+(Start onboarding or Not right now; both `POST /api/setup/complete`). Only optional
+extras can be deferred. Who
 Setup is for, the operator's details, the chosen messaging and voice routes and the
 Setup phase are kept in the `setup_state` table (migration 130), not the knowledge
 graph. The agent can show the full menu on request and can resume deferred extras in
@@ -281,24 +288,27 @@ limited, using the same one-time capture link as other keys.
 
 Since #2358 the `setup-wizard` agent is a setup guide: it explains, compares options and
 troubleshoots from `setup-status`, and never records anything about the principal. The
-instant wins above (persona, debrief, pronouns, the tour) moved to onboarding (#2360).
+instant wins above (persona, debrief, pronouns, the tour) moved to onboarding
+([Layer 4](#layer-4--onboarding-2360)).
 
 - **On the Setup page.** While the `setup_state` phase is `in_progress` (from the Setup
-  page's first save until Start onboarding), `web` chat goes to the setup guide instead of
+  page's first save until Setup is finished), `web` chat goes to the setup guide instead of
   the coordinator, with none of the principal-turn extras (turn guidance, backlog, live
   lanes). The chat route decides when it accepts the message, from one snapshot of the
   shared thread and the phase (`readWebThreadAndSetupPhase`), and stamps the inbound; the
-  dispatcher routes on that stamp, read only on `web`. A message accepted just before Start
-  onboarding therefore stays on the Setup thread with the setup guide. `POST /api/chat/messages` takes an optional `setupStep` (the open
+  dispatcher routes on that stamp, read only on `web`. A message accepted just before Setup
+  is finished therefore stays on the Setup thread with the setup guide. `POST /api/chat/messages` takes an optional `setupStep` (the open
   step's catalog id, or `apply` / `start`); the runtime heads the turn with a
   "[Setup page: ...]" line naming it (`none` when the client sent none), so the agent knows
   it is talking to the operator. A database with no `setup_state` row (a scripted install)
   keeps web chat with the coordinator.
 - **Kept out of the principal's memory.** The dispatcher schedules no conversation
   checkpoint for a setup guide turn on `web`, so fact and relationship extraction never
-  read the Setup chat. Start onboarding (`POST /api/setup/complete`) moves the shared web
-  thread to a new conversation and marks Setup complete in one transaction under a row
-  lock (`completeSetup`), so the thread rotates once however often it is pressed. The
+  read the Setup chat. Finishing Setup (`POST /api/setup/complete`, `completeSetup`) only
+  marks it complete. Starting onboarding from the console moves the shared web thread to a
+  new conversation, inside the start's transaction under its advisory lock
+  (`OnboardingService.start`), so the thread rotates once however often Start is pressed,
+  and an operator who chose Not right now keeps their Setup chat until then. The
   principal never opens on the Setup chat, which stays in `working_memory` and the audit
   log. Thread reads that started before a rotation never cache the old id.
 - **After Setup** the coordinator still delegates "help me set up X" to it, and relays its
@@ -342,6 +352,277 @@ the underlying service contract.
 
 ---
 
+## Layer 4 — Onboarding (#2360)
+
+Onboarding is Curia adapting to the principal: it does its homework, greets them, learns how
+they like to work in a first conversation (about half an hour, by chat or voice), applies each
+choice while they are present, and books later sessions one at a time. Design:
+`docs/wip/2026-11-20-onboarding-program-design.md`.
+
+It is built from what Curia already has: one ordinary task with a subtask per topic, an
+editable playbook, the `onboarding` skill bundle (how Curia runs it), and a few guarantees in
+code (`src/onboarding/`, `src/meetings/`). Nothing starts it on its own, so an existing
+install never gets a greeting, research or a triage change unless someone starts it.
+
+### Parts
+
+| Part | What it is | Where |
+|---|---|---|
+| Playbook default | Curia's guide, in its own voice: a `#` section per session (`<!-- session: id -->`), a `##` subsection per topic (`<!-- topic: id -->`); `Needs: mailbox` marks a topic that waits for the mailbox. Sessions: First conversation, Review, Check-in, Ongoing rhythm, and Weekly (for recurring sessions after onboarding, never onboarding topics) | `config/onboarding/playbook.md` |
+| Playbook | The install's copy, editable in Documents. Seeded when Setup starts (`POST /api/setup/start`) and again at Start if missing; never overwritten | OKF `/meetings/onboarding/playbook.md` |
+| Research brief | What the homework found, each item with its source and marked unconfirmed until the principal confirms, corrects or drops it | OKF `/meetings/onboarding/research-brief.md` |
+| Onboarding task | The coordinator's, owned by Curia, tagged `onboarding`, `created_by` `onboarding`. One subtask per topic, tagged `onboarding:topic:<id>` and `onboarding:session:<id>`, plus a homework subtask. The parent and the topics are `waiting` on the principal's contact; the homework is open with its own wake. Progress notes are what has happened | `tasks` |
+| Run state | The task id, the route, greeting and follow-up times, the greeting re-wake, the principal's last turn, the idle nudge, the operator notices sent | config store `onboarding/state` |
+| Triage hold | `{"held": true}` while triage waits for the inbox topic | config store `onboarding/triage_hold` |
+
+Only subtasks the onboarding program created count as topics (`created_by`), since the model
+can tag any task. The whole `onboarding` config-store namespace is code-owned: the
+`config-store` tool refuses writes to it.
+
+The playbook is seeded with `editable_by: console` in its frontmatter. That is a general
+document setting, not an onboarding rule: `doc-write` refuses every mode on a document that
+carries it unless the write is a principal-approved re-execution, and refuses any write that
+adds, changes or removes the key, whoever calls. Agents that read untrusted mail hold
+`doc-write`, so only the console (the documents API, which does not use `doc-write` and keeps
+frontmatter as edited) changes the playbook. Since it is always seeded with the key and no
+agent can remove it, a playbook found without it was planted (or predates the key): reading or
+seeding it replaces it with the default, keeping nothing, and logs a warning. The research
+brief is an ordinary document. The parser keeps ids to `[a-z0-9-]` (slugifying anything else)
+and caps session and topic titles at 120 characters. Topic ids are read back from task tags,
+which a model can edit, so a topic whose tag id is not `[a-z0-9-]{1,64}` is ignored (warned).
+
+### Starting
+
+The console starts it from the last Setup step or the dashboard alert, through
+`POST /api/onboarding/start`. Start can mint an invitation, so it needs a signed-in console
+session, not the access key alone. The principal can also ask ("can we do the onboarding?"):
+the coordinator calls `onboarding-start`, the same path. Nothing else starts it.
+
+Start is refused, with a code the console explains, when:
+
+| Code | When | The console |
+|---|---|---|
+| `setup_incomplete` | Setup is not finished | re-reads the checklist |
+| `already_started` | an onboarding task is open | says so |
+| `start_in_progress` | another start held the lock past its 10-second timeout | treats it as `already_started` and refreshes |
+| `no_persistent_store` | the knowledge graph is off, so the run state and the hold would not survive a restart | says to turn it back on |
+| `confirm_working_principal` | the install already looks in use: Email triage is on, or the principal has tasks from before Setup finished | asks to confirm, then starts with `confirmWorkingPrincipal` |
+| `route_unreachable` | no messaging route, `APP_ORIGIN` unset for the Curia app, or no verified principal identity on Signal, SMS or Slack | links Channels and the principal's contact |
+
+Otherwise, under a transaction-scoped advisory lock (two presses serialize, and the second
+sees `already_started`), Start:
+
+1. **Holds triage** (below).
+2. **Enables what onboarding needs:** the Email triage agent (`ceo-inbox`) and the `ceo-inbox`,
+   `learning` and `tasks` bundles. If the running process did not load any of them at boot
+   (whether this start or an earlier one enabled it), Curia restarts after it replies, and the
+   wakes below are set a minute ahead so they fire on the new process. The console waits for
+   the restart as Apply & restart does.
+3. **Creates the task tree** from the playbook's First conversation session, with the
+   `onboarding` skill active on the parent and the homework task.
+4. **Rotates the web thread**, so the principal's first view is clean: on an operator start, or
+   a principal start from any channel but the web app (where it would wipe their conversation).
+5. **Reaches the principal** on the Setup route. The Curia app: mints the 48-hour invitation,
+   shown once with copyable wording that mentions the 48 hours; the greeting goes out when it
+   is redeemed (`pairing.invitation_redeemed`). Signal, SMS or Slack: the parent task wakes
+   with "Send the greeting" and the coordinator writes it. There is no email invitation.
+6. **Wakes the homework, then records the run state**, last, so a failed start leaves no state
+   saying it started.
+
+A failure part-way, or a failed COMMIT, undoes the start: the tasks it created are cancelled,
+a minted invitation is stopped, the triage hold goes back to what it was (kept on if this
+start newly enabled Email triage) and an earlier run state is restored. An invitation whose
+audit record fails is stopped too; the console then shows onboarding as started
+(`started_invitation_unaudited`) and points at Devices for a new link. Every console start,
+and every release of the hold from the console, is recorded as a `config.change` naming the
+console session.
+
+A principal's own start reaches no one, and the greeting counts as sent. If it restarts
+Curia, the exit waits 15 seconds so the turn can say Curia will be back, and the parent wakes
+afterwards to pick the conversation back up (apologising if its last message did not go out).
+
+**Started** (`GET /api/onboarding/status`) means an onboarding task is open, or the run
+state's task completed. A cancelled onboarding is not started: the dashboard alert returns
+and Start can run again.
+
+**Not re-run by accident.** The coordinator's `onboarding-start` skill is for Curia's own onboarding
+with the principal, never for onboarding a new hire, contractor or client. When a completed
+onboarding exists (a done parent task, `created_by` `onboarding`, tagged `onboarding`) it
+refuses unless called with `redo: true`, which is set only after the principal explicitly
+confirmed redoing it from the start. The console's operator start is unchanged.
+
+### Homework
+
+The homework task researches the principal's professional public footprint (company, role,
+city, public bio, recent news; never family, home or personal accounts) and writes the
+research brief, flagging results that may belong to a namesake. If Curia's Google Workspace
+is signed in, it also lists the shared drives and their top-level folders, names only.
+Nothing from the brief reaches memory until the principal confirms it. A failed search is
+an operator notice (`web_search_failed`), and "Tell me about yourself" starts open. The
+homework wake completes its task once the brief is written; one still open when onboarding
+completes is cancelled.
+
+### The greeting and follow-ups
+
+The greeting says who Curia is and who set it up, offers a first conversation of about half
+an hour, and says how to have it by chat or voice. Nothing else, and never the research.
+
+The onboarding watcher (`src/onboarding/watcher.ts`, every 15 minutes) acts only while an
+onboarding task is open. Its timings are constants in `src/onboarding/constants.ts`, not
+settings:
+
+- **Follow-ups:** with no principal turn since the greeting, up to 2 follow-ups 48 hours
+  apart, then the operator notice `greeting_unanswered`.
+- **Greeting not recorded:** with no greeting recorded 48 hours after it was due (the start on
+  Signal, SMS or Slack; the invitation's redemption on the app), the parent wakes once to send
+  it if it did not go out and record it (`greeting_sent`); 48 hours after that wake, the
+  operator notice `greeting_unanswered`.
+- **Idle nudge:** when the principal goes quiet for 4 hours with First conversation topics
+  still open, one nudge per silence; open topics carry to the next session. No nudge while
+  the next session is booked (a pending wake of the onboarding task set for later, or a
+  pending agenda it owns): a deferral or a session that ended is agreed quiet.
+- **Expired invitation:** an unredeemed invitation past its 48 hours is the operator notice
+  `invitation_expired`.
+
+The backlog heartbeat leaves the parent and the topics alone because they wait on a person:
+they are created `waiting` with `waiting_on_contact_id` set to the principal, which
+`selectHeartbeatCandidates` skips, as it skips any task waiting on a contact. Onboarding moves
+only on the watcher, events and the principal's replies, so an idle parent or topic is never
+pushed to a disposition (a greeting outside the cap, a topic closed without the principal).
+Working a topic changes no status: `topic_done` completes it from `waiting`. The principal
+answering a message a wake of the parent sent resumes it (`in_progress`, the general task-wake
+reply rule); the watcher sets it, or any onboarding task that waits on a contact and was
+resumed, back to `waiting` on its next sweep. Without a
+principal contact the tasks are created open, and the heartbeat may wake them.
+
+### Running a session
+
+**How a turn picks up onboarding.** A task wake (greeting, follow-up, nudge, a booked session)
+restores the `onboarding` skill from the task's active skills. An ordinary principal message
+carries no task id, so while an onboarding task is open a live principal turn on any channel
+(including a voice `async-offramp` hand-off whose live-turn grant is active) gets the
+`onboarding` skill and a short block naming the task and its open topics by id only, so no
+operator-written text reaches the turn; titles and playbook text come from
+`onboarding-progress` `status` (`src/onboarding/turn-context.ts`). Task-bound turns, Setup page turns and tool-allowlisted
+turns do not. The turn is not bound to the task, so anything else in the message is handled
+as usual. A failed lookup, or an `onboarding` skill that cannot be activated, leaves the turn
+without the block. Nothing is added to the
+coordinator's always-on prompt.
+
+**The skill** (`skills/onboarding/SKILL.md`) has the coordinator take topics in any order,
+mostly as multiple choice with a read-back after each, apply each choice as soon as it is
+confirmed, then mark the topic done (or declined, with the reason). Side requests become
+their own tasks, never "after onboarding". A named day ("can we do Thursday?") is booked and
+confirmed in one line; a vague "later" gets two concrete times, once.
+
+| Tool | Does | Risk |
+|---|---|---|
+| `onboarding-progress` | `status` (open and done topics with their playbook text, mailbox connected, greeting sent, who Setup was for, the operator's name); `open_session` (create a later session's topics; idempotent); `topic_done` (done or declined, with a note); `greeting_sent`; `operator_notice`. Onboarding completes when the Ongoing rhythm topics exist and every topic subtask is closed, checked after each `topic_done` and on every `status` | low |
+| `office-tone-update` | Writes `tone.style` and/or `tone.verbosity` (0 to 100). No other agent writes tone | low |
+| `onboarding-triage-release` | Lifts the triage hold, live. Refused until the inbox topic is done; a declined topic leaves triage held | low |
+| `onboarding-start` | A start the principal asked for | low |
+
+All four are the coordinator's only (`allowed_callers`). While an onboarding task is open,
+`set-autonomy` accepts only 65 (Draft only), 75 (Ask first) and 85 (Spot-check); if the
+lookup fails, or the tool has no task repository to look in, it logs a warning and applies no
+limit.
+
+**Chat.** The coordinator runs the session in the principal's thread; a principal chat turn
+is already live, so principal-authorized writes apply without an approval prompt.
+
+**Voice.** Before a voice session the coordinator parks an agenda (`meeting-agenda-park`)
+from the open topics, their playbook text and, for "Tell me about yourself", the research
+brief, with the onboarding task as its owner. The call loads it (#2359). Choices made on the
+call are applied through `async-offramp` with a live-turn grant (#2495); the minutes
+follow-up marks covered topics done.
+
+**Wakes from events** (`src/onboarding/subscribers.ts`), each a progress note plus a
+coordinator wake on the open onboarding task: the invitation redeemed (send the greeting in
+the app, unless already greeted); `principal_mailbox.connected` (run the first look, pick up
+the connect and inbox topics); a principal mailbox sign-in blocked (`admin_blocked`,
+`org_internal`) is the operator notice `mailbox_signin_blocked`, with the Google client id to
+trust.
+
+### The triage hold
+
+Agents load only at startup, so Start turns Email triage on in the registry and holds it
+instead of switching it on mid-conversation.
+
+- While `onboarding/triage_hold` is held, the inbox heartbeat (the only thing that wakes
+  scheduled triage) does nothing, so no mail is labelled, archived, drafted or sent before
+  the principal has been told what to expect. Principal-directed mailbox actions are
+  unaffected, and the heartbeat's daily sweep of expired dedupe rows (no mailbox touched)
+  still runs. A hold that is malformed or cannot be read counts as held.
+- A missing key means no hold, so installs that never start onboarding keep triaging.
+- `onboarding-triage-release` lifts it once the inbox topic is done; switching Email triage
+  on in Capabilities lifts it too (`DELETE /api/onboarding/triage-hold`). Both are live.
+- A stalled or cancelled onboarding keeps the hold: the safe state. Start can run again and
+  creates a new task.
+
+### Sessions on the calendar
+
+At the end of each session Curia and the principal agree the next one, and only that one is
+booked: a busy event on the principal's calendar with the principal the only attendee, or,
+with no calendar yet, a scheduler job. Either way the onboarding task's own wake time is also
+set to the agreed session time (`task-update` `wake_at`), which is what the idle-nudge check
+reads as "next session booked": a pending (or, mid-wake, deferred) wake of the parent task, or a
+pending agenda it owns.
+
+**An agenda follows its event.** This is general to any calendar-tied agenda, not only
+onboarding's. `meeting-agenda-park` takes `calendar_event_id`, `calendar_id` and
+`owner_task_id`, stored in the agenda's frontmatter. With no webhooks, `AgendaEventSync`
+(`src/meetings/agenda-event-sync.ts`, every 15 minutes) re-reads each pending event-tied
+agenda's event by id:
+
+| The event | What happens |
+|---|---|
+| Moved | the agenda's `scheduled_for` follows |
+| Cancelled or gone | the agenda is closed, and the owner task wakes once to ask when instead |
+| Unreadable (access refused, or its calendar no longer routes to a mailbox) | the owner task wakes once to check with the principal; the event is not read again |
+| Unreachable (the principal's mailbox is missing, or a second mailbox needs a hint) | skipped each sweep, with the first failure time recorded in the agenda's `event_unreachable_since`; cleared when a read succeeds. The first failure is a warning, later sweeps info. After 24 hours of continuous failure it becomes Unreadable, and the owner task wakes once with a note naming the cause (the mailbox is disconnected, or one needs choosing) |
+| All-day (no timed start and end) | the owner task wakes once to ask when to hold the session; the event is not read again |
+| Starting within 15 minutes | the owner task wakes once to nudge the principal |
+| Ended 30 minutes ago, nothing loaded | a no-show: the owner task wakes once. Onboarding sends one "missed you, when suits better?" and books the answer, unless the session happened in chat (then nothing is sent) |
+
+Only an open coordinator task is woken (any other owner is logged as a warning), since the
+console can edit agenda frontmatter. Any other read failure is retried next sweep. The 24-hour grace is `EVENT_UNREACHABLE_GRACE_HOURS` in `src/meetings/constants.ts`. Each
+step is recorded before its wake, so a failed write never repeats one. An event-tied agenda
+is due from 12 hours before its event until it is settled, instead of the ±12-hour window,
+so a late call still loads it (`expires_at` still bounds it); a cancelled one never is.
+
+### Operator notices
+
+`notifyOperator` (`src/onboarding/notify-operator.ts`) records a progress note on the
+onboarding task and logs a warning. The watcher and the subscribers raise each event at most
+once per onboarding.
+Delivery to the operator waits for the operator role (`TODO(#2365)`). The events are
+`greeting_unanswered`, `invitation_expired`, `mailbox_signin_blocked` and
+`web_search_failed`. When Setup was for the principal themself, Curia tells them directly in
+the conversation.
+
+### Done
+
+The onboarding task completes when the Ongoing rhythm session has been opened and every
+onboarding topic subtask is closed (completed or declined, in any order); its last topic
+agrees an ongoing rhythm, which may be none. Only topic subtasks count: an open homework task
+is cancelled then, and tasks the model parented under onboarding stay as they are. The check
+runs after each `topic_done` and again on every `status`, so a completion that failed once is
+retried. The principal can stop it ("stop the onboarding"), or it can be
+cancelled from the console's task view; triage stays held until switched on.
+
+### Scenario cases
+
+`tests/scenarios/cases/48a`, `48b` and `48d`–`48g` (tag `onboarding`, evals, not in the
+gate): the style and independence topics of the first conversation, a deferral to a named day,
+a vague "later", a no-show, and a side request. The inbox topic has no case: the release tool
+refuses until the topic is done (code, unit-tested), and forgetting the release fails safe
+(triage stays held). A case's `seed.onboarding` gives its principal turn
+production's onboarding block and skill (the test-mode stack's `onboardingTurnContext`); the
+no-show wake restores the skill from `inbound.task.active_skills`. A vague "later" answered
+vaguely again is not covered: a case has no multi-turn history.
+
+---
+
 ## End-to-end flow
 
 ```
@@ -357,9 +638,13 @@ auth guard sees inSetup === true
   Curia's name → PUT /api/identity → POST /api/identity/reload
   Email, Messaging, Voice, Email & calendar → keys, routes and the principal's ids, inline
   Apply & restart → POST /api/system/restart, poll GET /api/system
-  Start onboarding (unlocked by setupComplete) → POST /api/setup/complete
+  Start onboarding (unlocked by setupComplete) → POST /api/setup/complete,
+                                                  then POST /api/onboarding/start
        → the web thread rotates; the console loads afresh, out of Setup
-the principal's first conversation                ← onboarding (#2360)
+  (or Not right now → POST /api/setup/complete; the dashboard alert starts it later)
+[ Onboarding ]                                    ← Layer 4 (#2360)
+  homework → greeting (or the app invitation) → capped follow-ups
+  first conversation by chat or voice → triage released → later sessions on the calendar
 ```
 
 ---

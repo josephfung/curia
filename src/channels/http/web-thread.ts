@@ -18,8 +18,8 @@ function conversationIdOf(row: Record<string, unknown> | undefined): string | nu
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-// The row is written once and then only read, until Start onboarding rotates it
-// (rotateWebThread, which updates this cache too). A process-local cache skips the
+// The row is written once and then only read, until starting onboarding rotates it
+// (OnboardingService.start, #2360, which updates this cache too). A process-local cache skips the
 // SELECT on later messages. Keyed by pool so tests with a fresh stub do not
 // share an id. Rows written before migration 090 have a NULL channel_id and
 // are not adopted; an upgrade from that era starts a new thread.
@@ -96,8 +96,9 @@ async function readOrCreateWebThread(
 
 /**
  * Point the shared thread at a new conversation (#2358), in the caller's transaction. The
- * caller calls noteWebThreadRotated once it commits. Start onboarding does this so the
- * principal never opens on the operator's Setup chat; the old conversation stays in
+ * caller calls noteWebThreadRotated once it commits. Starting onboarding does this
+ * (OnboardingService.start, #2360; not finishing Setup) so the principal never opens on the
+ * operator's Setup chat; the old conversation stays in
  * working_memory and the audit log.
  */
 export async function rotateWebThreadRow(db: WebThreadQueryable, conversationId: string): Promise<void> {
@@ -127,8 +128,9 @@ export async function rotateWebThread(
 
 /**
  * The shared thread and the Setup phase, read in one statement (#2358), so a chat message
- * is bound to one side of Start onboarding: either the Setup thread while Setup runs, or
- * the principal's thread after. Start onboarding changes both in one transaction.
+ * is bound to one side of Setup: either the Setup thread while Setup runs, or the shared
+ * thread after. Finishing Setup changes only the phase; starting onboarding (#2360) later
+ * rotates the thread.
  */
 export async function readWebThreadAndSetupPhase(
   pool: WebThreadQueryable,

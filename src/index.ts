@@ -23,7 +23,7 @@ import { runner } from 'node-pg-migrate';
 import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveApprovalExpiryConfig, resolveReportFallbackConfig, resolveIdentityGateMode, resolveAutonomyGating, resolveVerificationConfig, resolveRelayBudgetConfig, resolveTurnInjectionConfig, resolveOutboundJudgeConfig, resolveOutboundRedactionConfig, OutboundConfigError, type OutboundJudgeSettings, type OutboundRedactionSettings } from './config.js';
 import { createVerificationRuntime } from './verification/index.js';
 import { createLogger } from './logger.js';
-import { HttpAdapter } from './channels/http/http-adapter.js';
+import { HttpAdapter, scheduleProcessExit } from './channels/http/http-adapter.js';
 import { WebPushService } from './channels/web/push-service.js';
 import { loadVapidSetup, logVapidReadiness } from './channels/web/vapid.js';
 import { configuredReachChannels, reachChannelsFor } from './agents/principal-reach.js';
@@ -143,6 +143,7 @@ import { DeepgramSttProvider, CartesiaTtsProvider, SpeechMediaService } from './
 import { LiveKitRoomSession } from './channels/voice/livekit/room-session.js';
 import { deleteVoiceRoom, listVoiceRooms } from './channels/voice/livekit/token.js';
 import { SignalCallBridge } from './channels/voice/signal/signal-call-bridge.js';
+import { AgendaEventSync, readAgendaEvent } from './meetings/agenda-event-sync.js';
 import { AgendaStore } from './meetings/agenda-store.js';
 import { MinutesPipeline } from './meetings/minutes-pipeline.js';
 import { MeetingPipelineRecovery } from './meetings/recovery.js';
@@ -254,6 +255,13 @@ import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 import { closeLegacyInboxDrains, InboxHeartbeat, type InboxTriageHealth } from './scheduler/inbox-heartbeat.js';
 import { readTriageCadences, type Cadence } from './principal-mailboxes/triage-cadence.js';
 import { inMemoryTriageConfig, TriageState, TRIAGE_NAMESPACE } from './principal-mailboxes/triage-state.js';
+import { isTriageHeld } from './onboarding/triage-hold.js';
+import { OnboardingService } from './onboarding/onboarding-service.js';
+import { noteAndWakeCoordinator, OnboardingSubscribers } from './onboarding/subscribers.js';
+import { isNextSessionBooked, OnboardingWatcher } from './onboarding/watcher.js';
+import { isOpenTask } from './onboarding/subtasks.js';
+import { readCurrentInvitationTiming } from './channels/http/pairing-invitations.js';
+import { createOnboardingTurnContext } from './onboarding/turn-context.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
 import { unreadCandidateProbe } from './principal-mailboxes/triage-candidate.js';
 import type { TriageServices } from './principal-mailboxes/triage-services.js';
@@ -3470,6 +3478,31 @@ async function main(): Promise<void> {
   // (which the allowlist thunk depends on). Mirrors setAgentContactId's post-hoc injection.
   executionLayer.setSecretCaptureService(secretCaptureService);
 
+  // Starting onboarding (#2360). The triage hold is written to triageConfig, the store the
+  // inbox heartbeat reads it from. Built here, after registryService, and handed to the
+  // ExecutionLayer for the onboarding skill's tools.
+  const onboardingService = new OnboardingService({
+    pool,
+    taskRepo,
+    registry: registryService,
+    scheduler: schedulerService,
+    configStore: triageConfig,
+    workingDocsRepo,
+    principalName: async () => (await contactService.findContactBySystemRole('principal'))?.displayName ?? null,
+    principalContactId: async () => (await contactService.findContactBySystemRole('principal'))?.id ?? null,
+    principalHasIdentity: setupCheckDeps.principalHasIdentity,
+    appOrigin: config.appOrigin,
+    scheduleProcessExit,
+    // Agents and skill bundles load only at boot: what this process lacks needs a restart.
+    loadedAtBoot: (kind, name) =>
+      kind === 'agent' ? agentRegistry.has(name) : kind === 'skill' ? skillRegistry.get(name) !== undefined : false,
+    // triageConfig is in memory when the knowledge graph is off: Start is refused then.
+    persistentStore: entityMemory !== undefined,
+    logger,
+  });
+  executionLayer.setOnboardingService(onboardingService);
+  const onboardingTurnContext = createOnboardingTurnContext({ taskRepo, configStore: triageConfig, logger });
+
   // Agents that pin a skill with heartbeat: true — read by the BacklogHeartbeat to
   // know which source_agent_ids it may wake (and as the fallback target list).
   const taskManagementAgents = new Set<string>();
@@ -3567,7 +3600,12 @@ async function main(): Promise<void> {
       taskManagementAgents.add(agentConfig.name);
     }
 
-    new AgentRuntime(assembled.runtimeConfig).register();
+    // Onboarding context for live principal turns (#2360): the coordinator only.
+    new AgentRuntime(
+      agentConfig.name === 'coordinator'
+        ? { ...assembled.runtimeConfig, onboardingTurnContext }
+        : assembled.runtimeConfig,
+    ).register();
 
     if (assembled.toolDefs.length > 0) {
       logger.info({ agent: agentConfig.name, skills: assembled.toolDefs.map(d => d.name) }, 'Agent tools configured');
@@ -3763,6 +3801,10 @@ async function main(): Promise<void> {
       scheduler: schedulerService,
       tz: triageTz,
       logger,
+      // Onboarding triage hold (#2360). A missing key is no hold. triageConfig is the config store,
+      // or an in-memory stand-in when the knowledge graph is off; onboarding refuses to start then
+      // (no_persistent_store), so the stand-in never holds a hold that a restart would drop.
+      held: () => isTriageHeld(triageConfig, logger),
       sweepDedupe: () => triageDedupe.sweep(),
       sentObserveFailing: async (ids) => {
         const failing: string[] = [];
@@ -3823,6 +3865,61 @@ async function main(): Promise<void> {
   });
   planFrontierSubscriber.start();
 
+  // The Google OAuth client id on the Nylas Google connector, read with the live key; undefined when
+  // unknown. Shared by the onboarding blocked-sign-in notice and the sign-in resume subscriber.
+  const googleOAuthClientId = async (): Promise<string | undefined> => {
+    const apiKey = await nylasSignInReaders.readApiKey();
+    if (!apiKey) return undefined;
+    const apiUri = nylasApiUri(await nylasSignInReaders.readRegion());
+    const connectors = await new NylasAppClient({ apiKey, apiUri, logger }).listConnectors();
+    return connectors.find((c) => c.provider === 'google')?.clientId;
+  };
+
+  // Onboarding (#2360): pairing, mailbox connection and blocked sign-ins wake the onboarding program.
+  new OnboardingSubscribers({
+    bus,
+    taskRepo,
+    scheduler: schedulerService,
+    configStore: triageConfig,
+    logger,
+    googleClientId: googleOAuthClientId,
+  }).start();
+
+  // Onboarding watcher (#2360): greeting follow-ups, the idle nudge and the expired-invitation notice.
+  // A tick with no open onboarding task is one query, so installs that never onboard see nothing.
+  const onboardingWatcher = new OnboardingWatcher({
+    taskRepo,
+    scheduler: schedulerService,
+    configStore: triageConfig,
+    logger,
+    readInvitation: () => readCurrentInvitationTiming(pool),
+    nextSessionBooked: (taskId, now) =>
+      isNextSessionBooked({ pool, listPendingAgendas: (at) => agendaStore.listPending(at) }, taskId, now),
+  });
+  onboardingWatcher.start();
+
+  // Agendas tied to a calendar event follow it (#2360): moved, cancelled, about to start, missed.
+  // General meetings infrastructure; runs only when a calendar can be read.
+  let agendaEventSync: AgendaEventSync | undefined;
+  if (calendarRouter) {
+    const router = calendarRouter;
+    agendaEventSync = new AgendaEventSync({
+      store: agendaStore,
+      getEvent: (calendarId, eventId) => readAgendaEvent(router, calendarId, eventId),
+      wakeOwner: async (taskId, note) => {
+        // The owner id comes from agenda frontmatter, which the console can edit: wake only an
+        // open coordinator task, never an arbitrary one.
+        const task = await taskRepo.getTask(taskId);
+        if (!task || !isOpenTask(task) || task.agentId !== 'coordinator') {
+          logger.warn({ taskId }, 'agenda event sync: owner is not an open coordinator task, not waking it');
+          return;
+        }
+        await noteAndWakeCoordinator({ taskRepo, scheduler: schedulerService, logger }, task, note, 'meetings');
+      },
+      logger,
+    });
+    agendaEventSync.start();
+  }
 
   let meetingRecovery: MeetingPipelineRecovery | undefined;
   if (workingDocsRepo) {
@@ -4049,13 +4146,7 @@ async function main(): Promise<void> {
     bus,
     logger,
     registerRouting: (taskEventId, routing) => dispatcher.registerExternalTaskRouting(taskEventId, routing),
-    googleClientId: async () => {
-      const apiKey = await nylasSignInReaders.readApiKey();
-      if (!apiKey) return undefined;
-      const apiUri = nylasApiUri(await nylasSignInReaders.readRegion());
-      const connectors = await new NylasAppClient({ apiKey, apiUri, logger }).listConnectors();
-      return connectors.find((c) => c.provider === 'google')?.clientId;
-    },
+    googleClientId: googleOAuthClientId,
     ...(outboundGateway
       ? {
           notifier: {
@@ -4304,6 +4395,7 @@ async function main(): Promise<void> {
     livePrincipalMailboxIds: async () => (await principalMailboxStore.listLive()).map((m) => m.id),
     setupRequiredAtBoot,
     setupChecklist,
+    onboardingService,
     bootStartedAt,
     processStartedAt: healthService.startedAtIso,
     // Powers POST /api/setup/suggest-name (wizard starter-name suggestion, #799).
@@ -4424,6 +4516,16 @@ async function main(): Promise<void> {
       backlogHeartbeat.stop();
     } catch (err) {
       logger.error({ err }, 'Error stopping backlog heartbeat during shutdown');
+    }
+    try {
+      onboardingWatcher.stop();
+    } catch (err) {
+      logger.error({ err }, 'Error stopping onboarding watcher during shutdown');
+    }
+    try {
+      agendaEventSync?.stop();
+    } catch (err) {
+      logger.error({ err }, 'Error stopping agenda event sync during shutdown');
     }
     try {
       inboxHeartbeat?.stop();

@@ -36,6 +36,8 @@ skills:
   - setup
   - reports
   - meetings
+  # Onboarding (#2360): activated only on onboarding turns; inert until someone starts onboarding.
+  - onboarding
   # NOTE: tasks = heartbeat + task-*/plan/checkpoint; documents = doc-* workspace.
   # NOTE: ceo-inbox / learning / diagnostics skill bundles excluded — enable alongside
   #        their agents. Enabling one enrolls its member tools on the next boot.
