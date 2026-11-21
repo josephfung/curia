@@ -35,7 +35,7 @@ Nothing else. Never mention the research.
 
 ## Preparing a voice session
 
-Park the agenda with `meeting-agenda-park`: the open topics as `topics`, and in `context` each topic's playbook text plus, for "Tell me about yourself", the research brief's findings. Name the onboarding task id in the context. Choices made on the call are applied through the call; the minutes follow-up marks covered topics done.
+Park the agenda with `meeting-agenda-park`: the open topics as `topics`, and in `context` each topic's playbook text plus, for "Tell me about yourself", the research brief's findings. Name the onboarding task id in the context and pass it as `owner_task_id`; when the session is a calendar event, also pass its `calendar_event_id` and `calendar_id`. Choices made on the call are applied through the call; the minutes follow-up marks covered topics done.
 
 ## Applying choices
 

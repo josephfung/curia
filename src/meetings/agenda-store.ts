@@ -9,6 +9,7 @@ import type { WorkingDocRow, WorkingDocsRepo } from '../db/working-docs-repo.js'
 import type { Logger } from '../logger.js';
 import type {
   AgendaDoc,
+  AgendaEventState,
   AgendaHistoryEntry,
   AgendaSensitivity,
   AgendaSnapshot,
@@ -17,7 +18,13 @@ import type {
   ParkAgendaInput,
   TopicCoverageEntry,
 } from './types.js';
-import { AGENDA_SENSITIVITIES, AGENDA_SOURCES, AGENDA_STATUSES, TOPIC_COVERAGE } from './types.js';
+import {
+  AGENDA_EVENT_STATES,
+  AGENDA_SENSITIVITIES,
+  AGENDA_SOURCES,
+  AGENDA_STATUSES,
+  TOPIC_COVERAGE,
+} from './types.js';
 
 const AGENDA_PREFIX = '/meetings/agendas/';
 const DOC_TYPE = 'meeting-agenda';
@@ -26,6 +33,12 @@ const SETTLE_ATTEMPTS = 3;
 export type AgendaLockResult =
   | { ok: true; agenda: AgendaDoc }
   | { ok: false; reason: 'not_found' | 'not_pending' | 'expired' | 'conflict' };
+
+/** Event-sync bookkeeping written by `markEvent`. Absent keys are left as they are. */
+export interface AgendaEventPatch {
+  eventState?: AgendaEventState;
+  nudgedAt?: string | null;
+}
 
 export type AgendaSettleOutcome =
   | { kind: 'done' }
@@ -47,6 +60,19 @@ function isStatus(value: unknown): value is AgendaStatus {
 
 function isCoverage(value: unknown): value is TopicCoverageEntry['coverage'] {
   return typeof value === 'string' && TOPIC_COVERAGE.includes(value as TopicCoverageEntry['coverage']);
+}
+
+function isEventState(value: unknown): value is AgendaEventState {
+  return typeof value === 'string' && AGENDA_EVENT_STATES.includes(value as AgendaEventState);
+}
+
+/**
+ * An optional string frontmatter field: absent or null reads as null (documents
+ * parked before the field existed), a string as itself, anything else as invalid.
+ */
+function optionalString(value: unknown): string | null | undefined {
+  if (value === undefined || value === null) return null;
+  return typeof value === 'string' ? value : undefined;
 }
 
 function agendaIdFromPath(path: string): string | null {
@@ -102,6 +128,15 @@ export function parseAgendaDoc(row: WorkingDocRow): AgendaDoc | null {
   if (fm.in_call_session !== undefined && fm.in_call_session !== null && typeof fm.in_call_session !== 'string') {
     return null;
   }
+  const calendarEventId = optionalString(fm.calendar_event_id);
+  const calendarId = optionalString(fm.calendar_id);
+  const ownerTaskId = optionalString(fm.owner_task_id);
+  const nudgedAt = optionalString(fm.nudged_at);
+  if (calendarEventId === undefined || calendarId === undefined || ownerTaskId === undefined || nudgedAt === undefined) {
+    return null;
+  }
+  const eventState = fm.event_state === undefined || fm.event_state === null ? null : fm.event_state;
+  if (eventState !== null && !isEventState(eventState)) return null;
   return {
     agendaId,
     path: row.path,
@@ -117,6 +152,11 @@ export function parseAgendaDoc(row: WorkingDocRow): AgendaDoc | null {
     scheduledFor,
     inCallSession,
     history,
+    calendarEventId,
+    calendarId,
+    ownerTaskId,
+    nudgedAt,
+    eventState,
   };
 }
 
@@ -132,6 +172,11 @@ function frontmatterFor(doc: AgendaDoc): Record<string, unknown> {
     scheduled_for: doc.scheduledFor,
     in_call_session: doc.inCallSession,
     history: doc.history,
+    calendar_event_id: doc.calendarEventId,
+    calendar_id: doc.calendarId,
+    owner_task_id: doc.ownerTaskId,
+    nudged_at: doc.nudgedAt,
+    event_state: doc.eventState,
   };
 }
 
@@ -182,6 +227,11 @@ export class AgendaStore {
       scheduledFor: input.scheduledFor ? input.scheduledFor.toISOString() : null,
       inCallSession: null,
       history: [],
+      calendarEventId: input.calendarEventId ?? null,
+      calendarId: input.calendarId ?? null,
+      ownerTaskId: input.ownerTaskId ?? null,
+      nudgedAt: null,
+      eventState: input.calendarEventId ? 'scheduled' : null,
     };
     const created = await this.repo.create({
       path,
@@ -273,6 +323,57 @@ export class AgendaStore {
     const parsed = parseAgendaDoc(updated.document);
     if (!parsed) return { ok: false, reason: 'conflict' };
     return { ok: true, agenda: parsed };
+  }
+
+  /**
+   * Follow the agenda's calendar event to a new start. A later start clears
+   * `nudgedAt` and a recorded no-show, so the moved session is nudged and
+   * watched again. Only a pending agenda is changed. A version conflict is
+   * re-read and retried, as in `settle`.
+   */
+  async reschedule(agendaId: string, scheduledFor: Date): Promise<AgendaDoc | null> {
+    return this.updatePending(agendaId, (doc) => {
+      const previous = doc.scheduledFor === null ? Number.NaN : Date.parse(doc.scheduledFor);
+      const later = Number.isNaN(previous) || scheduledFor.getTime() > previous;
+      return {
+        ...doc,
+        scheduledFor: scheduledFor.toISOString(),
+        ...(later ? { nudgedAt: null, eventState: doc.eventState === 'no_show' ? 'scheduled' : doc.eventState } : {}),
+      };
+    });
+  }
+
+  /** Record event-sync bookkeeping on a pending agenda, retrying a version conflict as `settle` does. */
+  async markEvent(agendaId: string, patch: AgendaEventPatch): Promise<AgendaDoc | null> {
+    return this.updatePending(agendaId, (doc) => ({
+      ...doc,
+      ...(patch.eventState !== undefined ? { eventState: patch.eventState } : {}),
+      ...(patch.nudgedAt !== undefined ? { nudgedAt: patch.nudgedAt } : {}),
+    }));
+  }
+
+  /**
+   * Write `change(doc)` over the current pending agenda. Returns the written
+   * agenda, or null when it is gone, no longer pending, or still conflicting
+   * after SETTLE_ATTEMPTS reads.
+   */
+  private async updatePending(
+    agendaId: string,
+    change: (doc: AgendaDoc) => AgendaDoc,
+  ): Promise<AgendaDoc | null> {
+    for (let attempt = 0; attempt < SETTLE_ATTEMPTS; attempt++) {
+      const doc = await this.get(agendaId);
+      if (!doc || doc.status !== 'pending') return null;
+      const updated = await this.repo.update(doc.path, {
+        type: DOC_TYPE,
+        frontmatter: frontmatterFor(change(doc)),
+        expectedVersion: doc.version,
+      });
+      if (!updated.ok) continue;
+      return parseAgendaDoc(updated.document);
+    }
+    this.logger.error({ agendaId }, 'agenda-store: event update gave up after a version conflict');
+    return null;
   }
 
   /**

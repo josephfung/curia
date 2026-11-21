@@ -6,10 +6,8 @@ export const GREETING_FOLLOWUPS = 2;
 export const GREETING_FOLLOWUP_GAP_HOURS = 48;
 /** Hours of chat silence before the idle nudge. */
 export const CHAT_IDLE_NUDGE_HOURS = 4;
-/** Minutes past a session's start before it counts as a no-show. */
-export const NO_SHOW_GRACE_MINUTES = 30;
-/** Minutes before a session when the principal gets a nudge. */
-export const SESSION_NUDGE_LEAD_MINUTES = 15;
+// General meetings infrastructure: any calendar-tied agenda uses these, so they live with meetings.
+export { NO_SHOW_GRACE_MINUTES, SESSION_NUDGE_LEAD_MINUTES } from '../meetings/constants.js';
 /** How often the onboarding watcher sweeps, in minutes. */
 export const WATCHER_INTERVAL_MINUTES = 15;
 /** Autonomy bands offered during onboarding. */

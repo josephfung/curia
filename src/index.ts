@@ -143,6 +143,8 @@ import { DeepgramSttProvider, CartesiaTtsProvider, SpeechMediaService } from './
 import { LiveKitRoomSession } from './channels/voice/livekit/room-session.js';
 import { deleteVoiceRoom, listVoiceRooms } from './channels/voice/livekit/token.js';
 import { SignalCallBridge } from './channels/voice/signal/signal-call-bridge.js';
+import { AgendaEventSync } from './meetings/agenda-event-sync.js';
+import { nylasStatus } from './channels/email/nylas-message-id.js';
 import { AgendaStore } from './meetings/agenda-store.js';
 import { MinutesPipeline } from './meetings/minutes-pipeline.js';
 import { MeetingPipelineRecovery } from './meetings/recovery.js';
@@ -256,8 +258,9 @@ import { readTriageCadences, type Cadence } from './principal-mailboxes/triage-c
 import { inMemoryTriageConfig, TriageState, TRIAGE_NAMESPACE } from './principal-mailboxes/triage-state.js';
 import { isTriageHeld } from './onboarding/triage-hold.js';
 import { OnboardingService } from './onboarding/onboarding-service.js';
-import { OnboardingSubscribers } from './onboarding/subscribers.js';
+import { noteAndWakeCoordinator, OnboardingSubscribers } from './onboarding/subscribers.js';
 import { OnboardingWatcher } from './onboarding/watcher.js';
+import { isOpenTask } from './onboarding/subtasks.js';
 import { readCurrentInvitationTiming } from './channels/http/pairing-invitations.js';
 import { createOnboardingTurnContext } from './onboarding/turn-context.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
@@ -3887,6 +3890,45 @@ async function main(): Promise<void> {
   });
   onboardingWatcher.start();
 
+  // Agendas tied to a calendar event follow it (#2360): moved, cancelled, about to start, missed.
+  // General meetings infrastructure; runs only when a calendar can be read.
+  let agendaEventSync: AgendaEventSync | undefined;
+  if (calendarRouter) {
+    const router = calendarRouter;
+    agendaEventSync = new AgendaEventSync({
+      store: agendaStore,
+      getEvent: async (calendarId, eventId) => {
+        // A routing failure (no mailbox, calendar unregistered) throws: the sync skips the agenda this sweep.
+        const routed = await router.route(calendarId);
+        try {
+          const event = await routed.client.getEvent(routed.calendarId, eventId);
+          if (event.startTime === null || event.endTime === null) {
+            throw new Error('calendar event has no timed start and end');
+          }
+          return {
+            start: new Date(event.startTime * 1000),
+            end: new Date(event.endTime * 1000),
+            status: event.status === 'cancelled' ? 'cancelled' : 'confirmed',
+          };
+        } catch (err) {
+          // A 404 means the event is gone (deleted), which the sync treats as cancelled.
+          if (nylasStatus(err) === 404) return null;
+          throw err;
+        }
+      },
+      wakeOwner: async (taskId, note) => {
+        const task = await taskRepo.getTask(taskId);
+        if (!task || !isOpenTask(task)) {
+          logger.info({ taskId }, 'agenda event sync: owner task is gone or closed, not waking it');
+          return;
+        }
+        await noteAndWakeCoordinator({ taskRepo, scheduler: schedulerService, logger }, task, note);
+      },
+      logger,
+    });
+    agendaEventSync.start();
+  }
+
   let meetingRecovery: MeetingPipelineRecovery | undefined;
   if (workingDocsRepo) {
     const deliverableKgPromotionSubscriber = new DeliverableKgPromotionSubscriber({
@@ -4487,6 +4529,11 @@ async function main(): Promise<void> {
       onboardingWatcher.stop();
     } catch (err) {
       logger.error({ err }, 'Error stopping onboarding watcher during shutdown');
+    }
+    try {
+      agendaEventSync?.stop();
+    } catch (err) {
+      logger.error({ err }, 'Error stopping agenda event sync during shutdown');
     }
     try {
       inboxHeartbeat?.stop();

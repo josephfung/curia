@@ -285,6 +285,11 @@ describe('VoiceAdapter', () => {
         status: 'pending',
         expiresAt: '2099-11-04T16:00:00.000Z',
         inCallSession: null,
+        calendarEventId: null,
+        calendarId: null,
+        ownerTaskId: null,
+        nudgedAt: null,
+        eventState: null,
       };
     }
 
