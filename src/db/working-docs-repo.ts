@@ -85,11 +85,19 @@ export interface UpdateWorkingDocParams {
   conversationId?: string | null;
   agentId?: string | null;
   expectedVersion: number;
+  /**
+   * The document id the caller authorized the write against (doc-write's console-only check,
+   * #2360). A document archived and re-created at the same path starts again at version 1, so
+   * the version alone cannot tell them apart. Optional; absent means any document at the path.
+   */
+  expectedId?: string;
 }
 
 export interface AppendWorkingDocParams {
   content: string;
   expectedVersion: number;
+  /** As for update. */
+  expectedId?: string;
   /**
    * Claim ownership when the document currently has `task_id IS NULL`.
    * Existing owners are preserved (COALESCE semantics).
@@ -109,6 +117,8 @@ export interface EditSectionParams {
    * that version, never a newer one. Optional; absent means any document version.
    */
   expectedVersion?: number;
+  /** The document id, checked under the row lock with expectedVersion (see update). */
+  expectedId?: string;
   /**
    * Claim ownership when the document currently has `task_id IS NULL`.
    * Existing owners are preserved (COALESCE semantics).
@@ -122,6 +132,8 @@ export interface DeleteSectionParams {
   expectedSectionVersion?: number;
   /** Whole-document version, checked under the row lock, as for editSection. */
   expectedVersion?: number;
+  /** The document id, checked under the row lock, as for editSection. */
+  expectedId?: string;
 }
 
 /** editSection's results, plus a section that is not in the document (#2339). */
@@ -357,7 +369,8 @@ export class WorkingDocsRepo {
     if (!current) {
       throw new Error(`working-docs-repo: document not found at ${normalized}`);
     }
-    if (current.version !== params.expectedVersion) {
+    if (current.version !== params.expectedVersion
+      || (params.expectedId !== undefined && current.id !== params.expectedId)) {
       return { ok: false, conflict: true, document: current };
     }
 
@@ -392,6 +405,7 @@ export class WorkingDocsRepo {
          WHERE path = $1
            AND archived_at IS NULL
            AND version = $12
+           AND ($14::uuid IS NULL OR id = $14::uuid)
          RETURNING ${DOC_COLUMNS}`,
         [
           normalized,
@@ -407,6 +421,7 @@ export class WorkingDocsRepo {
           params.agentId ?? null,
           params.expectedVersion,
           JSON.stringify(sectionVersions),
+          params.expectedId ?? null,
         ],
       );
       if (!rows[0]) {
@@ -439,6 +454,7 @@ export class WorkingDocsRepo {
     return this.update(path, {
       body,
       expectedVersion: params.expectedVersion,
+      ...(params.expectedId !== undefined ? { expectedId: params.expectedId } : {}),
       // Claim-if-null is enforced in update()'s COALESCE semantics.
       ...(params.taskId ? { taskId: params.taskId } : {}),
     });
@@ -465,7 +481,8 @@ export class WorkingDocsRepo {
       }
 
       const locked = mapRow(lockedRow);
-      if (params.expectedVersion !== undefined && params.expectedVersion !== locked.version) {
+      if ((params.expectedVersion !== undefined && params.expectedVersion !== locked.version)
+        || (params.expectedId !== undefined && params.expectedId !== locked.id)) {
         await client.query('ROLLBACK');
         return { ok: false, conflict: true, document: locked };
       }
@@ -575,7 +592,8 @@ export class WorkingDocsRepo {
       }
 
       const locked = mapRow(lockedRow);
-      if (params.expectedVersion !== undefined && params.expectedVersion !== locked.version) {
+      if ((params.expectedVersion !== undefined && params.expectedVersion !== locked.version)
+        || (params.expectedId !== undefined && params.expectedId !== locked.id)) {
         await client.query('ROLLBACK');
         return { ok: false, conflict: true, document: locked };
       }

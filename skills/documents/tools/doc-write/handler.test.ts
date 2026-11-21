@@ -431,7 +431,9 @@ describe('DocWriteHandler', () => {
         expect(data.document?.version).toBe(4);
       }
       // expectedVersion: the version read for the console-only check (#2360).
-      expect(deleteSection).toHaveBeenCalledWith(PATH, { section: 'Board mail', expectedSectionVersion: 2, expectedVersion: 3 });
+      expect(deleteSection).toHaveBeenCalledWith(PATH, {
+        section: 'Board mail', expectedSectionVersion: 2, expectedVersion: 3, expectedId: 'doc-1',
+      });
       // The folder's log.md (which the read mock reports as existing) gets an entry.
       expect(repo.append).toHaveBeenCalledWith('/projects/x/log.md', expect.objectContaining({
         content: expect.stringContaining('section-delete'),
@@ -716,10 +718,20 @@ describe('DocWriteHandler', () => {
         if (result.success) expect((result.data as { conflict?: boolean; version?: number })).toMatchObject({ conflict: true, version: 1 });
         expect(writes(repo), input.mode).toBe(0);
       }
-      for (const [mode, fn] of [['section-edit', 'editSection'], ['section-delete', 'deleteSection']] as const) {
+      // Every mode also names the document it checked: one archived and re-created at the same
+      // path is back at version 1 under a new id.
+      for (const [mode, fn, extra] of [
+        ['append', 'append', { content: 'x', expected_version: 1 }],
+        ['replace', 'update', { body: 'x', expected_version: 1 }],
+        ['section-edit', 'editSection', { section: 'Style', content: 'x' }],
+        ['section-delete', 'deleteSection', { section: 'Style' }],
+      ] as const) {
         const repo = repoWith(ordinary);
-        await new DocWriteHandler().execute(ctxFor({ path: ordinary.path, mode, section: 'Style', content: 'x' }, repo));
-        expect(repo[fn], mode).toHaveBeenCalledWith(ordinary.path, expect.objectContaining({ expectedVersion: 1 }));
+        await new DocWriteHandler().execute(ctxFor({ path: ordinary.path, mode, ...extra }, repo));
+        expect(repo[fn], mode).toHaveBeenCalledWith(ordinary.path, expect.objectContaining({
+          expectedId: ordinary.id,
+          ...(mode.startsWith('section') ? { expectedVersion: 1 } : {}),
+        }));
       }
     });
 
