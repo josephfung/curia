@@ -15,5 +15,11 @@ export const WATCHER_INTERVAL_MINUTES = 15;
 /** Autonomy bands offered during onboarding. */
 export const ONBOARDING_BANDS = [65, 75, 85] as const;
 
+/**
+ * When Start enables registry entries it restarts the process; its task wakes are set this far
+ * ahead so they fire on the new process, not in the moments before the exit.
+ */
+export const RESTART_WAKE_DELAY_SECONDS = 60;
+
 /** created_by of the parent onboarding task. A tag alone is spoofable by the model; this is not. */
 export const ONBOARDING_CREATED_BY = 'onboarding';

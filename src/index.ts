@@ -23,7 +23,7 @@ import { runner } from 'node-pg-migrate';
 import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveApprovalExpiryConfig, resolveReportFallbackConfig, resolveIdentityGateMode, resolveAutonomyGating, resolveVerificationConfig, resolveRelayBudgetConfig, resolveTurnInjectionConfig, resolveOutboundJudgeConfig, resolveOutboundRedactionConfig, OutboundConfigError, type OutboundJudgeSettings, type OutboundRedactionSettings } from './config.js';
 import { createVerificationRuntime } from './verification/index.js';
 import { createLogger } from './logger.js';
-import { HttpAdapter } from './channels/http/http-adapter.js';
+import { HttpAdapter, scheduleProcessExit } from './channels/http/http-adapter.js';
 import { WebPushService } from './channels/web/push-service.js';
 import { loadVapidSetup, logVapidReadiness } from './channels/web/vapid.js';
 import { configuredReachChannels, reachChannelsFor } from './agents/principal-reach.js';
@@ -255,6 +255,7 @@ import { closeLegacyInboxDrains, InboxHeartbeat, type InboxTriageHealth } from '
 import { readTriageCadences, type Cadence } from './principal-mailboxes/triage-cadence.js';
 import { inMemoryTriageConfig, TriageState, TRIAGE_NAMESPACE } from './principal-mailboxes/triage-state.js';
 import { isTriageHeld } from './onboarding/triage-hold.js';
+import { OnboardingService } from './onboarding/onboarding-service.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
 import { unreadCandidateProbe } from './principal-mailboxes/triage-candidate.js';
 import type { TriageServices } from './principal-mailboxes/triage-services.js';
@@ -4263,6 +4264,22 @@ async function main(): Promise<void> {
   // The home's tiles read a cached model; keep it warm only when the console is served.
   if (config.webAppBootstrapSecret) briefingService.startWarming();
 
+  // Starting onboarding (#2360). The triage hold is written to triageConfig, the store the
+  // inbox heartbeat reads it from.
+  const onboardingService = new OnboardingService({
+    pool,
+    taskRepo,
+    registry: registryService,
+    scheduler: schedulerService,
+    configStore: triageConfig,
+    workingDocsRepo,
+    principalName: async () => (await contactService.findContactBySystemRole('principal'))?.displayName ?? null,
+    principalHasIdentity: setupCheckDeps.principalHasIdentity,
+    appOrigin: config.appOrigin,
+    scheduleProcessExit,
+    logger,
+  });
+
   const httpAdapter = new HttpAdapter({
     bus,
     logger,
@@ -4308,6 +4325,7 @@ async function main(): Promise<void> {
     livePrincipalMailboxIds: async () => (await principalMailboxStore.listLive()).map((m) => m.id),
     setupRequiredAtBoot,
     setupChecklist,
+    onboardingService,
     bootStartedAt,
     processStartedAt: healthService.startedAtIso,
     // Powers POST /api/setup/suggest-name (wizard starter-name suggestion, #799).

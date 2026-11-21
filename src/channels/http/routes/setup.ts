@@ -13,7 +13,7 @@
 //   GET  /api/setup/checklist — the Setup checklist and setup_complete (#2358)
 //   PUT  /api/setup/state     — who Setup is for, the operator, the routes (#2358)
 //   POST /api/setup/start     — the Setup page opened: Setup has started (#2358)
-//   POST /api/setup/complete  — Start onboarding: Setup is over (#2358)
+//   POST /api/setup/complete  — Setup is over (#2358)
 //
 // All routes require session cookie or x-web-bootstrap-secret authentication
 // (same pattern as identity routes). Routes are only registered when
@@ -587,11 +587,9 @@ export async function setupRoutes(
 
   // -- POST /api/setup/complete --
   //
-  // Start onboarding (#2358): Setup is over, and the console stops showing the Setup page.
-  // Refused with the missing steps until setup_complete. What onboarding then does is #2360.
-  // The shared web thread moves to a new conversation, so the principal never opens on the
-  // operator's Setup chat. completeSetup does both in one locked transaction: a repeated or
-  // concurrent request after the first commits leaves the thread where it is.
+  // Finish Setup (#2358): the console stops showing the Setup page. Refused with the missing
+  // steps until setup_complete. Starting onboarding is its own route (POST /api/onboarding/start,
+  // #2360), which also rotates the web thread; finishing Setup leaves the thread where it is.
   app.post('/api/setup/complete', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     if (!setupChecklist) {
@@ -602,8 +600,8 @@ export async function setupRoutes(
       if (!checklist.setupComplete) {
         return reply.status(409).send({ error: 'Setup is not finished yet.', missing: checklist.missing });
       }
-      const { rotated } = await completeSetup(pool, logger);
-      if (rotated) logger.info('Setup complete: Start onboarding pressed; the web thread was rotated');
+      await completeSetup(pool);
+      logger.info('Setup complete');
       return reply.send({ inSetup: false });
     } catch (err) {
       logger.error({ err }, 'POST /api/setup/complete: failed');
