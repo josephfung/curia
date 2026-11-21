@@ -142,19 +142,32 @@ livekit_command_for() {
 # Enable the voice profile and give LiveKit generated keys in env file $1.
 # $2 = local|public. Existing operator values (shell or .env) are never replaced.
 ensure_livekit_env() {
-  local env="$1" mode="$2" profiles
-  profiles="$(env_value "$env" COMPOSE_PROFILES)"
-  if [[ -z "$profiles" ]]; then
-    set_env_var "$env" COMPOSE_PROFILES voice
-  elif [[ ",$profiles," != *,voice,* ]]; then
-    set_env_var "$env" COMPOSE_PROFILES "${profiles},voice"
+  local env="$1" mode="$2" profiles key
+  # A value the shell sets (even empty) wins in Compose, so never write .env then.
+  if [[ -n "${COMPOSE_PROFILES+set}" ]]; then
+    if [[ ",${COMPOSE_PROFILES}," != *,voice,* ]]; then
+      warn "COMPOSE_PROFILES is set in your shell without 'voice'; LiveKit will not start."
+      hint "Add voice to COMPOSE_PROFILES (e.g. COMPOSE_PROFILES=${COMPOSE_PROFILES:+${COMPOSE_PROFILES},}voice)."
+    fi
+  else
+    profiles="$(env_value "$env" COMPOSE_PROFILES)"
+    if [[ -z "$profiles" ]]; then
+      set_env_var "$env" COMPOSE_PROFILES voice
+    elif [[ ",$profiles," != *,voice,* ]]; then
+      set_env_var "$env" COMPOSE_PROFILES "${profiles},voice"
+    fi
   fi
-  if [[ -z "$(compose_var "$env" LIVEKIT_KEYS)" ]]; then
-    set_env_var "$env" LIVEKIT_KEYS "\"$(gen_livekit_keys)\""
-  fi
-  if [[ -z "$(compose_var "$env" LIVEKIT_COMMAND)" ]]; then
-    set_env_var "$env" LIVEKIT_COMMAND "$(livekit_command_for "$mode")"
-  fi
+  for key in LIVEKIT_KEYS LIVEKIT_COMMAND; do
+    if [[ -n "${!key+set}" ]]; then
+      [[ -n "${!key}" ]] || warn "$key is set but empty in your shell; Compose will use the empty value."
+    elif [[ -z "$(env_value "$env" "$key")" ]]; then
+      if [[ "$key" == LIVEKIT_KEYS ]]; then
+        set_env_var "$env" LIVEKIT_KEYS "\"$(gen_livekit_keys)\""
+      else
+        set_env_var "$env" LIVEKIT_COMMAND "$(livekit_command_for "$mode")"
+      fi
+    fi
+  done
 }
 
 # Returns 0 if key matches sk-ant-... format, 1 otherwise.
