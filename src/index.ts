@@ -3885,7 +3885,7 @@ async function main(): Promise<void> {
     logger,
     readInvitation: async () => {
       const inv = await readCurrentInvitation(pool);
-      return inv === null ? null : { expiresAt: new Date(inv.expiresAt), redeemed: inv.state === 'redeemed' };
+      return inv === null ? null : { expiresAt: new Date(inv.expiresAt), createdAt: new Date(inv.createdAt), redeemed: inv.state === 'redeemed' };
     },
   });
   onboardingWatcher.start();

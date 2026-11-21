@@ -22,7 +22,7 @@ export interface OnboardingWatcherOptions {
   configStore: Pick<ConfigStore, 'get' | 'set'>;
   logger: Logger;
   /** The current phone-app invitation; null when none exists. */
-  readInvitation: () => Promise<{ expiresAt: Date; redeemed: boolean } | null>;
+  readInvitation: () => Promise<{ expiresAt: Date; createdAt: Date; redeemed: boolean } | null>;
   intervalMinutes?: number;
 }
 
@@ -59,7 +59,13 @@ export class OnboardingWatcher {
       const state = await readOnboardingState(this.o.configStore, this.o.logger);
       if (state === null || state.taskId !== task.id) return;
 
-      const invitation = await this.o.readInvitation();
+      // The current invitation may predate this run (cancel + restart, or minted from Devices): it
+      // counts only on the app route and when minted at or after the run started.
+      let invitation: { expiresAt: Date; redeemed: boolean } | null = null;
+      if (state.route === 'app') {
+        const inv = await this.o.readInvitation();
+        if (inv !== null && inv.createdAt.getTime() >= Date.parse(state.startedAt)) invitation = inv;
+      }
       const openTopicsRemain = await this.openFirstConversationTopics(task.id);
       const action = decideNext(state, now, invitation, openTopicsRemain);
       if (action === 'wait') return;
@@ -69,12 +75,12 @@ export class OnboardingWatcher {
         case 'send_followup': {
           const n = state.followUpsSent + 1;
           // State first: a failed write must not leave a sent follow-up uncounted (the cap would slip).
-          await this.updateState((s) => ({ ...s, followUpsSent: s.followUpsSent + 1, lastFollowUpAt: now.toISOString() }));
+          if (!(await this.updateState((s) => decideNext(s, now, invitation, openTopicsRemain) === action, (s) => ({ ...s, followUpsSent: s.followUpsSent + 1, lastFollowUpAt: now.toISOString() })))) break;
           await noteAndWakeCoordinator(this.o, task, `Send follow-up ${n} of ${GREETING_FOLLOWUPS}`);
           break;
         }
         case 'idle_nudge':
-          await this.updateState((s) => ({ ...s, idleNudgeSentAt: now.toISOString() }));
+          if (!(await this.updateState((s) => decideNext(s, now, invitation, openTopicsRemain) === action, (s) => ({ ...s, idleNudgeSentAt: now.toISOString() })))) break;
           await noteAndWakeCoordinator(this.o, task, 'Principal went quiet mid-conversation: one gentle nudge');
           break;
         case 'notify_greeting_unanswered':
@@ -94,12 +100,19 @@ export class OnboardingWatcher {
     return topicSubtasks(children).some((t) => t.sessionId === FIRST_CONVERSATION_SESSION && isOpenTask(t.task));
   }
 
-  /** Re-read the latest state right before writing so a concurrent change to another field survives. */
+  /**
+   * Re-read the latest state right before writing, so a concurrent change to another field survives,
+   * and re-decide on it: a reply that landed since the tick's first read cancels the action.
+   * Returns whether the change was written.
+   */
   private async updateState(
+    stillApplies: (s: OnboardingState) => boolean,
     change: (s: OnboardingState) => OnboardingState,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const latest = await readOnboardingState(this.o.configStore, this.o.logger);
-    if (latest === null) return;
+    if (latest === null) return false;
+    if (!stillApplies(latest)) return false;
     await writeOnboardingState(this.o.configStore, change(latest));
+    return true;
   }
 }

@@ -33,6 +33,7 @@ export interface InvitationStatus {
   id: string;
   state: InvitationState;
   expiresAt: string;
+  createdAt: string;
   redeemedAt: string | null;
   deviceName: string | null;
 }
@@ -156,7 +157,7 @@ export async function releaseInvitation(pool: PairingQueryable, id: string): Pro
 /** The current invitation, or null when none was minted or the last was cancelled. */
 export async function readCurrentInvitation(pool: PairingQueryable): Promise<InvitationStatus | null> {
   const result = await pool.query(
-    `SELECT id, expires_at, redeemed_at, device_name, (expires_at <= NOW()) AS expired
+    `SELECT id, expires_at, created_at, redeemed_at, device_name, (expires_at <= NOW()) AS expired
      FROM pairing_invitations
      WHERE superseded_at IS NULL
      LIMIT 1`,
@@ -170,6 +171,7 @@ export async function readCurrentInvitation(pool: PairingQueryable): Promise<Inv
     id: asString(row['id'], 'id'),
     state,
     expiresAt: asIso(row['expires_at'], 'expires_at'),
+    createdAt: asIso(row['created_at'], 'created_at'),
     redeemedAt,
     deviceName: typeof name === 'string' && name.length > 0 ? name : null,
   };
