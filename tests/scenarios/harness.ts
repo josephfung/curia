@@ -33,6 +33,7 @@
 // the run's conversation, and approve-action on a later live principal turn (a `followup`)
 // acts only on the run's own. readGatewayOutcome reads all of it before cleanup removes it.
 import { randomUUID } from 'node:crypto';
+import { reconcileActiveSkillsBlock } from '../../src/db/active-skills-progress.js';
 import { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import { AuditLogRepo } from '../../src/audit/audit-log-repo.js';
 import { BAND_GATE_C_UNREVIEWED_REASON } from '../../src/skills/execution.js';
@@ -109,6 +110,7 @@ import {
   scopedBullpen,
   scopedOutboundContext,
   scopedPinnedContextReader,
+  scopedOnboardingTurnContext,
   scopedPrincipalBacklog,
   scopedVerification,
   SeedScope,
@@ -287,6 +289,12 @@ export interface ScenarioHarness {
   reachableTools: Set<string>;
   /** The same, for every agent in the stack (#2027): what a real specialist can call. */
   reachableByAgent: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * The `onboarding` skill's tools as the coordinator gets them (#2360): a `seed.onboarding`
+   * case's principal turn is offered them, as production's onboarding turn context activates
+   * the skill. Empty when the skill is not loaded.
+   */
+  onboardingTools: ReadonlySet<string>;
   /**
    * A real-delegation run's default wait: the longest delegate wait any specialist gets,
    * plus a margin for the coordinator's own turn.
@@ -521,6 +529,8 @@ export async function createScenarioHarness(
     // is no browser; web-browser is stubbed).
     wrapVerification: (runtime) => scopedVerification(runtime, currentScope),
     wrapPinnedContextReader: (reader) => scopedPinnedContextReader(reader, currentScope),
+    // The onboarding block on the run's live principal turns (#2360), from its seed.onboarding.
+    onboardingTurnContext: scopedOnboardingTurnContext(currentScope),
     browserSessionAlive: scopedBrowserSessionAlive(currentScope),
     delegationClaims: true,
     // Through-gateway sends (#2312): production's review, recording transports. What passes
@@ -793,6 +803,8 @@ export async function createScenarioHarness(
     for (const tool of reach.unavailable) unservable.add(tool);
   }
   const reachableTools = reachableByAgent.get(COORDINATOR)!;
+  const onboardingActivation = stack.executionLayer.resolveSkillActivationForAgent(ONBOARDING_SKILL, COORDINATOR);
+  const onboardingTools = new Set('error' in onboardingActivation ? [] : onboardingActivation.tools);
   unavailable = unservable;
   const delegationRunTimeoutMs = longestDelegateWaitMs(stack) + DELEGATION_RUN_MARGIN_MS;
   const internalNames = internalNamesFor({
@@ -1512,6 +1524,7 @@ export async function createScenarioHarness(
     coordinatorTools,
     reachableTools,
     reachableByAgent,
+    onboardingTools,
     delegationRunTimeoutMs,
     unavailableTools: unavailable,
     inertTools: stack.snapshotMcpTools,
@@ -1560,9 +1573,16 @@ export function scheduledJobTask(agentId: string, conversationId: string, conten
  * and the bound-task metadata. A wake_at job carries no standing, so no wakeContext. It does carry
  * the task's stored originator: `system` for the inbox heartbeat's drain task (#2475).
  */
-/** A wake task's progress block: {} for a fresh task with no notes (the heartbeat's new drain). */
+/** A wake task's progress block: {} for a fresh task with no notes or skills (the heartbeat's new drain). */
+/** The skill production's onboarding turn context activates (src/agents/runtime.ts). */
+const ONBOARDING_SKILL = 'onboarding';
+
 function wakeProgress(task: ScenarioWakeTask): Record<string, unknown> {
-  return task.notes.length > 0 ? { notes: task.notes } : {};
+  return {
+    ...(task.notes.length > 0 ? { notes: task.notes } : {}),
+    // The task's active skills, which the wake restores as production's does (#2360).
+    ...(task.activeSkills ? { activeSkills: reconcileActiveSkillsBlock(task.activeSkills, null) } : {}),
+  };
 }
 
 export function taskWakeEvent(agentId: string, conversationId: string, content: string, task: ScenarioWakeTask): AgentTaskEvent {

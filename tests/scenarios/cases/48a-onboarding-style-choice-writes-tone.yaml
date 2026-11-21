@@ -7,10 +7,8 @@
 # One case per topic answer (48a style, 48b independence, 48c inbox): a case is one inbound
 # with no prior history, so the principal's message answers the topic on its own.
 #
-# NEEDS HARNESS SUPPORT before it can run: the test-mode stack does not wire the runtime's
-# onboardingTurnContext, so a principal turn never gets the onboarding block or the
-# `onboarding` skill (and with it onboarding-progress and office-tone-update). It needs a
-# run-scoped source that reports this case's onboarding task, like the pinned-context fixture.
+# seed.onboarding gives the principal turn production's onboarding block and the
+# `onboarding` skill (src/onboarding/turn-context.ts); its topics match the status stub.
 name: onboarding style choice writes the tone
 description: >
   The principal is in their first onboarding conversation with Curia, by chat. Curia asked
@@ -22,6 +20,13 @@ tags: [onboarding]
 # New in #2360: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
 release_gate: false
 stub_sets: [human-channels, deferred-work]
+seed:
+  onboarding:
+    task: 6e0b0a2d-2360-4c00-8a00-00000000048a
+    topics:
+      - { id: style, title: How I should sound, session: first-conversation }
+      - { id: independence, title: How independent I should be, session: first-conversation }
+      - { id: inbox-expectations, title: "What you'll notice in your inbox", session: first-conversation }
 inbound:
   from: principal
   channel: web

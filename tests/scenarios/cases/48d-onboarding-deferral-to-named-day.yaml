@@ -3,8 +3,8 @@
 # without pushing. Anti-goal: onboarding hijacking the relationship (design, "Anti-goals").
 # The day is two days out, by name, so it never reads as "today" or "next week".
 #
-# NEEDS HARNESS SUPPORT before it can run: see 48a (no onboarding turn context in the
-# test-mode stack, so the turn never gets the onboarding skill).
+# seed.onboarding gives the principal turn production's onboarding block and the
+# `onboarding` skill (src/onboarding/turn-context.ts); its topics match the status stub.
 name: onboarding deferral to a named day books it
 description: >
   Curia greeted the principal and invited a first onboarding conversation of about half an
@@ -16,6 +16,13 @@ tags: [onboarding]
 # New in #2360: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
 release_gate: false
 stub_sets: [human-channels, deferred-work]
+seed:
+  onboarding:
+    task: 6e0b0a2d-2360-4c00-8a00-00000000048d
+    topics:
+      - { id: hello, title: Hello, session: first-conversation }
+      - { id: about-you, title: Tell me about yourself, session: first-conversation }
+      - { id: style, title: How I should sound, session: first-conversation }
 inbound:
   from: principal
   channel: web

@@ -3,11 +3,11 @@
 # are code's job). Anti-goal: session spam, a session the principal didn't agree to (design,
 # "Anti-goals"). Nothing is booked on a vague answer.
 #
-# NEEDS HARNESS SUPPORT before it can run: see 48a (no onboarding turn context in the
-# test-mode stack, so the turn never gets the onboarding skill). The "once" half (a second
-# vague answer gets no new offer) needs a second turn with the first in its history, which
-# `inbound.then` does not give (it runs in a conversation of its own); it is judged here only
-# as "one offer in this reply".
+# seed.onboarding gives the principal turn production's onboarding block and the
+# `onboarding` skill (src/onboarding/turn-context.ts); its topics match the status stub.
+# The "once" half (a second vague answer gets no new offer) needs a second turn with the
+# first in its history, which `inbound.then` does not give (it runs in a conversation of its
+# own); it is judged here only as "one offer in this reply".
 name: onboarding vague later offers two times once
 description: >
   Curia greeted the principal and invited a first onboarding conversation of about half an
@@ -18,6 +18,12 @@ tags: [onboarding]
 # New in #2360: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
 release_gate: false
 stub_sets: [human-channels, deferred-work]
+seed:
+  onboarding:
+    task: 6e0b0a2d-2360-4c00-8a00-00000000048e
+    topics:
+      - { id: hello, title: Hello, session: first-conversation }
+      - { id: about-you, title: Tell me about yourself, session: first-conversation }
 inbound:
   from: principal
   channel: web

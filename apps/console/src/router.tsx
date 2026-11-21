@@ -75,7 +75,7 @@ const authedRoute = createRoute({
   beforeLoad: async ({ location }) => {
     const session = await getSessionInfo();
     if (!session.valid) throw redirect({ to: signedOutPath(isStandaloneDisplay()) });
-    // The Setup page (#2358) is the landing page on a new install until Start onboarding;
+    // The Setup page (#2358) is the landing page on a new install until Setup is finished;
     // an install that isn't in Setup never sees it.
     const target = setupRedirect(location.pathname, session);
     if (target === '/setup') throw redirect({ to: '/setup' });

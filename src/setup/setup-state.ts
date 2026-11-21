@@ -132,7 +132,7 @@ export async function markSetupComplete(db: SetupStateQueryable): Promise<void> 
 
 /**
  * Whether the console should show the Setup page and the server should treat web chat as
- * the operator's (PR 2): from a new install's first load until Start onboarding. Migration
+ * the operator's (PR 2): from a new install's first load until Setup is finished. Migration
  * 130 marked installs that predate the Setup page complete, so they never are.
  */
 export function isInSetup(state: SetupState): boolean {

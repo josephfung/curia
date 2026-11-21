@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { scheduledJobTask, taskWakeEvent } from '../../scenarios/harness.js';
 import { makeSystemOriginator, isSystemOriginated } from '../../../src/contacts/principal.js';
+import { readActiveSkillNames } from '../../../src/db/active-skills-progress.js';
 
 // #2474 final fixes addendum R1: the harness's `from: scheduler` branch publishes what
 // Scheduler.fireJob does for a declarative job, originator included. Without one, every autonomous
@@ -36,5 +37,15 @@ describe('taskWakeEvent', () => {
     const event = taskWakeEvent('ceo-inbox', 'conv-1', 'wake body', task);
     expect(event.payload.metadata).not.toHaveProperty('originator');
     expect(event.payload).toMatchObject({ agentId: 'ceo-inbox', conversationId: 'conv-1', channelId: 'scheduler', senderId: 'scheduler', content: 'wake body', intentAnchor: 'Triage' });
+  });
+
+  // #2360: the onboarding task carries the onboarding skill, which a wake restores from progress.
+  it('puts the wake task\'s active skills on the bound task\'s progress, readable as production stores them', () => {
+    const event = taskWakeEvent('coordinator', 'conv-1', 'wake body', { ...task, activeSkills: ['onboarding'] });
+    const progress = (event.payload.metadata?.['boundTask'] as { progress: Record<string, unknown> }).progress;
+    expect(readActiveSkillNames(progress)).toEqual(['onboarding']);
+    expect(progress['notes']).toEqual(task.notes);
+    const plain = (taskWakeEvent('coordinator', 'conv-1', 'wake body', task).payload.metadata?.['boundTask'] as { progress: Record<string, unknown> }).progress;
+    expect(plain).not.toHaveProperty('activeSkills');
   });
 });

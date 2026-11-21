@@ -3935,7 +3935,7 @@ table.records-table tbody tr.active td { background: transparent; }
 }
 
 /* ── Setup page (#2358) ─────────────────────────────────────────────────────
-   The console's landing page on a new install until Start onboarding: the step
+   The console's landing page on a new install until Setup is finished: the step
    list on the left, the open step's form on the right. Layout from
    docs/wip/2026-10-29-onboarding-journey-design/setup-page-mockup.html. */
 .setup-page {

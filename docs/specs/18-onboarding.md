@@ -550,8 +550,10 @@ cancelled from the console's task view; triage stays held until switched on.
 
 `tests/scenarios/cases/48a`–`48g` (tag `onboarding`, evals, not in the gate): the style,
 independence and inbox topics of the first conversation, a deferral to a named day, a vague
-"later", a no-show, and a side request. All but the no-show need the test-mode stack to
-serve onboarding turn context before they can run.
+"later", a no-show, and a side request. A case's `seed.onboarding` gives its principal turn
+production's onboarding block and skill (the test-mode stack's `onboardingTurnContext`); the
+no-show wake restores the skill from `inbound.task.active_skills`. A vague "later" answered
+vaguely again is not covered: a case has no multi-turn history.
 
 ---
 

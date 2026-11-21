@@ -3,8 +3,8 @@
 # for the right agent, say when to expect the result, and return to the topic. Anti-goal:
 # onboarding hijacking the relationship (design, "Anti-goals").
 #
-# NEEDS HARNESS SUPPORT before it can run: see 48a (no onboarding turn context in the
-# test-mode stack, so the turn never gets the onboarding skill or the block naming the task).
+# seed.onboarding gives the principal turn production's onboarding block and the
+# `onboarding` skill (src/onboarding/turn-context.ts); its topics match the status stub.
 name: onboarding side request becomes its own task
 description: >
   The principal is in their first onboarding conversation with Curia, by chat, about to answer
@@ -16,6 +16,12 @@ tags: [onboarding]
 # New in #2360: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
 release_gate: false
 stub_sets: [human-channels, deferred-work]
+seed:
+  onboarding:
+    task: 6e0b0a2d-2360-4c00-8a00-000000000487
+    topics:
+      - { id: style, title: How I should sound, session: first-conversation }
+      - { id: independence, title: How independent I should be, session: first-conversation }
 inbound:
   from: principal
   channel: web

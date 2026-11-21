@@ -16,6 +16,20 @@ export interface OnboardingTurnContextSource {
   forPrincipalTurn(now: Date): Promise<string | null>;
 }
 
+/**
+ * The block a live principal turn gets while onboarding is open. Exported so the scenario
+ * harness serves the same text from a case's `seed.onboarding`.
+ */
+export function formatOnboardingTurnBlock(
+  taskId: string,
+  openTopics: ReadonlyArray<{ title: string; topicId: string }>,
+): string {
+  const topics = openTopics.map((t) => `${t.title} (${t.topicId})`).join(', ') || 'none';
+  return `[Onboarding in progress — task ${taskId}. Open topics this session: ${topics}. `
+    + 'Use onboarding-progress with op: "status" to see and record progress. '
+    + 'Handle anything else the principal asks as usual.]';
+}
+
 export function createOnboardingTurnContext(deps: {
   taskRepo: Pick<TaskRepo, 'listTasks'>;
   configStore: Pick<ConfigStore, 'get' | 'set'>;
@@ -29,10 +43,7 @@ export function createOnboardingTurnContext(deps: {
         if (!parent) return null;
         const open = topicSubtasks(await listChildren(taskRepo, parent.id)).filter((s) => isOpenTask(s.task));
         await recordPrincipalTurn(configStore, logger, now);
-        const topics = open.map((s) => `${s.task.title} (${s.topicId})`).join(', ') || 'none';
-        return `[Onboarding in progress — task ${parent.id}. Open topics this session: ${topics}. `
-          + 'Use onboarding-progress with op: "status" to see and record progress. '
-          + 'Handle anything else the principal asks as usual.]';
+        return formatOnboardingTurnBlock(parent.id, open.map((s) => ({ title: s.task.title, topicId: s.topicId })));
       } catch (err) {
         // Fail open: a broken lookup must not break the principal's chat.
         logger.error({ err }, 'onboarding: turn context lookup failed — this turn proceeds without it');

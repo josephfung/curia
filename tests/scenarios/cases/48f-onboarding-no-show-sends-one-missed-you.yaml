@@ -4,10 +4,9 @@
 # you. When suits better?". Anti-goal: more than one "missed you" per missed session (design,
 # "Anti-goals"). The last progress note is NO_SHOW_NOTE verbatim, as the sync writes it.
 #
-# Runs as far as the harness allows: a task-wake case. It NEEDS HARNESS SUPPORT to match
-# production fully: the harness's wake progress carries notes only, not `activeSkills`, so the
-# wake does not restore the `onboarding` skill the real task carries. The wake note alone
-# states what to do.
+# A task wake on the onboarding task, which carries the `onboarding` skill in its active
+# skills (OnboardingService.createTaskTree); `active_skills` restores it on the wake as
+# production's does.
 name: onboarding no-show sends one missed-you
 description: >
   The onboarding task wakes after a booked onboarding session whose calendar event ended with
@@ -28,6 +27,7 @@ inbound:
       /meetings/onboarding/playbook.md.
     tags: [onboarding]
     originator: system
+    active_skills: [onboarding]
     notes:
       - at: "{{time:today-1 15:10}}"
         note: >

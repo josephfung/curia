@@ -181,6 +181,19 @@ export interface SeedPinned {
   unavailable: string[];
 }
 
+/**
+ * An onboarding under way (`seed.onboarding`, #2360): what production's onboarding turn
+ * context would find (the open onboarding task and its open topics). The harness serves the
+ * same block (formatOnboardingTurnBlock) on the run's live principal turns, so they get the
+ * `onboarding` skill. No task row is written; the case stubs onboarding-progress.
+ */
+export interface SeedOnboarding {
+  /** The onboarding task's id, a fixed UUID the case's stubs and checks match on. */
+  taskId: string;
+  /** The open topic subtasks, in playbook order. Empty: the block lists none. */
+  topics: Array<{ topicId: string; title: string; sessionId: string }>;
+}
+
 /** A contact to create for the run. Referenced elsewhere as `{{contact:<key>}}`. */
 export interface SeedContact {
   key: string;
@@ -508,6 +521,11 @@ export interface ScenarioWakeTask {
    * is what the inbox heartbeat stamps on its drain task (#2475). Omitted: no originator.
    */
   originator?: 'system';
+  /**
+   * Skills active on the task (progress.activeSkills), which a wake restores as production's
+   * does (#2360: the onboarding task carries `onboarding`). Omitted: none.
+   */
+  activeSkills?: string[];
 }
 
 /**
@@ -565,6 +583,8 @@ export interface ScenarioCase {
     outreach: SeedOutreach[];
     /** Pinned-context documents and settings (#2339). Absent: every entry reads as unset. */
     pinned?: SeedPinned;
+    /** An onboarding under way (#2360), coordinator cases only. Absent: no onboarding block. */
+    onboarding?: SeedOnboarding;
     /** The principal's own mailbox (#2474), through_gateway only. Absent: no drafts, on_request. */
     principalMailbox?: SeedPrincipalMailbox;
     /**

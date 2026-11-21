@@ -98,6 +98,7 @@ import { AgentRuntime } from '../agents/runtime.js';
 import { AgentRegistry } from '../agents/agent-registry.js';
 import { discoverAgentManifests, type AgentYamlConfig } from '../agents/loader.js';
 import { createPinnedContextReader, type PinnedContextReader } from '../agents/pinned-context.js';
+import type { OnboardingTurnContextSource } from '../onboarding/turn-context.js';
 import { WorkingDocsRepo } from '../db/working-docs-repo.js';
 import { AnthropicProvider } from '../agents/llm/anthropic.js';
 import { OpenRouterProvider } from '../agents/llm/openrouter.js';
@@ -291,6 +292,12 @@ export interface TestModeStackOptions {
    * are shared by every run, and a case must not depend on what happens to be in it.
    */
   wrapPinnedContextReader?: (reader: PinnedContextReader) => PinnedContextReader;
+  /**
+   * Onboarding context for live principal turns (#2360), given to the coordinator only, as
+   * production does. The scenario suite serves each run's `seed.onboarding`; absent, no turn
+   * gets the onboarding block (test mode has no task repo to find an onboarding task in).
+   */
+  onboardingTurnContext?: OnboardingTurnContextSource;
   /**
    * The cross-turn backstop's isolation scope for a new root (#2588), passed to the turn
    * activity registry as `scopeOf`. The behaviour suites run cases concurrently, and a case's
@@ -1654,7 +1661,12 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       },
     });
     for (const assembled of agents) {
-      new AgentRuntime(assembled.runtimeConfig).register();
+      // Onboarding context for live principal turns (#2360): the coordinator only, as in index.ts.
+      new AgentRuntime(
+        options.onboardingTurnContext && assembled.agentConfig.name === 'coordinator'
+          ? { ...assembled.runtimeConfig, onboardingTurnContext: options.onboardingTurnContext }
+          : assembled.runtimeConfig,
+      ).register();
     }
 
     // Unresolved pins drop tools and SKILL.md bodies; resolvePinnedSkills only logs

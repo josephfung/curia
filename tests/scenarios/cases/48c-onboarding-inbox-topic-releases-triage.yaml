@@ -4,8 +4,8 @@
 # from Start until this topic (design §8). The real release tool refuses until the topic is
 # done (code, unit-tested); with it stubbed here, the case checks the model's own order.
 #
-# NEEDS HARNESS SUPPORT before it can run: see 48a (no onboarding turn context in the
-# test-mode stack, so the turn never gets the onboarding skill).
+# seed.onboarding gives the principal turn production's onboarding block and the
+# `onboarding` skill (src/onboarding/turn-context.ts); its topics match the status stub.
 name: onboarding inbox topic releases triage after it
 description: >
   The principal is in their first onboarding conversation with Curia, by chat, with their
@@ -18,6 +18,13 @@ tags: [onboarding]
 # New in #2360: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
 release_gate: false
 stub_sets: [human-channels, deferred-work]
+seed:
+  onboarding:
+    task: 6e0b0a2d-2360-4c00-8a00-00000000048c
+    topics:
+      - { id: inbox-expectations, title: "What you'll notice in your inbox", session: first-conversation }
+      - { id: first-look, title: First look, session: first-conversation }
+      - { id: next-step, title: Next step, session: first-conversation }
 inbound:
   from: principal
   channel: web

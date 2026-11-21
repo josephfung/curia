@@ -4,8 +4,8 @@
 # onboarding is open (the band limit itself is enforced in code and unit-tested). Triage stays
 # held: onboarding-triage-release belongs to the inbox topic alone (design §8).
 #
-# NEEDS HARNESS SUPPORT before it can run: see 48a (no onboarding turn context in the
-# test-mode stack, so the turn never gets the onboarding skill).
+# seed.onboarding gives the principal turn production's onboarding block and the
+# `onboarding` skill (src/onboarding/turn-context.ts); its topics match the status stub.
 name: onboarding independence ask first sets 75
 description: >
   The principal is in their first onboarding conversation with Curia, by chat. Curia offered
@@ -16,6 +16,13 @@ tags: [onboarding]
 # New in #2360: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
 release_gate: false
 stub_sets: [human-channels, deferred-work]
+seed:
+  onboarding:
+    task: 6e0b0a2d-2360-4c00-8a00-00000000048b
+    topics:
+      - { id: independence, title: How independent I should be, session: first-conversation }
+      - { id: reach-you, title: How to reach you, session: first-conversation }
+      - { id: inbox-expectations, title: "What you'll notice in your inbox", session: first-conversation }
 inbound:
   from: principal
   channel: web

@@ -173,7 +173,7 @@ export function stepsLeft(checklist: Checklist | null): StepDef[] {
 /**
  * Pages an operator may open while Setup runs: the Setup page itself, and the Settings
  * pages a channel step links to until it has its own form. Everything else (the home page,
- * chat, the knowledge graph) waits until Start onboarding.
+ * chat, the knowledge graph) waits until Setup is finished (Start onboarding or Not right now).
  */
 const OPEN_DURING_SETUP = [
   '/setup', '/settings', '/system', '/channels', '/tools', '/agents', '/mcp-skills', '/secrets',
