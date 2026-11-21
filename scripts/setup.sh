@@ -179,6 +179,25 @@ handle_existing_env() {
     esac
 }
 
+# Sets global LIVEKIT_SEED_ENV (array of KEY=VALUE for seed-vault) from the LiveKit
+# settings in env file $1 (shell first, as Compose reads them). Empty when .env has
+# neither LIVEKIT_KEYS nor LIVEKIT_COMMAND (an old developer .env). Never prints keys.
+build_livekit_seed_env() {
+    local env="${1:-$ENV_FILE}" keys cmd pair="" rc=0
+    LIVEKIT_SEED_ENV=()
+    keys="$(compose_var "$env" LIVEKIT_KEYS)"
+    cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
+    [[ -n "$keys" || -n "$cmd" ]] || return 0
+    LIVEKIT_SEED_ENV=("SEED_LIVEKIT_URL=ws://localhost:7880")
+    pair="$(livekit_seed_keys "$keys" "$cmd")" || rc=$?
+    if [[ $rc -eq 0 ]]; then
+        LIVEKIT_SEED_ENV+=("SEED_LIVEKIT_API_KEY=${pair%% *}" "SEED_LIVEKIT_API_SECRET=${pair#* }")
+    else
+        warn "Could not tell which keys LiveKit's LIVEKIT_COMMAND uses, so they were not saved for Curia."
+        hint "Enter the LiveKit API key and secret under Settings → Channels → Voice after setup."
+    fi
+}
+
 # Starts Postgres, runs migrations, starts the full stack, writes SETUP_COMPLETE marker.
 # Parses .env to get DATABASE_URL and HTTP_PORT for use at runtime. The bootstrap secret
 # is no longer stored in .env (#911) — it lives in the vault; only the full-setup path
@@ -256,22 +275,13 @@ run_infra() {
             "ANTHROPIC_API_KEY=$SEED_ANTHROPIC_KEY"
             "API_TOKEN=$API_TOKEN"
             "WEB_APP_BOOTSTRAP_SECRET=$WEB_APP_BOOTSTRAP_SECRET"
-            "SEED_LIVEKIT_URL=ws://localhost:7880"
         )
-        # Seed the LiveKit pair Curia must sign tokens with. run_infra exported .env
-        # above, so compose_var sees the same values LiveKit starts with. Never echo them.
-        local lk_pair="" lk_rc=0
-        lk_pair="$(livekit_seed_keys "$(compose_var "$ENV_FILE" LIVEKIT_KEYS)" "$(compose_var "$ENV_FILE" LIVEKIT_COMMAND)")" || lk_rc=$?
-        if [[ $lk_rc -eq 0 ]]; then
-            seed_secret_env+=(
-                "SEED_LIVEKIT_API_KEY=${lk_pair%% *}"
-                "SEED_LIVEKIT_API_SECRET=${lk_pair#* }"
-            )
-        else
-            warn "Could not tell which keys LiveKit's LIVEKIT_COMMAND uses, so they were not saved for Curia."
-            hint "Enter the LiveKit API key and secret under Settings → Channels → Voice after setup."
-        fi
     fi
+    # LiveKit values go in on resume too: a first run interrupted before the vault
+    # seed leaves LiveKit running on .env keys the vault lacks. seed-vault writes
+    # them only when absent, so this never overwrites. Only these, no bootstrap secrets.
+    build_livekit_seed_env
+    seed_secret_env+=(${LIVEKIT_SEED_ENV[@]+"${LIVEKIT_SEED_ENV[@]}"})
     # ${arr[@]+"${arr[@]}"} expands safely to nothing when the array is empty, even under
     # `set -u` on bash 3.2 (macOS default), where a bare "${arr[@]}" is an unbound error.
     if ! env ${seed_secret_env[@]+"${seed_secret_env[@]}"} SEED_VAULT_VERIFY=1 \

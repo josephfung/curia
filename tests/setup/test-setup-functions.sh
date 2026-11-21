@@ -168,6 +168,10 @@ EXAMPLE_EOF
 
 _tmp_env=$(mktemp)
 
+# The LiveKit assertions below read what write_env puts in .env; a value the caller's
+# shell sets would suppress the write.
+unset COMPOSE_PROFILES LIVEKIT_KEYS LIVEKIT_COMMAND
+
 # Override script globals for test isolation. Under vault-only (#911), write_env only
 # templates the four bootstrap values into .env; ANTHROPIC_API_KEY / API_TOKEN /
 # WEB_APP_BOOTSTRAP_SECRET are seeded into the encrypted vault and must NOT appear here.
@@ -293,6 +297,34 @@ else
     echo "  ✗ full reset should keep LIVEKIT_KEYS (got '${_opt3k_out}')"
     FAIL=$((FAIL + 1))
 fi
+
+# build_livekit_seed_env: LiveKit seed args for full and resume alike, nothing else
+unset COMPOSE_PROFILES LIVEKIT_KEYS LIVEKIT_COMMAND
+_lk_seed_env=$(mktemp)
+printf 'COMPOSE_PROFILES=voice\nLIVEKIT_KEYS="APIres: ressecret"\nLIVEKIT_COMMAND=--config /etc/livekit.local.yaml\n' > "$_lk_seed_env"
+build_livekit_seed_env "$_lk_seed_env"
+_lk_joined=" ${LIVEKIT_SEED_ENV[*]} "
+if [[ "$_lk_joined" == *" SEED_LIVEKIT_URL=ws://localhost:7880 "* \
+   && "$_lk_joined" == *" SEED_LIVEKIT_API_KEY=APIres "* \
+   && "$_lk_joined" == *" SEED_LIVEKIT_API_SECRET=ressecret "* \
+   && "$_lk_joined" != *ANTHROPIC_API_KEY* && "$_lk_joined" != *API_TOKEN=* \
+   && "$_lk_joined" != *WEB_APP_BOOTSTRAP_SECRET* ]]; then
+    echo "  ✓ build_livekit_seed_env yields only SEED_LIVEKIT_* from .env"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ build_livekit_seed_env should yield only SEED_LIVEKIT_* entries"
+    FAIL=$((FAIL + 1))
+fi
+printf 'DB_USER=curia\n' > "$_lk_seed_env"
+build_livekit_seed_env "$_lk_seed_env"
+if [[ ${#LIVEKIT_SEED_ENV[@]} -eq 0 ]]; then
+    echo "  ✓ build_livekit_seed_env yields nothing for an old .env"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ old .env without LiveKit values should yield no seed args"
+    FAIL=$((FAIL + 1))
+fi
+rm -f "$_lk_seed_env"
 
 # Test SETUP_COMPLETE marker: hint shown when absent, hidden when present
 _hint_env=$(mktemp)
