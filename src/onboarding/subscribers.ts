@@ -104,13 +104,12 @@ export class OnboardingSubscribers {
 
 /**
  * Add a progress note to a task and wake the coordinator on it now; a pending wake (23505) is as
- * good. `createdBy` labels the wake; it defaults to onboarding, its original caller.
+ * good.
  */
 export async function noteAndWakeCoordinator(
   o: Pick<OnboardingSubscribersOptions, 'taskRepo' | 'scheduler' | 'logger'>,
   task: Pick<TaskRow, 'id'>,
   note: string,
-  createdBy: string = ONBOARDING_CREATED_BY,
 ): Promise<void> {
   await o.taskRepo.updateTask(task.id, { progressNote: note });
   try {
@@ -118,12 +117,12 @@ export async function noteAndWakeCoordinator(
       taskId: task.id,
       agentId: 'coordinator',
       runAt: new Date(),
-      createdBy,
+      createdBy: ONBOARDING_CREATED_BY,
       originator: makeSystemOriginator(),
     });
   } catch (err) {
     if (isPgUniqueViolation(err)) {
-      o.logger.debug({ taskId: task.id, createdBy }, 'a coordinator wake is already pending');
+      o.logger.debug({ taskId: task.id }, 'a coordinator wake is already pending');
       return;
     }
     throw err;

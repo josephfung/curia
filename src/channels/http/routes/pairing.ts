@@ -299,10 +299,9 @@ export async function pairingRoutes(
         logger.error({ err, ...logRef }, 'invitation pairing notice was not recorded');
       }
       try {
-        // #2360: wakes onboarding to send the greeting. The sign-in already happened, so a failed
-        // publish is logged, not surfaced. The onboarding watcher is the backstop: with no greeting
-        // recorded 48 hours after redemption it wakes the onboarding task once to send it, then
-        // tells the operator (greeting_unanswered).
+        // #2360: lets a system subscriber follow up once the phone is paired. The sign-in already
+        // happened, so a failed publish is logged, not surfaced; a subscriber that must act needs
+        // its own backstop.
         await bus.publish('system', createPairingInvitationRedeemed({ invitationId: redeemed.id, deviceName: name }));
       } catch (err) {
         logger.error({ err, ...logRef }, 'pairing.invitation_redeemed could not be published');

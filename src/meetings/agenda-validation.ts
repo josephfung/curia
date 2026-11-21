@@ -168,8 +168,10 @@ export function validateParkAgendaInput(raw: Record<string, unknown>, now: Date)
  * within ±12 hours of `now` (inclusive). An agenda tied to a calendar event
  * stays due from 12 hours before the event until it is settled, so a late
  * call, even one after a no-show, still loads it (#2360); `expires_at` still
- * bounds it. An event-tied agenda that is not pending, or whose event was
- * cancelled, is never due.
+ * bounds it. An event-tied agenda that is not pending, whose event was
+ * cancelled, or whose start is not known yet (parked without `scheduled_for`,
+ * before the event sync reads the event) is never due: preloading it would
+ * lock it onto an unrelated call. It can still be loaded by id.
  */
 export function isDue(
   agenda: Pick<AgendaSnapshot, 'scheduledFor'> & Partial<Pick<AgendaDoc, 'calendarEventId' | 'eventState' | 'status'>>,
@@ -177,6 +179,7 @@ export function isDue(
 ): boolean {
   if (agenda.calendarEventId) {
     if ((agenda.status !== undefined && agenda.status !== 'pending') || agenda.eventState === 'cancelled') return false;
+    if (agenda.scheduledFor == null || agenda.scheduledFor === '') return false;
   }
   if (agenda.scheduledFor == null || agenda.scheduledFor === '') return true;
   const at = Date.parse(agenda.scheduledFor);

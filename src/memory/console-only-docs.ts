@@ -2,7 +2,7 @@
 //
 // A document whose frontmatter carries `editable_by: console` is edited only in the console (the
 // documents API). doc-write refuses agents' writes to it; code that relies on a document being
-// console-owned (the onboarding playbook) checks for the mark with isConsoleOnlyMarked.
+// console-owned checks for the mark with isConsoleOnlyMarked.
 
 /** Frontmatter key marking a document only the console edits: `editable_by: console`. */
 export const EDITABLE_BY_KEY = 'editable_by';

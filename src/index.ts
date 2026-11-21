@@ -145,6 +145,7 @@ import { deleteVoiceRoom, listVoiceRooms } from './channels/voice/livekit/token.
 import { SignalCallBridge } from './channels/voice/signal/signal-call-bridge.js';
 import { AgendaEventSync, readAgendaEvent } from './meetings/agenda-event-sync.js';
 import { AgendaStore } from './meetings/agenda-store.js';
+import { wakeAgendaOwner } from './meetings/owner-wake.js';
 import { MinutesPipeline } from './meetings/minutes-pipeline.js';
 import { MeetingPipelineRecovery } from './meetings/recovery.js';
 import { MeetingSessionEndedSubscriber, MinutesReadySubscriber } from './meetings/subscribers.js';
@@ -257,9 +258,8 @@ import { readTriageCadences, type Cadence } from './principal-mailboxes/triage-c
 import { inMemoryTriageConfig, TriageState, TRIAGE_NAMESPACE } from './principal-mailboxes/triage-state.js';
 import { isTriageHeld } from './onboarding/triage-hold.js';
 import { OnboardingService } from './onboarding/onboarding-service.js';
-import { noteAndWakeCoordinator, OnboardingSubscribers } from './onboarding/subscribers.js';
+import { OnboardingSubscribers } from './onboarding/subscribers.js';
 import { isNextSessionBooked, OnboardingWatcher } from './onboarding/watcher.js';
-import { isOpenTask } from './onboarding/subtasks.js';
 import { readCurrentInvitationTiming } from './channels/http/pairing-invitations.js';
 import { createOnboardingTurnContext } from './onboarding/turn-context.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
@@ -3906,16 +3906,9 @@ async function main(): Promise<void> {
     agendaEventSync = new AgendaEventSync({
       store: agendaStore,
       getEvent: (calendarId, eventId) => readAgendaEvent(router, calendarId, eventId),
-      wakeOwner: async (taskId, note) => {
-        // The owner id comes from agenda frontmatter, which the console can edit: wake only an
-        // open coordinator task, never an arbitrary one.
-        const task = await taskRepo.getTask(taskId);
-        if (!task || !isOpenTask(task) || task.agentId !== 'coordinator') {
-          logger.warn({ taskId }, 'agenda event sync: owner is not an open coordinator task, not waking it');
-          return;
-        }
-        await noteAndWakeCoordinator({ taskRepo, scheduler: schedulerService, logger }, task, note, 'meetings');
-      },
+      // The owner id comes from agenda frontmatter, which the console can edit: wakeAgendaOwner
+      // wakes only an open coordinator task, never an arbitrary one.
+      wakeOwner: (taskId, note) => wakeAgendaOwner({ taskRepo, scheduler: schedulerService, logger }, taskId, note),
       logger,
     });
     agendaEventSync.start();

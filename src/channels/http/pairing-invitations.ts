@@ -176,9 +176,9 @@ export async function readCurrentInvitation(pool: PairingQueryable): Promise<Inv
 }
 
 /**
- * The current invitation's timing, for the onboarding watcher: when it was minted, when it
- * expires and whether it was redeemed. Kept apart from readCurrentInvitation so the route's
- * response shape is unchanged.
+ * The current invitation's timing, for a watcher that follows up on an unused or expired
+ * link: when it was minted, when it expires and whether (and when) it was redeemed. Kept
+ * apart from readCurrentInvitation so the route's response shape is unchanged.
  */
 export async function readCurrentInvitationTiming(
   pool: PairingQueryable,

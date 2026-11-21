@@ -50,9 +50,8 @@ import type { Layer, EventType } from './events.js';
 // #2361 (mailbox sign-in): system layer publishes principal_mailbox.connected and
 //          mailbox_signin.finished from the Nylas hosted-auth callback (ids, outcome and routing
 //          only, never a grant id or address); audit logger and the resume subscriber read them.
-// #2360 (onboarding): the pairing route (system) publishes pairing.invitation_redeemed when a phone
-//          signs in with an invitation link (invitation id and device name only); the onboarding
-//          subscriber (system) reads it, as it does principal_mailbox.connected and mailbox_signin.finished.
+// #2360: the pairing route (system) publishes pairing.invitation_redeemed when a phone signs in
+//          with an invitation link (invitation id and device name only); system subscribers read it.
 // #813 (model fallback): agent layer publishes model.fallback when the primary tier model is
 //          unavailable and execution falls through to the fallback tier's model.
 //          system layer subscribes for audit logging and monitoring.

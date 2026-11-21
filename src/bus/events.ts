@@ -1100,7 +1100,7 @@ interface PrincipalMailboxConnectedPayload {
   mailboxId: string;
 }
 
-// PairingInvitationRedeemedPayload — a phone redeemed the onboarding invitation link (#2360). Carries
+// PairingInvitationRedeemedPayload — a phone redeemed the phone app invitation link (#2360). Carries
 // the invitation id and the device's display name — NEVER the token or the session cookie.
 interface PairingInvitationRedeemedPayload {
   invitationId: string;
@@ -2096,7 +2096,7 @@ export interface PrincipalMailboxConnectedEvent extends BaseEvent {
 }
 
 // PairingInvitationRedeemedEvent — published by the pairing route (trusted system infra) after a phone
-// signs in with an invitation link (#2360). The onboarding subscriber wakes the program on it.
+// signs in with an invitation link (#2360), so a system subscriber can follow up once the phone is paired.
 export interface PairingInvitationRedeemedEvent extends BaseEvent {
   type: 'pairing.invitation_redeemed';
   sourceLayer: 'system';
@@ -2431,7 +2431,7 @@ export type BusEvent =
   | SecretChangedEvent       // #2453: console set/delete of a vault secret (name only, never value)
   | PrincipalMailboxChangedEvent // #2475: console add/relabel/default/grant/remove of a principal mailbox
   | PrincipalMailboxConnectedEvent // #2361: a mailbox connected through Hosted Auth (id only)
-  | PairingInvitationRedeemedEvent // #2360: a phone redeemed the onboarding invitation link
+  | PairingInvitationRedeemedEvent // #2360: a phone redeemed the invitation link (id + device name)
   | MailboxSignInFinishedEvent // #2361: a hosted sign-in ended (outcome + routing, never a grant id)
   | SecretCapturedEvent      // #972: one-time capture link redeemed (name/routing only, never value)
   | CardUseRequestedEvent    // #1358: saved-card use requested (brand/last4/site/amount, never the number)

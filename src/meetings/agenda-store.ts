@@ -226,13 +226,43 @@ function isExpired(doc: AgendaDoc, now: Date): boolean {
   return Number.isNaN(at) || at <= now.getTime();
 }
 
+/**
+ * Same-owner parks queued in this process. Module-level, not per store: the park tool builds a
+ * new AgendaStore per call. The tail is removed once it settles, so the map holds only owners
+ * with a park in flight.
+ */
+const parkQueues = new Map<string, Promise<void>>();
+
+async function serialByOwner<T>(ownerTaskId: string, run: () => Promise<T>): Promise<T> {
+  const previous = parkQueues.get(ownerTaskId) ?? Promise.resolve();
+  // A failed earlier park does not block the next one: its error is its own caller's.
+  const result = previous.then(run, run);
+  const tail = result.then(() => undefined, () => undefined);
+  parkQueues.set(ownerTaskId, tail);
+  try {
+    return await result;
+  } finally {
+    if (parkQueues.get(ownerTaskId) === tail) parkQueues.delete(ownerTaskId);
+  }
+}
+
 export class AgendaStore {
   constructor(
     private readonly repo: WorkingDocsRepo,
     private readonly logger: Logger,
   ) {}
 
+  /**
+   * Park a new agenda. Parks for the same owner task run one at a time (create, then
+   * supersede): two running at once would each see the other's new agenda in the
+   * supersede scan and close it, leaving none pending.
+   */
   async park(input: ParkedAgenda, now: Date): Promise<AgendaDoc> {
+    if (!input.ownerTaskId) return this.parkNow(input, now);
+    return serialByOwner(input.ownerTaskId, () => this.parkNow(input, now));
+  }
+
+  private async parkNow(input: ParkedAgenda, now: Date): Promise<AgendaDoc> {
     const agendaId = randomUUID();
     const path = `${AGENDA_PREFIX}${agendaId}.md`;
     const doc: AgendaDoc = {
@@ -351,14 +381,20 @@ export class AgendaStore {
     return held;
   }
 
-  /** Archive expired pending agendas. An `in_call` agenda is never culled. */
+  /**
+   * Archive expired pending agendas, and agendas `close` wrote as done but could not
+   * archive (status done with no call holding it). An `in_call` agenda is never culled,
+   * nor a done one a call still holds: `settle` archives that itself.
+   */
   async cullExpired(now: Date): Promise<number> {
     const rows = await this.repo.listByPrefix(AGENDA_PREFIX);
     let archived = 0;
     for (const row of rows) {
       if (!row.path.startsWith(AGENDA_PREFIX)) continue;
       const doc = parseAgendaDoc(row, this.logger);
-      if (!doc || doc.status !== 'pending' || !isExpired(doc, now)) continue;
+      if (!doc) continue;
+      const closedLeftover = doc.status === 'done' && doc.inCallSession === null;
+      if (!closedLeftover && (doc.status !== 'pending' || !isExpired(doc, now))) continue;
       const result = await this.repo.softDeleteAtVersion(doc.path, doc.version);
       if (result?.ok) archived += 1;
       else if (result && !result.ok) {
@@ -403,9 +439,18 @@ export class AgendaStore {
     });
   }
 
-  /** Record event-sync bookkeeping on a pending agenda, retrying a version conflict as `settle` does. */
-  async markEvent(agendaId: string, patch: AgendaEventPatch): Promise<AgendaDoc | null> {
-    return this.updatePending(agendaId, (doc) => ({
+  /**
+   * Record event-sync bookkeeping on a pending agenda, retrying a version conflict as `settle`
+   * does. `when`, if given, is checked on the document actually written (same version guard):
+   * false writes nothing and returns null, so a decision made from an older read cannot land
+   * on an agenda that changed since (a call settled it back with history, say).
+   */
+  async markEvent(
+    agendaId: string,
+    patch: AgendaEventPatch,
+    when?: (doc: AgendaDoc) => boolean,
+  ): Promise<AgendaDoc | null> {
+    return this.updatePending(agendaId, (doc) => (when && !when(doc) ? null : {
       ...doc,
       ...(patch.eventState !== undefined ? { eventState: patch.eventState } : {}),
       ...(patch.nudgedAt !== undefined ? { nudgedAt: patch.nudgedAt } : {}),
@@ -418,6 +463,10 @@ export class AgendaStore {
    * `settle` does for `done`. Used when its event was cancelled (with
    * `eventState: 'cancelled'`) or a new agenda for the same owner superseded
    * it. Retries a version conflict. Returns the closed agenda, or null.
+   *
+   * Once the done write commits, the agenda is closed and is returned whatever the
+   * archive step does: an archive that conflicts or throws is logged, and `cullExpired`
+   * archives the leftover later. So a caller always learns of a close that happened.
    */
   async close(agendaId: string, patch: AgendaEventPatch): Promise<AgendaDoc | null> {
     for (let attempt = 0; attempt < SETTLE_ATTEMPTS; attempt++) {
@@ -434,10 +483,15 @@ export class AgendaStore {
         expectedVersion: doc.version,
       });
       if (!updated.ok) continue;
-      const archived = await this.repo.softDeleteAtVersion(doc.path, updated.document.version);
-      if (!archived?.ok) {
-        // Written as done but not archived (edited in between): it is no longer pending either way.
-        this.logger.warn({ agendaId }, 'agenda-store: closed agenda changed before archive');
+      try {
+        const archived = await this.repo.softDeleteAtVersion(doc.path, updated.document.version);
+        if (!archived?.ok) {
+          // Written as done but not archived (edited in between): it is no longer pending either way.
+          this.logger.warn({ agendaId }, 'agenda-store: closed agenda changed before archive');
+        }
+      } catch (err) {
+        // The close committed; only the archive failed. cullExpired archives it later.
+        this.logger.error({ err, agendaId }, 'agenda-store: archiving a closed agenda failed, left for the cull');
       }
       return parseAgendaDoc(updated.document, this.logger);
     }
@@ -447,19 +501,21 @@ export class AgendaStore {
 
   /**
    * Write `change(doc)` over the current pending agenda. Returns the written
-   * agenda, or null when it is gone, no longer pending, or still conflicting
-   * after SETTLE_ATTEMPTS reads.
+   * agenda, or null when it is gone, no longer pending, `change` returned null
+   * (nothing to write), or still conflicting after SETTLE_ATTEMPTS reads.
    */
   private async updatePending(
     agendaId: string,
-    change: (doc: AgendaDoc) => AgendaDoc,
+    change: (doc: AgendaDoc) => AgendaDoc | null,
   ): Promise<AgendaDoc | null> {
     for (let attempt = 0; attempt < SETTLE_ATTEMPTS; attempt++) {
       const doc = await this.get(agendaId);
       if (!doc || doc.status !== 'pending') return null;
+      const next = change(doc);
+      if (!next) return null;
       const updated = await this.repo.update(doc.path, {
         type: DOC_TYPE,
-        frontmatter: frontmatterFor(change(doc)),
+        frontmatter: frontmatterFor(next),
         expectedVersion: doc.version,
       });
       if (!updated.ok) continue;

@@ -90,6 +90,12 @@ describe('isDue', () => {
     expect(isDue({ scheduledFor: start, calendarEventId: 'evt-1', eventState: 'no_show', status: 'pending' }, NOW)).toBe(true);
   });
 
+  it('does not make an event-tied agenda due before its start is known; an untied one stays due', () => {
+    expect(isDue({ scheduledFor: null, calendarEventId: 'evt-1', status: 'pending' }, NOW)).toBe(false);
+    expect(isDue({ scheduledFor: '', calendarEventId: 'evt-1' }, NOW)).toBe(false);
+    expect(isDue({ scheduledFor: null, calendarEventId: null }, NOW)).toBe(true);
+  });
+
   it('does not make an event-tied agenda due more than 12 hours early', () => {
     const start = new Date(NOW.getTime() + 13 * 60 * 60 * 1000).toISOString();
     expect(isDue({ scheduledFor: start, calendarEventId: 'evt-1' }, NOW)).toBe(false);
