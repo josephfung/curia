@@ -3472,6 +3472,24 @@ async function main(): Promise<void> {
   // (which the allowlist thunk depends on). Mirrors setAgentContactId's post-hoc injection.
   executionLayer.setSecretCaptureService(secretCaptureService);
 
+  // Starting onboarding (#2360). The triage hold is written to triageConfig, the store the
+  // inbox heartbeat reads it from. Built here, after registryService, and handed to the
+  // ExecutionLayer for the onboarding skill's tools.
+  const onboardingService = new OnboardingService({
+    pool,
+    taskRepo,
+    registry: registryService,
+    scheduler: schedulerService,
+    configStore: triageConfig,
+    workingDocsRepo,
+    principalName: async () => (await contactService.findContactBySystemRole('principal'))?.displayName ?? null,
+    principalHasIdentity: setupCheckDeps.principalHasIdentity,
+    appOrigin: config.appOrigin,
+    scheduleProcessExit,
+    logger,
+  });
+  executionLayer.setOnboardingService(onboardingService);
+
   // Agents that pin a skill with heartbeat: true — read by the BacklogHeartbeat to
   // know which source_agent_ids it may wake (and as the fallback target list).
   const taskManagementAgents = new Set<string>();
@@ -4263,22 +4281,6 @@ async function main(): Promise<void> {
   });
   // The home's tiles read a cached model; keep it warm only when the console is served.
   if (config.webAppBootstrapSecret) briefingService.startWarming();
-
-  // Starting onboarding (#2360). The triage hold is written to triageConfig, the store the
-  // inbox heartbeat reads it from.
-  const onboardingService = new OnboardingService({
-    pool,
-    taskRepo,
-    registry: registryService,
-    scheduler: schedulerService,
-    configStore: triageConfig,
-    workingDocsRepo,
-    principalName: async () => (await contactService.findContactBySystemRole('principal'))?.displayName ?? null,
-    principalHasIdentity: setupCheckDeps.principalHasIdentity,
-    appOrigin: config.appOrigin,
-    scheduleProcessExit,
-    logger,
-  });
 
   const httpAdapter = new HttpAdapter({
     bus,

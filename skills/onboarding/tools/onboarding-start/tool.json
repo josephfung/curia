@@ -1,0 +1,17 @@
+{
+  "name": "onboarding-start",
+  "description": "Start onboarding because the principal asked for it (\"can we do the onboarding?\"). Creates the onboarding task and its first-conversation topics, holds inbox triage until they hear what to expect, and starts the research homework. Sends nothing: carry on the conversation yourself. Use only when the principal asks; onboarding never starts on its own.",
+  "version": "0.1.0",
+  "sensitivity": "elevated",
+  "action_risk": "low",
+  "inputs": {},
+  "outputs": {
+    "taskId": "string (the onboarding task id)",
+    "restartScheduled": "boolean (true when Curia restarts in a moment to load what onboarding needs)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["onboardingService"],
+  "allowed_callers": ["coordinator"]
+}

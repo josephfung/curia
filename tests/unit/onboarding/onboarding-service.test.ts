@@ -235,6 +235,27 @@ describe('OnboardingService.start', () => {
     expect(h.scheduleProcessExit).not.toHaveBeenCalled();
   });
 
+  it('a principal start mints no invitation, wakes no greeting, keeps the web thread and counts the greeting as sent', async () => {
+    // App route with no APP_ORIGIN: an operator start would refuse, but the principal is already here.
+    const h = makeHarness({ appOrigin: undefined });
+    const result = await h.service.start({ actor: 'principal', confirmWorkingPrincipal: true });
+    if (!result.ok) throw new Error(`expected ok, got ${result.code}`);
+    expect(result.invitation).toBeNull();
+    expect(h.mintInvitation).not.toHaveBeenCalled();
+    expect(h.txQueries.some((q) => q.includes('web_thread'))).toBe(false);
+
+    const homework = h.tasks.find((t) => t.tags.includes('onboarding:homework'))!;
+    const woken = h.scheduler.enqueueTaskWake.mock.calls.map((c) => ((c as unknown[])[0] as { taskId: string }).taskId);
+    expect(woken).toEqual([homework.id]);
+    const parentCall = h.taskRepo.createTask.mock.calls.find(([p]) => !p.parentTaskId)!;
+    expect(parentCall[0].progressNote).toBeUndefined();
+
+    const state = await readOnboardingState(h.configStore);
+    expect(state).toMatchObject({ taskId: result.taskId, route: 'app' });
+    expect(state?.greetingSentAt).not.toBeNull();
+    expect(await isTriageHeld(h.configStore)).toBe(true);
+  });
+
   it('refuses before creating anything when the principal has no verified id on the route', async () => {
     const h = makeHarness({ setup: { messaging_route: 'sms' }, hasIdentity: false });
     expect(await h.service.start({ actor: 'operator' })).toEqual({ ok: false, code: 'route_unreachable' });

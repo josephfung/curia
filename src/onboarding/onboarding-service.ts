@@ -1,11 +1,13 @@
 // onboarding-service.ts — starting onboarding and reporting whether it has started (#2360).
 //
-// Start is one path for every caller (the console's Start button, and later the coordinator's
+// Start is one path for every caller (the console's Start button, and the coordinator's
 // onboarding-start tool): it holds triage, enables the capabilities onboarding needs, creates
 // the onboarding task tree from the playbook, rotates the web thread and reaches the principal.
 // No message is sent from here: on Signal, SMS and Slack the parent task is woken with a
 // "Send the greeting" note and the coordinator composes it; on the app route the greeting
-// waits for the invitation to be redeemed.
+// waits for the invitation to be redeemed. A principal who asks for onboarding is already
+// talking to Curia, so their start neither rotates the thread nor reaches out: the greeting
+// counts as sent.
 //
 // Idempotency: the whole start runs under a transaction-scoped advisory lock, so two presses
 // (double click, two tabs) serialize and the second sees the first's committed task and
@@ -34,8 +36,15 @@ import { replaceActiveSkillsBlock } from '../db/active-skills-progress.js';
 import { makeSystemOriginator } from '../contacts/principal.js';
 import { readSetupState, type MessagingRoute, type SetupFor } from '../setup/setup-state.js';
 import { readPlaybook, type PlaybookSession } from './playbook.js';
-import { findOpenOnboardingTask, readOnboardingState, writeOnboardingState, ONBOARDING_TASK_TAG } from './state.js';
+import {
+  findOpenOnboardingTask,
+  readOnboardingState,
+  writeOnboardingState,
+  ONBOARDING_TASK_TAG,
+  type OnboardingState,
+} from './state.js';
 import { releaseTriageHold, setTriageHold } from './triage-hold.js';
+import { topicSubtasks } from './subtasks.js';
 import { ONBOARDING_CREATED_BY, RESTART_WAKE_DELAY_SECONDS } from './constants.js';
 
 /** Signals that the install is already in use, so starting onboarding needs confirming. */
@@ -56,11 +65,19 @@ const REQUIRED_ENTRIES: ReadonlyArray<{ kind: RegistryKind; name: string }> = [
   { kind: 'skill', name: 'tasks' },
 ];
 const START_LOCK_KEY = 'onboarding:start';
+const OPEN_SESSION_LOCK_KEY = 'onboarding:open-session';
 /** Longest a start waits for a concurrent one before failing (Postgres interval). */
 const START_LOCK_TIMEOUT = '10s';
 /** Delay before the restart exit, so the HTTP reply flushes first (as setupRoutes does). */
 const RESTART_EXIT_DELAY_MS = 500;
 const GREETING_NOTE = 'Send the greeting';
+/** Every onboarding task: the coordinator's, owned by Curia, created by the onboarding program. */
+const TASK_BASE = {
+  agentId: 'coordinator',
+  owner: 'curia' as const,
+  source: 'scheduler' as const,
+  createdBy: ONBOARDING_CREATED_BY,
+};
 
 export type OnboardingStatus = {
   started: boolean;
@@ -83,7 +100,20 @@ export type StartResult =
 /** The phone app invitation Start minted; `id` lets a caller stop it (e.g. its audit failed). */
 export type StartedInvitation = { id: string; url: string; expiresAt: string };
 
+/**
+ * `actor: 'principal'` is the principal asking in conversation: no invitation, no greeting wake,
+ * no web-thread rotation (it would wipe the conversation they are in), and the greeting counts as sent.
+ */
 export type StartOptions = { actor: 'operator' | 'principal'; confirmWorkingPrincipal?: boolean };
+
+export type OpenSessionResult =
+  | { ok: true; session: PlaybookSession; createdSubtasks: number }
+  | { ok: false; code: 'unknown_session'; sessionIds: string[] };
+
+/** Tags of an onboarding topic subtask. */
+function topicSubtaskTags(sessionId: string, topicId: string): string[] {
+  return [ONBOARDING_TASK_TAG, `onboarding:topic:${topicId}`, `onboarding:session:${sessionId}`];
+}
 
 export interface OnboardingServiceDeps {
   pool: Pool;
@@ -157,33 +187,61 @@ export class OnboardingService {
     return releaseTriageHold(this.deps.configStore);
   }
 
+  /** The principal's display name, or "the principal" when none is recorded. */
+  async principalDisplayName(): Promise<string> {
+    return (await this.deps.principalName())?.trim() || 'the principal';
+  }
+
+  /** The install's playbook, seeded from the default if missing. */
+  playbook(): Promise<PlaybookSession[]> {
+    return readPlaybook(this.deps.workingDocsRepo, this.deps.logger);
+  }
+
+  /** The onboarding run state, or null before any start. */
+  readState(): Promise<OnboardingState | null> {
+    return readOnboardingState(this.deps.configStore, this.deps.logger);
+  }
+
+  /**
+   * Record that the greeting reached the principal. Keeps an earlier time (follow-ups are not
+   * the greeting). Null when onboarding has no state.
+   */
+  async markGreetingSent(): Promise<string | null> {
+    const { configStore, logger } = this.deps;
+    const state = await readOnboardingState(configStore, logger);
+    if (!state) return null;
+    if (state.greetingSentAt) return state.greetingSentAt;
+    const at = this.now().toISOString();
+    await writeOnboardingState(configStore, { ...state, greetingSentAt: at });
+    return at;
+  }
+
+  /**
+   * Create the subtasks of one playbook session under the onboarding task. Idempotent: a topic
+   * that already has a subtask (in any status) is not created again, so a second call creates
+   * nothing and a call after a part-way failure fills the gaps.
+   */
+  async openSession(parent: TaskRow, sessionId: string): Promise<OpenSessionResult> {
+    return this.inLockedTransaction(OPEN_SESSION_LOCK_KEY, async () => {
+      const sessions = await this.playbook();
+      const session = sessions.find((s) => s.id === sessionId);
+      if (!session) return { ok: false, code: 'unknown_session', sessionIds: sessions.map((s) => s.id) };
+      const existing = await this.deps.taskRepo.listTasks({
+        parentTaskId: parent.id,
+        tag: `onboarding:session:${session.id}`,
+        createdBy: ONBOARDING_CREATED_BY,
+        limit: 200,
+      });
+      const existingTopicIds = new Set(topicSubtasks(existing).map((s) => s.topicId));
+      const createdSubtasks = await this.createSessionSubtasks(parent, session, [], existingTopicIds);
+      return { ok: true, session, createdSubtasks };
+    });
+  }
+
   async start(opts: StartOptions): Promise<StartResult> {
     const { pool, logger } = this.deps;
-    const client = await pool.connect();
-    // Set when ROLLBACK fails: the connection may still hold the lock, so destroy it.
-    let discard: Error | undefined;
-    let rotatedTo: string | null = null;
-    let result: StartResult;
-    try {
-      await client.query('BEGIN');
-      await client.query(`SELECT set_config('lock_timeout', $1, true)`, [START_LOCK_TIMEOUT]);
-      // Same key hashing as KnowledgeGraphStore.withAdvisoryLock; held until COMMIT/ROLLBACK.
-      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [START_LOCK_KEY]);
-      const locked = await this.startLocked(client, opts);
-      await client.query('COMMIT');
-      result = locked.result;
-      rotatedTo = locked.rotatedTo;
-    } catch (err) {
-      try {
-        await client.query('ROLLBACK');
-      } catch (rollbackErr) {
-        discard = rollbackErr instanceof Error ? rollbackErr : new Error(String(rollbackErr));
-        logger.error({ err: rollbackErr }, 'onboarding: start rollback failed — discarding the connection');
-      }
-      throw err;
-    } finally {
-      client.release(discard);
-    }
+    const locked = await this.inLockedTransaction(START_LOCK_KEY, (client) => this.startLocked(client, opts));
+    const { result, rotatedTo } = locked;
 
     // Only after the commit: a rolled-back rotation must never reach the cache.
     if (rotatedTo) noteWebThreadRotated(pool, rotatedTo);
@@ -197,6 +255,35 @@ export class OnboardingService {
       }
     }
     return result;
+  }
+
+  /**
+   * Run `fn` in a transaction holding a transaction-scoped advisory lock on `key`, so concurrent
+   * callers serialize. Task rows written through TaskRepo use other connections (autocommit).
+   */
+  private async inLockedTransaction<T>(key: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    const client = await this.deps.pool.connect();
+    // Set when ROLLBACK fails: the connection may still hold the lock, so destroy it.
+    let discard: Error | undefined;
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('lock_timeout', $1, true)`, [START_LOCK_TIMEOUT]);
+      // Same key hashing as KnowledgeGraphStore.withAdvisoryLock; held until COMMIT/ROLLBACK.
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [key]);
+      const out = await fn(client);
+      await client.query('COMMIT');
+      return out;
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        discard = rollbackErr instanceof Error ? rollbackErr : new Error(String(rollbackErr));
+        this.deps.logger.error({ err: rollbackErr, key }, 'onboarding: rollback failed — discarding the connection');
+      }
+      throw err;
+    } finally {
+      client.release(discard);
+    }
   }
 
   private async startLocked(
@@ -216,24 +303,40 @@ export class OnboardingService {
     const signals = await this.workingPrincipalSignals(setup.completedAt);
     if (signals.length > 0 && !opts.confirmWorkingPrincipal) return refuse('confirm_working_principal', signals);
 
-    const reach = await this.resolveReach(setup.messagingRoute);
-    if (!reach) return refuse('route_unreachable');
+    // A principal asking in conversation is already reachable: Curia does not reach out.
+    const inConversation = opts.actor === 'principal';
+    let reach: Reach | null = null;
+    if (!inConversation) {
+      reach = await this.resolveReach(setup.messagingRoute);
+      if (!reach) return refuse('route_unreachable');
+    }
+    const route = reach?.route ?? setup.messagingRoute;
+    if (!route) {
+      logger.warn('onboarding: no messaging route chosen in Setup — cannot start');
+      return refuse('route_unreachable');
+    }
+    // On Signal, SMS and Slack the parent wakes to send the greeting; the app route waits for redemption.
+    const greetOnWake = reach !== null && reach.route !== 'app';
 
     await setTriageHold(configStore);
     const created: string[] = [];
     let mintedId: string | null = null;
     try {
       const restartScheduled = await this.enableRequiredEntries();
-      const principalName = (await this.deps.principalName())?.trim() || 'the principal';
-      const sessions = await readPlaybook(this.deps.workingDocsRepo, logger);
+      const principalName = await this.principalDisplayName();
+      const sessions = await this.playbook();
 
-      const { parent, homework } = await this.createTaskTree(principalName, sessions, reach, created);
+      const { parent, homework } = await this.createTaskTree(principalName, sessions, greetOnWake, created);
 
-      const rotatedTo = this.newId();
-      await rotateWebThreadRow(client, rotatedTo);
+      // Rotating would wipe the conversation a principal start comes from.
+      let rotatedTo: string | null = null;
+      if (!inConversation) {
+        rotatedTo = this.newId();
+        await rotateWebThreadRow(client, rotatedTo);
+      }
 
       let invitation: StartedInvitation | null = null;
-      if (reach.route === 'app') {
+      if (reach?.route === 'app') {
         const minted = await this.mint(reach.origin);
         mintedId = minted.id;
         invitation = { id: minted.id, url: minted.pairUrl, expiresAt: minted.expiresAt };
@@ -243,8 +346,8 @@ export class OnboardingService {
       await writeOnboardingState(configStore, {
         taskId: parent.id,
         startedAt: startedAt.toISOString(),
-        route: reach.route,
-        greetingSentAt: null,
+        route,
+        greetingSentAt: inConversation ? startedAt.toISOString() : null,
         followUpsSent: 0,
         lastFollowUpAt: null,
         lastPrincipalTurnAt: null,
@@ -257,10 +360,10 @@ export class OnboardingService {
         ? new Date(startedAt.getTime() + RESTART_WAKE_DELAY_SECONDS * 1000)
         : startedAt;
       await this.wake(homework.id, runAt);
-      if (reach.route !== 'app') await this.wake(parent.id, runAt);
+      if (greetOnWake) await this.wake(parent.id, runAt);
 
       logger.info(
-        { taskId: parent.id, actor: opts.actor, route: reach.route, subtasks: created.length - 2, restartScheduled },
+        { taskId: parent.id, actor: opts.actor, route, subtasks: created.length - 2, restartScheduled },
         'onboarding: started',
       );
       return { result: { ok: true, taskId: parent.id, invitation, restartScheduled }, rotatedTo };
@@ -332,59 +435,33 @@ export class OnboardingService {
   private async createTaskTree(
     principalName: string,
     sessions: PlaybookSession[],
-    reach: Reach,
+    greetOnWake: boolean,
     created: string[],
   ): Promise<{ parent: TaskRow; homework: TaskRow }> {
     const { taskRepo, logger } = this.deps;
-    const base = {
-      agentId: 'coordinator',
-      owner: 'curia' as const,
-      source: 'scheduler' as const,
-      createdBy: ONBOARDING_CREATED_BY,
-    };
 
     const parent = await taskRepo.createTask({
-      ...base,
+      ...TASK_BASE,
       title: `Onboarding: getting to know ${principalName}`,
       description:
         `Get to know ${principalName}. Each subtask is a First conversation topic from ` +
         `/meetings/onboarding/playbook.md.`,
       tags: [ONBOARDING_TASK_TAG],
       originator: makeSystemOriginator(),
-      ...(reach.route !== 'app' ? { progressNote: GREETING_NOTE } : {}),
+      ...(greetOnWake ? { progressNote: GREETING_NOTE } : {}),
     });
     created.push(parent.id);
     await this.activateOnboardingSkill(parent.id);
 
     const session = sessions.find((s) => s.id === FIRST_CONVERSATION_SESSION);
-    if (!session || session.topics.length === 0) {
-      logger.warn({ taskId: parent.id }, 'onboarding: the playbook has no First conversation topics — no subtasks created');
-    }
-    const seen = new Set<string>();
-    for (const topic of session?.topics ?? []) {
-      // The operator edits the playbook: a topic with no id, or a repeated one, is skipped.
-      if (!topic.id) {
-        logger.warn({ title: topic.title }, 'onboarding: playbook topic has no id — skipped');
-        continue;
-      }
-      if (seen.has(topic.id)) {
-        logger.warn({ topicId: topic.id, title: topic.title }, 'onboarding: duplicate playbook topic id — skipped');
-        continue;
-      }
-      seen.add(topic.id);
-      const sub = await taskRepo.createTask({
-        ...base,
-        title: topic.title,
-        parentTaskId: parent.id,
-        parentTask: parent,
-        tags: [ONBOARDING_TASK_TAG, `onboarding:topic:${topic.id}`, `onboarding:session:${FIRST_CONVERSATION_SESSION}`],
-        originator: makeSystemOriginator(),
-      });
-      created.push(sub.id);
+    if (session) {
+      await this.createSessionSubtasks(parent, session, created);
+    } else {
+      logger.warn({ taskId: parent.id }, 'onboarding: the playbook has no First conversation session — no subtasks created');
     }
 
     const homework = await taskRepo.createTask({
-      ...base,
+      ...TASK_BASE,
       title: `Homework: research ${principalName} and map shared drives`,
       description: homeworkDescription(principalName),
       parentTaskId: parent.id,
@@ -395,6 +472,48 @@ export class OnboardingService {
     created.push(homework.id);
     await this.activateOnboardingSkill(homework.id);
     return { parent, homework };
+  }
+
+  /**
+   * One subtask per topic of `session`, skipping topics in `skipTopicIds`. The operator edits the
+   * playbook, so a topic with no id, or a repeated one, is skipped with a warning. Returns how many
+   * subtasks were created; their ids are appended to `created`.
+   */
+  private async createSessionSubtasks(
+    parent: TaskRow,
+    session: PlaybookSession,
+    created: string[],
+    skipTopicIds: ReadonlySet<string> = new Set(),
+  ): Promise<number> {
+    const { taskRepo, logger } = this.deps;
+    if (session.topics.length === 0) {
+      logger.warn({ taskId: parent.id, sessionId: session.id }, 'onboarding: the playbook session has no topics — no subtasks created');
+    }
+    const seen = new Set<string>();
+    let count = 0;
+    for (const topic of session.topics) {
+      if (!topic.id) {
+        logger.warn({ title: topic.title, sessionId: session.id }, 'onboarding: playbook topic has no id — skipped');
+        continue;
+      }
+      if (seen.has(topic.id)) {
+        logger.warn({ topicId: topic.id, title: topic.title, sessionId: session.id }, 'onboarding: duplicate playbook topic id — skipped');
+        continue;
+      }
+      seen.add(topic.id);
+      if (skipTopicIds.has(topic.id)) continue;
+      const sub = await taskRepo.createTask({
+        ...TASK_BASE,
+        title: topic.title,
+        parentTaskId: parent.id,
+        parentTask: parent,
+        tags: topicSubtaskTags(session.id, topic.id),
+        originator: makeSystemOriginator(),
+      });
+      created.push(sub.id);
+      count++;
+    }
+    return count;
   }
 
   private async activateOnboardingSkill(taskId: string): Promise<void> {
