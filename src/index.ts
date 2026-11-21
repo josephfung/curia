@@ -258,7 +258,7 @@ import { isTriageHeld } from './onboarding/triage-hold.js';
 import { OnboardingService } from './onboarding/onboarding-service.js';
 import { OnboardingSubscribers } from './onboarding/subscribers.js';
 import { OnboardingWatcher } from './onboarding/watcher.js';
-import { readCurrentInvitation } from './channels/http/pairing-invitations.js';
+import { readCurrentInvitationTiming } from './channels/http/pairing-invitations.js';
 import { createOnboardingTurnContext } from './onboarding/turn-context.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
 import { unreadCandidateProbe } from './principal-mailboxes/triage-candidate.js';
@@ -3883,10 +3883,7 @@ async function main(): Promise<void> {
     scheduler: schedulerService,
     configStore: triageConfig,
     logger,
-    readInvitation: async () => {
-      const inv = await readCurrentInvitation(pool);
-      return inv === null ? null : { expiresAt: new Date(inv.expiresAt), createdAt: new Date(inv.createdAt), redeemed: inv.state === 'redeemed' };
-    },
+    readInvitation: () => readCurrentInvitationTiming(pool),
   });
   onboardingWatcher.start();
 

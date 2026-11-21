@@ -33,7 +33,6 @@ export interface InvitationStatus {
   id: string;
   state: InvitationState;
   expiresAt: string;
-  createdAt: string;
   redeemedAt: string | null;
   deviceName: string | null;
 }
@@ -157,7 +156,7 @@ export async function releaseInvitation(pool: PairingQueryable, id: string): Pro
 /** The current invitation, or null when none was minted or the last was cancelled. */
 export async function readCurrentInvitation(pool: PairingQueryable): Promise<InvitationStatus | null> {
   const result = await pool.query(
-    `SELECT id, expires_at, created_at, redeemed_at, device_name, (expires_at <= NOW()) AS expired
+    `SELECT id, expires_at, redeemed_at, device_name, (expires_at <= NOW()) AS expired
      FROM pairing_invitations
      WHERE superseded_at IS NULL
      LIMIT 1`,
@@ -171,9 +170,31 @@ export async function readCurrentInvitation(pool: PairingQueryable): Promise<Inv
     id: asString(row['id'], 'id'),
     state,
     expiresAt: asIso(row['expires_at'], 'expires_at'),
-    createdAt: asIso(row['created_at'], 'created_at'),
     redeemedAt,
     deviceName: typeof name === 'string' && name.length > 0 ? name : null,
+  };
+}
+
+/**
+ * The current invitation's timing, for the onboarding watcher: when it was minted, when it
+ * expires and whether it was redeemed. Kept apart from readCurrentInvitation so the route's
+ * response shape is unchanged.
+ */
+export async function readCurrentInvitationTiming(
+  pool: PairingQueryable,
+): Promise<{ createdAt: Date; expiresAt: Date; redeemed: boolean } | null> {
+  const result = await pool.query(
+    `SELECT created_at, expires_at, (redeemed_at IS NOT NULL) AS redeemed
+     FROM pairing_invitations
+     WHERE superseded_at IS NULL
+     LIMIT 1`,
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    createdAt: new Date(asIso(row['created_at'], 'created_at')),
+    expiresAt: new Date(asIso(row['expires_at'], 'expires_at')),
+    redeemed: row['redeemed'] === true,
   };
 }
 
