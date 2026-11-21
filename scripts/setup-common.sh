@@ -221,13 +221,15 @@ wait_for_postgres() {
     local max_wait=60
     local elapsed=0
     # Expand caller-supplied COMPOSE_FLAGS if set; default to empty array otherwise.
+    # Every expansion of _flags is guarded too: under `set -u`, bash 3.2 (macOS) treats
+    # "${empty[@]}" as unbound, which install.sh (no COMPOSE_FLAGS) hit on every run.
     local -a _flags=("${COMPOSE_FLAGS[@]+"${COMPOSE_FLAGS[@]}"}")
 
     info "Waiting for Postgres to be ready..."
     while [[ $elapsed -lt $max_wait ]]; do
         local container_id ps_err
         # Distinguish "container not started yet" (empty output, exit 0) from docker failures.
-        if ! ps_err=$(docker compose --project-directory "$REPO_ROOT" "${_flags[@]}" ps -q postgres 2>&1); then
+        if ! ps_err=$(docker compose --project-directory "$REPO_ROOT" ${_flags[@]+"${_flags[@]}"} ps -q postgres 2>&1); then
             error "docker compose ps failed: $ps_err"
             hint "Check logs: docker compose --project-directory \"$REPO_ROOT\" logs postgres"
             exit 1
@@ -280,12 +282,14 @@ wait_for_curia() {
     local ever_seen=0   # 0 until we observe a container id at least once
     local last_seen_id=""
     # Expand caller-supplied COMPOSE_FLAGS if set; default to empty array otherwise.
+    # Every expansion of _flags is guarded too: under `set -u`, bash 3.2 (macOS) treats
+    # "${empty[@]}" as unbound, which install.sh (no COMPOSE_FLAGS) hit on every run.
     local -a _flags=("${COMPOSE_FLAGS[@]+"${COMPOSE_FLAGS[@]}"}")
 
     info "Waiting for Curia to become healthy (up to ${max_wait}s)..."
     while [[ $elapsed -lt $max_wait ]]; do
         local container_id ps_err
-        if ! ps_err=$(docker compose --project-directory "$REPO_ROOT" "${_flags[@]}" ps -q curia 2>&1); then
+        if ! ps_err=$(docker compose --project-directory "$REPO_ROOT" ${_flags[@]+"${_flags[@]}"} ps -q curia 2>&1); then
             error "docker compose ps failed: $ps_err"
             hint "Check logs: docker compose --project-directory \"$REPO_ROOT\" logs curia"
             return 1

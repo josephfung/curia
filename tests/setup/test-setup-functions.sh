@@ -403,6 +403,37 @@ if [[ "${#key_b64}" -eq 44 ]]; then echo "  ✓ gen_secret_b64 length 44"; PASS=
 key_hex="$(gen_secret_hex)"
 if [[ "${#key_hex}" -eq 64 ]]; then echo "  ✓ gen_secret_hex length 64"; PASS=$((PASS+1)); else echo "  ✗ gen_secret_hex length ${#key_hex}"; FAIL=$((FAIL+1)); fi
 
+# --- setup-common: wait_* with no COMPOSE_FLAGS under set -u ---
+# install.sh sets COMPOSE_FLAGS=() and macOS ships bash 3.2, where "${empty[@]}" is
+# unbound under `set -u`. Run in /bin/bash when it exists, with docker stubbed healthy.
+
+echo ""
+echo "=== setup-common: wait_* with empty COMPOSE_FLAGS ==="
+_wf_bash=/bin/bash; [[ -x "$_wf_bash" ]] || _wf_bash=bash
+for _wf_fn in wait_for_postgres wait_for_curia; do
+    _wf_out="$("$_wf_bash" -c '
+        set -euo pipefail
+        source "$1"
+        docker() {
+            case "$*" in
+                *" ps -q "*) echo cid123 ;;
+                *State.Health.Status*) echo healthy ;;
+                *State.Status*) echo running ;;
+                *RestartCount*) echo 0 ;;
+                *) echo healthy ;;
+            esac
+        }
+        sleep() { :; }
+        REPO_ROOT=/tmp COMPOSE_FLAGS=()
+        "$2" >/dev/null 2>&1
+        echo ok' _ "$TEST_DIR/../../scripts/setup-common.sh" "$_wf_fn" 2>&1)" || true
+    if [[ "$_wf_out" == *ok ]]; then
+        echo "  ✓ $_wf_fn runs with empty COMPOSE_FLAGS under set -u"; PASS=$((PASS+1))
+    else
+        echo "  ✗ $_wf_fn failed with empty COMPOSE_FLAGS: $_wf_out"; FAIL=$((FAIL+1))
+    fi
+done
+
 # --- install.sh: source-checkout detection ---
 # Source install.sh (guarded: defines functions, does not run main).
 # Suppress setup-common.sh re-sourcing output; the helpers are already loaded.
