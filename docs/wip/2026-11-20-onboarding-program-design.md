@@ -80,7 +80,8 @@ has, and the refinements agreed with the maintainer on 2026-11-20.
 ## Non-goals
 
 - An operator role, operator notifications, or operator identity in the console (#2365).
-- A "leave everything in my inbox" option for triage (filed separately; not in this work).
+- A "leave everything in my inbox" option for triage (#2699, which also adds it to the playbook's
+  inbox topic).
 - Bulk import tooling (CSV or vCard contacts, writing-sample ingestion).
 - Refreshing a seeded playbook when the repo default changes.
 - Curia calling out or joining Meet (#2231). Microsoft 365 principals.
