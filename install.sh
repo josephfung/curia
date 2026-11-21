@@ -448,7 +448,7 @@ note_voice_off() {
   warn "Voice (LiveKit) is off on this install."
   hint "New installs turn it on; upgrades leave it as it was. To turn it on here, see"
   hint "the steps for an existing install in docs/dev/voice-setup.md:"
-  hint "  https://github.com/josephfung/curia/blob/main/docs/dev/voice-setup.md"
+  hint "  https://github.com/josephfung/curia/blob/main/docs/dev/voice-setup.md#turn-voice-on-for-an-existing-install"
 }
 
 # Fresh install, before Postgres starts. The HTTPS topology, and a proxy with a
