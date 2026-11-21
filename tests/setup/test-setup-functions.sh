@@ -377,7 +377,15 @@ _assert_output() {
 }
 
 _assert_output "contains 'Curia is running'"                "Curia is running."
-_assert_output "contains login URL"                         "http://localhost:3000"
+_assert_output "contains login URL"                         "http://localhost:3000/setup"
+_summary_output=$(print_summary "$_test_secret" "https://p.example.com")
+_assert_output "uses the base URL it is given"              "Open:    https://p.example.com/setup"
+if [[ "$_summary_output" != *localhost* ]]; then
+    echo "  ✓ given a base URL: no localhost"; PASS=$((PASS + 1))
+else
+    echo "  ✗ given a base URL: still shows localhost"; FAIL=$((FAIL + 1))
+fi
+_summary_output=$(print_summary "$_test_secret")
 _assert_output "contains the full secret"                   "$_test_secret"
 _assert_output "contains 'Bootstrap secret' label"          "Bootstrap secret"
 _assert_output "contains password manager instruction"      "save this to a password manager"
@@ -1382,17 +1390,19 @@ echo ""
 echo "=== print_next_steps ==="
 
 _has() { [[ "$1" == *"$2"* ]] && echo yes || echo no; }
-_pns="$(print_next_steps https://c.example.com domain 2>&1)" || true
-_assert_var "domain: setup URL"        "$(_has "$_pns" 'Finish setting up Curia in your browser: https://c.example.com/setup')" yes
+_pns="$(print_next_steps domain 2>&1)" || true
+_assert_var "domain: setup step"       "$(_has "$_pns" 'Finish setting up Curia in your browser at the address above.')" yes
+_assert_var "domain: no second address" "$(_has "$_pns" '/setup')" no
 _assert_var "domain: docs guide"       "$(_has "$_pns" 'Guide: https://docs.meetcuria.com/get-started/check-your-setup')" yes
 _assert_var "domain: Start onboarding" "$(_has "$_pns" 'When every step is done, choose Start onboarding.')" yes
 _assert_var "domain: RTC ports"        "$(_has "$_pns" 'Open these ports for calls: 7881/tcp, 7882/udp')" yes
-_assert_var "domain: no proxy rule"    "$(_has "$_pns" '/rtc* to port 7880')" no
-_pns="$(print_next_steps https://p.example.com proxy 2>&1)" || true
-_assert_var "proxy: forwarding line"   "$(_has "$_pns" 'Your proxy must forward / to port 3000 and /rtc* to port 7880.')" yes
+_assert_var "domain: no proxy rule"    "$(_has "$_pns" '/rtc* to')" no
+_pns="$(print_next_steps proxy 2>&1)" || true
+_assert_var "proxy: forwarding line"   "$(_has "$_pns" 'Your proxy must forward / to port 3000 and /rtc* to 127.0.0.1:7880 on this host.')" yes
+_assert_var "proxy: off-host proxy note" "$(_has "$_pns" 'LIVEKIT_HTTP_BIND')" yes
+_assert_var "proxy: names the voice docs" "$(_has "$_pns" 'docs/dev/voice-setup.md')" yes
 _assert_var "proxy: RTC ports"         "$(_has "$_pns" '7881/tcp, 7882/udp')" yes
-_pns="$(print_next_steps http://localhost:3000 local 2>&1)" || true
-_assert_var "local: setup URL"         "$(_has "$_pns" 'http://localhost:3000/setup')" yes
+_pns="$(print_next_steps local 2>&1)" || true
 _assert_var "local: no RTC ports"      "$(_has "$_pns" '7881/tcp')" no
 _assert_var "local: no proxy rule"     "$(_has "$_pns" '/rtc*')" no
 
@@ -1429,6 +1439,9 @@ _FB_OLD=$'services:\n  livekit:\n    command: --dev\n'
 _assert_var "compose mounts both: both fetched" "$(_fb_run "$_FB_LK")" "docker/livekit.yaml:livekit.yaml docker/livekit.local.yaml:livekit.local.yaml "
 _assert_var "compose mounts livekit.yaml only" "$(_fb_run "$_FB_LK_PUBLIC_ONLY")" "docker/livekit.yaml:livekit.yaml "
 _assert_var "older compose without the mounts: nothing fetched" "$(_fb_run "$_FB_OLD")" ""
+# v0.42-v0.45 compose files name the mount in a comment only; that is no mount.
+_FB_COMMENT=$'services:\n  livekit:\n    # plus a bind mount of ./docker/livekit.yaml:/etc/livekit.yaml:ro.\n    #   ./docker/livekit.local.yaml:/etc/livekit.local.yaml:ro\n    command: --dev\n'
+_assert_var "mount named only in a comment: nothing fetched" "$(_fb_run "$_FB_COMMENT")" ""
 _FB_EXISTING=1
 _assert_var "files already present: nothing fetched" "$(_fb_run "$_FB_LK")" ""
 _FB_EXISTING=""
@@ -1539,6 +1552,7 @@ _fi_calls="$_fi_dir/calls"
 # $_fi_calls and the run's output in $_fi_out; returns the run's status.
 _fi_run() {
     printf '%b' "DB_PASSWORD=your-db-password\n$3" > "$_fi_env"
+    printf '%s' "${_FI_COMPOSE-$_FB_LK}" > "$_fi_dir/docker-compose.yml"
     : > "$_fi_calls"
     local rc=0
     _fi_out="$(
@@ -1583,7 +1597,7 @@ _fi_run proxy "https://p.example.com" '' || true
 _assert_var "proxy with origin: public LiveKit command" "$(env_value "$_fi_env" LIVEKIT_COMMAND)" "--config /etc/livekit.yaml"
 _assert_var "proxy with origin: seeds wss URL" "$(_has "$(_seed_line)" '-e SEED_LIVEKIT_URL=wss://p.example.com ')" yes
 _assert_var "proxy with origin: next steps on the origin" "$(_has "$_fi_out" 'https://p.example.com/setup')" yes
-_assert_var "proxy with origin: forwarding rule" "$(_has "$_fi_out" '/rtc* to port 7880')" yes
+_assert_var "proxy with origin: forwarding rule" "$(_has "$_fi_out" '/rtc* to 127.0.0.1:7880')" yes
 
 # Keys LiveKit's command hides (an operator --config without LIVEKIT_KEYS): URL only, with a warning.
 _FI_SHELL_CMD="--config /mine.yaml"
@@ -1608,7 +1622,130 @@ _fi_rc=0; _fi_run local "" '' || _fi_rc=$?
 unset _FI_SHELL_CMD _FI_SHELL_KEYS_EMPTY
 _assert_var "local + operator --dev: continues"     "$_fi_rc" "0"
 _assert_var "local + --dev: seeds devkey"           "$(_has "$(_seed_line)" '-e SEED_LIVEKIT_API_KEY=devkey ')" yes
+
+# An older release's compose file (no LiveKit config mount, or only a comment
+# naming it): voice stays off rather than crash-looping LiveKit.
+for _fi_c in "$_FB_OLD" "$_FB_COMMENT"; do
+    _FI_COMPOSE="$_fi_c"
+    _fi_rc=0; _fi_run domain "c.example.com" '' || _fi_rc=$?
+    unset _FI_COMPOSE
+    _assert_var "no LiveKit mount: install continues"     "$_fi_rc" "0"
+    _assert_var "no LiveKit mount: no voice profile"      "$(grep -c '^COMPOSE_PROFILES=' "$_fi_env" | tr -d ' ')" "0"
+    _assert_var "no LiveKit mount: no LIVEKIT_ values"    "$(grep -c '^LIVEKIT_' "$_fi_env" | tr -d ' ')" "0"
+    _assert_var "no LiveKit mount: nothing LiveKit seeded" "$(_has "$(_seed_line)" 'SEED_LIVEKIT')" no
+    _assert_var "no LiveKit mount: says voice is off"     "$(_has "$_fi_out" 'Voice (LiveKit) is off')" yes
+    _assert_var "no LiveKit mount: names the voice docs"  "$(_has "$_fi_out" 'voice-setup')" yes
+done
+# A local install also needs livekit.local.yaml mounted.
+_FI_COMPOSE="$_FB_LK_PUBLIC_ONLY"
+_fi_rc=0; _fi_run local "" '' || _fi_rc=$?
+unset _FI_COMPOSE
+_assert_var "local, livekit.local.yaml not mounted: no voice profile" "$(grep -c '^COMPOSE_PROFILES=' "$_fi_env" | tr -d ' ')" "0"
+# --dev with no LiveKit mount: LiveKit is not turned on, so nothing to refuse.
+_FI_COMPOSE="$_FB_OLD"; _FI_SHELL_CMD="--dev"
+_fi_rc=0; _fi_run domain "c.example.com" '' || _fi_rc=$?
+unset _FI_COMPOSE _FI_SHELL_CMD
+_assert_var "no LiveKit mount + --dev: continues" "$_fi_rc" "0"
+
+# A rerun after an interrupted install, with another topology: the installer's
+# own LIVEKIT_COMMAND follows the new choice; an operator's value is kept.
+_fi_run domain "c.example.com" "LIVEKIT_COMMAND=$(livekit_command_for local)\n" || true
+_assert_var "rerun local -> domain: command now public" "$(env_value "$_fi_env" LIVEKIT_COMMAND)" "$(livekit_command_for public)"
+_assert_var "rerun local -> domain: warns the URL is kept" "$(_has "$_fi_out" 'Settings → Channels → Voice')" yes
+_fi_run local "" "LIVEKIT_COMMAND=$(livekit_command_for public)\n" || true
+_assert_var "rerun domain -> local: command now local" "$(env_value "$_fi_env" LIVEKIT_COMMAND)" "$(livekit_command_for local)"
+_fi_run domain "c.example.com" "LIVEKIT_COMMAND=$(livekit_command_for public)\n" || true
+_assert_var "rerun, same topology: command kept" "$(env_value "$_fi_env" LIVEKIT_COMMAND)" "$(livekit_command_for public)"
+_assert_var "rerun, same topology: no URL warning" "$(_has "$_fi_out" 'URL')" no
+_fi_run domain "c.example.com" 'LIVEKIT_COMMAND=--config /etc/livekit.yaml --node-ip 10.0.0.9\n' || true
+_assert_var "rerun, operator command: kept" "$(env_value "$_fi_env" LIVEKIT_COMMAND)" "--config /etc/livekit.yaml --node-ip 10.0.0.9"
+
+# One address at the end: the summary box's, the same base URL as next steps.
+_fi_run proxy "https://p.example.com" '' || true
+_assert_var "proxy: one /setup address"        "$(grep -c '/setup' <<< "$_fi_out" | tr -d ' ')" "1"
+_assert_var "proxy: summary uses the origin"   "$(_has "$_fi_out" 'https://p.example.com/setup')" yes
+_assert_var "proxy: no localhost address"      "$(_has "$_fi_out" 'localhost:3000')" no
+_fi_run domain "c.example.com" '' || true
+_assert_var "domain: one /setup address"       "$(grep -c '/setup' <<< "$_fi_out" | tr -d ' ')" "1"
 rm -rf "$_fi_dir"
+
+# --- install.sh: refreshes setup-common.sh on every run (upgrades, pinned releases) ---
+# An install made before #2357 keeps a setup-common.sh without the .env helpers
+# install.sh now calls. install.sh is sourced from a copy in a scratch dir, with
+# curl stubbed to "download" $_sc_serve (a file path; "fail" = a failed download).
+
+echo ""
+echo "=== install.sh: setup-common.sh refresh ==="
+
+_SC_NEW="$TEST_DIR/../../scripts/setup-common.sh"
+_SC_OLD="$TEST_DIR/fixtures/setup-common-pre-2357.sh"
+_sc_dir="$(mktemp -d)"
+# $1 existing setup-common.sh ("" = none), $2 what the download returns ("fail" = fails),
+# $3 "checkout" to make the dir a source checkout. Sets _sc_rc, _sc_out, _sc_curl.
+_sc_run() {
+    rm -rf "$_sc_dir"; mkdir -p "$_sc_dir/scripts"
+    cp "$TEST_DIR/../../install.sh" "$_sc_dir/install.sh"
+    [[ -z "$1" ]] || cp "$1" "$_sc_dir/scripts/setup-common.sh"
+    if [[ "${3:-}" == checkout ]]; then
+        mkdir -p "$_sc_dir/.git" "$_sc_dir/src"; printf '{"name":"curia"}' > "$_sc_dir/package.json"
+    fi
+    _sc_rc=0; _sc_curl="$_sc_dir/curl-calls"; : > "$_sc_curl"
+    _sc_out="$(
+      exec 2>"$_sc_dir/stderr"
+      unset CURIA_REF
+      # This harness already loaded the current helpers; start without them.
+      unset -f compose_var env_value set_env_var ensure_livekit_env livekit_seed_keys \
+          livekit_command_for print_next_steps
+      CURIA_VERSION=v0.46.0
+      _sc_serve="$2"
+      curl() {
+          local o="" a
+          for a in "$@"; do printf '%s ' "$a" >> "$_sc_curl"; done; echo >> "$_sc_curl"
+          while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && o="$2"; shift; done
+          [[ "$_sc_serve" != fail ]] || return 22
+          cp "$_sc_serve" "$o"
+      }
+      # shellcheck source=/dev/null
+      source "$_sc_dir/install.sh"
+      type -t compose_var
+    )" || _sc_rc=$?
+    _sc_err="$(< "$_sc_dir/stderr")"
+}
+
+_sc_run "$_SC_OLD" "$_SC_NEW"
+_assert_var "old setup-common.sh, new download: sources fine"   "$_sc_rc" "0"
+_assert_var "old setup-common.sh, new download: helpers present" "$_sc_out" "function"
+_assert_var "old setup-common.sh, new download: file replaced" \
+    "$(cmp -s "$_sc_dir/scripts/setup-common.sh" "$_SC_NEW" && echo same)" "same"
+_assert_var "downloads this release's setup-common.sh" \
+    "$(_has "$(< "$_sc_curl")" 'releases/download/v0.46.0/setup-common.sh')" yes
+
+_sc_run "$_SC_OLD" "$_SC_OLD"
+_assert_var "download is an older release's file: exit 1" "$_sc_rc" "1"
+_assert_var "older release: says the version predates this installer" \
+    "$(_has "$_sc_err" 'CURIA_VERSION=v0.46.0 predates this installer')" yes
+_assert_var "older release: points at that release's own installer" \
+    "$(_has "$_sc_err" 'releases/download/v0.46.0/install.sh')" yes
+
+_sc_run "$_SC_NEW" fail
+_assert_var "download fails, file present: continues" "$_sc_rc" "0"
+_assert_var "download fails, file present: warns"     "$(_has "$_sc_err" 'setup-common.sh')" yes
+_assert_var "download fails, file present: file kept" \
+    "$(cmp -s "$_sc_dir/scripts/setup-common.sh" "$_SC_NEW" && echo same)" "same"
+
+_sc_run "" fail
+_assert_var "download fails, no file: exit 1" "$_sc_rc" "1"
+_assert_var "download fails, no file: says so" "$(_has "$_sc_err" 'setup-common.sh')" yes
+
+_sc_run "$_SC_NEW" "$_SC_OLD" checkout
+_assert_var "source checkout: no download"      "$(< "$_sc_curl")" ""
+_assert_var "source checkout: file left as is" \
+    "$(cmp -s "$_sc_dir/scripts/setup-common.sh" "$_SC_NEW" && echo same)" "same"
+# A git worktree's .git is a file, not a directory: still a source checkout.
+rm -rf "$_sc_dir/.git"; printf 'gitdir: /elsewhere\n' > "$_sc_dir/.git"
+_assert_var "worktree (.git file) is a source checkout" \
+    "$(detect_source_checkout "$_sc_dir" && echo yes || echo no)" yes
+rm -rf "$_sc_dir"
 
 # --- Results ---
 

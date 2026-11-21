@@ -25,7 +25,8 @@
 #      .env.example, and Caddyfile next to install.sh (if not already present).
 #   3. Creates .env from the example, generating secrets for any placeholder values.
 #   4. Prompts for an Anthropic API key (format-validated, 3 retries).
-#   5. Asks about deployment topology (local / public HTTPS / behind-proxy).
+#   5. Asks how people will reach Curia: your domain with HTTPS set up for you
+#      (default), your domain behind HTTPS you already run, or just this computer.
 #   6. Starts Postgres, runs migrations and vault-seed *inside* the pulled image
 #      (tsx direct — no corepack/pnpm on the host), then brings the full stack up.
 #   7. Prints a summary box with the bootstrap secret the operator needs to sign in.
@@ -142,20 +143,58 @@ bundle_asset_url() {
   fi
 }
 
-# setup-common.sh may not be present when install.sh is fetched standalone.
-# Fetch it from the matching release/ref if missing, then source it to get the
-# shared output helpers and wait_* functions. NOTE: this runs before INSTALL_DIR
-# is set below, so it targets $SCRIPT_DIR directly rather than via fetch_asset.
-if [[ ! -f "$SCRIPT_DIR/scripts/setup-common.sh" ]]; then
+# Returns 0 if $1 looks like a Curia source checkout:
+#   - has a .git entry (a directory in a clone, a file in a git worktree)
+#   - has a src/ directory (Curia's TypeScript sources live here)
+#   - has a package.json whose "name" field is "curia"
+# Returns 1 otherwise. Used to warn operators who accidentally ran install.sh
+# inside a developer clone and offer them the right path, and to leave a clone's
+# own scripts/setup-common.sh alone (unit-tested via tests/setup/test-setup-functions.sh).
+detect_source_checkout() {
+  local d="$1"
+  [[ -e "$d/.git" && -d "$d/src" ]] || return 1
+  [[ -f "$d/package.json" ]] || return 1
+  grep -q '"name"[[:space:]]*:[[:space:]]*"curia"' "$d/package.json"
+}
+
+# install.sh needs the shared helpers in scripts/setup-common.sh, and the two
+# must come from the same release: an install made by an older release keeps an
+# older setup-common.sh that lacks helpers this script calls. So outside a source
+# checkout, refresh it from the resolved release/ref on every run. A failed
+# download keeps the file already there (with a warning); with none, stop.
+# NOTE: this runs before setup-common.sh is sourced (no error/hint helpers yet)
+# and before INSTALL_DIR is set below, so it prints inline and uses $SCRIPT_DIR.
+if ! detect_source_checkout "$SCRIPT_DIR"; then
   mkdir -p "$SCRIPT_DIR/scripts"
-  if [[ "$ASSET_MODE" == "release" ]]; then
-    download_to "${ASSET_BASE}/setup-common.sh" "$SCRIPT_DIR/scripts/setup-common.sh"
-  else
-    download_to "${RAW_BASE}/scripts/setup-common.sh" "$SCRIPT_DIR/scripts/setup-common.sh"
+  if ! download_to "$(bundle_asset_url scripts/setup-common.sh setup-common.sh)" "$SCRIPT_DIR/scripts/setup-common.sh"; then
+    if [[ -f "$SCRIPT_DIR/scripts/setup-common.sh" ]]; then
+      printf 'warning: could not download setup-common.sh from %s; using the copy already in %s/scripts.\n' \
+        "$(bundle_asset_url scripts/setup-common.sh setup-common.sh)" "$SCRIPT_DIR" >&2
+    else
+      printf 'error: could not download setup-common.sh from %s, which install.sh needs.\n' \
+        "$(bundle_asset_url scripts/setup-common.sh setup-common.sh)" >&2
+      printf 'hint:  check the network and CURIA_VERSION, then re-run install.sh.\n' >&2
+      exit 1
+    fi
   fi
 fi
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/scripts/setup-common.sh"
+
+# An older release's setup-common.sh (a pinned CURIA_VERSION from before these
+# helpers existed) cannot run this installer. Plain printf: the error/hint
+# helpers just sourced may be that release's.
+for _helper in compose_var env_value set_env_var ensure_livekit_env livekit_seed_keys \
+    livekit_command_for print_next_steps; do
+  if [[ "$(type -t "$_helper")" != function ]]; then
+    printf 'error: CURIA_VERSION=%s predates this installer (its setup-common.sh has no %s).\n' \
+      "$CURIA_VERSION" "$_helper" >&2
+    printf "hint:  download that release's own installer and run it instead: %s\n" \
+      "$(bundle_asset_url install.sh install.sh)" >&2
+    exit 1
+  fi
+done
+unset _helper
 
 # setup-common.sh's wait_for_postgres / wait_for_curia look up the compose
 # project via $REPO_ROOT. For the image-based install, the install dir IS the
@@ -170,19 +209,6 @@ COMPOSE_FLAGS=()
 # ---------------------------------------------------------------------------
 # Pure helpers (unit-tested via tests/setup/test-setup-functions.sh)
 # ---------------------------------------------------------------------------
-
-# Returns 0 if $1 looks like a Curia source checkout:
-#   - has a .git directory (it's a git repo)
-#   - has a src/ directory (Curia's TypeScript sources live here)
-#   - has a package.json whose "name" field is "curia"
-# Returns 1 otherwise. Used to warn operators who accidentally ran install.sh
-# inside a developer clone and offer them the right path.
-detect_source_checkout() {
-  local d="$1"
-  [[ -d "$d/.git" && -d "$d/src" ]] || return 1
-  [[ -f "$d/package.json" ]] || return 1
-  grep -q '"name"[[:space:]]*:[[:space:]]*"curia"' "$d/package.json"
-}
 
 # Returns 0 (true) only if the install at env file $1 is fully COMPLETE — i.e.
 # a prior fresh install ran all the way through migrations, vault seeding, a
@@ -651,6 +677,34 @@ ensure_https_app_origin() {
   fi
 }
 
+# Returns 0 when the install's docker-compose.yml bind-mounts docker/$1 (e.g.
+# livekit.yaml) on a line that is not a comment. Compose files from v0.42 to
+# v0.45 name ./docker/livekit.yaml:/etc/livekit.yaml in a comment only, and
+# those releases ship no such file.
+compose_mounts_config() {
+  local re="docker/${1//./\\.}:"
+  grep -qE "^[^#]*${re}" "$INSTALL_DIR/docker-compose.yml" 2>/dev/null
+}
+
+# Fresh install, after the topology is chosen. If LIVEKIT_COMMAND in .env is
+# exactly what an earlier, interrupted run wrote for the other topology
+# (livekit_command_for local|public), switch it to $2's. A shell value, or any
+# other value (the operator's), is left alone. The vault's LiveKit URL is only
+# written when absent, so one an earlier run seeded is kept: say where to fix it.
+retarget_livekit_command() {
+  local env="$1" mode="$2" cur want other
+  [[ -z "${LIVEKIT_COMMAND+set}" ]] || return 0
+  cur="$(env_value "$env" LIVEKIT_COMMAND)"
+  want="$(livekit_command_for "$mode")"
+  if [[ "$mode" == local ]]; then other="$(livekit_command_for public)"; else other="$(livekit_command_for local)"; fi
+  [[ "$cur" == "$other" ]] || return 0
+  set_env_var "$env" LIVEKIT_COMMAND "$want"
+  echo "" >&2
+  warn "LIVEKIT_COMMAND now matches the reach you chose this time (an earlier run used the other one)."
+  hint "If that earlier run already saved LiveKit's URL for Curia, it is kept: check it"
+  hint "under Settings → Channels → Voice after setup."
+}
+
 # Validate prereqs: Docker daemon up, compose plugin present, curl available.
 # The operator path deliberately does NOT require Node, pnpm, or openssl.
 check_prereqs() {
@@ -708,9 +762,10 @@ fetch_bundle() {
   # LiveKit's configs, the same way: only releases whose compose file mounts
   # them (#2357) ship them. Each is keyed on its own mount, since livekit.yaml
   # and livekit.local.yaml are separate files.
+  # Only a real mount counts: older compose files name it in a comment.
   local lk
   for lk in livekit.yaml livekit.local.yaml; do
-    if grep -qF "docker/$lk" "$INSTALL_DIR/docker-compose.yml" \
+    if compose_mounts_config "$lk" \
       && [[ ! -f "$INSTALL_DIR/docker/$lk" ]]; then
       mkdir -p "$INSTALL_DIR/docker"
       info "Fetching docker/$lk ..."
@@ -920,8 +975,7 @@ fresh_install() {
       set_env_var "$env" HTTP_BIND 127.0.0.1
       # Public origin for console links, Secure cookies and CORS.
       ensure_https_app_origin "$env"
-      # Expose DOMAIN as a shell variable so print_summary can build the HTTPS URL.
-      # shellcheck disable=SC2034  # read by print_summary (sourced from setup-common.sh)
+      # Kept as a shell variable for the LiveKit URL and the closing address below.
       DOMAIN="$dom"
       if port_listening 80 || port_listening 443; then
         warn "Something is already using port 80 or 443 on this machine."
@@ -959,22 +1013,38 @@ fresh_install() {
     proxy) [[ -n "$PROXY_ORIGIN" ]] || lk_mode=local; lk_value="$PROXY_ORIGIN" ;;
     domain) lk_value="$DOMAIN" ;;
   esac
-  ensure_livekit_env "$env" "$lk_mode"
-  require_livekit_real_keys "$env"
+
+  # Only a release whose compose file mounts LiveKit's config (the one the
+  # chosen command reads) can run it; an older one (a pinned CURIA_VERSION)
+  # would crash-loop LiveKit on a missing file, so voice stays off there.
+  local lk_on=1
+  compose_mounts_config livekit.yaml || lk_on=0
+  [[ "$lk_mode" != local ]] || compose_mounts_config livekit.local.yaml || lk_on=0
 
   # Seed the Voice channel's vault values to match what LiveKit runs on. The
   # keys are passed to the seed container only, like the other secrets, and
   # are never printed. seed-vault never replaces values already in the vault.
   local lk_url lk_pair="" lk_rc=0
-  local -a lk_seed
-  lk_url="$(livekit_browser_url "$TOPOLOGY" "$lk_value")"
-  lk_seed=(-e "SEED_LIVEKIT_URL=$lk_url")
-  lk_pair="$(livekit_seed_keys "$(compose_var "$env" LIVEKIT_KEYS)" "$(compose_var "$env" LIVEKIT_COMMAND)")" || lk_rc=$?
-  if [[ $lk_rc -eq 0 ]]; then
-    lk_seed+=(-e "SEED_LIVEKIT_API_KEY=${lk_pair%% *}" -e "SEED_LIVEKIT_API_SECRET=${lk_pair#* }")
+  local -a lk_seed=()
+  if [[ $lk_on -eq 1 ]]; then
+    retarget_livekit_command "$env" "$lk_mode"
+    ensure_livekit_env "$env" "$lk_mode"
+    require_livekit_real_keys "$env"
+
+    lk_url="$(livekit_browser_url "$TOPOLOGY" "$lk_value")"
+    lk_seed=(-e "SEED_LIVEKIT_URL=$lk_url")
+    lk_pair="$(livekit_seed_keys "$(compose_var "$env" LIVEKIT_KEYS)" "$(compose_var "$env" LIVEKIT_COMMAND)")" || lk_rc=$?
+    if [[ $lk_rc -eq 0 ]]; then
+      lk_seed+=(-e "SEED_LIVEKIT_API_KEY=${lk_pair%% *}" -e "SEED_LIVEKIT_API_SECRET=${lk_pair#* }")
+    else
+      warn "Could not tell which keys LiveKit's LIVEKIT_COMMAND uses, so they were not saved for Curia."
+      hint "Enter the LiveKit API key and secret under Settings → Channels → Voice after setup."
+    fi
   else
-    warn "Could not tell which keys LiveKit's LIVEKIT_COMMAND uses, so they were not saved for Curia."
-    hint "Enter the LiveKit API key and secret under Settings → Channels → Voice after setup."
+    echo "" >&2
+    warn "Voice (LiveKit) is off: this release's docker-compose.yml does not mount LiveKit's config."
+    hint "To turn it on later, see the steps for an existing install in docs/dev/voice-setup.md:"
+    hint "  https://github.com/josephfung/curia/blob/main/docs/dev/voice-setup.md#turn-voice-on-for-an-existing-install"
   fi
 
   # Start Postgres and wait for it to be ready before running migrations.
@@ -1007,7 +1077,7 @@ fresh_install() {
     -e "ANTHROPIC_API_KEY=$anthropic" \
     -e "API_TOKEN=$api_token" \
     -e "WEB_APP_BOOTSTRAP_SECRET=$boot_secret" \
-    "${lk_seed[@]}" \
+    ${lk_seed[@]+"${lk_seed[@]}"} \
     -e SEED_VAULT_VERIFY=1 \
     curia ./node_modules/.bin/tsx scripts/seed-vault.ts; then
     error "Vault seeding failed."
@@ -1035,8 +1105,8 @@ fresh_install() {
   # this marker and takes the upgrade path instead of rotating secrets.
   printf '\n# SETUP_COMPLETE\n' >> "$env"
 
-  print_summary "$boot_secret"
-  print_next_steps "$(setup_base_url "$TOPOLOGY" "$lk_value")" "$TOPOLOGY"
+  print_summary "$boot_secret" "$(setup_base_url "$TOPOLOGY" "$lk_value")"
+  print_next_steps "$TOPOLOGY"
 }
 
 # ---------------------------------------------------------------------------
@@ -1100,27 +1170,14 @@ existing_install() {
   note_missing_browser "$env"
   note_voice_off "$env"
 
-  # Load the URL-shaping values from .env so print_summary shows the right
-  # address for this existing install: DOMAIN (HTTPS topology) and a custom
-  # HTTP_PORT (local/proxy topology). Both are read by print_summary, which is
-  # sourced from setup-common.sh — hence the shellcheck disables.
-  # shellcheck disable=SC2034
-  if grep -qE '^DOMAIN=.+' "$env" 2>/dev/null; then
-    DOMAIN="$(grep -E '^DOMAIN=' "$env" | cut -d= -f2-)"
-  fi
-  # shellcheck disable=SC2034
+  # A custom HTTP_PORT from .env shapes the localhost address (setup_base_url).
   if grep -qE '^HTTP_PORT=.+' "$env" 2>/dev/null; then
     HTTP_PORT="$(grep -E '^HTTP_PORT=' "$env" | cut -d= -f2-)"
   fi
 
-  # Pass empty string: print_summary then shows the "secret is stored in the
-  # vault — use the console to retrieve it" branch rather than printing a
-  # fresh secret (which we don't have on the upgrade path).
-  print_summary ""
-
-  # Closing steps for the topology this install looks like: the TLS overlay is
-  # the HTTPS topology, an APP_ORIGIN without it is a user's own proxy, and
-  # anything else is local.
+  # The topology this install looks like: the TLS overlay is the HTTPS
+  # topology, an APP_ORIGIN without it is a user's own proxy, and anything
+  # else is local. It picks the address and the closing steps.
   local topology origin
   if uses_tls_overlay "$(compose_var "$env" COMPOSE_FILE)"; then
     topology=domain; origin="$(env_value "$env" DOMAIN)"
@@ -1128,7 +1185,11 @@ existing_install() {
     origin="$(env_value "$env" APP_ORIGIN)"
     if [[ -n "$origin" ]]; then topology=proxy; else topology=local; fi
   fi
-  print_next_steps "$(setup_base_url "$topology" "$origin")" "$topology"
+
+  # Empty secret: print_summary then shows the "stored in the vault" branch
+  # rather than a fresh secret (which we don't have on the upgrade path).
+  print_summary "" "$(setup_base_url "$topology" "$origin")"
+  print_next_steps "$topology"
 }
 
 # ---------------------------------------------------------------------------

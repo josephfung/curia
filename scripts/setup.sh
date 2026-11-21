@@ -314,9 +314,8 @@ run_infra() {
 
     # On the resume path the bootstrap secret is not in-shell (not in .env anymore,
     # not regenerated), so pass it defensively — print_summary degrades gracefully.
-    print_summary "${WEB_APP_BOOTSTRAP_SECRET:-}"
-    echo ""
-    print_next_steps "http://localhost:${HTTP_PORT:-3000}" local
+    print_summary "${WEB_APP_BOOTSTRAP_SECRET:-}" "http://localhost:${HTTP_PORT:-3000}"
+    print_next_steps local
 }
 
 main() {

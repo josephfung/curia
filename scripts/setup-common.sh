@@ -365,24 +365,20 @@ wait_for_curia() {
     return 1
 }
 
-# Prints the final summary box with login URL and bootstrap secret.
-# $1 = WEB_APP_BOOTSTRAP_SECRET (plain hex, no formatting)
-# Reads DOMAIN from the environment: when set, shows https://$DOMAIN;
-# otherwise falls back to http://localhost:$HTTP_PORT.
+# Prints the final summary box with the Setup page address and bootstrap secret.
+# This is the one address the installers print at the end; print_next_steps
+# refers back to it.
+#   $1 = WEB_APP_BOOTSTRAP_SECRET (plain hex, no formatting; empty on resume)
+#   $2 = base URL people open Curia on (install.sh: setup_base_url), no trailing
+#        slash needed. Empty: http://localhost:$HTTP_PORT (3000 by default).
 print_summary() {
-    local secret="$1"
-    local port="${HTTP_PORT:-3000}"
+    local secret="$1" base="${2:-}"
     local W=70  # inner box width; wide enough for a 64-char hex secret + padding
     local border url
     border=$(printf '═%.0s' $(seq 1 $W))
 
-    # Use the public HTTPS URL when the operator chose the domain topology;
-    # fall back to localhost for local and behind-proxy installs.
-    if [[ -n "${DOMAIN:-}" ]]; then
-        url="https://${DOMAIN}"
-    else
-        url="http://localhost:${port}"
-    fi
+    [[ -n "$base" ]] || base="http://localhost:${HTTP_PORT:-3000}"
+    url="${base%/}/setup"
 
     echo ""
     printf "╔%s╗\n" "$border"
@@ -409,13 +405,13 @@ print_summary() {
     echo ""
 }
 
-# Prints what to do after the installer finishes: the Setup page, the docs
-# guide and, for installs reached from other machines, the call ports (and a
-# proxy's forwarding rules).
-#   print_next_steps <base url> <topology: domain | proxy | local>
+# Prints what to do after the installer finishes: finish on the Setup page (at
+# the address print_summary showed), the docs guide and, for installs reached
+# from other machines, the call ports (and a proxy's forwarding rules).
+#   print_next_steps <topology: domain | proxy | local>
 print_next_steps() {
-    local url="${1%/}" topology="$2"
-    echo "Finish setting up Curia in your browser: ${url}/setup"
+    local topology="$1"
+    echo "Finish setting up Curia in your browser at the address above."
     echo "Guide: https://docs.meetcuria.com/get-started/check-your-setup"
     echo "When every step is done, choose Start onboarding."
     case "$topology" in
@@ -425,7 +421,8 @@ print_next_steps() {
             ;;
     esac
     if [[ "$topology" == proxy ]]; then
-        echo "Your proxy must forward / to port 3000 and /rtc* to port 7880."
+        echo "Your proxy must forward / to port 3000 and /rtc* to 127.0.0.1:7880 on this host."
+        echo "A proxy on another machine also needs LIVEKIT_HTTP_BIND set (see docs/dev/voice-setup.md)."
     fi
     echo ""
 }
