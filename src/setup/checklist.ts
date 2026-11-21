@@ -133,6 +133,8 @@ export interface SetupCheckDeps {
   browserReady: () => boolean;
   /** Asks LiveKit itself, with the saved keys, whether it answers. */
   livekitProbe: () => Promise<LiveKitProbeResult>;
+  /** The management URL the probe used, named when it is misconfigured. */
+  livekitManagementUrl: () => string;
   logger: Logger;
 }
 
@@ -221,6 +223,9 @@ async function checkVoice(deps: SetupCheckDeps, route: VoiceRoute | null): Promi
     return { done: false, detail: "LiveKit's keys aren't saved. They come with Curia's install; re-run the installer or enter them under Settings → Channels → Voice." };
   }
   if (livekit === 'unreachable') return { done: false, detail: "LiveKit isn't running. On the server, run: docker compose up -d livekit" };
+  if (livekit === 'misconfigured') {
+    return { done: false, detail: `Curia can't reach LiveKit at ${deps.livekitManagementUrl()}. Check channels.voice.livekit_management_url in Curia's config.` };
+  }
   if (livekit === 'rejected') return { done: false, detail: "LiveKit rejected the saved keys. They must match LIVEKIT_KEYS in the install's .env." };
   const voice = channelResult(await deps.channelStatus('voice'), 'Voice');
   if (route === 'app') return voice ?? { done: true };

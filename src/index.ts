@@ -141,7 +141,8 @@ import { invokeVoiceToolAudited } from './channels/voice/voice-tool-audit.js';
 import { evaluateVoiceModelCapabilities } from './channels/voice/voice-model-capabilities.js';
 import { DeepgramSttProvider, CartesiaTtsProvider, SpeechMediaService } from './speech/index.js';
 import { LiveKitRoomSession } from './channels/voice/livekit/room-session.js';
-import { deleteVoiceRoom, listVoiceRooms, toLiveKitWsUrl } from './channels/voice/livekit/token.js';
+import { deleteVoiceRoom, listVoiceRooms } from './channels/voice/livekit/token.js';
+import { resolveLiveKitServerUrl } from './channels/voice/livekit/server-url.js';
 import { SignalCallBridge } from './channels/voice/signal/signal-call-bridge.js';
 import { AgendaEventSync, readAgendaEvent } from './meetings/agenda-event-sync.js';
 import { AgendaStore } from './meetings/agenda-store.js';
@@ -495,6 +496,16 @@ async function main(): Promise<void> {
     logger.fatal({ err }, 'Failed to resolve bootstrap secrets from vault');
     process.exit(1);
   }
+
+  // Which address Curia's own end uses for LiveKit (#2357): the server-side join,
+  // RoomService, /api/health and the Setup probe all read it. A host-run Curia can't
+  // resolve the compose name (livekit), so it falls back to the browser-facing URL.
+  const livekitServer = await resolveLiveKitServerUrl({
+    managementUrl: config.voiceLivekitManagementUrl,
+    browserUrl: config.voiceLivekitUrl,
+    logger,
+  });
+  config.voiceLivekitManagementUrl = livekitServer.managementUrl;
 
   // api_token is a REQUIRED secret with a fail-OPEN consumer: validateBearerToken()
   // (src/channels/http/auth.ts) disables HTTP auth entirely when no token is configured
@@ -2550,12 +2561,13 @@ async function main(): Promise<void> {
       } else {
       // Wrap in telemetry so voice turns emit llm.call cost events like every other path.
       const voiceLlmProvider = new TelemetryLlmProvider(voiceBaseProvider, bus, logger, 'voice-turn', modelRegistry);
-      // Curia's own end of the call joins over the internal signaling URL (the
-      // compose-network address). The browser-facing URL (config.voiceLivekitUrl)
-      // still gates enabling voice (above) and is what VoiceAdapter hands browsers,
-      // but the runtime never dials it: inside a container `ws://localhost:7880` is
-      // the container itself (#2357).
-      const voiceLivekitUrl = toLiveKitWsUrl(config.voiceLivekitManagementUrl);
+      // Curia's own end of the call joins over the management URL's ws form (the
+      // compose-network address; resolveLiveKitServerUrl above). The browser-facing URL
+      // (config.voiceLivekitUrl) still gates enabling voice (above) and is what
+      // VoiceAdapter hands browsers; the runtime dials it only when the compose name
+      // does not resolve (a host-run Curia). Inside a container `ws://localhost:7880`
+      // is the container itself (#2357).
+      const voiceLivekitUrl = livekitServer.joinUrl;
       const voiceRuntime = new VoiceRuntime({
         bus,
         logger,
@@ -3330,6 +3342,7 @@ async function main(): Promise<void> {
     secretPresent: async (name) => (await secretsService.get(name)) !== null || !!process.env[name.toUpperCase()],
     browserReady: () => browserService?.browserContext != null,
     livekitProbe: () => probeLiveKit({ getSecret: (n) => secretsService.get(n), managementUrl: config.voiceLivekitManagementUrl, logger }),
+    livekitManagementUrl: () => config.voiceLivekitManagementUrl,
     logger,
   };
   const setupChecklist = async (): Promise<SetupChecklist> => {

@@ -5,10 +5,31 @@
 import type { Logger } from '../logger.js';
 import { listVoiceRooms } from '../channels/voice/livekit/token.js';
 
-export type LiveKitProbeResult = 'ok' | 'no_keys' | 'unreachable' | 'rejected';
+/**
+ * - `unreachable`: LiveKit's host answered but nothing listens (refused), or LiveKit answered
+ *   with an error: the container is down.
+ * - `misconfigured`: the management URL's host does not resolve, or the request timed out:
+ *   Curia is pointed at the wrong address (`channels.voice.livekit_management_url`).
+ */
+export type LiveKitProbeResult = 'ok' | 'no_keys' | 'unreachable' | 'misconfigured' | 'rejected';
 
 /** Short on purpose: Setup waits on this while it renders. */
 const PROBE_TIMEOUT_SEC = 3;
+
+/** DNS failures and timeouts: the address is wrong, not the container down. */
+const MISCONFIGURED_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'EAI_NONAME', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT']);
+
+/** fetch() wraps the socket error in TypeError('fetch failed') with the code on `cause`. */
+function isMisconfigured(err: unknown): boolean {
+  let cur: unknown = err;
+  for (let depth = 0; depth < 3 && typeof cur === 'object' && cur !== null; depth++) {
+    const e = cur as { name?: unknown; code?: unknown; cause?: unknown };
+    if (e.name === 'TimeoutError') return true;
+    if (typeof e.code === 'string' && MISCONFIGURED_CODES.has(e.code)) return true;
+    cur = e.cause;
+  }
+  return false;
+}
 
 export async function probeLiveKit(deps: {
   getSecret: (name: string) => Promise<string | null>;
@@ -29,6 +50,13 @@ export async function probeLiveKit(deps: {
     if (status === 401 || status === 403) {
       deps.logger.debug({ err, status, managementUrl: deps.managementUrl }, 'setup: LiveKit rejected the saved keys');
       return 'rejected';
+    }
+    if (status === undefined && isMisconfigured(err)) {
+      deps.logger.warn(
+        { err, managementUrl: deps.managementUrl },
+        'setup: LiveKit management URL does not resolve or timed out; check channels.voice.livekit_management_url',
+      );
+      return 'misconfigured';
     }
     if (typeof status === 'number') {
       // LiveKit answered, but with an error: not the expected "not running" case, so
