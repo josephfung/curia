@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import pino from 'pino';
 import {
+  createOnboardingStateLock,
   findOpenOnboardingTask,
   readOnboardingState,
+  updateOnboardingState,
   writeOnboardingState,
   type OnboardingState,
 } from '../../../src/onboarding/state.js';
@@ -64,6 +66,77 @@ describe('onboarding state', () => {
     const store = fakeStore();
     store.data.set('onboarding/state', JSON.stringify({ ...sample, ...patch }));
     expect(await readOnboardingState(store, logger)).toBeNull();
+  });
+});
+
+/** A pool whose lock connection records its queries; the in-process queue does the serializing. */
+function fakeLockPool() {
+  const queries: string[] = [];
+  const release = vi.fn();
+  const pool = {
+    connect: vi.fn(async () => ({
+      query: vi.fn(async (sql: string) => { queries.push(sql); return { rows: [] }; }),
+      release,
+    })),
+  };
+  return { pool: pool as never, queries, release };
+}
+
+describe('updateOnboardingState', () => {
+  it('serializes concurrent read-modify-writes, so neither change is lost', async () => {
+    const store = fakeStore();
+    await writeOnboardingState(store, sample);
+    // Every read yields first, so unlocked updates would both read the original state.
+    const slowStore = {
+      get: async (ns: string, key: string) => { await new Promise((r) => setTimeout(r, 5)); return store.get(ns, key); },
+      set: store.set,
+    };
+    const deps = { configStore: slowStore, stateLock: createOnboardingStateLock(fakeLockPool().pool, logger), logger };
+    await Promise.all([
+      updateOnboardingState(deps, (s) => ({ ...s, greetingSentAt: '2026-11-20T11:00:00.000Z' })),
+      updateOnboardingState(deps, (s) => ({ ...s, lastPrincipalTurnAt: '2026-11-20T11:01:00.000Z' })),
+    ]);
+    expect(await readOnboardingState(store)).toMatchObject({
+      greetingSentAt: '2026-11-20T11:00:00.000Z',
+      lastPrincipalTurnAt: '2026-11-20T11:01:00.000Z',
+    });
+  });
+
+  it('takes the advisory lock in a transaction and commits it', async () => {
+    const store = fakeStore();
+    await writeOnboardingState(store, sample);
+    const lock = fakeLockPool();
+    const out = await updateOnboardingState(
+      { configStore: store, stateLock: createOnboardingStateLock(lock.pool, logger) },
+      (s) => ({ ...s, followUpsSent: 1 }),
+    );
+    expect(out).toMatchObject({ written: true, state: { followUpsSent: 1 } });
+    expect(lock.queries[0]).toBe('BEGIN');
+    expect(lock.queries.some((q) => q.includes('pg_advisory_xact_lock'))).toBe(true);
+    expect(lock.queries.at(-1)).toBe('COMMIT');
+    expect(lock.release).toHaveBeenCalledOnce();
+  });
+
+  it('rolls back and rethrows when the update fails, and a later update still runs', async () => {
+    const lock = fakeLockPool();
+    const stateLock = createOnboardingStateLock(lock.pool, logger);
+    const failing = { get: async () => JSON.stringify(sample), set: async () => ({ stored: false, action: 'rejected' }) };
+    await expect(updateOnboardingState({ configStore: failing, stateLock }, (s) => ({ ...s, followUpsSent: 1 })))
+      .rejects.toThrow(/rejected the onboarding state write/);
+    expect(lock.queries.at(-1)).toBe('ROLLBACK');
+    const store = fakeStore();
+    await writeOnboardingState(store, sample);
+    await expect(updateOnboardingState({ configStore: store, stateLock }, (s) => ({ ...s, followUpsSent: 2 })))
+      .resolves.toMatchObject({ written: true });
+  });
+
+  it('leaves missing state uncreated, and writes nothing when the change declines', async () => {
+    const store = fakeStore();
+    const deps = { configStore: store, stateLock: createOnboardingStateLock(fakeLockPool().pool, logger) };
+    expect(await updateOnboardingState(deps, (s) => s)).toEqual({ state: null, written: false });
+    expect(store.data.size).toBe(0);
+    await writeOnboardingState(store, sample);
+    expect(await updateOnboardingState(deps, () => null)).toEqual({ state: sample, written: false });
   });
 });
 

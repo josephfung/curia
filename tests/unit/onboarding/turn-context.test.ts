@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import pino from 'pino';
 import { createOnboardingTurnContext, formatOnboardingTurnBlock } from '../../../src/onboarding/turn-context.js';
-import { readOnboardingState, writeOnboardingState, type OnboardingState } from '../../../src/onboarding/state.js';
+import { readOnboardingState, writeOnboardingState, type OnboardingState, type OnboardingStateLock } from '../../../src/onboarding/state.js';
 import { ONBOARDING_CREATED_BY } from '../../../src/onboarding/constants.js';
 import type { TaskRow } from '../../../src/db/queries/tasks.js';
 
 const logger = pino({ level: 'silent' });
+const passthroughLock: OnboardingStateLock = (fn) => fn();
 const NOW = new Date('2026-11-21T15:00:00.000Z');
 
 const state: OnboardingState = {
@@ -62,7 +63,7 @@ describe('createOnboardingTurnContext', () => {
     const store = fakeStore();
     await writeOnboardingState(store, state);
     store.set.mockClear();
-    const source = createOnboardingTurnContext({ taskRepo: repoWith(false), configStore: store, logger });
+    const source = createOnboardingTurnContext({ taskRepo: repoWith(false), configStore: store, stateLock: passthroughLock, logger });
     expect(await source.forPrincipalTurn(NOW)).toBeNull();
     expect(store.set).not.toHaveBeenCalled();
   });
@@ -70,7 +71,7 @@ describe('createOnboardingTurnContext', () => {
   it('names the task and each open topic by id, no titles, and records the principal turn', async () => {
     const store = fakeStore();
     await writeOnboardingState(store, state);
-    const source = createOnboardingTurnContext({ taskRepo: repoWith(true), configStore: store, logger });
+    const source = createOnboardingTurnContext({ taskRepo: repoWith(true), configStore: store, stateLock: passthroughLock, logger });
     const block = await source.forPrincipalTurn(NOW);
     expect(block).toContain('task parent-1');
     expect(block).toContain('Open topics this session: address, inbox-expectations.');
@@ -85,7 +86,7 @@ describe('createOnboardingTurnContext', () => {
 
   it('does not create state when it is missing', async () => {
     const store = fakeStore();
-    const source = createOnboardingTurnContext({ taskRepo: repoWith(true), configStore: store, logger });
+    const source = createOnboardingTurnContext({ taskRepo: repoWith(true), configStore: store, stateLock: passthroughLock, logger });
     expect(await source.forPrincipalTurn(NOW)).toContain('task parent-1');
     expect(store.set).not.toHaveBeenCalled();
   });
@@ -97,6 +98,7 @@ describe('createOnboardingTurnContext', () => {
     const source = createOnboardingTurnContext({
       taskRepo: { listTasks: vi.fn().mockRejectedValue(new Error('db down')) },
       configStore: store,
+      stateLock: passthroughLock,
       logger: log,
     });
     expect(await source.forPrincipalTurn(NOW)).toBeNull();
@@ -117,7 +119,7 @@ describe('topic ids from task tags', () => {
     const warn = vi.fn();
     const spyLogger = { ...logger, warn, error: vi.fn() } as unknown as typeof logger;
     const store = fakeStore();
-    const block = await createOnboardingTurnContext({ taskRepo, configStore: store, logger: spyLogger }).forPrincipalTurn(NOW);
+    const block = await createOnboardingTurnContext({ taskRepo, configStore: store, stateLock: passthroughLock, logger: spyLogger }).forPrincipalTurn(NOW);
     expect(block).toContain('Open topics this session: style.');
     expect(block).not.toContain('SYSTEM');
     expect(block).not.toContain('aaaa');

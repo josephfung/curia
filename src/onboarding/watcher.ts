@@ -15,7 +15,13 @@ import {
 } from './constants.js';
 import { decideNext, type WatcherFacts, type WatcherInvitation } from './followup-policy.js';
 import { notifyOperatorOnce } from './notify-operator-once.js';
-import { findOpenOnboardingTask, type OnboardingState, readOnboardingState, writeOnboardingState } from './state.js';
+import {
+  findOpenOnboardingTask,
+  type OnboardingState,
+  type OnboardingStateLock,
+  readOnboardingState,
+  updateOnboardingState,
+} from './state.js';
 import { isOpenTask, listChildren, topicSubtasks } from './subtasks.js';
 import { noteAndWakeCoordinator } from './subscribers.js';
 
@@ -23,6 +29,8 @@ export interface OnboardingWatcherOptions {
   taskRepo: TaskRepo;
   scheduler: Pick<SchedulerService, 'enqueueTaskWake'>;
   configStore: Pick<ConfigStore, 'get' | 'set'>;
+  /** The process's shared onboarding state lock (createOnboardingStateLock). */
+  stateLock: OnboardingStateLock;
   logger: Logger;
   /** The current phone-app invitation; null when none exists. */
   readInvitation: () => Promise<{ expiresAt: Date; createdAt: Date; redeemed: boolean; redeemedAt: Date | null } | null>;
@@ -89,8 +97,9 @@ export class OnboardingWatcher {
       const action = decideNext(state, now, invitation, facts);
       if (action === 'wait') return;
 
-      const deps = { taskRepo: this.o.taskRepo, logger: this.o.logger, configStore: this.o.configStore };
-      const stillApplies = (s: OnboardingState) => decideNext(s, now, invitation, facts) === action;
+      const deps = { taskRepo: this.o.taskRepo, logger: this.o.logger, configStore: this.o.configStore, stateLock: this.o.stateLock };
+      // Re-decided on the latest state inside each update, so it must still be this run's state.
+      const stillApplies = (s: OnboardingState) => s.taskId === task.id && decideNext(s, now, invitation, facts) === action;
       switch (action) {
         case 'greeting_nudge':
           if (!(await this.updateState(stillApplies, (s) => ({ ...s, greetingNudgedAt: now.toISOString() })))) break;
@@ -114,10 +123,11 @@ export class OnboardingWatcher {
             task.id,
             'greeting_unanswered',
             state.greetingSentAt === null ? { reason: 'greeting_not_recorded' } : undefined,
+            stillApplies,
           );
           break;
         case 'notify_invitation_expired':
-          await notifyOperatorOnce(deps, task.id, 'invitation_expired');
+          await notifyOperatorOnce(deps, task.id, 'invitation_expired', undefined, stillApplies);
           break;
       }
     } catch (err) {
@@ -153,19 +163,17 @@ export class OnboardingWatcher {
   }
 
   /**
-   * Re-read the latest state right before writing, so a concurrent change to another field survives,
-   * and re-decide on it: a reply that landed since the tick's first read cancels the action.
-   * Returns whether the change was written.
+   * One atomic state update (updateOnboardingState): the latest state is read under the state
+   * lock and re-decided there, so a reply or another write that landed since the tick's first
+   * read cancels the action, and no concurrent change is overwritten. Returns whether the change
+   * was written.
    */
   private async updateState(
     stillApplies: (s: OnboardingState) => boolean,
     change: (s: OnboardingState) => OnboardingState,
   ): Promise<boolean> {
-    const latest = await readOnboardingState(this.o.configStore, this.o.logger);
-    if (latest === null) return false;
-    if (!stillApplies(latest)) return false;
-    await writeOnboardingState(this.o.configStore, change(latest));
-    return true;
+    const { written } = await updateOnboardingState(this.o, (latest) => (stillApplies(latest) ? change(latest) : null));
+    return written;
   }
 }
 

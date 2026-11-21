@@ -25,7 +25,7 @@ const baseState: OnboardingState = {
   operatorNotified: [],
 };
 
-async function setup(opts: { open: boolean; state?: Partial<OnboardingState> }) {
+async function setup(opts: { open: boolean; state?: Partial<OnboardingState>; googleClientId?: () => Promise<string | undefined> }) {
   const handlers = new Map<string, (e: BusEvent) => unknown>();
   const bus = { subscribe: (type: string, _layer: string, h: (e: BusEvent) => unknown) => void handlers.set(type, h) };
   const data = new Map<string, string>();
@@ -47,8 +47,9 @@ async function setup(opts: { open: boolean; state?: Partial<OnboardingState> }) 
     taskRepo: taskRepo as never,
     scheduler,
     configStore,
+    stateLock: (fn) => fn(),
     logger: logger as never,
-    googleClientId: async () => 'client-123',
+    googleClientId: opts.googleClientId ?? (async () => 'client-123'),
   }).start();
   const fire = async (e: BusEvent) => { await handlers.get(e.type)?.(e); };
   return { fire, taskRepo, scheduler, data };
@@ -123,12 +124,24 @@ describe('OnboardingSubscribers', () => {
   });
 
   it('keeps a state change made while the client id was being read', async () => {
-    const t = await setup({ open: true });
-    await t.fire(blocked());
-    const saved = JSON.parse(t.data.get('onboarding/state')!) as OnboardingState;
-    expect(saved.greetingSentAt).toBeNull();
-    t.data.set('onboarding/state', JSON.stringify({ ...saved, operatorNotified: [], greetingSentAt: 'x' }));
-    await t.fire(blocked());
+    let lookupStarted!: () => void;
+    const started = new Promise<void>((r) => { lookupStarted = r; });
+    let resolveClientId!: (id: string) => void;
+    const clientId = new Promise<string>((r) => { resolveClientId = r; });
+    const t = await setup({
+      open: true,
+      googleClientId: () => {
+        lookupStarted();
+        return clientId;
+      },
+    });
+    const firing = t.fire(blocked());
+    await started;
+    // The greeting is recorded while the handler waits on the lookup.
+    const before = JSON.parse(t.data.get('onboarding/state')!) as OnboardingState;
+    t.data.set('onboarding/state', JSON.stringify({ ...before, greetingSentAt: 'x' }));
+    resolveClientId('client-123');
+    await firing;
     const after = JSON.parse(t.data.get('onboarding/state')!) as OnboardingState;
     expect(after.greetingSentAt).toBe('x');
     expect(after.operatorNotified).toContain('mailbox_signin_blocked');

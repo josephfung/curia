@@ -262,6 +262,7 @@ import { OnboardingSubscribers } from './onboarding/subscribers.js';
 import { isNextSessionBooked, OnboardingWatcher } from './onboarding/watcher.js';
 import { readCurrentInvitationTiming } from './channels/http/pairing-invitations.js';
 import { createOnboardingTurnContext } from './onboarding/turn-context.js';
+import { createOnboardingStateLock } from './onboarding/state.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
 import { unreadCandidateProbe } from './principal-mailboxes/triage-candidate.js';
 import type { TriageServices } from './principal-mailboxes/triage-services.js';
@@ -3481,12 +3482,15 @@ async function main(): Promise<void> {
   // Starting onboarding (#2360). The triage hold is written to triageConfig, the store the
   // inbox heartbeat reads it from. Built here, after registryService, and handed to the
   // ExecutionLayer for the onboarding skill's tools.
+  // One state lock for the process: every read-modify-write of the onboarding run state takes it.
+  const onboardingStateLock = createOnboardingStateLock(pool, logger);
   const onboardingService = new OnboardingService({
     pool,
     taskRepo,
     registry: registryService,
     scheduler: schedulerService,
     configStore: triageConfig,
+    stateLock: onboardingStateLock,
     workingDocsRepo,
     principalName: async () => (await contactService.findContactBySystemRole('principal'))?.displayName ?? null,
     principalContactId: async () => (await contactService.findContactBySystemRole('principal'))?.id ?? null,
@@ -3501,7 +3505,7 @@ async function main(): Promise<void> {
     logger,
   });
   executionLayer.setOnboardingService(onboardingService);
-  const onboardingTurnContext = createOnboardingTurnContext({ taskRepo, configStore: triageConfig, logger });
+  const onboardingTurnContext = createOnboardingTurnContext({ taskRepo, configStore: triageConfig, stateLock: onboardingStateLock, logger });
 
   // Agents that pin a skill with heartbeat: true — read by the BacklogHeartbeat to
   // know which source_agent_ids it may wake (and as the fallback target list).
@@ -3881,6 +3885,7 @@ async function main(): Promise<void> {
     taskRepo,
     scheduler: schedulerService,
     configStore: triageConfig,
+    stateLock: onboardingStateLock,
     logger,
     googleClientId: googleOAuthClientId,
   }).start();
@@ -3891,6 +3896,7 @@ async function main(): Promise<void> {
     taskRepo,
     scheduler: schedulerService,
     configStore: triageConfig,
+    stateLock: onboardingStateLock,
     logger,
     readInvitation: () => readCurrentInvitationTiming(pool),
     nextSessionBooked: (taskId, now) =>

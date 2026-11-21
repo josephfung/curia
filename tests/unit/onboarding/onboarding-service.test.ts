@@ -142,6 +142,7 @@ function makeHarness(opts: {
     registry,
     scheduler,
     configStore,
+    stateLock: (fn) => fn(),
     workingDocsRepo,
     principalName: async () => 'Avery Example',
     principalContactId: async () => PRINCIPAL_CONTACT_ID,

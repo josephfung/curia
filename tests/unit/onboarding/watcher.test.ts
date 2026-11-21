@@ -56,6 +56,7 @@ function setup(opts: {
     taskRepo: taskRepo as never,
     scheduler: { enqueueTaskWake },
     configStore,
+    stateLock: (fn) => fn(),
     logger,
     readInvitation,
     nextSessionBooked,

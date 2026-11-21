@@ -8,7 +8,7 @@
 import type { ConfigStore } from '../memory/config-store.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import type { Logger } from '../logger.js';
-import { findOpenOnboardingTask, readOnboardingState, writeOnboardingState } from './state.js';
+import { findOpenOnboardingTask, type OnboardingStateLock, updateOnboardingState } from './state.js';
 import { isOpenTask, listChildren, topicSubtasks } from './subtasks.js';
 
 export interface OnboardingTurnContextSource {
@@ -32,16 +32,18 @@ export function formatOnboardingTurnBlock(taskId: string, openTopicIds: readonly
 export function createOnboardingTurnContext(deps: {
   taskRepo: Pick<TaskRepo, 'listTasks'>;
   configStore: Pick<ConfigStore, 'get' | 'set'>;
+  /** The process's shared onboarding state lock (createOnboardingStateLock). */
+  stateLock: OnboardingStateLock;
   logger: Logger;
 }): OnboardingTurnContextSource {
-  const { taskRepo, configStore, logger } = deps;
+  const { taskRepo, configStore, stateLock, logger } = deps;
   return {
     async forPrincipalTurn(now: Date): Promise<string | null> {
       try {
         const parent = await findOpenOnboardingTask(taskRepo);
         if (!parent) return null;
         const open = topicSubtasks(await listChildren(taskRepo, parent.id), logger).filter((s) => isOpenTask(s.task));
-        await recordPrincipalTurn(configStore, logger, now);
+        await recordPrincipalTurn({ configStore, stateLock, logger }, now);
         return formatOnboardingTurnBlock(parent.id, open.map((s) => s.topicId));
       } catch (err) {
         // Fail open: a broken lookup must not break the principal's chat.
@@ -52,18 +54,19 @@ export function createOnboardingTurnContext(deps: {
   };
 }
 
-/** Stamp lastPrincipalTurnAt. Missing state is left alone: this path never creates it. */
+/**
+ * Stamp lastPrincipalTurnAt, atomically with every other state update: a watcher tick that read
+ * the state before this turn cannot write back a snapshot without it. Missing state is left
+ * alone: this path never creates it.
+ */
 async function recordPrincipalTurn(
-  store: Pick<ConfigStore, 'get' | 'set'>,
-  logger: Logger,
+  deps: { configStore: Pick<ConfigStore, 'get' | 'set'>; stateLock: OnboardingStateLock; logger: Logger },
   now: Date,
 ): Promise<void> {
   try {
-    const state = await readOnboardingState(store, logger);
-    if (!state) return;
-    await writeOnboardingState(store, { ...state, lastPrincipalTurnAt: now.toISOString() });
+    await updateOnboardingState(deps, (state) => ({ ...state, lastPrincipalTurnAt: now.toISOString() }));
   } catch (err) {
     // The idle nudge reads this; a missed stamp is not worth dropping the turn's context.
-    logger.error({ err }, 'onboarding: failed to record the principal turn — idle nudge timing may be early');
+    deps.logger.error({ err }, 'onboarding: failed to record the principal turn — idle nudge timing may be early');
   }
 }

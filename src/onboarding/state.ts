@@ -1,5 +1,6 @@
 // state.ts — onboarding run state, persisted in the config store (#2360).
 
+import type { Pool } from 'pg';
 import type { ConfigStore } from '../memory/config-store.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import type { TaskRow } from '../db/queries/tasks.js';
@@ -86,6 +87,84 @@ export async function writeOnboardingState(
 export async function writeOnboardingStateRaw(store: Pick<ConfigStore, 'set'>, raw: string): Promise<void> {
   const { stored } = await store.set(ONBOARDING_NAMESPACE, ONBOARDING_STATE_KEY, raw);
   if (!stored) throw new Error('onboarding: the config store rejected the onboarding state write');
+}
+
+/**
+ * Runs `fn` while holding the onboarding state lock. Every read-modify-write of the run state goes
+ * through one (see {@link updateOnboardingState}), so the watcher, live principal turns, event
+ * subscribers and the greeting record never write back a snapshot that misses another's change.
+ */
+export type OnboardingStateLock = <T>(fn: () => Promise<T>) => Promise<T>;
+
+const STATE_LOCK_KEY = 'onboarding:state';
+/** Longest a state update waits for another holder before failing (Postgres interval). */
+const STATE_LOCK_TIMEOUT = '10s';
+
+/**
+ * The state lock across processes: a transaction-scoped Postgres advisory lock (same key hashing
+ * as KnowledgeGraphStore.withAdvisoryLock) on its own connection, held while `fn` reads and writes
+ * the config store on other connections. Callers in this process queue first, so they hold at most
+ * one lock connection and cannot drain the pool `fn` needs. Share one instance per process.
+ */
+export function createOnboardingStateLock(pool: Pick<Pool, 'connect'>, logger: Logger): OnboardingStateLock {
+  let tail: Promise<void> = Promise.resolve();
+  return async <T>(fn: () => Promise<T>): Promise<T> => {
+    const previous = tail;
+    let release!: () => void;
+    tail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      const client = await pool.connect();
+      // Set when ROLLBACK fails: the connection may still hold the lock, so destroy it.
+      let discard: Error | undefined;
+      try {
+        await client.query('BEGIN');
+        await client.query(`SELECT set_config('lock_timeout', $1, true)`, [STATE_LOCK_TIMEOUT]);
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [STATE_LOCK_KEY]);
+        const out = await fn();
+        await client.query('COMMIT');
+        return out;
+      } catch (err) {
+        try {
+          await client.query('ROLLBACK');
+        } catch (rollbackErr) {
+          discard = rollbackErr instanceof Error ? rollbackErr : new Error(String(rollbackErr));
+          logger.error({ err: rollbackErr }, 'onboarding: state lock rollback failed — discarding the connection');
+        }
+        throw err;
+      } finally {
+        client.release(discard);
+      }
+    } finally {
+      release();
+    }
+  };
+}
+
+export type OnboardingStateDeps = {
+  configStore: Pick<ConfigStore, 'get' | 'set'>;
+  stateLock: OnboardingStateLock;
+  logger?: Logger;
+};
+
+/**
+ * The one read-modify-write of the run state: under the state lock, read the latest state and
+ * apply `change`, which returns the next state or null to leave it as it is. Missing (or
+ * malformed) state is never created here. Returns the state as it stands afterwards (null when
+ * there is none) and whether it was written. A failed write throws.
+ */
+export function updateOnboardingState(
+  deps: OnboardingStateDeps,
+  change: (s: OnboardingState) => OnboardingState | null,
+): Promise<{ state: OnboardingState | null; written: boolean }> {
+  return deps.stateLock(async () => {
+    const current = await readOnboardingState(deps.configStore, deps.logger);
+    if (current === null) return { state: null, written: false };
+    const next = change(current);
+    if (next === null) return { state: current, written: false };
+    await writeOnboardingState(deps.configStore, next);
+    return { state: next, written: true };
+  });
 }
 
 /** Read the raw state value, unparsed (null when missing), so a failed start can restore it. */

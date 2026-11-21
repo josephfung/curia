@@ -40,10 +40,12 @@ import {
   findOpenOnboardingTask,
   readOnboardingState,
   readOnboardingStateRaw,
+  updateOnboardingState,
   writeOnboardingState,
   writeOnboardingStateRaw,
   ONBOARDING_TASK_TAG,
   type OnboardingState,
+  type OnboardingStateLock,
 } from './state.js';
 import { isTriageHeld, releaseTriageHold, setTriageHold, writeTriageHold } from './triage-hold.js';
 import { RECURRING_SESSION, topicSubtasks } from './subtasks.js';
@@ -177,6 +179,8 @@ export interface OnboardingServiceDeps {
   scheduler: Pick<SchedulerService, 'enqueueTaskWake'>;
   /** The config store the inbox heartbeat reads the triage hold from. */
   configStore: Pick<ConfigStore, 'get' | 'set'>;
+  /** The process's shared onboarding state lock (createOnboardingStateLock): every state write takes it. */
+  stateLock: OnboardingStateLock;
   workingDocsRepo: WorkingDocsRepo;
   principalName: () => Promise<string | null>;
   /** The principal's contact id, which the onboarding tasks wait on; null when there is none. */
@@ -291,13 +295,9 @@ export class OnboardingService {
    * the greeting). Null when onboarding has no state.
    */
   async markGreetingSent(): Promise<string | null> {
-    const { configStore, logger } = this.deps;
-    const state = await readOnboardingState(configStore, logger);
-    if (!state) return null;
-    if (state.greetingSentAt) return state.greetingSentAt;
     const at = this.now().toISOString();
-    await writeOnboardingState(configStore, { ...state, greetingSentAt: at });
-    return at;
+    const { state } = await updateOnboardingState(this.deps, (s) => (s.greetingSentAt ? null : { ...s, greetingSentAt: at }));
+    return state?.greetingSentAt ?? null;
   }
 
   /**
@@ -481,7 +481,8 @@ export class OnboardingService {
 
       // Last, once the wakes are queued: a start that failed leaves no state saying it started.
       undo.stateWritten = true;
-      await writeOnboardingState(configStore, {
+      // Whole-value write, under the state lock so no concurrent update lands half on top of it.
+      await this.deps.stateLock(() => writeOnboardingState(configStore, {
         taskId: parent.id,
         startedAt: startedAt.toISOString(),
         route,
@@ -492,7 +493,7 @@ export class OnboardingService {
         idleNudgeSentAt: null,
         greetingNudgedAt: null,
         operatorNotified: [],
-      });
+      }));
 
       logger.info(
         { taskId: parent.id, actor: opts.actor, route, subtasks: undo.created.length - 2, restartScheduled, rotated: rotate },
@@ -729,7 +730,8 @@ export class OnboardingService {
     }
     if (undo.stateWritten && undo.priorStateRaw !== null) {
       try {
-        await writeOnboardingStateRaw(configStore, undo.priorStateRaw);
+        const priorStateRaw = undo.priorStateRaw;
+        await this.deps.stateLock(() => writeOnboardingStateRaw(configStore, priorStateRaw));
       } catch (err) {
         logger.error({ err }, 'onboarding: failed to restore the run state after a failed start');
       }
