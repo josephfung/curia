@@ -4,6 +4,8 @@ export type AgendaSource = 'principal' | 'routine' | 'coordinator' | 'ad_hoc';
 export type AgendaSensitivity = 'internal' | 'confidential' | 'shareable';
 export type AgendaStatus = 'pending' | 'in_call' | 'done';
 export type TopicCoverage = 'covered' | 'partial' | 'not_reached';
+/** What the agenda's calendar event did, as the event sync last saw it. Null when not event-tied. */
+export type AgendaEventState = 'scheduled' | 'cancelled' | 'no_show' | 'unreadable';
 
 export interface TopicCoverageEntry {
   topic: string;
@@ -35,6 +37,16 @@ export interface AgendaDoc extends AgendaSnapshot {
   status: AgendaStatus;
   expiresAt: string;
   inCallSession: string | null;
+  /** The booked calendar event this agenda follows (#2360). Null for an untied agenda. */
+  calendarEventId: string | null;
+  calendarId: string | null;
+  /** The task woken when the event is cancelled, about to start, or missed. */
+  ownerTaskId: string | null;
+  /** ISO time the owner was woken to nudge the principal; cleared when the event moves later. */
+  nudgedAt: string | null;
+  /** ISO time the event first became unreachable (a route error that is usually temporary); cleared on a successful read. */
+  eventUnreachableSince: string | null;
+  eventState: AgendaEventState | null;
 }
 
 export interface AgendaIndexEntry {
@@ -75,11 +87,15 @@ export interface ParkAgendaInput {
   sensitivity?: AgendaSensitivity;
   expiresAt?: Date;
   scheduledFor?: Date | null;
+  calendarEventId?: string | null;
+  calendarId?: string | null;
+  ownerTaskId?: string | null;
 }
 
 export const AGENDA_SOURCES: readonly AgendaSource[] = ['principal', 'routine', 'coordinator', 'ad_hoc'];
 export const AGENDA_SENSITIVITIES: readonly AgendaSensitivity[] = ['internal', 'confidential', 'shareable'];
 export const AGENDA_STATUSES: readonly AgendaStatus[] = ['pending', 'in_call', 'done'];
+export const AGENDA_EVENT_STATES: readonly AgendaEventState[] = ['scheduled', 'cancelled', 'no_show', 'unreadable'];
 export const TOPIC_COVERAGE: readonly TopicCoverage[] = ['covered', 'partial', 'not_reached'];
 
 /** Most restrictive first. Minutes take the strictest label of the agendas they cover. */

@@ -143,7 +143,9 @@ import { DeepgramSttProvider, CartesiaTtsProvider, SpeechMediaService } from './
 import { LiveKitRoomSession } from './channels/voice/livekit/room-session.js';
 import { deleteVoiceRoom, listVoiceRooms } from './channels/voice/livekit/token.js';
 import { SignalCallBridge } from './channels/voice/signal/signal-call-bridge.js';
+import { AgendaEventSync, readAgendaEvent } from './meetings/agenda-event-sync.js';
 import { AgendaStore } from './meetings/agenda-store.js';
+import { wakeAgendaOwner } from './meetings/owner-wake.js';
 import { MinutesPipeline } from './meetings/minutes-pipeline.js';
 import { MeetingPipelineRecovery } from './meetings/recovery.js';
 import { MeetingSessionEndedSubscriber, MinutesReadySubscriber } from './meetings/subscribers.js';
@@ -3823,6 +3825,21 @@ async function main(): Promise<void> {
   });
   planFrontierSubscriber.start();
 
+  // Agendas tied to a calendar event follow it (#2360): moved, cancelled, about to start, missed.
+  // General meetings infrastructure; runs only when a calendar can be read.
+  let agendaEventSync: AgendaEventSync | undefined;
+  if (calendarRouter) {
+    const router = calendarRouter;
+    agendaEventSync = new AgendaEventSync({
+      store: agendaStore,
+      getEvent: (calendarId, eventId) => readAgendaEvent(router, calendarId, eventId),
+      // The owner id comes from agenda frontmatter, which the console can edit: wakeAgendaOwner
+      // wakes only an open coordinator task, never an arbitrary one.
+      wakeOwner: (taskId, note) => wakeAgendaOwner({ taskRepo, scheduler: schedulerService, logger }, taskId, note),
+      logger,
+    });
+    agendaEventSync.start();
+  }
 
   let meetingRecovery: MeetingPipelineRecovery | undefined;
   if (workingDocsRepo) {
@@ -4424,6 +4441,11 @@ async function main(): Promise<void> {
       backlogHeartbeat.stop();
     } catch (err) {
       logger.error({ err }, 'Error stopping backlog heartbeat during shutdown');
+    }
+    try {
+      agendaEventSync?.stop();
+    } catch (err) {
+      logger.error({ err }, 'Error stopping agenda event sync during shutdown');
     }
     try {
       inboxHeartbeat?.stop();
