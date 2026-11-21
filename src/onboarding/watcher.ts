@@ -3,6 +3,7 @@
 // onboarding task is one cheap query.
 
 import type { TaskRepo } from '../db/task-repo.js';
+import type { TaskRow } from '../db/queries/tasks.js';
 import type { Logger } from '../logger.js';
 import type { ConfigStore } from '../memory/config-store.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
@@ -66,6 +67,7 @@ export class OnboardingWatcher {
     try {
       const task = await findOpenOnboardingTask(this.o.taskRepo);
       if (!task) return;
+      await this.keepWaitingOnPrincipal(task);
       const state = await readOnboardingState(this.o.configStore, this.o.logger);
       if (state === null || state.taskId !== task.id) return;
 
@@ -118,6 +120,21 @@ export class OnboardingWatcher {
       }
     } catch (err) {
       this.o.logger.error({ err }, 'onboarding: watcher tick failed');
+    }
+  }
+
+  /**
+   * The onboarding task waits on the principal (created so), which keeps the backlog heartbeat off
+   * it. The principal answering a message bound to it (a task-wake reply) resumes it as in_progress,
+   * the general rule for a task whose contact answered; here the conversation goes on, so it waits
+   * again. Only when it names a contact to wait on. A failure is logged: the sweep goes on.
+   */
+  private async keepWaitingOnPrincipal(task: TaskRow): Promise<void> {
+    if (!task.waitingOnContactId || (task.status !== 'open' && task.status !== 'in_progress')) return;
+    try {
+      await this.o.taskRepo.updateTask(task.id, { status: 'waiting' });
+    } catch (err) {
+      this.o.logger.error({ err, taskId: task.id }, 'onboarding: could not set the onboarding task back to waiting on the principal');
     }
   }
 

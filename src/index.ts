@@ -3489,6 +3489,7 @@ async function main(): Promise<void> {
     configStore: triageConfig,
     workingDocsRepo,
     principalName: async () => (await contactService.findContactBySystemRole('principal'))?.displayName ?? null,
+    principalContactId: async () => (await contactService.findContactBySystemRole('principal'))?.id ?? null,
     principalHasIdentity: setupCheckDeps.principalHasIdentity,
     appOrigin: config.appOrigin,
     scheduleProcessExit,

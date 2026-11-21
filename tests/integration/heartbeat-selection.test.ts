@@ -122,19 +122,35 @@ describeIf('selectHeartbeatCandidates', () => {
     expect(got.map((c) => c.id)).not.toContain(id);
   });
 
-  it('skips an idle onboarding task: the onboarding program sets its own cadence (#2360)', async () => {
-    const onboarding = await seedTask(pool, {
+  it('skips onboarding tasks waiting on the principal, and still selects ordinary idle work (#2360)', async () => {
+    // The onboarding parent and its topics are created waiting on the principal's contact: no
+    // onboarding-specific rule, just the waiting-on-a-person rule.
+    const principal = await seedContact(pool);
+    const parent = await seedTask(pool, {
       title: 'onboarding parent',
-      status: 'open',
+      status: 'waiting',
       sourceAgentId: 'coordinator',
-      updatedAt: hoursAgo(10),
+      source: 'scheduler',
+      updatedAt: hoursAgo(60),
       tags: ['onboarding'],
       createdBy: 'onboarding',
     });
+    const topic = await seedTask(pool, {
+      title: 'onboarding topic',
+      status: 'waiting',
+      sourceAgentId: 'coordinator',
+      source: 'scheduler',
+      parentTaskId: parent,
+      updatedAt: hoursAgo(60),
+      tags: ['onboarding', 'onboarding:topic:style', 'onboarding:session:first-conversation'],
+      createdBy: 'onboarding',
+    });
+    await pool.query(`UPDATE tasks SET waiting_on_contact_id = $1 WHERE id = ANY($2::uuid[])`, [principal, [parent, topic]]);
     const other = await seedTask(pool, { title: 'other', status: 'open', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(10) });
-    const got = await selectHeartbeatCandidates(pool, opts);
-    expect(got.map((c) => c.id)).not.toContain(onboarding);
-    expect(got.map((c) => c.id)).toContain(other);
+    const got = (await selectHeartbeatCandidates(pool, opts)).map((c) => c.id);
+    expect(got).not.toContain(parent);
+    expect(got).not.toContain(topic);
+    expect(got).toContain(other);
   });
 
   it('skips a task that already has a pending wake', async () => {

@@ -11,6 +11,7 @@ import { isTriageHeld } from '../../../src/onboarding/triage-hold.js';
 import { readOnboardingState } from '../../../src/onboarding/state.js';
 
 const logger = pino({ level: 'silent' });
+const PRINCIPAL_CONTACT_ID = '00000000-0000-4000-8000-0000000000a1';
 
 // Synthetic playbook: three first-conversation topics, plus a duplicate id that is skipped.
 const PLAYBOOK = [
@@ -80,7 +81,8 @@ function makeHarness(opts: {
         id: `task-${nextId++}`,
         agentId: p.agentId,
         title: p.title,
-        status: 'open',
+        status: p.status ?? 'open',
+        waitingOnContactId: p.waitingOnContactId ?? null,
         tags: p.tags ?? [],
         parentTaskId: p.parentTaskId ?? null,
         createdBy: p.createdBy ?? p.agentId,
@@ -142,6 +144,7 @@ function makeHarness(opts: {
     configStore,
     workingDocsRepo,
     principalName: async () => 'Avery Example',
+    principalContactId: async () => PRINCIPAL_CONTACT_ID,
     principalHasIdentity: async () => opts.hasIdentity ?? true,
     appOrigin: 'appOrigin' in opts ? opts.appOrigin : 'https://curia.example.com',
     mintInvitation,
@@ -181,6 +184,11 @@ describe('OnboardingService.start', () => {
     expect(topics.map((t) => t.tags)).toContainEqual(['onboarding', 'onboarding:topic:style', 'onboarding:session:first-conversation']);
     expect(h.tasks.every((t) => t.createdBy === 'onboarding')).toBe(true);
     expect(h.tasks).toHaveLength(1 + FIRST_CONVERSATION_TOPICS + 1);
+    // The parent and topics wait on the principal (not heartbeat candidates); the homework has its own wake.
+    for (const t of [parent, ...topics]) {
+      expect(t).toMatchObject({ status: 'waiting', waitingOnContactId: PRINCIPAL_CONTACT_ID });
+    }
+    expect(homework[0]).toMatchObject({ status: 'open', waitingOnContactId: null });
 
     // Triage held, the four registry entries enabled, the onboarding skill active.
     expect(await isTriageHeld(h.configStore)).toBe(true);

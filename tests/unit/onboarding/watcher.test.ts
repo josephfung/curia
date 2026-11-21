@@ -32,6 +32,7 @@ function setup(opts: {
   invitation?: Invitation | null;
   openTopic?: boolean;
   booked?: boolean;
+  parent?: Partial<typeof parent> & { waitingOnContactId?: string | null };
 }) {
   const data = new Map<string, string>();
   const get = vi.fn(async (ns: string, k: string) => data.get(`${ns}/${k}`) ?? null);
@@ -42,7 +43,7 @@ function setup(opts: {
   const configStore = { get, set };
   const taskRepo = {
     listTasks: vi.fn(async (f: { tag?: string; parentTaskId?: string }) =>
-      f.parentTaskId ? (opts.openTopic ? [openTopic] : []) : opts.open ? [parent] : []),
+      f.parentTaskId ? (opts.openTopic ? [openTopic] : []) : opts.open ? [{ ...parent, ...opts.parent }] : []),
     updateTask: vi.fn(async () => undefined),
   };
   const enqueueTaskWake = vi.fn(async () => ({ jobId: 'j1' }));
@@ -68,6 +69,16 @@ describe('OnboardingWatcher.tick', () => {
     expect(t.set).not.toHaveBeenCalled();
     expect(t.enqueueTaskWake).not.toHaveBeenCalled();
     expect(t.readInvitation).not.toHaveBeenCalled();
+  });
+
+  it('sets a resumed onboarding task back to waiting on the principal, and leaves a waiting one alone', async () => {
+    const resumed = setup({ open: true, parent: { status: 'in_progress', waitingOnContactId: 'c-principal' } });
+    await resumed.watcher.tick(START);
+    expect(resumed.taskRepo.updateTask).toHaveBeenCalledWith('t1', { status: 'waiting' });
+
+    const waiting = setup({ open: true, parent: { status: 'waiting', waitingOnContactId: 'c-principal' } });
+    await waiting.watcher.tick(START);
+    expect(waiting.taskRepo.updateTask).not.toHaveBeenCalled();
   });
 
   it('a due follow-up writes state once and wakes once', async () => {

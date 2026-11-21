@@ -9,6 +9,7 @@ import type { CreateTaskParams, ListTasksFilters } from '../../../../src/db/task
 import type { WorkingDocsRepo } from '../../../../src/db/working-docs-repo.js';
 
 const logger = pino({ level: 'silent' });
+const PRINCIPAL_CONTACT_ID = '00000000-0000-4000-8000-0000000000a1';
 
 // Synthetic playbook: two first-conversation topics and a one-topic ongoing rhythm.
 const PLAYBOOK = [
@@ -29,7 +30,7 @@ function task(p: Partial<TaskRow> & { id: string }): TaskRow {
 
 function makeWorld(opts: { withParent?: boolean } = {}) {
   const tasks: TaskRow[] = [];
-  if (opts.withParent ?? true) tasks.push(task({ id: 'parent', tags: ['onboarding'] }));
+  if (opts.withParent ?? true) tasks.push(task({ id: 'parent', tags: ['onboarding'], status: 'waiting', waitingOnContactId: PRINCIPAL_CONTACT_ID }));
   let nextId = 1;
   const notes = new Map<string, string | undefined>();
   const taskRepo = {
@@ -37,6 +38,8 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
       const row = task({
         id: `sub-${nextId++}`,
         title: p.title,
+        status: p.status ?? 'open',
+        waitingOnContactId: p.waitingOnContactId ?? null,
         tags: p.tags ?? [],
         parentTaskId: p.parentTaskId ?? null,
         createdBy: p.createdBy ?? p.agentId,
@@ -90,6 +93,7 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
     configStore,
     workingDocsRepo: { read: vi.fn(async () => ({ body: PLAYBOOK })), create: vi.fn() } as unknown as WorkingDocsRepo,
     principalName: async () => 'Avery Example',
+    principalContactId: async () => PRINCIPAL_CONTACT_ID,
     principalHasIdentity: async () => true,
     appOrigin: undefined,
     scheduleProcessExit: vi.fn(),
@@ -119,6 +123,8 @@ describe('onboarding-progress', () => {
     expect(second.success).toBe(true);
     expect(w.taskRepo.createTask).toHaveBeenCalledTimes(2);
     expect(w.sub('hello').tags).toEqual(['onboarding', 'onboarding:topic:hello', 'onboarding:session:first-conversation']);
+    // Topics wait on the principal: not backlog-heartbeat candidates.
+    expect(w.sub('hello')).toMatchObject({ status: 'waiting', waitingOnContactId: PRINCIPAL_CONTACT_ID });
   });
 
   it('topic_done completes the subtask, and the last open ongoing-rhythm subtask completes the parent', async () => {
@@ -134,7 +140,7 @@ describe('onboarding-progress', () => {
     // The rhythm topic is done, but an inbox topic is still open: the parent stays open.
     await w.run({ op: 'topic_done', topic_id: 'propose-rhythm', outcome: 'declined', note: 'No weekly session.' });
     expect(w.notes.get(w.sub('propose-rhythm').id)).toMatch(/declined/i);
-    expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('open');
+    expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('waiting');
 
     const last = await w.run({ op: 'topic_done', topic_id: 'inbox-expectations', outcome: 'done', note: 'Labels on.' });
     expect(last.success).toBe(true);
@@ -169,7 +175,7 @@ describe('onboarding-progress', () => {
     const last = await w.run({ op: 'topic_done', topic_id: 'propose-rhythm', outcome: 'done', note: 'ok' });
     expect(last).toMatchObject({ success: true, data: { onboardingComplete: false } });
     expect(w.sub('propose-rhythm').status).toBe('done');
-    expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('open');
+    expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('waiting');
 
     w.taskRepo.completeTask.mockImplementation(real);
     const status = await w.run({ op: 'status' });
@@ -197,7 +203,7 @@ describe('onboarding-progress', () => {
     await w.run({ op: 'open_session', session_id: 'first-conversation' });
     await w.run({ op: 'topic_done', topic_id: 'hello', outcome: 'done', note: 'ok' });
     await w.run({ op: 'topic_done', topic_id: 'inbox-expectations', outcome: 'done', note: 'ok' });
-    expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('open');
+    expect(w.tasks.find((t) => t.id === 'parent')!.status).toBe('waiting');
   });
 
   it('an unknown topic_id fails naming the open topic ids; a topic tag not created by onboarding does not count', async () => {

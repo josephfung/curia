@@ -157,6 +157,14 @@ export type OpenSessionResult =
   | { ok: true; session: PlaybookSession; createdSubtasks: number }
   | { ok: false; code: 'unknown_session'; sessionIds: string[] };
 
+/**
+ * The parent and topic tasks wait on a conversation with the principal: created `waiting` on the
+ * principal's contact, so the backlog heartbeat leaves them alone (selectHeartbeatCandidates skips
+ * a task waiting on a person). Their wakes come from the onboarding program and the principal's
+ * replies. Empty when there is no principal contact: they are then created open.
+ */
+type ParkedOnPrincipal = { status: 'waiting'; waitingOnContactId: string } | Record<string, never>;
+
 /** Tags of an onboarding topic subtask. */
 function topicSubtaskTags(sessionId: string, topicId: string): string[] {
   return [ONBOARDING_TASK_TAG, `onboarding:topic:${topicId}`, `onboarding:session:${sessionId}`];
@@ -171,6 +179,8 @@ export interface OnboardingServiceDeps {
   configStore: Pick<ConfigStore, 'get' | 'set'>;
   workingDocsRepo: WorkingDocsRepo;
   principalName: () => Promise<string | null>;
+  /** The principal's contact id, which the onboarding tasks wait on; null when there is none. */
+  principalContactId: () => Promise<string | null>;
   /** Whether the principal contact has a verified, active identity on the channel (setup's check). */
   principalHasIdentity: (channel: 'signal' | 'sms' | 'slack') => Promise<boolean>;
   /** APP_ORIGIN: the address the phone app invitation opens. */
@@ -307,7 +317,8 @@ export class OnboardingService {
         limit: 200,
       });
       const existingTopicIds = new Set(topicSubtasks(existing).map((s) => s.topicId));
-      const createdSubtasks = await this.createSessionSubtasks(parent, session, [], existingTopicIds);
+      const parked = await this.parkedOnPrincipal();
+      const createdSubtasks = await this.createSessionSubtasks(parent, session, parked, [], existingTopicIds);
       return { ok: true, session, createdSubtasks };
     });
   }
@@ -562,9 +573,11 @@ export class OnboardingService {
     created: string[],
   ): Promise<{ parent: TaskRow; homework: TaskRow }> {
     const { taskRepo, logger } = this.deps;
+    const parked = await this.parkedOnPrincipal();
 
     const parent = await taskRepo.createTask({
       ...TASK_BASE,
+      ...parked,
       title: `Onboarding: getting to know ${principalName}`,
       description:
         `Get to know ${principalName}. Each subtask is a First conversation topic from ` +
@@ -578,7 +591,7 @@ export class OnboardingService {
 
     const session = sessions.find((s) => s.id === FIRST_CONVERSATION_SESSION);
     if (session) {
-      await this.createSessionSubtasks(parent, session, created);
+      await this.createSessionSubtasks(parent, session, parked, created);
     } else {
       logger.warn({ taskId: parent.id }, 'onboarding: the playbook has no First conversation session — no subtasks created');
     }
@@ -605,6 +618,7 @@ export class OnboardingService {
   private async createSessionSubtasks(
     parent: TaskRow,
     session: PlaybookSession,
+    parked: ParkedOnPrincipal,
     created: string[],
     skipTopicIds: ReadonlySet<string> = new Set(),
   ): Promise<number> {
@@ -627,6 +641,7 @@ export class OnboardingService {
       if (skipTopicIds.has(topic.id)) continue;
       const sub = await taskRepo.createTask({
         ...TASK_BASE,
+        ...parked,
         title: topic.title,
         parentTaskId: parent.id,
         parentTask: parent,
@@ -637,6 +652,16 @@ export class OnboardingService {
       count++;
     }
     return count;
+  }
+
+  /** See {@link ParkedOnPrincipal}. */
+  private async parkedOnPrincipal(): Promise<ParkedOnPrincipal> {
+    const contactId = await this.deps.principalContactId();
+    if (!contactId) {
+      this.deps.logger.warn('onboarding: no principal contact — onboarding tasks are created open, and the backlog heartbeat may wake them');
+      return {};
+    }
+    return { status: 'waiting', waitingOnContactId: contactId };
   }
 
   private async activateOnboardingSkill(taskId: string): Promise<void> {

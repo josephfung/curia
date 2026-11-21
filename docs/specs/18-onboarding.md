@@ -371,7 +371,7 @@ install never gets a greeting, research or a triage change unless someone starts
 | Playbook default | Curia's guide, in its own voice: a `#` section per session (`<!-- session: id -->`), a `##` subsection per topic (`<!-- topic: id -->`); `Needs: mailbox` marks a topic that waits for the mailbox. Sessions: First conversation, Review, Check-in, Ongoing rhythm, and Weekly (for recurring sessions after onboarding, never onboarding topics) | `config/onboarding/playbook.md` |
 | Playbook | The install's copy, editable in Documents. Seeded when Setup starts (`POST /api/setup/start`) and again at Start if missing; never overwritten | OKF `/meetings/onboarding/playbook.md` |
 | Research brief | What the homework found, each item with its source and marked unconfirmed until the principal confirms, corrects or drops it | OKF `/meetings/onboarding/research-brief.md` |
-| Onboarding task | The coordinator's, owned by Curia, tagged `onboarding`, `created_by` `onboarding`. One subtask per topic, tagged `onboarding:topic:<id>` and `onboarding:session:<id>`, plus a homework subtask. Progress notes are what has happened | `tasks` |
+| Onboarding task | The coordinator's, owned by Curia, tagged `onboarding`, `created_by` `onboarding`. One subtask per topic, tagged `onboarding:topic:<id>` and `onboarding:session:<id>`, plus a homework subtask. The parent and the topics are `waiting` on the principal's contact; the homework is open with its own wake. Progress notes are what has happened | `tasks` |
 | Run state | The task id, the route, greeting and follow-up times, the greeting re-wake, the principal's last turn, the idle nudge, the operator notices sent | config store `onboarding/state` |
 | Triage hold | `{"held": true}` while triage waits for the inbox topic | config store `onboarding/triage_hold` |
 
@@ -453,7 +453,9 @@ city, public bio, recent news; never family, home or personal accounts) and writ
 research brief, flagging results that may belong to a namesake. If Curia's Google Workspace
 is signed in, it also lists the shared drives and their top-level folders, names only.
 Nothing from the brief reaches memory until the principal confirms it. A failed search is
-an operator notice (`web_search_failed`), and "Tell me about yourself" starts open.
+an operator notice (`web_search_failed`), and "Tell me about yourself" starts open. The
+homework wake completes its task once the brief is written; one still open when onboarding
+completes is cancelled.
 
 ### The greeting and follow-ups
 
@@ -477,10 +479,15 @@ settings:
 - **Expired invitation:** an unredeemed invitation past its 48 hours is the operator notice
   `invitation_expired`.
 
-The backlog heartbeat never wakes an onboarding task (`created_by` `onboarding`): onboarding
-moves only on the watcher, events and the principal's replies, so an idle parent or topic is
-never pushed to a disposition (a greeting outside the cap, a topic closed without the
-principal).
+The backlog heartbeat leaves the parent and the topics alone because they wait on a person:
+they are created `waiting` with `waiting_on_contact_id` set to the principal, which
+`selectHeartbeatCandidates` skips, as it skips any task waiting on a contact. Onboarding moves
+only on the watcher, events and the principal's replies, so an idle parent or topic is never
+pushed to a disposition (a greeting outside the cap, a topic closed without the principal).
+Working a topic changes no status: `topic_done` completes it from `waiting`. The principal
+answering a message the parent's wake sent resumes the parent (`in_progress`, the general
+task-wake reply rule); the watcher sets it back to `waiting` on its next sweep. Without a
+principal contact the tasks are created open, and the heartbeat may wake them.
 
 ### Running a session
 

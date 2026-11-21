@@ -48,7 +48,7 @@ Apply each choice as soon as the principal confirms it, then mark the topic done
 
 ## Homework and the research brief
 
-The research brief (`/meetings/onboarding/research-brief.md`) covers only the principal's professional public footprint: company and what it does, role, city, public bio, recent news. Never family, home or personal social accounts. Every item is unconfirmed until the principal confirms it; flag anything that may belong to a namesake. Nothing from the brief goes to memory before the principal confirms it.
+The research brief (`/meetings/onboarding/research-brief.md`) covers only the principal's professional public footprint: company and what it does, role, city, public bio, recent news. Never family, home or personal social accounts. Every item is unconfirmed until the principal confirms it; flag anything that may belong to a namesake. Nothing from the brief goes to memory before the principal confirms it. When the homework wake has written the brief (and listed the drives), complete the homework task with `task-complete`.
 
 ## Tell me about yourself
 
