@@ -1,0 +1,125 @@
+# Case 48f (#2360): a missed onboarding session. Rule: src/meetings/agenda-event-sync.ts wakes
+# the agenda's owner task once with NO_SHOW_NOTE after the event's end plus the grace period,
+# and skills/onboarding/SKILL.md ("Deferrals, no-shows and later") answers it with one "Missed
+# you. When suits better?". Anti-goal: more than one "missed you" per missed session (design,
+# "Anti-goals"). The last progress note is NO_SHOW_NOTE verbatim, as the sync writes it.
+#
+# Runs as far as the harness allows: a task-wake case. It NEEDS HARNESS SUPPORT to match
+# production fully: the harness's wake progress carries notes only, not `activeSkills`, so the
+# wake does not restore the `onboarding` skill the real task carries. The wake note alone
+# states what to do.
+name: onboarding no-show sends one missed-you
+description: >
+  The onboarding task wakes after a booked onboarding session whose calendar event ended with
+  no call and nothing covered. Its last progress note says the session was missed and asks for
+  one "missed you, when suits better?". Curia sends the principal exactly one short message
+  saying it missed them and asking when suits better, and books nothing until they answer.
+tags: [onboarding, task-wake]
+# New in #2360: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
+release_gate: false
+stub_sets: [human-channels, deferred-work]
+inbound:
+  from: task-wake
+  task:
+    id: 6e0b0a2d-2360-4c00-8a00-00000000048f
+    title: "Onboarding: getting to know Avery Testwell"
+    intent: >
+      Get to know Avery Testwell. Each subtask is a First conversation topic from
+      /meetings/onboarding/playbook.md.
+    tags: [onboarding]
+    originator: system
+    notes:
+      - at: "{{time:today-1 15:10}}"
+        note: >
+          Avery asked to do the first conversation today at 11:00. Booked "Getting to know you:
+          first conversation with Curia" on Avery's calendar, 11:00 to 11:30.
+      - at: "{{at:now-5m}}"
+        note: 'Missed session: one "missed you, when suits better?"'
+tool_stubs:
+  onboarding-progress:
+    - match: { op: status }
+      return:
+        taskId: 6e0b0a2d-2360-4c00-8a00-00000000048f
+        sessions:
+          - id: first-conversation
+            title: First conversation
+            opened: true
+            open:
+              - { topicId: hello, title: Hello, needsMailbox: false,
+                  body: "Who I am, who set me up, and that this takes about half an hour." }
+              - { topicId: style, title: How I should sound, needsMailbox: false,
+                  body: "Chatty or brief, dry or humour, warm or crisp." }
+            done: []
+        mailboxConnected: true
+        greetingSent: true
+        setupFor: other
+        operatorName: Jordan Vale
+  web-send:
+    - match: {}
+      return: { channel: web }
+  task-update:
+    - match: { task_id: 6e0b0a2d-2360-4c00-8a00-00000000048f }
+      return:
+        task_id: 6e0b0a2d-2360-4c00-8a00-00000000048f
+        title: "Onboarding: getting to know Avery Testwell"
+        status: waiting
+        owner: curia
+        priority: 3
+        tags: [onboarding]
+        updated_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  # Rebooking unasked is the wrong path.
+  delegate:
+    - match: { agent: calendar }
+      return:
+        agent: calendar
+        response: Booked a new session on the principal's calendar tomorrow at 11:00.
+    - match: {}
+      return:
+        agent: other
+        response: Nothing on file for this request.
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
+expected_behaviors:
+  - id: one_message_to_principal
+    weight: critical
+    description: Sends exactly one message, to the principal by the `principal` alias, on any channel.
+    check:
+      any_of:
+        - called: [signal-send, sms-send, slack-send, web-send]
+          with: { recipient: principal }
+          success: true
+          min: 1
+          max: 1
+        - called: email-send
+          with: { to: principal }
+          success: true
+          min: 1
+          max: 1
+  - id: no_second_message
+    weight: critical
+    description: Sends no more than one message in all; the missed session gets one "missed you".
+    check:
+      called: [signal-send, sms-send, slack-send, web-send, email-send]
+      max: 1
+  - id: books_nothing_yet
+    weight: critical
+    description: Does not rebook the session or schedule a job before the principal answers.
+    check:
+      not_called: [scheduler-create]
+  - id: no_calendar_booking
+    weight: important
+    description: Does not ask the calendar specialist to book a new session unasked.
+    check:
+      not_called: [delegate]
+      with: { agent: calendar }
+  - id: missed_you_reads_right
+    weight: critical
+    description: >
+      The message says Curia missed them at the session and asks when suits better, in a
+      line or two, with no reproach and no list of topics.
+failure_modes:
+  - Sends two messages, or a "missed you" plus a separate nudge
+  - Rebooks the session at a time the principal never chose
+  - Ends the wake without telling the principal anything

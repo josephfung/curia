@@ -1,6 +1,6 @@
 # Onboarding program — design (#2360)
 
-**Status:** Draft, 2026-11-20 (revised the same day after the maintainer's review)
+**Status:** Approved 2026-11-20; implementing
 **Issue:** #2360 (milestone v0.46 - Onboarding Journey)
 **Builds on:** `docs/wip/2026-10-29-onboarding-journey-design.md` (Phase 2, the journey this
 implements), `docs/wip/2026-10-30-onboarding-hawd-model.md` (A1, A4, A5), spec 18

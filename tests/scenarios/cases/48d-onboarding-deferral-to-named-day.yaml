@@ -1,0 +1,106 @@
+# Case 48d (#2360): a deferral to a named day. Rule: skills/onboarding/SKILL.md, "Deferrals,
+# no-shows and later": a named day ("can we do Thursday?") is booked and confirmed in one line,
+# without pushing. Anti-goal: onboarding hijacking the relationship (design, "Anti-goals").
+# The day is two days out, by name, so it never reads as "today" or "next week".
+#
+# NEEDS HARNESS SUPPORT before it can run: see 48a (no onboarding turn context in the
+# test-mode stack, so the turn never gets the onboarding skill).
+name: onboarding deferral to a named day books it
+description: >
+  Curia greeted the principal and invited a first onboarding conversation of about half an
+  hour. The principal replies that something came up and asks to do it two days from now, by
+  weekday name, at 2pm. Curia books the session for that day and time on the principal's
+  calendar and confirms in one short line. It does not try to start now, ask why, or press
+  for an earlier time.
+tags: [onboarding]
+# New in #2360: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
+release_gate: false
+stub_sets: [human-channels, deferred-work]
+inbound:
+  from: principal
+  channel: web
+  content: Something came up, sorry. Can we do {{weekday:today+2}} at 2pm instead?
+tool_stubs:
+  onboarding-progress:
+    - match: { op: status }
+      return:
+        taskId: 6e0b0a2d-2360-4c00-8a00-00000000048d
+        sessions:
+          - id: first-conversation
+            title: First conversation
+            opened: true
+            open:
+              - { topicId: hello, title: Hello, needsMailbox: false,
+                  body: "Who I am, who set me up, and that this takes about half an hour. Is now a good time, or should we book another?" }
+              - { topicId: about-you, title: Tell me about yourself, needsMailbox: false,
+                  body: "Open from the research brief, then a few open questions. Skippable." }
+              - { topicId: style, title: How I should sound, needsMailbox: false,
+                  body: "Chatty or brief, dry or humour, warm or crisp." }
+            done: []
+        mailboxConnected: true
+        greetingSent: true
+        setupFor: other
+        operatorName: Jordan Vale
+  delegate:
+    - match: { agent: calendar }
+      return:
+        agent: calendar
+        response: >
+          Booked "Getting to know you: first conversation with Curia" on the principal's
+          calendar, {{day:today+2}} from 2:00 to 2:30 PM, busy, with the principal as the only
+          attendee.
+    - match: {}
+      return:
+        agent: other
+        response: Nothing on file for this request.
+  # The wrong paths: starting a topic now instead of booking.
+  office-tone-update:
+    - match: {}
+      return: { style: (unchanged), verbosity: 50 }
+  set-autonomy:
+    - match: {}
+      return: { score: 75, band: Ask first, previous_score: 75, summary: Autonomy unchanged at 75. }
+expected_behaviors:
+  - id: books_the_named_day
+    weight: critical
+    description: Books the session on the day the principal named, through the calendar specialist or a scheduled job.
+    check:
+      any_of:
+        - called: delegate
+          with: { agent: calendar }
+          contains: { task: "{{weekday:today+2}}" }
+        - called: delegate
+          with: { agent: calendar }
+          contains: { task: "{{date:today+2}}" }
+        - called: scheduler-create
+          contains: { run_at: "{{date:today+2}}" }
+  - id: books_once
+    weight: critical
+    description: Books one session only.
+    check:
+      any_of:
+        - called: delegate
+          with: { agent: calendar }
+          max: 1
+        - called: scheduler-create
+          max: 1
+  - id: does_not_start_now
+    weight: critical
+    description: Does not run an onboarding topic now; the principal asked to do it later.
+    check:
+      not_called: [office-tone-update, set-autonomy]
+  - id: confirms_in_one_line
+    weight: important
+    description: The reply is a short confirmation, at most 40 words.
+    check:
+      text: reply
+      max_words: 40
+  - id: no_push
+    weight: critical
+    description: >
+      The reply confirms the day and time and nothing more: it does not ask why, suggest an
+      earlier slot, ask a topic question, or try to start the conversation now.
+failure_modes:
+  - Asks a first onboarding question anyway ("while I have you...")
+  - Suggests a sooner time than the one the principal named
+  - Books the session on the wrong day, or books two

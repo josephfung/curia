@@ -1,0 +1,94 @@
+# Case 48b (#2360): the first onboarding conversation by chat, the "How independent I should
+# be" topic. Rule: skills/onboarding/SKILL.md, "Applying choices": independence is set with
+# set-autonomy at 65 (Draft only), 75 (Ask first) or 85 (Spot-check), and nothing else while
+# onboarding is open (the band limit itself is enforced in code and unit-tested). Triage stays
+# held: onboarding-triage-release belongs to the inbox topic alone (design §8).
+#
+# NEEDS HARNESS SUPPORT before it can run: see 48a (no onboarding turn context in the
+# test-mode stack, so the turn never gets the onboarding skill).
+name: onboarding independence ask first sets 75
+description: >
+  The principal is in their first onboarding conversation with Curia, by chat. Curia offered
+  three independence levels: Draft only, Ask first (recommended) and Spot-check. The principal
+  picks Ask first. Curia sets the autonomy score to 75 with set-autonomy, reads the choice
+  back, and marks the independence topic done. It does not release inbox triage.
+tags: [onboarding]
+# New in #2360: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
+release_gate: false
+stub_sets: [human-channels, deferred-work]
+inbound:
+  from: principal
+  channel: web
+  content: Ask first sounds right to me. Let's go with that.
+tool_stubs:
+  onboarding-progress:
+    - match: { op: status }
+      return:
+        taskId: 6e0b0a2d-2360-4c00-8a00-00000000048b
+        sessions:
+          - id: first-conversation
+            title: First conversation
+            opened: true
+            open:
+              - { topicId: independence, title: How independent I should be, needsMailbox: false,
+                  body: "1. Draft only: I prepare everything, you send and decide. 2. Ask first (recommended): I handle routine things and check before anything significant. 3. Spot-check: I act on most things and you review afterwards. 4. Something else." }
+              - { topicId: reach-you, title: How to reach you, needsMailbox: false,
+                  body: "What counts as urgent, which channel for what, quiet and working hours, a daily recap, unsent-drafts reminders." }
+              - { topicId: inbox-expectations, title: "What you'll notice in your inbox", needsMailbox: true,
+                  body: "Explain the six categories and the choices, then read back what Avery will see from tomorrow." }
+            done:
+              - { topicId: hello, title: Hello }
+              - { topicId: about-you, title: Tell me about yourself }
+              - { topicId: style, title: How I should sound }
+        mailboxConnected: true
+        greetingSent: true
+        setupFor: other
+        operatorName: Jordan Vale
+    - match: { op: topic_done }
+      return: { topicId: independence, sessionId: first-conversation, outcome: done, onboardingComplete: false }
+  set-autonomy:
+    - match: {}
+      return:
+        score: 75
+        band: Ask first
+        previous_score: 70
+        summary: Autonomy set to 75 (Ask first).
+  # The wrong path, stubbed so the case tests the choice rather than a refusal.
+  onboarding-triage-release:
+    - match: {}
+      return: { released: true }
+expected_behaviors:
+  - id: sets_75
+    weight: critical
+    description: Sets the autonomy score to 75 (Ask first) with set-autonomy.
+    check:
+      called: set-autonomy
+      with: { score: 75 }
+      success: true
+  - id: sets_once
+    weight: critical
+    description: Calls set-autonomy once; no other score is tried.
+    check:
+      called: set-autonomy
+      max: 1
+  - id: triage_stays_held
+    weight: critical
+    description: Does not release inbox triage; that waits for the inbox topic.
+    check:
+      not_called: [onboarding-triage-release]
+  - id: marks_independence_done
+    weight: important
+    description: Marks the independence topic done with onboarding-progress after applying the score.
+    check:
+      called: onboarding-progress
+      with: { op: topic_done, topic_id: independence }
+  - id: reads_back
+    weight: important
+    description: >
+      The reply reads the choice back in plain words (routine things handled, a check before
+      anything significant) and moves on to the next topic, without quoting the score's
+      internals as the main message.
+failure_modes:
+  - Notes the preference without calling set-autonomy
+  - Sets a score other than 75, such as 70 or 80
+  - Releases inbox triage

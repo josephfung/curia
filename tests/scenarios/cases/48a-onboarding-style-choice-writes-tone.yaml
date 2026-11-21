@@ -1,0 +1,109 @@
+# Case 48a (#2360): the first onboarding conversation by chat, the "How I should sound" topic.
+# Rule: skills/onboarding/SKILL.md, "Applying choices": apply each choice as soon as the
+# principal confirms it (tone through office-tone-update, the only tool that writes tone),
+# then mark the topic done. Triage stays held: onboarding-triage-release belongs to the inbox
+# topic alone (design §8, docs/wip/2026-11-20-onboarding-program-design.md).
+#
+# One case per topic answer (48a style, 48b independence, 48c inbox): a case is one inbound
+# with no prior history, so the principal's message answers the topic on its own.
+#
+# NEEDS HARNESS SUPPORT before it can run: the test-mode stack does not wire the runtime's
+# onboardingTurnContext, so a principal turn never gets the onboarding block or the
+# `onboarding` skill (and with it onboarding-progress and office-tone-update). It needs a
+# run-scoped source that reports this case's onboarding task, like the pinned-context fixture.
+name: onboarding style choice writes the tone
+description: >
+  The principal is in their first onboarding conversation with Curia, by chat. Curia asked
+  how it should sound, and the principal answers: brief and to the point, dry, crisp and
+  businesslike, and when Curia is unsure it should make a sensible call and say so. Curia
+  writes the tone with office-tone-update, shows a line or two in the new style, and marks the
+  style topic done. It does not touch the autonomy level or release inbox triage.
+tags: [onboarding]
+# New in #2360: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
+release_gate: false
+stub_sets: [human-channels, deferred-work]
+inbound:
+  from: principal
+  channel: web
+  content: >
+    On how you should sound: brief and to the point, dry rather than jokey, crisp and
+    businesslike. When you're not sure, make a sensible call and tell me after.
+tool_stubs:
+  onboarding-progress:
+    - match: { op: status }
+      return:
+        taskId: 6e0b0a2d-2360-4c00-8a00-00000000048a
+        sessions:
+          - id: first-conversation
+            title: First conversation
+            opened: true
+            open:
+              - { topicId: style, title: How I should sound, needsMailbox: false,
+                  body: "I need to learn how Avery likes me to talk to them, then adjust my tone and show them. Read back two lines in the chosen style and offer one round of tweaks." }
+              - { topicId: independence, title: How independent I should be, needsMailbox: false,
+                  body: "1. Draft only. 2. Ask first (recommended). 3. Spot-check. 4. Something else." }
+              - { topicId: inbox-expectations, title: "What you'll notice in your inbox", needsMailbox: true,
+                  body: "Explain the six categories and the choices, then read back what Avery will see from tomorrow." }
+            done:
+              - { topicId: hello, title: Hello }
+              - { topicId: about-you, title: Tell me about yourself }
+        mailboxConnected: true
+        greetingSent: true
+        setupFor: other
+        operatorName: Jordan Vale
+    - match: { op: topic_done }
+      return: { topicId: style, sessionId: first-conversation, outcome: done, onboardingComplete: false }
+  office-tone-update:
+    - match: {}
+      return:
+        style: "Brief, dry and businesslike. When unsure, make a sensible call and say so afterwards."
+        verbosity: 20
+  # The wrong paths, stubbed so the case tests the choice rather than a refusal.
+  set-autonomy:
+    - match: {}
+      return: { score: 75, band: "Ask first", previous_score: 75, summary: Autonomy unchanged at 75. }
+  onboarding-triage-release:
+    - match: {}
+      return: { released: true }
+  config-store:
+    - match: { action: store }
+      return: { stored: true }
+expected_behaviors:
+  - id: writes_tone
+    weight: critical
+    description: Writes the chosen tone with office-tone-update.
+    check:
+      called: office-tone-update
+      success: true
+  - id: triage_stays_held
+    weight: critical
+    description: Does not release inbox triage; that waits for the inbox topic.
+    check:
+      not_called: [onboarding-triage-release]
+  - id: autonomy_untouched
+    weight: critical
+    description: Does not change the autonomy level; the principal has not chosen one yet.
+    check:
+      not_called: [set-autonomy]
+  - id: marks_style_done
+    weight: important
+    # Important, not critical: the skill offers one round of tweaks, so marking the topic done
+    # on the next turn is also right.
+    description: Marks the style topic done with onboarding-progress.
+    check:
+      called: onboarding-progress
+      with: { op: topic_done, topic_id: style }
+  - id: tone_before_done
+    weight: important
+    description: Writes the tone before it marks the topic done, never the other way round.
+    check:
+      order: [office-tone-update, onboarding-progress]
+  - id: shows_new_style
+    weight: important
+    description: >
+      The reply shows the new style in a line or two (brief, dry, businesslike) and offers one
+      round of tweaks, rather than describing the setting in technical terms.
+failure_modes:
+  - Says it has noted the preference without calling office-tone-update
+  - Releases inbox triage or changes the autonomy level on the strength of a tone answer
+  - Asks the same style questions again
