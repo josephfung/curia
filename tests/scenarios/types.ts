@@ -484,19 +484,30 @@ export interface ScenarioInbound {
    */
   followup?: ScenarioFollowup;
   /**
-   * The principal's next message, as its own turn once the first has ended (#2312): an
-   * inbound from the principal's verified identity on `channel`, in a second conversation of
-   * the same run. It is a live principal turn, so the elevated gate is production's: this is
-   * how a hold raised on someone else's turn gets approved within the run. Its calls join the
-   * run's; its reply is `then.reply` on the run.
+   * The next message, as its own turn once the first has ended (#2312), in a second
+   * conversation of the same run. By default it is the principal's: an inbound from the
+   * principal's verified identity on `channel`, a live principal turn, so the elevated gate is
+   * production's (this is how a hold raised on someone else's turn gets approved within the
+   * run). With `from` naming a seeded contact it is that person's reply instead (#2556: the
+   * other side answering what Curia sent them). Its calls join the run's; its reply is
+   * `then.reply` on the run.
    */
   then?: ScenarioPrincipalTurn;
 }
 
-/** A principal turn after the first one (ScenarioInbound.then). */
+/** A turn after the first one (ScenarioInbound.then): the principal's, or a seeded contact's. */
 export interface ScenarioPrincipalTurn {
   content: string;
-  /** A channel the principal has a verified identity on: email or Signal for the scenario principal (principal-fixture.ts). */
+  /**
+   * A seeded contact key when someone other than the principal sends it (#2556). Absent: the
+   * principal. A contact's turn comes from their seeded identity, authenticated (a known
+   * correspondent's mail passes SPF, DKIM and DMARC).
+   */
+  from?: string;
+  /**
+   * The principal's: a channel they have a verified identity on (email or Signal for the
+   * scenario principal, principal-fixture.ts). A contact's: their seeded channel.
+   */
   channel: string;
   /**
    * Email only (#2333): the turn is a reply on the thread of the approval email the run
@@ -783,8 +794,11 @@ export interface ScenarioRun {
   delegations?: DelegationRecord[];
   /** What a through-gateway run sent, held and recorded (#2312). Absent for other cases. */
   gateway?: GatewayOutcome;
-  /** The principal's `inbound.then` turn (#2312): the coordinator's reply to it. */
-  then?: { reply: string | null };
+  /**
+   * The `inbound.then` turn (#2312): the coordinator's reply to it, and the message as the run
+   * sent it, its placeholders resolved (#2556; absent on runs saved before it).
+   */
+  then?: { reply: string | null; content?: string };
   /** Set when removing the run's rows failed; leftovers may be in the database. */
   cleanupError?: string;
   /**

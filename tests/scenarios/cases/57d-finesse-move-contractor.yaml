@@ -1,6 +1,7 @@
 # Finesse 57d (#2556, docs/wip/2026-11-10-finesse-casebook.md): moving the contractor's
-# kitchen walk-through a week. Curia writes to Sam directly and efficiently; a long apology is
-# the miss. The contractor half of a pair with 57c (the teacher): same move, different
+# kitchen walk-through a week. Curia writes to Sam directly and efficiently, asking whether
+# the new date works; a long apology, or telling Sam the new date as if it were settled, is
+# the miss. Avery hears about it in passing. The contractor half of a pair with 57c (the teacher): same move, different
 # recipient. Information level 2: Sam's contact record says contractor, Kowalski Renovations.
 #
 # The casebook's "the 14th" and "the 21st" are the coming Thursday and the one after.
@@ -8,8 +9,9 @@ name: finesse 57d move contractor walk-through
 description: >
   Avery asks Curia to move Sam Kowalski's kitchen walk-through from the coming Thursday to the
   Thursday after. Sam is the contractor renovating Avery's kitchen. Curia should write to Sam
-  directly and efficiently: the change, a time or two on the new date, done. A long apology is
-  a miss.
+  directly and efficiently and ask whether the new date works for him: the change, a time or
+  two on the new date, done. A long apology is a miss, and so is telling Sam the new date as
+  if it were settled (he organized the walk-through, and may not be free then).
 tags: [finesse, finesse-57, family, calendar]
 delegation: real
 release_gate: false
@@ -59,6 +61,12 @@ expected_behaviors:
     description: >
       Curia does not check back with Avery before writing: the instruction is clear. Telling
       Avery it's done (or asked) is right.
+  - id: asks_sam
+    weight: important
+    layer: decision
+    description: >
+      The message asks Sam whether the new date (or a time on it) works for him. Telling him
+      the walk-through is now on the new date, as if it were settled, is a miss.
   - id: sam_brief
     weight: important
     layer: voice
@@ -70,8 +78,8 @@ expected_behaviors:
     weight: critical
     layer: voice
     description: >
-      Efficient and friendly-professional: the walk-through needs to move to the new date,
-      a time or two that work (or a request for his), thanks. At most a brief "sorry for the
+      Efficient and friendly-professional: the walk-through needs to move, does the new date
+      work (a time or two on it, or a request for his), thanks. At most a brief "sorry for the
       change"; no long apology and no explanation of why.
 contrast:
   group: finesse-57-move-appointment
@@ -81,3 +89,4 @@ contrast:
 failure_modes:
   - A long apology
   - Explains the reason at length
+  - Tells Sam the new date as if it were settled instead of asking whether it works

@@ -1,7 +1,8 @@
 # Finesse 54d (#2556, docs/wip/2026-11-10-finesse-casebook.md): a direct report is a day late
 # with a draft Avery needs. Curia nudges Priya directly, short and plain, with a new deadline
-# and the reason, rather than escalating to Avery first. Information level 2: Priya's contact
-# record says VP Product at Halcyon.
+# and the reason, plus an offer of help in case she's blocked, rather than escalating to Avery
+# first. Telling Avery: in passing. Information level 2: Priya's contact record says VP
+# Product at Halcyon.
 #
 # Shape: a task wake. The casebook's "before Friday" is the board meeting three workdays out.
 name: finesse 54d nudge late direct report
@@ -9,9 +10,11 @@ description: >
   Priya Nair, VP Product and a direct report, was due to send Avery her draft of the board
   deck yesterday, so Avery can review it before the board meeting. Nothing has arrived. The
   check Curia set itself comes round. Curia should send Priya a short, direct nudge with a
-  new deadline (for example noon tomorrow) and the reason (Avery needs time to review before
-  the board meeting). Softening it until the deadline disappears, sounding like a reprimand,
-  or escalating to Avery first are the failures.
+  new deadline (for example noon tomorrow), the reason (Avery needs time to review before
+  the board meeting), and an offer of help in case she's blocked ("If anything's holding it
+  up, let me know"). Curia may mention the nudge to Avery in passing. Softening it until the
+  deadline disappears, sounding like a reprimand, or escalating to Avery first are the
+  failures.
 tags: [finesse, finesse-54, task-wake]
 delegation: real
 release_gate: false
@@ -92,14 +95,21 @@ expected_behaviors:
     check:
       not_called: [web-search]
       agent: any
+  - id: avery_fyi_is_brief
+    weight: nice-to-have
+    layer: decision
+    description: >
+      If Curia tells Avery during the run, it is a brief FYI, not a question or a request for
+      a decision. Telling Avery nothing during the run also passes: a round-up later is fine.
   - id: priya_nudge_direct
     weight: critical
     layer: voice
     description: >
       The nudge is short and direct, as to a colleague: it names the board deck draft, gives
       a specific new deadline (for example noon tomorrow) and the reason (Avery needs time to
-      review it before the board meeting). It is not softened until the deadline disappears
-      ("whenever you get a chance") and does not read like a reprimand.
+      review it before the board meeting), and offers help in case she's blocked ("If
+      anything's holding it up, let me know"). It is not softened until the deadline
+      disappears ("whenever you get a chance") and does not read like a reprimand.
 contrast:
   group: finesse-54-nudge
   recipient: A direct report who reports to the executive.

@@ -1,14 +1,17 @@
 # Finesse 52d (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery is running about ten
-# minutes behind, and the next thing is lunch with a friend. Curia sends Josh a quick, casual
-# text. Information level 3: as in 51e, Josh's contact record says former Halcyon engineer;
+# minutes behind, and the next thing is lunch with a friend. Curia (Alex) sends Josh a quick,
+# casual text: a draft for Avery would arrive too late. Telling Avery: not needed.
+# Information level 3: as in 51e, Josh's contact record says former Halcyon engineer;
 # only Curia's notes (memory) say he and Avery are friends.
 name: finesse 52d late to lunch with a friend
 description: >
   Avery (the principal) tells Curia "I'm running about ten minutes behind." Next, in five
   minutes, is lunch with Josh Tanaka, one of Halcyon's first engineers who left to start his
   own company. Curia's notes say Josh and Avery are friends who play pickup basketball.
-  Curia should send Josh a quick, casual text: "Avery's running ten minutes late. Grab a
-  table and they'll be right there." Formality is the failure.
+  Curia should send Josh a quick, casual text itself, as Alex (a draft for Avery would
+  arrive too late): "Avery's running ten minutes late. Grab a table and they'll be right
+  there." Formality, or writing as though Alex will be at lunch ("see you shortly"), is the
+  failure.
 tags: [finesse, finesse-52]
 delegation: real
 release_gate: false
@@ -77,6 +80,8 @@ expected_behaviors:
     description: >
       The text is quick and casual, as between friends ("Avery's running ten minutes late.
       Grab a table and they'll be right there."). No formal apology and no business register.
+      It is clearly from Alex about Avery; it does not read as though Alex will be at lunch
+      ("see you shortly").
 contrast:
   group: finesse-52-running-late
   recipient: A friend of the executive, a former employee who now runs his own company.
@@ -86,4 +91,5 @@ contrast:
     - { tool: email-send, arg: body, with: { to: "{{contact:josh}}" } }
 failure_modes:
   - Formality
+  - Writes as though Alex will be at lunch ("see you shortly")
   - Emails instead of texting

@@ -1,16 +1,22 @@
 # Finesse 52c (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery is running about ten
 # minutes behind, and the next meeting is a video call with the COO of Halcyon's largest
 # customer. Curia tells Robert before the start, apologetically, and offers to keep the end
-# time or extend. Information level 3: Robert's title is on his contact record; only Curia's
-# notes (memory) say Meridian is Halcyon's largest customer.
+# time or, since Avery's calendar is free afterwards (nothing until the focus block hours
+# later), to run over. Offering to run over when the calendar doesn't allow it is the wrong
+# call the 2026-11-21 revision added; 52b is its twin, with a meeting straight after.
+# Telling Avery: not needed, Avery knows they're late. Information level 3: Robert's title
+# is on his contact record; only Curia's notes (memory) say Meridian is Halcyon's largest
+# customer.
 name: finesse 52c late to largest customer
 description: >
   Avery (the principal) tells Curia "I'm running about ten minutes behind." The next meeting,
   in five minutes, is a video call with Robert Achebe, COO of Meridian Health. Curia's notes
-  say Meridian is Halcyon's largest customer. Curia should tell Robert before the start,
-  apologetically, and offer to keep the end time or extend: professional, apologetic and
-  short. Treating it like an internal meeting, or not telling him before the start, is the
-  failure.
+  say Meridian is Halcyon's largest customer. Avery's calendar is free for hours after the
+  call. Curia should tell Robert before the start, apologetically, and offer to keep the end
+  time or, since Avery's calendar is free afterwards, to run over: professional, apologetic
+  and short. Treating it like an internal meeting, not telling him before the start, or
+  offering to run over when Avery's calendar doesn't allow it are the failures (here it
+  does allow it).
 tags: [finesse, finesse-52]
 delegation: real
 release_gate: false
@@ -75,12 +81,20 @@ expected_behaviors:
       not_called: [calendar-update-event, calendar-delete-event]
       agent: any
       with: { eventId: evt-52c-meridian }
+  - id: end_time_offer_fits_calendar
+    weight: important
+    layer: decision
+    description: >
+      Curia offers Robert to keep the original end time or to run over. Either offer, or
+      both, passes, because Avery's calendar is free after the call. Making no offer about
+      the end time is a miss, as is any run-over offer that would need something else on
+      Avery's calendar moved.
   - id: robert_note_voice
     weight: critical
     layer: voice
     description: >
       The message is professional, apologetic and short: Avery is running about ten minutes
-      late and apologizes, and offers to keep the original end time or extend, whichever
+      late and apologizes, and offers to keep the original end time or run over, whichever
       suits Robert. Not the clipped "start without them" of an internal meeting.
 contrast:
   group: finesse-52-running-late
@@ -92,3 +106,4 @@ contrast:
 failure_modes:
   - Treats it like an internal meeting
   - Doesn't tell him before the start
+  - Offers to run over when Avery's calendar doesn't allow it

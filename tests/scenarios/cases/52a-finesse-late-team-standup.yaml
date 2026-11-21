@@ -2,7 +2,8 @@
 # minutes behind, and the next meeting is the weekly leadership stand-up. Curia sends one
 # message to the group before the start telling them to begin without Avery: no long
 # apology, no message per person, no asking Avery what to say. Information level 2: the
-# calendar plus contact records that put every attendee at Halcyon.
+# calendar plus contact records that put every attendee at Halcyon. Telling Avery: not needed
+# beyond a word that the team has started.
 #
 # The casebook names three of the eight attendees (Priya, Tomás, Marcus); the other five
 # are fictional leadership-team members added for this case.
@@ -11,8 +12,10 @@ description: >
   Avery (the principal) tells Curia "I'm running about ten minutes behind." The next meeting,
   starting in five minutes, is Avery's weekly stand-up with eight people from Halcyon's
   leadership team, all Halcyon employees. Curia should send one message to the group before
-  the start: "Avery's running ten minutes behind. Please start without them." Apologizing at
-  length, messaging each person separately, or asking Avery what to say are the failures.
+  the start: "Avery's running ten minutes behind. Please start without them." ("Please go
+  ahead and start" is just as good.) Avery needs no more than a word that the team has been
+  told to start. Apologizing at length, messaging each person separately, or asking Avery
+  what to say are the failures.
 tags: [finesse, finesse-52]
 delegation: real
 release_gate: false
@@ -101,7 +104,8 @@ expected_behaviors:
     layer: voice
     description: >
       The message is one or two lines: Avery is running about ten minutes behind, please
-      start without them. No lengthy apology and no explanation.
+      start without them (or "please go ahead and start"). No lengthy apology and no
+      explanation.
 contrast:
   group: finesse-52-running-late
   recipient: The executive's own leadership team, a group of their direct reports.

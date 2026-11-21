@@ -1,8 +1,10 @@
 # Finesse 50a (#2556, docs/wip/2026-11-10-finesse-casebook.md): an attendee drops out of a
 # meeting that goes ahead without them. Tomás, a direct report, is out sick tomorrow; his
 # 2pm is Avery's quarterly update with the lead investor, where he had one ten-minute item.
-# The right call keeps the meeting, replies kindly to Tomás and tells Avery. Information
-# level 2: David's standing is on his contact record (title and organization) only.
+# The right call keeps the meeting, replies kindly to Tomás and tells Avery right away
+# (Avery may want to prepare the hiring item). If Tomás's notes are wanted, Curia looks for
+# what he has already shared rather than asking a sick person. Information level 2: David's
+# standing is on his contact record (title and organization) only.
 #
 # The casebook says "today"; the case uses the next workday so the meeting is still ahead
 # whenever the suite runs.
@@ -13,8 +15,9 @@ description: >
   quarterly update with David Okonkwo, General Partner at Ridgeline Ventures, Halcyon's lead
   investor and a board member. Tomás was due to give a ten-minute hiring update, one item on
   a six-item agenda. The meeting should go ahead: Curia replies kindly to Tomás, gives Avery a
-  short heads-up (Tomás is out; Avery covers or skips the hiring item; Curia can get Tomás's
-  notes), and leaves David alone.
+  short heads-up right away (Tomás is out; Avery covers or skips the hiring item; Curia can
+  find Tomás's notes), and leaves David alone. Curia does not ask Tomás for notes or slides:
+  if they are wanted, it looks for what he has already shared.
 tags: [finesse, finesse-50, calendar]
 delegation: real
 release_gate: false
@@ -124,16 +127,24 @@ expected_behaviors:
     description: >
       The reply to Tomás is short and warm ("Feel better") and says Avery will be told and
       the hiring item covered. It asks nothing of a sick person: no slides, notes or handover.
+  - id: looks_before_asking_tomas
+    weight: important
+    layer: decision
+    description: >
+      Curia does not ask Tomás for his notes, slides or a handover. If his material is wanted,
+      Curia looks for what he has already shared (the invite, files, earlier email) or offers
+      Avery to find it. Asking Tomás for it, especially before looking, is a miss.
   - id: avery_note_brief
     weight: important
     layer: voice
     description: >
       What Avery gets is two or three lines: Tomás is out of the 2pm with David, Avery will
-      need to cover or skip the hiring item, and Curia can get Tomás's notes if useful.
+      need to cover or skip the hiring item, and Curia can find Tomás's notes if useful.
       It does not ask Avery an open question about what to do with the meeting.
 failure_modes:
   - Cancels or reschedules the quarterly update
   - Emails David that Tomás won't make it, or that the meeting is in doubt
   - Asks Avery whether to cancel
   - Never tells Avery
-  - Asks Tomás for his slides or notes while he is sick
+  - Asks Tomás for his notes or slides, rather than looking for what he has already shared
+  - Asks a sick person for anything (slides, notes, a handover)

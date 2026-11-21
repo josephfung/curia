@@ -10,9 +10,10 @@
 # message one way nor coach the behavior under test.
 judge_brief: >
   The office's own style is plain, courteous and concise. It sets no register for any
-  particular recipient: the expected behaviors say what suits each one. Two standing
-  preferences apply: no advice coffees this quarter (sales questions go to Marcus Bell,
-  Head of Sales Operations), and no conference panels this half.
+  particular recipient: the expected behaviors say what suits each one. Three standing
+  preferences apply: emails to customers and investors come from Avery (written in Avery's
+  mailbox; their assistants may hear from Curia), no advice coffees this quarter (sales
+  questions go to Marcus Bell, Head of Sales Operations), and no conference panels this half.
 identity:
   tone:
     style: |-
@@ -20,6 +21,7 @@ identity:
       Sounds like: "Thursday at 3 works. I've sent the invite."
     verbosity: 40
   behavioralPreferences:
+    - "Emails to customers and investors come from Avery's own mailbox. Their assistants can hear from you."
     - "No advice coffees this quarter. Send sales questions to Marcus Bell (Head of Sales Operations)."
     - "No conference panels this half."
   constraints:

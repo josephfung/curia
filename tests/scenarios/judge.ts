@@ -162,17 +162,25 @@ export function formatJudgeInput(
     ...(run.principalNote !== undefined
       ? [``, `## Note for the principal (cut from the reply; emailed to the principal)`, run.principalNote]
       : []),
-    // The principal's later turn (inbound.then, #2333): without it, a behavior about the reply to
-    // the principal was judged against the first reply, which may be a held send to someone else.
+    // The later turn (inbound.then, #2333): without it, a behavior about the reply to the
+    // principal was judged against the first reply, which may be a held send to someone else.
+    // It is the principal's, or a seeded contact's reply (#2556), named as such.
     ...(scenario.inbound.then
-      ? [
-          ``,
-          `## The principal's next message (a turn of its own, after the reply above; its tool calls are in the list too)`,
-          scenario.inbound.then.content,
-          ``,
-          `## The coordinator's reply to the principal's next message`,
-          run.then?.reply ?? '(none)',
-        ]
+      ? (() => {
+          const thenFrom = scenario.inbound.then.from;
+          const who = thenFrom === undefined
+            ? `the principal`
+            : `${scenario.seed.contacts.find(c => c.key === thenFrom)?.displayName ?? thenFrom} (not the principal)`;
+          return [
+            ``,
+            `## Next message, from ${who} (a turn of its own, after the reply above; its tool calls are in the list too)`,
+            // As the run sent it (dates resolved), or the case text for runs saved before #2556.
+            run.then?.content ?? scenario.inbound.then.content,
+            ``,
+            `## The coordinator's reply to that message`,
+            run.then?.reply ?? '(none)',
+          ];
+        })()
       : []),
     ``,
     `## Expected behaviors`,

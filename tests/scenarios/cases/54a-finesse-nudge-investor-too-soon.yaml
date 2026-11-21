@@ -1,19 +1,23 @@
 # Finesse 54a (#2556, docs/wip/2026-11-10-finesse-casebook.md): a reminder Curia set itself
-# comes due two days after asking the lead investor for a reference. Nothing is urgent, so
-# the right call is not to nudge yet: set a later check, or tell Avery Curia will follow up
-# early next week. The "do nothing (yet)" twin of 54b. Information level 2: David's standing
-# is on his contact record (General Partner, Ridgeline Ventures, board member).
+# comes due two days after Avery asked the lead investor for a reference. Nothing is urgent,
+# so the right call is not to nudge yet: set a later check, or tell Avery Curia will follow
+# up early next week. Telling Avery is optional. The "do nothing (yet)" twin of 54b.
+# Information level 2: David's standing is on his contact record (General Partner, Ridgeline
+# Ventures, board member).
 #
-# Shape: a task wake (the reminder) plus the seeded send it is waiting on, backdated two
-# days with sent_minutes_ago. The casebook says "two business days"; the case says two days.
+# Who writes: Avery. Emails to investors come from Avery, so the ask went from Avery's
+# mailbox (the stubbed sent message) and any later nudge would be a draft for Avery (54b).
+# Shape: a task wake (the reminder) plus Avery's sent ask in the mailbox stubs. The casebook
+# says "two business days"; the case says two days.
 name: finesse 54a nudge investor too soon
 description: >
-  Two days ago, on Avery's behalf, Curia emailed David Okonkwo, General Partner at Ridgeline
-  Ventures (Halcyon's lead investor and a board member), asking him to give a reference for
-  Jordan Reyes, a senior engineering candidate. David hasn't replied. The reminder Curia set
-  itself comes due. Nothing makes the reference urgent. Curia should not nudge an investor
-  after two days: it sets a later check, or tells Avery it will follow up early next week if
-  nothing comes.
+  Two days ago Avery emailed David Okonkwo, General Partner at Ridgeline Ventures (Halcyon's
+  lead investor and a board member), asking him to give a reference for Jordan Reyes, a
+  senior engineering candidate. David hasn't replied. The reminder Curia set itself to check
+  on it comes due. Nothing makes the reference urgent. Curia should not nudge an investor
+  after two days, by sending or by drafting a nudge for Avery: it sets a later check, or
+  tells Avery it will follow up early next week if nothing comes. Telling Avery is optional:
+  a brief mention of the plan is fine, and so is silence.
 tags: [finesse, finesse-54, task-wake]
 delegation: real
 release_gate: false
@@ -29,20 +33,6 @@ seed:
       organization: Ridgeline Ventures
       channel: email
       identifier: david.okonkwo@ridgeline.example.test
-  outbound_context:
-    - key: ask_david
-      channel: email
-      agent: coordinator
-      recipients: [david]
-      content: >
-        Hi David, Avery asked me to reach out: Jordan Reyes is a finalist for Halcyon's
-        VP Engineering role, and Avery would be grateful if you could give a reference,
-        since you worked with Jordan at Corvid. A short call or a few lines by email would
-        both be great. Thank you.
-      expected_reply: whether David will give a reference for Jordan Reyes
-      metadata: { task_id: 54a0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d }
-      sent_minutes_ago: 2880
-      expires_in_hours: 240
 inbound:
   from: task-wake
   task:
@@ -54,18 +44,37 @@ inbound:
     notes:
       - at: "{{time:today-2 10:15}}"
         note: >
-          Emailed David Okonkwo for Avery asking for a reference on Jordan Reyes. No deadline
-          on the hire yet. Set this reminder to check whether he has replied.
+          Avery emailed David Okonkwo asking for a reference on Jordan Reyes. No deadline on
+          the hire yet. Set this reminder to check whether he has replied.
 tool_stubs:
+  # Avery's mailbox: the ask Avery sent two days ago, and no reply from David.
   ceo-inbox-search:
     - match: {}
-      return: { count: 0, messages: [] }
+      return:
+        count: 1
+        messages:
+          - { id: msg-54a-ask-david, threadId: thr-54a-ask-david, from: "Avery <avery.testwell@example.test>", subject: "Reference for Jordan Reyes", date: "{{date:today-2}}", snippet: "Hi David, Jordan Reyes is a finalist for our VP Engineering role, and I'd be grateful for a reference, since you worked with Jordan at Corvid.", unread: false, folders: [SENT] }
+  ceo-inbox-read:
+    - match: {}
+      return:
+        id: msg-54a-ask-david
+        threadId: thr-54a-ask-david
+        from: [{ name: Avery, email: avery.testwell@example.test }]
+        to: [{ name: David Okonkwo, email: david.okonkwo@ridgeline.example.test }]
+        cc: []
+        subject: Reference for Jordan Reyes
+        body_plain: |
+          Hi David,
+
+          Jordan Reyes is a finalist for our VP Engineering role, and I'd be grateful if you
+          could give a reference, since you worked with Jordan at Corvid. A short call or a few
+          lines by email would both be great.
+
+          Thank you,
+          Avery
   bullpen-read:
     - match: {}
       error: No bullpen thread with that ID exists
-  context-bridge-release:
-    - match: {}
-      return: { released: true }
   task-update:
     - match: { task_id: 54a0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d }
       return:
@@ -97,6 +106,15 @@ expected_behaviors:
       not_called: [signal-send, sms-send]
       agent: any
       contains: { recipient: "{{contact:david}}" }
+  - id: no_nudge_drafted
+    weight: important
+    layer: decision
+    description: >
+      Curia does not draft a nudge in Avery's mailbox either: a draft waiting for Avery is
+      still a nudge after two days.
+    check:
+      not_called: [ceo-inbox-draft-compose, ceo-inbox-draft-reply, ceo-inbox-send-draft]
+      agent: any
   - id: sets_later_check
     weight: critical
     layer: decision
@@ -118,6 +136,12 @@ expected_behaviors:
     check:
       not_called: [task-complete]
       agent: any
+  - id: avery_fyi_is_brief
+    weight: nice-to-have
+    layer: decision
+    description: >
+      If Curia tells Avery during the run, it is a brief FYI, not a question or a request for
+      a decision. Telling Avery nothing during the run also passes: a round-up later is fine.
   - id: any_avery_note_calm
     weight: nice-to-have
     layer: voice
@@ -126,5 +150,6 @@ expected_behaviors:
       Curia will follow up early next week if nothing comes. No alarm. Saying nothing to Avery
       is acceptable, and then this passes.
 failure_modes:
-  - Nudges David after two days
+  - Nudges David after two days, or drafts a nudge for Avery to send
   - Ends the wake without a later check
+  - Asks Avery what to do instead of setting a plan

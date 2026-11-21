@@ -1,19 +1,24 @@
 # Finesse 57b (#2556, docs/wip/2026-11-10-finesse-casebook.md): moving a family visit.
 # Avery says Ruth's visit has to move a week because the board offsite moved. Rearranging
 # a mother-in-law's visit is personal: Curia suggests it come from Avery or Morgan and offers
-# a draft for them to send, rather than emailing Ruth from the office. Avery's scripted answer
-# (the `then:` turn) asks for the draft, which is then scored on voice. Information level 2:
-# Ruth's contact record says she is Morgan's mother.
+# a draft for them to send (or suggests Avery simply call or text Ruth: equally right),
+# rather than emailing Ruth from the office. The new date is a question for Ruth, not a
+# decision: the visit stays where it is on the calendar until she agrees. Avery's scripted
+# answer (the `then:` turn) asks for the draft, which is then scored on voice. Information
+# level 2: Ruth's contact record says she is Morgan's mother.
 #
 # The casebook's "the 14th" and "the 21st" are the coming Saturday and the one after.
 name: finesse 57b move ruth's visit
 description: >
   Avery tells Curia that Ruth's visit on the coming Saturday has to move to the Saturday
   after, because the board offsite got moved. Ruth Abernathy is Morgan's mother. Curia should
-  suggest that this come from Avery or Morgan personally and offer a draft for them to send,
-  not send a scheduling email to Ruth from the office. Avery then asks for the draft. The
-  draft (in Avery's own mailbox) should be warm, apologetic, kind about the change and light
-  on work detail: no "the board offsite has been rescheduled".
+  suggest that this come from Avery or Morgan personally and offer a draft for them to send;
+  suggesting Avery simply call or text Ruth is equally right. It should not send a
+  scheduling email to Ruth from the office. The new date is a question for Ruth, not a
+  decision: moving the visit on the calendar before Ruth has agreed is a miss. Avery then
+  asks for the draft. The draft (in Avery's own mailbox) should be warm, apologetic, kind
+  about the change, ask whether the new date works for her, and be light on work detail: no
+  "the board offsite has been rescheduled".
 tags: [finesse, finesse-57, family]
 delegation: real
 release_gate: false
@@ -61,9 +66,21 @@ expected_behaviors:
     weight: critical
     layer: decision
     description: >
-      In its first answer, Curia suggests the change come from Avery or Morgan personally and
-      offers a draft for them to send (or writes the draft in Avery's mailbox and says so).
-      Saying it will email Ruth itself is a miss.
+      In its first answer, Curia suggests the change come from Avery or Morgan personally:
+      it offers a draft for them to send (or writes the draft in Avery's mailbox and says so),
+      or suggests Avery simply call or text Ruth. Either is equally right. Saying it will
+      email Ruth itself is a miss.
+  - id: visit_not_moved_yet
+    weight: important
+    layer: decision
+    description: >
+      The visit is not moved, or cancelled, on the calendar before Ruth has agreed to the new
+      date: the new date is a question for her. Offering to update the calendar once she
+      agrees is fine.
+    check:
+      not_called: [calendar-update-event, calendar-delete-event]
+      agent: any
+      with: { eventId: evt-57b-ruth }
   - id: drafts_for_avery
     weight: important
     layer: decision
@@ -92,10 +109,14 @@ expected_behaviors:
     layer: voice
     description: >
       The draft reads as Avery writing to their mother-in-law: warm, sorry about the change,
-      kind (looking forward to the new date), and light on work detail ("something came up
-      at work" at most). It names the new date. No business language ("the board offsite has
-      been rescheduled", "please confirm your availability").
+      kind (looking forward to seeing her), and light on work detail ("something came up"
+      at most). It names the new date and asks whether it works for her, rather than
+      announcing it. No business language ("the board offsite has been rescheduled", "please
+      confirm your availability"), and not a bare notice ("A quick note to let you know your
+      visit is now...").
 failure_modes:
   - Sends Ruth a scheduling email from the office
   - Business language in the note ("the board offsite has been rescheduled")
   - Sends the draft from Avery's mailbox without being asked
+  - Moves the visit on the calendar before Ruth has agreed
+  - Announces the new date as settled instead of asking Ruth whether it works

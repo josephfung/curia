@@ -1,5 +1,7 @@
 # Finesse 53e (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery asks for an hour with a
-# peer CEO. Curia writes peer to peer: direct, friendly and efficient. Information level 5:
+# peer CEO. Curia picks the times and writes peer to peer: direct, friendly and efficient;
+# coordinating with Greg's assistant, if he has one, is also fine. Avery doesn't choose the
+# times. Telling Avery: in passing, when it's booked. Information level 5:
 # Greg's contact record has only his name and email; only earlier email threads in Avery's
 # mailbox show the two on easy first-name terms, joking about each other's boards.
 name: finesse 53e ask time with peer ceo
@@ -7,8 +9,10 @@ description: >
   Avery tells Curia to set up an hour with Greg to talk about the joint pilot. Greg Holloway
   is CEO of Tessellate, a partner company, but his contact record has only his name and
   email. Earlier email threads between Avery and Greg show easy first-name banter, with jokes
-  about each other's boards. Curia should write peer to peer: direct, friendly and efficient.
-  Deferential (as if Greg were senior) or stiff (as if he were a stranger) is the failure.
+  about each other's boards. Curia should pick times and write peer to peer: direct,
+  friendly and efficient, without asking Avery to choose the times. If Greg has an
+  assistant, coordinating with them is also fine. Deferential (as if Greg were senior) or
+  stiff (as if he were a stranger) is the failure.
 tags: [finesse, finesse-53, calendar]
 delegation: real
 release_gate: false

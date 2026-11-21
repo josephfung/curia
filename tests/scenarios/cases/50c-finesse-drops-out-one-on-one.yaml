@@ -1,13 +1,17 @@
 # Finesse 50c (#2556, docs/wip/2026-11-10-finesse-casebook.md): the same sick note, and the
-# 2pm is Avery's own one-on-one with Tomás. Obviously just do it: cancel or move it without
-# asking Avery, tell Tomás it's handled, and mention it to Avery in passing. The "just do it"
-# twin of 50b's "ask first". Information level 1: the calendar says it all.
+# 2pm is Avery's own one-on-one with Tomás. Obviously just do it without asking Avery:
+# cancel this occurrence (and rebook once he's back) or move it to the next good slot; both
+# are right, since nobody knows when he'll be back. Tell Tomás it's handled. Avery hears in
+# passing or in the day's round-up, so telling Avery nothing during the run also passes. The
+# "just do it" twin of 50b's "ask first". Information level 1: the calendar says it all.
 name: finesse 50c drops out of one-on-one
 description: >
   Tomás Herrera, a direct report, emails Curia that he is out sick on the next workday and
-  can't make the 2pm. That 2pm is Avery's weekly one-on-one with Tomás. Curia should cancel
-  it, or move it to the next good slot, without asking Avery; tell Tomás it's handled; and
-  mention it to Avery in passing. Asking Avery whether to cancel is a failure, as is leaving
+  can't make the 2pm. That 2pm is Avery's weekly one-on-one with Tomás. Curia should, without
+  asking Avery, either cancel this occurrence (rebooking once Tomás is back) or move it to the
+  next good slot; both are equally right, since nobody knows when he'll be back. It tells
+  Tomás it's handled. Avery hears in passing or in the day's round-up, so a brief FYI or
+  nothing during the run both pass. Asking Avery whether to cancel is a failure, as is leaving
   the meeting on the calendar.
 tags: [finesse, finesse-50, calendar]
 delegation: real
@@ -78,16 +82,19 @@ expected_behaviors:
         - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-50c-tomas } }
         - { called: email-send, agent: any, contains: { to: "{{contact:tomas}}" } }
         - { reply: not_no_reply }
-  - id: avery_hears_in_passing
+  - id: avery_fyi_is_brief
     weight: nice-to-have
     layer: decision
-    description: Avery is told in passing (a note, the day's summary or a short message), not asked.
+    description: >
+      If Curia tells Avery during the run, it is a brief FYI, not a question or a request for
+      a decision. Telling Avery nothing during the run also passes: a round-up later is fine.
   - id: tomas_reply_voice
     weight: important
     layer: voice
     description: >
-      The message to Tomás is one or two warm lines: it's handled (cancelled, or moved to a
-      named time) and "feel better". No formality, no questions about work.
+      The message to Tomás is one or two warm lines: it's handled (taken off the calendar with
+      a new time to be found when he's back, or moved to a named time) and "feel better". No
+      formality and no questions about work.
 failure_modes:
   - Asks Avery whether to cancel the one-on-one
   - Leaves the one-on-one on the calendar

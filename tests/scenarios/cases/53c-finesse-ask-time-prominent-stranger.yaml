@@ -5,18 +5,22 @@
 # name and email, and only a web search shows she is a well-known operator, author and
 # public-company director. Level 3 for where they met: only Curia's notes say so.
 #
-# The casebook leaves open whether the request goes from Curia or as a draft in Avery's
-# mailbox for Avery to send, so either passes.
+# Who writes is settled (2026-11-21 revision): Avery. She barely knows Avery, and a request
+# from an assistant is easier to ignore, so Curia drafts it in Avery's mailbox and tells
+# Avery it's ready; a request from Alex is a wrong call. Telling Avery: built in.
 name: finesse 53c ask time with prominent stranger
 description: >
   Avery asks Curia to get time with Diane Kessler for her advice on building out Halcyon's
   board. Diane's contact record has only her name and email. A web search shows she is a
   well-known operator, the author of a book on boards, and a director on several
   public-company boards. Curia's notes say Avery met her briefly at a conference in the
-  spring. Curia should look her up before writing (and save what it learned), then ask for
-  something small: 20 minutes, by phone, at her convenience, mentioning where they met and
-  why her advice in particular, with an easy way to say no. Asking for an hour in person on
-  Avery's terms, writing as though she'd remember Avery, or flattery are the failures.
+  spring. Curia should look her up before writing (and save what it learned), then draft the
+  request in Avery's mailbox, in Avery's own voice, and tell Avery it's ready to send. The
+  ask is small: 20 minutes, by phone, at her convenience, mentioning where they met and why
+  her advice in particular, with an easy way to say no. Asking for an hour in person on
+  Avery's terms, writing as though she'd remember Avery, generic flattery (one specific,
+  genuine reason her experience matters is fine), or sending the request from Alex are the
+  failures.
 tags: [finesse, finesse-53, calendar, lookup]
 delegation: real
 release_gate: false
@@ -101,18 +105,38 @@ expected_behaviors:
         - { called: contact-update, agent: any, contains: { fields: board } }
         - { called: contact-update, agent: any, contains: { fields: author } }
         - { called: contact-create, agent: any, contains: { notes: board } }
-  - id: asks_diane
+  - id: drafts_for_avery
     weight: critical
     layer: decision
-    description: >
-      The request to Diane goes out from Curia, or is left as a draft in Avery's mailbox for
-      Avery to send. Either is fine.
+    description: The request to Diane is left as a draft in Avery's mailbox, for Avery to send.
     check:
       any_of:
-        - { called: email-send, agent: any, contains: { to: "{{contact:diane}}" } }
         - { called: ceo-inbox-draft-compose, agent: any, contains: { to: diane.kessler } }
         - { called: ceo-inbox-draft-compose, agent: any, contains: { to_addresses: diane.kessler } }
         - { called: ceo-inbox-draft-compose, agent: any, contains: { to: "{{contact:diane}}" } }
+  - id: not_from_alex
+    weight: critical
+    layer: decision
+    description: >
+      Curia does not send the request to Diane itself: from an assistant, it is easier to
+      ignore. The draft is left for Avery.
+    check:
+      not_called: [email-send]
+      agent: any
+      contains: { to: "{{contact:diane}}" }
+  - id: draft_not_sent
+    weight: important
+    layer: decision
+    description: The draft is left for Avery to send, not sent by Curia.
+    check:
+      not_called: [ceo-inbox-send-draft]
+      agent: any
+  - id: avery_told_draft_ready
+    weight: important
+    layer: decision
+    description: Avery's reply says the draft to Diane is ready in their mailbox to send.
+    check:
+      reply: not_no_reply
   - id: small_ask
     weight: critical
     layer: decision
@@ -131,19 +155,21 @@ expected_behaviors:
     weight: critical
     layer: voice
     description: >
-      The message reminds Diane where she met Avery (the conference in the spring) rather
-      than assuming she remembers, says in a sentence why her advice in particular (Halcyon
-      is building out its board and she has served on and written about boards), asks for a
-      short call at whatever time suits her, and gives her an easy way to say no. It is
-      gracious without flattery: no gushing about her career.
+      The draft is in Avery's voice, in the first person ("It was a pleasure meeting you
+      at..."). It reminds Diane where they met (the conference in the spring) rather than
+      assuming she remembers, says in a sentence why her advice in particular (Halcyon is
+      building out its board and she has served on and written about boards), asks for a
+      short call at whatever time suits her, and gives her an easy way to say no. One
+      specific, genuine reason her experience matters is fine; generic flattery or gushing
+      about her career is a miss.
 contrast:
   group: finesse-53-ask-for-time
   recipient: A prominent operator and public-company director whom the executive met once, briefly. She owes the executive nothing.
   message:
-    - { tool: email-send, arg: body, with: { to: "{{contact:diane}}" } }
     - { tool: ceo-inbox-draft-compose, arg: body }
 failure_modes:
   - Writes without looking Diane up
   - Asks for an hour, in person, on Avery's terms
   - Writes as though Diane would remember Avery
-  - Flattery
+  - Generic flattery
+  - Sends the request from Alex instead of drafting it for Avery

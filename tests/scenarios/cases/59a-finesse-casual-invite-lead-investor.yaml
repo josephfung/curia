@@ -1,9 +1,10 @@
 # Finesse 59a (#2556, docs/wip/2026-11-10-finesse-casebook.md): a casual invitation from
 # the lead investor. David writes informally to Avery for a beer next week. Curia's notes say
-# "Always make time for David", so Curia makes it happen: offers David a few free evenings
-# (or drafts a reply in Avery's voice for Avery to send) and tells Avery either way, matching
-# David's informality. Information level 3: the "always make time" rule is only in Curia's
-# notes (memory); David's title is on his contact record.
+# "Always make time for David", so Curia makes it happen: David is an investor, so it drafts a
+# reply in Avery's voice, in Avery's mailbox, offering free evenings and matching David's
+# informality, and tells Avery it's ready (the draft waiting is how Avery hears). A reply from
+# Alex is a miss. Information level 3: the "always make time" rule is only in Curia's notes
+# (memory); David's title is on his contact record.
 #
 # The casebook has David write to Avery, with Curia seeing it in Avery's inbox. The scenario
 # harness's principal-mailbox cases run ceo-inbox alone, not the real-delegation office the
@@ -13,10 +14,12 @@ name: finesse 59a casual invite from lead investor
 description: >
   David Okonkwo, General Partner at Ridgeline Ventures, Halcyon's lead investor and a board
   member, emails Avery (Curia copied): "Hey, grab a beer next week? Been too long." Curia's
-  notes say "Always make time for David." Curia should make it happen: offer David a few
-  evenings next week that are free, or draft a reply for Avery in Avery's voice, and tell Avery
-  either way. The reply matches David's informality ("Hey David, Avery would love that.
-  Tuesday or Thursday evening next week?"). A stiff reply, or leaving it unanswered, is a miss.
+  notes say "Always make time for David." David is an investor, so the reply comes from Avery:
+  Curia should make it happen by drafting a reply in Avery's mailbox, in Avery's voice, that
+  offers evenings next week that are free, and tell Avery it's ready to send, without asking
+  Avery whether to go. The draft matches David's informality ("Hey David, would love that.
+  Tuesday or Thursday evening?"). A reply from Curia (Alex), a stiff reply, "let me check with
+  Avery", or leaving it unanswered is a miss.
 tags: [finesse, finesse-59, invitations]
 delegation: real
 release_gate: false
@@ -90,15 +93,35 @@ expected_behaviors:
     weight: critical
     layer: decision
     description: >
-      David gets a yes with times, from Curia on the thread or as a draft in Avery's mailbox
-      for Avery to send. Either is right.
+      David gets a yes with times as a draft reply in Avery's mailbox, for Avery to send.
     check:
       any_of:
-        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-59a-david } }
-        - { called: email-send, agent: any, contains: { to: "{{contact:david}}" } }
         - { called: ceo-inbox-draft-reply, agent: any }
         - { called: ceo-inbox-draft-compose, agent: any, contains: { to: "{{contact:david}}" } }
-        - { reply: not_no_reply }
+  - id: no_alex_reply_on_thread
+    weight: critical
+    layer: decision
+    description: David is an investor, so Curia does not reply on his thread from its own address (Alex).
+    check:
+      not_called: [email-reply]
+      agent: any
+      with: { reply_to_message_id: scenario-msg-59a-david }
+  - id: no_alex_email_to_david
+    weight: critical
+    layer: decision
+    description: Curia does not email David from its own address (Alex).
+    check:
+      not_called: [email-send]
+      agent: any
+      contains: { to: "{{contact:david}}" }
+  - id: no_turn_reply_to_david
+    weight: important
+    layer: decision
+    description: >
+      Curia's own reply on the thread (which would reach David from Alex) is empty: it answers
+      through the draft for Avery and its note to Avery.
+    check:
+      reply: no_reply
   - id: does_not_decline_or_stall
     weight: critical
     layer: decision
@@ -114,7 +137,7 @@ expected_behaviors:
   - id: tells_avery
     weight: important
     layer: decision
-    description: Avery is told what Curia offered or drafted.
+    description: Avery is told the draft to David is ready to send.
     check:
       any_of:
         - { principal_note: present }
@@ -131,20 +154,19 @@ expected_behaviors:
     weight: critical
     layer: voice
     description: >
-      The message to David matches his informality: a line or two, like "Hey David, Avery
-      would love that. Tuesday or Thursday evening next week?" No stiff phrasing ("Avery would
+      The draft to David, in Avery's own voice, matches his informality: a line or two, like
+      "Hey David, would love that. Tuesday or Thursday evening?" No stiff phrasing ("Avery would
       be delighted to accept your kind invitation"), no formal sign-off, no over-familiarity
       beyond David's own tone.
 contrast:
   group: finesse-59-casual-invite
   recipient: The company's lead investor, a board member with a warm, informal relationship with the principal.
   message:
-    - reply
-    - { tool: email-reply, arg: body }
-    - { tool: email-send, arg: body, with: { to: "{{contact:david}}" } }
     - { tool: ceo-inbox-draft-reply, arg: body }
     - { tool: ceo-inbox-draft-compose, arg: body }
 failure_modes:
+  - A reply from Curia (Alex) instead of a draft for Avery
+  - '"Let me check with Avery" when the notes already say yes'
   - A stiff reply ("Avery would be delighted to accept your kind invitation")
   - Leaves it unanswered or stalls
   - Declines or hedges

@@ -1,13 +1,20 @@
 # Finesse 53a (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery asks for time with a
-# direct report. Curia books it straight onto both calendars and sends Priya a short note,
-# instead of asking her whether she might be available. The "just do it" end of task 53.
+# direct report. The better call: Curia books it straight onto both calendars and sends
+# Priya a short note that leaves her an easy way to say it doesn't work. Since the
+# 2026-11-21 revision, proposing one specific slot (or two or three) for Priya to confirm
+# is also right; only a deferential, open-ended request with no time proposed is wrong.
+# The "just do it" end of task 53. Telling Avery: in passing, when it's booked (the reply).
 # Information level 2: Priya's contact record says VP Product at Halcyon (a direct report).
 name: finesse 53a ask time with direct report
 description: >
   Avery tells Curia to find 30 minutes with Priya Nair this week to go over the roadmap.
-  Priya is VP Product at Halcyon, a direct report (her contact record says so). Curia should
-  find a slot, book it directly and send Priya a short note saying it's booked. A
-  deferential request asking whether Priya might be available is the failure.
+  Priya is VP Product at Halcyon, a direct report (her contact record says so). The better
+  call: Curia finds a slot, books it directly and sends Priya a short note saying it's
+  booked, leaving her an easy way to say it doesn't work ("Avery wants 30 minutes on the
+  roadmap this week. I've booked Wednesday at 3."). Proposing one specific slot, or two or
+  three, for Priya to confirm is also right. Curia does not ask Avery to choose the slot. A
+  deferential, open-ended request asking whether Priya might be available, with no time
+  proposed, is the failure.
 tags: [finesse, finesse-53, calendar]
 delegation: real
 release_gate: false
@@ -44,21 +51,34 @@ tool_stubs:
           - { start: "{{time:workday+1 14:00}}", end: "{{time:workday+1 16:00}}" }
           - { start: "{{time:workday+2 15:00}}", end: "{{time:workday+2 17:00}}" }
 expected_behaviors:
-  - id: books_it
+  - id: books_or_proposes
     weight: critical
     layer: decision
-    description: Curia books the 30 minutes with Priya on the calendar itself.
+    description: >
+      Curia acts on it: it books the 30 minutes with Priya, or writes to Priya proposing a
+      time.
+    check:
+      any_of:
+        - { called: calendar-create-event, agent: any, contains: { attendees: priya.nair@halcyon.example.test } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:priya}}" } }
+  - id: names_a_time
+    weight: critical
+    layer: decision
+    description: >
+      Curia picks the time: it books a slot, or proposes one specific slot (or two or three)
+      for Priya to confirm. Either passes. A deferential, open-ended request asking whether
+      Priya might be available, with no time proposed, is a miss, and so is asking Avery to
+      choose or confirm the slot.
+  - id: books_directly
+    weight: nice-to-have
+    layer: decision
+    description: >
+      The better of the two right calls: Curia books the slot directly rather than proposing
+      it for Priya to confirm.
     check:
       called: calendar-create-event
       agent: any
       contains: { attendees: priya.nair@halcyon.example.test }
-  - id: does_not_ask_priya_first
-    weight: critical
-    layer: decision
-    description: >
-      Curia does not write to Priya asking whether she is free or which time suits her before
-      booking, and does not ask Avery to confirm a slot. Picking a time and booking it is the
-      right call for a direct report.
   - id: tells_priya
     weight: important
     layer: decision
@@ -78,9 +98,11 @@ expected_behaviors:
     weight: critical
     layer: voice
     description: >
-      The note to Priya is one or two plain lines: Avery wants 30 minutes on the roadmap and
-      it's booked for a named time. It is not deferential: no "would you possibly be
-      available", no list of options with "whatever works best for you", no apology.
+      The note to Priya is one or two plain lines: Avery wants 30 minutes on the roadmap, and
+      either it's booked for a named time (with an easy way for her to say it doesn't work)
+      or here is a specific time, or two or three, for her to confirm. It is not deferential:
+      no "would you possibly be available", no open-ended "whenever works best for you" with
+      no time named, no apology.
   - id: avery_told_briefly
     weight: nice-to-have
     layer: voice
@@ -91,6 +113,5 @@ contrast:
   message:
     - { tool: email-send, arg: body, with: { to: "{{contact:priya}}" } }
 failure_modes:
-  - Asks Priya deferentially whether she might be available
-  - Sends Priya a list of options instead of booking
+  - Asks Priya deferentially and open-endedly whether she might be available, with no time proposed
   - Asks Avery to pick a slot

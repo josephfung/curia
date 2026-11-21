@@ -1,8 +1,11 @@
 # Finesse 58a (#2556, docs/wip/2026-11-10-finesse-casebook.md): one email, readers at
 # different levels. Avery asks Curia to send the board chair next week's agenda with two
 # presenting direct reports copied, and mentions that one of them owes slides by Wednesday.
-# The email must work for the chair, introduce the presenters well, and keep the slide
-# deadline off it: that goes to Priya in a separate internal note. Information level 1 for
+# The email goes to the chair with her assistant Paula copied (leaving Paula off is a miss),
+# must work for the chair, introduce the presenters well, and keep the slide deadline off it:
+# that goes to Priya in a separate internal note, with an offer of help if she needs anything
+# from Avery. Avery asked for this, so Avery hears in passing and the case adds nothing for
+# telling Avery. Information level 1 for
 # the request and the deadline (Avery says them); level 2 for who everyone is (contact
 # records); level 3 for Paula's role (Curia's notes).
 name: finesse 58a board agenda with staff copied
@@ -10,10 +13,11 @@ description: >
   Avery asks Curia to send Catherine Whitfield, Chair of the Board, the agenda for next
   week's strategy session, copying Priya Nair (VP Product) and Tomás Herrera (Director of
   Engineering), who are presenting. Avery adds that Priya's slides are running late and need
-  to be in by Wednesday. Curia should send one email to Catherine (or through Paula Greene, her
-  assistant, if that is how her email works) with Priya and Tomás copied, introducing what
-  each presents in a way that shows them well. The slide deadline goes to Priya in a separate
-  internal note, never on the email Catherine sees.
+  to be in by Wednesday. Curia (Alex) should send one email to Catherine, with Paula Greene
+  (her assistant, who runs her calendar), Priya and Tomás copied, introducing what each
+  presents in a way that shows them well. Leaving Paula off is a miss. The slide deadline goes
+  to Priya in a separate internal note, with an offer of help if she needs anything from
+  Avery, never on the email Catherine sees.
 tags: [finesse, finesse-58, mixed-audience]
 delegation: real
 release_gate: false
@@ -100,11 +104,19 @@ expected_behaviors:
   - id: agenda_to_catherine
     weight: critical
     layer: decision
-    description: The agenda email goes to Catherine (or to Paula on her behalf).
+    description: The agenda email goes to Catherine.
     check:
-      any_of:
-        - { called: email-send, agent: any, contains: { to: "{{contact:catherine}}" } }
-        - { called: email-send, agent: any, contains: { to: "{{contact:paula}}" } }
+      called: email-send
+      agent: any
+      contains: { to: "{{contact:catherine}}" }
+  - id: copies_paula
+    weight: important
+    layer: decision
+    description: Paula, Catherine's assistant, is copied on the agenda email to Catherine.
+    check:
+      called: email-send
+      agent: any
+      contains: { to: "{{contact:catherine}}", cc: "{{contact:paula}}" }
   - id: copies_priya
     weight: important
     layer: decision
@@ -163,8 +175,11 @@ expected_behaviors:
   - id: priya_note_voice
     weight: nice-to-have
     layer: voice
-    description: The note to Priya is short, friendly and clear about the {{day:next-monday+2}} deadline.
+    description: >
+      The note to Priya is short, friendly and clear about the {{day:next-monday+2}} deadline,
+      and offers help if she needs anything from Avery to get the slides done.
 failure_modes:
   - Puts the slide deadline or any staff nudge on the email Catherine sees
   - Writes over Catherine's head to the team
+  - Leaves Paula off the email to Catherine
   - Sends separate agendas instead of one email with the presenters copied

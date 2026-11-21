@@ -121,7 +121,7 @@ const RESUME_KEYS = ['agent', 'original_task', 'context'] as const;
 const REPLY_KEYS = ['from', 'content'] as const;
 const THREAD_KEYS = ['key', 'topic', 'creator', 'participants', 'content', 'mentions'] as const;
 const INBOUND_KEYS = ['from', 'channel', 'content', 'thread', 'author', 'requester', 'origin', 'email', 'task', 'followup', 'then'] as const;
-const THEN_KEYS = ['content', 'channel', 'reply_to_approval'] as const;
+const THEN_KEYS = ['content', 'channel', 'reply_to_approval', 'from'] as const;
 const FOLLOWUP_KEYS = ['after', 'from', 'content', 'channel'] as const;
 /** A follow-up held this long still releases the first tool, so a flag-off run can finish. */
 const FOLLOWUP_MAX_DELAY_MS = 120_000;
@@ -1028,10 +1028,27 @@ function parseInbound(raw: unknown, file: string): ScenarioInbound {
   };
 }
 
-/** `inbound.then` (#2312): the principal's next turn, on a channel with a verified identity. */
+/**
+ * `inbound.then` (#2312): the next turn. The principal's, on a channel with a verified
+ * identity; or, with `from` (#2556), a seeded contact's on their own channel, which
+ * validateInbound checks against the seed.
+ */
 function parseThen(raw: unknown, file: string): ScenarioPrincipalTurn {
   if (!isObject(raw)) throw new CaseError(file, `inbound.then must be a mapping {content, channel}`);
   onlyKeys(raw, THEN_KEYS, file, 'inbound.then');
+  const from = optStr(raw, 'from', file, 'inbound.then');
+  if (from !== undefined && from !== 'principal') {
+    if (from === 'bullpen' || from === 'scheduler' || from === 'task-wake' || from === 'delegate') {
+      throw new CaseError(file, `inbound.then.from must be principal or a seeded contact`);
+    }
+    // A contact's reply names its channel: there is no principal identity to default to.
+    const contactChannel = optStr(raw, 'channel', file, 'inbound.then');
+    if (contactChannel === undefined) throw new CaseError(file, `inbound.then.from '${from}' needs channel (the contact's own)`);
+    if (raw['reply_to_approval'] !== undefined) {
+      throw new CaseError(file, `inbound.then.reply_to_approval is the principal's: a contact does not answer an approval`);
+    }
+    return { content: str(raw, 'content', file, 'inbound.then'), channel: contactChannel, from };
+  }
   const channel = optStr(raw, 'channel', file, 'inbound.then') ?? 'signal';
   // A live principal turn comes from a verified identity; a console channel has none.
   if (PRINCIPAL_LOCAL_CHANNELS.includes(channel)) {
@@ -1669,7 +1686,15 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
     }
   }
   if (scenario.inbound.then && toSpecialist) {
-    throw new CaseError(file, `inbound.then is a principal turn to the coordinator; a case for '${scenario.agent}' cannot take one`);
+    throw new CaseError(file, `inbound.then is a turn to the coordinator; a case for '${scenario.agent}' cannot take one`);
+  }
+  const thenFrom = scenario.inbound.then?.from;
+  if (thenFrom !== undefined) {
+    const contact = scenario.seed.contacts.find(c => c.key === thenFrom);
+    if (!contact) throw new CaseError(file, `inbound.then.from '${thenFrom}' is not principal or a seeded contact`);
+    if (scenario.inbound.then!.channel !== contact.channel) {
+      throw new CaseError(file, `inbound.then.channel '${scenario.inbound.then!.channel}' differs from contact '${thenFrom}' channel '${contact.channel}'`);
+    }
   }
   if (follow && follow.from !== 'principal') {
     const contact = scenario.seed.contacts.find(c => c.key === follow.from);

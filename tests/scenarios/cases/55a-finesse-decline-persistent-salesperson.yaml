@@ -1,6 +1,7 @@
 # Finesse 55a (#2556, docs/wip/2026-11-10-finesse-casebook.md): a vendor's account executive
 # asks for Avery's time for the third time in three weeks. Curia declines politely and
-# firmly without asking Avery, and leaves no door open. The "just do it" decline of task 55.
+# firmly without asking Avery, and leaves no door open; asking him plainly to stop following
+# up is fine. Telling Avery: in passing, or in a round-up. The "just do it" decline of task 55.
 # Information level 2: Kevin's contact record says Account Executive, CloudGrid. That Avery
 # ignored his two earlier emails is in the inbound itself (level 1).
 name: finesse 55a decline persistent salesperson
@@ -9,8 +10,10 @@ description: >
   Curia for the third time in three weeks asking for 30 minutes with Avery to "share how
   CloudGrid is helping companies like Halcyon". Avery hasn't replied to the earlier two.
   Curia should decline politely and firmly, without asking Avery, and route him elsewhere
-  only if a right person exists (none does here). Asking Avery, leaving the door open
-  ("maybe next quarter"), or rudeness are the failures.
+  only if a right person exists (none does here). Asking him plainly to stop following up
+  is fine. Curia may mention it to Avery in passing or in a round-up. Asking Avery, leaving
+  the door open ("maybe next quarter"), rudeness, or sending Kevin to Marcus Bell (who runs
+  Halcyon's own sales, not its buying) are the failures.
 tags: [finesse, finesse-55]
 delegation: real
 release_gate: false
@@ -75,6 +78,12 @@ expected_behaviors:
     description: >
       Kevin is not handed to someone at Halcyon to keep the pitch alive; no one has asked
       for it. Avery's standing preference about sales questions is about advice, not vendors.
+  - id: avery_fyi_is_brief
+    weight: nice-to-have
+    layer: decision
+    description: >
+      If Curia tells Avery during the run, it is a brief FYI, not a question or a request for
+      a decision. Telling Avery nothing during the run also passes: a round-up later is fine.
   - id: kevin_decline_voice
     weight: critical
     layer: voice
@@ -82,7 +91,8 @@ expected_behaviors:
       The decline is short, polite and firm: thanks him, says Avery won't take a meeting on
       this, and that the team will be in touch if Halcyon looks at this area. It leaves no
       door open ("maybe next quarter", "circle back later") and is not rude or sarcastic
-      about the repeated emails.
+      about the repeated emails. Asking him plainly and politely to stop following up is
+      fine and does not count against it.
 contrast:
   group: finesse-55-decline
   recipient: An account executive at a vendor who is trying to sell to the company.

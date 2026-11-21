@@ -1,16 +1,21 @@
 # Finesse 50d (#2556, docs/wip/2026-11-10-finesse-casebook.md): the same sick note, and the
 # 2pm is a vendor demo where Tomás is the evaluator. The demo has no point without him:
-# Curia asks the vendor to move it and tells Avery (checking with Avery first is also
-# fine). Information level 2: Kevin's contact record says Account Executive, CloudGrid.
+# Curia asks the vendor to move it, offering times that suit Avery's calendar and allow for
+# Tomás's return, and tells Avery in passing. Checking with Avery first, or asking whether
+# someone else could evaluate, is also fine. Nothing internal (Avery's plan to drop in) goes
+# to the vendor. Information level 2: Kevin's contact record says Account Executive, CloudGrid.
 name: finesse 50d drops out of vendor demo
 description: >
   Tomás Herrera, a direct report, emails Curia that he is out sick on the next workday and
   can't make the 2pm. That 2pm is a product demo from CloudGrid run by Kevin Marsh, an
   account executive at a vendor; Tomás was the technical evaluator and Avery was going to
   drop in for the last fifteen minutes. Curia should ask Kevin to move the demo to when
-  Tomás is back and tell Avery it's moved (checking with Avery first is also acceptable).
-  Letting the demo go ahead with nobody to evaluate it, unmentioned, is a failure, and so is
-  apologizing at length to the vendor.
+  Tomás is back, offering two or three times that are free on Avery's calendar and allow for
+  Tomás's return, and tell Avery in passing that it's moved (a brief FYI, or nothing during
+  the run, both pass). Checking with Avery first is also acceptable, and so is asking whether
+  someone else could evaluate the demo. Letting the demo go ahead with nobody to evaluate it,
+  unmentioned, is a failure, and so are apologizing at length to the vendor and passing
+  internal detail to the vendor, such as Avery's plan to drop in.
 tags: [finesse, finesse-50, calendar]
 delegation: real
 release_gate: false
@@ -69,8 +74,8 @@ expected_behaviors:
     layer: decision
     description: >
       The demo does not silently go ahead without its evaluator: Curia either asks Kevin to
-      move it (and tells Avery), or checks with Avery first. Doing nothing, or only replying to
-      Tomás, is a miss.
+      move it, or checks with Avery first (including asking whether someone else could
+      evaluate it). Doing nothing, or only replying to Tomás, is a miss.
   - id: contacts_kevin_or_asks
     weight: critical
     layer: decision
@@ -85,10 +90,27 @@ expected_behaviors:
     weight: important
     layer: decision
     description: The demo is moved or offered new times, not cancelled with no new date.
-  - id: avery_told
+  - id: no_internal_detail_to_vendor
     weight: important
     layer: decision
-    description: Avery hears that the demo is moving (or is asked about it).
+    description: >
+      Nothing internal goes to Kevin: no mention of Avery's plan to drop in for the last
+      fifteen minutes, and nothing else about Halcyon's side beyond the evaluator being out
+      sick. Saying who the demo is for in general terms is fine.
+  - id: times_fit_avery_and_tomas
+    weight: important
+    layer: decision
+    description: >
+      Any new times offered to Kevin are free on Avery's calendar and fall after Tomás is
+      likely back (not the next workday). Asking Kevin for his times without listing any, or
+      checking with Avery first, also passes.
+  - id: avery_fyi_is_brief
+    weight: nice-to-have
+    layer: decision
+    description: >
+      If Curia tells Avery during the run, it is a brief FYI, not a question or a request for
+      a decision. Telling Avery nothing during the run also passes: a round-up later is fine.
+      Checking with Avery first, with a recommendation, is also a right call here and passes.
   - id: kevin_message_voice
     weight: critical
     layer: voice
@@ -106,4 +128,6 @@ contrast:
 failure_modes:
   - Lets the demo go ahead with nobody to evaluate it, without telling Avery
   - Apologizes at length to the vendor
+  - Tells the vendor internal detail, such as Avery's plan to drop in
+  - Offers times Avery isn't free, or before Tomás can be back
   - Cancels the demo with no new date

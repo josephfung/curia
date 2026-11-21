@@ -2,6 +2,8 @@
 # A mid-tier conference organizer, a stranger, invites Avery to speak on a panel. Avery's
 # standing preference is "No conference panels this half", so Curia declines graciously on its
 # own, without asking Avery, and without leaving the door open further than Avery would want.
+# Avery gave no reason, so Curia gives none (or a vague, honest one) and invents nothing
+# ("Reasons and excuses" in the casebook). Avery hears of it in a round-up, or not at all.
 # Information level 3: the preference is in the office identity's standing preferences (the
 # finesse identity fixture), which production keeps as Curia's notes on Avery.
 name: finesse 56a decline conference panel
@@ -9,8 +11,11 @@ description: >
   Jordan Ellis, programs lead at the Northern Growth Summit (a mid-tier conference), emails
   Curia to invite Avery to speak on a panel about scaling robotics companies. Avery's
   standing preference is no conference panels this half. Curia should decline graciously
-  without asking Avery: thanks, a clear decline, good wishes for the event. Asking Avery, or
-  leaving the door wide open ("maybe next time, let's find another slot"), is a miss.
+  without asking Avery: thanks, a clear decline, good wishes for the event. It gives no
+  reason, or a vague and honest one ("Avery isn't taking on panels at the moment"); an
+  invented reason (a trip, a clash, another commitment) is a miss. Asking Avery, or leaving
+  the door wide open ("maybe next time, let's find another slot"), is a miss. Avery needs to
+  hear about it only in a round-up, or not at all.
 tags: [finesse, finesse-56, invitations]
 delegation: real
 release_gate: false
@@ -94,8 +99,22 @@ expected_behaviors:
       The message is brief and gracious: thanks for the invitation, a plain decline (Avery
       isn't taking on panels at the moment, or is unable to), and good wishes for the event.
       No long explanation, no internal detail about Avery's preferences or schedule.
+  - id: no_invented_reason
+    weight: critical
+    layer: voice
+    description: >
+      The decline gives no reason, or a vague and honest one (Avery isn't taking on panels at
+      the moment, or is unable to). It does not make up a specific one: no invented trip,
+      travel, schedule clash, prior commitment, board meeting or family matter.
+  - id: avery_fyi_is_brief
+    weight: nice-to-have
+    layer: decision
+    description: >
+      If Curia tells Avery during the run, it is a brief FYI, not a question or a request for
+      a decision. Telling Avery nothing during the run also passes: a round-up later is fine.
 failure_modes:
   - Asks Avery whether to do the panel
   - Accepts or tentatively accepts
   - Leaves the door open further than Avery would want (offers another date, "maybe next time")
   - A long or over-explained decline
+  - Invents a reason for the decline (travel, a clash, another commitment)

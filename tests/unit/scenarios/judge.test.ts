@@ -116,8 +116,8 @@ describe('formatJudgeInput with the principal\'s next turn (#2333)', () => {
   it('shows the principal\'s next message and the reply to it, after the first reply', () => {
     const text = formatJudgeInput(scenario, run, behaviors);
     const first = text.indexOf('## Final reply');
-    const next = text.indexOf('## The principal\'s next message');
-    const answer = text.indexOf('## The coordinator\'s reply to the principal\'s next message');
+    const next = text.indexOf('## Next message, from the principal');
+    const answer = text.indexOf('## The coordinator\'s reply to that message');
     expect(first).toBeGreaterThan(-1);
     expect(next).toBeGreaterThan(first);
     expect(answer).toBeGreaterThan(next);
@@ -125,11 +125,25 @@ describe('formatJudgeInput with the principal\'s next turn (#2333)', () => {
     expect(text.slice(answer)).toContain('Understood: nothing went to Dana.');
   });
 
+  it('names a seeded contact as the sender of that turn, not the principal (#2556)', () => {
+    const fromDana = { ...scenario, inbound: { ...scenario.inbound, then: { content: 'Thanks, Tuesday works.', channel: 'signal', from: 'dana' } } };
+    const text = formatJudgeInput(fromDana, run, behaviors);
+    expect(text).toContain('## Next message, from Dana Whitfield (not the principal)');
+    expect(text).not.toContain('from the principal');
+  });
+
+  it('shows that turn as the run sent it, placeholders resolved, when the run recorded it (#2556)', () => {
+    const dated = { ...scenario, inbound: { ...scenario.inbound, then: { content: '{{weekday:today+1}} at 1pm works.', channel: 'email', from: 'dana' } } };
+    const text = formatJudgeInput(dated, { ...run, then: { reply: 'Done.', content: 'Tuesday at 1pm works.' } }, behaviors);
+    expect(text).toContain('Tuesday at 1pm works.');
+    expect(text).not.toContain('{{weekday');
+  });
+
   it('says (none) when that turn has no reply, and adds nothing to a case without one', () => {
-    expect(formatJudgeInput(scenario, { ...run, then: { reply: null } }, behaviors)).toContain('next message\n(none)');
+    expect(formatJudgeInput(scenario, { ...run, then: { reply: null } }, behaviors)).toContain('reply to that message\n(none)');
     const inbound = { ...scenario.inbound };
     delete inbound.then;
-    expect(formatJudgeInput({ ...scenario, inbound }, run, behaviors)).not.toContain('next message');
+    expect(formatJudgeInput({ ...scenario, inbound }, run, behaviors)).not.toContain('Next message');
   });
 });
 

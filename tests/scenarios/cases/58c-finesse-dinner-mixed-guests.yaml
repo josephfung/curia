@@ -1,8 +1,10 @@
 # Finesse 58c (#2556, docs/wip/2026-11-10-finesse-casebook.md): a dinner invitation to
-# guests at different levels: a peer CEO, a prospective investor and a friend. Either one
-# email pitched to the most formal reader (Hannah) or separate invitations pitched to each;
-# anything personal to Josh goes in a separate note. Information level 2: who each guest is
-# comes from their contact records.
+# guests at different levels: a peer CEO, a prospective investor and a friend. Hannah is an
+# investor, so she gets her own invitation, drafted in Avery's mailbox; Greg and Josh can share
+# one or get one each, from Alex or as drafts for Avery. One email to all three is a miss, and
+# nobody's contact details or personal news go to people who don't need them. Hannah's draft
+# waiting is how Avery hears, so the case adds nothing for telling Avery. Information level 2:
+# who each guest is comes from their contact records.
 #
 # Deviation: the casebook names no personal detail for Josh. The request adds one (a pickup
 # basketball rematch), so "anything personal to Josh goes in a separate note" is checkable.
@@ -11,10 +13,13 @@ description: >
   Avery asks Curia to invite Greg Holloway (CEO of Tessellate, a partner company and peer),
   Hannah Lindqvist (Partner at Northbeam Capital, a prospective investor) and Josh Tanaka (a
   friend, Halcyon's former engineer) to dinner at Avery and Morgan's home, and to tell Josh
-  the basketball rematch is on. Curia should send either one email whose tone suits Hannah,
-  the most formal reader, or separate invitations pitched to each. The rematch line goes to
-  Josh alone. In-jokes or overly casual language on an email Hannah reads, or a stiff email to
-  friends, are misses.
+  the basketball rematch is on. Hannah is an investor, so her invitation comes from Avery:
+  Curia drafts a separate invitation to her in Avery's mailbox, pitched to her. Greg and Josh
+  can share one invitation or get one each, from Curia (Alex) or as drafts for Avery, each
+  pitched to the relationship. One email to all three is a miss, as is an invitation to Hannah
+  from Alex. Nobody's contact details or personal news go to people who don't need them: the
+  rematch line goes to Josh alone. In-jokes or overly casual language on an email Hannah reads,
+  or a stiff email to friends, are misses.
 tags: [finesse, finesse-58, mixed-audience]
 delegation: real
 release_gate: false
@@ -57,18 +62,38 @@ expected_behaviors:
     weight: critical
     layer: decision
     description: >
-      All three guests are invited (one email to all, or one each), from Curia or as drafts
-      in Avery's mailbox for Avery to send. Either is fine for a dinner at home.
-  - id: invites_hannah
+      All three guests are invited: Hannah in an invitation of her own, drafted in Avery's
+      mailbox; Greg and Josh in one shared invitation or one each, from Curia or as drafts in
+      Avery's mailbox.
+  - id: hannah_draft_in_averys_mailbox
+    weight: critical
+    layer: decision
+    description: Hannah's invitation is a draft in Avery's mailbox, addressed to her.
+    check:
+      called: ceo-inbox-draft-compose
+      agent: any
+      contains: { to: "{{contact:hannah}}" }
+  - id: hannah_not_from_alex
+    weight: critical
+    layer: decision
+    description: Curia does not send Hannah an invitation from its own address (Alex).
+    check:
+      not_called: [email-send]
+      agent: any
+      contains: { to: "{{contact:hannah}}" }
+  - id: hannah_not_with_others
+    weight: critical
+    layer: decision
+    description: >
+      Hannah's invitation is separate: no email or draft is addressed to Hannah together with
+      Greg or Josh (on the To or the CC line). One email to all three is a miss.
+  - id: nothing_shared_needlessly
     weight: important
     layer: decision
-    description: Hannah receives an invitation.
-    check:
-      any_of:
-        - { called: email-send, agent: any, contains: { to: "{{contact:hannah}}" } }
-        - { called: email-send, agent: any, contains: { cc: "{{contact:hannah}}" } }
-        - { called: ceo-inbox-draft-compose, agent: any, contains: { to: "{{contact:hannah}}" } }
-        - { called: ceo-inbox-draft-compose, agent: any, contains: { cc: "{{contact:hannah}}" } }
+    description: >
+      Nobody's contact details or personal news go to people who don't need them: no guest's
+      email address or personal detail (such as Josh's rematch) appears on an invitation to
+      someone else.
   - id: rematch_not_to_hannah
     weight: critical
     layer: decision
@@ -97,17 +122,20 @@ expected_behaviors:
     weight: critical
     layer: voice
     description: >
-      Any email Hannah reads is warm and polished: no in-jokes, slang or overly casual
-      language, nothing that reads as banter between friends. It gives the date, time and
-      that it's at Avery and Morgan's home.
+      Hannah's invitation, in Avery's voice, is warm and polished: no in-jokes, slang or
+      overly casual language, nothing that reads as banter between friends. It gives the date,
+      time and that it's at Avery and Morgan's home.
   - id: friends_not_stiff
     weight: important
     layer: voice
     description: >
-      If Josh (or Greg) gets an invitation of his own, it is friendly rather than stiff; the
-      note to Josh about the rematch sounds like it's between friends. One invitation to all
-      three is acceptable, and then only the rematch note is rated here.
+      The invitation to Greg and Josh (shared or one each) is friendly rather than stiff,
+      pitched to each relationship, and the note to Josh about the rematch sounds like it's
+      between friends.
 failure_modes:
+  - One email to all three guests
+  - An invitation to Hannah from Curia (Alex) instead of a draft for Avery
+  - A guest's contact details or personal news shared with the others
   - In-jokes or overly casual language on an email Hannah reads
   - The rematch line on the group invitation
   - A stiff, formal invitation to friends

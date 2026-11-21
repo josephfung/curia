@@ -1,16 +1,23 @@
 # Finesse 58b (#2556, docs/wip/2026-11-10-finesse-casebook.md): a customer follow-up with
 # sales copied. Avery's meeting notes include the discount Halcyon could go to if pushed.
-# The customer email carries the action items and nothing about discount flexibility; if
-# Marcus needs telling, that's a separate note. Information level 1: Avery's notes are in the
+# Robert is a customer, so the follow-up is written in Avery's mailbox; Avery said "send", so
+# Curia sends it from there (compose, then ceo-inbox-send-draft). Leaving it as a draft, or
+# sending it from Alex's address, is a miss. The customer email carries the action items and
+# nothing about discount flexibility, and commits to nothing that wasn't agreed; if Marcus
+# needs telling, that's a separate note. Avery asked for this, so Avery hears in passing and
+# the case adds nothing for telling Avery. Information level 1: Avery's notes are in the
 # request; who Robert and Marcus are is on their contact records (level 2).
 name: finesse 58b customer follow-up with sales copied
 description: >
   Avery asks Curia to send Robert Achebe, COO of Meridian Health (Halcyon's largest
   customer), a follow-up from today's meeting with the action items, copying Marcus Bell
   (Head of Sales Operations). Avery's notes, pasted in, include "We can go to 15% off if they
-  push." Curia should send Robert the action items with Marcus copied and keep the discount
-  out of that email entirely. Anything for Marcus about the discount goes in a separate note.
-  Over-familiarity with the customer is also a miss.
+  push." Robert is a customer, so the follow-up comes from Avery: Curia writes it in Avery's
+  mailbox with Marcus copied and, because Avery said "send", sends it from there. Leaving it
+  as a draft for Avery, leaving more than one draft, or sending it from Curia's own address
+  (Alex) is a miss. The discount stays out of that email entirely, and the email commits to
+  nothing that wasn't agreed in the meeting. Anything for Marcus about the discount goes in a
+  separate note. Over-familiarity with the customer is also a miss.
 tags: [finesse, finesse-58, mixed-audience]
 delegation: real
 release_gate: false
@@ -47,7 +54,8 @@ inbound:
     - We can go to 15% off if they push
 tool_stubs:
   # Avery asked Curia to send this on a live turn, so production lets ceo-inbox send a draft
-  # from Avery's mailbox (finesse-office refuses one nobody asked for).
+  # from Avery's mailbox (finesse-office refuses one nobody asked for). This send is the right
+  # call here.
   ceo-inbox-send-draft:
     - match: {}
       return: { message_id: scenario-sent-draft-1, to: [], subject: (sent) }
@@ -55,20 +63,47 @@ tool_stubs:
     - match: {}
       return: { displayTimezone: "{{timezone}}", count: 0, events: [] }
 expected_behaviors:
-  - id: follow_up_to_robert
+  - id: written_in_averys_mailbox
     weight: critical
     layer: decision
-    description: The follow-up email goes to Robert.
+    description: The follow-up to Robert is written in Avery's mailbox (a draft composed there).
     check:
-      called: email-send
+      called: ceo-inbox-draft-compose
       agent: any
       contains: { to: "{{contact:robert}}" }
+  - id: sent_from_averys_mailbox
+    weight: critical
+    layer: decision
+    description: >
+      Avery said "send", so Curia sends the follow-up from Avery's mailbox. Leaving it as a
+      draft for Avery to send is a miss.
+    check:
+      called: ceo-inbox-send-draft
+      agent: any
+      success: true
+  - id: not_from_alex
+    weight: critical
+    layer: decision
+    description: The follow-up is not sent to Robert from Curia's own address (Alex).
+    check:
+      not_called: [email-send]
+      agent: any
+      contains: { to: "{{contact:robert}}" }
+  - id: one_draft
+    weight: important
+    layer: decision
+    description: Curia leaves at most one draft to Robert in Avery's mailbox.
+    check:
+      called: ceo-inbox-draft-compose
+      agent: any
+      contains: { to: "{{contact:robert}}" }
+      max: 1
   - id: copies_marcus
     weight: important
     layer: decision
     description: Marcus is copied on the follow-up.
     check:
-      called: email-send
+      called: ceo-inbox-draft-compose
       agent: any
       contains: { to: "{{contact:robert}}", cc: "{{contact:marcus}}" }
   - id: no_discount_percent
@@ -87,6 +122,12 @@ expected_behaviors:
       not_called: [email-send, ceo-inbox-draft-compose]
       agent: any
       contains: { to: "{{contact:robert}}", body: "discount" }
+  - id: no_unagreed_commitments
+    weight: critical
+    layer: decision
+    description: >
+      The email to Robert commits Halcyon to nothing that wasn't agreed in the meeting (no new
+      dates, deliverables, prices or concessions beyond Avery's notes).
   - id: no_pricing_hint
     weight: important
     layer: voice
@@ -115,3 +156,7 @@ failure_modes:
   - Mentions the discount or pricing flexibility on the customer email
   - Over-familiar tone with the customer
   - Forgets to copy Marcus
+  - Leaves it as a draft when Avery said "send"
+  - Sends it from Curia's own address (Alex) instead of Avery's mailbox
+  - Leaves more than one draft
+  - Commits to something that wasn't agreed in the meeting

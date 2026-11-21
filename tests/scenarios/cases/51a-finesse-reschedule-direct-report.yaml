@@ -1,16 +1,23 @@
 # Finesse 51a (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery asks Curia to move
 # their Thursday 2pm and gives no reason. The meeting is a roadmap review with a direct
-# report, so Curia just does it: picks a new time from both calendars, moves the meeting and
-# tells Priya in a line or two, with no apology, no excuse and no "whatever works for you".
-# Information level 2: Priya's standing (VP Product at Halcyon) is on her contact record only.
+# report. Two calls are right: pick a new time from both calendars, move the meeting and tell
+# Priya with an easy way to say it doesn't work (the better call, rewarded as nice-to-have);
+# or propose one specific time (or two or three) from both calendars for Priya to confirm,
+# since a free slot doesn't always mean she's free. Wrong: an open-ended "when are you free?"
+# with no proposed time, an apology, an excuse. Telling Avery: the inbound is Avery's, so
+# nothing is added for it. Information level 2: Priya's standing (VP Product at Halcyon) is
+# on her contact record only.
 name: finesse 51a reschedules a direct report
 description: >
   Avery (the principal) tells Curia "I need to move my Thursday 2pm with Priya. Something
   came up." The Thursday 2pm is a roadmap review with Priya Nair, VP Product at Halcyon and
-  a direct report. Curia should pick a new time that is free on both calendars, move the
-  meeting itself and tell Priya briefly ("Avery needs to move Thursday's roadmap review.
-  I've put it in for Friday at 10. Shout if that doesn't work."). Asking Priya for her
-  availability with a list of options, apologizing, or giving an excuse are the failures.
+  a direct report. Two calls are right. The better one: Curia picks a new time that is free on
+  both calendars, moves the meeting itself and tells Priya briefly, leaving her an easy way to
+  say it doesn't work ("Avery needs to move Thursday's roadmap review. I've put it in for
+  Friday at 10. Let me know if that doesn't work."). Also right: proposing one specific time,
+  or two or three, from both calendars for Priya to confirm, and moving the meeting once she
+  does. The failures are an open-ended request with no proposed time ("When are you free?",
+  "whatever works best for you"), apologizing, and giving an excuse.
 tags: [finesse, finesse-51, calendar]
 delegation: real
 release_gate: false
@@ -47,21 +54,24 @@ tool_stubs:
           - { start: "{{time:next-thursday+1 10:00}}", end: "{{time:next-thursday+1 12:00}}" }
           - { start: "{{time:next-thursday+4 13:00}}", end: "{{time:next-thursday+4 16:00}}" }
 expected_behaviors:
-  - id: moves_the_meeting
+  - id: proposes_specific_time
     weight: critical
     layer: decision
-    description: Curia moves the roadmap review to a new time itself.
+    description: >
+      Curia names a specific new time, or two or three, free on both calendars: either it
+      moves the meeting there and tells Priya, or it proposes the time(s) for Priya to
+      confirm. An open-ended request with no proposed time ("When are you free?", "whatever
+      works best for you") is a miss.
+  - id: books_directly
+    weight: nice-to-have
+    layer: decision
+    description: >
+      The better call: Curia moves the roadmap review to the new time itself and tells Priya,
+      rather than waiting for her to confirm.
     check:
       called: calendar-update-event
       agent: any
       with: { eventId: evt-51a-roadmap }
-  - id: does_not_poll_priya
-    weight: critical
-    layer: decision
-    description: >
-      Curia picks the new time; it does not send Priya a list of options and ask what works
-      best for her, or hold the move until she answers. Saying "shout if that doesn't work"
-      is fine.
   - id: does_not_ask_avery
     weight: important
     layer: decision
@@ -69,7 +79,9 @@ expected_behaviors:
   - id: tells_priya
     weight: important
     layer: decision
-    description: Priya is told the meeting has moved (a message to her, beyond the updated invite).
+    description: >
+      Priya hears from Curia about the change (a message to her, beyond any updated invite):
+      the new time, or the time(s) proposed for her to confirm.
     check:
       any_of:
         - { called: email-send, agent: any, contains: { to: "{{contact:priya}}" } }
@@ -86,8 +98,9 @@ expected_behaviors:
     layer: voice
     description: >
       The message to Priya is one or two plain lines: Avery needs to move Thursday's roadmap
-      review, here is the new time, say if it doesn't work. No apology, no excuse or reason,
-      and no "whatever works best for you".
+      review, here is the new time ("let me know if that doesn't work"), or here are one to
+      three specific times to confirm. No apology, no excuse or reason, and no open-ended
+      "whatever works best for you".
 contrast:
   group: finesse-51-reschedule
   recipient: A senior employee who reports directly to the executive.
@@ -95,7 +108,7 @@ contrast:
     - { tool: email-send, arg: body, with: { to: "{{contact:priya}}" } }
     - { tool: slack-send, arg: message, with: { recipient: "{{contact:priya}}" } }
 failure_modes:
-  - Asks Priya for her availability with a list of options and "whatever works best for you"
+  - An open-ended request with no proposed time ("When are you free?", "whatever works best for you")
   - Apologizes to a direct report for a routine move
   - Gives an excuse
   - Asks Avery which time to pick

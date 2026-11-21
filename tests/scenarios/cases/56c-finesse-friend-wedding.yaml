@@ -1,5 +1,6 @@
 # Finesse 56c (#2556, docs/wip/2026-11-10-finesse-casebook.md): a friend's wedding
-# invitation. A wedding RSVP is personal: Curia tells Avery (and Morgan), may offer a draft
+# invitation. A wedding RSVP is personal: Curia tells Avery (and Morgan), including the RSVP
+# deadline, may offer a draft
 # for Avery to send personally, and does not reply as Avery's assistant, accepting or
 # declining. Information level 1: the invitation itself says it all.
 #
@@ -10,9 +11,10 @@ name: finesse 56c friend wedding invitation
 description: >
   Josh Tanaka, one of Halcyon's first engineers and now a friend of Avery's, emails his
   wedding invitation to Avery, with Curia copied. It is addressed to Avery and Morgan and asks
-  them to RSVP. Curia should tell Avery (and through Avery, Morgan), and may offer to draft a
-  reply for Avery to send personally. Replying to Josh as Avery's assistant, whether
-  accepting or declining, is a failure.
+  them to RSVP by a given date. Curia should tell Avery (and through Avery, Morgan),
+  including the RSVP deadline, and may offer to draft a reply for Avery to send personally.
+  Replying to Josh as Avery's assistant, whether accepting or declining, is a failure.
+  Leaving the RSVP deadline out of the message to Avery is a miss.
 tags: [finesse, finesse-56, invitations, personal]
 delegation: real
 release_gate: false
@@ -38,8 +40,7 @@ inbound:
     Mei and I are getting married on {{day:next-saturday+56}} at the Evergreen Brick Works,
     ceremony at 3 pm, dinner and dancing after. It would mean a lot to have you both there.
 
-    RSVP at your convenience, ideally in the next few weeks. Let us know about any dietary
-    stuff.
+    Please RSVP by {{day:next-saturday+21}}, and let us know about any dietary stuff.
 
     Josh
   email:
@@ -84,12 +85,18 @@ expected_behaviors:
   - id: tells_avery
     weight: critical
     layer: decision
-    description: Avery hears about the invitation, with the date, and that it's for Avery and Morgan.
+    description: Avery hears about the invitation, with the date, the RSVP deadline, and that it's for Avery and Morgan.
     check:
       any_of:
         - { principal_note: present }
         - { called: email-send, agent: any, contains: { to: principal } }
         - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: mentions_rsvp_deadline
+    weight: important
+    layer: decision
+    description: >
+      The message to Avery gives the RSVP deadline ({{day:next-saturday+21}}, or the same day
+      in other words), not only the wedding date.
   - id: rsvp_left_to_avery
     weight: important
     layer: decision
@@ -105,9 +112,10 @@ expected_behaviors:
     layer: voice
     description: >
       The note to Avery is short and warm about the news (Josh is getting married), gives
-      the date and the RSVP ask, mentions Morgan, and offers a personal draft or a calendar
+      the date and the RSVP deadline, mentions Morgan, and offers a personal draft or a calendar
       hold rather than taking the decision.
 failure_modes:
   - Replies to Josh as Avery's assistant, accepting or declining
   - Never tells Avery
+  - Leaves out the RSVP deadline
   - Sends a reply from Avery's mailbox without Avery asking

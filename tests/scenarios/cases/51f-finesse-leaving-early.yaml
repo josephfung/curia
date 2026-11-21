@@ -1,7 +1,10 @@
 # Finesse 51f (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery has to leave the
 # board chair's one-on-one half an hour early. Curia keeps the meeting and gives Paula an
-# early, apologetic heads-up about the hard stop, offering a follow-up slot if they need more
-# time. Rescheduling the whole meeting, or saying nothing until the day, is the failure.
+# early, apologetic heads-up about the hard stop, asks whether Catherine is happy with 30
+# minutes or would rather find another time, and offers a follow-up slot if they need more.
+# Once Paula knows, it updates the invite to end at 2:30. Rescheduling the whole meeting,
+# shortening the invite without a word to Paula, or saying nothing until the day, is the
+# failure. Telling Avery: the inbound is Avery's, so nothing is added for it.
 # Information level 3: as in 51c, only Curia's notes (memory) say Catherine's calendar runs
 # through Paula.
 name: finesse 51f leaves the chair's meeting early
@@ -11,7 +14,10 @@ description: >
   board, on Thursday from 2 to 3. Curia's notes say Catherine's calendar runs through her
   executive assistant, Paula Greene, and that she is hard to schedule. Curia should keep the
   meeting and give Paula an early heads-up that Avery has a hard stop at 2:30, with an
-  apology, offering to find a follow-up slot if they need more time.
+  apology, asking whether Catherine is happy with 30 minutes or would rather find another
+  time, and offering a follow-up slot if they need more time. Once Paula has been told,
+  Curia updates the invite to end at 2:30. Shortening the invite before, or without, telling
+  Paula is a failure.
 tags: [finesse, finesse-51, calendar]
 delegation: real
 release_gate: false
@@ -108,14 +114,38 @@ expected_behaviors:
       not_called: [email-send]
       agent: any
       contains: { to: "{{contact:catherine}}" }
+  - id: asks_if_30_minutes_suits
+    weight: important
+    layer: decision
+    description: >
+      The message to Paula asks whether Catherine is happy with 30 minutes or would rather
+      find another time, rather than presenting the shorter meeting as settled.
+  - id: shortens_invite
+    weight: important
+    layer: decision
+    description: Curia updates the one-on-one's invite to end at 2:30.
+    check:
+      called: calendar-update-event
+      agent: any
+      with: { eventId: evt-51f-chair }
+  - id: no_shortening_before_paula
+    weight: critical
+    layer: decision
+    description: >
+      If the invite is shortened (a calendar update to the one-on-one), the message to Paula
+      comes first: the judge reads the order of tool calls, and a calendar update to the
+      meeting before the email to Paula, or with no email to Paula at all, is a miss. Not
+      touching the invite passes this behavior.
   - id: paula_note_voice
     weight: critical
     layer: voice
     description: >
-      The message to Paula is short and apologetic: Avery has a hard stop at 2:30, sorry for
-      the change, and an offer to find a follow-up slot if Catherine needs more time. No long
-      explanation.
+      The message to Paula is short, apologetic and early: Avery has a hard stop at 2:30,
+      sorry for the change, would Catherine be happy with 30 minutes or rather find another
+      time, and an offer of a follow-up slot if she needs more. No long explanation.
 failure_modes:
   - Reschedules the whole meeting
+  - Shortens the calendar invite without a word to Paula, or before telling her
+  - Presents the 30 minutes as settled without asking whether it suits Catherine
   - Says nothing until the day
   - Writes to Catherine directly instead of Paula

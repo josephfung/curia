@@ -1,17 +1,22 @@
 # Finesse 59d (#2556, docs/wip/2026-11-10-finesse-casebook.md): a casual invitation from a
-# friend. Josh writes "beers friday?". A personal invitation can go either way: Curia may ask
-# Avery, or answer casually from the calendar (or draft a reply for Avery). Whatever it sends
-# must sound like a friend's reply. Information level 5: Josh's contact record has only his
-# name; that he's a friend shows only in earlier threads with Avery, which are all banter.
+# friend. Josh writes "beers friday?". Being free doesn't mean Avery wants plans, so Curia
+# asks Avery (mentioning Friday evening is free) or drafts Avery a reply; it never accepts for
+# Avery, and nothing goes to Josh from Alex (not even a stiff "let me check with Avery"). The
+# ask or the draft is how Avery hears. A draft must sound like Avery talking to a friend.
+# Information level 5: Josh's contact record has only his name; that he's a friend shows only
+# in earlier threads with Avery, which are all banter.
 #
 # As in 59a, Josh writes to Avery with Curia copied, so Curia sees it on a live turn.
 name: finesse 59d casual invite from friend
 description: >
   Josh Tanaka emails Avery (Curia copied): "beers friday?" His contact record has only his
   name. Avery's earlier threads with him are all banter about pickup basketball and his
-  startup. Friday evening is free. Curia may ask Avery, answer casually from the calendar, or
-  draft a reply for Avery. Any reply must sound like a friend's: short and casual. Formality is
-  the miss.
+  startup. Friday evening is free, but being free doesn't mean Avery wants plans. Curia should
+  ask Avery, briefly and mentioning that Friday evening is free, or draft Avery a reply in
+  Avery's mailbox; nothing goes to Josh from Curia (Alex) until Avery has answered. Accepting
+  on Avery's behalf because the calendar is free is a miss, as is a stiff "let me check with
+  Avery and come back to you" sent to Josh. A draft must sound like Avery talking to a friend:
+  short and casual. Formality is a miss.
 tags: [finesse, finesse-59, invitations, personal]
 delegation: real
 release_gate: false
@@ -85,18 +90,55 @@ expected_behaviors:
     weight: critical
     layer: decision
     description: >
-      Curia does something with the invitation now: asks Avery, answers Josh from the
-      calendar, or drafts a reply for Avery. Any of these is right.
+      Curia does something with the invitation now: asks Avery, or drafts a reply for Avery in
+      Avery's mailbox. Either is right.
     check:
       any_of:
-        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-59d-josh } }
-        - { called: email-send, agent: any, contains: { to: "{{contact:josh}}" } }
         - { called: ceo-inbox-draft-reply, agent: any }
         - { called: ceo-inbox-draft-compose, agent: any, contains: { to: "{{contact:josh}}" } }
         - { principal_note: present }
+        - { called: report-to-principal, agent: any }
         - { called: email-send, agent: any, contains: { to: principal } }
         - { called: signal-send, agent: any, contains: { recipient: principal } }
-        - { reply: not_no_reply }
+  - id: does_not_accept_for_avery
+    weight: critical
+    layer: decision
+    description: >
+      Curia does not accept on Avery's behalf because the calendar is free: no yes goes to
+      Josh, and no plan is booked, before Avery has answered. A draft yes left for Avery to send
+      is fine.
+  - id: no_alex_reply_on_thread
+    weight: critical
+    layer: decision
+    description: >
+      Nothing goes to Josh on his thread from Curia's own address (Alex): no acceptance, and no
+      stiff "let me check with Avery".
+    check:
+      not_called: [email-reply]
+      agent: any
+      with: { reply_to_message_id: scenario-msg-59d-josh }
+  - id: no_alex_email_to_josh
+    weight: critical
+    layer: decision
+    description: Curia does not email Josh from its own address (Alex).
+    check:
+      not_called: [email-send]
+      agent: any
+      contains: { to: "{{contact:josh}}" }
+  - id: no_turn_reply_to_josh
+    weight: important
+    layer: decision
+    description: >
+      Curia's own reply on the thread (which would reach Josh from Alex) is empty: it handles
+      this by asking Avery or leaving Avery a draft.
+    check:
+      reply: no_reply
+  - id: mentions_friday_free
+    weight: important
+    layer: decision
+    description: >
+      If Curia asks Avery, it says Friday evening is free, so Avery can answer in one word.
+      Leaving Avery a draft without asking also passes.
   - id: treats_as_friend
     weight: important
     layer: decision
@@ -121,23 +163,26 @@ expected_behaviors:
     weight: critical
     layer: voice
     description: >
-      Any message to Josh fits who is writing. From Curia (signed Alex), it is warm and easy,
-      as an assistant who knows Josh is a friend ("Hi Josh, Friday evening's free for Avery.
-      6 at the usual spot?"), not borrowing Avery's voice ("Avery's in!"). As a draft for
-      Avery, it is Avery's own casual voice ("I'm in! 6ish at the usual?"). No formality
-      ("Thank you for your invitation") and no stiff "let me check with Avery" when the
-      calendar answers it. Writing nothing to Josh while Curia asks Avery is acceptable, and
-      then this passes.
+      A draft reply to Josh is in Avery's own casual voice, as between friends ("I'm in! 6ish
+      at the usual?"). No formality ("Thank you for your invitation"), nothing in an
+      assistant's voice. Writing nothing to Josh while Curia asks Avery is acceptable, and then
+      this passes.
+  - id: short_ask_to_avery
+    weight: important
+    layer: voice
+    description: >
+      Any message to Avery about it is short and plain, like "Josh asked about beers Friday.
+      You're free from 6. Want me to leave you a reply?", not a formal brief on an invitation
+      from a friend.
 contrast:
   group: finesse-59-casual-invite
   recipient: A friend of the principal.
   message:
-    - reply
-    - { tool: email-reply, arg: body }
-    - { tool: email-send, arg: body, with: { to: "{{contact:josh}}" } }
     - { tool: ceo-inbox-draft-reply, arg: body }
     - { tool: ceo-inbox-draft-compose, arg: body }
 failure_modes:
+  - Accepts on Avery's behalf because the calendar is free
+  - Writes to Josh from Curia (Alex), including a stiff "let me check with Avery and come back to you"
   - A formal reply to a friend
   - Treats Josh as a business contact or an unknown sender
   - Declines on Avery's behalf without asking

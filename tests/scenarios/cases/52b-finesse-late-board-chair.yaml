@@ -1,9 +1,14 @@
 # Finesse 52b (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery is running about ten
 # minutes behind, and the next meeting, in five minutes, is a video one-on-one with the
-# board chair. Curia texts Catherine now, before the start, with an apology and an offer to
-# keep the original end time or run over. Information level 3: Catherine's title is on her
-# contact record; only Curia's notes (memory) say she has texted Avery before and prefers a
-# text for day-of changes, and that her calendar otherwise runs through Paula.
+# board chair, and Avery has another meeting straight after it. Curia texts Catherine now,
+# before the start, with an apology. Running over only works if Avery's calendar allows it,
+# and here it doesn't, so Curia offers to keep the original end time or to find a follow-up
+# slot; offering to run over into Avery's next meeting is the new wrong call (2026-11-21
+# revision). Information level 3: Catherine's title is on her contact record; only Curia's
+# notes (memory) say she has texted Avery before and prefers a text for day-of changes, and
+# that her calendar otherwise runs through Paula. Then Catherine texts back to keep the end
+# time, and Curia tells Avery the meeting is now shorter (the casebook's "Closing the loop":
+# a reply that changes something Avery needs to know).
 #
 # Catherine is seeded with her mobile number (the channel under test). Her email is on the
 # invite, with her name, so the event still points at her.
@@ -13,10 +18,15 @@ description: >
   in five minutes, is a 30-minute video one-on-one with Catherine Whitfield, Chair of
   Halcyon's board. Curia's notes say Catherine's calendar runs through her executive
   assistant, Paula Greene, and that Catherine has texted Avery before and prefers a text for
-  day-of changes. Curia should text Catherine now, before the start, with an apology, and
-  offer to keep the original end time or run over, whichever suits her: "Catherine, Avery is
-  running about ten minutes late and is very sorry. Happy to keep to the original end time
-  or run over, whichever suits you."
+  day-of changes. Avery's calendar has another meeting straight after the one-on-one, so the
+  meeting cannot run over. Curia should text Catherine now, before the start, with an
+  apology, and offer to keep to the original end time, or to find a follow-up slot if she
+  needs more time: "Catherine, Avery is running about ten minutes late and is very sorry.
+  Happy to keep to the original end time, or to find a follow-up slot if you'd like more
+  time." Telling her after the start, emailing her, a breezy tone, or offering to run over
+  into Avery's next meeting are the failures. Catherine then texts back that she'd like to
+  keep the end time (a message of its own, after Curia's first turn): Curia tells Avery the
+  one-on-one is now about 20 minutes, since that changes Avery's meeting.
 tags: [finesse, finesse-52]
 delegation: real
 release_gate: false
@@ -40,6 +50,12 @@ seed:
 inbound:
   from: principal
   content: I'm running about ten minutes behind.
+  # Catherine's answer, as a turn of its own (#2556: closing the loop). It changes Avery's
+  # meeting (about 20 minutes now), so Avery should hear it.
+  then:
+    from: catherine
+    channel: sms
+    content: No problem, let's keep the end time.
 tool_stubs:
   # Curia's notes: the only place the text preference is recorded (information level 3).
   memory-query:
@@ -78,10 +94,12 @@ tool_stubs:
     - match: {}
       return:
         displayTimezone: "{{timezone}}"
-        count: 3
+        count: 4
         events:
           - { id: evt-52b-prev, title: "Investor call: pipeline review", location: Video call, startTime: "{{at:now-55m}}", endTime: "{{at:now+5m}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
           - { id: evt-52b-chair, title: "Avery / Catherine 1:1", location: Video call, startTime: "{{at:now+5m}}", endTime: "{{at:now+35m}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: catherine.whitfield@whitfield.example.test, name: Catherine Whitfield }] }
+          # Straight after the one-on-one: the meeting cannot run over (2026-11-21 revision).
+          - { id: evt-52b-next, title: "Hiring plan review", location: Room 4B, startTime: "{{at:now+35m}}", endTime: "{{at:now+65m}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: fatima.osei@halcyon.example.test }] }
           - { id: evt-52b-later, title: "Focus: board prep", location: null, startTime: "{{at:now+3h}}", endTime: "{{at:now+4h}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
 expected_behaviors:
   - id: texts_catherine
@@ -116,13 +134,41 @@ expected_behaviors:
       not_called: [calendar-update-event, calendar-delete-event]
       agent: any
       with: { eventId: evt-52b-chair }
+  - id: no_run_over_offer
+    weight: important
+    layer: decision
+    description: >
+      Curia does not offer to run over: Avery has another meeting straight after the
+      one-on-one. Offering to keep to the original end time, or to find a follow-up slot if
+      Catherine needs more time, is right. An offer to extend past the scheduled end, or to
+      run over "whichever suits you", is a miss.
+  - id: tells_avery_meeting_shorter
+    weight: important
+    layer: decision
+    description: >
+      After Catherine's reply (the next message), Avery hears that she wants to keep the end
+      time, so the one-on-one is now about 20 minutes (a note, a message or a report).
+    check:
+      any_of:
+        - { principal_note: present }
+        - { called: report-to-principal, agent: any }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: avery_update_says_what_changed
+    weight: important
+    layer: voice
+    description: >
+      What Avery hears after Catherine's reply is one or two lines: Catherine is keeping the
+      end time, so Avery has about 20 minutes with her. No question to Avery, no recap of the
+      exchange.
   - id: catherine_text_voice
     weight: critical
     layer: voice
     description: >
       The text is short and properly apologetic: Avery is running about ten minutes late and
-      is sorry, and Catherine can keep the original end time or run over, whichever suits
-      her. Not breezy or casual.
+      is very sorry, and Curia is happy to keep to the original end time, or to find a
+      follow-up slot if she'd like more time. It does not offer to run over. Not breezy or
+      casual.
 contrast:
   group: finesse-52-running-late
   recipient: The chair of the company's board.
@@ -134,4 +180,6 @@ failure_modes:
   - Tells her after the meeting has started
   - Emails when she prefers a text
   - A breezy tone
+  - Offers to run over into Avery's next meeting
   - No offer on the end time
+  - After Catherine's reply, Avery is not told the meeting is now shorter

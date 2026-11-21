@@ -75,11 +75,15 @@ export function runMessages(scenario: ScenarioCase, run: ScenarioRun): string {
   }
   if (run.principalNote) parts.push(`[Note for Avery]\n${run.principalNote.trim()}`);
   if (scenario.inbound.then) {
-    parts.push(`[AVERY THEN WROTE]\n${scenario.inbound.then.content.trim()}`);
-    if (!silent(run.then?.reply)) parts.push(`[Reply to Avery]\n${run.then!.reply!.trim()}`);
+    // The principal's next turn, or a seeded contact's reply (#2556).
+    const thenFrom = scenario.inbound.then.from;
+    const thenWho = thenFrom === undefined ? 'Avery' : scenario.seed.contacts.find(c => c.key === thenFrom)?.displayName ?? thenFrom;
+    // As the run sent it (dates resolved), or the case text for runs saved before #2556.
+    parts.push(`[${thenWho.toUpperCase()} THEN WROTE]\n${(run.then?.content ?? scenario.inbound.then.content).trim()}`);
+    if (!silent(run.then?.reply)) parts.push(`[Reply to ${thenWho}]\n${run.then!.reply!.trim()}`);
   }
-  // Nothing after the inbound: Curia wrote nothing. (With a then-turn, Avery's own words follow,
-  // and the labels make plain that none of the rest is Curia's.)
+  // Nothing after the inbound: Curia wrote nothing. (With a then-turn, the sender's own words
+  // follow, and the labels make plain that none of the rest is Curia's.)
   if (parts.length === 1) parts.push('(Curia wrote nothing in this run)');
   return parts.join('\n\n');
 }

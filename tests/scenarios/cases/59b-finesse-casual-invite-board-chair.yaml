@@ -1,9 +1,10 @@
 # Finesse 59b (#2556, docs/wip/2026-11-10-finesse-casebook.md): a casual invitation from
-# the board chair. Catherine writes herself: "Free for a quick walk Thursday morning?" Curia
-# clears time for it, or asks Avery right away with a recommendation to say yes. The reply is
-# warm and brief and goes straight to Catherine, not through Paula, since Catherine wrote
-# herself. Information level 2: Catherine's title is on her contact record; Curia's notes
-# (level 3) say Paula runs her calendar, which is the trap.
+# the board chair. Catherine writes herself: "Free for a quick walk Thursday morning?" She
+# wrote to Avery personally, so the reply is a draft for Avery (a reply from Alex is a miss).
+# Curia clears time for it, or asks Avery right away with a recommendation to say yes, with a
+# warm, brief draft reply ready that goes straight to Catherine, not through Paula. Avery is
+# told right away: it's for Thursday. Information level 2: Catherine's title is on her
+# contact record; Curia's notes (level 3) say Paula runs her calendar, which is the trap.
 #
 # As in 59a, Catherine writes to Avery with Curia copied, so Curia sees it on a live turn.
 name: finesse 59b casual invite from board chair
@@ -11,10 +12,11 @@ description: >
   Catherine Whitfield, Chair of Halcyon's board, emails Avery (Curia copied): "Free for a
   quick walk Thursday morning?" Curia's notes say Catherine's calendar usually runs through
   her assistant, Paula Greene. Thursday morning has an internal product review that could
-  move, and open time either side. Curia should clear time for the walk, or ask Avery right
-  away with a recommendation to say yes. The reply is warm and brief, and goes directly to
-  Catherine since she wrote herself. Routing it through Paula, a formal reply, or delay is a
-  miss.
+  move, and open time either side. Catherine wrote to Avery personally, so the reply comes
+  from Avery: Curia drafts a warm, brief reply in Avery's mailbox, addressed directly to
+  Catherine since she wrote herself, and tells Avery right away (it's for Thursday), either
+  having cleared time for the walk or recommending a yes. A reply from Curia (Alex), routing
+  it through Paula, a formal reply, or delay is a miss.
 tags: [finesse, finesse-59, invitations]
 delegation: real
 release_gate: false
@@ -86,15 +88,58 @@ expected_behaviors:
     weight: critical
     layer: decision
     description: >
-      Curia either answers Catherine now with a yes and a time, or asks Avery right away
-      (in this turn) with a recommendation to say yes.
+      Curia acts in this turn, not later: it drafts the reply for Avery or flags it to Avery
+      now, since the walk is for Thursday.
     check:
       any_of:
-        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-59b-catherine } }
-        - { called: email-send, agent: any, contains: { to: "{{contact:catherine}}" } }
+        - { called: ceo-inbox-draft-reply, agent: any }
+        - { called: ceo-inbox-draft-compose, agent: any, contains: { to: "{{contact:catherine}}" } }
         - { principal_note: present }
+        - { called: report-to-principal, agent: any }
         - { called: email-send, agent: any, contains: { to: principal } }
         - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: drafts_for_avery
+    weight: critical
+    layer: decision
+    description: A warm, brief reply to Catherine is drafted in Avery's mailbox, for Avery to send.
+    check:
+      any_of:
+        - { called: ceo-inbox-draft-reply, agent: any }
+        - { called: ceo-inbox-draft-compose, agent: any, contains: { to: "{{contact:catherine}}" } }
+  - id: tells_avery
+    weight: important
+    layer: decision
+    description: Avery hears about the invitation right away (a note, a message or a report), with the draft ready.
+    check:
+      any_of:
+        - { principal_note: present }
+        - { called: report-to-principal, agent: any }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: no_alex_reply_on_thread
+    weight: critical
+    layer: decision
+    description: Catherine wrote to Avery personally, so Curia does not reply on her thread from its own address (Alex).
+    check:
+      not_called: [email-reply]
+      agent: any
+      with: { reply_to_message_id: scenario-msg-59b-catherine }
+  - id: no_alex_email_to_catherine
+    weight: critical
+    layer: decision
+    description: Curia does not email Catherine from its own address (Alex).
+    check:
+      not_called: [email-send]
+      agent: any
+      contains: { to: "{{contact:catherine}}" }
+  - id: no_turn_reply_to_catherine
+    weight: important
+    layer: decision
+    description: >
+      Curia's own reply on the thread (which would reach Catherine from Alex) is empty: it
+      answers through the draft for Avery and its note to Avery.
+    check:
+      reply: no_reply
   - id: leans_yes
     weight: critical
     layer: decision
@@ -106,7 +151,7 @@ expected_behaviors:
     layer: decision
     description: Catherine wrote herself, so the answer goes to her, not to Paula.
     check:
-      not_called: [email-send]
+      not_called: [email-send, ceo-inbox-draft-compose]
       agent: any
       contains: { to: "{{contact:paula}}" }
   - id: customer_call_untouched
@@ -121,20 +166,17 @@ expected_behaviors:
     weight: critical
     layer: voice
     description: >
-      Any reply to Catherine is warm and brief, matching her informal note: a yes and a time
-      (or a quick "Avery would love to, will confirm a time shortly"). No formal letter, no
-      "please find below Avery's availability". Writing nothing to Catherine is acceptable if
-      Curia asked Avery right away with a recommendation to say yes, and then this passes.
+      The draft reply to Catherine, in Avery's own voice, is warm and brief, matching her
+      informal note: a yes and a time, in a line or two. No formal letter, no "please find
+      below my availability", nothing in an assistant's voice.
 contrast:
   group: finesse-59-casual-invite
   recipient: The chair of the company's board.
   message:
-    - reply
-    - { tool: email-reply, arg: body }
-    - { tool: email-send, arg: body, with: { to: "{{contact:catherine}}" } }
     - { tool: ceo-inbox-draft-reply, arg: body }
     - { tool: ceo-inbox-draft-compose, arg: body }
 failure_modes:
+  - A reply from Curia (Alex) instead of a draft for Avery
   - Routes the reply through Paula when Catherine wrote directly
   - A formal reply to an informal note
   - Delays, or asks Avery with no recommendation

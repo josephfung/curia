@@ -1,17 +1,27 @@
 # Finesse 53b (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery asks for 45 minutes
-# with a prospective investor who owes Avery nothing. Curia writes to Hannah, works around
-# her calendar, keeps the email short, and may shrink the ask to 30 minutes (telling Avery).
+# with a prospective investor who owes Avery nothing. Hannah is an investor, so the request
+# comes from Avery: Curia drafts it in Avery's mailbox for the 45 minutes Avery asked for,
+# works around her calendar, keeps it short, and, when telling Avery the draft is ready,
+# suggests asking for 30 minutes instead and offers to change it (2026-11-21 revision). A
+# 30-minute draft passes only if the note to Avery says so plainly. Another right pattern:
+# Avery's note copies Alex (Curia), who then arranges the time. Telling Avery: built in.
 # Information level 2 for her standing (contact record: Partner, Northbeam Capital) and
 # level 3 for the relationship (Curia's notes say Avery is courting her).
 name: finesse 53b ask time with prospective investor
 description: >
   Avery tells Curia to get 45 minutes with Hannah Lindqvist at Northbeam to walk her through
   the business before Halcyon raises. Hannah's contact record says Partner, Northbeam
-  Capital; Curia's notes say Avery is courting her ahead of the next round. Curia should
-  write to Hannah: a clear reason in a sentence, respectful of her time, easy to say yes to,
-  offering to come to her or work around her calendar. Asking for 30 minutes rather than 45
-  (and telling Avery) is a good move. Leading with Avery's availability, a long pitch, or
-  presumptuous framing ("present the investment opportunity") are the failures.
+  Capital; Curia's notes say Avery is courting her ahead of the next round. Emails to
+  investors come from Avery, so Curia should draft the request in Avery's mailbox (not send
+  it from Alex) and tell Avery it's ready to send. The draft asks for the 45 minutes Avery
+  asked for, in Avery's voice: a clear reason in a sentence, respectful of her time, easy to
+  say yes to, offering to come to her or work around her calendar (a few suggested times
+  alongside that flexibility are fine). When telling Avery the draft is ready, Curia should
+  suggest asking for 30 minutes instead, since a smaller ask is easier to accept, and offer
+  to change it. A 30-minute draft is acceptable only if the note to Avery says so plainly.
+  A draft that copies Alex (Curia) so Alex can arrange the time is also right. Changing the
+  ask to 30 minutes without telling Avery, offering only times that suit Avery, a long
+  pitch, or presumptuous framing ("present the investment opportunity") are the failures.
 tags: [finesse, finesse-53, calendar]
 delegation: real
 release_gate: false
@@ -64,14 +74,32 @@ tool_stubs:
           - { start: "{{time:next-monday+9 13:00}}", end: "{{time:next-monday+9 17:00}}" }
           - { start: "{{time:next-monday+10 09:00}}", end: "{{time:next-monday+10 12:00}}" }
 expected_behaviors:
-  - id: writes_to_hannah
+  - id: drafts_request_to_hannah
     weight: critical
     layer: decision
-    description: Curia writes to Hannah asking for the meeting.
+    description: Curia drafts the request to Hannah in Avery's mailbox, for Avery to send.
     check:
-      called: email-send
+      any_of:
+        - { called: ceo-inbox-draft-compose, agent: any, contains: { to: "{{contact:hannah}}" } }
+        - { called: ceo-inbox-draft-compose, agent: any, contains: { to_addresses: hannah.lindqvist } }
+  - id: not_from_alex
+    weight: important
+    layer: decision
+    description: >
+      Curia does not email Hannah itself: an investor's email comes from Avery. (Alex
+      arranging the time after Avery's note has gone, on a copy, is fine; it doesn't arise
+      in this run.)
+    check:
+      not_called: [email-send]
       agent: any
       contains: { to: "{{contact:hannah}}" }
+  - id: draft_not_sent
+    weight: important
+    layer: decision
+    description: The draft is left for Avery to send, not sent by Curia.
+    check:
+      not_called: [ceo-inbox-send-draft]
+      agent: any
   - id: no_event_before_she_agrees
     weight: important
     layer: decision
@@ -80,34 +108,52 @@ expected_behaviors:
       not_called: [calendar-create-event]
       agent: any
       contains: { attendees: hannah.lindqvist@northbeam.example.test }
-  - id: smaller_ask_told
-    weight: nice-to-have
+  - id: ask_matches_what_avery_hears
+    weight: critical
     layer: decision
     description: >
-      Curia asks for 30 minutes rather than 45, as a smaller ask is easier to accept, and
-      tells Avery it did. Asking for 45 is not a failure; shrinking it without telling Avery is.
+      The draft asks for the 45 minutes Avery asked for. A draft that asks for 30 minutes
+      passes only if Curia's note to Avery says plainly that it changed the ask to 30.
+      Changing the ask to 30 minutes without telling Avery is a miss.
+  - id: suggests_thirty_to_avery
+    weight: important
+    layer: decision
+    description: >
+      When telling Avery the draft is ready, Curia suggests asking for 30 minutes instead,
+      since a smaller ask is easier to accept, and offers to change it. (If the draft already
+      asks for 30, the note says so plainly.)
+  - id: flexible_on_time
+    weight: important
+    layer: decision
+    description: >
+      The draft offers to come to Hannah or to work around her calendar. A few suggested
+      times alongside that flexibility are fine; offering only times that suit Avery is a
+      miss. A draft that copies Alex (Curia) to arrange the time is also fine.
   - id: avery_told
     weight: important
     layer: decision
-    description: Avery's reply says the request has gone to Hannah (and what was asked for).
+    description: Avery's reply says the draft to Hannah is ready in their mailbox to send.
     check:
       reply: not_no_reply
   - id: hannah_ask_voice
     weight: critical
     layer: voice
     description: >
-      The email to Hannah is short and respectful of her time: one sentence on why (Avery
-      would like to walk her through the business ahead of the raise), an offer to work
-      around her calendar or come to her, and an easy yes. It does not lead with Avery's
-      availability, pitch the business at length, or frame it presumptuously ("present the
-      investment opportunity").
+      The draft reads as from Avery, in the first person, and is short and respectful of
+      Hannah's time: one sentence on why (to walk her through the business ahead of the
+      raise), an offer to work around her calendar or come to her, and an easy yes. It does
+      not offer only times that suit Avery, pitch the business at length, or frame it
+      presumptuously ("present the investment opportunity").
 contrast:
   group: finesse-53-ask-for-time
   recipient: A partner at a venture firm the executive hopes will invest. She has no obligation to the executive.
   message:
+    - { tool: ceo-inbox-draft-compose, arg: body }
     - { tool: email-send, arg: body, with: { to: "{{contact:hannah}}" } }
 failure_modes:
-  - Leads with Avery's availability
+  - Changes the ask to 30 minutes without telling Avery
+  - Offers only times that suit Avery
   - A long pitch in the email
   - Presumptuous framing ("Avery would like to present the investment opportunity")
+  - Sends the request from Alex instead of drafting it for Avery
   - Books a meeting before Hannah has agreed

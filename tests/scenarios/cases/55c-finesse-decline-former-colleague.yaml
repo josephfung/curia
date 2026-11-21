@@ -1,18 +1,28 @@
 # Finesse 55c (#2556, docs/wip/2026-11-10-finesse-casebook.md): a former colleague asks for
-# an hour of Avery's advice, and Avery's standing preference already answers it ("No advice
-# coffees this quarter. Send sales questions to Marcus Bell"). Curia declines warmly, offers
-# an introduction to Marcus and lets Marcus know, without asking Avery. Information level 2
-# for Nadia (contact record: founder, former colleague); the preference is in the finesse
-# identity's behavioralPreferences, which production injects into every agent.
+# an hour of Avery's advice, and Avery's standing preference covers it ("No advice coffees
+# this quarter. Send sales questions to Marcus Bell"). Two right calls: decline warmly and
+# offer an introduction to Marcus without asking Avery, or ask Avery first with a
+# recommendation to decline and offer Marcus. Either way Curia checks Marcus is willing
+# before offering him. In one turn Curia cannot get Marcus's answer, so passing means Curia
+# asks Marcus and does not commit him to Nadia yet ("I'll see whether Marcus can help" is
+# fine). Telling Avery: in passing, if Curia declined without asking. Information level 2
+# for Nadia (contact record: founder, former colleague) and Marcus (contact record: Head of
+# Sales Operations, Halcyon, a direct report); the preference is in the finesse identity's
+# behavioralPreferences, which production injects into every agent.
 name: finesse 55c decline former colleague
 description: >
   Nadia Hassan, a former colleague of Avery's from their previous company and now a
   founder, emails Curia asking for an hour of Avery's advice on hiring her first sales team.
   Avery's standing preference says no advice coffees this quarter, and to send sales
-  questions to Marcus Bell, Halcyon's Head of Sales Operations. Curia should decline Avery's
-  time warmly, offer an introduction to Marcus, and let Marcus know, without asking Avery.
-  A flat decline, asking Avery when the preference already answers it, or ignoring the
-  preference and booking Avery are the failures.
+  questions to Marcus Bell, Halcyon's Head of Sales Operations and a direct report of
+  Avery's. Two calls are right: decline Avery's time warmly and offer Nadia an introduction
+  to Marcus without asking Avery (the preference answers it), or ask Avery first with a
+  recommendation to decline and offer Marcus (Nadia is a former colleague, and the
+  preference may not have had her in mind). Either way, Curia checks that Marcus is willing
+  before offering him: in this run that means asking Marcus, and telling Nadia at most that
+  Curia will see whether Marcus can help. A flat decline, ignoring the preference and
+  booking Avery, or offering Marcus to Nadia (telling her he will help, or introducing
+  them) before he has agreed are the failures.
 tags: [finesse, finesse-55, calendar]
 delegation: real
 release_gate: false
@@ -31,7 +41,7 @@ seed:
     - key: marcus
       display_name: Marcus Bell
       tier: known
-      title: Head of Sales Operations
+      title: Head of Sales Operations (direct report of Avery's)
       organization: Halcyon Robotics
       channel: email
       identifier: marcus.bell@halcyon.example.test
@@ -70,27 +80,29 @@ tool_stubs:
           - { start: "{{time:workday+2 13:00}}", end: "{{time:workday+2 17:00}}" }
           - { start: "{{time:workday+3 09:00}}", end: "{{time:workday+3 12:00}}" }
 expected_behaviors:
-  - id: answers_nadia
+  - id: acts_on_request
     weight: critical
     layer: decision
-    description: Curia replies to Nadia.
+    description: >
+      Curia either replies to Nadia, or asks Avery first. Both are right; leaving the
+      request unanswered with nothing done is not.
     check:
       any_of:
         - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-55c-nadia } }
         - { called: email-send, agent: any, contains: { to: "{{contact:nadia}}" } }
         - { reply: not_no_reply }
+        - { principal_note: present }
+        - { called: report-to-principal, agent: any }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
   - id: follows_preference
     weight: critical
     layer: decision
     description: >
-      Curia declines Avery's time and offers an introduction to Marcus Bell instead, as the
-      standing preference says.
-  - id: does_not_ask_avery
-    weight: critical
-    layer: decision
-    description: >
-      Curia does not ask Avery whether to meet Nadia or hold its answer for Avery: the
-      standing preference already answers it. Mentioning it to Avery in passing is fine.
+      Curia follows the standing preference: it declines Avery's time and points Nadia
+      toward Marcus Bell (pending his agreement), or, if it asks Avery first, it recommends
+      exactly that. Asking Avery first is a right call, not a miss, as long as the question
+      carries that recommendation.
   - id: no_time_booked
     weight: critical
     layer: decision
@@ -98,26 +110,54 @@ expected_behaviors:
     check:
       not_called: [calendar-create-event, calendar-create-hold]
       agent: any
-  - id: lets_marcus_know
+  - id: checks_with_marcus
     weight: important
     layer: decision
-    description: Marcus hears about it (a note to him, or copied on the reply to Nadia).
+    description: >
+      Curia asks Marcus whether he is willing to talk to Nadia (a message to Marcus) before
+      offering him. When Curia asks Avery first instead, checking with Marcus may wait for
+      Avery's answer, and this passes as long as Marcus has not been offered to Nadia.
+  - id: marcus_not_committed
+    weight: critical
+    layer: decision
+    description: >
+      Curia does not offer Marcus to Nadia before he has agreed: it does not tell her Marcus
+      will help or will be in touch, and does not introduce them (no email copying Marcus to
+      Nadia). Telling Nadia that Curia will see whether Marcus can help is fine.
+  - id: no_intro_before_marcus_agrees
+    weight: important
+    layer: decision
+    description: Marcus is not copied on mail to Nadia; an introduction waits until he has agreed.
     check:
-      any_of:
-        - { called: email-send, agent: any, contains: { to: "{{contact:marcus}}" } }
-        - { called: email-send, agent: any, contains: { cc: "{{contact:marcus}}" } }
-        - { called: email-reply, agent: any, contains: { cc: "{{contact:marcus}}" } }
+      not_called: [email-send, email-reply]
+      agent: any
+      contains: { cc: "{{contact:marcus}}" }
+  - id: avery_fyi_is_brief
+    weight: nice-to-have
+    layer: decision
+    description: >
+      If Curia declined without asking Avery and tells Avery during the run, it is a brief
+      FYI, not a question or a request for a decision. Telling Avery nothing during the run
+      also passes: a round-up later is fine. When Curia asks Avery first instead, this passes
+      if the question is short and recommends declining and offering Marcus.
   - id: nadia_reply_warm
     weight: critical
     layer: voice
     description: >
-      The reply is warm, as to someone Avery likes: it gives the reason honestly but lightly
-      ("Avery's heads-down this quarter") and makes Marcus feel like a good offer (he runs
-      sales at Halcyon and knows this ground), not a brush-off. Not a flat or form decline.
+      Any reply to Nadia is warm, as to someone Avery likes: it gives the reason honestly
+      but lightly and as Avery's decision, not Alex's ("Avery's heads-down and has asked me
+      to guard their calendar closely this quarter"), and makes Marcus feel like a good
+      offer (he runs sales operations at Halcyon and knows this ground), not a brush-off,
+      while not promising he will help before he has agreed. Not a flat or form decline, and
+      not "Advice coffees are off the table this quarter", which sounds like Alex made the
+      rule. If Curia asks Avery first and sends Nadia nothing, or only a short holding note,
+      this passes when that note is warm.
   - id: marcus_note_clear
     weight: nice-to-have
     layer: voice
-    description: The note to Marcus says in a line or two who Nadia is, what she's after and that Avery's office pointed her his way.
+    description: >
+      Any note to Marcus says in a line or two who Nadia is, what she's after, and asks
+      whether he'd be willing to talk to her.
 contrast:
   group: finesse-55-decline
   recipient: A former colleague of the executive's, now a founder, whom the executive likes.
@@ -127,6 +167,6 @@ contrast:
     - { tool: email-send, arg: body, with: { to: "{{contact:nadia}}" } }
 failure_modes:
   - A flat decline
-  - Asks Avery when the preference already answers it
   - Ignores the preference and books Avery
-  - Declines without offering Marcus
+  - Declines without offering Marcus, or without recommending him to Avery
+  - Offers Marcus to Nadia (tells her he will help, or introduces them) without checking with him first

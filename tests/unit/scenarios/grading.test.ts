@@ -82,6 +82,21 @@ describe('runMessages', () => {
   });
 });
 
+describe('runMessages with a later turn', () => {
+  it("labels the later turn with its sender: Avery's, or a contact's reply (#2556)", () => {
+    const scenario = caseFile('finesse 52b late then', 'The board chair.');
+    const avery = { ...scenario, inbound: { ...scenario.inbound, then: { content: 'Keep it short.', channel: 'email' } } };
+    const fromAvery = runMessages(avery, run(0, { then: { reply: 'Will do.' } }));
+    expect(fromAvery).toContain('[AVERY THEN WROTE]\nKeep it short.');
+    expect(fromAvery).toContain('[Reply to Avery]\nWill do.');
+    const catherine = { ...scenario, inbound: { ...scenario.inbound, then: { content: "Let's keep the end time.", channel: 'email', from: 'them' } } };
+    const fromCatherine = runMessages(catherine, run(0, { then: { reply: 'Noted, thank you.' } }));
+    expect(fromCatherine).toContain("[CATHERINE WHITFIELD THEN WROTE]\nLet's keep the end time.");
+    expect(fromCatherine).toContain('[Reply to Catherine Whitfield]\nNoted, thank you.');
+    expect(fromCatherine).not.toContain('AVERY THEN WROTE');
+  });
+});
+
 describe('runMessages and the reply lock', () => {
   it("marks the turn's reply undelivered once Curia replied on the sender's thread, as production drops it", () => {
     const file = path.join(dir, 'beer.yaml');

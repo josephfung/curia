@@ -731,6 +731,18 @@ the results show whether Curia looks things up rather than only reacting when to
 5. Implied by an earlier thread: stub the principal's mail history (`ceo-inbox-search`,
    `ceo-inbox-read`).
 
+**A reply from the other side.** A case can script the other person answering what Curia sent them (#2556: the casebook's "Closing the loop"), as an `inbound.then` with `from` naming a seeded contact and `channel` their own. It arrives as that contact's mail or message, authenticated as a known correspondent's would be, in a conversation of its own filed under the run, like the principal's later turn (see **Sends through the gateway**). It is not a principal turn: it approves nothing, and `reply_to_approval` is refused. The judge and the grading sheet name its sender. Curia does not see the thread it sent on, only this message, so write the reply to stand on its own (say what it answers).
+
+```yaml
+inbound:
+  from: principal
+  content: I need to move my Thursday 2pm with Lina. Something came up.
+  then:
+    from: lina
+    channel: email
+    content: "Re: Thursday's design review: Tuesday at 10 works for us."
+```
+
 **Behavior layers.** Each behavior is marked `layer: decision` (act, act and inform, ask
 first, or do nothing; and whether Curia or the principal sends) or `layer: voice` (how the
 messages read). The loader refuses a finesse case with an unmarked behavior. Each case result

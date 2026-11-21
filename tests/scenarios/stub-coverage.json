@@ -1213,6 +1213,10 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-11-14T21:48:42.519Z"
     },
+    "finesse 51g excuse on request": {
+      "unstubbed": null,
+      "reason": "New in #2556 (EA review); not yet run (paid suite). The first run records coverage."
+    },
     "finesse 52a late to team stand-up": {
       "unstubbed": 0,
       "runs": 5,

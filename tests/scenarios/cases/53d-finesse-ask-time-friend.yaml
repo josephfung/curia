@@ -1,5 +1,7 @@
 # Finesse 53d (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery asks for lunch with a
-# friend. A casual note offering two or three days, not a formal request. Information level
+# friend. A casual note offering two or three days, not a formal request, from Alex or as a
+# draft for Avery with the voice to match. Telling Avery: in passing (or built in, for a
+# draft). Information level
 # 3: Josh's contact record says only former Halcyon engineer; Curia's notes say he and Avery
 # are friends who play pickup basketball. (The casebook gives no "what Curia knows" for 53d;
 # this follows 51e.)
@@ -8,7 +10,9 @@ description: >
   Avery tells Curia to set up lunch with Josh sometime in the next couple of weeks. Josh
   Tanaka was one of Halcyon's first engineers and left two years ago to start his own
   company; Curia's notes say he and Avery are friends who play pickup basketball. Curia
-  should send Josh a casual note offering two or three days. A formal request is the failure.
+  should write Josh a casual note offering two or three days: sent from Alex, or left as a
+  draft in Avery's mailbox for Avery to send, with the voice to match. A formal request is
+  the failure.
 tags: [finesse, finesse-53, calendar]
 delegation: real
 release_gate: false
@@ -62,9 +66,11 @@ expected_behaviors:
   - id: writes_to_josh
     weight: critical
     layer: decision
-    description: Curia writes to Josh proposing lunch.
+    description: Curia writes to Josh proposing lunch, or drafts the note in Avery's mailbox for Avery to send.
     check:
       any_of:
+        - { called: ceo-inbox-draft-compose, agent: any, contains: { to: "{{contact:josh}}" } }
+        - { called: ceo-inbox-draft-compose, agent: any, contains: { to_addresses: josh.tanaka } }
         - { called: email-send, agent: any, contains: { to: "{{contact:josh}}" } }
         - { called: signal-send, agent: any, contains: { recipient: "{{contact:josh}}" } }
         - { called: sms-send, agent: any, contains: { recipient: "{{contact:josh}}" } }
@@ -84,7 +90,7 @@ expected_behaviors:
     layer: voice
     description: >
       The note to Josh is short and casual, as to a friend ("Hey Josh, Avery's keen to grab
-      lunch..."). No formal request, no "Avery would like to request a meeting", no corporate
+      lunch...", or in Avery's own first person for a draft). No formal request, no "Avery would like to request a meeting", no corporate
       sign-off.
 contrast:
   group: finesse-53-ask-for-time
@@ -92,6 +98,7 @@ contrast:
   message:
     - { tool: email-send, arg: body, with: { to: "{{contact:josh}}" } }
     - { tool: signal-send, arg: message, with: { recipient: "{{contact:josh}}" } }
+    - { tool: ceo-inbox-draft-compose, arg: body }
 failure_modes:
   - A formal request
   - Corporate language

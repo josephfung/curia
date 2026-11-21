@@ -1,7 +1,10 @@
 # Finesse 50b (#2556, docs/wip/2026-11-10-finesse-casebook.md): the same sick note, but the
 # 2pm is a deep dive the board chair asked for, built around Tomás's topic. Curia asks Avery
 # first, with a recommendation, and leaves the calendar alone. Avery's scripted answer (the
-# `then:` turn) is "move it to next week": the rescheduling message is then scored on voice.
+# `then:` turn) is "move it to next week": Curia then writes to Paula (Catherine copied or
+# not; or to Catherine with Paula copied, as long as the times are arranged with Paula), with
+# times that suit Avery and allow for Tomás being back. Writing to Catherine without Paula is
+# the wrong call. Telling Avery is built in: Curia's first message is to Avery.
 # Information level 3: only Curia's notes (memory) say Catherine's calendar runs through
 # her assistant, Paula Greene.
 name: finesse 50b drops out of board deep dive
@@ -12,9 +15,13 @@ description: >
   Curia's notes say Catherine's calendar runs through her executive assistant, Paula Greene.
   Curia should ask Avery before changing anything, with a recommendation (move it to next
   week rather than Avery covering), and leave the calendar alone until Avery answers. Avery
-  then says to move it to next week, and Curia writes to Paula to rearrange it: apologetic,
-  owning it on Halcyon's side, aware Catherine asked for the session, the reason given
-  plainly, and times that suit Catherine.
+  then says to move it to next week, and Curia writes to Paula to rearrange it. Paula alone,
+  Paula with Catherine copied, or a note addressed to Catherine with Paula copied (the times
+  arranged with Paula) all pass; writing to Catherine without Paula fails. The note is
+  apologetic, owns it on Halcyon's side, knows Catherine asked for the session, gives the
+  reason plainly, and works around Catherine's calendar: it asks for times that suit her or
+  offers a wide range, and any times offered are free for Avery and fall after Tomás is
+  back.
 tags: [finesse, finesse-50, calendar]
 delegation: real
 release_gate: false
@@ -141,19 +148,27 @@ expected_behaviors:
   - id: through_paula
     weight: critical
     layer: decision
-    description: After Avery's answer, Curia writes to Paula (Catherine may be copied) to rearrange it.
+    description: >
+      After Avery's answer, Curia writes to Paula to rearrange it: to Paula (Catherine may be
+      copied), or to Catherine with Paula copied.
     check:
-      called: email-send
-      agent: any
-      contains: { to: "{{contact:paula}}" }
+      any_of:
+        - { called: email-send, agent: any, contains: { to: "{{contact:paula}}" } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:catherine}}", cc: "{{contact:paula}}" } }
   - id: not_to_catherine_alone
     weight: important
     layer: decision
-    description: Does not write to Catherine directly, without Paula, about rearranging her calendar.
-    check:
-      not_called: [email-send]
-      agent: any
-      contains: { to: "{{contact:catherine}}" }
+    description: >
+      Every message to Catherine about rearranging her calendar has Paula on it (in To or
+      copied), and the times are arranged with Paula. A note to Catherine without Paula is a
+      miss, even if Paula also gets one separately.
+  - id: times_fit_avery_and_tomas
+    weight: important
+    layer: decision
+    description: >
+      Any times offered to Catherine's side are free on Avery's calendar and fall next week,
+      allowing for Tomás being back from his illness. Asking Paula for times that suit
+      Catherine, without listing any, also passes.
   - id: reschedule_note_voice
     weight: critical
     layer: voice
@@ -176,9 +191,11 @@ contrast:
   recipient: The board chair's executive assistant, who manages the chair's calendar. The chair asked for this meeting.
   message:
     - { tool: email-send, arg: body, with: { to: "{{contact:paula}}" } }
+    - { tool: email-send, arg: body, with: { to: "{{contact:catherine}}" } }
 failure_modes:
   - Moves or cancels the deep dive before Avery answers
   - Asks Avery "what do you want to do?" with no recommendation
-  - Writes to Catherine directly instead of Paula
+  - Writes to Catherine alone, without Paula, when her assistant handles her calendar
+  - Offers times Avery isn't free, or before Tomás can be back
   - Offers only times that suit Avery, or leads with Halcyon's convenience
   - Over-explains Tomás's illness
