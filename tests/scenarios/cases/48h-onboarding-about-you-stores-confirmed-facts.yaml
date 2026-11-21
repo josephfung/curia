@@ -1,0 +1,170 @@
+# Case 48h (#2360): the "Tell me about yourself" topic, by chat. Rule: skills/onboarding/SKILL.md,
+# "Tell me about yourself": confirmed items and corrections go to memory with memory-store,
+# family and key people become contacts with contact-create, and each brief item's mark is
+# updated with doc-write. A dropped item (here a namesake's marathon) stays in the brief only.
+#
+# The brief's findings are in the topic body, as the status tool hands them over. memory-store
+# and contact-create are stubbed, so the case checks what Curia chose to write, not the KG.
+#
+# seed.onboarding gives the principal turn production's onboarding block and the
+# `onboarding` skill (src/onboarding/turn-context.ts); its topics match the status stub.
+name: onboarding about-you stores only what the principal confirmed
+description: >
+  The principal is in their first onboarding conversation with Curia, by chat. Curia shared
+  its homework: Avery runs Northwind Harbor Logistics, is based in Halifax, and ran a 2019
+  marathon in Ohio (flagged as a possible namesake). Avery answers: the company is right,
+  they moved to Toronto last year, the marathon isn't them, and the people who matter are
+  their wife Priya and their 12-year-old daughter Mara; they sail most weekends. Curia stores
+  the confirmed company, the corrected city and the sailing, adds Priya and Mara as contacts
+  with their relationship, updates the brief's marks, and never stores the marathon.
+tags: [onboarding]
+# New in #2360: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
+release_gate: false
+stub_sets: [human-channels, deferred-work]
+seed:
+  onboarding:
+    task: 6e0b0a2d-2360-4c00-8a00-000000000488
+    topics:
+      - { id: about-you, title: Tell me about yourself, session: first-conversation }
+      - { id: style, title: How I should sound, session: first-conversation }
+inbound:
+  from: principal
+  channel: web
+  content: >
+    Mostly right. Yes, I run Northwind Harbor Logistics. I moved to Toronto last year though,
+    not Halifax anymore. The marathon isn't me, I've never run one. The people who matter
+    most: my wife Priya and our daughter Mara, she's 12. Outside work I sail most weekends
+    from May to October.
+tool_stubs:
+  onboarding-progress:
+    - match: { op: status }
+      return:
+        taskId: 6e0b0a2d-2360-4c00-8a00-000000000488
+        sessions:
+          - id: first-conversation
+            title: First conversation
+            opened: true
+            open:
+              - { topicId: about-you, title: Tell me about yourself, needsMailbox: false,
+                  body: "Homework (all unconfirmed, see /meetings/onboarding/research-brief.md): 1. CEO of Northwind Harbor Logistics, a freight brokerage (company site). 2. Based in Halifax (2021 conference bio). 3. Finished the 2019 Columbus marathon (race results; may be a namesake). Ask what I got wrong, then the people who matter, life outside work, and what a good week looks like." }
+              - { topicId: style, title: How I should sound, needsMailbox: false,
+                  body: "Chatty or brief, dry or humour, warm or crisp." }
+            done:
+              - { topicId: hello, title: Hello }
+        mailboxConnected: true
+        greetingSent: true
+        setupFor: other
+        operatorName: Jordan Vale
+    - match: { op: topic_done }
+      return: { topicId: about-you, sessionId: first-conversation, outcome: done, onboardingComplete: false }
+  memory-store:
+    - match: {}
+      return: { stored: true, action: created, node_id: 3a4b5c6d-7e8f-4a1b-9c2d-48h000000001, sensitivity: internal }
+  # Matching is exact, so each family member's likely name forms get their own id: one shared
+  # id reads as a merged record, and Curia rightly stops to check it.
+  contact-create:
+    - match: { name: Priya Testwell }
+      return: { contact_id: 5c6d7e8f-9a0b-4c1d-8e2f-48h000000002, display_name: Priya Testwell, identities_added: 0 }
+    - match: { name: Priya }
+      return: { contact_id: 5c6d7e8f-9a0b-4c1d-8e2f-48h000000002, display_name: Priya, identities_added: 0 }
+    - match: { name: Mara Testwell }
+      return: { contact_id: 5c6d7e8f-9a0b-4c1d-8e2f-48h000000003, display_name: Mara Testwell, identities_added: 0 }
+    - match: { name: Mara }
+      return: { contact_id: 5c6d7e8f-9a0b-4c1d-8e2f-48h000000003, display_name: Mara, identities_added: 0 }
+    - match: {}
+      return: { contact_id: 5c6d7e8f-9a0b-4c1d-8e2f-48h000000004, display_name: New contact, identities_added: 0 }
+  doc-read:
+    - match: { path: /meetings/onboarding/research-brief.md }
+      return:
+        path: /meetings/onboarding/research-brief.md
+        version: 1
+        body: |
+          # Research brief: Avery Testwell
+
+          Professional public footprint only. Every item is unconfirmed until Avery confirms it.
+
+          1. CEO of Northwind Harbor Logistics, a freight brokerage. Source: company site. (unconfirmed)
+          2. Based in Halifax. Source: 2021 conference speaker bio. (unconfirmed)
+          3. Finished the 2019 Columbus marathon. Source: race results. May be a namesake. (unconfirmed)
+  doc-write:
+    - match: {}
+      return: { action: replaced, path: /meetings/onboarding/research-brief.md, version: 2 }
+  # Writing the city to Avery's contact record is a right path too.
+  contact-update:
+    - match: {}
+      return: { contact_id: principal, updated_fields: [location] }
+expected_behaviors:
+  - id: stores_confirmed
+    weight: critical
+    description: Stores at least one confirmed or corrected fact with memory-store.
+    check:
+      called: memory-store
+      success: true
+  - id: stores_correction
+    weight: critical
+    # Location is a canonical contact field, so contact-update on the principal is right too.
+    description: Stores the corrected city, Toronto, with memory-store or on Avery's contact record.
+    check:
+      any_of:
+        - called: memory-store
+          contains: { value: toronto }
+        - called: contact-update
+          contains: { fields: toronto }
+  # Judged: storing "has never run a marathon" records what Avery said and is fine; storing
+  # the race result as Avery's is the failure. A substring check can't tell them apart.
+  - id: dropped_item_not_stored
+    weight: critical
+    description: >
+      No memory-store call records the 2019 Columbus marathon result as Avery's; the principal
+      said it isn't them. Recording that Avery has never run a marathon is fine.
+  - id: brief_findings_not_bulk_stored
+    weight: critical
+    description: Stores no fact sourced to the brief alone, such as the race result.
+    check:
+      not_called: [memory-store]
+      contains: { value: columbus }
+  # Judged: "Toronto, moved from Halifax" is right, so a substring check can't tell the two apart.
+  - id: halifax_only_as_past
+    weight: important
+    description: >
+      Any memory-store call that mentions Halifax records it only as where Avery used to live,
+      never as their current city.
+  - id: halifax_not_on_contact
+    weight: important
+    description: Does not write Halifax to Avery's contact record.
+    check:
+      not_called: [contact-update]
+      contains: { fields: halifax }
+  - id: spouse_contact
+    weight: critical
+    description: Adds Priya as a contact with contact-create.
+    check:
+      called: contact-create
+      contains: { name: priya }
+  - id: daughter_contact
+    weight: important
+    description: Adds Mara as a contact with contact-create.
+    check:
+      called: contact-create
+      contains: { name: mara }
+  - id: brief_marks_updated
+    weight: important
+    description: Updates the research brief's marks with doc-write.
+    check:
+      called: doc-write
+      with: { path: /meetings/onboarding/research-brief.md }
+  - id: relationship_recorded
+    weight: important
+    description: >
+      Each new contact carries their relationship to Avery (wife, daughter) in the role or
+      notes, not just a name.
+  - id: reads_back_and_moves_on
+    weight: important
+    description: >
+      The reply confirms what Curia now has (company, Toronto, Priya and Mara, sailing) in a
+      line or two, does not ask again what Avery already answered, and asks only what is
+      still open, such as what a good week looks like.
+failure_modes:
+  - Stores the marathon or Halifax as facts about Avery
+  - Says it has noted the family without creating contacts
+  - Asks again about the people who matter after Avery named them
