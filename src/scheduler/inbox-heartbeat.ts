@@ -93,6 +93,11 @@ export interface InboxHeartbeatOptions {
   sentObserveFailing?: (mailboxIds: string[]) => Promise<string[]>;
   /** Deletes expired cross-mailbox dedupe rows; run once per local day (BR-M1, SEC-L6). */
   sweepDedupe?: () => Promise<number>;
+  /**
+   * True while the onboarding triage hold is set (#2360): the tick does nothing, so no mailbox is
+   * labelled before the principal has been told what to expect. Absent: never held.
+   */
+  held?: () => Promise<boolean>;
   /** Delay of the one tick run shortly after start (default 60 s), so a restart does not wait a full interval. */
   bootTickDelayMs?: number;
 }
@@ -337,6 +342,21 @@ export class InboxHeartbeat {
   }
 
   private async tickOnce(now: Date): Promise<InboxHeartbeatResult> {
+    if (this.o.held) {
+      let held: boolean;
+      try {
+        held = await this.o.held();
+      } catch (err) {
+        // Fail closed, like a malformed hold: if the hold cannot be read (config-store outage),
+        // do not risk labelling a mailbox the principal was never told about. Retry next tick.
+        this.o.logger.error({ ...grantSafeErrorFields(err) }, 'InboxHeartbeat: could not read the triage hold; treating it as held this tick');
+        return 'quiet';
+      }
+      if (held) {
+        this.o.logger.debug('InboxHeartbeat: triage is held until the principal has been onboarded; skipping the tick');
+        return 'quiet';
+      }
+    }
     // TriageState gates on TRIAGE_DAILY_CEILING, the one value the list tool also reads (BR-M2).
     await this.sweepOncePerDay(now);
     const atCeiling = await this.o.state.ceilingReached(now);

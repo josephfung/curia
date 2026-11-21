@@ -254,6 +254,7 @@ import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 import { closeLegacyInboxDrains, InboxHeartbeat, type InboxTriageHealth } from './scheduler/inbox-heartbeat.js';
 import { readTriageCadences, type Cadence } from './principal-mailboxes/triage-cadence.js';
 import { inMemoryTriageConfig, TriageState, TRIAGE_NAMESPACE } from './principal-mailboxes/triage-state.js';
+import { isTriageHeld } from './onboarding/triage-hold.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
 import { unreadCandidateProbe } from './principal-mailboxes/triage-candidate.js';
 import type { TriageServices } from './principal-mailboxes/triage-services.js';
@@ -3763,6 +3764,9 @@ async function main(): Promise<void> {
       scheduler: schedulerService,
       tz: triageTz,
       logger,
+      // Onboarding triage hold (#2360). A missing key is no hold. triageConfig is the config store
+      // (an in-memory stand-in only when there is no entity memory, where nothing sets a hold).
+      held: () => isTriageHeld(triageConfig, logger),
       sweepDedupe: () => triageDedupe.sweep(),
       sentObserveFailing: async (ids) => {
         const failing: string[] = [];

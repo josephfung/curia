@@ -337,7 +337,8 @@ need a restart. Instead:
   capability (held) at Apply & restart: builder's call.
 - **While the hold is set,** the inbox heartbeat, `inbox-drain` and the ceo-inbox crons do nothing
   that touches the principal's mailbox: no labels, archives, drafts or sends. Enforced in code at
-  the heartbeat and in the mailbox-writing tools.
+  the inbox heartbeat, which is the only thing that wakes scheduled triage; principal-directed
+  mailbox actions are unaffected.
 - **The inbox topic releases it** through `onboarding-triage-release` (principal-authorized,
   `action_risk: low`, refuses unless that subtask is done). Live, no restart.
 - **A missing hold means no hold,** so existing installs keep triaging when this ships.
