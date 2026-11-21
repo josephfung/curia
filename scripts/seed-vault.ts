@@ -72,6 +72,9 @@ export const SEED_IF_ABSENT_NAMES = [
   'channel.voice.livekit_api_secret',
 ] as const;
 
+/** The one SEED_IF_ABSENT_NAMES value that is not a secret, so it may appear in logs. */
+const LIVEKIT_URL_NAME = 'channel.voice.livekit_url';
+
 /** The env var a seeded vault name is read from. */
 export function seedEnvVar(name: string): string {
   return SEED_ENV_VARS[name] ?? name.toUpperCase();
@@ -123,9 +126,10 @@ export async function verifyRequiredSecrets(
 /**
  * Read each migrated secret from `env` (by its seedEnvVar() name) and upsert any
  * present, non-empty value into the vault. SEED_IF_ABSENT_NAMES are written only when the
- * vault has no value for them (reported in `kept` otherwise). Absent/empty values are skipped, never
+ * vault has no value for them (reported in `kept` otherwise, and in `keptDiffers` with a warning
+ * when the kept value is not the one offered). Absent/empty values are skipped, never
  * cleared — this is additive so a partial env (e.g. no Signal configured) is fine.
- * Never logs secret values, only their names.
+ * Never logs secret values, only their names (the LiveKit URL, not a secret, is the exception).
  */
 export async function seedVault(
   secrets: SecretsService,
@@ -137,10 +141,11 @@ export async function seedVault(
      *  then (boot deletes them), so a .env value would only be written to be deleted. */
     flatKeysManaged?: () => Promise<boolean>;
   } = {},
-): Promise<{ seeded: string[]; skipped: string[]; kept: string[] }> {
+): Promise<{ seeded: string[]; skipped: string[]; kept: string[]; keptDiffers: string[] }> {
   const seeded: string[] = [];
   const skipped: string[] = [];
   const kept: string[] = [];
+  const keptDiffers: string[] = [];
   let flatManaged: boolean | undefined;
   for (const name of SEED_SECRET_NAMES) {
     // `only` scopes a run to the named secrets. The CLI loads the whole .env, so without
@@ -181,16 +186,27 @@ export async function seedVault(
       skipped.push(name);
       continue;
     }
-    if ((await secrets.get(name)) !== null) {
-      log.info({ name }, 'Keeping existing vault value');
+    const existing = await secrets.get(name);
+    if (existing !== null) {
       kept.push(name);
+      if (existing === value) {
+        log.info({ name }, 'Keeping existing vault value');
+      } else {
+        // A rerun offered something else (e.g. a corrected domain). The vault value wins,
+        // so say so. Only the URL is shown: the key and secret are never logged.
+        keptDiffers.push(name);
+        log.warn(
+          name === LIVEKIT_URL_NAME ? { name, kept: existing, offered: value } : { name },
+          'Keeping the existing vault value, which differs from the one offered; change it under Settings → Channels → Voice',
+        );
+      }
       continue;
     }
     await secrets.set(name, value);
     seeded.push(name);
   }
-  log.info({ seeded, skipped, kept }, 'Vault seeding complete');
-  return { seeded, skipped, kept };
+  log.info({ seeded, skipped, kept, keptDiffers }, 'Vault seeding complete');
+  return { seeded, skipped, kept, keptDiffers };
 }
 
 /**

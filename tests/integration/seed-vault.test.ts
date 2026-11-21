@@ -178,6 +178,38 @@ describeIf('seedVault', () => {
     for (const name of SEED_IF_ABSENT_NAMES) expect(seeded).not.toContain(name);
   });
 
+  it('reports kept values that differ from the offered ones, and warns without printing keys', async () => {
+    const logs: Array<{ level: number; obj: Record<string, unknown>; msg: string }> = [];
+    const spyLogger = pino({ level: 'info' }, {
+      write: (line: string) => {
+        const parsed = JSON.parse(line) as Record<string, unknown>;
+        logs.push({ level: parsed.level as number, obj: parsed, msg: String(parsed.msg) });
+      },
+    });
+    await secrets.set('channel.voice.livekit_url', 'wss://old.example.com');
+    await secrets.set('channel.voice.livekit_api_key', 'old-key');
+    // Same secret as offered: kept, but not a difference.
+    await secrets.set('channel.voice.livekit_api_secret', 'lk-secret-new');
+    const { kept, keptDiffers } = await seedVault(secrets, LIVEKIT_ENV, spyLogger);
+    expect([...kept].sort()).toEqual([...SEED_IF_ABSENT_NAMES].sort());
+    expect([...keptDiffers].sort()).toEqual(['channel.voice.livekit_api_key', 'channel.voice.livekit_url']);
+    const warns = logs.filter(l => l.level === 40);
+    expect(warns.map(w => w.obj.name).sort()).toEqual(['channel.voice.livekit_api_key', 'channel.voice.livekit_url']);
+    const all = JSON.stringify(logs);
+    // The URL is not a secret and is named so the operator can see what was kept.
+    expect(all).toContain('wss://old.example.com');
+    expect(all).toContain('wss://curia.example.com');
+    // Keys and secrets never appear, kept or offered.
+    for (const v of ['old-key', 'lk-key-new', 'lk-secret-new']) expect(all).not.toContain(v);
+  });
+
+  it('keptDiffers is empty when the vault already holds the offered values', async () => {
+    await seedVault(secrets, LIVEKIT_ENV, logger);
+    const { kept, keptDiffers } = await seedVault(secrets, LIVEKIT_ENV, logger);
+    expect(kept).toHaveLength(SEED_IF_ABSENT_NAMES.length);
+    expect(keptDiffers).toEqual([]);
+  });
+
   it('still upserts ordinary secrets', async () => {
     await secrets.set('api_token', 'old');
     await seedVault(secrets, { API_TOKEN: 'new' }, logger);
