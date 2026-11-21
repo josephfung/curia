@@ -622,4 +622,40 @@ describe('DocWriteHandler', () => {
       expect(result.success).toBe(true);
     });
   });
+  // #2360 security review M1: onboarding's documents feed the principal's turns.
+  describe('onboarding documents guard', () => {
+    const BRIEF = '/meetings/onboarding/research-brief.md';
+    const PLAYBOOK = '/meetings/onboarding/playbook.md';
+    const ctxAs = (agentId: string, input: Record<string, unknown>, repo?: WorkingDocsRepo, humanApproved = false) => {
+      const ctx = makeCtx(input, repo) as unknown as { agentId: string; humanApproved?: boolean };
+      ctx.agentId = agentId;
+      if (humanApproved) ctx.humanApproved = true;
+      return ctx as unknown as ToolContext;
+    };
+
+    it('refuses the research brief from an agent other than the coordinator, without touching the repo', async () => {
+      const repo = makeRepo();
+      const result = await new DocWriteHandler().execute(ctxAs('ceo-inbox', { path: BRIEF, mode: 'append', content: 'x' }, repo));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/only the coordinator writes/);
+      expect(repo.append).not.toHaveBeenCalled();
+    });
+
+    it('lets the coordinator write the research brief', async () => {
+      const create = vi.fn().mockResolvedValue(makeDoc({ path: BRIEF }));
+      const repo = makeRepo({ read: vi.fn().mockResolvedValue(null), create });
+      const result = await new DocWriteHandler().execute(ctxAs('coordinator', { path: BRIEF, mode: 'create', type: 'note', body: 'x' }, repo));
+      expect(result.success).toBe(true);
+    });
+
+    it('refuses the playbook from every agent, the coordinator included, however the path is cased; a principal-approved replay may', async () => {
+      for (const path of [PLAYBOOK, '/Meetings/Onboarding/Playbook.md', '/projects/../meetings/onboarding/playbook.md']) {
+        const result = await new DocWriteHandler().execute(ctxAs('coordinator', { path, mode: 'replace', type: 'note', body: 'x', expected_version: 1 }));
+        expect(result.success, path).toBe(false);
+      }
+      const repo = makeRepo({ read: vi.fn().mockResolvedValue(makeDoc({ path: PLAYBOOK })) });
+      const approved = await new DocWriteHandler().execute(ctxAs('coordinator', { path: PLAYBOOK, mode: 'append', content: 'x' }, repo, true));
+      if (!approved.success) expect(approved.error).not.toMatch(/onboarding playbook/);
+    });
+  });
 });

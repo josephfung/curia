@@ -30,6 +30,18 @@ describe('parsePlaybook', () => {
     expect(sessions[0]!.topics[0]!.id).toBe('how-i-should-sound');
   });
 
+  it('slugifies an id outside [a-z0-9-] and caps titles at 120 characters', () => {
+    const long = 'x'.repeat(300);
+    const [session] = parsePlaybook([
+      '# First <!-- session: First_Conversation -->',
+      `## ${long} <!-- topic: ok-id -->`,
+      '## Odd <!-- topic: Bad]Id! -->',
+    ].join('\n'));
+    expect(session!.id).toBe('first-conversation');
+    expect(session!.topics.map((t) => t.id)).toEqual(['ok-id', 'bad-id']);
+    expect(session!.topics[0]!.title).toHaveLength(120);
+  });
+
   it('sets needsMailbox from a "Needs: mailbox" line only', () => {
     const [session] = parsePlaybook('# S\n## A\nNeeds: mailbox\ntext\n## B\nno need');
     expect(session!.topics.map((t) => t.needsMailbox)).toEqual([true, false]);

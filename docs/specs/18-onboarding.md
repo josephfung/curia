@@ -379,6 +379,13 @@ Only subtasks the onboarding program created count as topics (`created_by`), sin
 can tag any task. The whole `onboarding` config-store namespace is code-owned: the
 `config-store` tool refuses writes to it.
 
+`/meetings/onboarding/` is guarded the same way in `doc-write`, since agents that read
+untrusted mail hold it and topic titles ride into every live principal turn: the playbook is
+written only from the console (the documents API) or a principal-approved re-execution, and
+anything else there (the research brief) only by the coordinator. The parser keeps ids to
+`[a-z0-9-]` (slugifying anything else) and caps session and topic titles at 120 characters,
+and the turn block puts each title on one line with no brackets.
+
 ### Starting
 
 The console starts it from the last Setup step or the dashboard alert, through

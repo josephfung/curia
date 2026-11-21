@@ -23,6 +23,7 @@ import {
 import { isUuid } from '../../../../src/util/uuid.js';
 import { isDurableDocPath, isSharedDocPath } from '../../../../src/memory/durable-doc-prefixes.js';
 import { PRINCIPAL_SEND_LEDGER_PREFIX } from '../../../../src/skills/principal-send/send-ledger.js';
+import { ONBOARDING_DOCS_PREFIX, PLAYBOOK_PATH } from '../../../../src/onboarding/playbook.js';
 
 const VALID_MODES = new Set(['create', 'append', 'replace', 'section-edit', 'section-delete']);
 
@@ -60,6 +61,30 @@ function sendLedgerPathWriteError(ctx: ToolContext, normalizedPath: string): str
   if (path !== prefix && !path.startsWith(`${prefix}/`)) return null;
   ctx.log.warn({ path: normalizedPath, agentId: ctx.agentId ?? null }, 'doc-write: refused a write to the principal-mailbox send ledger');
   return `${PRINCIPAL_SEND_LEDGER_PREFIX}/ holds Curia's record of sends from the principal's mailbox, which only the send path writes. Leave it unchanged.`;
+}
+
+/**
+ * Onboarding documents guard (#2360, security review M1). Topic titles in the playbook become
+ * subtask titles that ride into every live principal turn, and the research brief feeds the first
+ * conversation, while agents that read untrusted mail hold doc-write. So:
+ *  - the playbook is the operator's: the console edits it (documents API, not this tool); here
+ *    only a principal-approved re-execution may write it;
+ *  - anything else under /meetings/onboarding/ (the research brief) is the coordinator's, which
+ *    runs onboarding, or a principal-approved re-execution.
+ * Compared case-insensitively, after normalization (fail closed). Returns an error, or null to allow.
+ */
+function onboardingPathWriteError(ctx: ToolContext, normalizedPath: string): string | null {
+  const path = normalizedPath.toLowerCase();
+  const prefix = ONBOARDING_DOCS_PREFIX.toLowerCase();
+  if (path !== prefix.slice(0, -1) && !path.startsWith(prefix)) return null;
+  if (ctx.humanApproved) return null;
+  if (path === PLAYBOOK_PATH.toLowerCase()) {
+    ctx.log.warn({ path: normalizedPath, agentId: ctx.agentId ?? null }, 'doc-write: refused a write to the onboarding playbook');
+    return `${PLAYBOOK_PATH} is the onboarding playbook, which the operator edits in the console. Leave it unchanged.`;
+  }
+  if (ctx.agentId === 'coordinator') return null;
+  ctx.log.warn({ path: normalizedPath, agentId: ctx.agentId ?? null }, 'doc-write: refused an onboarding document write from an agent other than the coordinator');
+  return `${ONBOARDING_DOCS_PREFIX} holds onboarding's documents, which only the coordinator writes. Leave it unchanged.`;
 }
 
 /**
@@ -143,6 +168,10 @@ export class DocWriteHandler implements ToolHandler {
     const sharedError = sharedPathWriteError(ctx, normalized);
     if (sharedError) {
       return { success: false, error: sharedError };
+    }
+    const onboardingError = onboardingPathWriteError(ctx, normalized);
+    if (onboardingError) {
+      return { success: false, error: onboardingError };
     }
     const summary = typeof input.summary === 'string' ? input.summary : `${input.mode} ${normalized}`;
     const ttlWarning = ttlDaysFrontmatterWarning(normalized, input.frontmatter);

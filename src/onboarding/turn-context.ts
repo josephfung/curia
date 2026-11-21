@@ -16,6 +16,17 @@ export interface OnboardingTurnContextSource {
   forPrincipalTurn(now: Date): Promise<string | null>;
 }
 
+/** Longest topic title (or id) put in the block. */
+const TURN_TITLE_MAX = 120;
+
+/**
+ * A topic title or id as the block shows it: one line, no brackets (they would close the block),
+ * capped. Titles come from the playbook the operator edits, so they are data, not instructions.
+ */
+function blockText(text: string): string {
+  return text.replace(/[\r\n]+/g, ' ').replace(/[[\]]/g, '').trim().slice(0, TURN_TITLE_MAX);
+}
+
 /**
  * The block a live principal turn gets while onboarding is open. Exported so the scenario
  * harness serves the same text from a case's `seed.onboarding`.
@@ -24,7 +35,7 @@ export function formatOnboardingTurnBlock(
   taskId: string,
   openTopics: ReadonlyArray<{ title: string; topicId: string }>,
 ): string {
-  const topics = openTopics.map((t) => `${t.title} (${t.topicId})`).join(', ') || 'none';
+  const topics = openTopics.map((t) => `${blockText(t.title)} (${blockText(t.topicId)})`).join(', ') || 'none';
   return `[Onboarding in progress — task ${taskId}. Open topics this session: ${topics}. `
     + 'Use onboarding-progress with op: "status" to see and record progress. '
     + 'Handle anything else the principal asks as usual.]';

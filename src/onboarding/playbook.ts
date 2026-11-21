@@ -12,7 +12,16 @@ import type { Logger } from '../logger.js';
 export type PlaybookTopic = { id: string; title: string; body: string; needsMailbox: boolean };
 export type PlaybookSession = { id: string; title: string; topics: PlaybookTopic[] };
 
+/** Onboarding's documents: doc-write guards this folder (#2360). */
+export const ONBOARDING_DOCS_PREFIX = '/meetings/onboarding/';
 export const PLAYBOOK_PATH = '/meetings/onboarding/playbook.md';
+export const RESEARCH_BRIEF_PATH = '/meetings/onboarding/research-brief.md';
+/**
+ * Longest session or topic title kept. Topic titles become subtask titles, which ride into every
+ * live principal turn, so an edited playbook cannot push a long text in there.
+ */
+export const PLAYBOOK_TITLE_MAX = 120;
+const ID_RE = /^[a-z0-9-]+$/;
 const PLAYBOOK_DOC_TYPE = 'onboarding-playbook';
 
 const ID_COMMENT_RE = /<!--\s*(?:session|topic)\s*:\s*([^\s>]+)\s*-->/;
@@ -26,9 +35,11 @@ function slugify(title: string): string {
 }
 
 function parseHeading(raw: string): { id: string; title: string } {
-  const id = ID_COMMENT_RE.exec(raw)?.[1];
-  const title = raw.replace(/<!--.*?-->/g, '').trim();
-  return { id: id ?? slugify(title), title };
+  const declared = ID_COMMENT_RE.exec(raw)?.[1];
+  const title = raw.replace(/<!--.*?-->/g, '').trim().slice(0, PLAYBOOK_TITLE_MAX).trim();
+  // Ids are only [a-z0-9-]: they become task tags and ride into turns. Anything else is slugified.
+  const id = declared === undefined ? slugify(title) : ID_RE.test(declared) ? declared : slugify(declared);
+  return { id, title };
 }
 
 /** Parse the playbook markdown into sessions and topics. Text before the first `#` is ignored. */
