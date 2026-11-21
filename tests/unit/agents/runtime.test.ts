@@ -3527,6 +3527,103 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     );
     expect(sys).toBeDefined();
   });
+
+  describe('onboarding context on live principal turns (#2360)', () => {
+    const progressToolDef = {
+      name: 'onboarding-progress',
+      description: 'Onboarding progress',
+      input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+    };
+    const BLOCK = '[Onboarding in progress — task t-1. Open topics this session: Tone (tone).]';
+    const principal = {
+      originator: {
+        contactId: 'ceo', systemRole: 'principal', channel: 'web', initiatedAt: '2026-11-21T00:00:00.000Z', authenticated: true,
+      },
+    };
+
+    async function runTurn(payload: { liveTurn?: boolean; liveTurnGrantId?: string; metadata?: Record<string, unknown> }) {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+      bus.subscribe('agent.response', 'dispatch', () => {});
+      const chatCalls: Array<{ tools: string[]; messages: Array<{ role: string; content: unknown }> }> = [];
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: async (params) => {
+          chatCalls.push({
+            tools: params.tools?.map((t) => t.name) ?? [],
+            messages: params.messages as Array<{ role: string; content: unknown }>,
+          });
+          return {
+            type: 'text' as const,
+            content: 'Hi.',
+            usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        },
+      };
+      const forPrincipalTurn = vi.fn().mockResolvedValue(BLOCK);
+      const mockExecution = {
+        invoke: vi.fn(),
+        getToolDefinitions: vi.fn((names: string[]) => [progressToolDef].filter((d) => names.includes(d.name))),
+        resolveSkillActivationForAgent: vi.fn().mockReturnValue({
+          skill: 'onboarding',
+          tools: ['onboarding-progress'],
+          skippedTools: [],
+          instructions: '## Onboarding\nWork the topics.',
+        }),
+      } as unknown as ExecutionLayer;
+      new AgentRuntime({
+        agentId: 'coordinator',
+        systemPrompt: 'You are an assistant.',
+        provider,
+        resolvedModel: 'mock-model',
+        bus,
+        logger,
+        executionLayer: mockExecution,
+        skillToolDefs: [skillActivateToolDef],
+        onboardingTurnContext: { forPrincipalTurn },
+      }).register();
+      await bus.publish('dispatch', createAgentTask({
+        agentId: 'coordinator',
+        conversationId: 'conv-onb',
+        channelId: 'web',
+        senderId: 'ceo',
+        content: 'What is on my calendar today?',
+        parentEventId: 'p-onb',
+        ...payload,
+      }));
+      const text = (m: { content: unknown }) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
+      const call = chatCalls[0]!;
+      return {
+        forPrincipalTurn,
+        mockExecution,
+        tools: call.tools,
+        system: call.messages.filter((m) => m.role === 'system').map(text).join('\n'),
+        user: call.messages.filter((m) => m.role === 'user').map(text).join('\n'),
+      };
+    }
+
+    it('activates the onboarding skill and puts the block in the prompt', async () => {
+      const r = await runTurn({ liveTurn: true, metadata: principal });
+      expect(r.forPrincipalTurn).toHaveBeenCalledTimes(1);
+      expect(r.mockExecution.resolveSkillActivationForAgent).toHaveBeenCalledWith('onboarding', 'coordinator');
+      expect(r.tools).toContain('onboarding-progress');
+      expect(r.system).toContain('[Activated skill: onboarding]');
+      expect(r.user).toContain(BLOCK);
+    });
+
+    it.each([
+      ['a turn that is not live', { metadata: principal }],
+      ['a live turn not from the principal', { liveTurn: true, metadata: { originator: { ...principal.originator, systemRole: 'contact' } } }],
+      ['a voice hand-off whose grant lapsed', { liveTurn: true, liveTurnGrantId: 'ltg-never-issued', metadata: principal }],
+    ])('does nothing on %s', async (_label, payload) => {
+      const r = await runTurn(payload);
+      expect(r.forPrincipalTurn).not.toHaveBeenCalled();
+      expect(r.mockExecution.resolveSkillActivationForAgent).not.toHaveBeenCalled();
+      expect(r.tools).not.toContain('onboarding-progress');
+      expect(r.user).not.toContain('Onboarding in progress');
+    });
+  });
 });
 
 // -- Error budget enforcement tests --

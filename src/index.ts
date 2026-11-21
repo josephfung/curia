@@ -256,6 +256,7 @@ import { readTriageCadences, type Cadence } from './principal-mailboxes/triage-c
 import { inMemoryTriageConfig, TriageState, TRIAGE_NAMESPACE } from './principal-mailboxes/triage-state.js';
 import { isTriageHeld } from './onboarding/triage-hold.js';
 import { OnboardingService } from './onboarding/onboarding-service.js';
+import { createOnboardingTurnContext } from './onboarding/turn-context.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
 import { unreadCandidateProbe } from './principal-mailboxes/triage-candidate.js';
 import type { TriageServices } from './principal-mailboxes/triage-services.js';
@@ -3489,6 +3490,7 @@ async function main(): Promise<void> {
     logger,
   });
   executionLayer.setOnboardingService(onboardingService);
+  const onboardingTurnContext = createOnboardingTurnContext({ taskRepo, configStore: triageConfig, logger });
 
   // Agents that pin a skill with heartbeat: true — read by the BacklogHeartbeat to
   // know which source_agent_ids it may wake (and as the fallback target list).
@@ -3587,7 +3589,12 @@ async function main(): Promise<void> {
       taskManagementAgents.add(agentConfig.name);
     }
 
-    new AgentRuntime(assembled.runtimeConfig).register();
+    // Onboarding context for live principal turns (#2360): the coordinator only.
+    new AgentRuntime(
+      agentConfig.name === 'coordinator'
+        ? { ...assembled.runtimeConfig, onboardingTurnContext }
+        : assembled.runtimeConfig,
+    ).register();
 
     if (assembled.toolDefs.length > 0) {
       logger.info({ agent: agentConfig.name, skills: assembled.toolDefs.map(d => d.name) }, 'Agent tools configured');
