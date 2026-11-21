@@ -7,6 +7,9 @@
 // in .env is re-upserted too:
 //   SEED_VAULT_ONLY=channel.email.nylas_api_key NYLAS_API_KEY=nyk_... pnpm run seed-vault
 //
+// A second list, SEED_IF_ABSENT_NAMES, is seeded only when the vault has no value for it, so a
+// re-run of the installer never clobbers a value the operator changed in the console (#2357).
+//
 // Invoked by scripts/setup.sh after migrations for fresh installs.
 import { pathToFileURL } from 'node:url';
 import pg from 'pg';
@@ -55,7 +58,19 @@ export const SEED_SECRET_NAMES = [
 // (the dotted channel keys). Matches the channel catalog's envFallback.
 const SEED_ENV_VARS: Readonly<Record<string, string>> = {
   'channel.email.nylas_api_key': 'NYLAS_API_KEY',
+  // Transient installer-provided LiveKit values (#2357); never read from a persistent .env.
+  'channel.voice.livekit_url': 'SEED_LIVEKIT_URL',
+  'channel.voice.livekit_api_key': 'SEED_LIVEKIT_API_KEY',
+  'channel.voice.livekit_api_secret': 'SEED_LIVEKIT_API_SECRET',
 };
+
+// Vault values the installer writes only when the vault has none. Unlike SEED_SECRET_NAMES
+// these are never upserted: an existing value (e.g. edited in the console) always wins.
+export const SEED_IF_ABSENT_NAMES = [
+  'channel.voice.livekit_url',
+  'channel.voice.livekit_api_key',
+  'channel.voice.livekit_api_secret',
+] as const;
 
 /** The env var a seeded vault name is read from. */
 export function seedEnvVar(name: string): string {
@@ -107,7 +122,8 @@ export async function verifyRequiredSecrets(
 
 /**
  * Read each migrated secret from `env` (by its seedEnvVar() name) and upsert any
- * present, non-empty value into the vault. Absent/empty values are skipped, never
+ * present, non-empty value into the vault. SEED_IF_ABSENT_NAMES are written only when the
+ * vault has no value for them (reported in `kept` otherwise). Absent/empty values are skipped, never
  * cleared — this is additive so a partial env (e.g. no Signal configured) is fine.
  * Never logs secret values, only their names.
  */
@@ -121,9 +137,10 @@ export async function seedVault(
      *  then (boot deletes them), so a .env value would only be written to be deleted. */
     flatKeysManaged?: () => Promise<boolean>;
   } = {},
-): Promise<{ seeded: string[]; skipped: string[] }> {
+): Promise<{ seeded: string[]; skipped: string[]; kept: string[] }> {
   const seeded: string[] = [];
   const skipped: string[] = [];
+  const kept: string[] = [];
   let flatManaged: boolean | undefined;
   for (const name of SEED_SECRET_NAMES) {
     // `only` scopes a run to the named secrets. The CLI loads the whole .env, so without
@@ -154,8 +171,26 @@ export async function seedVault(
     await secrets.set(name, value);
     seeded.push(name);
   }
-  log.info({ seeded, skipped }, 'Vault seeding complete');
-  return { seeded, skipped };
+  for (const name of SEED_IF_ABSENT_NAMES) {
+    if (options.only && !options.only.has(name)) {
+      skipped.push(name);
+      continue;
+    }
+    const value = env[seedEnvVar(name)]?.trim();
+    if (value === undefined || value === '') {
+      skipped.push(name);
+      continue;
+    }
+    if ((await secrets.get(name)) !== null) {
+      log.info({ name }, 'Keeping existing vault value');
+      kept.push(name);
+      continue;
+    }
+    await secrets.set(name, value);
+    seeded.push(name);
+  }
+  log.info({ seeded, skipped, kept }, 'Vault seeding complete');
+  return { seeded, skipped, kept };
 }
 
 /**
@@ -179,7 +214,7 @@ export async function principalRegistryHasRows(pool: pg.Pool): Promise<boolean> 
 export function parseSeedOnly(raw: string | undefined): ReadonlySet<string> | undefined {
   if (raw === undefined || raw.trim() === '') return undefined;
   const names = raw.split(',').map(n => n.trim()).filter(n => n.length > 0);
-  const known = new Set<string>(SEED_SECRET_NAMES);
+  const known = new Set<string>([...SEED_SECRET_NAMES, ...SEED_IF_ABSENT_NAMES]);
   const unknown = names.filter(n => !known.has(n));
   if (unknown.length > 0) {
     throw new Error(`SEED_VAULT_ONLY names unknown secret(s): ${unknown.join(', ')}. Known: ${[...known].join(', ')}`);
