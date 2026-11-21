@@ -1140,6 +1140,18 @@
     "onboarding side request becomes its own task": {
       "unstubbed": null,
       "reason": "New in #2360; not yet run (paid suite). The first run records coverage."
+    },
+    "onboarding about-you stores only what the principal confirmed": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-21T21:57:13.434Z"
+    },
+    "onboarding homework writes the research brief and nothing to memory": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-11-21T21:56:27.446Z"
     }
   }
 }
