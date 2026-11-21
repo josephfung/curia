@@ -1041,10 +1041,10 @@ fresh_install() {
   # install (DB creds written on a prior interrupted run but the vault never
   # seeded): the Postgres volume was already initialised with that password, so
   # regenerating it would break authentication. Only generate when the value is
-  # absent or the shipped placeholder.
-  db_pass="$(grep -E '^DB_PASSWORD=' "$env" 2>/dev/null | cut -d= -f2-)"
+  # absent or a shipped placeholder (.env.example's your-db-password included).
+  db_pass="$(env_value "$env" DB_PASSWORD)"
   case "$db_pass" in
-    ""|replace-*) db_pass="$(gen_secret_hex)" ;;
+    ""|replace-*|your-db-password) db_pass="$(gen_secret_hex)" ;;
   esac
   api_token="$(gen_secret_hex)"
   boot_secret="$(gen_secret_hex)"

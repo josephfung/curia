@@ -1638,7 +1638,8 @@ _fi_seedenv="$_fi_dir/seedenv"
 # $1 topology, $2 stdin answers, $3 extra env contents. Leaves docker calls in
 # $_fi_calls and the run's output in $_fi_out; returns the run's status.
 _fi_run() {
-    printf '%b' "DB_PASSWORD=your-db-password\n$3" > "$_fi_env"
+    if [[ -n "${_FI_ENV_BASE:-}" ]]; then cp "$_FI_ENV_BASE" "$_fi_env"; printf '%b' "$3" >> "$_fi_env"
+    else printf '%b' "DB_PASSWORD=${_FI_DB_PASSWORD-your-db-password}\n$3" > "$_fi_env"; fi
     printf '%s' "${_FI_COMPOSE-$_FB_LK}" > "$_fi_dir/docker-compose.yml"
     : > "$_fi_calls"; : > "$_fi_seedenv"
     local rc=0
@@ -1697,6 +1698,22 @@ _assert_var "domain: secret never printed"    "$(_has "$_fi_out" "$_fi_s")" no
 _assert_var "domain: key never printed"       "$(_has "$_fi_out" "$_fi_k")" no
 _assert_var "domain: next steps printed"      "$(_has "$_fi_out" 'https://c.example.com/setup')" yes
 
+# The shipped placeholder DB_PASSWORD is replaced with a generated one; a real
+# value (an interrupted install's, already in the Postgres volume) is kept.
+_assert_var "db password: placeholder replaced" \
+    "$([[ "$(env_value "$_fi_env" DB_PASSWORD)" =~ ^[0-9a-f]{64}$ ]] && echo yes || echo no)" yes
+_FI_ENV_BASE="$TEST_DIR/../../.env.example"
+_fi_run local "" '' || true
+unset _FI_ENV_BASE
+_fi_pw="$(env_value "$_fi_env" DB_PASSWORD)"
+_assert_var "db password: .env.example copy gets 64 hex" \
+    "$([[ "$_fi_pw" =~ ^[0-9a-f]{64}$ ]] && echo yes || echo no)" yes
+_assert_var "db password: DATABASE_URL uses it" "$(_has "$(env_value "$_fi_env" DATABASE_URL)" ":$_fi_pw@")" yes
+_assert_var "db password: one DB_PASSWORD line" "$(grep -c '^DB_PASSWORD=' "$_fi_env" | tr -d ' ')" "1"
+_FI_DB_PASSWORD=kept-from-an-earlier-run
+_fi_run local "" '' || true
+unset _FI_DB_PASSWORD
+_assert_var "db password: existing value kept" "$(env_value "$_fi_env" DB_PASSWORD)" "kept-from-an-earlier-run"
 _fi_run local "" '' || true
 _assert_var "local: loopback LiveKit command" "$(env_value "$_fi_env" LIVEKIT_COMMAND)" "--config /etc/livekit.local.yaml --node-ip 127.0.0.1"
 _assert_var "local: seeds ws://localhost:7880" "$(_seed_env SEED_LIVEKIT_URL)" "ws://localhost:7880"

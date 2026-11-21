@@ -16,3 +16,4 @@
 ### Security
 
 - **Installer** — `install.sh` checks its downloaded `setup-common.sh` against the release's `SHA256SUMS`. (#2357)
+- **Installer database password** — fresh installs generate a real password instead of keeping the shipped placeholder. (#2357)
