@@ -87,16 +87,50 @@ describe('resolveLiveKitServerUrl', () => {
     expect(lookup).not.toHaveBeenCalled();
   });
 
-  it('strips IPv6 brackets before the lookup', async () => {
-    const lookup = vi.fn().mockResolvedValue({ address: '::1', family: 6 });
-    await resolveLiveKitServerUrl({
+  // Only the compose name falls back: an explicit address was set on purpose, and a passing
+  // DNS failure at boot must not swap it for the browser URL until the next restart.
+  it.each([
+    ['EAI_AGAIN', () => Promise.reject(Object.assign(new Error('getaddrinfo EAI_AGAIN lk.internal'), { code: 'EAI_AGAIN' }))],
+    ['a lookup that never answers', () => new Promise(() => {})],
+  ])('keeps an explicit management URL on the host after %s, without a lookup', async (_label, failing) => {
+    const lookup = vi.fn(failing);
+    const logger = createSilentLogger();
+    const warn = vi.spyOn(logger, 'warn');
+    const result = await resolveLiveKitServerUrl({
+      managementUrl: 'http://lk.internal:7880',
+      browserUrl: 'wss://curia.example.com',
+      logger,
+      inContainer: () => false,
+      lookup,
+      lookupTimeoutMs: 20,
+    });
+    expect(result).toEqual({ managementUrl: 'http://lk.internal:7880', joinUrl: 'ws://lk.internal:7880' });
+    expect(lookup).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('keeps an explicit IPv6 management URL', async () => {
+    const lookup = vi.fn(notFound);
+    const result = await resolveLiveKitServerUrl({
       managementUrl: 'http://[::1]:7880',
       browserUrl: 'ws://localhost:7880',
       logger: createSilentLogger(),
       inContainer: () => false,
       lookup,
     });
-    expect(lookup).toHaveBeenCalledWith('::1');
+    expect(result.managementUrl).toBe('http://[::1]:7880');
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it('treats the compose host case-insensitively, as URL parsing does', async () => {
+    const result = await resolveLiveKitServerUrl({
+      managementUrl: 'http://LiveKit:7880',
+      browserUrl: 'ws://localhost:7880',
+      logger: createSilentLogger(),
+      inContainer: () => false,
+      lookup: notFound,
+    });
+    expect(result.managementUrl).toBe('http://localhost:7880');
   });
 
   it('keeps an unparseable management URL and warns', async () => {

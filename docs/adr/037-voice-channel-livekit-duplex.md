@@ -159,7 +159,14 @@ voice reuses that for session minting (and optional LiveKit webhooks).
 
 Curia's own server-side join (VoiceRuntime → LiveKitRoomSession) uses the
 internal signaling URL, derived from `channels.voice.livekit_management_url`
-(`http://livekit:7880` → `ws://livekit:7880`). The browser-facing URL
-(`channels.voice.livekit_url`) is browser-only: it is returned by the voice
-adapter to clients and never used for Curia's own join, since inside a
-container `ws://localhost:7880` points at the container itself.
+(`http://livekit:7880` → `ws://livekit:7880`). In a container the
+browser-facing URL (`channels.voice.livekit_url`) is browser-only: it is
+returned by the voice adapter to clients and never used for Curia's own join,
+since there `ws://localhost:7880` points at the container itself.
+
+One exception, for Curia run on the host (`pnpm dev` / `pnpm local`): when the
+management URL's host is the compose name `livekit` and it does not resolve
+there (or the lookup takes over 2 s), Curia uses the browser-facing URL for
+management calls and its own join, with a warning, until the next restart
+(`src/channels/voice/livekit/server-url.ts`). A management URL with any other
+host is always kept as configured.

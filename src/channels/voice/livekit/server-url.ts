@@ -8,6 +8,11 @@
 // ws://localhost:7880) is reachable from the host too, so it becomes the effective
 // management URL, with a warning naming both.
 //
+// Only for the compose name itself (host `livekit`, as in the default): a management URL
+// pointing anywhere else was set on purpose, so it is kept even when its lookup fails or is
+// slow at boot. Swapping it for the browser URL would last until the next restart, long
+// after a passing DNS failure, and a public proxy may route only /rtc*, not /twirp.
+//
 // Never inside a container: there the compose name is right even when it doesn't resolve
 // yet (Compose doesn't order curia after livekit, so livekit may be stopped or restarting
 // at boot), and the browser URL would be wrong for good (ws://localhost:7880 is the curia
@@ -21,6 +26,9 @@ import { toLiveKitHttpUrl, toLiveKitWsUrl } from './token.js';
 
 /** Boot waits on this lookup, so bound it. */
 const DEFAULT_LOOKUP_TIMEOUT_MS = 2_000;
+
+/** The compose service name in the default management URL (`http://livekit:7880`). */
+const COMPOSE_LIVEKIT_HOST = 'livekit';
 
 export interface LiveKitServerUrls {
   /** http(s) base for RoomService, health and the Setup probe. */
@@ -49,7 +57,7 @@ export async function resolveLiveKitServerUrl(opts: {
 
   let hostname: string;
   try {
-    hostname = new URL(managementUrl).hostname.replace(/^\[(.*)\]$/, '$1');
+    hostname = new URL(managementUrl).hostname;
   } catch (err) {
     logger.warn(
       { err, managementUrl },
@@ -57,6 +65,8 @@ export async function resolveLiveKitServerUrl(opts: {
     );
     return keep();
   }
+  // An explicit address is kept as configured: no lookup, no substitution.
+  if (hostname !== COMPOSE_LIVEKIT_HOST) return keep();
 
   const lookup = opts.lookup ?? ((h: string) => dnsLookup(h));
   const timeoutMs = opts.lookupTimeoutMs ?? DEFAULT_LOOKUP_TIMEOUT_MS;
