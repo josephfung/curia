@@ -265,7 +265,8 @@ source "$SCRIPT_DIR/scripts/setup-common.sh"
 # helpers existed) cannot run this installer. Plain printf: the error/hint
 # helpers just sourced may be that release's.
 for _helper in compose_var env_value env_decode_value set_env_var ensure_livekit_env livekit_seed_keys \
-    livekit_command_for livekit_host_port print_next_steps note_livekit_values_kept; do
+    livekit_command_for livekit_host_port note_unresolved_livekit_port print_next_steps \
+    note_livekit_values_kept; do
   if [[ "$(type -t "$_helper")" != function ]]; then
     if [[ -n "$SETUP_COMMON_KEPT_REASON" ]]; then
       # The refresh failed and the copy kept from an earlier run is too old.
@@ -594,6 +595,41 @@ livekit_next_steps_state() {
   if livekit_command_is_dev "$cmd"; then printf dev; else printf on; fi
 }
 
+# Ask Compose what it will run for livekit, with the current .env, shell and
+# profiles. Sets RENDERED_LIVEKIT_ACTIVE (1 when `config --services` lists
+# livekit, i.e. `up -d` starts it, profiled or not; else 0) and
+# RENDERED_LIVEKIT_COMMAND (the rendered command: list, items joined with
+# spaces; empty when the service has none). Returns 1, both empty, when Compose
+# can't render the config. Never prints the command: it may carry --keys.
+rendered_livekit() {
+  local services out
+  RENDERED_LIVEKIT_ACTIVE=""; RENDERED_LIVEKIT_COMMAND=""
+  services="$(docker compose --project-directory "$INSTALL_DIR" config --services 2>/dev/null)" || return 1
+  if ! grep -qx livekit <<< "$services"; then RENDERED_LIVEKIT_ACTIVE=0; return 0; fi
+  out="$(docker compose --project-directory "$INSTALL_DIR" config livekit 2>/dev/null)" || return 1
+  RENDERED_LIVEKIT_ACTIVE=1
+  RENDERED_LIVEKIT_COMMAND="$(awk '
+    /^[^ ]/ { in_lk = 0; in_cmd = 0; next }
+    /^  [^ ]/ { in_lk = ($0 ~ /^  livekit:/); in_cmd = 0; next }
+    in_lk && /^    [^ ]/ { in_cmd = ($0 ~ /^    command:/); next }
+    in_cmd && /^      - / {
+      v = substr($0, 9)
+      if (v ~ /^".*"$/ || v ~ /^\047.*\047$/) v = substr(v, 2, length(v) - 2)
+      printf "%s%s", sep, v; sep = " "
+    }' <<< "$out")"
+}
+
+# Returns 0 when `docker compose up -d` will start livekit (rendered_livekit).
+# When Compose can't render the config, falls back to the voice profile (shell,
+# then .env); require_livekit_real_keys then says the check read .env.
+livekit_will_start() {
+  if rendered_livekit; then
+    [[ "$RENDERED_LIVEKIT_ACTIVE" == 1 ]] && return 0
+    return 1
+  fi
+  [[ ",$(compose_var "$1" COMPOSE_PROFILES)," == *,voice,* ]]
+}
+
 # Fresh install, before Postgres starts. The HTTPS topology, and a proxy with a
 # public address, put LiveKit signaling on the internet (the shipped Caddyfile
 # routes /rtc* to it; a proxy is told to). --dev's devkey/secret are public, so
@@ -607,12 +643,21 @@ livekit_next_steps_state() {
 # URL only and says where to enter the keys.
 # The command itself is never printed: it may carry --keys.
 require_livekit_real_keys() {
-  local env="$1" cmd
-  cmd="$(effective_livekit_command "$env")"
+  local env="$1" cmd rendered=1
+  if rendered_livekit; then
+    # Compose will not start livekit at all: nothing is exposed or crash-loops.
+    [[ "$RENDERED_LIVEKIT_ACTIVE" == 1 ]] || return 0
+    cmd="$RENDERED_LIVEKIT_COMMAND"
+  else
+    rendered=0
+    echo "" >&2
+    warn "Could not render this install's compose config, so the LiveKit check read .env and the shell instead."
+    cmd="$(effective_livekit_command "$env")"
+  fi
   if [[ "$cmd" == "$(livekit_command_for local)" || "$cmd" == "$(livekit_command_for public)" ]] \
     && [[ -z "$(compose_var "$env" LIVEKIT_KEYS)" ]]; then
     echo "" >&2
-    error "LIVEKIT_COMMAND runs LiveKit from the shipped config, which has no keys, but LIVEKIT_KEYS is empty."
+    error "LiveKit runs from the shipped config, which has no keys, but LIVEKIT_KEYS is empty."
     hint "Set LIVEKIT_KEYS=\"<key>: <secret>\", or unset it in your shell to let the installer generate one."
     hint "Then re-run install.sh. Postgres was not started."
     exit 1
@@ -622,13 +667,26 @@ require_livekit_real_keys() {
     proxy) [[ -n "$PROXY_ORIGIN" ]] || return 0 ;;
     *) return 0 ;;
   esac
+  if [[ $rendered -eq 1 && -z "$cmd" ]]; then
+    # A rendered service with no command: the installer can't tell what it runs.
+    echo "" >&2
+    error "Compose starts a livekit service with no command, so this public install can't rule out --dev credentials."
+    hint_livekit_real_keys
+    exit 1
+  fi
   livekit_command_is_dev "$cmd" || return 0
   echo "" >&2
-  error "LIVEKIT_COMMAND runs LiveKit with --dev credentials (devkey/secret), which this public install would expose."
+  error "LiveKit would run with --dev credentials (devkey/secret), which this public install would expose."
+  hint_livekit_real_keys
+  exit 1
+}
+
+# How to give LiveKit real keys, after require_livekit_real_keys stops.
+hint_livekit_real_keys() {
   hint "Set real keys: unset LIVEKIT_COMMAND (in your shell and .env) to let the installer generate them,"
   hint "or set LIVEKIT_COMMAND=--config /etc/livekit.yaml with your own LIVEKIT_KEYS=\"<key>: <secret>\"."
+  hint "A command written into docker-compose.yml itself has to be changed there."
   hint "Then re-run install.sh. Postgres was not started."
-  exit 1
 }
 
 # Since #2408 LiveKit signaling (7880) is published on loopback unless
@@ -867,6 +925,30 @@ set_topology_var() {
   record_topology_var "$1" "$2" "$3"
 }
 
+# Like set_topology_var, but only when .env has no value for KEY: one still there
+# after reset_topology_vars is the operator's (never, or no longer, what an
+# earlier run wrote), and is kept.
+set_topology_default() {
+  [[ -n "$(env_value "$1" "$2")" ]] || set_topology_var "$1" "$2" "$3"
+}
+
+# Domain topology: COMPOSE_FILE must include the TLS overlay. Empty: the
+# installer's value, recorded. An operator's value is kept, with the overlay
+# appended when missing; that append is recorded as TLS_APPENDED, so a retry
+# with another topology removes only the overlay entry, never their files.
+ensure_tls_compose_file() {
+  local env="$1" cur want sep="${COMPOSE_PATH_SEPARATOR:-:}"
+  cur="$(env_value "$env" COMPOSE_FILE)"
+  if [[ -z "$cur" ]]; then
+    set_topology_var "$env" COMPOSE_FILE "docker-compose.yml:docker-compose.tls.yml"
+    return 0
+  fi
+  uses_tls_overlay "$cur" && return 0
+  want="${cur}${sep}docker-compose.tls.yml"
+  set_env_var "$env" COMPOSE_FILE "$want"
+  record_topology_var "$env" TLS_APPENDED "$want"
+}
+
 # Fresh install, once the topology is chosen and before its values are written:
 # an earlier, interrupted run may have written another topology's values (e.g.
 # COMPOSE_FILE with the TLS overlay, then a local retry would still start Caddy
@@ -880,6 +962,13 @@ reset_topology_vars() {
   while IFS= read -r line; do
     line="${line#"$TOPOLOGY_MARK"}"; key="${line%%=*}"; val="${line#*=}"
     if [[ "$key" == TOPOLOGY ]]; then prior="$val"; continue; fi
+    if [[ "$key" == TLS_APPENDED ]]; then
+      # Only the overlay entry this run appended to the operator's COMPOSE_FILE.
+      if [[ "$(env_value "$env" COMPOSE_FILE)" == "$val" ]]; then
+        set_env_var "$env" COMPOSE_FILE "${val%"${COMPOSE_PATH_SEPARATOR:-:}"docker-compose.tls.yml}"
+      fi
+      continue
+    fi
     [[ "$key" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
     if [[ "$(env_value "$env" "$key")" == "$val" ]]; then unset_env_var "$env" "$key"; fi
   done < <(grep "^${TOPOLOGY_MARK}" "$env")
@@ -1247,10 +1336,13 @@ fresh_install() {
         [[ -n "$dom" ]] || error "A domain is required for the HTTPS topology."
       done
       set_topology_var "$env" DOMAIN "$dom"
-      set_topology_var "$env" COMPOSE_FILE "docker-compose.yml:docker-compose.tls.yml"
+      # An operator's COMPOSE_FILE (e.g. their own overlay added after an
+      # interrupted run) is kept, with the TLS overlay added when missing.
+      ensure_tls_compose_file "$env"
       # Caddy reaches curia:3000 over the compose network; keep :3000 off the
-      # public interface so traffic can't bypass TLS.
-      set_topology_var "$env" HTTP_BIND 127.0.0.1
+      # public interface so traffic can't bypass TLS. An operator's own
+      # HTTP_BIND is kept, as on the upgrade path (ensure_https_http_bind).
+      set_topology_default "$env" HTTP_BIND 127.0.0.1
       # Public origin for console links, Secure cookies and CORS. Recorded only
       # when this run filled it: a value already there is the operator's.
       if [[ -z "$(env_value "$env" APP_ORIGIN)" ]]; then
@@ -1275,8 +1367,9 @@ fresh_install() {
       fi
       ;;
     local)
-      # Evaluation on this machine: http://localhost:3000 only.
-      set_topology_var "$env" HTTP_BIND 127.0.0.1
+      # Evaluation on this machine: http://localhost:3000 only (an operator's
+      # own HTTP_BIND is kept).
+      set_topology_default "$env" HTTP_BIND 127.0.0.1
       ;;
     *)
       # proxy: base compose only, HTTP on :3000 on every interface.
@@ -1315,6 +1408,7 @@ fresh_install() {
     ensure_livekit_env "$env" "$lk_mode"
     require_livekit_real_keys "$env"
 
+    note_unresolved_livekit_port "$env"
     lk_url="$(livekit_browser_url "$TOPOLOGY" "$lk_value" "$(livekit_host_port "$env")")"
     lk_seed=(-e SEED_LIVEKIT_URL)
     lk_pair="$(livekit_seed_keys "$(compose_var "$env" LIVEKIT_KEYS)" "$(effective_livekit_command "$env")")" || lk_rc=$?
@@ -1325,10 +1419,10 @@ fresh_install() {
       warn "Could not tell which keys LiveKit's LIVEKIT_COMMAND uses, so they were not saved for Curia."
       hint "Enter the LiveKit API key and secret under Settings → Channels → Voice after setup."
     fi
-  elif [[ ",$(compose_var "$env" COMPOSE_PROFILES)," == *,voice,* ]]; then
-    # The voice profile is already on (the operator's .env or shell), so Compose
-    # starts this compose file's livekit service as it stands, whatever the
-    # installer can provision: the same --dev check before anything starts.
+  elif livekit_will_start "$env"; then
+    # Compose starts this compose file's livekit service as it stands (the voice
+    # profile is on, or the service has no profile), whatever the installer can
+    # provision: the same --dev check, on the rendered command, before anything starts.
     require_livekit_real_keys "$env"
     echo "" >&2
     warn "This release's docker-compose.yml does not mount LiveKit's config, so the installer"

@@ -1612,6 +1612,8 @@ _assert_rk() {
     if (
       unset LIVEKIT_COMMAND
       [[ "$4" == - ]] || export LIVEKIT_COMMAND="$4"
+      # Compose cannot render here: these cases cover the .env/shell fallback.
+      docker() { return 1; }
       TOPOLOGY="$1"; PROXY_ORIGIN="$2"
       require_livekit_real_keys "$_rk_env"
     ) >/dev/null 2>&1; then got=ok; else got=stopped; fi
@@ -1629,7 +1631,7 @@ _assert_rk proxy  https://p.example   "$_RK_DEV"  -       stopped "proxy with an
 _assert_rk proxy  https://p.example   "$_RK_REAL" -       ok      "proxy with an origin, real config"
 _assert_rk proxy  ''                  "$_RK_DEV"  -       ok      "proxy for localhost testing, --dev"
 _assert_rk local  ''                  "$_RK_DEV"  -       ok      "local, operator's own --dev"
-_rk_out="$( unset LIVEKIT_COMMAND; TOPOLOGY=domain; PROXY_ORIGIN=""; printf '%b' "$_RK_DEV" > "$_rk_env"; require_livekit_real_keys "$_rk_env" 2>&1 )" || true
+_rk_out="$( unset LIVEKIT_COMMAND; docker() { return 1; }; TOPOLOGY=domain; PROXY_ORIGIN=""; printf '%b' "$_RK_DEV" > "$_rk_env"; require_livekit_real_keys "$_rk_env" 2>&1 )" || true
 _assert_var "real keys: says how to fix" "$(_has "$_rk_out" 'LIVEKIT_KEYS')" yes
 # A --config command needs LIVEKIT_KEYS (the shipped configs carry none), on any
 # topology: an empty value (set empty in the shell) would crash-loop LiveKit.
@@ -1640,6 +1642,7 @@ _assert_rkk() {
     if (
       unset LIVEKIT_COMMAND LIVEKIT_KEYS
       [[ "$3" == - ]] || export LIVEKIT_KEYS="$3"
+      docker() { return 1; }
       TOPOLOGY="$1"; PROXY_ORIGIN=""
       require_livekit_real_keys "$_rk_env"
     ) >/dev/null 2>&1; then got=ok; else got=stopped; fi
@@ -1657,7 +1660,7 @@ _assert_rkk local  'LIVEKIT_COMMAND=--dev\n'        ''             ok      "loca
 # only the installer's own (keyless, shipped) commands need LIVEKIT_KEYS.
 _assert_rkk local  'LIVEKIT_COMMAND=--config /etc/my-livekit.yaml\n' '' ok "local, operator --config, keys empty"
 _assert_rkk domain 'LIVEKIT_COMMAND=--config /etc/my-livekit.yaml\n' '' ok "domain, operator --config, keys empty"
-_rk_out="$( unset LIVEKIT_COMMAND; export LIVEKIT_KEYS=""; TOPOLOGY=local; PROXY_ORIGIN=""; printf '%b' "$_RK_LOCAL" > "$_rk_env"; require_livekit_real_keys "$_rk_env" 2>&1 )" || true
+_rk_out="$( unset LIVEKIT_COMMAND; export LIVEKIT_KEYS=""; docker() { return 1; }; TOPOLOGY=local; PROXY_ORIGIN=""; printf '%b' "$_RK_LOCAL" > "$_rk_env"; require_livekit_real_keys "$_rk_env" 2>&1 )" || true
 _assert_var "config keys: names LIVEKIT_KEYS" "$(_has "$_rk_out" 'LIVEKIT_KEYS is empty')" yes
 _assert_var "config keys: Postgres not started" "$(_has "$_rk_out" 'Postgres was not started')" yes
 rm -f "$_rk_env"
@@ -1702,6 +1705,24 @@ _assert_var "effective command: overlay, explicit kept" "$(_ec "${_TLS_CF}LIVEKI
 _assert_var "effective command: base, unset -> empty (--dev)" "$(_ec '')" ""
 rm -f "$_ec_env"
 
+# rendered_livekit: reads `docker compose config` (stubbed), never .env.
+_rl() {   # $1 services, $2 rendered livekit ("fail" = config livekit fails)
+    ( _rl_s="$1"; _rl_r="$2"
+      docker() {
+        case "$*" in
+          (*"config --services") printf '%b' "$_rl_s" ;;
+          (*"config livekit") [[ "$_rl_r" != fail ]] || return 1; printf '%b' "$_rl_r" ;;
+        esac
+      }
+      if rendered_livekit; then printf '%s|%s' "$RENDERED_LIVEKIT_ACTIVE" "$RENDERED_LIVEKIT_COMMAND"; else printf 'fail'; fi )
+}
+_RL_HEAD='name: x\nservices:\n  livekit:\n    command:\n'
+_assert_var "rendered_livekit: list joined" "$(_rl 'curia\nlivekit\n' "${_RL_HEAD}      - --config\n      - /etc/livekit.yaml\n    environment:\n      A: b\n")" "1|--config /etc/livekit.yaml"
+_assert_var "rendered_livekit: quoted items unquoted" "$(_rl 'livekit\n' "${_RL_HEAD}      - --keys\n      - 'APIa: b'\n      - \"--x\"\n")" "1|--keys APIa: b --x"
+_assert_var "rendered_livekit: not an active service" "$(_rl 'curia\npostgres\n' '')" "0|"
+_assert_var "rendered_livekit: no command" "$(_rl 'livekit\n' 'services:\n  livekit:\n    image: x\nvolumes:\n  command:\n')" "1|"
+_assert_var "rendered_livekit: config livekit fails" "$(_rl 'livekit\n' fail)" "fail"
+
 # --- install.sh: fresh_install starts LiveKit and seeds matching vault values ---
 
 echo ""
@@ -1739,6 +1760,13 @@ _fi_run() {
         esac
         # The rendered config, when the test gives one (otherwise Compose prints nothing).
         case "$*" in (compose*" config") printf '%b' "${_FI_CONFIG:-}"; return 0 ;; esac
+        # Active services and the rendered livekit service: _FI_SERVICES unset means
+        # Compose cannot render (the installer falls back to .env and says so).
+        case "$*" in (compose*" config --services")
+          [[ -n "${_FI_SERVICES+set}" ]] || return 1
+          printf '%b' "$_FI_SERVICES"; return 0 ;;
+        esac
+        case "$*" in (compose*" config livekit") printf '%b' "${_FI_LK_RENDER:-}"; return 0 ;; esac
         case "$*" in (*seed-vault*)
           local n
           for n in SEED_LIVEKIT_URL SEED_LIVEKIT_API_KEY SEED_LIVEKIT_API_SECRET \
@@ -1978,6 +2006,52 @@ _fi_rc=0; _fi_run local "" 'COMPOSE_PROFILES=voice\n' || _fi_rc=$?
 unset _FI_COMPOSE
 _assert_var "no mount, voice profile on, local --dev: continues" "$_fi_rc" "0"
 
+# The --dev check reads the rendered compose service (#2705 round 2): a command
+# written into docker-compose.yml, or a livekit service with no profile, counts.
+_FI_LK_SVC='postgres\ncuria\nlivekit\n'
+_lk_render() { printf 'name: x\nservices:\n  livekit:\n    image: livekit/livekit-server\n%s' "$1"; }
+_FI_COMPOSE="$_FB_OLD"; _FI_SERVICES="$_FI_LK_SVC"
+_FI_LK_RENDER="$(_lk_render '    command:\n      - --dev\n      - --bind\n      - 0.0.0.0\n    ports:\n      - mode: ingress\n')"
+_fi_rc=0; _fi_run domain "c.example.com" '' || _fi_rc=$?
+_assert_var "rendered: unprofiled --dev service, domain: stops" "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+_assert_var "rendered: unprofiled --dev service, domain: Postgres never started" "$(grep -c 'up -d postgres' "$_fi_calls" | tr -d ' ')" "0"
+_assert_var "rendered: no .env fallback warning" "$(_has "$_fi_out" 'read .env')" no
+_fi_rc=0; _fi_run local "" '' || _fi_rc=$?
+_assert_var "rendered: --dev service, local: continues" "$_fi_rc" "0"
+_FI_LK_RENDER="$(_lk_render '    command:\n      - --config\n      - /etc/mine.yaml\n')"
+_fi_rc=0; _fi_run domain "c.example.com" 'LIVEKIT_KEYS="APIx: y"\n' || _fi_rc=$?
+_assert_var "rendered: real config, domain: continues" "$_fi_rc" "0"
+_FI_LK_RENDER="$(_lk_render '    environment:\n      LIVEKIT_KEYS: ""\n')"
+_fi_rc=0; _fi_run domain "c.example.com" '' || _fi_rc=$?
+_assert_var "rendered: no command, domain: stops" "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+_FI_SERVICES='postgres\ncuria\n'
+_fi_rc=0; _fi_run domain "c.example.com" 'COMPOSE_PROFILES=voice\n' || _fi_rc=$?
+_assert_var "rendered: livekit not active, domain: continues" "$_fi_rc" "0"
+_assert_var "rendered: livekit not active: says voice is off" "$(_has "$_fi_out" 'Voice (LiveKit) is off')" yes
+unset _FI_COMPOSE
+# With the shipped mounts: a --dev command hard-coded in docker-compose.yml wins
+# over the LIVEKIT_COMMAND the installer wrote, and the check sees it.
+_FI_SERVICES="$_FI_LK_SVC"
+_FI_LK_RENDER="$(_lk_render '    command:\n      - --dev\n')"
+_fi_rc=0; _fi_run domain "c.example.com" '' || _fi_rc=$?
+_assert_var "rendered: hard-coded --dev despite LIVEKIT_COMMAND, domain: stops" "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+_assert_var "rendered: never prints the command's keys" "$(_has "$_fi_out" "$(env_value "$_fi_env" LIVEKIT_KEYS)")" no
+unset _FI_SERVICES _FI_LK_RENDER
+# Compose can't render: the check falls back to .env and the shell, and says so.
+_FI_COMPOSE="$_FB_OLD"
+_fi_rc=0; _fi_run domain "c.example.com" 'COMPOSE_PROFILES=voice\n' || _fi_rc=$?
+unset _FI_COMPOSE
+_assert_var "render failure: falls back and stops on .env --dev" "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+_assert_var "render failure: says the check read .env" "$(_has "$_fi_out" 'read .env and the shell instead')" yes
+
+# LIVEKIT_HTTP_PORT with a ${...} reference: assume 7880 and say where to correct it.
+_fi_run local "" 'LIVEKIT_HTTP_PORT=${VOICE_PORT:-17880}\n' || true
+_assert_var "unresolved LIVEKIT_HTTP_PORT: seeds 7880" "$(_seed_env SEED_LIVEKIT_URL)" "ws://localhost:7880"
+_assert_var "unresolved LIVEKIT_HTTP_PORT: warns" "$(_has "$_fi_out" 'does not resolve, so it assumed port 7880')" yes
+_assert_var "unresolved LIVEKIT_HTTP_PORT: says where to correct it" "$(_has "$_fi_out" 'correct the LiveKit URL under Settings → Channels → Voice')" yes
+_fi_run local "" 'LIVEKIT_HTTP_PORT=17880\n' || true
+_assert_var "literal LIVEKIT_HTTP_PORT: no unresolved warning" "$(_has "$_fi_out" 'assumed port 7880')" no
+
 # A rerun after an interrupted install, with another topology: the reach values
 # the earlier run wrote are replaced; values the operator changed since are kept.
 _fi_base="$_fi_dir/env.base"
@@ -2008,6 +2082,25 @@ _fi_rerun proxy "https://p.example.com" domain "c.example.com"
 _assert_var "rerun proxy -> domain: APP_ORIGIN is the domain's" "$(env_value "$_fi_env" APP_ORIGIN)" "https://c.example.com"
 _fi_rerun domain "c.example.com" local "" 'APP_ORIGIN=https://mine.example.com\n'
 _assert_var "rerun, APP_ORIGIN changed by the operator: kept" "$(env_value "$_fi_env" APP_ORIGIN)" "https://mine.example.com"
+# The operator's COMPOSE_FILE survives a retry of the domain topology: their own
+# overlay is kept, and the TLS overlay is only added when missing.
+_fi_rerun domain "c.example.com" domain "c.example.com" 'COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml:custom.yml\n'
+_assert_var "rerun domain, operator added custom.yml: kept with the TLS overlay" "$(env_value "$_fi_env" COMPOSE_FILE)" "docker-compose.yml:docker-compose.tls.yml:custom.yml"
+_fi_rerun local "" domain "c.example.com" 'COMPOSE_FILE=docker-compose.yml:custom.yml\n'
+_assert_var "rerun local -> domain, operator COMPOSE_FILE: TLS overlay appended" "$(env_value "$_fi_env" COMPOSE_FILE)" "docker-compose.yml:custom.yml:docker-compose.tls.yml"
+_assert_var "rerun local -> domain, operator COMPOSE_FILE: one assignment" "$(grep -c '^COMPOSE_FILE=' "$_fi_env" | tr -d ' ')" "1"
+# ... and a later retry with another topology removes only the overlay it appended.
+_FI_INTERRUPT=1
+_fi_run local "" 'COMPOSE_FILE=docker-compose.yml:custom.yml\n' || true
+cp "$_fi_env" "$_fi_base"
+_FI_ENV_BASE="$_fi_base"; _fi_run domain "c.example.com" '' || true
+cp "$_fi_env" "$_fi_base"; _fi_run local "" '' || true
+unset _FI_ENV_BASE _FI_INTERRUPT
+_assert_var "retry domain -> local after an append: operator COMPOSE_FILE restored" "$(env_value "$_fi_env" COMPOSE_FILE)" "docker-compose.yml:custom.yml"
+# An HTTP_BIND the operator set after an interrupted run is kept on retry.
+_fi_rerun domain "c.example.com" domain "c.example.com" 'HTTP_BIND=10.0.0.5\n'
+_assert_var "rerun domain, operator HTTP_BIND: kept" "$(env_value "$_fi_env" HTTP_BIND)" "10.0.0.5"
+
 _fi_rerun domain "c.example.com" domain "c.example.com"
 _assert_var "rerun, same topology: overlay kept" "$(env_value "$_fi_env" COMPOSE_FILE)" "docker-compose.yml:docker-compose.tls.yml"
 _assert_var "rerun, same topology: APP_ORIGIN kept" "$(env_value "$_fi_env" APP_ORIGIN)" "https://c.example.com"
@@ -2067,7 +2160,8 @@ _sc_run() {
       unset CURIA_REF CURIA_VERSION
       # This harness already loaded the current helpers; start without them.
       unset -f compose_var env_value env_decode_value set_env_var ensure_livekit_env livekit_seed_keys \
-          livekit_command_for livekit_host_port print_next_steps note_livekit_values_kept
+          livekit_command_for livekit_host_port note_unresolved_livekit_port print_next_steps \
+          note_livekit_values_kept
       [[ "${_SC_VERSION-v0.46.0}" == - ]] || CURIA_VERSION="${_SC_VERSION-v0.46.0}"
       [[ -z "${_SC_REF:-}" ]] || CURIA_REF="$_SC_REF"
       _sc_serve="$2"
@@ -2334,6 +2428,10 @@ _xe_out="$(
 _assert_var "export_env_file: quotes removed, plain values unchanged" "$_xe_out" \
     "APIabc: s3cr3t|a b|v||unset|postgres://u:p@h:5432/db"
 # setup.sh's seed URL follows the published LiveKit port too.
+printf 'LIVEKIT_KEYS="APIabc: s3cr3t"\nLIVEKIT_COMMAND=--config /etc/livekit.local.yaml --node-ip 127.0.0.1\nLIVEKIT_HTTP_PORT=17880\n' > "$_xe_env"
+printf 'LIVEKIT_KEYS="APIabc: s3cr3t"\nLIVEKIT_HTTP_PORT=${VOICE_PORT:-17880}\n' > "$_xe_env"
+_assert_var "build_livekit_seed_env: unresolved port warns" \
+    "$( (unset LIVEKIT_KEYS LIVEKIT_COMMAND LIVEKIT_HTTP_PORT; build_livekit_seed_env "$_xe_env") 2>&1 | grep -c 'assumed port 7880' | tr -d ' ')" "1"
 printf 'LIVEKIT_KEYS="APIabc: s3cr3t"\nLIVEKIT_COMMAND=--config /etc/livekit.local.yaml --node-ip 127.0.0.1\nLIVEKIT_HTTP_PORT=17880\n' > "$_xe_env"
 _assert_var "build_livekit_seed_env: URL uses LIVEKIT_HTTP_PORT" \
     "$( unset LIVEKIT_KEYS LIVEKIT_COMMAND LIVEKIT_HTTP_PORT; build_livekit_seed_env "$_xe_env"; printf '%s' "${LIVEKIT_SEED_ENV[0]}" )" \

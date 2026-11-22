@@ -168,6 +168,20 @@ livekit_host_port() {
   printf '%s' "$p"
 }
 
+# Warn when LIVEKIT_HTTP_PORT (shell, then .env $1) holds a ${...} reference:
+# livekit_host_port can't resolve it and assumes 7880, so the LiveKit URL saved
+# for Curia (and a proxy's /rtc* rule) may name the wrong port. Silent otherwise.
+note_unresolved_livekit_port() {
+  local p
+  p="$(compose_var "$1" LIVEKIT_HTTP_PORT)"
+  # shellcheck disable=SC2016  # a literal ${, not an expansion
+  [[ "$p" == *'${'* ]] || return 0
+  echo "" >&2
+  warn "LIVEKIT_HTTP_PORT=$p uses a \${...} reference the installer does not resolve, so it assumed port 7880 for LiveKit."
+  hint "If Compose publishes another port, correct the LiveKit URL under Settings → Channels → Voice"
+  hint "(and a proxy's /rtc* rule). Check by hand: docker compose --profile voice port livekit 7880"
+}
+
 # LIVEKIT_COMMAND for a local (loopback-only, node-ip pinned) or public install.
 livekit_command_for() {
   case "$1" in

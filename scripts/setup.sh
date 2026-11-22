@@ -188,6 +188,7 @@ build_livekit_seed_env() {
     keys="$(compose_var "$env" LIVEKIT_KEYS)"
     cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
     [[ -n "$keys" || -n "$cmd" ]] || return 0
+    note_unresolved_livekit_port "$env"
     LIVEKIT_SEED_ENV=("SEED_LIVEKIT_URL=ws://localhost:$(livekit_host_port "$env")")
     pair="$(livekit_seed_keys "$keys" "$cmd")" || rc=$?
     if [[ $rc -eq 0 ]]; then
