@@ -35,6 +35,11 @@ Feedback from a principal and from operators changed the journey in five ways:
    them when the principal moves them.
 5. **Onboarding ends in a weekly session** that keeps tuning Curia's independence and finding
    new uses for it.
+6. **Priorities: use, upkeep and installs without a deep dive** (2026-11-22). The priorities
+   document's pinned description tells the coordinator how to use it, where goal changes go,
+   and to offer to start it when it's missing. The deep dive is one way the document gets
+   written, not the only one. The document is the record of priorities; the knowledge graph is
+   unchanged.
 
 Operators also told us they didn't know what to expect or how to get set up. The curia-docs
 "Getting started" section is restructured around the two phases (*How the docs tell it*).
@@ -605,9 +610,28 @@ holds are named in "what to expect".
 ### Priorities: scope
 
 - **Where they live:** `/shared/principal/priorities.md`, no hard size limit (#2338's size
-  warning is the safeguard). The principal can edit it in the console.
-- **Who uses it:** the coordinator (`pinned_context`, #2338); voice, read once at session start
-  (#2363); the daily recap; the weekly session.
+  warning is the safeguard). The principal can edit it in the console. Its frontmatter
+  describes its format: current priorities with an "as of" date, and a *Past* section that
+  superseded ones move into. There is no version history.
+- **It is the record.** Goal facts the knowledge graph learns along the way are context, not
+  the record. `extract-facts` and `memory-store` are unchanged. Spec 20's "the workspace is the
+  scratchpad, the KG is the record" is revised for durable, principal-owned `/shared/`
+  documents (#2362).
+- **How Curia uses them:** the coordinator pins the document (`pinned_context`, #2338), and its
+  declared description is the instruction: weigh work and suggestions against the priorities;
+  when the principal states or changes a goal, propose updating the document; if it's missing,
+  offer to start it. Voice reads it once at session start (#2363). The daily recap frames the
+  day against it, and the weekly session revisits it.
+- **How it's created:** by confirming the deep-dive draft (2.5), or by offer. On any install,
+  with or without onboarding, Curia offers to start the document when goals come up or it
+  notices what the principal is focused on. The offer is support, not an unexpected change, so
+  Curia may make it on its own initiative. It writes only after the principal agrees.
+- **How it stays current:** the coordinator writes changes the principal agrees anywhere: in
+  chat, on a call, or in the weekly session. A call's agreed changes go through the post-call
+  follow-up, which carries out directed changes. The weekly playbook's Priorities topic says to
+  record them.
+- **If the principal archives it,** Curia doesn't recreate it (the pinned renderer already says
+  so), and the principal can restore it in the console.
 - **Not in this milestone:** ceo-inbox and calendar don't pin it. If we want it, it's a later
   experiment with a before-and-after comparison.
 
@@ -720,7 +744,7 @@ pages are written.
 | Weekly session | Independence, feature upkeep, new plays, priorities | Joseph |
 | Done | Drafts confirmed and a weekly session agreed | builder's call |
 | Triage switch | Off on a fresh install; on after "what to expect", by voice or chat | Joseph (switch); builder's call (chat too) |
-| Priorities scope | Coordinator, voice, recap, weekly session; no specialist pinning | Joseph |
+| Priorities scope | Coordinator, voice, recap, weekly session; no specialist pinning; the pinned description carries use, upkeep and the offer to start it; the document is the record | Joseph |
 | Operator role | Design issue only (#2365) | Joseph |
 | Setup surface | One Setup page in the console: every field on its step, one Save and continue per step, fields save on leaving them; the setup agent is a help panel beside it (#2358) | Joseph |
 | Google Docs in Setup | An optional extra, not required: its sign-in isn't in the console yet (#2683) | builder's call |
@@ -741,7 +765,7 @@ Tracked in milestone **v0.48 - Onboarding Journey** (#29).
 | #2360 **Onboarding program** | Rewritten: the console's Start onboarding step and Curia's greeting; one first conversation by voice or chat with multiple-choice style, autonomy and preferences; review-format choice; review session that adapts; check-ins; weekly session. Absorbs chat sessions (#2364) and the setup agent's onboarding content. | #2358, #2359, #2361, and #2341 for the default route (Signal or SMS work without it) | XL → XXL; consider splitting the weekly session out |
 | #2361 **Principal mailbox sign-in** | Rewritten: Nylas hosted authentication (Google connector) with a callback on the Curia server, picking up the grant without a restart, an operator Setup guide, the in-conversation link, and the "connected" event. Replaces the hand-made grant guide. | #2358 | M → L |
 | #2362 **Deep dive** | Adds writing voice as the third draft; delivery as Google Docs, one email and a review session on the calendar; confirmation from the docs and the review session instead of the numbered-list email. The ADR also covers writing voice and drafts held in Google Drive. | #2360, #2361, #2338 | XL → XXL |
-| #2363 Voice loads priorities | Unchanged. | #2362 | S |
+| #2363 Voice loads priorities | No longer waits for the deep dive: the document can be started on offer (*Priorities: scope*). | — | S |
 | #2364 Spike: text-chat sessions | Folded into #2360; closed. | — | — |
 | #2365 Design: operator role | Unchanged, still off the critical path. | — | S |
 
@@ -760,7 +784,8 @@ can run in parallel.
 - **Invitation and nudge copy,** and their frequency caps, within the "no session spam"
   anti-goal.
 - **Chat session idle timeout.**
-- **Format of the priorities document:** described in its own frontmatter, per #2338.
+- **Format of the priorities document:** described in its own frontmatter, per #2338, with
+  current and *Past* sections and an "as of" date.
 
 ## Appendix A — setup-doc inconsistencies to fix in #2356
 
