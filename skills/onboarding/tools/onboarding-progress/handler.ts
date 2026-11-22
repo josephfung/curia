@@ -243,7 +243,7 @@ async function greetingSent({ svc }: Deps): Promise<ToolResult> {
   return { success: true, data: { recorded: true } };
 }
 
-async function operatorNotice({ repo, parent, ctx }: Deps, input: Record<string, unknown>): Promise<ToolResult> {
+async function operatorNotice({ svc, repo, parent, ctx }: Deps, input: Record<string, unknown>): Promise<ToolResult> {
   const event = input.event;
   if (typeof event !== 'string' || !(OPERATOR_EVENTS as readonly string[]).includes(event)) {
     return fail(`operator_notice requires event: one of ${OPERATOR_EVENTS.join(', ')}`);
@@ -252,7 +252,14 @@ async function operatorNotice({ repo, parent, ctx }: Deps, input: Record<string,
   if (details !== undefined && (typeof details !== 'object' || details === null || Array.isArray(details))) {
     return fail('details must be an object when given');
   }
-  const recorded = await notifyOperator({ taskRepo: repo, logger: ctx.log }, parent.id, event as OperatorEvent, details as Record<string, unknown> | undefined);
+  // Model-supplied details go no further than the task note, the log and the audit row (#2710):
+  // the emailed notice carries the event only. The service's notifier is the one index.ts binds
+  // to the outbound gateway; without it the notice is still recorded, and nobody is emailed.
+  const notice = { details: details as Record<string, unknown> | undefined };
+  const deliver = svc.operatorNoticeDelivery();
+  const recorded = deliver
+    ? await deliver(parent.id, event as OperatorEvent, notice)
+    : await notifyOperator({ taskRepo: repo, logger: ctx.log }, parent.id, event as OperatorEvent, notice);
   if (!recorded) return fail('The operator notice could not be recorded on the onboarding task. Try again shortly.');
   return { success: true, data: { recorded: true } };
 }

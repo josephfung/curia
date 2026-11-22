@@ -25,6 +25,7 @@ const PosturePage = lazy(() => import('./pages/PostureSettingsPage'));
 const EmailCalendarPage = lazy(() => import('./pages/EmailCalendarSettingsPage'));
 const CapabilitiesPage = lazy(() => import('./pages/capabilities/CapabilitiesSettingsPage'));
 const RetentionPage = lazy(() => import('./pages/RetentionSettingsPage'));
+const OperatorPage = lazy(() => import('./pages/OperatorSettingsPage'));
 const DevicesPage = lazy(() => import('./pages/DevicesSettingsPage'));
 const AboutPage = lazy(() => import('./pages/AboutSettingsPage'));
 const ToolsPage = lazy(() =>
@@ -196,6 +197,13 @@ const retentionRoute = createRoute({
   getParentRoute: () => systemRoute,
   path: '/retention',
   component: RetentionPage,
+});
+
+// Who hears about technical problems (#2710).
+const operatorRoute = createRoute({
+  getParentRoute: () => systemRoute,
+  path: '/operator',
+  component: OperatorPage,
 });
 
 // Tools and Agents are standalone top-level pages (peer to Contacts/Tasks),
@@ -376,6 +384,7 @@ const routeTree = rootRoute.addChildren([
       aboutRoute,
       devicesRoute,
       retentionRoute,
+      operatorRoute,
     ]),
     settingsRoute.addChildren([
       personalityRoute,

@@ -26,6 +26,7 @@ How reviewers weigh findings, including what not to raise, is in `docs/dev/revie
 - **Manifest and prompt text:** read each `tool.json` description, agent YAML line and `SKILL.md` claim against what the handler actually does. *(model-facing contract)*
 - **Times:** user-facing times go through `toLocalIso()` with an IANA zone; date-only values stay dates. *(timezone / dates)*
 - **Logs:** log ids, counts and hosts, not message content, raw identifiers or full URLs. *(log hygiene)*
+- **Operator notices:** a notification whose audience is `operator` (`src/notifications/audience.ts`) carries no principal content — system names, ids, counts, error codes and console links only. No objectives, message text, sender addresses, or model-supplied detail values. *(privacy / ADR-068)*
 
 ## Tests, docs and migrations
 

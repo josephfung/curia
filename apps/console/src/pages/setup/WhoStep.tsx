@@ -30,6 +30,11 @@ export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Prop
   const [pronouns, setPronouns] = useState(principal?.pronouns ?? '');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  /** Set when the save recorded an operator but the confirmation notice to them failed: the
+   *  step stays put on one warning rather than continuing and losing the only signal that the
+   *  address may be mistyped (#2710). The values attempted are kept so a corrected address is
+   *  saved again, and only an unchanged second press continues anyway. */
+  const [noticeFailure, setNoticeFailure] = useState<{ message: string; name: string; email: string } | null>(null);
 
   function validate(): string | null {
     if (setupFor === 'other') {
@@ -46,17 +51,33 @@ export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Prop
 
   async function save(e: FormEvent): Promise<void> {
     e.preventDefault();
+    const attempt = { name: operatorName.trim(), email: operatorEmail.trim().toLowerCase() };
+    // A second press continues past a failed confirmation, unless the address was corrected —
+    // then it is saved again, because continuing would keep the address that did not work.
+    if (noticeFailure && noticeFailure.name === attempt.name && noticeFailure.email === attempt.email) {
+      onContinue();
+      return;
+    }
     const problem = validate();
     if (problem) { setError(problem); return; }
     setSaving(true);
     setError(null);
+    setNoticeFailure(null);
     try {
       // The Setup row first: it marks Setup in progress, so the page stays the landing page.
-      await saveSetupFields({
+      const saved = await saveSetupFields({
         setupFor,
-        operatorName: setupFor === 'other' ? operatorName.trim() : null,
+        operatorName: setupFor === 'other' ? attempt.name : null,
         operatorEmail: setupFor === 'other' ? operatorEmail.trim() : null,
       });
+      if (saved.operatorNoticeSent === false) {
+        // Saved, but the operator will not have heard from Curia. Say so before moving on.
+        setNoticeFailure({
+          message: `Saved, but the confirmation email to ${operatorEmail.trim()} could not be sent. Check the address, then continue.`,
+          ...attempt,
+        });
+        return;
+      }
       await postJson('/api/setup/principal', { name: name.trim() });
       await postJson('/api/setup/principal/profile', {
         timezone: timezone.trim(),
@@ -142,7 +163,8 @@ export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Prop
       )}
 
       {error && <p className="setup-status attention" role="alert">{error}</p>}
-      <StepFooter primary={saving ? 'Saving…' : 'Save and continue'} primaryDisabled={saving} onHelp={onHelp} submit />
+      {noticeFailure && <p className="setup-status attention" role="alert">{noticeFailure.message}</p>}
+      <StepFooter primary={saving ? 'Saving…' : noticeFailure ? 'Continue anyway' : 'Save and continue'} primaryDisabled={saving} onHelp={onHelp} submit />
     </form>
   );
 }

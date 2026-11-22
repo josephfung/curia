@@ -55,6 +55,7 @@ import {
   PRINCIPAL_RESTART_EXIT_DELAY_SECONDS,
   RESTART_WAKE_DELAY_SECONDS,
 } from './constants.js';
+import type { OperatorNotifier } from './notify-operator.js';
 
 /** Signals that the install is already in use, so starting onboarding needs confirming. */
 export const WORKING_PRINCIPAL_SIGNALS = {
@@ -203,6 +204,11 @@ export interface OnboardingServiceDeps {
    */
   persistentStore: boolean;
   logger: Logger;
+  /**
+   * How an operator notice is emailed (#2710), for the onboarding-progress tool's own notices.
+   * Absent: the tool still records the notice on the task; nobody is emailed.
+   */
+  operatorNotifier?: OperatorNotifier;
   /** Defaults to the pairing-invitations mint on `pool`. */
   mintInvitation?: (origin: string) => Promise<Pick<MintedInvitation, 'id' | 'pairUrl' | 'expiresAt'>>;
   /** Defaults to the pairing-invitations stop-by-id on `pool`. */
@@ -224,6 +230,11 @@ export class OnboardingService {
     this.newId = deps.newId ?? randomUUID;
     this.mint = deps.mintInvitation ?? ((origin) => mintPairingInvitation(deps.pool, origin));
     this.stop = deps.stopInvitation ?? ((id) => stopPairingInvitation(deps.pool, id));
+  }
+
+  /** The email seam for operator notices, when one was injected (#2710). */
+  operatorNoticeDelivery(): OperatorNotifier | undefined {
+    return this.deps.operatorNotifier;
   }
 
   async status(): Promise<OnboardingStatus> {

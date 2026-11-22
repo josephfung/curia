@@ -64,7 +64,9 @@ function createMocks() {
     createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'draft-1' }),
     linkGatedAction: vi.fn().mockResolvedValue(undefined),
     listEmailMessages: vi.fn().mockResolvedValue([]),
-    sendNotification: vi.fn().mockResolvedValue(undefined),
+    // The gateway returns whether the notice was published; the rate-limit dedup stamp is
+    // only committed on true (#2710).
+    sendNotification: vi.fn().mockResolvedValue(true),
   } as unknown as OutboundGateway;
 
   return { logger, bus, contactService, outboundGateway };
@@ -73,7 +75,6 @@ function createMocks() {
 function makeAdapter(mocks: ReturnType<typeof createMocks>, overrides: Partial<{
   contactCreationMaxPerMessage: number;
   contactCreationMaxPerHour: number;
-  ceoEmail: string;
   timezone: string;
   suppressedSenderEmails: string[];
 }> = {}) {
@@ -89,7 +90,6 @@ function makeAdapter(mocks: ReturnType<typeof createMocks>, overrides: Partial<{
     contactCreationMaxPerMessage: overrides.contactCreationMaxPerMessage ?? 10,
     contactCreationMaxPerHour: overrides.contactCreationMaxPerHour ?? 100,
     maxConcurrentTurns: 4,
-    ceoEmail: overrides.ceoEmail ?? CEO_EMAIL,
     timezone: overrides.timezone ?? 'America/Toronto',
   });
 }
@@ -464,7 +464,6 @@ describe('EmailAdapter — inbound poll: suppressedSenderEmails', () => {
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
       maxConcurrentTurns: 4,
-      ceoEmail: CEO_EMAIL,
       timezone: 'America/Toronto',
     });
 
@@ -496,7 +495,6 @@ describe('EmailAdapter — inbound poll: suppressedSenderEmails', () => {
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
       maxConcurrentTurns: 4,
-      ceoEmail: CEO_EMAIL,
       timezone: 'America/Toronto',
     });
 
@@ -528,7 +526,6 @@ describe('EmailAdapter — inbound poll: suppressedSenderEmails', () => {
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
       maxConcurrentTurns: 4,
-      ceoEmail: CEO_EMAIL,
       timezone: 'America/Toronto',
     });
 
@@ -565,7 +562,9 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
 
     const event = createOutboundNotification({
       notificationType: 'blocked_content',
-      ceoEmail: CEO_EMAIL,
+      // What OutboundGateway.sendNotification resolves from the type (#2710).
+      recipient: CEO_EMAIL,
+      audience: 'principal',
       subject: 'Action needed — blocked outbound reply',
       body: 'Block ID: block_test123',
       blockId: 'block_test123',
@@ -603,14 +602,14 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
       maxConcurrentTurns: 4,
-      ceoEmail: CEO_EMAIL,
       timezone: 'America/Toronto',
     });
     await adapter.start();
 
     const event = createOutboundNotification({
       notificationType: 'blocked_content',
-      ceoEmail: CEO_EMAIL,
+      recipient: CEO_EMAIL,
+      audience: 'principal',
       subject: 'Test',
       body: 'Test body',
     });
@@ -647,7 +646,8 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
 
     const event = createOutboundNotification({
       notificationType: 'blocked_content',
-      ceoEmail: CEO_EMAIL,
+      recipient: CEO_EMAIL,
+      audience: 'principal',
       subject: 'Test',
       body: 'Test body',
       blockId: 'block_test456',
@@ -849,7 +849,8 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
     expect(mocks.outboundGateway.sendNotification).toHaveBeenCalledOnce();
     const notifPayload = (mocks.outboundGateway.sendNotification as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(notifPayload.notificationType).toBe('contact_rate_limited');
-    expect(notifPayload.ceoEmail).toBe(CEO_EMAIL);
+    // The recipient is the gateway's to resolve (#2710); the adapter states the type only.
+    expect(notifPayload).not.toHaveProperty('ceoEmail');
     expect(notifPayload.subject).toContain('rate limit');
 
     await adapter.stop();
@@ -1321,7 +1322,6 @@ describe('EmailAdapter — inbound poll: self-loop hardening', () => {
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
       maxConcurrentTurns: 4,
-      ceoEmail: CEO_EMAIL,
       timezone: 'America/Toronto',
     });
 

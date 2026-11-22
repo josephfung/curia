@@ -15,6 +15,7 @@ import {
 } from './constants.js';
 import { decideNext, type WatcherFacts, type WatcherInvitation } from './followup-policy.js';
 import { notifyOperatorOnce } from './notify-operator-once.js';
+import type { OperatorNotifier } from './notify-operator.js';
 import {
   findOpenOnboardingTask,
   type OnboardingState,
@@ -32,6 +33,8 @@ export interface OnboardingWatcherOptions {
   /** The process's shared onboarding state lock (createOnboardingStateLock). */
   stateLock: OnboardingStateLock;
   logger: Logger;
+  /** How an operator notice is emailed (#2710). Absent: the note is recorded, nobody is emailed. */
+  notifyOperator?: OperatorNotifier;
   /** The current phone-app invitation; null when none exists. */
   readInvitation: () => Promise<{ id: string; expiresAt: Date; redeemed: boolean; redeemedAt: Date | null } | null>;
   /**
@@ -95,7 +98,14 @@ export class OnboardingWatcher {
       const action = decideNext(state, now, invitation, facts);
       if (action === 'wait') return;
 
-      const deps = { taskRepo: this.o.taskRepo, logger: this.o.logger, configStore: this.o.configStore, stateLock: this.o.stateLock };
+      const deps = {
+        taskRepo: this.o.taskRepo,
+        logger: this.o.logger,
+        configStore: this.o.configStore,
+        stateLock: this.o.stateLock,
+        // Present when an outbound gateway exists: the notice is recorded either way.
+        notifier: this.o.notifyOperator,
+      };
       // Re-decided on the latest state inside each update, so it must still be this run's state.
       const stillApplies = (s: OnboardingState) => s.taskId === task.id && decideNext(s, now, invitation, facts) === action;
       switch (action) {
@@ -120,7 +130,7 @@ export class OnboardingWatcher {
             deps,
             task.id,
             'greeting_unanswered',
-            state.greetingSentAt === null ? { reason: 'greeting_not_recorded' } : undefined,
+            state.greetingSentAt === null ? { details: { reason: 'greeting_not_recorded' } } : undefined,
             stillApplies,
           );
           break;

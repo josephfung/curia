@@ -174,7 +174,7 @@ A `known_failures` table records tool + error-type combinations that consistentl
   - **Non-critical paths** (audit acknowledgement, working-memory summary *persistence*) retry with bounded exponential backoff via `withDbRetry`. Skill handlers are **not** retried wholesale (side-effect duplication risk) — they classify the fault and return `{ success: false, errorType: 'DATABASE_UNAVAILABLE' }`
 - Task error budgets track DB failures on a separate `dbFailures` counter — temporary outages do **not** burn `consecutiveErrors`
 - The health endpoint detects DB connectivity issues immediately (`checkDb`)
-- `DbAvailabilityMonitor` probes every 30s; after **>5 minutes** of continuous unavailability it escalates to the CEO via `outbound.notification` (`database_unavailable`), retrying until delivery succeeds (typically once Postgres recovers)
+- `DbAvailabilityMonitor` probes every 30s; after **>5 minutes** of continuous unavailability it escalates to the operator via `outbound.notification` (`database_unavailable`; the principal when no operator is set, [ADR-068](../adr/068-operator-notices.md)), retrying until delivery succeeds (typically once Postgres recovers)
 
 ---
 

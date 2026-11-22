@@ -1,10 +1,10 @@
-// availability-monitor.ts — probe Postgres and escalate to the principal after a
-// sustained outage (#1381 / spec 05).
+// availability-monitor.ts — probe Postgres and escalate to the operator after a
+// sustained outage (#1381 / spec 05, #2710).
 //
 // Design:
 // - In-memory `downSince` tracker — no DB required to observe the outage.
 // - Periodic SELECT 1 probe (default 30s).
-// - After continuous unavailability ≥ 5 minutes, attempt principal notification
+// - After continuous unavailability ≥ 5 minutes, attempt an operator notification
 //   via OutboundGateway.sendNotification (LLM-free, same pattern as
 //   SuspensionNotifier). While the bus audit write still needs Postgres,
 //   retries continue each probe until the send succeeds (typically on
@@ -14,10 +14,6 @@
 import type { Pool } from 'pg';
 import type { Logger } from '../logger.js';
 import type { OutboundGateway } from '../skills/outbound-gateway.js';
-import {
-  resolvePrincipalEmail,
-  type PrincipalEmailRef,
-} from '../contacts/types.js';
 import {
   DEFAULT_DB_ESCALATION_MS,
   DEFAULT_DB_PROBE_INTERVAL_MS,
@@ -29,11 +25,9 @@ export interface DbAvailabilityMonitorConfig {
   logger: Logger;
   /** Optional — without a gateway the monitor still logs; it cannot email. */
   outboundGateway?: OutboundGateway;
-  /** Plain string (tests) or live ref so post-boot email binds hot-reload (#1514). */
-  ceoEmail?: string | PrincipalEmailRef;
   /** Probe interval. Default 30s. */
   probeIntervalMs?: number;
-  /** Continuous-down threshold before principal escalation. Default 5 min. */
+  /** Continuous-down threshold before the outage is escalated to the operator. Default 5 min. */
   escalationAfterMs?: number;
   /** Override setInterval/clearInterval for tests. */
   setIntervalFn?: typeof setInterval;
@@ -48,7 +42,7 @@ export interface DbAvailabilitySnapshot {
   downSince: number | null;
   /** True once the escalation threshold was crossed for this outage episode. */
   escalationDue: boolean;
-  /** True after a principal notification was successfully published for this episode. */
+  /** True after the outage notification was successfully published for this episode. */
   escalated: boolean;
 }
 
@@ -194,25 +188,14 @@ export class DbAvailabilityMonitor {
     const minutes = Math.round(downForMs / 60_000);
     this.log.error(
       { downForMs, minutes },
-      'Database unavailable beyond escalation threshold — attempting principal notification',
+      'Database unavailable beyond escalation threshold — attempting operator notification',
     );
 
     const gateway = this.config.outboundGateway;
     if (!gateway) {
       this.log.error(
         { downForMs },
-        'DbAvailabilityMonitor: no outbound gateway — cannot email principal; reliance on health endpoint / logs',
-      );
-      return;
-    }
-
-    const ceoEmail = this.config.ceoEmail
-      ? resolvePrincipalEmail(this.config.ceoEmail)
-      : '';
-    if (!ceoEmail) {
-      this.log.warn(
-        { downForMs },
-        'DbAvailabilityMonitor: principal email not bound yet — skipping notification',
+        'DbAvailabilityMonitor: no outbound gateway — cannot email anyone; reliance on health endpoint / logs',
       );
       return;
     }
@@ -230,16 +213,18 @@ export class DbAvailabilityMonitor {
       'This alert retries until delivery succeeds (typically once connectivity returns).',
     ].join('\n');
 
+    // The gateway resolves the address: the operator when one is set, the principal otherwise.
+    // Reading the operator setting needs Postgres too, so the lookup falls back to the last
+    // address it read (src/notifications/operator-setting.ts); with none it is the principal.
     const sent = await gateway.sendNotification({
       notificationType: 'database_unavailable',
-      ceoEmail,
       subject,
       body,
     });
 
     if (sent) {
       this.escalated = true;
-      this.log.info({ downForMs, minutes }, 'DbAvailabilityMonitor: principal notification published');
+      this.log.info({ downForMs, minutes }, 'DbAvailabilityMonitor: notification published');
     } else {
       this.log.error(
         { downForMs, minutes },

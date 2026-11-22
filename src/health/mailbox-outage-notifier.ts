@@ -1,19 +1,31 @@
-// mailbox-outage-notifier.ts — alert the principal once per principal-mailbox outage (#2475).
+// mailbox-outage-notifier.ts — alert on a principal-mailbox outage, once per episode
+// (#2475, #2710).
 //
 // The canary calls record() after probing each mailbox. The first failure of an episode sends
 // one email through OutboundGateway.sendNotification (LLM-free, same pattern as
 // DbAvailabilityMonitor); later failures stay quiet until a probe passes, which ends the
-// episode. If the alert could not be sent (no principal email yet, bus down) the next failing
-// probe tries again, so it is not lost.
+// episode. If the alert could not be sent (no address yet, bus down) the next failing probe
+// tries again, so it is not lost.
 //
-// The alert names the mailbox by label only: never its address or Nylas grant id.
+// A principal mailbox has two audiences and the gateway picks each from the notification type
+// (NOTIFICATION_AUDIENCES, ADR-068):
+//   - principal_mailbox_outage — the principal, and only they can use its reconnect link.
+//   - mailbox_outage — the operator, with no link and no address.
+// The operator notice is raised only when an operator is set, so a "Myself" install gets one
+// email rather than two about the same outage (the no-duplication rule).
+//
+// Both alerts name the mailbox by label only: never its address or Nylas grant id.
 import type { Logger } from '../logger.js';
 import type { OutboundGateway } from '../skills/outbound-gateway.js';
 
 export interface MailboxOutageNotifierDeps {
   gateway: Pick<OutboundGateway, 'sendNotification'>;
-  /** Live lookup: the principal's email may be bound after boot. */
-  principalEmail: () => string | undefined;
+  /**
+   * Whether an operator is set (ADR-067's `operator` setting). When one is, the same outage
+   * also raises the operator's link-free notice; when none is, that notice would go to the
+   * principal and duplicate the one they already got. Absent: treated as no operator.
+   */
+  hasOperator?: () => Promise<boolean>;
   /**
    * Whether a published notification is delivered right now: the primary ('curia') email adapter
    * has subscribed (EmailAdapter.deliversNotifications). A publish before that reaches no one, so
@@ -61,12 +73,6 @@ export class MailboxOutageNotifier {
     }
     if (this.alerted.has(mailboxId)) return;
 
-    const ceoEmail = this.deps.principalEmail();
-    if (!ceoEmail) {
-      this.log.warn({ mailboxId }, 'Principal mailbox is failing but the principal email is not bound yet; will alert on a later probe');
-      return;
-    }
-
     if (this.deps.canDeliver && !this.deps.canDeliver()) {
       this.log.warn({ mailboxId }, 'Principal mailbox is failing but no email adapter delivers alerts yet; will alert on a later probe');
       return;
@@ -95,7 +101,6 @@ export class MailboxOutageNotifier {
 
     const sent = await this.deps.gateway.sendNotification({
       notificationType: 'principal_mailbox_outage',
-      ceoEmail,
       subject: `Curia cannot reach your "${label}" mailbox`,
       body: [
         `Curia's health check for your "${label}" mailbox failed.`,
@@ -120,11 +125,46 @@ export class MailboxOutageNotifier {
         'You will not get another alert for this mailbox until it has recovered and failed again.',
       ].join('\n'),
     });
-    if (sent) {
-      this.alerted.add(mailboxId);
-      this.log.error({ mailboxId }, 'Principal mailbox outage: alert sent');
-    } else {
+    if (!sent) {
       this.log.error({ mailboxId }, 'Principal mailbox outage: alert could not be sent; will retry on the next failing probe');
+      return;
+    }
+
+    // The operator hears the same outage without the link: only the principal can sign in to
+    // their own mailbox, so the operator's copy says what happened and that no action is needed.
+    // A failed operator send does not hold back the principal's alert or the episode record;
+    // the gateway logs it at error level and audits it.
+    if (await this.operatorIsSet()) {
+      const operatorSent = await this.deps.gateway.sendNotification({
+        notificationType: 'mailbox_outage',
+        subject: `Curia cannot reach the principal's "${label}" mailbox`,
+        body: [
+          `Curia's health check for the principal's "${label}" mailbox is failing.`,
+          '',
+          'Mail and calendar for that account are not being read or written until it is reachable again.',
+          'Curia has already told the mailbox owner; nothing here needs you.',
+          '',
+          'You will not get another notice for this mailbox until it has recovered and failed again.',
+        ].join('\n'),
+      });
+      if (!operatorSent) {
+        this.log.error({ mailboxId }, 'Principal mailbox outage: the operator notice could not be sent; the principal was already told');
+      }
+    }
+
+    this.alerted.add(mailboxId);
+    this.log.error({ mailboxId }, 'Principal mailbox outage: alert sent');
+  }
+
+  /** Whether an operator is set. A read failure counts as no operator: the principal's alert
+   *  has already gone out, and a duplicate is worse than a missing operator copy. */
+  private async operatorIsSet(): Promise<boolean> {
+    if (!this.deps.hasOperator) return false;
+    try {
+      return await this.deps.hasOperator();
+    } catch (err) {
+      this.log.warn({ err }, 'Principal mailbox outage: could not read whether an operator is set; skipping the operator notice');
+      return false;
     }
   }
 }

@@ -61,6 +61,24 @@ message must pass through it regardless of origin.
 The gateway fails closed: if the content filter crashes, the message is blocked. A channel
 client failure returns a structured error; it does not silently drop the message.
 
+### System notifications: one recipient, chosen by the type (#2710)
+
+`OutboundGateway.sendNotification` is the only path for a system notice (a database outage, a
+suspended job, a blocked mailbox sign-in). Callers state the notification type, a subject and a
+body; they never name a recipient. `NOTIFICATION_AUDIENCES`
+(`src/notifications/audience.ts`) maps each type to exactly one audience — `operator` or
+`principal` — and the gateway resolves the address from it ([ADR-068](../adr/068-operator-notices.md)):
+
+- **operator**: the `operator` setting's email. With no operator set (a "Myself" install, or one
+  that predates the Setup page) it is the principal's email, so those installs behave as before.
+- **principal**: the principal's primary verified email.
+
+The table is a `Record` over the notification-type union, so a new type with no chosen audience
+fails typecheck. Publications carry the resolved `recipient` and the `audience` that chose it;
+`ceoEmail` is gone. A notice that reaches nobody — no address, or a refused publish — is logged
+at error level and audited as `outbound.notification_undelivered` (type, audience and reason
+only), never redirected to the other person: a fallback would break the no-duplication rule.
+
 ### Personal details, outreach links and asks
 
 Authority-aware PII disclosure, [ADR-054](../adr/054-authority-aware-pii-disclosure.md) (#2312). The full policy table and judge contract are in [spec 14](14-autonomy-engine.md#personal-details-under-band-gating-2312); this is the gateway's side.

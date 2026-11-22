@@ -6,7 +6,9 @@
 // carries no origin and resumes nothing.
 //
 // `admin_blocked` also tells the operator, whatever started the sign-in: only a Google Workspace
-// administrator can lift the block, by trusting the app's OAuth client id.
+// administrator can lift the block, by trusting the app's OAuth client id. That notice is
+// operator-routed (NOTIFICATION_AUDIENCES, #2710), so the gateway addresses it — and sends it to
+// the principal when no operator is set, where it used to go before #2710.
 //
 // The event carries no grant id and no address, so neither can reach the task or the notice.
 
@@ -104,10 +106,10 @@ export interface MailboxSignInResumeSubscriberDeps {
   registerRouting?: ResumeRoutingRegistrar;
   /** The Google OAuth client id on the Nylas Google connector, for admin_blocked; undefined when unknown. */
   googleClientId?: () => Promise<string | undefined>;
-  /** Where the admin_blocked notice goes. Absent (no outbound gateway): only logged. */
+  /** How the admin_blocked notice is sent. Absent (no outbound gateway): only logged. The
+   *  recipient is the gateway's to resolve from the notification type (#2710). */
   notifier?: {
     gateway: Pick<OutboundGateway, 'sendNotification'>;
-    principalEmail: () => string | undefined;
     /** False until an email adapter that delivers notifications is running (as in
      *  MailboxOutageNotifier): a publish before then reaches no one. Absent: assumed delivered. */
     canDeliver?: () => boolean;
@@ -141,7 +143,7 @@ export class MailboxSignInResumeSubscriber {
     let operatorNotified = false;
     if (outcome === 'admin_blocked') {
       clientId = await this.lookupClientId();
-      operatorNotified = await this.notifyOperator(target, clientId, event.id);
+      operatorNotified = await this.notifyAdminBlocked(target, clientId, event.id);
     }
 
     // R6: Curia exits a few seconds after connecting its own mailbox; a resumed turn would be cut
@@ -222,13 +224,15 @@ export class MailboxSignInResumeSubscriber {
     }
   }
 
-  /** True when the notice was published (the gateway accepted it; delivery is not confirmed).
-   *  Never throws: the notice is best effort and the resume still runs. */
-  private async notifyOperator(target: SignInTarget, clientId: string | undefined, eventId: string): Promise<boolean> {
+  /** Publish the admin_blocked notice. Named for what it does: it raises a notice about a
+   *  blocked sign-in, and the notification type decides who reads it (#2710) — the operator
+   *  when one is set, the principal otherwise. True when the notice was published (the gateway
+   *  accepted it; delivery is not confirmed). Never throws: the notice is best effort and the
+   *  resume still runs. */
+  private async notifyAdminBlocked(target: SignInTarget, clientId: string | undefined, eventId: string): Promise<boolean> {
     const notifier = this.deps.notifier;
-    const ceoEmail = notifier?.principalEmail();
-    if (!notifier || !ceoEmail) {
-      this.log.warn({ eventId, hasGateway: !!notifier }, 'A Google admin policy blocked a mailbox sign-in, but no notice can be sent (no gateway or no principal email)');
+    if (!notifier) {
+      this.log.warn({ eventId }, 'A Google admin policy blocked a mailbox sign-in, but no notice can be sent (no gateway)');
       return false;
     }
     if (notifier.canDeliver && !notifier.canDeliver()) {
@@ -239,14 +243,13 @@ export class MailboxSignInResumeSubscriber {
     try {
       sent = await notifier.gateway.sendNotification({
         notificationType: 'mailbox_signin_admin_blocked',
-        ceoEmail,
         subject: 'Google blocked a mailbox sign-in for Curia',
         body: [
           `A Google sign-in for ${whose(target)} was blocked by the Google Workspace administrator's policy.`,
           '',
           `To allow it, a Workspace administrator opens the Google Admin console → Security → Access and data control → API controls → App access control, adds the app by ${clientIdPhrase(clientId)}, and marks it Trusted.`,
           '',
-          'Then ask Curia for a fresh sign-in link.',
+          'Once the app is trusted, the sign-in can be tried again.',
         ].join('\n'),
       }, eventId);
     } catch (err) {

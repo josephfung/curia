@@ -16,6 +16,7 @@ import type { ConfigStore } from '../memory/config-store.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import { BUSY_WAKE_RETRIES, BUSY_WAKE_RETRY_SECONDS, ONBOARDING_CREATED_BY } from './constants.js';
 import { notifyOperatorOnce } from './notify-operator-once.js';
+import type { OperatorNotifier } from './notify-operator.js';
 import { findOpenOnboardingTask, type OnboardingStateLock, readOnboardingState } from './state.js';
 
 export interface OnboardingSubscribersOptions {
@@ -26,6 +27,8 @@ export interface OnboardingSubscribersOptions {
   /** The process's shared onboarding state lock (createOnboardingStateLock). */
   stateLock: OnboardingStateLock;
   logger: Logger;
+  /** How an operator notice is emailed (#2710). Absent: the note is recorded, nobody is emailed. */
+  notifyOperator?: OperatorNotifier;
   /** The Google OAuth client id to trust, for a mailbox_signin_blocked notice; undefined when unknown. */
   googleClientId?: () => Promise<string | undefined>;
 }
@@ -106,10 +109,18 @@ export class OnboardingSubscribers {
       this.o.logger.warn({ errName: err instanceof Error ? err.name : typeof err }, 'onboarding: could not read the Google client id for the notice');
     }
     await notifyOperatorOnce(
-      { taskRepo: this.o.taskRepo, logger: this.o.logger, configStore: this.o.configStore, stateLock: this.o.stateLock },
+      {
+        taskRepo: this.o.taskRepo,
+        logger: this.o.logger,
+        configStore: this.o.configStore,
+        stateLock: this.o.stateLock,
+        notifier: this.o.notifyOperator,
+      },
       task.id,
       'mailbox_signin_blocked',
-      { outcome, ...(clientId !== undefined ? { clientId } : {}) },
+      // The client id is code-read from the Google connector, so it may be emailed; the outcome
+      // is context for the note and log only.
+      { ...(clientId !== undefined ? { clientId } : {}), details: { outcome } },
     );
   }
 

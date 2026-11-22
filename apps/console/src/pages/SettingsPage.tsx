@@ -301,6 +301,8 @@ const SECTION_GROUPS = {
       { id: 'about',     label: 'About',     href: '/system/about' },
       { id: 'devices',   label: 'Devices',   href: '/system/devices' },
       { id: 'retention', label: 'Retention', href: '/system/retention' },
+      // Who hears about technical problems (#2710).
+      { id: 'operator',  label: 'Operator',  href: '/system/operator' },
     ],
   },
 } as const;

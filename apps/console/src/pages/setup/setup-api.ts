@@ -51,14 +51,21 @@ export async function fetchPrincipal(): Promise<PrincipalInfo> {
   return json<PrincipalInfo>(await apiFetch('/api/setup/principal'));
 }
 
+/** What PUT /api/setup/state answers. `operatorNoticeSent` is present only when the save
+ *  recorded a new operator address and a confirmation notice was attempted (#2710). */
+export interface SaveSetupFieldsResult {
+  setup: SetupFields;
+  operatorNoticeSent?: boolean;
+}
+
 /** PUT /api/setup/state: a partial update; null clears a field. */
-export async function saveSetupFields(update: Partial<SetupFields>): Promise<SetupFields> {
-  const data = await json<{ setup: SetupFields }>(await apiFetch('/api/setup/state', {
+export async function saveSetupFields(update: Partial<SetupFields>): Promise<SaveSetupFieldsResult> {
+  const data = await json<SaveSetupFieldsResult>(await apiFetch('/api/setup/state', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(update),
   }));
-  return data.setup;
+  return data;
 }
 
 /**

@@ -600,12 +600,21 @@ so a late call still loads it (`expires_at` still bounds it); a cancelled one ne
 ### Operator notices
 
 `notifyOperator` (`src/onboarding/notify-operator.ts`) records a progress note on the
-onboarding task and logs a warning. The watcher and the subscribers raise each event at most
-once per onboarding.
-Delivery to the operator waits for the operator role (`TODO(#2365)`). The events are
-`greeting_unanswered`, `invitation_expired`, `mailbox_signin_blocked` and
-`web_search_failed`. When Setup was for the principal themself, Curia tells them directly in
-the conversation.
+onboarding task, logs a warning, and emails the operator through the one system-notice path,
+`OutboundGateway.sendNotification` (#2710, [ADR-068](../adr/068-operator-notices.md)). The
+watcher and the subscribers raise each event at most once per onboarding.
+
+The events are `greeting_unanswered`, `invitation_expired`, `mailbox_signin_blocked` and
+`web_search_failed`. All four are operator-routed in `NOTIFICATION_AUDIENCES`
+(`src/notifications/audience.ts`), so the gateway addresses them: the operator's email when
+Setup was for someone else, and the principal's when it was for them themself — a "Myself"
+install behaves exactly as before. When Setup was for the principal themself, Curia also tells
+them directly in the conversation.
+
+The emailed text carries the event and, for a blocked sign-in, the Google OAuth client id to
+trust. Nothing model-supplied reaches it: a tool call's `details` are context for the progress
+note, the log and the `onboarding.operator_notice` audit row (key names only) and never the
+email. Bodies carry no principal content — no message text, addresses or objectives.
 
 ### Done
 

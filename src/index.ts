@@ -260,6 +260,8 @@ import { inMemoryTriageConfig, TriageState, TRIAGE_NAMESPACE } from './principal
 import { isTriageHeld } from './onboarding/triage-hold.js';
 import { OnboardingService } from './onboarding/onboarding-service.js';
 import { OnboardingSubscribers } from './onboarding/subscribers.js';
+import { createOperatorEmailLookup } from './notifications/operator-setting.js';
+import { createOperatorNotifier } from './onboarding/notify-operator.js';
 import { isNextSessionBooked, OnboardingWatcher } from './onboarding/watcher.js';
 import { readCurrentInvitationTiming } from './channels/http/pairing-invitations.js';
 import { createOnboardingTurnContext } from './onboarding/turn-context.js';
@@ -1016,6 +1018,19 @@ async function main(): Promise<void> {
   // The principal's stored home timezone, refreshed with the identities. Inbox triage reads
   // it through usableTimezone(); the boot-time principalContact copy went stale on an edit.
   const principalTimezone: { current: string | null } = { current: null };
+  /**
+   * The principal's notification address: the designated primary when it is a verified, active
+   * email identity, otherwise the first verified email. Read live, so a post-boot bind applies.
+   * One reader for the gateway's notifications and the adapters that resolve their own recipient.
+   */
+  const principalNotificationEmail = (): string | undefined =>
+    findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
+    ?? (principalEmail.current || undefined);
+  // The operator's notification address (#2710), read from the settings store on use. Warmed
+  // here so the database_unavailable notice — the one raised while the settings read is
+  // failing — still knows who the operator is (the lookup keeps the last address it read).
+  const operatorEmail = createOperatorEmailLookup(pool, logger);
+  void operatorEmail();
 
   // Monotonic guard against overlapping refreshes (#1514). onIdentitiesChanged is
   // fire-and-forget, so two mutations in quick succession (e.g. add + verify, or a
@@ -2341,6 +2356,9 @@ async function main(): Promise<void> {
       defaultMailboxId,
       draftProvenance: new DraftProvenance(auditLogRepo, logger, undefined, defaultMailboxId, async () => (await principalMailboxes.list()).map((m) => m.id)),
       sendLedger: new PrincipalSendLedger(workingDocsRepo, logger),
+      // System notices go to the operator when one is set and to the principal otherwise;
+      // the notification type decides which (#2710).
+      notificationRecipients: { principalEmail: principalNotificationEmail, operatorEmail },
     });
     outboundGateway.start();
     logger.info({
@@ -2401,9 +2419,6 @@ async function main(): Promise<void> {
         pollingIntervalMs: config.nylasPollingIntervalMs,
         selfEmail: account.selfEmail,
         suppressedSenderEmails: ownedMailboxAddresses,
-        // Principal's email, resolved from findContactBySystemRole('principal') (#1049).
-        // Mutable ref so post-boot email binds update rate-limit notifications (#1514).
-        ceoEmail: principalEmail,
         contactCreationMaxPerMessage: yamlConfig.contact_creation_limits?.max_per_message ?? 10,
         contactCreationMaxPerHour: yamlConfig.contact_creation_limits?.max_per_hour ?? 100,
         // default.yaml is 4. Applying it here matches the neighbouring limits,
@@ -2849,7 +2864,6 @@ async function main(): Promise<void> {
       bus,
       outboundGateway,
       schedulerService,
-      ceoEmail: principalEmail,
       logger,
       appOrigin: config.appOrigin,
       httpPort: config.httpPort,
@@ -2876,7 +2890,6 @@ async function main(): Promise<void> {
       bus,
       outboundGateway,
       schedulerService,
-      ceoEmail: principalEmail,
       logger,
       appOrigin: config.appOrigin,
       httpPort: config.httpPort,
@@ -2901,7 +2914,6 @@ async function main(): Promise<void> {
     pool,
     logger,
     outboundGateway,
-    ceoEmail: principalEmail,
   });
   dbAvailabilityMonitor.start();
   if (!outboundGateway) {
@@ -2966,11 +2978,9 @@ async function main(): Promise<void> {
     mailboxOutageNotifier: mailboxOutageAlerts && outboundGateway
       ? new MailboxOutageNotifier({
           gateway: outboundGateway,
-          // The designated primary email when it is a verified, active identity, as the gateway's
-          // own notices use; otherwise the first verified email.
-          principalEmail: () =>
-            findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
-            ?? (principalEmail.current || undefined),
+          // A "someone else" install also tells the operator, with no reconnect link. The
+          // gateway addresses both notices from their notification types (#2710).
+          hasOperator: async () => (await operatorEmail()) !== undefined,
           // Delivered only by the primary ('curia') adapter once it has subscribed (start() runs
           // after the health service): until then an alert is not counted as sent, and retried.
           canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
@@ -3492,6 +3502,15 @@ async function main(): Promise<void> {
   // ExecutionLayer for the onboarding skill's tools.
   // One state lock for the process: every read-modify-write of the onboarding run state takes it.
   const onboardingStateLock = createOnboardingStateLock(pool, logger);
+  // Operator notices (#2710): one seam, bound here to the outbound gateway. The subscribers, the
+  // watcher and the onboarding-progress tool all send through it, so each of the four onboarding
+  // events reaches the operator by the one system-notice path.
+  const operatorNotifier = createOperatorNotifier({
+    taskRepo,
+    logger,
+    ...(outboundGateway ? { gateway: outboundGateway } : {}),
+    ...(config.appOrigin ? { appOrigin: config.appOrigin } : {}),
+  });
   const onboardingService = new OnboardingService({
     pool,
     taskRepo,
@@ -3511,6 +3530,7 @@ async function main(): Promise<void> {
     // triageConfig is in memory when the knowledge graph is off: Start is refused then.
     persistentStore: entityMemory !== undefined,
     logger,
+    operatorNotifier,
   });
   executionLayer.setOnboardingService(onboardingService);
   const onboardingTurnContext = createOnboardingTurnContext({ taskRepo, configStore: triageConfig, stateLock: onboardingStateLock, logger });
@@ -3828,15 +3848,13 @@ async function main(): Promise<void> {
       },
       // One email a day when triage pauses at the ceiling (R67); the same path as the outage alert.
       notifyCeiling: async (batches) => {
-        const ceoEmail = findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
-          ?? (principalEmail.current || undefined);
         // outbound.notification is delivered only by the primary ('curia') email adapter once its
         // outbound side has subscribed (start() does that, after the heartbeat starts). Until
         // then a publish reaches no one, so it is not reported as sent and the heartbeat retries.
-        if (!outboundGateway || !ceoEmail || !emailAdapters.some((a) => a.deliversNotifications())) return false;
+        // The gateway resolves the address and reports false when there is none (#2710).
+        if (!outboundGateway || !emailAdapters.some((a) => a.deliversNotifications())) return false;
         return outboundGateway.sendNotification({
           notificationType: 'inbox_triage_paused',
-          ceoEmail,
           subject: 'Curia paused inbox triage for today',
           body: [
             `Curia triaged ${batches} batches of your mail today, its daily limit, so it has stopped until midnight.`,
@@ -3895,6 +3913,7 @@ async function main(): Promise<void> {
     configStore: triageConfig,
     stateLock: onboardingStateLock,
     logger,
+    notifyOperator: operatorNotifier,
     googleClientId: googleOAuthClientId,
   }).start();
 
@@ -3906,6 +3925,7 @@ async function main(): Promise<void> {
     configStore: triageConfig,
     stateLock: onboardingStateLock,
     logger,
+    notifyOperator: operatorNotifier,
     readInvitation: () => readCurrentInvitationTiming(pool),
     nextSessionBooked: (taskId, now) =>
       isNextSessionBooked({ pool, listPendingAgendas: (at) => agendaStore.listPending(at) }, taskId, now),
@@ -4158,9 +4178,6 @@ async function main(): Promise<void> {
       ? {
           notifier: {
             gateway: outboundGateway,
-            principalEmail: () =>
-              findPrimaryEmailIdentity(principalIdentities, principalPrimaryEmail.current)?.channelIdentifier
-              ?? (principalEmail.current || undefined),
             // As for the outage notifier: a notice published before an adapter delivers reaches no one.
             canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
           },
@@ -4380,6 +4397,8 @@ async function main(): Promise<void> {
     mcpRegistryService,
     secretsService,
     secretCaptureService,
+    // The Operator setting's confirmation notice goes through the one system-notice path (#2710).
+    ...(outboundGateway ? { outboundGateway } : {}),
     mailboxSignIn: {
       service: mailboxSignInService,
       readiness: nylasSignInReadiness,

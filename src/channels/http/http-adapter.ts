@@ -45,6 +45,7 @@ import { documentsRoutes } from './routes/documents.js';
 import { identityRoutes } from './routes/identity.js';
 import { executiveRoutes } from './routes/executive.js';
 import { autonomyRoutes } from './routes/autonomy.js';
+import { operatorRoutes } from './routes/operator.js';
 import {
   memoryRetentionRoutes,
   type MemoryRetentionSnapshot,
@@ -183,6 +184,11 @@ export interface HttpAdapterConfig {
   };
   /** Backs /api/google-workspace/* ("Sign in as Curia" with Google Workspace, #2683). */
   googleWorkspaceSignIn?: import('../../google/workspace-signin.js').GoogleWorkspaceSignInService;
+  /**
+   * The one system-notice path, for the Operator setting's confirmation notice (#2710). Absent:
+   * the save still succeeds and the console reports the notice could not be sent.
+   */
+  outboundGateway?: Pick<import('../../skills/outbound-gateway.js').OutboundGateway, 'sendNotification'>;
   /**
    * True when the process booted without a principal contact and is running in
    * setup-required mode (email + Signal adapters are skipped until restart).
@@ -550,6 +556,9 @@ export class HttpAdapter implements Channel {
         contactService: this.config.contactService,
         entityMemory: this.config.entityMemory,
         setupChecklist: this.config.setupChecklist,
+        // The operator's confirmation notice when Setup records them (#2710).
+        ...(this.config.outboundGateway ? { outboundGateway: this.config.outboundGateway } : {}),
+        ...(this.config.appOrigin ? { appOrigin: this.config.appOrigin } : {}),
       });
     }
 
@@ -571,6 +580,19 @@ export class HttpAdapter implements Channel {
         executiveProfileService: this.config.executiveProfileService,
         webAppBootstrapSecret,
         sessions,
+      });
+    }
+
+    // Operator setting (#2710) — the operator's name and email, their change history, and the
+    // confirmation notice sent when the address changes. Same session-auth pattern.
+    if (webAppBootstrapSecret) {
+      await this.app.register(operatorRoutes, {
+        webAppBootstrapSecret,
+        sessions,
+        pool: this.config.pool,
+        logger,
+        ...(this.config.outboundGateway ? { outboundGateway: this.config.outboundGateway } : {}),
+        ...(this.config.appOrigin ? { appOrigin: this.config.appOrigin } : {}),
       });
     }
 

@@ -53,7 +53,7 @@ import type { DetectedPii, PiiRedactor } from '../dispatch/pii-redactor.js';
 import type { BriefDetectedItem } from '../autonomy/judge-brief.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
-import { createOutboundBlocked, createOutboundDelivered, createOutboundNotification, createAutonomySendBlocked, createAutonomyRelayDeferred, createPrincipalReport } from '../bus/events.js';
+import { createOutboundBlocked, createOutboundDelivered, createOutboundNotification, createOutboundNotificationUndelivered, createAutonomySendBlocked, createAutonomyRelayDeferred, createPrincipalReport } from '../bus/events.js';
 import type { ChannelReconnectEvent } from '../bus/events.js';
 import { AutonomyService, type AutonomyConfig } from '../autonomy/autonomy-service.js';
 import { markdownToMrkdwn } from '../format/markdown-to-mrkdwn.js';
@@ -69,7 +69,10 @@ import {
   BAND_RULES, describePiiLabels, plainReviewReasons, type BandReviewAsk, type BandReviewReport, type BandReviewSignals, type BandSendReview,
   type DraftAuthor,
 } from '../dispatch/band-send-review.js';
-import type { OutboundNotificationPayload } from '../bus/events.js';
+import type { OutboundNotificationRequest } from '../bus/events.js';
+import type { NotificationRecipientDeps } from '../notifications/recipients.js';
+import { resolveNotificationRecipient } from '../notifications/recipients.js';
+import { notificationAudience } from '../notifications/audience.js';
 import { askPreamble, displayName, normalizeCounterparty, type DisclosureAsk } from '../autonomy/disclosure-decisions.js';
 import { markdownToHtml } from '../format/markdown-to-html.js';
 import { bodyEndsWithSignature, emailSignatureHtml, emailSignatureText } from '../channels/email/signature.js';
@@ -474,6 +477,13 @@ export interface OutboundGatewayConfig {
   mailboxAddress?: (mailboxId: string) => Promise<string | undefined>;
   /** A mailbox's label for the principal ("Work"), or undefined when unknown (#2475, Task 19). */
   mailboxLabel?: (mailboxId: string) => Promise<string | undefined>;
+  /**
+   * Where system notifications go (#2710, ADR-068). The gateway reads the notification type's
+   * audience from NOTIFICATION_AUDIENCES and asks this for that person's address: the operator
+   * when it is operator-routed and an operator is set, the principal otherwise. Absent: a
+   * notification has no address, so nothing is sent and the miss is audited — never a guess.
+   */
+  notificationRecipients?: NotificationRecipientDeps;
 }
 
 /**
@@ -1311,6 +1321,7 @@ export class OutboundGateway {
   private readonly mailboxLabelLookup?: (mailboxId: string) => Promise<string | undefined>;
   private readonly draftProvenance?: OutboundGatewayConfig['draftProvenance'];
   private readonly sendLedger?: OutboundGatewayConfig['sendLedger'];
+  private readonly notificationRecipients?: NotificationRecipientDeps;
   private flushInFlight = new Set<string>();
   /** Backoff timers for HTTP channels that queued on a transient failure (#1380). */
   private flushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1352,6 +1363,7 @@ export class OutboundGateway {
     this.mailboxLabelLookup = config.mailboxLabel;
     this.draftProvenance = config.draftProvenance;
     this.sendLedger = config.sendLedger;
+    this.notificationRecipients = config.notificationRecipients;
     if (this.gating === 'band' && !this.bandReview) {
       // The filter turns contact-data-leak and Stage 2.5 off under band; without the review
       // that replaces them, sends would go out with no disclosure review at all.
@@ -2785,19 +2797,53 @@ export class OutboundGateway {
    *
    * This replaces the former direct dispatchEmail() calls that bypassed the content
    * filter. The notification body is always a hardcoded template (no LLM-generated
-   * content) addressed to the principal email (which is in the content filter allowlist),
-   * so the filter will always pass.
+   * content) addressed to one of the two people Curia tells about its own trouble, so
+   * the filter will always pass.
    *
-   * Callers: the blocked-content path in send().
+   * The recipient is resolved here, from the notification type (#2710, ADR-068): callers
+   * state what happened and never name an address. An operator-routed type goes to the
+   * operator when one is set and to the principal otherwise; a principal-routed type always
+   * goes to the principal. When there is no address at all, nothing is sent to anyone else:
+   * the miss is logged at error level and audited, because a fallback to the other person
+   * would break the no-duplication rule.
+   *
+   * Returns whether the notice was published for delivery. False means it reached no one:
+   * either there was no address (audited), or the bus refused the publish (logged). Neither
+   * throws — a notifier must not fail the operation it is reporting on.
    */
   async sendNotification(
-    payload: OutboundNotificationPayload,
+    request: OutboundNotificationRequest,
     parentEventId?: string,
   ): Promise<boolean> {
+    const audience = notificationAudience(request.notificationType);
+    let recipient: string | null = null;
+    try {
+      recipient = this.notificationRecipients
+        ? (await resolveNotificationRecipient(request.notificationType, this.notificationRecipients))?.email ?? null
+        : null;
+    } catch (err) {
+      // Resolving reads the operator setting and the live principal email; either can throw
+      // (a closed pool, a refresh mid-flight). That is still "no address", not a crash path.
+      this.log.error(
+        { err, notificationType: request.notificationType, audience },
+        'outbound-gateway: could not resolve a notification recipient',
+      );
+      recipient = null;
+    }
+
+    if (!recipient) {
+      this.log.error(
+        { notificationType: request.notificationType, audience },
+        'outbound-gateway: no address for a system notification — nothing sent, and nothing sent to the other person',
+      );
+      await this.auditUndeliveredNotification(request.notificationType, 'no_recipient', parentEventId);
+      return false;
+    }
+
     try {
       await this.bus.publish(
         'dispatch',
-        createOutboundNotification({ ...payload, parentEventId }),
+        createOutboundNotification({ ...request, recipient, audience, parentEventId }),
       );
       return true;
     } catch (err) {
@@ -2805,10 +2851,41 @@ export class OutboundGateway {
       // is visible in alerting but do not throw; the caller's primary operation (block
       // or hold) has already completed successfully.
       this.log.error(
-        { err, notificationType: payload.notificationType },
+        { err, notificationType: request.notificationType, audience },
         'outbound-gateway: failed to publish outbound.notification event',
       );
+      // A notice nobody will receive: audit the miss too, so the failure is visible in the log an
+      // operator reads. The bus may be the broken part; that attempt failing is logged as well.
+      await this.auditUndeliveredNotification(request.notificationType, 'publish_failed', parentEventId);
       return false;
+    }
+  }
+
+  /**
+   * Record that a system notification had no address, so an operator can see a notice that
+   * reached nobody (#2710). The audit row is the whole point: the alternative is a silent
+   * drop. Best-effort by design — the bus write-ahead audit can itself fail (Postgres down is
+   * the usual reason an address is missing late), and that failure is logged rather than
+   * thrown, because the caller is already reporting trouble.
+   */
+  private async auditUndeliveredNotification(
+    notificationType: OutboundNotificationRequest['notificationType'],
+    reason: 'no_recipient' | 'publish_failed',
+    parentEventId?: string,
+  ): Promise<void> {
+    try {
+      await this.bus.publish(
+        'dispatch',
+        createOutboundNotificationUndelivered(
+          { notificationType, audience: notificationAudience(notificationType), reason },
+          parentEventId,
+        ),
+      );
+    } catch (err) {
+      this.log.error(
+        { err, notificationType },
+        'outbound-gateway: could not audit an undelivered system notification',
+      );
     }
   }
 

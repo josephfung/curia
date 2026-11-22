@@ -43,6 +43,8 @@ import {
   type SetupStateUpdate,
 } from '../../../setup/setup-settings.js';
 import { InvalidSettingError } from '../../../settings/store.js';
+import type { OutboundGateway } from '../../../skills/outbound-gateway.js';
+import { sendOperatorConfirmation } from '../../../notifications/operator-notice.js';
 
 import { WorkingDocsRepo } from '../../../db/working-docs-repo.js';
 import { seedPlaybook } from '../../../onboarding/playbook.js';
@@ -87,6 +89,14 @@ export interface SetupRouteOptions {
   infraLlmService?: InfraLlmService;
   /** The Setup checklist (#2358). Absent: the checklist and complete routes answer 503. */
   setupChecklist?: () => Promise<SetupChecklist>;
+  /**
+   * How the operator's confirmation notice is sent when Setup first records them (#2710). The
+   * one system-notice path; absent, the save still succeeds and the page says the notice was
+   * not sent.
+   */
+  outboundGateway?: Pick<OutboundGateway, 'sendNotification'>;
+  /** The console's origin, for the confirmation's link (#2710). */
+  appOrigin?: string;
 }
 
 // Match identity.ts: tighter rate limit on auth-sensitive routes (10/min vs the
@@ -123,6 +133,8 @@ export async function setupRoutes(
     scheduleProcessExit,
     infraLlmService,
     setupChecklist,
+    outboundGateway,
+    appOrigin,
   } = options;
 
   // Delay before process.exit so Fastify can finish flushing the 200 response.
@@ -550,8 +562,28 @@ export async function setupRoutes(
     const parsed = parseStateUpdate(request.body);
     if ('error' in parsed) return reply.status(400).send({ error: parsed.error });
     try {
+      const before = await readSetupState(pool, logger);
       const state = await updateSetupState(pool, parsed.update, { updatedBy: 'console', logger });
-      return reply.send({ inSetup: isInSetup(state.phase), setup: publicState(state) });
+      // A saved operator address gets one confirmation notice, to that address (#2710). Only
+      // when it actually changed: the Setup page saves its fields step by step, and re-saving
+      // the same address is not a new operator. A clear sends nothing — there is no address.
+      let operatorNoticeSent: boolean | undefined;
+      // The two halves are stored together, so a non-null email always has a name.
+      if (state.operatorEmail !== null && state.operatorName !== null && state.operatorEmail !== before.operatorEmail) {
+        operatorNoticeSent = await sendOperatorConfirmation(
+          {
+            ...(outboundGateway ? { gateway: outboundGateway } : {}),
+            ...(appOrigin ? { appOrigin } : {}),
+            logger,
+          },
+          { name: state.operatorName, email: state.operatorEmail },
+        );
+      }
+      return reply.send({
+        inSetup: isInSetup(state.phase),
+        setup: publicState(state),
+        ...(operatorNoticeSent !== undefined ? { operatorNoticeSent } : {}),
+      });
     } catch (err) {
       // A cross-field rule (Myself with operator details; Someone else without them) or a
       // value that fails its schema is the caller's mistake, not a server failure.

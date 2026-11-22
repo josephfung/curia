@@ -99,7 +99,7 @@ Whenever you book the next session, calendar event or not, also set the onboardi
 
 ## Operator notices
 
-Raise op `operator_notice` only for trouble the code cannot see, such as `web_search_failed` when search fails during the homework. Unanswered greetings, expired invitations and blocked mailbox sign-ins are raised for you. The notice is recorded either way; when `setupFor` is `self`, also tell the principal directly in the conversation, since they are the operator.
+Raise op `operator_notice` only for trouble the code cannot see, such as `web_search_failed` when search fails during the homework. Unanswered greetings, expired invitations and blocked mailbox sign-ins are raised for you. The notice is recorded and emailed to the operator either way (when `setupFor` is `self` that is the principal's own address, so also tell them directly in the conversation). Only the event is emailed: put facts in `details` for the record, and do not write personal details there.
 
 ## Starting and stopping
 

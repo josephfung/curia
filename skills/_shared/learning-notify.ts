@@ -10,6 +10,10 @@
 // Everything here is best-effort and non-fatal: it runs AFTER the durable proposal/digest write,
 // so a missing gateway, missing principal email, or a failed send must never fail the generator's
 // run (which would falsely signal failure and churn the scheduler). All such cases log and return.
+//
+// `learning_proposal` is principal-routed, so the gateway resolves the address itself (#2710,
+// ADR-068) — this helper no longer looks one up or passes one. The local lookup below is kept for
+// anything that still needs the address for its own reasons.
 
 import type { ToolContext } from '../../src/skills/types.js';
 
@@ -63,14 +67,10 @@ export async function notifyLearningProposal(
       ctx.log.warn('learning-notify: outboundGateway unavailable — skipping learning-proposal notification');
       return false;
     }
-    const ceoEmail = await resolvePrincipalEmail(ctx);
-    if (!ceoEmail) {
-      ctx.log.warn('learning-notify: no principal email on file — skipping learning-proposal notification');
-      return false;
-    }
+    // The gateway resolves the principal's address from the type. A missing one comes back as
+    // false, which this helper already treats as "not delivered this run".
     const sent = await ctx.outboundGateway.sendNotification({
       notificationType: 'learning_proposal',
-      ceoEmail,
       subject: notification.subject,
       body: notification.body,
     });

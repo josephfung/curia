@@ -3,7 +3,7 @@
 // Kept apart from notify-operator.ts because state.ts imports OPERATOR_EVENTS from there; this
 // file needs state.ts's writer, and one file doing both would be an import cycle.
 
-import { notifyOperator, type NotifyOperatorDeps, type OperatorEvent } from './notify-operator.js';
+import { notifyOperator, type NotifyOperatorDeps, type OperatorEvent, type OperatorNotice } from './notify-operator.js';
 import { type OnboardingState, type OnboardingStateDeps, updateOnboardingState } from './state.js';
 
 /**
@@ -20,7 +20,7 @@ export async function notifyOperatorOnce(
   deps: NotifyOperatorDeps & Pick<OnboardingStateDeps, 'configStore' | 'stateLock'>,
   taskId: string,
   event: OperatorEvent,
-  details?: Record<string, unknown>,
+  notice?: OperatorNotice,
   stillApplies?: (s: OnboardingState) => boolean,
 ): Promise<boolean> {
   try {
@@ -34,5 +34,8 @@ export async function notifyOperatorOnce(
     deps.logger.error({ err, taskId, event }, 'onboarding: could not record the operator notice in state; not sending it');
     return false;
   }
-  return notifyOperator(deps, taskId, event, details);
+  // The injected notifier (index.ts binds the gateway) takes precedence over the bare deps;
+  // without one the notice is still recorded, and holding no gateway means nobody is emailed.
+  if (deps.notifier) return deps.notifier(taskId, event, notice);
+  return notifyOperator(deps, taskId, event, notice);
 }
