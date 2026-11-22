@@ -101,7 +101,7 @@ export type OnboardingStatus = {
   showDashboardAlert: boolean;
   workingPrincipalSignals: string[];
   route: MessagingRoute | null;
-  setupFor: SetupFor | null;
+  setupFor: SetupFor;
   principalName: string | null;
   /** Email triage is held until the principal hears what to expect (Capabilities shows it). */
   triageHeld: boolean;
@@ -243,11 +243,12 @@ export class OnboardingService {
       started,
       taskId: task?.id ?? completedTaskId,
       // Only an install whose Setup finished on the Setup page. Migration 132 marks an install
-      // that predates the page complete too, but a completed Setup always chose a messaging
-      // route (the checklist requires it) and a pre-Setup install never did, so its absence is
-      // what keeps the alert off those installs (#2709).
-      showDashboardAlert: !started && setup.phase === 'complete' && setup.messagingRoute !== null,
-      workingPrincipalSignals: await this.workingPrincipalSignals(setup.completedAt),
+      // that predates the page complete too, and `completedOnPage` is what tells them apart
+      // (#2709), so the alert does not depend on which catalog steps are required.
+      showDashboardAlert: !started && setup.completedOnPage,
+      workingPrincipalSignals: await this.workingPrincipalSignals(
+        setup.completedOnPage ? setup.completedAt : null,
+      ),
       route: setup.messagingRoute,
       setupFor: setup.setupFor,
       principalName,
@@ -282,7 +283,7 @@ export class OnboardingService {
   }
 
   /** Who Setup was for and the operator's name, as Setup recorded them (absent operator means 'self'). */
-  async setupContext(): Promise<{ setupFor: SetupFor | null; operatorName: string | null }> {
+  async setupContext(): Promise<{ setupFor: SetupFor; operatorName: string | null }> {
     const setup = await readSetupState(this.deps.pool, this.deps.logger);
     return { setupFor: setup.setupFor, operatorName: setup.operatorName?.trim() || null };
   }
@@ -418,7 +419,9 @@ export class OnboardingService {
     }
     if (await findOpenOnboardingTask(taskRepo)) return refuse('already_started');
 
-    const signals = await this.workingPrincipalSignals(setup.completedAt);
+    const signals = await this.workingPrincipalSignals(
+      setup.completedOnPage ? setup.completedAt : null,
+    );
     if (signals.length > 0 && !opts.confirmWorkingPrincipal) return refuse('confirm_working_principal', signals);
 
     // A principal asking in conversation is already reachable: Curia does not reach out.

@@ -42,8 +42,9 @@ A second table, `settings_history`, is append-only (a database trigger rejects `
 and its provenance cannot disagree. It answers "who changed X, and when", which no
 purpose-built table did.
 
-The store is out of the knowledge graph, and no agent tool reads or writes it. A unit test
-fails if any skill handler imports `src/settings/`.
+The store is out of the knowledge graph. No agent tool writes settings or imports the store.
+Two tools (`setup-status`, `onboarding-progress`) see a read-only Setup projection through
+injected services, and a unit test fails if any file under `skills/` imports `src/settings/`.
 
 Setup's keys come over from `setup_state` (migration 132): `operator`, `messaging_route`,
 `voice_route`, `setup.completed_at`. Two former columns are derived instead of stored:
@@ -65,14 +66,25 @@ back into it.
 - **There is no separate "Setup has not started" state.** With the phase derived from
   `setup.completed_at`, a database with no settings at all reads as in progress. This drops
   `setup_state`'s carve-out for a database whose principal a script created: it already saw
-  the console's Setup page, and now its web chat reaches the setup guide too. `POST
-  /api/setup/start` writes nothing and so can never reopen a finished Setup.
-- **`showDashboardAlert` needed a new marker.** Migration 132 sets `setup.completed_at` on
-  installs that predate the Setup page, so a null completion time no longer distinguishes
-  them. A Setup finished on the page always chose a messaging route (the checklist requires
-  it) and a pre-Setup install never did, so the alert keys on the route instead.
-- **Writes need their own connection.** `setSetting`/`writeSettings` take a pool, not a
-  queryable, because the value and the history row share one transaction. Callers inside an
-  existing transaction should pass the store a pool for this write rather than nest it.
+  the console's Setup page, and now its web chat reaches the setup guide too. A scripted
+  bootstrap (the KG demo, a scenario database) that needs web chat to stay with the
+  coordinator must write `setup.completed_at`. `POST /api/setup/start` writes nothing and so
+  can never reopen a finished Setup.
+- **`setup_for` has no "not chosen" value.** An absent operator means "myself", so a fresh
+  install starts there and the checklist no longer asks. `POST /api/setup/start` runs when the
+  page opens, which is before the first render of the step, so a stored "not chosen" state
+  could never be shown anyway.
+- **A migration-marked completion is not a page completion.** Migration 132 sets
+  `setup.completed_at` on installs that predate the Setup page, so a non-null completion time
+  no longer says Setup finished on the page. `readSetupState` exposes `completedOnPage`, from
+  the setting row's `updated_by`, and onboarding uses it twice: the prior-principal-tasks
+  signal passes `null` for a migration-marked install (counting every task), and the dashboard
+  alert is only for a page completion. That keeps the alert independent of which catalog
+  steps are required.
+- **A write commits on its own connection.** `setSetting`/`writeSettings` take a pool, not a
+  queryable, because the value and the history row share one transaction. That transaction is
+  the store's own: if a caller's transaction later rolls back, the setting stays set. A caller
+  that needs a setting write to succeed or fail with its own work cannot wrap it in that
+  work's transaction.
 - **The registry is the schema.** There is no database `CHECK` that would duplicate it: adding
   a key is a code change by design, and a value written by hand is rejected on read.

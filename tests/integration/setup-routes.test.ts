@@ -47,7 +47,6 @@ const AUTH_HEADER = { 'x-web-bootstrap-secret': TEST_SECRET };
 const TEST_LABEL_PREFIX = 'Setup-Route Test';
 // The settings migration 132 created for Setup (#2709). These suites own them.
 const SETUP_SETTING_KEYS = ['operator', 'messaging_route', 'voice_route', 'setup.completed_at'];
-const TEST_WRITE: SetupWriteOptions = { updatedBy: 'integration-test' };
 // Person labels this file writes that do not use the prefix above.
 const OWNED_KG_LABELS = [
   'Original Name',
@@ -931,6 +930,7 @@ describeIf('/api/setup/* routes', () => {
   describe('Setup page state', () => {
     let app: FastifyInstance;
     let checklist: SetupChecklist = { setupFor: 'self', tasks: [], setupComplete: false, missing: ['email'] };
+    const TEST_WRITE: SetupWriteOptions = { updatedBy: 'integration-test', logger };
     let savedSettings: Array<Record<string, unknown>> = [];
     let savedThread: string | undefined;
     // web-thread.test.ts reads the same rows (#2358, #2709): one suite at a time.
@@ -1022,7 +1022,7 @@ describeIf('/api/setup/* routes', () => {
     it('refuses Someone else without an operator, and a half-written operator', async () => {
       await expect(updateSetupState(pool, { setupFor: 'other' }, TEST_WRITE)).rejects.toBeInstanceOf(SetupSettingsError);
       await expect(updateSetupState(pool, { operatorName: 'Sam' }, TEST_WRITE)).rejects.toBeInstanceOf(SetupSettingsError);
-      expect(await readSetupState(pool)).toMatchObject({ setupFor: 'self', operatorName: null, operatorEmail: null });
+      expect(await readSetupState(pool, logger)).toMatchObject({ setupFor: 'self', operatorName: null, operatorEmail: null });
     });
 
     it('PUT /api/setup/state saves and returns the state', async () => {
@@ -1034,7 +1034,7 @@ describeIf('/api/setup/* routes', () => {
       expect(res.json().setup).toMatchObject({
         setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com', messagingRoute: 'slack', voiceRoute: 'app',
       });
-      expect((await readSetupState(pool)).messagingRoute).toBe('slack');
+      expect((await readSetupState(pool, logger)).messagingRoute).toBe('slack');
     });
 
     it('POST /api/setup/start keeps what is saved, and never reopens a finished Setup', async () => {
@@ -1042,23 +1042,23 @@ describeIf('/api/setup/* routes', () => {
       const res = await app.inject({ method: 'POST', url: '/api/setup/start', headers: AUTH_HEADER });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ inSetup: true, setupGuide: true });
-      expect(await readSetupState(pool)).toMatchObject({ phase: 'in_progress', messagingRoute: 'app' });
+      expect(await readSetupState(pool, logger)).toMatchObject({ phase: 'in_progress', messagingRoute: 'app' });
       await markSetupComplete(pool, TEST_WRITE);
       const after = await app.inject({ method: 'POST', url: '/api/setup/start', headers: AUTH_HEADER });
       expect(after.json()).toEqual({ inSetup: false, setupGuide: false });
-      expect((await readSetupState(pool)).phase).toBe('complete');
+      expect((await readSetupState(pool, logger)).phase).toBe('complete');
     });
 
     it('POST /api/setup/start needs auth', async () => {
       const res = await app.inject({ method: 'POST', url: '/api/setup/start' });
       expect(res.statusCode).toBe(401);
-      expect((await readSetupState(pool)).phase).toBe('in_progress');
+      expect((await readSetupState(pool, logger)).phase).toBe('in_progress');
     });
 
     it('PUT /api/setup/state refuses a bad body and saves nothing', async () => {
       const res = await app.inject({ method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER, payload: { messagingRoute: 'fax' } });
       expect(res.statusCode).toBe(400);
-      expect((await readSetupState(pool)).messagingRoute).toBeNull();
+      expect((await readSetupState(pool, logger)).messagingRoute).toBeNull();
     });
 
     it('PUT /api/setup/state answers 400 for a combination the registry refuses', async () => {
@@ -1066,7 +1066,27 @@ describeIf('/api/setup/* routes', () => {
         method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER, payload: { setupFor: 'other' },
       });
       expect(res.statusCode).toBe(400);
-      expect(await readSetupState(pool)).toMatchObject({ setupFor: 'self' });
+      // A half-blank operator pair is refused rather than silently clearing the operator.
+      const halfBlank = await app.inject({
+        method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER,
+        payload: { operatorName: 'Sam', operatorEmail: '' },
+      });
+      expect(halfBlank.statusCode).toBe(400);
+      expect(await readSetupState(pool, logger)).toMatchObject({ setupFor: 'self' });
+    });
+
+    it('refuses a half-blank operator pair instead of switching to Myself', async () => {
+      await updateSetupState(
+        pool,
+        { setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com' },
+        TEST_WRITE,
+      );
+      await expect(
+        updateSetupState(pool, { operatorName: 'Sam', operatorEmail: null }, TEST_WRITE),
+      ).rejects.toBeInstanceOf(SetupSettingsError);
+      expect(await readSetupState(pool, logger)).toMatchObject({
+        setupFor: 'other', operatorEmail: 'sam@example.com',
+      });
     });
 
     it('GET /api/setup/status reports inSetup and the saved fields', async () => {
@@ -1089,7 +1109,7 @@ describeIf('/api/setup/* routes', () => {
       const refused = await app.inject({ method: 'POST', url: '/api/setup/complete', headers: AUTH_HEADER });
       expect(refused.statusCode).toBe(409);
       expect(refused.json().missing).toEqual(['email']);
-      expect((await readSetupState(pool)).phase).toBe('in_progress');
+      expect((await readSetupState(pool, logger)).phase).toBe('in_progress');
 
       await pool.query(
         `INSERT INTO web_thread (id, conversation_id) VALUES (1, 'setup-chat')
@@ -1098,15 +1118,36 @@ describeIf('/api/setup/* routes', () => {
       checklist = { setupFor: 'self', tasks: [], setupComplete: true, missing: [] };
       const ok = await app.inject({ method: 'POST', url: '/api/setup/complete', headers: AUTH_HEADER });
       expect(ok.statusCode).toBe(200);
-      expect((await readSetupState(pool)).phase).toBe('complete');
+      expect((await readSetupState(pool, logger)).phase).toBe('complete');
       // Finishing Setup leaves the thread alone (#2360): starting onboarding rotates it.
       const after = await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1');
       expect(after.rows[0]?.conversation_id).toBe('setup-chat');
     });
 
-    it('finishing Setup twice is idempotent', async () => {
+    it('finishing Setup twice is idempotent and keeps the first completion time', async () => {
+      const before = await pool.query<{ id: string }>(
+        `SELECT COALESCE(max(id), 0)::text AS id FROM settings_history`,
+      );
       await Promise.all([completeSetup(pool, TEST_WRITE), completeSetup(pool, TEST_WRITE)]);
-      expect((await readSetupState(pool)).phase).toBe('complete');
+
+      const first = (await pool.query<{ value: string }>(
+        `SELECT value FROM settings WHERE key = 'setup.completed_at'`,
+      )).rows[0]?.value;
+      expect(first).toBeDefined();
+
+      await completeSetup(pool, TEST_WRITE);
+      const later = (await pool.query<{ value: string }>(
+        `SELECT value FROM settings WHERE key = 'setup.completed_at'`,
+      )).rows[0]?.value;
+      expect(later).toBe(first);
+
+      // Two concurrent calls, one write: the loser saw the winner's row under the lock.
+      const history = await pool.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM settings_history
+          WHERE key = 'setup.completed_at' AND id > $1::bigint`,
+        [before.rows[0]?.id ?? '0'],
+      );
+      expect(history.rows[0]).toMatchObject({ n: 1 });
     });
 
     it.each([

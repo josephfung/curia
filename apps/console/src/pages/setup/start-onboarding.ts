@@ -21,7 +21,7 @@ export interface OnboardingStatus {
   showDashboardAlert: boolean;
   workingPrincipalSignals: string[];
   route: MessagingRoute | null;
-  setupFor: SetupFor | null;
+  setupFor: SetupFor;
   principalName: string | null;
   /** Email triage is held until the principal hears what to expect. */
   triageHeld: boolean;
@@ -117,7 +117,7 @@ export function signalText(signal: string, principal: string): string {
 }
 
 /** The confirmation before "Not right now" (design §3), by who Curia is set up for. */
-export function notRightNowText(setupFor: SetupFor | null, principal: string): string {
+export function notRightNowText(setupFor: SetupFor, principal: string): string {
   if (setupFor === 'self') {
     return 'Onboarding is where Curia learns how you like to work. It’s required before Curia acts for you. You can start it any time from the dashboard.';
   }
@@ -125,7 +125,7 @@ export function notRightNowText(setupFor: SetupFor | null, principal: string): s
 }
 
 /** The message to send with the invitation link; it says the link lasts 48 hours. */
-export function invitationMessage(url: string, setupFor: SetupFor | null, principal: string): string {
+export function invitationMessage(url: string, setupFor: SetupFor, principal: string): string {
   if (setupFor === 'self') {
     return `Open this link on your phone, in Safari or Chrome, to install Curia and sign in. It works once and is valid for 48 hours: ${url}`;
   }

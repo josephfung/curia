@@ -91,7 +91,7 @@ export async function identityRoutes(
       const configured = await isIdentityConfigured(pool);
       // #2358: the console's first-load gate. True on a new install until Setup is finished;
       // migration 132 marked installs that predate the Setup page complete.
-      const inSetup = isInSetup(await readSetupState(pool, request.log));
+      const inSetup = isInSetup((await readSetupState(pool, request.log)).phase);
 
       return reply.send({ identity, configured, inSetup, lengthLimits: LENGTH_LIMITS_RESPONSE });
     } catch (err) {

@@ -109,8 +109,8 @@ it. Design and mockup:
   finished; migration 132, which replaced `setup_state`, marks older installs complete).
   While Setup runs, every page but the Setup page and the Settings pages its steps link to
   (`/settings`, `/system`, `/channels`, `/tools`, `/agents`, `/mcp-skills`, `/secrets`,
-  `/contacts`) redirects to `/setup`; outside Setup, `/setup` redirects home. A server that predates `inSetup` falls
-  back to the older `configured` flag.
+  `/contacts`) redirects to `/setup`; outside Setup, `/setup` redirects home. A server that
+  predates `inSetup` falls back to the older `configured` flag.
 
 ### Steps
 
@@ -296,15 +296,16 @@ instant wins above (persona, debrief, pronouns, the tour) moved to onboarding
 - **On the Setup page.** While Setup is in progress (`settings`' `setup.completed_at`
   absent: from a new install until Setup is finished), `web` chat goes to the setup guide
   instead of the coordinator, with none of the principal-turn extras (turn guidance,
-  backlog, live lanes). The chat route decides when it accepts the message, from one
-  snapshot of the shared thread and the phase (`readWebThreadAndSetupPhase`), and stamps
-  the inbound; the dispatcher routes on that stamp, read only on `web`. A message accepted just before Setup
-  is finished therefore stays on the Setup thread with the setup guide. `POST /api/chat/messages` takes an optional `setupStep` (the open
-  step's catalog id, or `apply` / `start`); the runtime heads the turn with a
-  "[Setup page: ...]" line naming it (`none` when the client sent none), so the agent knows
-  it is talking to the operator. A database with no settings at all (a scripted install)
-  reads as in progress, so its web chat reaches the setup guide once the console is opened
-  on it.
+  backlog, live lanes). The chat route decides when it accepts the message from the shared
+  thread and the phase (`readWebThreadAndSetupPhase`, two reads; the only extra interleaving
+  is a Setup thread read just before Setup finishes, which is a legitimate state) and stamps
+  the inbound; the dispatcher routes on that stamp, read only on `web`. A message accepted
+  just before Setup is finished therefore stays on the Setup thread with the setup guide.
+  `POST /api/chat/messages` takes an optional `setupStep` (the open step's catalog id, or
+  `apply` / `start`); the runtime heads the turn with a "[Setup page: ...]" line naming it
+  (`none` when the client sent none), so the agent knows it is talking to the operator. A
+  database with no settings at all (a scripted install) reads as in progress, so its web
+  chat reaches the setup guide once the console is opened on it.
 - **Kept out of the principal's memory.** The dispatcher schedules no conversation
   checkpoint for a setup guide turn on `web`, so fact and relationship extraction never
   read the Setup chat. Finishing Setup (`POST /api/setup/complete`, `completeSetup`) only

@@ -20,7 +20,7 @@ interface Props {
 
 /** Step 1 (#2358): who Curia is for, the operator when that's someone else, and the principal. */
 export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Props): JSX.Element {
-  const [setupFor, setSetupFor] = useState<SetupFor | null>(fields.setupFor);
+  const [setupFor, setSetupFor] = useState<SetupFor>(fields.setupFor);
   const [operatorName, setOperatorName] = useState(fields.operatorName ?? '');
   const [operatorEmail, setOperatorEmail] = useState(fields.operatorEmail ?? '');
   const [name, setName] = useState(principal?.displayName ?? '');
@@ -32,7 +32,6 @@ export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Prop
   const [saving, setSaving] = useState(false);
 
   function validate(): string | null {
-    if (!setupFor) return 'Choose who you’re setting Curia up for.';
     if (setupFor === 'other') {
       if (!operatorName.trim()) return 'Add your name.';
       if (!operatorEmail.trim()) return 'Add your email.';

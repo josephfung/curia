@@ -10,9 +10,21 @@
 //   - setupFor: an operator value means "someone else"; absent means "myself".
 //   - phase: complete once setup.completed_at is set, in progress until then. Setup has
 //     started from the moment the console opens it, so there is no separate "not started".
+//
+// `completedOnPage` separates a Setup finished on the Setup page from one that migration 132
+// marked complete for an install that predates the page. Onboarding uses it: the prior-tasks
+// signal counts every task on a pre-Setup install, and the dashboard alert is for the page.
 
 import type { Logger } from '../logger.js';
-import { getSetting, getSettings, setSetting, writeSettings, type SettingsChange, type SettingsPool, type SettingsQueryable } from '../settings/store.js';
+import {
+  getSetting,
+  getSettingRecords,
+  setSettingIfAbsent,
+  writeSettings,
+  type SettingsChange,
+  type SettingsPool,
+  type SettingsQueryable,
+} from '../settings/store.js';
 import { MESSAGING_ROUTES, VOICE_ROUTES, type MessagingRoute, type VoiceRoute } from '../settings/registry.js';
 
 export { MESSAGING_ROUTES, VOICE_ROUTES };
@@ -20,6 +32,12 @@ export type { MessagingRoute, VoiceRoute };
 
 export type SetupFor = 'self' | 'other';
 export type SetupPhaseValue = 'in_progress' | 'complete';
+
+/**
+ * The `updated_by` migration 132 writes when it marks an install that predates the Setup page
+ * complete. A test pins it; the migration SQL has the same literal.
+ */
+export const MIGRATION_SETUP_ACTOR = 'migration:132';
 
 export interface SetupState {
   /** Derived from setup.completed_at, never stored as its own value. */
@@ -32,11 +50,13 @@ export interface SetupState {
   voiceRoute: VoiceRoute | null;
   /** When Setup finished, or null while it runs. */
   completedAt: Date | null;
+  /** True only when the Setup page finished Setup; false when migration 132 marked it complete. */
+  completedOnPage: boolean;
 }
 
 /** The fields the Setup page writes. Undefined leaves a field as it is; null clears it. */
 export interface SetupStateUpdate {
-  setupFor?: SetupFor | null;
+  setupFor?: SetupFor;
   operatorName?: string | null;
   operatorEmail?: string | null;
   messagingRoute?: MessagingRoute | null;
@@ -46,7 +66,7 @@ export interface SetupStateUpdate {
 /** Where a Setup write came from, for settings_history: an actor and where to log a bad read. */
 export interface SetupWriteOptions {
   updatedBy: string;
-  logger?: Pick<Logger, 'error'>;
+  logger: Pick<Logger, 'error'>;
 }
 
 /** A combination of Setup fields that is valid on its own but not as a whole. */
@@ -66,6 +86,7 @@ export const EMPTY_SETUP_STATE: SetupState = {
   messagingRoute: null,
   voiceRoute: null,
   completedAt: null,
+  completedOnPage: false,
 };
 
 const SETUP_KEYS = ['operator', 'messaging_route', 'voice_route', 'setup.completed_at'] as const;
@@ -73,26 +94,27 @@ const SETUP_KEYS = ['operator', 'messaging_route', 'voice_route', 'setup.complet
 /** The four Setup keys, validated, as the console sees them. */
 export async function readSetupState(
   db: SettingsQueryable,
-  logger?: Pick<Logger, 'error'>,
+  logger: Pick<Logger, 'error'>,
 ): Promise<SetupState> {
-  const values = await getSettings(db, SETUP_KEYS, logger);
-  const operator = values.operator;
-  const completedAt = values['setup.completed_at'];
+  const records = await getSettingRecords(db, SETUP_KEYS, logger);
+  const operator = records.operator?.value;
+  const completed = records['setup.completed_at'];
   return {
-    phase: completedAt ? 'complete' : 'in_progress',
+    phase: completed ? 'complete' : 'in_progress',
     setupFor: operator ? 'other' : 'self',
     operatorName: operator?.name ?? null,
     operatorEmail: operator?.email ?? null,
-    messagingRoute: values.messaging_route ?? null,
-    voiceRoute: values.voice_route ?? null,
-    completedAt: completedAt ? new Date(completedAt) : null,
+    messagingRoute: records.messaging_route?.value ?? null,
+    voiceRoute: records.voice_route?.value ?? null,
+    completedAt: completed ? new Date(completed.value) : null,
+    completedOnPage: completed !== undefined && completed.updatedBy !== MIGRATION_SETUP_ACTOR,
   };
 }
 
 /** Just the derived phase, for web-chat routing, which has no use for the other keys. */
 export async function readSetupPhase(
   db: SettingsQueryable,
-  logger?: Pick<Logger, 'error'>,
+  logger: Pick<Logger, 'error'>,
 ): Promise<SetupPhaseValue> {
   return (await getSetting(db, 'setup.completed_at', logger)) ? 'complete' : 'in_progress';
 }
@@ -128,10 +150,16 @@ export async function updateSetupState(
     if (nameGiven !== emailGiven) {
       throw new SetupSettingsError("Send the operator's name and email together.");
     }
-    operator =
-      (update.operatorName ?? '') === '' || (update.operatorEmail ?? '') === ''
-        ? null
-        : { name: update.operatorName as string, email: update.operatorEmail as string };
+    const nameBlank = (update.operatorName ?? '') === '';
+    const emailBlank = (update.operatorEmail ?? '') === '';
+    // Both blank clears ("myself"); both filled sets. A half-blank pair is neither, and
+    // silently clearing the operator would flip Setup to "myself" with no error.
+    if (nameBlank !== emailBlank) {
+      throw new SetupSettingsError("Send both the operator's name and email, or clear both.");
+    }
+    operator = nameBlank
+      ? null
+      : { name: update.operatorName as string, email: update.operatorEmail as string };
   }
   if (operator !== undefined) {
     changes.push(operator === null ? { key: 'operator', value: null } : { key: 'operator', value: operator });
@@ -159,27 +187,25 @@ export async function updateSetupState(
 }
 
 /**
- * Setup is finished (Start onboarding or Not right now; POST /api/setup/complete). Keeps the
- * first completion time, so calling it again changes nothing. Idempotent.
+ * Setup is finished (Start onboarding or Not right now; POST /api/setup/complete). The check
+ * and the write share one locked transaction, so concurrent calls keep the first completion
+ * time. Idempotent.
  */
 export async function markSetupComplete(pool: SettingsPool, options: SetupWriteOptions): Promise<void> {
-  if (await getSetting(pool, 'setup.completed_at', options.logger)) return;
-  await setSetting(pool, 'setup.completed_at', new Date().toISOString(), options.updatedBy, options.logger);
+  await setSettingIfAbsent(
+    pool,
+    'setup.completed_at',
+    new Date().toISOString(),
+    options.updatedBy,
+    options.logger,
+  );
 }
 
 /**
- * Whether the console should show the Setup page and the server should treat web chat as
- * the operator's (PR 2): until Setup is finished. Installs that predate the Setup page are
- * marked complete by migration 132, so they never are.
+ * Whether the console should show the Setup page and the server should treat web chat as the
+ * operator's (PR 2): until Setup is finished. Installs that predate the Setup page are marked
+ * complete by migration 132, so they never are.
  */
-export function isInSetup(state: SetupState): boolean {
-  return state.phase !== 'complete';
-}
-
-/**
- * Whether web chat goes to the setup guide (#2358): only while Setup is in progress. A
- * finished Setup routes web chat to the coordinator.
- */
-export function routesWebChatToSetupGuide(phase: SetupState['phase'] | string | null): boolean {
-  return phase === 'in_progress';
+export function isInSetup(phase: SetupPhaseValue): boolean {
+  return phase !== 'complete';
 }

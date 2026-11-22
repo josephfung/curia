@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { completeSetup } from '../../../src/setup/complete-setup.js';
+import { createSilentLogger } from '../../../src/logger.js';
+
+const OPTIONS = { updatedBy: 'test', logger: createSilentLogger() };
 
 /** A pool whose settings read returns `stored`, and whose transaction records its statements. */
 function fakePool(stored: Array<{ key: string; value: unknown }> = []) {
@@ -31,7 +34,7 @@ function fakePool(stored: Array<{ key: string; value: unknown }> = []) {
 describe('completeSetup', () => {
   it('stores setup.completed_at with its history row, and leaves the web thread alone', async () => {
     const { pool, statements } = fakePool();
-    await completeSetup(pool, { updatedBy: 'test' });
+    await completeSetup(pool, OPTIONS);
 
     const sql = statements.join('\n');
     expect(sql).toContain('INSERT INTO settings');
@@ -45,7 +48,7 @@ describe('completeSetup', () => {
     const { pool, statements } = fakePool([
       { key: 'setup.completed_at', value: '2026-01-01T00:00:00.000Z' },
     ]);
-    await completeSetup(pool, { updatedBy: 'test' });
+    await completeSetup(pool, OPTIONS);
     expect(statements.some((s) => s.includes('INSERT INTO settings'))).toBe(false);
   });
 });

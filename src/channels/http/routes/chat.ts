@@ -16,7 +16,7 @@ import { markdownToHtml } from '../../../format/markdown-to-html.js';
 import { fetchChatHistoryPage } from '../chat-history-page.js';
 import { getOrCreateWebThread, readClientMessageId, readWebThreadAndSetupPhase } from '../web-thread.js';
 import { readSetupStep, SETUP_GUIDE_METADATA_KEY } from '../../../setup/setup-guide.js';
-import { routesWebChatToSetupGuide } from '../../../setup/setup-settings.js';
+import { isInSetup } from '../../../setup/setup-settings.js';
 
 export interface ChatRouteOptions {
   pool: Pool;
@@ -107,15 +107,16 @@ export async function chatRoutes(
       return reply.status(400).send({ error: 'Missing required field: message (non-empty string)' });
     }
 
-    // The thread and the Setup phase come from one snapshot (#2358), so the message is bound
-    // to one side of Start onboarding at acceptance: the Setup thread and the setup guide, or
-    // the principal's thread and the coordinator. Routing never re-reads the phase later.
+    // The thread and the Setup phase are read together at acceptance (#2358, #2709), and the
+    // setup-guide flag is stamped on the inbound, so the message is bound to one side of Start
+    // onboarding: the Setup thread and the setup guide, or the principal's thread and the
+    // coordinator. Routing never re-reads the phase later.
     let conversationId: string;
     let setupGuide: boolean;
     try {
       const snapshot = await readWebThreadAndSetupPhase(pool, logger);
       conversationId = snapshot.conversationId;
-      setupGuide = routesWebChatToSetupGuide(snapshot.setupPhase);
+      setupGuide = isInSetup(snapshot.setupPhase);
     } catch (err) {
       logger.error({ err }, 'chat thread lookup failed');
       return reply.status(503).send({ error: 'Chat is temporarily unavailable. Please try again.' });

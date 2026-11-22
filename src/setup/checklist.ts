@@ -248,10 +248,8 @@ export async function evaluateChecklist(catalog: CatalogTask[], deps: SetupCheck
     const check = task.completion_check;
     switch (check.type) {
       case 'principal_basics': {
-        // setupFor is derived: absent operator means "myself", so there is nothing to choose.
-        if (state.setupFor === 'other' && (!state.operatorName || !state.operatorEmail)) {
-          return { done: false, detail: 'Add your name and email as the operator.' };
-        }
+        // setupFor is derived (absent operator means "myself"), and the registry guarantees a
+        // present operator has both fields, so there is no operator state left to check here.
         const p = await deps.principal();
         if (!p || !p.displayName.trim()) return { done: false, detail: "Add the principal's name." };
         if (!p.primaryEmail) return { done: false, detail: "Add the principal's email." };

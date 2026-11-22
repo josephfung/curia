@@ -36,7 +36,6 @@ import {
   isInSetup,
   MESSAGING_ROUTES,
   readSetupState,
-  routesWebChatToSetupGuide,
   SetupSettingsError,
   updateSetupState,
   VOICE_ROUTES,
@@ -437,7 +436,7 @@ export async function setupRoutes(
         externalAdaptersPending,
         bootStartedAt,
         // #2358: the console shows the Setup page while this is true.
-        inSetup: isInSetup(setupState),
+        inSetup: isInSetup(setupState.phase),
         setup: publicState(setupState),
       });
     } catch (err) {
@@ -552,7 +551,7 @@ export async function setupRoutes(
     if ('error' in parsed) return reply.status(400).send({ error: parsed.error });
     try {
       const state = await updateSetupState(pool, parsed.update, { updatedBy: 'console', logger });
-      return reply.send({ inSetup: isInSetup(state), setup: publicState(state) });
+      return reply.send({ inSetup: isInSetup(state.phase), setup: publicState(state) });
     } catch (err) {
       // A cross-field rule (Myself with operator details; Someone else without them) or a
       // value that fails its schema is the caller's mistake, not a server failure.
@@ -576,7 +575,7 @@ export async function setupRoutes(
       const state = await readSetupState(pool, logger);
       // Seed the onboarding playbook while Setup is running (#2360). Best-effort: a failure is
       // logged and does not fail the route; starting onboarding seeds again if it is missing.
-      if (isInSetup(state)) {
+      if (isInSetup(state.phase)) {
         try {
           await seedPlaybook(new WorkingDocsRepo(pool, logger), logger);
         } catch (err) {
@@ -584,7 +583,7 @@ export async function setupRoutes(
         }
       }
       // setupGuide: whether web chat now reaches the setup guide, so the page can say when not.
-      return reply.send({ inSetup: isInSetup(state), setupGuide: routesWebChatToSetupGuide(state.phase) });
+      return reply.send({ inSetup: isInSetup(state.phase), setupGuide: isInSetup(state.phase) });
     } catch (err) {
       logger.error({ err }, 'POST /api/setup/start: failed to start Setup');
       return reply.status(500).send({ error: 'Failed to start Setup. Check server logs.' });
@@ -713,9 +712,15 @@ export function parseStateUpdate(body: unknown): { update: SetupStateUpdate } | 
     return trimmed === '' ? null : trimmed;
   };
 
-  const setupFor = oneOf('setupFor', ['self', 'other'] as const);
-  if (typeof setupFor === 'object' && setupFor !== null) return setupFor;
-  if (setupFor !== undefined) update.setupFor = setupFor;
+  // setupFor is never absent in the response (#2709), so null has no meaning: refuse it
+  // rather than saving nothing.
+  const rawSetupFor = input['setupFor'];
+  if (rawSetupFor !== undefined) {
+    if (rawSetupFor !== 'self' && rawSetupFor !== 'other') {
+      return { error: 'setupFor must be one of self, other.' };
+    }
+    update.setupFor = rawSetupFor;
+  }
 
   const messagingRoute = oneOf('messagingRoute', MESSAGING_ROUTES);
   if (typeof messagingRoute === 'object' && messagingRoute !== null) return messagingRoute;

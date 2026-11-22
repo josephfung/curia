@@ -17,7 +17,7 @@ export interface ChecklistTask {
 }
 
 export interface Checklist {
-  setupFor: 'self' | 'other' | null;
+  setupFor: 'self' | 'other';
   tasks: ChecklistTask[];
   setupComplete: boolean;
   missing: string[];

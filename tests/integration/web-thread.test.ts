@@ -4,6 +4,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import pg from 'pg';
 import { clearWebThreadCache, getOrCreateWebThread, readWebThreadAndSetupPhase, rotateWebThread, type WebThreadQueryable } from '../../src/channels/http/web-thread.js';
+import { createSilentLogger } from '../../src/logger.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 import { lockSetupSingletons } from './setup-singletons-lock.js';
 
@@ -156,14 +157,14 @@ describeIf('web thread (integration)', () => {
     try {
       await pool.query(`DELETE FROM settings WHERE key = 'setup.completed_at'`);
       await rotateWebThread(pool, { newId: () => 'wt-after-race' });
-      await expect(readWebThreadAndSetupPhase(pool)).resolves.toEqual({
+      await expect(readWebThreadAndSetupPhase(pool, createSilentLogger())).resolves.toEqual({
         conversationId: 'wt-after-race', setupPhase: 'in_progress',
       });
       await pool.query(
         `INSERT INTO settings (key, value, updated_by) VALUES ('setup.completed_at', to_jsonb($1::text), 'test')`,
         ['2026-01-01T00:00:00.000Z'],
       );
-      await expect(readWebThreadAndSetupPhase(pool)).resolves.toEqual({
+      await expect(readWebThreadAndSetupPhase(pool, createSilentLogger())).resolves.toEqual({
         conversationId: 'wt-after-race', setupPhase: 'complete',
       });
     } finally {

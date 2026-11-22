@@ -1,6 +1,7 @@
 // Migration 132 takes setup_state apart into the settings store (#2709). These run on scratch
-// databases migrated only to 131, so setup_state still exists and the migration's own copy runs
-// once, exactly as it would on an install upgrading from 131.
+// databases migrated only to 130 (001–130), so setup_state still exists and 132 has not run.
+// Each scenario gets its own database: 132 applies once, and its own copy runs as it would on
+// an install upgrading from 130.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import pg from 'pg';
@@ -62,6 +63,26 @@ describeIf('migration 132 — setup_state becomes settings', () => {
       expect(byKey.get('voice_route')).toBe('app');
       expect(byKey.get('setup.completed_at')).toBe('2026-02-03T04:05:06.000Z');
       for (const row of rows) expect(row.updated_by).toBe('migration:132');
+    } finally {
+      await pool.end();
+      await scratch.drop();
+    }
+  });
+
+  it('does not copy leftover operator fields from a "myself" install', async () => {
+    const scratch = await createScratchDatabase(DATABASE_URL!, 'settings_self', { migrations: 130 });
+    const pool = new pg.Pool({ connectionString: scratch.url });
+    try {
+      // The old page allowed a half-save, so a "myself" row can still carry a name and email.
+      await pool.query(
+        `INSERT INTO setup_state
+           (id, phase, setup_for, operator_name, operator_email, messaging_route, voice_route)
+         VALUES (1, 'in_progress', 'self', 'Stale Operator', 'stale@example.com', 'app', NULL)`,
+      );
+      await migrateToLatest(scratch.url);
+
+      const { rows } = await pool.query('SELECT key FROM settings ORDER BY key');
+      expect(rows.map((row) => row.key)).toEqual(['messaging_route']);
     } finally {
       await pool.end();
       await scratch.drop();

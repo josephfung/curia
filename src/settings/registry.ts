@@ -3,7 +3,9 @@
 // One module owns the key list, each key's schema, its default and a one-line purpose.
 // `SettingValues` makes an undeclared key a compile error, and the store rejects one at
 // runtime too. The values live in the `settings` table (migration 132) as JSONB, out of
-// the knowledge graph: these are admin records, and no agent tool reads or writes them.
+// the knowledge graph: these are admin records. No agent tool writes settings or imports the
+// store. Two tools (`setup-status`, `onboarding-progress`) see a read-only Setup projection
+// through injected services.
 //
 // A missing row means the key's declared default applies. For all four keys the default
 // is "absent", which the Setup projection reads as "not answered yet".
@@ -119,7 +121,7 @@ export const SETTINGS: { readonly [K in SettingKey]: SettingDefinition<SettingVa
   },
 };
 
-/** Every key, for iteration and for a test that keeps the registry and the table in step. */
+/** Every key. The registry test pins this list, so adding one is a deliberate edit to both. */
 export function settingKeys(): SettingKey[] {
   return Object.keys(SETTINGS) as SettingKey[];
 }

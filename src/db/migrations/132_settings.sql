@@ -7,9 +7,10 @@
 -- described the first.
 --
 -- Out of the knowledge graph on purpose: these are admin records, not something Curia
--- knows about the principal's world, and no agent tool may read or write them. The typed
--- registry in src/settings/ is the only reader and writer; a missing row means the key's
--- declared default applies.
+-- knows about the principal's world. No agent tool writes settings or imports the store;
+-- two tools (setup-status, onboarding-progress) see a read-only Setup projection through
+-- injected services. The typed registry in src/settings/ is the only reader and writer; a
+-- missing row means the key's declared default applies.
 
 -- Up Migration
 
@@ -54,15 +55,17 @@ CREATE TRIGGER settings_history_immutable_trigger
 
 -- Take over what setup_state held.
 --
--- operator: only when both halves are present. The registry's schema is { name, email }
--- and a partial pair was never usable for "someone else" (the Setup checklist required
--- both), so a half-written pair is dropped rather than made to satisfy the schema.
+-- operator: only when Setup was for someone else and both halves are present. A "myself"
+-- install can carry stale operator fields (the old page allowed a half-save); copying them
+-- would flip it to "someone else". The registry's schema is { name, email }, and a partial
+-- pair was never usable, so a half-written pair is dropped rather than made to satisfy it.
 INSERT INTO settings (key, value, updated_by)
 SELECT 'operator',
        jsonb_build_object('name', btrim(operator_name), 'email', lower(btrim(operator_email))),
        'migration:132'
   FROM setup_state
  WHERE id = 1
+   AND setup_for = 'other'
    AND btrim(coalesce(operator_name, '')) <> ''
    AND btrim(coalesce(operator_email, '')) <> '';
 

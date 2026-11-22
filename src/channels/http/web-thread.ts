@@ -129,17 +129,20 @@ export async function rotateWebThread(
 }
 
 /**
- * The shared thread and the Setup phase, read in one statement (#2358), so a chat message
- * is bound to one side of Setup: either the Setup thread while Setup runs, or the shared
- * thread after. Finishing Setup changes only the phase; starting onboarding (#2360) later
- * rotates the thread.
+ * The shared thread and the Setup phase (#2358, #2709), so a chat message is bound to one
+ * side of Setup: either the Setup thread while Setup runs, or the shared thread after.
+ * Finishing Setup changes only the phase; starting onboarding (#2360) later rotates it.
+ *
+ * The two are read in separate statements (the settings store validates the phase value,
+ * which a SQL join would bypass). That is safe: the worst interleaving is a thread read
+ * just before a rotation whose phase read lands after Setup finishes, and (Setup thread,
+ * complete) is a legitimate state — the message was accepted while Setup ran and the
+ * dispatcher then treats it as the Setup chat.
  */
 export async function readWebThreadAndSetupPhase(
   pool: WebThreadQueryable,
-  logger?: Pick<Logger, 'error'>,
+  logger: Pick<Logger, 'error'>,
 ): Promise<{ conversationId: string; setupPhase: SetupPhaseValue }> {
-  // Creates the row on first use; the id and the phase then come from one call each, and
-  // the message is bound to whatever the phase was here.
   const conversationId = await getOrCreateWebThread(pool);
   return { conversationId, setupPhase: await readSetupPhase(pool, logger) };
 }
