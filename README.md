@@ -108,7 +108,7 @@ bash install.sh
 
 The installer asks how people will reach Curia: your domain with HTTPS set up for you (the default), your domain behind HTTPS you already run, or just this computer. It pulls the published image, generates secrets, runs migrations inside the container, and ends by printing your bootstrap secret and the Setup page to open, such as `https://curia.example.com/setup` (`http://localhost:3000/setup` on just this computer).
 
-By default it installs the release `install.sh` came from (the **latest release** for the download above) — both the config files and the image come from it. On every run it also downloads that release's `setup-common.sh` and checks it against the release's `SHA256SUMS` before using it. To pin a specific version, prefix the run with `CURIA_VERSION` (this pins the config *and* the image together):
+By default it installs the **latest release** — both the config files and the image come from it. To pin a specific version, prefix the run with `CURIA_VERSION` (this pins the config *and* the image together):
 
 ```bash
 CURIA_VERSION=v0.40.1 bash install.sh
@@ -172,8 +172,6 @@ cosign verify-blob --bundle SHA256SUMS.sigstore \
 ```
 
 `cosign verify-blob` prints `Verified OK` on success and exits non-zero on failure — the `&&` above ensures a failed signature check stops before `sha256sum -c` (which only checks hashes, not authenticity) can print a misleading pass. If either command fails, do not trust the downloaded assets.
-
-You only need to verify `install.sh` itself before running it: it checks the `setup-common.sh` it downloads against the same release's `SHA256SUMS` and stops on a mismatch. That check is by hash only; the manifest's signature is what the commands above verify.
 
 ---
 

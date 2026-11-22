@@ -141,15 +141,7 @@ jobs:
       - name: Stage install bundle
         run: |
           rm -rf bundle && mkdir bundle
-          # Stamp the tag into the bundled install.sh (the repo copy leaves it empty),
-          # so a downloaded installer fetches its own release's setup-common.sh by
-          # default. An older tag (a backfill) has no such line and is copied as is.
-          sed 's/^CURIA_INSTALLER_VERSION=""$/CURIA_INSTALLER_VERSION="'"$TAG"'"/' install.sh > bundle/install.sh
-          if grep -qx 'CURIA_INSTALLER_VERSION=""' install.sh \
-            && ! grep -qx "CURIA_INSTALLER_VERSION=\"$TAG\"" bundle/install.sh; then
-            echo "::error::bundle/install.sh was not stamped with CURIA_INSTALLER_VERSION=\"$TAG\"" >&2
-            exit 1
-          fi
+          cp install.sh                bundle/install.sh
           cp docker-compose.yml        bundle/docker-compose.yml
           cp docker-compose.tls.yml    bundle/docker-compose.tls.yml
           cp .env.example              bundle/env.example        # no leading dot (GitHub mangles it)
@@ -234,13 +226,6 @@ jobs:
               exit 1
             fi
           done
-          # The published install.sh carries its own tag (stamped at staging), so it
-          # fetches and checks this release's setup-common.sh by default.
-          if grep -qx 'CURIA_INSTALLER_VERSION=""' install.sh \
-            && ! grep -qx "CURIA_INSTALLER_VERSION=\"$TAG\"" verify/install.sh; then
-            echo "::error::the released install.sh is not stamped with CURIA_INSTALLER_VERSION=\"$TAG\"" >&2
-            exit 1
-          fi
           # Identity is pinned to this workflow in this repo; issuer is pinned to
           # GitHub's OIDC. The ref after @ varies (tag for release events, the
           # default branch for workflow_dispatch backfills), so it is left open.

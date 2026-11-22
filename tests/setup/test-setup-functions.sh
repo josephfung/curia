@@ -1329,6 +1329,9 @@ _assert_var "seed from LIVEKIT_KEYS with extra spaces" "$(livekit_seed_keys '  A
 _assert_var "seed from --keys" "$(livekit_seed_keys '' '--config /x --keys "APIk: sec"')" "APIk sec"
 _assert_var "seed from --keys=" "$(livekit_seed_keys '' "--config /x --keys='APIk: sec'")" "APIk sec"
 _assert_var "seed from --dev" "$(livekit_seed_keys '' '--dev --bind 0.0.0.0')" "devkey secret"
+_assert_var "--keys wins over LIVEKIT_KEYS" "$(livekit_seed_keys 'APIenv: envsecret' '--config /x --keys "APIk: sec"')" "APIk sec"
+_lk_rc=0; livekit_seed_keys 'APIenv: envsecret' '--config /x --key-file /keys.yaml' >/dev/null || _lk_rc=$?
+_assert_var "--key-file: unknown" "$_lk_rc" "1"
 _assert_var "seed from empty command" "$(livekit_seed_keys '' '')" "devkey secret"
 _lk_rc=0; _lk_out="$(livekit_seed_keys '' '--config /etc/livekit.yaml')" || _lk_rc=$?
 _assert_var "seed unknown: empty output" "$_lk_out" ""

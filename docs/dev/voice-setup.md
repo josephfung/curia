@@ -50,6 +50,12 @@ the `--dev` fallback.
 Curia's own end of a call does not use that public URL. It joins over
 `ws://livekit:7880`, derived from `channels.voice.livekit_management_url` (default
 `http://livekit:7880`), so local calls work and traffic stays on the compose network.
+A Curia run on the host (`pnpm dev`) sets `LIVEKIT_INTERNAL_URL=ws://localhost:7880`
+for its own join instead.
+
+Re-running `install.sh` keeps the install's topology and LiveKit settings. To
+change how Curia is reached, edit `.env` (`COMPOSE_FILE`, `DOMAIN`, `APP_ORIGIN`,
+`LIVEKIT_COMMAND`) or install into a new directory.
 
 ## Turn voice on for an existing install
 

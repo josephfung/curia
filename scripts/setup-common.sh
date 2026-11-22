@@ -98,22 +98,24 @@ gen_livekit_keys() {
 
 # Echo "<key> <secret>" for the keys LiveKit will run on, or return 1 with no
 # output when they cannot be known. $1 = LIVEKIT_KEYS value, $2 = LIVEKIT_COMMAND.
-# Order: LIVEKIT_KEYS ("k: s", quotes and spaces tolerated), then --keys in the
-# command, then --dev (or an empty command) -> devkey/secret.
+# LiveKit's own precedence: --key-file in the command (unreadable here, so
+# unknown), then --keys in the command (LIVEKIT_KEYS is only its environment
+# default), then LIVEKIT_KEYS ("k: s", quotes and spaces tolerated), then --dev
+# (or an empty command) -> devkey/secret.
 livekit_seed_keys() {
-  local keys="$1" cmd="$2" k s
-  if [[ -z "$keys" ]]; then
-    case "$cmd" in
-      *--keys=*) keys="${cmd#*--keys=}" ;;
-      *--keys\ *) keys="${cmd#*--keys }" ;;
+  local keys="$1" cmd="$2" flag="" k s
+  case "$cmd" in *--key-file*) return 1 ;; esac
+  case "$cmd" in
+    *--keys=*) flag="${cmd#*--keys=}" ;;
+    *--keys\ *) flag="${cmd#*--keys }" ;;
+  esac
+  if [[ -n "$flag" ]]; then
+    case "$flag" in
+      \"*) flag="${flag#\"}"; flag="${flag%%\"*}" ;;
+      \'*) flag="${flag#\'}"; flag="${flag%%\'*}" ;;
+      *) flag="${flag%% *}" ;;
     esac
-    if [[ -n "$keys" ]]; then
-      case "$keys" in
-        \"*) keys="${keys#\"}"; keys="${keys%%\"*}" ;;
-        \'*) keys="${keys#\'}"; keys="${keys%%\'*}" ;;
-        *) keys="${keys%% *}" ;;
-      esac
-    fi
+    keys="$flag"
   fi
   if [[ -n "$keys" ]]; then
     keys="${keys#\"}"; keys="${keys%\"}"; keys="${keys#\'}"; keys="${keys%\'}"

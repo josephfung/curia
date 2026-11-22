@@ -1,177 +1,18 @@
-// resolveLiveKitServerUrl (#2357): which LiveKit address Curia's own end uses (server join,
-// RoomService, health and the Setup probe). The compose-network name only resolves inside
-// the compose network, so a host-run Curia (pnpm dev / pnpm local) falls back to the
-// browser-facing URL.
-import { describe, it, expect, vi } from 'vitest';
-import { resolveLiveKitServerUrl } from '../../../../../src/channels/voice/livekit/server-url.js';
-import { createSilentLogger } from '../../../../../src/logger.js';
+import { describe, expect, it } from 'vitest';
+import { liveKitJoinUrl } from '../../../../../src/channels/voice/livekit/server-url.js';
 
-const notFound = (): Promise<never> =>
-  Promise.reject(Object.assign(new Error('getaddrinfo ENOTFOUND livekit'), { code: 'ENOTFOUND' }));
-
-describe('resolveLiveKitServerUrl', () => {
-  it('keeps the management URL when its host resolves, and joins over its ws form', async () => {
-    const lookup = vi.fn().mockResolvedValue({ address: '172.18.0.3', family: 4 });
-    const result = await resolveLiveKitServerUrl({
-      managementUrl: 'http://livekit:7880',
-      browserUrl: 'wss://curia.example.com',
-      logger: createSilentLogger(),
-      inContainer: () => false,
-      lookup,
-    });
-    expect(lookup).toHaveBeenCalledWith('livekit');
-    expect(result).toEqual({ managementUrl: 'http://livekit:7880', joinUrl: 'ws://livekit:7880' });
+describe('liveKitJoinUrl', () => {
+  it('defaults to the management URL as a ws URL', () => {
+    expect(liveKitJoinUrl('http://livekit:7880', {})).toBe('ws://livekit:7880');
+    expect(liveKitJoinUrl('https://lk.example.com', {})).toBe('wss://lk.example.com');
   });
 
-  it('never joins over the browser URL while the management host resolves', async () => {
-    const result = await resolveLiveKitServerUrl({
-      managementUrl: 'http://livekit:7880',
-      browserUrl: 'ws://localhost:7880',
-      logger: createSilentLogger(),
-      inContainer: () => false,
-      lookup: async () => ({ address: '172.18.0.3', family: 4 }),
-    });
-    expect(result.joinUrl).not.toBe('ws://localhost:7880');
-    expect(result.joinUrl).toBe('ws://livekit:7880');
+  it('uses LIVEKIT_INTERNAL_URL when set', () => {
+    expect(liveKitJoinUrl('http://livekit:7880', { LIVEKIT_INTERNAL_URL: 'ws://localhost:7880' })).toBe('ws://localhost:7880');
+    expect(liveKitJoinUrl('http://livekit:7880', { LIVEKIT_INTERNAL_URL: 'http://127.0.0.1:7880' })).toBe('ws://127.0.0.1:7880');
   });
 
-  it('falls back to the browser URL when the management host does not resolve, with a warning', async () => {
-    const logger = createSilentLogger();
-    const warn = vi.spyOn(logger, 'warn');
-    const result = await resolveLiveKitServerUrl({
-      managementUrl: 'http://livekit:7880',
-      browserUrl: 'ws://localhost:7880',
-      logger,
-      inContainer: () => false,
-      lookup: notFound,
-    });
-    expect(result).toEqual({ managementUrl: 'http://localhost:7880', joinUrl: 'ws://localhost:7880' });
-    expect(warn).toHaveBeenCalledTimes(1);
-    const [fields, msg] = warn.mock.calls[0]! as [Record<string, unknown>, string];
-    expect(fields).toMatchObject({ managementUrl: 'http://livekit:7880', browserUrl: 'ws://localhost:7880' });
-    expect(msg).toContain('channels.voice.livekit_management_url');
-  });
-
-  it('maps a wss browser URL to https for management and wss for the join', async () => {
-    const result = await resolveLiveKitServerUrl({
-      managementUrl: 'http://livekit:7880',
-      browserUrl: 'wss://curia.example.com',
-      logger: createSilentLogger(),
-      inContainer: () => false,
-      lookup: notFound,
-    });
-    expect(result).toEqual({ managementUrl: 'https://curia.example.com', joinUrl: 'wss://curia.example.com' });
-  });
-
-  it('treats EAI_AGAIN as not resolving', async () => {
-    const result = await resolveLiveKitServerUrl({
-      managementUrl: 'http://livekit:7880',
-      browserUrl: 'ws://localhost:7880',
-      logger: createSilentLogger(),
-      inContainer: () => false,
-      lookup: () => Promise.reject(Object.assign(new Error('getaddrinfo EAI_AGAIN livekit'), { code: 'EAI_AGAIN' })),
-    });
-    expect(result.managementUrl).toBe('http://localhost:7880');
-  });
-
-  it('keeps the management URL when there is no browser URL to fall back to', async () => {
-    const lookup = vi.fn();
-    const result = await resolveLiveKitServerUrl({
-      managementUrl: 'http://livekit:7880',
-      browserUrl: undefined,
-      logger: createSilentLogger(),
-      inContainer: () => false,
-      lookup,
-    });
-    expect(result).toEqual({ managementUrl: 'http://livekit:7880', joinUrl: 'ws://livekit:7880' });
-    expect(lookup).not.toHaveBeenCalled();
-  });
-
-  // Only the compose name falls back: an explicit address was set on purpose, and a passing
-  // DNS failure at boot must not swap it for the browser URL until the next restart.
-  it.each([
-    ['EAI_AGAIN', () => Promise.reject(Object.assign(new Error('getaddrinfo EAI_AGAIN lk.internal'), { code: 'EAI_AGAIN' }))],
-    ['a lookup that never answers', () => new Promise(() => {})],
-  ])('keeps an explicit management URL on the host after %s, without a lookup', async (_label, failing) => {
-    const lookup = vi.fn(failing);
-    const logger = createSilentLogger();
-    const warn = vi.spyOn(logger, 'warn');
-    const result = await resolveLiveKitServerUrl({
-      managementUrl: 'http://lk.internal:7880',
-      browserUrl: 'wss://curia.example.com',
-      logger,
-      inContainer: () => false,
-      lookup,
-      lookupTimeoutMs: 20,
-    });
-    expect(result).toEqual({ managementUrl: 'http://lk.internal:7880', joinUrl: 'ws://lk.internal:7880' });
-    expect(lookup).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it('keeps an explicit IPv6 management URL', async () => {
-    const lookup = vi.fn(notFound);
-    const result = await resolveLiveKitServerUrl({
-      managementUrl: 'http://[::1]:7880',
-      browserUrl: 'ws://localhost:7880',
-      logger: createSilentLogger(),
-      inContainer: () => false,
-      lookup,
-    });
-    expect(result.managementUrl).toBe('http://[::1]:7880');
-    expect(lookup).not.toHaveBeenCalled();
-  });
-
-  it('treats the compose host case-insensitively, as URL parsing does', async () => {
-    const result = await resolveLiveKitServerUrl({
-      managementUrl: 'http://LiveKit:7880',
-      browserUrl: 'ws://localhost:7880',
-      logger: createSilentLogger(),
-      inContainer: () => false,
-      lookup: notFound,
-    });
-    expect(result.managementUrl).toBe('http://localhost:7880');
-  });
-
-  it('keeps an unparseable management URL and warns', async () => {
-    const logger = createSilentLogger();
-    const warn = vi.spyOn(logger, 'warn');
-    const result = await resolveLiveKitServerUrl({
-      managementUrl: 'not a url',
-      browserUrl: 'ws://localhost:7880',
-      logger,
-      inContainer: () => false,
-      lookup: vi.fn(),
-    });
-    expect(result.managementUrl).toBe('not a url');
-    expect(warn).toHaveBeenCalledTimes(1);
-  });
-
-  it('in a container, keeps the management URL even when it does not resolve (livekit not up yet)', async () => {
-    const lookup = vi.fn(notFound);
-    const logger = createSilentLogger();
-    const warn = vi.spyOn(logger, 'warn');
-    const result = await resolveLiveKitServerUrl({
-      managementUrl: 'http://livekit:7880',
-      browserUrl: 'ws://localhost:7880',
-      logger,
-      inContainer: () => true,
-      lookup,
-    });
-    expect(result).toEqual({ managementUrl: 'http://livekit:7880', joinUrl: 'ws://livekit:7880' });
-    expect(lookup).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it('on the host, a lookup that does not answer in time counts as unresolvable', async () => {
-    const result = await resolveLiveKitServerUrl({
-      managementUrl: 'http://livekit:7880',
-      browserUrl: 'ws://localhost:7880',
-      logger: createSilentLogger(),
-      inContainer: () => false,
-      lookup: () => new Promise(() => {}),
-      lookupTimeoutMs: 20,
-    });
-    expect(result).toEqual({ managementUrl: 'http://localhost:7880', joinUrl: 'ws://localhost:7880' });
+  it('ignores an empty override', () => {
+    expect(liveKitJoinUrl('http://livekit:7880', { LIVEKIT_INTERNAL_URL: '  ' })).toBe('ws://livekit:7880');
   });
 });

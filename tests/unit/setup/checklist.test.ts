@@ -38,7 +38,6 @@ function deps(overrides: Partial<SetupCheckDeps> = {}, state: Partial<SetupState
     secretPresent: async () => false,
     browserReady: () => false,
     livekitProbe: async () => 'ok',
-    livekitManagementUrl: () => 'http://livekit:7880',
     logger: createSilentLogger(),
     ...overrides,
   };
@@ -204,17 +203,6 @@ describe('evaluateChecklist', () => {
       expect(task(result, 'voice').detail).toContain('docker compose up -d livekit');
     });
 
-    it('voice names the management URL and its config key when LiveKit is misconfigured', async () => {
-      const result = await evaluateChecklist(catalog, deps({
-        livekitProbe: async () => 'misconfigured',
-        livekitManagementUrl: () => 'http://livekit:7880',
-      }));
-      expect(task(result, 'voice').status).toBe('pending');
-      expect(task(result, 'voice').detail).toContain('http://livekit:7880');
-      expect(task(result, 'voice').detail).toContain('channels.voice.livekit_management_url');
-      expect(task(result, 'voice').detail).not.toContain("isn't running");
-    });
-
     it('voice reads rejected keys', async () => {
       const result = await evaluateChecklist(catalog, deps({ livekitProbe: async () => 'rejected' }));
       expect(task(result, 'voice').status).toBe('pending');
@@ -236,7 +224,6 @@ describe('evaluateChecklist', () => {
     it('voice is restart_required when LiveKit answers and the channel is saved but not started', async () => {
       const result = await evaluateChecklist(catalog, deps({
         livekitProbe: async () => 'ok',
-    livekitManagementUrl: () => 'http://livekit:7880',
         channelStatus: async (c) => (c === 'voice' ? 'restart_required' : 'running'),
       }));
       expect(task(result, 'voice')).toMatchObject({ status: 'pending', restart_required: true });
