@@ -300,6 +300,11 @@ COMPOSE_FLAGS=()
 # Pure helpers (unit-tested via tests/setup/test-setup-functions.sh)
 # ---------------------------------------------------------------------------
 
+# Append the SETUP_COMPLETE marker to env file $1 (install_is_complete reads it).
+mark_setup_complete() {
+  printf '\n# SETUP_COMPLETE\n' >> "$1"
+}
+
 # Returns 0 (true) only if the install at env file $1 is fully COMPLETE — i.e.
 # a prior fresh install ran all the way through migrations, vault seeding, a
 # healthy container, and wrote the SETUP_COMPLETE marker as its last step.
@@ -820,10 +825,10 @@ ensure_https_http_bind() {
   if uses_tls_overlay "$(compose_var "$env" COMPOSE_FILE)" && ! grep -qE '^HTTP_BIND=' "$env" 2>/dev/null; then
     set_env_var "$env" HTTP_BIND 127.0.0.1
     echo "" >&2
-    warn "HTTPS install: Curia's port ${HTTP_PORT:-3000} is now published on 127.0.0.1 only (HTTP_BIND, #2408)."
-    hint "Curia stays reachable through Caddy on 443. Anything that hit <host>:${HTTP_PORT:-3000}"
+    warn "HTTPS install: Curia's port ${CURIA_PORT_DISPLAY:-3000} is now published on 127.0.0.1 only (HTTP_BIND, #2408)."
+    hint "Curia stays reachable through Caddy on 443. Anything that hit <host>:${CURIA_PORT_DISPLAY:-3000}"
     hint "directly (e.g. an uptime probe) stops working; point it at https://$(env_value "$env" DOMAIN)."
-    hint "To keep port ${HTTP_PORT:-3000} public, set HTTP_BIND= (empty) in .env and re-run."
+    hint "To keep port ${CURIA_PORT_DISPLAY:-3000} public, set HTTP_BIND= (empty) in .env and re-run."
   fi
 }
 
@@ -846,7 +851,7 @@ ensure_https_app_origin() {
     echo "" >&2
     warn "HTTPS install: APP_ORIGIN is now https://$dom (#2368)."
     hint "Session cookies are now Secure: sign in to the console at https://$dom,"
-    hint "not http://<host>:${HTTP_PORT:-3000}. To use another origin, set APP_ORIGIN in .env and re-run."
+    hint "not http://<host>:${CURIA_PORT_DISPLAY:-3000}. To use another origin, set APP_ORIGIN in .env and re-run."
   fi
 }
 
@@ -957,26 +962,43 @@ check_shell_reach_values() {
   return 0
 }
 
-# A retry that leaves the HTTPS topology (the earlier, interrupted run recorded
-# domain): that run may have started Caddy, and `up -d` without the overlay
-# would leave it running as an orphan on 80/443. Remove only this project's
-# caddy service container (rm -sf names the service; volumes and other
-# containers are untouched). The overlay is named explicitly, since .env no
-# longer lists it. When removal fails, stop before Postgres starts; the domain
-# topology record ($1 = env file) is still there, so the next retry tries again.
-retire_previous_caddy() {
-  local env="$1" overlay="$INSTALL_DIR/docker-compose.tls.yml"
-  [[ -f "$overlay" ]] || return 0
-  if docker compose --project-directory "$INSTALL_DIR" -f "$INSTALL_DIR/docker-compose.yml" -f "$overlay" \
-      rm -sf caddy >/dev/null 2>&1; then
-    return 0
+# The Compose project this install's containers belong to, from the final
+# rendered config (its top-level name:, which reflects a name: in any compose
+# file and COMPOSE_PROJECT_NAME); compose_project_name when Compose can't render.
+rendered_project_name() {
+  local cfg name=""
+  if cfg="$(docker compose --project-directory "$INSTALL_DIR" config 2>/dev/null)"; then
+    name="$(awk '/^name:/ { sub(/^name:[[:space:]]*/, ""); gsub(/["\047]/, ""); print; exit }' <<< "$cfg")"
   fi
-  # The domain topology record is still in .env (set_topology_record has not
-  # run yet), so the next retry tries this removal again.
+  [[ -n "$name" ]] || name="$(compose_project_name "$1")"
+  printf '%s' "$name"
+}
+
+# The project an earlier, unfinished HTTPS run recorded before it could start
+# Caddy (CADDY_PROJECT record), or nothing. The last record wins.
+recorded_caddy_project() {
+  { grep "^${TOPOLOGY_MARK}CADDY_PROJECT=" "$1" 2>/dev/null || true; } | tail -n 1 | cut -d= -f2-
+}
+
+# Remove the caddy container(s) of Compose project $1, found by Compose's own
+# labels (project and service), so the right project is cleaned up whatever
+# compose files or name: it ran with, and nothing else is touched (no other
+# service, no volume). Fails closed: a failed lookup or removal, or a caddy
+# container still there afterwards, stops the install before Postgres starts.
+# The CADDY_PROJECT record stays until this succeeds, so the next retry tries again.
+retire_previous_caddy() {
+  local project="$1" ids
+  local -a filt=(--filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=caddy")
+  if ids="$(docker ps -aq "${filt[@]}")"; then
+    # shellcheck disable=SC2086  # container ids, split on purpose
+    if [[ -z "$ids" ]] || { docker rm -f $ids >/dev/null 2>&1 && [[ -z "$(docker ps -aq "${filt[@]}")" ]]; }; then
+      return 0
+    fi
+  fi
   echo "" >&2
-  error "Could not remove the Caddy container an earlier HTTPS run started; it would keep ports 80 and 443."
+  error "Could not remove the Caddy container an earlier HTTPS run started (project $project); it would keep ports 80 and 443."
   hint "Remove it by hand, then re-run install.sh. Postgres was not started:"
-  hint "  docker compose --project-directory \"$INSTALL_DIR\" -f \"$INSTALL_DIR/docker-compose.yml\" -f \"$overlay\" rm -sf caddy"
+  hint "  docker rm -f \$(docker ps -aq --filter label=com.docker.compose.project=$project --filter label=com.docker.compose.service=caddy)"
   exit 1
 }
 
@@ -1011,6 +1033,8 @@ reset_topology_vars() {
   while IFS= read -r line; do
     line="${line#"$TOPOLOGY_MARK"}"; key="${line%%=*}"; val="${line#*=}"
     if [[ "$key" == TOPOLOGY ]]; then prior="$val"; continue; fi
+    # Kept until the cleanup it stands for has succeeded (fresh_install).
+    [[ "$key" != CADDY_PROJECT ]] || continue
     if [[ "$key" == TLS_APPENDED ]]; then
       # Only the overlay entry this run appended to the operator's COMPOSE_FILE.
       if [[ "$(env_value "$env" COMPOSE_FILE)" == "$val" ]]; then
@@ -1029,12 +1053,12 @@ reset_topology_vars() {
 }
 
 # Remove the topology records from env file $1 (a finished install needs none).
-# With $2 = keep-topology, the TOPOLOGY record(s) stay.
+# With $2 = keep-topology, the TOPOLOGY and CADDY_PROJECT records stay.
 drop_topology_records() {
   local tmp
   tmp="$(mktemp)"
   if [[ "${2:-}" == keep-topology ]]; then
-    awk -v m="$TOPOLOGY_MARK" 'index($0, m) == 1 && index($0, m "TOPOLOGY=") != 1 { next } { print }' "$1" > "$tmp"
+    awk -v m="$TOPOLOGY_MARK" 'index($0, m) == 1 && index($0, m "TOPOLOGY=") != 1 && index($0, m "CADDY_PROJECT=") != 1 { next } { print }' "$1" > "$tmp"
   else
     grep -v "^${TOPOLOGY_MARK}" "$1" > "$tmp" || true
   fi
@@ -1042,15 +1066,18 @@ drop_topology_records() {
 }
 
 # Record $2 as this run's topology in env file $1, replacing the earlier run's.
-# The new record is appended before the old ones are removed, so no interrupt
-# leaves the file without one; reset_topology_vars reads the last.
-set_topology_record() {
+set_topology_record() { replace_record "$1" TOPOLOGY "$2"; }
+
+# Replace record KEY ($2) in env file $1 with value $3, or with none when $3 is
+# empty. A new record is appended before the old ones are removed, so no
+# interrupt leaves the file without one; readers take the last.
+replace_record() {
   local tmp
-  record_topology_var "$1" TOPOLOGY "$2"
+  [[ -z "$3" ]] || record_topology_var "$1" "$2" "$3"
   tmp="$(mktemp)"
-  awk -v m="${TOPOLOGY_MARK}TOPOLOGY=" '
+  awk -v m="${TOPOLOGY_MARK}$2=" -v keep="${3:+1}" '
     { line[NR] = $0; if (index($0, m) == 1) last = NR }
-    END { for (i = 1; i <= NR; i++) if (index(line[i], m) != 1 || i == last) print line[i] }' "$1" > "$tmp"
+    END { for (i = 1; i <= NR; i++) if (index(line[i], m) != 1 || (keep && i == last)) print line[i] }' "$1" > "$tmp"
   mv "$tmp" "$1"
 }
 
@@ -1267,7 +1294,7 @@ setup_base_url() {
       proxy)  printf '%s' "${value%/}"; return 0 ;;
     esac
   fi
-  printf 'http://localhost:%s' "${HTTP_PORT:-3000}"
+  printf 'http://localhost:%s' "${CURIA_PORT_DISPLAY:-${HTTP_PORT:-3000}}"
 }
 
 # 0 when something accepts a TCP connection on 127.0.0.1:<port> (1 s bound).
@@ -1334,15 +1361,6 @@ fresh_install() {
     set_env_var "$env" SECRET_ENCRYPTION_KEY "$secret_key"
   fi
 
-  # Pin the app image tag to the resolved CURIA_VERSION (latest / vX.Y.Z / edge),
-  # so the config files and the image both come from the same release. This runs
-  # only on fresh install, so a re-run never clobbers an operator's hand-pinned
-  # tag. CURIA_POSTGRES_TAG is intentionally left at its default (pg16) — the
-  # postgres image is versioned by PG major, not app version.
-  if [[ -n "$CURIA_IMAGE_TAG_RESOLVED" ]]; then
-    set_env_var "$env" CURIA_IMAGE_TAG "$CURIA_IMAGE_TAG_RESOLVED"
-  fi
-
   # Prompt for the Anthropic key (format-validated, 3 retries). Not written to
   # .env — passed as a transient env var to the vault-seed container only.
   local anthropic
@@ -1353,16 +1371,36 @@ fresh_install() {
   TOPOLOGY="$(choose_topology)"
   PROXY_ORIGIN=""
   # A rerun of an interrupted install starts from this choice, not the last one's.
-  # The earlier run's topology record outlives the reset until the cleanup it
-  # implies (its Caddy) has succeeded; only then is this run's recorded.
+  # An earlier HTTPS run's Caddy is cleaned up at the resolution point below,
+  # from its own CADDY_PROJECT record, which outlives the reset until then.
   local prior_topology
   prior_topology="$(reset_topology_vars "$env")"
   if [[ -n "$prior_topology" && "$prior_topology" != "$TOPOLOGY" ]]; then
     echo "" >&2
     warn "An earlier, interrupted run chose another way to reach Curia; its settings were replaced by this choice."
-    [[ "$prior_topology" != domain ]] || retire_previous_caddy "$env"
   fi
   set_topology_record "$env" "$TOPOLOGY"
+
+  # Pin the app image tag to the resolved CURIA_VERSION (latest / vX.Y.Z / edge),
+  # so the config files and the image both come from the same release.
+  # CURIA_POSTGRES_TAG is intentionally left at its default (pg16) — the
+  # postgres image is versioned by PG major, not app version. Recorded like the
+  # reach values (after the reset above): on a retry of an unfinished install,
+  # reset_topology_vars removed the pin an earlier run wrote, so the tag is
+  # empty here unless the operator set it since; that pin is kept (the template's
+  # "latest" is not a pin). A first run (no vault key yet) always pins.
+  if [[ -n "$CURIA_IMAGE_TAG_RESOLVED" ]]; then
+    local cur_tag
+    cur_tag="$(env_value "$env" CURIA_IMAGE_TAG)"
+    # .env.example's own "latest" is the template, not an operator pin.
+    if [[ $rerun -eq 0 || -z "$cur_tag" || "$cur_tag" == latest ]]; then
+      set_topology_var "$env" CURIA_IMAGE_TAG "$CURIA_IMAGE_TAG_RESOLVED"
+    elif [[ "$cur_tag" != "$CURIA_IMAGE_TAG_RESOLVED" ]]; then
+      echo "" >&2
+      warn "Keeping CURIA_IMAGE_TAG=$cur_tag from .env (set after an earlier, unfinished run), not $CURIA_IMAGE_TAG_RESOLVED."
+      hint "To install $CURIA_IMAGE_TAG_RESOLVED instead, change CURIA_IMAGE_TAG in .env and re-run."
+    fi
+  fi
   case "$TOPOLOGY" in
     domain)
       # Require a non-empty domain — the TLS overlay and the summary URL are
@@ -1449,6 +1487,18 @@ fresh_install() {
   # An exported reach value that breaks the chosen topology stops here.
   check_shell_reach_values "$TOPOLOGY" "$env"
 
+  # Caddy: an earlier, unfinished HTTPS run recorded the project it would start
+  # Caddy in. Unless this run is HTTPS in that same project, remove that Caddy
+  # first (stops on failure, record kept). Then record this run's project
+  # (HTTPS) or none, before anything starts.
+  local project prev_project
+  project="$(rendered_project_name "$env")"
+  prev_project="$(recorded_caddy_project "$env")"
+  if [[ -n "$prev_project" ]] && [[ "$TOPOLOGY" != domain || "$prev_project" != "$project" ]]; then
+    retire_previous_caddy "$prev_project"
+  fi
+  if [[ "$TOPOLOGY" == domain ]]; then replace_record "$env" CADDY_PROJECT "$project"; else replace_record "$env" CADDY_PROJECT ""; fi
+
   # Generate all secrets for this install. None of these are written to .env
   # in plaintext (DB creds are the exception — they must be in .env for the
   # postgres container and migration runner to consume them). api_token and
@@ -1521,7 +1571,9 @@ fresh_install() {
     fi
     # The keys the service Compose renders runs on (a compose override's own
     # --keys or LIVEKIT_KEYS included); .env and the shell when it can't render.
-    if rendered_livekit && [[ "$RENDERED_LIVEKIT_ACTIVE" == 1 ]]; then
+    # The rendered service, active or not: with the voice profile off (e.g. an
+    # exported COMPOSE_PROFILES without it) it still shows the keys it runs once on.
+    if rendered_livekit && [[ "$RENDERED_LIVEKIT_DEFINED" == 1 ]]; then
       lk_pair="$(rendered_livekit_seed_keys)" || lk_rc=$?
     else
       lk_pair="$(livekit_seed_keys "$(compose_var "$env" LIVEKIT_KEYS)" "$(effective_livekit_command "$env")")" || lk_rc=$?
@@ -1611,13 +1663,15 @@ fresh_install() {
   check_livekit_exposure "$env"
   note_missing_browser "$env"
 
-  # Mark setup as complete. On subsequent re-runs, install_is_complete() sees
-  # this marker and takes the upgrade path instead of rotating secrets. The
-  # topology records only serve a rerun of an unfinished install, so they go
-  # once the marker is written, never before.
-  printf '\n# SETUP_COMPLETE\n' >> "$env"
-  drop_topology_records "$env"
-
+  # Order matters, and each step is safe to interrupt:
+  #   1. Show the bootstrap secret (and the next steps). It exists only in this
+  #      run; a rerun before the marker is a fresh install again, which makes and
+  #      shows a new one.
+  #   2. Write SETUP_COMPLETE: from here a rerun takes the upgrade path, which
+  #      never shows a secret, so this comes only after it has been shown.
+  #   3. Drop the topology records, which only serve a rerun of an unfinished
+  #      install: after the marker, never before (a leftover record on a
+  #      finished install is inert; existing_install never reads them).
   # livekit_next_steps_state reads off when the voice profile is off and
   # livekit is not running, so an install the installer left voice off on says so.
   print_summary "$boot_secret" "$(setup_base_url "$TOPOLOGY" "$lk_value")"
@@ -1631,6 +1685,9 @@ fresh_install() {
     case "$lk_port_rc" in 0) ;; 2) lk_port="" ;; *) lk_port=7880 ;; esac
   fi
   print_next_steps "$TOPOLOGY" "$(livekit_next_steps_state "$env")" "$PROXY_ORIGIN" "$lk_port"
+
+  mark_setup_complete "$env"
+  drop_topology_records "$env"
 }
 
 # ---------------------------------------------------------------------------

@@ -125,7 +125,7 @@ gen_livekit_keys() {
 #   - LIVEKIT_KEYS ("k: s", quotes and spaces tolerated);
 #   - --dev (or an empty command, the compose default) -> devkey/secret.
 # A --config file that names a key_file is invisible here too; the Setup Voice
-# check reports keys LiveKit rejects.
+# check reports keys LiveKit rejects. A pair containing $ is unknown (see below).
 livekit_seed_keys() {
   local keys="$1" cmd="$2" flag="" k s
   case "$cmd" in *--key-file*) return 1 ;; esac
@@ -147,6 +147,12 @@ livekit_seed_keys() {
     k="${k#"${k%%[![:space:]]*}"}"; k="${k%"${k##*[![:space:]]}"}"
     s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"
     [[ "$keys" == *:* && -n "$k" && -n "$s" ]] || return 1
+    # A $ in the pair is unknown, not guessed: Compose interpolates it (or keeps
+    # it, single-quoted), and `docker compose config` may print it doubled ($$),
+    # depending on the version, so the installer can't be sure what LiveKit gets.
+    # Generated and usual keys are alphanumeric; the operator enters such a pair
+    # under Settings → Channels → Voice.
+    [[ "$k$s" != *'$'* ]] || return 1
     printf '%s %s' "$k" "$s"
     return 0
   fi
@@ -162,6 +168,9 @@ livekit_seed_keys() {
 # Returns 1, with everything empty, when Compose can't render the config. Sets:
 #   RENDERED_LIVEKIT_ACTIVE   1 when `config --services` lists livekit (`up -d`
 #                             starts it, profiled or not), else 0;
+#   RENDERED_LIVEKIT_DEFINED  1 when the livekit service renders (`config
+#                             livekit` names it even while its profile is off),
+#                             so the values below are what it runs once enabled;
 #   RENDERED_LIVEKIT_COMMAND  the rendered command: list joined with spaces
 #                             (empty when the service has none);
 #   RENDERED_LIVEKIT_KEYS_FLAG  the argument after --keys (or of --keys=), kept
@@ -172,12 +181,20 @@ livekit_seed_keys() {
 rendered_livekit() {
   local services out tag val
   local -a _flags=("${COMPOSE_FLAGS[@]+"${COMPOSE_FLAGS[@]}"}")
-  RENDERED_LIVEKIT_ACTIVE=""; RENDERED_LIVEKIT_COMMAND=""; RENDERED_LIVEKIT_KEYS_FLAG=""
-  RENDERED_LIVEKIT_KEY_FILE=""; RENDERED_LIVEKIT_ENV_KEYS=""
+  RENDERED_LIVEKIT_ACTIVE=""; RENDERED_LIVEKIT_DEFINED=""; RENDERED_LIVEKIT_COMMAND=""
+  RENDERED_LIVEKIT_KEYS_FLAG=""; RENDERED_LIVEKIT_KEY_FILE=""; RENDERED_LIVEKIT_ENV_KEYS=""
   services="$(docker compose --project-directory "$REPO_ROOT" ${_flags[@]+"${_flags[@]}"} config --services 2>/dev/null)" || return 1
-  if ! grep -qx livekit <<< "$services"; then RENDERED_LIVEKIT_ACTIVE=0; return 0; fi
-  out="$(docker compose --project-directory "$REPO_ROOT" ${_flags[@]+"${_flags[@]}"} config livekit 2>/dev/null)" || return 1
-  RENDERED_LIVEKIT_ACTIVE=1
+  RENDERED_LIVEKIT_ACTIVE=0
+  grep -qx livekit <<< "$services" && RENDERED_LIVEKIT_ACTIVE=1
+  # Rendered even while the voice profile is off, so the keys an override gives
+  # it are known before the operator turns voice on.
+  if ! out="$(docker compose --project-directory "$REPO_ROOT" ${_flags[@]+"${_flags[@]}"} config livekit 2>/dev/null)"; then
+    # Active but not renderable is a failure; inactive and absent is no service.
+    [[ "$RENDERED_LIVEKIT_ACTIVE" == 0 ]] || return 1
+    RENDERED_LIVEKIT_DEFINED=0
+    return 0
+  fi
+  RENDERED_LIVEKIT_DEFINED=1
   # One "tag<TAB>value" line per finding; command items keep their boundaries.
   while IFS=$'\t' read -r tag val; do
     case "$tag" in
@@ -210,7 +227,7 @@ rendered_livekit() {
 }
 
 # Echo "<key> <secret>" for the keys the rendered livekit service runs on
-# (rendered_livekit must have succeeded with RENDERED_LIVEKIT_ACTIVE=1), or
+# (rendered_livekit must have succeeded with RENDERED_LIVEKIT_DEFINED=1), or
 # return 1 when they can't be known. Same precedence as livekit_seed_keys:
 # --key-file, then --keys (read whole from its own argument), then LIVEKIT_KEYS
 # in the rendered environment, then --dev. A service with no command is unknown.
@@ -275,15 +292,17 @@ curia_host_port() {
   printf '%s' "$p"
 }
 
-# Set HTTP_PORT, which every message naming Curia's host port reads (the
-# summary address, a proxy's forwarding rule, hints), to curia_host_port's
-# answer for env file $1. When that is unknown, HTTP_PORT becomes the
-# placeholder <port> and one note says what it stands for, rather than a guess.
+# Set CURIA_PORT_DISPLAY, which every message naming Curia's host port reads
+# (the summary address, a proxy's forwarding rule, hints), to curia_host_port's
+# answer for env file $1. When that is unknown, it is the placeholder <port>
+# and one note says what it stands for, rather than a guess. A display-only
+# variable: HTTP_PORT is left alone, since Compose reads it from the shell
+# first and a later docker compose call must not see a placeholder.
 resolve_curia_port_for_messages() {
   local rc=0 p
   p="$(curia_host_port "$1")" || rc=$?
-  if [[ $rc -eq 0 ]]; then HTTP_PORT="$p"; return 0; fi
-  HTTP_PORT="<port>"
+  if [[ $rc -eq 0 ]]; then CURIA_PORT_DISPLAY="$p"; return 0; fi
+  CURIA_PORT_DISPLAY="<port>"
   echo "" >&2
   if [[ $rc -eq 2 ]]; then
     warn "Compose publishes no host port for Curia's 3000; below, <port> stands for the one you publish."
@@ -593,7 +612,7 @@ print_summary() {
     local border url
     border=$(printf '═%.0s' $(seq 1 $W))
 
-    [[ -n "$base" ]] || base="http://localhost:${HTTP_PORT:-3000}"
+    [[ -n "$base" ]] || base="http://localhost:${CURIA_PORT_DISPLAY:-${HTTP_PORT:-3000}}"
     url="${base%/}/setup"
 
     echo ""
@@ -631,10 +650,11 @@ print_summary() {
 # proxy's public address: empty means a proxy kept on localhost for testing.
 # A 4th argument is the host port LiveKit signaling is published on
 # (livekit_host_port), 7880 when omitted; empty means Compose publishes none.
-# Curia's own host port is HTTP_PORT (as print_summary reads it), 3000 by default.
+# Curia's own host port is CURIA_PORT_DISPLAY (resolve_curia_port_for_messages),
+# else HTTP_PORT, else 3000, as print_summary reads it.
 print_next_steps() {
     local topology="$1" voice="${2:-off}" origin="${3-}" lk_port="${4-7880}" reached=0
-    local curia_port="${HTTP_PORT:-3000}"
+    local curia_port="${CURIA_PORT_DISPLAY:-${HTTP_PORT:-3000}}"
     echo "Finish setting up Curia in your browser at the address above."
     echo "Guide: https://docs.meetcuria.com/get-started/check-your-setup"
     echo "When every step is done, choose Start onboarding."

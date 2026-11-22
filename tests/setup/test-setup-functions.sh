@@ -1179,11 +1179,6 @@ _ao_paths() {
       note_missing_browser() { :; }
       print_summary() { :; }; getent() { return 0; }
       prompt_anthropic_key() { echo sk-ant-test; }
-      # _FI_DROP_KILL: the run dies while dropping the records after completion.
-      if [[ -n "${_FI_DROP_KILL:-}" ]]; then
-        eval "_orig_$(declare -f drop_topology_records)"
-        drop_topology_records() { [[ -n "${2:-}" ]] || exit 9; _orig_drop_topology_records "$@"; }
-      fi
       choose_topology() { echo "$_AO_TOPOLOGY"; }
       gen_secret_hex() { echo genhex; }; gen_secret_b64() { echo genb64; }
       INSTALL_DIR="$(dirname "$envf")"
@@ -1392,6 +1387,13 @@ for _lk_kf in '--key-file /etc/lk-keys.yaml' '--key-file=/etc/lk-keys.yaml' '--c
     _assert_var "seed: key file ($_lk_kf) is unknown even with LIVEKIT_KEYS" "$_lk_rc:$_lk_out" "1:"
 done
 _assert_var "seed: LIVEKIT_KEYS still beats --dev" "$(livekit_seed_keys 'APIgen: gensecret' '--dev')" "APIgen gensecret"
+# A $ in the pair is unknown: Compose interpolates it and `config` may print it doubled.
+for _lk_d in 'APIx: 0123456789$tail' 'APIx: 0123456789$$tail' 'API$x: secret'; do
+    _lk_rc=0; _lk_out="$(livekit_seed_keys "$_lk_d" '')" || _lk_rc=$?
+    _assert_var "seed: \$ in '$_lk_d' is unknown" "$_lk_rc:$_lk_out" "1:"
+done
+_lk_rc=0; _lk_out="$(livekit_seed_keys '' '--keys "APIx: abc$$def"')" || _lk_rc=$?
+_assert_var "seed: \$ in a --keys argument is unknown" "$_lk_rc:$_lk_out" "1:"
 
 # The host port signaling is published on: what Compose renders, else
 # LIVEKIT_HTTP_PORT as docker-compose.yml reads it.
@@ -1414,7 +1416,7 @@ _rcp() {   # $1 .env contents, $2 rendered curia ("" = cannot render); echoes HT
     printf '%b' "$1" > "$_cp_env2"
     ( unset HTTP_PORT; _r="$2"
       docker() { [[ -n "$_r" ]] || return 1; printf '%b' "$_r"; }
-      resolve_curia_port_for_messages "$_cp_env2" 2>"$_cp_env2.err"; printf '%s|%s' "$HTTP_PORT" "$(grep -c '<port>' "$_cp_env2.err" | tr -d ' ')" )
+      resolve_curia_port_for_messages "$_cp_env2" 2>"$_cp_env2.err"; printf '%s|%s' "$CURIA_PORT_DISPLAY" "$(grep -c '<port>' "$_cp_env2.err" | tr -d ' ')" )
 }
 _RCP_3100='services:\n  curia:\n    ports:\n      - mode: ingress\n        target: 3000\n        published: "3100"\n'
 _assert_var "curia port: rendered from \${WEB_PORT:-3100}" "$(_rcp 'HTTP_PORT=${WEB_PORT:-3100}\n' "$_RCP_3100")" "3100|0"
@@ -1422,6 +1424,10 @@ _assert_var "curia port: literal HTTP_PORT without a render" "$(_rcp 'HTTP_PORT=
 _assert_var "curia port: default 3000 without a render" "$(_rcp '' '')" "3000|0"
 _assert_var "curia port: unresolved, no render -> placeholder + note" "$(_rcp 'HTTP_PORT=${WEB_PORT:-3100}\n' '')" "<port>|1"
 _assert_var "curia port: rendered without 3000 published -> placeholder + note" "$(_rcp '' 'services:\n  curia:\n    image: x\n')" "<port>|1"
+# HTTP_PORT itself is never touched: Compose reads it from the shell first.
+printf '' > "$_cp_env2"
+_assert_var "curia port: an exported HTTP_PORT is left alone" \
+    "$( (export HTTP_PORT=3300; docker() { printf 'services:\n  curia:\n    image: x\n'; }; resolve_curia_port_for_messages "$_cp_env2" 2>/dev/null; printf '%s|%s' "$HTTP_PORT" "$CURIA_PORT_DISPLAY") )" "3300|<port>"
 rm -f "$_cp_env2" "$_cp_env2.err"
 _assert_var "require host port: none published -> empty, continues" \
     "$( (unset LIVEKIT_HTTP_PORT; docker() { printf 'services:\n  livekit:\n    image: x\n'; }; require_livekit_host_port "$_lk_env"; printf '[%s]' "$LIVEKIT_HOST_PORT") )" "[]"
@@ -1797,6 +1803,7 @@ _assert_var "rendered keys: --key-file is unknown" \
     "$(_rlk "${_RL_HEAD}      - --key-file\n      - /k.yaml\n    environment:\n      LIVEKIT_KEYS: 'APIgen: gensecret'\n")" "|1|APIgen: gensecret|unknown"
 _assert_var "rendered keys: --dev with no LIVEKIT_KEYS -> devkey" "$(_rlk "${_RL_HEAD}      - --dev\n")" "|||devkey secret"
 _assert_var "rendered keys: no command -> unknown" "$(_rlk 'services:\n  livekit:\n    image: x\n')" "|||unknown"
+_assert_var "rendered keys: a doubled \$\$ from config is unknown" "$(_rlk "${_RL_HEAD}      - --keys\n      - 'APIx: abc\$\$def'\n" | cut -d'|' -f4)" "unknown"
 
 # --- install.sh: fresh_install starts LiveKit and seeds matching vault values ---
 
@@ -1833,7 +1840,7 @@ _fi_seedenv="$_fi_dir/seedenv"
 # $_fi_calls and the run's output in $_fi_out; returns the run's status.
 _fi_run() {
     if [[ -n "${_FI_ENV_BASE:-}" ]]; then cp "$_FI_ENV_BASE" "$_fi_env"; printf '%b' "$3" >> "$_fi_env"
-    else printf '%b' "DB_PASSWORD=${_FI_DB_PASSWORD-your-db-password}\n$3" > "$_fi_env"; fi
+    else printf '%b' "DB_PASSWORD=${_FI_DB_PASSWORD-your-db-password}\n$3" > "$_fi_env"; : > "$_fi_dir/caddy-ids"; fi
     printf '%s' "${_FI_COMPOSE-$_FB_LK}" > "$_fi_dir/docker-compose.yml"
     : > "$_fi_calls"; : > "$_fi_seedenv"
     local rc=0
@@ -1860,6 +1867,13 @@ _fi_run() {
           esac
           return 0 ;;
         esac
+        # _FI_PROJECT_BY_CF: the TLS overlay names the project "office".
+        if [[ -n "${_FI_PROJECT_BY_CF:-}" ]]; then
+          case "$*" in (compose*" config")
+            if [[ "$(env_value "$_fi_env" COMPOSE_FILE)" == *tls* ]]; then printf 'name: office\n'; else printf 'name: plain\n'; fi
+            return 0 ;;
+          esac
+        fi
         # The rendered config, when the test gives one (otherwise Compose prints nothing).
         case "$*" in (compose*" config") printf '%b' "${_FI_CONFIG:-}"; return 0 ;; esac
         # Active services and the rendered livekit service: _FI_SERVICES unset means
@@ -1883,11 +1897,29 @@ _fi_run() {
           [[ -n "${_FI_CURIA_RENDER+set}" ]] || return 1
           printf '%b' "$_FI_CURIA_RENDER"; return 0 ;;
         esac
-        # _FI_CADDY_RM_KILL: the run dies during the removal (an SSH drop).
-        case "$*" in (*" rm -sf caddy")
-          [[ -z "${_FI_CADDY_RM_KILL:-}" ]] || exit 9
-          [[ -z "${_FI_CADDY_RM_FAIL:-}" ]]; return ;;
+        # Caddy containers, "<project> <id>" lines in $_fi_dir/caddy-ids: started
+        # by a full `up -d` with the TLS overlay, in the project the run recorded.
+        case "$*" in ("ps -aq --filter label=com.docker.compose.project="*" --filter label=com.docker.compose.service=caddy")
+          local _all="$*" _p; _p="${_all#*project=}"; _p="${_p%% *}"
+          [[ -z "${_FI_CADDY_PS_FAIL:-}" ]] || return 1
+          awk -v p="$_p" '$1 == p { print $2 }' "$_fi_dir/caddy-ids" 2>/dev/null; return 0 ;;
         esac
+        # _FI_CADDY_RM_KILL: the run dies during the removal (an SSH drop).
+        case "$*" in ("rm -f "*)
+          [[ -z "${_FI_CADDY_RM_KILL:-}" ]] || exit 9
+          [[ -z "${_FI_CADDY_RM_FAIL:-}" ]] || return 1
+          [[ -z "${_FI_CADDY_RM_NOOP:-}" ]] || return 0
+          local _all="$*" _id; for _id in ${_all#rm -f }; do
+            awk -v i="$_id" '$2 != i' "$_fi_dir/caddy-ids" > "$_fi_dir/caddy-ids.tmp"; mv "$_fi_dir/caddy-ids.tmp" "$_fi_dir/caddy-ids"
+          done; return 0 ;;
+        esac
+        case "$*" in (compose*" up -d")
+          if [[ "$(env_value "$_fi_env" COMPOSE_FILE)" == *tls* ]]; then
+            local _cp; _cp="$({ grep '^# installer-topology: CADDY_PROJECT=' "$_fi_env" || true; } | tail -n 1 | cut -d= -f2-)"
+            printf '%s caddy-%s\n' "${_cp:-unrecorded}" "${_cp:-unrecorded}" >> "$_fi_dir/caddy-ids"
+          fi ;;
+        esac
+
         case "$*" in (compose*" config livekit")
           [[ -n "${_FI_LK_RENDER+set}" ]] || return 1
           printf '%b' "$_FI_LK_RENDER"; return 0 ;;
@@ -1909,6 +1941,15 @@ _fi_run() {
       service_running() { [[ "$1" == caddy && -n "${_FI_CADDY_RUNNING:-}" ]]; }
       prompt_anthropic_key() { echo sk-ant-test; }
       choose_topology() { echo "$_FI_TOPOLOGY"; }
+      CURIA_IMAGE_TAG_RESOLVED="${_FI_IMAGE_TAG:-}"
+      [[ -z "${_FI_SHELL_PROFILES+set}" ]] || export COMPOSE_PROFILES="$_FI_SHELL_PROFILES"
+      # Interrupt the end of a run (exit 9): _FI_DROP_KILL while dropping the
+      # topology records, _FI_MARK_KILL instead of writing SETUP_COMPLETE.
+      if [[ -n "${_FI_DROP_KILL:-}" ]]; then
+        eval "_orig_$(declare -f drop_topology_records)"
+        drop_topology_records() { [[ -n "${2:-}" ]] || exit 9; _orig_drop_topology_records "$@"; }
+      fi
+      [[ -z "${_FI_MARK_KILL:-}" ]] || mark_setup_complete() { exit 9; }
       INSTALL_DIR="$_fi_dir"
       _FI_TOPOLOGY="$1"
       fresh_install "$_fi_env" <<< "$2" 2>&1
@@ -2283,48 +2324,73 @@ _fi_rc=0; _FI_SHELL_HTTP_BIND_EMPTY=1; _fi_run domain "c.example.com" '' || _fi_
 _assert_var "exported HTTP_BIND, domain: continues, .env not written" "$_fi_rc:$(grep -c '^HTTP_BIND=' "$_fi_env" | tr -d ' ')" "0:0"
 
 # A retry that leaves the HTTPS topology removes the Caddy container the earlier,
-# interrupted run started (this project's caddy service only).
-: > "$_fi_dir/docker-compose.tls.yml"
+# interrupted run started, by Compose's labels for the project that run recorded.
+_caddy_left() { awk 'END { print NR }' "$_fi_dir/caddy-ids"; }
 _fi_rerun domain "c.example.com" local ""
-_assert_var "retry domain -> local: removes this project's caddy" \
-    "$(grep -c "docker-compose.tls.yml rm -sf caddy$" "$_fi_calls" | tr -d ' ')" "1"
+_assert_var "retry domain -> local: removes the recorded project's caddy" "$(grep -c '^rm -f caddy-' "$_fi_calls" | tr -d ' '):$(_caddy_left)" "1:0"
 _assert_var "retry domain -> local: before Postgres starts" \
-    "$(awk '/rm -sf caddy$/ { r = NR } /up -d postgres/ && !p { p = NR } END { print (r && p && r < p) ? "yes" : "no" }' "$_fi_calls")" "yes"
+    "$(awk '/^rm -f caddy-/ { r = NR } /up -d postgres/ && !p { p = NR } END { print (r && p && r < p) ? "yes" : "no" }' "$_fi_calls")" "yes"
+_assert_var "retry domain -> local: CADDY_PROJECT record gone" "$(grep -c 'CADDY_PROJECT' "$_fi_env" | tr -d ' ')" "0"
 _fi_rerun domain "c.example.com" domain "c.example.com"
-_assert_var "retry domain -> domain: Caddy left alone" "$(grep -c 'rm -sf caddy' "$_fi_calls" | tr -d ' ')" "0"
-# Removal fails: stop before Postgres, and keep the domain record so the next
-# retry tries again; once it succeeds the install continues and the record goes.
+_assert_var "retry domain -> domain, same project: Caddy left alone" "$(grep -c '^rm -f' "$_fi_calls" | tr -d ' ')" "0"
+# The overlay named the project (name: office); the retry's project differs, and
+# the removal still targets office.
+_FI_PROJECT_BY_CF=1
+_fi_rerun domain "c.example.com" local ""
+unset _FI_PROJECT_BY_CF
+_assert_var "retry from a renamed HTTPS project: looks up that project, and checks it is gone" "$(grep -c 'project=office --filter' "$_fi_calls" | tr -d ' ')" "2"
+_assert_var "retry from a renamed HTTPS project: its caddy removed" "$(grep -c '^rm -f caddy-office$' "$_fi_calls" | tr -d ' '):$(_caddy_left)" "1:0"
+# Removal fails, or the lookup fails: stop before Postgres with the command,
+# keeping the CADDY_PROJECT record so the next retry tries again.
+for _fi_mode in _FI_CADDY_RM_FAIL _FI_CADDY_PS_FAIL; do
+    _FI_INTERRUPT=1; _fi_run domain "c.example.com" '' || true; unset _FI_INTERRUPT
+    cp "$_fi_env" "$_fi_base"; _FI_ENV_BASE="$_fi_base"
+    eval "$_fi_mode=1"; _fi_rc=0; _fi_run local "" '' || _fi_rc=$?; unset "$_fi_mode"
+    _assert_var "$_fi_mode: stops" "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+    _assert_var "$_fi_mode: Postgres never started" "$(grep -c 'up -d postgres' "$_fi_calls" | tr -d ' ')" "0"
+    _assert_var "$_fi_mode: gives the command" "$(_has "$_fi_out" 'label=com.docker.compose.service=caddy')" yes
+    _assert_var "$_fi_mode: CADDY_PROJECT record kept" "$(grep -c '^# installer-topology: CADDY_PROJECT=' "$_fi_env" | tr -d ' ')" "1"
+    cp "$_fi_env" "$_fi_base"
+    _fi_rc=0; _fi_run local "" '' || _fi_rc=$?
+    unset _FI_ENV_BASE
+    _assert_var "$_fi_mode, retried: removed, continues, record gone" \
+        "$(grep -c '^rm -f caddy-' "$_fi_calls" | tr -d ' '):$_fi_rc:$(_caddy_left):$(grep -c 'CADDY_PROJECT' "$_fi_env" | tr -d ' ')" "1:0:0:0"
+done
+# Lookup reports it gone after a removal that did nothing: still there -> stop.
+# (Covered by the verify step: rm -f succeeds but ps still lists it.)
 _FI_INTERRUPT=1; _fi_run domain "c.example.com" '' || true; unset _FI_INTERRUPT
 cp "$_fi_env" "$_fi_base"; _FI_ENV_BASE="$_fi_base"
-_FI_CADDY_RM_FAIL=1; _fi_rc=0; _fi_run local "" '' || _fi_rc=$?; unset _FI_CADDY_RM_FAIL
-_assert_var "caddy removal fails: stops" "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
-_assert_var "caddy removal fails: Postgres never started" "$(grep -c 'up -d postgres' "$_fi_calls" | tr -d ' ')" "0"
-_assert_var "caddy removal fails: gives the command" "$(_has "$_fi_out" 'rm -sf caddy')" yes
-_assert_var "caddy removal fails: domain record kept" "$(grep -c '^# installer-topology: TOPOLOGY=domain$' "$_fi_env" | tr -d ' ')" "1"
-cp "$_fi_env" "$_fi_base"
-_fi_rc=0; _fi_run local "" '' || _fi_rc=$?
-unset _FI_ENV_BASE
-_assert_var "caddy removal retried: tries again" "$(grep -c 'rm -sf caddy$' "$_fi_calls" | tr -d ' ')" "1"
-_assert_var "caddy removal succeeds: continues" "$_fi_rc" "0"
-_assert_var "caddy removal succeeds: domain record gone" "$(grep -c 'TOPOLOGY=domain' "$_fi_env" | tr -d ' ')" "0"
-# The run dies during the Caddy removal: the domain record is still there (it is
-# replaced only after the removal succeeds), so the next retry tries again.
+_FI_CADDY_RM_NOOP=1; _fi_rc=0; _fi_run local "" '' || _fi_rc=$?; unset _FI_CADDY_RM_NOOP _FI_ENV_BASE
+_assert_var "removal reports success but caddy remains: stops" "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+# The run dies during the removal: the record is still there for the next retry.
 _FI_INTERRUPT=1; _fi_run domain "c.example.com" '' || true; unset _FI_INTERRUPT
 cp "$_fi_env" "$_fi_base"; _FI_ENV_BASE="$_fi_base"
 _FI_CADDY_RM_KILL=1; _fi_run local "" '' || true; unset _FI_CADDY_RM_KILL
-_assert_var "killed during Caddy removal: domain record still there" "$(grep -c '^# installer-topology: TOPOLOGY=domain$' "$_fi_env" | tr -d ' ')" "1"
-_assert_var "killed during Caddy removal: no local record yet" "$(grep -c 'TOPOLOGY=local' "$_fi_env" | tr -d ' ')" "0"
+_assert_var "killed during Caddy removal: CADDY_PROJECT record still there" "$(grep -c '^# installer-topology: CADDY_PROJECT=' "$_fi_env" | tr -d ' ')" "1"
 cp "$_fi_env" "$_fi_base"; _fi_run local "" '' || true
 unset _FI_ENV_BASE
-_assert_var "killed during Caddy removal: next retry tries again" "$(grep -c 'rm -sf caddy$' "$_fi_calls" | tr -d ' ')" "1"
+_assert_var "killed during Caddy removal: next retry removes it" "$(grep -c '^rm -f caddy-' "$_fi_calls" | tr -d ' '):$(_caddy_left)" "1:0"
 # SETUP_COMPLETE is written before the records are dropped: a run that dies in
 # between is complete, never an unmarked install without its records.
-_FI_DROP_KILL=1; _fi_run local "" '' || true; unset _FI_DROP_KILL
-_assert_var "killed while dropping records: install already marked complete" "$(grep -c '^# SETUP_COMPLETE' "$_fi_env" | tr -d ' ')" "1"
+# Each end step interrupted in turn. The bootstrap secret is shown before
+# SETUP_COMPLETE (after it, a rerun takes the upgrade path and shows none), and
+# the records go only after the marker.
+_fi_rc=0; _FI_DROP_KILL=1; _fi_run local "" '' || _fi_rc=$?; unset _FI_DROP_KILL
+_assert_var "killed while dropping records: the run was interrupted" "$_fi_rc" "9"
+_assert_var "killed while dropping records: already marked complete" "$(grep -c '^# SETUP_COMPLETE' "$_fi_env" | tr -d ' ')" "1"
+_assert_var "killed while dropping records: secret already shown" "$(_has "$_fi_out" 'Bootstrap secret (save this')" yes
+_fi_rc=0; _FI_MARK_KILL=1; _fi_run local "" '' || _fi_rc=$?; unset _FI_MARK_KILL
+_assert_var "killed at the marker: the run was interrupted" "$_fi_rc" "9"
+_assert_var "killed at the marker: secret already shown" "$(_has "$_fi_out" 'Bootstrap secret (save this')" yes
+_assert_var "killed at the marker: not complete, so a rerun is fresh" "$(grep -c '^# SETUP_COMPLETE' "$_fi_env" | tr -d ' ')" "0"
+_assert_var "killed at the marker: records kept for that rerun" "$(grep -c '^# installer-topology: TOPOLOGY=local$' "$_fi_env" | tr -d ' ')" "1"
+_fi_rc=0; _fi_run local "" '' || _fi_rc=$?
+_assert_var "uninterrupted run: exits 0, complete, records gone" \
+    "$_fi_rc:$(grep -c '^# SETUP_COMPLETE' "$_fi_env" | tr -d ' '):$(grep -c 'installer-topology' "$_fi_env" | tr -d ' ')" "0:1:0"
 _fi_rerun local "" proxy ""
-_assert_var "retry local -> proxy: no Caddy removal" "$(grep -c 'rm -sf caddy' "$_fi_calls" | tr -d ' ')" "0"
+_assert_var "retry local -> proxy: no Caddy removal" "$(grep -c '^rm -f\|service=caddy' "$_fi_calls" | tr -d ' ')" "0"
 _fi_run local "" '' || true
-_assert_var "fresh local: no Caddy removal" "$(grep -c 'rm -sf caddy' "$_fi_calls" | tr -d ' ')" "0"
+_assert_var "fresh local: no Caddy removal" "$(grep -c '^rm -f\|service=caddy' "$_fi_calls" | tr -d ' ')" "0"
 # An operator COMPOSE_FILE in .env that keeps the overlay on a non-HTTPS retry: stop.
 _fi_rerun domain "c.example.com" local "" 'COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml:custom.yml\n'
 _assert_var "retry domain -> local, .env COMPOSE_FILE still with the overlay: Postgres never started" \
@@ -2358,6 +2424,30 @@ _assert_var "unpublished signaling, proxy: origin URL seeded" "$(_seed_env SEED_
 _assert_var "unpublished signaling, proxy: warns" "$(_has "$_fi_out" "can't forward /rtc* to LiveKit until 7880 is published")" yes
 _assert_var "unpublished signaling, proxy: no 127.0.0.1 rule" "$(_has "$_fi_out" '/rtc* to 127.0.0.1')" no
 unset _FI_LK_RENDER
+# The image pin: written on a first run; on a retry, the earlier run's pin
+# follows this run's release, and a pin the operator set since is kept.
+_FI_IMAGE_TAG=v0.47.0; _fi_run local "" '' || true
+_assert_var "image pin: first run pins the release" "$(env_value "$_fi_env" CURIA_IMAGE_TAG)" "v0.47.0"
+_FI_INTERRUPT=1; _fi_run local "" '' || true; unset _FI_INTERRUPT
+cp "$_fi_env" "$_fi_base"; _FI_ENV_BASE="$_fi_base"
+_FI_IMAGE_TAG=v0.48.0; _fi_run local "" '' || true
+_assert_var "image pin: retry moves the installer's own pin" "$(env_value "$_fi_env" CURIA_IMAGE_TAG)" "v0.48.0"
+_FI_IMAGE_TAG=v0.47.0; _FI_INTERRUPT=1; _fi_run local "" '' || true; unset _FI_INTERRUPT
+printf 'CURIA_IMAGE_TAG=v0.45.2\n' >> "$_fi_env"; cp "$_fi_env" "$_fi_base"
+_FI_IMAGE_TAG=v0.48.0; _fi_run local "" '' || true
+unset _FI_ENV_BASE _FI_IMAGE_TAG
+_assert_var "image pin: retry keeps the operator's pin" "$(env_value "$_fi_env" CURIA_IMAGE_TAG)" "v0.45.2"
+_assert_var "image pin: and says how to change it" "$(_has "$_fi_out" 'Keeping CURIA_IMAGE_TAG=v0.45.2')" yes
+
+# Voice profile off in the shell: the rendered service still gives the keys an
+# override runs it with once voice is on, and those are seeded, not .env's pair.
+_FI_SHELL_PROFILES=""
+_FI_SERVICES='postgres\ncuria\n'
+_FI_LK_RENDER='name: x\nservices:\n  livekit:\n    profiles:\n      - voice\n    command:\n      - --config\n      - /etc/livekit.local.yaml\n      - --keys\n      - '"'"'APIover: oversecret'"'"'\n    ports:\n      - mode: ingress\n        target: 7880\n        published: "7880"\n'
+_fi_run local "" '' || true
+unset _FI_SHELL_PROFILES _FI_SERVICES _FI_LK_RENDER
+_assert_var "voice profile off: the override's key seeded" "$(_seed_env SEED_LIVEKIT_API_KEY)" "APIover"
+
 # Rendered values are read once the topology is final: an interrupted HTTPS install
 # whose custom TLS overlay publishes 3100:3000 (and LiveKit 17880), retried as
 # local, shows the base file's 3000 and seeds LiveKit's 7880.

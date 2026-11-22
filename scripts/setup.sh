@@ -197,7 +197,7 @@ build_livekit_seed_env() {
         note_livekit_signaling_unpublished local
     fi
     # The keys the service Compose renders runs on; .env and the shell when it can't render.
-    if rendered_livekit && [[ "$RENDERED_LIVEKIT_ACTIVE" == 1 ]]; then
+    if rendered_livekit && [[ "$RENDERED_LIVEKIT_DEFINED" == 1 ]]; then
         pair="$(rendered_livekit_seed_keys)" || rc=$?
     else
         pair="$(livekit_seed_keys "$keys" "$cmd")" || rc=$?
@@ -360,7 +360,7 @@ run_infra() {
     # not regenerated), so pass it defensively — print_summary degrades gracefully.
     # Curia's host port as Compose publishes it; a placeholder with a note when unknown.
     resolve_curia_port_for_messages "$ENV_FILE"
-    print_summary "${WEB_APP_BOOTSTRAP_SECRET:-}" "http://localhost:${HTTP_PORT}"
+    print_summary "${WEB_APP_BOOTSTRAP_SECRET:-}" "http://localhost:${CURIA_PORT_DISPLAY}"
     print_next_steps local
 }
 
