@@ -11,8 +11,9 @@
 //   - phase: complete once setup.completed_at is set, in progress until then. Setup has
 //     started from the moment the console opens it, so there is no separate "not started".
 //
-// `completedOnPage` separates a Setup finished on the Setup page from one that migration 132
-// marked complete for an install that predates the page. Onboarding uses it: the prior-tasks
+// `completedOnPage` separates a Setup finished on the Setup page (before or after migration
+// 132) from one that migration 132 marked complete for an install that predates the page
+// (PRE_SETUP_PAGE_ACTOR). Onboarding uses it: the prior-tasks
 // signal counts every task on a pre-Setup install, and the dashboard alert is for the page.
 
 import type { Logger } from '../logger.js';
@@ -34,10 +35,12 @@ export type SetupFor = 'self' | 'other';
 export type SetupPhaseValue = 'in_progress' | 'complete';
 
 /**
- * The `updated_by` migration 132 writes when it marks an install that predates the Setup page
- * complete. A test pins it; the migration SQL has the same literal.
+ * The `updated_by` migration 132 writes on `setup.completed_at` only for an install that
+ * predates the Setup page (no completion time to copy). A Setup the page finished before the
+ * upgrade is copied under the plain `migration:132` actor and still counts as a page
+ * completion. A test pins this value; the migration SQL has the same literal.
  */
-export const MIGRATION_SETUP_ACTOR = 'migration:132';
+export const PRE_SETUP_PAGE_ACTOR = 'migration:132:pre-setup-page';
 
 export interface SetupState {
   /** Derived from setup.completed_at, never stored as its own value. */
@@ -50,7 +53,10 @@ export interface SetupState {
   voiceRoute: VoiceRoute | null;
   /** When Setup finished, or null while it runs. */
   completedAt: Date | null;
-  /** True only when the Setup page finished Setup; false when migration 132 marked it complete. */
+  /**
+   * True when the Setup page finished Setup (before or after migration 132); false while Setup
+   * runs and when migration 132 marked an install that predates the page complete.
+   */
   completedOnPage: boolean;
 }
 
@@ -107,7 +113,7 @@ export async function readSetupState(
     messagingRoute: records.messaging_route?.value ?? null,
     voiceRoute: records.voice_route?.value ?? null,
     completedAt: completed ? new Date(completed.value) : null,
-    completedOnPage: completed !== undefined && completed.updatedBy !== MIGRATION_SETUP_ACTOR,
+    completedOnPage: completed !== undefined && completed.updatedBy !== PRE_SETUP_PAGE_ACTOR,
   };
 }
 

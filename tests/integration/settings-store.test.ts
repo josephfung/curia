@@ -176,11 +176,18 @@ describeIf('settings store (Postgres)', () => {
 
     // Migration 132 marks an install that predates the Setup page complete. Same phase, but
     // not a completion on the page (onboarding uses the difference).
-    await pool.query(`UPDATE settings SET updated_by = 'migration:132' WHERE key = 'setup.completed_at'`);
+    await pool.query(
+      `UPDATE settings SET updated_by = 'migration:132:pre-setup-page' WHERE key = 'setup.completed_at'`,
+    );
     expect(await readSetupState(pool, logger)).toMatchObject({
       phase: 'complete',
       completedOnPage: false,
     });
+
+    // A Setup the page finished before the upgrade is copied under the plain migration actor,
+    // and is still a page completion.
+    await pool.query(`UPDATE settings SET updated_by = 'migration:132' WHERE key = 'setup.completed_at'`);
+    expect(await readSetupState(pool, logger)).toMatchObject({ completedOnPage: true });
 
     await clearSetting(pool, 'operator', 'console', logger);
     expect(await readSetupState(pool, logger)).toMatchObject({ setupFor: 'self', operatorName: null });

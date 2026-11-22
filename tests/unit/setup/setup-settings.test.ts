@@ -1,12 +1,14 @@
 // Which installs see the Setup page (#2358, #2709), and the PUT /api/setup/state body rules.
 import { describe, it, expect } from 'vitest';
-import { EMPTY_SETUP_STATE, MIGRATION_SETUP_ACTOR, isInSetup } from '../../../src/setup/setup-settings.js';
+import { EMPTY_SETUP_STATE, PRE_SETUP_PAGE_ACTOR, isInSetup } from '../../../src/setup/setup-settings.js';
 import { parseStateUpdate } from '../../../src/channels/http/routes/setup.js';
 
-describe('MIGRATION_SETUP_ACTOR', () => {
-  it('matches the updated_by migration 132 records', () => {
-    // The migration SQL has the same literal; a rename there must change this too.
-    expect(MIGRATION_SETUP_ACTOR).toBe('migration:132');
+describe('PRE_SETUP_PAGE_ACTOR', () => {
+  it('matches the updated_by migration 132 records for an install that predates the Setup page', () => {
+    // The migration SQL has the same literal; a rename there must change this too. It must
+    // differ from the plain actor the migration uses for Setups finished on the page.
+    expect(PRE_SETUP_PAGE_ACTOR).toBe('migration:132:pre-setup-page');
+    expect(PRE_SETUP_PAGE_ACTOR).not.toBe('migration:132');
   });
 });
 

@@ -74,13 +74,16 @@ back into it.
   install starts there and the checklist no longer asks. `POST /api/setup/start` runs when the
   page opens, which is before the first render of the step, so a stored "not chosen" state
   could never be shown anyway.
-- **A migration-marked completion is not a page completion.** Migration 132 sets
-  `setup.completed_at` on installs that predate the Setup page, so a non-null completion time
-  no longer says Setup finished on the page. `readSetupState` exposes `completedOnPage`, from
-  the setting row's `updated_by`, and onboarding uses it twice: the prior-principal-tasks
-  signal passes `null` for a migration-marked install (counting every task), and the dashboard
-  alert is only for a page completion. That keeps the alert independent of which catalog
-  steps are required.
+- **A migration-marked completion is not a page completion.** Migration 132 also sets
+  `setup.completed_at` on installs that predate the Setup page (`phase = 'complete'` with no
+  completion time), so a non-null completion time alone no longer says Setup finished on the
+  page. Those rows, and only those, carry `updated_by = 'migration:132:pre-setup-page'`. A
+  Setup the page finished before the upgrade keeps its completion time and is copied under
+  the plain `migration:132` actor, so it still counts as a page completion. `readSetupState`
+  exposes `completedOnPage` from that `updated_by`, and onboarding uses it twice: the
+  prior-principal-tasks signal passes `null` for a pre-Setup-page install (counting every
+  task), and the dashboard alert is only for a page completion. That keeps the alert
+  independent of which catalog steps are required.
 - **A write commits on its own connection.** `setSetting`/`writeSettings` take a pool, not a
   queryable, because the value and the history row share one transaction. That transaction is
   the store's own: if a caller's transaction later rolls back, the setting stays set. A caller

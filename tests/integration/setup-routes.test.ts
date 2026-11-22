@@ -1002,7 +1002,7 @@ describeIf('/api/setup/* routes', () => {
     it('a save on an install that predates the Setup page leaves it complete', async () => {
       await pool.query(
         `INSERT INTO settings (key, value, updated_by)
-         VALUES ('setup.completed_at', to_jsonb($1::text), 'migration:132')`,
+         VALUES ('setup.completed_at', to_jsonb($1::text), 'migration:132:pre-setup-page')`,
         ['2026-01-01T00:00:00.000Z'],
       );
       const state = await updateSetupState(pool, { messagingRoute: 'app' }, TEST_WRITE);

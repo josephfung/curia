@@ -7,6 +7,8 @@ import path from 'node:path';
 import pg from 'pg';
 import { runner } from 'node-pg-migrate';
 import { createScratchDatabase } from './scratch-database.js';
+import { createSilentLogger } from '../../src/logger.js';
+import { readSetupState } from '../../src/setup/setup-settings.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
@@ -31,11 +33,17 @@ describeIf('migration 132 — setup_state becomes settings', () => {
       await pool.query(`INSERT INTO setup_state (id, phase) VALUES (1, 'complete')`);
       await migrateToLatest(scratch.url);
 
-      const { rows } = await pool.query('SELECT key, value FROM settings ORDER BY key');
+      const { rows } = await pool.query('SELECT key, value, updated_by FROM settings ORDER BY key');
       expect(rows.map((row) => row.key)).toEqual(['setup.completed_at']);
       const completedAt = rows[0]?.value;
       expect(typeof completedAt).toBe('string');
       expect(Number.isNaN(Date.parse(completedAt as string))).toBe(false);
+      // Its own actor, so it reads as complete but not as a completion on the Setup page.
+      expect(rows[0]?.updated_by).toBe('migration:132:pre-setup-page');
+      expect(await readSetupState(pool, createSilentLogger())).toMatchObject({
+        phase: 'complete',
+        completedOnPage: false,
+      });
 
       const gone = await pool.query(`SELECT to_regclass('setup_state') AS relation`);
       expect(gone.rows[0]).toEqual({ relation: null });
@@ -63,6 +71,11 @@ describeIf('migration 132 — setup_state becomes settings', () => {
       expect(byKey.get('voice_route')).toBe('app');
       expect(byKey.get('setup.completed_at')).toBe('2026-02-03T04:05:06.000Z');
       for (const row of rows) expect(row.updated_by).toBe('migration:132');
+      // A Setup the page finished before the upgrade is still a page completion afterwards.
+      expect(await readSetupState(pool, createSilentLogger())).toMatchObject({
+        phase: 'complete',
+        completedOnPage: true,
+      });
     } finally {
       await pool.end();
       await scratch.drop();

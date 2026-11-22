@@ -79,17 +79,28 @@ SELECT 'voice_route', to_jsonb(voice_route), 'migration:132'
   FROM setup_state
  WHERE id = 1 AND voice_route IS NOT NULL;
 
--- The old phase becomes the completed_at marker. A phase='complete' row with a NULL
--- completed_at (an install that predates the Setup page, marked complete by migration
--- 130) gets one now: the new model has no phase column, and completed_at is what says
--- Setup is finished.
+-- The old phase becomes the completed_at marker, in two cases the registry tells apart by
+-- updated_by (completedOnPage in src/setup/setup-settings.ts):
+--
+-- A Setup finished on the Setup page has its completed_at, which the page set. It is copied
+-- as it is, under the plain migration actor, and still reads as a page completion.
 INSERT INTO settings (key, value, updated_by)
 SELECT 'setup.completed_at',
-       to_jsonb(to_char(COALESCE(completed_at, now()) AT TIME ZONE 'UTC',
-                        'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')),
+       to_jsonb(to_char(completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')),
        'migration:132'
   FROM setup_state
- WHERE id = 1 AND phase = 'complete';
+ WHERE id = 1 AND phase = 'complete' AND completed_at IS NOT NULL;
+
+-- A phase='complete' row with a NULL completed_at is an install that predates the Setup
+-- page (migration 130 marked it complete). The new model has no phase column, so it gets a
+-- completion time now, under its own actor: that actor is what says Setup never ran on
+-- the page here.
+INSERT INTO settings (key, value, updated_by)
+SELECT 'setup.completed_at',
+       to_jsonb(to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')),
+       'migration:132:pre-setup-page'
+  FROM setup_state
+ WHERE id = 1 AND phase = 'complete' AND completed_at IS NULL;
 
 DROP TABLE setup_state;
 

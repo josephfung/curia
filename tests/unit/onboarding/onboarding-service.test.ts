@@ -66,7 +66,7 @@ function makeHarness(opts: {
     ...(setup.messaging_route ? [{ key: 'messaging_route', value: setup.messaging_route, updated_by: 'console' }] : []),
     ...(setup.voice_route ? [{ key: 'voice_route', value: setup.voice_route, updated_by: 'console' }] : []),
     ...(setup.completed_at
-      ? [{ key: 'setup.completed_at', value: setup.completed_at, updated_by: setup.completed_on_page ? 'console' : 'migration:132' }]
+      ? [{ key: 'setup.completed_at', value: setup.completed_at, updated_by: setup.completed_on_page ? 'console' : 'migration:132:pre-setup-page' }]
       : []),
   ];
   const txQueries: string[] = [];
