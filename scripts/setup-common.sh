@@ -672,6 +672,18 @@ print_next_steps() {
         echo ""
         echo "Open these ports for calls: 7881/tcp, 7882/udp"
     fi
+    # HTTPS: Caddy routes /rtc* to LiveKit, so --dev (or a command that could not
+    # be read) is public there; say so rather than stay silent.
+    if [[ "$topology" == domain ]]; then
+        if [[ "$voice" == dev ]]; then
+            echo "LiveKit runs --dev credentials (devkey/secret), and Caddy's /rtc* route makes them public:"
+            echo "set real keys and recreate it before using voice (see docs/dev/voice-setup.md)."
+        elif [[ "$voice" == unknown ]]; then
+            echo "LiveKit's command could not be read, so it may run --dev credentials (devkey/secret), which"
+            echo "Caddy's /rtc* route would make public. Check it before using voice (see docs/dev/voice-setup.md):"
+            echo "  docker compose --profile voice ps livekit"
+        fi
+    fi
     if [[ "$topology" == proxy && -n "$origin" ]]; then
         if [[ "$voice" == on ]]; then
             if [[ -n "$lk_port" ]]; then

@@ -555,7 +555,10 @@ check_http_exposure() {
 # Fresh and upgrade paths both call this, after check_livekit_bind.
 warn_public_livekit_dev() {
   local env="$1" bindings="$2" cmd via=""
-  if [[ -n "$bindings" ]] && ! bindings_are_loopback "$bindings"; then
+  if [[ "${3:-}" == unknown ]]; then
+    # Its published ports could not be read: treat signaling as possibly public.
+    via="unknown"
+  elif [[ -n "$bindings" ]] && ! bindings_are_loopback "$bindings"; then
     via="port"
   elif uses_tls_overlay "$(compose_var "$env" COMPOSE_FILE)" \
     && { [[ -n "$bindings" ]] || service_maybe_running livekit; }; then
@@ -582,6 +585,10 @@ warn_public_livekit_dev() {
   if [[ "$via" == port ]]; then
     warn "LiveKit signaling is public ($(echo "$bindings" | tr '\n' ' ')) and runs --dev credentials (devkey/secret)."
     hint "Anyone who can reach 7880 can mint LiveKit tokens without Curia's auth."
+  elif [[ "$via" == unknown ]]; then
+    warn "LiveKit runs --dev credentials (devkey/secret), and whether its signaling is public could not be checked."
+    hint "If 7880 is published beyond loopback, or Caddy routes /rtc* to it, anyone can mint LiveKit tokens."
+    hint "Check: docker compose --project-directory \"$INSTALL_DIR\" --profile voice port livekit 7880"
   else
     warn "HTTPS install: LiveKit runs --dev credentials (devkey/secret), and the shipped Caddyfile routes /rtc* to it."
     hint "Anyone who can reach this domain can then mint LiveKit tokens without Curia's auth."
@@ -768,7 +775,12 @@ check_livekit_bind() {
 # Run after either path's stack starts: the bind check, then the --dev check.
 check_livekit_exposure() {
   local env="$1" bindings
-  bindings="$(published_bindings livekit 7880)" || return 0   # unknown: already warned
+  if ! bindings="$(published_bindings livekit 7880)"; then
+    # Exposure unknown (published_bindings warned): the bind check needs the
+    # bindings, but the credential check never goes silent; it fails closed.
+    warn_public_livekit_dev "$env" "" unknown
+    return 0
+  fi
   check_livekit_bind "$env" "$bindings"
   warn_public_livekit_dev "$env" "$bindings"
 }

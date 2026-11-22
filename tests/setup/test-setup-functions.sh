@@ -1577,6 +1577,15 @@ _assert_var "proxy, voice off: forwards / to HTTP_PORT" "$(_has "$_pns" 'forward
 _pns="$(print_next_steps proxy on https://p.example.com '' 2>&1)" || true
 _assert_var "proxy, signaling unpublished: no 127.0.0.1 rule" "$(_has "$_pns" '/rtc* to 127.0.0.1')" no
 _assert_var "proxy, signaling unpublished: says to publish it" "$(_has "$_pns" 'once')" yes
+# HTTPS: Caddy routes /rtc*, so --dev or an unreadable command is never silent.
+_pns="$(print_next_steps domain unknown 2>&1)" || true
+_assert_var "domain, LiveKit command unreadable: warns it may be --dev" "$(_has "$_pns" 'may run --dev credentials')" yes
+_pns="$(print_next_steps domain dev 2>&1)" || true
+_assert_var "domain, --dev: warns /rtc* makes it public" "$(_has "$_pns" "Caddy's /rtc* route makes them public")" yes
+_pns="$(print_next_steps domain on 2>&1)" || true
+_assert_var "domain, real keys: no credential warning" "$(_has "$_pns" '--dev')" no
+_pns="$(print_next_steps local unknown 2>&1)" || true
+_assert_var "local, unknown: nothing about /rtc*" "$(_has "$_pns" '/rtc*')" no
 _pns="$(print_next_steps proxy unknown https://p.example.com 2>&1)" || true
 _assert_var "proxy, LiveKit command unreadable: no /rtc* rule" "$(_has "$_pns" '/rtc* to 127.0.0.1')" no
 _assert_var "proxy, LiveKit command unreadable: says it may be --dev" "$(_has "$_pns" 'may run --dev credentials')" yes
@@ -1786,6 +1795,30 @@ _assert_var "service_running: lookup fails -> unknown, treated as maybe running"
 _assert_var "warn_public_livekit_dev: livekit state unknown under the overlay -> warns" \
     "$( (unset COMPOSE_FILE LIVEKIT_COMMAND; _e="$(mktemp)"; printf 'COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml\nLIVEKIT_COMMAND=--dev\n' > "$_e"
          docker() { return 1; }; warn_public_livekit_dev "$_e" '' 2>&1 | grep -c -- '--dev credentials'; rm -f "$_e") )" "1"
+
+# check_livekit_exposure when the port lookup fails (e.g. docker compose ps
+# fails): the credential check still runs and fails closed.
+# $1 .env, $2 live command ("?" = unreadable, "" = not running); echoes the warning kind.
+_cle() {
+    ( _e="$(mktemp)"; printf '%b' "$1" > "$_e"; _c="$2"
+      unset COMPOSE_FILE LIVEKIT_COMMAND
+      published_bindings() { return 2; }
+      service_running() { return 2; }
+      live_command() { [[ "$_c" != "?" ]] || return 2; [[ -n "$_c" ]] || return 1; printf '%s' "$_c"; }
+      out="$(check_livekit_exposure "$_e" 2>&1)"; rm -f "$_e"
+      if [[ "$out" == *"could not be checked"* ]]; then echo dev-unknown-exposure
+      elif [[ "$out" == *"may run the public --dev"* ]]; then echo may-be-dev
+      elif [[ -z "$out" ]]; then echo quiet; else echo "other: $out"; fi )
+}
+_assert_var "exposure lookup fails, HTTPS, command unreadable: may-be-dev warning" "$(_cle "${_TLS_CF}LIVEKIT_COMMAND=--config /etc/livekit.yaml\n" '?')" "may-be-dev"
+_assert_var "exposure lookup fails, live --dev: warns, exposure unknown" "$(_cle "$_TLS_CF" '--dev --bind 0.0.0.0')" "dev-unknown-exposure"
+_assert_var "exposure lookup fails, not running, .env --dev: warns" "$(_cle "${_TLS_CF}LIVEKIT_COMMAND=--dev\n" '')" "dev-unknown-exposure"
+_assert_var "exposure lookup fails, live real config: quiet" "$(_cle "$_TLS_CF" '--config /etc/livekit.yaml')" "quiet"
+# The real lookups, with `docker compose ps` itself failing on an HTTPS install.
+_assert_var "docker compose ps fails on HTTPS: credential warning still shown" \
+    "$( ( _e="$(mktemp)"; printf '%b' "${_TLS_CF}LIVEKIT_COMMAND=--config /etc/livekit.yaml\n" > "$_e"
+          unset COMPOSE_FILE LIVEKIT_COMMAND; docker() { return 1; }
+          check_livekit_exposure "$_e" 2>&1 | grep -c 'may run the public --dev'; rm -f "$_e" ) )" "1"
 
 # effective_livekit_command: the TLS overlay's fallback is the keyless shipped
 # config (fails closed), the base file's is --dev (empty).
