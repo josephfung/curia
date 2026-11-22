@@ -1768,9 +1768,13 @@ _fi_run() {
       [[ -z "${_FI_SHELL_CMD+set}" ]] || export LIVEKIT_COMMAND="$_FI_SHELL_CMD"
       [[ -z "${_FI_SHELL_KEYS_EMPTY:-}" ]] || export LIVEKIT_KEYS=""
       [[ -z "${_FI_SHELL_HTTP_BIND_EMPTY:-}" ]] || export HTTP_BIND=""
+      [[ -z "${_FI_SHELL_COMPOSE_FILE+set}" ]] || export COMPOSE_FILE="$_FI_SHELL_COMPOSE_FILE"
+      [[ -z "${_FI_SHELL_DOMAIN+set}" ]] || export DOMAIN="$_FI_SHELL_DOMAIN"
       # Record the seed command environment as an external process sees it (exported only).
       docker() {
         printf '%s\n' "$*" >> "$_fi_calls"
+        # What Compose would interpolate DOMAIN to when the stack starts.
+        [[ "$*" != *" up -d" ]] || printf '%s\n' "$(printenv DOMAIN || true)" > "$_fi_dir/domain-at-up"
         # An existing Postgres volume only when the test says so; "fail" = Docker
         # did not answer (any error other than no such volume).
         case "$*" in ("volume inspect "*)
@@ -2146,6 +2150,38 @@ _assert_var "rerun, same topology: no topology note" "$(_has "$_fi_out" 'chose a
 _assert_var "interrupted run: records its topology" "$(grep -c '^# installer-topology: TOPOLOGY=domain$' "$_fi_base" | tr -d ' ')" "1"
 _assert_var "interrupted run: no SETUP_COMPLETE" "$(grep -c 'SETUP_COMPLETE' "$_fi_base" | tr -d ' ')" "0"
 _assert_var "finished run: records dropped" "$(grep -c '^# installer-topology:' "$_fi_env" | tr -d ' ')" "0"
+
+# An exported COMPOSE_FILE wins over .env in Compose: stop when it breaks the
+# chosen topology (no TLS overlay on HTTPS, or the overlay elsewhere).
+_fi_sh_cf() {   # $1 topology, $2 answers, $3 shell COMPOSE_FILE; sets _fi_rc
+    _FI_SHELL_COMPOSE_FILE="$3"; _fi_rc=0; _fi_run "$1" "$2" '' || _fi_rc=$?; unset _FI_SHELL_COMPOSE_FILE
+}
+_fi_sh_cf domain "c.example.com" "docker-compose.yml:custom.yml"
+_assert_var "shell COMPOSE_FILE without overlay, domain: stops" "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+_assert_var "shell COMPOSE_FILE without overlay, domain: Postgres never started" "$(grep -c 'up -d postgres' "$_fi_calls" | tr -d ' ')" "0"
+_assert_var "shell COMPOSE_FILE without overlay, domain: says to add it" "$(_has "$_fi_out" 'Add docker-compose.tls.yml to the exported COMPOSE_FILE')" yes
+_fi_sh_cf domain "c.example.com" "docker-compose.yml:docker-compose.tls.yml:custom.yml"
+_assert_var "shell COMPOSE_FILE with overlay, domain: continues" "$_fi_rc" "0"
+_fi_sh_cf local "" "docker-compose.yml:docker-compose.tls.yml"
+_assert_var "shell COMPOSE_FILE with overlay, local: stops" "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+_assert_var "shell COMPOSE_FILE with overlay, local: Postgres never started" "$(grep -c 'up -d postgres' "$_fi_calls" | tr -d ' ')" "0"
+_fi_sh_cf proxy "https://p.example.com" "docker-compose.yml:docker-compose.tls.yml"
+_assert_var "shell COMPOSE_FILE with overlay, proxy: stops" "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+_fi_sh_cf local "" "docker-compose.yml:custom.yml"
+_assert_var "shell COMPOSE_FILE without overlay, local: continues" "$_fi_rc" "0"
+# Retry of an interrupted domain install, now with an exported COMPOSE_FILE lacking the overlay.
+_FI_INTERRUPT=1; _fi_run domain "c.example.com" '' || true; unset _FI_INTERRUPT
+cp "$_fi_env" "$_fi_base"; _FI_ENV_BASE="$_fi_base"
+_fi_sh_cf domain "c.example.com" "docker-compose.yml:custom.yml"
+unset _FI_ENV_BASE
+_assert_var "retry domain, shell COMPOSE_FILE without overlay: stops" "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+_assert_var "retry domain, shell COMPOSE_FILE without overlay: Postgres never started" "$(grep -c 'up -d postgres' "$_fi_calls" | tr -d ' ')" "0"
+# An exported DOMAIN is updated to the domain entered, so Compose (Caddy) gets that one.
+_FI_SHELL_DOMAIN="old.example.com"; _fi_run domain "c.example.com" '' || true; unset _FI_SHELL_DOMAIN
+_assert_var "exported DOMAIN: Compose gets the domain entered" "$(< "$_fi_dir/domain-at-up")" "c.example.com"
+# An exported HTTP_BIND stays the operator's choice: respected, .env not written.
+_fi_rc=0; _FI_SHELL_HTTP_BIND_EMPTY=1; _fi_run domain "c.example.com" '' || _fi_rc=$?; unset _FI_SHELL_HTTP_BIND_EMPTY
+_assert_var "exported HTTP_BIND, domain: continues, .env not written" "$_fi_rc:$(grep -c '^HTTP_BIND=' "$_fi_env" | tr -d ' ')" "0:0"
 
 # One address at the end: the summary box's, the same base URL as next steps.
 _fi_run proxy "https://p.example.com" '' || true

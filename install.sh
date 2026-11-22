@@ -937,6 +937,39 @@ set_topology_default() {
   set_topology_var "$env" "$key" "$3"
 }
 
+# Fresh install, after the topology's values are written to .env and before
+# anything starts. Compose prefers a shell value over .env for what it
+# interpolates, so an exported reach value silently replaces what was just
+# written. Of the values the topology branch writes:
+#   - COMPOSE_FILE (which files run): stop when the shell's breaks the chosen
+#     topology: without the TLS overlay on the domain topology (Caddy never
+#     starts), or with it on another topology (Caddy takes 80/443 there).
+#   - DOMAIN (Caddy's certificate): fresh_install assigns DOMAIN=<the domain
+#     entered>, which also updates an exported DOMAIN, so Compose gets that one.
+#   - HTTP_BIND (port 3000): the shell's is the operator's choice and is
+#     respected (set_topology_default), as on the upgrade path.
+#   - APP_ORIGIN reaches Curia through env_file only; the shell can't override it.
+check_shell_reach_values() {
+  local topology="$1"
+  if [[ -n "${COMPOSE_FILE+set}" ]]; then
+    if [[ "$topology" == domain ]] && ! uses_tls_overlay "$COMPOSE_FILE"; then
+      echo "" >&2
+      error "COMPOSE_FILE is exported in your shell without docker-compose.tls.yml, so Compose would ignore .env's and never start Caddy for HTTPS."
+      hint "Add docker-compose.tls.yml to the exported COMPOSE_FILE (e.g. docker-compose.yml:docker-compose.tls.yml),"
+      hint "or unset COMPOSE_FILE in your shell, then re-run install.sh. Postgres was not started."
+      exit 1
+    fi
+    if [[ "$topology" != domain ]] && uses_tls_overlay "$COMPOSE_FILE"; then
+      echo "" >&2
+      error "COMPOSE_FILE is exported in your shell with docker-compose.tls.yml, which starts Caddy on ports 80 and 443, but you chose a topology without it."
+      hint "Remove docker-compose.tls.yml from the exported COMPOSE_FILE, or unset COMPOSE_FILE in your shell,"
+      hint "then re-run install.sh (or choose option 1 for HTTPS). Postgres was not started."
+      exit 1
+    fi
+  fi
+  return 0
+}
+
 # Domain topology: COMPOSE_FILE must include the TLS overlay. Empty: the
 # installer's value, recorded. An operator's value is kept, with the overlay
 # appended when missing; that append is recorded as TLS_APPENDED, so a retry
@@ -1384,6 +1417,8 @@ fresh_install() {
       fi
       ;;
   esac
+
+  check_shell_reach_values "$TOPOLOGY"
 
   # Voice (#2357): turn the LiveKit profile on with generated keys. Installs
   # only this machine reaches (local, or a proxy kept on localhost) pin
