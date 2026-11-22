@@ -183,3 +183,4 @@ what I do.
 I need to learn what matters most now so I weigh things correctly.
 - What are the top three things this week and this month?
 - Who or what should I watch for?
+After the call I record any changes we agreed in the priorities document.
