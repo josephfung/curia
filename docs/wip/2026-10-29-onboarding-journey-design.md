@@ -40,6 +40,11 @@ Feedback from a principal and from operators changed the journey in five ways:
    and to offer to start it when it's missing. The deep dive is one way the document gets
    written, not the only one. The document is the record of priorities; the knowledge graph is
    unchanged.
+7. **The deep dive is rescoped** (2026-11-22, #2362). One deterministic history summary feeds
+   every output; the priorities draft shows where time went and asks what the principal is
+   trying to move, instead of inferring goals; a contacts backfill is added. The Google Docs
+   review is create, edit, import: comment handling moved to #2712. The drafts email and the
+   pre-run cost estimate are gone.
 
 Operators also told us they didn't know what to expect or how to get set up. The curia-docs
 "Getting started" section is restructured around the two phases (*How the docs tell it*).
@@ -367,7 +372,7 @@ approval for a calendar write, the principal gets one approval prompt, which the
 expect. The principal moves or cancels it like any other meeting.
 
 **The agenda follows the event.** Each session's agenda, its nudge and any pre-session delivery
-(the drafts email) are tied to the calendar event, not to a fixed time:
+(the drafts-ready message) are tied to the calendar event, not to a fixed time:
 - **Moved:** the agenda, nudge and delivery move with it.
 - **Cancelled:** Curia asks the principal when they'd like to do it instead, once, and books the
   answer.
@@ -495,57 +500,77 @@ These are directed changes: the principal agreed them in the session.
 ### 2.3 The deep dive (offline)
 
 1. **Trigger.** The one-time "connected" event from the sign-in callback starts a background job,
-   once. A re-run takes an explicit operator or principal action.
-2. **One read, three drafts.** It reads a window of calendar and mail history (about 90 days by
-   default, configurable) once, and writes three drafts. Every item carries the evidence behind
-   it, by reference to specific threads or events.
+   once, or Start onboarding does when the mailbox was connected during Setup. A re-run takes an
+   explicit operator or principal action.
+2. **The history summary: one scan, stored.** A deterministic tool reads a window of calendar and
+   mail history (about 90 days by default, configurable) once and stores a summary. Every output
+   below reads the summary, not the mailbox, so nothing scans twice and a draft can be redone
+   cheaply. Every item carries its evidence by reference to specific threads or events. The
+   summary covers:
+   - correspondents: volume each way, two-way or one-way, reply speed;
+   - mail never opened, and threads handed off;
+   - recurring meetings, lengths, buffers, kept-clear blocks, and what the principal declines or
+     moves;
+   - where time went, grouped by person, organisation and recurring series;
+   - a sample of sent mail.
+
+   The tool's logic is the evidence heuristics, documented with it and reviewed with it.
+3. **What it produces.**
    - **Working rules:** how the principal handles mail (senders they always answer quickly, mail
      they never open, threads they hand off) and how they schedule (times they keep clear,
      meeting lengths, buffers, which meetings they decline or move).
-   - **Priorities and goals:** recurring meetings, frequent correspondents, and threads with high
-     effort or high stakes, framed as what the principal is focused on.
+   - **Priorities: where the time went, then the question.** The draft shows where the last 90
+     days went and asks "what are you actually trying to move?". It doesn't infer goals: mail
+     shows where time goes, not what the principal is trying to achieve, and a bad guess
+     undermines trust. The principal states the priorities in the review.
    - **Writing voice:** how the principal writes, drawn from their sent mail: greetings and
      sign-offs, length, formality by audience, phrases they use and avoid. It maps onto the
      existing writing-voice profile (`executive-profile`, provenance `seeded`), so the weekly
      `voice-learn` job keeps refining it from draft-versus-sent differences afterwards. The draft
      includes two or three sample replies written in that voice, so the principal can judge it
      by reading it.
-   - **Model:** the strongest configured tier. This is a one-time, high-stakes read, and quality
-     beats cost.
-   - **Cost:** no cap. The job estimates its cost before starting, logs the actual spend, and the
-     first real run's measured cost is recorded on the issue.
-3. **Existing rules and voice settings are kept.** A draft item that conflicts with one is
-   flagged in the draft, not silently replaced.
+   - **Contacts backfill:** contacts for two-way correspondents above a small threshold and for
+     attendees of recurring meetings, through the existing creation path with duplicate
+     detection. Bulk and one-way senders get none. These are facts from the principal's own
+     systems, so they don't wait for the review; the receipt says how many were added.
+   - **Model:** the strongest configured tier for the drafting. This is a one-time, high-stakes
+     job, and quality beats cost. No cap, and no pre-run estimate. The actual spend is logged,
+     and the first real run's measured cost is recorded on the issue.
+4. **Existing rules and voice settings are kept.** A draft item that conflicts with one is
+   flagged in the draft, not silently replaced. What the principal said in the first
+   conversation counts more than inference.
 
 ### 2.4 Delivery
 
 - **Google Docs.** Curia writes the three drafts as Google Docs from its own Google account and
   shares each with the principal as `writer`, following the existing Drive convention. Each doc
-  opens with a short note: what it is, that nothing in it is in effect yet, and how to respond
-  (edit, comment, or tell Curia).
-- **One email** from Curia to the principal linking all three docs, saying what to look at first,
-  and when the review is.
+  opens with a short note: what it is, that nothing in it is in effect yet, and to edit it
+  directly and tell Curia when it's done.
 - **A review session on the principal's calendar.** Curia finds a clear time in the next few
   working days and books it as a real event (see *Sessions live on the principal's calendar*),
   titled for the format the principal chose ("Review Curia's drafts — call Curia" or "Review
-  Curia's drafts"), with the three doc links in the description. The email goes out a day or so
-  before the event, and moves with it.
+  Curia's drafts"), with the three doc links in the description.
+- **The principal hears the drafts are ready on their messaging route** when the review is
+  booked. No separate email.
+- **If Google Workspace fails at delivery,** the drafts are written to Curia documents instead,
+  the operator is told, and the review runs from the Curia app.
 
 ### 2.5 The review (adapts to the principal's choice)
 
 - **Together on a call:** at the event, Curia parks a review agenda and nudges. The agenda walks
   the drafts, strongest and most surprising items first, and reads the writing-voice samples
   aloud for a reaction. Edits agreed on the call are applied to the docs afterwards by the
-  structuring pass.
+  post-call follow-up.
 - **On their own, then text:** at the event, Curia messages the principal that the drafts are
-  ready and it's available. The principal edits or comments in the docs and texts Curia with
-  questions or changes; Curia answers and applies them.
+  ready and it's available. The principal edits the docs and tells Curia when each is done, or
+  texts questions and changes; Curia answers and applies them.
 
 Either way:
-- Curia reads the docs back, including the principal's edits and comments, and replies to each
-  comment.
-- When the principal says a draft is right, Curia writes the confirmed version into the Curia
-  app: `/shared/inbox/rules.md` and `/shared/calendar/rules.md` (one `##` section per rule),
+- The principal edits the docs directly and tells Curia when a document is done. Reading and
+  replying to comments, and inferring when a doc is done, are #2712, a general Google Docs
+  collaboration issue that takes this review as its test case once it ships.
+- When the principal confirms a draft, Curia imports the doc's current text into the Curia app:
+  `/shared/inbox/rules.md` and `/shared/calendar/rules.md` (one `##` section per rule),
   `/shared/principal/priorities.md`, and the writing-voice profile.
 - Curia sends a **receipt** with what it set and a console link to each ("Here's what I've set.
   You can change these anytime here."). The receipt doesn't wait for a reply.
@@ -690,7 +715,7 @@ Operators told us they didn't know what to expect or how to get set up. An audit
 | | **8. Check your setup** | Operator | The finish line: every item verified, then Start onboarding and the invitation link, and what the operator does (and doesn't do) in the console afterwards | New; parts of `health-monitoring.mdx` |
 | Onboarding | **Your first conversation with Curia** | Principal | Putting Curia on your phone from the link, Curia's greeting, voice or chat, what Curia will ask and why | Rewrite of `playbooks.mdx:8-50` |
 | | **Connecting your email and calendar** | Principal | What delegated access means, what Curia will and won't do, what to expect | New |
-| | **Reviewing what Curia learned** | Principal | The three drafts, how to edit or comment, what happens on confirm | New |
+| | **Reviewing what Curia learned** | Principal | The three drafts, how to edit them, what happens on confirm | New |
 | | **Check-ins and your weekly session** | Principal | What they cover; changing autonomy and routines; new plays | New; `examples/*` |
 | Running Curia | Secrets vault, Deployment and self-hosting, Health monitoring | Operator | Kept as they are | — |
 
@@ -735,9 +760,9 @@ pages are written.
 | Invitation channel | Phone app: an operator-generated link sent by the operator; Signal or SMS: a hello from Curia on that channel. Curia doesn't email the invitation | Joseph |
 | Invitation link | Single-use, principal-bound, 48 hours, minted from the console; ADR-055 amendment | Joseph (48 hours, operator-sent); builder's call (rest) |
 | Sessions on the calendar | Real busy events once the calendar is connected; the agenda, nudge and delivery follow the event when it moves | Joseph |
-| Deep dive | One read, three drafts: working rules, priorities, writing voice; strongest tier; no cost cap | Joseph |
+| Deep dive | One stored history summary feeds working rules, priorities (where time went, then the question), writing voice and a contacts backfill; strongest tier; no cost cap, no pre-run estimate | Joseph |
 | Writing voice | Seeds the existing writing-voice profile; `voice-learn` refines it afterwards | builder's call |
-| Draft delivery | Google Docs shared with the principal, one email, a review session booked on their calendar | Joseph |
+| Draft delivery | Google Docs shared with the principal, a drafts-ready message on their messaging route, a review session booked on their calendar; the principal edits and says when done, Curia imports. Comment handling is #2712 | Joseph |
 | Review format | Asked in the first conversation: call together, or review alone and text | Joseph |
 | Final home | Confirmed versions live in the Curia app; each Google Doc is marked as moved, with a link to its console page | Joseph |
 | Sessions | Booked one at a time; check-ins taper into a weekly session | Joseph |
@@ -764,10 +789,11 @@ Tracked in milestone **v0.48 - Onboarding Journey** (#29).
 | #2359 Console and PWA calls load the parked agenda | Unchanged. | — | S |
 | #2360 **Onboarding program** | Rewritten: the console's Start onboarding step and Curia's greeting; one first conversation by voice or chat with multiple-choice style, autonomy and preferences; review-format choice; review session that adapts; check-ins; weekly session. Absorbs chat sessions (#2364) and the setup agent's onboarding content. | #2358, #2359, #2361, and #2341 for the default route (Signal or SMS work without it) | XL → XXL; consider splitting the weekly session out |
 | #2361 **Principal mailbox sign-in** | Rewritten: Nylas hosted authentication (Google connector) with a callback on the Curia server, picking up the grant without a restart, an operator Setup guide, the in-conversation link, and the "connected" event. Replaces the hand-made grant guide. | #2358 | M → L |
-| #2362 **Deep dive** | Adds writing voice as the third draft; delivery as Google Docs, one email and a review session on the calendar; confirmation from the docs and the review session instead of the numbered-list email. The ADR also covers writing voice and drafts held in Google Drive. | #2360, #2361, #2338 | XL → XXL |
+| #2362 **Deep dive** | Adds writing voice as the third draft and a contacts backfill, all fed by one stored history summary; delivery as Google Docs with a review session on the calendar; the principal edits and says when done, and Curia imports. Comment handling moved to #2712. The ADR also covers writing voice and drafts held in Google Drive. | #2360, #2361, #2338 | XL → XXL → XL |
 | #2363 Voice loads priorities | No longer waits for the deep dive: the document can be started on offer (*Priorities: scope*). | — | S |
 | #2364 Spike: text-chat sessions | Folded into #2360; closed. | — | — |
 | #2365 Design: operator role | Unchanged, still off the critical path. | — | S |
+| #2712 Google Docs collaboration | New (2026-11-22): react to comments and know when a document is done. Not in this milestone; takes the deep-dive review as its test case once it ships. | — | L |
 
 **Critical path:** #2358 and #2361 → #2360 → #2362. #2356 (Setup half), #2357, #2359 and #2365
 can run in parallel.
