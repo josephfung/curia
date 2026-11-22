@@ -299,7 +299,7 @@ else
 fi
 
 # build_livekit_seed_env: LiveKit seed args for full and resume alike, nothing else
-unset COMPOSE_PROFILES LIVEKIT_KEYS LIVEKIT_COMMAND
+unset COMPOSE_PROFILES LIVEKIT_KEYS LIVEKIT_COMMAND LIVEKIT_HTTP_PORT
 _lk_seed_env=$(mktemp)
 printf 'COMPOSE_PROFILES=voice\nLIVEKIT_KEYS="APIres: ressecret"\nLIVEKIT_COMMAND=--config /etc/livekit.local.yaml\n' > "$_lk_seed_env"
 build_livekit_seed_env "$_lk_seed_env"
