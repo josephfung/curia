@@ -962,8 +962,8 @@ check_shell_reach_values() {
 # would leave it running as an orphan on 80/443. Remove only this project's
 # caddy service container (rm -sf names the service; volumes and other
 # containers are untouched). The overlay is named explicitly, since .env no
-# longer lists it. When removal fails, stop before Postgres starts, and put the
-# domain topology record ($1 = env file) back, so the next retry tries again.
+# longer lists it. When removal fails, stop before Postgres starts; the domain
+# topology record ($1 = env file) is still there, so the next retry tries again.
 retire_previous_caddy() {
   local env="$1" overlay="$INSTALL_DIR/docker-compose.tls.yml"
   [[ -f "$overlay" ]] || return 0
@@ -971,7 +971,8 @@ retire_previous_caddy() {
       rm -sf caddy >/dev/null 2>&1; then
     return 0
   fi
-  record_topology_var "$env" TOPOLOGY domain
+  # The domain topology record is still in .env (set_topology_record has not
+  # run yet), so the next retry tries this removal again.
   echo "" >&2
   error "Could not remove the Caddy container an earlier HTTPS run started; it would keep ports 80 and 443."
   hint "Remove it by hand, then re-run install.sh. Postgres was not started:"
@@ -1020,15 +1021,36 @@ reset_topology_vars() {
     [[ "$key" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
     if [[ "$(env_value "$env" "$key")" == "$val" ]]; then unset_env_var "$env" "$key"; fi
   done < <(grep "^${TOPOLOGY_MARK}" "$env")
-  drop_topology_records "$env"
+  # The values are reverted; their records go. The topology record stays until
+  # set_topology_record replaces it, after any cleanup it implies has succeeded
+  # (retire_previous_caddy), so an interrupted run leaves it for the next retry.
+  drop_topology_records "$env" keep-topology
   printf '%s' "$prior"
 }
 
 # Remove the topology records from env file $1 (a finished install needs none).
+# With $2 = keep-topology, the TOPOLOGY record(s) stay.
 drop_topology_records() {
   local tmp
   tmp="$(mktemp)"
-  grep -v "^${TOPOLOGY_MARK}" "$1" > "$tmp" || true
+  if [[ "${2:-}" == keep-topology ]]; then
+    awk -v m="$TOPOLOGY_MARK" 'index($0, m) == 1 && index($0, m "TOPOLOGY=") != 1 { next } { print }' "$1" > "$tmp"
+  else
+    grep -v "^${TOPOLOGY_MARK}" "$1" > "$tmp" || true
+  fi
+  mv "$tmp" "$1"
+}
+
+# Record $2 as this run's topology in env file $1, replacing the earlier run's.
+# The new record is appended before the old ones are removed, so no interrupt
+# leaves the file without one; reset_topology_vars reads the last.
+set_topology_record() {
+  local tmp
+  record_topology_var "$1" TOPOLOGY "$2"
+  tmp="$(mktemp)"
+  awk -v m="${TOPOLOGY_MARK}TOPOLOGY=" '
+    { line[NR] = $0; if (index($0, m) == 1) last = NR }
+    END { for (i = 1; i <= NR; i++) if (index(line[i], m) != 1 || i == last) print line[i] }' "$1" > "$tmp"
   mv "$tmp" "$1"
 }
 
@@ -1175,7 +1197,7 @@ choose_topology() {
     echo "     server and ports 80 and 443 open."
     echo "  2  My domain, behind HTTPS I already run"
     echo "     For servers that already have nginx, Traefik, Cloudflare Tunnel or"
-    echo "     similar in front. Curia listens on port ${HTTP_PORT:-3000} behind it."
+    echo "     similar in front. Curia listens on its HTTP port (3000 by default) behind it."
     echo "  3  Just this computer, to try it out"
     echo "     No phone app; onboarding then needs Signal or SMS."
     echo "Not sure? Choose 1."
@@ -1291,57 +1313,12 @@ prompt_proxy_origin() {
 fresh_install() {
   local env="$1"
 
-  # Generate all secrets for this install. None of these are written to .env
-  # in plaintext (DB creds are the exception — they must be in .env for the
-  # postgres container and migration runner to consume them). api_token and
-  # boot_secret are passed only as transient env vars to the seed-vault container.
-  local db_pass api_token boot_secret
-  # Preserve an existing real DB password. This path also handles a partial
-  # install (DB creds written on a prior interrupted run but the vault never
-  # seeded): the Postgres volume was already initialised with that password, so
-  # regenerating it would break authentication. Only generate when the value is
-  # absent or a shipped placeholder. .env.example's your-db-password is one too,
-  # except when this project's Postgres volume already exists: an older install,
-  # interrupted, initialised it with that password, so changing .env alone would
-  # lock the installer out of it.
-  # A failed volume lookup stops here, before .env is written: replacing the
-  # password of a volume that does exist would lock the installer out of it.
-  db_pass="$(env_value "$env" DB_PASSWORD)"
-  case "$db_pass" in
-    ""|replace-*) db_pass="$(gen_secret_hex)" ;;
-    your-db-password)
-      local vol_rc=0
-      pgdata_volume_exists "$env" || vol_rc=$?
-      case "$vol_rc" in
-        0)
-          warn "Keeping DB_PASSWORD=your-db-password, the weak default from .env.example:"
-          hint "this install's Postgres volume was already set up with it." ;;
-        1) db_pass="$(gen_secret_hex)" ;;
-        *)
-          error "Could not check whether this install's Postgres volume already exists (Docker did not answer)."
-          hint "DB_PASSWORD was left as it is, since the volume may already use it."
-          hint "Re-run install.sh once Docker is available. Nothing was started."
-          exit 1 ;;
-      esac ;;
-  esac
-  api_token="$(gen_secret_hex)"
-  boot_secret="$(gen_secret_hex)"
-
-  set_env_var "$env" DB_USER curia
-  set_env_var "$env" DB_PASSWORD "$db_pass"
-  # Note: the compose `curia` service overrides DATABASE_URL in its environment:
-  # block (pointing at the internal postgres hostname). This .env value is used
-  # by the migration runner (docker compose run --rm curia), not by the app container.
-  set_env_var "$env" DATABASE_URL "postgres://curia:${db_pass}@postgres:5432/curia"
-
-  # Pin the app image tag to the resolved CURIA_VERSION (latest / vX.Y.Z / edge),
-  # so the config files and the image both come from the same release. This runs
-  # only on fresh install, so a re-run never clobbers an operator's hand-pinned
-  # tag. CURIA_POSTGRES_TAG is intentionally left at its default (pg16) — the
-  # postgres image is versioned by PG major, not app version.
-  if [[ -n "$CURIA_IMAGE_TAG_RESOLVED" ]]; then
-    set_env_var "$env" CURIA_IMAGE_TAG "$CURIA_IMAGE_TAG_RESOLVED"
-  fi
+  # Two phases. First every decision that writes .env (secrets aside): the
+  # topology and its values, then LiveKit's. Then, once .env and COMPOSE_FILE
+  # are final, one resolution point reads everything that depends on the
+  # rendered compose (the Postgres volume, Curia's and LiveKit's published
+  # ports, LiveKit's command and keys, whether livekit runs) and runs the
+  # preflight checks, before anything starts. Nothing rendered is read earlier.
 
   # Only generate a new encryption key if the current value is the template
   # placeholder or entirely absent/empty. A key that already exists must be
@@ -1357,20 +1334,27 @@ fresh_install() {
     set_env_var "$env" SECRET_ENCRYPTION_KEY "$secret_key"
   fi
 
+  # Pin the app image tag to the resolved CURIA_VERSION (latest / vX.Y.Z / edge),
+  # so the config files and the image both come from the same release. This runs
+  # only on fresh install, so a re-run never clobbers an operator's hand-pinned
+  # tag. CURIA_POSTGRES_TAG is intentionally left at its default (pg16) — the
+  # postgres image is versioned by PG major, not app version.
+  if [[ -n "$CURIA_IMAGE_TAG_RESOLVED" ]]; then
+    set_env_var "$env" CURIA_IMAGE_TAG "$CURIA_IMAGE_TAG_RESOLVED"
+  fi
+
   # Prompt for the Anthropic key (format-validated, 3 retries). Not written to
   # .env — passed as a transient env var to the vault-seed container only.
   local anthropic
   anthropic="$(prompt_anthropic_key)"
-
-  # Curia's host port, for every message that names it (the menu, the closing
-  # address and a proxy's forwarding rule).
-  resolve_curia_port_for_messages "$env"
 
   # Prompt for topology only on a fresh install (no COMPOSE_FILE/DOMAIN yet).
   # TOPOLOGY and PROXY_ORIGIN are read by later steps (LiveKit seeding).
   TOPOLOGY="$(choose_topology)"
   PROXY_ORIGIN=""
   # A rerun of an interrupted install starts from this choice, not the last one's.
+  # The earlier run's topology record outlives the reset until the cleanup it
+  # implies (its Caddy) has succeeded; only then is this run's recorded.
   local prior_topology
   prior_topology="$(reset_topology_vars "$env")"
   if [[ -n "$prior_topology" && "$prior_topology" != "$TOPOLOGY" ]]; then
@@ -1378,7 +1362,7 @@ fresh_install() {
     warn "An earlier, interrupted run chose another way to reach Curia; its settings were replaced by this choice."
     [[ "$prior_topology" != domain ]] || retire_previous_caddy "$env"
   fi
-  record_topology_var "$env" TOPOLOGY "$TOPOLOGY"
+  set_topology_record "$env" "$TOPOLOGY"
   case "$TOPOLOGY" in
     domain)
       # Require a non-empty domain — the TLS overlay and the summary URL are
@@ -1436,8 +1420,6 @@ fresh_install() {
       ;;
   esac
 
-  check_shell_reach_values "$TOPOLOGY" "$env"
-
   # Voice (#2357): turn the LiveKit profile on with generated keys. Installs
   # only this machine reaches (local, or a proxy kept on localhost) pin
   # LiveKit's node IP to loopback; the rest advertise their public address.
@@ -1455,6 +1437,66 @@ fresh_install() {
   compose_mounts_config livekit.yaml || lk_on=0
   [[ "$lk_mode" != local ]] || compose_mounts_config livekit.local.yaml || lk_on=0
 
+  # LiveKit's .env values (still the first phase: nothing rendered is read here).
+  if [[ $lk_on -eq 1 ]]; then
+    retarget_livekit_command "$env" "$lk_mode"
+    ensure_livekit_env "$env" "$lk_mode"
+  fi
+
+  # ---- Reach and LiveKit settings (.env, COMPOSE_FILE) are final from here: ----
+  # ---- the one resolution point for everything read from the rendered compose. ----
+
+  # An exported reach value that breaks the chosen topology stops here.
+  check_shell_reach_values "$TOPOLOGY" "$env"
+
+  # Generate all secrets for this install. None of these are written to .env
+  # in plaintext (DB creds are the exception — they must be in .env for the
+  # postgres container and migration runner to consume them). api_token and
+  # boot_secret are passed only as transient env vars to the seed-vault container.
+  local db_pass api_token boot_secret
+  # Preserve an existing real DB password. This path also handles a partial
+  # install (DB creds written on a prior interrupted run but the vault never
+  # seeded): the Postgres volume was already initialised with that password, so
+  # regenerating it would break authentication. Only generate when the value is
+  # absent or a shipped placeholder. .env.example's your-db-password is one too,
+  # except when this project's Postgres volume already exists: an older install,
+  # interrupted, initialised it with that password, so changing .env alone would
+  # lock the installer out of it.
+  # A failed volume lookup stops here, before DB_PASSWORD is written: replacing
+  # the password of a volume that does exist would lock the installer out of it.
+  # The volume is the one the final compose renders (after the topology's files).
+  db_pass="$(env_value "$env" DB_PASSWORD)"
+  case "$db_pass" in
+    ""|replace-*) db_pass="$(gen_secret_hex)" ;;
+    your-db-password)
+      local vol_rc=0
+      pgdata_volume_exists "$env" || vol_rc=$?
+      case "$vol_rc" in
+        0)
+          warn "Keeping DB_PASSWORD=your-db-password, the weak default from .env.example:"
+          hint "this install's Postgres volume was already set up with it." ;;
+        1) db_pass="$(gen_secret_hex)" ;;
+        *)
+          error "Could not check whether this install's Postgres volume already exists (Docker did not answer)."
+          hint "DB_PASSWORD was left as it is, since the volume may already use it."
+          hint "Re-run install.sh once Docker is available. Nothing was started."
+          exit 1 ;;
+      esac ;;
+  esac
+  api_token="$(gen_secret_hex)"
+  boot_secret="$(gen_secret_hex)"
+
+  set_env_var "$env" DB_USER curia
+  set_env_var "$env" DB_PASSWORD "$db_pass"
+  # Note: the compose `curia` service overrides DATABASE_URL in its environment:
+  # block (pointing at the internal postgres hostname). This .env value is used
+  # by the migration runner (docker compose run --rm curia), not by the app container.
+  set_env_var "$env" DATABASE_URL "postgres://curia:${db_pass}@postgres:5432/curia"
+
+  # Curia's host port, for every message that names it (the closing address and
+  # a proxy's forwarding rule), from the final compose.
+  resolve_curia_port_for_messages "$env"
+
   # Seed the Voice channel's vault values to match what LiveKit runs on. The
   # keys are passed to the seed container only, like the other secrets, and
   # are never printed. seed-vault never replaces values already in the vault.
@@ -1462,8 +1504,6 @@ fresh_install() {
   local lk_url="" lk_key="" lk_secret="" lk_pair="" lk_rc=0
   local -a lk_seed=()
   if [[ $lk_on -eq 1 ]]; then
-    retarget_livekit_command "$env" "$lk_mode"
-    ensure_livekit_env "$env" "$lk_mode"
     require_livekit_real_keys "$env"
 
     # The port Compose publishes signaling on, for the URL saved below; an
@@ -1573,9 +1613,10 @@ fresh_install() {
 
   # Mark setup as complete. On subsequent re-runs, install_is_complete() sees
   # this marker and takes the upgrade path instead of rotating secrets. The
-  # topology records only serve a rerun of an unfinished install.
-  drop_topology_records "$env"
+  # topology records only serve a rerun of an unfinished install, so they go
+  # once the marker is written, never before.
   printf '\n# SETUP_COMPLETE\n' >> "$env"
+  drop_topology_records "$env"
 
   # livekit_next_steps_state reads off when the voice profile is off and
   # livekit is not running, so an install the installer left voice off on says so.

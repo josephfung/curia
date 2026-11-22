@@ -1179,6 +1179,11 @@ _ao_paths() {
       note_missing_browser() { :; }
       print_summary() { :; }; getent() { return 0; }
       prompt_anthropic_key() { echo sk-ant-test; }
+      # _FI_DROP_KILL: the run dies while dropping the records after completion.
+      if [[ -n "${_FI_DROP_KILL:-}" ]]; then
+        eval "_orig_$(declare -f drop_topology_records)"
+        drop_topology_records() { [[ -n "${2:-}" ]] || exit 9; _orig_drop_topology_records "$@"; }
+      fi
       choose_topology() { echo "$_AO_TOPOLOGY"; }
       gen_secret_hex() { echo genhex; }; gen_secret_b64() { echo genb64; }
       INSTALL_DIR="$(dirname "$envf")"
@@ -1811,6 +1816,13 @@ _assert_var "ensure_tls_compose_file: append recorded before it is written" \
 # A record whose write never happened is skipped by the retry: the operator's value stays.
 ( unset COMPOSE_FILE; reset_topology_vars "$_rbw_env" >/dev/null )
 _assert_var "reset: a record without its write leaves the value alone" "$(env_value "$_rbw_env" COMPOSE_FILE)" "docker-compose.yml:custom.yml"
+# reset_topology_vars keeps the TOPOLOGY record; set_topology_record replaces it.
+printf 'COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml\n# installer-topology: TOPOLOGY=domain\n# installer-topology: COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml\n' > "$_rbw_env"
+_assert_var "reset: returns the earlier topology" "$( (unset COMPOSE_FILE; reset_topology_vars "$_rbw_env") )" "domain"
+_assert_var "reset: value reverted, its record gone, TOPOLOGY record kept" \
+    "$(grep -c '^COMPOSE_FILE=' "$_rbw_env" | tr -d ' '):$(grep -c 'installer-topology: COMPOSE_FILE' "$_rbw_env" | tr -d ' '):$(grep -c 'installer-topology: TOPOLOGY=domain' "$_rbw_env" | tr -d ' ')" "0:0:1"
+set_topology_record "$_rbw_env" local
+_assert_var "set_topology_record: only the new record" "$(grep 'installer-topology: TOPOLOGY=' "$_rbw_env" | tr '\n' '|')" "# installer-topology: TOPOLOGY=local|"
 rm -f "$_rbw_env"
 
 _fi_dir="$(mktemp -d)"
@@ -1856,11 +1868,26 @@ _fi_run() {
           [[ -n "${_FI_SERVICES+set}" ]] || return 1
           printf '%b' "$_FI_SERVICES"; return 0 ;;
         esac
+        # _FI_RENDER_BY_CF: render as the .env COMPOSE_FILE now says: a custom
+        # TLS overlay publishes Curia on 3100 and LiveKit on 17880, the base file
+        # on 3000 and 7880. Proves values are read after the topology is final.
+        if [[ -n "${_FI_RENDER_BY_CF:-}" ]]; then
+          local _cp=3000 _lp=7880
+          if [[ "$(env_value "$_fi_env" COMPOSE_FILE)" == *tls* ]]; then _cp=3100; _lp=17880; fi
+          case "$*" in
+            (compose*" config curia") printf 'services:\n  curia:\n    ports:\n      - mode: ingress\n        target: 3000\n        published: "%s"\n' "$_cp"; return 0 ;;
+            (compose*" config livekit") printf 'services:\n  livekit:\n    ports:\n      - mode: ingress\n        target: 7880\n        published: "%s"\n' "$_lp"; return 0 ;;
+          esac
+        fi
         case "$*" in (compose*" config curia")
           [[ -n "${_FI_CURIA_RENDER+set}" ]] || return 1
           printf '%b' "$_FI_CURIA_RENDER"; return 0 ;;
         esac
-        case "$*" in (*" rm -sf caddy") [[ -z "${_FI_CADDY_RM_FAIL:-}" ]]; return ;; esac
+        # _FI_CADDY_RM_KILL: the run dies during the removal (an SSH drop).
+        case "$*" in (*" rm -sf caddy")
+          [[ -z "${_FI_CADDY_RM_KILL:-}" ]] || exit 9
+          [[ -z "${_FI_CADDY_RM_FAIL:-}" ]]; return ;;
+        esac
         case "$*" in (compose*" config livekit")
           [[ -n "${_FI_LK_RENDER+set}" ]] || return 1
           printf '%b' "$_FI_LK_RENDER"; return 0 ;;
@@ -2280,6 +2307,20 @@ unset _FI_ENV_BASE
 _assert_var "caddy removal retried: tries again" "$(grep -c 'rm -sf caddy$' "$_fi_calls" | tr -d ' ')" "1"
 _assert_var "caddy removal succeeds: continues" "$_fi_rc" "0"
 _assert_var "caddy removal succeeds: domain record gone" "$(grep -c 'TOPOLOGY=domain' "$_fi_env" | tr -d ' ')" "0"
+# The run dies during the Caddy removal: the domain record is still there (it is
+# replaced only after the removal succeeds), so the next retry tries again.
+_FI_INTERRUPT=1; _fi_run domain "c.example.com" '' || true; unset _FI_INTERRUPT
+cp "$_fi_env" "$_fi_base"; _FI_ENV_BASE="$_fi_base"
+_FI_CADDY_RM_KILL=1; _fi_run local "" '' || true; unset _FI_CADDY_RM_KILL
+_assert_var "killed during Caddy removal: domain record still there" "$(grep -c '^# installer-topology: TOPOLOGY=domain$' "$_fi_env" | tr -d ' ')" "1"
+_assert_var "killed during Caddy removal: no local record yet" "$(grep -c 'TOPOLOGY=local' "$_fi_env" | tr -d ' ')" "0"
+cp "$_fi_env" "$_fi_base"; _fi_run local "" '' || true
+unset _FI_ENV_BASE
+_assert_var "killed during Caddy removal: next retry tries again" "$(grep -c 'rm -sf caddy$' "$_fi_calls" | tr -d ' ')" "1"
+# SETUP_COMPLETE is written before the records are dropped: a run that dies in
+# between is complete, never an unmarked install without its records.
+_FI_DROP_KILL=1; _fi_run local "" '' || true; unset _FI_DROP_KILL
+_assert_var "killed while dropping records: install already marked complete" "$(grep -c '^# SETUP_COMPLETE' "$_fi_env" | tr -d ' ')" "1"
 _fi_rerun local "" proxy ""
 _assert_var "retry local -> proxy: no Caddy removal" "$(grep -c 'rm -sf caddy' "$_fi_calls" | tr -d ' ')" "0"
 _fi_run local "" '' || true
@@ -2317,6 +2358,19 @@ _assert_var "unpublished signaling, proxy: origin URL seeded" "$(_seed_env SEED_
 _assert_var "unpublished signaling, proxy: warns" "$(_has "$_fi_out" "can't forward /rtc* to LiveKit until 7880 is published")" yes
 _assert_var "unpublished signaling, proxy: no 127.0.0.1 rule" "$(_has "$_fi_out" '/rtc* to 127.0.0.1')" no
 unset _FI_LK_RENDER
+# Rendered values are read once the topology is final: an interrupted HTTPS install
+# whose custom TLS overlay publishes 3100:3000 (and LiveKit 17880), retried as
+# local, shows the base file's 3000 and seeds LiveKit's 7880.
+_FI_RENDER_BY_CF=1
+_fi_rerun domain "c.example.com" local ""
+unset _FI_RENDER_BY_CF
+_assert_var "retry HTTPS -> local: summary on the base file's port" "$(_has "$_fi_out" 'http://localhost:3000/setup')" yes
+_assert_var "retry HTTPS -> local: not the overlay's port" "$(_has "$_fi_out" '3100')" no
+_assert_var "retry HTTPS -> local: LiveKit URL from the base file's port" "$(_seed_env SEED_LIVEKIT_URL)" "ws://localhost:7880"
+_FI_RENDER_BY_CF=1
+_fi_rerun domain "c.example.com" proxy "https://p.example.com"
+unset _FI_RENDER_BY_CF
+_assert_var "retry HTTPS -> proxy: rule names the base file's ports" "$(_has "$_fi_out" 'forward / to port 3000 and /rtc* to 127.0.0.1:7880')" yes
 # Curia's published port comes from the rendered compose: HTTP_PORT=${WEB_PORT:-3100}.
 _FI_CURIA_RENDER='name: x\nservices:\n  curia:\n    ports:\n      - mode: ingress\n        target: 3000\n        published: "3100"\n        protocol: tcp\n'
 _fi_run proxy "https://p.example.com" 'HTTP_PORT=${WEB_PORT:-3100}\n' || true
