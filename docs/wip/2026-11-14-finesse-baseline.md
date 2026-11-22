@@ -138,8 +138,8 @@ Decision: no finesse judge yet (`TAG_JUDGE_MODELS` stays empty). The release gat
 
 ## Pending
 
-1. **EA feedback (5–7 reviewers).** Synthesise per task, fold into the casebook, then into the case files. Add the "who writes" rules and Avery's customer and investor preference to the identity fixture.
-2. **New baseline.** All 45 cases, run count and cost agreed first. Remove the coverage allowances once re-measured.
+1. **EA feedback (5–7 reviewers).** Done 2026-11-21: six reviews, `docs/wip/2026-11-21-finesse-ea-review-synthesis.md`.
+2. **New baseline.** Done 2026-11-21, 46 cases: `docs/wip/2026-11-21-finesse-baseline.md`. Coverage allowances removed.
 3. **Grading round.** A fresh 25-item sheet from the new baseline, graded by the owner and one or two EAs on the same items, to measure how far people agree with each other.
 4. **Judge choice.** Re-run the strongest candidates against those grades (`pnpm grading agree --current-cases`). Set `TAG_JUDGE_MODELS.finesse`.
 5. **Final report (§5b).** Before/after comparison, per-recipient figures, quoted good and bad messages, product recommendations, and which cases, if any, could join the release gate.
