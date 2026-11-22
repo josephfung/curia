@@ -4,6 +4,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import pg from 'pg';
 import { clearWebThreadCache, getOrCreateWebThread, readWebThreadAndSetupPhase, rotateWebThread, type WebThreadQueryable } from '../../src/channels/http/web-thread.js';
+import { createSilentLogger } from '../../src/logger.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 import { lockSetupSingletons } from './setup-singletons-lock.js';
 
@@ -149,21 +150,29 @@ describeIf('web thread (integration)', () => {
     await expect(getOrCreateWebThread(slow)).resolves.toBe('wt-after-race');
   });
 
-  it('reads the thread and the Setup phase together', async () => {
-    const saved = (await pool.query('SELECT * FROM setup_state WHERE id = 1')).rows[0] as Record<string, unknown> | undefined;
+  it('reads the thread and the derived Setup phase together', async () => {
+    const saved = (await pool.query(
+      `SELECT key, value, updated_at, updated_by FROM settings WHERE key = 'setup.completed_at'`,
+    )).rows;
     try {
-      await pool.query('DELETE FROM setup_state WHERE id = 1');
+      await pool.query(`DELETE FROM settings WHERE key = 'setup.completed_at'`);
       await rotateWebThread(pool, { newId: () => 'wt-after-race' });
-      await expect(readWebThreadAndSetupPhase(pool)).resolves.toEqual({ conversationId: 'wt-after-race', setupPhase: null });
-      await pool.query(`INSERT INTO setup_state (id, phase) VALUES (1, 'in_progress')`);
-      await expect(readWebThreadAndSetupPhase(pool)).resolves.toEqual({ conversationId: 'wt-after-race', setupPhase: 'in_progress' });
+      await expect(readWebThreadAndSetupPhase(pool, createSilentLogger())).resolves.toEqual({
+        conversationId: 'wt-after-race', setupPhase: 'in_progress',
+      });
+      await pool.query(
+        `INSERT INTO settings (key, value, updated_by) VALUES ('setup.completed_at', to_jsonb($1::text), 'test')`,
+        ['2026-01-01T00:00:00.000Z'],
+      );
+      await expect(readWebThreadAndSetupPhase(pool, createSilentLogger())).resolves.toEqual({
+        conversationId: 'wt-after-race', setupPhase: 'complete',
+      });
     } finally {
-      await pool.query('DELETE FROM setup_state WHERE id = 1');
-      if (saved) {
-        const cols = Object.keys(saved);
+      await pool.query(`DELETE FROM settings WHERE key = 'setup.completed_at'`);
+      for (const row of saved) {
         await pool.query(
-          `INSERT INTO setup_state (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`,
-          cols.map((c) => saved[c]),
+          `INSERT INTO settings (key, value, updated_at, updated_by) VALUES ($1, $2::jsonb, $3, $4)`,
+          [row['key'], JSON.stringify(row['value']), row['updated_at'], row['updated_by']],
         );
       }
     }

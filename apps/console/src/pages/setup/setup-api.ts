@@ -11,7 +11,7 @@ export type VoiceRoute = 'app' | 'signal';
 
 /** GET /api/setup/status → `setup`. */
 export interface SetupFields {
-  setupFor: SetupFor | null;
+  setupFor: SetupFor;
   operatorName: string | null;
   operatorEmail: string | null;
   messagingRoute: MessagingRoute | null;
@@ -30,7 +30,7 @@ export interface PrincipalInfo {
 }
 
 export const EMPTY_SETUP_FIELDS: SetupFields = {
-  setupFor: null, operatorName: null, operatorEmail: null, messagingRoute: null, voiceRoute: null,
+  setupFor: 'self', operatorName: null, operatorEmail: null, messagingRoute: null, voiceRoute: null,
 };
 
 async function json<T>(res: Response): Promise<T> {

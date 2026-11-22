@@ -24,7 +24,13 @@ import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { KnowledgeGraphStore } from '../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../src/memory/embedding.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
-import { markSetupComplete, readSetupState, startSetup, updateSetupState } from '../../src/setup/setup-state.js';
+import {
+  markSetupComplete,
+  readSetupState,
+  SetupSettingsError,
+  updateSetupState,
+  type SetupWriteOptions,
+} from '../../src/setup/setup-settings.js';
 import type { SetupChecklist } from '../../src/setup/checklist.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 import { completeSetup } from '../../src/setup/complete-setup.js';
@@ -39,6 +45,8 @@ const describeIf = DATABASE_URL ? describe : describe.skip;
 const TEST_SECRET = 'setup-route-test-secret';
 const AUTH_HEADER = { 'x-web-bootstrap-secret': TEST_SECRET };
 const TEST_LABEL_PREFIX = 'Setup-Route Test';
+// The settings migration 132 created for Setup (#2709). These suites own them.
+const SETUP_SETTING_KEYS = ['operator', 'messaging_route', 'voice_route', 'setup.completed_at'];
 // Person labels this file writes that do not use the prefix above.
 const OWNED_KG_LABELS = [
   'Original Name',
@@ -73,7 +81,7 @@ describeIf('/api/setup/* routes', () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    // Every hook below deletes rows (principal contacts, setup_state): refuse anything but
+    // Every hook below deletes rows (principal contacts, setup settings): refuse anything but
     // the isolated test database before the first of them runs.
     await requireCuriaTestDatabase(pool);
     await pool.query('SELECT 1 FROM contacts LIMIT 0');
@@ -918,19 +926,23 @@ describeIf('/api/setup/* routes', () => {
     });
   });
 
-  // #2358: the Setup page's own state, its checklist and Start onboarding.
+  // #2358/#2709: the Setup page's own settings, its checklist and Start onboarding.
   describe('Setup page state', () => {
     let app: FastifyInstance;
-    let checklist: SetupChecklist = { setupFor: null, tasks: [], setupComplete: false, missing: ['email'] };
-    let savedRow: Record<string, unknown> | undefined;
+    let checklist: SetupChecklist = { setupFor: 'self', tasks: [], setupComplete: false, missing: ['email'] };
+    const TEST_WRITE: SetupWriteOptions = { updatedBy: 'integration-test', logger };
+    let savedSettings: Array<Record<string, unknown>> = [];
     let savedThread: string | undefined;
-    // web-thread.test.ts rewrites the same single rows (#2358): one suite at a time.
+    // web-thread.test.ts reads the same rows (#2358, #2709): one suite at a time.
     let unlock: (() => Promise<void>) | undefined;
 
     beforeAll(async () => {
       unlock = await lockSetupSingletons(DATABASE_URL!);
-      // Keep whatever row a working database has, and put it back afterwards.
-      savedRow = (await pool.query('SELECT * FROM setup_state WHERE id = 1')).rows[0];
+      // Keep whatever settings a working database has, and put them back afterwards.
+      savedSettings = (await pool.query(
+        'SELECT key, value, updated_at, updated_by FROM settings WHERE key = ANY($1::text[])',
+        [SETUP_SETTING_KEYS],
+      )).rows;
       // A test writes the shared web thread; put a working database's back after.
       savedThread = (await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1')).rows[0]?.conversation_id;
       app = Fastify();
@@ -951,21 +963,20 @@ describeIf('/api/setup/* routes', () => {
     });
 
     beforeEach(async () => {
-      await pool.query('DELETE FROM setup_state WHERE id = 1');
-      checklist = { setupFor: null, tasks: [], setupComplete: false, missing: ['email'] };
+      await pool.query('DELETE FROM settings WHERE key = ANY($1::text[])', [SETUP_SETTING_KEYS]);
+      checklist = { setupFor: 'self', tasks: [], setupComplete: false, missing: ['email'] };
     });
 
     afterAll(async () => {
       try {
         await app.close();
-        await pool.query('DELETE FROM setup_state WHERE id = 1');
+        await pool.query('DELETE FROM settings WHERE key = ANY($1::text[])', [SETUP_SETTING_KEYS]);
         await pool.query('DELETE FROM web_thread WHERE id = 1');
         if (savedThread) await pool.query('INSERT INTO web_thread (id, conversation_id) VALUES (1, $1)', [savedThread]);
-        if (savedRow) {
-          const cols = Object.keys(savedRow);
+        for (const row of savedSettings) {
           await pool.query(
-            `INSERT INTO setup_state (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`,
-            cols.map((c) => savedRow![c]),
+            `INSERT INTO settings (key, value, updated_at, updated_by) VALUES ($1, $2::jsonb, $3, $4)`,
+            [row['key'], JSON.stringify(row['value']), row['updated_at'], row['updated_by']],
           );
         }
       } finally {
@@ -973,27 +984,45 @@ describeIf('/api/setup/* routes', () => {
       }
     });
 
-    it('the first save on a new install starts Setup; a later save never moves the phase', async () => {
-      let state = await updateSetupState(pool, { setupFor: 'other' });
-      expect(state).toMatchObject({ phase: 'in_progress', setupFor: 'other' });
-      state = await updateSetupState(pool, { messagingRoute: 'signal' });
+    it('the first save creates both keys, and a later save never moves the phase', async () => {
+      let state = await updateSetupState(
+        pool,
+        { setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com' },
+        TEST_WRITE,
+      );
+      expect(state).toMatchObject({ phase: 'in_progress', setupFor: 'other', operatorName: 'Sam' });
+      state = await updateSetupState(pool, { messagingRoute: 'signal' }, TEST_WRITE);
       expect(state).toMatchObject({ phase: 'in_progress', setupFor: 'other', messagingRoute: 'signal' });
-      await markSetupComplete(pool);
-      state = await updateSetupState(pool, { voiceRoute: 'app' });
+      await markSetupComplete(pool, TEST_WRITE);
+      state = await updateSetupState(pool, { voiceRoute: 'app' }, TEST_WRITE);
       expect(state.phase).toBe('complete');
       expect(state.completedAt).toBeInstanceOf(Date);
     });
 
     it('a save on an install that predates the Setup page leaves it complete', async () => {
-      await pool.query(`INSERT INTO setup_state (id, phase) VALUES (1, 'complete')`);
-      const state = await updateSetupState(pool, { messagingRoute: 'app' });
+      await pool.query(
+        `INSERT INTO settings (key, value, updated_by)
+         VALUES ('setup.completed_at', to_jsonb($1::text), 'migration:132:pre-setup-page')`,
+        ['2026-01-01T00:00:00.000Z'],
+      );
+      const state = await updateSetupState(pool, { messagingRoute: 'app' }, TEST_WRITE);
       expect(state.phase).toBe('complete');
     });
 
-    it('null clears a field and a missing field is left alone', async () => {
-      await updateSetupState(pool, { operatorName: 'Sam', operatorEmail: 'sam@example.com' });
-      const state = await updateSetupState(pool, { operatorName: null });
-      expect(state).toMatchObject({ operatorName: null, operatorEmail: 'sam@example.com' });
+    it('choosing Myself clears the operator, and a missing field is left alone', async () => {
+      await updateSetupState(
+        pool,
+        { setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com' },
+        TEST_WRITE,
+      );
+      const state = await updateSetupState(pool, { setupFor: 'self' }, TEST_WRITE);
+      expect(state).toMatchObject({ setupFor: 'self', operatorName: null, operatorEmail: null });
+    });
+
+    it('refuses Someone else without an operator, and a half-written operator', async () => {
+      await expect(updateSetupState(pool, { setupFor: 'other' }, TEST_WRITE)).rejects.toBeInstanceOf(SetupSettingsError);
+      await expect(updateSetupState(pool, { operatorName: 'Sam' }, TEST_WRITE)).rejects.toBeInstanceOf(SetupSettingsError);
+      expect(await readSetupState(pool, logger)).toMatchObject({ setupFor: 'self', operatorName: null, operatorEmail: null });
     });
 
     it('PUT /api/setup/state saves and returns the state', async () => {
@@ -1005,97 +1034,120 @@ describeIf('/api/setup/* routes', () => {
       expect(res.json().setup).toMatchObject({
         setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com', messagingRoute: 'slack', voiceRoute: 'app',
       });
-      expect((await readSetupState(pool)).messagingRoute).toBe('slack');
-    });
-
-    // The Setup page calls it on load (PR 4), so web chat goes to the setup guide from the
-    // first message. Whether it starts Setup depends on the whole database (any principal,
-    // any saved identity), which other test files share, so that part runs on a cleared
-    // copy inside a transaction that is rolled back.
-    it('startSetup starts Setup only on a database with nothing set up', async () => {
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        // As if nothing were set up yet (rolled back below; no row is deleted but Setup's own).
-        await client.query('DELETE FROM setup_state WHERE id = 1');
-        await client.query(`UPDATE office_identity_versions SET changed_by = 'system_default' WHERE changed_by IN ('wizard', 'api')`);
-        await client.query(`UPDATE contacts SET system_role = NULL WHERE system_role = 'principal'`);
-        expect(await startSetup(client)).toMatchObject({ phase: 'in_progress', setupFor: null });
-        // A principal a script created, and no row: nothing changes.
-        await client.query('DELETE FROM setup_state WHERE id = 1');
-        await client.query(
-          `INSERT INTO contacts (id, display_name, role, tier, kind, system_role, created_at, updated_at)
-           VALUES (gen_random_uuid(), $1, 'ceo', 'principal', 'principal', 'principal', now(), now())`,
-          [`${TEST_LABEL_PREFIX} ScriptPrincipal`],
-        );
-        expect((await startSetup(client)).phase).toBeNull();
-      } finally {
-        await client.query('ROLLBACK');
-        client.release();
-      }
+      expect((await readSetupState(pool, logger)).messagingRoute).toBe('slack');
     });
 
     it('POST /api/setup/start keeps what is saved, and never reopens a finished Setup', async () => {
-      await updateSetupState(pool, { setupFor: 'self' });
+      await updateSetupState(pool, { messagingRoute: 'app' }, TEST_WRITE);
       const res = await app.inject({ method: 'POST', url: '/api/setup/start', headers: AUTH_HEADER });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ inSetup: true, setupGuide: true });
-      expect(await readSetupState(pool)).toMatchObject({ phase: 'in_progress', setupFor: 'self' });
-      await markSetupComplete(pool);
+      expect(await readSetupState(pool, logger)).toMatchObject({ phase: 'in_progress', messagingRoute: 'app' });
+      await markSetupComplete(pool, TEST_WRITE);
       const after = await app.inject({ method: 'POST', url: '/api/setup/start', headers: AUTH_HEADER });
       expect(after.json()).toEqual({ inSetup: false, setupGuide: false });
-      expect((await readSetupState(pool)).phase).toBe('complete');
+      expect((await readSetupState(pool, logger)).phase).toBe('complete');
     });
 
     it('POST /api/setup/start needs auth', async () => {
       const res = await app.inject({ method: 'POST', url: '/api/setup/start' });
       expect(res.statusCode).toBe(401);
-      expect((await readSetupState(pool)).phase).toBeNull();
+      expect((await readSetupState(pool, logger)).phase).toBe('in_progress');
     });
 
     it('PUT /api/setup/state refuses a bad body and saves nothing', async () => {
       const res = await app.inject({ method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER, payload: { messagingRoute: 'fax' } });
       expect(res.statusCode).toBe(400);
-      expect((await readSetupState(pool)).messagingRoute).toBeNull();
+      expect((await readSetupState(pool, logger)).messagingRoute).toBeNull();
+    });
+
+    it('PUT /api/setup/state answers 400 for a combination the registry refuses', async () => {
+      const res = await app.inject({
+        method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER, payload: { setupFor: 'other' },
+      });
+      expect(res.statusCode).toBe(400);
+      // A half-blank operator pair is refused rather than silently clearing the operator.
+      const halfBlank = await app.inject({
+        method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER,
+        payload: { operatorName: 'Sam', operatorEmail: '' },
+      });
+      expect(halfBlank.statusCode).toBe(400);
+      expect(await readSetupState(pool, logger)).toMatchObject({ setupFor: 'self' });
+    });
+
+    it('refuses a half-blank operator pair instead of switching to Myself', async () => {
+      await updateSetupState(
+        pool,
+        { setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com' },
+        TEST_WRITE,
+      );
+      await expect(
+        updateSetupState(pool, { operatorName: 'Sam', operatorEmail: null }, TEST_WRITE),
+      ).rejects.toBeInstanceOf(SetupSettingsError);
+      expect(await readSetupState(pool, logger)).toMatchObject({
+        setupFor: 'other', operatorEmail: 'sam@example.com',
+      });
     });
 
     it('GET /api/setup/status reports inSetup and the saved fields', async () => {
-      await pool.query(`INSERT INTO setup_state (id, phase, setup_for) VALUES (1, 'in_progress', 'self')`);
+      await pool.query(
+        `INSERT INTO settings (key, value, updated_by) VALUES ('messaging_route', to_jsonb($1::text), 'test')`,
+        ['signal'],
+      );
       const res = await app.inject({ method: 'GET', url: '/api/setup/status', headers: AUTH_HEADER });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toMatchObject({ inSetup: true, setup: { setupFor: 'self' } });
+      expect(res.json()).toMatchObject({ inSetup: true, setup: { setupFor: 'self', messagingRoute: 'signal' } });
     });
 
     it('GET /api/setup/checklist returns the checklist', async () => {
       const res = await app.inject({ method: 'GET', url: '/api/setup/checklist', headers: AUTH_HEADER });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ setupFor: null, tasks: [], setupComplete: false, missing: ['email'] });
+      expect(res.json()).toEqual({ setupFor: 'self', tasks: [], setupComplete: false, missing: ['email'] });
     });
 
     it('POST /api/setup/complete is refused with the missing steps until setup is complete', async () => {
-      await pool.query(`INSERT INTO setup_state (id, phase) VALUES (1, 'in_progress')`);
       const refused = await app.inject({ method: 'POST', url: '/api/setup/complete', headers: AUTH_HEADER });
       expect(refused.statusCode).toBe(409);
       expect(refused.json().missing).toEqual(['email']);
-      expect((await readSetupState(pool)).phase).toBe('in_progress');
+      expect((await readSetupState(pool, logger)).phase).toBe('in_progress');
 
       await pool.query(
         `INSERT INTO web_thread (id, conversation_id) VALUES (1, 'setup-chat')
          ON CONFLICT (id) DO UPDATE SET conversation_id = EXCLUDED.conversation_id`,
       );
-      checklist = { setupFor: null, tasks: [], setupComplete: true, missing: [] };
+      checklist = { setupFor: 'self', tasks: [], setupComplete: true, missing: [] };
       const ok = await app.inject({ method: 'POST', url: '/api/setup/complete', headers: AUTH_HEADER });
       expect(ok.statusCode).toBe(200);
-      expect((await readSetupState(pool)).phase).toBe('complete');
+      expect((await readSetupState(pool, logger)).phase).toBe('complete');
       // Finishing Setup leaves the thread alone (#2360): starting onboarding rotates it.
       const after = await pool.query<{ conversation_id: string }>('SELECT conversation_id FROM web_thread WHERE id = 1');
       expect(after.rows[0]?.conversation_id).toBe('setup-chat');
     });
 
-    it('finishing Setup twice is idempotent', async () => {
-      await pool.query(`INSERT INTO setup_state (id, phase) VALUES (1, 'in_progress')`);
-      await Promise.all([completeSetup(pool), completeSetup(pool)]);
-      expect((await readSetupState(pool)).phase).toBe('complete');
+    it('finishing Setup twice is idempotent and keeps the first completion time', async () => {
+      const before = await pool.query<{ id: string }>(
+        `SELECT COALESCE(max(id), 0)::text AS id FROM settings_history`,
+      );
+      await Promise.all([completeSetup(pool, TEST_WRITE), completeSetup(pool, TEST_WRITE)]);
+
+      const first = (await pool.query<{ value: string }>(
+        `SELECT value FROM settings WHERE key = 'setup.completed_at'`,
+      )).rows[0]?.value;
+      expect(first).toBeDefined();
+
+      await completeSetup(pool, TEST_WRITE);
+      const later = (await pool.query<{ value: string }>(
+        `SELECT value FROM settings WHERE key = 'setup.completed_at'`,
+      )).rows[0]?.value;
+      expect(later).toBe(first);
+
+      // Two concurrent calls, one write: the loser saw the winner's row under the lock.
+      const history = await pool.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM settings_history
+          WHERE key = 'setup.completed_at' AND id > $1::bigint`,
+        [before.rows[0]?.id ?? '0'],
+      );
+      expect(history.rows[0]).toMatchObject({ n: 1 });
     });
 
     it.each([
@@ -1113,11 +1165,14 @@ describeIf('/api/setup/* routes', () => {
   describe('rate limits', () => {
     let limited: FastifyInstance;
     let unlock: (() => Promise<void>) | undefined;
-    let savedRow: Record<string, unknown> | undefined;
+    let savedSettings: Array<Record<string, unknown>> = [];
 
     beforeAll(async () => {
       unlock = await lockSetupSingletons(DATABASE_URL!);
-      savedRow = (await pool.query('SELECT * FROM setup_state WHERE id = 1')).rows[0];
+      savedSettings = (await pool.query(
+        'SELECT key, value, updated_at, updated_by FROM settings WHERE key = ANY($1::text[])',
+        [SETUP_SETTING_KEYS],
+      )).rows;
       limited = Fastify();
       await limited.register(rateLimit, { max: 1000, timeWindow: '1 minute' });
       await limited.register(setupRoutes, {
@@ -1133,12 +1188,11 @@ describeIf('/api/setup/* routes', () => {
     afterAll(async () => {
       try {
         await limited.close();
-        await pool.query('DELETE FROM setup_state WHERE id = 1');
-        if (savedRow) {
-          const cols = Object.keys(savedRow);
+        await pool.query('DELETE FROM settings WHERE key = ANY($1::text[])', [SETUP_SETTING_KEYS]);
+        for (const row of savedSettings) {
           await pool.query(
-            `INSERT INTO setup_state (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`,
-            cols.map((c) => savedRow![c]),
+            `INSERT INTO settings (key, value, updated_at, updated_by) VALUES ($1, $2::jsonb, $3, $4)`,
+            [row['key'], JSON.stringify(row['value']), row['updated_at'], row['updated_by']],
           );
         }
       } finally {

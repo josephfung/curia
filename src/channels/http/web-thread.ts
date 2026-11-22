@@ -5,6 +5,8 @@
 // minted only when there is no history. A client-supplied id is not consulted.
 
 import { randomUUID } from 'node:crypto';
+import type { Logger } from '../../logger.js';
+import { readSetupPhase, type SetupPhaseValue } from '../../setup/setup-settings.js';
 
 export interface WebThreadQueryable {
   query: (
@@ -127,26 +129,22 @@ export async function rotateWebThread(
 }
 
 /**
- * The shared thread and the Setup phase, read in one statement (#2358), so a chat message
- * is bound to one side of Setup: either the Setup thread while Setup runs, or the shared
- * thread after. Finishing Setup changes only the phase; starting onboarding (#2360) later
- * rotates the thread.
+ * The shared thread and the Setup phase (#2358, #2709), so a chat message is bound to one
+ * side of Setup: either the Setup thread while Setup runs, or the shared thread after.
+ * Finishing Setup changes only the phase; starting onboarding (#2360) later rotates it.
+ *
+ * The two are read in separate statements (the settings store validates the phase value,
+ * which a SQL join would bypass). That is safe: the extra pairing it allows is (Setup
+ * thread, complete) — a message read against the Setup thread just as Setup finishes. With
+ * the phase complete it is routed to the coordinator on that thread, the same outcome as a
+ * message sent after "Not right now", which keeps the Setup chat by design.
  */
 export async function readWebThreadAndSetupPhase(
   pool: WebThreadQueryable,
-): Promise<{ conversationId: string; setupPhase: string | null }> {
-  // Creates the row on first use; the snapshot below is what binds the message.
-  await getOrCreateWebThread(pool);
-  const snapshot = await pool.query(
-    `SELECT w.conversation_id, s.phase
-     FROM web_thread w LEFT JOIN setup_state s ON s.id = 1
-     WHERE w.id = 1`,
-  );
-  const row = snapshot.rows[0];
-  const conversationId = conversationIdOf(row);
-  if (!conversationId) throw new Error('web_thread row is missing after it was created');
-  const phase = row?.['phase'];
-  return { conversationId, setupPhase: typeof phase === 'string' ? phase : null };
+  logger: Pick<Logger, 'error'>,
+): Promise<{ conversationId: string; setupPhase: SetupPhaseValue }> {
+  const conversationId = await getOrCreateWebThread(pool);
+  return { conversationId, setupPhase: await readSetupPhase(pool, logger) };
 }
 
 /** A client message id is an opaque token the sender uses to ignore its own echo. */

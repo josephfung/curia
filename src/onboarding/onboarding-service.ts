@@ -34,7 +34,7 @@ import { choosePairOrigin } from '../channels/http/pairing.js';
 import { noteWebThreadRotated, rotateWebThreadRow } from '../channels/http/web-thread.js';
 import { replaceActiveSkillsBlock } from '../db/active-skills-progress.js';
 import { makeSystemOriginator } from '../contacts/principal.js';
-import { readSetupState, type MessagingRoute, type SetupFor } from '../setup/setup-state.js';
+import { readSetupState, type MessagingRoute, type SetupFor } from '../setup/setup-settings.js';
 import { readPlaybook, type PlaybookSession } from './playbook.js';
 import {
   findOpenOnboardingTask,
@@ -101,7 +101,7 @@ export type OnboardingStatus = {
   showDashboardAlert: boolean;
   workingPrincipalSignals: string[];
   route: MessagingRoute | null;
-  setupFor: SetupFor | null;
+  setupFor: SetupFor;
   principalName: string | null;
   /** Email triage is held until the principal hears what to expect (Capabilities shows it). */
   triageHeld: boolean;
@@ -229,7 +229,7 @@ export class OnboardingService {
   async status(): Promise<OnboardingStatus> {
     const { pool, taskRepo, configStore, logger } = this.deps;
     const [setup, task, state, principalName, triageHeld] = await Promise.all([
-      readSetupState(pool),
+      readSetupState(pool, logger),
       findOpenOnboardingTask(taskRepo),
       readOnboardingState(configStore, logger),
       this.deps.principalName(),
@@ -242,10 +242,13 @@ export class OnboardingService {
     return {
       started,
       taskId: task?.id ?? completedTaskId,
-      // Only an install whose Setup finished on the Setup page (completed_at set there, not by
-      // migration 130), so installs that predate the page never see it.
-      showDashboardAlert: !started && setup.phase === 'complete' && setup.completedAt !== null,
-      workingPrincipalSignals: await this.workingPrincipalSignals(setup.completedAt),
+      // Only an install whose Setup finished on the Setup page. Migration 132 marks an install
+      // that predates the page complete too, and `completedOnPage` is what tells them apart
+      // (#2709), so the alert does not depend on which catalog steps are required.
+      showDashboardAlert: !started && setup.completedOnPage,
+      workingPrincipalSignals: await this.workingPrincipalSignals(
+        setup.completedOnPage ? setup.completedAt : null,
+      ),
       route: setup.messagingRoute,
       setupFor: setup.setupFor,
       principalName,
@@ -279,9 +282,9 @@ export class OnboardingService {
     return readPlaybook(this.deps.workingDocsRepo, this.deps.logger);
   }
 
-  /** Who Setup was for and the operator's name, as Setup recorded them (null on pre-Setup installs). */
-  async setupContext(): Promise<{ setupFor: SetupFor | null; operatorName: string | null }> {
-    const setup = await readSetupState(this.deps.pool);
+  /** Who Setup was for and the operator's name, as Setup recorded them (absent operator means 'self'). */
+  async setupContext(): Promise<{ setupFor: SetupFor; operatorName: string | null }> {
+    const setup = await readSetupState(this.deps.pool, this.deps.logger);
     return { setupFor: setup.setupFor, operatorName: setup.operatorName?.trim() || null };
   }
 
@@ -408,7 +411,7 @@ export class OnboardingService {
       undo: null,
     });
 
-    const setup = await readSetupState(pool);
+    const setup = await readSetupState(pool, logger);
     if (setup.phase !== 'complete') return refuse('setup_incomplete');
     if (!this.deps.persistentStore) {
       logger.warn('onboarding: the knowledge graph is off — the run state would not survive a restart, refusing Start');
@@ -416,7 +419,9 @@ export class OnboardingService {
     }
     if (await findOpenOnboardingTask(taskRepo)) return refuse('already_started');
 
-    const signals = await this.workingPrincipalSignals(setup.completedAt);
+    const signals = await this.workingPrincipalSignals(
+      setup.completedOnPage ? setup.completedAt : null,
+    );
     if (signals.length > 0 && !opts.confirmWorkingPrincipal) return refuse('confirm_working_principal', signals);
 
     // A principal asking in conversation is already reachable: Curia does not reach out.
@@ -426,7 +431,8 @@ export class OnboardingService {
       reach = await this.resolveReach(setup.messagingRoute);
       if (!reach) return refuse('route_unreachable');
     }
-    // A pre-Setup install (migration 130) has no messaging route; a principal start records none.
+    // A pre-Setup install (marked complete by migration 132) has no messaging route; a principal
+    // start records none.
     const route = reach?.route ?? setup.messagingRoute;
     // On Signal, SMS and Slack the parent wakes to send the greeting; the app route waits for redemption.
     const greetOnWake = reach !== null && reach.route !== 'app';

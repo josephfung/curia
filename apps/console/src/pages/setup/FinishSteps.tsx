@@ -189,7 +189,7 @@ export function StartFailure(props: {
 export function OnboardingStarted(props: {
   flow: Extract<StartFlow, { kind: 'started' }>;
   route: MessagingRoute | null;
-  setupFor: SetupFor | null;
+  setupFor: SetupFor;
   principal: string;
   continueLabel: string;
   onContinue: () => void;
@@ -271,7 +271,7 @@ export function OnboardingStarted(props: {
 export function StartStep(props: {
   checklist: Checklist | null;
   principal: string;
-  setupFor: SetupFor | null;
+  setupFor: SetupFor;
   route: MessagingRoute | null;
   onRefresh: () => Promise<void>;
   onHelp?: () => void;

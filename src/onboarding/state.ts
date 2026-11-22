@@ -4,12 +4,12 @@ import type { Pool } from 'pg';
 import type { ConfigStore } from '../memory/config-store.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import type { TaskRow } from '../db/queries/tasks.js';
-import type { MessagingRoute } from '../setup/setup-state.js';
+import type { MessagingRoute } from '../settings/registry.js';
 import type { Logger } from '../logger.js';
 import type { OperatorEvent } from './notify-operator.js';
 import { OPERATOR_EVENTS } from './notify-operator.js';
 import { ONBOARDING_CREATED_BY } from './constants.js';
-import { MESSAGING_ROUTES } from '../setup/setup-state.js';
+import { MESSAGING_ROUTES } from '../settings/registry.js';
 
 export const ONBOARDING_NAMESPACE = 'onboarding';
 export const ONBOARDING_STATE_KEY = 'state';

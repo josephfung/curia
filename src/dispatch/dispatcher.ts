@@ -1400,9 +1400,9 @@ export class Dispatcher {
 
     // During Setup (#2358) web chat is the operator asking the setup guide for help, not the
     // principal: it skips the coordinator and everything built for a principal turn below.
-    // Decided by the chat route when it accepted the message (one snapshot of the thread and
-    // the Setup phase), never re-read here: a message accepted just before Start onboarding
-    // must not reach the coordinator, whose turns feed extraction.
+    // Decided by the chat route when it accepted the message, from the thread and the Setup
+    // phase, and stamped on the inbound; never re-read here. A message accepted just before
+    // Start onboarding must not reach the coordinator, whose turns feed extraction.
     const setupGuide = payload.channelId === 'web' && payload.metadata?.[SETUP_GUIDE_METADATA_KEY] === true;
     // Every setup guide turn carries a step, NO_SETUP_STEP when the client named none: the
     // runtime's "[Setup page: ...]" line is how the agent knows it is talking to the operator.

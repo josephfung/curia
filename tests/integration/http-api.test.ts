@@ -89,6 +89,11 @@ describe('HTTP API integration', () => {
           if (sql.includes('web_thread')) {
             return { rows: [{ conversation_id: 'test-conv-1' }], rowCount: 1 };
           }
+          // A finished Setup, so web chat reaches the coordinator rather than the setup
+          // guide (#2709): the phase is derived from setup.completed_at.
+          if (sql.includes('FROM settings')) {
+            return { rows: [{ key: 'setup.completed_at', value: '2026-01-01T00:00:00.000Z' }], rowCount: 1 };
+          }
           return { rows: [], rowCount: 0 };
         }),
       } as unknown as Pool,

@@ -21,7 +21,7 @@ export function OnboardingAlert(): JSX.Element | null {
         <OnboardingStarted
           flow={flow}
           route={data?.route ?? null}
-          setupFor={data?.setupFor ?? null}
+          setupFor={data?.setupFor ?? 'self'}
           principal={principal}
           continueLabel="Done"
           onContinue={() => setDismissed(true)}

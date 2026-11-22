@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evaluateChecklist, parseCatalog, type CatalogTask, type SetupCheckDeps } from '../../../src/setup/checklist.js';
-import { EMPTY_SETUP_STATE, type SetupState } from '../../../src/setup/setup-state.js';
+import { EMPTY_SETUP_STATE, type SetupState } from '../../../src/setup/setup-settings.js';
 import { createSilentLogger } from '../../../src/logger.js';
 
 const CATALOG_PATH = join(import.meta.dirname, '../../../skills/setup/tools/setup-status/catalog.yaml');
@@ -97,7 +97,7 @@ describe('evaluateChecklist', () => {
   });
 
   const missingCases: Array<[string, Partial<SetupCheckDeps>, Partial<SetupState>]> = [
-    ['who', {}, { setupFor: null }],
+    ['who', { principal: async () => null }, {}],
     ['curia_name', { identityConfigured: async () => false }, {}],
     ['email', { emailChannelStatus: async () => 'not_configured' }, {}],
     ['messaging', {}, { messagingRoute: null }],
@@ -113,12 +113,7 @@ describe('evaluateChecklist', () => {
   });
 
   describe('who it is for', () => {
-    it('needs the operator details when Setup is for someone else', async () => {
-      const result = await evaluateChecklist(catalog, deps({}, { operatorEmail: null }));
-      expect(task(result, 'who').detail).toMatch(/operator/);
-    });
-
-    it('needs no operator details when Setup is for the operator themselves', async () => {
+    it('does not check the operator: the registry guarantees a present one has both fields', async () => {
       const result = await evaluateChecklist(catalog, deps({}, { setupFor: 'self', operatorName: null, operatorEmail: null }));
       expect(task(result, 'who').status).toBe('done');
     });
@@ -308,10 +303,11 @@ describe('evaluateChecklist', () => {
 
   it('gives every pending task a detail, including the optional extras on a new install', async () => {
     const result = await evaluateChecklist(catalog, deps({
+      principal: async () => null,
       identityConfigured: async () => false,
       emailChannelStatus: async () => 'not_configured',
       googleWorkspaceSignIn: async () => ({ state: 'not_configured', missing: ['Curia’s Google address'] }),
-    }, { setupFor: null, messagingRoute: null, voiceRoute: null }));
+    }, { messagingRoute: null, voiceRoute: null }));
     const pending = result.tasks.filter((t) => t.status === 'pending');
     expect(pending.map((t) => t.id)).toEqual(expect.arrayContaining(['principal_mailboxes', 'web_browser', 'google_workspace', 'who']));
     for (const t of pending) expect(t.detail, t.id).toBeTruthy();

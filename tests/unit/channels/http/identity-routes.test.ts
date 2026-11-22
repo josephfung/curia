@@ -34,13 +34,14 @@ describe('GET /api/identity — inSetup', () => {
   const sessions = new Map<string, { id: string; expiresAt: number; renewedAt: number }>();
 
   it.each([
-    ['a new install that has saved nothing', [], true],
-    ['Setup in progress', [{ phase: 'in_progress' }], true],
-    ['Setup complete, or an install that predates the Setup page (migration 130)', [{ phase: 'complete' }], false],
-  ])('%s', async (_name, setupRows, inSetup) => {
+    ['a new install that has saved nothing, which is still in Setup', [], true],
+    ['Setup complete, or an install that predates the Setup page (migration 132)', [
+      { key: 'setup.completed_at', value: '2026-01-01T00:00:00.000Z' },
+    ], false],
+  ])('%s', async (_name, settingsRows, inSetup) => {
     const pool = {
-      query: vi.fn(async (sql: string) => (sql.includes('FROM setup_state')
-        ? { rows: setupRows }
+      query: vi.fn(async (sql: string) => (sql.includes('FROM settings')
+        ? { rows: settingsRows }
         : { rows: [{ configured: true }] })),
     } as unknown as Pool;
     const app = Fastify();

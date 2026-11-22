@@ -17,7 +17,7 @@ vi.mock('@tanstack/react-router', () => ({
 
 const { StartStep } = await import('./FinishSteps.js');
 
-const READY: Checklist = { setupFor: null, tasks: [], setupComplete: true, missing: [] };
+const READY: Checklist = { setupFor: 'self', tasks: [], setupComplete: true, missing: [] };
 
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;

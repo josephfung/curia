@@ -106,11 +106,11 @@ it. Design and mockup:
   step directly; without it the page opens on the first required step that isn't done.
 - The first-load gate is `setupRedirect` (`pages/setup/setup-steps.ts`), fed by
   `GET /api/identity`'s `inSetup` (true from a new install's first load until Setup is
-  finished; migration 130 marked older installs complete). While Setup runs, every page
-  but the Setup page and the Settings pages its steps link to (`/settings`, `/system`,
-  `/channels`, `/tools`, `/agents`, `/mcp-skills`, `/secrets`, `/contacts`) redirects to
-  `/setup`; outside Setup, `/setup` redirects home. A server that predates `inSetup` falls
-  back to the older `configured` flag.
+  finished; migration 132, which replaced `setup_state`, marks older installs complete).
+  While Setup runs, every page but the Setup page and the Settings pages its steps link to
+  (`/settings`, `/system`, `/channels`, `/tools`, `/agents`, `/mcp-skills`, `/secrets`,
+  `/contacts`) redirects to `/setup`; outside Setup, `/setup` redirects home. A server that
+  predates `inSetup` falls back to the older `configured` flag.
 
 ### Steps
 
@@ -206,13 +206,13 @@ The setup agent as a help panel; it never drives Setup.
   setup agent reads it as a `[Setup page: ...]` line. `ChatComposer` takes a `draft`.
 - **Step markers.** When the open step changes, a "Now on: <step>" line appears in the
   thread. They live in the panel only, not in the saved history.
-- **Setup starts when the page opens.** `POST /api/setup/start` creates the Setup row as
-  in progress, so web chat reaches the setup guide from the first message, before anything
-  is saved. It does so only on a database with nothing set up (no principal, no saved office
-  identity: migration 130's test), and never reopens a finished Setup. A database whose
-  principal a script created has no row, and its web chat stays with the coordinator even
-  when the console is opened on it. If the call fails, the panel says its messages may
-  reach Curia's usual chat.
+- **Setup starts when the page opens.** `POST /api/setup/start` writes nothing: the phase
+  is derived from `settings`' `setup.completed_at` marker (ADR-067), so an install without
+  one is in Setup and web chat reaches the setup guide from the first message. It never
+  reopens a finished Setup. A database with no Setup settings at all (a scripted install)
+  also reads as in progress, which matches the console already showing it the Setup page;
+  its web chat reaches the setup guide once the console is opened on it. If the call fails,
+  the panel says its messages may reach Curia's usual chat.
 
 ### Out of scope
 
@@ -272,10 +272,12 @@ optional extras. `src/setup/checklist.ts` runs each task's check, and both the c
 `setup_complete`: true when every required step is done, which unlocks the last step
 (Start onboarding or Not right now; both `POST /api/setup/complete`). Only optional
 extras can be deferred. Who
-Setup is for, the operator's details, the chosen messaging and voice routes and the
-Setup phase are kept in the `setup_state` table (migration 130), not the knowledge
-graph. The agent can show the full menu on request and can resume deferred extras in
-any subsequent session.
+Setup is for, the operator's details, and the chosen messaging and voice routes are kept in
+the `settings` table through the typed registry in `src/settings/` (migration 132,
+[ADR-067](../adr/067-typed-key-value-settings-store.md)), not the knowledge graph. There is
+no stored phase or `setup_for`: an `operator` value means "someone else" and an absent one
+means "myself", and the phase is `in_progress` until `setup.completed_at` is set. The agent
+can show the full menu on request and can resume deferred extras in any subsequent session.
 
 A task can carry an `optional_upgrade`: a credential that improves something that
 already works. Web research is the one example (#2445). It reports done with no key,
@@ -291,17 +293,21 @@ troubleshoots from `setup-status`, and never records anything about the principa
 instant wins above (persona, debrief, pronouns, the tour) moved to onboarding
 ([Layer 4](#layer-4--onboarding-2360)).
 
-- **On the Setup page.** While the `setup_state` phase is `in_progress` (from the Setup
-  page's first save until Setup is finished), `web` chat goes to the setup guide instead of
-  the coordinator, with none of the principal-turn extras (turn guidance, backlog, live
-  lanes). The chat route decides when it accepts the message, from one snapshot of the
-  shared thread and the phase (`readWebThreadAndSetupPhase`), and stamps the inbound; the
-  dispatcher routes on that stamp, read only on `web`. A message accepted just before Setup
-  is finished therefore stays on the Setup thread with the setup guide. `POST /api/chat/messages` takes an optional `setupStep` (the open
-  step's catalog id, or `apply` / `start`); the runtime heads the turn with a
-  "[Setup page: ...]" line naming it (`none` when the client sent none), so the agent knows
-  it is talking to the operator. A database with no `setup_state` row (a scripted install)
-  keeps web chat with the coordinator.
+- **On the Setup page.** While Setup is in progress (`settings`' `setup.completed_at`
+  absent: from a new install until Setup is finished), `web` chat goes to the setup guide
+  instead of the coordinator, with none of the principal-turn extras (turn guidance,
+  backlog, live lanes). The chat route decides when it accepts the message from the shared
+  thread and the phase (`readWebThreadAndSetupPhase`, two reads; the settings store validates
+  the phase value) and stamps the inbound; the dispatcher routes on that stamp, read only on
+  `web`. The two reads can produce (Setup thread, complete) when Setup finishes in between:
+  that message goes to the coordinator on the Setup thread, the same outcome as a message sent
+  after "Not right now", which keeps the Setup chat by design. A message whose phase read still
+  sees Setup in progress is stamped for the setup guide and stays on the Setup thread with it.
+  `POST /api/chat/messages` takes an optional `setupStep` (the open step's catalog id, or
+  `apply` / `start`); the runtime heads the turn with a "[Setup page: ...]" line naming it
+  (`none` when the client sent none), so the agent knows it is talking to the operator. A
+  database with no settings at all (a scripted install) reads as in progress, so its web
+  chat reaches the setup guide once the console is opened on it.
 - **Kept out of the principal's memory.** The dispatcher schedules no conversation
   checkpoint for a setup guide turn on `web`, so fact and relationship extraction never
   read the Setup chat. Finishing Setup (`POST /api/setup/complete`, `completeSetup`) only

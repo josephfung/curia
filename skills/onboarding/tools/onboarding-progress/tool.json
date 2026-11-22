@@ -18,7 +18,7 @@
     "sessions": "array? (status: [{ id, title, opened, open: [{ topicId, title, body, needsMailbox }], done: [{ topicId, title }] }])",
     "mailboxConnected": "boolean? (status)",
     "greetingSent": "boolean? (status)",
-    "setupFor": "string? (status: self when the principal set Curia up, other when an operator did; null on installs that predate Setup)",
+    "setupFor": "string? (status: self when the principal set Curia up, other when an operator did; absent operator means self)",
     "operatorName": "string? (status: the operator's name from Setup, or null)",
     "topics": "array? (open_session: the session's topics with their status)",
     "createdSubtasks": "number? (open_session: how many topics were added now)",
