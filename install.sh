@@ -265,7 +265,8 @@ source "$SCRIPT_DIR/scripts/setup-common.sh"
 # helpers existed) cannot run this installer. Plain printf: the error/hint
 # helpers just sourced may be that release's.
 for _helper in compose_var env_value env_decode_value set_env_var ensure_livekit_env livekit_seed_keys \
-    livekit_command_for livekit_host_port rendered_livekit_http_port require_livekit_host_port print_next_steps \
+    livekit_command_for livekit_host_port rendered_livekit rendered_livekit_seed_keys rendered_livekit_http_port \
+    require_livekit_host_port note_livekit_signaling_unpublished print_next_steps \
     note_livekit_values_kept; do
   if [[ "$(type -t "$_helper")" != function ]]; then
     if [[ -n "$SETUP_COMMON_KEPT_REASON" ]]; then
@@ -595,30 +596,6 @@ livekit_next_steps_state() {
   if livekit_command_is_dev "$cmd"; then printf dev; else printf on; fi
 }
 
-# Ask Compose what it will run for livekit, with the current .env, shell and
-# profiles. Sets RENDERED_LIVEKIT_ACTIVE (1 when `config --services` lists
-# livekit, i.e. `up -d` starts it, profiled or not; else 0) and
-# RENDERED_LIVEKIT_COMMAND (the rendered command: list, items joined with
-# spaces; empty when the service has none). Returns 1, both empty, when Compose
-# can't render the config. Never prints the command: it may carry --keys.
-rendered_livekit() {
-  local services out
-  RENDERED_LIVEKIT_ACTIVE=""; RENDERED_LIVEKIT_COMMAND=""
-  services="$(docker compose --project-directory "$INSTALL_DIR" config --services 2>/dev/null)" || return 1
-  if ! grep -qx livekit <<< "$services"; then RENDERED_LIVEKIT_ACTIVE=0; return 0; fi
-  out="$(docker compose --project-directory "$INSTALL_DIR" config livekit 2>/dev/null)" || return 1
-  RENDERED_LIVEKIT_ACTIVE=1
-  RENDERED_LIVEKIT_COMMAND="$(awk '
-    /^[^ ]/ { in_lk = 0; in_cmd = 0; next }
-    /^  [^ ]/ { in_lk = ($0 ~ /^  livekit:/); in_cmd = 0; next }
-    in_lk && /^    [^ ]/ { in_cmd = ($0 ~ /^    command:/); next }
-    in_cmd && /^      - / {
-      v = substr($0, 9)
-      if (v ~ /^".*"$/ || v ~ /^\047.*\047$/) v = substr(v, 2, length(v) - 2)
-      printf "%s%s", sep, v; sep = " "
-    }' <<< "$out")"
-}
-
 # Returns 0 when `docker compose up -d` will start livekit (rendered_livekit).
 # When Compose can't render the config, falls back to the voice profile (shell,
 # then .env); require_livekit_real_keys then says the check read .env.
@@ -919,10 +896,13 @@ record_topology_var() {
   printf '%s%s=%s\n' "$TOPOLOGY_MARK" "$2" "$3" >> "$1"
 }
 
-# Set KEY=VALUE in env file $1 and record it as this topology's.
+# Set KEY=VALUE in env file $1 and record it as this topology's. The record
+# goes first: a run stopped between the two steps then leaves a record without
+# the value, which reset_topology_vars skips (the value doesn't match), never a
+# value without its record, which a retry with another topology would keep.
 set_topology_var() {
-  set_env_var "$1" "$2" "$3"
   record_topology_var "$1" "$2" "$3"
+  set_env_var "$1" "$2" "$3"
 }
 
 # Like set_topology_var, but only when KEY is not assigned at all: an
@@ -950,7 +930,7 @@ set_topology_default() {
 #     respected (set_topology_default), as on the upgrade path.
 #   - APP_ORIGIN reaches Curia through env_file only; the shell can't override it.
 check_shell_reach_values() {
-  local topology="$1"
+  local topology="$1" env="$2"
   if [[ -n "${COMPOSE_FILE+set}" ]]; then
     if [[ "$topology" == domain ]] && ! uses_tls_overlay "$COMPOSE_FILE"; then
       echo "" >&2
@@ -959,15 +939,38 @@ check_shell_reach_values() {
       hint "or unset COMPOSE_FILE in your shell, then re-run install.sh. Postgres was not started."
       exit 1
     fi
-    if [[ "$topology" != domain ]] && uses_tls_overlay "$COMPOSE_FILE"; then
-      echo "" >&2
-      error "COMPOSE_FILE is exported in your shell with docker-compose.tls.yml, which starts Caddy on ports 80 and 443, but you chose a topology without it."
-      hint "Remove docker-compose.tls.yml from the exported COMPOSE_FILE, or unset COMPOSE_FILE in your shell,"
-      hint "then re-run install.sh (or choose option 1 for HTTPS). Postgres was not started."
-      exit 1
-    fi
+  fi
+  # Caddy on a topology without HTTPS: the TLS overlay in the COMPOSE_FILE Compose
+  # uses, from the shell or from .env (an operator's value a retry kept).
+  local cf
+  cf="$(compose_var "$env" COMPOSE_FILE)"
+  if [[ "$topology" != domain ]] && uses_tls_overlay "$cf"; then
+    local where=".env"
+    [[ -z "${COMPOSE_FILE+set}" ]] || where="your shell (exported)"
+    echo "" >&2
+    error "COMPOSE_FILE in $where includes docker-compose.tls.yml, which starts Caddy on ports 80 and 443, but you chose a topology without it."
+    hint "Remove docker-compose.tls.yml from COMPOSE_FILE there (or unset an exported one),"
+    hint "then re-run install.sh (or choose option 1 for HTTPS). Postgres was not started."
+    exit 1
   fi
   return 0
+}
+
+# A retry that leaves the HTTPS topology (the earlier, interrupted run recorded
+# domain): that run may have started Caddy, and `up -d` without the overlay
+# would leave it running as an orphan on 80/443. Remove only this project's
+# caddy service container (rm -sf names the service; volumes and other
+# containers are untouched). The overlay is named explicitly, since .env no
+# longer lists it.
+retire_previous_caddy() {
+  local overlay="$INSTALL_DIR/docker-compose.tls.yml"
+  [[ -f "$overlay" ]] || return 0
+  if ! docker compose --project-directory "$INSTALL_DIR" -f "$INSTALL_DIR/docker-compose.yml" -f "$overlay" \
+      rm -sf caddy >/dev/null 2>&1; then
+    echo "" >&2
+    warn "Could not remove the Caddy container an earlier HTTPS run started; it may still hold ports 80 and 443."
+    hint "Remove it: docker compose --project-directory \"$INSTALL_DIR\" -f docker-compose.yml -f docker-compose.tls.yml rm -sf caddy"
+  fi
 }
 
 # Domain topology: COMPOSE_FILE must include the TLS overlay. Empty: the
@@ -983,8 +986,9 @@ ensure_tls_compose_file() {
   fi
   uses_tls_overlay "$cur" && return 0
   want="${cur}${sep}docker-compose.tls.yml"
-  set_env_var "$env" COMPOSE_FILE "$want"
+  # Recorded before it is written, as in set_topology_var.
   record_topology_var "$env" TLS_APPENDED "$want"
+  set_env_var "$env" COMPOSE_FILE "$want"
 }
 
 # Fresh install, once the topology is chosen and before its values are written:
@@ -1223,6 +1227,16 @@ livekit_browser_url() {
   esac
 }
 
+# Curia's host port as docker-compose.yml publishes it ("${HTTP_PORT:-3000}:3000"):
+# HTTP_PORT (shell, then .env $1) when it is a number, else 3000. Only shapes
+# the closing address and a proxy's forwarding rule.
+curia_host_port() {
+  local p
+  p="$(compose_var "$1" HTTP_PORT)"
+  [[ "$p" =~ ^[0-9]+$ ]] || p=3000
+  printf '%s' "$p"
+}
+
 # Base URL people open Curia on, for the closing message (no trailing slash).
 #   setup_base_url <topology> <domain_or_origin>
 # domain -> https://<domain>; proxy -> its public origin; otherwise, or when
@@ -1362,6 +1376,7 @@ fresh_install() {
   if [[ -n "$prior_topology" && "$prior_topology" != "$TOPOLOGY" ]]; then
     echo "" >&2
     warn "An earlier, interrupted run chose another way to reach Curia; its settings were replaced by this choice."
+    [[ "$prior_topology" != domain ]] || retire_previous_caddy
   fi
   record_topology_var "$env" TOPOLOGY "$TOPOLOGY"
   case "$TOPOLOGY" in
@@ -1383,9 +1398,12 @@ fresh_install() {
       set_topology_default "$env" HTTP_BIND 127.0.0.1
       # Public origin for console links, Secure cookies and CORS. Recorded only
       # when this run filled it: a value already there is the operator's.
+      # Recorded before ensure_https_app_origin writes it, as in set_topology_var;
+      # when that writes nothing (a domain it can't turn into an origin), the
+      # record matches no value and a retry skips it.
       if [[ -z "$(env_value "$env" APP_ORIGIN)" ]]; then
+        record_topology_var "$env" APP_ORIGIN "https://$dom"
         ensure_https_app_origin "$env"
-        [[ -z "$(env_value "$env" APP_ORIGIN)" ]] || record_topology_var "$env" APP_ORIGIN "$(env_value "$env" APP_ORIGIN)"
       fi
       # Kept as a shell variable for the LiveKit URL and the closing address below.
       DOMAIN="$dom"
@@ -1418,7 +1436,7 @@ fresh_install() {
       ;;
   esac
 
-  check_shell_reach_values "$TOPOLOGY"
+  check_shell_reach_values "$TOPOLOGY" "$env"
 
   # Voice (#2357): turn the LiveKit profile on with generated keys. Installs
   # only this machine reaches (local, or a proxy kept on localhost) pin
@@ -1451,14 +1469,28 @@ fresh_install() {
     # The port Compose publishes signaling on, for the URL saved below; an
     # unknowable one stops here, before anything starts or is seeded.
     require_livekit_host_port "$env"
-    lk_url="$(livekit_browser_url "$TOPOLOGY" "$lk_value" "$LIVEKIT_HOST_PORT")"
-    lk_seed=(-e SEED_LIVEKIT_URL)
-    lk_pair="$(livekit_seed_keys "$(compose_var "$env" LIVEKIT_KEYS)" "$(effective_livekit_command "$env")")" || lk_rc=$?
+    # Compose publishes no host port for signaling: a browser on this machine
+    # can't reach it, so a localhost URL would be a guess. Save none, and say so.
+    # Domain installs reach LiveKit through Caddy on the compose network.
+    if [[ -n "$LIVEKIT_HOST_PORT" || "$lk_mode" != local ]]; then
+      lk_url="$(livekit_browser_url "$TOPOLOGY" "$lk_value" "$LIVEKIT_HOST_PORT")"
+      lk_seed=(-e SEED_LIVEKIT_URL)
+    fi
+    if [[ -z "$LIVEKIT_HOST_PORT" && "$TOPOLOGY" != domain ]]; then
+      if [[ "$lk_mode" == local ]]; then note_livekit_signaling_unpublished local; else note_livekit_signaling_unpublished proxy; fi
+    fi
+    # The keys the service Compose renders runs on (a compose override's own
+    # --keys or LIVEKIT_KEYS included); .env and the shell when it can't render.
+    if rendered_livekit && [[ "$RENDERED_LIVEKIT_ACTIVE" == 1 ]]; then
+      lk_pair="$(rendered_livekit_seed_keys)" || lk_rc=$?
+    else
+      lk_pair="$(livekit_seed_keys "$(compose_var "$env" LIVEKIT_KEYS)" "$(effective_livekit_command "$env")")" || lk_rc=$?
+    fi
     if [[ $lk_rc -eq 0 ]]; then
       lk_key="${lk_pair%% *}"; lk_secret="${lk_pair#* }"
       lk_seed+=(-e SEED_LIVEKIT_API_KEY -e SEED_LIVEKIT_API_SECRET)
     else
-      warn "Could not tell which keys LiveKit's LIVEKIT_COMMAND uses, so they were not saved for Curia."
+      warn "Could not tell which keys LiveKit's command uses, so they were not saved for Curia."
       hint "Enter the LiveKit API key and secret under Settings → Channels → Voice after setup."
     fi
   elif livekit_will_start "$env"; then
@@ -1547,9 +1579,17 @@ fresh_install() {
 
   # livekit_next_steps_state reads off when the voice profile is off and
   # livekit is not running, so an install the installer left voice off on says so.
+  HTTP_PORT="$(curia_host_port "$env")"
   print_summary "$boot_secret" "$(setup_base_url "$TOPOLOGY" "$lk_value")"
-  local lk_port="${LIVEKIT_HOST_PORT:-}"
-  [[ -n "$lk_port" ]] || lk_port="$(livekit_host_port "$env")" || lk_port=7880
+  # LIVEKIT_HOST_PORT is set (possibly empty: nothing published) when LiveKit
+  # was set up above; otherwise ask, with an unknown port read as 7880 (advice only).
+  local lk_port lk_port_rc=0
+  if [[ -n "${LIVEKIT_HOST_PORT+set}" ]]; then
+    lk_port="$LIVEKIT_HOST_PORT"
+  else
+    lk_port="$(livekit_host_port "$env")" || lk_port_rc=$?
+    case "$lk_port_rc" in 0) ;; 2) lk_port="" ;; *) lk_port=7880 ;; esac
+  fi
   print_next_steps "$TOPOLOGY" "$(livekit_next_steps_state "$env")" "$PROXY_ORIGIN" "$lk_port"
 }
 
@@ -1614,10 +1654,9 @@ existing_install() {
   note_missing_browser "$env"
   note_voice_off "$env"
 
-  # A custom HTTP_PORT from .env shapes the localhost address (setup_base_url).
-  if grep -qE '^HTTP_PORT=.+' "$env" 2>/dev/null; then
-    HTTP_PORT="$(grep -E '^HTTP_PORT=' "$env" | cut -d= -f2-)"
-  fi
+  # Curia's host port shapes the localhost address (setup_base_url) and a
+  # proxy's forwarding rule (print_next_steps).
+  HTTP_PORT="$(curia_host_port "$env")"
 
   # The topology this install looks like: the TLS overlay is the HTTPS
   # topology, an APP_ORIGIN without it is a user's own proxy, and anything
@@ -1634,8 +1673,10 @@ existing_install() {
   # rather than a fresh secret (which we don't have on the upgrade path).
   print_summary "" "$(setup_base_url "$topology" "$origin")"
   # Only advice here (nothing is seeded on upgrades): an unknowable port reads as 7880.
-  local lk_port
-  lk_port="$(livekit_host_port "$env")" || lk_port=7880
+  # Empty when Compose publishes no host port for signaling (rc 2).
+  local lk_port lk_port_rc=0
+  lk_port="$(livekit_host_port "$env")" || lk_port_rc=$?
+  case "$lk_port_rc" in 0) ;; 2) lk_port="" ;; *) lk_port=7880 ;; esac
   print_next_steps "$topology" "$(livekit_next_steps_state "$env")" "$origin" "$lk_port"
 }
 

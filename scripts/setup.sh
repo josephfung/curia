@@ -188,14 +188,24 @@ build_livekit_seed_env() {
     keys="$(compose_var "$env" LIVEKIT_KEYS)"
     cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
     [[ -n "$keys" || -n "$cmd" ]] || return 0
-    # Stops (before seeding) when the published port can't be known.
+    # Stops (before seeding) when the published port can't be known; saves no
+    # URL when Compose publishes none (a browser here couldn't reach it).
     require_livekit_host_port "$env"
-    LIVEKIT_SEED_ENV=("SEED_LIVEKIT_URL=ws://localhost:${LIVEKIT_HOST_PORT}")
-    pair="$(livekit_seed_keys "$keys" "$cmd")" || rc=$?
+    if [[ -n "$LIVEKIT_HOST_PORT" ]]; then
+        LIVEKIT_SEED_ENV=("SEED_LIVEKIT_URL=ws://localhost:${LIVEKIT_HOST_PORT}")
+    else
+        note_livekit_signaling_unpublished local
+    fi
+    # The keys the service Compose renders runs on; .env and the shell when it can't render.
+    if rendered_livekit && [[ "$RENDERED_LIVEKIT_ACTIVE" == 1 ]]; then
+        pair="$(rendered_livekit_seed_keys)" || rc=$?
+    else
+        pair="$(livekit_seed_keys "$keys" "$cmd")" || rc=$?
+    fi
     if [[ $rc -eq 0 ]]; then
         LIVEKIT_SEED_ENV+=("SEED_LIVEKIT_API_KEY=${pair%% *}" "SEED_LIVEKIT_API_SECRET=${pair#* }")
     else
-        warn "Could not tell which keys LiveKit's LIVEKIT_COMMAND uses, so they were not saved for Curia."
+        warn "Could not tell which keys LiveKit's command uses, so they were not saved for Curia."
         hint "Enter the LiveKit API key and secret under Settings → Channels → Voice after setup."
     fi
 }
@@ -218,13 +228,17 @@ run_seed_vault() {
 # Each value is decoded as Compose decodes .env (env_decode_value: quotes removed,
 # an inline comment dropped): Compose prefers the shell's value over the file's,
 # so exporting LIVEKIT_KEYS="k: s" with its quotes would hand LiveKit a quoted
-# string it can't parse.
+# string it can't parse. For the same reason a value Compose would interpolate
+# (a $ outside single quotes, e.g. ${VOICE_PORT:-17880}) is not exported at all:
+# the literal text would win over Compose's own resolution of the .env line.
 export_env_file() {
     local line name raw
     while IFS= read -r line || [[ -n "$line" ]]; do
         [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
         if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
             name="${BASH_REMATCH[1]}"; raw="${BASH_REMATCH[2]}"
+            # Single-quoted values are literal in Compose; anything else with a $ is not.
+            [[ "$raw" == \'* || "$raw" != *'$'* ]] || continue
             export "$name=$(env_decode_value "$raw")"
         fi
     done < "$1"

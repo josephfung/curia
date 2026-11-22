@@ -1171,7 +1171,8 @@ _ao_paths() {
     local path="$1" envf="$2"
     (
       unset COMPOSE_FILE APP_ORIGIN HTTP_BIND DOMAIN
-      docker() { return 0; }
+      # Compose cannot render here (the config subcommands fail); the rest succeeds.
+      docker() { case "$*" in (*" config"*) return 1 ;; esac; return 0; }
       wait_for_postgres() { :; }; wait_for_curia() { return 0; }
       check_postgres_exposure() { :; }; check_http_exposure() { :; }
       check_livekit_exposure() { :; }; note_livekit_signaling() { :; }
@@ -1392,11 +1393,18 @@ _assert_var "seed: LIVEKIT_KEYS still beats --dev" "$(livekit_seed_keys 'APIgen:
 _lk_env="$(mktemp)"
 _RLP_LONG='name: x\nservices:\n  livekit:\n    image: x\n    ports:\n      - mode: ingress\n        host_ip: 127.0.0.1\n        target: 7880\n        published: "17880"\n        protocol: tcp\n      - mode: ingress\n        target: 7881\n        published: "7881"\n        protocol: tcp\nnetworks:\n  default: {}\n'
 _RLP_SHORT='services:\n  livekit:\n    ports:\n      - "7881:7881"\n      - "127.0.0.1:18880:7880"\n'
-_rlp() { ( _rlp_out="$1"; docker() { [[ "$_rlp_out" != fail ]] || return 1; printf '%b' "$_rlp_out"; }; rendered_livekit_http_port || echo none ); }
+_rlp() { ( _rlp_out="$1"; docker() { [[ "$_rlp_out" != fail ]] || return 1; printf '%b' "$_rlp_out"; }; rendered_livekit_http_port || echo "none rc=$?" ); }
 _assert_var "rendered port: long form" "$(_rlp "$_RLP_LONG")" "17880"
 _assert_var "rendered port: short form" "$(_rlp "$_RLP_SHORT")" "18880"
-_assert_var "rendered port: none published" "$(_rlp 'services:\n  livekit:\n    image: x\n')" "none"
-_assert_var "rendered port: config fails" "$(_rlp fail)" "none"
+# Rendered with no host port for 7880 (e.g. ports: !reset []) is known-unpublished
+# (rc 2), not unknown (rc 1): nothing on this host listens for a browser.
+_assert_var "rendered port: none published -> rc 2" "$(_rlp 'services:\n  livekit:\n    image: x\n')" "none rc=2"
+_assert_var "rendered port: only 7881 published -> rc 2" "$(_rlp 'services:\n  livekit:\n    ports:\n      - mode: ingress\n        target: 7881\n        published: "7881"\n')" "none rc=2"
+_assert_var "rendered port: config fails -> rc 1" "$(_rlp fail)" "none rc=1"
+_assert_var "host port: rendered with none published -> rc 2, no guess" \
+    "$( (unset LIVEKIT_HTTP_PORT; docker() { printf 'services:\n  livekit:\n    image: x\n'; }; livekit_host_port "$_lk_env") || echo "rc=$?")" "rc=2"
+_assert_var "require host port: none published -> empty, continues" \
+    "$( (unset LIVEKIT_HTTP_PORT; docker() { printf 'services:\n  livekit:\n    image: x\n'; }; require_livekit_host_port "$_lk_env"; printf '[%s]' "$LIVEKIT_HOST_PORT") )" "[]"
 printf 'LIVEKIT_HTTP_PORT=${VOICE_PORT:-17880}\n' > "$_lk_env"
 _assert_var "host port: rendered wins over an unresolved reference" \
     "$( (unset LIVEKIT_HTTP_PORT; _o="$_RLP_LONG"; docker() { printf '%b' "$_o"; }; livekit_host_port "$_lk_env") )" "17880"
@@ -1509,6 +1517,8 @@ echo ""
 echo "=== print_next_steps ==="
 
 _has() { [[ "$1" == *"$2"* ]] && echo yes || echo no; }
+# print_next_steps reads Curia's port from HTTP_PORT, as print_summary does.
+unset HTTP_PORT
 _pns="$(print_next_steps domain on 2>&1)" || true
 _assert_var "domain: setup step"       "$(_has "$_pns" 'Finish setting up Curia in your browser at the address above.')" yes
 _assert_var "domain: no second address" "$(_has "$_pns" '/setup')" no
@@ -1521,6 +1531,13 @@ _assert_var "proxy: forwarding line"   "$(_has "$_pns" 'Your proxy must forward 
 _assert_var "proxy: off-host proxy note" "$(_has "$_pns" 'LIVEKIT_HTTP_BIND')" yes
 _assert_var "proxy: names the voice docs" "$(_has "$_pns" 'docs/dev/voice-setup.md')" yes
 _assert_var "proxy: RTC ports"         "$(_has "$_pns" '7881/tcp, 7882/udp')" yes
+_pns="$( (HTTP_PORT=3100; print_next_steps proxy on https://p.example.com 2>&1) )" || true
+_assert_var "proxy: forwards / to HTTP_PORT" "$(_has "$_pns" 'forward / to port 3100 and /rtc*')" yes
+_pns="$( (HTTP_PORT=3100; print_next_steps proxy off https://p.example.com 2>&1) )" || true
+_assert_var "proxy, voice off: forwards / to HTTP_PORT" "$(_has "$_pns" 'forward / to port 3100 on this host.')" yes
+_pns="$(print_next_steps proxy on https://p.example.com '' 2>&1)" || true
+_assert_var "proxy, signaling unpublished: no 127.0.0.1 rule" "$(_has "$_pns" '/rtc* to 127.0.0.1')" no
+_assert_var "proxy, signaling unpublished: says to publish it" "$(_has "$_pns" 'once')" yes
 _pns="$(print_next_steps proxy on https://p.example.com 17880 2>&1)" || true
 _assert_var "proxy: forwarding line uses the published LiveKit port" "$(_has "$_pns" '/rtc* to 127.0.0.1:17880 on this host.')" yes
 _pns="$(print_next_steps local on 2>&1)" || true
@@ -1743,11 +1760,43 @@ _assert_var "rendered_livekit: quoted items unquoted" "$(_rl 'livekit\n' "${_RL_
 _assert_var "rendered_livekit: not an active service" "$(_rl 'curia\npostgres\n' '')" "0|"
 _assert_var "rendered_livekit: no command" "$(_rl 'livekit\n' 'services:\n  livekit:\n    image: x\nvolumes:\n  command:\n')" "1|"
 _assert_var "rendered_livekit: config livekit fails" "$(_rl 'livekit\n' fail)" "fail"
+# Credentials as LiveKit receives them: --keys keeps its own argument whole.
+_rlk() {   # $1 rendered livekit; echoes keysflag|keyfile|envkeys|seed
+    ( _rl_r="$1"
+      docker() { case "$*" in (*"config --services") printf 'livekit\n' ;; (*"config livekit") printf '%b' "$_rl_r" ;; esac; }
+      rendered_livekit
+      printf '%s|%s|%s|%s' "$RENDERED_LIVEKIT_KEYS_FLAG" "$RENDERED_LIVEKIT_KEY_FILE" "$RENDERED_LIVEKIT_ENV_KEYS" "$(rendered_livekit_seed_keys || echo unknown)" )
+}
+_assert_var "rendered keys: --keys argument kept whole" \
+    "$(_rlk "${_RL_HEAD}      - --config\n      - /etc/livekit.yaml\n      - --keys\n      - 'APIo: osecret'\n    environment:\n      LIVEKIT_KEYS: 'APIgen: gensecret'\n")" \
+    "APIo: osecret||APIgen: gensecret|APIo osecret"
+_assert_var "rendered keys: --keys= form" "$(_rlk "${_RL_HEAD}      - '--keys=APIe: esecret'\n")" "APIe: esecret|||APIe esecret"
+_assert_var "rendered keys: stock service seeds its environment LIVEKIT_KEYS" \
+    "$(_rlk "${_RL_HEAD}      - --config\n      - /etc/livekit.yaml\n    environment:\n      LIVEKIT_KEYS: 'APIgen: gensecret'\n")" "||APIgen: gensecret|APIgen gensecret"
+_assert_var "rendered keys: --key-file is unknown" \
+    "$(_rlk "${_RL_HEAD}      - --key-file\n      - /k.yaml\n    environment:\n      LIVEKIT_KEYS: 'APIgen: gensecret'\n")" "|1|APIgen: gensecret|unknown"
+_assert_var "rendered keys: --dev with no LIVEKIT_KEYS -> devkey" "$(_rlk "${_RL_HEAD}      - --dev\n")" "|||devkey secret"
+_assert_var "rendered keys: no command -> unknown" "$(_rlk 'services:\n  livekit:\n    image: x\n')" "|||unknown"
 
 # --- install.sh: fresh_install starts LiveKit and seeds matching vault values ---
 
 echo ""
 echo "=== install.sh: fresh_install LiveKit seeding ==="
+
+# Topology values are recorded before they are written, so a run stopped in
+# between never leaves a value without its record.
+_rbw_env="$(mktemp)"
+( set_env_var() { exit 1; }; set_topology_var "$_rbw_env" COMPOSE_FILE "docker-compose.yml:docker-compose.tls.yml" ) || true
+_assert_var "set_topology_var: record written before the value" \
+    "$(grep -c '^# installer-topology: COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml$' "$_rbw_env" | tr -d ' '):$(grep -c '^COMPOSE_FILE=' "$_rbw_env" | tr -d ' ')" "1:0"
+printf 'COMPOSE_FILE=docker-compose.yml:custom.yml\n' > "$_rbw_env"
+( unset COMPOSE_FILE; set_env_var() { exit 1; }; ensure_tls_compose_file "$_rbw_env" ) || true
+_assert_var "ensure_tls_compose_file: append recorded before it is written" \
+    "$(grep -c '^# installer-topology: TLS_APPENDED=' "$_rbw_env" | tr -d ' '):$(env_value "$_rbw_env" COMPOSE_FILE)" "1:docker-compose.yml:custom.yml"
+# A record whose write never happened is skipped by the retry: the operator's value stays.
+( unset COMPOSE_FILE; reset_topology_vars "$_rbw_env" >/dev/null )
+_assert_var "reset: a record without its write leaves the value alone" "$(env_value "$_rbw_env" COMPOSE_FILE)" "docker-compose.yml:custom.yml"
+rm -f "$_rbw_env"
 
 _fi_dir="$(mktemp -d)"
 _fi_env="$_fi_dir/.env"
@@ -1792,7 +1841,10 @@ _fi_run() {
           [[ -n "${_FI_SERVICES+set}" ]] || return 1
           printf '%b' "$_FI_SERVICES"; return 0 ;;
         esac
-        case "$*" in (compose*" config livekit") printf '%b' "${_FI_LK_RENDER:-}"; return 0 ;; esac
+        case "$*" in (compose*" config livekit")
+          [[ -n "${_FI_LK_RENDER+set}" ]] || return 1
+          printf '%b' "$_FI_LK_RENDER"; return 0 ;;
+        esac
         case "$*" in (*seed-vault*)
           local n
           for n in SEED_LIVEKIT_URL SEED_LIVEKIT_API_KEY SEED_LIVEKIT_API_SECRET \
@@ -2183,6 +2235,59 @@ _assert_var "exported DOMAIN: Compose gets the domain entered" "$(< "$_fi_dir/do
 _fi_rc=0; _FI_SHELL_HTTP_BIND_EMPTY=1; _fi_run domain "c.example.com" '' || _fi_rc=$?; unset _FI_SHELL_HTTP_BIND_EMPTY
 _assert_var "exported HTTP_BIND, domain: continues, .env not written" "$_fi_rc:$(grep -c '^HTTP_BIND=' "$_fi_env" | tr -d ' ')" "0:0"
 
+# A retry that leaves the HTTPS topology removes the Caddy container the earlier,
+# interrupted run started (this project's caddy service only).
+: > "$_fi_dir/docker-compose.tls.yml"
+_fi_rerun domain "c.example.com" local ""
+_assert_var "retry domain -> local: removes this project's caddy" \
+    "$(grep -c "docker-compose.tls.yml rm -sf caddy$" "$_fi_calls" | tr -d ' ')" "1"
+_assert_var "retry domain -> local: before Postgres starts" \
+    "$(awk '/rm -sf caddy$/ { r = NR } /up -d postgres/ && !p { p = NR } END { print (r && p && r < p) ? "yes" : "no" }' "$_fi_calls")" "yes"
+_fi_rerun domain "c.example.com" domain "c.example.com"
+_assert_var "retry domain -> domain: Caddy left alone" "$(grep -c 'rm -sf caddy' "$_fi_calls" | tr -d ' ')" "0"
+_fi_rerun local "" proxy ""
+_assert_var "retry local -> proxy: no Caddy removal" "$(grep -c 'rm -sf caddy' "$_fi_calls" | tr -d ' ')" "0"
+_fi_run local "" '' || true
+_assert_var "fresh local: no Caddy removal" "$(grep -c 'rm -sf caddy' "$_fi_calls" | tr -d ' ')" "0"
+# An operator COMPOSE_FILE in .env that keeps the overlay on a non-HTTPS retry: stop.
+_fi_rerun domain "c.example.com" local "" 'COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml:custom.yml\n'
+_assert_var "retry domain -> local, .env COMPOSE_FILE still with the overlay: Postgres never started" \
+    "$(grep -c 'up -d postgres' "$_fi_calls" | tr -d ' ')" "0"
+_assert_var "retry domain -> local, .env COMPOSE_FILE still with the overlay: says where" "$(_has "$_fi_out" 'COMPOSE_FILE in .env includes docker-compose.tls.yml')" yes
+rm -f "$_fi_dir/docker-compose.tls.yml"
+
+# Seeded keys come from the rendered service: a compose override's own --keys wins.
+_FI_SERVICES='postgres\ncuria\nlivekit\n'
+_FI_LK_RENDER='name: x\nservices:\n  livekit:\n    command:\n      - --config\n      - /etc/livekit.local.yaml\n      - --keys\n      - '"'"'APIover: oversecret'"'"'\n    ports:\n      - mode: ingress\n        target: 7880\n        published: "7880"\n'
+_fi_run local "" '' || true
+_assert_var "rendered override --keys: its key seeded" "$(_seed_env SEED_LIVEKIT_API_KEY)" "APIover"
+_assert_var "rendered override --keys: its secret seeded" "$(_seed_env SEED_LIVEKIT_API_SECRET)" "oversecret"
+_assert_var "rendered override --keys: secret never printed" "$(_has "$_fi_out" oversecret)" no
+_FI_LK_RENDER='name: x\nservices:\n  livekit:\n    command:\n      - --key-file\n      - /k.yaml\n'
+_fi_run local "" '' || true
+_assert_var "rendered --key-file: no key seeded" "$(_has "$(_seed_line)" 'SEED_LIVEKIT_API_KEY')" no
+unset _FI_SERVICES
+# Compose renders livekit with no host port for signaling: no guessed URL.
+_FI_LK_RENDER='name: x\nservices:\n  livekit:\n    image: livekit/livekit-server\n'
+_fi_rc=0; _fi_run local "" '' || _fi_rc=$?
+_assert_var "unpublished signaling, local: continues" "$_fi_rc" "0"
+_assert_var "unpublished signaling, local: no URL seeded" "$(_has "$(_seed_line)" 'SEED_LIVEKIT_URL')" no
+_assert_var "unpublished signaling, local: keys still seeded" "$(_has "$(_seed_line)" 'SEED_LIVEKIT_API_KEY')" yes
+_assert_var "unpublished signaling, local: says voice needs it published" "$(_has "$_fi_out" 'Voice needs signaling published')" yes
+_fi_run domain "c.example.com" '' || true
+_assert_var "unpublished signaling, domain: wss URL still seeded (Caddy)" "$(_seed_env SEED_LIVEKIT_URL)" "wss://c.example.com"
+_assert_var "unpublished signaling, domain: no warning" "$(_has "$_fi_out" 'publishes no host port')" no
+_fi_run proxy "https://p.example.com" '' || true
+_assert_var "unpublished signaling, proxy: origin URL seeded" "$(_seed_env SEED_LIVEKIT_URL)" "wss://p.example.com"
+_assert_var "unpublished signaling, proxy: warns" "$(_has "$_fi_out" "can't forward /rtc* to LiveKit until 7880 is published")" yes
+_assert_var "unpublished signaling, proxy: no 127.0.0.1 rule" "$(_has "$_fi_out" '/rtc* to 127.0.0.1')" no
+unset _FI_LK_RENDER
+# Curia's published port (HTTP_PORT) shapes the proxy rule and the local address.
+_fi_run proxy "https://p.example.com" 'HTTP_PORT=3100\n' || true
+_assert_var "HTTP_PORT, proxy: forward / to 3100" "$(_has "$_fi_out" 'forward / to port 3100')" yes
+_fi_run local "" 'HTTP_PORT=3100\n' || true
+_assert_var "HTTP_PORT, local: summary on 3100" "$(_has "$_fi_out" 'http://localhost:3100/setup')" yes
+
 # One address at the end: the summary box's, the same base URL as next steps.
 _fi_run proxy "https://p.example.com" '' || true
 _assert_var "proxy: one /setup address"        "$(grep -c '/setup' <<< "$_fi_out" | tr -d ' ')" "1"
@@ -2234,7 +2339,8 @@ _sc_run() {
       unset CURIA_REF CURIA_VERSION
       # This harness already loaded the current helpers; start without them.
       unset -f compose_var env_value env_decode_value set_env_var ensure_livekit_env livekit_seed_keys \
-          livekit_command_for livekit_host_port rendered_livekit_http_port require_livekit_host_port print_next_steps \
+          livekit_command_for livekit_host_port rendered_livekit rendered_livekit_seed_keys rendered_livekit_http_port \
+          require_livekit_host_port note_livekit_signaling_unpublished print_next_steps \
           note_livekit_values_kept
       [[ "${_SC_VERSION-v0.46.0}" == - ]] || CURIA_VERSION="${_SC_VERSION-v0.46.0}"
       [[ -z "${_SC_REF:-}" ]] || CURIA_REF="$_SC_REF"
@@ -2388,7 +2494,8 @@ _ei_run() {
       unset COMPOSE_FILE APP_ORIGIN HTTP_BIND DOMAIN COMPOSE_PROFILES LIVEKIT_KEYS LIVEKIT_COMMAND HTTP_PORT \
           COMPOSE_PROJECT_NAME LIVEKIT_HTTP_PORT
       _ei_cmd="$2"; _ei_running="$3"
-      docker() { return 0; }
+      # Compose cannot render here (the config subcommands fail); the rest succeeds.
+      docker() { case "$*" in (*" config"*) return 1 ;; esac; return 0; }
       wait_for_postgres() { :; }; wait_for_curia() { return 0; }
       check_postgres_exposure() { :; }; check_http_exposure() { :; }
       check_livekit_exposure() { :; }; note_livekit_signaling() { :; }
@@ -2492,15 +2599,20 @@ echo ""
 echo "=== setup.sh: export_env_file ==="
 
 _xe_env="$(mktemp)"
-printf '%s\n' 'LIVEKIT_KEYS="APIabc: s3cr3t"' "SQ='a b'" 'PLAIN=v # note' 'EMPTY=' '# COMMENTED=x' 'URL=postgres://u:p@h:5432/db' > "$_xe_env"
+printf '%s\n' 'LIVEKIT_KEYS="APIabc: s3cr3t"' "SQ='a b'" 'PLAIN=v # note' 'EMPTY=' '# COMMENTED=x' 'URL=postgres://u:p@h:5432/db' \
+    'LIVEKIT_HTTP_PORT=${VOICE_PORT:-17880}' 'DQ="x$Y"' "LIT='a\$b'" > "$_xe_env"
 _xe_out="$(
-  unset LIVEKIT_KEYS SQ PLAIN EMPTY COMMENTED URL
+  unset LIVEKIT_KEYS SQ PLAIN EMPTY COMMENTED URL LIVEKIT_HTTP_PORT DQ LIT
   export_env_file "$_xe_env"
   printf '%s|%s|%s|%s|%s|%s' "$(printenv LIVEKIT_KEYS)" "$(printenv SQ)" "$(printenv PLAIN)" \
       "$(printenv EMPTY || echo unset)" "$(printenv COMMENTED || echo unset)" "$(printenv URL)"
+  printf '#%s|%s|%s' "$(printenv LIVEKIT_HTTP_PORT || echo unset)" "$(printenv DQ || echo unset)" "$(printenv LIT || echo unset)"
 )"
-_assert_var "export_env_file: quotes removed, plain values unchanged" "$_xe_out" \
+_assert_var "export_env_file: quotes removed, plain values unchanged" "${_xe_out%%#*}" \
     "APIabc: s3cr3t|a b|v||unset|postgres://u:p@h:5432/db"
+# Values Compose interpolates stay out of the shell, so Compose resolves the .env
+# line itself; single-quoted values are literal in Compose and are exported.
+_assert_var "export_env_file: \${...} and \$ values not exported, single-quoted kept" "${_xe_out#*#}" 'unset|unset|a$b'
 # setup.sh's seed URL follows the published LiveKit port too.
 printf 'LIVEKIT_KEYS="APIabc: s3cr3t"\nLIVEKIT_COMMAND=--config /etc/livekit.local.yaml --node-ip 127.0.0.1\nLIVEKIT_HTTP_PORT=17880\n' > "$_xe_env"
 printf 'LIVEKIT_KEYS="APIabc: s3cr3t"\nLIVEKIT_HTTP_PORT=${VOICE_PORT:-17880}\n' > "$_xe_env"
@@ -2513,6 +2625,14 @@ printf 'LIVEKIT_KEYS="APIabc: s3cr3t"\nLIVEKIT_COMMAND=--config /etc/livekit.loc
 _assert_var "build_livekit_seed_env: URL uses LIVEKIT_HTTP_PORT" \
     "$( unset LIVEKIT_KEYS LIVEKIT_COMMAND LIVEKIT_HTTP_PORT; build_livekit_seed_env "$_xe_env"; printf '%s' "${LIVEKIT_SEED_ENV[0]}" )" \
     "SEED_LIVEKIT_URL=ws://localhost:17880"
+# setup.sh seeds the keys the rendered service runs on, and no URL when
+# Compose publishes no host port for signaling.
+_xe_lk='name: x\nservices:\n  livekit:\n    command:\n      - --config\n      - /etc/livekit.local.yaml\n      - --keys\n      - '"'"'APIover: oversecret'"'"'\n'
+_assert_var "build_livekit_seed_env: rendered --keys seeded, no URL when unpublished" \
+    "$( (unset LIVEKIT_KEYS LIVEKIT_COMMAND LIVEKIT_HTTP_PORT; _o="$_xe_lk"
+         docker() { case "$*" in (*"config --services") printf 'livekit\n' ;; (*"config livekit") printf '%b' "$_o" ;; esac; }
+         build_livekit_seed_env "$_xe_env" 2>/dev/null; printf '%s ' "${LIVEKIT_SEED_ENV[@]}") )" \
+    "SEED_LIVEKIT_API_KEY=APIover SEED_LIVEKIT_API_SECRET=oversecret "
 rm -f "$_xe_env"
 
 # --- setup-common: note_livekit_values_kept ---

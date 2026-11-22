@@ -157,13 +157,78 @@ livekit_seed_keys() {
   return 1
 }
 
+# Ask Compose what it will run for livekit, with the current .env, shell and
+# profiles (run in $REPO_ROOT with COMPOSE_FLAGS, as the wait_* helpers do).
+# Returns 1, with everything empty, when Compose can't render the config. Sets:
+#   RENDERED_LIVEKIT_ACTIVE   1 when `config --services` lists livekit (`up -d`
+#                             starts it, profiled or not), else 0;
+#   RENDERED_LIVEKIT_COMMAND  the rendered command: list joined with spaces
+#                             (empty when the service has none);
+#   RENDERED_LIVEKIT_KEYS_FLAG  the argument after --keys (or of --keys=), kept
+#                             whole, as LiveKit receives it;
+#   RENDERED_LIVEKIT_KEY_FILE 1 when the command names --key-file;
+#   RENDERED_LIVEKIT_ENV_KEYS the rendered environment's LIVEKIT_KEYS.
+# Never prints any of them: they may carry the secret.
+rendered_livekit() {
+  local services out tag val
+  local -a _flags=("${COMPOSE_FLAGS[@]+"${COMPOSE_FLAGS[@]}"}")
+  RENDERED_LIVEKIT_ACTIVE=""; RENDERED_LIVEKIT_COMMAND=""; RENDERED_LIVEKIT_KEYS_FLAG=""
+  RENDERED_LIVEKIT_KEY_FILE=""; RENDERED_LIVEKIT_ENV_KEYS=""
+  services="$(docker compose --project-directory "$REPO_ROOT" ${_flags[@]+"${_flags[@]}"} config --services 2>/dev/null)" || return 1
+  if ! grep -qx livekit <<< "$services"; then RENDERED_LIVEKIT_ACTIVE=0; return 0; fi
+  out="$(docker compose --project-directory "$REPO_ROOT" ${_flags[@]+"${_flags[@]}"} config livekit 2>/dev/null)" || return 1
+  RENDERED_LIVEKIT_ACTIVE=1
+  # One "tag<TAB>value" line per finding; command items keep their boundaries.
+  while IFS=$'\t' read -r tag val; do
+    case "$tag" in
+      cmd) RENDERED_LIVEKIT_COMMAND="${RENDERED_LIVEKIT_COMMAND:+$RENDERED_LIVEKIT_COMMAND }$val" ;;
+      keys) RENDERED_LIVEKIT_KEYS_FLAG="$val" ;;
+      keyfile) RENDERED_LIVEKIT_KEY_FILE=1 ;;
+      env) RENDERED_LIVEKIT_ENV_KEYS="$val" ;;
+    esac
+  done < <(awk '
+    function unq(v) {
+      if (v ~ /^".*"$/) return substr(v, 2, length(v) - 2)
+      if (v ~ /^\047.*\047$/) { v = substr(v, 2, length(v) - 2); gsub(/\047\047/, "\047", v); return v }
+      return v
+    }
+    /^[^ ]/ { in_lk = 0; sect = ""; next }
+    /^  [^ ]/ { in_lk = ($0 ~ /^  livekit:/); sect = ""; next }
+    in_lk && /^    [^ ]/ { sect = $0; sub(/^    /, "", sect); sub(/:.*/, "", sect); next }
+    in_lk && sect == "command" && /^      - / {
+      v = unq(substr($0, 9)); print "cmd\t" v
+      if (want_keys) { print "keys\t" v; want_keys = 0 }
+      if (v == "--keys") want_keys = 1
+      else if (v ~ /^--keys=/) print "keys\t" unq(substr(v, 8))
+      if (v ~ /^--key-file/) print "keyfile\t1"
+      next
+    }
+    in_lk && sect == "environment" && /^      LIVEKIT_KEYS:/ {
+      v = $0; sub(/^      LIVEKIT_KEYS:[[:space:]]*/, "", v); print "env\t" unq(v); next
+    }' <<< "$out")
+  return 0
+}
+
+# Echo "<key> <secret>" for the keys the rendered livekit service runs on
+# (rendered_livekit must have succeeded with RENDERED_LIVEKIT_ACTIVE=1), or
+# return 1 when they can't be known. Same precedence as livekit_seed_keys:
+# --key-file, then --keys (read whole from its own argument), then LIVEKIT_KEYS
+# in the rendered environment, then --dev. A service with no command is unknown.
+rendered_livekit_seed_keys() {
+  [[ -z "$RENDERED_LIVEKIT_KEY_FILE" ]] || return 1
+  if [[ -n "$RENDERED_LIVEKIT_KEYS_FLAG" ]]; then livekit_seed_keys "$RENDERED_LIVEKIT_KEYS_FLAG" ""; return; fi
+  [[ -n "$RENDERED_LIVEKIT_COMMAND" ]] || return 1
+  livekit_seed_keys "$RENDERED_LIVEKIT_ENV_KEYS" "$RENDERED_LIVEKIT_COMMAND"
+}
+
 # Echo the host port Compose publishes LiveKit signaling (container port 7880)
 # on, read from the rendered service (`docker compose config livekit`, run in
 # $REPO_ROOT with COMPOSE_FLAGS, as the wait_* helpers do), so a value such as
 # LIVEKIT_HTTP_PORT=${VOICE_PORT:-17880} or a hand-edited ports: entry is
 # resolved by Compose itself. Handles the long form (target: 7880 with its
 # published: value) and the short "host:published:7880" form. Returns 1, with no
-# output, when Compose can't render the service or publishes no such port.
+# output, when Compose can't render the service, and 2 when it renders it with
+# no host port for 7880 (e.g. ports: !reset []): known unpublished, not unknown.
 rendered_livekit_http_port() {
   local out port
   local -a _flags=("${COMPOSE_FLAGS[@]+"${COMPOSE_FLAGS[@]}"}")
@@ -187,7 +252,7 @@ rendered_livekit_http_port() {
     }
     inp && /^        [a-z_]+:/ { kv(substr($0, 9)); next }
     END { flush_item() }' <<< "$out")"
-  [[ "$port" =~ ^[0-9]+$ ]] || return 1
+  [[ "$port" =~ ^[0-9]+$ ]] || return 2
   printf '%s' "$port"
 }
 
@@ -196,27 +261,49 @@ rendered_livekit_http_port() {
 # docker-compose.yml reads it ("${LIVEKIT_HTTP_PORT:-7880}:7880"): a literal
 # number, or 7880 when empty. Returns 1, with no output, when Compose can't
 # render and LIVEKIT_HTTP_PORT is something else (a ${...} reference): the port
-# is unknown, and callers must not guess. A browser on this machine reaches
-# ws://localhost:<port>.
+# is unknown, and callers must not guess. Returns 2 when Compose renders livekit
+# with no host port for signaling: nothing on this host listens for a browser.
+# A browser on this machine reaches ws://localhost:<port>.
 livekit_host_port() {
-  local p
-  if p="$(rendered_livekit_http_port)"; then printf '%s' "$p"; return 0; fi
+  local p rc=0
+  p="$(rendered_livekit_http_port)" || rc=$?
+  if [[ $rc -eq 0 ]]; then printf '%s' "$p"; return 0; fi
+  [[ $rc -ne 2 ]] || return 2
   p="$(compose_var "$1" LIVEKIT_HTTP_PORT)"
   [[ -n "$p" ]] || p=7880
   [[ "$p" =~ ^[0-9]+$ ]] || return 1
   printf '%s' "$p"
 }
 
-# Set LIVEKIT_HOST_PORT to livekit_host_port's answer for env file $1, or stop
-# when the port can't be known: saving a guessed LiveKit URL would leave calls
-# unable to connect, and seeding never replaces a saved value. Run before
+# Set LIVEKIT_HOST_PORT to livekit_host_port's answer for env file $1 (empty
+# when Compose publishes no host port: callers then save no localhost URL), or
+# stop when the port can't be known: saving a guessed LiveKit URL would leave
+# calls unable to connect, and seeding never replaces a saved value. Run before
 # anything starts or is seeded. Never prints keys.
 require_livekit_host_port() {
-  if LIVEKIT_HOST_PORT="$(livekit_host_port "$1")"; then return 0; fi
+  local rc=0
+  LIVEKIT_HOST_PORT="$(livekit_host_port "$1")" || rc=$?
+  [[ $rc -ne 0 ]] || return 0
+  if [[ $rc -eq 2 ]]; then LIVEKIT_HOST_PORT=""; return 0; fi
   echo "" >&2
   error "LIVEKIT_HTTP_PORT=$(compose_var "$1" LIVEKIT_HTTP_PORT) can't be resolved here (Compose could not render the config), so the installer can't tell which port LiveKit is published on."
   hint "Set a literal port in .env (e.g. LIVEKIT_HTTP_PORT=17880), then re-run. Nothing was saved for LiveKit."
   exit 1
+}
+
+# Compose publishes no host port for LiveKit signaling (7880), so a browser
+# can't reach it on this host. $1: local (no LiveKit URL is saved) or proxy (the
+# proxy has nothing on this host to forward /rtc* to).
+note_livekit_signaling_unpublished() {
+  echo "" >&2
+  warn "Compose publishes no host port for LiveKit signaling (7880), so a browser can't reach it on this host."
+  if [[ "$1" == local ]]; then
+    hint "Voice needs signaling published (the livekit ports: entry for 7880) or proxied. No LiveKit URL"
+    hint "was saved for Curia: once signaling is reachable, enter it under Settings → Channels → Voice."
+  else
+    hint "Your proxy can't forward /rtc* to LiveKit until 7880 is published on this host (the livekit"
+    hint "ports: entry); see docs/dev/voice-setup.md."
+  fi
 }
 
 # LIVEKIT_COMMAND for a local (loopback-only, node-ip pinned) or public install.
@@ -506,9 +593,11 @@ print_summary() {
 # so a proxy must not publish /rtc* yet; off = voice is not running. origin is a
 # proxy's public address: empty means a proxy kept on localhost for testing.
 # A 4th argument is the host port LiveKit signaling is published on
-# (livekit_host_port), 7880 by default.
+# (livekit_host_port), 7880 when omitted; empty means Compose publishes none.
+# Curia's own host port is HTTP_PORT (as print_summary reads it), 3000 by default.
 print_next_steps() {
-    local topology="$1" voice="${2:-off}" origin="${3-}" lk_port="${4:-7880}" reached=0
+    local topology="$1" voice="${2:-off}" origin="${3-}" lk_port="${4-7880}" reached=0
+    local curia_port="${HTTP_PORT:-3000}"
     echo "Finish setting up Curia in your browser at the address above."
     echo "Guide: https://docs.meetcuria.com/get-started/check-your-setup"
     echo "When every step is done, choose Start onboarding."
@@ -522,10 +611,15 @@ print_next_steps() {
     fi
     if [[ "$topology" == proxy && -n "$origin" ]]; then
         if [[ "$voice" == on ]]; then
-            echo "Your proxy must forward / to port 3000 and /rtc* to 127.0.0.1:${lk_port} on this host."
+            if [[ -n "$lk_port" ]]; then
+                echo "Your proxy must forward / to port ${curia_port} and /rtc* to 127.0.0.1:${lk_port} on this host."
+            else
+                echo "Your proxy must forward / to port ${curia_port} on this host, and /rtc* to LiveKit once"
+                echo "its signaling port (7880) is published here (see docs/dev/voice-setup.md)."
+            fi
             echo "A proxy on another machine also needs LIVEKIT_HTTP_BIND set (see docs/dev/voice-setup.md)."
         else
-            echo "Your proxy must forward / to port 3000 on this host."
+            echo "Your proxy must forward / to port ${curia_port} on this host."
         fi
         if [[ "$voice" == dev ]]; then
             echo "LiveKit runs --dev credentials (devkey/secret): Don't forward /rtc* to it, or set"
