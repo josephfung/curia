@@ -35,19 +35,31 @@ gen_secret_hex() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 # --- .env helpers (shared by install.sh and scripts/setup.sh) ---
 
 # Set KEY=VALUE in the .env file at path $1.
-#   - If the key already exists (commented or uncommented), replace that line.
+#   - If the key has uncommented assignments, the first becomes KEY=VALUE and the
+#     others are dropped: Compose reads the last one, so a later duplicate would
+#     otherwise win over the value written here. Commented lines are left alone.
+#   - Else, if a commented placeholder (# KEY=...) exists, the first one becomes KEY=VALUE.
 #   - If the key is absent, append it.
 # Uses awk for a portable in-place edit that avoids sed -i portability issues
-# between GNU and BSD sed.
+# between GNU and BSD sed. The value reaches awk through ENVIRON, not -v, which
+# would turn backslashes in it into escapes.
 set_env_var() {
   local env="$1" key="$2" val="$3"
   if grep -qE "^#?[[:space:]]*${key}=" "$env"; then
     local tmp
     tmp="$(mktemp)"
-    awk -v k="$key" -v v="$val" '
-      $0 ~ "^#?[[:space:]]*"k"=" && !done { print k"="v; done=1; next }
-      { print }
-      END { if (!done) print k"="v }' "$env" > "$tmp"
+    _SET_ENV_VAL="$val" awk -v k="$key" '
+      BEGIN { v = ENVIRON["_SET_ENV_VAL"]; live = "^[[:space:]]*" k "="; any = "^#?[[:space:]]*" k "=" }
+      { line[NR] = $0 }
+      $0 ~ live && !first_live { first_live = NR }
+      $0 ~ any && !first_any { first_any = NR }
+      END {
+        target = first_live ? first_live : first_any
+        for (i = 1; i <= NR; i++) {
+          if (i == target) print k "=" v
+          else if (!(first_live && line[i] ~ live)) print line[i]
+        }
+      }' "$env" > "$tmp"
     mv "$tmp" "$env"
   else
     printf '\n%s=%s\n' "$key" "$val" >> "$env"
@@ -64,8 +76,15 @@ set_env_var() {
 # under `set -euo pipefail`, where grep's no-match status would abort the
 # installer from inside `x="$(env_value ...)"`.
 env_value() {
-  local env="$1" key="$2" v rest q
-  v="$({ grep -E "^${key}=" "$env" 2>/dev/null || true; } | tail -n 1 | cut -d= -f2-)"
+  local env="$1" key="$2"
+  env_decode_value "$({ grep -E "^${key}=" "$env" 2>/dev/null || true; } | tail -n 1 | cut -d= -f2-)"
+}
+
+# Echo a raw .env value (the text after KEY=) decoded by env_value's rules above:
+# quotes removed, an inline comment dropped. scripts/setup.sh exports .env with
+# it, so the shell holds what Compose would read from the file.
+env_decode_value() {
+  local v="$1" rest q
   case "$v" in
     \"*|\'*)
       q="${v:0:1}"; rest="${v:1}"
@@ -98,22 +117,29 @@ gen_livekit_keys() {
 
 # Echo "<key> <secret>" for the keys LiveKit will run on, or return 1 with no
 # output when they cannot be known. $1 = LIVEKIT_KEYS value, $2 = LIVEKIT_COMMAND.
-# Order: LIVEKIT_KEYS ("k: s", quotes and spaces tolerated), then --keys in the
-# command, then --dev (or an empty command) -> devkey/secret.
+# LiveKit's own precedence (v1.13 config.ValidateKeys and the keys flag):
+#   - --key-file in the command: the file's keys replace every other source, and
+#     the installer can't read it -> unknown;
+#   - --keys "k: s" in the command: wins over LIVEKIT_KEYS, which is only that
+#     flag's environment default;
+#   - LIVEKIT_KEYS ("k: s", quotes and spaces tolerated);
+#   - --dev (or an empty command, the compose default) -> devkey/secret.
+# A --config file that names a key_file is invisible here too; the Setup Voice
+# check reports keys LiveKit rejects.
 livekit_seed_keys() {
-  local keys="$1" cmd="$2" k s
-  if [[ -z "$keys" ]]; then
-    case "$cmd" in
-      *--keys=*) keys="${cmd#*--keys=}" ;;
-      *--keys\ *) keys="${cmd#*--keys }" ;;
+  local keys="$1" cmd="$2" flag="" k s
+  case "$cmd" in *--key-file*) return 1 ;; esac
+  case "$cmd" in
+    *--keys=*) flag="${cmd#*--keys=}" ;;
+    *--keys\ *) flag="${cmd#*--keys }" ;;
+  esac
+  if [[ -n "$flag" ]]; then
+    case "$flag" in
+      \"*) flag="${flag#\"}"; flag="${flag%%\"*}" ;;
+      \'*) flag="${flag#\'}"; flag="${flag%%\'*}" ;;
+      *) flag="${flag%% *}" ;;
     esac
-    if [[ -n "$keys" ]]; then
-      case "$keys" in
-        \"*) keys="${keys#\"}"; keys="${keys%%\"*}" ;;
-        \'*) keys="${keys#\'}"; keys="${keys%%\'*}" ;;
-        *) keys="${keys%% *}" ;;
-      esac
-    fi
+    keys="$flag"
   fi
   if [[ -n "$keys" ]]; then
     keys="${keys#\"}"; keys="${keys%\"}"; keys="${keys#\'}"; keys="${keys%\'}"
@@ -129,6 +155,17 @@ livekit_seed_keys() {
     return 0
   fi
   return 1
+}
+
+# Host port LiveKit signaling is published on, as docker-compose.yml reads it
+# ("${LIVEKIT_HTTP_PORT:-7880}:7880"): LIVEKIT_HTTP_PORT (shell, then .env $1),
+# else 7880. A value the installer can't use as a port (a ${...} reference) is
+# read as the default. A browser on this machine reaches ws://localhost:<port>.
+livekit_host_port() {
+  local p
+  p="$(compose_var "$1" LIVEKIT_HTTP_PORT)"
+  [[ "$p" =~ ^[0-9]+$ ]] || p=7880
+  printf '%s' "$p"
 }
 
 # LIVEKIT_COMMAND for a local (loopback-only, node-ip pinned) or public install.
@@ -417,8 +454,10 @@ print_summary() {
 # voice: on = LiveKit runs real keys; dev = it runs --dev's public devkey/secret,
 # so a proxy must not publish /rtc* yet; off = voice is not running. origin is a
 # proxy's public address: empty means a proxy kept on localhost for testing.
+# A 4th argument is the host port LiveKit signaling is published on
+# (livekit_host_port), 7880 by default.
 print_next_steps() {
-    local topology="$1" voice="${2:-off}" origin="${3-}" reached=0
+    local topology="$1" voice="${2:-off}" origin="${3-}" lk_port="${4:-7880}" reached=0
     echo "Finish setting up Curia in your browser at the address above."
     echo "Guide: https://docs.meetcuria.com/get-started/check-your-setup"
     echo "When every step is done, choose Start onboarding."
@@ -432,7 +471,7 @@ print_next_steps() {
     fi
     if [[ "$topology" == proxy && -n "$origin" ]]; then
         if [[ "$voice" == on ]]; then
-            echo "Your proxy must forward / to port 3000 and /rtc* to 127.0.0.1:7880 on this host."
+            echo "Your proxy must forward / to port 3000 and /rtc* to 127.0.0.1:${lk_port} on this host."
             echo "A proxy on another machine also needs LIVEKIT_HTTP_BIND set (see docs/dev/voice-setup.md)."
         else
             echo "Your proxy must forward / to port 3000 on this host."

@@ -188,7 +188,7 @@ build_livekit_seed_env() {
     keys="$(compose_var "$env" LIVEKIT_KEYS)"
     cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
     [[ -n "$keys" || -n "$cmd" ]] || return 0
-    LIVEKIT_SEED_ENV=("SEED_LIVEKIT_URL=ws://localhost:7880")
+    LIVEKIT_SEED_ENV=("SEED_LIVEKIT_URL=ws://localhost:$(livekit_host_port "$env")")
     pair="$(livekit_seed_keys "$keys" "$cmd")" || rc=$?
     if [[ $rc -eq 0 ]]; then
         LIVEKIT_SEED_ENV+=("SEED_LIVEKIT_API_KEY=${pair%% *}" "SEED_LIVEKIT_API_SECRET=${pair#* }")
@@ -211,6 +211,23 @@ run_seed_vault() {
     )
 }
 
+# Export the KEY=VALUE lines of env file $1 into the shell environment without
+# executing shell code (source would run any shell expression in the file).
+# Each value is decoded as Compose decodes .env (env_decode_value: quotes removed,
+# an inline comment dropped): Compose prefers the shell's value over the file's,
+# so exporting LIVEKIT_KEYS="k: s" with its quotes would hand LiveKit a quoted
+# string it can't parse.
+export_env_file() {
+    local line name raw
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            name="${BASH_REMATCH[1]}"; raw="${BASH_REMATCH[2]}"
+            export "$name=$(env_decode_value "$raw")"
+        fi
+    done < "$1"
+}
+
 # Starts Postgres, runs migrations, starts the full stack, writes SETUP_COMPLETE marker.
 # Parses .env to get DATABASE_URL and HTTP_PORT for use at runtime. The bootstrap secret
 # is no longer stored in .env (#911) — it lives in the vault; only the full-setup path
@@ -222,14 +239,7 @@ run_infra() {
         exit 1
     fi
 
-    # Export .env vars into the shell environment safely — parse KEY=VALUE lines without
-    # executing shell code. (source would run any shell expression in the .env file.)
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
-        if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
-            export "${BASH_REMATCH[1]}=${BASH_REMATCH[2]}"
-        fi
-    done < "$ENV_FILE"
+    export_env_file "$ENV_FILE"
 
     info "Starting Postgres..."
     docker compose --project-directory "$REPO_ROOT" "${DEV_COMPOSE[@]}" up -d postgres

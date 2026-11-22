@@ -264,8 +264,8 @@ source "$SCRIPT_DIR/scripts/setup-common.sh"
 # An older release's setup-common.sh (a pinned CURIA_VERSION from before these
 # helpers existed) cannot run this installer. Plain printf: the error/hint
 # helpers just sourced may be that release's.
-for _helper in compose_var env_value set_env_var ensure_livekit_env livekit_seed_keys \
-    livekit_command_for print_next_steps note_livekit_values_kept; do
+for _helper in compose_var env_value env_decode_value set_env_var ensure_livekit_env livekit_seed_keys \
+    livekit_command_for livekit_host_port print_next_steps note_livekit_values_kept; do
   if [[ "$(type -t "$_helper")" != function ]]; then
     if [[ -n "$SETUP_COMMON_KEPT_REASON" ]]; then
       # The refresh failed and the copy kept from an earlier run is too old.
@@ -827,6 +827,59 @@ retarget_livekit_command() {
   hint "under Settings → Channels → Voice after setup."
 }
 
+# Remove every uncommented KEY= assignment from env file $1 (commented
+# placeholders stay).
+unset_env_var() {
+  local env="$1" key="$2" tmp
+  tmp="$(mktemp)"
+  grep -vE "^[[:space:]]*${key}=" "$env" > "$tmp" || true
+  mv "$tmp" "$env"
+}
+
+# fresh_install records each reach (topology) value it writes to .env on a
+# "# installer-topology: KEY=VALUE" line, plus the topology itself, so a rerun
+# of an interrupted install can tell its own values from the operator's.
+TOPOLOGY_MARK='# installer-topology: '
+
+# Record KEY=VALUE ($2, $3) in env file $1 as written by this run's topology.
+record_topology_var() {
+  printf '%s%s=%s\n' "$TOPOLOGY_MARK" "$2" "$3" >> "$1"
+}
+
+# Set KEY=VALUE in env file $1 and record it as this topology's.
+set_topology_var() {
+  set_env_var "$1" "$2" "$3"
+  record_topology_var "$1" "$2" "$3"
+}
+
+# Fresh install, once the topology is chosen and before its values are written:
+# an earlier, interrupted run may have written another topology's values (e.g.
+# COMPOSE_FILE with the TLS overlay, then a local retry would still start Caddy
+# on 80/443). Remove each value that run recorded and that still holds what it
+# wrote; one changed since is the operator's and is kept, as is anything set in
+# the shell. Drops the records, and echoes the earlier run's topology (empty
+# when there was none).
+reset_topology_vars() {
+  local env="$1" line key val prior=""
+  grep -q "^${TOPOLOGY_MARK}" "$env" 2>/dev/null || return 0
+  while IFS= read -r line; do
+    line="${line#"$TOPOLOGY_MARK"}"; key="${line%%=*}"; val="${line#*=}"
+    if [[ "$key" == TOPOLOGY ]]; then prior="$val"; continue; fi
+    [[ "$key" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
+    if [[ "$(env_value "$env" "$key")" == "$val" ]]; then unset_env_var "$env" "$key"; fi
+  done < <(grep "^${TOPOLOGY_MARK}" "$env")
+  drop_topology_records "$env"
+  printf '%s' "$prior"
+}
+
+# Remove the topology records from env file $1 (a finished install needs none).
+drop_topology_records() {
+  local tmp
+  tmp="$(mktemp)"
+  grep -v "^${TOPOLOGY_MARK}" "$1" > "$tmp" || true
+  mv "$tmp" "$1"
+}
+
 # Echo this install's Compose project name the way Compose derives it:
 # COMPOSE_PROJECT_NAME (shell, then .env), else the install dir's basename;
 # lowercased, characters outside [a-z0-9_-] dropped, leading - and _ trimmed.
@@ -839,10 +892,35 @@ compose_project_name() {
   printf '%s' "$name"
 }
 
-# Returns 0 when this install's Postgres volume (<project>_pgdata) exists, i.e.
-# Postgres was already initialised with whatever DB_PASSWORD was then in .env.
+# Echo the name of this install's Postgres volume as Compose resolves it: the
+# rendered config's volumes.pgdata.name, which already reflects a top-level
+# `name:` in the compose file, COMPOSE_PROJECT_NAME and a volume `name:`. When
+# Compose can't render the config, <project>_pgdata derived the way Compose does
+# (compose_project_name).
+pgdata_volume_name() {
+  local env="$1" cfg name=""
+  # Captured first, not piped: awk stopping early must not fail the docker side.
+  if cfg="$(docker compose --project-directory "$INSTALL_DIR" config 2>/dev/null)"; then
+    name="$(awk '
+      /^[^[:space:]#]/ { top = $0; in_vol = 0 }
+      top ~ /^volumes:/ && /^  [^[:space:]]/ { in_vol = ($0 ~ /^  pgdata:/) }
+      in_vol && /^    name:/ { sub(/^    name:[[:space:]]*/, ""); gsub(/["\047]/, ""); print; exit }' <<< "$cfg")"
+  fi
+  [[ -n "$name" ]] || name="$(compose_project_name "$env")_pgdata"
+  printf '%s' "$name"
+}
+
+# Whether this install's Postgres volume exists, i.e. Postgres was already
+# initialised with whatever DB_PASSWORD was then in .env. Returns 0 when it
+# exists, 1 when Docker says there is no such volume, and 2 when the lookup
+# failed for any other reason (Docker unreachable): unknown is not absent.
 pgdata_volume_exists() {
-  docker volume inspect "$(compose_project_name "$1")_pgdata" >/dev/null 2>&1
+  local err
+  err="$(docker volume inspect "$(pgdata_volume_name "$1")" 2>&1 >/dev/null)" && return 0
+  case "$err" in
+    *[Nn]"o such volume"*) return 1 ;;
+  esac
+  return 2
 }
 
 # Validate prereqs: Docker daemon up, compose plugin present, curl available.
@@ -959,7 +1037,7 @@ choose_topology() {
 # drops one trailing slash. Returns 1 for anything else: no http(s):// scheme,
 # a path beyond "/", a query or fragment, an empty host, or a host outside
 # [A-Za-z0-9.-] (userinfo, quotes, $, backticks; IPv6 literals included) or a
-# port that is not all digits. The value lands in .env and the vault.
+# port that is not a number from 1 to 65535. The value lands in .env and the vault.
 normalize_origin() {
   local v="$1" scheme rest
   case "$v" in
@@ -973,22 +1051,33 @@ normalize_origin() {
     *[[:space:]]*|*/*|*\?*|*\#*) return 1 ;;
   esac
   [[ "$rest" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || return 1
+  # A port must be 1-65535 (browsers refuse anything else); leading zeros are
+  # dropped so the setup link and the LiveKit URL carry the plain number.
+  if [[ "$rest" == *:* ]]; then
+    local port="${rest##*:}"
+    port="${port#"${port%%[!0]*}"}"
+    [[ -n "$port" && ${#port} -le 5 ]] || return 1
+    (( port <= 65535 )) || return 1
+    rest="${rest%:*}:$port"
+  fi
   printf '%s://%s' "$scheme" "$rest"
 }
 
 # Browser-facing LiveKit base URL (never ending in /rtc: livekit-client appends it).
-#   livekit_browser_url <topology> <domain_or_origin>
+#   livekit_browser_url <topology> <domain_or_origin> [livekit host port]
+# Installs reached only from this machine use ws://localhost:<port>, the host
+# port signaling is published on (livekit_host_port; 7880 by default).
 livekit_browser_url() {
-  local topology="$1" value="${2:-}"
+  local topology="$1" value="${2:-}" port="${3:-7880}"
   case "$topology" in
     domain) printf 'wss://%s' "$value" ;;
     proxy)
       case "$value" in
         https://*) printf 'wss://%s' "${value#https://}" ;;
         http://*)  printf 'ws://%s' "${value#http://}" ;;
-        *)         printf 'ws://localhost:7880' ;;
+        *)         printf 'ws://localhost:%s' "$port" ;;
       esac ;;
-    *) printf 'ws://localhost:7880' ;;
+    *) printf 'ws://localhost:%s' "$port" ;;
   esac
 }
 
@@ -1030,7 +1119,7 @@ prompt_proxy_origin() {
     echo "Public address your proxy serves Curia on (e.g. https://curia.example.com)." >&2
     read -rp "Press Enter to keep localhost for testing: " ans
     if [[ -z "$ans" ]]; then
-      hint "Using ws://localhost:7880 for calls; this is for testing only."
+      hint "Calls then use LiveKit on localhost; this is for testing only."
       return 0
     fi
     if norm="$(normalize_origin "$ans")"; then
@@ -1063,16 +1152,25 @@ fresh_install() {
   # except when this project's Postgres volume already exists: an older install,
   # interrupted, initialised it with that password, so changing .env alone would
   # lock the installer out of it.
+  # A failed volume lookup stops here, before .env is written: replacing the
+  # password of a volume that does exist would lock the installer out of it.
   db_pass="$(env_value "$env" DB_PASSWORD)"
   case "$db_pass" in
     ""|replace-*) db_pass="$(gen_secret_hex)" ;;
     your-db-password)
-      if pgdata_volume_exists "$env"; then
-        warn "Keeping DB_PASSWORD=your-db-password, the weak default from .env.example:"
-        hint "this install's Postgres volume was already set up with it."
-      else
-        db_pass="$(gen_secret_hex)"
-      fi ;;
+      local vol_rc=0
+      pgdata_volume_exists "$env" || vol_rc=$?
+      case "$vol_rc" in
+        0)
+          warn "Keeping DB_PASSWORD=your-db-password, the weak default from .env.example:"
+          hint "this install's Postgres volume was already set up with it." ;;
+        1) db_pass="$(gen_secret_hex)" ;;
+        *)
+          error "Could not check whether this install's Postgres volume already exists (Docker did not answer)."
+          hint "DB_PASSWORD was left as it is, since the volume may already use it."
+          hint "Re-run install.sh once Docker is available. Nothing was started."
+          exit 1 ;;
+      esac ;;
   esac
   api_token="$(gen_secret_hex)"
   boot_secret="$(gen_secret_hex)"
@@ -1116,6 +1214,14 @@ fresh_install() {
   # TOPOLOGY and PROXY_ORIGIN are read by later steps (LiveKit seeding).
   TOPOLOGY="$(choose_topology)"
   PROXY_ORIGIN=""
+  # A rerun of an interrupted install starts from this choice, not the last one's.
+  local prior_topology
+  prior_topology="$(reset_topology_vars "$env")"
+  if [[ -n "$prior_topology" && "$prior_topology" != "$TOPOLOGY" ]]; then
+    echo "" >&2
+    warn "An earlier, interrupted run chose another way to reach Curia; its settings were replaced by this choice."
+  fi
+  record_topology_var "$env" TOPOLOGY "$TOPOLOGY"
   case "$TOPOLOGY" in
     domain)
       # Require a non-empty domain — the TLS overlay and the summary URL are
@@ -1125,13 +1231,17 @@ fresh_install() {
         read -rp "Domain (e.g. curia.example.com): " dom
         [[ -n "$dom" ]] || error "A domain is required for the HTTPS topology."
       done
-      set_env_var "$env" DOMAIN "$dom"
-      set_env_var "$env" COMPOSE_FILE "docker-compose.yml:docker-compose.tls.yml"
+      set_topology_var "$env" DOMAIN "$dom"
+      set_topology_var "$env" COMPOSE_FILE "docker-compose.yml:docker-compose.tls.yml"
       # Caddy reaches curia:3000 over the compose network; keep :3000 off the
       # public interface so traffic can't bypass TLS.
-      set_env_var "$env" HTTP_BIND 127.0.0.1
-      # Public origin for console links, Secure cookies and CORS.
-      ensure_https_app_origin "$env"
+      set_topology_var "$env" HTTP_BIND 127.0.0.1
+      # Public origin for console links, Secure cookies and CORS. Recorded only
+      # when this run filled it: a value already there is the operator's.
+      if [[ -z "$(env_value "$env" APP_ORIGIN)" ]]; then
+        ensure_https_app_origin "$env"
+        [[ -z "$(env_value "$env" APP_ORIGIN)" ]] || record_topology_var "$env" APP_ORIGIN "$(env_value "$env" APP_ORIGIN)"
+      fi
       # Kept as a shell variable for the LiveKit URL and the closing address below.
       DOMAIN="$dom"
       # A rerun of an interrupted install finds its own Caddy on 80/443.
@@ -1151,13 +1261,13 @@ fresh_install() {
       ;;
     local)
       # Evaluation on this machine: http://localhost:3000 only.
-      set_env_var "$env" HTTP_BIND 127.0.0.1
+      set_topology_var "$env" HTTP_BIND 127.0.0.1
       ;;
     *)
       # proxy: base compose only, HTTP on :3000 on every interface.
       PROXY_ORIGIN="$(prompt_proxy_origin)"
       if [[ -n "$PROXY_ORIGIN" && -z "$(env_value "$env" APP_ORIGIN)" ]]; then
-        set_env_var "$env" APP_ORIGIN "$PROXY_ORIGIN"
+        set_topology_var "$env" APP_ORIGIN "$PROXY_ORIGIN"
       fi
       ;;
   esac
@@ -1190,7 +1300,7 @@ fresh_install() {
     ensure_livekit_env "$env" "$lk_mode"
     require_livekit_real_keys "$env"
 
-    lk_url="$(livekit_browser_url "$TOPOLOGY" "$lk_value")"
+    lk_url="$(livekit_browser_url "$TOPOLOGY" "$lk_value" "$(livekit_host_port "$env")")"
     lk_seed=(-e SEED_LIVEKIT_URL)
     lk_pair="$(livekit_seed_keys "$(compose_var "$env" LIVEKIT_KEYS)" "$(compose_var "$env" LIVEKIT_COMMAND)")" || lk_rc=$?
     if [[ $lk_rc -eq 0 ]]; then
@@ -1200,6 +1310,16 @@ fresh_install() {
       warn "Could not tell which keys LiveKit's LIVEKIT_COMMAND uses, so they were not saved for Curia."
       hint "Enter the LiveKit API key and secret under Settings → Channels → Voice after setup."
     fi
+  elif [[ ",$(compose_var "$env" COMPOSE_PROFILES)," == *,voice,* ]]; then
+    # The voice profile is already on (the operator's .env or shell), so Compose
+    # starts this compose file's livekit service as it stands, whatever the
+    # installer can provision: the same --dev check before anything starts.
+    require_livekit_real_keys "$env"
+    echo "" >&2
+    warn "This release's docker-compose.yml does not mount LiveKit's config, so the installer"
+    hint "left LiveKit as your compose file and .env set it up, and saved nothing for Curia."
+    hint "Enter LiveKit's URL and keys under Settings → Channels → Voice, or see docs/dev/voice-setup.md:"
+    hint "  https://github.com/josephfung/curia/blob/main/docs/dev/voice-setup.md#turn-voice-on-for-an-existing-install"
   else
     echo "" >&2
     warn "Voice (LiveKit) is off: this release's docker-compose.yml does not mount LiveKit's config."
@@ -1269,13 +1389,15 @@ fresh_install() {
   note_missing_browser "$env"
 
   # Mark setup as complete. On subsequent re-runs, install_is_complete() sees
-  # this marker and takes the upgrade path instead of rotating secrets.
+  # this marker and takes the upgrade path instead of rotating secrets. The
+  # topology records only serve a rerun of an unfinished install.
+  drop_topology_records "$env"
   printf '\n# SETUP_COMPLETE\n' >> "$env"
 
-  local voice_state=off
-  [[ $lk_on -eq 0 ]] || voice_state="$(livekit_next_steps_state "$env")"
+  # livekit_next_steps_state reads off when the voice profile is off and
+  # livekit is not running, so an install the installer left voice off on says so.
   print_summary "$boot_secret" "$(setup_base_url "$TOPOLOGY" "$lk_value")"
-  print_next_steps "$TOPOLOGY" "$voice_state" "$PROXY_ORIGIN"
+  print_next_steps "$TOPOLOGY" "$(livekit_next_steps_state "$env")" "$PROXY_ORIGIN" "$(livekit_host_port "$env")"
 }
 
 # ---------------------------------------------------------------------------
@@ -1358,7 +1480,7 @@ existing_install() {
   # Empty secret: print_summary then shows the "stored in the vault" branch
   # rather than a fresh secret (which we don't have on the upgrade path).
   print_summary "" "$(setup_base_url "$topology" "$origin")"
-  print_next_steps "$topology" "$(livekit_next_steps_state "$env")" "$origin"
+  print_next_steps "$topology" "$(livekit_next_steps_state "$env")" "$origin" "$(livekit_host_port "$env")"
 }
 
 # ---------------------------------------------------------------------------

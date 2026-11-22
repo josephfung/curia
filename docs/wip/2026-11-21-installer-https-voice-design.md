@@ -166,12 +166,17 @@ from `LIVEKIT_KEYS`, as in production) and keeps ports, `use_external_ip`, room 
 (shell or `.env`) before a fresh install, it is not overwritten. The seeded key pair must match
 what LiveKit will actually run:
 
-1. `LIVEKIT_KEYS` set → seed from it.
-2. else `LIVEKIT_COMMAND` contains `--keys "<k>: <s>"` → seed from that.
-3. else `LIVEKIT_COMMAND` contains `--dev` → seed `devkey`/`secret` (the operator chose it;
+1. `LIVEKIT_COMMAND` contains `--key-file` → seed the URL only (LiveKit's key file replaces
+   every other key source, and the installer can't read it).
+2. else `LIVEKIT_COMMAND` contains `--keys "<k>: <s>"` → seed from that (the explicit flag
+   wins over `LIVEKIT_KEYS`, which is only its environment default).
+3. else `LIVEKIT_KEYS` set → seed from it.
+4. else `LIVEKIT_COMMAND` contains `--dev` → seed `devkey`/`secret` (the operator chose it;
    the existing `--dev` exposure warnings still apply).
-4. else (a custom `--config` with keys inside a file the installer can't read) → seed the URL
+5. else (a custom `--config` with keys inside a file the installer can't read) → seed the URL
    only, and say the keys must be entered under Settings → Channels → Voice.
+
+(Order corrected in review against LiveKit v1.13.4's `ValidateKeys` and `keys` flag.)
 
 **Interrupted fresh install** (no `SETUP_COMPLETE` marker): `LIVEKIT_KEYS` already in `.env` from
 the earlier run is reused, never regenerated, for the same reason `DB_PASSWORD` is.
