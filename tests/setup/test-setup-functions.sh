@@ -1759,6 +1759,16 @@ _assert_wd "$_RK_DEV"            '127.0.0.1:7880' '--dev'                      1
 _assert_wd "$_RK_DEV"            '0.0.0.0:7880'   '--dev'                      1  warn  "no overlay, public, --dev (unchanged)"
 rm -f "$_wd_env"
 
+# service_running: a failed lookup is unknown (2), not "not running" (1); the
+# exposure warnings use service_maybe_running, which fails closed on unknown.
+_sr() { ( _m="$1"; docker() { case "$_m" in (fail) return 1 ;; (none) return 0 ;; (*) echo cid ;; esac; }; service_running livekit; echo "rc=$?|$(service_maybe_running livekit && echo maybe || echo no)" ) 2>/dev/null; }
+_assert_var "service_running: running" "$(_sr run)" "rc=0|maybe"
+_assert_var "service_running: none" "$(_sr none)" "rc=1|no"
+_assert_var "service_running: lookup fails -> unknown, treated as maybe running" "$(_sr fail)" "rc=2|maybe"
+_assert_var "warn_public_livekit_dev: livekit state unknown under the overlay -> warns" \
+    "$( (unset COMPOSE_FILE LIVEKIT_COMMAND; _e="$(mktemp)"; printf 'COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml\nLIVEKIT_COMMAND=--dev\n' > "$_e"
+         docker() { return 1; }; warn_public_livekit_dev "$_e" '' 2>&1 | grep -c -- '--dev credentials'; rm -f "$_e") )" "1"
+
 # effective_livekit_command: the TLS overlay's fallback is the keyless shipped
 # config (fails closed), the base file's is --dev (empty).
 _ec_env="$(mktemp)"
@@ -1786,6 +1796,17 @@ _assert_var "rendered_livekit: quoted items unquoted" "$(_rl 'livekit\n' "${_RL_
 _assert_var "rendered_livekit: not an active service" "$(_rl 'curia\npostgres\n' '')" "0|"
 _assert_var "rendered_livekit: no command" "$(_rl 'livekit\n' 'services:\n  livekit:\n    image: x\nvolumes:\n  command:\n')" "1|"
 _assert_var "rendered_livekit: config livekit fails" "$(_rl 'livekit\n' fail)" "fail"
+# Whether livekit exists at all is asked with --profile '*'; that lookup failing
+# is unknown (rc 1), not "no livekit service".
+_assert_var "rendered_livekit: all-profiles lookup fails -> unknown" \
+    "$( ( docker() { case "$*" in (*"--profile * config --services") return 1 ;; (*"config --services") printf 'curia\n' ;; esac; }
+          rendered_livekit && echo ok || echo "rc=$?" ) )" "rc=1"
+_assert_var "rendered_livekit: inactive but defined -> rendered" \
+    "$( ( docker() { case "$*" in (*"--profile * config --services") printf 'curia\nlivekit\n' ;; (*"config --services") printf 'curia\n' ;; (*"config livekit") printf 'services:\n  livekit:\n    command:\n      - --dev\n' ;; esac; }
+          rendered_livekit; printf '%s|%s|%s' "$RENDERED_LIVEKIT_ACTIVE" "$RENDERED_LIVEKIT_DEFINED" "$RENDERED_LIVEKIT_COMMAND" ) )" "0|1|--dev"
+_assert_var "rendered_livekit: defined but its render fails -> unknown" \
+    "$( ( docker() { case "$*" in (*"--profile * config --services") printf 'livekit\n' ;; (*"config --services") printf 'curia\n' ;; (*"config livekit") return 1 ;; esac; }
+          rendered_livekit && echo ok || echo "rc=$?" ) )" "rc=1"
 # Credentials as LiveKit receives them: --keys keeps its own argument whole.
 _rlk() {   # $1 rendered livekit; echoes keysflag|keyfile|envkeys|seed
     ( _rl_r="$1"
@@ -1878,9 +1899,23 @@ _fi_run() {
         case "$*" in (compose*" config") printf '%b' "${_FI_CONFIG:-}"; return 0 ;; esac
         # Active services and the rendered livekit service: _FI_SERVICES unset means
         # Compose cannot render (the installer falls back to .env and says so).
+        # Every service under any profile (--profile '*'): the active ones, plus
+        # livekit whenever the test renders it.
+        case "$*" in (compose*" --profile * config --services")
+          [[ -n "${_FI_SERVICES+set}" ]] || return 1
+          printf '%b' "$_FI_SERVICES"
+          [[ -z "${_FI_LK_RENDER+set}" ]] || printf 'livekit\n'
+          return 0 ;;
+        esac
         case "$*" in (compose*" config --services")
           [[ -n "${_FI_SERVICES+set}" ]] || return 1
           printf '%b' "$_FI_SERVICES"; return 0 ;;
+        esac
+        # A curia container from an earlier run (_FI_CURIA_EXISTS), or a failed lookup.
+        case "$*" in (compose*" ps -aq curia")
+          [[ -z "${_FI_CURIA_PS_FAIL:-}" ]] || return 1
+          [[ -z "${_FI_CURIA_EXISTS:-}" ]] || echo curia-old
+          return 0 ;;
         esac
         # _FI_RENDER_BY_CF: render as the .env COMPOSE_FILE now says: a custom
         # TLS overlay publishes Curia on 3100 and LiveKit on 17880, the base file
@@ -1902,6 +1937,11 @@ _fi_run() {
         case "$*" in ("ps -aq --filter label=com.docker.compose.project="*" --filter label=com.docker.compose.service=caddy")
           local _all="$*" _p; _p="${_all#*project=}"; _p="${_p%% *}"
           [[ -z "${_FI_CADDY_PS_FAIL:-}" ]] || return 1
+          # _FI_CADDY_PS_FAIL_SECOND: only the lookup after the removal fails.
+          if [[ -n "${_FI_CADDY_PS_FAIL_SECOND:-}" ]]; then
+            if [[ -f "$_fi_dir/ps-once" ]]; then return 1; fi
+            : > "$_fi_dir/ps-once"
+          fi
           awk -v p="$_p" '$1 == p { print $2 }' "$_fi_dir/caddy-ids" 2>/dev/null; return 0 ;;
         esac
         # _FI_CADDY_RM_KILL: the run dies during the removal (an SSH drop).
@@ -2362,6 +2402,15 @@ _FI_INTERRUPT=1; _fi_run domain "c.example.com" '' || true; unset _FI_INTERRUPT
 cp "$_fi_env" "$_fi_base"; _FI_ENV_BASE="$_fi_base"
 _FI_CADDY_RM_NOOP=1; _fi_rc=0; _fi_run local "" '' || _fi_rc=$?; unset _FI_CADDY_RM_NOOP _FI_ENV_BASE
 _assert_var "removal reports success but caddy remains: stops" "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+# Only the check after the removal fails: unknown, not "gone" -> stop, record kept.
+_FI_INTERRUPT=1; _fi_run domain "c.example.com" '' || true; unset _FI_INTERRUPT
+cp "$_fi_env" "$_fi_base"; _FI_ENV_BASE="$_fi_base"; rm -f "$_fi_dir/ps-once"
+_FI_CADDY_PS_FAIL_SECOND=1; _fi_rc=0; _fi_run local "" '' || _fi_rc=$?; unset _FI_CADDY_PS_FAIL_SECOND _FI_ENV_BASE
+rm -f "$_fi_dir/ps-once"
+_assert_var "second Caddy lookup fails: stops" "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+_assert_var "second Caddy lookup fails: removal was attempted" "$(grep -c '^rm -f caddy-' "$_fi_calls" | tr -d ' ')" "1"
+_assert_var "second Caddy lookup fails: Postgres never started" "$(grep -c 'up -d postgres' "$_fi_calls" | tr -d ' ')" "0"
+_assert_var "second Caddy lookup fails: CADDY_PROJECT record kept" "$(grep -c '^# installer-topology: CADDY_PROJECT=' "$_fi_env" | tr -d ' ')" "1"
 # The run dies during the removal: the record is still there for the next retry.
 _FI_INTERRUPT=1; _fi_run domain "c.example.com" '' || true; unset _FI_INTERRUPT
 cp "$_fi_env" "$_fi_base"; _FI_ENV_BASE="$_fi_base"
@@ -2447,6 +2496,19 @@ _FI_LK_RENDER='name: x\nservices:\n  livekit:\n    profiles:\n      - voice\n   
 _fi_run local "" '' || true
 unset _FI_SHELL_PROFILES _FI_SERVICES _FI_LK_RENDER
 _assert_var "voice profile off: the override's key seeded" "$(_seed_env SEED_LIVEKIT_API_KEY)" "APIover"
+
+# Curia reads the seeded vault at startup: a curia container an earlier run
+# left running is recreated after seeding (curia only); none -> no extra step.
+_fi_recreate() { grep -c -- 'up -d --force-recreate --no-deps curia$' "$_fi_calls" | tr -d ' '; }
+_FI_CURIA_EXISTS=1; _fi_run local "" '' || true; unset _FI_CURIA_EXISTS
+_assert_var "earlier curia running: recreated once" "$(_fi_recreate)" "1"
+_assert_var "earlier curia running: recreated after seeding and up -d" \
+    "$(awk '/seed-vault/ { s = NR } / up -d$/ { u = NR } /--force-recreate --no-deps curia$/ { r = NR } END { print (s && u && r && s < u && u < r) ? "yes" : "no" }' "$_fi_calls")" "yes"
+_fi_run local "" '' || true
+_assert_var "no earlier curia: no extra recreate" "$(_fi_recreate)" "0"
+_FI_CURIA_PS_FAIL=1; _fi_run local "" '' || true; unset _FI_CURIA_PS_FAIL
+_assert_var "curia lookup fails: recreated anyway (unknown is not none)" "$(_fi_recreate)" "1"
+_assert_var "recreate touches curia only" "$(grep -c -- '--force-recreate' "$_fi_calls" | tr -d ' '):$(grep -- '--force-recreate' "$_fi_calls" | grep -c -- '--no-deps curia$' | tr -d ' ')" "1:1"
 
 # Rendered values are read once the topology is final: an interrupted HTTPS install
 # whose custom TLS overlay publishes 3100:3000 (and LiveKit 17880), retried as

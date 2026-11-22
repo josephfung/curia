@@ -186,14 +186,15 @@ rendered_livekit() {
   services="$(docker compose --project-directory "$REPO_ROOT" ${_flags[@]+"${_flags[@]}"} config --services 2>/dev/null)" || return 1
   RENDERED_LIVEKIT_ACTIVE=0
   grep -qx livekit <<< "$services" && RENDERED_LIVEKIT_ACTIVE=1
+  # Whether the service exists at all, under any profile: a failed lookup is
+  # unknown (return 1), never "no livekit service".
+  local all
+  all="$(docker compose --project-directory "$REPO_ROOT" ${_flags[@]+"${_flags[@]}"} --profile '*' config --services 2>/dev/null)" || return 1
+  if ! grep -qx livekit <<< "$all"; then RENDERED_LIVEKIT_DEFINED=0; return 0; fi
   # Rendered even while the voice profile is off, so the keys an override gives
-  # it are known before the operator turns voice on.
-  if ! out="$(docker compose --project-directory "$REPO_ROOT" ${_flags[@]+"${_flags[@]}"} config livekit 2>/dev/null)"; then
-    # Active but not renderable is a failure; inactive and absent is no service.
-    [[ "$RENDERED_LIVEKIT_ACTIVE" == 0 ]] || return 1
-    RENDERED_LIVEKIT_DEFINED=0
-    return 0
-  fi
+  # it are known before the operator turns voice on. It exists, so a failure
+  # here is a failure.
+  out="$(docker compose --project-directory "$REPO_ROOT" ${_flags[@]+"${_flags[@]}"} config livekit 2>/dev/null)" || return 1
   RENDERED_LIVEKIT_DEFINED=1
   # One "tag<TAB>value" line per finding; command items keep their boundaries.
   while IFS=$'\t' read -r tag val; do

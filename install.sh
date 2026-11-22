@@ -440,13 +440,22 @@ published_bindings() {
   return 2
 }
 
-# Returns 0 when a compose service has a running container. Distinguishes a
+# Returns 0 when a compose service has a running container, 1 when it has none,
+# and 2 when the lookup failed (unknown is not "not running"). Distinguishes a
 # running service that publishes nothing from one that is not running at all,
 # which published_bindings alone reports the same way (empty output).
 service_running() {
   local cid
-  cid="$(docker compose --project-directory "$INSTALL_DIR" ps -q "$1" 2>/dev/null)" || return 1
+  cid="$(docker compose --project-directory "$INSTALL_DIR" ps -q "$1" 2>/dev/null)" || return 2
   [[ -n "$cid" ]]
+}
+
+# Returns 0 when service $1 is running or its state can't be read: the checks
+# that warn about an exposed or unexpected service fail closed on unknown.
+service_maybe_running() {
+  local rc=0
+  service_running "$1" || rc=$?
+  [[ $rc -ne 1 ]]
 }
 
 # Echo the command a running compose service's container was created with, or
@@ -547,7 +556,7 @@ warn_public_livekit_dev() {
   if [[ -n "$bindings" ]] && ! bindings_are_loopback "$bindings"; then
     via="port"
   elif uses_tls_overlay "$(compose_var "$env" COMPOSE_FILE)" \
-    && { [[ -n "$bindings" ]] || service_running livekit; }; then
+    && { [[ -n "$bindings" ]] || service_maybe_running livekit; }; then
     via="caddy"
   fi
   [[ -n "$via" ]] || return 0
@@ -577,7 +586,8 @@ note_voice_off() {
   local env="$1" profiles
   profiles="$(compose_var "$env" COMPOSE_PROFILES)"
   [[ ",${profiles}," != *,voice,* ]] || return 0
-  service_running livekit && return 0
+  # Running, or unknown: don't claim it is off.
+  service_maybe_running livekit && return 0
   echo "" >&2
   warn "Voice (LiveKit) is off on this install."
   hint "New installs turn it on; upgrades leave it as it was. To turn it on here, see"
@@ -594,7 +604,7 @@ note_voice_off() {
 livekit_next_steps_state() {
   local env="$1" profiles cmd
   profiles="$(compose_var "$env" COMPOSE_PROFILES)"
-  if [[ ",${profiles}," != *,voice,* ]] && ! service_running livekit; then
+  if [[ ",${profiles}," != *,voice,* ]] && ! service_maybe_running livekit; then
     printf off; return 0
   fi
   cmd="$(live_command livekit)"
@@ -690,7 +700,7 @@ check_livekit_bind() {
   if [[ -z "$bindings" ]]; then
     # Nothing published: voice not running, or (an override) running without
     # 7880. Only the second matters, and only when public access was asked for.
-    if [[ -n "$want" ]] && ! bind_value_is_loopback "$want" && service_running livekit; then
+    if [[ -n "$want" ]] && ! bind_value_is_loopback "$want" && service_maybe_running livekit; then
       echo "" >&2
       warn "LIVEKIT_HTTP_BIND=$want is set, but the running livekit container publishes no port 7880 (#2408)."
       hint "Remote browsers can't reach signaling. Check the livekit ports: entry in docker-compose.yml"
@@ -989,9 +999,12 @@ recorded_caddy_project() {
 retire_previous_caddy() {
   local project="$1" ids
   local -a filt=(--filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=caddy")
+  local left
+  # Every lookup's own status counts: a failed one is unknown, never "none".
   if ids="$(docker ps -aq "${filt[@]}")"; then
+    [[ -n "$ids" ]] || return 0
     # shellcheck disable=SC2086  # container ids, split on purpose
-    if [[ -z "$ids" ]] || { docker rm -f $ids >/dev/null 2>&1 && [[ -z "$(docker ps -aq "${filt[@]}")" ]]; }; then
+    if docker rm -f $ids >/dev/null 2>&1 && left="$(docker ps -aq "${filt[@]}")" && [[ -z "$left" ]]; then
       return 0
     fi
   fi
@@ -1648,11 +1661,29 @@ fresh_install() {
   if [[ $rerun -eq 1 && $lk_on -eq 1 ]]; then note_livekit_values_kept; fi
 
   # Bring the full stack up and wait for the app to become healthy.
+  # Curia reads the vault (just seeded) only at startup. A curia container an
+  # earlier, interrupted run started is still running on the old values, and
+  # `up -d` leaves it alone when its config is unchanged, so it is recreated
+  # (--force-recreate --no-deps: curia only; Postgres, LiveKit, Caddy and the
+  # browser are left as `up -d` decided). Recreate, not restart, so curia also
+  # picks up any .env change through env_file. LiveKit reads its keys and
+  # command from its config, which `up -d` already recreates it for when they
+  # change; it reads nothing from the vault. The lookup's own status counts:
+  # when it fails, curia is recreated anyway (only ever curia, so it is safe).
   info "Starting Curia..."
+  local curia_before="" curia_lookup_rc=0
+  curia_before="$(docker compose --project-directory "$INSTALL_DIR" ps -aq curia 2>/dev/null)" || curia_lookup_rc=$?
   if ! docker compose --project-directory "$INSTALL_DIR" up -d; then
     error "Failed to start the Curia stack."
     hint "Check Docker logs: docker compose --project-directory \"$INSTALL_DIR\" logs"
     exit 1
+  fi
+  if [[ -n "$curia_before" || $curia_lookup_rc -ne 0 ]]; then
+    if ! docker compose --project-directory "$INSTALL_DIR" up -d --force-recreate --no-deps curia; then
+      error "Failed to recreate Curia with the newly seeded vault values."
+      hint "Check Docker logs: docker compose --project-directory \"$INSTALL_DIR\" logs curia"
+      exit 1
+    fi
   fi
   if ! wait_for_curia; then
     error "Curia did not become healthy — refusing to print a success banner."
