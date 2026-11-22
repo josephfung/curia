@@ -157,29 +157,66 @@ livekit_seed_keys() {
   return 1
 }
 
-# Host port LiveKit signaling is published on, as docker-compose.yml reads it
-# ("${LIVEKIT_HTTP_PORT:-7880}:7880"): LIVEKIT_HTTP_PORT (shell, then .env $1),
-# else 7880. A value the installer can't use as a port (a ${...} reference) is
-# read as the default. A browser on this machine reaches ws://localhost:<port>.
+# Echo the host port Compose publishes LiveKit signaling (container port 7880)
+# on, read from the rendered service (`docker compose config livekit`, run in
+# $REPO_ROOT with COMPOSE_FLAGS, as the wait_* helpers do), so a value such as
+# LIVEKIT_HTTP_PORT=${VOICE_PORT:-17880} or a hand-edited ports: entry is
+# resolved by Compose itself. Handles the long form (target: 7880 with its
+# published: value) and the short "host:published:7880" form. Returns 1, with no
+# output, when Compose can't render the service or publishes no such port.
+rendered_livekit_http_port() {
+  local out port
+  local -a _flags=("${COMPOSE_FLAGS[@]+"${COMPOSE_FLAGS[@]}"}")
+  out="$(docker compose --project-directory "$REPO_ROOT" ${_flags[@]+"${_flags[@]}"} config livekit 2>/dev/null)" || return 1
+  port="$(awk '
+    function kv(s,  k, v) {
+      k = s; sub(/:.*/, "", k); v = s; sub(/^[^:]*:[[:space:]]*/, "", v); gsub(/["\047]/, "", v)
+      if (k == "target") tgt = v
+      if (k == "published") pub = v
+    }
+    function flush_item() { if (tgt == "7880" && pub != "" && !found) { print pub; found = 1 } tgt = ""; pub = "" }
+    /^[^ ]/ { flush_item(); lk = 0; inp = 0; next }
+    /^  [^ ]/ { flush_item(); lk = ($0 ~ /^  livekit:/); inp = 0; next }
+    lk && /^    [^ ]/ { flush_item(); inp = ($0 ~ /^    ports:/); next }
+    inp && /^      - / {
+      flush_item(); rest = substr($0, 9)
+      if (rest ~ /^[a-z_]+:( |$)/) { kv(rest); next }
+      gsub(/["\047]/, "", rest); n = split(rest, a, ":"); t = a[n]; sub(/\/tcp$/, "", t)
+      if (t == "7880" && n >= 2) { tgt = "7880"; pub = a[n - 1] }
+      next
+    }
+    inp && /^        [a-z_]+:/ { kv(substr($0, 9)); next }
+    END { flush_item() }' <<< "$out")"
+  [[ "$port" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$port"
+}
+
+# Host port LiveKit signaling is published on: what Compose renders
+# (rendered_livekit_http_port), else LIVEKIT_HTTP_PORT (shell, then .env $1) as
+# docker-compose.yml reads it ("${LIVEKIT_HTTP_PORT:-7880}:7880"): a literal
+# number, or 7880 when empty. Returns 1, with no output, when Compose can't
+# render and LIVEKIT_HTTP_PORT is something else (a ${...} reference): the port
+# is unknown, and callers must not guess. A browser on this machine reaches
+# ws://localhost:<port>.
 livekit_host_port() {
   local p
+  if p="$(rendered_livekit_http_port)"; then printf '%s' "$p"; return 0; fi
   p="$(compose_var "$1" LIVEKIT_HTTP_PORT)"
-  [[ "$p" =~ ^[0-9]+$ ]] || p=7880
+  [[ -n "$p" ]] || p=7880
+  [[ "$p" =~ ^[0-9]+$ ]] || return 1
   printf '%s' "$p"
 }
 
-# Warn when LIVEKIT_HTTP_PORT (shell, then .env $1) holds a ${...} reference:
-# livekit_host_port can't resolve it and assumes 7880, so the LiveKit URL saved
-# for Curia (and a proxy's /rtc* rule) may name the wrong port. Silent otherwise.
-note_unresolved_livekit_port() {
-  local p
-  p="$(compose_var "$1" LIVEKIT_HTTP_PORT)"
-  # shellcheck disable=SC2016  # a literal ${, not an expansion
-  [[ "$p" == *'${'* ]] || return 0
+# Set LIVEKIT_HOST_PORT to livekit_host_port's answer for env file $1, or stop
+# when the port can't be known: saving a guessed LiveKit URL would leave calls
+# unable to connect, and seeding never replaces a saved value. Run before
+# anything starts or is seeded. Never prints keys.
+require_livekit_host_port() {
+  if LIVEKIT_HOST_PORT="$(livekit_host_port "$1")"; then return 0; fi
   echo "" >&2
-  warn "LIVEKIT_HTTP_PORT=$p uses a \${...} reference the installer does not resolve, so it assumed port 7880 for LiveKit."
-  hint "If Compose publishes another port, correct the LiveKit URL under Settings → Channels → Voice"
-  hint "(and a proxy's /rtc* rule). Check by hand: docker compose --profile voice port livekit 7880"
+  error "LIVEKIT_HTTP_PORT=$(compose_var "$1" LIVEKIT_HTTP_PORT) can't be resolved here (Compose could not render the config), so the installer can't tell which port LiveKit is published on."
+  hint "Set a literal port in .env (e.g. LIVEKIT_HTTP_PORT=17880), then re-run. Nothing was saved for LiveKit."
+  exit 1
 }
 
 # LIVEKIT_COMMAND for a local (loopback-only, node-ip pinned) or public install.

@@ -265,7 +265,7 @@ source "$SCRIPT_DIR/scripts/setup-common.sh"
 # helpers existed) cannot run this installer. Plain printf: the error/hint
 # helpers just sourced may be that release's.
 for _helper in compose_var env_value env_decode_value set_env_var ensure_livekit_env livekit_seed_keys \
-    livekit_command_for livekit_host_port note_unresolved_livekit_port print_next_steps \
+    livekit_command_for livekit_host_port rendered_livekit_http_port require_livekit_host_port print_next_steps \
     note_livekit_values_kept; do
   if [[ "$(type -t "$_helper")" != function ]]; then
     if [[ -n "$SETUP_COMMON_KEPT_REASON" ]]; then
@@ -925,11 +925,16 @@ set_topology_var() {
   record_topology_var "$1" "$2" "$3"
 }
 
-# Like set_topology_var, but only when .env has no value for KEY: one still there
-# after reset_topology_vars is the operator's (never, or no longer, what an
-# earlier run wrote), and is kept.
+# Like set_topology_var, but only when KEY is not assigned at all: an
+# assignment still in .env after reset_topology_vars is the operator's (never,
+# or no longer, what an earlier run wrote), and so is one in the shell. Either
+# is kept even when empty: HTTP_BIND= means "every interface", as
+# ensure_https_http_bind already reads it on upgrades.
 set_topology_default() {
-  [[ -n "$(env_value "$1" "$2")" ]] || set_topology_var "$1" "$2" "$3"
+  local env="$1" key="$2"
+  [[ -z "${!key+set}" ]] || return 0
+  grep -qE "^[[:space:]]*${key}=" "$env" 2>/dev/null && return 0
+  set_topology_var "$env" "$key" "$3"
 }
 
 # Domain topology: COMPOSE_FILE must include the TLS overlay. Empty: the
@@ -1408,8 +1413,10 @@ fresh_install() {
     ensure_livekit_env "$env" "$lk_mode"
     require_livekit_real_keys "$env"
 
-    note_unresolved_livekit_port "$env"
-    lk_url="$(livekit_browser_url "$TOPOLOGY" "$lk_value" "$(livekit_host_port "$env")")"
+    # The port Compose publishes signaling on, for the URL saved below; an
+    # unknowable one stops here, before anything starts or is seeded.
+    require_livekit_host_port "$env"
+    lk_url="$(livekit_browser_url "$TOPOLOGY" "$lk_value" "$LIVEKIT_HOST_PORT")"
     lk_seed=(-e SEED_LIVEKIT_URL)
     lk_pair="$(livekit_seed_keys "$(compose_var "$env" LIVEKIT_KEYS)" "$(effective_livekit_command "$env")")" || lk_rc=$?
     if [[ $lk_rc -eq 0 ]]; then
@@ -1506,7 +1513,9 @@ fresh_install() {
   # livekit_next_steps_state reads off when the voice profile is off and
   # livekit is not running, so an install the installer left voice off on says so.
   print_summary "$boot_secret" "$(setup_base_url "$TOPOLOGY" "$lk_value")"
-  print_next_steps "$TOPOLOGY" "$(livekit_next_steps_state "$env")" "$PROXY_ORIGIN" "$(livekit_host_port "$env")"
+  local lk_port="${LIVEKIT_HOST_PORT:-}"
+  [[ -n "$lk_port" ]] || lk_port="$(livekit_host_port "$env")" || lk_port=7880
+  print_next_steps "$TOPOLOGY" "$(livekit_next_steps_state "$env")" "$PROXY_ORIGIN" "$lk_port"
 }
 
 # ---------------------------------------------------------------------------
@@ -1589,7 +1598,10 @@ existing_install() {
   # Empty secret: print_summary then shows the "stored in the vault" branch
   # rather than a fresh secret (which we don't have on the upgrade path).
   print_summary "" "$(setup_base_url "$topology" "$origin")"
-  print_next_steps "$topology" "$(livekit_next_steps_state "$env")" "$origin" "$(livekit_host_port "$env")"
+  # Only advice here (nothing is seeded on upgrades): an unknowable port reads as 7880.
+  local lk_port
+  lk_port="$(livekit_host_port "$env")" || lk_port=7880
+  print_next_steps "$topology" "$(livekit_next_steps_state "$env")" "$origin" "$lk_port"
 }
 
 # ---------------------------------------------------------------------------

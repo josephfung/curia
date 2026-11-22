@@ -133,6 +133,11 @@ else
 fi
 rm -f "$_node_out"
 
+# From here on no test reaches the real Docker: by default Compose "cannot
+# render" (the installers then fall back to .env and the shell). Harnesses that
+# need answers define their own docker() in a subshell.
+docker() { return 1; }
+
 # --- validate_anthropic_key tests ---
 
 echo ""
@@ -1382,8 +1387,24 @@ for _lk_kf in '--key-file /etc/lk-keys.yaml' '--key-file=/etc/lk-keys.yaml' '--c
 done
 _assert_var "seed: LIVEKIT_KEYS still beats --dev" "$(livekit_seed_keys 'APIgen: gensecret' '--dev')" "APIgen gensecret"
 
-# The host port signaling is published on (LIVEKIT_HTTP_PORT, as docker-compose.yml reads it).
+# The host port signaling is published on: what Compose renders, else
+# LIVEKIT_HTTP_PORT as docker-compose.yml reads it.
 _lk_env="$(mktemp)"
+_RLP_LONG='name: x\nservices:\n  livekit:\n    image: x\n    ports:\n      - mode: ingress\n        host_ip: 127.0.0.1\n        target: 7880\n        published: "17880"\n        protocol: tcp\n      - mode: ingress\n        target: 7881\n        published: "7881"\n        protocol: tcp\nnetworks:\n  default: {}\n'
+_RLP_SHORT='services:\n  livekit:\n    ports:\n      - "7881:7881"\n      - "127.0.0.1:18880:7880"\n'
+_rlp() { ( _rlp_out="$1"; docker() { [[ "$_rlp_out" != fail ]] || return 1; printf '%b' "$_rlp_out"; }; rendered_livekit_http_port || echo none ); }
+_assert_var "rendered port: long form" "$(_rlp "$_RLP_LONG")" "17880"
+_assert_var "rendered port: short form" "$(_rlp "$_RLP_SHORT")" "18880"
+_assert_var "rendered port: none published" "$(_rlp 'services:\n  livekit:\n    image: x\n')" "none"
+_assert_var "rendered port: config fails" "$(_rlp fail)" "none"
+printf 'LIVEKIT_HTTP_PORT=${VOICE_PORT:-17880}\n' > "$_lk_env"
+_assert_var "host port: rendered wins over an unresolved reference" \
+    "$( (unset LIVEKIT_HTTP_PORT; _o="$_RLP_LONG"; docker() { printf '%b' "$_o"; }; livekit_host_port "$_lk_env") )" "17880"
+_assert_var "host port: unresolved and unrenderable -> unknown (rc 1)" \
+    "$( (unset LIVEKIT_HTTP_PORT; livekit_host_port "$_lk_env") || echo "rc=$?")" "rc=1"
+_rhp_out="$( (unset LIVEKIT_HTTP_PORT; require_livekit_host_port "$_lk_env"; echo "continued") 2>&1 )" || true
+_assert_var "require host port: stops when unknown" "$([[ "$_rhp_out" == *continued* ]] && echo yes || echo no)" no
+_assert_var "require host port: asks for a literal port" "$([[ "$_rhp_out" == *'Set a literal port in .env'* ]] && echo yes || echo no)" yes
 : > "$_lk_env"
 _assert_var "host port: default 7880" "$( (unset LIVEKIT_HTTP_PORT; livekit_host_port "$_lk_env") )" "7880"
 printf 'LIVEKIT_HTTP_PORT=17880\n' > "$_lk_env"
@@ -1746,6 +1767,7 @@ _fi_run() {
           COMPOSE_PROJECT_NAME LIVEKIT_HTTP_PORT
       [[ -z "${_FI_SHELL_CMD+set}" ]] || export LIVEKIT_COMMAND="$_FI_SHELL_CMD"
       [[ -z "${_FI_SHELL_KEYS_EMPTY:-}" ]] || export LIVEKIT_KEYS=""
+      [[ -z "${_FI_SHELL_HTTP_BIND_EMPTY:-}" ]] || export HTTP_BIND=""
       # Record the seed command environment as an external process sees it (exported only).
       docker() {
         printf '%s\n' "$*" >> "$_fi_calls"
@@ -2044,13 +2066,20 @@ unset _FI_COMPOSE
 _assert_var "render failure: falls back and stops on .env --dev" "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
 _assert_var "render failure: says the check read .env" "$(_has "$_fi_out" 'read .env and the shell instead')" yes
 
-# LIVEKIT_HTTP_PORT with a ${...} reference: assume 7880 and say where to correct it.
-_fi_run local "" 'LIVEKIT_HTTP_PORT=${VOICE_PORT:-17880}\n' || true
-_assert_var "unresolved LIVEKIT_HTTP_PORT: seeds 7880" "$(_seed_env SEED_LIVEKIT_URL)" "ws://localhost:7880"
-_assert_var "unresolved LIVEKIT_HTTP_PORT: warns" "$(_has "$_fi_out" 'does not resolve, so it assumed port 7880')" yes
-_assert_var "unresolved LIVEKIT_HTTP_PORT: says where to correct it" "$(_has "$_fi_out" 'correct the LiveKit URL under Settings → Channels → Voice')" yes
-_fi_run local "" 'LIVEKIT_HTTP_PORT=17880\n' || true
-_assert_var "literal LIVEKIT_HTTP_PORT: no unresolved warning" "$(_has "$_fi_out" 'assumed port 7880')" no
+# LIVEKIT_HTTP_PORT with a ${...} reference: the seeded URL uses the port Compose
+# renders; when Compose cannot render, the install stops before anything starts.
+_FI_LK_RENDER='name: x\nservices:\n  livekit:\n    ports:\n      - mode: ingress\n        host_ip: 127.0.0.1\n        target: 7880\n        published: "17880"\n        protocol: tcp\n'
+_fi_rc=0; _fi_run local "" 'LIVEKIT_HTTP_PORT=${VOICE_PORT:-17880}\n' || _fi_rc=$?
+unset _FI_LK_RENDER
+_assert_var "unresolved LIVEKIT_HTTP_PORT, rendered 17880: continues" "$_fi_rc" "0"
+_assert_var "unresolved LIVEKIT_HTTP_PORT, rendered 17880: seeds it" "$(_seed_env SEED_LIVEKIT_URL)" "ws://localhost:17880"
+_fi_rc=0; _fi_run local "" 'LIVEKIT_HTTP_PORT=${VOICE_PORT:-17880}\n' || _fi_rc=$?
+_assert_var "unresolved LIVEKIT_HTTP_PORT, unrenderable: stops" "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+_assert_var "unresolved LIVEKIT_HTTP_PORT, unrenderable: Postgres never started" "$(grep -c 'up -d postgres' "$_fi_calls" | tr -d ' ')" "0"
+_assert_var "unresolved LIVEKIT_HTTP_PORT, unrenderable: nothing seeded" "$(_seed_line)" ""
+_assert_var "unresolved LIVEKIT_HTTP_PORT, unrenderable: asks for a literal port" "$(_has "$_fi_out" 'Set a literal port in .env')" yes
+_fi_rc=0; _fi_run local "" 'LIVEKIT_HTTP_PORT=17880\n' || _fi_rc=$?
+_assert_var "literal LIVEKIT_HTTP_PORT, unrenderable: still works" "$_fi_rc:$(_seed_env SEED_LIVEKIT_URL)" "0:ws://localhost:17880"
 
 # A rerun after an interrupted install, with another topology: the reach values
 # the earlier run wrote are replaced; values the operator changed since are kept.
@@ -2100,6 +2129,15 @@ _assert_var "retry domain -> local after an append: operator COMPOSE_FILE restor
 # An HTTP_BIND the operator set after an interrupted run is kept on retry.
 _fi_rerun domain "c.example.com" domain "c.example.com" 'HTTP_BIND=10.0.0.5\n'
 _assert_var "rerun domain, operator HTTP_BIND: kept" "$(env_value "$_fi_env" HTTP_BIND)" "10.0.0.5"
+# An explicit empty HTTP_BIND= (every interface) is the operator's too, in .env or the shell.
+_fi_rerun domain "c.example.com" domain "c.example.com" 'HTTP_BIND=\n'
+_assert_var "rerun domain, operator HTTP_BIND= (empty): kept empty" "$(grep '^HTTP_BIND=' "$_fi_env" | tail -n 1)" "HTTP_BIND="
+_fi_rerun domain "c.example.com" local "" 'HTTP_BIND=\n'
+_assert_var "rerun domain -> local, operator HTTP_BIND=: kept empty" "$(grep '^HTTP_BIND=' "$_fi_env" | tail -n 1)" "HTTP_BIND="
+_FI_SHELL_HTTP_BIND_EMPTY=1
+_fi_run local "" '' || true
+unset _FI_SHELL_HTTP_BIND_EMPTY
+_assert_var "local, HTTP_BIND= in the shell: .env not written" "$(grep -c '^HTTP_BIND=' "$_fi_env" | tr -d ' ')" "0"
 
 _fi_rerun domain "c.example.com" domain "c.example.com"
 _assert_var "rerun, same topology: overlay kept" "$(env_value "$_fi_env" COMPOSE_FILE)" "docker-compose.yml:docker-compose.tls.yml"
@@ -2160,7 +2198,7 @@ _sc_run() {
       unset CURIA_REF CURIA_VERSION
       # This harness already loaded the current helpers; start without them.
       unset -f compose_var env_value env_decode_value set_env_var ensure_livekit_env livekit_seed_keys \
-          livekit_command_for livekit_host_port note_unresolved_livekit_port print_next_steps \
+          livekit_command_for livekit_host_port rendered_livekit_http_port require_livekit_host_port print_next_steps \
           note_livekit_values_kept
       [[ "${_SC_VERSION-v0.46.0}" == - ]] || CURIA_VERSION="${_SC_VERSION-v0.46.0}"
       [[ -z "${_SC_REF:-}" ]] || CURIA_REF="$_SC_REF"
@@ -2430,8 +2468,11 @@ _assert_var "export_env_file: quotes removed, plain values unchanged" "$_xe_out"
 # setup.sh's seed URL follows the published LiveKit port too.
 printf 'LIVEKIT_KEYS="APIabc: s3cr3t"\nLIVEKIT_COMMAND=--config /etc/livekit.local.yaml --node-ip 127.0.0.1\nLIVEKIT_HTTP_PORT=17880\n' > "$_xe_env"
 printf 'LIVEKIT_KEYS="APIabc: s3cr3t"\nLIVEKIT_HTTP_PORT=${VOICE_PORT:-17880}\n' > "$_xe_env"
-_assert_var "build_livekit_seed_env: unresolved port warns" \
-    "$( (unset LIVEKIT_KEYS LIVEKIT_COMMAND LIVEKIT_HTTP_PORT; build_livekit_seed_env "$_xe_env") 2>&1 | grep -c 'assumed port 7880' | tr -d ' ')" "1"
+_assert_var "build_livekit_seed_env: unresolved, unrenderable port stops" \
+    "$( (unset LIVEKIT_KEYS LIVEKIT_COMMAND LIVEKIT_HTTP_PORT; build_livekit_seed_env "$_xe_env"; echo continued) 2>/dev/null || echo stopped)" "stopped"
+_assert_var "build_livekit_seed_env: unresolved port, rendered by Compose" \
+    "$( (unset LIVEKIT_KEYS LIVEKIT_COMMAND LIVEKIT_HTTP_PORT; _o="$_RLP_LONG"; docker() { printf '%b' "$_o"; }; build_livekit_seed_env "$_xe_env"; printf '%s' "${LIVEKIT_SEED_ENV[0]}") )" \
+    "SEED_LIVEKIT_URL=ws://localhost:17880"
 printf 'LIVEKIT_KEYS="APIabc: s3cr3t"\nLIVEKIT_COMMAND=--config /etc/livekit.local.yaml --node-ip 127.0.0.1\nLIVEKIT_HTTP_PORT=17880\n' > "$_xe_env"
 _assert_var "build_livekit_seed_env: URL uses LIVEKIT_HTTP_PORT" \
     "$( unset LIVEKIT_KEYS LIVEKIT_COMMAND LIVEKIT_HTTP_PORT; build_livekit_seed_env "$_xe_env"; printf '%s' "${LIVEKIT_SEED_ENV[0]}" )" \
