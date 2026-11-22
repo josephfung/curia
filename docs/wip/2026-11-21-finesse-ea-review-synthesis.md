@@ -286,7 +286,7 @@ These need the case format to script a reply from someone other than Avery (toda
 3. ~~Close the loop.~~ Done 2026-11-21. Each case says how Avery hears about it, and has a behaviour for it where the run can see it. A case's later turn can now come from a seeded contact (`inbound.then` with `from`), and 51b, 52b and 54c script the other side's reply.
 4. ~~Add a case where Avery asks for an excuse.~~ Done 2026-11-21: case 51g.
 5. Identity fixture, done in part (2026-11-21). The customer/investor preference is now one of the finesse identity's standing preferences ("Emails to customers and investors come from Avery's own mailbox. Their assistants can hear from you."). The general "who writes" rules were deliberately left out: they are what the finesse cases measure, and the fixture is written so as not to coach the behaviour under test. If the baseline shows Curia getting them wrong, the fix belongs in the product (the coordinator's guidance or the send tools' descriptions, per ADR-046), not in the fixture. A run with the rules in the fixture could separate "doesn't know the rule" from "can't apply it", but it would be a separate experiment, not the baseline.
-6. Run a new paid baseline of the finesse cases (the owner approves the run and its cost first), then sample a fresh grading sheet for choosing the judge. Every finesse setup has changed since the 2026-11-14 baseline, so this is a new baseline, not a re-score.
+6. ~~Run a new paid baseline of the finesse cases, then sample a fresh grading sheet for choosing the judge.~~ Done 2026-11-21: the finesse benchmark's v0.1 baseline, in `2026-11-21-finesse-benchmark-baseline.md`, with a 25-item grading sheet.
 
 ## Notes on the reviews
 

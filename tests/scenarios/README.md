@@ -241,7 +241,7 @@ person, before `JUDGE_MODEL` changes. A judge for one group of cases only goes i
 
 `pnpm rejudge --from-cases tests/scenarios/results/<run>.json` answers a different question:
 what the same transcripts score once the cases' expected behaviors have been edited. See
-[Finesse cases](#finesse-cases).
+[Finesse benchmark](#finesse-benchmark).
 
 ### Seeded state and the shared database
 
@@ -398,8 +398,8 @@ autonomy: { score: 84, gating: band }     # optional; this case's autonomy, see 
 through_gateway: true                     # optional; sends run production's review, see Sends through the gateway
 gated_tools: [calendar-create-event]      # optional, through_gateway only; these stubs answer only after the gates, see Gated stubs
 approval_channels: [email]                # optional, through_gateway only; the channels approvals may use, see Approval channels
-judge_model: vendor/model                 # optional; this case's judge, see Finesse cases
-contrast:                                 # optional; blind identification, see Finesse cases
+judge_model: vendor/model                 # optional; this case's judge, see Finesse benchmark
+contrast:                                 # optional; blind identification, see Finesse benchmark
   group: finesse-51-reschedule
   recipient: A direct report.
   message: [{ tool: email-send, arg: body, with: { to: "{{contact:sam}}" } }]
@@ -697,9 +697,9 @@ with a Signal identity in the database the run uses. The design, and the baselin
 later tone & style PRs compare against, are in
 [docs/wip/2026-10-15-tone-and-style-design.md](../../docs/wip/2026-10-15-tone-and-style-design.md#measurement).
 
-## Finesse cases
+## Finesse benchmark
 
-The finesse cases, 50a–59e (#2556, tag `finesse`), measure whether Curia makes the right
+The finesse benchmark, cases 50a–59e (#2556, tag `finesse`), measures whether Curia makes the right
 call and uses the right voice for the person it is dealing with: a board chair, a direct
 report, a vendor, a friend, the principal's mother-in-law. They are written from the
 casebook, [docs/wip/2026-11-10-finesse-casebook.md](../../docs/wip/2026-11-10-finesse-casebook.md),
@@ -711,6 +711,14 @@ still needs a person to diff the two.
 ```bash
 pnpm scenarios --tags finesse --model deepseek/deepseek-v4.1-flash
 ```
+
+**Versions.** It is a benchmark, not a gate: product fixes are measured against a recorded
+baseline, so the cases and their criteria hold still between baselines. The current version
+is v0.1, with its baseline in
+[docs/wip/2026-11-21-finesse-benchmark-baseline.md](../../docs/wip/2026-11-21-finesse-benchmark-baseline.md).
+It is provisional until the finesse judge is chosen, which makes it v1. After that, a change to
+a case's setup or criteria is a new version with a new baseline. `pnpm rejudge --from-cases`
+only re-scores runs whose setup is unchanged, and the results' setup hashes show which runs those are.
 
 All of them run under the `finesse` identity fixture (the principal's standing preferences, in
 a neutral tone that does not coach the behavior under test), so they run as a group, like the
@@ -754,8 +762,8 @@ perfectly worded message that should never have been sent shows as a decision fa
 (`judge-models.ts`), picks its judge; every other case keeps the suite default
 (`JUDGE_MODEL`, gpt-4o). Each judge is created at boot, so a model with no priced entry in the
 model registry fails the run before any paid call. Results list the cases off the default
-under `caseJudges`. The finesse judge is chosen by agreement with human grades on the pilot
-run (#2556); until then the tag has no entry.
+under `caseJudges`. The finesse judge is chosen by agreement with human grades on the v0.1
+baseline (#2556); until then the tag has no entry.
 
 **Human grades.** `pnpm grading` measures a judge against people, not against another judge:
 

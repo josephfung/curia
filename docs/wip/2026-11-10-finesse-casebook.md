@@ -2,7 +2,7 @@
 
 Issue #2556 · Started 2026-11-10 · Last revised 2026-11-21, after review by six executive assistants (see **Revision history** at the end, and the [review synthesis](2026-11-21-finesse-ea-review-synthesis.md))
 
-This casebook describes situations an executive assistant handles every week: moving meetings, asking for time, saying no, keeping family happy. For each one it says what we think the right call is, and what a good message sounds like. It is the source of truth for a set of automated tests. When the tests and this document disagree, this document wins, and the tests are changed to match.
+This casebook describes situations an executive assistant handles every week: moving meetings, asking for time, saying no, keeping family happy. For each one it says what we think the right call is, and what a good message sounds like. It is the source of truth for a set of automated tests, the **finesse benchmark** (now v0.1; it becomes v1 once its automated judge is chosen). When the tests and this document disagree, this document wins, and the tests are changed to match.
 
 ---
 
@@ -878,6 +878,7 @@ Someone writes to Avery informally, copying Curia, asking to get together. Curia
 
 ## Revision history
 
+- **2026-11-21, benchmark v0.1.** The cases built from this casebook are now the finesse benchmark, with this revision as v0.1. Its baseline is in [the v0.1 baseline note](2026-11-21-finesse-benchmark-baseline.md).
 - **2026-11-21, after review by six executive assistants.** The open questions are gone; their answers are folded into the cases. The [review synthesis](2026-11-21-finesse-ea-review-synthesis.md) has the detail and the owner's decision on each split. The main changes:
   - **Reasons and excuses** replaces **Excuses**: Curia never invents a reason on its own, but writes one when Avery asks for it (new case 51g).
   - **Closing the loop** is new, and every case now says how Avery hears about it.
