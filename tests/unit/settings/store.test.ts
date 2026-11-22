@@ -189,7 +189,7 @@ describe('settings store — writes', () => {
   });
 
   it('locks a multi-key write in sorted order, so two writes cannot deadlock', async () => {
-    const { pool, lockedKeys } = fakePool();
+    const { pool, lockedKeys, statements } = fakePool();
     const { logger } = fakeLogger();
     await writeSettings(
       pool,
@@ -197,7 +197,8 @@ describe('settings store — writes', () => {
       'console',
       logger,
     );
-    expect(lockedKeys).toEqual(['messaging_route', 'voice_route']);
+    expect(lockedKeys).toEqual(['settings:messaging_route', 'settings:voice_route']);
+    expect(statements.some((s) => s.includes('hashtextextended'))).toBe(true);
   });
 
   it('appends one history row per key in a multi-key write', async () => {

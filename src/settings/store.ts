@@ -270,10 +270,14 @@ async function runInTransaction<T>(
  * first writes would both record `old_value = null`. A transaction-scoped advisory lock per
  * key serializes them; taking the keys in sorted order means two multi-key writes cannot
  * deadlock against each other.
+ *
+ * The key is namespaced (`settings:<key>`) and hashed to 64 bits, so it cannot collide with
+ * another module's `hashtext` lock on the same 32-bit keyspace (the outbound queue locks on
+ * channel names, for example).
  */
 async function lockKeys(client: SettingsClient, keys: readonly SettingKey[]): Promise<void> {
   for (const key of [...new Set(keys)].sort()) {
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1)::bigint)', [key]);
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`settings:${key}`]);
   }
 }
 

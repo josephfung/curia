@@ -297,10 +297,12 @@ instant wins above (persona, debrief, pronouns, the tour) moved to onboarding
   absent: from a new install until Setup is finished), `web` chat goes to the setup guide
   instead of the coordinator, with none of the principal-turn extras (turn guidance,
   backlog, live lanes). The chat route decides when it accepts the message from the shared
-  thread and the phase (`readWebThreadAndSetupPhase`, two reads; the only extra interleaving
-  is a Setup thread read just before Setup finishes, which is a legitimate state) and stamps
-  the inbound; the dispatcher routes on that stamp, read only on `web`. A message accepted
-  just before Setup is finished therefore stays on the Setup thread with the setup guide.
+  thread and the phase (`readWebThreadAndSetupPhase`, two reads; the settings store validates
+  the phase value) and stamps the inbound; the dispatcher routes on that stamp, read only on
+  `web`. The two reads can produce (Setup thread, complete) when Setup finishes in between:
+  that message goes to the coordinator on the Setup thread, the same outcome as a message sent
+  after "Not right now", which keeps the Setup chat by design. A message whose phase read still
+  sees Setup in progress is stamped for the setup guide and stays on the Setup thread with it.
   `POST /api/chat/messages` takes an optional `setupStep` (the open step's catalog id, or
   `apply` / `start`); the runtime heads the turn with a "[Setup page: ...]" line naming it
   (`none` when the client sent none), so the agent knows it is talking to the operator. A

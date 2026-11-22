@@ -11,20 +11,25 @@ import { join, relative } from 'node:path';
 
 const SKILLS_DIR = join(import.meta.dirname, '../../../skills');
 
-function sourceFilesUnder(dir: string): string[] {
+function filesUnder(dir: string, matches: (name: string) => boolean): string[] {
   const found: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
-    if (entry.isDirectory()) found.push(...sourceFilesUnder(full));
-    else if (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx')) found.push(full);
+    if (entry.isDirectory()) found.push(...filesUnder(full, matches));
+    else if (matches(entry.name)) found.push(full);
   }
   return found;
+}
+
+function sourceFilesUnder(dir: string): string[] {
+  return filesUnder(dir, (name) => (name.endsWith('.ts') || name.endsWith('.tsx')) && !/\.test\.tsx?$/.test(name));
 }
 
 // Matches an import of the settings store or its Setup projection, wherever it sits.
 const SETTINGS_IMPORT = /from\s+['"][^'"]*(?:\/settings\/(?:registry|store)|setup\/setup-settings)\.js['"]/;
 
-const agentSources = sourceFilesUnder(SKILLS_DIR).filter((file) => !/\.test\.tsx?$/.test(file));
+const agentSources = sourceFilesUnder(SKILLS_DIR);
+const toolManifests = filesUnder(SKILLS_DIR, (name) => name === 'tool.json');
 
 describe('settings are not reachable from an agent tool', () => {
   it('finds the files it is checking', () => {
@@ -40,8 +45,9 @@ describe('settings are not reachable from an agent tool', () => {
   });
 
   it('no tool manifest declares a settings capability', () => {
-    const offenders = sourceFilesUnder(SKILLS_DIR)
-      .filter((file) => file.endsWith('tool.json'))
+    // Same guard against a silently vacuous scan as the source scan above.
+    expect(toolManifests.length).toBeGreaterThan(100);
+    const offenders = toolManifests
       .filter((file) => {
         const manifest = JSON.parse(readFileSync(file, 'utf-8')) as { capabilities?: unknown };
         return Array.isArray(manifest.capabilities)

@@ -134,10 +134,10 @@ export async function rotateWebThread(
  * Finishing Setup changes only the phase; starting onboarding (#2360) later rotates it.
  *
  * The two are read in separate statements (the settings store validates the phase value,
- * which a SQL join would bypass). That is safe: the worst interleaving is a thread read
- * just before a rotation whose phase read lands after Setup finishes, and (Setup thread,
- * complete) is a legitimate state — the message was accepted while Setup ran and the
- * dispatcher then treats it as the Setup chat.
+ * which a SQL join would bypass). That is safe: the extra pairing it allows is (Setup
+ * thread, complete) — a message read against the Setup thread just as Setup finishes. With
+ * the phase complete it is routed to the coordinator on that thread, the same outcome as a
+ * message sent after "Not right now", which keeps the Setup chat by design.
  */
 export async function readWebThreadAndSetupPhase(
   pool: WebThreadQueryable,
