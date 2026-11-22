@@ -106,7 +106,7 @@ write_env() {
     # LiveKit voice is on by default for source installs (#2357). Write a preserved
     # pair (full reset) first so ensure_livekit_env keeps it instead of generating.
     if [[ -n "${PRESERVED_LIVEKIT_KEYS:-}" ]]; then
-        set_env_var "$ENV_FILE" LIVEKIT_KEYS "\"${PRESERVED_LIVEKIT_KEYS}\""
+        set_env_var "$ENV_FILE" LIVEKIT_KEYS "${PRESERVED_LIVEKIT_KEYS}"
     fi
     ensure_livekit_env "$ENV_FILE" local
 }
@@ -188,60 +188,14 @@ build_livekit_seed_env() {
     keys="$(compose_var "$env" LIVEKIT_KEYS)"
     cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
     [[ -n "$keys" || -n "$cmd" ]] || return 0
-    # Stops (before seeding) when the published port can't be known; saves no
-    # URL when Compose publishes none (a browser here couldn't reach it).
-    require_livekit_host_port "$env"
-    if [[ -n "$LIVEKIT_HOST_PORT" ]]; then
-        LIVEKIT_SEED_ENV=("SEED_LIVEKIT_URL=ws://localhost:${LIVEKIT_HOST_PORT}")
-    else
-        note_livekit_signaling_unpublished local
-    fi
-    # The keys the service Compose renders runs on; .env and the shell when it can't render.
-    if rendered_livekit && [[ "$RENDERED_LIVEKIT_DEFINED" == 1 ]]; then
-        pair="$(rendered_livekit_seed_keys)" || rc=$?
-    else
-        pair="$(livekit_seed_keys "$keys" "$cmd")" || rc=$?
-    fi
+    LIVEKIT_SEED_ENV=("SEED_LIVEKIT_URL=ws://localhost:7880")
+    pair="$(livekit_seed_keys "$keys" "$cmd")" || rc=$?
     if [[ $rc -eq 0 ]]; then
         LIVEKIT_SEED_ENV+=("SEED_LIVEKIT_API_KEY=${pair%% *}" "SEED_LIVEKIT_API_SECRET=${pair#* }")
     else
-        warn "Could not tell which keys LiveKit's command uses, so they were not saved for Curia."
+        warn "Could not tell which keys LiveKit's LIVEKIT_COMMAND uses, so they were not saved for Curia."
         hint "Enter the LiveKit API key and secret under Settings → Channels → Voice after setup."
     fi
-}
-
-# Run seed-vault with SEED_VAULT_VERIFY=1 and each KEY=VALUE argument in its
-# environment. The values are exported in a subshell (export is a builtin), so
-# they never appear on a command line, where `ps` would show them, and do not
-# outlive the call.
-run_seed_vault() {
-    (
-        local kv
-        for kv in "$@"; do export "$kv"; done
-        export SEED_VAULT_VERIFY=1
-        pnpm --prefix "$REPO_ROOT" run seed-vault
-    )
-}
-
-# Export the KEY=VALUE lines of env file $1 into the shell environment without
-# executing shell code (source would run any shell expression in the file).
-# Each value is decoded as Compose decodes .env (env_decode_value: quotes removed,
-# an inline comment dropped): Compose prefers the shell's value over the file's,
-# so exporting LIVEKIT_KEYS="k: s" with its quotes would hand LiveKit a quoted
-# string it can't parse. For the same reason a value Compose would interpolate
-# (a $ outside single quotes, e.g. ${VOICE_PORT:-17880}) is not exported at all:
-# the literal text would win over Compose's own resolution of the .env line.
-export_env_file() {
-    local line name raw
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
-        if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
-            name="${BASH_REMATCH[1]}"; raw="${BASH_REMATCH[2]}"
-            # Single-quoted values are literal in Compose; anything else with a $ is not.
-            [[ "$raw" == \'* || "$raw" != *'$'* ]] || continue
-            export "$name=$(env_decode_value "$raw")"
-        fi
-    done < "$1"
 }
 
 # Starts Postgres, runs migrations, starts the full stack, writes SETUP_COMPLETE marker.
@@ -255,7 +209,14 @@ run_infra() {
         exit 1
     fi
 
-    export_env_file "$ENV_FILE"
+    # Export .env vars into the shell environment safely — parse KEY=VALUE lines without
+    # executing shell code. (source would run any shell expression in the .env file.)
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            export "${BASH_REMATCH[1]}=${BASH_REMATCH[2]}"
+        fi
+    done < "$ENV_FILE"
 
     info "Starting Postgres..."
     docker compose --project-directory "$REPO_ROOT" "${DEV_COMPOSE[@]}" up -d postgres
@@ -323,18 +284,13 @@ run_infra() {
     seed_secret_env+=(${LIVEKIT_SEED_ENV[@]+"${LIVEKIT_SEED_ENV[@]}"})
     # ${arr[@]+"${arr[@]}"} expands safely to nothing when the array is empty, even under
     # `set -u` on bash 3.2 (macOS default), where a bare "${arr[@]}" is an unbound error.
-    if ! run_seed_vault ${seed_secret_env[@]+"${seed_secret_env[@]}"}; then
+    if ! env ${seed_secret_env[@]+"${seed_secret_env[@]}"} SEED_VAULT_VERIFY=1 \
+         pnpm --prefix "$REPO_ROOT" run seed-vault; then
         error "Vault seeding failed or required secrets are missing. See the output above."
         hint "If this is a resume after a failed first run, re-run full setup (option 3) to regenerate and seed the bootstrap secrets."
         exit 1
     fi
     success "Secrets vault seeded"
-    # seed-vault keeps LiveKit values an earlier run saved; say so when this run
-    # follows one (a resume, or a full reset that kept the vault).
-    if [[ ${#LIVEKIT_SEED_ENV[@]} -gt 0 ]] \
-        && [[ "$SETUP_MODE" == resume || -n "${PRESERVED_ENCRYPTION_KEY:-}" ]]; then
-        note_livekit_values_kept
-    fi
 
     info "Starting Curia..."
     if ! docker compose --project-directory "$REPO_ROOT" "${DEV_COMPOSE[@]}" up -d; then
@@ -358,10 +314,10 @@ run_infra() {
 
     # On the resume path the bootstrap secret is not in-shell (not in .env anymore,
     # not regenerated), so pass it defensively — print_summary degrades gracefully.
-    # Curia's host port as Compose publishes it; a placeholder with a note when unknown.
-    resolve_curia_port_for_messages "$ENV_FILE"
-    print_summary "${WEB_APP_BOOTSTRAP_SECRET:-}" "http://localhost:${CURIA_PORT_DISPLAY}"
-    print_next_steps local
+    print_summary "${WEB_APP_BOOTSTRAP_SECRET:-}" "http://localhost:${HTTP_PORT:-3000}"
+    local voice=off
+    [[ ",${COMPOSE_PROFILES:-}," != *,voice,* ]] || voice=on
+    print_next_steps local "$voice"
 }
 
 main() {
