@@ -30,6 +30,8 @@ The second baseline: the 46 finesse cases as revised from the six EA reviews (`d
 - The 15 cases kept from the first run carry the setup hash from before that stub. They never called the tool, so their behavior is unaffected. A re-score that checks hashes will see them as changed.
 - 57e's coordinator called `decay-warnings-list` once, refused for the same reason. It is allowed in `stub-coverage.json`, citing #2706.
 
+A review after the runs found that calendar listings were replayed twice. The branch's own replay of moves and cancellations duplicated one main already does (#2588). That fix is in, but these runs had the duplicate. Its effect was small: of 528 stubbed listings, one (a single 53e run) showed an event twice, and none of the 10 events created across all runs appeared in a later listing.
+
 The first run also caught six cases that forbid sending Avery's draft while `finesse-office` refused the send. Those cases now stub a succeeding send, so the forbidden path is open to be chosen.
 
 ## Results
