@@ -458,14 +458,16 @@ service_maybe_running() {
   [[ $rc -ne 1 ]]
 }
 
-# Echo the command a running compose service's container was created with, or
-# nothing when it is not running or cannot be inspected. A container that was
-# not recreated keeps its old command whatever .env now says.
+# Echo the command a running compose service's container was created with. A
+# container that was not recreated keeps its old command whatever .env now
+# says. Returns 0 (printed), 1 when the service has no running container, and
+# 2 when the lookup or the inspection failed: unknown, which callers must not
+# replace with what .env says.
 live_command() {
   local service="$1" cid
-  cid="$(docker compose --project-directory "$INSTALL_DIR" ps -q "$service" 2>/dev/null)" || return 0
-  [[ -n "$cid" ]] || return 0
-  docker inspect -f '{{join .Config.Cmd " "}}' "$cid" 2>/dev/null || return 0
+  cid="$(docker compose --project-directory "$INSTALL_DIR" ps -q "$service" 2>/dev/null)" || return 2
+  [[ -n "$cid" ]] || return 1
+  docker inspect -f '{{join .Config.Cmd " "}}' "$cid" 2>/dev/null || return 2
 }
 
 # Run right after Postgres starts, on both the fresh and upgrade paths:
@@ -560,8 +562,21 @@ warn_public_livekit_dev() {
     via="caddy"
   fi
   [[ -n "$via" ]] || return 0
-  cmd="$(live_command livekit)"
-  [[ -n "$cmd" ]] || cmd="$(effective_livekit_command "$env")"
+  local lc=0
+  cmd="$(live_command livekit)" || lc=$?
+  case "$lc" in
+    0) ;;
+    1) cmd="$(effective_livekit_command "$env")" ;;
+    *)
+      # Running (or unknown) but its command can't be read: it may be --dev,
+      # and .env says nothing about a container that was not recreated.
+      echo "" >&2
+      warn "LiveKit's command could not be read, so it may run the public --dev credentials (devkey/secret)."
+      hint "Check it: docker compose --project-directory \"$INSTALL_DIR\" --profile voice ps livekit"
+      hint "and recreate it with real keys if so (docs/dev/voice-setup.md):"
+      hint "  docker compose --project-directory \"$INSTALL_DIR\" --profile voice up -d livekit"
+      return 0 ;;
+  esac
   livekit_command_is_dev "$cmd" || return 0
   echo "" >&2
   if [[ "$via" == port ]]; then
@@ -597,18 +612,23 @@ note_voice_off() {
 
 # Echo the voice state the closing steps describe: off (the voice profile is not
 # enabled and livekit is not running), dev (LiveKit runs --dev's public
-# devkey/secret), or on (real keys). The running container's command is checked
+# devkey/secret), unknown (it runs, or may, but its command can't be read: told
+# like dev, never as on), or on (real keys). The running container's command is checked
 # first, as warn_public_livekit_dev does: one that was not recreated keeps its old
 # command. Falls back to effective_livekit_command (empty = the base file's --dev;
 # the TLS overlay's fallback is the keyless shipped config).
 livekit_next_steps_state() {
-  local env="$1" profiles cmd
+  local env="$1" profiles cmd lc=0
   profiles="$(compose_var "$env" COMPOSE_PROFILES)"
   if [[ ",${profiles}," != *,voice,* ]] && ! service_maybe_running livekit; then
     printf off; return 0
   fi
-  cmd="$(live_command livekit)"
-  [[ -n "$cmd" ]] || cmd="$(effective_livekit_command "$env")"
+  cmd="$(live_command livekit)" || lc=$?
+  case "$lc" in
+    0) ;;
+    1) cmd="$(effective_livekit_command "$env")" ;;   # not running: .env decides
+    *) printf unknown; return 0 ;;                     # can't read it: never "on"
+  esac
   if livekit_command_is_dev "$cmd"; then printf dev; else printf on; fi
 }
 

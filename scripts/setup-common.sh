@@ -153,6 +153,10 @@ livekit_seed_keys() {
     # Generated and usual keys are alphanumeric; the operator enters such a pair
     # under Settings → Channels → Voice.
     [[ "$k$s" != *'$'* ]] || return 1
+    # A quote left inside the key or secret (e.g. k: "s" within a quoted pair)
+    # is YAML quoting LiveKit decodes; rather than re-implement that, such a
+    # pair is unknown too, and goes the manual-entry way.
+    [[ "$k$s" != *[\"\']* ]] || return 1
     printf '%s %s' "$k" "$s"
     return 0
   fi
@@ -645,9 +649,10 @@ print_summary() {
 # the address print_summary showed), the docs guide and, for installs reached
 # from other machines with voice on, the call ports (and a proxy's forwarding
 # rules).
-#   print_next_steps <topology: domain | proxy | local> <voice: on | dev | off> [origin]
+#   print_next_steps <topology: domain | proxy | local> <voice: on | dev | unknown | off> [origin]
 # voice: on = LiveKit runs real keys; dev = it runs --dev's public devkey/secret,
-# so a proxy must not publish /rtc* yet; off = voice is not running. origin is a
+# so a proxy must not publish /rtc* yet; unknown = its command can't be read,
+# told like dev; off = voice is not running. origin is a
 # proxy's public address: empty means a proxy kept on localhost for testing.
 # A 4th argument is the host port LiveKit signaling is published on
 # (livekit_host_port), 7880 when omitted; empty means Compose publishes none.
@@ -682,6 +687,10 @@ print_next_steps() {
         if [[ "$voice" == dev ]]; then
             echo "LiveKit runs --dev credentials (devkey/secret): Don't forward /rtc* to it, or set"
             echo "LIVEKIT_HTTP_BIND, until it runs real keys (see docs/dev/voice-setup.md)."
+        elif [[ "$voice" == unknown ]]; then
+            echo "LiveKit's command could not be read, so it may run --dev credentials (devkey/secret):"
+            echo "Don't forward /rtc* to it, or set LIVEKIT_HTTP_BIND, until you have checked it runs"
+            echo "real keys (see docs/dev/voice-setup.md)."
         fi
     fi
     echo ""

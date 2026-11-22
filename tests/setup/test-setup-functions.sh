@@ -788,7 +788,10 @@ eval "_orig_$(declare -f live_command)"
 eval "_orig_$(declare -f service_running)"
 _STUB_RUNNING=""
 published_bindings() { printf '%s' "$_STUB_BINDINGS"; return "$_STUB_RC"; }
-live_command() { printf '%s' "$_STUB_CMD"; }
+# live_command's contract: 0 + command, 1 = no running container (.env decides),
+# 2 = can't be read. Empty _STUB_CMD is 1, unless _STUB_CMD_RC says otherwise.
+_STUB_CMD_RC=""
+live_command() { [[ -z "$_STUB_CMD_RC" ]] || return "$_STUB_CMD_RC"; [[ -n "$_STUB_CMD" ]] || return 1; printf '%s' "$_STUB_CMD"; }
 service_running() { [[ -n "$_STUB_RUNNING" ]]; }
 
 # $1 desc, $2 env file contents, $3 stub bindings, $4 want: ok | stopped
@@ -937,6 +940,10 @@ _assert_lk "public opt-in, .env real config, live --dev" 'LIVEKIT_HTTP_BIND=0.0.
 _STUB_CMD="--config /etc/livekit.yaml"
 _assert_lk "public opt-in, live real config"    'LIVEKIT_HTTP_BIND=0.0.0.0\n'     '0.0.0.0:7880'              quiet
 _STUB_CMD=""
+# Public, and the running command can't be read: it may be --dev, whatever .env says.
+_STUB_CMD_RC=2
+_assert_lk "public opt-in, .env real config, live command unreadable" 'LIVEKIT_HTTP_BIND=0.0.0.0\nLIVEKIT_COMMAND=--config /etc/livekit.yaml\n' '0.0.0.0:7880' dev-warning
+_STUB_CMD_RC=""
 
 # Fresh installs: check_livekit_exposure alone (no loopback-only note).
 _assert_lkdev() {
@@ -1392,6 +1399,12 @@ for _lk_d in 'APIx: 0123456789$tail' 'APIx: 0123456789$$tail' 'API$x: secret'; d
     _lk_rc=0; _lk_out="$(livekit_seed_keys "$_lk_d" '')" || _lk_rc=$?
     _assert_var "seed: \$ in '$_lk_d' is unknown" "$_lk_rc:$_lk_out" "1:"
 done
+# A quote left inside the key or secret is YAML quoting LiveKit decodes: unknown.
+for _lk_q in 'APIoffice: "0123456789abcdef"' "APIoffice: '0123456789abcdef'" '"APIx": secret'; do
+    _lk_rc=0; _lk_out="$(livekit_seed_keys "$_lk_q" '')" || _lk_rc=$?
+    _assert_var "seed: quoted inner value in '$_lk_q' is unknown" "$_lk_rc:$_lk_out" "1:"
+done
+_assert_var "seed: a quoted whole pair is still seedable" "$(livekit_seed_keys '"APIx: s3cr3t"' '')" "APIx s3cr3t"
 _lk_rc=0; _lk_out="$(livekit_seed_keys '' '--keys "APIx: abc$$def"')" || _lk_rc=$?
 _assert_var "seed: \$ in a --keys argument is unknown" "$_lk_rc:$_lk_out" "1:"
 
@@ -1564,6 +1577,9 @@ _assert_var "proxy, voice off: forwards / to HTTP_PORT" "$(_has "$_pns" 'forward
 _pns="$(print_next_steps proxy on https://p.example.com '' 2>&1)" || true
 _assert_var "proxy, signaling unpublished: no 127.0.0.1 rule" "$(_has "$_pns" '/rtc* to 127.0.0.1')" no
 _assert_var "proxy, signaling unpublished: says to publish it" "$(_has "$_pns" 'once')" yes
+_pns="$(print_next_steps proxy unknown https://p.example.com 2>&1)" || true
+_assert_var "proxy, LiveKit command unreadable: no /rtc* rule" "$(_has "$_pns" '/rtc* to 127.0.0.1')" no
+_assert_var "proxy, LiveKit command unreadable: says it may be --dev" "$(_has "$_pns" 'may run --dev credentials')" yes
 _pns="$(print_next_steps proxy on https://p.example.com 17880 2>&1)" || true
 _assert_var "proxy: forwarding line uses the published LiveKit port" "$(_has "$_pns" '/rtc* to 127.0.0.1:17880 on this host.')" yes
 _pns="$(print_next_steps local on 2>&1)" || true
@@ -1740,7 +1756,8 @@ _assert_wd() {
     out="$(
       unset COMPOSE_FILE LIVEKIT_COMMAND
       _wd_cmd="$3"; _wd_running="$4"
-      live_command() { printf '%s' "$_wd_cmd"; }
+      # Empty = no running container (.env decides); "?" = command unreadable.
+      live_command() { [[ "$_wd_cmd" != "?" ]] || return 2; [[ -n "$_wd_cmd" ]] || return 1; printf '%s' "$_wd_cmd"; }
       service_running() { [[ -n "$_wd_running" ]]; }
       warn_public_livekit_dev "$_wd_env" "$2" 2>&1
     )" || true
@@ -1754,6 +1771,7 @@ _assert_wd "${_TLS_CF}${_RK_DEV}" '127.0.0.1:7880' ''                          1
 # Under the overlay an empty LIVEKIT_COMMAND is its fail-closed --config fallback, not --dev.
 _assert_wd "$_TLS_CF"            ''               ''                           1  quiet "TLS overlay, running without 7880, overlay fallback (not --dev)"
 _assert_wd "$_TLS_CF"            ''               '--dev'                      1  warn  "TLS overlay, running without 7880, live --dev"
+_assert_wd "${_TLS_CF}LIVEKIT_COMMAND=--config /etc/livekit.yaml\n" '127.0.0.1:7880' '?' 1 warn "TLS overlay, .env real config, live command unreadable"
 _assert_wd "$_TLS_CF"            ''               ''                           '' quiet "TLS overlay, livekit not running"
 _assert_wd "$_RK_DEV"            '127.0.0.1:7880' '--dev'                      1  quiet "no overlay, loopback, --dev"
 _assert_wd "$_RK_DEV"            '0.0.0.0:7880'   '--dev'                      1  warn  "no overlay, public, --dev (unchanged)"
@@ -1953,10 +1971,16 @@ _fi_run() {
             awk -v i="$_id" '$2 != i' "$_fi_dir/caddy-ids" > "$_fi_dir/caddy-ids.tmp"; mv "$_fi_dir/caddy-ids.tmp" "$_fi_dir/caddy-ids"
           done; return 0 ;;
         esac
+        # A full `up -d` with the TLS overlay starts Caddy in the project the
+        # compose fixture defines, independently of what the installer recorded:
+        # "office" when _FI_PROJECT_BY_CF names it, else the directory-derived
+        # name (the Compose default; the stub renders no name: then).
         case "$*" in (compose*" up -d")
           if [[ "$(env_value "$_fi_env" COMPOSE_FILE)" == *tls* ]]; then
-            local _cp; _cp="$({ grep '^# installer-topology: CADDY_PROJECT=' "$_fi_env" || true; } | tail -n 1 | cut -d= -f2-)"
-            printf '%s caddy-%s\n' "${_cp:-unrecorded}" "${_cp:-unrecorded}" >> "$_fi_dir/caddy-ids"
+            local _cp
+            if [[ -n "${_FI_PROJECT_BY_CF:-}" ]]; then _cp=office
+            else _cp="$(basename "$_fi_dir" | tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -cd 'a-z0-9_-')"; fi
+            printf '%s caddy-%s\n' "$_cp" "$_cp" >> "$_fi_dir/caddy-ids"
           fi ;;
         esac
 
@@ -2761,7 +2785,8 @@ _ei_run() {
       check_postgres_exposure() { :; }; check_http_exposure() { :; }
       check_livekit_exposure() { :; }; note_livekit_signaling() { :; }
       note_missing_browser() { :; }; note_voice_off() { :; }
-      live_command() { if [[ "$1" == livekit ]]; then printf '%s' "$_ei_cmd"; fi; }
+      # Empty = no running container; "?" = its command is unreadable.
+      live_command() { [[ "$1" == livekit ]] || return 1; [[ "$_ei_cmd" != "?" ]] || return 2; [[ -n "$_ei_cmd" ]] || return 1; printf '%s' "$_ei_cmd"; }
       service_running() { [[ "$1" == livekit && -n "$_ei_running" ]]; }
       INSTALL_DIR="$_ei_dir"
       existing_install "$_ei_env" 2>&1
@@ -2787,6 +2812,10 @@ _assert_var "upgrade, proxy, real keys: /rtc* rule" "$(_has "$_ei_out" '/rtc* to
 _assert_var "upgrade, proxy, real keys: LIVEKIT_HTTP_BIND advice" "$(_has "$_ei_out" 'LIVEKIT_HTTP_BIND')" yes
 _assert_var "upgrade, proxy, real keys: call ports" "$(_has "$_ei_out" '7881/tcp')" yes
 # Voice off: neither the call ports nor any /rtc* line.
+# Running, but its command is unreadable: never "on" from .env.
+_ei_run "${_EI_PROXY}COMPOSE_PROFILES=voice\nLIVEKIT_COMMAND=--config /etc/livekit.yaml${_EI_DONE}" '?' 1
+_assert_var "upgrade, proxy, live command unreadable: no /rtc* rule" "$(_has "$_ei_out" '/rtc* to 127.0.0.1')" no
+_assert_var "upgrade, proxy, live command unreadable: warns it may be --dev" "$(_has "$_ei_out" 'may run --dev credentials')" yes
 _ei_run "${_EI_PROXY}${_EI_DONE}" '' ''
 _assert_var "upgrade, proxy, voice off: no /rtc*" "$(_has "$_ei_out" '/rtc*')" no
 _assert_var "upgrade, proxy, voice off: no call ports" "$(_has "$_ei_out" '7881/tcp')" no
