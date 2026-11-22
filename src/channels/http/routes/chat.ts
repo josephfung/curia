@@ -16,7 +16,7 @@ import { markdownToHtml } from '../../../format/markdown-to-html.js';
 import { fetchChatHistoryPage } from '../chat-history-page.js';
 import { getOrCreateWebThread, readClientMessageId, readWebThreadAndSetupPhase } from '../web-thread.js';
 import { readSetupStep, SETUP_GUIDE_METADATA_KEY } from '../../../setup/setup-guide.js';
-import { routesWebChatToSetupGuide } from '../../../setup/setup-state.js';
+import { routesWebChatToSetupGuide } from '../../../setup/setup-settings.js';
 
 export interface ChatRouteOptions {
   pool: Pool;
@@ -113,7 +113,7 @@ export async function chatRoutes(
     let conversationId: string;
     let setupGuide: boolean;
     try {
-      const snapshot = await readWebThreadAndSetupPhase(pool);
+      const snapshot = await readWebThreadAndSetupPhase(pool, logger);
       conversationId = snapshot.conversationId;
       setupGuide = routesWebChatToSetupGuide(snapshot.setupPhase);
     } catch (err) {

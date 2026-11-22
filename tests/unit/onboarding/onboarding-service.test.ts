@@ -6,7 +6,7 @@ import type { TaskRow } from '../../../src/db/queries/tasks.js';
 import type { CreateTaskParams } from '../../../src/db/task-repo.js';
 import type { RegistryEntry, RegistryKind } from '../../../src/registry/types.js';
 import type { WorkingDocsRepo } from '../../../src/db/working-docs-repo.js';
-import type { MessagingRoute } from '../../../src/setup/setup-state.js';
+import type { MessagingRoute, VoiceRoute } from '../../../src/settings/registry.js';
 import { isTriageHeld } from '../../../src/onboarding/triage-hold.js';
 import { readOnboardingState } from '../../../src/onboarding/state.js';
 
@@ -32,7 +32,13 @@ const FIRST_CONVERSATION_TOPICS = 3;
 /** Everything Start enables already on: no restart. */
 const ALL_REQUIRED_ENABLED = { agent: ['ceo-inbox'], skill: ['ceo-inbox', 'learning', 'tasks'] };
 
-type SetupRow = { phase: string | null; completed_at: Date | null; messaging_route: MessagingRoute | null; setup_for: string | null };
+// What the settings store holds for Setup: the operator's presence is setup_for, and a
+// completed_at is the phase (#2709).
+type SetupRow = {
+  completed_at: string | null;
+  messaging_route: MessagingRoute | null;
+  voice_route: VoiceRoute | null;
+};
 
 function makeHarness(opts: {
   setup?: Partial<SetupRow>;
@@ -47,18 +53,21 @@ function makeHarness(opts: {
   persistentStore?: boolean;
 } = {}) {
   const setup: SetupRow = {
-    phase: 'complete',
-    completed_at: new Date('2026-11-20T12:00:00Z'),
+    completed_at: '2026-11-20T12:00:00.000Z',
     messaging_route: 'app',
-    setup_for: 'other',
+    voice_route: null,
     ...opts.setup,
   };
+  const settingsRows = [
+    { key: 'operator', value: { name: 'Operator', email: 'operator@example.com' } },
+    ...(setup.messaging_route ? [{ key: 'messaging_route', value: setup.messaging_route }] : []),
+    ...(setup.voice_route ? [{ key: 'voice_route', value: setup.voice_route }] : []),
+    ...(setup.completed_at ? [{ key: 'setup.completed_at', value: setup.completed_at }] : []),
+  ];
   const txQueries: string[] = [];
   const pool = {
     query: vi.fn(async (sql: string) => {
-      if (sql.includes('FROM setup_state')) {
-        return { rows: [{ ...setup, operator_name: null, operator_email: null, voice_route: null }] };
-      }
+      if (sql.includes('FROM settings')) return { rows: settingsRows };
       if (sql.includes('FROM tasks')) return { rows: [{ exists: opts.priorCeoTasks ?? false }] };
       throw new Error(`unexpected pool query: ${sql}`);
     }),
@@ -162,7 +171,7 @@ describe('OnboardingService.start', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('refuses while Setup is not complete', async () => {
-    const h = makeHarness({ setup: { phase: 'in_progress' } });
+    const h = makeHarness({ setup: { completed_at: null } });
     expect(await h.service.start({ actor: 'operator' })).toEqual({ ok: false, code: 'setup_incomplete' });
     expect(h.taskRepo.createTask).not.toHaveBeenCalled();
   });
@@ -430,7 +439,9 @@ describe('OnboardingService.start', () => {
 
 describe('OnboardingService.status', () => {
   it('shows no dashboard alert on an install whose Setup never completed on the page', async () => {
-    const h = makeHarness({ setup: { completed_at: null } });
+    // Migration 132 sets completed_at on an install that predates the Setup page, but it never
+    // chose a messaging route, which a Setup finished on the page always does (#2709).
+    const h = makeHarness({ setup: { messaging_route: null } });
     const status = await h.service.status();
     expect(status).toMatchObject({ started: false, showDashboardAlert: false, principalName: 'Avery Example' });
   });

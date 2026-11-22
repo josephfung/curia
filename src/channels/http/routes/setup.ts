@@ -37,12 +37,13 @@ import {
   MESSAGING_ROUTES,
   readSetupState,
   routesWebChatToSetupGuide,
-  startSetup,
+  SetupSettingsError,
   updateSetupState,
   VOICE_ROUTES,
   type SetupState,
   type SetupStateUpdate,
-} from '../../../setup/setup-state.js';
+} from '../../../setup/setup-settings.js';
+import { InvalidSettingError } from '../../../settings/store.js';
 
 import { WorkingDocsRepo } from '../../../db/working-docs-repo.js';
 import { seedPlaybook } from '../../../onboarding/playbook.js';
@@ -428,7 +429,7 @@ export async function setupRoutes(
       const identityConfigured = await isIdentityConfigured(pool);
       const externalAdaptersPending =
         setupRequiredAtBoot && principalExists && identityConfigured;
-      const setupState = await readSetupState(pool);
+      const setupState = await readSetupState(pool, logger);
 
       return reply.send({
         principalExists,
@@ -550,9 +551,14 @@ export async function setupRoutes(
     const parsed = parseStateUpdate(request.body);
     if ('error' in parsed) return reply.status(400).send({ error: parsed.error });
     try {
-      const state = await updateSetupState(pool, parsed.update);
+      const state = await updateSetupState(pool, parsed.update, { updatedBy: 'console', logger });
       return reply.send({ inSetup: isInSetup(state), setup: publicState(state) });
     } catch (err) {
+      // A cross-field rule (Myself with operator details; Someone else without them) or a
+      // value that fails its schema is the caller's mistake, not a server failure.
+      if (err instanceof SetupSettingsError || err instanceof InvalidSettingError) {
+        return reply.status(400).send({ error: err.message });
+      }
       logger.error({ err }, 'PUT /api/setup/state: failed to save');
       return reply.status(500).send({ error: 'Failed to save. Check server logs.' });
     }
@@ -560,14 +566,14 @@ export async function setupRoutes(
 
   // -- POST /api/setup/start --
   //
-  // The Setup page calls this when it opens, so web chat goes to the setup guide from the
-  // first message (routesWebChatToSetupGuide reads in_progress). Only on a database with
-  // nothing set up yet (startSetup): one whose principal a script created keeps its web chat
-  // with the coordinator even when the console is opened on it. Never reopens a finished Setup.
+  // The Setup page calls this when it opens. The phase is derived from setup.completed_at,
+  // so Setup is already in progress and web chat goes to the setup guide from the first
+  // message; this route writes nothing and so never reopens a finished Setup. It seeds the
+  // onboarding playbook while Setup runs (#2360).
   app.post('/api/setup/start', SETUP_WRITE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     try {
-      const state = await startSetup(pool);
+      const state = await readSetupState(pool, logger);
       // Seed the onboarding playbook while Setup is running (#2360). Best-effort: a failure is
       // logged and does not fail the route; starting onboarding seeds again if it is missing.
       if (isInSetup(state)) {
@@ -600,7 +606,7 @@ export async function setupRoutes(
       if (!checklist.setupComplete) {
         return reply.status(409).send({ error: 'Setup is not finished yet.', missing: checklist.missing });
       }
-      await completeSetup(pool);
+      await completeSetup(pool, { updatedBy: 'console', logger });
       logger.info('Setup complete');
       return reply.send({ inSetup: false });
     } catch (err) {

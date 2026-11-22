@@ -1,6 +1,6 @@
-// Which installs see the Setup page (#2358), and the PUT /api/setup/state body rules.
+// Which installs see the Setup page (#2358, #2709), and the PUT /api/setup/state body rules.
 import { describe, it, expect } from 'vitest';
-import { EMPTY_SETUP_STATE, isInSetup } from '../../../src/setup/setup-state.js';
+import { EMPTY_SETUP_STATE, isInSetup, routesWebChatToSetupGuide } from '../../../src/setup/setup-settings.js';
 import { parseStateUpdate } from '../../../src/channels/http/routes/setup.js';
 
 describe('isInSetup', () => {
@@ -12,8 +12,16 @@ describe('isInSetup', () => {
     expect(isInSetup({ ...EMPTY_SETUP_STATE, phase: 'in_progress' })).toBe(true);
   });
 
-  it('is out of Setup once complete (also how migration 130 marks older installs)', () => {
+  it('is out of Setup once complete (also how migration 132 marks older installs)', () => {
     expect(isInSetup({ ...EMPTY_SETUP_STATE, phase: 'complete' })).toBe(false);
+  });
+});
+
+describe('routesWebChatToSetupGuide', () => {
+  it('routes web chat to the setup guide only while Setup is in progress', () => {
+    expect(routesWebChatToSetupGuide('in_progress')).toBe(true);
+    expect(routesWebChatToSetupGuide('complete')).toBe(false);
+    expect(routesWebChatToSetupGuide(null)).toBe(false);
   });
 });
 

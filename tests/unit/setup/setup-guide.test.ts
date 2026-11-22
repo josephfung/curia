@@ -1,7 +1,7 @@
 // The setup guide's step field (#2358): what a client may send, and the line the agent sees.
 import { describe, it, expect } from 'vitest';
 import { NO_SETUP_STEP, readSetupStep, setupStepLine } from '../../../src/setup/setup-guide.js';
-import { routesWebChatToSetupGuide } from '../../../src/setup/setup-state.js';
+import { routesWebChatToSetupGuide } from '../../../src/setup/setup-settings.js';
 
 describe('readSetupStep', () => {
   it.each(['who', 'mailbox_signin', 'apply', 'start', '  voice  '])('accepts %j', (raw) => {
@@ -29,7 +29,7 @@ describe('routesWebChatToSetupGuide', () => {
     expect(routesWebChatToSetupGuide('complete')).toBe(false);
   });
 
-  it('not on a database with no Setup row, such as a scripted test install', () => {
+  it('never for a missing phase', () => {
     expect(routesWebChatToSetupGuide(null)).toBe(false);
   });
 });

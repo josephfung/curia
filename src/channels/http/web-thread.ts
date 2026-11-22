@@ -5,6 +5,8 @@
 // minted only when there is no history. A client-supplied id is not consulted.
 
 import { randomUUID } from 'node:crypto';
+import type { Logger } from '../../logger.js';
+import { readSetupPhase, type SetupPhaseValue } from '../../setup/setup-settings.js';
 
 export interface WebThreadQueryable {
   query: (
@@ -134,19 +136,12 @@ export async function rotateWebThread(
  */
 export async function readWebThreadAndSetupPhase(
   pool: WebThreadQueryable,
-): Promise<{ conversationId: string; setupPhase: string | null }> {
-  // Creates the row on first use; the snapshot below is what binds the message.
-  await getOrCreateWebThread(pool);
-  const snapshot = await pool.query(
-    `SELECT w.conversation_id, s.phase
-     FROM web_thread w LEFT JOIN setup_state s ON s.id = 1
-     WHERE w.id = 1`,
-  );
-  const row = snapshot.rows[0];
-  const conversationId = conversationIdOf(row);
-  if (!conversationId) throw new Error('web_thread row is missing after it was created');
-  const phase = row?.['phase'];
-  return { conversationId, setupPhase: typeof phase === 'string' ? phase : null };
+  logger?: Pick<Logger, 'error'>,
+): Promise<{ conversationId: string; setupPhase: SetupPhaseValue }> {
+  // Creates the row on first use; the id and the phase then come from one call each, and
+  // the message is bound to whatever the phase was here.
+  const conversationId = await getOrCreateWebThread(pool);
+  return { conversationId, setupPhase: await readSetupPhase(pool, logger) };
 }
 
 /** A client message id is an opaque token the sender uses to ignore its own echo. */

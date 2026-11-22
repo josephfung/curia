@@ -10,7 +10,7 @@ import type { EmailChannelStatus, PrincipalMailboxReadiness } from '../skills/ty
 import type { NylasSignInReadiness } from '../nylas/signin-readiness.js';
 import type { WorkspaceSignInStatus } from '../google/workspace-signin.js';
 import type { LiveKitProbeResult } from './livekit-probe.js';
-import type { MessagingRoute, SetupState, VoiceRoute } from './setup-state.js';
+import type { MessagingRoute, SetupState, VoiceRoute } from './setup-settings.js';
 
 // ── Catalog ────────────────────────────────────────────────────────────────
 
@@ -248,7 +248,7 @@ export async function evaluateChecklist(catalog: CatalogTask[], deps: SetupCheck
     const check = task.completion_check;
     switch (check.type) {
       case 'principal_basics': {
-        if (!state.setupFor) return { done: false, detail: 'Choose who Curia is for.' };
+        // setupFor is derived: absent operator means "myself", so there is nothing to choose.
         if (state.setupFor === 'other' && (!state.operatorName || !state.operatorEmail)) {
           return { done: false, detail: 'Add your name and email as the operator.' };
         }

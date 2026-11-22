@@ -11,7 +11,7 @@
 //   GET  /api/identity/history — return all versions, newest first
 //   POST /api/identity/reload  — force a reload from DB (used post-wizard)
 
-import { isInSetup, readSetupState } from '../../../setup/setup-state.js';
+import { isInSetup, readSetupState } from '../../../setup/setup-settings.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import type { OfficeIdentityService } from '../../../identity/service.js';
@@ -90,8 +90,8 @@ export async function identityRoutes(
       // which triggers the first-run wizard in the browser.
       const configured = await isIdentityConfigured(pool);
       // #2358: the console's first-load gate. True on a new install until Setup is finished;
-      // migration 130 marked installs that predate the Setup page complete.
-      const inSetup = isInSetup(await readSetupState(pool));
+      // migration 132 marked installs that predate the Setup page complete.
+      const inSetup = isInSetup(await readSetupState(pool, request.log));
 
       return reply.send({ identity, configured, inSetup, lengthLimits: LENGTH_LIMITS_RESPONSE });
     } catch (err) {

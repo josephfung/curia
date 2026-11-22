@@ -1,6 +1,7 @@
 // tests/integration/setup-singletons-lock.ts
 //
-// `web_thread` and `setup_state` are single-row tables (#2358). Integration files run in
+// `web_thread` is a single-row table and `settings` holds one row per Setup key (#2358,
+// #2709). Integration files run in
 // parallel against one curia_test database, so two suites that rewrite those rows would
 // see each other's writes. Each such suite holds this lock for its whole run: a
 // session-level advisory lock on its own connection, released when the suite ends.

@@ -77,12 +77,14 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
       return { stored: true, action: 'set' };
     }),
   };
-  const setupRow = {
-    phase: 'complete', completed_at: null, messaging_route: 'signal', setup_for: 'other',
-    operator_name: 'Jordan Operator', operator_email: null, voice_route: null,
-  };
+  // Setup's keys in the settings store (#2709): the operator means "someone else".
+  const setupSettings = [
+    { key: 'operator', value: { name: 'Jordan Operator', email: 'jordan@example.com' } },
+    { key: 'messaging_route', value: 'signal' },
+    { key: 'setup.completed_at', value: '2026-01-01T00:00:00.000Z' },
+  ];
   const pool = {
-    query: vi.fn(async () => ({ rows: [setupRow] })),
+    query: vi.fn(async (sql: string) => ({ rows: sql.includes('FROM settings') ? setupSettings : [] })),
     connect: vi.fn(async () => ({ query: vi.fn(async () => ({ rows: [] })), release: vi.fn() })),
   };
   const service = new OnboardingService({

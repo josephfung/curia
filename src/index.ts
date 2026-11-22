@@ -300,7 +300,7 @@ import type { Discovery, RegistryRow } from './registry/types.js';
 import { CHANNEL_CATALOG, type ChannelDescriptor } from './channels/catalog.js';
 import { probeLiveKit } from './setup/livekit-probe.js';
 import { evaluateChecklist, loadCatalog, type CatalogTask, type RouteChannel, type SetupCheckDeps, type SetupChecklist } from './setup/checklist.js';
-import { readSetupState } from './setup/setup-state.js';
+import { readSetupState } from './setup/setup-settings.js';
 import { isIdentityConfigured } from './channels/http/routes/identity.js';
 import { installabilityWarning } from './channels/http/pairing.js';
 import { channelCredentialStatus } from './channels/credential-resolver.js';
@@ -3297,7 +3297,7 @@ async function main(): Promise<void> {
   // awaiting email's first poll, or setup-required mode, which starts none) does not count.
   const startedChannels = new Set<RouteChannel | 'signal_calls'>();
   const setupCheckDeps: SetupCheckDeps = {
-    state: () => readSetupState(pool),
+    state: () => readSetupState(pool, logger),
     principal: async () => {
       const p = await contactService.findContactBySystemRole('principal');
       return p ? { displayName: p.displayName, primaryEmail: p.primaryEmail, timezone: p.timezone } : null;
