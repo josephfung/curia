@@ -51,6 +51,8 @@ services:
     # ("--config /etc/livekit.yaml", or for local installs
     # "--config /etc/livekit.local.yaml --node-ip 127.0.0.1") and generates
     # LIVEKIT_KEYS, which must match Settings → Channels → Voice.
+    # docker-compose.tls.yml replaces this fallback with the keyless shipped
+    # config (fails closed), since Caddy publishes /rtc* there.
     command: ${LIVEKIT_COMMAND:---dev --bind 0.0.0.0}
     environment:
       # "key: secret" read by LiveKit itself; the shipped configs carry no keys.

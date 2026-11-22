@@ -48,6 +48,27 @@ describe('compose livekit service', () => {
   });
 });
 
+// Caddy publishes /rtc* under the TLS overlay, so LiveKit must not fall back to --dev's
+// public devkey/secret there: the overlay's fallback is the keyless shipped config, which
+// refuses to start without LIVEKIT_KEYS (owner decision on #2705). Only the command changes.
+describe('TLS overlay livekit service', () => {
+  const tls = yaml.load(read('docker-compose.tls.yml')) as ComposeFile;
+  const overlay = tls.services['livekit'];
+
+  it('fails closed: falls back to the keyless shipped config, never --dev', () => {
+    expect(overlay?.command).toBe('${LIVEKIT_COMMAND:---config /etc/livekit.yaml}');
+    expect(overlay?.command).not.toContain('--dev');
+  });
+
+  it('overrides nothing but the command', () => {
+    expect(Object.keys(overlay ?? {})).toEqual(['command']);
+  });
+
+  it('falls back to a config the base file mounts', () => {
+    expect(livekit.volumes).toContain('./docker/livekit.yaml:/etc/livekit.yaml:ro');
+  });
+});
+
 describe('shipped livekit configs', () => {
   it('shipped livekit.yaml carries no keys', () => {
     const cfg = yaml.load(read('docker/livekit.yaml')) as LivekitConfig;

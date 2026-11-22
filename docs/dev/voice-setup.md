@@ -40,6 +40,13 @@ On a domain install, or a proxy install that gave a public address, the installe
 refuses to continue if `LIVEKIT_COMMAND` is `--dev`: the Caddy `/rtc*` route would
 publish the `devkey` / `secret` credentials.
 
+The HTTPS overlay (`docker-compose.tls.yml`) also fails closed for stacks started
+by hand: with `LIVEKIT_COMMAND` unset or empty, LiveKit runs the keyless
+`--config /etc/livekit.yaml` instead of the base file's `--dev` fallback, so it
+refuses to start until `LIVEKIT_KEYS` holds real keys. Only the base
+`docker-compose.yml` (developer checkouts, installs without the overlay) keeps
+the `--dev` fallback.
+
 Curia's own end of a call does not use that public URL. It joins over
 `ws://livekit:7880`, derived from `channels.voice.livekit_management_url` (default
 `http://livekit:7880`), so local calls work and traffic stays on the compose network.
@@ -133,7 +140,7 @@ running container is still on loopback (not yet recreated). On every run, fresh
 or upgrade, it warns when signaling is public and the running container uses the
 `--dev` credentials. It reads the container's own command, not `.env`.
 
-For local development the profiled service runs `livekit-server --dev`, which
+For local development (no TLS overlay) the profiled service runs `livekit-server --dev`, which
 uses known credentials (`devkey` / `secret`). **Never expose `--dev` on a
 public interface** — anyone who can reach the ports can mint LiveKit JWTs with
 those credentials without Curia auth. Production must set `LIVEKIT_COMMAND` to

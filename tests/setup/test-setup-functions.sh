@@ -1684,11 +1684,23 @@ _assert_wd() {
 _assert_wd "$_TLS_CF"            '127.0.0.1:7880' '--dev --bind 0.0.0.0'      1  warn  "TLS overlay, loopback, live --dev"
 _assert_wd "$_TLS_CF"            '127.0.0.1:7880' '--config /etc/livekit.yaml' 1 quiet "TLS overlay, loopback, live real config"
 _assert_wd "${_TLS_CF}${_RK_DEV}" '127.0.0.1:7880' ''                          1  warn  "TLS overlay, cannot inspect, .env --dev"
-_assert_wd "$_TLS_CF"            ''               ''                           1  warn  "TLS overlay, running without 7880, default --dev"
+# Under the overlay an empty LIVEKIT_COMMAND is its fail-closed --config fallback, not --dev.
+_assert_wd "$_TLS_CF"            ''               ''                           1  quiet "TLS overlay, running without 7880, overlay fallback (not --dev)"
+_assert_wd "$_TLS_CF"            ''               '--dev'                      1  warn  "TLS overlay, running without 7880, live --dev"
 _assert_wd "$_TLS_CF"            ''               ''                           '' quiet "TLS overlay, livekit not running"
 _assert_wd "$_RK_DEV"            '127.0.0.1:7880' '--dev'                      1  quiet "no overlay, loopback, --dev"
 _assert_wd "$_RK_DEV"            '0.0.0.0:7880'   '--dev'                      1  warn  "no overlay, public, --dev (unchanged)"
 rm -f "$_wd_env"
+
+# effective_livekit_command: the TLS overlay's fallback is the keyless shipped
+# config (fails closed), the base file's is --dev (empty).
+_ec_env="$(mktemp)"
+_ec() { printf '%b' "$1" > "$_ec_env"; ( unset COMPOSE_FILE LIVEKIT_COMMAND; effective_livekit_command "$_ec_env" ); }
+_assert_var "effective command: overlay, unset -> shipped config" "$(_ec "$_TLS_CF")" "--config /etc/livekit.yaml"
+_assert_var "effective command: overlay, empty -> shipped config" "$(_ec "${_TLS_CF}LIVEKIT_COMMAND=\n")" "--config /etc/livekit.yaml"
+_assert_var "effective command: overlay, explicit kept" "$(_ec "${_TLS_CF}LIVEKIT_COMMAND=--dev\n")" "--dev"
+_assert_var "effective command: base, unset -> empty (--dev)" "$(_ec '')" ""
+rm -f "$_ec_env"
 
 # --- install.sh: fresh_install starts LiveKit and seeds matching vault values ---
 

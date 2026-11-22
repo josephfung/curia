@@ -390,6 +390,18 @@ livekit_command_is_dev() {
   [[ -z "$1" || "$1" == *--dev* ]]
 }
 
+# Echo the command Compose starts livekit with when LIVEKIT_COMMAND (shell, then
+# .env $1) is empty: the TLS overlay's fail-closed fallback, the keyless shipped
+# config (owner decision on #2705), or else empty, which is the base file's --dev.
+effective_livekit_command() {
+  local cmd
+  cmd="$(compose_var "$1" LIVEKIT_COMMAND)"
+  if [[ -z "$cmd" ]] && uses_tls_overlay "$(compose_var "$1" COMPOSE_FILE)"; then
+    cmd="$(livekit_command_for public)"
+  fi
+  printf '%s' "$cmd"
+}
+
 # ---------------------------------------------------------------------------
 # Non-interactive helpers (not unit-tested; rely on Docker or filesystem state)
 # ---------------------------------------------------------------------------
@@ -519,7 +531,8 @@ check_http_exposure() {
 # the shipped Caddyfile routes /rtc* to livekit:7880 over the compose network,
 # whatever 7880's host binding. The running container's command is checked,
 # not .env: one that was not recreated keeps its old command. Falls back to
-# LIVEKIT_COMMAND (shell, then .env) when the container cannot be inspected.
+# LIVEKIT_COMMAND (shell, then .env; effective_livekit_command) when the
+# container cannot be inspected.
 # Fresh and upgrade paths both call this, after check_livekit_bind.
 warn_public_livekit_dev() {
   local env="$1" bindings="$2" cmd via=""
@@ -531,7 +544,7 @@ warn_public_livekit_dev() {
   fi
   [[ -n "$via" ]] || return 0
   cmd="$(live_command livekit)"
-  [[ -n "$cmd" ]] || cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
+  [[ -n "$cmd" ]] || cmd="$(effective_livekit_command "$env")"
   livekit_command_is_dev "$cmd" || return 0
   echo "" >&2
   if [[ "$via" == port ]]; then
@@ -568,7 +581,8 @@ note_voice_off() {
 # enabled and livekit is not running), dev (LiveKit runs --dev's public
 # devkey/secret), or on (real keys). The running container's command is checked
 # first, as warn_public_livekit_dev does: one that was not recreated keeps its old
-# command. Falls back to LIVEKIT_COMMAND (shell, then .env; empty = --dev).
+# command. Falls back to effective_livekit_command (empty = the base file's --dev;
+# the TLS overlay's fallback is the keyless shipped config).
 livekit_next_steps_state() {
   local env="$1" profiles cmd
   profiles="$(compose_var "$env" COMPOSE_PROFILES)"
@@ -576,7 +590,7 @@ livekit_next_steps_state() {
     printf off; return 0
   fi
   cmd="$(live_command livekit)"
-  [[ -n "$cmd" ]] || cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
+  [[ -n "$cmd" ]] || cmd="$(effective_livekit_command "$env")"
   if livekit_command_is_dev "$cmd"; then printf dev; else printf on; fi
 }
 
@@ -584,7 +598,8 @@ livekit_next_steps_state() {
 # public address, put LiveKit signaling on the internet (the shipped Caddyfile
 # routes /rtc* to it; a proxy is told to). --dev's devkey/secret are public, so
 # anyone could then mint LiveKit tokens: stop rather than install that. An
-# empty command is the compose default, --dev. Reads TOPOLOGY and PROXY_ORIGIN.
+# empty command is the compose default: --dev, or the keyless shipped config
+# under the TLS overlay (effective_livekit_command). Reads TOPOLOGY and PROXY_ORIGIN.
 # On any topology, the installer's own --config commands (livekit_command_for,
 # the shipped keyless configs) need LIVEKIT_KEYS: empty, e.g. set empty in the
 # shell, LiveKit would crash-loop. An operator's own --config may keep its keys
@@ -593,7 +608,7 @@ livekit_next_steps_state() {
 # The command itself is never printed: it may carry --keys.
 require_livekit_real_keys() {
   local env="$1" cmd
-  cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
+  cmd="$(effective_livekit_command "$env")"
   if [[ "$cmd" == "$(livekit_command_for local)" || "$cmd" == "$(livekit_command_for public)" ]] \
     && [[ -z "$(compose_var "$env" LIVEKIT_KEYS)" ]]; then
     echo "" >&2
@@ -700,7 +715,7 @@ note_livekit_signaling() {
   # Installs whose LiveKit the installer set up (#2357) are loopback on purpose:
   # browsers reach signaling through Caddy's /rtc* route or ws://localhost:7880.
   local cmd
-  cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
+  cmd="$(effective_livekit_command "$env")"
   [[ "$cmd" == "$(livekit_command_for local)" || "$cmd" == "$(livekit_command_for public)" ]] && return 0
   echo "" >&2
   warn "LiveKit signaling (7880) is published on loopback only (#2408)."
@@ -1302,7 +1317,7 @@ fresh_install() {
 
     lk_url="$(livekit_browser_url "$TOPOLOGY" "$lk_value" "$(livekit_host_port "$env")")"
     lk_seed=(-e SEED_LIVEKIT_URL)
-    lk_pair="$(livekit_seed_keys "$(compose_var "$env" LIVEKIT_KEYS)" "$(compose_var "$env" LIVEKIT_COMMAND)")" || lk_rc=$?
+    lk_pair="$(livekit_seed_keys "$(compose_var "$env" LIVEKIT_KEYS)" "$(effective_livekit_command "$env")")" || lk_rc=$?
     if [[ $lk_rc -eq 0 ]]; then
       lk_key="${lk_pair%% *}"; lk_secret="${lk_pair#* }"
       lk_seed+=(-e SEED_LIVEKIT_API_KEY -e SEED_LIVEKIT_API_SECRET)

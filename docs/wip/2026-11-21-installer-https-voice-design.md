@@ -77,6 +77,8 @@ like production's; compose mounts it and passes `LIVEKIT_KEYS` through. Develope
 existing installs are untouched, an operator's own `LIVEKIT_COMMAND` is respected by not
 overwriting it, and it mirrors production. Cost: someone running compose without the installer
 still gets `--dev`, which stays loopback-only and is already warned about if it becomes public.
+TLS overlay fails closed — owner decision on #2705: `docker-compose.tls.yml` overrides only the
+livekit command fallback to `--config /etc/livekit.yaml`, since Caddy's `/rtc*` route makes `--dev` public there.
 
 **B. Make the real config the compose fallback (drop `--dev`).** Safe by default however the stack
 starts, but LiveKit refuses to start without keys, breaking every developer checkout and hand-run
