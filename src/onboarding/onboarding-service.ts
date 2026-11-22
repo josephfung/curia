@@ -55,7 +55,8 @@ import {
   PRINCIPAL_RESTART_EXIT_DELAY_SECONDS,
   RESTART_WAKE_DELAY_SECONDS,
 } from './constants.js';
-import type { OperatorNotifier } from './notify-operator.js';
+import type { OperatorEvent, OperatorNotifier, OperatorNotice } from './notify-operator.js';
+import { notifyOperatorOnce } from './notify-operator-once.js';
 
 /** Signals that the install is already in use, so starting onboarding needs confirming. */
 export const WORKING_PRINCIPAL_SIGNALS = {
@@ -232,9 +233,29 @@ export class OnboardingService {
     this.stop = deps.stopInvitation ?? ((id) => stopPairingInvitation(deps.pool, id));
   }
 
-  /** The email seam for operator notices, when one was injected (#2710). */
-  operatorNoticeDelivery(): OperatorNotifier | undefined {
-    return this.deps.operatorNotifier;
+  /**
+   * Raise an operator notice once per onboarding run (#2360, #2710): the same dedupe the
+   * watcher and the event subscribers use, so a model that raises the same event repeatedly
+   * emails the operator once. The progress note and the audit row are written either way.
+   * Without an injected notifier the notice is still recorded on the task and nobody is emailed.
+   */
+  async raiseOperatorNotice(
+    taskId: string,
+    event: OperatorEvent,
+    notice: OperatorNotice = {},
+  ): Promise<boolean> {
+    return notifyOperatorOnce(
+      {
+        taskRepo: this.deps.taskRepo,
+        logger: this.deps.logger,
+        configStore: this.deps.configStore,
+        stateLock: this.deps.stateLock,
+        ...(this.deps.operatorNotifier ? { notifier: this.deps.operatorNotifier } : {}),
+      },
+      taskId,
+      event,
+      notice,
+    );
   }
 
   async status(): Promise<OnboardingStatus> {

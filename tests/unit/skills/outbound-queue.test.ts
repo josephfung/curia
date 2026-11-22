@@ -336,10 +336,14 @@ describe('OutboundGateway queue (#1380)', () => {
         { recipientSource: 'email_participant' },
       );
       expect(queued.queued).toBe(true);
-      expect(outboundQueue.enqueue).toHaveBeenCalledWith(expect.objectContaining({
-        to: 'alice@example.com',
-        recipientSource: 'email_participant',
-      }));
+      expect(outboundQueue.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'alice@example.com',
+          recipientSource: 'email_participant',
+        }),
+        // A correspondence send, not a system notice (#2710): the recipient is recorded.
+        { systemNotification: false },
+      );
       await vi.advanceTimersByTimeAsync(30_000);
     } finally {
       vi.useRealTimers();
@@ -423,7 +427,10 @@ describe('OutboundGateway queue (#1380)', () => {
     try {
       const queued = await gateway.send({ channel: 'email', to: 'alice@example.com', subject: 'Venue', body: 'The 14th works.' });
       expect(queued.queued).toBe(true);
-      expect(outboundQueue.enqueue).toHaveBeenCalledWith(expect.objectContaining({ signature: 'Alex Curia\nDigital EA' }));
+      expect(outboundQueue.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({ signature: 'Alex Curia\nDigital EA' }),
+        { systemNotification: false },
+      );
       await vi.advanceTimersByTimeAsync(30_000);
     } finally {
       vi.useRealTimers();

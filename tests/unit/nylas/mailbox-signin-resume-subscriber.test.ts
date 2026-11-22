@@ -206,11 +206,13 @@ describe('MailboxSignInResumeSubscriber', () => {
     expect(content).toContain("I couldn't notify the operator");
   });
 
-  it('admin_blocked: no email adapter delivers yet, so nothing is sent and the agent is told so (I)', async () => {
-    const sendNotification = vi.fn(async () => true);
-    const { emit, tasks } = setup({ notifier: { gateway: { sendNotification }, canDeliver: () => false } });
+  it('admin_blocked: when the gateway reports nothing was published, the agent is told the operator was not notified (I)', async () => {
+    // Deliverability is the gateway's check now (#2710): it answers false when no adapter can
+    // deliver, or when there is no address, and this subscriber reports that honestly.
+    const sendNotification = vi.fn(async () => false);
+    const { emit, tasks } = setup({ notifier: { gateway: { sendNotification } } });
     await emit(finished({ outcome: 'admin_blocked' }));
-    expect(sendNotification).not.toHaveBeenCalled();
+    expect(sendNotification).toHaveBeenCalledOnce();
     expect(tasks()[0]!.payload.content).toContain("I couldn't notify the operator");
   });
 

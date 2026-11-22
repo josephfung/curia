@@ -48,7 +48,7 @@ const operatorNotices = vi.fn(async (_request: { notificationType: string; subje
 const AUTH_HEADER = { 'x-web-bootstrap-secret': TEST_SECRET };
 const TEST_LABEL_PREFIX = 'Setup-Route Test';
 // The settings migration 132 created for Setup (#2709). These suites own them.
-const SETUP_SETTING_KEYS = ['operator', 'messaging_route', 'voice_route', 'setup.completed_at'];
+const SETUP_SETTING_KEYS = ['operator', 'operator_confirmation', 'messaging_route', 'voice_route', 'setup.completed_at'];
 // Person labels this file writes that do not use the prefix above.
 const OWNED_KG_LABELS = [
   'Original Name',
@@ -1052,7 +1052,7 @@ describeIf('/api/setup/* routes', () => {
         payload: { setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com' },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json().operatorNoticeSent).toBe(true);
+      expect(res.json().operatorConfirmation).toMatchObject({ state: 'sent', email: 'sam@example.com' });
       expect(operatorNotices).toHaveBeenCalledOnce();
       const notice = operatorNotices.mock.calls[0]![0];
       expect(notice.notificationType).toBe('operator_configured');
@@ -1067,14 +1067,19 @@ describeIf('/api/setup/* routes', () => {
       expect(operatorNotices).toHaveBeenCalledOnce();
     });
 
-    it('PUT /api/setup/state says the confirmation did not go out, and keeps the setting', async () => {
+    it('PUT /api/setup/state records a failed confirmation, and keeps the setting', async () => {
       operatorNotices.mockResolvedValueOnce(false);
       const res = await app.inject({
         method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER,
         payload: { setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com' },
       });
-      expect(res.json().operatorNoticeSent).toBe(false);
+      expect(res.json().operatorConfirmation).toMatchObject({ state: 'failed' });
       expect(await readSetupState(pool, logger)).toMatchObject({ operatorEmail: 'sam@example.com' });
+
+      // A failed notice is owed, not abandoned: the next attempt sends it.
+      const retried = await app.inject({ method: 'POST', url: '/api/setup/start', headers: AUTH_HEADER });
+      expect(retried.statusCode).toBe(200);
+      expect(operatorNotices).toHaveBeenCalledTimes(2);
     });
 
     it('PUT /api/setup/state sends no notice when the operator is cleared', async () => {
@@ -1085,7 +1090,7 @@ describeIf('/api/setup/* routes', () => {
         payload: { setupFor: 'self' },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json().operatorNoticeSent).toBeUndefined();
+      expect(res.json().operatorConfirmation).toEqual({ state: 'none' });
       expect(operatorNotices).not.toHaveBeenCalled();
     });
 

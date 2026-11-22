@@ -51,11 +51,22 @@ export async function fetchPrincipal(): Promise<PrincipalInfo> {
   return json<PrincipalInfo>(await apiFetch('/api/setup/principal'));
 }
 
-/** What PUT /api/setup/state answers. `operatorNoticeSent` is present only when the save
- *  recorded a new operator address and a confirmation notice was attempted (#2710). */
+/** Where the operator's confirmation notice stands (#2710). `pending` means Curia owes one and
+ *  will send it once it can email; `failed` means an attempt reached nobody and will be retried. */
+export type OperatorConfirmationState = 'none' | 'pending' | 'sent' | 'failed';
+
+export interface OperatorConfirmationStatus {
+  state: OperatorConfirmationState;
+  email?: string;
+  attemptedAt?: string;
+  sentAt?: string;
+}
+
+/** What PUT /api/setup/state answers. */
 export interface SaveSetupFieldsResult {
   setup: SetupFields;
-  operatorNoticeSent?: boolean;
+  /** Always present on a save: the console never blocks on it, but it can say what happened. */
+  operatorConfirmation?: OperatorConfirmationStatus;
 }
 
 /** PUT /api/setup/state: a partial update; null clears a field. */

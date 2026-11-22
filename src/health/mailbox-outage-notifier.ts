@@ -27,12 +27,6 @@ export interface MailboxOutageNotifierDeps {
    */
   hasOperator?: () => Promise<boolean>;
   /**
-   * Whether a published notification is delivered right now: the primary ('curia') email adapter
-   * has subscribed (EmailAdapter.deliversNotifications). A publish before that reaches no one, so
-   * it is not counted as sent and the next failing probe tries again. Absent: assumed delivered.
-   */
-  canDeliver?: () => boolean;
-  /**
    * A fresh 7-day sign-in link that reconnects this mailbox, or null when sign-in is not ready
    * (the email then keeps the grant-paste wording). Called once per alert, auth failures only.
    * The link goes in the email alone: never in a log or the canary detail.
@@ -56,6 +50,10 @@ class MintTimeoutError extends Error {
 export class MailboxOutageNotifier {
   /** Mailbox ids whose current outage episode has already been alerted. */
   private readonly alerted = new Set<string>();
+  /** Mailbox ids whose operator copy has been published for the current episode. Kept apart
+   *  from `alerted` so a failed operator send is retried on the next probe without telling the
+   *  principal twice (#2710). */
+  private readonly operatorAlerted = new Set<string>();
   private readonly log: Logger;
 
   constructor(private readonly deps: MailboxOutageNotifierDeps) {
@@ -66,15 +64,17 @@ export class MailboxOutageNotifier {
    *  timeout, a Nylas server error) gets connectivity guidance instead. */
   async record(mailboxId: string, label: string, ok: boolean, opts: { authFailure?: boolean } = {}): Promise<void> {
     if (ok) {
+      this.operatorAlerted.delete(mailboxId);
       if (this.alerted.delete(mailboxId)) {
         this.log.info({ mailboxId }, 'Principal mailbox recovered');
       }
       return;
     }
-    if (this.alerted.has(mailboxId)) return;
 
-    if (this.deps.canDeliver && !this.deps.canDeliver()) {
-      this.log.warn({ mailboxId }, 'Principal mailbox is failing but no email adapter delivers alerts yet; will alert on a later probe');
+    // The principal's alert is one per episode. The operator's copy is retried separately, so a
+    // probe after a failed operator send still tries it without repeating the principal's.
+    if (this.alerted.has(mailboxId)) {
+      if (!this.operatorAlerted.has(mailboxId)) await this.notifyOperatorOfOutage(mailboxId, label);
       return;
     }
 
@@ -130,41 +130,44 @@ export class MailboxOutageNotifier {
       return;
     }
 
-    // The operator hears the same outage without the link: only the principal can sign in to
-    // their own mailbox, so the operator's copy says what happened and that no action is needed.
-    // A failed operator send does not hold back the principal's alert or the episode record;
-    // the gateway logs it at error level and audits it.
-    if (await this.operatorIsSet()) {
-      const operatorSent = await this.deps.gateway.sendNotification({
-        notificationType: 'mailbox_outage',
-        subject: `Curia cannot reach the principal's "${label}" mailbox`,
-        body: [
-          `Curia's health check for the principal's "${label}" mailbox is failing.`,
-          '',
-          'Mail and calendar for that account are not being read or written until it is reachable again.',
-          'Curia has already told the mailbox owner; nothing here needs you.',
-          '',
-          'You will not get another notice for this mailbox until it has recovered and failed again.',
-        ].join('\n'),
-      });
-      if (!operatorSent) {
-        this.log.error({ mailboxId }, 'Principal mailbox outage: the operator notice could not be sent; the principal was already told');
-      }
-    }
-
     this.alerted.add(mailboxId);
     this.log.error({ mailboxId }, 'Principal mailbox outage: alert sent');
+    // The operator hears the same outage without the link: only the principal can sign in to
+    // their own mailbox, so the operator's copy says what happened and that no action is needed.
+    await this.notifyOperatorOfOutage(mailboxId, label);
   }
 
-  /** Whether an operator is set. A read failure counts as no operator: the principal's alert
-   *  has already gone out, and a duplicate is worse than a missing operator copy. */
-  private async operatorIsSet(): Promise<boolean> {
-    if (!this.deps.hasOperator) return false;
-    try {
-      return await this.deps.hasOperator();
-    } catch (err) {
-      this.log.warn({ err }, 'Principal mailbox outage: could not read whether an operator is set; skipping the operator notice');
-      return false;
+  /**
+   * The operator's copy of an outage, sent once per episode when an operator is set. Only the
+   * mailbox's label is named — never its address, and never the reconnect link, which only the
+   * principal can use. A failed send is left unrecorded so the next failing probe retries it;
+   * the gateway logs it at error level and audits it.
+   */
+  private async notifyOperatorOfOutage(mailboxId: string, label: string): Promise<void> {
+    if (this.operatorAlerted.has(mailboxId)) return;
+    // The dependency contract is "never throws" (createOperatorEmailLookup answers false rather
+    // than throwing), so a read failure has already been handled where it happened.
+    if (!this.deps.hasOperator || !(await this.deps.hasOperator())) return;
+
+    const sent = await this.deps.gateway.sendNotification({
+      notificationType: 'mailbox_outage',
+      subject: `Curia cannot reach the principal's "${label}" mailbox`,
+      body: [
+        `Curia's health check for the principal's "${label}" mailbox is failing.`,
+        '',
+        'Mail and calendar for that account are not being read or written until it is reachable again.',
+        'Curia has already told the mailbox owner; nothing here needs you.',
+        '',
+        'You will not get another notice for this mailbox until it has recovered and failed again.',
+      ].join('\n'),
+    });
+    if (sent) {
+      this.operatorAlerted.add(mailboxId);
+      return;
     }
+    this.log.error(
+      { mailboxId },
+      'Principal mailbox outage: the operator notice could not be sent; the principal was already told; retrying on the next failing probe',
+    );
   }
 }

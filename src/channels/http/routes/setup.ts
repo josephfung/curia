@@ -44,7 +44,11 @@ import {
 } from '../../../setup/setup-settings.js';
 import { InvalidSettingError } from '../../../settings/store.js';
 import type { OutboundGateway } from '../../../skills/outbound-gateway.js';
-import { sendOperatorConfirmation } from '../../../notifications/operator-notice.js';
+import {
+  readOperatorConfirmationStatus,
+  sendPendingOperatorConfirmation,
+  type OperatorConfirmationStatus,
+} from '../../../notifications/operator-confirmation.js';
 
 import { WorkingDocsRepo } from '../../../db/working-docs-repo.js';
 import { seedPlaybook } from '../../../onboarding/playbook.js';
@@ -97,6 +101,10 @@ export interface SetupRouteOptions {
   outboundGateway?: Pick<OutboundGateway, 'sendNotification'>;
   /** The console's origin, for the confirmation's link (#2710). */
   appOrigin?: string;
+  /** Keep the gateway's cached operator address current after a Setup save (#2710). */
+  onOperatorChanged?: (operator: { name: string; email: string } | null) => void;
+  /** Whether a channel adapter delivers notifications right now (#2710). */
+  canDeliver?: () => boolean;
 }
 
 // Match identity.ts: tighter rate limit on auth-sensitive routes (10/min vs the
@@ -135,6 +143,8 @@ export async function setupRoutes(
     setupChecklist,
     outboundGateway,
     appOrigin,
+    onOperatorChanged,
+    canDeliver,
   } = options;
 
   // Delay before process.exit so Fastify can finish flushing the 200 response.
@@ -562,27 +572,29 @@ export async function setupRoutes(
     const parsed = parseStateUpdate(request.body);
     if ('error' in parsed) return reply.status(400).send({ error: parsed.error });
     try {
-      const before = await readSetupState(pool, logger);
       const state = await updateSetupState(pool, parsed.update, { updatedBy: 'console', logger });
-      // A saved operator address gets one confirmation notice, to that address (#2710). Only
-      // when it actually changed: the Setup page saves its fields step by step, and re-saving
-      // the same address is not a new operator. A clear sends nothing — there is no address.
-      let operatorNoticeSent: boolean | undefined;
-      // The two halves are stored together, so a non-null email always has a name.
-      if (state.operatorEmail !== null && state.operatorName !== null && state.operatorEmail !== before.operatorEmail) {
-        operatorNoticeSent = await sendOperatorConfirmation(
-          {
+      // The confirmation notice is *owed* rather than fired here (#2710): on a fresh install
+      // this request is step 1, before Curia has any email account, so nothing can send it. It
+      // is attempted where delivery is possible (boot after the email adapters start, and Start
+      // onboarding), and recorded in `operator_confirmation` so the console can show where it
+      // got to. This response only reports the status; the page never blocks on it.
+      const operator = state.operatorEmail !== null && state.operatorName !== null
+        ? { name: state.operatorName, email: state.operatorEmail }
+        : null;
+      onOperatorChanged?.(operator);
+      const confirmation = operator
+        ? await sendPendingOperatorConfirmation({
+            pool,
             ...(outboundGateway ? { gateway: outboundGateway } : {}),
+            ...(canDeliver ? { canDeliver } : {}),
             ...(appOrigin ? { appOrigin } : {}),
             logger,
-          },
-          { name: state.operatorName, email: state.operatorEmail },
-        );
-      }
+          })
+        : await readOperatorConfirmationStatus(pool, logger);
       return reply.send({
         inSetup: isInSetup(state.phase),
         setup: publicState(state),
-        ...(operatorNoticeSent !== undefined ? { operatorNoticeSent } : {}),
+        operatorConfirmation: confirmation satisfies OperatorConfirmationStatus,
       });
     } catch (err) {
       // A cross-field rule (Myself with operator details; Someone else without them) or a
@@ -612,6 +624,22 @@ export async function setupRoutes(
           await seedPlaybook(new WorkingDocsRepo(pool, logger), logger);
         } catch (err) {
           logger.error({ err }, 'POST /api/setup/start: failed to seed the onboarding playbook');
+        }
+      }
+      // An operator confirmation owed from Setup is retried here too (#2710): Start is the
+      // point where a fresh install has restarted and can email, so it is the tempting moment
+      // for a typo to go unnoticed. Best-effort: a failure must not fail Start.
+      if (outboundGateway) {
+        try {
+          await sendPendingOperatorConfirmation({
+            pool,
+            gateway: outboundGateway,
+            ...(canDeliver ? { canDeliver } : {}),
+            ...(appOrigin ? { appOrigin } : {}),
+            logger,
+          });
+        } catch (err) {
+          logger.error({ err }, 'POST /api/setup/start: failed to send an owed operator confirmation');
         }
       }
       // setupGuide: whether web chat now reaches the setup guide, so the page can say when not.

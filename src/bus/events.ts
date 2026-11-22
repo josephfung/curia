@@ -513,8 +513,17 @@ export interface OutboundNotificationUndeliveredPayload {
   notificationType: NotificationType;
   /** Which side of NOTIFICATION_AUDIENCES the missing address came from. */
   audience: NotificationAudience;
-  /** Why nothing was sent: there was no address to send it to, or the bus refused the publish. */
-  reason: 'no_recipient' | 'publish_failed';
+  /**
+   * Why the notice reached nobody:
+   *   - `no_recipient`: no address to send it to (no operator and no bound principal email).
+   *   - `publish_failed`: the bus refused the publish.
+   *   - `delivery_unavailable`: no email adapter that delivers notifications is subscribed yet,
+   *     so a publish would reach no one.
+   *   - `delivery_refused`: the channel refused the send — the sending account is (or may be)
+   *     the principal's own mailbox, which only principal-addressed notices may use (#2474).
+   *   - `delivery_failed`: the provider send failed, or threw.
+   */
+  reason: 'no_recipient' | 'publish_failed' | 'delivery_unavailable' | 'delivery_refused' | 'delivery_failed';
 }
 
 interface ToolInvokePayload {
@@ -785,10 +794,24 @@ interface ScheduleFiredPayload {
   agentTaskId: string | null;
 }
 
+/**
+ * The coarse class of a job's last failure, for notices that an operator reads (#2710). The
+ * message itself can be the agent's own response text, so it is never sent to the operator:
+ * the class says what went wrong and the console link carries the detail.
+ */
+export type JobErrorClass = 'timeout' | 'llm_failure' | 'tool_failure' | 'other';
+
 interface ScheduleSuspendedPayload {
   jobId: string;
   agentId: string;
+  /**
+   * The failure message, stored for the audit trail and the console. It may be model-written
+   * text (the scheduler falls back to the agent's response when no agent.error arrived), so an
+   * operator-routed notice must not carry it (#2710, ADR-068) — it carries `lastErrorClass`.
+   */
   lastError: string;
+  /** Coarse class of `lastError`, for operator notices. Absent on events written before #2710. */
+  lastErrorClass?: JobErrorClass;
   consecutiveFailures: number;
 }
 

@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EmailAdapter } from '../../../../src/channels/email/email-adapter.js';
 import { createLogger } from '../../../../src/logger.js';
 import type { OutboundGateway } from '../../../../src/skills/outbound-gateway.js';
+import { PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL } from '../../../../src/skills/outbound-gateway.js';
 import type { ContactService } from '../../../../src/contacts/contact-service.js';
 import type { EventBus } from '../../../../src/bus/bus.js';
 import type { NylasMessage } from '../../../../src/channels/email/nylas-client.js';
@@ -61,6 +62,7 @@ function createMocks() {
 
   const outboundGateway = {
     send: vi.fn().mockResolvedValue({ success: true, messageId: 'sent-1' }),
+    reportNotificationUndelivered: vi.fn().mockResolvedValue(undefined),
     createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'draft-1' }),
     linkGatedAction: vi.fn().mockResolvedValue(undefined),
     listEmailMessages: vi.fn().mockResolvedValue([]),
@@ -1518,5 +1520,74 @@ describe('EmailAdapter — subscribeOutbound once-guard (#2312)', () => {
     // start() calls subscribeOutbound() itself; as in the suite above, the poll is not awaited.
     void adapter.start();
     expect((mocks.bus.subscribe as ReturnType<typeof vi.fn>).mock.calls.length).toBe(subscribed);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A notice that fails to deliver is audited, not just logged (#2710)
+// ---------------------------------------------------------------------------
+
+describe('EmailAdapter — undelivered notification reporting', () => {
+  it('reports delivery_failed when the provider send fails', async () => {
+    const mocks = createMocks();
+    const handleNotification = captureHandler('outbound.notification', mocks);
+    const adapter = makeAdapter(mocks);
+    await adapter.start();
+    (mocks.outboundGateway.send as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ success: false, blockedReason: 'nylas 500' });
+
+    await handleNotification(createOutboundNotification({
+      notificationType: 'inbox_triage_paused',
+      recipient: CEO_EMAIL,
+      audience: 'principal',
+      subject: 'Paused',
+      body: 'Body',
+    }));
+
+    expect(mocks.outboundGateway.reportNotificationUndelivered)
+      .toHaveBeenCalledWith('inbox_triage_paused', 'delivery_failed');
+    await adapter.stop();
+  });
+
+  it('reports delivery_refused when the account is the principal\'s own mailbox', async () => {
+    const mocks = createMocks();
+    const handleNotification = captureHandler('outbound.notification', mocks);
+    const adapter = makeAdapter(mocks);
+    await adapter.start();
+    (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      success: false,
+      blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL,
+    });
+
+    await handleNotification(createOutboundNotification({
+      notificationType: 'schedule_suspended',
+      recipient: 'operator@example.com',
+      audience: 'operator',
+      subject: 'Suspended',
+      body: 'Body',
+    }));
+
+    // A refusal is the rule working (#2474), recorded as such so it is not chased as a fault.
+    expect(mocks.outboundGateway.reportNotificationUndelivered)
+      .toHaveBeenCalledWith('schedule_suspended', 'delivery_refused');
+    await adapter.stop();
+  });
+
+  it('reports nothing when the notice is delivered', async () => {
+    const mocks = createMocks();
+    const handleNotification = captureHandler('outbound.notification', mocks);
+    const adapter = makeAdapter(mocks);
+    await adapter.start();
+
+    await handleNotification(createOutboundNotification({
+      notificationType: 'inbox_triage_paused',
+      recipient: CEO_EMAIL,
+      audience: 'principal',
+      subject: 'Paused',
+      body: 'Body',
+    }));
+
+    expect(mocks.outboundGateway.reportNotificationUndelivered).not.toHaveBeenCalled();
+    await adapter.stop();
   });
 });

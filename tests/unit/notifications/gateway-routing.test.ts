@@ -56,6 +56,7 @@ interface Published { event: BusEvent }
 function makeGateway(recipients: {
   principalEmail?: () => string | undefined;
   operatorEmail?: () => Promise<string | undefined>;
+  canDeliver?: () => boolean;
 } | undefined) {
   const published: Published[] = [];
   const bus = {
@@ -72,6 +73,7 @@ function makeGateway(recipients: {
           notificationRecipients: {
             principalEmail: recipients.principalEmail ?? (() => PRINCIPAL),
             operatorEmail: recipients.operatorEmail ?? (async () => undefined),
+            ...(recipients.canDeliver ? { canDeliver: recipients.canDeliver } : {}),
           },
         }
       : {}),
@@ -160,6 +162,21 @@ describe('OutboundGateway.sendNotification routing', () => {
     expect(sent).toBe(false);
     expect(notices(published)).toEqual([]);
     expect(undelivered(published)).toHaveLength(1);
+  });
+
+  it('does not publish, and says so, when no adapter can deliver a notice yet', async () => {
+    // One check for every caller (#2710): a publish before the email adapter subscribes reaches
+    // no one, so nobody may be told the notice went out.
+    const { gateway, published } = makeGateway({ principalEmail: () => PRINCIPAL, canDeliver: () => false });
+    expect(await gateway.sendNotification({ notificationType: 'inbox_triage_paused', subject: 's', body: 'b' })).toBe(false);
+    expect(notices(published)).toEqual([]);
+    expect(undelivered(published)[0]!.payload).toMatchObject({ reason: 'delivery_unavailable' });
+  });
+
+  it('publishes once an adapter can deliver', async () => {
+    const { gateway, published } = makeGateway({ principalEmail: () => PRINCIPAL, canDeliver: () => true });
+    expect(await gateway.sendNotification({ notificationType: 'inbox_triage_paused', subject: 's', body: 'b' })).toBe(true);
+    expect(notices(published)).toHaveLength(1);
   });
 
   it('sends nothing when the gateway was given no recipient lookup at all', async () => {

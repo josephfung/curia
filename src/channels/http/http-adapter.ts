@@ -190,6 +190,13 @@ export interface HttpAdapterConfig {
    */
   outboundGateway?: Pick<import('../../skills/outbound-gateway.js').OutboundGateway, 'sendNotification'>;
   /**
+   * Keeps the gateway's cached operator address current after the console or Setup saves it
+   * (#2710), so a later `database_unavailable` notice cannot reach a former operator.
+   */
+  onOperatorChanged?: (operator: { name: string; email: string } | null) => void;
+  /** Whether a channel adapter that delivers notifications is subscribed (#2710). */
+  canDeliverNotifications?: () => boolean;
+  /**
    * True when the process booted without a principal contact and is running in
    * setup-required mode (email + Signal adapters are skipped until restart).
    * Drives the externalAdaptersPending flag on GET /api/setup/status so the
@@ -559,6 +566,8 @@ export class HttpAdapter implements Channel {
         // The operator's confirmation notice when Setup records them (#2710).
         ...(this.config.outboundGateway ? { outboundGateway: this.config.outboundGateway } : {}),
         ...(this.config.appOrigin ? { appOrigin: this.config.appOrigin } : {}),
+        onOperatorChanged: this.config.onOperatorChanged,
+        canDeliver: this.config.canDeliverNotifications,
       });
     }
 
@@ -593,6 +602,8 @@ export class HttpAdapter implements Channel {
         logger,
         ...(this.config.outboundGateway ? { outboundGateway: this.config.outboundGateway } : {}),
         ...(this.config.appOrigin ? { appOrigin: this.config.appOrigin } : {}),
+        onOperatorChanged: this.config.onOperatorChanged,
+        canDeliver: this.config.canDeliverNotifications,
       });
     }
 

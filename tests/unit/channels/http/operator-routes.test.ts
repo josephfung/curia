@@ -17,19 +17,23 @@ const SECRET = 'test-bootstrap-secret';
 /** A pool whose settings table holds one key, and whose history holds what a test says. */
 function makePool(initial: { value: unknown; updatedBy: string } | null = null) {
   let stored = initial;
-  const history: Array<{ id: string; old_value: unknown; new_value: unknown; updated_by: string; changed_at: Date }> = [];
+  let confirmation: { email: string; attemptedAt: string; sentAt: string | null } | undefined;
+  const history: Array<{ id: string; key: string; old_value: unknown; new_value: unknown; updated_by: string; changed_at: Date }> = [];
 
   const client = {
     query: vi.fn(async (sql: string, params?: unknown[]) => {
       if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return { rows: [] };
       if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
       if (sql.includes('SELECT value FROM settings')) {
-        return { rows: stored ? [{ value: stored.value }] : [] };
+        const key = String(params![0]);
+        const value = key === 'operator' ? stored?.value : key === 'operator_confirmation' ? confirmation : undefined;
+        return { rows: value === undefined ? [] : [{ value }] };
       }
       // The history INSERT also starts with "INSERT INTO settings", so it is matched first.
       if (sql.includes('INSERT INTO settings_history')) {
         history.unshift({
           id: String(history.length + 1),
+          key: String(params![0]),
           old_value: params![1] === null ? null : JSON.parse(String(params![1])),
           new_value: params![2] === null ? null : JSON.parse(String(params![2])),
           updated_by: String(params![3]),
@@ -38,7 +42,10 @@ function makePool(initial: { value: unknown; updatedBy: string } | null = null) 
         return { rows: [] };
       }
       if (sql.includes('INSERT INTO settings')) {
-        stored = { value: JSON.parse(String(params![1])), updatedBy: String(params![2]) };
+        const key = String(params![0]);
+        const value = JSON.parse(String(params![1]));
+        if (key === 'operator_confirmation') confirmation = value;
+        else stored = { value, updatedBy: String(params![2]) };
         return { rows: [] };
       }
       if (sql.includes('DELETE FROM settings')) {
@@ -55,18 +62,22 @@ function makePool(initial: { value: unknown; updatedBy: string } | null = null) 
     connect: vi.fn(async () => client),
     query: vi.fn(async (sql: string) => {
       if (sql.includes('FROM settings WHERE key = ANY')) {
-        return { rows: stored ? [{ key: 'operator', value: stored.value, updated_by: stored.updatedBy }] : [] };
+        const rows: Array<Record<string, unknown>> = [];
+        if (stored) rows.push({ key: 'operator', value: stored.value, updated_by: stored.updatedBy });
+        if (confirmation) rows.push({ key: 'operator_confirmation', value: confirmation, updated_by: 'curia' });
+        return { rows };
       }
+      const forKey = (rows: typeof history) => rows.filter((row) => row.key === 'operator');
       if (sql.includes('FROM settings_history') && sql.includes('count(*)')) {
-        return { rows: [{ total: history.length }] };
+        return { rows: [{ total: forKey(history).length }] };
       }
       if (sql.includes('FROM settings_history')) {
-        return { rows: history };
+        return { rows: forKey(history) };
       }
       throw new Error(`unexpected pool SQL: ${sql}`);
     }),
   };
-  return { pool, history, current: () => stored };
+  return { pool, history, current: () => stored, confirmation: () => confirmation };
 }
 
 interface Harness {
@@ -141,7 +152,7 @@ describe('operator routes', () => {
     const { app } = await makeApp(pool.pool);
     const res = await app.inject({ method: 'GET', url: '/api/operator', headers: { 'x-web-bootstrap-secret': SECRET } });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ operator: null, updatedBy: null });
+    expect(res.json()).toEqual({ operator: null, updatedBy: null, confirmation: { state: 'none' } });
     await app.close();
   });
 
@@ -150,9 +161,9 @@ describe('operator routes', () => {
     const res = await put(app, { name: 'Sam Rivera', email: 'sam@example.com' });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({
+    expect(res.json()).toMatchObject({
       operator: { name: 'Sam Rivera', email: 'sam@example.com' },
-      noticeSent: true,
+      confirmation: { state: 'sent', email: 'sam@example.com' },
     });
     expect(pool.current()).toMatchObject({ value: { name: 'Sam Rivera', email: 'sam@example.com' } });
     // The confirmation is the smoke test for a typo, and it is operator-routed.
@@ -171,9 +182,9 @@ describe('operator routes', () => {
     const res = await put(app, { name: 'Sam Rivera', email: 'sam@example.com' });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({
+    expect(res.json()).toMatchObject({
       operator: { name: 'Sam Rivera', email: 'sam@example.com' },
-      noticeSent: false,
+      confirmation: { state: 'failed', email: 'sam@example.com' },
     });
     // The setting is saved: a notice that failed must not undo it.
     expect(pool.current()).not.toBeNull();
@@ -182,8 +193,10 @@ describe('operator routes', () => {
 
   it('saves and reports the miss when no outbound gateway exists', async () => {
     const { app } = await makeApp(pool.pool, { withGateway: false });
+    // Nothing can deliver it, so the notice is owed rather than failed: that is what the console
+    // says, and a later boot or Start retries it.
     const res = await put(app, { name: 'Sam Rivera', email: 'sam@example.com' });
-    expect(res.json()).toMatchObject({ noticeSent: false });
+    expect(res.json()).toMatchObject({ confirmation: { state: 'pending' } });
     expect(pool.current()).not.toBeNull();
     await app.close();
   });
@@ -194,9 +207,27 @@ describe('operator routes', () => {
     const res = await put(app, { clear: true });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ operator: null, noticeSent: false });
+    expect(res.json()).toEqual({ operator: null, confirmation: { state: 'none' } });
     expect(pool.current()).toBeNull();
     expect(sendNotification).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('does not re-send the confirmation when the saved operator is unchanged', async () => {
+    pool = makePool({ value: { name: 'Sam Rivera', email: 'sam@example.com' }, updatedBy: 'console' });
+    const { app, sendNotification } = await makeApp(pool.pool);
+    const res = await put(app, { name: 'Sam Rivera', email: 'sam@example.com' });
+
+    expect(res.statusCode).toBe(200);
+    expect(sendNotification).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('reports a pending confirmation on GET while one is owed', async () => {
+    pool = makePool({ value: { name: 'Sam Rivera', email: 'sam@example.com' }, updatedBy: 'console' });
+    const { app } = await makeApp(pool.pool);
+    const res = await app.inject({ method: 'GET', url: '/api/operator', headers: { 'x-web-bootstrap-secret': SECRET } });
+    expect(res.json()).toMatchObject({ confirmation: { state: 'pending', email: 'sam@example.com' } });
     await app.close();
   });
 

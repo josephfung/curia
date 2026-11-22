@@ -17,7 +17,7 @@ import {
   writeSettings,
 } from '../../../src/settings/store.js';
 
-const EXPECTED_KEYS = ['messaging_route', 'operator', 'setup.completed_at', 'voice_route'];
+const EXPECTED_KEYS = ['messaging_route', 'operator', 'operator_confirmation', 'setup.completed_at', 'voice_route'];
 
 function fakeLogger(): { logger: Pick<Logger, 'error'>; error: ReturnType<typeof vi.fn> } {
   const error = vi.fn();
@@ -66,7 +66,7 @@ function fakePool(options: { failOn?: string; existing?: StoredRow[] } = {}) {
 }
 
 describe('settings registry', () => {
-  it('declares exactly the four Setup keys, each with a purpose, a default and a parser', () => {
+  it('declares exactly the Setup and operator keys, each with a purpose, a default and a parser', () => {
     expect(settingKeys().sort()).toEqual(EXPECTED_KEYS);
     for (const key of settingKeys()) {
       expect(SETTINGS[key].purpose.length).toBeGreaterThan(0);
@@ -91,6 +91,36 @@ describe('settings registry', () => {
       { name: 'Sam', email: 'sam@example.com', extra: true },
     ]) {
       expect(SETTINGS.operator.parse(bad).ok, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it('keeps the operator name to one line, so it cannot forge a line of the notice body (#2710)', () => {
+    // The name is rendered into the confirmation notice, so a newline must not survive.
+    expect(SETTINGS.operator.parse({ name: 'Sam\nBcc: someone@example.com', email: 'sam@example.com' }))
+      .toEqual(ok({ name: 'Sam Bcc: someone@example.com', email: 'sam@example.com' }));
+    expect(SETTINGS.operator.parse({ name: ' Sam   Rivera\t ', email: 'sam@example.com' }))
+      .toEqual(ok({ name: 'Sam Rivera', email: 'sam@example.com' }));
+    // A name that is only whitespace is still not a name.
+    expect(SETTINGS.operator.parse({ name: '\n\t ', email: 'sam@example.com' }).ok).toBe(false);
+  });
+
+  it('accepts a confirmation record and rejects a malformed one', () => {
+    const at = '2026-11-22T12:00:00.000Z';
+    expect(SETTINGS.operator_confirmation.parse({ email: 'Sam@Example.com', attemptedAt: at, sentAt: at }))
+      .toEqual(ok({ email: 'sam@example.com', attemptedAt: at, sentAt: at }));
+    // A failed attempt records a null sentAt: the notice is owed, not delivered.
+    expect(SETTINGS.operator_confirmation.parse({ email: 'sam@example.com', attemptedAt: at, sentAt: null }))
+      .toEqual(ok({ email: 'sam@example.com', attemptedAt: at, sentAt: null }));
+    for (const bad of [
+      null,
+      'sam@example.com',
+      {},
+      { email: 'nope', attemptedAt: at, sentAt: at },
+      { email: 'sam@example.com', attemptedAt: 'yesterday', sentAt: at },
+      { email: 'sam@example.com', attemptedAt: at, sentAt: 'later' },
+      { email: 'sam@example.com', attemptedAt: at, sentAt: at, extra: true },
+    ]) {
+      expect(SETTINGS.operator_confirmation.parse(bad).ok, JSON.stringify(bad)).toBe(false);
     }
   });
 

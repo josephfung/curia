@@ -11,6 +11,7 @@ import type { EventBus } from '../../bus/bus.js';
 import type { TurnLanes } from '../../dispatch/turn-lanes.js';
 import type { Logger } from '../../logger.js';
 import type { OutboundGateway } from '../../skills/outbound-gateway.js';
+import { MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL } from '../../skills/outbound-gateway.js';
 import type { EmailSendRequest } from './outbound-request.js';
 import { replyDisplayName, replyRecipientSource } from './reply-recipient-provenance.js';
 import { deriveEmailReplyRecipientSet } from './reply-recipients.js';
@@ -68,6 +69,16 @@ interface QueuedInboundEmail {
   queuedAt: number;
   /** True when this item was loaded from an unacknowledged audit row. */
   replayed?: boolean;
+}
+
+/**
+ * Whether a failed system-notification send was the channel refusing it outright — the sending
+ * account is (or may be) the principal's own mailbox, which only principal-addressed notices may
+ * use (#2474). A refusal is a rule working, so it is audited as one and not retried as a fault.
+ */
+function isNotificationDeliveryRefusal(result: { blockedReason?: string }): boolean {
+  return result.blockedReason === PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL
+    || result.blockedReason === MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL;
 }
 
 function nylasMessageIdOf(event: InboundMessageEvent): string {
@@ -475,6 +486,13 @@ export class EmailAdapter implements Channel {
             },
             'EmailAdapter: failed to deliver outbound.notification — its recipient will NOT receive this alert',
           );
+          // The gateway only knows the publish succeeded; this is the only place the real
+          // outcome is known, so the miss is audited here (#2710). A refusal (the account is the
+          // principal's own mailbox) is a rule working, not a failure to retry.
+          await this.config.outboundGateway.reportNotificationUndelivered(
+            notification.payload.notificationType,
+            isNotificationDeliveryRefusal(result) ? 'delivery_refused' : 'delivery_failed',
+          );
         }
       } catch (err) {
         logger.error(
@@ -485,6 +503,15 @@ export class EmailAdapter implements Channel {
           },
           'EmailAdapter: unexpected error delivering outbound.notification',
         );
+        // An unexpected throw is still a notice nobody got; record it rather than only logging.
+        try {
+          await this.config.outboundGateway.reportNotificationUndelivered(
+            notification.payload.notificationType,
+            'delivery_failed',
+          );
+        } catch (reportErr) {
+          logger.error({ reportErr }, 'EmailAdapter: could not audit the undelivered notification');
+        }
       }
     });
   }

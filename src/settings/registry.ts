@@ -25,12 +25,29 @@ export interface OperatorSetting {
 }
 
 /**
+ * The last confirmation notice attempted for the operator setting (#2710). Saving an operator
+ * address emails it as a typo check, and the console shows where that got to. `sentAt` null means
+ * the attempt reached nobody, so the next boot or Start tries again; a different `email` than the
+ * saved operator means a notice is still owed for the current address.
+ */
+export interface OperatorConfirmation {
+  /** The address the attempt was for, lower-cased like the setting. */
+  email: string;
+  /** When the latest attempt was made. */
+  attemptedAt: string;
+  /** When a notice was published for that address; null when the attempt reached nobody. */
+  sentAt: string | null;
+}
+
+/**
  * The key list and each key's value type. Adding a key here without a `SETTINGS` entry
  * below fails to compile, and vice versa.
  */
 export interface SettingValues {
   /** The operator's name and email; absent means Setup was for the principal themselves. */
   operator: OperatorSetting;
+  /** The last confirmation notice attempted for the operator (#2710); absent means none yet. */
+  operator_confirmation: OperatorConfirmation;
   messaging_route: MessagingRoute;
   voice_route: VoiceRoute;
   /** ISO timestamp. Absent until Setup finishes, which is what keeps Setup in progress. */
@@ -73,10 +90,37 @@ function parseOperator(raw: unknown): SettingParse<OperatorSetting> {
   const name = input['name'];
   const email = input['email'];
   if (typeof name !== 'string' || name.trim() === '') return fail('name must be a non-empty string');
-  const trimmed = name.trim();
+  // One line, no control characters: the name is rendered into an email body (the confirmation
+  // notice, #2710), and a newline there would let a saved name forge a line of it.
+  const trimmed = name.replace(/[\r\n\t\v\f]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  if (trimmed === '') return fail('name must be a non-empty string');
   if (trimmed.length > MAX_OPERATOR_NAME) return fail(`name must be ${MAX_OPERATOR_NAME} characters or fewer`);
   if (typeof email !== 'string' || !EMAIL_RE.test(email.trim())) return fail('email must be an email address');
   return ok({ name: trimmed, email: email.trim().toLowerCase() });
+}
+
+function parseConfirmation(raw: unknown): SettingParse<OperatorConfirmation> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return fail('expected an object with email, attemptedAt and sentAt');
+  }
+  const input = raw as Record<string, unknown>;
+  const extra = Object.keys(input).filter((k) => k !== 'email' && k !== 'attemptedAt' && k !== 'sentAt');
+  if (extra.length > 0) return fail(`unknown field(s): ${extra.join(', ')}`);
+  const email = input['email'];
+  if (typeof email !== 'string' || !EMAIL_RE.test(email.trim())) return fail('email must be an email address');
+  const attemptedAt = input['attemptedAt'];
+  if (typeof attemptedAt !== 'string' || Number.isNaN(Date.parse(attemptedAt))) {
+    return fail('attemptedAt must be an ISO timestamp');
+  }
+  const sentAt = input['sentAt'];
+  if (sentAt !== null && (typeof sentAt !== 'string' || Number.isNaN(Date.parse(sentAt)))) {
+    return fail('sentAt must be an ISO timestamp or null');
+  }
+  return ok({
+    email: email.trim().toLowerCase(),
+    attemptedAt: new Date(Date.parse(attemptedAt)).toISOString(),
+    sentAt: sentAt === null ? null : new Date(Date.parse(sentAt as string)).toISOString(),
+  });
 }
 
 function parseOneOf<T extends string>(allowed: readonly T[]): (raw: unknown) => SettingParse<T> {
@@ -103,6 +147,11 @@ export const SETTINGS: { readonly [K in SettingKey]: SettingDefinition<SettingVa
     purpose: 'Who Setup was for when it was not the principal — the person who runs this Curia.',
     default: undefined,
     parse: parseOperator,
+  },
+  operator_confirmation: {
+    purpose: "The last confirmation notice attempted for the operator, so a typo is caught and a pending one is retried (#2710).",
+    default: undefined,
+    parse: parseConfirmation,
   },
   messaging_route: {
     purpose: 'How Curia messages the principal: the app, Signal, SMS or Slack.',

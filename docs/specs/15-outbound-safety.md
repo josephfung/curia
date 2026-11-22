@@ -75,9 +75,14 @@ body; they never name a recipient. `NOTIFICATION_AUDIENCES`
 
 The table is a `Record` over the notification-type union, so a new type with no chosen audience
 fails typecheck. Publications carry the resolved `recipient` and the `audience` that chose it;
-`ceoEmail` is gone. A notice that reaches nobody — no address, or a refused publish — is logged
-at error level and audited as `outbound.notification_undelivered` (type, audience and reason
-only), never redirected to the other person: a fallback would break the no-duplication rule.
+`ceoEmail` is gone. A notice that reaches nobody — no address, no adapter subscribing yet, a
+refused publish, or a send the channel refused or failed — is logged at error level and audited
+as `outbound.notification_undelivered` (type, audience and reason only), never redirected to the
+other person: a fallback would break the no-duplication rule. Deliverability is checked once, in
+the gateway; the outcome the gateway cannot see (the send happens later, in the email adapter) is
+reported back by the adapter. A system notice also creates no contact: the recipient is never
+promoted, on the direct path or the queue flush, because the operator has no tier or role
+(ADR-068).
 
 ### Personal details, outreach links and asks
 

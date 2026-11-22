@@ -13,6 +13,8 @@ import {
 } from '../bus/events.js';
 import type { AgentResponseEvent, AgentErrorEvent, AgentTaskEvent, ScheduleFiredEvent } from '../bus/events.js';
 import { makeWakeContext } from '../autonomy/effective-standing.js';
+import { jobErrorClass } from './job-notification-context.js';
+import type { ErrorType } from '../errors/types.js';
 import type { DriftDetector } from './drift-detector.js';
 import type { DreamEngine } from '../memory/dream-engine.js';
 import type { JobRow } from './scheduler-service.js';
@@ -511,7 +513,7 @@ export class Scheduler {
   // agent.error arrives before agent.response(isError) on failure paths. Stash the
   // structured error message here so the response subscriber can complete the job
   // with both the real message and failedSkills (#1830 follow-on).
-  private pendingFailureMessages = new Map<string, string>();
+  private pendingFailureMessages = new Map<string, { message: string; errorType: ErrorType }>();
 
   // Tracks burst counts per job for checkEveryNBursts support.
   // In-memory only — resets on process restart (a missed check is not a security failure).
@@ -593,8 +595,11 @@ export class Scheduler {
           );
         }
         const errorMessage = stashed !== undefined
-          ? this.scrubStored(stashed)
+          ? this.scrubStored(stashed.message)
           : (content.slice(0, 500) || 'Agent error');
+        // The class travels to the suspension notice (#2710): the message may be the agent's own
+        // response text, so an operator notice carries this instead.
+        const errorType: ErrorType = stashed?.errorType ?? 'UNKNOWN';
         this.handleCompletion(
           parentEventId,
           false,
@@ -602,6 +607,7 @@ export class Scheduler {
           undefined,
           failedSkills,
           failedSkillsOmitted,
+          errorType,
         ).catch((err) => {
           this.logger.error({ err, parentEventId }, 'Unhandled error in handleCompletion (error-response path)');
         });
@@ -630,10 +636,10 @@ export class Scheduler {
     this.bus.subscribe('agent.error', 'system', (event) => {
       const errorEvent = event as AgentErrorEvent;
       if (errorEvent.parentEventId && this.pendingJobs.has(errorEvent.parentEventId)) {
-        this.pendingFailureMessages.set(
-          errorEvent.parentEventId,
-          errorEvent.payload.message,
-        );
+        this.pendingFailureMessages.set(errorEvent.parentEventId, {
+          message: errorEvent.payload.message,
+          errorType: errorEvent.payload.errorType,
+        });
       }
     });
 
@@ -1858,6 +1864,8 @@ export class Scheduler {
     autoSummary?: string,
     failedSkills?: Array<{ name: string; error: string }>,
     failedSkillsOmitted?: number,
+    /** Class of `error`, for the operator's suspension notice (#2710). */
+    errorType?: ErrorType,
   ): Promise<void> {
     const jobId = this.pendingJobs.get(parentEventId);
     if (!jobId) {
@@ -2056,6 +2064,8 @@ export class Scheduler {
             jobId,
             agentId: job.agentId,
             lastError: error ?? 'Unknown error',
+            // The operator hears the class, never the message: it can be the agent's own text.
+            lastErrorClass: jobErrorClass(errorType),
             consecutiveFailures: job.consecutiveFailures,
             parentEventId,
           });
@@ -2300,6 +2310,8 @@ export class Scheduler {
                 jobId: row.id,
                 agentId: row.agent_id,
                 lastError: `Job timed out after ${timeoutMinutes}m — auto-recovered`,
+                // The watchdog suspends only for a stuck run, so the class is known here.
+                lastErrorClass: 'timeout',
                 consecutiveFailures: result.consecutiveFailures,
                 parentEventId: recoveredEvent.id,
               });

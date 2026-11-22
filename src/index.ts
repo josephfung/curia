@@ -261,6 +261,7 @@ import { isTriageHeld } from './onboarding/triage-hold.js';
 import { OnboardingService } from './onboarding/onboarding-service.js';
 import { OnboardingSubscribers } from './onboarding/subscribers.js';
 import { createOperatorEmailLookup } from './notifications/operator-setting.js';
+import { sendPendingOperatorConfirmation } from './notifications/operator-confirmation.js';
 import { createOperatorNotifier } from './onboarding/notify-operator.js';
 import { isNextSessionBooked, OnboardingWatcher } from './onboarding/watcher.js';
 import { readCurrentInvitationTiming } from './channels/http/pairing-invitations.js';
@@ -1030,7 +1031,7 @@ async function main(): Promise<void> {
   // here so the database_unavailable notice — the one raised while the settings read is
   // failing — still knows who the operator is (the lookup keeps the last address it read).
   const operatorEmail = createOperatorEmailLookup(pool, logger);
-  void operatorEmail();
+  void operatorEmail.read();
 
   // Monotonic guard against overlapping refreshes (#1514). onIdentitiesChanged is
   // fire-and-forget, so two mutations in quick succession (e.g. add + verify, or a
@@ -2358,7 +2359,13 @@ async function main(): Promise<void> {
       sendLedger: new PrincipalSendLedger(workingDocsRepo, logger),
       // System notices go to the operator when one is set and to the principal otherwise;
       // the notification type decides which (#2710).
-      notificationRecipients: { principalEmail: principalNotificationEmail, operatorEmail },
+      notificationRecipients: {
+        principalEmail: principalNotificationEmail,
+        operatorEmail: operatorEmail.read,
+        // Deliverable only once the primary ('curia') adapter has subscribed (its start() runs
+        // after the health service). Checked in the gateway, so every caller gets the same answer.
+        canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
+      },
     });
     outboundGateway.start();
     logger.info({
@@ -2979,11 +2986,9 @@ async function main(): Promise<void> {
       ? new MailboxOutageNotifier({
           gateway: outboundGateway,
           // A "someone else" install also tells the operator, with no reconnect link. The
-          // gateway addresses both notices from their notification types (#2710).
-          hasOperator: async () => (await operatorEmail()) !== undefined,
-          // Delivered only by the primary ('curia') adapter once it has subscribed (start() runs
-          // after the health service): until then an alert is not counted as sent, and retried.
-          canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
+          // gateway addresses both notices from their notification types (#2710), and checks
+          // that an adapter can deliver them before reporting a notice as published.
+          hasOperator: async () => (await operatorEmail.read()) !== undefined,
           // A 7-day sign-in link for the failing mailbox (#2361). mailboxSignInService is built
           // later in boot; the canary only calls this after boot, so the reference is live then.
           mintReconnectLink: async (mailboxId, label) => {
@@ -3848,11 +3853,9 @@ async function main(): Promise<void> {
       },
       // One email a day when triage pauses at the ceiling (R67); the same path as the outage alert.
       notifyCeiling: async (batches) => {
-        // outbound.notification is delivered only by the primary ('curia') email adapter once its
-        // outbound side has subscribed (start() does that, after the heartbeat starts). Until
-        // then a publish reaches no one, so it is not reported as sent and the heartbeat retries.
-        // The gateway resolves the address and reports false when there is none (#2710).
-        if (!outboundGateway || !emailAdapters.some((a) => a.deliversNotifications())) return false;
+        // The gateway resolves the address and checks that an adapter can deliver it, returning
+        // false when not, so the heartbeat retries rather than reporting a notice nobody got (#2710).
+        if (!outboundGateway) return false;
         return outboundGateway.sendNotification({
           notificationType: 'inbox_triage_paused',
           subject: 'Curia paused inbox triage for today',
@@ -4178,8 +4181,6 @@ async function main(): Promise<void> {
       ? {
           notifier: {
             gateway: outboundGateway,
-            // As for the outage notifier: a notice published before an adapter delivers reaches no one.
-            canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
           },
         }
       : {}),
@@ -4399,6 +4400,8 @@ async function main(): Promise<void> {
     secretCaptureService,
     // The Operator setting's confirmation notice goes through the one system-notice path (#2710).
     ...(outboundGateway ? { outboundGateway } : {}),
+    onOperatorChanged: (operator) => operatorEmail.remember(operator),
+    canDeliverNotifications: () => emailAdapters.some((a) => a.deliversNotifications()),
     mailboxSignIn: {
       service: mailboxSignInService,
       readiness: nylasSignInReadiness,
@@ -4673,6 +4676,22 @@ async function main(): Promise<void> {
       }
       if (emailAdapters.length > 0) {
         logger.info({ count: emailAdapters.length }, 'Email channel adapter(s) started');
+      }
+      // An operator confirmation owed from Setup is sent now that something can deliver it
+      // (#2710): "Who it's for" is saved before Curia has an email account, so the notice waits
+      // for this point. Best-effort — a failure is logged and retried on the next boot or Start.
+      if (outboundGateway) {
+        try {
+          await sendPendingOperatorConfirmation({
+            pool,
+            gateway: outboundGateway,
+            canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
+            ...(config.appOrigin ? { appOrigin: config.appOrigin } : {}),
+            logger,
+          });
+        } catch (err) {
+          logger.error({ err }, 'Boot: failed to send an owed operator confirmation');
+        }
       }
     } else if (emailAdapters.length > 0) {
       logger.warn(

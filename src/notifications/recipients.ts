@@ -20,6 +20,13 @@ export interface NotificationRecipientDeps {
    *  Must not throw: the `createOperatorEmailLookup` factory in ./operator-setting.ts logs a
    *  read failure and answers with the last address it read. */
   operatorEmail: () => Promise<string | undefined>;
+  /**
+   * Whether a channel adapter that delivers notifications is subscribed right now (the primary
+   * email adapter's `deliversNotifications`). A publish before that reaches no one, so the
+   * gateway reports the notice as undelivered instead of telling the caller it went out.
+   * Absent: assumed deliverable.
+   */
+  canDeliver?: () => boolean;
 }
 
 export interface ResolvedNotificationRecipient {

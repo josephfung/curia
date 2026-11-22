@@ -77,24 +77,6 @@ describe('MailboxOutageNotifier', () => {
     expect(sendNotification).toHaveBeenCalledTimes(2);
   });
 
-  it('with no delivering email adapter (none, or not yet subscribed) it is not counted as sent, and retries', async () => {
-    const sendNotification = vi.fn().mockResolvedValue(true);
-    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-    let delivering = false;
-    const n = new MailboxOutageNotifier({
-      gateway: { sendNotification },
-      canDeliver: () => delivering,
-      logger: logger as never,
-    });
-    await n.record('work', 'Work', false);
-    expect(sendNotification).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalledWith(expect.objectContaining({ mailboxId: 'work' }), expect.stringContaining('no email adapter'));
-    // The primary adapter has subscribed: the next failing probe alerts.
-    delivering = true;
-    await n.record('work', 'Work', false);
-    expect(sendNotification).toHaveBeenCalledTimes(1);
-  });
-
   describe('the operator also hears about it (#2710)', () => {
     it('raises the link-free operator notice when an operator is set', async () => {
       const { n, sendNotification } = make(true, async () => true);
@@ -124,19 +106,12 @@ describe('MailboxOutageNotifier', () => {
       expect(sendNotification.mock.calls[0]![0].notificationType).toBe('principal_mailbox_outage');
     });
 
-    it('a failing operator-notice read counts as no operator, and the principal alert still stands', async () => {
-      const { n, sendNotification, logger } = make(true, async () => { throw new Error('db down'); });
-      await n.record('work', 'Work', false);
-      expect(sendNotification).toHaveBeenCalledTimes(1);
-      expect(sendNotification.mock.calls[0]![0].notificationType).toBe('principal_mailbox_outage');
-      expect(logger.warn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('whether an operator is set'));
-    });
-
-    it('a failed operator send does not hold back the episode record or the principal alert', async () => {
-      // True for the principal's notice, false for the operator's.
+    it('retries a failed operator copy on the next probe, without repeating the principal alert', async () => {
+      // The principal's notice publishes, the operator's first attempt does not.
       const sendNotification = vi.fn()
         .mockResolvedValueOnce(true)
-        .mockResolvedValueOnce(false);
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true);
       const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
       const n = new MailboxOutageNotifier({
         gateway: { sendNotification },
@@ -144,14 +119,20 @@ describe('MailboxOutageNotifier', () => {
         logger: logger as never,
       });
       await n.record('work', 'Work', false);
-      await n.record('work', 'Work', false);
-      // The principal's alert is one per episode, and the episode is recorded as alerted even
-      // though the operator's copy failed: the gateway logs and audits that failure itself.
-      expect(sendNotification).toHaveBeenCalledTimes(2);
       expect(logger.error).toHaveBeenCalledWith(
         expect.objectContaining({ mailboxId: 'work' }),
         expect.stringContaining('operator notice could not be sent'),
       );
+
+      // The next failing probe retries the operator copy only: the principal heard once.
+      await n.record('work', 'Work', false);
+      expect(sendNotification).toHaveBeenCalledTimes(3);
+      const types = sendNotification.mock.calls.map((c) => (c[0] as { notificationType: string }).notificationType);
+      expect(types).toEqual(['principal_mailbox_outage', 'mailbox_outage', 'mailbox_outage']);
+
+      // After it publishes, no further probes repeat either notice.
+      await n.record('work', 'Work', false);
+      expect(sendNotification).toHaveBeenCalledTimes(3);
     });
   });
 

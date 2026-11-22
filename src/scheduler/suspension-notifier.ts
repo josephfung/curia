@@ -20,6 +20,7 @@ import type { ScheduleSuspendedEvent, BusEvent } from '../bus/events.js';
 import { classifyError } from '../errors/classify.js';
 import type { SchedulerService } from './scheduler-service.js';
 import {
+  describeJobErrorClass,
   loadJobNotificationContext,
 } from './job-notification-context.js';
 
@@ -57,7 +58,7 @@ export class SuspensionNotifier {
   }
 
   private async handle(event: ScheduleSuspendedEvent): Promise<void> {
-    const { jobId, agentId, lastError, consecutiveFailures } = event.payload;
+    const { jobId, agentId, lastError, lastErrorClass, consecutiveFailures } = event.payload;
 
     const jobContext = await loadJobNotificationContext(
       this.config.schedulerService,
@@ -76,7 +77,9 @@ export class SuspensionNotifier {
       `Job:        ${jobId}`,
       `Recurrence: ${jobContext.recurrence}`,
       `Failures:   ${consecutiveFailures}`,
-      `Error:      ${lastError}`,
+      // The class, not the message: `lastError` can be the agent's own response text, and this
+      // notice is operator-routed (#2710, ADR-068). The detail is behind the console link.
+      `Error:      ${describeJobErrorClass(lastErrorClass)}`,
       '',
       `View job: ${jobContext.consoleUrl}`,
       '',

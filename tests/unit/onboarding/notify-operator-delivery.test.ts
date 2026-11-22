@@ -52,7 +52,7 @@ describe('notifyOperator delivery', () => {
       const { gateway, sendNotification } = makeGateway();
       const { deps, updateTask } = makeDeps({ gateway });
 
-      await expect(notifyOperator(deps, 'task-1', event)).resolves.toBe(true);
+      await expect(notifyOperator(deps, 'task-1', event)).resolves.toEqual({ recorded: true, emailed: true });
 
       expect(updateTask, event).toHaveBeenCalledWith('task-1', { progressNote: `Operator notice: ${event}` });
       expect(sendNotification, event).toHaveBeenCalledOnce();
@@ -104,14 +104,16 @@ describe('notifyOperator delivery', () => {
 
   it('records the note and reports success when there is no outbound path', async () => {
     const { deps, updateTask } = makeDeps();
-    await expect(notifyOperator(deps, 'task-1', 'invitation_expired')).resolves.toBe(true);
+    await expect(notifyOperator(deps, 'task-1', 'invitation_expired'))
+      .resolves.toEqual({ recorded: true, emailed: false });
     expect(updateTask).toHaveBeenCalledOnce();
   });
 
   it('logs at error level when the email could not be published, and still reports the notice recorded', async () => {
     const { gateway } = makeGateway(false);
     const { deps, error } = makeDeps({ gateway });
-    await expect(notifyOperator(deps, 'task-1', 'greeting_unanswered')).resolves.toBe(true);
+    await expect(notifyOperator(deps, 'task-1', 'greeting_unanswered'))
+      .resolves.toEqual({ recorded: true, emailed: false });
     expect(error).toHaveBeenCalledWith(
       expect.objectContaining({ taskId: 'task-1', event: 'greeting_unanswered' }),
       expect.stringContaining('could not be sent'),
@@ -177,8 +179,34 @@ describe('notifyOperatorOnce delivery', () => {
     expect(sendNotification).not.toHaveBeenCalled();
   });
 
+  it('records a failed email separately from the raised notice (#2710)', async () => {
+    const { gateway } = makeGateway(false);
+    const { deps } = makeDeps({ gateway });
+    const { store, data } = stateStore(RUN);
+    const once = { ...deps, configStore: store, stateLock: <T>(fn: () => Promise<T>) => fn() };
+
+    // The notice is raised (so the once-per-run guard holds) and the state says the email failed:
+    // "raised" must never read as "the operator heard it".
+    await expect(notifyOperatorOnce(once, 'task-1', 'web_search_failed')).resolves.toBe(true);
+    let saved = JSON.parse(data.get(`${ONBOARDING_NAMESPACE}/${ONBOARDING_STATE_KEY}`)!) as OnboardingState;
+    expect(saved.operatorNotified).toContain('web_search_failed');
+    expect(saved.operatorNoticeFailed).toEqual(['web_search_failed']);
+
+    // A notice that is delivered records no failure, so the field means what it says.
+    const delivered = makeGateway(true);
+    const fresh = stateStore(RUN);
+    const second = {
+      ...makeDeps({ gateway: delivered.gateway }).deps,
+      configStore: fresh.store,
+      stateLock: <T>(fn: () => Promise<T>) => fn(),
+    };
+    await expect(notifyOperatorOnce(second, 'task-1', 'web_search_failed')).resolves.toBe(true);
+    const deliveredState = JSON.parse(fresh.data.get(`${ONBOARDING_NAMESPACE}/${ONBOARDING_STATE_KEY}`)!) as OnboardingState;
+    expect(deliveredState.operatorNoticeFailed ?? []).toEqual([]);
+  });
+
   it('delegates to an injected notifier, which is how the tool path reaches the gateway', async () => {
-    const notifier = vi.fn().mockResolvedValue(true);
+    const notifier = vi.fn().mockResolvedValue({ recorded: true, emailed: true });
     const { deps } = makeDeps();
     const { store } = stateStore(RUN);
     const once = { ...deps, configStore: store, stateLock: <T>(fn: () => Promise<T>) => fn(), notifier };

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '../api';
 import { SettingsLayout } from './SettingsPage';
-import { ConfigHistory, errorMessage, type ConfigHistoryEntry } from '../components/settings/ConfigHistory';
+import { ConfigHistory, errorMessage, timeAgo, type ConfigHistoryEntry } from '../components/settings/ConfigHistory';
 
 // The operator (#2710, ADR-068): the person who set Curia up when that was not the
 // principal. Curia emails them its technical notices — one-way, with no replies acted on
@@ -13,10 +13,39 @@ interface Operator {
   email: string;
 }
 
+/** Where the operator's confirmation notice stands (#2710). */
+type ConfirmationState = 'none' | 'pending' | 'sent' | 'failed';
+
+interface Confirmation {
+  state: ConfirmationState;
+  email?: string;
+  attemptedAt?: string;
+  sentAt?: string;
+}
+
 type SaveOutcome =
-  | { kind: 'saved'; noticeSent: boolean }
+  | { kind: 'saved'; confirmation: Confirmation | null }
   | { kind: 'cleared' }
   | { kind: 'error'; message: string };
+
+/** One line about the confirmation: the typo check, and what happens next when it did not run. */
+function confirmationLine(confirmation: Confirmation | null): string | null {
+  if (!confirmation) return null;
+  switch (confirmation.state) {
+    case 'sent':
+      return confirmation.sentAt
+        ? `A confirmation notice was sent to ${confirmation.email} ${timeAgo(confirmation.sentAt)}.`
+        : `A confirmation notice was sent to ${confirmation.email}.`;
+    case 'pending':
+      return `Curia will email ${confirmation.email} to confirm once its own email is set up.`;
+    case 'failed':
+      return confirmation.attemptedAt
+        ? `The confirmation to ${confirmation.email} could not be sent ${timeAgo(confirmation.attemptedAt)}; Curia will try again. Check the address if it looks wrong.`
+        : `The confirmation could not be sent; Curia will try again.`;
+    case 'none':
+      return null;
+  }
+}
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -28,6 +57,7 @@ function OperatorSection() {
   const [saving, setSaving] = useState(false);
   const [outcome, setOutcome] = useState<SaveOutcome | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
 
   const [history, setHistory] = useState<ConfigHistoryEntry[]>([]);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -62,8 +92,9 @@ function OperatorSection() {
       try {
         const res = await apiFetch('/api/operator');
         if (!res.ok) throw new Error(await errorMessage(res));
-        const data = await res.json() as { operator: Operator | null };
+        const data = await res.json() as { operator: Operator | null; confirmation?: Confirmation };
         setLoaded(data.operator);
+        setConfirmation(data.confirmation ?? null);
         setName(data.operator?.name ?? '');
         setEmail(data.operator?.email ?? '');
       } catch (err) {
@@ -98,11 +129,12 @@ function OperatorSection() {
         body: JSON.stringify({ name: trimmedName, email: trimmedEmail }),
       });
       if (!res.ok) throw new Error(await errorMessage(res));
-      const data = await res.json() as { operator: Operator; noticeSent: boolean };
+      const data = await res.json() as { operator: Operator; confirmation?: Confirmation };
       setLoaded(data.operator);
+      setConfirmation(data.confirmation ?? null);
       setName(data.operator.name);
       setEmail(data.operator.email);
-      setOutcome({ kind: 'saved', noticeSent: data.noticeSent });
+      setOutcome({ kind: 'saved', confirmation: data.confirmation ?? null });
       void loadHistory();
     } catch (err) {
       setOutcome({ kind: 'error', message: err instanceof Error ? err.message : 'Could not save.' });
@@ -122,6 +154,7 @@ function OperatorSection() {
       });
       if (!res.ok) throw new Error(await errorMessage(res));
       setLoaded(null);
+      setConfirmation(null);
       setName('');
       setEmail('');
       setConfirmingClear(false);
@@ -192,6 +225,11 @@ function OperatorSection() {
             Saving emails this address a short confirmation, so a typo shows up now rather than
             swallowing an alert later.
           </p>
+          {confirmationLine(loaded ? confirmation : null) && (
+            <p className="settings-muted-hint" role="status">
+              {confirmationLine(loaded ? confirmation : null)}
+            </p>
+          )}
 
           <div className="autonomy-control">
             <div className="autonomy-save-row">
@@ -238,9 +276,11 @@ function OperatorSection() {
               {outcome?.kind === 'saved' && (
                 <span className="autonomy-save-status">
                   Saved.{' '}
-                  {outcome.noticeSent
+                  {outcome.confirmation?.state === 'sent'
                     ? 'A confirmation went out to that address.'
-                    : 'The confirmation notice could not be sent — check the address.'}
+                    : outcome.confirmation?.state === 'failed'
+                      ? 'The confirmation could not be sent; Curia will try again.'
+                      : 'The confirmation is queued until Curia can email.'}
                 </span>
               )}
               {outcome?.kind === 'cleared' && (

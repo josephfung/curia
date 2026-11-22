@@ -107,12 +107,10 @@ export interface MailboxSignInResumeSubscriberDeps {
   /** The Google OAuth client id on the Nylas Google connector, for admin_blocked; undefined when unknown. */
   googleClientId?: () => Promise<string | undefined>;
   /** How the admin_blocked notice is sent. Absent (no outbound gateway): only logged. The
-   *  recipient is the gateway's to resolve from the notification type (#2710). */
+   *  recipient is the gateway's to resolve from the notification type (#2710), and the gateway
+   *  checks that an adapter can deliver it. */
   notifier?: {
     gateway: Pick<OutboundGateway, 'sendNotification'>;
-    /** False until an email adapter that delivers notifications is running (as in
-     *  MailboxOutageNotifier): a publish before then reaches no one. Absent: assumed delivered. */
-    canDeliver?: () => boolean;
   };
 }
 
@@ -233,10 +231,6 @@ export class MailboxSignInResumeSubscriber {
     const notifier = this.deps.notifier;
     if (!notifier) {
       this.log.warn({ eventId }, 'A Google admin policy blocked a mailbox sign-in, but no notice can be sent (no gateway)');
-      return false;
-    }
-    if (notifier.canDeliver && !notifier.canDeliver()) {
-      this.log.warn({ eventId }, 'A Google admin policy blocked a mailbox sign-in, but no email adapter delivers notices yet');
       return false;
     }
     let sent: boolean;
