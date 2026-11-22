@@ -221,39 +221,76 @@ rendered_livekit_seed_keys() {
   livekit_seed_keys "$RENDERED_LIVEKIT_ENV_KEYS" "$RENDERED_LIVEKIT_COMMAND"
 }
 
-# Echo the host port Compose publishes LiveKit signaling (container port 7880)
-# on, read from the rendered service (`docker compose config livekit`, run in
+# Echo the host port Compose publishes container port $2 of service $1 on,
+# read from the rendered service (`docker compose config $1`, run in
 # $REPO_ROOT with COMPOSE_FLAGS, as the wait_* helpers do), so a value such as
 # LIVEKIT_HTTP_PORT=${VOICE_PORT:-17880} or a hand-edited ports: entry is
-# resolved by Compose itself. Handles the long form (target: 7880 with its
-# published: value) and the short "host:published:7880" form. Returns 1, with no
+# resolved by Compose itself. Handles the long form (target: $2 with its
+# published: value) and the short "host:published:$2" form. Returns 1, with no
 # output, when Compose can't render the service, and 2 when it renders it with
-# no host port for 7880 (e.g. ports: !reset []): known unpublished, not unknown.
-rendered_livekit_http_port() {
-  local out port
+# no host port for $2 (e.g. ports: !reset []): known unpublished, not unknown.
+rendered_published_port() {
+  local svc="$1" target="$2" out port
   local -a _flags=("${COMPOSE_FLAGS[@]+"${COMPOSE_FLAGS[@]}"}")
-  out="$(docker compose --project-directory "$REPO_ROOT" ${_flags[@]+"${_flags[@]}"} config livekit 2>/dev/null)" || return 1
-  port="$(awk '
+  out="$(docker compose --project-directory "$REPO_ROOT" ${_flags[@]+"${_flags[@]}"} config "$svc" 2>/dev/null)" || return 1
+  port="$(awk -v svc="$svc" -v target="$target" '
     function kv(s,  k, v) {
       k = s; sub(/:.*/, "", k); v = s; sub(/^[^:]*:[[:space:]]*/, "", v); gsub(/["\047]/, "", v)
       if (k == "target") tgt = v
       if (k == "published") pub = v
     }
-    function flush_item() { if (tgt == "7880" && pub != "" && !found) { print pub; found = 1 } tgt = ""; pub = "" }
+    function flush_item() { if (tgt == target && pub != "" && !found) { print pub; found = 1 } tgt = ""; pub = "" }
     /^[^ ]/ { flush_item(); lk = 0; inp = 0; next }
-    /^  [^ ]/ { flush_item(); lk = ($0 ~ /^  livekit:/); inp = 0; next }
+    /^  [^ ]/ { flush_item(); lk = ($0 == "  " svc ":"); inp = 0; next }
     lk && /^    [^ ]/ { flush_item(); inp = ($0 ~ /^    ports:/); next }
     inp && /^      - / {
       flush_item(); rest = substr($0, 9)
       if (rest ~ /^[a-z_]+:( |$)/) { kv(rest); next }
       gsub(/["\047]/, "", rest); n = split(rest, a, ":"); t = a[n]; sub(/\/tcp$/, "", t)
-      if (t == "7880" && n >= 2) { tgt = "7880"; pub = a[n - 1] }
+      if (t == target && n >= 2) { tgt = target; pub = a[n - 1] }
       next
     }
     inp && /^        [a-z_]+:/ { kv(substr($0, 9)); next }
     END { flush_item() }' <<< "$out")"
   [[ "$port" =~ ^[0-9]+$ ]] || return 2
   printf '%s' "$port"
+}
+
+# LiveKit signaling: container port 7880 (see rendered_published_port).
+rendered_livekit_http_port() { rendered_published_port livekit 7880; }
+
+# Curia's host port for container port 3000, for operator instructions: what
+# Compose renders, else HTTP_PORT (shell, then .env $1) as docker-compose.yml
+# reads it ("${HTTP_PORT:-3000}:3000"): a literal number, or 3000 when empty.
+# Returns 1 (unknown: an unresolved ${...} and no render) or 2 (Compose
+# publishes none), with no output: callers must not print a guessed number.
+curia_host_port() {
+  local p rc=0
+  p="$(rendered_published_port curia 3000)" || rc=$?
+  if [[ $rc -eq 0 ]]; then printf '%s' "$p"; return 0; fi
+  [[ $rc -ne 2 ]] || return 2
+  p="$(compose_var "$1" HTTP_PORT)"
+  [[ -n "$p" ]] || p=3000
+  [[ "$p" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$p"
+}
+
+# Set HTTP_PORT, which every message naming Curia's host port reads (the
+# summary address, a proxy's forwarding rule, hints), to curia_host_port's
+# answer for env file $1. When that is unknown, HTTP_PORT becomes the
+# placeholder <port> and one note says what it stands for, rather than a guess.
+resolve_curia_port_for_messages() {
+  local rc=0 p
+  p="$(curia_host_port "$1")" || rc=$?
+  if [[ $rc -eq 0 ]]; then HTTP_PORT="$p"; return 0; fi
+  HTTP_PORT="<port>"
+  echo "" >&2
+  if [[ $rc -eq 2 ]]; then
+    warn "Compose publishes no host port for Curia's 3000; below, <port> stands for the one you publish."
+  else
+    warn "HTTP_PORT=$(compose_var "$1" HTTP_PORT) can't be resolved here; below, <port> is the port Compose publishes for Curia's 3000."
+  fi
+  hint "Check it: docker compose --project-directory \"$REPO_ROOT\" port curia 3000"
 }
 
 # Host port LiveKit signaling is published on: what Compose renders

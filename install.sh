@@ -266,7 +266,8 @@ source "$SCRIPT_DIR/scripts/setup-common.sh"
 # helpers just sourced may be that release's.
 for _helper in compose_var env_value env_decode_value set_env_var ensure_livekit_env livekit_seed_keys \
     livekit_command_for livekit_host_port rendered_livekit rendered_livekit_seed_keys rendered_livekit_http_port \
-    require_livekit_host_port note_livekit_signaling_unpublished print_next_steps \
+    require_livekit_host_port note_livekit_signaling_unpublished rendered_published_port curia_host_port \
+    resolve_curia_port_for_messages print_next_steps \
     note_livekit_values_kept; do
   if [[ "$(type -t "$_helper")" != function ]]; then
     if [[ -n "$SETUP_COMMON_KEPT_REASON" ]]; then
@@ -819,10 +820,10 @@ ensure_https_http_bind() {
   if uses_tls_overlay "$(compose_var "$env" COMPOSE_FILE)" && ! grep -qE '^HTTP_BIND=' "$env" 2>/dev/null; then
     set_env_var "$env" HTTP_BIND 127.0.0.1
     echo "" >&2
-    warn "HTTPS install: port 3000 is now published on 127.0.0.1 only (HTTP_BIND, #2408)."
-    hint "Curia stays reachable through Caddy on 443. Anything that hit <host>:3000"
+    warn "HTTPS install: Curia's port ${HTTP_PORT:-3000} is now published on 127.0.0.1 only (HTTP_BIND, #2408)."
+    hint "Curia stays reachable through Caddy on 443. Anything that hit <host>:${HTTP_PORT:-3000}"
     hint "directly (e.g. an uptime probe) stops working; point it at https://$(env_value "$env" DOMAIN)."
-    hint "To keep :3000 public, set HTTP_BIND= (empty) in .env and re-run."
+    hint "To keep port ${HTTP_PORT:-3000} public, set HTTP_BIND= (empty) in .env and re-run."
   fi
 }
 
@@ -845,7 +846,7 @@ ensure_https_app_origin() {
     echo "" >&2
     warn "HTTPS install: APP_ORIGIN is now https://$dom (#2368)."
     hint "Session cookies are now Secure: sign in to the console at https://$dom,"
-    hint "not http://<host>:3000. To use another origin, set APP_ORIGIN in .env and re-run."
+    hint "not http://<host>:${HTTP_PORT:-3000}. To use another origin, set APP_ORIGIN in .env and re-run."
   fi
 }
 
@@ -961,16 +962,21 @@ check_shell_reach_values() {
 # would leave it running as an orphan on 80/443. Remove only this project's
 # caddy service container (rm -sf names the service; volumes and other
 # containers are untouched). The overlay is named explicitly, since .env no
-# longer lists it.
+# longer lists it. When removal fails, stop before Postgres starts, and put the
+# domain topology record ($1 = env file) back, so the next retry tries again.
 retire_previous_caddy() {
-  local overlay="$INSTALL_DIR/docker-compose.tls.yml"
+  local env="$1" overlay="$INSTALL_DIR/docker-compose.tls.yml"
   [[ -f "$overlay" ]] || return 0
-  if ! docker compose --project-directory "$INSTALL_DIR" -f "$INSTALL_DIR/docker-compose.yml" -f "$overlay" \
+  if docker compose --project-directory "$INSTALL_DIR" -f "$INSTALL_DIR/docker-compose.yml" -f "$overlay" \
       rm -sf caddy >/dev/null 2>&1; then
-    echo "" >&2
-    warn "Could not remove the Caddy container an earlier HTTPS run started; it may still hold ports 80 and 443."
-    hint "Remove it: docker compose --project-directory \"$INSTALL_DIR\" -f docker-compose.yml -f docker-compose.tls.yml rm -sf caddy"
+    return 0
   fi
+  record_topology_var "$env" TOPOLOGY domain
+  echo "" >&2
+  error "Could not remove the Caddy container an earlier HTTPS run started; it would keep ports 80 and 443."
+  hint "Remove it by hand, then re-run install.sh. Postgres was not started:"
+  hint "  docker compose --project-directory \"$INSTALL_DIR\" -f \"$INSTALL_DIR/docker-compose.yml\" -f \"$overlay\" rm -sf caddy"
+  exit 1
 }
 
 # Domain topology: COMPOSE_FILE must include the TLS overlay. Empty: the
@@ -1169,7 +1175,7 @@ choose_topology() {
     echo "     server and ports 80 and 443 open."
     echo "  2  My domain, behind HTTPS I already run"
     echo "     For servers that already have nginx, Traefik, Cloudflare Tunnel or"
-    echo "     similar in front. Curia listens on port 3000 behind it."
+    echo "     similar in front. Curia listens on port ${HTTP_PORT:-3000} behind it."
     echo "  3  Just this computer, to try it out"
     echo "     No phone app; onboarding then needs Signal or SMS."
     echo "Not sure? Choose 1."
@@ -1225,16 +1231,6 @@ livekit_browser_url() {
       esac ;;
     *) printf 'ws://localhost:%s' "$port" ;;
   esac
-}
-
-# Curia's host port as docker-compose.yml publishes it ("${HTTP_PORT:-3000}:3000"):
-# HTTP_PORT (shell, then .env $1) when it is a number, else 3000. Only shapes
-# the closing address and a proxy's forwarding rule.
-curia_host_port() {
-  local p
-  p="$(compose_var "$1" HTTP_PORT)"
-  [[ "$p" =~ ^[0-9]+$ ]] || p=3000
-  printf '%s' "$p"
 }
 
 # Base URL people open Curia on, for the closing message (no trailing slash).
@@ -1366,6 +1362,10 @@ fresh_install() {
   local anthropic
   anthropic="$(prompt_anthropic_key)"
 
+  # Curia's host port, for every message that names it (the menu, the closing
+  # address and a proxy's forwarding rule).
+  resolve_curia_port_for_messages "$env"
+
   # Prompt for topology only on a fresh install (no COMPOSE_FILE/DOMAIN yet).
   # TOPOLOGY and PROXY_ORIGIN are read by later steps (LiveKit seeding).
   TOPOLOGY="$(choose_topology)"
@@ -1376,7 +1376,7 @@ fresh_install() {
   if [[ -n "$prior_topology" && "$prior_topology" != "$TOPOLOGY" ]]; then
     echo "" >&2
     warn "An earlier, interrupted run chose another way to reach Curia; its settings were replaced by this choice."
-    [[ "$prior_topology" != domain ]] || retire_previous_caddy
+    [[ "$prior_topology" != domain ]] || retire_previous_caddy "$env"
   fi
   record_topology_var "$env" TOPOLOGY "$TOPOLOGY"
   case "$TOPOLOGY" in
@@ -1579,7 +1579,6 @@ fresh_install() {
 
   # livekit_next_steps_state reads off when the voice profile is off and
   # livekit is not running, so an install the installer left voice off on says so.
-  HTTP_PORT="$(curia_host_port "$env")"
   print_summary "$boot_secret" "$(setup_base_url "$TOPOLOGY" "$lk_value")"
   # LIVEKIT_HOST_PORT is set (possibly empty: nothing published) when LiveKit
   # was set up above; otherwise ask, with an unknown port read as 7880 (advice only).
@@ -1600,6 +1599,9 @@ existing_install() {
   local env="$1"
   info "Existing install detected — running in upgrade/restart mode."
   info "No secrets will be regenerated."
+  # Curia's host port, for every message that names it (the hints below, the
+  # closing address and a proxy's forwarding rule).
+  resolve_curia_port_for_messages "$env"
 
   ensure_https_http_bind "$env"
   ensure_https_app_origin "$env" note
@@ -1654,9 +1656,6 @@ existing_install() {
   note_missing_browser "$env"
   note_voice_off "$env"
 
-  # Curia's host port shapes the localhost address (setup_base_url) and a
-  # proxy's forwarding rule (print_next_steps).
-  HTTP_PORT="$(curia_host_port "$env")"
 
   # The topology this install looks like: the TLS overlay is the HTTPS
   # topology, an APP_ORIGIN without it is a user's own proxy, and anything

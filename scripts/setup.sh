@@ -358,7 +358,9 @@ run_infra() {
 
     # On the resume path the bootstrap secret is not in-shell (not in .env anymore,
     # not regenerated), so pass it defensively — print_summary degrades gracefully.
-    print_summary "${WEB_APP_BOOTSTRAP_SECRET:-}" "http://localhost:${HTTP_PORT:-3000}"
+    # Curia's host port as Compose publishes it; a placeholder with a note when unknown.
+    resolve_curia_port_for_messages "$ENV_FILE"
+    print_summary "${WEB_APP_BOOTSTRAP_SECRET:-}" "http://localhost:${HTTP_PORT}"
     print_next_steps local
 }
 

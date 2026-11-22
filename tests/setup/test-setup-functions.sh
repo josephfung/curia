@@ -1403,6 +1403,21 @@ _assert_var "rendered port: only 7881 published -> rc 2" "$(_rlp 'services:\n  l
 _assert_var "rendered port: config fails -> rc 1" "$(_rlp fail)" "none rc=1"
 _assert_var "host port: rendered with none published -> rc 2, no guess" \
     "$( (unset LIVEKIT_HTTP_PORT; docker() { printf 'services:\n  livekit:\n    image: x\n'; }; livekit_host_port "$_lk_env") || echo "rc=$?")" "rc=2"
+# Curia's host port for messages (container 3000): rendered, else HTTP_PORT, else a placeholder.
+_cp_env2="$(mktemp)"
+_rcp() {   # $1 .env contents, $2 rendered curia ("" = cannot render); echoes HTTP_PORT and the note
+    printf '%b' "$1" > "$_cp_env2"
+    ( unset HTTP_PORT; _r="$2"
+      docker() { [[ -n "$_r" ]] || return 1; printf '%b' "$_r"; }
+      resolve_curia_port_for_messages "$_cp_env2" 2>"$_cp_env2.err"; printf '%s|%s' "$HTTP_PORT" "$(grep -c '<port>' "$_cp_env2.err" | tr -d ' ')" )
+}
+_RCP_3100='services:\n  curia:\n    ports:\n      - mode: ingress\n        target: 3000\n        published: "3100"\n'
+_assert_var "curia port: rendered from \${WEB_PORT:-3100}" "$(_rcp 'HTTP_PORT=${WEB_PORT:-3100}\n' "$_RCP_3100")" "3100|0"
+_assert_var "curia port: literal HTTP_PORT without a render" "$(_rcp 'HTTP_PORT=3200\n' '')" "3200|0"
+_assert_var "curia port: default 3000 without a render" "$(_rcp '' '')" "3000|0"
+_assert_var "curia port: unresolved, no render -> placeholder + note" "$(_rcp 'HTTP_PORT=${WEB_PORT:-3100}\n' '')" "<port>|1"
+_assert_var "curia port: rendered without 3000 published -> placeholder + note" "$(_rcp '' 'services:\n  curia:\n    image: x\n')" "<port>|1"
+rm -f "$_cp_env2" "$_cp_env2.err"
 _assert_var "require host port: none published -> empty, continues" \
     "$( (unset LIVEKIT_HTTP_PORT; docker() { printf 'services:\n  livekit:\n    image: x\n'; }; require_livekit_host_port "$_lk_env"; printf '[%s]' "$LIVEKIT_HOST_PORT") )" "[]"
 printf 'LIVEKIT_HTTP_PORT=${VOICE_PORT:-17880}\n' > "$_lk_env"
@@ -1841,6 +1856,11 @@ _fi_run() {
           [[ -n "${_FI_SERVICES+set}" ]] || return 1
           printf '%b' "$_FI_SERVICES"; return 0 ;;
         esac
+        case "$*" in (compose*" config curia")
+          [[ -n "${_FI_CURIA_RENDER+set}" ]] || return 1
+          printf '%b' "$_FI_CURIA_RENDER"; return 0 ;;
+        esac
+        case "$*" in (*" rm -sf caddy") [[ -z "${_FI_CADDY_RM_FAIL:-}" ]]; return ;; esac
         case "$*" in (compose*" config livekit")
           [[ -n "${_FI_LK_RENDER+set}" ]] || return 1
           printf '%b' "$_FI_LK_RENDER"; return 0 ;;
@@ -2245,6 +2265,21 @@ _assert_var "retry domain -> local: before Postgres starts" \
     "$(awk '/rm -sf caddy$/ { r = NR } /up -d postgres/ && !p { p = NR } END { print (r && p && r < p) ? "yes" : "no" }' "$_fi_calls")" "yes"
 _fi_rerun domain "c.example.com" domain "c.example.com"
 _assert_var "retry domain -> domain: Caddy left alone" "$(grep -c 'rm -sf caddy' "$_fi_calls" | tr -d ' ')" "0"
+# Removal fails: stop before Postgres, and keep the domain record so the next
+# retry tries again; once it succeeds the install continues and the record goes.
+_FI_INTERRUPT=1; _fi_run domain "c.example.com" '' || true; unset _FI_INTERRUPT
+cp "$_fi_env" "$_fi_base"; _FI_ENV_BASE="$_fi_base"
+_FI_CADDY_RM_FAIL=1; _fi_rc=0; _fi_run local "" '' || _fi_rc=$?; unset _FI_CADDY_RM_FAIL
+_assert_var "caddy removal fails: stops" "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+_assert_var "caddy removal fails: Postgres never started" "$(grep -c 'up -d postgres' "$_fi_calls" | tr -d ' ')" "0"
+_assert_var "caddy removal fails: gives the command" "$(_has "$_fi_out" 'rm -sf caddy')" yes
+_assert_var "caddy removal fails: domain record kept" "$(grep -c '^# installer-topology: TOPOLOGY=domain$' "$_fi_env" | tr -d ' ')" "1"
+cp "$_fi_env" "$_fi_base"
+_fi_rc=0; _fi_run local "" '' || _fi_rc=$?
+unset _FI_ENV_BASE
+_assert_var "caddy removal retried: tries again" "$(grep -c 'rm -sf caddy$' "$_fi_calls" | tr -d ' ')" "1"
+_assert_var "caddy removal succeeds: continues" "$_fi_rc" "0"
+_assert_var "caddy removal succeeds: domain record gone" "$(grep -c 'TOPOLOGY=domain' "$_fi_env" | tr -d ' ')" "0"
 _fi_rerun local "" proxy ""
 _assert_var "retry local -> proxy: no Caddy removal" "$(grep -c 'rm -sf caddy' "$_fi_calls" | tr -d ' ')" "0"
 _fi_run local "" '' || true
@@ -2282,6 +2317,25 @@ _assert_var "unpublished signaling, proxy: origin URL seeded" "$(_seed_env SEED_
 _assert_var "unpublished signaling, proxy: warns" "$(_has "$_fi_out" "can't forward /rtc* to LiveKit until 7880 is published")" yes
 _assert_var "unpublished signaling, proxy: no 127.0.0.1 rule" "$(_has "$_fi_out" '/rtc* to 127.0.0.1')" no
 unset _FI_LK_RENDER
+# Curia's published port comes from the rendered compose: HTTP_PORT=${WEB_PORT:-3100}.
+_FI_CURIA_RENDER='name: x\nservices:\n  curia:\n    ports:\n      - mode: ingress\n        target: 3000\n        published: "3100"\n        protocol: tcp\n'
+_fi_run proxy "https://p.example.com" 'HTTP_PORT=${WEB_PORT:-3100}\n' || true
+_assert_var "rendered HTTP_PORT, proxy: forward / to 3100" "$(_has "$_fi_out" 'forward / to port 3100')" yes
+_fi_run local "" 'HTTP_PORT=${WEB_PORT:-3100}\n' || true
+unset _FI_CURIA_RENDER
+_assert_var "rendered HTTP_PORT, local: summary on 3100" "$(_has "$_fi_out" 'http://localhost:3100/setup')" yes
+# Unresolved and unrenderable: no guessed number, a placeholder and one note.
+_fi_run local "" 'HTTP_PORT=${WEB_PORT:-3100}\n' || true
+_assert_var "unknown HTTP_PORT, local: placeholder address" "$(_has "$_fi_out" 'http://localhost:<port>/setup')" yes
+_assert_var "unknown HTTP_PORT: says what <port> is" "$(_has "$_fi_out" "<port> is the port Compose publishes for Curia's 3000")" yes
+_assert_var "unknown HTTP_PORT: no 3000 guessed" "$(_has "$_fi_out" 'localhost:3000')" no
+_fi_run proxy "https://p.example.com" 'HTTP_PORT=${WEB_PORT:-3100}\n' || true
+_assert_var "unknown HTTP_PORT, proxy: rule with the placeholder" "$(_has "$_fi_out" 'forward / to port <port>')" yes
+# Compose publishes no host port for 3000.
+_FI_CURIA_RENDER='name: x\nservices:\n  curia:\n    image: x\n'
+_fi_run local "" '' || true
+unset _FI_CURIA_RENDER
+_assert_var "unpublished Curia port: says so" "$(_has "$_fi_out" "Compose publishes no host port for Curia's 3000")" yes
 # Curia's published port (HTTP_PORT) shapes the proxy rule and the local address.
 _fi_run proxy "https://p.example.com" 'HTTP_PORT=3100\n' || true
 _assert_var "HTTP_PORT, proxy: forward / to 3100" "$(_has "$_fi_out" 'forward / to port 3100')" yes
@@ -2340,7 +2394,8 @@ _sc_run() {
       # This harness already loaded the current helpers; start without them.
       unset -f compose_var env_value env_decode_value set_env_var ensure_livekit_env livekit_seed_keys \
           livekit_command_for livekit_host_port rendered_livekit rendered_livekit_seed_keys rendered_livekit_http_port \
-          require_livekit_host_port note_livekit_signaling_unpublished print_next_steps \
+          require_livekit_host_port note_livekit_signaling_unpublished rendered_published_port curia_host_port \
+          resolve_curia_port_for_messages print_next_steps \
           note_livekit_values_kept
       [[ "${_SC_VERSION-v0.46.0}" == - ]] || CURIA_VERSION="${_SC_VERSION-v0.46.0}"
       [[ -z "${_SC_REF:-}" ]] || CURIA_REF="$_SC_REF"
