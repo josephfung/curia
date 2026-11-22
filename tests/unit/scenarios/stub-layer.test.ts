@@ -592,6 +592,22 @@ describe('real delegation (#2027)', () => {
     expect(fresh).toMatchObject({ data: { events: [{ id: 'evt-a', startTime: '2026-11-19T08:00:00-05:00' }] } });
   });
 
+  it('lists a created event once, and only in a window that holds it (#2556)', async () => {
+    const { layer, controller } = delegationSetup([]);
+    controller.beginRun({
+      'calendar-create-event': [{ match: {}, return: { event: { title: 'Sync' } } }],
+      'calendar-list-events': [{ match: {}, return: { events: [] } }],
+    }, 'scenario-1', { realDelegation: true });
+    await layer.invoke('calendar-create-event', { title: 'Sync', start: '2026-11-24T10:00:00-05:00', end: '2026-11-24T10:30:00-05:00' }, undefined, coordinatorCall);
+    const count = async (timeMin: string, timeMax: string): Promise<number> => {
+      const listed = await layer.invoke('calendar-list-events', { timeMin, timeMax }, undefined, coordinatorCall);
+      return listed.success ? (listed.data as { events: unknown[] }).events.length : -1;
+    };
+    expect(await count('2026-11-24T00:00:00-05:00', '2026-11-24T23:59:59-05:00')).toBe(1);
+    expect(await count('2026-11-27T00:00:00-05:00', '2026-11-27T23:59:59-05:00')).toBe(0);
+    controller.endRun('scenario-1');
+  });
+
   it('runs the outbound-context tools a specialist settles entries with, but not release', async () => {
     const { layer, controller, specialistResults, executed } = delegationSetup([
       { tool: 'context-bridge-keep-open', input: { entry_id: 'e-1' } },

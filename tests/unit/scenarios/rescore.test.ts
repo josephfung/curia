@@ -73,6 +73,10 @@ describe('caseSetupHash (#2556)', () => {
     expect(caseSetupHash(load(CASE.replace("can't make the board update", "can't make the deep dive"), 'b.yaml'))).not.toBe(base);
     expect(caseSetupHash(load(CASE.replace('display_name: Tomás Reyes', 'display_name: Tomás Reyes, title: VP Product'), 'c.yaml'))).not.toBe(base);
     expect(caseSetupHash(load(CASE.replace('{ deleted: true }', '{ deleted: false }'), 'd.yaml'))).not.toBe(base);
+    // Where approvals go shapes the run; a case without the key keeps its hash.
+    const viaSignal = caseSetupHash({ ...load(CASE), approvalChannels: ['signal'] });
+    expect(viaSignal).not.toBe(base);
+    expect(caseSetupHash({ ...load(CASE), approvalChannels: ['email'] })).not.toBe(viaSignal);
   });
 
   it('does not depend on key order', () => {

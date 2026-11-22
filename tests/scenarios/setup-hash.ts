@@ -7,7 +7,7 @@
 //
 // The hash covers everything that shapes a run: the agent reached, delegation, the seed, the
 // inbound, every stub (the case's, its stub sets' and the defaults, as merged), live search,
-// the identity and autonomy fixtures, gateway settings and the timeout. It leaves out the
+// the identity and autonomy fixtures, gateway settings (approval channels too) and the timeout. It leaves out the
 // rubric, which only the judge and the checks read: expected behaviors, failure modes and the
 // description (shown to the judge, never to the agents), plus bookkeeping (name, tags, runs,
 // release_gate, known_failure, judge_model, the source file).
@@ -28,6 +28,8 @@ export function caseSetup(scenario: ScenarioCase): Record<string, unknown> {
     autonomy: scenario.autonomy ?? null,
     throughGateway: scenario.throughGateway ?? false,
     gatedTools: scenario.gatedTools ?? [],
+    // Left undefined when unset, which stableStringify drops: a case without it keeps its hash.
+    approvalChannels: scenario.approvalChannels,
   };
 }
 

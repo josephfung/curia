@@ -325,18 +325,7 @@ export function createStubController(
     // Clone so a handler-side mutation in one run cannot leak into the next.
     const data = structuredClone(stub.return ?? null);
     if (run && data !== null && typeof data === 'object' && !Array.isArray(data)) {
-      const record = data as Record<string, unknown>;
-      // A move or a cancellation shows in the run's later calendar listings (#2556). Without
-      // it an agent that moved an event and checked saw the old time, and retried the move
-      // or reported that it failed. Creates are left out: CalendarState gives a created event
-      // its own id, which would change what a create stub returns.
-      if (toolName === 'calendar-update-event' || toolName === 'calendar-delete-event') run.tools.calendar.recordWrite(toolName, record, input);
-      // Only over a listing of event objects, as the tool returns: a fixture of anything else
-      // is passed through as written.
-      const replayable = toolName === 'calendar-list-events' && Array.isArray(record['events'])
-        && (record['events'] as unknown[]).every(e => e !== null && typeof e === 'object' && !Array.isArray(e));
-      const listed = replayable ? run.tools.calendar.replayOnto(record) : record;
-      return { success: true, data: applyCaseWrites(toolName, listed, input, run.tools) };
+      return { success: true, data: applyCaseWrites(toolName, data as Record<string, unknown>, input, run.tools) };
     }
     return { success: true, data };
   };
