@@ -337,9 +337,10 @@ Writes to `OfficeIdentity.behavioralPreferences` via the
 | `operation` | `'append'` (default, idempotent — deduplicates by exact string match) or `'replace'` (overwrites the full list) |
 | `entries` | non-empty `string[]` |
 | `action_risk` | `low` (internal state write; min autonomy score 60) |
-| `sensitivity` | `elevated` |
+| `sensitivity` | `elevated` (a live principal turn, or the principal's approval) |
+| `allowed_callers` | `coordinator` |
 
-Persistence calls `OfficeIdentityService.update(...)` with `'skill'` as the
+Persistence calls `OfficeIdentityService.update(...)` with `'tool'` as the
 `changedBy` value, producing an `office_identity_versions` row per change.
 See [13 — Office Identity](13-office-identity.md#officeidentityservice) for
 the underlying service contract.

@@ -1,4 +1,5 @@
 // handler.test.ts — behavioral-preferences-update skill
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BehavioralPreferencesUpdateHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
@@ -129,5 +130,15 @@ describe('BehavioralPreferencesUpdateHandler', () => {
     });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
+  });
+
+  it('manifest is elevated and callable only by the coordinator (#2700)', () => {
+    // Preferences land in every agent's system prompt and in voice, so a non-principal turn
+    // (an inbound email, a wake) must not reach it.
+    const manifest = JSON.parse(
+      readFileSync(new URL('./tool.json', import.meta.url), 'utf8'),
+    ) as { sensitivity: string; allowed_callers: string[] };
+    expect(manifest.sensitivity).toBe('elevated');
+    expect(manifest.allowed_callers).toEqual(['coordinator']);
   });
 });
