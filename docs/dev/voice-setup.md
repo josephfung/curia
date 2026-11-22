@@ -55,7 +55,9 @@ for its own join instead.
 
 Re-running `install.sh` keeps the install's topology and LiveKit settings. To
 change how Curia is reached, edit `.env` (`COMPOSE_FILE`, `DOMAIN`, `APP_ORIGIN`,
-`LIVEKIT_COMMAND`) or install into a new directory.
+`LIVEKIT_COMMAND`) or install into a new directory. Neither changes the Voice URL
+already saved in the vault: set `channel.voice.livekit_url` under **Settings →
+Channels → Voice** to the new address too.
 
 ## Turn voice on for an existing install
 
@@ -153,8 +155,11 @@ those credentials without Curia auth. Production must set `LIVEKIT_COMMAND` to
 a real config (via `docker/livekit.yaml`) and store the same keys in the Curia
 vault.
 
-For a config-file deploy, copy `docker/livekit.yaml`, replace the placeholder
-key/secret, and add a local compose override:
+For a config-file deploy, generate a key pair and set `LIVEKIT_KEYS` and
+`LIVEKIT_COMMAND="--config /etc/livekit.yaml"` in `.env` as in "Turn voice on for
+an existing install" above. `docker/livekit.yaml` holds no keys, so LiveKit
+refuses to start without `LIVEKIT_KEYS`. If your compose file does not already
+mount it, add a local override:
 
 ```yaml
 services:
