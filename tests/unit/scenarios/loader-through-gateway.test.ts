@@ -181,6 +181,14 @@ expected_behaviors:`));
     expect(c.expectedBehaviors.map(b => b.check).find(k => k?.kind === 'delivered' && k.turn !== undefined)).toMatchObject({ turn: 'then' });
   });
 
+  it('reads a seeded contact\'s reply as inbound.then (#2556)', () => {
+    const c = load(CASE.replace('    sender_verified: true\n', '    sender_verified: true\n  then: { content: "Tuesday works.", from: pat, channel: email }\n'));
+    expect(c.inbound.then).toEqual({ content: 'Tuesday works.', channel: 'email', from: 'pat' });
+    // `from: principal` is the default turn, spelled out.
+    const principal = load(CASE.replace('    sender_verified: true\n', '    sender_verified: true\n  then: { content: yes, from: principal, channel: email }\n'));
+    expect(principal.inbound.then).toEqual({ content: 'yes', channel: 'email' });
+  });
+
   it('reads inbound.then.reply_to_approval on an email turn (#2333)', () => {
     const c = load(CASE.replace('    sender_verified: true\n', '    sender_verified: true\n  then: { content: "Yes, share it.", channel: email, reply_to_approval: true }\n'));
     expect(c.inbound.then).toEqual({ content: 'Yes, share it.', channel: 'email', replyToApproval: true });
@@ -198,7 +206,12 @@ expected_behaviors:`));
     ['a delivered turn without inbound.then', (s: string) => s.replace('count: 1 }', 'count: 1, turn: first }'), /'turn' needs inbound.then/],
     ['a delivered turn that is not first or then', (s: string) => s.replace('    sender_verified: true\n', '    sender_verified: true\n  then: { content: yes, channel: signal }\n').replace('count: 1 }', 'count: 1, turn: later }'), /'turn' must be first or then/],
     ['inbound.then without content', (s: string) => s.replace('    sender_verified: true\n', '    sender_verified: true\n  then: { channel: signal }\n'), /'content' must be a non-empty string/],
-    ['an unknown inbound.then key', (s: string) => s.replace('    sender_verified: true\n', '    sender_verified: true\n  then: { content: x, from: pat }\n'), /unknown key/],
+    ['an unknown inbound.then key', (s: string) => s.replace('    sender_verified: true\n', '    sender_verified: true\n  then: { content: x, sender: pat }\n'), /unknown key/],
+    ['a contact\'s inbound.then without a channel', (s: string) => s.replace('    sender_verified: true\n', '    sender_verified: true\n  then: { content: x, from: pat }\n'), /needs channel \(the contact's own\)/],
+    ['a contact\'s inbound.then on another channel', (s: string) => s.replace('    sender_verified: true\n', '    sender_verified: true\n  then: { content: x, from: pat, channel: signal }\n'), /inbound.then.channel 'signal' differs from contact 'pat' channel 'email'/],
+    ['an inbound.then from an unseeded contact', (s: string) => s.replace('    sender_verified: true\n', '    sender_verified: true\n  then: { content: x, from: lee, channel: email }\n'), /inbound.then.from 'lee' is not principal or a seeded contact/],
+    ['an inbound.then from the scheduler', (s: string) => s.replace('    sender_verified: true\n', '    sender_verified: true\n  then: { content: x, from: scheduler, channel: email }\n'), /inbound.then.from must be principal or a seeded contact/],
+    ['a contact answering an approval', (s: string) => s.replace('    sender_verified: true\n', '    sender_verified: true\n  then: { content: x, from: pat, channel: email, reply_to_approval: true }\n'), /a contact does not answer an approval/],
     ['a contact on a real domain', (s: string) => s.replace('pat@vendor.example.test', 'pat@vendor.com'), /under a .test name/],
     ['a gateway check without through_gateway', (s: string) => s.replace('through_gateway: true\n', ''), /'held' check needs through_gateway: true/],
     ['through_gateway: false', (s: string) => s.replace('through_gateway: true', 'through_gateway: false'), /true or absent/],

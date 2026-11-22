@@ -55,6 +55,20 @@ Respond with ONLY a JSON object:
 {"scores": [{"behaviorId": "<id>", "rating": "PASS|PARTIAL|MISS", "justification": "<one sentence>"}]}`;
 }
 
+/**
+ * How to rate a voice behavior whose message was never written (#2556). Without it the judge
+ * passed "any message to Kevin is courteous" when nothing went to Kevin, which the human
+ * graders' guide (grading-cli.ts) scores MISS. Only behaviors marked with a layer carry it, so
+ * the rest of the suite is judged as before.
+ */
+export const VOICE_RULE = [
+  'Behaviors marked [voice] rate the wording of a message. If the message a [voice] behavior',
+  'describes was never written (nothing sent, drafted or replied to that person), rate it MISS:',
+  'there is no wording to get right. The exception is a behavior that says outright that writing',
+  'nothing is acceptable in what happened; then follow what it says. Phrasing such as "any',
+  'message to X" does not by itself make writing nothing acceptable.',
+].join(' ');
+
 /** The judge's system prompt for this case. */
 export function judgeSystemPrompt(scenario: Pick<ScenarioCase, 'agent'>): string {
   return scenario.agent === COORDINATOR ? SYSTEM_PROMPT : specialistSystemPrompt(scenario.agent);
@@ -148,21 +162,30 @@ export function formatJudgeInput(
     ...(run.principalNote !== undefined
       ? [``, `## Note for the principal (cut from the reply; emailed to the principal)`, run.principalNote]
       : []),
-    // The principal's later turn (inbound.then, #2333): without it, a behavior about the reply to
-    // the principal was judged against the first reply, which may be a held send to someone else.
+    // The later turn (inbound.then, #2333): without it, a behavior about the reply to the
+    // principal was judged against the first reply, which may be a held send to someone else.
+    // It is the principal's, or a seeded contact's reply (#2556), named as such.
     ...(scenario.inbound.then
-      ? [
-          ``,
-          `## The principal's next message (a turn of its own, after the reply above; its tool calls are in the list too)`,
-          scenario.inbound.then.content,
-          ``,
-          `## The coordinator's reply to the principal's next message`,
-          run.then?.reply ?? '(none)',
-        ]
+      ? (() => {
+          const thenFrom = scenario.inbound.then.from;
+          const who = thenFrom === undefined
+            ? `the principal`
+            : `${scenario.seed.contacts.find(c => c.key === thenFrom)?.displayName ?? thenFrom} (not the principal)`;
+          return [
+            ``,
+            `## Next message, from ${who} (a turn of its own, after the reply above; its tool calls are in the list too)`,
+            // As the run sent it (dates resolved), or the case text for runs saved before #2556.
+            run.then?.content ?? scenario.inbound.then.content,
+            ``,
+            `## The coordinator's reply to that message`,
+            run.then?.reply ?? '(none)',
+          ];
+        })()
       : []),
     ``,
     `## Expected behaviors`,
-    behaviors.map(b => `- ${b.id}: ${b.description.trim()}`).join('\n'),
+    behaviors.map(b => `- ${b.id}${b.layer === 'voice' ? ' [voice]' : ''}: ${b.description.trim()}`).join('\n'),
+    ...(behaviors.some(b => b.layer === 'voice') ? [``, VOICE_RULE] : []),
     ...(scenario.failureModes.length > 0
       ? [``, `## Known failure modes`, scenario.failureModes.map(f => `- ${f}`).join('\n')]
       : []),
@@ -284,13 +307,62 @@ export function createJudge(
   };
 }
 
-/** A JSON object out of a model reply that may wrap it in a code fence or prose. */
+/** Where the complete JSON object starting at `start` ends (its closing brace), or -1. */
+function objectEnd(body: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < body.length; i++) {
+    const ch = body[i];
+    if (inString) {
+      if (ch === '\\') i++;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/** The top-level keys of a JSON object text, or none when it doesn't parse as one. */
+function topKeys(text: string): string[] {
+  try {
+    const v: unknown = JSON.parse(text);
+    return typeof v === 'object' && v !== null && !Array.isArray(v) ? Object.keys(v) : [];
+  } catch {
+    // Not an answer-shaped object: a stray brace pair in prose, say. Nothing to compare.
+    return [];
+  }
+}
+
+/**
+ * A JSON object out of a model reply that may wrap it in a code fence or prose: the first
+ * complete object, matched brace by brace (braces inside strings do not count). A judge that
+ * adds a remark after its answer (#2556: 'Unexpected non-whitespace character after JSON') is
+ * read for the answer it gave. A judge that gives a second answer of the same shape ('On
+ * reflection: {"scores": …}') has revised itself, and which one it meant is unknowable: the
+ * whole text goes to JSON.parse, which fails, so the caller retries or reports a judge error.
+ * With no complete object, the text from the first '{' to the last '}' goes to JSON.parse,
+ * which says what is wrong.
+ */
 export function extractJsonObject(text: string): string {
   const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text);
   const body = (fenced ? fenced[1]! : text).trim();
   const start = body.indexOf('{');
-  const end = body.lastIndexOf('}');
-  return start !== -1 && end > start ? body.slice(start, end + 1) : body;
+  if (start === -1) return body;
+  const end = objectEnd(body, start);
+  if (end === -1) {
+    const last = body.lastIndexOf('}');
+    return last > start ? body.slice(start, last + 1) : body;
+  }
+  const first = body.slice(start, end + 1);
+  const keys = topKeys(first);
+  for (let next = body.indexOf('{', end + 1); next !== -1 && keys.length > 0;) {
+    const nextEnd = objectEnd(body, next);
+    if (nextEnd === -1) break;
+    if (topKeys(body.slice(next, nextEnd + 1)).some(k => keys.includes(k))) return body;
+    next = body.indexOf('{', nextEnd + 1);
+  }
+  return first;
 }
 
 const JUDGE_ATTEMPTS = 3;
@@ -327,7 +399,13 @@ export async function judgeRun(
     meterJudgeResponse(judge, response, usage);
 
     if (response.type === 'text') {
-      return parseJudgeResponse(extractJsonObject(response.content), behaviors);
+      const ratings = parseJudgeResponse(extractJsonObject(response.content), behaviors);
+      // A reply with no readable scores is the judge fumbling the format, which another
+      // attempt usually fixes; the last attempt's ratings say why if it does not.
+      const unreadable = [...ratings.values()].find(r => r.justification.startsWith(`${JUDGE_ERROR_PREFIX}: reply unparseable`));
+      if (!unreadable || attempt === JUDGE_ATTEMPTS) return ratings;
+      lastError = unreadable.justification;
+      continue;
     }
     if (response.type === 'tool_use') {
       lastError = 'answered with a tool call, not JSON';

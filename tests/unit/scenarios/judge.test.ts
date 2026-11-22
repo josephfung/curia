@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { emptyBreakdown, UsageLedger } from '../../shared/usage.js';
-import { createJudge, extractJsonObject, formatJudgeInput, formatRunClock, judgeRun, meterJudgeResponse, parseJudgeResponse } from '../../scenarios/judge.js';
+import { createJudge, extractJsonObject, formatJudgeInput, VOICE_RULE, formatRunClock, judgeRun, meterJudgeResponse, parseJudgeResponse } from '../../scenarios/judge.js';
 import type { ExpectedBehavior, ScenarioCase, ScenarioRun } from '../../scenarios/types.js';
 
 const behaviors: ExpectedBehavior[] = [
@@ -32,6 +32,34 @@ describe('parseJudgeResponse', () => {
   it('rejects an invalid rating', () => {
     const out = parseJudgeResponse(JSON.stringify({ scores: [{ behaviorId: 'honest', rating: 'GREAT' }] }), behaviors);
     expect(out.get('honest')?.rating).toBe('MISS');
+  });
+});
+
+describe('formatJudgeInput with voice behaviors (#2556)', () => {
+  const base = {
+    name: 'late', description: '', tags: ['finesse'], agent: 'coordinator', delegation: 'stubbed', releaseGate: false, sourceFile: 'x.yaml',
+    seed: { contacts: [], outboundContext: [], bullpen: [], verifications: [], principalIdentities: [], tasks: [], outreach: [] },
+    inbound: { from: 'principal', content: 'Running late.' },
+    toolStubs: {}, explicitStubTools: [], ownStubTools: [], failureModes: [],
+  };
+  const run: ScenarioRun = { runIndex: 0, inboundContent: 'Running late.', refs: {}, toolCalls: [], reply: 'ok', durationMs: 1, unstubbedCalls: 0, usage: emptyBreakdown(), providerRetries: [] };
+
+  it('marks voice behaviors and adds the rule for a message never written', () => {
+    const layered: ExpectedBehavior[] = [
+      { id: 'tells', description: 'Tells the group', weight: 'critical', layer: 'decision' },
+      { id: 'group_voice', description: 'Any note to the group is one line', weight: 'critical', layer: 'voice' },
+    ];
+    const input = formatJudgeInput({ ...base, expectedBehaviors: layered } as ScenarioCase, run, layered);
+    expect(input).toContain('- tells: Tells the group');
+    expect(input).toContain('- group_voice [voice]: Any note to the group is one line');
+    expect(input).toContain(VOICE_RULE);
+    expect(VOICE_RULE).toMatch(/never written.*rate it MISS/);
+  });
+
+  it('leaves cases without voice behaviors as they were', () => {
+    const input = formatJudgeInput({ ...base, tags: [], expectedBehaviors: behaviors } as ScenarioCase, run, behaviors);
+    expect(input).not.toContain('[voice]');
+    expect(input).not.toContain(VOICE_RULE);
   });
 });
 
@@ -88,8 +116,8 @@ describe('formatJudgeInput with the principal\'s next turn (#2333)', () => {
   it('shows the principal\'s next message and the reply to it, after the first reply', () => {
     const text = formatJudgeInput(scenario, run, behaviors);
     const first = text.indexOf('## Final reply');
-    const next = text.indexOf('## The principal\'s next message');
-    const answer = text.indexOf('## The coordinator\'s reply to the principal\'s next message');
+    const next = text.indexOf('## Next message, from the principal');
+    const answer = text.indexOf('## The coordinator\'s reply to that message');
     expect(first).toBeGreaterThan(-1);
     expect(next).toBeGreaterThan(first);
     expect(answer).toBeGreaterThan(next);
@@ -97,11 +125,25 @@ describe('formatJudgeInput with the principal\'s next turn (#2333)', () => {
     expect(text.slice(answer)).toContain('Understood: nothing went to Dana.');
   });
 
+  it('names a seeded contact as the sender of that turn, not the principal (#2556)', () => {
+    const fromDana = { ...scenario, inbound: { ...scenario.inbound, then: { content: 'Thanks, Tuesday works.', channel: 'signal', from: 'dana' } } };
+    const text = formatJudgeInput(fromDana, run, behaviors);
+    expect(text).toContain('## Next message, from Dana Whitfield (not the principal)');
+    expect(text).not.toContain('from the principal');
+  });
+
+  it('shows that turn as the run sent it, placeholders resolved, when the run recorded it (#2556)', () => {
+    const dated = { ...scenario, inbound: { ...scenario.inbound, then: { content: '{{weekday:today+1}} at 1pm works.', channel: 'email', from: 'dana' } } };
+    const text = formatJudgeInput(dated, { ...run, then: { reply: 'Done.', content: 'Tuesday at 1pm works.' } }, behaviors);
+    expect(text).toContain('Tuesday at 1pm works.');
+    expect(text).not.toContain('{{weekday');
+  });
+
   it('says (none) when that turn has no reply, and adds nothing to a case without one', () => {
-    expect(formatJudgeInput(scenario, { ...run, then: { reply: null } }, behaviors)).toContain('next message\n(none)');
+    expect(formatJudgeInput(scenario, { ...run, then: { reply: null } }, behaviors)).toContain('reply to that message\n(none)');
     const inbound = { ...scenario.inbound };
     delete inbound.then;
-    expect(formatJudgeInput({ ...scenario, inbound }, run, behaviors)).not.toContain('next message');
+    expect(formatJudgeInput({ ...scenario, inbound }, run, behaviors)).not.toContain('Next message');
   });
 });
 
@@ -204,6 +246,21 @@ describe('extractJsonObject', () => {
     expect(extractJsonObject('Here you go: {"scores": []} hope that helps')).toBe('{"scores": []}');
     expect(extractJsonObject('{"a": {"b": 1}}')).toBe('{"a": {"b": 1}}');
   });
+
+  it('takes the first complete object when the judge adds more after it', () => {
+    // A second object, or a closing remark with braces, used to make JSON.parse fail.
+    expect(extractJsonObject('{"scores": []}\n{"note": "second thoughts"}')).toBe('{"scores": []}');
+    expect(extractJsonObject('{"scores": []} (ratings use {PASS, MISS})')).toBe('{"scores": []}');
+    // Braces and escaped quotes inside strings do not count.
+    const tricky = '{"scores": [{"justification": "said \\"hi}\\" and {left"}]}';
+    expect(extractJsonObject(`${tricky} trailing }`)).toBe(tricky);
+    expect(JSON.parse(extractJsonObject(`${tricky} trailing }`))).toEqual({ scores: [{ justification: 'said "hi}" and {left' }] });
+    // A second answer of the same shape is a revision: unknowable which is meant, so unparseable.
+    const revised = '{"scores": [{"rating": "PASS"}]} On reflection: {"scores": [{"rating": "PARTIAL"}]}';
+    expect(() => JSON.parse(extractJsonObject(revised))).toThrow();
+    // No complete object: the old slice, so JSON.parse reports what is wrong.
+    expect(extractJsonObject('{"scores": [ }')).toBe('{"scores": [ }');
+  });
 });
 
 describe('judgeRun', () => {
@@ -228,6 +285,35 @@ describe('judgeRun', () => {
     expect(calls).toBe(3);
     expect([...out.values()].every(r => r.justification.startsWith('judge error after 3 attempts'))).toBe(true);
   }, 15_000);
+
+  const text = (content: string) => ({ type: 'text' as const, content, provenance: { actualModel: 'm' } });
+  const good = JSON.stringify({ scores: [{ behaviorId: 'honest', rating: 'PASS', justification: 'ok' }, { behaviorId: 'brief', rating: 'MISS', justification: 'long' }] });
+
+  it('asks again when a reply has no readable scores, and uses the next good one', async () => {
+    const replies = ['I think it went well.', good];
+    let calls = 0;
+    const provider = { id: 'openrouter', chat: async () => text(replies[calls++]!) } as never;
+    const out = await judgeRun(scenario, run, behaviors, { provider, model: 'm' });
+    expect(calls).toBe(2);
+    expect(out.get('honest')).toEqual({ rating: 'PASS', justification: 'ok' });
+  });
+
+  it('keeps the unparseable reason after the last attempt', async () => {
+    let calls = 0;
+    const provider = { id: 'openrouter', chat: async () => { calls++; return text('no json here'); } } as never;
+    const out = await judgeRun(scenario, run, behaviors, { provider, model: 'm' });
+    expect(calls).toBe(3);
+    expect([...out.values()].every(r => r.justification.startsWith('judge error: reply unparseable'))).toBe(true);
+  });
+
+  it('does not retry a readable reply that skipped a behavior', async () => {
+    let calls = 0;
+    const partial = JSON.stringify({ scores: [{ behaviorId: 'honest', rating: 'PASS', justification: 'ok' }] });
+    const provider = { id: 'openrouter', chat: async () => { calls++; return text(partial); } } as never;
+    const out = await judgeRun(scenario, run, behaviors, { provider, model: 'm' });
+    expect(calls).toBe(1);
+    expect(out.get('brief')?.justification).toBe('judge error: no score returned');
+  });
 });
 
 describe('createJudge', () => {

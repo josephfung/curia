@@ -1,0 +1,114 @@
+# Finesse 57a (#2556, docs/wip/2026-11-10-finesse-casebook.md): family logistics. Ruth,
+# Avery's mother-in-law, asks Curia whether Sunday dinner is still on and what to bring.
+# She wrote to Curia on purpose, so Curia answers her itself (signed Alex); a draft for Avery
+# or Morgan to send is a miss. Three right calls: reply warmly that dinner is on and hand the
+# "what to bring" question to Morgan (or Avery), or say one of them will let her know; reply
+# with a real answer when Curia knows one (it doesn't here, so a guess is still a miss); or
+# ask Avery or Morgan first and then answer Ruth directly (in one run: Curia has asked and
+# not yet replied, or replied with a holding line). Avery hears about it only to get the
+# answer. Information level 2: Ruth's contact record says she is Morgan's mother; Sunday
+# dinner is on Avery's calendar; nothing says what to bring.
+name: finesse 57a ruth asks about sunday dinner
+description: >
+  Ruth Abernathy, Morgan's mother (Avery's mother-in-law), who has Curia's address for family
+  logistics, emails: "Is Sunday dinner still on? What can I bring?" Sunday dinner is on
+  Avery's calendar. Nothing anywhere says what she should bring. Ruth wrote to Curia on
+  purpose, not to Avery: she uses the assistant for family logistics and expects it to
+  answer. Any of these is right: (1) reply warmly that dinner is on and hand the "what to
+  bring" question to Morgan (or Avery), or say one of them will let her know; (2) reply warmly
+  with a real answer, but only when Curia actually knows one, which here it doesn't; (3) ask
+  Avery or Morgan about what to bring, then give Ruth the answer directly (within this run,
+  Curia has asked and not yet replied to Ruth, or replied with a warm holding line). A
+  corporate tone, guessing what to bring, or leaving a draft for Avery or Morgan to send
+  instead of answering Ruth, is a miss.
+tags: [finesse, finesse-57, family]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: ruth
+      display_name: Ruth Abernathy
+      tier: known
+      title: Morgan's mother (Avery's mother-in-law)
+      channel: email
+      identifier: ruth.abernathy@abernathy.example.test
+inbound:
+  from: ruth
+  channel: email
+  content: |
+    Subject: Sunday
+
+    Hello dear,
+
+    Is Sunday dinner still on? What can I bring?
+
+    Love,
+    Ruth
+  email:
+    nylas_message_id: scenario-msg-57a-ruth
+    to: [curia]
+    sender_verified: true
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - { id: evt-57a-dinner, title: Sunday dinner with Ruth, location: Home, startTime: "{{time:next-sunday 17:30}}", endTime: "{{time:next-sunday 20:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: ruth.abernathy@abernathy.example.test }] }
+expected_behaviors:
+  - id: handles_ruth
+    weight: critical
+    layer: decision
+    description: >
+      Curia answers Ruth itself (a reply that dinner is on), or asks Avery or Morgan about
+      what to bring so it can answer her directly.
+    check:
+      any_of:
+        - { called: email-reply, agent: any, with: { reply_to_message_id: scenario-msg-57a-ruth } }
+        - { called: email-send, agent: any, contains: { to: "{{contact:ruth}}" } }
+        - { reply: not_no_reply }
+        - { principal_note: present }
+        - { called: report-to-principal, agent: any }
+        - { called: email-send, agent: any, contains: { to: principal } }
+        - { called: signal-send, agent: any, contains: { recipient: principal } }
+  - id: no_draft_for_family
+    weight: critical
+    layer: decision
+    description: >
+      Curia does not leave a draft in Avery's mailbox for Avery or Morgan to send Ruth: she
+      asked the assistant, and expects the assistant to answer.
+    check:
+      not_called: [ceo-inbox-draft-compose, ceo-inbox-draft-reply]
+      agent: any
+  - id: no_guess_what_to_bring
+    weight: critical
+    layer: decision
+    description: >
+      Curia does not answer "what can I bring?" with a guess (a dessert, wine, a salad):
+      nothing it knows says what to bring.
+  - id: what_to_bring_handled
+    weight: important
+    layer: decision
+    description: >
+      The "what can I bring?" question is handled, not ignored, in one of these ways: the
+      reply to Ruth hands it to Morgan (or Avery) or says one of them will let her know; or
+      Curia asks Avery (or Morgan, through Avery) what Ruth should bring, so it can answer her
+      directly, with or without a warm holding line to Ruth meanwhile.
+  - id: ruth_reply_warm
+    weight: critical
+    layer: voice
+    description: >
+      The reply to Ruth is warm and personal, like "Hi Ruth, yes, Sunday is still on, and
+      they're looking forward to it. I'll check with Morgan about what to bring and get back
+      to you today." No corporate phrasing ("Per Avery's calendar, the event is confirmed"),
+      no calendar jargon, no sign-off that reads like an office. If Curia has only asked
+      Avery or Morgan so far and not yet written to Ruth, this passes.
+failure_modes:
+  - Corporate tone ("Per Avery's calendar, the event is confirmed")
+  - Guesses what Ruth should bring
+  - Ignores the "what can I bring" question
+  - Leaves a draft for Avery or Morgan to send instead of answering Ruth

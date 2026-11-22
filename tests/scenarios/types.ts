@@ -157,12 +157,25 @@ export const GATEWAY_CHECK_KINDS = ['delivered', 'not_delivered', 'held', 'not_h
 export type ReviewOutcome = RecordedReview['outcome'];
 export const REVIEW_OUTCOMES: readonly ReviewOutcome[] = ['send', 'bounce', 'block', 'hold'];
 
+/**
+ * What a behavior measures (#2556): `decision` is the call (act, ask, inform, do nothing; who
+ * sends), `voice` is how the resulting messages read. Scored apart, so a well-worded message
+ * that should never have been sent shows as a decision failure, not a passing case.
+ */
+export type BehaviorLayer = 'decision' | 'voice';
+export const BEHAVIOR_LAYERS: readonly BehaviorLayer[] = ['decision', 'voice'];
+
+/** Tags whose cases must mark every behavior with a layer. */
+export const LAYERED_TAGS: readonly string[] = ['finesse'];
+
 export interface ExpectedBehavior {
   id: string;
   description: string;
   weight: BehaviorWeight;
   /** Absent → scored by the LLM judge from `description`. */
   check?: BehaviorCheck;
+  /** Absent on cases outside LAYERED_TAGS: the behavior is scored only in the case total. */
+  layer?: BehaviorLayer;
 }
 
 /**
@@ -202,6 +215,12 @@ export interface SeedContact {
   tier: 'trusted' | 'known' | 'unknown';
   kind?: 'person' | 'organization' | 'automated';
   role?: string;
+  /**
+   * Profile fields (#2556): what the contact record says about the person, which agents read
+   * when they look the contact up. A case that tests "it was on the profile" sets these.
+   */
+  title?: string;
+  organization?: string;
   /** Channel identity used when this contact is the sender. */
   channel: string;
   identifier: string;
@@ -465,19 +484,30 @@ export interface ScenarioInbound {
    */
   followup?: ScenarioFollowup;
   /**
-   * The principal's next message, as its own turn once the first has ended (#2312): an
-   * inbound from the principal's verified identity on `channel`, in a second conversation of
-   * the same run. It is a live principal turn, so the elevated gate is production's: this is
-   * how a hold raised on someone else's turn gets approved within the run. Its calls join the
-   * run's; its reply is `then.reply` on the run.
+   * The next message, as its own turn once the first has ended (#2312), in a second
+   * conversation of the same run. By default it is the principal's: an inbound from the
+   * principal's verified identity on `channel`, a live principal turn, so the elevated gate is
+   * production's (this is how a hold raised on someone else's turn gets approved within the
+   * run). With `from` naming a seeded contact it is that person's reply instead (#2556: the
+   * other side answering what Curia sent them). Its calls join the run's; its reply is
+   * `then.reply` on the run.
    */
   then?: ScenarioPrincipalTurn;
 }
 
-/** A principal turn after the first one (ScenarioInbound.then). */
+/** A turn after the first one (ScenarioInbound.then): the principal's, or a seeded contact's. */
 export interface ScenarioPrincipalTurn {
   content: string;
-  /** A channel the principal has a verified identity on: email or Signal for the scenario principal (principal-fixture.ts). */
+  /**
+   * A seeded contact key when someone other than the principal sends it (#2556). Absent: the
+   * principal. A contact's turn comes from their seeded identity, authenticated (a known
+   * correspondent's mail passes SPF, DKIM and DMARC).
+   */
+  from?: string;
+  /**
+   * The principal's: a channel they have a verified identity on (email or Signal for the
+   * scenario principal, principal-fixture.ts). A contact's: their seeded channel.
+   */
   channel: string;
   /**
    * Email only (#2333): the turn is a reply on the thread of the approval email the run
@@ -646,8 +676,35 @@ export interface ScenarioCase {
    * Needs `through_gateway`. Absent: every channel the principal has (Signal first).
    */
   approvalChannels?: ApprovalChannel[];
+  /**
+   * The judge model for this case (#2556), over its tag's and the suite default
+   * (judge-models.ts). Absent: the tag's, else the default.
+   */
+  judgeModel?: string;
+  /** The contrast group this case belongs to, for the blind-identification check (#2556). */
+  contrast?: ContrastSpec;
   /** File the case came from, for messages. */
   sourceFile: string;
+}
+
+/**
+ * Where a case's message for its recipient is (#2556): the reply, or one argument of a tool
+ * call, optionally only calls whose arguments include `with` (a subset match; placeholders
+ * such as {{contact:chair}} resolve per run). The run's last matching call wins.
+ */
+export type ContrastMessageSource = 'reply' | { tool: string; arg: string; with?: Record<string, unknown> };
+
+/** A case's membership of a contrast group (blind-id.ts, #2556). */
+export interface ContrastSpec {
+  /** Cases with the same group are compared with each other. */
+  group: string;
+  /**
+   * Who the recipient is to the principal, as the judge reads it: no name, and nothing about
+   * the situation, which would let the judge match on content instead of voice.
+   */
+  recipient: string;
+  /** Where the message is; any of these. */
+  message: ContrastMessageSource[];
 }
 
 /** A run-level office identity (tests/scenarios/identities/). */
@@ -679,6 +736,13 @@ export interface CapturedToolCall extends ObservedToolCall {
   disposition: 'stubbed' | 'passthrough' | 'canned' | 'refused' | 'runtime';
 }
 
+/** A stub-layer refusal or canned answer with no matching captured call. */
+export interface UncapturedHole {
+  name: string;
+  agentId?: string;
+  disposition: 'refused' | 'canned';
+}
+
 export interface ScenarioRun {
   runIndex: number;
   /** The inbound content after placeholder resolution. */
@@ -706,6 +770,12 @@ export interface ScenarioRun {
   durationMs: number;
   /** Calls the harness answered badly: refused by the stub layer, or a failed passthrough read. */
   unstubbedCalls: number;
+  /**
+   * The holes among `unstubbedCalls` that are not in `toolCalls`: stub-layer refusals and canned
+   * answers the bus capture never saw (a bounced relay's rewrite turn, #2192). Without this they
+   * were counted but nowhere named. Absent when there were none.
+   */
+  uncapturedHoles?: UncapturedHole[];
   /** Set when the run could not complete (timeout, boot error, agent.error). */
   error?: string;
   /**
@@ -724,8 +794,11 @@ export interface ScenarioRun {
   delegations?: DelegationRecord[];
   /** What a through-gateway run sent, held and recorded (#2312). Absent for other cases. */
   gateway?: GatewayOutcome;
-  /** The principal's `inbound.then` turn (#2312): the coordinator's reply to it. */
-  then?: { reply: string | null };
+  /**
+   * The `inbound.then` turn (#2312): the coordinator's reply to it, and the message as the run
+   * sent it, its placeholders resolved (#2556; absent on runs saved before it).
+   */
+  then?: { reply: string | null; content?: string };
   /** Set when removing the run's rows failed; leftovers may be in the database. */
   cleanupError?: string;
   /**
@@ -882,12 +955,64 @@ export interface CaseResult {
   criticalFailures: string[];
   /** The strict pass rate each critical behavior needed: the case's pass_rate, else CRITICAL_PASS_THRESHOLD. */
   requiredPassRate: number;
+  /**
+   * The same score and critical failures per behavior layer (#2556), for the layers the case's
+   * behaviors use. Absent when no behavior has a layer.
+   */
+  layers?: Partial<Record<BehaviorLayer, LayerScore>>;
   /** Copied from the case: when set, criticalFailures are reported, not gated. */
   knownFailure?: { issue: string; reason: string };
   /** Runs where the judge itself failed (not the model) — reported as a gate failure. */
   judgeErrors: number;
   /** Model spend on the case: its runs' agents and judge calls. */
   usage: UsageBreakdown;
+  /**
+   * Fingerprint of the case's setup when it ran (setup-hash.ts, #2556): re-scoring against the
+   * current case file needs it unchanged. Absent on results saved before it existed.
+   */
+  setupHash?: string;
+}
+
+/** One contrast group's blind-identification result (blind-id.ts, #2556), in the results JSON. */
+export interface ContrastGroupResult {
+  group: string;
+  /** The group's cases in this run, by name. A trial letters the ones that wrote a message, in this order. */
+  cases: string[];
+  /** Cases in the group this run did not include (a narrowed selection). */
+  missing: string[];
+  /** Judge calls made: two orders per trial. */
+  judgeCalls: number;
+  /** Assignments the judge got right, of all it was asked to make. */
+  correct: number;
+  total: number;
+  /** correct / total; null when no trial could run. */
+  accuracy: number | null;
+  /** What guessing would score: the mean of 1/n over the trials asked. */
+  chance: number | null;
+  /**
+   * Right / asked, per case: which recipients' messages are recognisable. `written` is the runs
+   * that wrote this recipient a message; `unmatched` the runs that called a source's tool without
+   * matching its `with` (a hint the source is wrong); `errored` the runs that errored. All
+   * absent in results saved before #2556's baseline.
+   */
+  byCase: Record<string, { correct: number; total: number; written?: number; unmatched?: number; errored?: number }>;
+  /** Trials with fewer than two messages (a case decided not to write), which were not asked. */
+  skippedTrials: number;
+  /**
+   * Judge calls that failed (after retries, a non-retryable error, or an answer that is not a
+   * one-to-one match); their assignments count in neither correct nor total.
+   */
+  judgeErrors: number;
+  /** The first of those failures' reasons. */
+  firstJudgeError?: string;
+}
+
+/** One layer's share of a case result (#2556). */
+export interface LayerScore {
+  /** Σ(weight × passRate) / Σweight over the layer's behaviors. */
+  weightedScore: number;
+  /** The layer's critical behaviors under CRITICAL_PASS_THRESHOLD. */
+  criticalFailures: string[];
 }
 
 export interface SuiteResult {
@@ -911,6 +1036,10 @@ export interface SuiteResult {
   caseAutonomy?: Record<string, string>;
   /** Runs each case actually got (a case's `runs` or --runs can differ from the default). */
   runsPerCase: Record<string, number>;
+  /** The suite's default judge model (#2556). Absent on results saved before it existed. */
+  judge?: string;
+  /** The judge model, for every case not judged by the suite default (#2556). */
+  caseJudges?: Record<string, string>;
   cases: CaseResult[];
   passed: boolean;
   /**
@@ -933,6 +1062,13 @@ export interface SuiteResult {
   overheadUsage: UsageBreakdown;
   /** web-search calls that reached Tavily (#2106). Absent on results saved before it existed. */
   liveSearch?: LiveSearchTally;
+  /**
+   * Blind identification per contrast group with at least two cases in the run (#2556).
+   * Tracked, not gated. Its judge spend is in `usage` (under `contrastUsage` as well).
+   */
+  contrastGroups?: ContrastGroupResult[];
+  /** What the blind-identification judge calls cost. */
+  contrastUsage?: UsageBreakdown;
 }
 
 /**

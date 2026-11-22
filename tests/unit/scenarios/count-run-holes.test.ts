@@ -2,7 +2,7 @@
 // canned answer made in it exists only in the stub layer's record. The stub-coverage gate
 // reads this count, so such a hole must still count, once.
 import { describe, it, expect } from 'vitest';
-import { countRunHoles } from '../../scenarios/harness.js';
+import { countRunHoles, uncapturedHoles } from '../../scenarios/harness.js';
 import type { CapturedToolCall } from '../../scenarios/types.js';
 import type { StubbedCall } from '../../scenarios/stub-layer.js';
 
@@ -26,5 +26,16 @@ describe('countRunHoles', () => {
 
   it('does not count unobserved stubbed or passthrough calls', () => {
     expect(countRunHoles([], [stub('x', 'stubbed'), stub('y', 'passthrough')])).toBe(0);
+  });
+});
+
+describe('uncapturedHoles', () => {
+  it('names the holes the count adds beyond the captured calls, so a report can show them', () => {
+    expect(uncapturedHoles([call('a', 'refused')], [
+      stub('a', 'refused'), stub('b', 'stubbed'), { ...stub('c', 'refused'), toolName: 'contact-merge', agentId: 'contacts' }, stub(undefined, 'canned'),
+    ])).toEqual([
+      { name: 'contact-merge', agentId: 'contacts', disposition: 'refused' },
+      { name: 'email-send', agentId: 'coordinator', disposition: 'canned' },
+    ]);
   });
 });

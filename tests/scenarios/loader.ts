@@ -14,14 +14,20 @@ import { registrableDomain } from '../../src/verification/domain.js';
 import { hasDatePlaceholders, resolveDatePlaceholders } from '../shared/date-placeholders.js';
 import { LIVE_SEARCH_TOOL } from '../shared/live-search.js';
 import { leafChecks } from './assertions.js';
+import { caseJudgeModel } from './judge-models.js';
 import { THROUGH_GATEWAY_TOOLS } from './stub-layer.js';
 import {
   ANY_AGENT,
+  BEHAVIOR_LAYERS,
   COORDINATOR,
   GATEWAY_CHECK_KINDS,
+  LAYERED_TAGS,
   REVIEW_OUTCOMES,
   type BehaviorCheck,
+  type BehaviorLayer,
   type BehaviorWeight,
+  type ContrastMessageSource,
+  type ContrastSpec,
   type DelegationMode,
   type DeliveryChannel,
   type DeliveryTurn,
@@ -85,7 +91,7 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
   }
 }
 
-const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'pass_rate', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway', 'gated_tools', 'approval_channels'] as const;
+const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'pass_rate', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes', 'identity', 'autonomy', 'through_gateway', 'gated_tools', 'approval_channels', 'judge_model', 'contrast'] as const;
 const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog', 'verifications', 'tasks', 'outreach', 'pinned', 'principal_mailbox', 'onboarding'] as const;
 const ONBOARDING_KEYS = ['task', 'topics'] as const;
 const ONBOARDING_TOPIC_KEYS = ['id', 'title', 'session'] as const;
@@ -109,13 +115,13 @@ const VERIFICATION_KEYS = ['key', 'site', 'page_domain', 'delivery', 'browser_se
 const VERIFICATION_DELIVERIES: readonly SeedVerification['delivery'][] = ['email', 'sms', 'app'];
 const VERIFICATION_STATUSES: readonly SeedVerification['status'][] = ['pending', 'expired', 'satisfied', 'abandoned'];
 const BACKLOG_KEYS = ['decay_warnings', 'pending_approvals', 'principal_tasks'] as const;
-const CONTACT_KEYS = ['key', 'display_name', 'tier', 'kind', 'role', 'channel', 'identifier', 'principal_wrote'] as const;
+const CONTACT_KEYS = ['key', 'display_name', 'tier', 'kind', 'role', 'title', 'organization', 'channel', 'identifier', 'principal_wrote'] as const;
 const ENTRY_KEYS = ['key', 'channel', 'agent', 'content', 'expected_reply', 'delegation_hint', 'metadata', 'recipients', 'replies', 'sent_minutes_ago', 'expires_in_hours', 'resume'] as const;
 const RESUME_KEYS = ['agent', 'original_task', 'context'] as const;
 const REPLY_KEYS = ['from', 'content'] as const;
 const THREAD_KEYS = ['key', 'topic', 'creator', 'participants', 'content', 'mentions'] as const;
 const INBOUND_KEYS = ['from', 'channel', 'content', 'thread', 'author', 'requester', 'origin', 'email', 'task', 'followup', 'then'] as const;
-const THEN_KEYS = ['content', 'channel', 'reply_to_approval'] as const;
+const THEN_KEYS = ['content', 'channel', 'reply_to_approval', 'from'] as const;
 const FOLLOWUP_KEYS = ['after', 'from', 'content', 'channel'] as const;
 /** A follow-up held this long still releases the first tool, so a flag-off run can finish. */
 const FOLLOWUP_MAX_DELAY_MS = 120_000;
@@ -136,7 +142,7 @@ const TEST_DOMAIN = /^([a-z0-9-]+\.)+test$/i;
 const TEST_ADDRESS = /^[^@\s]+@([a-z0-9-]+\.)+test$/i;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STUB_KEYS = ['match', 'agent', 'return', 'error'] as const;
-const BEHAVIOR_KEYS = ['id', 'weight', 'description', 'check'] as const;
+const BEHAVIOR_KEYS = ['id', 'weight', 'description', 'check', 'layer'] as const;
 const CHECK_KEYS: Record<string, readonly string[]> = {
   called: ['called', 'agent', 'with', 'contains', 'min', 'max', 'success', 'returns'],
   not_called: ['not_called', 'agent', 'with', 'contains', 'returns'],
@@ -475,13 +481,56 @@ function parseBehaviors(raw: Raw, file: string): ExpectedBehavior[] {
     seen.add(id);
     const weight = (b['weight'] ?? 'important') as BehaviorWeight;
     if (!WEIGHTS.includes(weight)) throw new CaseError(file, `${where}: invalid weight '${String(b['weight'])}'`);
+    const layer = b['layer'];
+    if (layer !== undefined && !BEHAVIOR_LAYERS.includes(layer as BehaviorLayer)) {
+      throw new CaseError(file, `${where}: layer must be one of ${BEHAVIOR_LAYERS.join(', ')}`);
+    }
     return {
       id,
       description: str(b, 'description', file, where),
       weight,
       ...(b['check'] !== undefined ? { check: parseCheck(b['check'], file, `${where}.check`) } : {}),
+      ...(layer !== undefined ? { layer: layer as BehaviorLayer } : {}),
     };
   });
+}
+
+const CONTRAST_KEYS = ['group', 'recipient', 'message'] as const;
+const CONTRAST_SOURCE_KEYS = ['tool', 'arg', 'with'] as const;
+
+/** A case's `contrast:` block (#2556): its group, its recipient for the judge, where its message is. */
+function parseContrast(raw: Raw, file: string): ContrastSpec | undefined {
+  const block = raw['contrast'];
+  if (block === undefined) return undefined;
+  if (!isObject(block)) throw new CaseError(file, `'contrast' must be a mapping {group, recipient, message}`);
+  onlyKeys(block, CONTRAST_KEYS, file, 'contrast');
+  const sourcesRaw = block['message'];
+  const list = Array.isArray(sourcesRaw) ? sourcesRaw : [sourcesRaw];
+  if (sourcesRaw === undefined || list.length === 0) throw new CaseError(file, `contrast: 'message' is required (reply, or {tool, arg}, or a list of them)`);
+  const message = list.map((s: unknown, i): ContrastMessageSource => {
+    const where = `contrast.message[${i}]`;
+    if (s === 'reply') return 'reply';
+    if (!isObject(s)) throw new CaseError(file, `${where}: must be reply or {tool, arg, with?}`);
+    onlyKeys(s, CONTRAST_SOURCE_KEYS, file, where);
+    const withRaw = s['with'];
+    if (withRaw !== undefined && !isObject(withRaw)) throw new CaseError(file, `${where}: 'with' must be a mapping`);
+    return { tool: str(s, 'tool', file, where), arg: str(s, 'arg', file, where), ...(withRaw !== undefined ? { with: withRaw } : {}) };
+  });
+  return { group: str(block, 'group', file, 'contrast'), recipient: str(block, 'recipient', file, 'contrast'), message };
+}
+
+/**
+ * A case under a layered tag (#2556) marks every behavior `decision` or `voice`: one left
+ * unmarked would count in the case total but in neither layer, and the layer scores would
+ * quietly leave it out.
+ */
+function validateLayers(scenario: ScenarioCase, file: string): void {
+  const tag = scenario.tags.find(t => LAYERED_TAGS.includes(t));
+  if (tag === undefined) return;
+  const unmarked = scenario.expectedBehaviors.filter(b => b.layer === undefined).map(b => b.id);
+  if (unmarked.length > 0) {
+    throw new CaseError(file, `a '${tag}' case marks every behavior with a layer (${BEHAVIOR_LAYERS.join(' or ')}); missing on ${unmarked.join(', ')}`);
+  }
 }
 
 function parseContacts(raw: Raw, file: string): SeedContact[] {
@@ -503,12 +552,16 @@ function parseContacts(raw: Raw, file: string): SeedContact[] {
     if (principalWrote === true && c['channel'] !== 'email') {
       throw new CaseError(file, `${where}: principal_wrote needs an email contact (it stands for mail in the principal's Sent folder)`);
     }
+    const title = optStr(c, 'title', file, where);
+    const organization = optStr(c, 'organization', file, where);
     return {
       key: str(c, 'key', file, where),
       displayName: str(c, 'display_name', file, where),
       tier: tier as SeedContact['tier'],
       kind: kind as NonNullable<SeedContact['kind']>,
       role: optStr(c, 'role', file, where),
+      ...(title !== undefined ? { title } : {}),
+      ...(organization !== undefined ? { organization } : {}),
       channel: str(c, 'channel', file, where),
       identifier: str(c, 'identifier', file, where),
       ...(principalWrote === true ? { principalWrote: true } : {}),
@@ -975,10 +1028,27 @@ function parseInbound(raw: unknown, file: string): ScenarioInbound {
   };
 }
 
-/** `inbound.then` (#2312): the principal's next turn, on a channel with a verified identity. */
+/**
+ * `inbound.then` (#2312): the next turn. The principal's, on a channel with a verified
+ * identity; or, with `from` (#2556), a seeded contact's on their own channel, which
+ * validateInbound checks against the seed.
+ */
 function parseThen(raw: unknown, file: string): ScenarioPrincipalTurn {
   if (!isObject(raw)) throw new CaseError(file, `inbound.then must be a mapping {content, channel}`);
   onlyKeys(raw, THEN_KEYS, file, 'inbound.then');
+  const from = optStr(raw, 'from', file, 'inbound.then');
+  if (from !== undefined && from !== 'principal') {
+    if (from === 'bullpen' || from === 'scheduler' || from === 'task-wake' || from === 'delegate') {
+      throw new CaseError(file, `inbound.then.from must be principal or a seeded contact`);
+    }
+    // A contact's reply names its channel: there is no principal identity to default to.
+    const contactChannel = optStr(raw, 'channel', file, 'inbound.then');
+    if (contactChannel === undefined) throw new CaseError(file, `inbound.then.from '${from}' needs channel (the contact's own)`);
+    if (raw['reply_to_approval'] !== undefined) {
+      throw new CaseError(file, `inbound.then.reply_to_approval is the principal's: a contact does not answer an approval`);
+    }
+    return { content: str(raw, 'content', file, 'inbound.then'), channel: contactChannel, from };
+  }
   const channel = optStr(raw, 'channel', file, 'inbound.then') ?? 'signal';
   // A live principal turn comes from a verified identity; a console channel has none.
   if (PRINCIPAL_LOCAL_CHANNELS.includes(channel)) {
@@ -1254,6 +1324,9 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
   if (throughGateway === false) throw new CaseError(file, `'through_gateway' is true or absent`);
   const gatedTools = strList(raw, 'gated_tools', file, 'case');
   const approvalChannels = parseApprovalChannels(raw, file);
+  const judgeModel = optStr(raw, 'judge_model', file, 'case');
+  if (judgeModel !== undefined && judgeModel.trim() === '') throw new CaseError(file, `'judge_model' must name a model`);
+  const contrast = parseContrast(raw, file);
   // The release gate is one unfiltered run on the database's identity. An autonomy fixture
   // is pinned per case (#2312), so a case with one can join it.
   if (identity && releaseGate) {
@@ -1283,10 +1356,19 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     ...(throughGateway ? { throughGateway: true as const } : {}),
     ...(gatedTools.length > 0 ? { gatedTools } : {}),
     ...(approvalChannels ? { approvalChannels } : {}),
+    ...(judgeModel !== undefined ? { judgeModel } : {}),
+    ...(contrast ? { contrast } : {}),
     sourceFile: file,
   };
 
+  // Tags that set different judges are a load error, not a choice made by tag order.
+  try {
+    caseJudgeModel(scenario);
+  } catch (e) {
+    throw new CaseError(file, e instanceof Error ? e.message : String(e));
+  }
   validateReferences(scenario, file);
+  validateLayers(scenario, file);
   validateDelegation(scenario, file);
   validateEnvelope(scenario, file);
   validateThroughGateway(scenario, file);
@@ -1528,7 +1610,7 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
   let dated: Raw;
   try {
     dated = resolveDatePlaceholders(
-      { seed: scenario.seed, inbound: scenario.inbound, toolStubs: scenario.toolStubs, behaviors: scenario.expectedBehaviors },
+      { seed: scenario.seed, inbound: scenario.inbound, toolStubs: scenario.toolStubs, behaviors: scenario.expectedBehaviors, contrast: scenario.contrast?.message ?? [] },
       'UTC',
       new Date(0),
     );
@@ -1604,7 +1686,15 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
     }
   }
   if (scenario.inbound.then && toSpecialist) {
-    throw new CaseError(file, `inbound.then is a principal turn to the coordinator; a case for '${scenario.agent}' cannot take one`);
+    throw new CaseError(file, `inbound.then is a turn to the coordinator; a case for '${scenario.agent}' cannot take one`);
+  }
+  const thenFrom = scenario.inbound.then?.from;
+  if (thenFrom !== undefined) {
+    const contact = scenario.seed.contacts.find(c => c.key === thenFrom);
+    if (!contact) throw new CaseError(file, `inbound.then.from '${thenFrom}' is not principal or a seeded contact`);
+    if (scenario.inbound.then!.channel !== contact.channel) {
+      throw new CaseError(file, `inbound.then.channel '${scenario.inbound.then!.channel}' differs from contact '${thenFrom}' channel '${contact.channel}'`);
+    }
   }
   if (follow && follow.from !== 'principal') {
     const contact = scenario.seed.contacts.find(c => c.key === follow.from);
@@ -1625,7 +1715,29 @@ export function loadScenarioCases(dir: string, options: LoadOptions = {}): Scena
     if (seen.has(key)) throw new Error(`Duplicate scenario name '${c.name}' in ${dir}`);
     seen.add(key);
   }
+  validateContrastGroups(cases, dir);
   return cases;
+}
+
+/**
+ * A contrast group (#2556) compares its cases with each other, so it needs at least two, and
+ * the judge must be able to tell their recipients apart: two identical descriptions would
+ * make a correct match impossible.
+ */
+function validateContrastGroups(cases: readonly ScenarioCase[], dir: string): void {
+  const groups = new Map<string, ScenarioCase[]>();
+  for (const c of cases.filter(x => x.contrast)) groups.set(c.contrast!.group, [...(groups.get(c.contrast!.group) ?? []), c]);
+  for (const [group, members] of groups) {
+    if (members.length < 2) {
+      throw new Error(`Contrast group '${group}' in ${dir} has one case (${members[0]!.name}); a group compares two or more`);
+    }
+    const recipients = new Map<string, string>();
+    for (const m of members) {
+      const r = m.contrast!.recipient.trim().toLowerCase();
+      if (recipients.has(r)) throw new Error(`Contrast group '${group}': ${recipients.get(r)} and ${m.name} describe the same recipient`);
+      recipients.set(r, m.name);
+    }
+  }
 }
 
 /** The cases a `pnpm scenarios` run gets, and the ones it leaves out and why. */
@@ -1651,8 +1763,9 @@ export function selectRunCases(
 ): RunSelection {
   let cases = [...all];
   if (args.caseFilter !== undefined) {
-    const needle = args.caseFilter.toLowerCase();
-    cases = cases.filter(c => c.name.toLowerCase().includes(needle));
+    // Comma-separated: a case is picked when its name contains any one of the parts.
+    const needles = args.caseFilter.toLowerCase().split(',').map(n => n.trim()).filter(n => n !== '');
+    cases = cases.filter(c => needles.some(n => c.name.toLowerCase().includes(n)));
   }
   if (args.tags !== undefined) cases = cases.filter(c => c.tags.some(t => args.tags!.includes(t)));
   const selected = args.caseFilter !== undefined || args.tags !== undefined;
