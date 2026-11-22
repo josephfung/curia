@@ -11,8 +11,10 @@ import {
   parseCsv,
   parseGrades,
   runMessages,
+  sameSituation,
   sampleGradingItems,
   toCsv,
+  unlabelledMessageTools,
   type HumanGrade,
 } from '../../scenarios/grading.js';
 import { loadScenarioCase } from '../../scenarios/loader.js';
@@ -79,6 +81,31 @@ describe('runMessages', () => {
       '[Reply to Avery]\nDone.',
     ].join('\n\n'));
     expect(runMessages(scenario, run(0, { reply: 'NO_REPLY' }))).toMatch(/\(Curia wrote nothing in this run\)$/);
+  });
+
+  it('shows a Slack message, which two finesse cases accept as the message', () => {
+    const scenario = caseFile('finesse 52a late', 'The team.');
+    const text = runMessages(scenario, run(0, {
+      toolCalls: [{ name: 'slack-send', input: { recipient: 'c-1', message: 'Avery is ten minutes late.' }, result: { success: true, data: {} }, disposition: 'stubbed' }],
+    }));
+    expect(text).toContain('[Slack message to Catherine Whitfield]\nAvery is ten minutes late.');
+  });
+});
+
+describe('unlabelledMessageTools', () => {
+  it('names a contrast message tool the sheet cannot show', () => {
+    const scenario = caseFile('finesse 52c late', 'A customer.');
+    expect(unlabelledMessageTools([scenario])).toEqual([]);
+    const odd = { ...scenario, contrast: { ...scenario.contrast!, message: [{ tool: 'carrier-pigeon', arg: 'note' }] } } as ScenarioCase;
+    expect(unlabelledMessageTools([odd])).toEqual(['finesse 52c late: carrier-pigeon']);
+  });
+});
+
+describe('sameSituation', () => {
+  it('matches the description the sheet showed, whatever the spacing or text guard', () => {
+    expect(sameSituation('Avery is  running\r\nlate.', 'Avery is running late.')).toBe(true);
+    expect(sameSituation("'- Avery is late.", '- Avery is late.')).toBe(true);
+    expect(sameSituation('Avery is running late.', 'Avery is running late; tell the chair first.')).toBe(false);
   });
 });
 
@@ -171,7 +198,7 @@ describe('the sheet', () => {
     const rows = parseCsv(sheet);
     expect(rows[0]).toEqual(['item_id', 'task', 'recipient', 'situation', 'what_to_grade', 'messages', 'grade', 'notes']);
     const filled = toCsv([rows[0]!, ['x#1#voice', '', '', '', '', '', ' partial ', 'too long'], ['y#1#voice', '', '', '', '', '', '', '']]);
-    expect([...parseGrades(filled)]).toEqual([['x#1#voice', { rating: 'PARTIAL', notes: 'too long' }]]);
+    expect([...parseGrades(filled)]).toEqual([['x#1#voice', { rating: 'PARTIAL', notes: 'too long', situation: '' }]]);
     expect(() => parseGrades(toCsv([rows[0]!, ['x#1#voice', '', '', '', '', '', 'good', '']]))).toThrow(/row 2 \(x#1#voice\): grade 'good'/);
     expect(() => parseGrades(toCsv([['id', 'grade']]))).toThrow(/needs item_id and grade/);
     // A grade whose id cell was lost can't be placed: an error, not a silent skip.

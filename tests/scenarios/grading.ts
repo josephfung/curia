@@ -32,10 +32,27 @@ const SEND_TEXT: Readonly<Record<string, { arg: string; label: (input: Record<st
   'email-reply': { arg: 'body', label: (i, who) => `Email reply on the sender's thread${i['cc'] ? ` (cc ${who(i['cc'])})` : ''}` },
   'sms-send': { arg: 'message', label: (i, who) => `Text to ${who(i['recipient'])}` },
   'signal-send': { arg: 'message', label: (i, who) => `Signal message to ${who(i['recipient'])}` },
+  'slack-send': { arg: 'message', label: (i, who) => `Slack message to ${who(i['recipient'])}` },
   'ceo-inbox-draft-compose': { arg: 'body', label: (i, who) => `Draft in Avery's mailbox, to ${who(i['to'] ?? i['to_addresses'])}` },
   'ceo-inbox-draft-reply': { arg: 'body', label: () => `Draft reply in Avery's mailbox` },
   'ceo-inbox-draft-edit': { arg: 'body', label: () => `Edited draft in Avery's mailbox` },
 };
+
+/**
+ * Tools a case names as its contrast message (the message the case is about) that the sheet
+ * cannot show. A grader would see "nothing written" where the judge read a message, so
+ * sampling refuses them until SEND_TEXT knows how to label the tool.
+ */
+export function unlabelledMessageTools(cases: readonly ScenarioCase[]): string[] {
+  const missing = new Set<string>();
+  for (const c of cases) {
+    for (const source of c.contrast?.message ?? []) {
+      // The reply is always on the sheet.
+      if (source !== 'reply' && !(source.tool in SEND_TEXT)) missing.add(`${c.name}: ${source.tool}`);
+    }
+  }
+  return [...missing];
+}
 
 /** Who a recipient value names: a seeded contact's name, Avery, or the value as written. */
 function whoFor(scenario: ScenarioCase, run: ScenarioRun): (v: unknown) => string {
@@ -223,6 +240,16 @@ export function asText(cell: string): string {
 export interface HumanGrade {
   rating: BehaviorRating;
   notes: string;
+  /** The sheet's situation cell (the case description the grader read), when the sheet has one. */
+  situation?: string;
+}
+
+/** Whether a sheet's situation cell still reads as the case's description: spacing and the sheet's text guard aside. */
+export function sameSituation(sheet: string, description: string): boolean {
+  const norm = (t: string): string => t.replace(/\s+/g, ' ').trim();
+  const cell = norm(sheet);
+  const now = norm(description);
+  return cell === now || cell === norm(asText(description));
 }
 
 const GRADES: Readonly<Record<string, BehaviorRating>> = { PASS: 'PASS', PARTIAL: 'PARTIAL', MISS: 'MISS' };
@@ -237,6 +264,7 @@ export function parseGrades(csv: string): Map<string, HumanGrade> {
   const idCol = header.indexOf('item_id');
   const gradeCol = header.indexOf('grade');
   const notesCol = header.indexOf('notes');
+  const situationCol = header.indexOf('situation');
   if (idCol === -1 || gradeCol === -1) throw new Error(`the sheet needs item_id and grade columns (found: ${header.join(', ')})`);
   const grades = new Map<string, HumanGrade>();
   rows.slice(1).forEach((r, i) => {
@@ -248,7 +276,11 @@ export function parseGrades(csv: string): Map<string, HumanGrade> {
     const rating = GRADES[raw];
     if (!rating) throw new Error(`row ${i + 2} (${id}): grade '${r[gradeCol]}' is not PASS, PARTIAL or MISS`);
     if (grades.has(id)) throw new Error(`row ${i + 2}: ${id} is graded twice`);
-    grades.set(id, { rating, notes: notesCol === -1 ? '' : (r[notesCol] ?? '').trim() });
+    grades.set(id, {
+      rating,
+      notes: notesCol === -1 ? '' : (r[notesCol] ?? '').trim(),
+      ...(situationCol === -1 ? {} : { situation: r[situationCol] ?? '' }),
+    });
   });
   return grades;
 }

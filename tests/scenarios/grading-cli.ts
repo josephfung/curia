@@ -20,7 +20,9 @@ import {
   formatAgreementLine,
   gradingSheet,
   parseGrades,
+  sameSituation,
   sampleGradingItems,
+  unlabelledMessageTools,
   type Agreement,
 } from './grading.js';
 import { formatUsd, UsageLedger } from '../shared/usage.js';
@@ -114,6 +116,10 @@ async function sample(argv: string[]): Promise<void> {
   const known = new Set(cases.map(c => c.name));
   const gone = suite.cases.map(c => c.name).filter(name => !known.has(name));
   if (gone.length > 0) err(`grading: not sampled, no longer in ${CASES_DIR}: ${gone.join(', ')}`);
+  const unlabelled = unlabelledMessageTools(cases.filter(c => suite.cases.some(r => r.name === c.name)));
+  if (unlabelled.length > 0) {
+    throw new Error(`the sheet can't show these cases' messages (add the tool to SEND_TEXT in grading.ts): ${unlabelled.join('; ')}`);
+  }
   const items = sampleGradingItems(suite, cases, { n, seed, layer });
   if (items.length === 0) throw new Error(`no judged ${layer} ratings to grade in ${file}`);
   const sheet = resolvePath(flag(argv, '--out') ?? file.replace(/\.json$/, '') + '.grading.csv');
@@ -167,6 +173,13 @@ async function agree(argv: string[]): Promise<number> {
     for (const [id, at] of located) {
       const scenario = byName.get(at.caseName);
       if (!scenario) throw new Error(`${at.caseName}: no such case in ${CASES_DIR} any more, so '${id}' can't be re-judged`);
+      // Without --current-cases a candidate is meant to judge what the grader saw, but the judge
+      // reads the case's description (the right call) from the case file. Refuse when it has
+      // changed since the sheet was made rather than compare two different questions.
+      const situation = human.get(id)?.situation;
+      if (!currentCases && situation !== undefined && !sameSituation(situation, scenario.description)) {
+        throw new Error(`'${id}': ${at.caseName}'s description has changed since the sheet was made, so a candidate would judge a different right call than the grader read. Pass --current-cases to judge against the case files as they are now, or sample a new sheet`);
+      }
       if (currentCases && !scenario.expectedBehaviors.some(b => b.id === at.behaviorId && !b.check)) {
         throw new Error(`'${id}': the case file no longer has a judged behavior '${at.behaviorId}' (renamed, removed or now a check), so --current-cases can't rate it`);
       }
