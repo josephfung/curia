@@ -14,6 +14,7 @@ import type { PrincipalMailboxes } from '../../principal-mailboxes/service.js';
 import type { TaskRepo } from '../../db/task-repo.js';
 import type { WorkingDocsRepo } from '../../db/working-docs-repo.js';
 import type { Logger } from '../../logger.js';
+import { EDITABLE_BY_CONSOLE, EDITABLE_BY_KEY } from '../../memory/console-only-docs.js';
 import type { OperatorNotifier } from '../notify-operator.js';
 import { findOpenOnboardingTask, type OnboardingStateLock } from '../state.js';
 import { summarise, type HistorySummary } from './history-summary.js';
@@ -59,6 +60,9 @@ class SupersededError extends Error {
 export async function runDeepDive(deps: RunDeps, state: DeepDiveState): Promise<void> {
   const now = deps.now ?? (() => new Date());
   const { logger } = deps;
+  // The run is identified by startedAt, and a resume reuses it. So a live run whose heartbeat
+  // writes keep failing for STALL_MINUTES can be resumed while it still runs, and the two attempts
+  // overlap (both pass this guard). A per-attempt token would close that; deferred as unlikely.
   const { startedAt } = state;
 
   /** Write a change to this run, or stop the pipeline if it was superseded. */
@@ -142,7 +146,8 @@ async function withHeartbeat<T>(deps: RunDeps, startedAt: string, now: () => Dat
 /** Create the summary doc, or replace an earlier run's. */
 async function storeSummary(deps: RunDeps, summary: HistorySummary): Promise<void> {
   const body = '```json\n' + JSON.stringify(summary, null, 2) + '\n```\n';
-  const frontmatter = { title: 'History summary' };
+  // Console-only: later stages trust this doc, so no agent's doc-write may rewrite it.
+  const frontmatter = { title: 'History summary', [EDITABLE_BY_KEY]: EDITABLE_BY_CONSOLE };
   const existing = await deps.workingDocsRepo.read(SUMMARY_PATH);
   if (existing === null) {
     await deps.workingDocsRepo.create({ path: SUMMARY_PATH, type: SUMMARY_DOC_TYPE, frontmatter, body, taskId: null });

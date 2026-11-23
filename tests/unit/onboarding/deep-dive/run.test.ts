@@ -108,7 +108,7 @@ describe('runDeepDive', () => {
     expect(created.path).toBe(SUMMARY_PATH);
     expect(SUMMARY_PATH).toBe('/meetings/onboarding/deep-dive/history-summary.md');
     expect(created.type).toBe('deep-dive-summary');
-    expect(created.frontmatter).toEqual({ title: 'History summary' });
+    expect(created.frontmatter).toEqual({ title: 'History summary', editable_by: 'console' });
     expect(created.taskId).toBeNull();
     const fenced = /^```json\n([\s\S]*)\n```\n?$/.exec(created.body);
     expect(fenced).not.toBeNull();
@@ -125,7 +125,10 @@ describe('runDeepDive', () => {
     await t.seed();
     await runDeepDive(t.deps, running);
     expect(t.workingDocsRepo.create).not.toHaveBeenCalled();
-    expect(t.workingDocsRepo.update).toHaveBeenCalledWith(SUMMARY_PATH, expect.objectContaining({ expectedVersion: 4 }));
+    expect(t.workingDocsRepo.update).toHaveBeenCalledWith(SUMMARY_PATH, expect.objectContaining({
+      expectedVersion: 4,
+      frontmatter: { title: 'History summary', editable_by: 'console' },
+    }));
     expect((await t.read())?.status).toBe('drafting');
   });
 
