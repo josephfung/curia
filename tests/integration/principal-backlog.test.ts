@@ -82,6 +82,9 @@ describeIf('principal backlog counts (prompt trim PR 7)', () => {
    */
   async function snapshot() {
     const client = await pool.connect();
+    // Set when the connection must not go back to the pool for reuse: a failed read
+    // leaves the transaction aborted, and a ROLLBACK that also fails leaves it unknown.
+    let broken: Error | undefined;
     try {
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
       const db = { query: client.query.bind(client) } as unknown as DbPool;
@@ -93,8 +96,19 @@ describeIf('principal backlog counts (prompt trim PR 7)', () => {
       };
       await client.query('COMMIT');
       return { counts, lists };
+    } catch (err) {
+      // Roll back so the pool never hands out a connection inside an aborted
+      // transaction (afterAll's cleanup would fail on it); the read's own error is
+      // the one the test reports.
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        broken = rollbackErr as Error;
+      }
+      throw err;
     } finally {
-      client.release();
+      // release(err) makes the pool destroy the connection instead of reusing it.
+      client.release(broken);
     }
   }
 
