@@ -28,11 +28,17 @@ AMD="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 ARM="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 INDEX="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 
-# stub dir platforms: `inspect --raw` lists these linux architectures, plus an
-# attestation manifest (platform unknown/unknown) as buildx writes one.
+# stub dir platforms [amd64-leg-arch] [arm64-leg-arch] [raw-failures]:
+# `inspect --raw <tag>` lists `platforms` (the assembled index); `inspect --raw
+# <image>@<digest>` lists the arch that leg actually holds (default: its own).
+# Every index also carries an attestation manifest (platform unknown/unknown), as
+# buildx writes one. The first `raw-failures` raw reads fail, as a registry blip.
 install_docker_stub() {
   mkdir -p "$1/bin"
   printf '%s\n' "$2" > "$1/platforms"
+  printf '%s\n' "${3:-amd64}" > "$1/leg_$AMD"
+  printf '%s\n' "${4:-arm64}" > "$1/leg_$ARM"
+  printf '%s\n' "${5:-0}" > "$1/raw_failures"
   cat > "$1/bin/docker" <<STUB
 #!/usr/bin/env bash
 dir="$1"
@@ -42,13 +48,21 @@ case "\$*" in
     printf '%s\n' "\$@" > "\$dir/create_args"
     exit 0 ;;
   "buildx imagetools inspect --raw "*)
+    n=\$(( \$(cat "\$dir/raw_count" 2>/dev/null || echo 0) + 1 ))
+    echo "\$n" > "\$dir/raw_count"
+    if [ "\$n" -le "\$(cat "\$dir/raw_failures")" ]; then echo "unexpected EOF" >&2; exit 1; fi
+    ref="\$5"
+    case "\$ref" in
+      *@sha256:*) src="\$dir/leg_\${ref#*@}" ;;
+      *) src="\$dir/platforms" ;;
+    esac
     python3 -c '
 import json, sys
 arches = open(sys.argv[1]).read().split()
 manifests = [{"platform": {"os": "linux", "architecture": a}} for a in arches]
 manifests.append({"platform": {"os": "unknown", "architecture": "unknown"}})
 print(json.dumps({"manifests": manifests}))
-' "\$dir/platforms"
+' "\$src"
     exit 0 ;;
   "buildx imagetools inspect "*"--format"*)
     printf '%s\n' '{"digest":"$INDEX"}'
@@ -70,7 +84,7 @@ run() { # dir [extra env...]
   local d="$1"; shift
   env PATH="$d/bin:$PATH" IMAGE=ghcr.io/example/curia \
     TAGS=$'ghcr.io/example/curia:edge\nghcr.io/example/curia:v1.2.3' \
-    DIGESTS_DIR="$d/digests" GITHUB_OUTPUT="$d/github_output" BUILDX_RETRY_DELAY=0 \
+    DIGESTS_DIR="$d/digests" GITHUB_OUTPUT="$d/github_output" BUILDX_RETRY_DELAY=0 ASSEMBLE_READ_DELAY=0 \
     "$@" "$ASSEMBLE" >/dev/null 2>"$d/stderr"
 }
 
@@ -100,11 +114,25 @@ run "$d"
 check_eq "garbled digest: exits 1" "1" "$?"
 if [ -f "$d/create_args" ]; then bad "  ...but it tagged"; else ok "  ...and nothing was tagged"; fi
 
-# 4. The assembled index lacks a platform: fail, write no digest (nothing is signed).
+# 4. The assembled index lacks a platform: fail, write no digest (nothing is signed),
+#    and say the tags already moved.
 d="$tmpdir/a4"; install_docker_stub "$d" "amd64"; digests "$d" "$AMD" "$ARM"
 run "$d"
 check_eq "index missing arm64: exits 1" "1" "$?"
 if [ -s "$d/github_output" ]; then bad "  ...but a digest was written"; else ok "  ...and no digest was written"; fi
+if grep -q "already moved" "$d/stderr"; then ok "  ...saying the tags already moved"; else bad "  ...without saying the tags moved"; fi
+
+# 4b. A leg that pushed the wrong architecture: caught before any tag moves.
+d="$tmpdir/a4b"; install_docker_stub "$d" "amd64 arm64" amd64 amd64; digests "$d" "$AMD" "$ARM"
+run "$d"
+check_eq "arm64 leg holding amd64: exits 1" "1" "$?"
+if [ -f "$d/create_args" ]; then bad "  ...but it tagged"; else ok "  ...and nothing was tagged"; fi
+
+# 4c. A registry blip on a read is retried, and the publish still succeeds.
+d="$tmpdir/a4c"; install_docker_stub "$d" "amd64 arm64" amd64 arm64 2; digests "$d" "$AMD" "$ARM"
+run "$d"
+check_eq "two failed reads, then success: exits 0" "0" "$?"
+check_eq "  ...writes the index digest" "digest=$INDEX" "$(cat "$d/github_output")"
 
 # 5. Required inputs.
 d="$tmpdir/a5"; install_docker_stub "$d" "amd64 arm64"; digests "$d" "$AMD" "$ARM"

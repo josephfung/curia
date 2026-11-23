@@ -53,6 +53,7 @@ interface Workflow {
       strategy: { matrix: { include: MatrixEntry[] } };
       steps: Array<Record<string, unknown>>;
     };
+    'build-arch': { steps: Array<Record<string, unknown>> };
   };
 }
 
@@ -307,6 +308,8 @@ function renderTags(tagsBlock: string, ctx: Context): string[] {
  * ref-dropdown dispatch form (#1718), and it is the only case where
  * `github.ref` legitimately names the build target rather than the launch site.
  */
+const LAUNCH_SHA = '0123456789abcdef0123456789abcdef01234567';
+
 function contextFor(opts: { eventName: string; ref: string; inputTag?: string; releaseTag?: string }): Context {
   const refTag = opts.ref.startsWith('refs/tags/') ? opts.ref.slice('refs/tags/'.length) : '';
   const resolvedTag = opts.inputTag || opts.releaseTag || refTag;
@@ -324,6 +327,9 @@ function contextFor(opts: { eventName: string; ref: string; inputTag?: string; r
       // rather than passed in so a fixture cannot state a ref and a ref_name
       // that disagree.
       ref_name: opts.ref.replace(/^refs\/(heads|tags)\//, ''),
+      // The commit the run was triggered for: on a push, the pushed commit; on a
+      // dispatch, the launch ref's HEAD at dispatch time.
+      sha: LAUNCH_SHA,
       event: { release: { tag_name: opts.releaseTag ?? '' } },
     },
     inputs: { tag: opts.inputTag ?? '' },
@@ -507,8 +513,18 @@ describe('docker-publish.yml tag derivation', () => {
       expect(tagsFor('curia-postgres', DISPATCH_BARE)).toEqual(['edge']);
     });
 
-    it('checks out the launch ref', () => {
-      expect(interpolate(checkoutRef(), DISPATCH_BARE)).toBe('refs/heads/main');
+    it('checks out the commit main was at when dispatched, not the moving branch', () => {
+      expect(interpolate(checkoutRef(), DISPATCH_BARE)).toBe(LAUNCH_SHA);
+      expect(interpolate(checkoutRef(), PUSH_MAIN)).toBe(LAUNCH_SHA);
+    });
+
+    it('checks out the same source in every leg and in the assembling job', () => {
+      // build-arch's legs start at different times (and can be re-run on their own),
+      // so a branch name here would let one image's platforms come from two commits.
+      const refs = (['build-arch', 'build'] as const).map((job) =>
+        (workflow.jobs[job].steps.find((step) => String(step.uses ?? '').startsWith('actions/checkout@')) as { with?: { ref?: string } }).with?.ref,
+      );
+      expect(refs[0]).toBe(refs[1]);
     });
   });
 

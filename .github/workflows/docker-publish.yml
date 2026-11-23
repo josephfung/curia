@@ -305,8 +305,11 @@ jobs:
           # On a manual re-publish, check out the requested tag so the built
           # image really is that release's source. For release/push triggers the
           # resolved tag is the release tag or empty, so this falls back to the
-          # event ref (the release tag or the pushed branch).
-          ref: ${{ needs.resolve.outputs.tag || github.ref }}
+          # commit the run was triggered for. `github.sha`, not the branch name:
+          # build-arch's legs and this job start at different times, and a leg
+          # re-run days later would otherwise build a newer main than the other
+          # leg did, and the run would sign one image made of both.
+          ref: ${{ needs.resolve.outputs.tag || github.sha }}
 
       # metadata-action stamps `org.opencontainers.image.revision` from
       # `github.sha`, which on a dispatch is the launch branch's HEAD — not the
@@ -504,8 +507,11 @@ jobs:
           # On a manual re-publish, check out the requested tag so the built
           # image really is that release's source. For release/push triggers the
           # resolved tag is the release tag or empty, so this falls back to the
-          # event ref (the release tag or the pushed branch).
-          ref: ${{ needs.resolve.outputs.tag || github.ref }}
+          # commit the run was triggered for. `github.sha`, not the branch name:
+          # build-arch's legs and this job start at different times, and a leg
+          # re-run days later would otherwise build a newer main than the other
+          # leg did, and the run would sign one image made of both.
+          ref: ${{ needs.resolve.outputs.tag || github.sha }}
 
       # metadata-action stamps `org.opencontainers.image.revision` from
       # `github.sha`, which on a dispatch is the launch branch's HEAD — not the
