@@ -2948,6 +2948,11 @@ export class OutboundGateway {
    * every retry. `sendNotification` checks it too; this is the cheap pre-check, not a substitute.
    */
   canDeliverNotifications(): boolean {
+    // Email is a queueable channel (#1380): while it is not outbound-ready (an adapter between
+    // subscribing and running at start, or stopping) a send is queued and reported as a success.
+    // A notice must not be published into that window, or the caller records "published" for a
+    // notice that sits in the queue — and a flush failure or expiry would never correct it.
+    if (!this.isChannelOutboundReady('email')) return false;
     const canDeliver = this.notificationRecipients?.canDeliver;
     if (!canDeliver) return true;
     try {

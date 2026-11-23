@@ -21,7 +21,7 @@ import type { EventBus } from '../../bus/bus.js';
 import type { Logger } from '../../logger.js';
 import type { Pool } from 'pg';
 import type { AgentRegistry } from '../../agents/agent-registry.js';
-import { bypassesBearerAuth, validateBearerToken } from './auth.js';
+import { createBearerAuthHook } from './auth.js';
 import { registerSecurityHeaders } from './security-headers.js';
 import { EventRouter } from './event-router.js';
 import type { SchedulerService } from '../../scheduler/scheduler-service.js';
@@ -356,42 +356,8 @@ export class HttpAdapter implements Channel {
     // hook registration order does not affect onSend coverage.
     registerSecurityHeaders(this.app);
 
-    // Auth hook — runs before every request
-    this.app.addHook('onRequest', async (request, reply) => {
-      // routeOptions.url is the registered pattern (e.g. '/assets/index-CU1g6HdR.js' or '/*').
-      // request.url is the actual request path (with query string).
-      const routeUrl = request.routeOptions.url ?? '';
-
-      // Non-API routes are the console app (static assets, SPA pages, /auth) — no bearer auth.
-      //
-      // @fastify/static v9 with wildcard:false scans consoleDist at startup and registers
-      // an individual Fastify route per file (e.g. /assets/index-CU1g6HdR.js). These exact
-      // paths don't match a '/*' check, so we gate on isApiPath() instead.
-      //
-      // We also check request.url as a fallback: the console '/*' catch-all absorbs GET
-      // requests to unregistered paths (e.g. GET /api/nonexistent, GET /api). Without
-      // the request.url check, those get routeUrl='/*', skip auth, and silently return
-      // the React app HTML. Checking the actual URL keeps unregistered /api paths enforced.
-      //
-      // isApiPath matches '/api' exactly and '/api/...' — avoids false positives like
-      // '/api-docs' while catching the bare '/api' case that startsWith('/api/') misses.
-      const isApiPath = (p: string) => p === '/api' || p.startsWith('/api/');
-      const requestPath = (request.url ?? '').split('?')[0] ?? '';
-      if (!isApiPath(routeUrl) && !isApiPath(requestPath)) return;
-
-      // Session-cookie, capability-token and webhook-signature routes authenticate
-      // themselves and bypass bearer token enforcement. A new console route must be
-      // added to the list in auth.ts, or this hook rejects it before assertSecret runs.
-      if (bypassesBearerAuth(routeUrl)) return;
-
-      if (!validateBearerToken(request.headers.authorization, apiToken)) {
-        // Audit-log the failure: IP, route, and whether a token was even provided.
-        // Never log the token value — only that it was present and wrong vs absent.
-        const reason = request.headers.authorization ? 'invalid_token' : 'missing_token';
-        logger.warn({ ip: request.ip, route: routeUrl, reason }, 'HTTP auth failed');
-        return reply.status(401).send({ error: 'Unauthorized — provide a valid Bearer token' });
-      }
-    });
+    // Auth hook — runs before every request (bearer token, with self-authenticating routes let through).
+    this.app.addHook('onRequest', createBearerAuthHook(apiToken, logger));
 
     // Shared session store — used by both KG and identity routes to validate browser sessions.
     // Sessions are set by POST /auth (KG routes) and verified by both route registrations.

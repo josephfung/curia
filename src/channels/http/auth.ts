@@ -6,6 +6,8 @@
 // local development).
 
 import { timingSafeEqual } from 'node:crypto';
+import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { Logger } from '../../logger.js';
 
 /**
  * Validate a bearer token from an Authorization header.
@@ -98,4 +100,50 @@ export function bypassesBearerAuth(routeUrl: string): boolean {
   return SELF_AUTHED_API_PREFIXES.some(
     (p) => routeUrl === p || routeUrl.startsWith(`${p}/`),
   );
+}
+
+/**
+ * The HTTP adapter's global auth hook (`onRequest`): bearer-token enforcement on API routes, with
+ * the self-authenticating prefixes above let through to their own checks. Exported so a test can
+ * put it in front of a route plugin and see what the adapter does (#2710 review).
+ */
+export function createBearerAuthHook(
+  apiToken: string | undefined,
+  logger: Pick<Logger, 'warn'>,
+): (request: FastifyRequest, reply: FastifyReply) => Promise<void> {
+  return async (request, reply) => {
+    // routeOptions.url is the registered pattern (e.g. '/assets/index-CU1g6HdR.js' or '/*').
+    // request.url is the actual request path (with query string).
+    const routeUrl = request.routeOptions.url ?? '';
+
+    // Non-API routes are the console app (static assets, SPA pages, /auth) — no bearer auth.
+    //
+    // @fastify/static v9 with wildcard:false scans consoleDist at startup and registers
+    // an individual Fastify route per file (e.g. /assets/index-CU1g6HdR.js). These exact
+    // paths don't match a '/*' check, so we gate on isApiPath() instead.
+    //
+    // We also check request.url as a fallback: the console '/*' catch-all absorbs GET
+    // requests to unregistered paths (e.g. GET /api/nonexistent, GET /api). Without
+    // the request.url check, those get routeUrl='/*', skip auth, and silently return
+    // the React app HTML. Checking the actual URL keeps unregistered /api paths enforced.
+    //
+    // isApiPath matches '/api' exactly and '/api/...' — avoids false positives like
+    // '/api-docs' while catching the bare '/api' case that startsWith('/api/') misses.
+    const isApiPath = (p: string) => p === '/api' || p.startsWith('/api/');
+    const requestPath = (request.url ?? '').split('?')[0] ?? '';
+    if (!isApiPath(routeUrl) && !isApiPath(requestPath)) return;
+
+    // Session-cookie, capability-token and webhook-signature routes authenticate
+    // themselves and bypass bearer token enforcement. A new console route must be
+    // added to the list above, or this hook rejects it before assertSecret runs.
+    if (bypassesBearerAuth(routeUrl)) return;
+
+    if (!validateBearerToken(request.headers.authorization, apiToken)) {
+      // Audit-log the failure: IP, route, and whether a token was even provided.
+      // Never log the token value — only that it was present and wrong vs absent.
+      const reason = request.headers.authorization ? 'invalid_token' : 'missing_token';
+      logger.warn({ ip: request.ip, route: routeUrl, reason }, 'HTTP auth failed');
+      return reply.status(401).send({ error: 'Unauthorized — provide a valid Bearer token' });
+    }
+  };
 }

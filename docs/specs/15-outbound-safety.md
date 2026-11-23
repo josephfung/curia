@@ -80,7 +80,9 @@ refused publish, or a send the channel refused or failed — is audited as
 `outbound.notification_undelivered` (type, audience and reason only) and never redirected to the
 other person: a fallback would break the no-duplication rule. It is logged at error level, except
 `delivery_unavailable` (no adapter subscribed yet, as during boot), which is logged at warn level
-and still audited. Deliverability is checked once, in the gateway. The send itself happens in the
+and still audited. Deliverability is checked once, in the gateway: an adapter that delivers
+notifications has subscribed, and email is outbound-ready. Email is a queueable channel, and a
+notice published while it is not ready would be queued and reported as a success. The send itself happens in the
 email adapter while the gateway publishes the notice, and the adapter reports a refused or failed
 send back, so `sendNotification` returns false for it. A system notice also creates no contact: the recipient is never
 promoted, on the direct path or the queue flush, because the operator has no tier or role

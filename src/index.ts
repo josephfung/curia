@@ -2402,7 +2402,9 @@ async function main(): Promise<void> {
         await sendPendingOperatorConfirmation({
           pool,
           gateway: outboundGateway,
-          canDeliver: () => emailAdapters.some((a) => a.deliversNotifications()),
+          // The gateway's own check: an adapter subscribed and email outbound-ready, so an
+          // owed notice is never queued as if it were sent (#2710 review).
+          canDeliver: () => outboundGateway.canDeliverNotifications(),
           ...(config.appOrigin ? { appOrigin: config.appOrigin } : {}),
           logger,
         });
@@ -4434,7 +4436,9 @@ async function main(): Promise<void> {
     // The Operator setting's confirmation notice goes through the one system-notice path (#2710).
     ...(outboundGateway ? { outboundGateway } : {}),
     onOperatorChanged: (operator) => operatorEmail.remember(operator),
-    canDeliverNotifications: () => emailAdapters.some((a) => a.deliversNotifications()),
+    canDeliverNotifications: () => (outboundGateway
+      ? outboundGateway.canDeliverNotifications()
+      : emailAdapters.some((a) => a.deliversNotifications())),
     ...(retryOwedOperatorConfirmation ? { retryOwedOperatorConfirmation } : {}),
     mailboxSignIn: {
       service: mailboxSignInService,

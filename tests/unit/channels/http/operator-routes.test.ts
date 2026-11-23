@@ -10,7 +10,8 @@ import rateLimit from '@fastify/rate-limit';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { operatorRoutes, parseOperatorUpdate } from '../../../../src/channels/http/routes/operator.js';
 import { createSilentLogger } from '../../../../src/logger.js';
-import type { SessionStore } from '../../../../src/channels/http/session-auth.js';
+import { hashToken, type SessionStore } from '../../../../src/channels/http/session-auth.js';
+import { createBearerAuthHook } from '../../../../src/channels/http/auth.js';
 
 const SECRET = 'test-bootstrap-secret';
 
@@ -310,6 +311,61 @@ describe('operator routes', () => {
     expect((await app.inject({ method: 'GET', url: '/api/operator' })).statusCode).toBe(401);
     expect((await app.inject({ method: 'PUT', url: '/api/operator', payload: { clear: true } })).statusCode).toBe(401);
     expect((await app.inject({ method: 'GET', url: '/api/operator/history' })).statusCode).toBe(401);
+    await app.close();
+  });
+});
+
+// The adapter puts a bearer-token hook in front of every /api route. With API_TOKEN set (as in
+// production), a console route missing from the bypass list is refused there, before its own
+// session check can run (#2710 review). So test the routes behind the adapter's own hook.
+describe('operator routes behind the adapter auth hook, with an API token set', () => {
+  const API_TOKEN = 'api-token-for-tests';
+  const COOKIE = 'operator-route-session-cookie';
+
+  async function adapterApp() {
+    const sessions: SessionStore = new Map();
+    sessions.set(hashToken(COOKIE), { id: 'session-1', expiresAt: Date.now() + 60 * 60 * 1000, renewedAt: Date.now() });
+    const app = Fastify();
+    await app.register(cookie);
+    await app.register(rateLimit, { max: 200, timeWindow: '1 minute' });
+    app.addHook('onRequest', createBearerAuthHook(API_TOKEN, createSilentLogger()));
+    await app.register(operatorRoutes, {
+      webAppBootstrapSecret: SECRET,
+      sessions,
+      pool: makePool().pool as never,
+      logger: createSilentLogger(),
+    });
+    // A plain API route the bypass list does not name, to show the hook is enforcing.
+    app.get('/api/agents/status', async () => ({ ok: true }));
+    await app.ready();
+    return app;
+  }
+
+  it('lets a console session with no bearer token reach every operator route', async () => {
+    const app = await adapterApp();
+    const headers = { cookie: `curia_session=${COOKIE}` };
+    expect((await app.inject({ method: 'GET', url: '/api/operator', headers })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/api/operator/history', headers })).statusCode).toBe(200);
+    const put = await app.inject({ method: 'PUT', url: '/api/operator', headers, payload: { clear: true } });
+    expect(put.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('still refuses a request with neither a session nor the bootstrap secret, through the route check', async () => {
+    const app = await adapterApp();
+    const res = await app.inject({ method: 'GET', url: '/api/operator' });
+    expect(res.statusCode).toBe(401);
+    // The route's own refusal, not the bearer hook's: the hook let it through to assertSecret.
+    expect(res.json().error).not.toContain('Bearer');
+    await app.close();
+  });
+
+  it('keeps enforcing the bearer token on routes outside the bypass list', async () => {
+    const app = await adapterApp();
+    const headers = { cookie: `curia_session=${COOKIE}` };
+    const res = await app.inject({ method: 'GET', url: '/api/agents/status', headers });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error).toContain('Bearer');
     await app.close();
   });
 });

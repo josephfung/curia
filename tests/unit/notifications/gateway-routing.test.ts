@@ -208,6 +208,24 @@ describe('OutboundGateway.sendNotification routing', () => {
     expect(deliverable.gateway.canDeliverNotifications()).toBe(true);
   });
 
+  it('does not publish while email is not outbound-ready, since the send would be queued as a success', async () => {
+    // Email is queueable (#1380). An adapter that has subscribed but is not running yet (or is
+    // stopping) would have its send queued and reported as success, and the caller would record
+    // "published" for a notice sitting in the queue (#2710 review).
+    const { gateway, published } = makeGateway({ principalEmail: () => PRINCIPAL, canDeliver: () => true });
+    let emailReady = false;
+    gateway.setOutboundQueueReadiness('email', () => emailReady);
+
+    expect(gateway.canDeliverNotifications()).toBe(false);
+    expect(await gateway.sendNotification({ notificationType: 'operator_configured', subject: 's', body: 'b' })).toBe(false);
+    expect(notices(published)).toEqual([]);
+    expect(undelivered(published)[0]!.payload).toMatchObject({ reason: 'delivery_unavailable' });
+
+    emailReady = true;
+    expect(gateway.canDeliverNotifications()).toBe(true);
+    expect(await gateway.sendNotification({ notificationType: 'operator_configured', subject: 's', body: 'b' })).toBe(true);
+  });
+
   it('publishes once an adapter can deliver', async () => {
     const { gateway, published } = makeGateway({ principalEmail: () => PRINCIPAL, canDeliver: () => true });
     expect(await gateway.sendNotification({ notificationType: 'inbox_triage_paused', subject: 's', body: 'b' })).toBe(true);
