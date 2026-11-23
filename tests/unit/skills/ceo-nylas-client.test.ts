@@ -241,7 +241,7 @@ describe('CeoNylasClient.listMessages — folder alias normalization', () => {
         const client = new CeoNylasClient('key', 'grant', logger);
         const pages: Array<{ requests: number; rateLimited: boolean }> = [];
 
-        const pending = client.listAllMessages({ pageDelayMs: 1000, onPage: (p) => pages.push(p) });
+        const pending = client.listAllMessages({ pageDelayMs: 1000, onPage: (p) => { pages.push(p); } });
         await vi.runAllTimersAsync();
         await pending;
 
@@ -266,6 +266,21 @@ describe('CeoNylasClient.listMessages — folder alias normalization', () => {
       await client.listAllMessages({});
 
       expect(delays).toEqual([]);
+    });
+
+    it('stops paging when onPage returns false, keeping what was read', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+        .mockResolvedValueOnce(json({ data: [{ id: 'b' }], next_cursor: 'C3' }))
+        .mockResolvedValueOnce(json({ data: [{ id: 'c' }] }));
+      const client = new CeoNylasClient('key', 'grant', logger);
+      let pages = 0;
+
+      const { messages, truncated } = await client.listAllMessages({ onPage: () => ++pages < 2 });
+
+      expect(messages.map((m) => m.id)).toEqual(['a', 'b']);
+      expect(truncated).toBe(true);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
 
     it('refuses a page delay that outlasts the call budget', async () => {

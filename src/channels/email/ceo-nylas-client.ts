@@ -296,8 +296,12 @@ export class CeoNylasClient {
       maxScan?: number;
       /** Sleep between pages (default 0: none). Doubles, up to 30 s, after a page that saw a 429. */
       pageDelayMs?: number;
-      /** Called once per page with the HTTP requests it took (retries included) and whether any was a 429. */
-      onPage?: (info: { requests: number; rateLimited: boolean }) => void;
+      /**
+       * Called once per page with the HTTP requests it took (retries included) and whether any was
+       * a 429. Returning `false` stops paging after this page (`truncated` if a cursor remains), so
+       * a caller with a request budget keeps the messages read so far (#2362).
+       */
+      onPage?: (info: { requests: number; rateLimited: boolean }) => boolean | void;
     } = {},
   ): Promise<{ messages: NylasMessageSummary[]; truncated: boolean }> {
     const maxScan = options.maxScan ?? 500;
@@ -323,9 +327,13 @@ export class CeoNylasClient {
         undefined,
         stats,
       );
-      options.onPage?.({ requests: stats.requests, rateLimited: stats.rateLimited });
+      const keepGoing = options.onPage?.({ requests: stats.requests, rateLimited: stats.rateLimited });
       if (stats.rateLimited) pageDelayMs = Math.min(pageDelayMs * 2, NYLAS_MAX_BACKOFF_MS);
       messages.push(...data.map(normalizeMessageSummary));
+      if (keepGoing === false) {
+        truncated = Boolean(nextCursor);
+        break;
+      }
 
       // An empty page with a cursor would otherwise spin forever — bail out, but
       // treat a lingering cursor as truncation so the caller doesn't mistake an

@@ -1,0 +1,32 @@
+[
+  {
+    "id": "m02", "threadId": "t-alice", "subject": "Re: t-alice",
+    "from": [{ "email": "ceo@acme.com", "name": "Joe CEO" }], "to": [{ "email": "alice.smith@partner.com", "name": "Alice Smith" }],
+    "cc": [], "bcc": [], "snippet": "", "date": 1793629800, "unread": false, "folders": ["SENT"], "attachments": [], "labels": [],
+    "body": "<div>Works for me, Alice.</div><div>Thursday it is.</div><div class=\"gmail_quote\">On Mon, Nov 2, 2026 at 9:00 AM Alice Smith wrote:<br>Can we meet Thursday?</div>"
+  },
+  {
+    "id": "m04", "threadId": "t-alice", "subject": "Re: t-alice",
+    "from": [{ "email": "ceo@acme.com", "name": "Joe CEO" }], "to": [{ "email": "alice.smith@partner.com", "name": "Alice Smith" }],
+    "cc": [{ "email": "ceo@acme.com", "name": "Joe CEO" }], "bcc": [], "snippet": "", "date": 1793705400, "unread": false, "folders": ["SENT"], "attachments": [], "labels": [],
+    "body": "<p>Short answer: yes.</p><p>J</p>"
+  },
+  {
+    "id": "m08", "threadId": "t-carol", "subject": "Re: t-carol",
+    "from": [{ "email": "ceo@acme.com", "name": "Joe CEO" }], "to": [{ "email": "carol.white@partner.com", "name": "Carol White" }],
+    "cc": [], "bcc": [], "snippet": "", "date": 1793894400, "unread": false, "folders": ["SENT"], "attachments": [], "labels": [],
+    "body": "<p>Carol &mdash; send me the deck before Friday.</p>"
+  },
+  {
+    "id": "m12", "threadId": "t-erin", "subject": "Re: t-erin",
+    "from": [{ "email": "joe@joefung.dev", "name": "Joe" }], "to": [{ "email": "erin.park@client.org", "name": "Erin Park" }],
+    "cc": [{ "email": "ceo@acme.com", "name": "Joe CEO" }], "bcc": [], "snippet": "", "date": 1794211200, "unread": false, "folders": ["SENT"], "attachments": [], "labels": [],
+    "body": "Thanks Erin, looping in my work address.\n\n> previous message text\n> more quoted text"
+  },
+  {
+    "id": "m14", "threadId": "t-frank", "subject": "Re: t-frank",
+    "from": [{ "email": "ceo@acme.com", "name": "Joe CEO" }], "to": [{ "email": "frank.moss@client.org", "name": "Frank Moss" }],
+    "cc": [], "bcc": [], "snippet": "", "date": 1794308400, "unread": false, "folders": ["SENT"], "attachments": [], "labels": [],
+    "body": "<p>Frank, not this quarter.</p>"
+  }
+]
