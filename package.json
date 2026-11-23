@@ -117,7 +117,7 @@
     "@typescript-eslint/eslint-plugin": "^8.72.2",
     "@typescript-eslint/parser": "^8.72.2",
     "concurrently": "^10.0.7",
-    "eslint": "^10.14.0",
+    "eslint": "^10.15.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "happy-dom": "^21.0.4",
     "pino-pretty": "^13.2.0",
@@ -126,7 +126,7 @@
     "tsup": "^8.5.1",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
-    "vite": "^8.3.5",
+    "vite": "^8.3.8",
     "vitest": "^5.1.0"
   }
 }
