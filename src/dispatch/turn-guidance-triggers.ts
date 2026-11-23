@@ -194,7 +194,9 @@ function hasForeignSubject(text: string, index: number): boolean {
 }
 
 // Words a person quotes: "Dana said \"I'm running late\"" is Dana's status, not the principal's.
-const QUOTED_SPAN = /"[^"\n]*"|“[^”\n]*”/g;
+// Single quotes open only at a word start and close only before a non-word character, so the
+// apostrophe in "I'm" or "Dana's" neither opens nor ends a span: "Dana said, 'I'm running late.'".
+const QUOTED_SPAN = /"[^"\n]*"|“[^”\n]*”|(?<![\p{L}\p{N}_])['‘][^\n]*?['’](?![\p{L}\p{N}_])/gu;
 
 const RUNNING_LATE_PATTERNS: readonly RegExp[] = [
   // "I'm late", "I'll be an hour late", "we're going to be late", "I'm running a little late"

@@ -386,6 +386,13 @@ describe('looksLikeRunningLate', () => {
     expect(looksLikeRunningLate('Sam wrote — stuck in traffic')).toBe(false);
     expect(looksLikeRunningLate("Dana said, 'I'm running late'")).toBe(false);
     expect(looksLikeRunningLate('Dana told me: running late')).toBe(false);
+    // Single-quoted reported speech, straight and curly, with an apostrophe inside the quote.
+    expect(looksLikeRunningLate("Dana said, ‘I'm running late.’")).toBe(false);
+    expect(looksLikeRunningLate('Dana said, ‘I’m running late.’')).toBe(false);
+    expect(looksLikeRunningLate("Dana said, 'I'm running late.'")).toBe(false);
+    expect(looksLikeRunningLate("Sam wrote: 'stuck in traffic'")).toBe(false);
+    expect(looksLikeRunningLate("Dana's flight is delayed. I'm running late")).toBe(true);
+    expect(looksLikeRunningLate("Don't wait, I'm running late")).toBe(true);
     expect(looksLikeRunningLate("She told me she's late. Running late, sorry")).toBe(true);
   });
 
@@ -401,6 +408,8 @@ describe('looksLikeRunningLate', () => {
   it('does not let a multi-word refusal swallow the negation of the next line', () => {
     expect(looksLikeMakeRoom("I do\nnot want to make room")).toBe(false);
     expect(looksLikeMakeRoom('do\nnot. I can make room')).toBe(true);
+    expect(looksLikeMakeRoom('Please do\nnot move my meetings')).toBe(false);
+    expect(looksLikeRunningLate("I do\nnot mean I'm late")).toBe(false);
   });
 
   it('scans long whitespace runs in linear time', () => {
