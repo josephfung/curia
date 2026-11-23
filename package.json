@@ -82,7 +82,7 @@
     "js-yaml": "^5.5.0",
     "layout-base": "^2.0.1",
     "libphonenumber-js": "^1.13.16",
-    "livekit-server-sdk": "^2.19.2",
+    "livekit-server-sdk": "^2.20.0",
     "luxon": "^3.7.2",
     "markdown-it": "^15.0.3",
     "node-html-parser": "^9.0.7",

@@ -114,8 +114,8 @@ importers:
         specifier: ^1.13.16
         version: 1.13.16
       livekit-server-sdk:
-        specifier: ^2.19.2
-        version: 2.19.2
+        specifier: ^2.20.0
+        version: 2.20.0
       luxon:
         specifier: ^3.7.2
         version: 3.7.2
@@ -1566,11 +1566,11 @@ packages:
   '@livekit/mutex@1.1.1':
     resolution: {integrity: sha512-EsshAucklmpuUAfkABPxJNhzj9v2sG7JuzFDL4ML1oJQSV14sqrpTYnsaOudMAw9yOaW53NU3QQTlUQoRs4czw==}
 
-  '@livekit/protocol@1.51.0':
-    resolution: {integrity: sha512-kEDEDaFvIcp5VlYBromdSKMJMEJKfPvXPfEaJPdEz1Qgo84gZAoLF2g58CcMlVYGsjrwE5XYgQxRS5B7KuEj3w==}
-
   '@livekit/protocol@1.52.1':
     resolution: {integrity: sha512-X8DxKlNbzk6Lh+v630+mjdFHSotdAFwIyzxSRSUql2DbTxCnlpa7JsvFGc6Na3mXiex2OFh0iiQtWwOBP0rIYA==}
+
+  '@livekit/protocol@1.53.0':
+    resolution: {integrity: sha512-dM562Q7sEQbJ9ZghjIpcVuRxRApGNwJW/JfXRub+dJT8J1cC2Tep0SyYkDzOawix7+0x969fnjXt0qEZOxkjbQ==}
 
   '@livekit/rtc-ffi-bindings-darwin-arm64@0.13.1':
     resolution: {integrity: sha512-SIbQpLHmY5oq0hiUM9UTmlkPVLAm8TbTjnQlMWMqQLLFgmtIx+ayN2kLII5w0KIC68iK4yOjTUAeFMAJFYY5hg==}
@@ -4261,8 +4261,8 @@ packages:
     peerDependencies:
       '@types/dom-mediacapture-record': ^1
 
-  livekit-server-sdk@2.19.2:
-    resolution: {integrity: sha512-aNb7iZOdMYWjg3X227GO9i/jWsqR6uiUa2le3T0JOaK+FwE3bMx+bEhHVoSioMFL4LQ4xk4ztz1H8TKxIPjq1w==}
+  livekit-server-sdk@2.20.0:
+    resolution: {integrity: sha512-kkzvWp50q8oPGhJp7gpgGSPx2riQAzTZQXOBKz7ze58Be+dzdArneTbXM9ATZ5BdRFFvN+sxGEfGYyXAczLFig==}
     engines: {node: '>=19'}
 
   load-esm@1.0.3:
@@ -7476,11 +7476,11 @@ snapshots:
 
   '@livekit/mutex@1.1.1': {}
 
-  '@livekit/protocol@1.51.0':
+  '@livekit/protocol@1.52.1':
     dependencies:
       '@bufbuild/protobuf': 1.10.1
 
-  '@livekit/protocol@1.52.1':
+  '@livekit/protocol@1.53.0':
     dependencies:
       '@bufbuild/protobuf': 1.10.1
 
@@ -10180,10 +10180,10 @@ snapshots:
       typed-emitter: 2.1.0
       webrtc-adapter: 9.0.6
 
-  livekit-server-sdk@2.19.2:
+  livekit-server-sdk@2.20.0:
     dependencies:
       '@bufbuild/protobuf': 1.10.1
-      '@livekit/protocol': 1.51.0
+      '@livekit/protocol': 1.53.0
       jose: 5.10.0
 
   load-esm@1.0.3:
