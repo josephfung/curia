@@ -84,7 +84,10 @@ and still audited. Deliverability is checked once, in the gateway: an adapter th
 notifications has subscribed, and email is outbound-ready. Email is a queueable channel, and a
 notice published while it is not ready would be queued and reported as a success. The send itself happens in the
 email adapter while the gateway publishes the notice, and the adapter reports a refused or failed
-send back, so `sendNotification` returns false for it. A system notice also creates no contact: the recipient is never
+send back, so `sendNotification` returns false for it. A send the channel queued after a
+transient failure keeps the notice's type on the queue row; if it expires unsent (a flush that
+keeps failing leaves it queued until then), the prune reports it and the gateway audits it as
+`delivery_failed`. A system notice also creates no contact: the recipient is never
 promoted, on the direct path or the queue flush, because the operator has no tier or role
 (ADR-068).
 

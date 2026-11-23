@@ -25,6 +25,16 @@ export interface OutboundQueueRow {
  */
 const SYSTEM_NOTIFICATION_MARKER = '__systemNotification';
 
+/**
+ * A queued system notice's notification type, carried the same way (#2710 review), so a notice
+ * that expires unsent can be audited as one that reached nobody. Stripped by `listPending`. The
+ * expiry DELETEs name it as a literal in their RETURNING clause; keep the two in step.
+ */
+const NOTIFICATION_TYPE_MARKER = '__notificationType';
+
+/** Told the notification types of queued system notices that expired unsent. Must not throw. */
+export type ExpiredNotificationHandler = (notificationTypes: string[]) => void;
+
 export interface OutboundQueueRepoConfig {
   /** Max pending rows per channel. Default 100. */
   maxPerChannel?: number;
@@ -38,6 +48,7 @@ const DEFAULT_TTL_HOURS = 24;
 export class OutboundQueueRepo {
   private readonly maxPerChannel: number;
   private readonly ttlHours: number;
+  private onExpiredNotifications?: ExpiredNotificationHandler;
 
   constructor(
     private readonly pool: Pool,
@@ -47,6 +58,21 @@ export class OutboundQueueRepo {
     this.ttlHours = config.ttlHours ?? DEFAULT_TTL_HOURS;
   }
 
+  /**
+   * Who hears about queued system notices that expired unsent (#2710 review). The gateway sets it,
+   * so such a notice leaves an `outbound.notification_undelivered` row instead of vanishing. A
+   * notice whose flush keeps failing stays queued until it expires, so this covers that too.
+   */
+  setExpiredNotificationHandler(handler: ExpiredNotificationHandler): void {
+    this.onExpiredNotifications = handler;
+  }
+
+  /** Hand expired notification types to the handler, when there are any. */
+  private reportExpired(rows: Array<{ notification_type: string | null }> | undefined): void {
+    const types = (rows ?? []).map((row) => row.notification_type).filter((t): t is string => typeof t === 'string');
+    if (types.length > 0) this.onExpiredNotifications?.(types);
+  }
+
   get maxPendingPerChannel(): number {
     return this.maxPerChannel;
   }
@@ -54,15 +80,19 @@ export class OutboundQueueRepo {
   /** Delete expired rows for a channel (or all channels). Returns deleted count. */
   async deleteExpired(channel?: string): Promise<number> {
     if (channel) {
-      const result = await this.pool.query(
-        `DELETE FROM outbound_queue WHERE channel = $1 AND expires_at < now()`,
+      const result = await this.pool.query<{ notification_type: string | null }>(
+        `DELETE FROM outbound_queue WHERE channel = $1 AND expires_at < now()
+         RETURNING payload->>'__notificationType' AS notification_type`,
         [channel],
       );
+      this.reportExpired(result.rows);
       return result.rowCount ?? 0;
     }
-    const result = await this.pool.query(
-      `DELETE FROM outbound_queue WHERE expires_at < now()`,
+    const result = await this.pool.query<{ notification_type: string | null }>(
+      `DELETE FROM outbound_queue WHERE expires_at < now()
+       RETURNING payload->>'__notificationType' AS notification_type`,
     );
+    this.reportExpired(result.rows);
     return result.rowCount ?? 0;
   }
 
@@ -83,7 +113,7 @@ export class OutboundQueueRepo {
    */
   async enqueue(
     request: OutboundSendRequest,
-    options: { systemNotification?: boolean } = {},
+    options: { systemNotification?: boolean; notificationType?: string } = {},
   ): Promise<{ id: string }> {
     const channel = request.channel;
     const client = await this.pool.connect();
@@ -91,8 +121,9 @@ export class OutboundQueueRepo {
       await client.query('BEGIN');
       // Serializes concurrent enqueue() calls for the same channel (TOCTOU fix).
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [channel]);
-      await client.query(
-        `DELETE FROM outbound_queue WHERE channel = $1 AND expires_at < now()`,
+      const expired = await client.query<{ notification_type: string | null }>(
+        `DELETE FROM outbound_queue WHERE channel = $1 AND expires_at < now()
+         RETURNING payload->>'__notificationType' AS notification_type`,
         [channel],
       );
       const countResult = await client.query<{ count: string }>(
@@ -115,7 +146,11 @@ export class OutboundQueueRepo {
           recipient,
           JSON.stringify(
             options.systemNotification === true
-              ? { ...request, [SYSTEM_NOTIFICATION_MARKER]: true }
+              ? {
+                  ...request,
+                  [SYSTEM_NOTIFICATION_MARKER]: true,
+                  ...(options.notificationType ? { [NOTIFICATION_TYPE_MARKER]: options.notificationType } : {}),
+                }
               : request,
           ),
           expiresAt,
@@ -124,6 +159,8 @@ export class OutboundQueueRepo {
       const id = result.rows[0]?.id;
       if (!id) throw new Error('outbound_queue insert returned no id');
       await client.query('COMMIT');
+      // After the commit: the rows are gone only once it lands.
+      this.reportExpired(expired.rows);
       return { id };
     } catch (err) {
       try {
@@ -159,14 +196,16 @@ export class OutboundQueueRepo {
     );
     return result.rows.map((row) => {
       // Runtime: payload was inserted as JSONB from OutboundSendRequest, possibly with the
-      // system-notification marker. Strip it so a channel client never sees it.
-      const { [SYSTEM_NOTIFICATION_MARKER]: marker, ...payload } =
-        row.payload as unknown as OutboundSendRequest & { [SYSTEM_NOTIFICATION_MARKER]?: boolean };
+      // system-notification markers. Strip them so a channel client never sees them.
+      const payload = { ...(row.payload as unknown as Record<string, unknown>) };
+      const marker = payload[SYSTEM_NOTIFICATION_MARKER];
+      delete payload[SYSTEM_NOTIFICATION_MARKER];
+      delete payload[NOTIFICATION_TYPE_MARKER];
       return {
         id: row.id,
         channel: row.channel,
         recipient: row.recipient,
-        payload: payload as OutboundSendRequest,
+        payload: payload as unknown as OutboundSendRequest,
         systemNotification: marker === true,
         enqueuedAt: row.enqueued_at,
         expiresAt: row.expires_at,

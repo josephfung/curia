@@ -585,7 +585,7 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
       to: CEO_EMAIL,
       subject: 'Action needed — blocked outbound reply',
     }));
-    expect(sendCall[1]).toEqual({ skipNotificationOnBlock: true, isSystemNotification: true });
+    expect(sendCall[1]).toEqual({ skipNotificationOnBlock: true, isSystemNotification: true, notificationType: 'blocked_content' });
 
     await adapter.stop();
   });
@@ -1618,6 +1618,11 @@ describe('EmailAdapter — undelivered notification reporting', () => {
     await handleNotification(notice);
 
     expect(mocks.outboundGateway.reportNotificationQueued).toHaveBeenCalledWith(notice.id);
+    // The type travels with the send, so a queued row that expires can be audited.
+    expect(mocks.outboundGateway.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ isSystemNotification: true, notificationType: 'operator_configured' }),
+    );
     expect(mocks.outboundGateway.reportNotificationUndelivered).not.toHaveBeenCalled();
     await adapter.stop();
   });

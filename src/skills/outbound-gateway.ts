@@ -72,7 +72,7 @@ import {
 import type { OutboundNotificationRequest, OutboundNotificationUndeliveredPayload } from '../bus/events.js';
 import type { NotificationRecipientDeps } from '../notifications/recipients.js';
 import { resolveNotificationRecipient } from '../notifications/recipients.js';
-import { notificationAudience } from '../notifications/audience.js';
+import { NOTIFICATION_AUDIENCES, notificationAudience } from '../notifications/audience.js';
 import { askPreamble, displayName, normalizeCounterparty, type DisclosureAsk } from '../autonomy/disclosure-decisions.js';
 import { markdownToHtml } from '../format/markdown-to-html.js';
 import { bodyEndsWithSignature, emailSignatureHtml, emailSignatureText } from '../channels/email/signature.js';
@@ -1371,6 +1371,8 @@ export class OutboundGateway {
     this.confidencePipeline = config.confidencePipeline;
     this.exportControlService = config.exportControlService;
     this.outboundQueue = config.outboundQueue;
+    // A queued system notice that expires unsent reached nobody: audit it like any other (#2710).
+    this.outboundQueue?.setExpiredNotificationHandler?.((types) => this.auditExpiredNotifications(types));
     this.outboundQueueReadiness = new Map(config.outboundQueueReadiness ?? []);
     this.gating = config.gating ?? 'tier';
     this.bandReview = config.bandReview;
@@ -1475,6 +1477,11 @@ export class OutboundGateway {
       skipNotificationOnBlock?: boolean;
       humanApproved?: boolean;
       isSystemNotification?: boolean;
+      /**
+       * The system notice's type, when this send delivers one (the email adapter's
+       * outbound.notification path). Kept on a queued row so an expiry can be audited (#2710).
+       */
+      notificationType?: OutboundNotificationRequest['notificationType'];
       /** Task event ID for action_log traceability. */
       taskEventId?: string;
       /** Conversation ID for action_log context. */
@@ -2349,6 +2356,7 @@ export class OutboundGateway {
         toSend,
         () => this.dispatchEmail(toSend),
         options?.isSystemNotification === true,
+        options?.notificationType,
       );
       if (result.success && !result.queued) {
         // A system notice is Curia reporting its own trouble, not correspondence (#2710,
@@ -2667,9 +2675,10 @@ export class OutboundGateway {
     request: OutboundSendRequest,
     dispatch: () => Promise<OutboundSendResult>,
     systemNotification = false,
+    notificationType?: OutboundNotificationRequest['notificationType'],
   ): Promise<OutboundSendResult> {
     if (this.isQueueableChannel(request.channel) && !this.isChannelOutboundReady(request.channel)) {
-      return this.enqueueInsteadOfDrop(request, systemNotification);
+      return this.enqueueInsteadOfDrop(request, systemNotification, notificationType);
     }
     const result = await dispatch();
     if (
@@ -2677,7 +2686,7 @@ export class OutboundGateway {
       && result.queueable
       && this.isQueueableChannel(request.channel)
     ) {
-      const queued = await this.enqueueInsteadOfDrop(request, systemNotification);
+      const queued = await this.enqueueInsteadOfDrop(request, systemNotification, notificationType);
       // HTTP channels (SMS) may stay "ready" while the provider is briefly down —
       // schedule a flush retry since no socket reconnect event will fire.
       if (queued.queued && this.isChannelOutboundReady(request.channel)) {
@@ -2709,12 +2718,16 @@ export class OutboundGateway {
   private async enqueueInsteadOfDrop(
     request: OutboundSendRequest,
     systemNotification = false,
+    notificationType?: OutboundNotificationRequest['notificationType'],
   ): Promise<OutboundSendResult> {
     if (!this.outboundQueue) {
       return { success: false, blockedReason: 'Outbound queue not configured' };
     }
     try {
-      const { id } = await this.outboundQueue.enqueue(request, { systemNotification });
+      const { id } = await this.outboundQueue.enqueue(request, {
+        systemNotification,
+        ...(notificationType ? { notificationType } : {}),
+      });
       this.log.info(
         { channel: request.channel, queueId: id },
         'outbound-gateway: channel disconnected — message queued for reconnect flush',
@@ -2957,6 +2970,28 @@ export class OutboundGateway {
         { err, notificationType },
         'outbound-gateway: could not audit an undelivered system notification',
       );
+    }
+  }
+
+  /**
+   * Queued system notices expired unsent (#2710 review): each reached nobody, so it is logged at
+   * error level and audited as `delivery_failed`, like a send the channel failed. A flush that
+   * keeps failing leaves its row queued until it expires, so this is where such a notice ends.
+   * Never throws: the queue calls it from its own cleanup.
+   */
+  private auditExpiredNotifications(types: string[]): void {
+    for (const type of types) {
+      if (!Object.prototype.hasOwnProperty.call(NOTIFICATION_AUDIENCES, type)) {
+        this.log.warn({ notificationType: type }, 'outbound-gateway: a queued notice of an unknown type expired unsent');
+        continue;
+      }
+      const notificationType = type as OutboundNotificationRequest['notificationType'];
+      this.log.error(
+        { notificationType, audience: notificationAudience(notificationType) },
+        'outbound-gateway: a queued system notification expired unsent — auditing the miss',
+      );
+      // auditUndeliveredNotification catches and logs its own failures.
+      void this.auditUndeliveredNotification(notificationType, 'delivery_failed');
     }
   }
 

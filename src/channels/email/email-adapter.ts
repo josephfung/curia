@@ -474,7 +474,11 @@ export class EmailAdapter implements Channel {
             subject: notification.payload.subject,
             body: notification.payload.body,
           },
-          { skipNotificationOnBlock: true, isSystemNotification: true },
+          {
+            skipNotificationOnBlock: true,
+            isSystemNotification: true,
+            notificationType: notification.payload.notificationType,
+          },
         );
         if (result.success && result.queued) {
           // A transient provider failure: the send is queued for a later flush, not delivered.
