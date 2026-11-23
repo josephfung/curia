@@ -7,7 +7,7 @@
 # Pinned-Dependencies Docker finding on this line). Tag kept inline so Dependabot's
 # docker ecosystem (see .github/dependabot.yml) can read the pg16 version and bump
 # the digest within the major. Re-resolve the digest when intentionally moving pg majors.
-FROM pgvector/pgvector:pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f
+FROM pgvector/pgvector:pg16@sha256:484e838076e04939d27d3e176e91c86eea96236126023be8d3059761122e579f
 
 # Acquire::Retries covers a transient Debian mirror hiccup, the apt-side equivalent of
 # the npm registry drop that motivated #1699. Without it a single failed fetch fails the
