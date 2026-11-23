@@ -2369,10 +2369,15 @@ async function main(): Promise<void> {
       // A published confirmation that the adapter could not deliver is corrected here (#2710):
       // otherwise a refused or failed send reads as "sent" forever, and the typo check misses
       // exactly the installs where operator notices never arrive.
-      onNotificationUndelivered: async (notificationType) => {
-        if (notificationType === 'operator_configured') {
-          await markOperatorConfirmationUndelivered({ pool, logger });
+      onNotificationUndelivered: async (notificationType, _reason, recipient) => {
+        if (notificationType !== 'operator_configured') return;
+        // Matched on the address the notice went to, so a late failure for a previous operator
+        // address cannot clear the current one's confirmation.
+        if (!recipient) {
+          logger.warn('operator confirmation: an undelivered report carried no address — leaving the record as it is');
+          return;
         }
+        await markOperatorConfirmationUndelivered({ pool, logger, recipient });
       },
     });
     outboundGateway.start();

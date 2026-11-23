@@ -1545,7 +1545,7 @@ describe('EmailAdapter — undelivered notification reporting', () => {
     }));
 
     expect(mocks.outboundGateway.reportNotificationUndelivered)
-      .toHaveBeenCalledWith('inbox_triage_paused', 'delivery_failed');
+      .toHaveBeenCalledWith('inbox_triage_paused', 'delivery_failed', { recipient: CEO_EMAIL });
     await adapter.stop();
   });
 
@@ -1569,7 +1569,7 @@ describe('EmailAdapter — undelivered notification reporting', () => {
 
     // A refusal is the rule working (#2474), recorded as such so it is not chased as a fault.
     expect(mocks.outboundGateway.reportNotificationUndelivered)
-      .toHaveBeenCalledWith('schedule_suspended', 'delivery_refused');
+      .toHaveBeenCalledWith('schedule_suspended', 'delivery_refused', { recipient: 'operator@example.com' });
     await adapter.stop();
   });
 
@@ -1592,7 +1592,7 @@ describe('EmailAdapter — undelivered notification reporting', () => {
     }));
 
     expect(mocks.outboundGateway.reportNotificationUndelivered)
-      .toHaveBeenCalledWith('schedule_suspended', 'delivery_failed');
+      .toHaveBeenCalledWith('schedule_suspended', 'delivery_failed', { recipient: 'operator@example.com' });
     await adapter.stop();
   });
 

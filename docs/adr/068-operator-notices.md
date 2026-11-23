@@ -138,8 +138,10 @@ Setup step, and a fresh install has no email account until it restarts. So the n
   the send happens later, in the email adapter. So a refused or failed delivery is reported back
   through the gateway's `onNotificationUndelivered` hook, which puts the confirmation back to
   `failed` — otherwise a mistyped address would read as confirmed for good, on exactly the
-  installs where operator notices never arrive. The console says "queued" until a real delivery
-  receipt exists.
+  installs where operator notices never arrive. The hook carries the address the notice went to,
+  and the record is only cleared when it matches: a late failure for the previous operator address
+  must not invalidate a newer confirmation that worked. The console says "queued" until a real
+  delivery receipt exists.
 - The console shows `sent`, `pending` (owed, nothing could send it yet) or `failed`, with the
   time. Setup says "we'll email … once Curia's own email is set up" and never frames an
   undeliverable notice as a mistake in the address, because at step 1 nothing has gone wrong.

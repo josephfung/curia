@@ -69,14 +69,20 @@ export async function readOperatorConfirmationStatus(
  */
 export async function markOperatorConfirmationUndelivered(deps: {
   pool: SettingsPool;
+  /** The address the failed notice went to. Required: without it the record cannot be matched. */
+  recipient: string;
   logger: Pick<Logger, 'error'> & Pick<Logger, 'warn'>;
 }): Promise<void> {
   const [operator, stored] = await Promise.all([
     getSetting(deps.pool, 'operator', deps.logger),
     getSetting(deps.pool, 'operator_confirmation', deps.logger),
   ]);
-  if (!operator || !stored) return;
-  if (stored.email !== operator.email || stored.sentAt === null) return;
+  if (!operator || !stored || stored.sentAt === null) return;
+  // Only the record for the address that failed. A late failure for the previous operator address
+  // must not clear the confirmation of the one that replaced it — that would cost an extra notice
+  // and misreport a delivery that worked.
+  if (deps.recipient.trim().toLowerCase() !== stored.email) return;
+  if (stored.email !== operator.email) return;
   try {
     await setSetting(deps.pool, 'operator_confirmation', { ...stored, sentAt: null }, 'curia', deps.logger);
     deps.logger.warn(

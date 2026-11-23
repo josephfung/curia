@@ -82,7 +82,7 @@ function makeGateway(recipients: {
 }
 
 function makeGatewayWithHook(
-  onNotificationUndelivered: (type: string, reason: string) => Promise<void>,
+  onNotificationUndelivered: (type: string, reason: string, recipient: string) => Promise<void>,
   recipients: { principalEmail?: () => string | undefined; canDeliver?: () => boolean },
 ) {
   const published: Published[] = [];
@@ -217,8 +217,9 @@ describe('OutboundGateway.sendNotification routing', () => {
   it('tells the onNotificationUndelivered hook, so a caller can correct "published" in its own record', async () => {
     const hook = vi.fn(async () => {});
     const { gateway } = makeGatewayWithHook(hook, { principalEmail: () => PRINCIPAL });
-    await gateway.reportNotificationUndelivered('operator_configured', 'delivery_refused');
-    expect(hook).toHaveBeenCalledWith('operator_configured', 'delivery_refused');
+    await gateway.reportNotificationUndelivered('operator_configured', 'delivery_refused', { recipient: OPERATOR });
+    // The address travels to the hook, so a caller can match the failure to its own record.
+    expect(hook).toHaveBeenCalledWith('operator_configured', 'delivery_refused', OPERATOR);
   });
 
   it('a throwing hook does not throw out of the report', async () => {

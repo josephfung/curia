@@ -494,6 +494,7 @@ export class EmailAdapter implements Channel {
           await this.config.outboundGateway.reportNotificationUndelivered(
             notification.payload.notificationType,
             isNotificationDeliveryRefusal(result) ? 'delivery_refused' : 'delivery_failed',
+            { recipient: notification.payload.recipient },
           );
         }
       } catch (err) {
@@ -510,6 +511,7 @@ export class EmailAdapter implements Channel {
           await this.config.outboundGateway.reportNotificationUndelivered(
             notification.payload.notificationType,
             'delivery_failed',
+            { recipient: notification.payload.recipient },
           );
         } catch (reportErr) {
           logger.error({ reportErr }, 'EmailAdapter: could not audit the undelivered notification');

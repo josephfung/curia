@@ -492,6 +492,8 @@ export interface OutboundGatewayConfig {
   onNotificationUndelivered?: (
     notificationType: OutboundNotificationRequest['notificationType'],
     reason: Extract<OutboundNotificationUndeliveredPayload['reason'], 'delivery_refused' | 'delivery_failed'>,
+    /** The address the notice was sent to, so a caller can tell which record it is about. */
+    recipient: string,
   ) => Promise<void> | void;
 }
 
@@ -2955,16 +2957,24 @@ export class OutboundGateway {
   async reportNotificationUndelivered(
     notificationType: OutboundNotificationRequest['notificationType'],
     reason: Extract<OutboundNotificationUndeliveredPayload['reason'], 'delivery_refused' | 'delivery_failed'>,
-    parentEventId?: string,
+    options: {
+      /**
+       * The address the notice was addressed to (the payload's resolved `recipient`). A caller
+       * that recorded state for that address needs it: a late failure for a previous address must
+       * not invalidate a newer record (#2710).
+       */
+      recipient?: string;
+      parentEventId?: string;
+    } = {},
   ): Promise<void> {
     this.log.error(
       { notificationType, reason, audience: notificationAudience(notificationType) },
       'outbound-gateway: system notification was not delivered — auditing the miss',
     );
-    await this.auditUndeliveredNotification(notificationType, reason, parentEventId);
+    await this.auditUndeliveredNotification(notificationType, reason, options.parentEventId);
     if (!this.onNotificationUndelivered) return;
     try {
-      await this.onNotificationUndelivered(notificationType, reason);
+      await this.onNotificationUndelivered(notificationType, reason, options.recipient ?? '');
     } catch (err) {
       // The caller's correction of its own record is best-effort; the audit row is the record.
       this.log.error(

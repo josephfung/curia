@@ -176,7 +176,7 @@ describe('sendPendingOperatorConfirmation', () => {
 describe('markOperatorConfirmationUndelivered', () => {
   it('puts a "sent" confirmation back to failed, so the console stops claiming it arrived', async () => {
     const h = makeHarness({ operator: OPERATOR, confirmation: confirmation() });
-    await markOperatorConfirmationUndelivered({ pool: h.deps.pool, logger: h.deps.logger });
+    await markOperatorConfirmationUndelivered({ pool: h.deps.pool, logger: h.deps.logger, recipient: OPERATOR.email });
 
     expect(h.stored()).toMatchObject({ email: OPERATOR.email, sentAt: null, attemptedAt: NOW });
     await expect(sendPendingOperatorConfirmation(h.deps)).resolves.toMatchObject({ state: 'sent' });
@@ -185,14 +185,29 @@ describe('markOperatorConfirmationUndelivered', () => {
 
   it('leaves a failure record alone when nothing says it was sent', async () => {
     const h = makeHarness({ operator: OPERATOR, confirmation: confirmation({ sentAt: null }) });
-    await markOperatorConfirmationUndelivered({ pool: h.deps.pool, logger: h.deps.logger });
+    await markOperatorConfirmationUndelivered({ pool: h.deps.pool, logger: h.deps.logger, recipient: OPERATOR.email });
     expect(h.stored()).toMatchObject({ sentAt: null, attemptedAt: NOW });
   });
 
   it('does not touch the record of an address that is no longer the operator', async () => {
     // A late failure report for the old EA must not invalidate the new one's confirmation.
     const h = makeHarness({ operator: OPERATOR, confirmation: confirmation({ email: OTHER.email }) });
-    await markOperatorConfirmationUndelivered({ pool: h.deps.pool, logger: h.deps.logger });
+    await markOperatorConfirmationUndelivered({ pool: h.deps.pool, logger: h.deps.logger, recipient: OTHER.email });
     expect(h.stored()).toMatchObject({ email: OTHER.email, sentAt: NOW });
+  });
+
+  it('does not clear a newer confirmation when the failure is for the address it replaced', async () => {
+    // A was confirmed, then the operator changed to B and B's confirmation was sent; A's delivery
+    // failure arrives late. B worked, so B's record must stand (#2710 review).
+    const OTHER_OPERATOR: OperatorSetting = { name: 'Sam', email: 'new@example.com' };
+    const h = makeHarness({ operator: OTHER_OPERATOR, confirmation: confirmation({ email: OTHER_OPERATOR.email }) });
+    await markOperatorConfirmationUndelivered({ pool: h.deps.pool, logger: h.deps.logger, recipient: OPERATOR.email });
+    expect(h.stored()).toMatchObject({ email: OTHER_OPERATOR.email, sentAt: NOW });
+  });
+
+  it('matches the address case-insensitively, as the setting is stored lower-cased', async () => {
+    const h = makeHarness({ operator: OPERATOR, confirmation: confirmation() });
+    await markOperatorConfirmationUndelivered({ pool: h.deps.pool, logger: h.deps.logger, recipient: 'Sam@Example.com' });
+    expect(h.stored()).toMatchObject({ sentAt: null });
   });
 });
