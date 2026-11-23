@@ -116,7 +116,9 @@ toolchain on the host — Docker (with the Compose plugin) and `curl` are the on
   source-free and unified with dev/prod.
 
 Both images are built for `linux/amd64` + `linux/arm64` and signed with **cosign**
-(keyless, via GitHub OIDC — no long-lived signing key). Tagging:
+(keyless, via GitHub OIDC — no long-lived signing key). Each platform builds on a
+runner of its own architecture and is pushed untagged; the tags are written once every
+platform of the image is in, so a tag never names an image missing one. Tagging:
 
 - **Push to `main`** → `:edge` on both images (for dogfood use).
 - **Release published** → app gets `vX.Y.Z`, `vX.Y`, and `latest`; the DB image gets

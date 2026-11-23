@@ -214,15 +214,26 @@ jobs:
             echo "::notice::Publish target: main (:edge on every image)."
           fi
 
-  build:
+  # One leg per image and architecture, each on a runner of that architecture, pushing its
+  # platform untagged by digest. The arm64 legs used to run under QEMU on an amd64 runner
+  # inside one multi-platform build: about 13 of the curia image's 14 minutes, on every
+  # merge to main. `build` below joins each image's legs under its tags and signs it, so
+  # nothing is tagged until every platform of that image is in.
+  #
+  # The image list and its tags are the same as `build`'s matrix (keyed by `image` here, so
+  # each entry extends that image's amd64 and arm64 legs);
+  # tests/unit/ci/docker-publish-native-arch.test.ts fails if the two drift. The tags are
+  # needed here only for metadata-action's labels, which go into each platform's image
+  # config (org.opencontainers.image.version among them).
+  build-arch:
+    name: build-arch (${{ matrix.image }}, ${{ matrix.arch }})
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     # Hard wall-clock bound. The retry layers added in #1699 compose multiplicatively —
     # pnpm's own fetch retries per request, inside up to 3 command-level attempts, across
-    # 3 install sites, on a QEMU-emulated arm64 leg. During a sustained registry outage
-    # that could otherwise grind for hours against the 6h default before failing. A normal
-    # build is ~10min (see the concurrency note above), so this is generous headroom while
-    # still failing in a bounded time instead of burning a runner all afternoon.
+    # 3 install sites. During a sustained registry outage that could otherwise grind for
+    # hours against the 6h default before failing. A normal leg is a few minutes, so this
+    # is generous headroom while still failing in a bounded time.
     #
     # #1864 adds a third layer, around the whole build, capped at 3 attempts and only
     # when the log matches a registry/network signature. An outdated lockfile fails the
@@ -232,9 +243,209 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read    # actions/checkout
+      packages: write   # push the platform image to GHCR, untagged
+      actions: write    # GHA layer cache (type=gha) written by the build step
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [curia, curia-browser, curia-postgres]
+        arch: [amd64, arm64]
+        include:
+          - name: curia
+            image: curia
+            dockerfile: Dockerfile
+            # Carries app semver (as does curia-browser), so a tag build must
+            # produce a version for it (asserted after `meta`).
+            expects_semver: true
+            # App tags: semver on any release build (published or re-published),
+            # `latest` only on a real release, `edge` only on a main build.
+            #
+            # `value=` pins the semver source to the resolved target. Without it
+            # metadata-action falls back to its default `context: workflow` and
+            # derives the version from `github.ref`, which on a dispatch is a
+            # branch and yields no semver tag at all.
+            #
+            # `latest` deliberately stays keyed to the event rather than to the
+            # target: like `edge` it is a floating "newest" pointer, and a
+            # re-publish names an arbitrary older tag, so only an actual release
+            # may advance it.
+            tags: |
+              type=semver,pattern=v{{version}},value=${{ needs.resolve.outputs.tag }}
+              type=semver,pattern=v{{major}}.{{minor}},value=${{ needs.resolve.outputs.tag }}
+              type=raw,value=latest,enable=${{ github.event_name == 'release' }}
+              type=raw,value=edge,enable=${{ needs.resolve.outputs.tag == '' && github.ref == 'refs/heads/main' }}
+          # The browser container's image (#2541). Tagged exactly like curia, so a
+          # deployment pulling one tag gets the Chromium that matches curia's Patchright
+          # driver: both are built from this run's commit.
+          - name: curia-browser
+            image: curia-browser
+            dockerfile: docker/browser.Dockerfile
+            expects_semver: true
+            tags: |
+              type=semver,pattern=v{{version}},value=${{ needs.resolve.outputs.tag }}
+              type=semver,pattern=v{{major}}.{{minor}},value=${{ needs.resolve.outputs.tag }}
+              type=raw,value=latest,enable=${{ github.event_name == 'release' }}
+              type=raw,value=edge,enable=${{ needs.resolve.outputs.tag == '' && github.ref == 'refs/heads/main' }}
+          - name: curia-postgres
+            image: curia-postgres
+            dockerfile: docker/postgres.Dockerfile
+            expects_semver: false
+            # DB is versioned by pg major, not app semver — so every tag it has
+            # is a floating pointer, and none of them may be moved by a
+            # re-publish of an old app release. That leaves a dispatched
+            # re-publish with nothing to write for this image; the steps below
+            # skip the leg rather than failing on an empty tag list.
+            tags: |
+              type=raw,value=pg16,enable=${{ github.event_name == 'release' }}
+              type=raw,value=latest,enable=${{ github.event_name == 'release' }}
+              type=raw,value=edge,enable=${{ needs.resolve.outputs.tag == '' && github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # On a manual re-publish, check out the requested tag so the built
+          # image really is that release's source. For release/push triggers the
+          # resolved tag is the release tag or empty, so this falls back to the
+          # event ref (the release tag or the pushed branch).
+          ref: ${{ needs.resolve.outputs.tag || github.ref }}
+
+      # metadata-action stamps `org.opencontainers.image.revision` from
+      # `github.sha`, which on a dispatch is the launch branch's HEAD — not the
+      # tag just checked out. A re-published v0.40.0 image would therefore claim
+      # main's revision, and curia-deploy's deploy-time revision assert
+      # (curia-deploy#213 / #215) would wave that old image straight through.
+      # Read the commit that was actually checked out instead.
+      - name: Resolve the built commit
+        id: src
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # A manual re-publish checks out an older tag, whose source may predate an
+      # image's Dockerfile (curia-browser first shipped in #2541). Building it would
+      # fail the run although the other images publish, so that leg is skipped: with
+      # `meta` skipped it has no tags, and the build and sign steps (guarded on tags)
+      # skip with it.
+      - name: Check the image's Dockerfile exists in this source
+        id: buildable
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          if [ -f "$DOCKERFILE" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${DOCKERFILE} does not exist in the checked-out source; skipping ${IMAGE} (the release predates it)."
+          fi
+
+      # Every pull from Docker Hub below is authenticated: the BuildKit image
+      # setup-buildx starts, and the Dockerfiles' base images (node, pgvector).
+      # Anonymous pulls are rate-limited per IP, and GitHub's hosted runners
+      # share IPs, so an unlucky runner failed the publish with
+      # "429 Too Many Requests" on a merge that changed no image input (#2095).
+      # Logged in, the pulls count against the account instead.
+      #
+      # This must come before setup-buildx, which pulls at setup time. It has no `if:` and no `continue-on-error` on purpose: a missing or
+      # revoked token fails here, naming the cause, rather than falling back to
+      # anonymous pulls that fail later as a rate limit. The token is a Docker Hub
+      # personal access token with Public Repo Read-only scope; it cannot push.
+      - name: Log in to Docker Hub
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The same inputs as `build`'s meta step (pinned equal by the test above). Only the
+      # labels are used here; an empty tag list means this image publishes nothing on this
+      # trigger, and the leg skips like `build` does.
+      - name: Derive tags & labels
+        id: meta
+        if: steps.buildable.outputs.present == 'true'
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          tags: ${{ matrix.tags }}
+          # `latest` comes from the `type=raw` line in `matrix.tags` and NOWHERE
+          # else. metadata-action's default is `latest=auto`, under which
+          # `procSemver` sets latest for *any non-prerelease semver it resolves*
+          # — it does not care that our raw entry said `enable=false`, and it
+          # does not require a tag ref.
+          #
+          # That default was harmless until #1715 gave the semver entries an
+          # explicit `value=`. Before that, a dispatch resolved no version at
+          # all (branch ref, no value), so auto-latest had nothing to attach to.
+          # Afterwards a re-publish of v0.41.0 resolved a version, auto-latest
+          # fired, and `latest` moved **backwards** onto the old release —
+          # the exact failure #1715 and #1718 were about, reintroduced through
+          # an input neither of them touched. Caught by the live dispatch in
+          # #1718's AC #5; expression-level tests could not see it, because the
+          # tags block they model was correct and the default is not in it.
+          #
+          # Keep this pinned off, so `latest` is only ever written by a rule
+          # visible in this file.
+          flavor: latest=false
+          # Overrides metadata-action's `github.sha` default — see the step above.
+          labels: |
+            org.opencontainers.image.revision=${{ steps.src.outputs.sha }}
+
+      - name: Build and push this platform by digest
+        id: build
+        if: steps.meta.outputs.tags != ''
+        env:
+          PUSH_BY_DIGEST: "true"
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          PLATFORMS: linux/${{ matrix.arch }}
+          LABELS: ${{ steps.meta.outputs.labels }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          # One cache per image and architecture: legs run at once and would otherwise
+          # overwrite each other's layers.
+          CACHE_SCOPE: ${{ matrix.image }}-${{ matrix.arch }}
+          BUILDER_ID: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+        run: bash docker/publish-image.sh
+
+      # A file named after the architecture, holding the digest, so `build` can download
+      # every leg of an image into one directory.
+      - name: Record the digest for assembly
+        if: steps.meta.outputs.tags != ''
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          printf '%s\n' "$DIGEST" > "$RUNNER_TEMP/digests/$ARCH"
+
+      - name: Upload the digest
+        if: steps.meta.outputs.tags != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-${{ matrix.image }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    # Joins each image's per-architecture legs (build-arch) under its tags, then signs it.
+    # `!cancelled()` so one failed leg does not skip the other images: each image's leg
+    # here checks that all of its own platforms arrived, and fails (and so alerts, see
+    # notify-failure) when one did not.
+    needs: [resolve, build-arch]
+    if: ${{ !cancelled() && needs.resolve.result == 'success' }}
+    runs-on: ubuntu-latest
+    # Joining and signing take a minute or two. The wall is the old one-job build's, kept as
+    # a backstop for the retrying steps (assembly and signing both retry).
+    timeout-minutes: 60
+    permissions:
+      contents: read    # actions/checkout
       packages: write   # push + sign images in GHCR
       id-token: write   # keyless cosign via GitHub OIDC
-      actions: write    # GHA layer cache (type=gha) written by the build step
     strategy:
       fail-fast: false
       matrix:
@@ -324,15 +535,14 @@ jobs:
             echo "::notice::${DOCKERFILE} does not exist in the checked-out source; skipping ${IMAGE} (the release predates it)."
           fi
 
-      # Every pull from Docker Hub below is authenticated: QEMU's binfmt image, the
-      # BuildKit image setup-buildx starts, and both Dockerfiles' base images
-      # (node, pgvector). Anonymous pulls are rate-limited per IP, and GitHub's
-      # hosted runners share IPs, so an unlucky runner failed the publish with
+      # Every pull from Docker Hub below is authenticated: the BuildKit image
+      # setup-buildx starts, and the Dockerfiles' base images (node, pgvector).
+      # Anonymous pulls are rate-limited per IP, and GitHub's hosted runners
+      # share IPs, so an unlucky runner failed the publish with
       # "429 Too Many Requests" on a merge that changed no image input (#2095).
       # Logged in, the pulls count against the account instead.
       #
-      # This must come before setup-qemu and setup-buildx, which pull at setup
-      # time. It has no `if:` and no `continue-on-error` on purpose: a missing or
+      # This must come before setup-buildx, which pulls at setup time. It has no `if:` and no `continue-on-error` on purpose: a missing or
       # revoked token fails here, naming the cause, rather than falling back to
       # anonymous pulls that fail later as a rate limit. The token is a Docker Hub
       # personal access token with Public Repo Read-only scope; it cannot push.
@@ -343,7 +553,6 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
@@ -409,27 +618,36 @@ jobs:
           IMAGE: ${{ matrix.image }}
         run: echo "::notice::No tags apply to ${IMAGE} on this trigger; skipping its build and push."
 
-      # `docker/build-push-action` cannot be retried selectively: a `uses:` step
-      # does not expose its log, and retrying every failure would rebuild an
-      # outdated lockfile until `timeout-minutes` (#1864). publish-image.sh runs
-      # the same build (SBOM attestation, provenance mode=max, multi-arch push)
-      # through buildx-retry.sh, which retries only a registry/network signature,
-      # and writes `digest` for the cosign step below.
-      #
-      # Tag, label, and dockerfile values cross this boundary through the
-      # environment, not through the shell text — same rule as `resolve` above.
-      - name: Build and push
+      # Every platform leg of this image (build-arch) left its digest as an artifact. A leg
+      # that failed or was skipped left none, and assemble-image.sh refuses to tag the image
+      # without it, so a tag never points at an image missing a platform.
+      # By exact name, one per platform: a pattern such as `digest-curia-*` would also
+      # match curia-browser's and curia-postgres's digests and assemble the wrong image.
+      - name: Download this image's amd64 digest
+        if: steps.meta.outputs.tags != ''
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: digest-${{ matrix.image }}-amd64
+          path: ${{ runner.temp }}/digests
+
+      - name: Download this image's arm64 digest
+        if: steps.meta.outputs.tags != ''
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: digest-${{ matrix.image }}-arm64
+          path: ${{ runner.temp }}/digests
+
+      # The only step that writes a tag. Values cross into the shell through the
+      # environment, as in the build step (#1864). Writes `digest` (the multi-arch
+      # index) for the cosign step.
+      - name: Assemble and push the multi-arch image
         id: build
         if: steps.meta.outputs.tags != ''
         env:
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
           TAGS: ${{ steps.meta.outputs.tags }}
-          LABELS: ${{ steps.meta.outputs.labels }}
-          DOCKERFILE: ${{ matrix.dockerfile }}
-          # Separate scopes: the images share a branch and would otherwise
-          # overwrite each other's layer cache.
-          CACHE_SCOPE: ${{ matrix.name }}
-          BUILDER_ID: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
-        run: bash docker/publish-image.sh
+          DIGESTS_DIR: ${{ runner.temp }}/digests
+        run: bash docker/assemble-image.sh
 
       - name: Install cosign
         if: steps.meta.outputs.tags != ''

@@ -409,6 +409,49 @@ PATH="$d/bin:$PATH" GITHUB_OUTPUT="$out_file" BUILDX_RETRY_DELAY=0 "$PUBLISH" >/
 check_eq "missing TAGS exits 2" "2" "$?"
 if [ ! -f "$d/count" ]; then ok "  ...before docker runs"; else bad "  ...but docker ran"; fi
 
+# 17. By digest: one platform, pushed untagged to IMAGE, digest written for assembly.
+d="$tmpdir/p7"; install_docker_stub "$d" 0 ""
+out_file="$d/github_output"
+PATH="$d/bin:$PATH" \
+  PUSH_BY_DIGEST=true \
+  IMAGE=ghcr.io/example/curia \
+  PLATFORMS=linux/arm64 \
+  LABELS='org.opencontainers.image.revision=abc' \
+  DOCKERFILE=Dockerfile \
+  CACHE_SCOPE=curia-arm64 \
+  GITHUB_OUTPUT="$out_file" \
+  BUILDX_RETRY_DELAY=0 \
+  "$PUBLISH" >/dev/null 2>&1
+check_eq "by-digest build exits 0" "0" "$?"
+check_eq "  ...writes the digest output" "digest=$DIGEST" "$(cat "$out_file")"
+for needle in \
+  "type=image,name=ghcr.io/example/curia,push-by-digest=true,name-canonical=true,push=true" \
+  "linux/arm64" \
+  "type=sbom" \
+  "type=gha,scope=curia-arm64" \
+  "org.opencontainers.image.revision=abc"
+do
+  if has_line "$d/args" "$needle"; then ok "  argv has $needle"; else bad "  argv missing $needle"; fi
+done
+if has_line "$d/args" "--tag" || has_line "$d/args" "--push"; then
+  bad "  ...but it tagged or pushed by tag"
+else
+  ok "  ...with no --tag and no --push"
+fi
+
+# 18. By digest needs IMAGE, and refuses TAGS (a tag pushed here would name one platform).
+d="$tmpdir/p8"; install_docker_stub "$d" 0 ""
+PATH="$d/bin:$PATH" PUSH_BY_DIGEST=true DOCKERFILE=Dockerfile CACHE_SCOPE=curia-amd64 \
+  GITHUB_OUTPUT="$d/github_output" BUILDX_RETRY_DELAY=0 "$PUBLISH" >/dev/null 2>&1
+check_eq "by-digest without IMAGE exits 2" "2" "$?"
+PATH="$d/bin:$PATH" PUSH_BY_DIGEST=true IMAGE=ghcr.io/example/curia TAGS='ghcr.io/example/curia:edge' \
+  DOCKERFILE=Dockerfile CACHE_SCOPE=curia-amd64 GITHUB_OUTPUT="$d/github_output" BUILDX_RETRY_DELAY=0 "$PUBLISH" >/dev/null 2>&1
+check_eq "by-digest with TAGS exits 2" "2" "$?"
+PATH="$d/bin:$PATH" PUSH_BY_DIGEST=yes IMAGE=ghcr.io/example/curia \
+  DOCKERFILE=Dockerfile CACHE_SCOPE=curia-amd64 GITHUB_OUTPUT="$d/github_output" BUILDX_RETRY_DELAY=0 "$PUBLISH" >/dev/null 2>&1
+check_eq "PUSH_BY_DIGEST other than true/false exits 2" "2" "$?"
+if [ ! -f "$d/count" ]; then ok "  ...all before docker runs"; else bad "  ...but docker ran"; fi
+
 echo
 echo "buildx-retry: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1
