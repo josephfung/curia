@@ -39,10 +39,17 @@ Defaults live in `limits.ts`; design background is `docs/wip/2026-11-23-deep-div
   that reports `truncated`) skips the rest of that step and marks `coverage.truncated`; later
   steps still run if budget remains (so the voice bodies get their reserved requests). The only
   overshoot is the retries inside the final page.
-- **Rate limiting:** `listAllMessages` doubles its page delay after a 429 itself. A Nylas error
-  with status 429 (retries exhausted) or 0 (a delay that would outlast a call budget), from any
-  step, ends the whole scan as truncated with a warning — what was read is kept. Messages from
-  the listing call that threw are lost (the client returns nothing from a failed call).
+- **Rate limiting is scoped to a step.** The steps are: each mailbox's calendar, each mailbox's
+  Sent listing, the voice bodies, each mailbox's Inbox listing. `listAllMessages` retries 429s
+  and doubles its page delay itself. The calendar client (Nylas SDK) does not retry, so each
+  calendar call gets one retry after a pause that starts at 2 × `PAGE_DELAY_MS` and doubles with
+  every calendar 429 in the scan (each counted in `rateLimited` and as a request). A Nylas error
+  with status 429 (retries exhausted) or 0 (a delay that would outlast a call budget) ends only
+  the step it happened in: the scan is marked truncated with a warning, what was read is kept,
+  and the next step runs. Messages from the listing call that threw are lost (the client
+  returns nothing from a failed call); events from earlier calendar windows are kept.
+- **Deduplication:** a message listed twice (self-sent mail carries both INBOX and SENT) is kept
+  and counted once.
 - **Any other error propagates** (auth 401/403, a bad grant): the run fails.
 - **Principal addresses:** the scanned mailboxes' non-empty `address` values, plus every sender
   of a `SENT`-folder message (send-as aliases), lower-cased.
