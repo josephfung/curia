@@ -54,7 +54,7 @@ function makeHarness(opts: {
   txFail?: (sql: string) => Error | undefined;
   persistentStore?: boolean;
   /** Whether a principal mailbox is connected (for the deep dive). Defaults false. */
-  hasMailbox?: boolean;
+  hasMailbox?: boolean | 'unwired';
 } = {}) {
   const setup: SetupRow = {
     completed_at: '2026-11-20T12:00:00.000Z',
@@ -175,7 +175,7 @@ function makeHarness(opts: {
     loadedAtBoot,
     persistentStore: opts.persistentStore ?? true,
     logger,
-    hasPrincipalMailbox: async () => opts.hasMailbox ?? false,
+    ...(opts.hasMailbox === 'unwired' ? {} : { hasPrincipalMailbox: async () => opts.hasMailbox === true }),
     deepDive: { startOnce },
   };
   return { service: new OnboardingService(deps), startOnce, tasks, taskRepo, registry, scheduler, configStore, mintInvitation, stopInvitation, scheduleProcessExit, txQueries, taskQueryParams };
@@ -257,6 +257,12 @@ describe('OnboardingService.start', () => {
     h.startOnce.mockRejectedValueOnce(new Error('store down'));
     const result = await h.service.start({ actor: 'operator', confirmWorkingPrincipal: true });
     expect(result.ok).toBe(true);
+    expect(h.startOnce).toHaveBeenCalledTimes(1);
+  });
+
+  it('without a mailbox check, start leaves the decision to startOnce', async () => {
+    const h = makeHarness({ enabled: ALL_REQUIRED_ENABLED, hasMailbox: 'unwired' });
+    expect((await h.service.start({ actor: 'operator', confirmWorkingPrincipal: true })).ok).toBe(true);
     expect(h.startOnce).toHaveBeenCalledTimes(1);
   });
 

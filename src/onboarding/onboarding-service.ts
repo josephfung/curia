@@ -213,10 +213,13 @@ export interface OnboardingServiceDeps {
   operatorNotifier?: OperatorNotifier;
   /**
    * The deep dive (#2362): Start begins it when a principal mailbox is already connected (one
-   * connected in Setup, before onboarding). Absent, or no `hasPrincipalMailbox`: nothing starts.
+   * connected in Setup, before onboarding). Absent: nothing starts.
    */
   deepDive?: Pick<DeepDiveService, 'startOnce'>;
-  /** Whether any principal mailbox is connected. */
+  /**
+   * Whether any principal mailbox is connected: skips the startOnce call when none. Absent:
+   * startOnce is always called and answers `no_mailbox` itself.
+   */
   hasPrincipalMailbox?: () => Promise<boolean>;
   /** Defaults to the pairing-invitations mint on `pool`. */
   mintInvitation?: (origin: string) => Promise<Pick<MintedInvitation, 'id' | 'pairUrl' | 'expiresAt'>>;
@@ -419,9 +422,9 @@ export class OnboardingService {
    */
   private async startDeepDive(taskId: string): Promise<void> {
     const { deepDive, hasPrincipalMailbox, logger } = this.deps;
-    if (!deepDive || !hasPrincipalMailbox) return;
+    if (!deepDive) return;
     try {
-      if (!(await hasPrincipalMailbox())) return;
+      if (hasPrincipalMailbox && !(await hasPrincipalMailbox())) return;
       const started = await deepDive.startOnce();
       logger.info({ taskId, ...started }, 'onboarding: deep dive start on Start');
     } catch (err) {

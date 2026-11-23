@@ -168,12 +168,19 @@ describe('runDeepDive', () => {
   });
 
   it('a failure of a superseded run leaves the newer run alone', async () => {
-    const t = setup({ openTask: true, scan: async () => { throw new Error('late'); } });
-    const newer = { ...running, startedAt: '2026-11-23T11:30:00.000Z' };
-    await t.seed(newer);
+    const t = setup({ openTask: true });
+    await t.seed();
+    const newer: DeepDiveState = { ...running, startedAt: '2026-11-23T11:30:00.000Z', updatedAt: '2026-11-23T11:30:00.000Z' };
+    // A newer forced run takes over mid-scan, then this run's scan fails late.
+    t.scan.mockImplementation(async () => {
+      await writeDeepDiveState(t.configStore, newer);
+      throw new Error('late');
+    });
     await runDeepDive(t.deps, running);
-    expect(await t.read()).toMatchObject({ status: 'scanning', startedAt: newer.startedAt, error: null });
+    expect(t.scan).toHaveBeenCalledTimes(1);
+    expect(await t.read()).toEqual(newer);
     expect(t.notifyOperator).not.toHaveBeenCalled();
+    expect(t.taskRepo.updateTask).not.toHaveBeenCalled();
   });
 
   it('stops without writing when the run was superseded during the scan', async () => {
