@@ -168,6 +168,10 @@ EXAMPLE_EOF
 
 _tmp_env=$(mktemp)
 
+# The LiveKit assertions below read what write_env puts in .env; a value the caller's
+# shell sets would suppress the write.
+unset COMPOSE_PROFILES LIVEKIT_KEYS LIVEKIT_COMMAND
+
 # Override script globals for test isolation. Under vault-only (#911), write_env only
 # templates the four bootstrap values into .env; ANTHROPIC_API_KEY / API_TOKEN /
 # WEB_APP_BOOTSTRAP_SECRET are seeded into the encrypted vault and must NOT appear here.
@@ -195,6 +199,18 @@ assert_true  "API_TOKEN placeholder left untouched"        "$_tmp_env" "API_TOKE
 assert_true  "WEB_APP_BOOTSTRAP placeholder left untouched" "$_tmp_env" "WEB_APP_BOOTSTRAP_SECRET=replace-with-a-long-random-secret"
 assert_true  "optional comment line preserved"            "$_tmp_env" "# NYLAS_API_KEY"
 assert_true  "non-substituted var preserved"              "$_tmp_env" "LOG_LEVEL=info"
+
+# LiveKit is on by default for source installs (#2357): voice profile, generated keys,
+# loopback command.
+assert_true  "COMPOSE_PROFILES=voice written"          "$_tmp_env" "COMPOSE_PROFILES=voice"
+assert_true  "LIVEKIT_KEYS generated"                  "$_tmp_env" 'LIVEKIT_KEYS=API'
+assert_true  "LIVEKIT_COMMAND is the local command"    "$_tmp_env" "LIVEKIT_COMMAND=$(livekit_command_for local)"
+
+# A preserved key (full reset) is kept, not regenerated.
+PRESERVED_LIVEKIT_KEYS="APIkeep: keepsecret"
+write_env
+assert_true  "preserved LIVEKIT_KEYS kept"             "$_tmp_env" 'LIVEKIT_KEYS=APIkeep: keepsecret'
+PRESERVED_LIVEKIT_KEYS=""
 
 rm -f "$_tmp_example" "$_tmp_env"
 # Reset ENV_FILE/ENV_EXAMPLE to real paths after test
@@ -266,6 +282,50 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+# Test option 3 (confirm) carries LIVEKIT_KEYS over into PRESERVED_LIVEKIT_KEYS
+printf 'DB_USER=curia\nLIVEKIT_KEYS="APIkeep: keepsecret"\n' > "$_menu_env"
+_opt3k_out=$(
+    ENV_FILE="$_menu_env"
+    PRESERVED_LIVEKIT_KEYS=""
+    handle_existing_env < <(printf "3\nyes\n") >/dev/null 2>&1
+    printf '%s' "$PRESERVED_LIVEKIT_KEYS"
+) || true
+if [[ "$_opt3k_out" == "APIkeep: keepsecret" ]]; then
+    echo "  ✓ full reset keeps LIVEKIT_KEYS"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ full reset should keep LIVEKIT_KEYS (got '${_opt3k_out}')"
+    FAIL=$((FAIL + 1))
+fi
+
+# build_livekit_seed_env: LiveKit seed args for full and resume alike, nothing else
+unset COMPOSE_PROFILES LIVEKIT_KEYS LIVEKIT_COMMAND
+_lk_seed_env=$(mktemp)
+printf 'COMPOSE_PROFILES=voice\nLIVEKIT_KEYS="APIres: ressecret"\nLIVEKIT_COMMAND=--config /etc/livekit.local.yaml\n' > "$_lk_seed_env"
+build_livekit_seed_env "$_lk_seed_env"
+_lk_joined=" ${LIVEKIT_SEED_ENV[*]} "
+if [[ "$_lk_joined" == *" SEED_LIVEKIT_URL=ws://localhost:7880 "* \
+   && "$_lk_joined" == *" SEED_LIVEKIT_API_KEY=APIres "* \
+   && "$_lk_joined" == *" SEED_LIVEKIT_API_SECRET=ressecret "* \
+   && "$_lk_joined" != *ANTHROPIC_API_KEY* && "$_lk_joined" != *API_TOKEN=* \
+   && "$_lk_joined" != *WEB_APP_BOOTSTRAP_SECRET* ]]; then
+    echo "  ✓ build_livekit_seed_env yields only SEED_LIVEKIT_* from .env"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ build_livekit_seed_env should yield only SEED_LIVEKIT_* entries"
+    FAIL=$((FAIL + 1))
+fi
+printf 'DB_USER=curia\n' > "$_lk_seed_env"
+build_livekit_seed_env "$_lk_seed_env"
+if [[ ${#LIVEKIT_SEED_ENV[@]} -eq 0 ]]; then
+    echo "  ✓ build_livekit_seed_env yields nothing for an old .env"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ old .env without LiveKit values should yield no seed args"
+    FAIL=$((FAIL + 1))
+fi
+rm -f "$_lk_seed_env"
+
 # Test SETUP_COMPLETE marker: hint shown when absent, hidden when present
 _hint_env=$(mktemp)
 echo "DB_USER=curia" > "$_hint_env"  # no SETUP_COMPLETE
@@ -317,13 +377,15 @@ _assert_output() {
 }
 
 _assert_output "contains 'Curia is running'"                "Curia is running."
-_assert_output "contains login URL"                         "http://localhost:3000"
+_assert_output "contains the Setup page URL"                 "http://localhost:3000/setup"
 _assert_output "contains the full secret"                   "$_test_secret"
 _assert_output "contains 'Bootstrap secret' label"          "Bootstrap secret"
 _assert_output "contains password manager instruction"      "save this to a password manager"
 _assert_output "contains login instruction"                 "Enter it on the login page"
 _assert_output "contains box top-left corner"               "╔"
 _assert_output "contains box bottom-right corner"           "╝"
+_summary_output=$(print_summary "" "https://c.example.com/")
+_assert_output "given base URL: its Setup page"             "https://c.example.com/setup"
 
 # --- setup-common: secret generator tests ---
 
@@ -334,6 +396,37 @@ key_b64="$(gen_secret_b64)"
 if [[ "${#key_b64}" -eq 44 ]]; then echo "  ✓ gen_secret_b64 length 44"; PASS=$((PASS+1)); else echo "  ✗ gen_secret_b64 length ${#key_b64}"; FAIL=$((FAIL+1)); fi
 key_hex="$(gen_secret_hex)"
 if [[ "${#key_hex}" -eq 64 ]]; then echo "  ✓ gen_secret_hex length 64"; PASS=$((PASS+1)); else echo "  ✗ gen_secret_hex length ${#key_hex}"; FAIL=$((FAIL+1)); fi
+
+# --- setup-common: wait_* with no COMPOSE_FLAGS under set -u ---
+# install.sh sets COMPOSE_FLAGS=() and macOS ships bash 3.2, where "${empty[@]}" is
+# unbound under `set -u`. Run in /bin/bash when it exists, with docker stubbed healthy.
+
+echo ""
+echo "=== setup-common: wait_* with empty COMPOSE_FLAGS ==="
+_wf_bash=/bin/bash; [[ -x "$_wf_bash" ]] || _wf_bash=bash
+for _wf_fn in wait_for_postgres wait_for_curia; do
+    _wf_out="$("$_wf_bash" -c '
+        set -euo pipefail
+        source "$1"
+        docker() {
+            case "$*" in
+                *" ps -q "*) echo cid123 ;;
+                *State.Health.Status*) echo healthy ;;
+                *State.Status*) echo running ;;
+                *RestartCount*) echo 0 ;;
+                *) echo healthy ;;
+            esac
+        }
+        sleep() { :; }
+        REPO_ROOT=/tmp COMPOSE_FLAGS=()
+        "$2" >/dev/null 2>&1
+        echo ok' _ "$TEST_DIR/../../scripts/setup-common.sh" "$_wf_fn" 2>&1)" || true
+    if [[ "$_wf_out" == *ok ]]; then
+        echo "  ✓ $_wf_fn runs with empty COMPOSE_FLAGS under set -u"; PASS=$((PASS+1))
+    else
+        echo "  ✗ $_wf_fn failed with empty COMPOSE_FLAGS: $_wf_out"; FAIL=$((FAIL+1))
+    fi
+done
 
 # --- install.sh: source-checkout detection ---
 # Source install.sh (guarded: defines functions, does not run main).
@@ -780,6 +873,8 @@ _assert_lk() {
 _assert_lk "voice not running"                 ''                                 ''                          quiet
 _assert_lk "unset, still public (not recreated)" ''                               $'0.0.0.0:7880\n[::]:7880'  recreate
 _assert_lk "unset, loopback"                   ''                                 '127.0.0.1:7880'            loopback-note
+_assert_lk "installer-managed local command, loopback" 'LIVEKIT_COMMAND=--config /etc/livekit.local.yaml --node-ip 127.0.0.1\n' '127.0.0.1:7880' quiet
+_assert_lk "installer-managed public command, loopback" 'LIVEKIT_COMMAND=--config /etc/livekit.yaml\n' '127.0.0.1:7880' quiet
 _assert_lk "LIVEKIT_HTTP_BIND=127.0.0.1 (proxied)" 'LIVEKIT_HTTP_BIND=127.0.0.1\n'  '127.0.0.1:7880'            quiet
 _assert_lk "loopback intent, still public (not recreated)" 'LIVEKIT_HTTP_BIND=127.0.0.1\n' $'0.0.0.0:7880\n[::]:7880' recreate
 _assert_lk "quoted loopback intent, still public" 'LIVEKIT_HTTP_BIND="127.0.0.1"\n' '0.0.0.0:7880'              recreate
@@ -1217,6 +1312,379 @@ _assert_var "the successful fetch landed its own bytes" "$(< "$_fa_dir/docker-co
 unset -f curl
 INSTALL_DIR="$_saved_install_dir"
 rm -rf "$_fa_dir"
+
+# --- setup-common: livekit helpers ---
+
+echo ""
+echo "=== setup-common: livekit helpers ==="
+
+_lk_k1="$(gen_livekit_keys)"; _lk_k2="$(gen_livekit_keys)"
+_assert_var "gen_livekit_keys format" \
+    "$([[ "$_lk_k1" =~ ^API[A-Za-z0-9]{12}:\ [0-9a-f]{64}$ ]] && echo ok)" "ok"
+_assert_var "gen_livekit_keys differs per call" "$([[ "$_lk_k1" != "$_lk_k2" ]] && echo ok)" "ok"
+
+_assert_var "seed from LIVEKIT_KEYS" "$(livekit_seed_keys 'APIabc: s3cr3t' '')" "APIabc s3cr3t"
+_assert_var "seed from quoted LIVEKIT_KEYS" "$(livekit_seed_keys '"APIabc: s3cr3t"' '')" "APIabc s3cr3t"
+_assert_var "seed from LIVEKIT_KEYS with extra spaces" "$(livekit_seed_keys '  APIabc :   s3cr3t ' '--dev')" "APIabc s3cr3t"
+_assert_var "seed from --keys" "$(livekit_seed_keys '' '--config /x --keys "APIk: sec"')" "APIk sec"
+_assert_var "seed from --keys=" "$(livekit_seed_keys '' "--config /x --keys='APIk: sec'")" "APIk sec"
+_assert_var "seed from --dev" "$(livekit_seed_keys '' '--dev --bind 0.0.0.0')" "devkey secret"
+_assert_var "--keys wins over LIVEKIT_KEYS" "$(livekit_seed_keys 'APIenv: envsecret' '--config /x --keys "APIk: sec"')" "APIk sec"
+_lk_rc=0; livekit_seed_keys 'APIenv: envsecret' '--config /x --key-file /keys.yaml' >/dev/null || _lk_rc=$?
+_assert_var "--key-file: unknown" "$_lk_rc" "1"
+_assert_var "seed from empty command" "$(livekit_seed_keys '' '')" "devkey secret"
+_lk_rc=0; _lk_out="$(livekit_seed_keys '' '--config /etc/livekit.yaml')" || _lk_rc=$?
+_assert_var "seed unknown: empty output" "$_lk_out" ""
+_assert_var "seed unknown: rc 1" "$_lk_rc" "1"
+
+_assert_var "command for local" "$(livekit_command_for local)" "--config /etc/livekit.local.yaml --node-ip 127.0.0.1"
+_assert_var "command for public" "$(livekit_command_for public)" "--config /etc/livekit.yaml"
+
+_lk_env="$(mktemp)"
+cp "$TEST_DIR/../../.env.example" "$_lk_env"
+unset LIVEKIT_KEYS LIVEKIT_COMMAND COMPOSE_PROFILES
+ensure_livekit_env "$_lk_env" local
+_assert_var "fresh: COMPOSE_PROFILES" "$(env_value "$_lk_env" COMPOSE_PROFILES)" "voice"
+_assert_var "fresh: LIVEKIT_KEYS format" \
+    "$([[ "$(env_value "$_lk_env" LIVEKIT_KEYS)" =~ ^API[A-Za-z0-9]{12}:\ [0-9a-f]{64}$ ]] && echo ok)" "ok"
+_assert_var "fresh: LIVEKIT_KEYS is unquoted (setup.sh exports .env raw)" \
+    "$(grep -cE '^LIVEKIT_KEYS=API[A-Za-z0-9]{12}: [0-9a-f]{64}$' "$_lk_env")" "1"
+_assert_var "fresh: LIVEKIT_COMMAND" "$(env_value "$_lk_env" LIVEKIT_COMMAND)" "$(livekit_command_for local)"
+
+printf 'LIVEKIT_KEYS="APIold: oldsecret"\nLIVEKIT_COMMAND=--config /mine.yaml\n' > "$_lk_env"
+ensure_livekit_env "$_lk_env" public
+_assert_var "keeps existing LIVEKIT_KEYS" "$(env_value "$_lk_env" LIVEKIT_KEYS)" "APIold: oldsecret"
+_assert_var "keeps operator LIVEKIT_COMMAND" "$(env_value "$_lk_env" LIVEKIT_COMMAND)" "--config /mine.yaml"
+
+: > "$_lk_env"
+LIVEKIT_COMMAND="--dev" LIVEKIT_KEYS="APIsh: shsecret" ensure_livekit_env "$_lk_env" public
+_assert_var "shell LIVEKIT_COMMAND blocks the write" "$(grep -c '^LIVEKIT_COMMAND=' "$_lk_env")" "0"
+_assert_var "shell LIVEKIT_KEYS blocks the write" "$(grep -c '^LIVEKIT_KEYS=' "$_lk_env")" "0"
+
+printf 'COMPOSE_PROFILES=signal\n' > "$_lk_env"
+ensure_livekit_env "$_lk_env" public
+_assert_var "appends voice to profiles" "$(env_value "$_lk_env" COMPOSE_PROFILES)" "signal,voice"
+printf 'COMPOSE_PROFILES=voice,x\n' > "$_lk_env"
+ensure_livekit_env "$_lk_env" public
+_assert_var "profiles already with voice unchanged" "$(env_value "$_lk_env" COMPOSE_PROFILES)" "voice,x"
+_assert_var "public: LIVEKIT_COMMAND" "$(env_value "$_lk_env" LIVEKIT_COMMAND)" "--config /etc/livekit.yaml"
+: > "$_lk_env"
+_lk_w="$(COMPOSE_PROFILES=signal ensure_livekit_env "$_lk_env" public 2>&1 >/dev/null)"
+_assert_var "shell profiles without voice: .env has no COMPOSE_PROFILES" "$(grep -c '^COMPOSE_PROFILES=' "$_lk_env")" "0"
+_assert_var "shell profiles without voice: warns" "$([[ "$_lk_w" == *"without 'voice'"* ]] && echo ok)" "ok"
+: > "$_lk_env"
+_lk_w="$(COMPOSE_PROFILES=voice,x LIVEKIT_KEYS=a:b LIVEKIT_COMMAND=--dev ensure_livekit_env "$_lk_env" public 2>&1)"
+_assert_var "shell profiles with voice: .env untouched" "$(grep -c '^COMPOSE_PROFILES=' "$_lk_env")" "0"
+_assert_var "shell profiles with voice: silent" "$_lk_w" ""
+: > "$_lk_env"
+_lk_w="$(LIVEKIT_COMMAND= ensure_livekit_env "$_lk_env" public 2>&1 >/dev/null)"
+_assert_var "empty shell LIVEKIT_COMMAND: not written" "$(grep -c '^LIVEKIT_COMMAND=' "$_lk_env")" "0"
+_assert_var "empty shell LIVEKIT_COMMAND: warns" "$([[ "$_lk_w" == *LIVEKIT_COMMAND* ]] && echo ok)" "ok"
+: > "$_lk_env"
+_lk_w="$(LIVEKIT_KEYS= ensure_livekit_env "$_lk_env" public 2>&1 >/dev/null)"
+_assert_var "empty shell LIVEKIT_KEYS: not written" "$(grep -c '^LIVEKIT_KEYS=' "$_lk_env")" "0"
+_assert_var "empty shell LIVEKIT_KEYS: warns" "$([[ "$_lk_w" == *LIVEKIT_KEYS* ]] && echo ok)" "ok"
+rm -f "$_lk_env"
+
+# --- install.sh: topology ---
+
+echo ""
+echo "=== install.sh: topology ==="
+
+_assert_var "topology: empty -> domain" "$(topology_for_choice "")" "domain"
+_assert_var "topology: 1 -> domain" "$(topology_for_choice 1)" "domain"
+_assert_var "topology: 2 -> proxy" "$(topology_for_choice 2)" "proxy"
+_assert_var "topology: 3 -> local" "$(topology_for_choice 3)" "local"
+_assert_var "topology: unknown -> domain" "$(topology_for_choice x)" "domain"
+
+_assert_var "normalize_origin strips trailing slash" "$(normalize_origin 'https://curia.example.com/')" "https://curia.example.com"
+_assert_var "normalize_origin lowercases scheme" "$(normalize_origin 'HTTPS://h.example.com:8443')" "https://h.example.com:8443"
+_assert_var "normalize_origin keeps http host:port" "$(normalize_origin 'http://10.0.0.5:3000')" "http://10.0.0.5:3000"
+for _no_bad in 'curia.example.com' 'https://h.example.com/curia' 'https://h .com' 'https://' 'https://h.com?x=1' 'https://h.com#f'; do
+    if normalize_origin "$_no_bad" >/dev/null 2>&1; then _no_rc=0; else _no_rc=1; fi
+    _assert_var "normalize_origin rejects '$_no_bad'" "$_no_rc" "1"
+done
+
+_assert_var "livekit url: domain" "$(livekit_browser_url domain curia.example.com)" "wss://curia.example.com"
+_assert_var "livekit url: proxy https" "$(livekit_browser_url proxy https://h.example.com:8443)" "wss://h.example.com:8443"
+_assert_var "livekit url: proxy http" "$(livekit_browser_url proxy http://10.0.0.5:3000)" "ws://10.0.0.5:3000"
+_assert_var "livekit url: proxy empty" "$(livekit_browser_url proxy '')" "ws://localhost:7880"
+_assert_var "livekit url: local" "$(livekit_browser_url local '')" "ws://localhost:7880"
+for _lu in "$(livekit_browser_url domain d.com)" "$(livekit_browser_url proxy https://h.com)" "$(livekit_browser_url local '')"; do
+    _assert_var "livekit url never ends in /rtc ($_lu)" "$([[ "$_lu" == */rtc ]] && echo bad || echo ok)" "ok"
+done
+
+# --- setup-common: print_next_steps ---
+
+echo ""
+echo "=== print_next_steps ==="
+
+_has() { [[ "$1" == *"$2"* ]] && echo yes || echo no; }
+_pns="$(print_next_steps domain on 2>&1)" || true
+_assert_var "domain: setup page"       "$(_has "$_pns" 'Finish setting up Curia in your browser at the address above.')" yes
+_assert_var "domain: docs guide"       "$(_has "$_pns" 'Guide: https://docs.meetcuria.com/get-started/check-your-setup')" yes
+_assert_var "domain: Start onboarding" "$(_has "$_pns" 'When every step is done, choose Start onboarding.')" yes
+_assert_var "domain: voice on"         "$(_has "$_pns" 'Voice (LiveKit): on.')" yes
+_assert_var "domain: RTC ports"        "$(_has "$_pns" 'Open these ports for calls: 7881/tcp, 7882/udp')" yes
+_assert_var "domain: no proxy rule"    "$(_has "$_pns" '/rtc* to')" no
+_pns="$(print_next_steps proxy on 2>&1)" || true
+_assert_var "proxy: forwarding line"   "$(_has "$_pns" 'Your proxy must forward / to port 3000 and /rtc* to 127.0.0.1:7880 on this host.')" yes
+_assert_var "proxy: RTC ports"         "$(_has "$_pns" '7881/tcp, 7882/udp')" yes
+_pns="$(print_next_steps local on 2>&1)" || true
+_assert_var "local: no RTC ports"      "$(_has "$_pns" '7881/tcp')" no
+_assert_var "local: no proxy rule"     "$(_has "$_pns" '/rtc*')" no
+_pns="$(print_next_steps domain off 2>&1)" || true
+_assert_var "voice off: says so"       "$(_has "$_pns" 'Voice (LiveKit): off.')" yes
+_assert_var "voice off: no RTC ports"  "$(_has "$_pns" '7881/tcp')" no
+
+_assert_var "setup url: domain"        "$(setup_base_url domain c.example.com 2>&1 || true)" "https://c.example.com"
+_assert_var "setup url: proxy origin"  "$(setup_base_url proxy https://p.example.com 2>&1 || true)" "https://p.example.com"
+_assert_var "setup url: proxy, no origin" "$( (unset HTTP_PORT; setup_base_url proxy '') 2>&1 || true)" "http://localhost:3000"
+_assert_var "setup url: local, HTTP_PORT" "$( (HTTP_PORT=3100; setup_base_url local '') 2>&1 || true)" "http://localhost:3100"
+_assert_var "setup url: domain, none known" "$( (unset HTTP_PORT; setup_base_url domain '') 2>&1 || true)" "http://localhost:3000"
+
+# --- install.sh: an older setup-common.sh on disk (upgrade skew, #2357) ---
+# An install from an older release keeps its setup-common.sh, which lacks
+# ensure_livekit_env. install.sh fetches this release's copy over it; when the
+# fetch fails (or is still old) it stops with a hint instead of crashing later.
+
+echo ""
+echo "=== install.sh: older setup-common.sh on disk ==="
+_sk_dir="$(mktemp -d)"; mkdir -p "$_sk_dir/inst/scripts" "$_sk_dir/bin"
+cp "$TEST_DIR/../../install.sh" "$_sk_dir/inst/install.sh"
+_sk_old() { printf 'info() { :; }\nwarn() { :; }\nerror() { :; }\nhint() { :; }\n' > "$_sk_dir/inst/scripts/setup-common.sh"; }
+# Fake curl: copy this checkout's setup-common.sh to the -o target, or fail.
+cat > "$_sk_dir/bin/curl" <<CURL
+#!/usr/bin/env bash
+[[ -n "\${SK_CURL_OK:-}" ]] || exit 22
+while [[ \$# -gt 0 ]]; do [[ "\$1" == -o ]] && { cp "$TEST_DIR/../../scripts/setup-common.sh" "\$2"; exit 0; }; shift; done
+exit 22
+CURL
+chmod +x "$_sk_dir/bin/curl"
+_sk_old
+_sk_out="$(PATH="$_sk_dir/bin:$PATH" SK_CURL_OK=1 bash -c 'source "$1"; declare -F ensure_livekit_env >/dev/null && echo refreshed' _ "$_sk_dir/inst/install.sh" 2>&1)" || true
+_assert_var "old copy, fetch works: refreshed" "$([[ "$_sk_out" == *refreshed* ]] && echo yes || echo no)" yes
+_sk_old
+_sk_rc=0
+_sk_out="$(PATH="$_sk_dir/bin:$PATH" bash -c 'source "$1"; echo continued' _ "$_sk_dir/inst/install.sh" 2>&1)" || _sk_rc=$?
+_assert_var "old copy, fetch fails: stops" "$_sk_rc" "1"
+_assert_var "old copy, fetch fails: says why" "$([[ "$_sk_out" == *"older than this installer"* ]] && echo yes || echo no)" yes
+rm -rf "$_sk_dir"
+
+# --- install.sh: fetch_bundle fetches the LiveKit configs the compose file mounts ---
+
+echo ""
+echo "=== install.sh: fetch_bundle livekit.yaml ==="
+
+_fb_dir="$(mktemp -d)"
+_fb_calls="$(mktemp)"
+# $1 = compose file contents; prints the fetch_asset calls, one per line.
+_fb_run() {
+    rm -rf "$_fb_dir"; mkdir -p "$_fb_dir/deploy"
+    printf '%s' "$1" > "$_fb_dir/docker-compose.yml"
+    : > "$_fb_dir/docker-compose.tls.yml"; : > "$_fb_dir/.env.example"; : > "$_fb_dir/deploy/Caddyfile"
+    [[ -z "${_FB_EXISTING:-}" ]] || { mkdir -p "$_fb_dir/docker"; : > "$_fb_dir/docker/livekit.yaml"; : > "$_fb_dir/docker/livekit.local.yaml"; }
+    : > "$_fb_calls"
+    (
+      INSTALL_DIR="$_fb_dir"
+      fetch_asset() { printf '%s:%s\n' "$1" "$2" >> "$_fb_calls"; }
+      fetch_bundle
+    ) >/dev/null 2>&1 || true
+    tr '\n' ' ' < "$_fb_calls"
+}
+_FB_LK=$'services:\n  livekit:\n    volumes:\n      - ./docker/livekit.yaml:/etc/livekit.yaml:ro\n      - ./docker/livekit.local.yaml:/etc/livekit.local.yaml:ro\n'
+_FB_LK_PUBLIC_ONLY=$'services:\n  livekit:\n    volumes:\n      - ./docker/livekit.yaml:/etc/livekit.yaml:ro\n'
+_FB_OLD=$'services:\n  livekit:\n    command: --dev\n'
+_assert_var "compose mounts both: both fetched" "$(_fb_run "$_FB_LK")" "docker/livekit.yaml:livekit.yaml docker/livekit.local.yaml:livekit.local.yaml "
+_assert_var "compose mounts livekit.yaml only" "$(_fb_run "$_FB_LK_PUBLIC_ONLY")" "docker/livekit.yaml:livekit.yaml "
+_assert_var "older compose without the mounts: nothing fetched" "$(_fb_run "$_FB_OLD")" ""
+_FB_COMMENT=$'services:\n  livekit:\n    # mount ./docker/livekit.yaml:/etc/livekit.yaml for a real config\n    command: --dev\n'
+_assert_var "mount named in a comment only: nothing fetched" "$(_fb_run "$_FB_COMMENT")" ""
+_FB_EXISTING=1
+_assert_var "files already present: nothing fetched" "$(_fb_run "$_FB_LK")" ""
+_FB_EXISTING=""
+rm -rf "$_fb_dir" "$_fb_calls"
+
+# --- install.sh: note_voice_off (upgrade path) ---
+
+echo ""
+echo "=== note_voice_off ==="
+
+_nv_env="$(mktemp)"
+# $1 env contents, $2 shell COMPOSE_PROFILES ("-" = unset), $3 running (1/""), $4 want: note | silent
+_assert_nv() {
+    local out got
+    printf '%b' "$1" > "$_nv_env"
+    out="$(
+      unset COMPOSE_PROFILES
+      [[ "$2" == - ]] || export COMPOSE_PROFILES="$2"
+      _nv_running="$3"
+      service_running() { [[ -n "$_nv_running" ]]; }
+      note_voice_off "$_nv_env" 2>&1
+    )" || true
+    if [[ "$out" == *"Voice (LiveKit) is off on this install."* ]]; then got=note
+    elif [[ -z "$out" ]]; then got=silent; else got="other: $out"; fi
+    _assert_var "note_voice_off: $5" "$got" "$4"
+}
+_assert_nv ''                           -          ''  note   "profiles unset, not running"
+_assert_nv 'COMPOSE_PROFILES=voice\n'   -          ''  silent "COMPOSE_PROFILES=voice in .env"
+_assert_nv 'COMPOSE_PROFILES=signal,voice\n' -     ''  silent "voice in a profile list"
+_assert_nv 'COMPOSE_PROFILES=voices\n'  -          ''  note   "voices is not voice"
+_assert_nv ''                           voice      ''  silent "COMPOSE_PROFILES=voice in the shell"
+_assert_nv 'COMPOSE_PROFILES=voice\n'   ''         ''  note   "shell empty COMPOSE_PROFILES wins over .env"
+_assert_nv ''                           -          1   silent "livekit running"
+_nv_out="$( unset COMPOSE_PROFILES; service_running() { return 1; }; note_voice_off "$_nv_env" 2>&1 )" || true
+_assert_var "note_voice_off names the voice docs" "$(_has "$_nv_out" 'voice-setup')" yes
+rm -f "$_nv_env"
+
+# --- install.sh: LiveKit --dev on public installs (fail closed, #2357) ---
+
+echo ""
+echo "=== install.sh: LiveKit --dev on public installs ==="
+
+_rk_env="$(mktemp)"
+# $1 topology, $2 proxy origin, $3 env contents, $4 shell LIVEKIT_COMMAND ("-" = unset), $5 want: ok | stopped
+_assert_rk() {
+    local got
+    printf '%b' "$3" > "$_rk_env"
+    if (
+      unset LIVEKIT_COMMAND
+      [[ "$4" == - ]] || export LIVEKIT_COMMAND="$4"
+      TOPOLOGY="$1"; PROXY_ORIGIN="$2"
+      require_livekit_real_keys "$_rk_env"
+    ) >/dev/null 2>&1; then got=ok; else got=stopped; fi
+    _assert_var "real keys: $6" "$got" "$5"
+}
+_RK_REAL='LIVEKIT_COMMAND=--config /etc/livekit.yaml\n'
+_RK_DEV='LIVEKIT_COMMAND=--dev --bind 0.0.0.0\n'
+_assert_rk domain ''                  "$_RK_REAL" -       ok      "domain, real config"
+_assert_rk domain ''                  "$_RK_DEV"  -       stopped "domain, --dev in .env"
+_assert_rk domain ''                  ''          -       stopped "domain, command empty (--dev default)"
+_assert_rk domain ''                  "$_RK_REAL" '--dev' stopped "domain, --dev in the shell wins"
+_assert_rk domain ''                  "$_RK_REAL" ''      stopped "domain, empty shell value wins"
+_assert_rk proxy  https://p.example   "$_RK_DEV"  -       stopped "proxy with an origin, --dev"
+_assert_rk proxy  https://p.example   "$_RK_REAL" -       ok      "proxy with an origin, real config"
+_assert_rk proxy  ''                  "$_RK_DEV"  -       ok      "proxy for localhost testing, --dev"
+_assert_rk local  ''                  "$_RK_DEV"  -       ok      "local, operator's own --dev"
+_rk_out="$( unset LIVEKIT_COMMAND; TOPOLOGY=domain; PROXY_ORIGIN=""; printf '%b' "$_RK_DEV" > "$_rk_env"; require_livekit_real_keys "$_rk_env" 2>&1 )" || true
+_assert_var "real keys: says how to fix" "$(_has "$_rk_out" 'LIVEKIT_KEYS')" yes
+rm -f "$_rk_env"
+
+# warn_public_livekit_dev: --dev is flagged only when 7880 is published beyond
+# loopback (the TLS overlay itself fails closed at Compose level).
+_wd_env="$(mktemp)"
+# $1 env contents, $2 bindings, $3 live command, $4 running (1/""), $5 want: warn | quiet
+_assert_wd() {
+    local out got
+    printf '%b' "$1" > "$_wd_env"
+    out="$(
+      unset COMPOSE_FILE LIVEKIT_COMMAND
+      _wd_cmd="$3"; _wd_running="$4"
+      live_command() { printf '%s' "$_wd_cmd"; }
+      service_running() { [[ -n "$_wd_running" ]]; }
+      warn_public_livekit_dev "$_wd_env" "$2" 2>&1
+    )" || true
+    if [[ "$out" == *"--dev credentials"* ]]; then got=warn
+    elif [[ -z "$out" ]]; then got=quiet; else got="other: $out"; fi
+    _assert_var "--dev warning: $6" "$got" "$5"
+}
+_assert_wd "$_RK_DEV"            '127.0.0.1:7880' '--dev'                      1  quiet "no overlay, loopback, --dev"
+_assert_wd "$_RK_DEV"            '0.0.0.0:7880'   '--dev'                      1  warn  "no overlay, public, --dev (unchanged)"
+rm -f "$_wd_env"
+
+# --- install.sh: fresh_install starts LiveKit and seeds matching vault values ---
+
+echo ""
+echo "=== install.sh: fresh_install LiveKit seeding ==="
+
+_fi_dir="$(mktemp -d)"
+_fi_env="$_fi_dir/.env"
+_fi_calls="$_fi_dir/calls"
+# $1 topology, $2 stdin answers, $3 extra env contents. Leaves docker calls in
+# $_fi_calls and the run's output in $_fi_out; returns the run's status.
+_fi_run() {
+    printf '%b' "DB_PASSWORD=your-db-password\n$3" > "$_fi_env"
+    : > "$_fi_calls"
+    local rc=0
+    _fi_out="$(
+      unset COMPOSE_FILE APP_ORIGIN HTTP_BIND DOMAIN COMPOSE_PROFILES LIVEKIT_KEYS LIVEKIT_COMMAND HTTP_PORT
+      [[ -z "${_FI_SHELL_CMD+set}" ]] || export LIVEKIT_COMMAND="$_FI_SHELL_CMD"
+      [[ -z "${_FI_SHELL_KEYS_EMPTY:-}" ]] || export LIVEKIT_KEYS=""
+      docker() {
+        printf '%s\n' "$*" >> "$_fi_calls"
+        [[ "$1 $2" != "volume inspect" || -n "${_FI_PGDATA:-}" ]]
+      }
+      wait_for_postgres() { :; }; wait_for_curia() { return 0; }
+      check_postgres_exposure() { :; }; check_http_exposure() { :; }
+      check_livekit_exposure() { :; }; note_missing_browser() { :; }
+      port_listening() { return 1; }; getent() { return 0; }
+      prompt_anthropic_key() { echo sk-ant-test; }
+      choose_topology() { echo "$_FI_TOPOLOGY"; }
+      INSTALL_DIR="$_fi_dir"
+      _FI_TOPOLOGY="$1"
+      fresh_install "$_fi_env" <<< "$2" 2>&1
+    )" || rc=$?
+    return $rc
+}
+_seed_line() { grep 'seed-vault' "$_fi_calls" || true; }
+
+_fi_run domain "c.example.com" '' || true
+_fi_keys="$(env_value "$_fi_env" LIVEKIT_KEYS)"
+_fi_k="${_fi_keys%%:*}"; _fi_s="${_fi_keys#*: }"
+_assert_var "domain: voice profile on"        "$(env_value "$_fi_env" COMPOSE_PROFILES)" "voice"
+_assert_var "domain: public LiveKit command"  "$(env_value "$_fi_env" LIVEKIT_COMMAND)" "--config /etc/livekit.yaml"
+_assert_var "domain: seeds wss URL"           "$(_has "$(_seed_line)" '-e SEED_LIVEKIT_URL=wss://c.example.com ')" yes
+_assert_var "domain: seeds the generated key" "$(_has "$(_seed_line)" "-e SEED_LIVEKIT_API_KEY=$_fi_k ")" yes
+_assert_var "domain: seeds the generated secret" "$(_has "$(_seed_line)" "-e SEED_LIVEKIT_API_SECRET=$_fi_s ")" yes
+_assert_var "domain: secret never printed"    "$(_has "$_fi_out" "$_fi_s")" no
+_assert_var "domain: key never printed"       "$(_has "$_fi_out" "$_fi_k")" no
+_assert_var "domain: next steps printed"      "$(_has "$_fi_out" 'https://c.example.com/setup')" yes
+
+_fi_run local "" '' || true
+_assert_var "local: placeholder DB password replaced" "$(_has "$(env_value "$_fi_env" DB_PASSWORD)" 'your-db-password')" no
+_assert_var "local: loopback LiveKit command" "$(env_value "$_fi_env" LIVEKIT_COMMAND)" "--config /etc/livekit.local.yaml --node-ip 127.0.0.1"
+_assert_var "local: seeds ws://localhost:7880" "$(_has "$(_seed_line)" '-e SEED_LIVEKIT_URL=ws://localhost:7880 ')" yes
+_assert_var "local: next steps on localhost" "$(_has "$_fi_out" 'http://localhost:3000/setup')" yes
+
+_fi_run proxy "" '' || true
+_assert_var "proxy, no origin: loopback LiveKit command" "$(env_value "$_fi_env" LIVEKIT_COMMAND)" "--config /etc/livekit.local.yaml --node-ip 127.0.0.1"
+_fi_run proxy "https://p.example.com" '' || true
+_assert_var "proxy with origin: public LiveKit command" "$(env_value "$_fi_env" LIVEKIT_COMMAND)" "--config /etc/livekit.yaml"
+_assert_var "proxy with origin: seeds wss URL" "$(_has "$(_seed_line)" '-e SEED_LIVEKIT_URL=wss://p.example.com ')" yes
+_assert_var "proxy with origin: next steps on the origin" "$(_has "$_fi_out" 'https://p.example.com/setup')" yes
+_assert_var "proxy with origin: forwarding rule" "$(_has "$_fi_out" '/rtc* to 127.0.0.1:7880')" yes
+_assert_var "proxy with origin: voice on line" "$(_has "$_fi_out" 'Voice (LiveKit): on.')" yes
+
+# Keys LiveKit's command hides (an operator --config without LIVEKIT_KEYS): URL only, with a warning.
+_FI_SHELL_CMD="--config /mine.yaml"
+_FI_SHELL_KEYS_EMPTY=1
+_fi_rc=0; _fi_run local "" '' || _fi_rc=$?
+unset _FI_SHELL_CMD _FI_SHELL_KEYS_EMPTY
+_assert_var "unknown keys: install continues" "$_fi_rc" "0"
+_assert_var "unknown keys: URL still seeded"  "$(_has "$(_seed_line)" 'SEED_LIVEKIT_URL=')" yes
+_assert_var "unknown keys: no key seeded"     "$(_has "$(_seed_line)" 'SEED_LIVEKIT_API_KEY')" no
+_assert_var "unknown keys: warns where to enter them" "$(_has "$_fi_out" 'Settings → Channels → Voice')" yes
+
+# Fail closed: an HTTPS install with --dev stops before Postgres starts.
+_FI_SHELL_CMD="--dev --bind 0.0.0.0"
+_fi_rc=0; _fi_run domain "c.example.com" '' || _fi_rc=$?
+unset _FI_SHELL_CMD
+_assert_var "domain + --dev: stops"                 "$([[ $_fi_rc -ne 0 ]] && echo yes || echo no)" yes
+_assert_var "domain + --dev: Postgres never started" "$(grep -c 'up -d postgres' "$_fi_calls" | tr -d ' ')" "0"
+# LIVEKIT_KEYS, when set, wins over --dev's devkey (LiveKit reads it too), so
+# devkey is seeded only with LIVEKIT_KEYS empty.
+_FI_SHELL_CMD="--dev"; _FI_SHELL_KEYS_EMPTY=1
+_fi_rc=0; _fi_run local "" '' || _fi_rc=$?
+unset _FI_SHELL_CMD _FI_SHELL_KEYS_EMPTY
+_assert_var "local + operator --dev: continues"     "$_fi_rc" "0"
+_assert_var "local + --dev: seeds devkey"           "$(_has "$(_seed_line)" '-e SEED_LIVEKIT_API_KEY=devkey ')" yes
+# The placeholder DB password stays when its Postgres volume already exists.
+_FI_PGDATA=1
+_fi_run local "" '' || true
+unset _FI_PGDATA
+_assert_var "pgdata exists: placeholder DB password kept" "$(env_value "$_fi_env" DB_PASSWORD)" "your-db-password"
+_assert_var "pgdata exists: warns it is weak" "$(_has "$_fi_out" 'weak default')" yes
+rm -rf "$_fi_dir"
 
 # --- Results ---
 

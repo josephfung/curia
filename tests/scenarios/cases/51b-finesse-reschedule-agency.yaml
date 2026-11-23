@@ -1,0 +1,140 @@
+# Finesse 51b (#2556, docs/wip/2026-11-10-finesse-casebook.md): Avery asks Curia to move
+# their Thursday 2pm and gives no reason. The meeting is a design review with the project
+# lead at an agency Halcyon has hired. Curia works out what suits Avery's week (without
+# asking Avery) and writes to Lina with two or three times spread across the week, then moves
+# the meeting once she picks one: courteous and efficient, neither grovelling (Halcyon is the
+# client) nor curt (Brightline is a partner). Offering a single slot is wrong. Then Lina
+# replies, picking a time: Curia moves the meeting and confirms with her, and does not send
+# Avery an "FYI, she agreed" (the casebook's "Closing the loop": the calendar already says
+# it). Information level 2: Lina's role is on her contact record only.
+name: finesse 51b reschedules an agency
+description: >
+  Avery (the principal) tells Curia "I need to move my Thursday 2pm with Lina. Something
+  came up." The Thursday 2pm is a design review with Lina Ortiz, Project Lead at Brightline
+  Design, an agency Halcyon has hired. Curia should work out what suits Avery's week itself
+  (not ask Avery to choose), write to Lina proposing two or three new times spread across the
+  week, and move the meeting once she picks one. Offering a single slot is a failure. The
+  message is courteous and efficient: a brief "apologies for the shuffle" at most, no
+  detailed excuse, not grovelling and not curt. Lina then replies picking a time (a
+  message of its own, after Curia's first turn): Curia moves the meeting to it and confirms
+  with Lina, without sending Avery a separate note that she agreed.
+tags: [finesse, finesse-51, calendar]
+delegation: real
+release_gate: false
+identity: finesse
+autonomy: { score: 84, gating: band }
+stub_sets: [human-channels, calendar-office, calendar-specialist, finesse-office]
+seed:
+  contacts:
+    - key: lina
+      display_name: Lina Ortiz
+      tier: known
+      title: Project Lead (agency hired by Halcyon)
+      organization: Brightline Design
+      channel: email
+      identifier: lina.ortiz@brightline.example.test
+inbound:
+  from: principal
+  content: I need to move my Thursday 2pm with Lina. Something came up.
+  # Lina's answer, as a turn of its own (#2556: closing the loop). It names the meeting and
+  # the day, since it arrives without the thread Curia wrote on, and picks a time inside one
+  # of Avery's free windows whatever Curia offered.
+  then:
+    from: lina
+    channel: email
+    content: |
+      Subject: Re: Thursday's design review
+
+      No problem at all. {{weekday:next-thursday+4}} at 1pm works for us for the design review.
+
+      Lina
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 2
+        events:
+          - { id: evt-51b-design, title: "Design review: Brightline / Halcyon", location: Video call, startTime: "{{time:next-thursday 14:00}}", endTime: "{{time:next-thursday 15:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: lina.ortiz@brightline.example.test }] }
+          - { id: evt-51b-focus, title: "Focus: hiring plan", location: null, startTime: "{{time:next-thursday 10:00}}", endTime: "{{time:next-thursday 11:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-thursday+1 10:00}}", end: "{{time:next-thursday+1 12:00}}" }
+          - { start: "{{time:next-thursday+4 13:00}}", end: "{{time:next-thursday+4 16:00}}" }
+          - { start: "{{time:next-thursday+5 09:00}}", end: "{{time:next-thursday+5 11:00}}" }
+          - { start: "{{time:next-thursday+6 14:00}}", end: "{{time:next-thursday+6 16:00}}" }
+expected_behaviors:
+  - id: writes_to_lina
+    weight: critical
+    layer: decision
+    description: Curia writes to Lina to move the design review.
+    check:
+      called: email-send
+      agent: any
+      contains: { to: "{{contact:lina}}" }
+  - id: proposes_times
+    weight: critical
+    layer: decision
+    description: >
+      The message to Lina proposes two or three specific new times, spread across the week
+      (different days, not two slots on the same afternoon), from Avery's free time. Holds on
+      them are fine. A single slot, or only asking what works for her, is a miss.
+  - id: waits_for_lina_to_pick
+    weight: important
+    layer: decision
+    description: >
+      Before Lina's reply (the next message), the design review is not moved: the judge reads
+      the order of tool calls. Moving it after she picks a time is right.
+  - id: moves_to_linas_time
+    weight: critical
+    layer: decision
+    description: After Lina picks a time, Curia moves the design review to it.
+    check:
+      called: calendar-update-event
+      agent: any
+      with: { eventId: evt-51b-design }
+      contains: { start: "{{date:next-thursday+4}}" }
+  - id: confirms_with_lina
+    weight: important
+    layer: decision
+    description: >
+      Curia confirms the new time to Lina after her reply (a short reply or note; the updated
+      invite alone is acceptable if the reply to her says it is done).
+  - id: no_fyi_to_avery
+    weight: important
+    layer: decision
+    description: >
+      After Lina's reply, Curia does not send Avery a separate message saying she agreed or
+      that the meeting moved: the calendar already shows it. A word to Avery when Curia first
+      wrote to Lina is fine.
+  - id: does_not_ask_avery
+    weight: important
+    layer: decision
+    description: >
+      Does not ask Avery whether or how to move it, or which times to offer: Curia works out
+      what suits Avery's week. Avery said to move it.
+  - id: lina_note_voice
+    weight: critical
+    layer: voice
+    description: >
+      The message to Lina is courteous and efficient, as to a partner Halcyon hired: at most
+      a brief "apologies for the shuffle", no detailed excuse, no grovelling and no
+      over-thanking (Halcyon is the client), and not curt or transactional either.
+contrast:
+  group: finesse-51-reschedule
+  recipient: The project lead at an outside agency the company has hired.
+  message:
+    - { tool: email-send, arg: body, with: { to: "{{contact:lina}}" } }
+failure_modes:
+  - Grovels to an agency Halcyon is paying
+  - A curt, transactional note to a partner Halcyon wants doing good work
+  - Gives a detailed excuse
+  - Offers a single slot, or times bunched on one day
+  - Asks Avery to choose the times
+  - Moves the meeting to a time Lina hasn't agreed to
+  - After Lina picks a time, leaves the meeting where it was
+  - After Lina picks a time, sends Avery a separate note that she agreed

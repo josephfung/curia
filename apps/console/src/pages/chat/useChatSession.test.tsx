@@ -89,14 +89,17 @@ function historyPage(path: string): { messages: Row[]; hasMore: boolean } {
   return { messages: older.slice(-limit), hasMore: older.length > limit };
 }
 
+let probeSetupStep: string | null = null;
+
 function Probe(): ReactElement {
-  const current = useChatSession();
+  const current = useChatSession({ setupStep: probeSetupStep });
   session = current;
   return (
     <div>
       <p data-testid="error">{current.connectionError ?? ''}</p>
       <p data-testid="sending">{current.sending ? 'yes' : 'no'}</p>
       <p data-testid="has-more">{current.hasMore ? 'yes' : 'no'}</p>
+      <p data-testid="history-loaded">{current.historyLoaded ? 'yes' : 'no'}</p>
       <ul>
         {current.messages.map((message) => (
           <li key={message.id} data-id={message.id} data-kind={message.kind}>{message.text}</li>
@@ -170,6 +173,32 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.clearAllMocks();
   localStorage.removeItem('curia:onboarding:welcome-banner-pending');
+  probeSetupStep = null;
+});
+
+describe('useChatSession historyLoaded', () => {
+  const loaded = () => container?.querySelector('[data-testid="history-loaded"]')?.textContent;
+
+  it('is false until the first history request comes back, empty or not', async () => {
+    let answer: (() => void) | null = null;
+    history = [];
+    const real = apiFetch.getMockImplementation()!;
+    apiFetch.mockImplementation((path: string) => (String(path).startsWith('/api/chat/history')
+      ? new Promise((resolve) => { answer = () => resolve(real(path)); })
+      : real(path)));
+    await mount();
+    expect(loaded()).toBe('no');
+    await act(async () => { answer!(); });
+    await flush();
+    expect(loaded()).toBe('yes');
+    expect(texts()).toEqual([]);
+  });
+
+  it('stays false when the first history request fails', async () => {
+    historyStatus = 503;
+    await mount();
+    expect(loaded()).toBe('no');
+  });
 });
 
 describe('useChatSession catch-up', () => {
@@ -407,6 +436,46 @@ async function liveTurn(question: string, reply: string): Promise<void> {
   });
   await flush();
 }
+
+// #2358: the Setup page's guide sends the open step with each message.
+describe('useChatSession setupStep', () => {
+  function postedBodies(): Array<Record<string, unknown>> {
+    return apiFetch.mock.calls
+      .filter(([path]) => String(path) === '/api/chat/messages')
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+  }
+
+  it('sends the open step, and the step open at send time', async () => {
+    probeSetupStep = 'email';
+    await mount();
+    await act(async () => { latestSource().open(); });
+    await liveTurn('which key?', 'the Nylas one');
+    probeSetupStep = 'voice';
+    await act(async () => { root!.render(<Probe />); });
+    await sendText('and here?');
+    expect(postedBodies().map((b) => b['setupStep'])).toEqual(['email', 'voice']);
+  });
+
+  it('sends the step open when Send was pressed, not when the stream finished opening', async () => {
+    probeSetupStep = 'email';
+    await mount();
+    // The stream isn't open yet, so send() waits for it; the operator moves on meanwhile.
+    let sent: Promise<void> = Promise.resolve();
+    await act(async () => { sent = session!.send('which key?'); });
+    probeSetupStep = 'voice';
+    await act(async () => { root!.render(<Probe />); });
+    await act(async () => { latestSource().open(); });
+    await act(async () => { await sent; });
+    expect(postedBodies()[0]!['setupStep']).toBe('email');
+  });
+
+  it('sends no step outside the Setup page', async () => {
+    await mount();
+    await act(async () => { latestSource().open(); });
+    await sendText('hello');
+    expect(postedBodies()[0]).not.toHaveProperty('setupStep');
+  });
+});
 
 describe('useChatSession reconnect', () => {
   it('reconnects after a stream error and catches up on open', async () => {

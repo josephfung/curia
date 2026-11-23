@@ -84,6 +84,31 @@ describe('loadScenarioCase', () => {
     expect(c.expectedBehaviors[1]).toEqual({ id: 'silent', description: 'does not answer directly', weight: 'important' });
   });
 
+  it('loads a contact\'s title and organization (#2556)', () => {
+    const withProfile = VALID.replace(
+      '      tier: known\n',
+      '      tier: known\n      title: Board Chair\n      organization: Harbourline Capital\n',
+    );
+    const c = loadScenarioCase(write('a.yaml', withProfile));
+    expect(c.seed.contacts[0]).toMatchObject({ title: 'Board Chair', organization: 'Harbourline Capital' });
+    // Absent fields stay absent rather than appearing as undefined keys.
+    expect(Object.hasOwn(loadScenarioCase(write('b.yaml', VALID)).seed.contacts[0]!, 'title')).toBe(false);
+  });
+
+  it('loads behavior layers, and requires one on every behavior of a finesse case (#2556)', () => {
+    const layered = VALID
+      .replace('  - id: routes\n    weight: critical\n', '  - id: routes\n    weight: critical\n    layer: decision\n')
+      .replace('  - id: silent\n', '  - id: silent\n    layer: voice\n');
+    const c = loadScenarioCase(write('a.yaml', layered));
+    expect(c.expectedBehaviors.map(b => b.layer)).toEqual(['decision', 'voice']);
+
+    expect(() => loadScenarioCase(write('b.yaml', layered.replace('layer: voice', 'layer: tone'))))
+      .toThrow(/layer must be one of decision, voice/);
+    const finesse = VALID.replace('tags: [routing]', 'tags: [finesse]');
+    expect(() => loadScenarioCase(write('c.yaml', finesse))).toThrow(/'finesse' case marks every behavior with a layer.*missing on routes, silent/);
+    expect(loadScenarioCase(write('d.yaml', layered.replace('tags: [routing]', 'tags: [finesse]'))).tags).toEqual(['finesse']);
+  });
+
   it('loads the replies a recipient already sent on an entry (#2261)', () => {
     const withReplies = VALID.replace(
       '      delegation_hint: ceo-inbox\n',
@@ -328,6 +353,57 @@ describe('loadScenarioCase', () => {
   ])('rejects seed.pinned with %s', (_label, block, error) => {
     const body = VALID.replace('seed:\n', `seed:\n  pinned:\n    ${block}\n`);
     expect(() => loadScenarioCase(write('bad-pinned.yaml', body))).toThrow(error);
+  });
+
+  it('loads seed.onboarding: the task id and its open topics (#2360)', () => {
+    const body = VALID.replace('seed:\n', [
+      'seed:',
+      '  onboarding:',
+      `    task: ${WAKE_TASK_ID}`,
+      '    topics:',
+      '      - { id: style, title: How I should sound, session: first-conversation }',
+      '      - { id: next-step, title: Next step, session: first-conversation }',
+      '      - { id: next-step, title: Next step, session: review }',
+      '',
+    ].join('\n'));
+    const c = loadScenarioCase(write('onboarding.yaml', body));
+    expect(c.seed.onboarding).toEqual({
+      taskId: WAKE_TASK_ID,
+      topics: [
+        { topicId: 'style', title: 'How I should sound', sessionId: 'first-conversation' },
+        { topicId: 'next-step', title: 'Next step', sessionId: 'first-conversation' },
+        { topicId: 'next-step', title: 'Next step', sessionId: 'review' },
+      ],
+    });
+    // The harness seeds from a date-resolved copy (harness.ts); the values must survive it.
+    expect(resolveDatePlaceholders(c.seed, 'America/Toronto').onboarding).toEqual(c.seed.onboarding);
+    expect(loadScenarioCase(write('none.yaml', VALID)).seed).not.toHaveProperty('onboarding');
+    const empty = VALID.replace('seed:\n', `seed:\n  onboarding:\n    task: ${WAKE_TASK_ID}\n`);
+    expect(loadScenarioCase(write('empty.yaml', empty)).seed.onboarding).toEqual({ taskId: WAKE_TASK_ID, topics: [] });
+  });
+
+  it.each([
+    ['a task that is not a UUID', 'task: onboarding-1', /'task' must be a UUID/],
+    ['no task', 'topics: []', /'task' must be a non-empty string/],
+    ['an unknown key', `task: ${WAKE_TASK_ID}\n    status: open`, /unknown key\(s\) status/],
+    ['topics that are not a list', `task: ${WAKE_TASK_ID}\n    topics: style`, /'topics' must be a list/],
+    ['a topic with an unknown key', `task: ${WAKE_TASK_ID}\n    topics:\n      - { id: style, title: Tone, session: first-conversation, done: true }`, /unknown key\(s\) done/],
+    ['a topic with no session', `task: ${WAKE_TASK_ID}\n    topics:\n      - { id: style, title: Tone }`, /'session' must be a non-empty string/],
+    ['a topic twice in one session', `task: ${WAKE_TASK_ID}\n    topics:\n      - { id: style, title: Tone, session: s }\n      - { id: style, title: Tone, session: s }`, /listed twice in session 's'/],
+  ])('rejects seed.onboarding with %s', (_label, block, error) => {
+    const body = VALID.replace('seed:\n', `seed:\n  onboarding:\n    ${block}\n`);
+    expect(() => loadScenarioCase(write('bad-onboarding.yaml', body))).toThrow(error);
+  });
+
+  it('loads a task wake whose task carries active skills, and rejects a malformed list (#2360)', () => {
+    const withSkills = WAKE_TASK.replace(/ }$/, ', active_skills: [onboarding] }');
+    const c = loadScenarioCase(write('wa.yaml', VALID.replace(PRINCIPAL_INBOUND, `from: task-wake\n  task: ${withSkills}`)));
+    expect(c.inbound.task?.activeSkills).toEqual(['onboarding']);
+    const plain = loadScenarioCase(write('wp.yaml', VALID.replace(PRINCIPAL_INBOUND, `from: task-wake\n  task: ${WAKE_TASK}`)));
+    expect(plain.inbound.task).not.toHaveProperty('activeSkills');
+    const bad = WAKE_TASK.replace(/ }$/, ', active_skills: onboarding }');
+    expect(() => loadScenarioCase(write('wb.yaml', VALID.replace(PRINCIPAL_INBOUND, `from: task-wake\n  task: ${bad}`))))
+      .toThrow(/'active_skills' must be a list of strings/);
   });
 
   it('parses seed.verifications and resolves {{verification:key}} (#2017)', () => {
@@ -661,6 +737,11 @@ expected_behaviors:
     expect(reply.inbound).toMatchObject({ from: 'bullpen', thread: 'consult', author: 'calendar' });
   });
 
+  it('rejects seed.onboarding, which only the coordinator sees (#2360)', () => {
+    const body = SPECIALIST.replace('seed:\n', `seed:\n  onboarding:\n    task: ${WAKE_TASK_ID}\n`);
+    expect(load(body)).toThrow(/seed.onboarding reaches the coordinator only/);
+  });
+
   it('rejects inbounds a specialist cannot receive and fields that belong to another inbound', () => {
     expect(load(SPECIALIST.replace('  from: delegate\n', '  from: principal\n'))).toThrow(/takes inbound from delegate, bullpen, scheduler or task-wake/);
     expect(load(SPECIALIST.replace('agent: ceo-inbox\n', ''))).toThrow(/set the case's 'agent'/);
@@ -918,6 +999,8 @@ describe('selectRunCases', () => {
 
   it('filters by case name, case-insensitively', () => {
     expect(selectRunCases([plain, at84, at74], { caseFilter: 'PII AT' }).cases.map(c => c.name)).toEqual(['pii at 84', 'pii at 74']);
+    // Comma-separated parts pick any case matching one of them; blanks are ignored.
+    expect(selectRunCases([plain, at84, at74], { caseFilter: 'at 84, ,AT 74' }).cases.map(c => c.name)).toEqual(['pii at 84', 'pii at 74']);
   });
 });
 

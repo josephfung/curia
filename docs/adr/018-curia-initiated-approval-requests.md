@@ -322,6 +322,10 @@ this ADR's flow, with no per-skill work. (For example, a heartbeat-woken contact
 can't clear `contact-merge`'s `medium` threshold surfaces the golden-record preview for
 confirmation rather than auto-merging.)
 
+(#2700: `behavioral-preferences-update` went back to `elevated`, coordinator-only. Its text
+lands in every agent's prompt, and at score 60 or more the score gate alone let a coordinator
+turn started by a prompt-injected email through. A woken attempt is now refused, not filed.)
+
 The authorization-*altering* contact skills (`contact-set-tier`, `contact-set-role`,
 `contact-grant-permission`, `contact-revoke-permission`) deliberately do **not** join this flow:
 they stay `elevated` (live principal only), so Curia never proposes an authorization change

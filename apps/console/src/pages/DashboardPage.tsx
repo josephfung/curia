@@ -11,6 +11,7 @@ import { AskCuria } from './dashboard/AskCuria.js';
 import { Bullpen } from './dashboard/Bullpen.js';
 import { HealthCard } from './dashboard/HealthCard.js';
 import { ActivityFeed } from './dashboard/ActivityFeed.js';
+import { OnboardingAlert } from './dashboard/OnboardingAlert.js';
 
 // Principal home (#2340). Each card loads on its own. The greeting uses the
 // waiting count and the "handled since yesterday" count only after those
@@ -57,6 +58,7 @@ export default function DashboardPage() {
                 <p className="dash-greeting-sub">{subtitle || '\u00a0'}</p>
               </div>
 
+              <OnboardingAlert />
               <WaitingOnYou onVisibleCount={setWaitingCount} onTimezone={rememberZone} />
               <BigNumbers onHandled={setHandled} onTimezone={rememberZone} />
 

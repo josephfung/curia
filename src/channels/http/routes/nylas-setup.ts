@@ -138,7 +138,7 @@ export async function nylasSetupRoutes(app: FastifyInstance, options: NylasSetup
       throw err;
     }
     if (key === undefined) {
-      void reply.status(409).send({ error: 'Save the Nylas API key first (Channels → Email).' });
+      void reply.status(409).send({ error: 'Save the Nylas API key first.' });
       return undefined;
     }
     return key;

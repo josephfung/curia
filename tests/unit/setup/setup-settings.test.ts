@@ -1,19 +1,28 @@
-// Which installs see the Setup page (#2358), and the PUT /api/setup/state body rules.
+// Which installs see the Setup page (#2358, #2709), and the PUT /api/setup/state body rules.
 import { describe, it, expect } from 'vitest';
-import { EMPTY_SETUP_STATE, isInSetup } from '../../../src/setup/setup-state.js';
+import { EMPTY_SETUP_STATE, PRE_SETUP_PAGE_ACTOR, isInSetup } from '../../../src/setup/setup-settings.js';
 import { parseStateUpdate } from '../../../src/channels/http/routes/setup.js';
+
+describe('PRE_SETUP_PAGE_ACTOR', () => {
+  it('matches the updated_by migration 132 records for an install that predates the Setup page', () => {
+    // The migration SQL has the same literal; a rename there must change this too. It must
+    // differ from the plain actor the migration uses for Setups finished on the page.
+    expect(PRE_SETUP_PAGE_ACTOR).toBe('migration:132:pre-setup-page');
+    expect(PRE_SETUP_PAGE_ACTOR).not.toBe('migration:132');
+  });
+});
 
 describe('isInSetup', () => {
   it('a brand-new install that has saved nothing is in Setup', () => {
-    expect(isInSetup(EMPTY_SETUP_STATE)).toBe(true);
+    expect(isInSetup(EMPTY_SETUP_STATE.phase)).toBe(true);
   });
 
   it('stays in Setup until Start onboarding', () => {
-    expect(isInSetup({ ...EMPTY_SETUP_STATE, phase: 'in_progress' })).toBe(true);
+    expect(isInSetup('in_progress')).toBe(true);
   });
 
-  it('is out of Setup once complete (also how migration 130 marks older installs)', () => {
-    expect(isInSetup({ ...EMPTY_SETUP_STATE, phase: 'complete' })).toBe(false);
+  it('is out of Setup once complete (also how migration 132 marks older installs)', () => {
+    expect(isInSetup('complete')).toBe(false);
   });
 });
 
@@ -42,6 +51,7 @@ describe('parseStateUpdate', () => {
     ['a bad route', { messagingRoute: 'telnyx-voice' }],
     ['a voice route Setup does not offer', { voiceRoute: 'sms' }],
     ['a bad setupFor', { setupFor: 'team' }],
+    ['a null setupFor', { setupFor: null }],
     ['a bad email', { operatorEmail: 'nope' }],
     ['a non-string name', { operatorName: 4 }],
     ['an over-long name', { operatorName: 'x'.repeat(201) }],

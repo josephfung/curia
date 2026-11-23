@@ -8,6 +8,7 @@ import {
   consumeInvitation,
   mintInvitation,
   readCurrentInvitation,
+  readCurrentInvitationTiming,
   recordPairedNotice,
   releaseInvitation,
   stopInvitation,
@@ -128,6 +129,25 @@ describeIf('pairing invitations (integration)', () => {
     await expect(consumeInvitation(pool, token, 'iPhone')).resolves.toBeNull();
     await expect(readCurrentInvitation(pool)).resolves.toBeNull();
     await expect(cancelInvitation(pool)).resolves.toBe(false);
+  });
+
+  it('reads the current link timing: minted, expires, and when it was redeemed (#2360)', async () => {
+    await expect(readCurrentInvitationTiming(pool)).resolves.toBeNull();
+    const minted = await mintInvitation(pool, 'https://curia.example.com');
+    const waiting = await readCurrentInvitationTiming(pool);
+    // The id is what onboarding keeps to know its own link.
+    expect(waiting).toMatchObject({ id: minted.id, redeemed: false, redeemedAt: null });
+    const hours = (waiting!.expiresAt.getTime() - waiting!.createdAt.getTime()) / 3_600_000;
+    expect(hours).toBeCloseTo(48, 1);
+
+    await consumeInvitation(pool, tokenFrom(minted.pairUrl), 'iPhone');
+    const redeemed = await readCurrentInvitationTiming(pool);
+    expect(redeemed?.redeemed).toBe(true);
+    expect(redeemed?.redeemedAt).toBeInstanceOf(Date);
+
+    // A newer link supersedes it: the timing is the new link's.
+    await mintInvitation(pool, 'https://curia.example.com');
+    await expect(readCurrentInvitationTiming(pool)).resolves.toMatchObject({ redeemed: false, redeemedAt: null });
   });
 
   it('records a paired notice tied to the new phone', async () => {

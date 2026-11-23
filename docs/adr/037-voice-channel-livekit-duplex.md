@@ -154,3 +154,17 @@ voice reuses that for session minting (and optional LiveKit webhooks).
 - Operator how-to (ports, vault, mint auth table, privacy checklist) lives in
   `docs/dev/voice-setup.md` — keep security facts there and here only; do not
   reintroduce a third security memo.
+
+## 2026-11 amendment (#2357)
+
+Curia's own server-side join (VoiceRuntime → LiveKitRoomSession) uses the
+internal signaling URL, derived from `channels.voice.livekit_management_url`
+(`http://livekit:7880` → `ws://livekit:7880`). The browser-facing URL
+(`channels.voice.livekit_url`) is browser-only: it is returned by the voice
+adapter to clients and never used for Curia's own join, since in a container
+`ws://localhost:7880` points at the container itself.
+
+A Curia run on the host (`pnpm dev`), where the compose name does not resolve,
+sets the `LIVEKIT_INTERNAL_URL` env var (e.g. `ws://localhost:7880`) for its own
+join, and `channels.voice.livekit_management_url` for management calls
+(`src/channels/voice/livekit/server-url.ts`).

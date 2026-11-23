@@ -14,7 +14,9 @@ import { assertSecret, CONSOLE_RATE, hashToken, readSessionCookie, type SessionS
 import { writeSseHead } from '../console-sessions.js';
 import { markdownToHtml } from '../../../format/markdown-to-html.js';
 import { fetchChatHistoryPage } from '../chat-history-page.js';
-import { getOrCreateWebThread, readClientMessageId } from '../web-thread.js';
+import { getOrCreateWebThread, readClientMessageId, readWebThreadAndSetupPhase } from '../web-thread.js';
+import { readSetupStep, SETUP_GUIDE_METADATA_KEY } from '../../../setup/setup-guide.js';
+import { isInSetup } from '../../../setup/setup-settings.js';
 
 export interface ChatRouteOptions {
   pool: Pool;
@@ -100,14 +102,21 @@ export async function chatRoutes(
   app.post('/api/chat/messages', CONSOLE_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
 
-    const body = request.body as { message?: unknown; clientMessageId?: unknown; conversationId?: unknown };
+    const body = request.body as { message?: unknown; clientMessageId?: unknown; conversationId?: unknown; setupStep?: unknown };
     if (typeof body?.message !== 'string' || body.message.trim().length === 0) {
       return reply.status(400).send({ error: 'Missing required field: message (non-empty string)' });
     }
 
+    // The thread and the Setup phase are read together at acceptance (#2358, #2709), and the
+    // setup-guide flag is stamped on the inbound, so the message is bound to one side of Start
+    // onboarding: the Setup thread and the setup guide, or the principal's thread and the
+    // coordinator. Routing never re-reads the phase later.
     let conversationId: string;
+    let setupGuide: boolean;
     try {
-      conversationId = await getOrCreateWebThread(pool);
+      const snapshot = await readWebThreadAndSetupPhase(pool, logger);
+      conversationId = snapshot.conversationId;
+      setupGuide = isInSetup(snapshot.setupPhase);
     } catch (err) {
       logger.error({ err }, 'chat thread lookup failed');
       return reply.status(503).send({ error: 'Chat is temporarily unavailable. Please try again.' });
@@ -120,6 +129,9 @@ export async function chatRoutes(
       );
     }
     const clientMessageId = readClientMessageId(body.clientMessageId);
+    // The Setup page's open step (#2358), for the setup guide. A catalog id or a step id:
+    // anything else is dropped, not refused, so a stale client never loses a message.
+    const setupStep = setupGuide ? readSetupStep(body.setupStep) : null;
 
     // stagePublish persists the inbound without waiting for the agent turn.
     // The echo goes out before deliver(), so other devices see the question
@@ -133,7 +145,11 @@ export async function chatRoutes(
         content: body.message,
         // Tag with structural channel trust level — session-cookie auth earns medium trust,
         // same as bearer token auth on the API channel. Required for messageTrustScore computation.
-        metadata: { trustLevel: 'medium' },
+        metadata: {
+          trustLevel: 'medium',
+          ...(setupGuide ? { [SETUP_GUIDE_METADATA_KEY]: true } : {}),
+          ...(setupStep ? { setupStep } : {}),
+        },
       }));
     } catch (publishErr) {
       // Log the real error server-side (full context) but return a fixed,
@@ -227,6 +243,13 @@ export async function chatRoutes(
     // so a half-open phone socket would look healthy. The client reconnects
     // if this stops arriving.
     const heartbeat = setInterval(() => {
+      // Ended at shutdown (or a late registration): a write after end() errors
+      // asynchronously, past this catch, so stop here instead (#2358).
+      if (reply.raw.writableEnded) {
+        clearInterval(heartbeat);
+        cleanup();
+        return;
+      }
       try {
         reply.raw.write('data: {"type":"ping"}\n\n');
       } catch (err) {

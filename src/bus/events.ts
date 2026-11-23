@@ -131,6 +131,12 @@ export interface AgentTaskPayload {
    */
   turnGuidance?: import('../agents/prompts/turn-guidance.js').TurnGuidanceKey[];
   /**
+   * The Setup page step the operator has open (#2358), on a setup guide turn only. Like
+   * `turnGuidance`, the runtime renders it into this turn's user message and never into
+   * `content`. Re-validated there: the payload crossed the bus. Absent means none.
+   */
+  setupStep?: string;
+  /**
    * What is waiting on the principal (prompt trim PR 7): set by the dispatcher on a live
    * principal turn when anything is. The runtime renders it as the backlog line at the end
    * of the turn guidance (src/agents/prompts/backlog-line.ts); like `turnGuidance`, it is
@@ -413,43 +419,76 @@ interface OutboundNoReplyPayload {
   abandonedContent?: string;
 }
 
-// OutboundNotificationPayload — published by the dispatch layer (via OutboundGateway.sendNotification)
-// when a system-level principal alert needs to be sent. Routing through the bus ensures the notification
-// goes through the same safety pipeline as regular outbound messages, closing the prior direct
-// dispatchEmail() bypass. See #206.
+// Who a system notification is for (#2710, ADR-068). Exactly one audience per notification
+// type, fixed in NOTIFICATION_AUDIENCES (src/notifications/audience.ts): callers state what
+// happened, never who to tell.
 //
-// notificationType discriminates between alert categories:
+// `operator` is the person who set Curia up, when that was not the principal — an EA, an IT
+// person, a technical friend. They are told, never talked with: no replies are acted on, and
+// they hold no contact, tier, role or approval rights. An install with no operator set routes
+// operator notices to the principal, so a "Myself" install behaves as it always has.
+// `principal` is the person Curia works for.
+export type NotificationAudience = 'operator' | 'principal';
+
+// The notification-type union. Each member's audience is declared in NOTIFICATION_AUDIENCES,
+// which is a `Record` over this union — a new type with no chosen audience fails typecheck.
+//
 //   - 'blocked_content': no longer emitted (#2159: block notices go to the digest queue); kept for historical audit rows
 //   - 'contact_rate_limited': principal alert that contact auto-creation was throttled due to rate limits
 //   - 'approval_requested':   principal alert that an autonomy gate blocked a skill and approval is needed
 //   - 'approval_expired':     no longer emitted (#2159: expiries go to the digest queue); kept for historical audit rows
-//   - 'schedule_suspended': principal alert that a scheduled job was auto-suspended after consecutive failures (#538)
-//   - 'schedule_recovered': principal alert that a stuck job was auto-recovered (reset to pending or suspended) (#207)
+//   - 'schedule_suspended': operator alert that a scheduled job was auto-suspended after consecutive failures (#538)
+//   - 'schedule_recovered': operator alert that a stuck job was auto-recovered (reset to pending or suspended) (#207)
 //   - 'learning_proposal':  principal alert surfacing a learning-digest item (voice-guide proposal or sent-mail
 //                           task-completion undo/confirm) event-driven when produced, after #1464 removed
 //                           the scheduled digest that used to surface them (#1466)
-//   - 'database_unavailable': principal alert that Postgres has been unreachable for >5 minutes (#1381)
-//   - 'principal_mailbox_outage': principal alert that a principal mailbox failed its health canary (#2475)
+//   - 'database_unavailable': operator alert that Postgres has been unreachable for >5 minutes (#1381)
+//   - 'principal_mailbox_outage': principal alert that a principal mailbox failed its health canary, with the
+//                           sign-in link only they can use (#2475)
+//   - 'mailbox_outage': operator alert that a principal mailbox failed its health canary, carrying no
+//                           reconnect link and no address (#2710)
 //   - 'inbox_triage_paused': principal alert that inbox triage hit its daily batch ceiling; once a day (#2475)
-//   - 'mailbox_signin_admin_blocked': principal alert that a Google Workspace admin policy blocked a
+//   - 'mailbox_signin_admin_blocked': operator alert that a Google Workspace admin policy blocked a
 //                           hosted mailbox sign-in, naming the OAuth client id to trust (#2361)
+//   - 'mailbox_signin_blocked': operator alert, during onboarding, that a Workspace admin policy blocked the
+//                           principal mailbox sign-in (#2360; carried by the onboarding notice, #2710)
+//   - 'greeting_unanswered', 'invitation_expired', 'web_search_failed': operator alerts raised while the
+//                           onboarding program runs (#2360; carried by the onboarding notice, #2710)
 //   - 'principal_note':     no longer emitted (#2159: notes go to the digest queue); kept for historical audit rows
+export type NotificationType =
+  | 'blocked_content'         // no longer emitted (#2159); kept for historical audit rows
+  | 'contact_rate_limited'
+  | 'approval_requested'
+  | 'approval_expired'        // no longer emitted (#2159); kept for historical audit rows
+  | 'schedule_suspended'      // scheduled job auto-suspended after consecutive failures (#538)
+  | 'schedule_recovered'      // stuck job auto-recovered after exceeding timeout threshold (#207)
+  | 'learning_proposal'       // learning-digest item surfaced event-driven when produced (#1466)
+  | 'database_unavailable'  // Postgres unreachable beyond escalation threshold (#1381)
+  | 'principal_mailbox_outage' // a principal mailbox failed its health canary; once per outage (#2475)
+  | 'mailbox_outage'          // the same outage, told to the operator without the reconnect link (#2710)
+  | 'inbox_triage_paused'      // inbox triage hit its daily batch ceiling; once a local day (#2475)
+  | 'mailbox_signin_admin_blocked' // a Workspace admin policy blocked a mailbox sign-in (#2361)
+  | 'greeting_unanswered'     // onboarding: the principal never answered the greeting (#2360)
+  | 'invitation_expired'      // onboarding: the app invitation link expired unused (#2360)
+  | 'web_search_failed'       // onboarding: web search failed during the homework (#2360)
+  | 'mailbox_signin_blocked'  // onboarding: a Workspace admin policy blocked the sign-in (#2360)
+  | 'principal_note';       // no longer emitted (#2159); kept for historical audit rows
+
+// OutboundNotificationPayload — published by the dispatch layer (via OutboundGateway.sendNotification)
+// when a system-level alert needs to be sent. Routing through the bus ensures the notification
+// goes through the same safety pipeline as regular outbound messages, closing the prior direct
+// dispatchEmail() bypass. See #206.
+//
+// The gateway resolves the address from the notification type (#2710): the payload carries the
+// resolved `recipient` and the `audience` it came from, so a reader can see which of the two
+// rules placed the notice. Callers never name a recipient.
 export interface OutboundNotificationPayload {
-  notificationType:
-    | 'blocked_content'         // no longer emitted (#2159); kept for historical audit rows
-    | 'contact_rate_limited'
-    | 'approval_requested'
-    | 'approval_expired'        // no longer emitted (#2159); kept for historical audit rows
-    | 'schedule_suspended'      // scheduled job auto-suspended after consecutive failures (#538)
-    | 'schedule_recovered'      // stuck job auto-recovered after exceeding timeout threshold (#207)
-    | 'learning_proposal'       // learning-digest item surfaced event-driven when produced (#1466)
-    | 'database_unavailable'  // Postgres unreachable beyond escalation threshold (#1381)
-    | 'principal_mailbox_outage' // a principal mailbox failed its health canary; once per outage (#2475)
-    | 'inbox_triage_paused'      // inbox triage hit its daily batch ceiling; once a local day (#2475)
-    | 'mailbox_signin_admin_blocked' // a Workspace admin policy blocked a mailbox sign-in (#2361)
-    | 'principal_note';       // no longer emitted (#2159); kept for historical audit rows
-  /** Recipient email for this notification (always the principal email today). */
-  ceoEmail: string;
+  notificationType: NotificationType;
+  /** The resolved address: the operator's when the type is operator-routed and one is set,
+   *  otherwise the principal's. Never both — a notice is sent to exactly one of them. */
+  recipient: string;
+  /** The audience table's answer for this type, which is what chose `recipient`. */
+  audience: NotificationAudience;
   subject: string;
   body: string;
   /** Present for blocked_content notifications — links back to the outbound.blocked event. */
@@ -458,6 +497,28 @@ export interface OutboundNotificationPayload {
   originalChannel?: string;
   /** Intended recipient of the original blocked or held message. */
   originalRecipientId?: string;
+}
+
+/** What a caller of `OutboundGateway.sendNotification` states: what happened, not who to tell. */
+export type OutboundNotificationRequest = Omit<OutboundNotificationPayload, 'recipient' | 'audience'>;
+
+// OutboundNotificationUndeliveredPayload — published by the dispatch layer when a system
+// notification could not be addressed, so nothing was published for delivery (#2710). This is
+// the audit row for a notice nobody received: the address was missing (no principal email
+// bound yet, usually), and the policy is to log and audit rather than fall back to the other
+// audience. It carries the type and the audience only — never the subject or the body.
+export interface OutboundNotificationUndeliveredPayload {
+  notificationType: NotificationType;
+  /** Which side of NOTIFICATION_AUDIENCES the missing address came from. */
+  audience: NotificationAudience;
+  /**
+   * Why the notice reached nobody:
+   *   - `no_recipient`: no address to send it to (no operator and no bound principal email).
+   *   - `publish_failed`: the bus refused the publish.
+   *   - `delivery_unavailable`: no email adapter that delivers notifications is subscribed yet,
+   *     so a publish would reach no one.
+   */
+  reason: 'no_recipient' | 'publish_failed' | 'delivery_unavailable';
 }
 
 interface ToolInvokePayload {
@@ -728,10 +789,24 @@ interface ScheduleFiredPayload {
   agentTaskId: string | null;
 }
 
+/**
+ * The coarse class of a job's last failure, for notices that an operator reads (#2710). The
+ * message itself can be the agent's own response text, so it is never sent to the operator:
+ * the class says what went wrong and the console link carries the detail.
+ */
+export type JobErrorClass = 'timeout' | 'llm_failure' | 'tool_failure' | 'other';
+
 interface ScheduleSuspendedPayload {
   jobId: string;
   agentId: string;
+  /**
+   * The failure message, stored for the audit trail and the console. It may be model-written
+   * text (the scheduler falls back to the agent's response when no agent.error arrived), so an
+   * operator-routed notice must not carry it (#2710, ADR-068) — it carries `lastErrorClass`.
+   */
   lastError: string;
+  /** Coarse class of `lastError`, for operator notices. Absent on events written before #2710. */
+  lastErrorClass?: JobErrorClass;
   consecutiveFailures: number;
 }
 
@@ -1092,6 +1167,13 @@ interface PrincipalMailboxChangedPayload {
 // end in mailbox_signin.finished. Audit-only. Carries the mailbox id — NEVER a grant id or an address.
 interface PrincipalMailboxConnectedPayload {
   mailboxId: string;
+}
+
+// PairingInvitationRedeemedPayload — a phone redeemed the phone app invitation link (#2360). Carries
+// the invitation id and the device's display name — NEVER the token or the session cookie.
+interface PairingInvitationRedeemedPayload {
+  invitationId: string;
+  deviceName: string;
 }
 
 // MailboxSignInFinishedPayload — a hosted sign-in ended, whatever the outcome (#2361). A resume
@@ -1610,6 +1692,16 @@ export interface OutboundNotificationEvent extends BaseEvent {
   payload: OutboundNotificationPayload;
 }
 
+// OutboundNotificationUndeliveredEvent — published by the dispatch layer when a system
+// notification had no address to go to, so nothing reached anyone (#2710). System layer
+// subscribes for the audit row; no channel adapter must ever see it, because there is no
+// message in it to deliver.
+export interface OutboundNotificationUndeliveredEvent extends BaseEvent {
+  type: 'outbound.notification_undelivered';
+  sourceLayer: 'dispatch';
+  payload: OutboundNotificationUndeliveredPayload;
+}
+
 export interface ToolInvokeEvent extends BaseEvent {
   type: 'tool.invoke';
   sourceLayer: 'agent';
@@ -2082,6 +2174,14 @@ export interface PrincipalMailboxConnectedEvent extends BaseEvent {
   payload: PrincipalMailboxConnectedPayload;
 }
 
+// PairingInvitationRedeemedEvent — published by the pairing route (trusted system infra) after a phone
+// signs in with an invitation link (#2360), so a system subscriber can follow up once the phone is paired.
+export interface PairingInvitationRedeemedEvent extends BaseEvent {
+  type: 'pairing.invitation_redeemed';
+  sourceLayer: 'system';
+  payload: PairingInvitationRedeemedPayload;
+}
+
 // MailboxSignInFinishedEvent — published by the sign-in callback (trusted system infra) when a
 // hosted sign-in ends (#2361). parentEventId traces to the originating agent.task. Never carries
 // a grant id or an address.
@@ -2385,6 +2485,7 @@ export type BusEvent =
   | OutboundSuppressedDuplicateEvent  // #847: duplicate reply suppressed by reply-lock
   | OutboundNoReplyEvent              // #1732: agent declined to reply (NO_REPLY sentinel)
   | OutboundNotificationEvent // System notifications routed through safety pipeline (#206)
+  | OutboundNotificationUndeliveredEvent // A system notification had no address; audit only (#2710)
   | ScheduleCreatedEvent   // Scheduler: job created
   | ScheduleFiredEvent     // Scheduler: job fired
   | ScheduleSuspendedEvent   // Scheduler: job auto-suspended
@@ -2410,6 +2511,7 @@ export type BusEvent =
   | SecretChangedEvent       // #2453: console set/delete of a vault secret (name only, never value)
   | PrincipalMailboxChangedEvent // #2475: console add/relabel/default/grant/remove of a principal mailbox
   | PrincipalMailboxConnectedEvent // #2361: a mailbox connected through Hosted Auth (id only)
+  | PairingInvitationRedeemedEvent // #2360: a phone redeemed the invitation link (id + device name)
   | MailboxSignInFinishedEvent // #2361: a hosted sign-in ended (outcome + routing, never a grant id)
   | SecretCapturedEvent      // #972: one-time capture link redeemed (name/routing only, never value)
   | CardUseRequestedEvent    // #1358: saved-card use requested (brand/last4/site/amount, never the number)
@@ -2668,6 +2770,20 @@ export function createOutboundNotification(
     type: 'outbound.notification',
     sourceLayer: 'dispatch',
     payload: rest,
+    parentEventId,
+  };
+}
+
+export function createOutboundNotificationUndelivered(
+  payload: OutboundNotificationUndeliveredPayload,
+  parentEventId?: string,
+): OutboundNotificationUndeliveredEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'outbound.notification_undelivered',
+    sourceLayer: 'dispatch',
+    payload,
     parentEventId,
   };
 }
@@ -3094,6 +3210,20 @@ export function createPrincipalMailboxConnected(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'principal_mailbox.connected',
+    sourceLayer: 'system',
+    payload,
+    parentEventId,
+  };
+}
+
+export function createPairingInvitationRedeemed(
+  payload: PairingInvitationRedeemedPayload,
+  parentEventId?: string,
+): PairingInvitationRedeemedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'pairing.invitation_redeemed',
     sourceLayer: 'system',
     payload,
     parentEventId,

@@ -1,0 +1,23 @@
+# Keyless LiveKit config for local (this-computer) installs. Identical to
+# livekit.yaml except rtc.use_external_ip is false: LiveKit's --node-ip does not
+# override use_external_ip: true, so a local install needs its own file. Used
+# with: --config /etc/livekit.local.yaml --node-ip 127.0.0.1
+# API keys come from LIVEKIT_KEYS in .env, never from this file.
+port: 7880
+
+rtc:
+  tcp_port: 7881
+  # Single-port UDP mux is intentional for Phase 1 (one concurrent console call).
+  # Widen (or switch to a port range) before expecting multiple simultaneous rooms.
+  udp_port: 7882
+  use_external_ip: false
+
+# Tear empty rooms down promptly after the last participant leaves. This is
+# cleanup only — it does not revoke JWTs. A leaked token remains valid until its
+# TTL and LiveKit may auto-create the room on rejoin within that window.
+room:
+  empty_timeout: 30
+  departure_timeout: 20
+
+logging:
+  level: info

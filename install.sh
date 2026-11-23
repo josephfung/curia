@@ -25,7 +25,8 @@
 #      .env.example, and Caddyfile next to install.sh (if not already present).
 #   3. Creates .env from the example, generating secrets for any placeholder values.
 #   4. Prompts for an Anthropic API key (format-validated, 3 retries).
-#   5. Asks about deployment topology (local / public HTTPS / behind-proxy).
+#   5. Asks how people will reach Curia: your domain with HTTPS set up for you
+#      (default), your domain behind HTTPS you already run, or just this computer.
 #   6. Starts Postgres, runs migrations and vault-seed *inside* the pulled image
 #      (tsx direct — no corepack/pnpm on the host), then brings the full stack up.
 #   7. Prints a summary box with the bootstrap secret the operator needs to sign in.
@@ -157,6 +158,21 @@ fi
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/scripts/setup-common.sh"
 
+# An install made by an older release keeps that release's setup-common.sh,
+# which lacks the helpers this installer calls (#2357). Fetch this release's
+# copy over it once; if that still lacks them (a CURIA_VERSION older than this
+# installer), stop and point at that release's own install.sh.
+if ! declare -F ensure_livekit_env >/dev/null; then
+  download_to "$(bundle_asset_url scripts/setup-common.sh setup-common.sh)" "$SCRIPT_DIR/scripts/setup-common.sh" || true
+  # shellcheck source=/dev/null
+  source "$SCRIPT_DIR/scripts/setup-common.sh"
+  if ! declare -F ensure_livekit_env >/dev/null; then
+    printf 'error: scripts/setup-common.sh is older than this installer (CURIA_VERSION=%s).\n' "$CURIA_VERSION" >&2
+    printf "hint:  run that release's own installer instead: %s\n" "$(bundle_asset_url install.sh install.sh)" >&2
+    exit 1
+  fi
+fi
+
 # setup-common.sh's wait_for_postgres / wait_for_curia look up the compose
 # project via $REPO_ROOT. For the image-based install, the install dir IS the
 # project root (docker-compose.yml lives alongside install.sh).
@@ -184,26 +200,6 @@ detect_source_checkout() {
   grep -q '"name"[[:space:]]*:[[:space:]]*"curia"' "$d/package.json"
 }
 
-# Set KEY=VALUE in the .env file at path $1.
-#   - If the key already exists (commented or uncommented), replace that line.
-#   - If the key is absent, append it.
-# Uses awk for a portable in-place edit that avoids sed -i portability issues
-# between GNU and BSD sed.
-set_env_var() {
-  local env="$1" key="$2" val="$3"
-  if grep -qE "^#?[[:space:]]*${key}=" "$env"; then
-    local tmp
-    tmp="$(mktemp)"
-    awk -v k="$key" -v v="$val" '
-      $0 ~ "^#?[[:space:]]*"k"=" && !done { print k"="v; done=1; next }
-      { print }
-      END { if (!done) print k"="v }' "$env" > "$tmp"
-    mv "$tmp" "$env"
-  else
-    printf '\n%s=%s\n' "$key" "$val" >> "$env"
-  fi
-}
-
 # Returns 0 (true) only if the install at env file $1 is fully COMPLETE — i.e.
 # a prior fresh install ran all the way through migrations, vault seeding, a
 # healthy container, and wrote the SETUP_COMPLETE marker as its last step.
@@ -220,45 +216,11 @@ install_is_complete() {
   grep -q "^# SETUP_COMPLETE" "$env" 2>/dev/null
 }
 
-# Echo the value of KEY from an env file (last assignment wins), or nothing when
-# the key is absent or the file is missing. Follows Compose's .env value rules
-# for the shapes a *_BIND or COMPOSE_FILE value takes: a "..." or '...' value is
-# what the quotes hold, anything after the closing quote (e.g. `# note`) is
-# dropped; an unquoted value ends at a ` #` inline comment, blanks around it
-# trimmed. So HTTP_BIND="127.0.0.1" # note reads as 127.0.0.1. ${VAR}
-# interpolation inside .env is not resolved (is_unresolved flags it). Always returns 0: this script runs
-# under `set -euo pipefail`, where grep's no-match status would abort the
-# installer from inside `x="$(env_value ...)"`.
-env_value() {
-  local env="$1" key="$2" v rest q
-  v="$({ grep -E "^${key}=" "$env" 2>/dev/null || true; } | tail -n 1 | cut -d= -f2-)"
-  case "$v" in
-    \"*|\'*)
-      q="${v:0:1}"; rest="${v:1}"
-      # Unterminated quote: keep the raw value, as before.
-      [[ "$rest" == *"$q"* ]] && v="${rest%%"$q"*}"
-      ;;
-    *)
-      v="${v%%[[:blank:]]#*}"
-      v="${v%"${v##*[![:blank:]]}"}"
-      v="${v#"${v%%[![:blank:]]*}"}"
-      ;;
-  esac
-  printf '%s' "$v"
-}
-
 # Returns 0 when a value ($1) holds a ${...} reference that env_value leaves
 # unresolved, so a check keyed on it can't tell what Compose will use.
 is_unresolved() {
   # shellcheck disable=SC2016  # a literal ${, not an expansion
   [[ "$1" == *'${'* ]]
-}
-
-# Echo VAR as Compose resolves it: the shell's value when the shell sets it
-# (even to empty, which Compose also prefers over .env), else the .env value.
-compose_var() {
-  local env="$1" key="$2"
-  if [[ -n "${!key+set}" ]]; then printf '%s' "${!key}"; else env_value "$env" "$key"; fi
 }
 
 # Returns 0 when a *_BIND value ($1) names a loopback address. Empty is not
@@ -475,6 +437,44 @@ warn_public_livekit_dev() {
   hint "or remove LIVEKIT_HTTP_BIND from .env to keep signaling on loopback."
 }
 
+# Upgrade path: the installer never turns voice on for an existing install
+# (#2357), so say when it is off and where the steps are. Silent when the voice
+# profile is enabled (shell first, then .env, as Compose reads it) or livekit
+# runs anyway.
+note_voice_off() {
+  local env="$1" profiles
+  profiles="$(compose_var "$env" COMPOSE_PROFILES)"
+  [[ ",${profiles}," != *,voice,* ]] || return 0
+  service_running livekit && return 0
+  echo "" >&2
+  warn "Voice (LiveKit) is off on this install."
+  hint "New installs turn it on; upgrades leave it as it was. To turn it on here, see"
+  hint "the steps for an existing install in docs/dev/voice-setup.md:"
+  hint "  https://github.com/josephfung/curia/blob/main/docs/dev/voice-setup.md#turn-voice-on-for-an-existing-install"
+}
+
+# Fresh install, before Postgres starts. The HTTPS topology, and a proxy with a
+# public address, put LiveKit signaling on the internet (the shipped Caddyfile
+# routes /rtc* to it; a proxy is told to). --dev's devkey/secret are public, so
+# anyone could then mint LiveKit tokens: stop rather than install that. An
+# empty command is the compose default, --dev. Reads TOPOLOGY and PROXY_ORIGIN.
+# The command itself is never printed: it may carry --keys.
+require_livekit_real_keys() {
+  local env="$1"
+  case "$TOPOLOGY" in
+    domain) ;;
+    proxy) [[ -n "$PROXY_ORIGIN" ]] || return 0 ;;
+    *) return 0 ;;
+  esac
+  livekit_command_is_dev "$(compose_var "$env" LIVEKIT_COMMAND)" || return 0
+  echo "" >&2
+  error "LIVEKIT_COMMAND runs LiveKit with --dev credentials (devkey/secret), which this public install would expose."
+  hint "Set real keys: unset LIVEKIT_COMMAND (in your shell and .env) to let the installer generate them,"
+  hint "or set LIVEKIT_COMMAND=--config /etc/livekit.yaml with your own LIVEKIT_KEYS=\"<key>: <secret>\"."
+  hint "Then re-run install.sh. Postgres was not started."
+  exit 1
+}
+
 # Since #2408 LiveKit signaling (7880) is published on loopback unless
 # LIVEKIT_HTTP_BIND says otherwise. Warn when the live binding ($2) disagrees
 # with that intent, as check_postgres_exposure does. Fresh and upgrade paths
@@ -556,6 +556,11 @@ note_livekit_signaling() {
   [[ -n "$bindings" ]] || return 0   # voice not running
   bindings_are_loopback "$bindings" || return 0
   [[ -z "$(compose_var "$env" LIVEKIT_HTTP_BIND)" ]] || return 0
+  # Installs whose LiveKit the installer set up (#2357) are loopback on purpose:
+  # browsers reach signaling through Caddy's /rtc* route or ws://localhost:7880.
+  local cmd
+  cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
+  [[ "$cmd" == "$(livekit_command_for local)" || "$cmd" == "$(livekit_command_for public)" ]] && return 0
   echo "" >&2
   warn "LiveKit signaling (7880) is published on loopback only (#2408)."
   hint "Browsers can no longer reach ws://<host>:7880 directly. If your Voice"
@@ -653,6 +658,29 @@ ensure_https_app_origin() {
   fi
 }
 
+# Echo this install's Compose project name the way Compose derives it:
+# COMPOSE_PROJECT_NAME (shell, then .env), else the install dir's basename;
+# lowercased, characters outside [a-z0-9_-] dropped, leading - and _ trimmed.
+compose_project_name() {
+  local env="$1" name
+  name="$(compose_var "$env" COMPOSE_PROJECT_NAME)"
+  [[ -n "$name" ]] || name="${INSTALL_DIR%/}"; name="${name##*/}"
+  name="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -cd 'a-z0-9_-')"
+  while [[ "$name" == [-_]* ]]; do name="${name#?}"; done
+  printf '%s' "$name"
+}
+
+# Returns 0 when this install's Postgres volume (<project>_pgdata) exists, i.e.
+# Postgres was already initialised with whatever DB_PASSWORD was then in .env.
+pgdata_volume_exists() {
+  docker volume inspect "$(compose_project_name "$1")_pgdata" >/dev/null 2>&1
+}
+
+# Echo "on" when the voice profile is enabled (shell, then .env), else "off".
+voice_state() {
+  if [[ ",$(compose_var "$1" COMPOSE_PROFILES)," == *,voice,* ]]; then echo on; else echo off; fi
+}
+
 # Validate prereqs: Docker daemon up, compose plugin present, curl available.
 # The operator path deliberately does NOT require Node, pnpm, or openssl.
 check_prereqs() {
@@ -673,7 +701,7 @@ check_prereqs() {
 }
 
 # Fetch the compose bundle (base compose file, TLS overlay, env template,
-# Caddyfile, and the browser container's seccomp profile) into the install dir,
+# Caddyfile, the browser container's seccomp profile and LiveKit's configs) into the install dir,
 # skipping files that are already present.
 # This lets an operator re-run install.sh safely without clobbering hand-edits.
 fetch_bundle() {
@@ -707,6 +735,19 @@ fetch_bundle() {
     info "Fetching $seccomp ..."
     fetch_asset "$seccomp" "seccomp-chrome.json"
   fi
+  # LiveKit's configs, the same way: only releases whose compose file mounts
+  # them (#2357) ship them. Each is keyed on its own mount, since livekit.yaml
+  # and livekit.local.yaml are separate files. Only a non-comment line counts:
+  # older compose files name ./docker/livekit.yaml in a comment.
+  local lk
+  for lk in livekit.yaml livekit.local.yaml; do
+    if grep -qE "^[^#]*docker/${lk//./\\.}:" "$INSTALL_DIR/docker-compose.yml" \
+      && [[ ! -f "$INSTALL_DIR/docker/$lk" ]]; then
+      mkdir -p "$INSTALL_DIR/docker"
+      info "Fetching docker/$lk ..."
+      fetch_asset "docker/$lk" "$lk"
+    fi
+  done
 }
 
 # Create .env from the template if it does not exist yet, then return its path.
@@ -719,21 +760,121 @@ resolve_env_file() {
   printf '%s' "$env"
 }
 
-# Prompt for deployment topology. Echoes one of: local | domain | proxy.
+# Map a menu answer to a topology name: 1/empty/unknown -> domain, 2 -> proxy,
+# 3 -> local. HTTPS is the default, so anything unrecognised lands on domain.
+topology_for_choice() {
+  case "$1" in
+    2) echo "proxy" ;;
+    3) echo "local" ;;
+    *) echo "domain" ;;
+  esac
+}
+
+# Prompt for deployment topology. Echoes one of: domain | proxy | local.
 # Runs interactively; not unit-tested (requires a TTY and user input).
 choose_topology() {
-  echo "" >&2
-  echo "How will you reach Curia?" >&2
-  echo "  1  Local / evaluation        (http://localhost:3000, no TLS)" >&2
-  echo "  2  Public domain + HTTPS      (automatic Let's Encrypt via Caddy)" >&2
-  echo "  3  Public IP / my own proxy   (http on :3000, terminate TLS upstream)" >&2
+  {
+    echo ""
+    echo "How will people reach Curia?"
+    echo "  1  My domain, with HTTPS set up for me   (recommended)"
+    echo "     Curia gets its own certificate. Needs a domain pointing at this"
+    echo "     server and ports 80 and 443 open."
+    echo "  2  My domain, behind HTTPS I already run"
+    echo "     For servers that already have nginx, Traefik, Cloudflare Tunnel or"
+    echo "     similar in front. Curia listens on port 3000 behind it."
+    echo "  3  Just this computer, to try it out"
+    echo "     No phone app; onboarding then needs Signal or SMS."
+    echo "Not sure? Choose 1."
+  } >&2
+  local c
   read -rp "Choice [1]: " c
-  c="${c:-1}"
-  case "$c" in
-    2) echo "domain" ;;
-    3) echo "proxy" ;;
-    *) echo "local" ;;
+  topology_for_choice "$c"
+}
+
+# Normalize a proxy address to scheme://host[:port]. Lowercases the scheme and
+# drops one trailing slash. Returns 1 for anything else: no http(s):// scheme,
+# whitespace, a path beyond "/", a query or fragment, or an empty host.
+normalize_origin() {
+  local v="$1" scheme rest
+  case "$v" in
+    [Hh][Tt][Tt][Pp][Ss]://*) scheme="https"; rest="${v#????????}" ;;
+    [Hh][Tt][Tt][Pp]://*)     scheme="http";  rest="${v#???????}" ;;
+    *) return 1 ;;
   esac
+  rest="${rest%/}"
+  [[ -n "$rest" ]] || return 1
+  case "$rest" in
+    *[[:space:]]*|*/*|*\?*|*\#*) return 1 ;;
+  esac
+  printf '%s://%s' "$scheme" "$rest"
+}
+
+# Browser-facing LiveKit base URL (never ending in /rtc: livekit-client appends it).
+#   livekit_browser_url <topology> <domain_or_origin>
+livekit_browser_url() {
+  local topology="$1" value="${2:-}"
+  case "$topology" in
+    domain) printf 'wss://%s' "$value" ;;
+    proxy)
+      case "$value" in
+        https://*) printf 'wss://%s' "${value#https://}" ;;
+        http://*)  printf 'ws://%s' "${value#http://}" ;;
+        *)         printf 'ws://localhost:7880' ;;
+      esac ;;
+    *) printf 'ws://localhost:7880' ;;
+  esac
+}
+
+# Base URL people open Curia on, for the closing message (no trailing slash).
+#   setup_base_url <topology> <domain_or_origin>
+# domain -> https://<domain>; proxy -> its public origin; otherwise, or when
+# the value is empty, http://localhost:$HTTP_PORT (3000 by default).
+setup_base_url() {
+  local topology="$1" value="${2:-}"
+  if [[ -n "$value" ]]; then
+    case "$topology" in
+      domain) printf 'https://%s' "$value"; return 0 ;;
+      proxy)  printf '%s' "${value%/}"; return 0 ;;
+    esac
+  fi
+  printf 'http://localhost:%s' "${HTTP_PORT:-3000}"
+}
+
+# 0 when something accepts a TCP connection on 127.0.0.1:<port> (1 s bound).
+port_listening() {
+  local port="$1"
+  ( exec 3<>"/dev/tcp/127.0.0.1/$port" ) 2>/dev/null &
+  local pid=$! i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null; return $?; }
+    sleep 0.1
+  done
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  return 1
+}
+
+# Ask for the public address a user's own proxy serves Curia on. Echoes the
+# normalized origin, or nothing for Enter (localhost testing). Re-asks on invalid.
+prompt_proxy_origin() {
+  local ans norm
+  echo "" >&2
+  while true; do
+    echo "Public address your proxy serves Curia on (e.g. https://curia.example.com)." >&2
+    read -rp "Press Enter to keep localhost for testing: " ans
+    if [[ -z "$ans" ]]; then
+      hint "Using ws://localhost:7880 for calls; this is for testing only."
+      return 0
+    fi
+    if norm="$(normalize_origin "$ans")"; then
+      if [[ "$norm" == http://* ]]; then
+        warn "The phone app needs https. $norm will work for the browser only."
+      fi
+      printf '%s' "$norm"
+      return 0
+    fi
+    warn "Enter the address as https://host or https://host:port, with no path."
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -751,10 +892,19 @@ fresh_install() {
   # install (DB creds written on a prior interrupted run but the vault never
   # seeded): the Postgres volume was already initialised with that password, so
   # regenerating it would break authentication. Only generate when the value is
-  # absent or the shipped placeholder.
-  db_pass="$(grep -E '^DB_PASSWORD=' "$env" 2>/dev/null | cut -d= -f2-)"
+  # absent or a shipped placeholder. .env.example's your-db-password is one too,
+  # except when this project's Postgres volume already exists: an older install,
+  # interrupted, initialised it with that password.
+  db_pass="$(env_value "$env" DB_PASSWORD)"
   case "$db_pass" in
     ""|replace-*) db_pass="$(gen_secret_hex)" ;;
+    your-db-password)
+      if pgdata_volume_exists "$env"; then
+        warn "Keeping DB_PASSWORD=your-db-password, the weak default from .env.example:"
+        hint "this install's Postgres volume was already set up with it."
+      else
+        db_pass="$(gen_secret_hex)"
+      fi ;;
   esac
   api_token="$(gen_secret_hex)"
   boot_secret="$(gen_secret_hex)"
@@ -790,10 +940,14 @@ fresh_install() {
   local anthropic
   anthropic="$(prompt_anthropic_key)"
 
-  # Prompt for topology only on a fresh install (no COMPOSE_FILE/DOMAIN yet).
-  local topology
-  topology="$(choose_topology)"
-  case "$topology" in
+  # TOPOLOGY and PROXY_ORIGIN are read by later steps (LiveKit seeding).
+  # A rerun after an interrupted install keeps that run's LiveKit settings in .env.
+  if [[ -n "$(env_value "$env" LIVEKIT_COMMAND)" ]]; then
+    hint "An earlier run's settings in .env are kept; to reach Curia another way, edit .env or install in a new directory."
+  fi
+  TOPOLOGY="$(choose_topology)"
+  PROXY_ORIGIN=""
+  case "$TOPOLOGY" in
     domain)
       # Require a non-empty domain — the TLS overlay and the summary URL are
       # both useless without one, and Caddy cannot request a certificate.
@@ -809,9 +963,12 @@ fresh_install() {
       set_env_var "$env" HTTP_BIND 127.0.0.1
       # Public origin for console links, Secure cookies and CORS.
       ensure_https_app_origin "$env"
-      # Expose DOMAIN as a shell variable so print_summary can build the HTTPS URL.
-      # shellcheck disable=SC2034  # read by print_summary (sourced from setup-common.sh)
+      # Kept as a shell variable for the LiveKit URL and the closing address below.
       DOMAIN="$dom"
+      if port_listening 80 || port_listening 443; then
+        warn "Something is already using port 80 or 443 on this machine."
+        hint "If nginx, Traefik or similar already serves HTTPS here, re-run and choose option 2."
+      fi
       # Best-effort DNS warning; never blocks the install.
       if ! getent hosts "$dom" >/dev/null 2>&1; then
         if command -v host >/dev/null 2>&1; then
@@ -826,8 +983,41 @@ fresh_install() {
       # Evaluation on this machine: http://localhost:3000 only.
       set_env_var "$env" HTTP_BIND 127.0.0.1
       ;;
-    *) : ;;  # proxy: base compose only, HTTP on :3000 on every interface
+    *)
+      # proxy: base compose only, HTTP on :3000 on every interface.
+      PROXY_ORIGIN="$(prompt_proxy_origin)"
+      if [[ -n "$PROXY_ORIGIN" && -z "$(env_value "$env" APP_ORIGIN)" ]]; then
+        set_env_var "$env" APP_ORIGIN "$PROXY_ORIGIN"
+      fi
+      ;;
   esac
+
+  # Voice (#2357): turn the LiveKit profile on with generated keys. Installs
+  # only this machine reaches (local, or a proxy kept on localhost) pin
+  # LiveKit's node IP to loopback; the rest advertise their public address.
+  local lk_mode=public lk_value=""
+  case "$TOPOLOGY" in
+    local) lk_mode=local ;;
+    proxy) [[ -n "$PROXY_ORIGIN" ]] || lk_mode=local; lk_value="$PROXY_ORIGIN" ;;
+    domain) lk_value="$DOMAIN" ;;
+  esac
+  ensure_livekit_env "$env" "$lk_mode"
+  require_livekit_real_keys "$env"
+
+  # Seed the Voice channel's vault values to match what LiveKit runs on. The
+  # keys are passed to the seed container only, like the other secrets, and
+  # are never printed. seed-vault never replaces values already in the vault.
+  local lk_url lk_pair="" lk_rc=0
+  local -a lk_seed
+  lk_url="$(livekit_browser_url "$TOPOLOGY" "$lk_value")"
+  lk_seed=(-e "SEED_LIVEKIT_URL=$lk_url")
+  lk_pair="$(livekit_seed_keys "$(compose_var "$env" LIVEKIT_KEYS)" "$(compose_var "$env" LIVEKIT_COMMAND)")" || lk_rc=$?
+  if [[ $lk_rc -eq 0 ]]; then
+    lk_seed+=(-e "SEED_LIVEKIT_API_KEY=${lk_pair%% *}" -e "SEED_LIVEKIT_API_SECRET=${lk_pair#* }")
+  else
+    warn "Could not tell which keys LiveKit's LIVEKIT_COMMAND uses, so they were not saved for Curia."
+    hint "Enter the LiveKit API key and secret under Settings → Channels → Voice after setup."
+  fi
 
   # Start Postgres and wait for it to be ready before running migrations.
   info "Starting Postgres..."
@@ -859,6 +1049,7 @@ fresh_install() {
     -e "ANTHROPIC_API_KEY=$anthropic" \
     -e "API_TOKEN=$api_token" \
     -e "WEB_APP_BOOTSTRAP_SECRET=$boot_secret" \
+    ${lk_seed[@]+"${lk_seed[@]}"} \
     -e SEED_VAULT_VERIFY=1 \
     curia ./node_modules/.bin/tsx scripts/seed-vault.ts; then
     error "Vault seeding failed."
@@ -886,7 +1077,8 @@ fresh_install() {
   # this marker and takes the upgrade path instead of rotating secrets.
   printf '\n# SETUP_COMPLETE\n' >> "$env"
 
-  print_summary "$boot_secret"
+  print_summary "$boot_secret" "$(setup_base_url "$TOPOLOGY" "$lk_value")"
+  print_next_steps "$TOPOLOGY" "$(voice_state "$env")"
 }
 
 # ---------------------------------------------------------------------------
@@ -948,24 +1140,27 @@ existing_install() {
   check_livekit_exposure "$env"
   note_livekit_signaling "$env"
   note_missing_browser "$env"
+  note_voice_off "$env"
 
-  # Load the URL-shaping values from .env so print_summary shows the right
-  # address for this existing install: DOMAIN (HTTPS topology) and a custom
-  # HTTP_PORT (local/proxy topology). Both are read by print_summary, which is
-  # sourced from setup-common.sh — hence the shellcheck disables.
-  # shellcheck disable=SC2034
-  if grep -qE '^DOMAIN=.+' "$env" 2>/dev/null; then
-    DOMAIN="$(grep -E '^DOMAIN=' "$env" | cut -d= -f2-)"
-  fi
-  # shellcheck disable=SC2034
+  # A custom HTTP_PORT from .env shapes the localhost address (setup_base_url).
   if grep -qE '^HTTP_PORT=.+' "$env" 2>/dev/null; then
     HTTP_PORT="$(grep -E '^HTTP_PORT=' "$env" | cut -d= -f2-)"
   fi
 
-  # Pass empty string: print_summary then shows the "secret is stored in the
-  # vault — use the console to retrieve it" branch rather than printing a
-  # fresh secret (which we don't have on the upgrade path).
-  print_summary ""
+  # The topology this install looks like: the TLS overlay is the HTTPS
+  # topology, an APP_ORIGIN without it is a user's own proxy, and anything
+  # else is local. A rerun keeps it; to change it, edit .env or reinstall.
+  local topology origin
+  if uses_tls_overlay "$(compose_var "$env" COMPOSE_FILE)"; then
+    topology=domain; origin="$(env_value "$env" DOMAIN)"
+  else
+    origin="$(env_value "$env" APP_ORIGIN)"
+    if [[ -n "$origin" ]]; then topology=proxy; else topology=local; fi
+  fi
+  # Empty secret: print_summary then shows the "stored in the vault" branch
+  # rather than a fresh secret (which we don't have on the upgrade path).
+  print_summary "" "$(setup_base_url "$topology" "$origin")"
+  print_next_steps "$topology" "$(voice_state "$env")"
 }
 
 # ---------------------------------------------------------------------------

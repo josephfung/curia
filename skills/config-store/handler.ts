@@ -314,7 +314,11 @@ export class ConfigStoreHandler implements ToolHandler {
 /** Keys in ceo_inbox that only code writes: triage, sent-observe and voice-learning state (R65). */
 const CODE_OWNED_STATE_KEY = /^(triage|sent_observe|voice_learn)\./;
 
+/** The onboarding program (#2360) keeps its state and triage hold here: every key is code-owned. */
+const ONBOARDING_NAMESPACE = 'onboarding';
+
 function isCodeOwnedStateKey(namespace: string, key: string): boolean {
+  if (namespace === ONBOARDING_NAMESPACE) return true;
   return namespace === TRIAGE_NAMESPACE && CODE_OWNED_STATE_KEY.test(key);
 }
 

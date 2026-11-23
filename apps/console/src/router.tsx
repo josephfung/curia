@@ -11,7 +11,7 @@ import { PwaChrome } from './pwa/PwaChrome';
 import { PushNoticesBanner } from './pwa/PushNoticesBanner';
 import { accessKeyLoginRequested, isStandaloneDisplay, signedOutPath } from './pwa/standalone';
 import { getSessionInfo } from './api';
-import { clampWizardStep } from './pages/wizard-utils';
+import { isStepId, setupRedirect, type StepId } from './pages/setup/setup-steps';
 import { noteResolvedPath } from './pages/chat/ask-handoff';
 
 // Route components are lazy-loaded so Vite produces separate chunks per route.
@@ -23,7 +23,9 @@ const PersonalityPage = lazy(() => import('./pages/PersonalitySettingsPage'));
 const GhostwritingPage = lazy(() => import('./pages/GhostwritingSettingsPage'));
 const PosturePage = lazy(() => import('./pages/PostureSettingsPage'));
 const EmailCalendarPage = lazy(() => import('./pages/EmailCalendarSettingsPage'));
+const CapabilitiesPage = lazy(() => import('./pages/capabilities/CapabilitiesSettingsPage'));
 const RetentionPage = lazy(() => import('./pages/RetentionSettingsPage'));
+const OperatorPage = lazy(() => import('./pages/OperatorSettingsPage'));
 const DevicesPage = lazy(() => import('./pages/DevicesSettingsPage'));
 const AboutPage = lazy(() => import('./pages/AboutSettingsPage'));
 const ToolsPage = lazy(() =>
@@ -36,9 +38,10 @@ const ChannelsPage = lazy(() =>
   import('./pages/ChannelSettings').then(m => ({ default: m.ChannelsPage })),
 );
 const McpToolsPage = lazy(() => import('./pages/McpToolsPage'));
-const WizardPage = lazy(() => import('./pages/WizardPage'));
+const SetupPage = lazy(() => import('./pages/setup/SetupPage'));
 const SecretCapturePage = lazy(() => import('./pages/SecretCapturePage'));
 const MailboxSignInDonePage = lazy(() => import('./pages/MailboxSignInDonePage'));
+const GoogleWorkspaceSignInDonePage = lazy(() => import('./pages/GoogleWorkspaceSignInDonePage'));
 const PairPage = lazy(() => import('./pages/PairPage'));
 const ContactsPage = lazy(() => import('./pages/ContactsPage'));
 const JobsPage = lazy(() => import('./pages/JobsPage'));
@@ -73,11 +76,11 @@ const authedRoute = createRoute({
   beforeLoad: async ({ location }) => {
     const session = await getSessionInfo();
     if (!session.valid) throw redirect({ to: signedOutPath(isStandaloneDisplay()) });
-    // First-run redirect: push to /setup if not yet configured, unless already
-    // heading there (avoids a redirect loop).
-    if (!session.configured && location.pathname !== '/setup') {
-      throw redirect({ to: '/setup', search: { step: 1 } });
-    }
+    // The Setup page (#2358) is the landing page on a new install until Setup is finished;
+    // an install that isn't in Setup never sees it.
+    const target = setupRedirect(location.pathname, session);
+    if (target === '/setup') throw redirect({ to: '/setup' });
+    if (target === '/') throw redirect({ to: '/' });
   },
 });
 
@@ -93,14 +96,14 @@ const chatRoute = createRoute({
   component: ChatPage,
 });
 
-// Setup wizard — full-screen, no sidebar/topbar.
+// The Setup page (#2358) — full-screen, no sidebar/topbar. `step` opens one step directly.
 const setupRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: '/setup',
-  validateSearch: (search: Record<string, unknown>) => ({
-    step: clampWizardStep(search['step']),
-  }),
-  component: WizardPage,
+  validateSearch: (search: Record<string, unknown>): { step?: StepId } => (
+    isStepId(search['step']) ? { step: search['step'] } : {}
+  ),
+  component: SetupPage,
 });
 
 // Settings layout route — bare /settings redirects to the default section.
@@ -156,6 +159,12 @@ const autonomyRoute = createRoute({
   component: AutonomyPage,
 });
 
+const capabilitiesRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/capabilities',
+  component: CapabilitiesPage,
+});
+
 // Settings → System: this install. Bare /system opens About.
 const systemRoute = createRoute({
   getParentRoute: () => authedRoute,
@@ -188,6 +197,13 @@ const retentionRoute = createRoute({
   getParentRoute: () => systemRoute,
   path: '/retention',
   component: RetentionPage,
+});
+
+// Who hears about technical problems (#2710).
+const operatorRoute = createRoute({
+  getParentRoute: () => systemRoute,
+  path: '/operator',
+  component: OperatorPage,
 });
 
 // Tools and Agents are standalone top-level pages (peer to Contacts/Tasks),
@@ -252,6 +268,13 @@ const mailboxSignInDoneRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/mailbox-signin/done',
   component: MailboxSignInDonePage,
+});
+
+// Public Google Workspace sign-in result page (#2683): same shape, outcome-only query string.
+const googleWorkspaceSignInDoneRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/google-workspace/done',
+  component: GoogleWorkspaceSignInDonePage,
 });
 
 const contactsRoute = createRoute({
@@ -361,6 +384,7 @@ const routeTree = rootRoute.addChildren([
       aboutRoute,
       devicesRoute,
       retentionRoute,
+      operatorRoute,
     ]),
     settingsRoute.addChildren([
       personalityRoute,
@@ -368,6 +392,7 @@ const routeTree = rootRoute.addChildren([
       postureRoute,
       emailCalendarRoute,
       autonomyRoute,
+      capabilitiesRoute,
       assistantRedirect,
       workspaceRedirect,
       skillsSettingsRedirect,
@@ -378,6 +403,7 @@ const routeTree = rootRoute.addChildren([
   pairRoute,
   secretCaptureRoute,
   mailboxSignInDoneRoute,
+  googleWorkspaceSignInDoneRoute,
 ]);
 
 export const router = createRouter({ routeTree });

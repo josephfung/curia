@@ -3,6 +3,8 @@
 // RecoveryNotifier and SuspensionNotifier bypass the LLM pipeline; this module supplies
 // human-readable job objective, recurrence, and console deep-link fields from scheduled_jobs.
 
+import type { JobErrorClass } from '../bus/events.js';
+import type { ErrorType } from '../errors/types.js';
 import type { Logger } from '../logger.js';
 import { classifyError } from '../errors/classify.js';
 import type { JobRow, SchedulerService } from './scheduler-service.js';
@@ -144,5 +146,42 @@ export async function loadJobNotificationContext(
     const agentErr = classifyError(err, source);
     logger.warn({ err: agentErr, jobId }, `${source}: failed to load job context for notification`);
     return { objective: '(unavailable)', recurrence: '(unknown)', consoleUrl };
+  }
+}
+
+
+/**
+ * The coarse class of a failure, for an operator notice (#2710, ADR-068). A job's last error is
+ * the stashed agent.error message or — when none arrived — up to 500 characters of the agent's
+ * own response, so it can quote the principal's mail. The operator gets this class and a console
+ * link; the detail stays in the console and the audit trail.
+ */
+export function jobErrorClass(type: ErrorType | undefined): JobErrorClass {
+  switch (type) {
+    case 'TIMEOUT':
+      return 'timeout';
+    case 'RATE_LIMIT':
+    case 'PROVIDER_ERROR':
+    case 'AUTH_FAILURE':
+      return 'llm_failure';
+    case 'SKILL_ERROR':
+      return 'tool_failure';
+    default:
+      return 'other';
+  }
+}
+
+/** How a class reads in a notice. Plain words, no codes: the operator is not a Curia operator. */
+export function describeJobErrorClass(errorClass: JobErrorClass | undefined): string {
+  switch (errorClass) {
+    case 'timeout':
+      return 'the run timed out';
+    case 'llm_failure':
+      return 'the model provider failed (rate limit, auth or upstream error)';
+    case 'tool_failure':
+      return 'a skill the run used failed';
+    case 'other':
+    case undefined:
+      return 'a failure of another kind';
   }
 }

@@ -33,6 +33,7 @@
 // the run's conversation, and approve-action on a later live principal turn (a `followup`)
 // acts only on the run's own. readGatewayOutcome reads all of it before cleanup removes it.
 import { randomUUID } from 'node:crypto';
+import { reconcileActiveSkillsBlock } from '../../src/db/active-skills-progress.js';
 import { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import { AuditLogRepo } from '../../src/audit/audit-log-repo.js';
 import { BAND_GATE_C_UNREVIEWED_REASON } from '../../src/skills/execution.js';
@@ -109,6 +110,7 @@ import {
   scopedBullpen,
   scopedOutboundContext,
   scopedPinnedContextReader,
+  scopedOnboardingTurnContext,
   scopedPrincipalBacklog,
   scopedVerification,
   SeedScope,
@@ -125,7 +127,7 @@ import {
   type SeededRun,
 } from './seed.js';
 import { createStubController, type StubController, type StubbedCall } from './stub-layer.js';
-import { COORDINATOR, type CapturedToolCall, type ScenarioCase, type ScenarioRun, type ScenarioWakeTask } from './types.js';
+import { COORDINATOR, type CapturedToolCall, type ScenarioCase, type ScenarioRun, type ScenarioWakeTask, type UncapturedHole } from './types.js';
 import type { AutonomyService } from '../../src/autonomy/autonomy-service.js';
 
 /**
@@ -287,6 +289,12 @@ export interface ScenarioHarness {
   reachableTools: Set<string>;
   /** The same, for every agent in the stack (#2027): what a real specialist can call. */
   reachableByAgent: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * The `onboarding` skill's tools as the coordinator gets them (#2360): a `seed.onboarding`
+   * case's principal turn is offered them, as production's onboarding turn context activates
+   * the skill. Empty when the skill is not loaded.
+   */
+  onboardingTools: ReadonlySet<string>;
   /**
    * A real-delegation run's default wait: the longest delegate wait any specialist gets,
    * plus a margin for the coordinator's own turn.
@@ -521,6 +529,8 @@ export async function createScenarioHarness(
     // is no browser; web-browser is stubbed).
     wrapVerification: (runtime) => scopedVerification(runtime, currentScope),
     wrapPinnedContextReader: (reader) => scopedPinnedContextReader(reader, currentScope),
+    // The onboarding block on the run's live principal turns (#2360), from its seed.onboarding.
+    onboardingTurnContext: scopedOnboardingTurnContext(currentScope),
     browserSessionAlive: scopedBrowserSessionAlive(currentScope),
     delegationClaims: true,
     // Through-gateway sends (#2312): production's review, recording transports. What passes
@@ -793,6 +803,8 @@ export async function createScenarioHarness(
     for (const tool of reach.unavailable) unservable.add(tool);
   }
   const reachableTools = reachableByAgent.get(COORDINATOR)!;
+  const onboardingActivation = stack.executionLayer.resolveSkillActivationForAgent(ONBOARDING_SKILL, COORDINATOR);
+  const onboardingTools = new Set('error' in onboardingActivation ? [] : onboardingActivation.tools);
   unavailable = unservable;
   const delegationRunTimeoutMs = longestDelegateWaitMs(stack) + DELEGATION_RUN_MARGIN_MS;
   const internalNames = internalNamesFor({
@@ -951,19 +963,22 @@ export async function createScenarioHarness(
   }
 
   /**
-   * The principal's `inbound.then` turn (#2312): an inbound from the principal's verified
-   * identity on its channel, in a conversation of its own filed under the run (its tool calls
-   * get the run's stubs, and its rows are the run's). The Dispatcher stamps it a live principal
-   * turn, so approve-action's elevated gate runs as in production.
+   * The `inbound.then` turn (#2312), in a conversation of its own filed under the run (its tool
+   * calls get the run's stubs, and its rows are the run's). By default it is the principal's:
+   * an inbound from their verified identity on its channel, which the Dispatcher stamps a live
+   * principal turn, so approve-action's elevated gate runs as in production. With `from` it is a
+   * seeded contact's reply from their own identity (#2556), and the Dispatcher treats it as it
+   * would that person's mail.
    */
-  async function runPrincipalTurn(
+  async function runThenTurn(
     scenario: ScenarioCase,
     turn: NonNullable<ScenarioCase['inbound']['then']>,
     rootConversationId: string,
     scope: SeedScope,
     timeoutMs: number,
   ): Promise<{ outcome: TurnOutcome; delivery: Promise<void> }> {
-    const sender = await resolveSender({ ...scenario, inbound: { ...scenario.inbound, from: 'principal', channel: turn.channel } }, stack);
+    const from = turn.from ?? 'principal';
+    const sender = await resolveSender({ ...scenario, inbound: { ...scenario.inbound, from, channel: turn.channel } }, stack);
     if (typeof sender !== 'object' || !('channelId' in sender)) throw new Error('unreachable: inbound.then sender is not a channel sender');
     // A reply on the approval email's thread (#2333) joins that thread, as Nylas threads it.
     const approvalThread = turn.replyToApproval ? await approvalEmailThread(scope) : undefined;
@@ -983,16 +998,17 @@ export async function createScenarioHarness(
       await cleanupScenarioConversation(stack.pool, conversationId);
     }
     scope.followOnConversations.add(conversationId);
-    // The turn boundary (#2333): a delivery before it went out before the principal answered.
+    // The turn boundary (#2333): a delivery before it went out before this turn's message.
     scope.thenStartsAt = scope.deliveries.length;
     outcomeGate.hold(conversationId);
     controller.attach(rootConversationId, conversationId);
     const waiter = capture.waitFor(conversationId, timeoutMs, COORDINATOR);
-    // The principal's own verified identity: their mail authenticates as the adapter would see it.
-    const principalEmail = { from: 'principal', email: { autoGenerated: false, autoGeneratedSignals: [], senderVerified: true } };
+    // The sender's own identity, the principal's verified one or a known contact's: their mail
+    // authenticates as the adapter would see it.
+    const senderEmail = { from, email: { autoGenerated: false, autoGeneratedSignals: [], senderVerified: true } };
     const messageId = `scenario-msg-${randomUUID()}`;
     if (sender.channelId === 'email') {
-      const message = inboundNylasMessage(messageId, sender.senderId, { ...principalEmail, content: turn.content }, undefined, conversationId.slice('email:'.length));
+      const message = inboundNylasMessage(messageId, sender.senderId, { ...senderEmail, content: turn.content }, undefined, conversationId.slice('email:'.length));
       scope.inboundMessages.set(messageId, message);
       scope.threadMessages.set(message.threadId, [message]);
     }
@@ -1003,7 +1019,7 @@ export async function createScenarioHarness(
       content: turn.content,
       // nylasThreadId as the email adapter sets it (message-converter.ts).
       ...(sender.channelId === 'email'
-        ? { metadata: { ...emailMetadata(sender.senderId, principalEmail, undefined, messageId), nylasThreadId: conversationId.slice('email:'.length) } }
+        ? { metadata: { ...emailMetadata(sender.senderId, senderEmail, undefined, messageId), nylasThreadId: conversationId.slice('email:'.length) } }
         : {}),
       ...(sender.channelId === 'signal' ? { metadata: { isGroup: false } } : {}),
       ...(sender.channelId === 'slack' ? { metadata: { isDm: true } } : {}),
@@ -1396,7 +1412,7 @@ export async function createScenarioHarness(
               settled = snapshot.length;
             }
           })(), timeoutMs);
-          const then = await runPrincipalTurn(scenario, inbound.then, runConversationId, scope, timeoutMs);
+          const then = await runThenTurn(scenario, inbound.then, runConversationId, scope, timeoutMs);
           thenOutcome = then.outcome;
           await settleWithin(then.delivery, timeoutMs);
         }
@@ -1449,6 +1465,7 @@ export async function createScenarioHarness(
         ? `${outcome.error} — a specialist was still working (${[...new Set(stillWorking)].join(', ')}): the run's wait ran out before the delegate wait did`
         : outcome.error ?? (thenOutcome?.error ? `inbound.then turn: ${thenOutcome.error}` : undefined)
           ?? (wakeError ? `approval wake turn: ${wakeError}` : undefined) ?? premiseError ?? reviewerError ?? gateReviewerError;
+      const uncaptured = uncapturedHoles(merged, stubbedCalls);
       result = {
         runIndex,
         inboundContent,
@@ -1460,12 +1477,13 @@ export async function createScenarioHarness(
         ...(outcome.noReplyReason ? { noReplyReason: outcome.noReplyReason } : {}),
         durationMs: Date.now() - started,
         unstubbedCalls: countRunHoles(merged, stubbedCalls),
+        ...(uncaptured.length > 0 ? { uncapturedHoles: uncaptured } : {}),
         ...(error ? { error } : {}),
         ...(timeoutKind ? { timeoutKind } : {}),
         ...(injectionDrainPoints !== undefined ? { injectionDrainPoints: [...injectionDrainPoints] } : {}),
         ...(realDelegation ? { delegations: trace?.delegations ?? [] } : {}),
         ...(gateway ? { gateway } : {}),
-        ...(thenOutcome ? { then: { reply: thenOutcome.reply } } : {}),
+        ...(thenOutcome ? { then: { reply: thenOutcome.reply, ...(inbound.then ? { content: inbound.then.content } : {}) } } : {}),
         usage: state.usage.snapshot(),
         providerRetries: [],
       };
@@ -1512,6 +1530,7 @@ export async function createScenarioHarness(
     coordinatorTools,
     reachableTools,
     reachableByAgent,
+    onboardingTools,
     delegationRunTimeoutMs,
     unavailableTools: unavailable,
     inertTools: stack.snapshotMcpTools,
@@ -1555,16 +1574,23 @@ export function scheduledJobTask(agentId: string, conversationId: string, conten
   });
 }
 
+/** The skill production's onboarding turn context activates (src/agents/runtime.ts). */
+const ONBOARDING_SKILL = 'onboarding';
+
+/** A wake task's progress block: {} for a fresh task with no notes or skills (the heartbeat's new drain). */
+function wakeProgress(task: ScenarioWakeTask): Record<string, unknown> {
+  return {
+    ...(task.notes.length > 0 ? { notes: task.notes } : {}),
+    // The task's active skills, which the wake restores as production's does (#2360).
+    ...(task.activeSkills ? { activeSkills: reconcileActiveSkillsBlock(task.activeSkills, null) } : {}),
+  };
+}
+
 /**
  * What Scheduler.fireJob publishes for a task's wake_at: the wake body, the task's intent anchor
  * and the bound-task metadata. A wake_at job carries no standing, so no wakeContext. It does carry
  * the task's stored originator: `system` for the inbox heartbeat's drain task (#2475).
  */
-/** A wake task's progress block: {} for a fresh task with no notes (the heartbeat's new drain). */
-function wakeProgress(task: ScenarioWakeTask): Record<string, unknown> {
-  return task.notes.length > 0 ? { notes: task.notes } : {};
-}
-
 export function taskWakeEvent(agentId: string, conversationId: string, content: string, task: ScenarioWakeTask): AgentTaskEvent {
   return createAgentTask({
     agentId,
@@ -1599,10 +1625,16 @@ export function countHoles(calls: CapturedToolCall[]): number {
  * outcome has calls: []), so its holes exist only in the stub layer's record (#2192).
  */
 export function countRunHoles(merged: CapturedToolCall[], stubbed: readonly StubbedCall[]): number {
+  return countHoles(merged) + uncapturedHoles(merged, stubbed).length;
+}
+
+/** The stub layer's refusals and canned answers that no captured call matches. */
+export function uncapturedHoles(merged: CapturedToolCall[], stubbed: readonly StubbedCall[]): UncapturedHole[] {
   const observed = new Set(merged.map(c => c.invokeEventId).filter((id): id is string => !!id));
-  const unobserved = stubbed.filter(s =>
-    (s.disposition === 'refused' || s.disposition === 'canned') && !(s.invokeEventId && observed.has(s.invokeEventId)));
-  return countHoles(merged) + unobserved.length;
+  return stubbed.flatMap(s =>
+    (s.disposition === 'refused' || s.disposition === 'canned') && !(s.invokeEventId && observed.has(s.invokeEventId))
+      ? [{ name: s.toolName, ...(s.agentId !== undefined ? { agentId: s.agentId } : {}), disposition: s.disposition }]
+      : []);
 }
 
 /**

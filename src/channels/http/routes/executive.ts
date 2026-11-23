@@ -12,7 +12,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ExecutiveProfileService } from '../../../executive/service.js';
 import type { ExecutiveProfile } from '../../../executive/types.js';
-import { assertSecret, type SessionStore } from '../session-auth.js';
+import { assertSecret, CONSOLE_RATE, type SessionStore } from '../session-auth.js';
 
 export interface ExecutiveRouteOptions {
   executiveProfileService: ExecutiveProfileService;
@@ -34,10 +34,14 @@ export async function executiveRoutes(
   // These routes check credentials on every call — a brute-force target that
   // needs tighter throttling than the global 200/min baseline.
   const AUTH_RATE = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
+  // Reads use the console-wide read limit (60/min): the router reads GET /api/identity on every
+  // navigation, and the Setup page re-reads after each save. Failed auth is throttled
+  // separately, in assertSecret, so a tight cap on authenticated reads only adds friction
+  // (#2358). Writes keep AUTH_RATE.
 
   // -- GET /api/executive — return current executive profile --
 
-  app.get('/api/executive', AUTH_RATE, async (request, reply) => {
+  app.get('/api/executive', CONSOLE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     try {
@@ -86,7 +90,7 @@ export async function executiveRoutes(
 
   // -- GET /api/executive/history — return all versions, newest first --
 
-  app.get('/api/executive/history', AUTH_RATE, async (request, reply) => {
+  app.get('/api/executive/history', CONSOLE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     try {

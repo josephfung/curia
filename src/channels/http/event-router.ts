@@ -141,6 +141,13 @@ export const ANT_FARM_EVENT_TYPES = [
   'autonomy.send_blocked',
 ] as const;
 
+/**
+ * How long an ended stream may take to flush before it is destroyed. end() waits for buffered
+ * writes, so a client that stopped reading keeps its response open, and the HTTP server's
+ * close waits for it (#2358).
+ */
+const STREAM_END_GRACE_MS = 2_000;
+
 /** Per-client pending SSE frames before a slow consumer is dropped. */
 export const ANT_FARM_MAX_CLIENT_BUFFER = 50;
 /** Max interpreted directives delivered to one client per second (coalesce guard). */
@@ -165,6 +172,8 @@ export class EventRouter {
   private pendingResponses = new Map<string, PendingResponse>();
   /** Active SSE connections */
   private sseClients = new Set<SseClient>();
+  /** Set by closeAllStreams: shutting down, so a stream that registers late is ended at once. */
+  private closing = false;
   /** Ant Farm live-stream clients — separate from console chat SSE (no cross-talk). */
   private antfarmClients = new Set<AntfarmClient>();
 
@@ -456,6 +465,10 @@ export class EventRouter {
 
   /** Register an SSE client. Returns a cleanup function. */
   addSseClient(client: SseClient): () => void {
+    if (this.closing) {
+      this.endStream(client.res, 'Late SSE stream could not be ended at shutdown');
+      return () => {};
+    }
     if (client.lastSeen === undefined) client.lastSeen = Date.now();
     this.sseClients.add(client);
     this.logger.debug({ conversationId: client.conversationId }, 'SSE client connected');
@@ -465,8 +478,58 @@ export class EventRouter {
     };
   }
 
+  /**
+   * Ends every open SSE stream (chat and Ant Farm), for shutdown. A stream never ends on its
+   * own, and the HTTP server's close waits for open requests, so one open console tab kept a
+   * restart from finishing (#2358: the Setup page's guide is often open at Apply & restart).
+   * Browsers' EventSource reconnects to the new process. Returns how many were ended.
+   */
+  closeAllStreams(): number {
+    // From here on a stream that registers (its request was mid-flight) is ended at once.
+    this.closing = true;
+    let ended = 0;
+    for (const client of [...this.sseClients, ...this.antfarmClients]) {
+      if (this.endStream(client.res, 'SSE stream could not be ended at shutdown')) ended++;
+    }
+    this.sseClients.clear();
+    this.antfarmClients.clear();
+    return ended;
+  }
+
+  /**
+   * Ends one stream's response, and destroys it if it hasn't flushed within
+   * STREAM_END_GRACE_MS (a client that stopped reading). False (and logged) when it couldn't.
+   */
+  private endStream(res: ServerResponse, failure: string): boolean {
+    try {
+      res.end();
+    } catch (err) {
+      this.logger.warn({ err }, failure);
+      this.destroyStream(res, failure);
+      return false;
+    }
+    const timer = setTimeout(() => {
+      if (res.writableFinished !== true) this.destroyStream(res, failure);
+    }, STREAM_END_GRACE_MS);
+    timer.unref?.();
+    return true;
+  }
+
+  /** Destroys one stream's response, dropping whatever it still had buffered. */
+  private destroyStream(res: ServerResponse, failure: string): void {
+    try {
+      if (typeof res.destroy === 'function') res.destroy();
+    } catch (err) {
+      this.logger.warn({ err }, failure);
+    }
+  }
+
   /** Register an Ant Farm SSE client. Returns a cleanup function. */
   addAntfarmClient(client: Pick<AntfarmClient, 'res'>): () => void {
+    if (this.closing) {
+      this.endStream(client.res, 'Late Ant Farm SSE stream could not be ended at shutdown');
+      return () => {};
+    }
     const entry: AntfarmClient = {
       res: client.res,
       pendingWrites: 0,
@@ -507,6 +570,9 @@ export class EventRouter {
       for (const directive of directives) {
         if (client.pendingWrites >= ANT_FARM_MAX_CLIENT_BUFFER) {
           this.antfarmClients.delete(client);
+          // Destroy it: it stopped reading, so end() would wait on its full buffer, and a
+          // dropped stream left open keeps a restart waiting (#2358).
+          this.destroyStream(client.res, 'Dropped Ant Farm SSE stream could not be destroyed');
           this.logger.warn('Dropped slow Ant Farm SSE client — pending buffer full');
           break;
         }

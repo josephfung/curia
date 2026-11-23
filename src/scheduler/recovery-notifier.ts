@@ -1,8 +1,12 @@
 // src/scheduler/recovery-notifier.ts
 //
-// RecoveryNotifier — system-layer bus subscriber that emails the principal whenever
+// RecoveryNotifier — system-layer bus subscriber that emails the operator whenever
 // the watchdog auto-recovers a stuck job (resets it from 'running' → 'pending'
 // after exceeding the computed timeout threshold). See #207.
+//
+// The notice is operator-routed (NOTIFICATION_AUDIENCES, #2710), so it carries no principal
+// content: the agent, the job id, the recurrence, timings, counts and a console link. The
+// job's objective is model-written text and is deliberately left out (ADR-068).
 //
 // Design constraint: this path MUST NOT touch the LLM pipeline. The most
 // common trigger for a stuck job is an infrastructure failure (Anthropic API
@@ -25,17 +29,11 @@ import type { SchedulerService } from './scheduler-service.js';
 import {
   loadJobNotificationContext,
 } from './job-notification-context.js';
-import {
-  resolvePrincipalEmail,
-  type PrincipalEmailRef,
-} from '../contacts/types.js';
 
 export interface RecoveryNotifierConfig {
   bus: EventBus;
   outboundGateway: OutboundGateway;
   schedulerService: SchedulerService;
-  /** Plain string (tests) or live ref so post-boot email binds hot-reload (#1514). */
-  ceoEmail: string | PrincipalEmailRef;
   logger: Logger;
   appOrigin?: string;
   httpPort: number;
@@ -95,7 +93,7 @@ export class RecoveryNotifier {
       'Scheduled job was stuck and has been auto-recovered (reset to pending).',
       '',
       `Agent:      ${agentId}`,
-      `Objective:  ${jobContext.objective}`,
+      `Job:        ${jobId}`,
       `Recurrence: ${jobContext.recurrence}`,
       `Stuck for:  ${stuckDescription}`,
       `Timeout:    ${formatMinutes(timeoutSeconds)}`,
@@ -106,21 +104,12 @@ export class RecoveryNotifier {
       outcome,
     ].join('\n');
 
-    const ceoEmail = resolvePrincipalEmail(this.config.ceoEmail);
-    if (!ceoEmail) {
-      this.log.warn(
-        { jobId, agentId },
-        'RecoveryNotifier: principal email not bound yet — skipping notification',
-      );
-      return;
-    }
-
     // sendNotification() catches its own errors and returns false on failure —
-    // it does not throw. We log at error if it returns false so the anomaly is
-    // visible in alerting.
+    // it does not throw. The gateway resolves the address (operator, or the principal when
+    // no operator is set) and reports false when there is none; we log at error either way
+    // so the anomaly is visible in alerting.
     const sent = await this.config.outboundGateway.sendNotification({
       notificationType: 'schedule_recovered',
-      ceoEmail,
       subject,
       body,
     });

@@ -74,25 +74,25 @@ const handler = new SetupDeferHandler();
 describe('setup-defer', () => {
   it('defers a task that was not deferred', async () => {
     // No pre-existing deferrals — getFacts returns []
-    const ctx = makeCtx({ task_id: 'google_workspace', action: 'defer' });
+    const ctx = makeCtx({ task_id: 'web_browser', action: 'defer' });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
-    expect((result as { success: true; data: { deferred: string[] } }).data.deferred).toEqual(['google_workspace']);
+    expect((result as { success: true; data: { deferred: string[] } }).data.deferred).toEqual(['web_browser']);
   });
 
   it('defers a task only once (idempotent)', async () => {
-    // Pre-seed with 'google_workspace' already deferred
-    const existing = JSON.stringify(['google_workspace']);
-    const ctx = makeCtx({ task_id: 'google_workspace', action: 'defer' }, existing);
+    // Pre-seed with 'web_browser' already deferred
+    const existing = JSON.stringify(['web_browser']);
+    const ctx = makeCtx({ task_id: 'web_browser', action: 'defer' }, existing);
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
     const data = (result as { success: true; data: { deferred: string[] } }).data;
-    expect(data.deferred).toEqual(['google_workspace']); // no duplicate
+    expect(data.deferred).toEqual(['web_browser']); // no duplicate
   });
 
   it('resumes a deferred task', async () => {
-    const existing = JSON.stringify(['google_workspace', 'web_research']);
-    const ctx = makeCtx({ task_id: 'google_workspace', action: 'resume' }, existing);
+    const existing = JSON.stringify(['web_browser', 'web_research']);
+    const ctx = makeCtx({ task_id: 'web_browser', action: 'resume' }, existing);
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
     const data = (result as { success: true; data: { deferred: string[] } }).data;
@@ -106,18 +106,24 @@ describe('setup-defer', () => {
   });
 
   it('returns error when action is invalid', async () => {
-    const ctx = makeCtx({ task_id: 'google_workspace', action: 'snooze' });
+    const ctx = makeCtx({ task_id: 'web_browser', action: 'snooze' });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
   });
 
-  it('normalizes whitespace in task_id — " google_workspace " stores and returns as "google_workspace"', async () => {
-    const ctx = makeCtx({ task_id: ' google_workspace ', action: 'defer' });
+  it('normalizes whitespace in task_id — " web_browser " stores and returns as "web_browser"', async () => {
+    const ctx = makeCtx({ task_id: ' web_browser ', action: 'defer' });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
     const data = (result as { success: true; data: { deferred: string[]; task_id: string } }).data;
-    expect(data.task_id).toBe('google_workspace');
-    expect(data.deferred).toEqual(['google_workspace']);
+    expect(data.task_id).toBe('web_browser');
+    expect(data.deferred).toEqual(['web_browser']);
+  });
+
+  it('refuses Google Workspace: a required step since #2683', async () => {
+    const result = await handler.execute(makeCtx({ task_id: 'google_workspace', action: 'defer' }));
+    expect(result.success).toBe(false);
+    expect((result as { success: false; error: string }).error).toMatch(/required step/);
   });
 
   it('refuses a required step: it blocks Start onboarding', async () => {
@@ -130,7 +136,7 @@ describe('setup-defer', () => {
   it('refuses an id that is no longer in the catalog', async () => {
     const result = await handler.execute(makeCtx({ task_id: 'persona', action: 'defer' }));
     expect(result.success).toBe(false);
-    expect((result as { success: false; error: string }).error).toMatch(/google_workspace/);
+    expect((result as { success: false; error: string }).error).toMatch(/web_browser/);
   });
 
   it('returns error for an unknown task_id not in the catalog', async () => {
@@ -146,7 +152,7 @@ describe('setup-defer', () => {
     const mem = makeEntityMemory() as unknown as { storeFact: ReturnType<typeof vi.fn> };
     mem.storeFact.mockResolvedValue({ stored: false, action: 'conflict' });
     const ctx = {
-      input: { task_id: 'google_workspace', action: 'defer' },
+      input: { task_id: 'web_browser', action: 'defer' },
       entityMemory: mem as unknown as EntityMemory,
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
     } as unknown as ToolContext;
@@ -157,7 +163,7 @@ describe('setup-defer', () => {
 
   it('returns error when entityMemory is absent', async () => {
     const ctx = {
-      input: { task_id: 'google_workspace', action: 'defer' },
+      input: { task_id: 'web_browser', action: 'defer' },
       log: {
         info: vi.fn(),
         warn: vi.fn(),

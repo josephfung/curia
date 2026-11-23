@@ -12,7 +12,8 @@
 //                               it back into normal (non-setup-required) mode
 //   GET  /api/setup/checklist — the Setup checklist and setup_complete (#2358)
 //   PUT  /api/setup/state     — who Setup is for, the operator, the routes (#2358)
-//   POST /api/setup/complete  — Start onboarding: Setup is over (#2358)
+//   POST /api/setup/start     — the Setup page opened: Setup has started (#2358)
+//   POST /api/setup/complete  — Setup is over (#2358)
 //
 // All routes require session cookie or x-web-bootstrap-secret authentication
 // (same pattern as identity routes). Routes are only registered when
@@ -21,7 +22,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import type { Logger } from '../../../logger.js';
-import { assertSecret, type SessionStore } from '../session-auth.js';
+import { assertSecret, CONSOLE_RATE, type SessionStore } from '../session-auth.js';
 import { ensurePrincipalContact } from '../../../contacts/ensure-principal.js';
 import { isIdentityConfigured } from './identity.js';
 import type { InfraLlmService } from '../../../skills/infra-llm.js';
@@ -30,16 +31,21 @@ import type { ContactService } from '../../../contacts/contact-service.js';
 import type { EntityMemory } from '../../../memory/entity-memory.js';
 import { validateWorkingHours, serializeWorkingHours } from '../../../contacts/working-hours.js';
 import type { SetupChecklist } from '../../../setup/checklist.js';
+import { completeSetup } from '../../../setup/complete-setup.js';
 import {
   isInSetup,
-  markSetupComplete,
   MESSAGING_ROUTES,
   readSetupState,
+  SetupSettingsError,
   updateSetupState,
   VOICE_ROUTES,
   type SetupState,
   type SetupStateUpdate,
-} from '../../../setup/setup-state.js';
+} from '../../../setup/setup-settings.js';
+import { InvalidSettingError } from '../../../settings/store.js';
+
+import { WorkingDocsRepo } from '../../../db/working-docs-repo.js';
+import { seedPlaybook } from '../../../onboarding/playbook.js';
 
 export interface SetupRouteOptions {
   webAppBootstrapSecret: string;
@@ -81,6 +87,11 @@ export interface SetupRouteOptions {
   infraLlmService?: InfraLlmService;
   /** The Setup checklist (#2358). Absent: the checklist and complete routes answer 503. */
   setupChecklist?: () => Promise<SetupChecklist>;
+  /**
+   * Keep the gateway's cached operator address current after a Setup save (#2710), so a later
+   * failing database read cannot route a notice to whoever held the setting before.
+   */
+  onOperatorChanged?: (operator: { name: string; email: string } | null) => void;
 }
 
 // Match identity.ts: tighter rate limit on auth-sensitive routes (10/min vs the
@@ -90,6 +101,10 @@ export interface SetupRouteOptions {
 const AUTH_RATE = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
 // The Setup page re-reads the checklist after every save and while a restart lands.
 const CHECKLIST_RATE = { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } };
+// The Setup page (#2358) re-reads its state after every save and saves on each route pick, so
+// its reads take the console-wide read limit and its saves 30/min, like the vault and
+// registry writes. Restart, complete and the LLM name suggestion keep AUTH_RATE.
+const SETUP_WRITE_RATE = { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } };
 
 const MAX_DISPLAY_NAME_LENGTH = 200;
 
@@ -113,6 +128,7 @@ export async function setupRoutes(
     scheduleProcessExit,
     infraLlmService,
     setupChecklist,
+    onOperatorChanged,
   } = options;
 
   // Delay before process.exit so Fastify can finish flushing the 200 response.
@@ -132,7 +148,7 @@ export async function setupRoutes(
   // later, per channel. Idempotent: a second call when the principal already
   // exists returns the existing IDs. If the submitted name differs from the
   // stored name, the contact is renamed so Step 1 can correct a typo (#392).
-  app.post('/api/setup/principal', AUTH_RATE, async (request, reply) => {
+  app.post('/api/setup/principal', SETUP_WRITE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     const body = request.body as { name?: unknown };
@@ -206,18 +222,21 @@ export async function setupRoutes(
   // Loads the principal's name + operational profile so the wizard can pre-populate
   // Steps 1 and 2 (#392). Returns { exists:false } (not 404) when no principal yet —
   // the wizard treats that as a fresh install.
-  app.get('/api/setup/principal', AUTH_RATE, async (request, reply) => {
+  app.get('/api/setup/principal', CONSOLE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     try {
       const principal = await contactService.findContactBySystemRole('principal');
       if (!principal) {
         return reply.send({
-          exists: false, displayName: null, timezone: null,
-          preferredName: null, title: null, email: null, workingHours: null,
+          exists: false, contactId: null, displayName: null, timezone: null,
+          preferredName: null, title: null, pronouns: null, email: null, workingHours: null,
         });
       }
+      // The primary email (#2358): the profile route sets it on every save, so a corrected
+      // address is what shows, not an older one still linked. Only a principal with no primary
+      // set (created before it existed) falls back to the first verified, active email.
       const withIdentities = await contactService.getContactWithIdentities(principal.id);
-      const email = (withIdentities?.identities ?? [])
+      const email = principal.primaryEmail ?? (withIdentities?.identities ?? [])
         .find((i) => i.channel === 'email' && i.verified && i.status === 'active')
         ?.channelIdentifier ?? null;
 
@@ -238,10 +257,13 @@ export async function setupRoutes(
 
       return reply.send({
         exists: true,
+        // The Setup page links the principal's channel ids to this contact (#2358).
+        contactId: principal.id,
         displayName: principal.displayName,
         timezone: principal.timezone ?? null,
         preferredName: principal.preferredName ?? null,
         title: principal.title ?? null,
+        pronouns: principal.pronouns ?? null,
         email,
         workingHours,
       });
@@ -259,12 +281,12 @@ export async function setupRoutes(
   // after the wizard-end restart); working hours as a KG fact surfaced by entity-context.
   // Requires the principal to exist (created in Step 1). Omitted optional fields are not
   // written, so a partial submit never clobbers an existing value.
-  app.post('/api/setup/principal/profile', AUTH_RATE, async (request, reply) => {
+  app.post('/api/setup/principal/profile', SETUP_WRITE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     const body = (request.body ?? {}) as {
       timezone?: unknown; email?: unknown; preferredName?: unknown;
-      title?: unknown; workingHours?: unknown;
+      title?: unknown; pronouns?: unknown; workingHours?: unknown;
     };
 
     // timezone is required and must be a real IANA zone (same guard as config.ts).
@@ -295,8 +317,19 @@ export async function setupRoutes(
     }
     const preferredName =
       typeof body.preferredName === 'string' && body.preferredName.trim() ? body.preferredName.trim() : undefined;
-    const title =
-      typeof body.title === 'string' && body.title.trim() ? body.title.trim() : undefined;
+    // Title and pronouns (#2358): absent leaves the value as it is; null or a blank string
+    // clears it, so clearing the field on the Setup page really clears it. Any other type is
+    // refused before anything is written.
+    for (const field of ['title', 'pronouns'] as const) {
+      const v = body[field];
+      if (v !== undefined && v !== null && typeof v !== 'string') {
+        return reply.status(400).send({ error: `${field} must be a string or null.` });
+      }
+    }
+    const clearable = (v: unknown): string | null | undefined =>
+      v === undefined ? undefined : typeof v === 'string' && v.trim() ? v.trim() : null;
+    const title = clearable(body.title);
+    const pronouns = clearable(body.pronouns);
 
     let workingHoursValue: string | undefined;
     if (body.workingHours !== undefined && body.workingHours !== null) {
@@ -335,6 +368,7 @@ export async function setupRoutes(
         timezone,
         ...(preferredName !== undefined ? { preferredName } : {}),
         ...(title !== undefined ? { title } : {}),
+        ...(pronouns !== undefined ? { pronouns } : {}),
         ...(email !== undefined ? { primaryEmail: email } : {}),
       });
 
@@ -387,7 +421,7 @@ export async function setupRoutes(
   //     the operator has finished the wizard but the email/Signal adapters
   //     remain skipped until restart. This is the signal for the dashboard
   //     "please restart" banner.
-  app.get('/api/setup/status', AUTH_RATE, async (request, reply) => {
+  app.get('/api/setup/status', CONSOLE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     try {
@@ -400,7 +434,7 @@ export async function setupRoutes(
       const identityConfigured = await isIdentityConfigured(pool);
       const externalAdaptersPending =
         setupRequiredAtBoot && principalExists && identityConfigured;
-      const setupState = await readSetupState(pool);
+      const setupState = await readSetupState(pool, logger);
 
       return reply.send({
         principalExists,
@@ -408,7 +442,7 @@ export async function setupRoutes(
         externalAdaptersPending,
         bootStartedAt,
         // #2358: the console shows the Setup page while this is true.
-        inSetup: isInSetup(setupState),
+        inSetup: isInSetup(setupState.phase),
         setup: publicState(setupState),
       });
     } catch (err) {
@@ -517,23 +551,61 @@ export async function setupRoutes(
   //
   // Saves the Setup page's own fields (#2358). Partial: a field left out is unchanged, and
   // null clears it.
-  app.put<{ Body: unknown }>('/api/setup/state', AUTH_RATE, async (request, reply) => {
+  app.put<{ Body: unknown }>('/api/setup/state', SETUP_WRITE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     const parsed = parseStateUpdate(request.body);
     if ('error' in parsed) return reply.status(400).send({ error: parsed.error });
     try {
-      const state = await updateSetupState(pool, parsed.update);
-      return reply.send({ inSetup: isInSetup(state), setup: publicState(state) });
+      const state = await updateSetupState(pool, parsed.update, { updatedBy: 'console', logger });
+      onOperatorChanged?.(
+        state.operatorEmail !== null && state.operatorName !== null
+          ? { name: state.operatorName, email: state.operatorEmail }
+          : null,
+      );
+      return reply.send({ inSetup: isInSetup(state.phase), setup: publicState(state) });
     } catch (err) {
+      // A cross-field rule (Myself with operator details; Someone else without them) or a
+      // value that fails its schema is the caller's mistake, not a server failure.
+      if (err instanceof SetupSettingsError || err instanceof InvalidSettingError) {
+        return reply.status(400).send({ error: err.message });
+      }
       logger.error({ err }, 'PUT /api/setup/state: failed to save');
       return reply.status(500).send({ error: 'Failed to save. Check server logs.' });
     }
   });
 
+  // -- POST /api/setup/start --
+  //
+  // The Setup page calls this when it opens. The phase is derived from setup.completed_at,
+  // so Setup is already in progress and web chat goes to the setup guide from the first
+  // message; this route writes nothing and so never reopens a finished Setup. It seeds the
+  // onboarding playbook while Setup runs (#2360).
+  app.post('/api/setup/start', SETUP_WRITE_RATE, async (request, reply) => {
+    if (!requireAuth(request, reply)) return;
+    try {
+      const state = await readSetupState(pool, logger);
+      // Seed the onboarding playbook while Setup is running (#2360). Best-effort: a failure is
+      // logged and does not fail the route; starting onboarding seeds again if it is missing.
+      if (isInSetup(state.phase)) {
+        try {
+          await seedPlaybook(new WorkingDocsRepo(pool, logger), logger);
+        } catch (err) {
+          logger.error({ err }, 'POST /api/setup/start: failed to seed the onboarding playbook');
+        }
+      }
+      // setupGuide: whether web chat now reaches the setup guide, so the page can say when not.
+      return reply.send({ inSetup: isInSetup(state.phase), setupGuide: isInSetup(state.phase) });
+    } catch (err) {
+      logger.error({ err }, 'POST /api/setup/start: failed to start Setup');
+      return reply.status(500).send({ error: 'Failed to start Setup. Check server logs.' });
+    }
+  });
+
   // -- POST /api/setup/complete --
   //
-  // Start onboarding (#2358): Setup is over, and the console stops showing the Setup page.
-  // Refused with the missing steps until setup_complete. What onboarding then does is #2360.
+  // Finish Setup (#2358): the console stops showing the Setup page. Refused with the missing
+  // steps until setup_complete. Starting onboarding is its own route (POST /api/onboarding/start,
+  // #2360), which also rotates the web thread; finishing Setup leaves the thread where it is.
   app.post('/api/setup/complete', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     if (!setupChecklist) {
@@ -544,8 +616,8 @@ export async function setupRoutes(
       if (!checklist.setupComplete) {
         return reply.status(409).send({ error: 'Setup is not finished yet.', missing: checklist.missing });
       }
-      await markSetupComplete(pool);
-      logger.info('Setup complete: Start onboarding pressed');
+      await completeSetup(pool, { updatedBy: 'console', logger });
+      logger.info('Setup complete');
       return reply.send({ inSetup: false });
     } catch (err) {
       logger.error({ err }, 'POST /api/setup/complete: failed');
@@ -651,9 +723,15 @@ export function parseStateUpdate(body: unknown): { update: SetupStateUpdate } | 
     return trimmed === '' ? null : trimmed;
   };
 
-  const setupFor = oneOf('setupFor', ['self', 'other'] as const);
-  if (typeof setupFor === 'object' && setupFor !== null) return setupFor;
-  if (setupFor !== undefined) update.setupFor = setupFor;
+  // setupFor is never absent in the response (#2709), so null has no meaning: refuse it
+  // rather than saving nothing.
+  const rawSetupFor = input['setupFor'];
+  if (rawSetupFor !== undefined) {
+    if (rawSetupFor !== 'self' && rawSetupFor !== 'other') {
+      return { error: 'setupFor must be one of self, other.' };
+    }
+    update.setupFor = rawSetupFor;
+  }
 
   const messagingRoute = oneOf('messagingRoute', MESSAGING_ROUTES);
   if (typeof messagingRoute === 'object' && messagingRoute !== null) return messagingRoute;

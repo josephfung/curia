@@ -5,7 +5,8 @@ import { apiFetch } from '../../api.js';
 import { makeMessage, mergeLiveTail, nextReconnectDelayMs, parseSseEvent, pickRecoveredReply } from './chat-utils.js';
 import type { Message, HistoryMessage, SseEvent } from './types.js';
 
-// Onboarding kickoff — set by the setup wizard page after form submission.
+// Onboarding kickoff. Its only writer was the old setup wizard (removed in #2358); what the
+// principal's first conversation starts with is #2360's, so nothing sets it today.
 const ONBOARDING_KICKOFF_KEY = 'curia:onboarding:welcome-banner-pending';
 const LEGACY_CONVERSATION_KEY = 'curia:chat:conversationId';
 const KICKOFF_TEXT = 'Just finished setup — say hi!';
@@ -45,6 +46,8 @@ interface ChatSession {
   sending: boolean;
   hasMore: boolean;
   loadingHistory: boolean;
+  /** The first history request has come back (empty or not). False until then, and after a failed one. */
+  historyLoaded: boolean;
   connectionError: string | null;
   send: (text: string) => Promise<void>;
   loadMore: () => Promise<void>;
@@ -90,12 +93,24 @@ function historyToMessages(items: HistoryMessage[]): Message[] {
   }));
 }
 
-export function useChatSession(): ChatSession {
+export interface ChatSessionOptions {
+  /**
+   * The Setup page's open step (#2358), sent with each message so the setup guide knows
+   * where the operator is. The server honours it only while Setup runs.
+   */
+  setupStep?: string | null;
+}
+
+export function useChatSession(options: ChatSessionOptions = {}): ChatSession {
   const navigate = useNavigate();
+  // Read at send time, so a step opened after the hook mounted is the one sent.
+  const setupStep = useRef(options.setupStep ?? null);
+  setupStep.current = options.setupStep ?? null;
   const [messages, setMessages] = useState<Message[]>([]);
   const [sending, setSending] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
   // isSending and isLoadingMore are refs so their guards are immune to stale
@@ -349,6 +364,7 @@ export function useChatSession(): ChatSession {
         throw new Error(`initial history fetch returned ${res.status}`);
       }
       const data = (await res.json()) as HistoryResponse;
+      setHistoryLoaded(true);
       if (data.messages.length === 0) return false;
       const loaded = historyToMessages(data.messages);
       // The stream opens after this load, so the only rows already on screen
@@ -405,6 +421,8 @@ export function useChatSession(): ChatSession {
   }, [hasMore]);
 
   async function send(text: string): Promise<void> {
+    // The step open when the message was sent, not when the connection finished opening.
+    const stepAtSend = setupStep.current;
     if (isSending.current || text.trim().length === 0) return;
 
     let convId: string;
@@ -533,7 +551,7 @@ export function useChatSession(): ChatSession {
       const res = await apiFetch('/api/chat/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, clientMessageId }),
+        body: JSON.stringify({ message: text, clientMessageId, ...(stepAtSend ? { setupStep: stepAtSend } : {}) }),
       });
 
       if (!res.ok) {
@@ -682,5 +700,5 @@ export function useChatSession(): ChatSession {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return { messages, sending, hasMore, loadingHistory, connectionError, send, loadMore };
+  return { messages, sending, hasMore, loadingHistory, historyLoaded, connectionError, send, loadMore };
 }

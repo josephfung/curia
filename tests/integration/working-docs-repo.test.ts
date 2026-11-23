@@ -433,6 +433,58 @@ describeIf('WorkingDocsRepo (integration)', () => {
       expect((await repo.read(path))!.body).toBe(replacedBody);
     });
 
+    // #2360: doc-write authorizes against one read of the document; the section write must
+    // refuse a newer version (the console marked it console-only in between).
+    it('refuses a section edit or delete when the document moved past expectedVersion', async () => {
+      const path = '/projects/sv-f/rules.md';
+      await repo.create({ path, type: 'agent-settings', body: RULES });
+      const read = (await repo.read(path))!;
+      const marked = await repo.update(path, { frontmatter: { editable_by: 'console' }, expectedVersion: read.version });
+      expect(marked.ok).toBe(true);
+
+      const edit = await repo.editSection(path, { section: 'Board mail', content: '- Status: x', expectedVersion: read.version });
+      expect(edit.ok).toBe(false);
+      if (!edit.ok) expect(edit.conflict).toBe(true);
+      const del = await repo.deleteSection(path, { section: 'Board mail', expectedVersion: read.version });
+      expect(del.ok).toBe(false);
+      if (!del.ok) expect('conflict' in del && del.conflict).toBe(true);
+      expect((await repo.read(path))!.body).toBe(RULES);
+
+      // The current version goes through.
+      const current = (await repo.read(path))!.version;
+      expect((await repo.editSection(path, { section: 'Board mail', content: '- Status: x', expectedVersion: current })).ok).toBe(true);
+    });
+
+    // #2360 follow-up: archived and re-created at the same path, a document is back at version 1
+    // under a new id, so every write mode must also refuse a different id.
+    it('refuses every write mode on a document re-created at the same path (new id, same version)', async () => {
+      const path = '/projects/sv-g/rules.md';
+      const original = await repo.create({ path, type: 'agent-settings', body: RULES });
+      expect((await repo.softDeleteAtVersion(path, original.version))?.ok).toBe(true);
+      const recreated = await repo.create({ path, type: 'agent-settings', frontmatter: { editable_by: 'console' }, body: RULES });
+      expect(recreated.version).toBe(original.version);
+      expect(recreated.id).not.toBe(original.id);
+
+      const stale = { expectedVersion: original.version, expectedId: original.id };
+      const results = [
+        await repo.update(path, { body: 'agent body', ...stale }),
+        await repo.append(path, { content: 'agent line', ...stale }),
+        await repo.editSection(path, { section: 'Board mail', content: '- Status: x', ...stale }),
+        await repo.deleteSection(path, { section: 'Board mail', ...stale }),
+      ];
+      for (const result of results) {
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect('conflict' in result && result.conflict).toBe(true);
+      }
+      const after = (await repo.read(path))!;
+      expect(after.id).toBe(recreated.id);
+      expect(after.body).toBe(RULES);
+      expect(after.version).toBe(recreated.version);
+
+      // The re-created document's own id goes through.
+      expect((await repo.update(path, { body: RULES, expectedVersion: recreated.version, expectedId: recreated.id })).ok).toBe(true);
+    });
+
     it('checks a section delete against a counter stored under another spelling', async () => {
       const path = '/projects/sv-e/rules.md';
       await repo.create({ path, type: 'agent-settings', body: RULES });

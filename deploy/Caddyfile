@@ -1,5 +1,12 @@
 # Automatic HTTPS for Curia via Caddy + Let's Encrypt. DOMAIN is injected from
-# the environment. Caddy terminates TLS and reverse-proxies to the curia service.
+# the environment. Caddy terminates TLS, sends LiveKit call signaling (/rtc*,
+# the wss:// websocket) to the livekit service, and everything else to curia.
+# Media (7881/tcp, 7882/udp) does not pass through Caddy.
 {$DOMAIN} {
-	reverse_proxy curia:3000
+	handle /rtc* {
+		reverse_proxy livekit:7880
+	}
+	handle {
+		reverse_proxy curia:3000
+	}
 }

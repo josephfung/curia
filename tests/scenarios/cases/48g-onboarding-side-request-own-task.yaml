@@ -1,0 +1,125 @@
+# Case 48g (#2360): a side request in the middle of onboarding. Rule: skills/onboarding/SKILL.md,
+# "Side requests": handle it, never defer it "until we finish onboarding"; make it its own task
+# for the right agent, say when to expect the result, and return to the topic. Anti-goal:
+# onboarding hijacking the relationship (design, "Anti-goals").
+#
+# seed.onboarding gives the principal turn production's onboarding block and the
+# `onboarding` skill (src/onboarding/turn-context.ts); its topics match the status stub.
+name: onboarding side request becomes its own task
+description: >
+  The principal is in their first onboarding conversation with Curia, by chat, about to answer
+  the "how I should sound" topic. They ask Curia to look into flights for their Lisbon trip
+  next month first. Curia creates a separate task for the flight research (not a subtask of
+  the onboarding task), says roughly when to expect the result, and returns to the style topic
+  in the same reply. It never says the request will wait until onboarding is finished.
+tags: [onboarding]
+# New in #2360: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
+release_gate: false
+stub_sets: [human-channels, deferred-work]
+seed:
+  onboarding:
+    task: 6e0b0a2d-2360-4c00-8a00-000000000487
+    topics:
+      - { id: style, title: How I should sound, session: first-conversation }
+      - { id: independence, title: How independent I should be, session: first-conversation }
+inbound:
+  from: principal
+  channel: web
+  content: >
+    Before we get to how you should sound: can you look into flights for my Lisbon trip next
+    month? Economy is fine, direct if possible.
+tool_stubs:
+  onboarding-progress:
+    - match: { op: status }
+      return:
+        taskId: 6e0b0a2d-2360-4c00-8a00-000000000487
+        sessions:
+          - id: first-conversation
+            title: First conversation
+            opened: true
+            open:
+              - { topicId: style, title: How I should sound, needsMailbox: false,
+                  body: "Chatty and thorough, or brief and to the point? Dry, or a bit of humour? Warm, or crisp and businesslike? When unsure: ask, or make a sensible call and tell you?" }
+              - { topicId: independence, title: How independent I should be, needsMailbox: false,
+                  body: "1. Draft only. 2. Ask first (recommended). 3. Spot-check. 4. Something else." }
+            done:
+              - { topicId: hello, title: Hello }
+              - { topicId: about-you, title: Tell me about yourself }
+        mailboxConnected: true
+        greetingSent: true
+        setupFor: other
+        operatorName: Jordan Vale
+  task-create:
+    - match: {}
+      return:
+        task_id: 0e5d6c7b-1a2b-4c3d-8e9f-00000000048a
+        title: Research flights for the Lisbon trip
+        status: open
+        owner: curia
+        priority: 3
+        tags: []
+        created_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  task-update:
+    - match: { task_id: 0e5d6c7b-1a2b-4c3d-8e9f-00000000048a }
+      return:
+        task_id: 0e5d6c7b-1a2b-4c3d-8e9f-00000000048a
+        title: Research flights for the Lisbon trip
+        status: in_progress
+        owner: curia
+        priority: 3
+        tags: []
+        updated_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  delegate:
+    - match: { agent: research-analyst }
+      return:
+        agent: research-analyst
+        response: >
+          Started on the Lisbon flights. I'll have options with prices and times within the
+          hour.
+    - match: {}
+      return:
+        agent: other
+        response: Nothing on file for this request.
+  # Marking the style topic declined to make room for the request is the wrong path.
+  office-tone-update:
+    - match: {}
+      return: { style: (unchanged), verbosity: 50 }
+expected_behaviors:
+  - id: own_task
+    weight: critical
+    description: Creates a task for the flight research with task-create.
+    check:
+      called: task-create
+      contains: { title: lisbon }
+      success: true
+  - id: not_an_onboarding_subtask
+    weight: critical
+    description: The flight task is not filed under the onboarding task.
+    check:
+      not_called: [task-create]
+      with: { parent_task_id: 6e0b0a2d-2360-4c00-8a00-000000000487 }
+  - id: never_after_onboarding
+    weight: critical
+    description: The reply never puts the request off until onboarding is finished.
+    check:
+      reply_excludes:
+        - "\\b(?:after|until|once) (?:we(?:['’]re| are)? (?:done|finished) with )?(?:the |your )?onboarding\\b"
+        - "\\buntil we(?:['’]re| are)? (?:done|finish)"
+  - id: topic_left_open
+    weight: important
+    description: Does not mark the style topic done or declined; the principal has not answered it.
+    check:
+      not_called: [onboarding-progress]
+      with: { op: topic_done, topic_id: style }
+  - id: returns_to_agenda
+    weight: critical
+    description: >
+      The reply says roughly when the flight options will be ready, then returns to the "how I
+      should sound" topic by asking one of its questions (brief or thorough, dry or humorous,
+      warm or crisp), in the same reply.
+failure_modes:
+  - Says it will look into flights after onboarding
+  - Researches flights inline at length and never returns to the topic
+  - Files the flight research as a subtask of the onboarding task

@@ -95,7 +95,11 @@ function StepMessage({ msg }: { msg: { notice?: string; error?: string } | undef
   return null;
 }
 
-export function NylasSignInSetupSection() {
+/**
+ * keyLocation: where the API key is entered, for the two lines that send the operator
+ * there. Settings says "under Channels → Email"; the Setup page says "in the Email step".
+ */
+export function NylasSignInSetupSection({ keyLocation = 'under Channels → Email' }: { keyLocation?: string } = {}) {
   const [status, setStatus] = useState<SignInStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   // True while any action or the first-load chain's steps run (see hold()).
@@ -253,7 +257,9 @@ export function NylasSignInSetupSection() {
       </div>
     );
   } else {
-    const why = isReason(status.reason) ? FIX[status.reason] : (status.detail || 'Sign-in is not set up yet.');
+    const why = isReason(status.reason)
+      ? FIX[status.reason].replace('under Channels → Email', keyLocation)
+      : (status.detail || 'Sign-in is not set up yet.');
     summary = (
       <div className="settings-callout settings-callout-readonly" role="status">
         <p><strong>Not ready.</strong> {why} {checkAgain}</p>

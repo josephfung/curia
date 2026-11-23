@@ -66,7 +66,7 @@ export class SetupStatusHandler implements ToolHandler {
 
       return {
         success: true,
-        data: { setup_complete: checklist.setupComplete, missing: checklist.missing, tasks, summary },
+        data: { setup_for: checklist.setupFor, setup_complete: checklist.setupComplete, missing: checklist.missing, tasks, summary },
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

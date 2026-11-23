@@ -273,6 +273,7 @@ container startup; operators enable the profile only when Voice is configured.
 {
   "status": "ok",
   "uptime_s": 3812,
+  "started_at": "2026-11-20T14:02:11.204Z",
   "checks": {
     "db": "ok",
     "bus": "ok",

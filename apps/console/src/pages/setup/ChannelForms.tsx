@@ -1,0 +1,558 @@
+// The channel steps' inline forms (#2358, PR 3b): a channel's credentials, saved to the
+// vault and the channel turned on, and the principal's id on a channel, linked to their
+// contact. Built on the routes Settings → Channels and Contacts use.
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type FormEvent, type JSX, type Ref } from 'react';
+import { apiFetch } from '../../api.js';
+import { errorMessage } from '../../components/settings/ConfigHistory.js';
+
+/** GET /api/registry/channels → one entry (src/registry/channel-registry-types.ts). */
+interface ChannelEntry {
+  name: string;
+  state: 'uninstalled' | 'installed' | 'enabled';
+  credentialFields: Array<{ key: string; label: string; secret: boolean; configured: boolean }>;
+  requiredResolvable: boolean;
+}
+
+export interface FieldSpec {
+  /** The credential key, saved as channel.<channel>.<key>. */
+  key: string;
+  label: string;
+  hint?: string;
+  placeholder?: string;
+  /** A phone number: saved as E.164 (see normalizePhone). */
+  phone?: boolean;
+}
+
+/**
+ * A phone number as the channels compare and send it: E.164, "+14165550100". Spaces, dashes,
+ * dots and brackets an operator types are dropped; anything else is refused, because Signal,
+ * Telnyx and the principal match compare the stored string exactly.
+ */
+export function normalizePhone(raw: string): { value: string } | { error: string } {
+  const value = raw.replace(/[\s().-]/g, '');
+  return /^\+[1-9]\d{6,14}$/.test(value)
+    ? { value }
+    : { error: 'Enter the number with its country code, like +14165550100.' };
+}
+
+async function loadChannel(channel: string): Promise<ChannelEntry> {
+  const res = await apiFetch('/api/registry/channels');
+  if (!res.ok) throw new Error(await errorMessage(res));
+  const { channels } = await res.json() as { channels: ChannelEntry[] };
+  const entry = channels.find((c) => c.name === channel);
+  if (!entry) throw new Error(`This server has no ${channel} channel.`);
+  return entry;
+}
+
+async function post(path: string): Promise<void> {
+  const res = await apiFetch(path, { method: 'POST' });
+  if (!res.ok) throw new Error(await errorMessage(res));
+}
+
+/**
+ * Installs and turns on a channel once its required credentials resolve (for email, also a
+ * mailbox). Returns false when something is still missing. It starts at Apply & restart.
+ */
+export async function turnOnChannelIfReady(channel: string): Promise<boolean> {
+  const entry = await loadChannel(channel);
+  if (entry.state === 'enabled') return true;
+  if (!entry.requiredResolvable) return false;
+  if (entry.state === 'uninstalled') await post(`/api/registry/channels/${channel}/install`);
+  await post(`/api/registry/channels/${channel}/enable`);
+  return true;
+}
+
+/**
+ * A field group's own Save button (#2683, owner review): nothing saves when a field loses
+ * focus, which surprised operators and fired whenever a password manager filled a field.
+ * The group is a real <form>, so Enter saves too, and the step's Save and continue still
+ * saves anything typed before moving on.
+ */
+function SaveButton({ dirty, saving }: { dirty: boolean; saving: boolean }): JSX.Element {
+  return (
+    <div className="setup-save-row">
+      <button type="submit" className="btn btn-sm" disabled={!dirty || saving}>{saving ? 'Saving…' : 'Save'}</button>
+    </div>
+  );
+}
+
+/** A form's submit: save, never navigate. */
+function submitWith(flush: () => Promise<boolean>) {
+  return (e: FormEvent<HTMLFormElement>): void => {
+    e.preventDefault();
+    void flush();
+  };
+}
+
+/** What a step's field group gives the step: save anything still typed. */
+export interface FieldGroupHandle {
+  /** Saves what is typed and not yet saved. False when anything failed (its error shows). */
+  flush: () => Promise<boolean>;
+}
+
+/**
+ * A channel's credentials as Setup asks for them: the listed fields only, in this order.
+ * The group's Save button (or Enter) saves what is typed, and so does the step's Save and
+ * continue (flush). Nothing saves when a field loses focus (#2683). A field already
+ * saved shows as saved and is left alone unless a new value is typed. Once every required
+ * credential resolves, the channel is installed and turned on; it starts at Apply & restart.
+ */
+export function ChannelCredentialsForm(props: {
+  channel: string;
+  fields: readonly FieldSpec[];
+  /**
+   * Shown when every field on this form is saved but the channel still can't turn on: what
+   * else it needs, that this page doesn't ask for (email: a mailbox; voice: LiveKit's keys).
+   */
+  incompleteNote?: string;
+  onChanged: () => Promise<void>;
+  ref?: Ref<FieldGroupHandle>;
+}): JSX.Element {
+  const { channel, fields, onChanged } = props;
+  const [entry, setEntry] = useState<ChannelEntry | null>(null);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  // The latest typed values, for a save that runs after the render that typed them.
+  const valuesRef = useRef(values);
+  valuesRef.current = values;
+  // One save at a time: the Save button and Save and continue can both ask.
+  const running = useRef<Promise<boolean> | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const reload = useCallback(async (): Promise<ChannelEntry | null> => {
+    try {
+      const next = await loadChannel(channel);
+      setEntry(next);
+      return next;
+    } catch (err) {
+      setMessage({ kind: 'error', text: err instanceof Error ? err.message : 'Could not read the channel.' });
+      return null;
+    }
+  }, [channel]);
+
+  useEffect(() => { void reload(); }, [reload]);
+
+  const saved = (key: string) => entry?.credentialFields.find((f) => f.key === key)?.configured === true;
+  const secret = (key: string) => entry?.credentialFields.find((f) => f.key === key)?.secret ?? true;
+
+  async function saveTyped(): Promise<boolean> {
+    // Check every typed number first, so a bad one saves nothing.
+    // `submitted` is the text as typed: the field is cleared after its save only if it still
+    // holds exactly that, so an edit made while the save ran is kept for the next save.
+    const typed: Array<{ f: FieldSpec; value: string; submitted: string }> = [];
+    for (const f of fields) {
+      const submitted = valuesRef.current[f.key] ?? '';
+      const raw = submitted.trim();
+      if (!raw) continue;
+      if (!f.phone) { typed.push({ f, value: raw, submitted }); continue; }
+      const phone = normalizePhone(raw);
+      if ('error' in phone) {
+        setMessage({ kind: 'error', text: `${f.label}: ${phone.error}` });
+        return false;
+      }
+      typed.push({ f, value: phone.value, submitted });
+    }
+    if (typed.length === 0) return retryTurnOn();
+    let savedAny = false;
+    try {
+      // One field at a time, so a failure names the field and nothing after it is half-saved.
+      for (const { f, value, submitted } of typed) {
+        const res = await apiFetch(`/api/vault/secrets/${encodeURIComponent(`channel.${channel}.${f.key}`)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value }),
+        });
+        if (!res.ok) throw new Error(`${f.label}: ${await errorMessage(res)}`);
+        // Never keep a saved credential in component state, unless it was retyped while the
+        // save ran: that newer value is kept for the next save.
+        if (valuesRef.current[f.key] === submitted) {
+          valuesRef.current = { ...valuesRef.current, [f.key]: '' };
+          setValues((v) => (v[f.key] === submitted ? { ...v, [f.key]: '' } : v));
+        }
+        savedAny = true;
+      }
+      const before = await loadChannel(channel);
+      const on = await turnOnChannelIfReady(channel);
+      const after = await reload();
+      // The step's own fields all saved but still off: something this page doesn't ask for is
+      // missing, and the step says what (incompleteNote); otherwise one of its fields is.
+      const ownFieldsSaved = fields.every((f) => after?.credentialFields.find((c) => c.key === f.key)?.configured === true);
+      setMessage({
+        kind: 'ok',
+        text: before.state === 'enabled' ? 'Saved. Changes apply when you apply and restart.'
+          : on ? 'Saved and turned on. It starts when you apply and restart.'
+          : ownFieldsSaved && props.incompleteNote ? props.incompleteNote
+          : 'Saved. Add the rest to turn it on.',
+      });
+      await onChanged();
+      return true;
+    } catch (err) {
+      const text = err instanceof Error ? err.message : 'Could not save.';
+      // A save that landed before a later step failed (turning the channel on) is still saved.
+      setMessage({ kind: 'error', text: savedAny ? `Saved, but couldn’t turn it on: ${text}` : text });
+      await reload();
+      if (savedAny) await onChanged();
+      return false;
+    }
+  }
+
+  /**
+   * Nothing typed: the step may move on, unless the channel's credentials resolve but it is
+   * still off (an earlier turn-on failed). Then turning it on is retried, and a failure keeps
+   * the step open. A channel whose credentials were never entered stays skippable.
+   */
+  async function retryTurnOn(): Promise<boolean> {
+    try {
+      const current = await loadChannel(channel);
+      if (current.state === 'enabled' || !current.requiredResolvable) return true;
+      await turnOnChannelIfReady(channel);
+      await reload();
+      setMessage({ kind: 'ok', text: 'Turned on. It starts when you apply and restart.' });
+      await onChanged();
+      return true;
+    } catch (err) {
+      setMessage({ kind: 'error', text: `Couldn’t turn it on: ${err instanceof Error ? err.message : 'unknown error'}` });
+      return false;
+    }
+  }
+
+  // Waits for a save already running, then saves what is still typed.
+  async function flush(): Promise<boolean> {
+    while (running.current) await running.current;
+    running.current = saveTyped();
+    setSaving(true);
+    try {
+      return await running.current;
+    } finally {
+      running.current = null;
+      setSaving(false);
+    }
+  }
+
+  useImperativeHandle(props.ref, () => ({ flush }));
+
+  const dirty = Object.values(values).some((v) => v.trim() !== '');
+  return (
+    <form className="setup-fields" onSubmit={submitWith(flush)} noValidate>
+      {fields.map((f) => (
+        <label key={f.key} className="setup-field">
+          <span className="setup-field-label">
+            {f.label}{' '}
+            {saved(f.key) ? <span className="setup-hint setup-saved">Saved</span> : f.hint && <span className="setup-hint">{f.hint}</span>}
+          </span>
+          <input
+            type={secret(f.key) ? 'password' : 'text'}
+            autoComplete="off"
+            value={values[f.key] ?? ''}
+            placeholder={saved(f.key) ? 'Saved. Type a new value to replace it.' : f.placeholder}
+            onChange={(e) => {
+              const value = e.target.value;
+              valuesRef.current = { ...valuesRef.current, [f.key]: value };
+              setValues((v) => ({ ...v, [f.key]: value }));
+            }}
+          />
+        </label>
+      ))}
+      <SaveButton dirty={dirty} saving={saving} />
+      {message && (
+        <p className={`setup-status ${message.kind === 'ok' ? 'ok' : 'attention'}`} role={message.kind === 'error' ? 'alert' : 'status'}>
+          {message.text}
+        </p>
+      )}
+    </form>
+  );
+}
+
+interface Identity {
+  id: string;
+  channel: string;
+  channelIdentifier: string;
+  status: string;
+}
+
+/**
+ * The principal's id on one channel (Signal number, mobile, Slack member id), linked to
+ * their contact as a principal-stated identity. Nothing is sent to it. Like the credentials,
+ * it saves with its Save button (or Enter), and on the step's Save and continue.
+ */
+export function PrincipalIdentityField(props: {
+  contactId: string | null;
+  channel: 'signal' | 'sms' | 'slack';
+  label: string;
+  placeholder?: string;
+  onChanged: () => Promise<void>;
+  ref?: Ref<FieldGroupHandle>;
+}): JSX.Element {
+  const { contactId, channel, onChanged } = props;
+  const [linked, setLinked] = useState<Identity[]>([]);
+  const [value, setValue] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const running = useRef<Promise<boolean> | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const reload = useCallback(async () => {
+    if (!contactId) return;
+    try {
+      const res = await apiFetch(`/api/contacts/${encodeURIComponent(contactId)}/identities`);
+      if (!res.ok) throw new Error(await errorMessage(res));
+      const data = await res.json() as { identities: Identity[] };
+      setLinked(data.identities.filter((i) => i.channel === channel && i.status === 'active'));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not read the contact.');
+    }
+  }, [contactId, channel]);
+
+  useEffect(() => { void reload(); }, [reload]);
+
+  async function link(): Promise<boolean> {
+    // As typed: cleared afterwards only if the field still holds exactly this (an edit made
+    // while the request ran is kept for the next save).
+    const submitted = valueRef.current;
+    const typed = submitted.trim();
+    if (!typed) return true;
+    if (!contactId) return false;
+    setError(null);
+    let identifier = typed;
+    if (channel !== 'slack') {
+      const phone = normalizePhone(identifier);
+      if ('error' in phone) { setError(phone.error); return false; }
+      identifier = phone.value;
+    }
+    if (linked.some((i) => i.channelIdentifier === identifier)) {
+      clearIfUnchanged(submitted);
+      return true;
+    }
+    try {
+      const res = await apiFetch(`/api/contacts/${encodeURIComponent(contactId)}/identities`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel, channelIdentifier: identifier }),
+      });
+      if (!res.ok) throw new Error(await errorMessage(res));
+      clearIfUnchanged(submitted);
+      await reload();
+      await onChanged();
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save.');
+      return false;
+    }
+  }
+
+  function clearIfUnchanged(submitted: string): void {
+    if (valueRef.current !== submitted) return;
+    valueRef.current = '';
+    setValue('');
+  }
+
+  async function flush(): Promise<boolean> {
+    while (running.current) await running.current;
+    running.current = link();
+    setSaving(true);
+    try {
+      return await running.current;
+    } finally {
+      running.current = null;
+      setSaving(false);
+    }
+  }
+
+  useImperativeHandle(props.ref, () => ({ flush }));
+
+  if (!contactId) {
+    return <p className="setup-hint">Save Who it’s for first: this links to the principal’s contact.</p>;
+  }
+  return (
+    <form className="setup-fields setup-identity" onSubmit={submitWith(flush)} noValidate>
+      <label className="setup-field">
+        <span className="setup-field-label">
+          {props.label}{' '}
+          {linked.length > 0 && <span className="setup-hint setup-saved">Saved: {linked.map((i) => i.channelIdentifier).join(', ')}</span>}
+        </span>
+        <input
+          type="text"
+          autoComplete="off"
+          value={value}
+          placeholder={linked.length > 0 ? 'Type another to add it' : props.placeholder}
+          onChange={(e) => { valueRef.current = e.target.value; setValue(e.target.value); }}
+        />
+      </label>
+      <SaveButton dirty={value.trim() !== ''} saving={saving} />
+      {error && <p className="setup-status attention" role="alert">{error}</p>}
+    </form>
+  );
+}
+
+export interface VaultFieldSpec {
+  /** The vault key, saved as is (e.g. tavily_api_key). */
+  key: string;
+  label: string;
+  hint?: string;
+  placeholder?: string;
+  /** Shown as typed (an address), not masked. Masked by default. */
+  plain?: boolean;
+  /** An email address: refused before anything is saved when it doesn't look like one. */
+  email?: boolean;
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+async function loadConfiguredKeys(): Promise<Set<string>> {
+  const res = await apiFetch('/api/vault/status');
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return new Set((await res.json() as { configured_keys: string[] }).configured_keys);
+}
+
+/**
+ * Vault keys a step asks for (Google Workspace, the Tavily key), with no channel to turn on.
+ * Like ChannelCredentialsForm: the Save button (or Enter) and the step's Save and continue save
+ * what is typed (flush). A saved key shows as saved and is left alone unless a new value is typed.
+ */
+export function VaultKeysForm(props: {
+  fields: readonly VaultFieldSpec[];
+  onChanged: () => Promise<void>;
+  /** Told whether every field is filled in, typed or already saved (Google Workspace's sign-in button). */
+  onFilledChange?: (filled: boolean) => void;
+  ref?: Ref<FieldGroupHandle>;
+}): JSX.Element {
+  const { fields, onChanged, onFilledChange } = props;
+  const [configured, setConfigured] = useState<Set<string>>(new Set());
+  const [saving, setSaving] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const valuesRef = useRef(values);
+  valuesRef.current = values;
+  const running = useRef<Promise<boolean> | null>(null);
+
+  /** Re-reads which keys are saved. Returns the failure, if any, for the caller to word. */
+  const reload = useCallback(async (): Promise<string | null> => {
+    try {
+      setConfigured(await loadConfiguredKeys());
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : 'unknown error';
+    }
+  }, []);
+
+  useEffect(() => {
+    void reload().then((failure) => {
+      if (failure) setMessage({ kind: 'error', text: `Couldn’t read which keys are saved: ${failure}` });
+    });
+  }, [reload]);
+
+  async function saveTyped(): Promise<boolean> {
+    // Check every typed value first, so a bad one saves nothing. `submitted` is the text as
+    // typed: the field is cleared after its save only if it still holds exactly that.
+    const typed: Array<{ f: VaultFieldSpec; value: string; submitted: string }> = [];
+    for (const f of fields) {
+      const submitted = valuesRef.current[f.key] ?? '';
+      const value = submitted.trim();
+      if (!value) continue;
+      if (f.email && !EMAIL_RE.test(value)) {
+        setMessage({ kind: 'error', text: `${f.label}: enter an email address, like curia@example.com.` });
+        return false;
+      }
+      typed.push({ f, value, submitted });
+    }
+    if (typed.length === 0) return true;
+    let savedAny = false;
+    try {
+      // One field at a time, so a failure names the field.
+      for (const { f, value, submitted } of typed) {
+        const res = await apiFetch(`/api/vault/secrets/${encodeURIComponent(f.key)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value }),
+        });
+        if (!res.ok) throw new Error(`${f.label}: ${await errorMessage(res)}`);
+        // Never keep a saved key in component state, unless it was retyped while the save ran.
+        if (valuesRef.current[f.key] === submitted) {
+          valuesRef.current = { ...valuesRef.current, [f.key]: '' };
+          setValues((v) => (v[f.key] === submitted ? { ...v, [f.key]: '' } : v));
+        }
+        savedAny = true;
+      }
+      // The save stands even when the re-read fails: say both, never just the failure.
+      const failure = await reload();
+      setMessage({ kind: 'ok', text: failure ? `Saved, but couldn’t re-read which keys are saved: ${failure}` : 'Saved.' });
+      await onChanged();
+      return true;
+    } catch (err) {
+      setMessage({ kind: 'error', text: err instanceof Error ? err.message : 'Could not save.' });
+      if (savedAny) {
+        await reload();
+        await onChanged();
+      }
+      return false;
+    }
+  }
+
+  async function flush(): Promise<boolean> {
+    setSaving(true);
+    try {
+      return await flushPasses();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function flushPasses(): Promise<boolean> {
+    // A value typed while a save ran is kept for the next save; save again until nothing
+    // typed is left, so Save and continue never moves on past it. Bounded: someone typing
+    // through every save is told to wait rather than looped forever.
+    for (let pass = 0; pass < 5; pass++) {
+      while (running.current) await running.current;
+      running.current = saveTyped();
+      let ok: boolean;
+      try {
+        ok = await running.current;
+      } finally {
+        running.current = null;
+      }
+      if (!ok) return false;
+      if (!Object.values(valuesRef.current).some((v) => v.trim())) return true;
+    }
+    setMessage({ kind: 'error', text: 'Still saving what you typed. Try again in a moment.' });
+    return false;
+  }
+
+  useImperativeHandle(props.ref, () => ({ flush }));
+
+  const filled = fields.every((f) => configured.has(f.key) || (values[f.key] ?? '').trim() !== '');
+  const onFilledRef = useRef(onFilledChange);
+  onFilledRef.current = onFilledChange;
+  useEffect(() => { onFilledRef.current?.(filled); }, [filled]);
+
+  const dirty = Object.values(values).some((v) => v.trim() !== '');
+  return (
+    <form className="setup-fields" onSubmit={submitWith(flush)} noValidate>
+      {fields.map((f) => (
+        <label key={f.key} className="setup-field">
+          <span className="setup-field-label">
+            {f.label}{' '}
+            {configured.has(f.key) ? <span className="setup-hint setup-saved">Saved</span> : f.hint && <span className="setup-hint">{f.hint}</span>}
+          </span>
+          <input
+            type={f.plain ? (f.email ? 'email' : 'text') : 'password'}
+            autoComplete="off"
+            value={values[f.key] ?? ''}
+            placeholder={configured.has(f.key) ? 'Saved. Type a new value to replace it.' : f.placeholder}
+            onChange={(e) => {
+              const value = e.target.value;
+              valuesRef.current = { ...valuesRef.current, [f.key]: value };
+              setValues((v) => ({ ...v, [f.key]: value }));
+            }}
+          />
+        </label>
+      ))}
+      <SaveButton dirty={dirty} saving={saving} />
+      {message && (
+        <p className={`setup-status ${message.kind === 'ok' ? 'ok' : 'attention'}`} role={message.kind === 'error' ? 'alert' : 'status'}>
+          {message.text}
+        </p>
+      )}
+    </form>
+  );
+}

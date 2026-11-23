@@ -5,6 +5,8 @@
 // minted only when there is no history. A client-supplied id is not consulted.
 
 import { randomUUID } from 'node:crypto';
+import type { Logger } from '../../logger.js';
+import { readSetupPhase, type SetupPhaseValue } from '../../setup/setup-settings.js';
 
 export interface WebThreadQueryable {
   query: (
@@ -18,11 +20,15 @@ function conversationIdOf(row: Record<string, unknown> | undefined): string | nu
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-// The row is written once and then only read. A process-local cache skips the
+// The row is written once and then only read, until starting onboarding rotates it
+// (OnboardingService.start, #2360, which updates this cache too). A process-local cache skips the
 // SELECT on later messages. Keyed by pool so tests with a fresh stub do not
 // share an id. Rows written before migration 090 have a NULL channel_id and
 // are not adopted; an upgrade from that era starts a new thread.
 const threadIds = new WeakMap<WebThreadQueryable, string>();
+// Bumped by every rotation. An uncached read caches its result only when no rotation
+// happened while it ran, so a read that saw the old row can never overwrite the new id.
+const generations = new WeakMap<WebThreadQueryable, number>();
 
 /** Drop a cached id. Tests delete the row and need the next call to read again. */
 export function clearWebThreadCache(pool: WebThreadQueryable): void {
@@ -39,15 +45,25 @@ export async function getOrCreateWebThread(
 ): Promise<string> {
   const cached = threadIds.get(pool);
   if (cached) return cached;
+  const generation = generations.get(pool) ?? 0;
+  const resolved = await readOrCreateWebThread(pool, opts);
+  // A rotation finished while this read ran: what it read may be the old row. The rotation
+  // already cached the new id, so return that.
+  if ((generations.get(pool) ?? 0) !== generation) return threadIds.get(pool) ?? getOrCreateWebThread(pool, opts);
+  threadIds.set(pool, resolved);
+  return resolved;
+}
+
+async function readOrCreateWebThread(
+  pool: WebThreadQueryable,
+  opts?: { newId?: () => string },
+): Promise<string> {
 
   const existing = await pool.query(
     `SELECT conversation_id FROM web_thread WHERE id = 1`,
   );
   const stored = conversationIdOf(existing.rows[0]);
-  if (stored) {
-    threadIds.set(pool, stored);
-    return stored;
-  }
+  if (stored) return stored;
 
   const recent = await pool.query(
     `SELECT conversation_id
@@ -70,18 +86,65 @@ export async function getOrCreateWebThread(
     [adopted],
   );
   const won = conversationIdOf(inserted.rows[0]);
-  if (won) {
-    threadIds.set(pool, won);
-    return won;
-  }
+  if (won) return won;
 
   const winner = await pool.query(
     `SELECT conversation_id FROM web_thread WHERE id = 1`,
   );
   const resolved = conversationIdOf(winner.rows[0]);
   if (!resolved) throw new Error('web_thread insert lost the race and the row is missing');
-  threadIds.set(pool, resolved);
   return resolved;
+}
+
+/**
+ * Point the shared thread at a new conversation (#2358), in the caller's transaction. The
+ * caller calls noteWebThreadRotated once it commits. Starting onboarding does this
+ * (OnboardingService.start, #2360; not finishing Setup) so the principal never opens on the
+ * operator's Setup chat; the old conversation stays in
+ * working_memory and the audit log.
+ */
+export async function rotateWebThreadRow(db: WebThreadQueryable, conversationId: string): Promise<void> {
+  await db.query(
+    `INSERT INTO web_thread (id, conversation_id) VALUES (1, $1)
+     ON CONFLICT (id) DO UPDATE SET conversation_id = EXCLUDED.conversation_id, created_at = now()`,
+    [conversationId],
+  );
+}
+
+/** After a committed rotation: every later read in this process gets the new id. */
+export function noteWebThreadRotated(pool: WebThreadQueryable, conversationId: string): void {
+  generations.set(pool, (generations.get(pool) ?? 0) + 1);
+  threadIds.set(pool, conversationId);
+}
+
+/** Rotate outside a transaction (tests, tools). Returns the new id. */
+export async function rotateWebThread(
+  pool: WebThreadQueryable,
+  opts?: { newId?: () => string },
+): Promise<string> {
+  const next = (opts?.newId ?? randomUUID)();
+  await rotateWebThreadRow(pool, next);
+  noteWebThreadRotated(pool, next);
+  return next;
+}
+
+/**
+ * The shared thread and the Setup phase (#2358, #2709), so a chat message is bound to one
+ * side of Setup: either the Setup thread while Setup runs, or the shared thread after.
+ * Finishing Setup changes only the phase; starting onboarding (#2360) later rotates it.
+ *
+ * The two are read in separate statements (the settings store validates the phase value,
+ * which a SQL join would bypass). That is safe: the extra pairing it allows is (Setup
+ * thread, complete) — a message read against the Setup thread just as Setup finishes. With
+ * the phase complete it is routed to the coordinator on that thread, the same outcome as a
+ * message sent after "Not right now", which keeps the Setup chat by design.
+ */
+export async function readWebThreadAndSetupPhase(
+  pool: WebThreadQueryable,
+  logger: Pick<Logger, 'error'>,
+): Promise<{ conversationId: string; setupPhase: SetupPhaseValue }> {
+  const conversationId = await getOrCreateWebThread(pool);
+  return { conversationId, setupPhase: await readSetupPhase(pool, logger) };
 }
 
 /** A client message id is an opaque token the sender uses to ignore its own echo. */

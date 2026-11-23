@@ -11,8 +11,9 @@
 //   GET  /api/identity/history — return all versions, newest first
 //   POST /api/identity/reload  — force a reload from DB (used post-wizard)
 
+import { isInSetup, readSetupState } from '../../../setup/setup-settings.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import type { OfficeIdentityService } from '../../../identity/service.js';
 import type { OfficeIdentity } from '../../../identity/types.js';
 import { DETAIL_BANDS, LENGTH_ROWS, LENGTH_ROW_LABELS } from '../../../identity/length.js';
@@ -25,16 +26,18 @@ export const LENGTH_LIMITS_RESPONSE = {
   rows: LENGTH_ROWS.map(id => ({ id, label: LENGTH_ROW_LABELS[id] })),
   bands: DETAIL_BANDS,
 };
-import { assertSecret, type SessionStore } from '../session-auth.js';
+import { assertSecret, CONSOLE_RATE, type SessionStore } from '../session-auth.js';
 
 /**
  * Returns true if the office identity has ever been explicitly configured via the
  * wizard or API. A fresh deployment only has file_load versions and returns false.
+ * A 'working_style' save (the Setup page's tone, #2358) doesn't count: it sets no name,
+ * so it must not tick Curia's name, the Setup step this answers.
  *
  * Shared with the /api/setup/status route so both endpoints answer the same question
  * the same way; "configured" is a single concept, not a per-route opinion.
  */
-export async function isIdentityConfigured(pool: Pool): Promise<boolean> {
+export async function isIdentityConfigured(pool: Pick<Pool, 'query'> | PoolClient): Promise<boolean> {
   const result = await pool.query<{ configured: boolean }>(
     `SELECT EXISTS (
        SELECT 1 FROM office_identity_versions
@@ -69,10 +72,14 @@ export async function identityRoutes(
   // These routes check credentials on every call — a brute-force target that
   // needs tighter throttling than the global 200/min baseline.
   const AUTH_RATE = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
+  // Reads use the console-wide read limit (60/min): the router reads GET /api/identity on every
+  // navigation, and the Setup page re-reads after each save. Failed auth is throttled
+  // separately, in assertSecret, so a tight cap on authenticated reads only adds friction
+  // (#2358). Writes keep AUTH_RATE.
 
   // -- GET /api/identity — return current identity config --
 
-  app.get('/api/identity', AUTH_RATE, async (request, reply) => {
+  app.get('/api/identity', CONSOLE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     try {
@@ -82,8 +89,11 @@ export async function identityRoutes(
       // or API. A fresh deployment (only file_load versions) returns configured: false,
       // which triggers the first-run wizard in the browser.
       const configured = await isIdentityConfigured(pool);
+      // #2358: the console's first-load gate. True on a new install until Setup is finished;
+      // migration 132 marked installs that predate the Setup page complete.
+      const inSetup = isInSetup((await readSetupState(pool, request.log)).phase);
 
-      return reply.send({ identity, configured, lengthLimits: LENGTH_LIMITS_RESPONSE });
+      return reply.send({ identity, configured, inSetup, lengthLimits: LENGTH_LIMITS_RESPONSE });
     } catch (err) {
       request.log.error({ err }, 'GET /api/identity: failed to query configured flag or get identity');
       return reply.status(500).send({ error: 'Failed to get identity. Check server logs.' });
@@ -111,8 +121,9 @@ export async function identityRoutes(
     // (explicit confirmation step, separate from tone/persona edits).
 
     try {
-      // Accept 'wizard' or 'api' as the source; default to 'api' for direct API callers.
-      const VALID_CHANGED_BY = ['api', 'wizard'] as const;
+      // Accept 'wizard', 'api' or 'working_style' (the Setup page's tone, which
+      // isIdentityConfigured doesn't count) as the source; default to 'api' for direct API callers.
+      const VALID_CHANGED_BY = ['api', 'wizard', 'working_style'] as const;
       type ChangedBy = typeof VALID_CHANGED_BY[number];
       const changedBy: ChangedBy = VALID_CHANGED_BY.includes(body.changedBy as ChangedBy)
         ? (body.changedBy as ChangedBy)
@@ -136,7 +147,7 @@ export async function identityRoutes(
 
   // -- GET /api/identity/history — return all versions, newest first --
 
-  app.get('/api/identity/history', AUTH_RATE, async (request, reply) => {
+  app.get('/api/identity/history', CONSOLE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     try {

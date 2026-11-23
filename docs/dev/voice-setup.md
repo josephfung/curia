@@ -14,10 +14,97 @@ PSTN/SIP are Phase 2.
 - Host firewall/NAT access for LiveKit's RTC ports (and for signaling only if
   you publish it directly with `LIVEKIT_HTTP_BIND`).
 
+## Fresh installs: LiveKit is on by default
+
+A fresh `install.sh` run starts LiveKit for you. It generates a LiveKit key and
+secret, writes `COMPOSE_PROFILES`, `LIVEKIT_KEYS` and `LIVEKIT_COMMAND` to `.env`,
+and seeds the vault with `channel.voice.livekit_url`, `channel.voice.livekit_api_key`
+and `channel.voice.livekit_api_secret`. You only add the Deepgram key, the Cartesia
+key and a Cartesia voice id (see "Vault keys and channel enablement"). Setup's
+Voice check reports "LiveKit isn't running" or a rejected key rather than done.
+
+What the installer sets depends on the topology you pick:
+
+| Install | `LIVEKIT_COMMAND` | Seeded `channel.voice.livekit_url` |
+|---|---|---|
+| Domain (HTTPS) | `--config /etc/livekit.yaml` | `wss://<domain>` |
+| Behind your own proxy, with a public address | `--config /etc/livekit.yaml` | `wss://<host>` |
+| Local | `--config /etc/livekit.local.yaml --node-ip 127.0.0.1` | `ws://localhost:7880` |
+
+The seeded URL is a base address: the LiveKit client adds `/rtc` itself, so do not
+append it. Local installs use `docker/livekit.local.yaml`, which sets
+`use_external_ip: false`, because `--node-ip` alone does not override
+`use_external_ip: true` in the public config.
+
+On a domain install, or a proxy install that gave a public address, the installer
+refuses to continue if `LIVEKIT_COMMAND` is `--dev`: the Caddy `/rtc*` route would
+publish the `devkey` / `secret` credentials.
+
+The HTTPS overlay (`docker-compose.tls.yml`) also fails closed for stacks started
+by hand: with `LIVEKIT_COMMAND` unset or empty, LiveKit runs the keyless
+`--config /etc/livekit.yaml` instead of the base file's `--dev` fallback, so it
+refuses to start until `LIVEKIT_KEYS` holds real keys. Only the base
+`docker-compose.yml` (developer checkouts, installs without the overlay) keeps
+the `--dev` fallback.
+
+Curia's own end of a call does not use that public URL. It joins over
+`ws://livekit:7880`, derived from `channels.voice.livekit_management_url` (default
+`http://livekit:7880`), so local calls work and traffic stays on the compose network.
+A Curia run on the host (`pnpm dev`) sets `LIVEKIT_INTERNAL_URL=ws://localhost:7880`
+for its own join instead.
+
+Re-running `install.sh` keeps the install's topology and LiveKit settings. To
+change how Curia is reached, edit `.env` (`COMPOSE_FILE`, `DOMAIN`, `APP_ORIGIN`,
+`LIVEKIT_COMMAND`) or install into a new directory. Neither changes the Voice URL
+already saved in the vault: set `channel.voice.livekit_url` under **Settings →
+Channels → Voice** to the new address too.
+
+## Turn voice on for an existing install
+
+Upgrades leave LiveKit alone. When voice is off, `install.sh` prints a note
+pointing here. To turn it on for an install you already have:
+
+1. Fetch the current `docker-compose.yml`, `deploy/Caddyfile`,
+   `docker/livekit.yaml` and `docker/livekit.local.yaml` from the release you run
+   (release assets `docker-compose.yml`, `Caddyfile`, `livekit.yaml` and
+   `livekit.local.yaml`). The Caddyfile adds the `/rtc*` route; skip it if you
+   terminate TLS elsewhere. Fetch both LiveKit files even on a public install: the
+   compose file mounts both, and a missing one makes Docker create an empty
+   directory in its place.
+2. Generate a key and secret. The key is `API` plus 12 letters or digits, the
+   secret 32 random bytes in hex:
+
+   ```bash
+   echo "API$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 12)"
+   openssl rand -hex 32
+   ```
+
+   Then set in `.env`:
+
+   ```bash
+   COMPOSE_PROFILES=voice
+   LIVEKIT_KEYS="<api-key>: <api-secret>"
+   # Domain or public proxy install:
+   LIVEKIT_COMMAND="--config /etc/livekit.yaml"
+   # Local install (only this machine reaches Curia) instead:
+   # LIVEKIT_COMMAND="--config /etc/livekit.local.yaml --node-ip 127.0.0.1"
+   ```
+
+   `LIVEKIT_KEYS` must hold the same pair you enter in the vault. Never use `--dev`
+   here (see below).
+3. Start it: `docker compose up -d`.
+4. In **Settings → Channels → Voice**, enter `channel.voice.livekit_url`
+   (`wss://<your-domain>`, or `ws://localhost:7880` on a local install),
+   `channel.voice.livekit_api_key`, `channel.voice.livekit_api_secret`, plus the
+   Deepgram and Cartesia values, then restart Curia.
+5. On a domain or public proxy install, open `7881/tcp` and `7882/udp` on the host
+   firewall.
+
 ## Start LiveKit with Docker Compose
 
 The root `docker-compose.yml` includes an independent `livekit` service behind
-the Compose `voice` profile so plain `docker compose up` never starts it.
+the Compose `voice` profile so plain `docker compose up` never starts it unless
+`COMPOSE_PROFILES` includes `voice` (fresh installs set it).
 Curia does not `depends_on` it because the voice channel is toggleable;
 Postgres-only deploys still boot normally.
 
@@ -61,15 +148,18 @@ running container is still on loopback (not yet recreated). On every run, fresh
 or upgrade, it warns when signaling is public and the running container uses the
 `--dev` credentials. It reads the container's own command, not `.env`.
 
-For local development the profiled service runs `livekit-server --dev`, which
+For local development (no TLS overlay) the profiled service runs `livekit-server --dev`, which
 uses known credentials (`devkey` / `secret`). **Never expose `--dev` on a
 public interface** — anyone who can reach the ports can mint LiveKit JWTs with
 those credentials without Curia auth. Production must set `LIVEKIT_COMMAND` to
 a real config (via `docker/livekit.yaml`) and store the same keys in the Curia
 vault.
 
-For a config-file deploy, copy `docker/livekit.yaml`, replace the placeholder
-key/secret, and add a local compose override:
+For a config-file deploy, generate a key pair and set `LIVEKIT_KEYS` and
+`LIVEKIT_COMMAND="--config /etc/livekit.yaml"` in `.env` as in "Turn voice on for
+an existing install" above. `docker/livekit.yaml` holds no keys, so LiveKit
+refuses to start without `LIVEKIT_KEYS`. If your compose file does not already
+mount it, add a local override:
 
 ```yaml
 services:
@@ -168,16 +258,18 @@ through `ExecutionLayer` and external sends still hit the gateway.
   loopback-only by default; a TLS proxy on the host reaches `127.0.0.1:7880`).
 - Forward those ports through NAT if Curia is behind a router.
 - Keep `rtc.use_external_ip: true` for a simple public-VPS deploy.
-- The optional `docker-compose.tls.yml` Caddy overlay terminates HTTPS for Curia
-  on ports 80/443. The shipped `deploy/Caddyfile` proxies only Curia — not
-  LiveKit. Terminate HTTPS/WSS for signaling with a separate proxy on the host
-  (to `127.0.0.1:7880`); `7881/tcp` (TCP fallback) and `7882/udp` (media) still
-  need direct firewall/NAT exposure.
-- Set the Voice channel LiveKit URL to the browser-reachable signaling endpoint:
-  `ws://localhost:7880` for local testing on the same machine,
+- The `docker-compose.tls.yml` Caddy overlay terminates HTTPS for Curia on ports
+  80/443. The shipped `deploy/Caddyfile` also routes `/rtc*` to LiveKit, so
+  `wss://<domain>` reaches LiveKit signaling on the same host and certificate.
+  Everything else, including `/twirp/*`, goes to Curia, so LiveKit's admin API is
+  not reachable from outside. `7881/tcp` (TCP fallback) and `7882/udp` (media)
+  still need direct firewall/NAT exposure. If you run your own proxy, route `/rtc*`
+  to `127.0.0.1:7880` yourself.
+- Set the Voice channel LiveKit URL to the browser-reachable signaling base
+  address (no `/rtc`; the client adds it): `wss://<domain>` behind the shipped
+  Caddyfile, `ws://localhost:7880` for local testing on the same machine, or
   `ws://<host>:7880` only with `LIVEKIT_HTTP_BIND` set (private networks, real
-  keys), or `wss://<voice-host>` when you terminate TLS for LiveKit through a
-  separate proxy.
+  keys).
 - **Signaling vs management:** the vault `channel.voice.livekit_url` is for the
   **browser** (`wss://…` / `ws://…`). Curia's server-side RoomService calls
   (`DeleteRoom` on hangup, and any future admin ops) use a **separate** HTTP

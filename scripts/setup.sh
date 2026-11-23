@@ -25,6 +25,10 @@ SETUP_MODE="full"  # "full" | "resume"
 # Global: set by handle_existing_env when the vault key should be preserved across
 # a full reset (Postgres data is NOT wiped, so existing encrypted rows must stay readable)
 PRESERVED_ENCRYPTION_KEY=""
+# Global: set by handle_existing_env so a full reset keeps the LiveKit key pair. The
+# vault holds a copy that seed-vault never overwrites, so regenerating would leave
+# LiveKit and Curia with different keys.
+PRESERVED_LIVEKIT_KEYS=""
 # Global: set by main() from the prompted Anthropic key, consumed by run_infra to
 # seed the vault (#911). Empty on the resume path (vault already seeded on first run).
 SEED_ANTHROPIC_KEY=""
@@ -98,6 +102,13 @@ write_env() {
         -e "s|^DATABASE_URL=.*|DATABASE_URL=${DATABASE_URL}|" \
         -e "s|^SECRET_ENCRYPTION_KEY=.*|SECRET_ENCRYPTION_KEY=${SECRET_ENCRYPTION_KEY}|" \
         "$ENV_EXAMPLE" > "$ENV_FILE"
+
+    # LiveKit voice is on by default for source installs (#2357). Write a preserved
+    # pair (full reset) first so ensure_livekit_env keeps it instead of generating.
+    if [[ -n "${PRESERVED_LIVEKIT_KEYS:-}" ]]; then
+        set_env_var "$ENV_FILE" LIVEKIT_KEYS "${PRESERVED_LIVEKIT_KEYS}"
+    fi
+    ensure_livekit_env "$ENV_FILE" local
 }
 
 # Shown when .env already exists. Returns with SETUP_MODE set based on choice.
@@ -157,6 +168,7 @@ handle_existing_env() {
             # A full reset does NOT wipe the Postgres volume — generating a new key
             # would make all previously stored vault secrets permanently unreadable.
             PRESERVED_ENCRYPTION_KEY=$(grep "^SECRET_ENCRYPTION_KEY=" "$ENV_FILE" 2>/dev/null | cut -d= -f2-)
+            PRESERVED_LIVEKIT_KEYS=$(env_value "$ENV_FILE" LIVEKIT_KEYS)
             rm "$ENV_FILE"
             SETUP_MODE="full"
             ;;
@@ -165,6 +177,25 @@ handle_existing_env() {
             exit 1
             ;;
     esac
+}
+
+# Sets global LIVEKIT_SEED_ENV (array of KEY=VALUE for seed-vault) from the LiveKit
+# settings in env file $1 (shell first, as Compose reads them). Empty when .env has
+# neither LIVEKIT_KEYS nor LIVEKIT_COMMAND (an old developer .env). Never prints keys.
+build_livekit_seed_env() {
+    local env="${1:-$ENV_FILE}" keys cmd pair="" rc=0
+    LIVEKIT_SEED_ENV=()
+    keys="$(compose_var "$env" LIVEKIT_KEYS)"
+    cmd="$(compose_var "$env" LIVEKIT_COMMAND)"
+    [[ -n "$keys" || -n "$cmd" ]] || return 0
+    LIVEKIT_SEED_ENV=("SEED_LIVEKIT_URL=ws://localhost:7880")
+    pair="$(livekit_seed_keys "$keys" "$cmd")" || rc=$?
+    if [[ $rc -eq 0 ]]; then
+        LIVEKIT_SEED_ENV+=("SEED_LIVEKIT_API_KEY=${pair%% *}" "SEED_LIVEKIT_API_SECRET=${pair#* }")
+    else
+        warn "Could not tell which keys LiveKit's LIVEKIT_COMMAND uses, so they were not saved for Curia."
+        hint "Enter the LiveKit API key and secret under Settings → Channels → Voice after setup."
+    fi
 }
 
 # Starts Postgres, runs migrations, starts the full stack, writes SETUP_COMPLETE marker.
@@ -246,6 +277,11 @@ run_infra() {
             "WEB_APP_BOOTSTRAP_SECRET=$WEB_APP_BOOTSTRAP_SECRET"
         )
     fi
+    # LiveKit values go in on resume too: a first run interrupted before the vault
+    # seed leaves LiveKit running on .env keys the vault lacks. seed-vault writes
+    # them only when absent, so this never overwrites. Only these, no bootstrap secrets.
+    build_livekit_seed_env
+    seed_secret_env+=(${LIVEKIT_SEED_ENV[@]+"${LIVEKIT_SEED_ENV[@]}"})
     # ${arr[@]+"${arr[@]}"} expands safely to nothing when the array is empty, even under
     # `set -u` on bash 3.2 (macOS default), where a bare "${arr[@]}" is an unbound error.
     if ! env ${seed_secret_env[@]+"${seed_secret_env[@]}"} SEED_VAULT_VERIFY=1 \
@@ -278,7 +314,10 @@ run_infra() {
 
     # On the resume path the bootstrap secret is not in-shell (not in .env anymore,
     # not regenerated), so pass it defensively — print_summary degrades gracefully.
-    print_summary "${WEB_APP_BOOTSTRAP_SECRET:-}"
+    print_summary "${WEB_APP_BOOTSTRAP_SECRET:-}" "http://localhost:${HTTP_PORT:-3000}"
+    local voice=off
+    [[ ",${COMPOSE_PROFILES:-}," != *,voice,* ]] || voice=on
+    print_next_steps local "$voice"
 }
 
 main() {

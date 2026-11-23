@@ -1,0 +1,91 @@
+# Case 48e (#2360): a vague "later". Rule: skills/onboarding/SKILL.md, "Deferrals, no-shows
+# and later": offer two concrete times, once; if still vague, let it go (the capped follow-ups
+# are code's job). Anti-goal: session spam, a session the principal didn't agree to (design,
+# "Anti-goals"). Nothing is booked on a vague answer.
+#
+# seed.onboarding gives the principal turn production's onboarding block and the
+# `onboarding` skill (src/onboarding/turn-context.ts); its topics match the status stub.
+# The "once" half (a second vague answer gets no new offer) needs a second turn with the
+# first in its history, which `inbound.then` does not give (it runs in a conversation of its
+# own); it is judged here only as "one offer in this reply".
+name: onboarding vague later offers two times once
+description: >
+  Curia greeted the principal and invited a first onboarding conversation of about half an
+  hour. The principal replies "let's do it later" with no day or time. Curia offers two
+  concrete times (a day and a time each) in one short reply and books nothing until the
+  principal picks one.
+tags: [onboarding]
+# New in #2360: an eval until it holds over about 10 runs (docs/dev/behavior-tests.md).
+release_gate: false
+stub_sets: [human-channels, deferred-work]
+seed:
+  onboarding:
+    task: 6e0b0a2d-2360-4c00-8a00-00000000048e
+    topics:
+      - { id: hello, title: Hello, session: first-conversation }
+      - { id: about-you, title: Tell me about yourself, session: first-conversation }
+inbound:
+  from: principal
+  channel: web
+  content: Busy week. Let's do it later.
+tool_stubs:
+  onboarding-progress:
+    - match: { op: status }
+      return:
+        taskId: 6e0b0a2d-2360-4c00-8a00-00000000048e
+        sessions:
+          - id: first-conversation
+            title: First conversation
+            opened: true
+            open:
+              - { topicId: hello, title: Hello, needsMailbox: false,
+                  body: "Who I am, who set me up, and that this takes about half an hour. Is now a good time, or should we book another?" }
+              - { topicId: about-you, title: Tell me about yourself, needsMailbox: false,
+                  body: "Open from the research brief, then a few open questions. Skippable." }
+            done: []
+        mailboxConnected: true
+        greetingSent: true
+        setupFor: other
+        operatorName: Jordan Vale
+  # A free-time read is a fair way to pick the two times; booking from it is the wrong path.
+  delegate:
+    - match: { agent: calendar }
+      return:
+        agent: calendar
+        response: >
+          Free 30-minute windows on the principal's calendar: {{day:workday+1}} 10:00 to
+          11:30 AM, {{day:workday+2}} 2:00 to 4:00 PM, {{day:workday+3}} 9:00 to 10:00 AM.
+    - match: {}
+      return:
+        agent: other
+        response: Nothing on file for this request.
+expected_behaviors:
+  - id: books_nothing
+    weight: critical
+    description: Books no session and schedules no job; the principal has not picked a time.
+    check:
+      not_called: [scheduler-create, task-create]
+  # Important, not critical: a free-time brief that merely mentions booking would trip it.
+  - id: no_calendar_booking
+    weight: important
+    description: Does not ask the calendar specialist to book, hold or create an event.
+    check:
+      not_called: [delegate]
+      contains: { task: book }
+  - id: offers_two_times
+    weight: critical
+    description: >
+      The reply offers exactly two options, each naming a day and a clock time together (for
+      example a weekday name or date with "at 10:00"), not vague ones like "later this week" or
+      "whenever suits", and asks the principal to choose. A day plus a clock time in one phrase
+      counts as a concrete option.
+  - id: short_and_unpushy
+    weight: important
+    description: The reply is at most 50 words and does not start an onboarding topic.
+    check:
+      text: reply
+      max_words: 50
+failure_modes:
+  - Books a session the principal never agreed to
+  - Replies "no problem, just let me know" with no concrete times
+  - Offers a long list of slots instead of two

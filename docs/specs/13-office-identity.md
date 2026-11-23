@@ -329,10 +329,11 @@ The `behavioralPreferences` array is populated through three paths:
    Personality and Standing preferences pages do not clobber each other. The route keeps
    its old name so existing links work; the page held decision-posture cards until #2143.
 
-3. **`behavioral-preferences-update` skill** — invoked by the `setup-wizard`
-   specialist agent during the in-chat onboarding conversation (and any
-   later "remember that I…" turn the coordinator delegates to it). The
-   skill calls `OfficeIdentityService.update(...)` with `'skill'` as the
+3. **`behavioral-preferences-update` skill** — called by the coordinator during
+   onboarding and on any later "remember that I…" turn. It is `elevated` and the
+   coordinator's only (`allowed_callers`), so it writes only on a live principal
+   turn (chat, or a voice call's live hand-off) or with the principal's approval;
+   an inbound email or a wake cannot set a preference (#2700). The skill calls `OfficeIdentityService.update(...)` with `'tool'` as the
    `changedBy` value, producing a versioned row per change.
 
    | Property | Value |

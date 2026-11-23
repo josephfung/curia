@@ -6,7 +6,8 @@ describe('outbound.notification event', () => {
   it('creates a blocked_content notification with correct type and sourceLayer', () => {
     const event = createOutboundNotification({
       notificationType: 'blocked_content',
-      ceoEmail: 'ceo@example.com',
+      recipient: 'ceo@example.com',
+      audience: 'principal',
       subject: 'Action needed — blocked outbound reply',
       body: 'An outbound message was blocked.\n\nBlock ID: block_abc123',
       blockId: 'block_abc123',
@@ -18,7 +19,8 @@ describe('outbound.notification event', () => {
     expect(event.type).toBe('outbound.notification');
     expect(event.sourceLayer).toBe('dispatch');
     expect(event.payload.notificationType).toBe('blocked_content');
-    expect(event.payload.ceoEmail).toBe('ceo@example.com');
+    expect(event.payload.recipient).toBe('ceo@example.com');
+    expect(event.payload.audience).toBe('principal');
     expect(event.payload.subject).toBe('Action needed — blocked outbound reply');
     expect(event.payload.blockId).toBe('block_abc123');
     expect(event.payload.originalChannel).toBe('email');

@@ -2,7 +2,7 @@
   "name": "behavioral-preferences-update",
   "description": "Append or replace entries in the assistant's behavioral-preferences list. Use 'append' to add new preferences without discarding existing ones (idempotent — safe to call repeatedly); use 'replace' to overwrite the full list. Requires principal authorization. Use after capturing a preference in conversation.",
   "version": "1.1.1",
-  "sensitivity": "normal",
+  "sensitivity": "elevated",
   "capabilities": ["officeIdentityService"],
   "inputs": {
     "operation": "string (\"append\" to add new preferences, \"replace\" to overwrite the full list)",
@@ -12,5 +12,6 @@
   "permissions": [],
   "secrets": [],
   "timeout": 15000,
-  "action_risk": "low"
+  "action_risk": "low",
+  "allowed_callers": ["coordinator"]
 }

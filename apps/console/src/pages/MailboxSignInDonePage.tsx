@@ -54,22 +54,26 @@ export function resultMessage(result: string, target: Target | null): ResultMess
   }
 }
 
-type RestartState = 'waiting' | 'back' | 'timeout';
+export type RestartState = 'waiting' | 'back' | 'timeout';
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_WAIT_MS = 120_000;
 
-export default function MailboxSignInDonePage(
-  { pollIntervalMs = POLL_INTERVAL_MS, maxWaitMs = MAX_WAIT_MS }: { pollIntervalMs?: number; maxWaitMs?: number } = {},
-) {
-  const params = new URLSearchParams(window.location.search);
-  const rawResult = params.get('result') ?? '';
-  const result = SIGNIN_RESULTS.includes(rawResult) ? rawResult : 'unknown';
-  const rawTarget = params.get('target');
-  const target: Target | null = rawTarget === 'principal' || rawTarget === 'curia' ? rawTarget : null;
-  const msg = resultMessage(result, target);
-  const restart = params.get('restart') === '1' && msg.ok;
-
+/**
+ * Waits for a restart Curia scheduled after a sign-in: 'waiting' until a new process answers
+ * /api/health, then 'back', or 'timeout' after maxWaitMs. Inert when `restart` is false. Shared
+ * with the Google Workspace done page (#2683).
+ *
+ * `since` is the old process's start (/api/health `started_at`), which the callback puts in
+ * the page's URL (#2697). With it, done means a healthy answer from a process that started at
+ * another time: exact across a refresh, a page that loads after the restart, and a second
+ * sign-in in the same tab. Without it (an older server, or a health answer without
+ * started_at), the uptime heuristics below decide.
+ */
+export function useRestartWait(
+  restart: boolean,
+  { pollIntervalMs = POLL_INTERVAL_MS, maxWaitMs = MAX_WAIT_MS, since = null }: { pollIntervalMs?: number; maxWaitMs?: number; since?: string | null } = {},
+): RestartState {
   const [restartState, setRestartState] = useState<RestartState>('waiting');
 
   useEffect(() => {
@@ -99,16 +103,25 @@ export default function MailboxSignInDonePage(
         const res = await fetch('/api/health', { signal: ctrl.signal });
         if (res.ok) {
           let uptime: number | null = null;
+          let startedAt: string | null = null;
           try {
-            const body = await res.json() as { uptime_s?: unknown };
+            const body = await res.json() as { uptime_s?: unknown; started_at?: unknown };
             if (typeof body.uptime_s === 'number' && body.uptime_s >= 0) uptime = body.uptime_s;
+            if (typeof body.started_at === 'string' && body.started_at !== '') startedAt = body.started_at;
           } catch {
             // A body that is not JSON carries no uptime: treated as not trustworthy below.
             // (An abort mid-body also lands here; the cancelled check below ends the poll.)
           }
           if (cancelled) return;
-          const restarted = uptime !== null && firstUptime !== null && uptime < firstUptime;
-          if (sawFailure || restarted) {
+          // The exact test when both sides carry a start time; a failure in between proves nothing.
+          const exact = since !== null && startedAt !== null;
+          // Fallback: a process that booted after this load started is the new one (the old one
+          // served the sign-in that redirected here), or one younger than the first sample.
+          const bootedAfterPageLoad = uptime !== null && Date.now() - uptime * 1000 > performance.timeOrigin;
+          const restarted = exact
+            ? startedAt !== since
+            : sawFailure || bootedAfterPageLoad || (uptime !== null && firstUptime !== null && uptime < firstUptime);
+          if (restarted) {
             cancelled = true;
             clearTimeout(deadline);
             setRestartState('back');
@@ -132,7 +145,21 @@ export default function MailboxSignInDonePage(
       if (timer) clearTimeout(timer);
       inFlight?.abort();
     };
-  }, [restart, pollIntervalMs, maxWaitMs]);
+  }, [restart, pollIntervalMs, maxWaitMs, since]);
+  return restartState;
+}
+
+export default function MailboxSignInDonePage(
+  { pollIntervalMs, maxWaitMs }: { pollIntervalMs?: number; maxWaitMs?: number } = {},
+) {
+  const params = new URLSearchParams(window.location.search);
+  const rawResult = params.get('result') ?? '';
+  const result = SIGNIN_RESULTS.includes(rawResult) ? rawResult : 'unknown';
+  const rawTarget = params.get('target');
+  const target: Target | null = rawTarget === 'principal' || rawTarget === 'curia' ? rawTarget : null;
+  const msg = resultMessage(result, target);
+  const restart = params.get('restart') === '1' && msg.ok;
+  const restartState = useRestartWait(restart, { pollIntervalMs, maxWaitMs, since: params.get('since') });
 
   return (
     <div className="login-root">

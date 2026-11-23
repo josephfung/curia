@@ -53,7 +53,7 @@ import type { DetectedPii, PiiRedactor } from '../dispatch/pii-redactor.js';
 import type { BriefDetectedItem } from '../autonomy/judge-brief.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
-import { createOutboundBlocked, createOutboundDelivered, createOutboundNotification, createAutonomySendBlocked, createAutonomyRelayDeferred, createPrincipalReport } from '../bus/events.js';
+import { createOutboundBlocked, createOutboundDelivered, createOutboundNotification, createOutboundNotificationUndelivered, createAutonomySendBlocked, createAutonomyRelayDeferred, createPrincipalReport } from '../bus/events.js';
 import type { ChannelReconnectEvent } from '../bus/events.js';
 import { AutonomyService, type AutonomyConfig } from '../autonomy/autonomy-service.js';
 import { markdownToMrkdwn } from '../format/markdown-to-mrkdwn.js';
@@ -69,7 +69,10 @@ import {
   BAND_RULES, describePiiLabels, plainReviewReasons, type BandReviewAsk, type BandReviewReport, type BandReviewSignals, type BandSendReview,
   type DraftAuthor,
 } from '../dispatch/band-send-review.js';
-import type { OutboundNotificationPayload } from '../bus/events.js';
+import type { OutboundNotificationRequest, OutboundNotificationUndeliveredPayload } from '../bus/events.js';
+import type { NotificationRecipientDeps } from '../notifications/recipients.js';
+import { resolveNotificationRecipient } from '../notifications/recipients.js';
+import { notificationAudience } from '../notifications/audience.js';
 import { askPreamble, displayName, normalizeCounterparty, type DisclosureAsk } from '../autonomy/disclosure-decisions.js';
 import { markdownToHtml } from '../format/markdown-to-html.js';
 import { bodyEndsWithSignature, emailSignatureHtml, emailSignatureText } from '../channels/email/signature.js';
@@ -474,6 +477,13 @@ export interface OutboundGatewayConfig {
   mailboxAddress?: (mailboxId: string) => Promise<string | undefined>;
   /** A mailbox's label for the principal ("Work"), or undefined when unknown (#2475, Task 19). */
   mailboxLabel?: (mailboxId: string) => Promise<string | undefined>;
+  /**
+   * Where system notifications go (#2710, ADR-068). The gateway reads the notification type's
+   * audience from NOTIFICATION_AUDIENCES and asks this for that person's address: the operator
+   * when it is operator-routed and an operator is set, the principal otherwise. Absent: a
+   * notification has no address, so nothing is sent and the miss is audited — never a guess.
+   */
+  notificationRecipients?: NotificationRecipientDeps;
 }
 
 /**
@@ -1311,6 +1321,7 @@ export class OutboundGateway {
   private readonly mailboxLabelLookup?: (mailboxId: string) => Promise<string | undefined>;
   private readonly draftProvenance?: OutboundGatewayConfig['draftProvenance'];
   private readonly sendLedger?: OutboundGatewayConfig['sendLedger'];
+  private readonly notificationRecipients?: NotificationRecipientDeps;
   private flushInFlight = new Set<string>();
   /** Backoff timers for HTTP channels that queued on a transient failure (#1380). */
   private flushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1352,6 +1363,7 @@ export class OutboundGateway {
     this.mailboxLabelLookup = config.mailboxLabel;
     this.draftProvenance = config.draftProvenance;
     this.sendLedger = config.sendLedger;
+    this.notificationRecipients = config.notificationRecipients;
     if (this.gating === 'band' && !this.bandReview) {
       // The filter turns contact-data-leak and Stage 2.5 off under band; without the review
       // that replaces them, sends would go out with no disclosure review at all.
@@ -1577,7 +1589,7 @@ export class OutboundGateway {
       // of the score that caused the block. All other safety checks still run below.
       this.log.info(
         { channel: request.channel },
-        'outbound-gateway: autonomy gate skipped — isSystemNotification flag set (infrastructure alert to principal)',
+        'outbound-gateway: autonomy gate skipped — isSystemNotification flag set (infrastructure alert to one of the two people Curia notifies)',
       );
     } else if (this.autonomyService && this.isPrincipalRecipient(request)) {
       // Agent-to-principal communication — the autonomy gate must not silence
@@ -2310,10 +2322,18 @@ export class OutboundGateway {
         const fromName = options.recipientDisplayName?.trim();
         if (fromName) toSend.recipientDisplayName = fromName;
       }
-      const result = await this.dispatchOrEnqueue(toSend, () => this.dispatchEmail(toSend));
+      const result = await this.dispatchOrEnqueue(
+        toSend,
+        () => this.dispatchEmail(toSend),
+        options?.isSystemNotification === true,
+      );
       if (result.success && !result.queued) {
+        // A system notice is Curia reporting its own trouble, not correspondence (#2710,
+        // ADR-068): recording its recipient as a contact would give the operator a tier and let
+        // their mail clear the unknown-sender hold — they are told, never talked with. The
+        // principal is already a contact, so principal-routed notices are unaffected.
         // A To copied from Curia's own message has not written to us (#2273).
-        if (toSend.toFromOwnMessage !== true) {
+        if (toSend.toFromOwnMessage !== true && options?.isSystemNotification !== true) {
           await this.promoteOrCreateRecipientContact(
             'email',
             recipientId,
@@ -2358,7 +2378,7 @@ export class OutboundGateway {
 
     if (request.channel === 'slack') {
       const toSend = { ...request, message: sendBody };
-      const result = await this.dispatchOrEnqueue(toSend, () => this.dispatchSlack(toSend));
+      const result = await this.dispatchOrEnqueue(toSend, () => this.dispatchSlack(toSend), options?.isSystemNotification === true);
       // Contact resolution uses slackUserId (U…) when provided; inbound auto-creates
       // contacts from Slack user ids. Skip promoteOrCreate on conversation ids.
       if (result.success && !result.queued) {
@@ -2382,7 +2402,7 @@ export class OutboundGateway {
 
     if (request.channel === 'sms') {
       const toSend = { ...request, message: sendBody };
-      const result = await this.dispatchOrEnqueue(toSend, () => this.dispatchSms(toSend));
+      const result = await this.dispatchOrEnqueue(toSend, () => this.dispatchSms(toSend), options?.isSystemNotification === true);
       if (result.success && !result.queued) {
         await this.promoteOrCreateRecipientContact('sms', request.recipient);
         await this.publishDelivered({
@@ -2438,7 +2458,7 @@ export class OutboundGateway {
 
     {
       const toSend: SignalOutboundRequest = { ...request, message: sendBody };
-      const result = await this.dispatchOrEnqueue(toSend, () => this.dispatchSignal(toSend));
+      const result = await this.dispatchOrEnqueue(toSend, () => this.dispatchSignal(toSend), options?.isSystemNotification === true);
       // Only promote for 1:1 Signal sends — group sends use a groupId, not an individual
       // phone number. Creating a contact for a group token would pollute the contacts table
       // and would not help with inbound replies (which come from member numbers, not the group ID).
@@ -2623,9 +2643,10 @@ export class OutboundGateway {
   private async dispatchOrEnqueue(
     request: OutboundSendRequest,
     dispatch: () => Promise<OutboundSendResult>,
+    systemNotification = false,
   ): Promise<OutboundSendResult> {
     if (this.isQueueableChannel(request.channel) && !this.isChannelOutboundReady(request.channel)) {
-      return this.enqueueInsteadOfDrop(request);
+      return this.enqueueInsteadOfDrop(request, systemNotification);
     }
     const result = await dispatch();
     if (
@@ -2633,7 +2654,7 @@ export class OutboundGateway {
       && result.queueable
       && this.isQueueableChannel(request.channel)
     ) {
-      const queued = await this.enqueueInsteadOfDrop(request);
+      const queued = await this.enqueueInsteadOfDrop(request, systemNotification);
       // HTTP channels (SMS) may stay "ready" while the provider is briefly down —
       // schedule a flush retry since no socket reconnect event will fire.
       if (queued.queued && this.isChannelOutboundReady(request.channel)) {
@@ -2664,12 +2685,13 @@ export class OutboundGateway {
    */
   private async enqueueInsteadOfDrop(
     request: OutboundSendRequest,
+    systemNotification = false,
   ): Promise<OutboundSendResult> {
     if (!this.outboundQueue) {
       return { success: false, blockedReason: 'Outbound queue not configured' };
     }
     try {
-      const { id } = await this.outboundQueue.enqueue(request);
+      const { id } = await this.outboundQueue.enqueue(request, { systemNotification });
       this.log.info(
         { channel: request.channel, queueId: id },
         'outbound-gateway: channel disconnected — message queued for reconnect flush',
@@ -2743,18 +2765,22 @@ export class OutboundGateway {
         // gating may have changed since it was queued: the audit event always gets a redacted
         // copy (#2312), so it never carries them.
         const content = this.redactedCopy(sent, row.payload.channel, row.recipient);
-        if (row.payload.channel === 'signal' && row.payload.recipient) {
-          await this.promoteOrCreateRecipientContact('signal', row.payload.recipient);
-        } else if (row.payload.channel === 'sms') {
-          await this.promoteOrCreateRecipientContact('sms', row.payload.recipient);
-        } else if (row.payload.channel === 'email' && row.payload.toFromOwnMessage !== true) {
-          const provenance = emailProvenanceFromPayload(row.payload);
-          await this.promoteOrCreateRecipientContact(
-            'email',
-            row.payload.to,
-            provenance.source,
-            provenance.displayName,
-          );
+        // A queued system notice must not create a contact (#2710): the flag travelled with the
+        // row, so the flush path treats it exactly like the direct one.
+        if (!row.systemNotification) {
+          if (row.payload.channel === 'signal' && row.payload.recipient) {
+            await this.promoteOrCreateRecipientContact('signal', row.payload.recipient);
+          } else if (row.payload.channel === 'sms') {
+            await this.promoteOrCreateRecipientContact('sms', row.payload.recipient);
+          } else if (row.payload.channel === 'email' && row.payload.toFromOwnMessage !== true) {
+            const provenance = emailProvenanceFromPayload(row.payload);
+            await this.promoteOrCreateRecipientContact(
+              'email',
+              row.payload.to,
+              provenance.source,
+              provenance.displayName,
+            );
+          }
         }
 
         await this.publishDelivered({
@@ -2785,19 +2811,66 @@ export class OutboundGateway {
    *
    * This replaces the former direct dispatchEmail() calls that bypassed the content
    * filter. The notification body is always a hardcoded template (no LLM-generated
-   * content) addressed to the principal email (which is in the content filter allowlist),
-   * so the filter will always pass.
+   * content) addressed to one of the two people Curia tells about its own trouble, so
+   * the filter will always pass.
    *
-   * Callers: the blocked-content path in send().
+   * The recipient is resolved here, from the notification type (#2710, ADR-068): callers
+   * state what happened and never name an address. An operator-routed type goes to the
+   * operator when one is set and to the principal otherwise; a principal-routed type always
+   * goes to the principal. When there is no address at all, nothing is sent to anyone else:
+   * the miss is logged at error level and audited, because a fallback to the other person
+   * would break the no-duplication rule.
+   *
+   * Returns whether the notice was published for delivery. False means it reached no one:
+   * either there was no address (audited), or the bus refused the publish (logged). Neither
+   * throws — a notifier must not fail the operation it is reporting on.
    */
   async sendNotification(
-    payload: OutboundNotificationPayload,
+    request: OutboundNotificationRequest,
     parentEventId?: string,
   ): Promise<boolean> {
+    const audience = notificationAudience(request.notificationType);
+
+    // Nothing can deliver a publish right now: an email adapter subscribes to
+    // outbound.notification when it starts, and until then the event reaches no one. Checked
+    // here, once, so every caller gets the same answer instead of each one re-checking (#2710).
+    if (!this.canDeliverNotifications()) {
+      this.log.warn(
+        { notificationType: request.notificationType, audience },
+        'outbound-gateway: no adapter delivers notifications yet — the notice is not published',
+      );
+      await this.auditUndeliveredNotification(request.notificationType, 'delivery_unavailable', parentEventId);
+      return false;
+    }
+
+    let recipient: string | null = null;
+    try {
+      recipient = this.notificationRecipients
+        ? (await resolveNotificationRecipient(request.notificationType, this.notificationRecipients))?.email ?? null
+        : null;
+    } catch (err) {
+      // Resolving reads the operator setting and the live principal email; either can throw
+      // (a closed pool, a refresh mid-flight). That is still "no address", not a crash path.
+      this.log.error(
+        { err, notificationType: request.notificationType, audience },
+        'outbound-gateway: could not resolve a notification recipient',
+      );
+      recipient = null;
+    }
+
+    if (!recipient) {
+      this.log.error(
+        { notificationType: request.notificationType, audience },
+        'outbound-gateway: no address for a system notification — nothing sent, and nothing sent to the other person',
+      );
+      await this.auditUndeliveredNotification(request.notificationType, 'no_recipient', parentEventId);
+      return false;
+    }
+
     try {
       await this.bus.publish(
         'dispatch',
-        createOutboundNotification({ ...payload, parentEventId }),
+        createOutboundNotification({ ...request, recipient, audience, parentEventId }),
       );
       return true;
     } catch (err) {
@@ -2805,9 +2878,57 @@ export class OutboundGateway {
       // is visible in alerting but do not throw; the caller's primary operation (block
       // or hold) has already completed successfully.
       this.log.error(
-        { err, notificationType: payload.notificationType },
+        { err, notificationType: request.notificationType, audience },
         'outbound-gateway: failed to publish outbound.notification event',
       );
+      // A notice nobody will receive: audit the miss too, so the failure is visible in the log an
+      // operator reads. The bus may be the broken part; that attempt failing is logged as well.
+      await this.auditUndeliveredNotification(request.notificationType, 'publish_failed', parentEventId);
+      return false;
+    }
+  }
+
+  /**
+   * Record that a system notification had no address, so an operator can see a notice that
+   * reached nobody (#2710). The audit row is the whole point: the alternative is a silent
+   * drop. Best-effort by design — the bus write-ahead audit can itself fail (Postgres down is
+   * the usual reason an address is missing late), and that failure is logged rather than
+   * thrown, because the caller is already reporting trouble.
+   */
+  private async auditUndeliveredNotification(
+    notificationType: OutboundNotificationRequest['notificationType'],
+    reason: OutboundNotificationUndeliveredPayload['reason'],
+    parentEventId?: string,
+  ): Promise<void> {
+    try {
+      await this.bus.publish(
+        'dispatch',
+        createOutboundNotificationUndelivered(
+          { notificationType, audience: notificationAudience(notificationType), reason },
+          parentEventId,
+        ),
+      );
+    } catch (err) {
+      this.log.error(
+        { err, notificationType },
+        'outbound-gateway: could not audit an undelivered system notification',
+      );
+    }
+  }
+
+  /**
+   * Whether a channel adapter that delivers notifications is subscribed right now (#2710).
+   * Callers that do work before publishing — minting a sign-in link, retrying an owed notice —
+   * ask first, so a notice that cannot go anywhere does not cost a link or write an audit row on
+   * every retry. `sendNotification` checks it too; this is the cheap pre-check, not a substitute.
+   */
+  canDeliverNotifications(): boolean {
+    const canDeliver = this.notificationRecipients?.canDeliver;
+    if (!canDeliver) return true;
+    try {
+      return canDeliver();
+    } catch (err) {
+      this.log.warn({ err }, 'outbound-gateway: could not tell whether notifications are deliverable');
       return false;
     }
   }

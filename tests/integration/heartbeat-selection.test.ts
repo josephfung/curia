@@ -24,13 +24,15 @@ async function seedTask(
     /** Lineage to stamp on tasks.originator (#1125). */
     originator?: Record<string, unknown> | null;
     tags?: string[];
+    /** tasks.created_by. Default 'test'. */
+    createdBy?: string;
   },
 ): Promise<string> {
   const { rows } = await pool.query(
     `INSERT INTO tasks
        (agent_id, title, intent_anchor, status, progress, error_budget, owner,
         blocked_by_task_id, parent_task_id, priority, source, source_agent_id, created_by, tags, updated_at, originator)
-     VALUES ($1,$2,$3,$4,'{}'::jsonb,'{}'::jsonb,$5,$6,$11,50,$9,$7,'test',$12::text[],$8,$10::jsonb)
+     VALUES ($1,$2,$3,$4,'{}'::jsonb,'{}'::jsonb,$5,$6,$11,50,$9,$7,$13,$12::text[],$8,$10::jsonb)
      RETURNING id`,
     [
       opts.sourceAgentId ?? 'coordinator',
@@ -45,6 +47,7 @@ async function seedTask(
       opts.originator ? JSON.stringify(opts.originator) : null,
       opts.parentTaskId ?? null,
       opts.tags ?? [],
+      opts.createdBy ?? 'test',
     ],
   );
   const [row] = rows as Array<{ id: string }>;
@@ -117,6 +120,37 @@ describeIf('selectHeartbeatCandidates', () => {
     });
     const got = await selectHeartbeatCandidates(pool, opts);
     expect(got.map((c) => c.id)).not.toContain(id);
+  });
+
+  it('skips onboarding tasks waiting on the principal, and still selects ordinary idle work (#2360)', async () => {
+    // The onboarding parent and its topics are created waiting on the principal's contact: no
+    // onboarding-specific rule, just the waiting-on-a-person rule.
+    const principal = await seedContact(pool);
+    const parent = await seedTask(pool, {
+      title: 'onboarding parent',
+      status: 'waiting',
+      sourceAgentId: 'coordinator',
+      source: 'scheduler',
+      updatedAt: hoursAgo(60),
+      tags: ['onboarding'],
+      createdBy: 'onboarding',
+    });
+    const topic = await seedTask(pool, {
+      title: 'onboarding topic',
+      status: 'waiting',
+      sourceAgentId: 'coordinator',
+      source: 'scheduler',
+      parentTaskId: parent,
+      updatedAt: hoursAgo(60),
+      tags: ['onboarding', 'onboarding:topic:style', 'onboarding:session:first-conversation'],
+      createdBy: 'onboarding',
+    });
+    await pool.query(`UPDATE tasks SET waiting_on_contact_id = $1 WHERE id = ANY($2::uuid[])`, [principal, [parent, topic]]);
+    const other = await seedTask(pool, { title: 'other', status: 'open', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(10) });
+    const got = (await selectHeartbeatCandidates(pool, opts)).map((c) => c.id);
+    expect(got).not.toContain(parent);
+    expect(got).not.toContain(topic);
+    expect(got).toContain(other);
   });
 
   it('skips a task that already has a pending wake', async () => {

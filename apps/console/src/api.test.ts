@@ -16,37 +16,47 @@ afterEach(() => vi.unstubAllGlobals());
 describe('getSessionInfo', () => {
   it('returns valid=true configured=true when identity is configured', async () => {
     vi.stubGlobal('fetch', mockFetch(200, { identity: {}, configured: true }));
-    expect(await getSessionInfo()).toEqual({ valid: true, configured: true });
+    expect(await getSessionInfo()).toEqual({ valid: true, configured: true, inSetup: null });
   });
 
   it('returns valid=true configured=false when not yet configured', async () => {
     vi.stubGlobal('fetch', mockFetch(200, { identity: {}, configured: false }));
-    expect(await getSessionInfo()).toEqual({ valid: true, configured: false });
+    expect(await getSessionInfo()).toEqual({ valid: true, configured: false, inSetup: null });
   });
 
   it('returns valid=false on 401', async () => {
     vi.stubGlobal('fetch', mockFetch(401, {}));
-    expect(await getSessionInfo()).toEqual({ valid: false, configured: false });
+    expect(await getSessionInfo()).toEqual({ valid: false, configured: false, inSetup: null });
   });
 
   it('returns valid=false on 403', async () => {
     vi.stubGlobal('fetch', mockFetch(403, {}));
-    expect(await getSessionInfo()).toEqual({ valid: false, configured: false });
+    expect(await getSessionInfo()).toEqual({ valid: false, configured: false, inSetup: null });
   });
 
   it('treats non-auth server errors as valid (transient)', async () => {
     vi.stubGlobal('fetch', mockFetch(500, {}));
-    expect(await getSessionInfo()).toEqual({ valid: true, configured: true });
+    expect(await getSessionInfo()).toEqual({ valid: true, configured: true, inSetup: null });
   });
 
   it('returns valid=false when response is HTML (SPA fallback)', async () => {
     vi.stubGlobal('fetch', mockFetch(200, '', 'text/html'));
-    expect(await getSessionInfo()).toEqual({ valid: false, configured: false });
+    expect(await getSessionInfo()).toEqual({ valid: false, configured: false, inSetup: null });
+  });
+
+  it.each([true, false])('reports inSetup=%s from the server (#2358)', async (inSetup) => {
+    vi.stubGlobal('fetch', mockFetch(200, { identity: {}, configured: true, inSetup }));
+    expect(await getSessionInfo()).toEqual({ valid: true, configured: true, inSetup });
+  });
+
+  it('reads a non-boolean inSetup as not reported', async () => {
+    vi.stubGlobal('fetch', mockFetch(200, { identity: {}, configured: true, inSetup: 'yes' }));
+    expect(await getSessionInfo()).toEqual({ valid: true, configured: true, inSetup: null });
   });
 
   it('treats network errors as valid/configured to avoid forced logout', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network error')));
-    expect(await getSessionInfo()).toEqual({ valid: true, configured: true });
+    expect(await getSessionInfo()).toEqual({ valid: true, configured: true, inSetup: null });
   });
 });
 
