@@ -87,12 +87,22 @@ const MAKE_ROOM_PATTERNS: readonly RegExp[] = [
 // "I'm not sure what's going on — running late". A denied status reads the same way: "I'm not
 // running late", "I'm never late".
 const CLAUSE_NEGATION = /\b(?:don['’]?t|do\s+not|doesn['’]?t|not|never|no\s+need\s+to|can['’]?t|cannot|won['’]?t|shouldn['’]?t|rather\s+not|without)\b/i;
-const CLAUSE_END = /[.;!?,\n—–-]/;
+const CLAUSE_END = /[.;!?,\n—–]/;
+
+/**
+ * An ASCII hyphen ends a clause only as a typed dash: with whitespace on a side ("late - sorry",
+ * "- running late"). Inside a word or range ("check-in", "30-45") it does not.
+ */
+function isClauseBreak(text: string, i: number): boolean {
+  const ch = text[i]!;
+  if (CLAUSE_END.test(ch)) return true;
+  return ch === '-' && (/\s/.test(text[i - 1] ?? '') || /\s/.test(text[i + 1] ?? ''));
+}
 
 /** Whether the match at `index` has a negation earlier in its clause. */
 function negatedInClause(text: string, index: number): boolean {
   let start = index;
-  while (start > 0 && !CLAUSE_END.test(text[start - 1]!)) start--;
+  while (start > 0 && !isClauseBreak(text, start - 1)) start--;
   return CLAUSE_NEGATION.test(text.slice(start, index));
 }
 
@@ -132,7 +142,7 @@ const FIRST_PERSON_TIMING = String.raw`(?:i['’]?m\s+going\s+to\s+be|i\s+am\s+g
 // The start of the message, a sentence, or a dash-opened aside. The lookbehind keeps the match
 // on the status phrase, so the clause before a sentence break cannot deny it
 // ("I'm not sure what you mean. Running late, sorry").
-const CLAUSE_OPEN = String.raw`(?<=^|[.!?;,\n—–-]\s*)`;
+const CLAUSE_OPEN = String.raw`(?<=^|[.!?;,\n—–]\s*|(?:^|\s)-+\s*)`;
 // A subjectless status: the principal's own ("running ..."), or one with no subject at all
 // ("stuck in traffic"). Someone else's name or a thing before the phrase rules both out.
 const OWN_OR_OPEN = String.raw`(?:${FIRST_PERSON_TIMING}\s+${LATENESS_FILLER}|${CLAUSE_OPEN})`;

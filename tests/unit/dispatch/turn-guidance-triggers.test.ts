@@ -349,6 +349,19 @@ describe('looksLikeRunningLate', () => {
     expect(looksLikeRunningLate("I'm not sure what you mean. Running late, sorry")).toBe(true);
     expect(looksLikeRunningLate("I'm not sure what's going on — running late, sorry")).toBe(true);
   });
+
+  it('treats an ASCII hyphen as a clause break only when it is spaced', () => {
+    expect(looksLikeRunningLate("I'm not sure what's going on - running late, sorry")).toBe(true);
+    expect(looksLikeRunningLate('- running late, start without me')).toBe(true);
+    // In a word or a range the hyphen opens no clause.
+    expect(looksLikeRunningLate('The flight is 30-45 minutes late')).toBe(false);
+    expect(looksLikeRunningLate('The check-in is 10-15 minutes behind')).toBe(false);
+  });
+
+  it('keeps a refusal ahead of a hyphenated word in the same clause', () => {
+    expect(looksLikeMakeRoom("I won't cancel the check-in to make room")).toBe(false);
+    expect(looksLikeMakeRoom("I won't move the follow-up, I can make room")).toBe(true);
+  });
 });
 
 describe('looksLikeMakeRoom', () => {
