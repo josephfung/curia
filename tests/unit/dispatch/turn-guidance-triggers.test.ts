@@ -358,6 +358,36 @@ describe('looksLikeRunningLate', () => {
     expect(looksLikeRunningLate('The check-in is 10-15 minutes behind')).toBe(false);
   });
 
+  it('does not read the end of a name as a first-person subject', () => {
+    expect(looksLikeRunningLate('Jim stuck in traffic, start without him')).toBe(false);
+    expect(looksLikeRunningLate('Slim held up on my way in')).toBe(false);
+    expect(looksLikeRunningLate("I'm stuck in traffic")).toBe(true);
+    expect(looksLikeRunningLate('im stuck in traffic')).toBe(true);
+  });
+
+  it('does not take reported or quoted lateness as the principal\'s', () => {
+    expect(looksLikeRunningLate('Dana said "I\'m running late"')).toBe(false);
+    expect(looksLikeRunningLate('Dana said “running late, sorry”')).toBe(false);
+    expect(looksLikeRunningLate("Dana said I'm running late")).toBe(false);
+    expect(looksLikeRunningLate("She told me she's late. Running late, sorry")).toBe(true);
+    expect(looksLikeRunningLate("I'm running late")).toBe(true);
+  });
+
+  it('keeps a third-party subject across a parenthetical', () => {
+    expect(looksLikeRunningLate('Dana is, unfortunately, running late')).toBe(false);
+    expect(looksLikeRunningLate('Dana was - sadly - running behind')).toBe(false);
+    expect(looksLikeRunningLate('Running late, sorry')).toBe(true);
+    expect(looksLikeRunningLate('Sorry, running late')).toBe(true);
+  });
+
+  it('scans a long clause without a break in linear time', () => {
+    const text = `not ${"I'm late ".repeat(8000)}`;
+    const start = Date.now();
+    expect(looksLikeRunningLate(text)).toBe(false);
+    expect(looksLikeMakeRoom(`don't ${'make room '.repeat(8000)}`)).toBe(false);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
   it('keeps a refusal ahead of a hyphenated word in the same clause', () => {
     expect(looksLikeMakeRoom("I won't cancel the check-in to make room")).toBe(false);
     expect(looksLikeMakeRoom("I won't move the follow-up, I can make room")).toBe(true);

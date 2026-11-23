@@ -99,11 +99,30 @@ function isClauseBreak(text: string, i: number): boolean {
   return ch === '-' && (/\s/.test(text[i - 1] ?? '') || /\s/.test(text[i + 1] ?? ''));
 }
 
-/** Whether the match at `index` has a negation earlier in its clause. */
-function negatedInClause(text: string, index: number): boolean {
-  let start = index;
-  while (start > 0 && !isClauseBreak(text, start - 1)) start--;
-  return CLAUSE_NEGATION.test(text.slice(start, index));
+/**
+ * A checker for "does the match at `index` have a `marker` earlier in its clause". Built once per
+ * text in a single pass, so each lookup is constant time: a long message with no clause break
+ * and many matches would otherwise rescan the whole clause for every match (quadratic).
+ */
+function clauseMarkerCheck(text: string, marker: RegExp): (index: number) => boolean {
+  const n = text.length;
+  // clauseStart[i]: where the clause containing position i begins.
+  const clauseStart = new Int32Array(n + 1);
+  for (let i = 1; i <= n; i++) clauseStart[i] = isClauseBreak(text, i - 1) ? i : clauseStart[i - 1]!;
+  // lastMarker[i]: start of the latest marker occurrence ending at or before i, or -1. Occurrences
+  // do not overlap and come in order, so if the latest one starts before the clause, none is inside.
+  const lastMarker = new Int32Array(n + 1).fill(-1);
+  const found = [...text.matchAll(new RegExp(marker.source, `${marker.flags.replace('g', '')}g`))];
+  let next = 0;
+  let latest = -1;
+  for (let i = 0; i <= n; i++) {
+    while (next < found.length && found[next]!.index + found[next]![0].length <= i) {
+      latest = found[next]!.index;
+      next++;
+    }
+    lastMarker[i] = latest;
+  }
+  return (index) => lastMarker[index]! >= clauseStart[index]!;
 }
 
 /**
@@ -114,9 +133,10 @@ function negatedInClause(text: string, index: number): boolean {
  */
 export function looksLikeMakeRoom(text: string): boolean {
   const own = text.split('\n').filter((line) => !line.trimStart().startsWith('>')).join('\n');
+  const negated = clauseMarkerCheck(own, CLAUSE_NEGATION);
   return MAKE_ROOM_PATTERNS.some((p) => {
     for (const match of own.matchAll(new RegExp(p.source, `${p.flags}g`))) {
-      if (!negatedInClause(own, match.index)) return true;
+      if (!negated(match.index)) return true;
     }
     return false;
   });
@@ -145,7 +165,27 @@ const FIRST_PERSON_TIMING = String.raw`(?:i['’]?m\s+going\s+to\s+be|i\s+am\s+g
 const CLAUSE_OPEN = String.raw`(?<=^|[.!?;,\n—–]\s*|(?:^|\s)-+\s*)`;
 // A subjectless status: the principal's own ("running ..."), or one with no subject at all
 // ("stuck in traffic"). Someone else's name or a thing before the phrase rules both out.
-const OWN_OR_OPEN = String.raw`(?:${FIRST_PERSON_TIMING}\s+${LATENESS_FILLER}|${CLAUSE_OPEN})`;
+// The word boundary keeps the end of a name from reading as a subject ("Jim" is not "im").
+const OWN_OR_OPEN = String.raw`(?:\b${FIRST_PERSON_TIMING}\s+${LATENESS_FILLER}|${CLAUSE_OPEN})`;
+
+// Someone else's words, not the principal's status: a reporting verb ahead of the match in the
+// clause ("Dana said I'm running late", "she told me I'm late").
+const REPORTED_SPEECH = /\b(?:said|says|saying|told|tells|telling|texted|wrote|writes|messaged|claims?|claimed|thinks|thought|mentioned|reported)\b/i;
+// A copula left hanging before a comma or dash, then the match: "Dana is, unfortunately, running
+// late". The sentence still has its own subject, so the comma does not open the principal's status.
+const DANGLING_SUBJECT = /\b(?:is|are|was|were|be|been|has|have|had)\s*(?:,|[—–]|\s-\s)/i;
+const SENTENCE_END = /[.;!?\n]/;
+
+/** Whether the sentence holding the match at `index` has a subject of its own cut off by a comma. */
+function hasDanglingSubject(text: string, index: number): boolean {
+  // Looks back at most 200 characters, so the cost per match does not grow with the message.
+  let start = index;
+  while (start > 0 && index - start < 200 && !SENTENCE_END.test(text[start - 1]!)) start--;
+  return DANGLING_SUBJECT.test(text.slice(start, index));
+}
+
+// Words a person quotes: "Dana said \"I'm running late\"" is Dana's status, not the principal's.
+const QUOTED_SPAN = /"[^"\n]*"|“[^”\n]*”/g;
 
 const RUNNING_LATE_PATTERNS: readonly RegExp[] = [
   // "I'm late", "I'll be an hour late", "we're going to be late", "I'm running a little late"
@@ -179,10 +219,15 @@ export function looksLikeRunningLate(text: string): boolean {
     .split('\n')
     .filter((line) => !line.trimStart().startsWith('>'))
     .join('\n')
-    .replace(/^Subject:\s*/i, '');
+    .replace(/^Subject:\s*/i, '')
+    .replace(QUOTED_SPAN, ' ');
+  const disowned = clauseMarkerCheck(
+    own,
+    new RegExp(`${CLAUSE_NEGATION.source}|${REPORTED_SPEECH.source}`, 'i'),
+  );
   return RUNNING_LATE_PATTERNS.some((p) => {
     for (const match of own.matchAll(new RegExp(p.source, `${p.flags}g`))) {
-      if (!negatedInClause(own, match.index)) return true;
+      if (!disowned(match.index) && !hasDanglingSubject(own, match.index)) return true;
     }
     return false;
   });
