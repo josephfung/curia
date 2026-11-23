@@ -26,7 +26,8 @@ A finding costs a fix, a re-review and sometimes a paid test run. Each one has t
 - **Defenses against implausible spoofs on everyday paths.** Curia is held to a human assistant's standard. Don't add friction to daily use to stop an attack that needs an unrealistic setup. Send, write and hide paths keep their strictness.
 - **Wider coverage for heuristics that fail closed.** Quote and forward detection, trigger patterns and similar code withhold or over-block when they miss, so a miss costs an extra question, not a leak. Ask for wider coverage only if the miss sends something, leaks something or skips an approval. Don't ask for more languages, formats or variants for their own sake.
 - **New guards, options or config keys without a failure scenario.** If a guard is warranted, say what simpler change was considered (removing the capability, narrowing an input) and why it doesn't work.
-- **Findings on code the diff doesn't touch,** unless the change makes that code newly reachable.
+- **Guarantees beyond what the feature is for.** Judge the PR against its description and the issue it closes. Delivery proof for a notification, an audit trail nobody reads, retries or a new outcome state are new capabilities, not fixes. Mention the cost if you think one is worth having, as a follow-up, never as changes requested. On #2714, review rounds added about 1,100 lines to prove one confirmation email was delivered, reaching into the outbound queue, and all of it was cut ("it's an email notification").
+- **Behavior that existed before the PR, in code outside the diff,** unless the change makes that code newly reachable. Raise it as a follow-up (a note in the review body, or an issue), not as changes requested.
 
 ### Broadly acceptable
 
