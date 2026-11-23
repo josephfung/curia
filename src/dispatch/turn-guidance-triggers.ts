@@ -86,7 +86,7 @@ const MAKE_ROOM_PATTERNS: readonly RegExp[] = [
 // dash, or a line break, so "Don't worry, I'll make some room" is still a request — and so is
 // "I'm not sure what's going on — running late". A denied status reads the same way: "I'm not
 // running late", "I'm never late".
-const CLAUSE_NEGATION = /\b(?:don['’]?t|do\s+not|doesn['’]?t|not|never|no\s+need\s+to|can['’]?t|cannot|won['’]?t|shouldn['’]?t|rather\s+not|without)\b/i;
+const CLAUSE_NEGATION = /\b(?:don['’]?t|do[^\S\n]+not|doesn['’]?t|not|never|no[^\S\n]+need[^\S\n]+to|can['’]?t|cannot|won['’]?t|shouldn['’]?t|rather[^\S\n]+not|without)\b/i;
 const CLAUSE_END = /[.;!?,\n—–]/;
 
 /**
@@ -162,7 +162,7 @@ const FIRST_PERSON_TIMING = String.raw`(?:i['’]?m\s+going\s+to\s+be|i\s+am\s+g
 // The start of the message, a sentence, or a dash-opened aside. The lookbehind keeps the match
 // on the status phrase, so the clause before a sentence break cannot deny it
 // ("I'm not sure what you mean. Running late, sorry").
-const CLAUSE_OPEN = String.raw`(?<=^|[.!?;,\n—–]\s*|(?:^|\s)-+\s*)`;
+const CLAUSE_OPEN = String.raw`(?<=^|[.!?;,\n—–]\s{0,64}|(?:^|\s)-+\s{0,64})`;
 // A subjectless status: the principal's own ("running ..."), or one with no subject at all
 // ("stuck in traffic"). Someone else's name or a thing before the phrase rules both out.
 // The word boundary keeps the end of a name from reading as a subject ("Jim" is not "im").
@@ -173,15 +173,24 @@ const OWN_OR_OPEN = String.raw`(?:\b${FIRST_PERSON_TIMING}\s+${LATENESS_FILLER}|
 const REPORTED_SPEECH = /\b(?:said|says|saying|told|tells|telling|texted|wrote|writes|messaged|claims?|claimed|thinks|thought|mentioned|reported)\b/i;
 // A copula left hanging before a comma or dash, then the match: "Dana is, unfortunately, running
 // late". The sentence still has its own subject, so the comma does not open the principal's status.
-const DANGLING_SUBJECT = /\b(?:is|are|was|were|be|been|has|have|had)\s*(?:,|[—–]|\s-\s)/i;
+// Contracted copulas ("She's, unfortunately, running late") count too, except the principal's own
+// "I'm" / "I've" / "we're".
+const DANGLING_SUBJECT = /(?:\b(?:is|are|was|were|be|been|has|have|had)|\b(?!(?:i|we)['’])\w+['’](?:s|re|ve|d|ll(?:\s+be)?))\s*(?:,|[—–]|\s-\s)/i;
+// A reporting verb that introduces the words right after it, with no quote marks: "Dana texted,
+// running late", "Sam wrote — stuck in traffic", "Dana said, 'I'm running late'".
+const REPORT_INTRO = new RegExp(`${REPORTED_SPEECH.source}(?:\\s+(?:me|us|him|her|them))?\\s*(?:[,:]|[—–]|\\s-\\s)\\s*['‘"“]?\\s*$`, 'i');
 const SENTENCE_END = /[.;!?\n]/;
 
-/** Whether the sentence holding the match at `index` has a subject of its own cut off by a comma. */
-function hasDanglingSubject(text: string, index: number): boolean {
+/**
+ * Whether the sentence holding the match at `index` has a subject of its own cut off by a comma,
+ * or is introduced by a reporting verb ("Dana said, ...").
+ */
+function hasForeignSubject(text: string, index: number): boolean {
   // Looks back at most 200 characters, so the cost per match does not grow with the message.
   let start = index;
   while (start > 0 && index - start < 200 && !SENTENCE_END.test(text[start - 1]!)) start--;
-  return DANGLING_SUBJECT.test(text.slice(start, index));
+  const before = text.slice(start, index);
+  return DANGLING_SUBJECT.test(before) || REPORT_INTRO.test(before);
 }
 
 // Words a person quotes: "Dana said \"I'm running late\"" is Dana's status, not the principal's.
@@ -227,7 +236,7 @@ export function looksLikeRunningLate(text: string): boolean {
   );
   return RUNNING_LATE_PATTERNS.some((p) => {
     for (const match of own.matchAll(new RegExp(p.source, `${p.flags}g`))) {
-      if (!disowned(match.index) && !hasDanglingSubject(own, match.index)) return true;
+      if (!disowned(match.index) && !hasForeignSubject(own, match.index)) return true;
     }
     return false;
   });

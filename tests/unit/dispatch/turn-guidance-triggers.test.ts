@@ -380,6 +380,36 @@ describe('looksLikeRunningLate', () => {
     expect(looksLikeRunningLate('Sorry, running late')).toBe(true);
   });
 
+  it('does not take unquoted direct speech after a reporting verb as the principal\'s', () => {
+    expect(looksLikeRunningLate('Dana texted, running late, start without her')).toBe(false);
+    expect(looksLikeRunningLate("Dana said, I'm running late")).toBe(false);
+    expect(looksLikeRunningLate('Sam wrote — stuck in traffic')).toBe(false);
+    expect(looksLikeRunningLate("Dana said, 'I'm running late'")).toBe(false);
+    expect(looksLikeRunningLate('Dana told me: running late')).toBe(false);
+    expect(looksLikeRunningLate("She told me she's late. Running late, sorry")).toBe(true);
+  });
+
+  it('keeps a third-party subject when the copula is contracted', () => {
+    expect(looksLikeRunningLate("She's, unfortunately, running late")).toBe(false);
+    expect(looksLikeRunningLate("They're - sadly - running behind")).toBe(false);
+    expect(looksLikeRunningLate("Dana's — sadly — running behind")).toBe(false);
+    expect(looksLikeRunningLate("He'll be, sadly, 10 minutes late")).toBe(false);
+    expect(looksLikeRunningLate("I'm, sadly, running late")).toBe(true);
+    expect(looksLikeRunningLate("We're sorry, running late")).toBe(true);
+  });
+
+  it('does not let a multi-word refusal swallow the negation of the next line', () => {
+    expect(looksLikeMakeRoom("I do\nnot want to make room")).toBe(false);
+    expect(looksLikeMakeRoom('do\nnot. I can make room')).toBe(true);
+  });
+
+  it('scans long whitespace runs in linear time', () => {
+    const start = Date.now();
+    expect(looksLikeRunningLate(' '.repeat(100_000))).toBe(false);
+    expect(looksLikeRunningLate(`x${'\n '.repeat(50_000)}`)).toBe(false);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
   it('scans a long clause without a break in linear time', () => {
     const text = `not ${"I'm late ".repeat(8000)}`;
     const start = Date.now();
