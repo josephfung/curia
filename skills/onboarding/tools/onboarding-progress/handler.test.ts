@@ -87,6 +87,21 @@ function makeWorld(opts: { withParent?: boolean } = {}) {
     query: vi.fn(async (sql: string) => ({ rows: sql.includes('FROM settings') ? setupSettings : [] })),
     connect: vi.fn(async () => ({ query: vi.fn(async () => ({ rows: [] })), release: vi.fn() })),
   };
+  // The onboarding run state (#2360): the operator-notice dedupe reads and writes it.
+  store.set(
+    'onboarding/state',
+    JSON.stringify({
+      taskId: 'parent',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      route: 'app',
+      greetingSentAt: null,
+      followUpsSent: 0,
+      lastFollowUpAt: null,
+      lastPrincipalTurnAt: null,
+      idleNudgeSentAt: null,
+      operatorNotified: [],
+    }),
+  );
   const service = new OnboardingService({
     pool: pool as unknown as Pool,
     taskRepo: taskRepo as unknown as OnboardingServiceDeps['taskRepo'],
@@ -260,6 +275,26 @@ describe('onboarding-progress', () => {
     const result = await w.run({ op: 'operator_notice', event: 'web_search_failed' });
     expect(result).toEqual({ success: true, data: { recorded: true } });
     expect(w.taskRepo.updateTask).toHaveBeenCalledWith('parent', { progressNote: 'Operator notice: web_search_failed' });
+  });
+
+  it('operator_notice is raised once per run: a second call reports alreadyRaised, not a failure', async () => {
+    const w = makeWorld();
+    const first = await w.run({ op: 'operator_notice', event: 'web_search_failed' });
+    expect(first).toEqual({ success: true, data: { recorded: true } });
+    // Success, so the model does not retry a notice the dedupe is deliberately holding back.
+    const second = await w.run({ op: 'operator_notice', event: 'web_search_failed' });
+    expect(second).toEqual({ success: true, data: { alreadyRaised: true } });
+    // One note on the task, whatever the model does with the tool.
+    expect(w.taskRepo.updateTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('operator_notice refuses the events the code raises itself', async () => {
+    const w = makeWorld();
+    for (const event of ['greeting_unanswered', 'invitation_expired', 'mailbox_signin_blocked']) {
+      const result = await w.run({ op: 'operator_notice', event });
+      expect(result.success, event).toBe(false);
+    }
+    expect(w.taskRepo.updateTask).not.toHaveBeenCalled();
   });
 
   it('operator_notice fails when the notice could not be written', async () => {

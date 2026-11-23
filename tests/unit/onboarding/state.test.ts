@@ -169,7 +169,7 @@ describe('notifyOperator', () => {
     const audit = vi.fn();
     await expect(
       notifyOperator({ taskRepo: { updateTask }, logger, audit }, 't1', 'greeting_unanswered'),
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ recorded: true });
     expect(updateTask).toHaveBeenCalledWith('t1', { progressNote: 'Operator notice: greeting_unanswered' });
     expect(audit).toHaveBeenCalledOnce();
   });
@@ -179,7 +179,7 @@ describe('notifyOperator', () => {
     const updateTask = vi.fn(async () => { throw new Error('db down'); });
     await expect(
       notifyOperator({ taskRepo: { updateTask }, logger }, 't1', 'web_search_failed'),
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ recorded: false });
     expect(error).toHaveBeenCalled();
   });
 
@@ -188,6 +188,6 @@ describe('notifyOperator', () => {
     const audit = vi.fn(() => { throw new Error('audit down'); });
     await expect(
       notifyOperator({ taskRepo: { updateTask }, logger, audit }, 't1', 'web_search_failed'),
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ recorded: true });
   });
 });

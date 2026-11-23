@@ -331,3 +331,52 @@ export async function writeSettings(
     }
   });
 }
+
+/** One entry of a key's write history: what it was, what it became, and who wrote it (#2709). */
+export interface SettingHistoryRow {
+  id: string;
+  /** The value before the write; null when the key was absent. Validated: an unreadable stored
+   *  value is reported as null, which is what the registry reads it as (`reportBadValue`). */
+  oldValue: unknown;
+  /** The value written; null when the write cleared the key. */
+  newValue: unknown;
+  updatedBy: string;
+  changedAt: Date;
+}
+
+/**
+ * A key's write history, newest first (the console's "who changed this, and when"). `oldValue`
+ * and `newValue` are raw JSONB: a caller renders them, it does not act on them — reads that act
+ * on a value go through getSetting, which validates. Bad VALUES from history are therefore
+ * returned as they were written rather than dropped; a value that fails its schema was never
+ * trusted, and showing it is how an operator sees the mistake.
+ */
+export async function readSettingHistory(
+  db: SettingsQueryable,
+  key: SettingKey,
+  options: { limit: number; offset: number },
+): Promise<SettingHistoryRow[]> {
+  assertKnownKey(key);
+  const { rows } = await db.query(
+    `SELECT id::text AS id, old_value, new_value, updated_by, changed_at
+       FROM settings_history
+      WHERE key = $1
+      ORDER BY changed_at DESC, id DESC
+      LIMIT $2 OFFSET $3`,
+    [key, options.limit, options.offset],
+  );
+  return rows.map((row) => ({
+    id: String(row['id']),
+    oldValue: row['old_value'] ?? null,
+    newValue: row['new_value'] ?? null,
+    updatedBy: String(row['updated_by'] ?? ''),
+    changedAt: row['changed_at'] instanceof Date ? row['changed_at'] : new Date(String(row['changed_at'])),
+  }));
+}
+
+/** How many writes a key has recorded, for the console's paging. */
+export async function countSettingHistory(db: SettingsQueryable, key: SettingKey): Promise<number> {
+  assertKnownKey(key);
+  const { rows } = await db.query('SELECT count(*)::int AS total FROM settings_history WHERE key = $1', [key]);
+  return Number(rows[0]?.['total'] ?? 0);
+}

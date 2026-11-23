@@ -55,6 +55,8 @@ import {
   PRINCIPAL_RESTART_EXIT_DELAY_SECONDS,
   RESTART_WAKE_DELAY_SECONDS,
 } from './constants.js';
+import type { OperatorEvent, OperatorNotifier, OperatorNotice } from './notify-operator.js';
+import { notifyOperatorOnce } from './notify-operator-once.js';
 
 /** Signals that the install is already in use, so starting onboarding needs confirming. */
 export const WORKING_PRINCIPAL_SIGNALS = {
@@ -203,6 +205,11 @@ export interface OnboardingServiceDeps {
    */
   persistentStore: boolean;
   logger: Logger;
+  /**
+   * How an operator notice is emailed (#2710), for the onboarding-progress tool's own notices.
+   * Absent: the tool still records the notice on the task; nobody is emailed.
+   */
+  operatorNotifier?: OperatorNotifier;
   /** Defaults to the pairing-invitations mint on `pool`. */
   mintInvitation?: (origin: string) => Promise<Pick<MintedInvitation, 'id' | 'pairUrl' | 'expiresAt'>>;
   /** Defaults to the pairing-invitations stop-by-id on `pool`. */
@@ -224,6 +231,39 @@ export class OnboardingService {
     this.newId = deps.newId ?? randomUUID;
     this.mint = deps.mintInvitation ?? ((origin) => mintPairingInvitation(deps.pool, origin));
     this.stop = deps.stopInvitation ?? ((id) => stopPairingInvitation(deps.pool, id));
+  }
+
+  /**
+   * Raise an operator notice once per onboarding run (#2360, #2710): the same dedupe the
+   * watcher and the event subscribers use, so a model that raises the same event repeatedly
+   * emails the operator once. The progress note and the audit row are written either way.
+   * Without an injected notifier the notice is still recorded on the task and nobody is emailed.
+   */
+  async raiseOperatorNotice(
+    taskId: string,
+    event: OperatorEvent,
+    notice: OperatorNotice = {},
+  ): Promise<{ alreadyRaised: boolean; recorded: boolean }> {
+    // Checked up front so the caller can say "already raised" instead of "could not be recorded":
+    // the model would otherwise retry a notice that is deliberately not sent twice (#2710).
+    // notifyOperatorOnce re-checks under the state lock, so this is only about the message.
+    const state = await readOnboardingState(this.deps.configStore, this.deps.logger);
+    if (state !== null && state.taskId === taskId && state.operatorNotified.includes(event)) {
+      return { alreadyRaised: true, recorded: true };
+    }
+    const recorded = await notifyOperatorOnce(
+      {
+        taskRepo: this.deps.taskRepo,
+        logger: this.deps.logger,
+        configStore: this.deps.configStore,
+        stateLock: this.deps.stateLock,
+        ...(this.deps.operatorNotifier ? { notifier: this.deps.operatorNotifier } : {}),
+      },
+      taskId,
+      event,
+      notice,
+    );
+    return { alreadyRaised: false, recorded };
   }
 
   async status(): Promise<OnboardingStatus> {

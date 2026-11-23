@@ -15,8 +15,6 @@ import type { EmailSendRequest } from './outbound-request.js';
 import { replyDisplayName, replyRecipientSource } from './reply-recipient-provenance.js';
 import { deriveEmailReplyRecipientSet } from './reply-recipients.js';
 import type { ContactService } from '../../contacts/contact-service.js';
-import type { PrincipalEmailRef } from '../../contacts/types.js';
-import { resolvePrincipalEmail } from '../../contacts/types.js';
 import type { ConfigStore } from '../../memory/config-store.js';
 import { convertNylasMessage, normalizeForComparison } from './message-converter.js';
 import {
@@ -131,12 +129,6 @@ export interface EmailAdapterConfig {
    * agent never replies to a mailbox it owns. Case-insensitive.
    */
   suppressedSenderEmails: string[];
-  /**
-   * principal's email address — used as the recipient for rate-limit notification emails.
-   * When absent/empty, rate-limit notifications are logged but not emailed.
-   * Accepts a mutable PrincipalEmailRef so post-boot binds hot-reload (#1514).
-   */
-  ceoEmail?: string | PrincipalEmailRef;
   /**
    * Maximum new contacts to auto-create from a single email's participant list.
    * Existing contacts (already in DB) don't count. Default: 10.
@@ -465,7 +457,7 @@ export class EmailAdapter implements Channel {
         const result = await this.config.outboundGateway.send(
           {
             channel: 'email',
-            to: notification.payload.ceoEmail,
+            to: notification.payload.recipient,
             subject: notification.payload.subject,
             body: notification.payload.body,
           },
@@ -478,9 +470,9 @@ export class EmailAdapter implements Channel {
               reason: result.blockedReason,
               blockId: notification.payload.blockId,
               originalChannel: notification.payload.originalChannel,
-              ceoEmail: notification.payload.ceoEmail,
+              audience: notification.payload.audience,
             },
-            'EmailAdapter: failed to deliver outbound.notification — principal will NOT receive this alert',
+            'EmailAdapter: failed to deliver outbound.notification — its recipient will NOT receive this alert',
           );
         }
       } catch (err) {
@@ -1818,7 +1810,6 @@ export class EmailAdapter implements Channel {
     emailSender: string,
   ): Promise<void> {
     const { outboundGateway, logger } = this.config;
-    const ceoEmail = resolvePrincipalEmail(this.config.ceoEmail);
     const now = Date.now();
 
     // Dedup: skip if we already sent a notification for this limit type within the last hour
@@ -1828,19 +1819,15 @@ export class EmailAdapter implements Channel {
       return;
     }
 
-    if (!ceoEmail) {
-      logger.warn({ limitType, skippedCount }, 'Contact rate-limit hit but ceoEmail not configured — cannot notify');
-      return;
-    }
-
     const limitLabel = limitType === 'per_message'
       ? `per-message limit (${this.config.contactCreationMaxPerMessage})`
       : `per-hour limit (${this.config.contactCreationMaxPerHour})`;
 
     try {
-      await outboundGateway.sendNotification({
+      // The gateway resolves the principal's address; a missing one returns false, and the
+      // dedup stamp stays unset so the next limit hit tries again rather than going quiet.
+      const sent = await outboundGateway.sendNotification({
         notificationType: 'contact_rate_limited',
-        ceoEmail,
         subject: `Contact auto-creation rate limit reached (${limitLabel})`,
         body: [
           `Contact auto-creation was throttled on the ${this.config.accountId} email account.`,
@@ -1854,6 +1841,10 @@ export class EmailAdapter implements Channel {
           'If this is unexpected, check for spam activity on this account.',
         ].join('\n'),
       });
+      if (!sent) {
+        logger.warn({ limitType, skippedCount }, 'Contact rate-limit notification reached no one — will retry on the next limit hit');
+        return;
+      }
       // Commit the dedup timestamp only after a successful send — if the send fails we
       // allow a retry on the next limit hit rather than silencing the principal for an hour.
       if (limitType === 'per_message') {

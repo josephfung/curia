@@ -71,7 +71,6 @@ describe('RecoveryNotifier', () => {
       bus: bus as never,
       outboundGateway: gateway as never,
       schedulerService: schedulerService as never,
-      ceoEmail: 'ceo@example.com',
       logger: logger as never,
       appOrigin: 'https://curia.example.com',
       httpPort: 3000,
@@ -104,10 +103,13 @@ describe('RecoveryNotifier', () => {
     expect(gateway.sendNotification).toHaveBeenCalledOnce();
     const call = gateway.sendNotification.mock.calls[0][0];
     expect(call.notificationType).toBe('schedule_recovered');
-    expect(call.ceoEmail).toBe('ceo@example.com');
+    // Operator-routed (#2710): the gateway resolves the address, and no principal content
+    // (the job's objective) is carried.
+    expect(call).not.toHaveProperty('ceoEmail');
+    expect(call).not.toHaveProperty('recipient');
     expect(call.subject).toContain('coordinator');        // agentId in subject
     expect(call.body).toContain('coordinator');           // agentId in body
-    expect(call.body).toContain('Compiled the daily digest.'); // objective from last_run_summary
+    expect(call.body).not.toContain('Compiled the daily digest.'); // objective is not carried
     expect(call.body).toContain('Recurring (cron: `0 8 * * *`)');
     expect(call.body).toContain('~20 min');              // stuck duration (now - runStartedAt)
     expect(call.body).toContain('15 min');               // timeout threshold (900s)
@@ -178,8 +180,11 @@ describe('RecoveryNotifier', () => {
     await (notifier as never as { handle(e: ScheduleRecoveredEvent): Promise<void> })
       .handle(makeEvent());
 
+    // The job context could not be read, so the recurrence is unknown; the body still names
+    // the job and links to it, which is what the operator needs to act.
     const call = gateway.sendNotification.mock.calls[0][0];
-    expect(call.body).toContain('(job not found)');
+    expect(call.body).toContain('(unknown)');
+    expect(call.body).toContain('job-abc123');
     expect(call.body).toContain('https://curia.example.com/jobs/job-abc123');
   });
 });

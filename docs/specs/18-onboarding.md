@@ -600,12 +600,29 @@ so a late call still loads it (`expires_at` still bounds it); a cancelled one ne
 ### Operator notices
 
 `notifyOperator` (`src/onboarding/notify-operator.ts`) records a progress note on the
-onboarding task and logs a warning. The watcher and the subscribers raise each event at most
-once per onboarding.
-Delivery to the operator waits for the operator role (`TODO(#2365)`). The events are
-`greeting_unanswered`, `invitation_expired`, `mailbox_signin_blocked` and
-`web_search_failed`. When Setup was for the principal themself, Curia tells them directly in
-the conversation.
+onboarding task, logs a warning, and emails the operator through the one system-notice path,
+`OutboundGateway.sendNotification` (#2710, [ADR-068](../adr/068-operator-notices.md)). The
+watcher and the subscribers raise each event at most once per onboarding.
+
+The events are `greeting_unanswered`, `invitation_expired`, `mailbox_signin_blocked` and
+`web_search_failed`. All four are operator-routed in `NOTIFICATION_AUDIENCES`
+(`src/notifications/audience.ts`), so the gateway addresses them from the current `operator`
+setting: the operator's email when one is set, and the principal's when none is — a "Myself"
+install behaves exactly as before. The setting, not the original Setup choice, decides: an
+operator saved later in the console receives them, and clearing it sends them to the principal. When Setup was for the principal themself, Curia also tells
+them directly in the conversation.
+
+The emailed text carries the event and, for a blocked sign-in, the Google OAuth client id to
+trust. Nothing model-supplied reaches it: a tool call's `details` are context for the progress
+note, the log and the `onboarding.operator_notice` audit row (key names only) and never the
+email. Bodies carry no principal content — no message text, addresses or objectives.
+
+`onboarding-progress` op `operator_notice` raises only `web_search_failed`: it is the one notice
+only the model can see, and the other three are detected in code. It goes through the same
+once-per-run dedupe as everything else (`OnboardingService.raiseOperatorNotice`), so a repeated
+call emails once and adds no second note — and answers `{ alreadyRaised: true }` rather than a
+failure, so the model does not retry it. `operatorNotified` records what was raised; a notice
+whose task note could not be written gives its event back, so a retry raises it.
 
 ### Done
 

@@ -66,7 +66,7 @@ function fakePool(options: { failOn?: string; existing?: StoredRow[] } = {}) {
 }
 
 describe('settings registry', () => {
-  it('declares exactly the four Setup keys, each with a purpose, a default and a parser', () => {
+  it('declares exactly the Setup and operator keys, each with a purpose, a default and a parser', () => {
     expect(settingKeys().sort()).toEqual(EXPECTED_KEYS);
     for (const key of settingKeys()) {
       expect(SETTINGS[key].purpose.length).toBeGreaterThan(0);
@@ -92,6 +92,24 @@ describe('settings registry', () => {
     ]) {
       expect(SETTINGS.operator.parse(bad).ok, JSON.stringify(bad)).toBe(false);
     }
+  });
+
+  it('keeps the operator name to one line, so it cannot forge a line of the notice body (#2710)', () => {
+    // The name is rendered into the confirmation notice, so a newline must not survive.
+    expect(SETTINGS.operator.parse({ name: 'Sam\nBcc: someone@example.com', email: 'sam@example.com' }))
+      .toEqual(ok({ name: 'Sam Bcc: someone@example.com', email: 'sam@example.com' }));
+    expect(SETTINGS.operator.parse({ name: ' Sam   Rivera\t ', email: 'sam@example.com' }))
+      .toEqual(ok({ name: 'Sam Rivera', email: 'sam@example.com' }));
+    // A name that is only whitespace is still not a name.
+    expect(SETTINGS.operator.parse({ name: '\n\t ', email: 'sam@example.com' }).ok).toBe(false);
+  });
+
+  it('caps the operator email at 254 characters, as the Setup route does', () => {
+    const at254 = `${'a'.repeat(64)}@${'b'.repeat(185)}.com`;
+    const over = `${'a'.repeat(64)}@${'b'.repeat(186)}.com`;
+    expect(at254).toHaveLength(254);
+    expect(SETTINGS.operator.parse({ name: 'Sam', email: at254 }).ok).toBe(true);
+    expect(SETTINGS.operator.parse({ name: 'Sam', email: over }).ok).toBe(false);
   });
 
   it('accepts only the shipped routes', () => {

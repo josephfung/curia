@@ -87,6 +87,11 @@ export interface SetupRouteOptions {
   infraLlmService?: InfraLlmService;
   /** The Setup checklist (#2358). Absent: the checklist and complete routes answer 503. */
   setupChecklist?: () => Promise<SetupChecklist>;
+  /**
+   * Keep the gateway's cached operator address current after a Setup save (#2710), so a later
+   * failing database read cannot route a notice to whoever held the setting before.
+   */
+  onOperatorChanged?: (operator: { name: string; email: string } | null) => void;
 }
 
 // Match identity.ts: tighter rate limit on auth-sensitive routes (10/min vs the
@@ -123,6 +128,7 @@ export async function setupRoutes(
     scheduleProcessExit,
     infraLlmService,
     setupChecklist,
+    onOperatorChanged,
   } = options;
 
   // Delay before process.exit so Fastify can finish flushing the 200 response.
@@ -551,6 +557,11 @@ export async function setupRoutes(
     if ('error' in parsed) return reply.status(400).send({ error: parsed.error });
     try {
       const state = await updateSetupState(pool, parsed.update, { updatedBy: 'console', logger });
+      onOperatorChanged?.(
+        state.operatorEmail !== null && state.operatorName !== null
+          ? { name: state.operatorName, email: state.operatorEmail }
+          : null,
+      );
       return reply.send({ inSetup: isInSetup(state.phase), setup: publicState(state) });
     } catch (err) {
       // A cross-field rule (Myself with operator details; Someone else without them) or a

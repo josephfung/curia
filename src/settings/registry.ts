@@ -54,6 +54,15 @@ const MAX_OPERATOR_NAME = 200;
 // Shape check only: the Setup route already validates richer input, and this also has to
 // accept the values migration 132 copied from setup_state.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// RFC 5321's 254-character cap, checked before the pattern runs: the pattern backtracks
+// polynomially on a long domain, and the Setup route applies the same cap (#2710).
+const MAX_EMAIL = 254;
+
+function isEmail(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  return trimmed.length <= MAX_EMAIL && EMAIL_RE.test(trimmed);
+}
 
 function ok<T>(value: T): SettingParse<T> {
   return { ok: true, value };
@@ -73,9 +82,12 @@ function parseOperator(raw: unknown): SettingParse<OperatorSetting> {
   const name = input['name'];
   const email = input['email'];
   if (typeof name !== 'string' || name.trim() === '') return fail('name must be a non-empty string');
-  const trimmed = name.trim();
+  // One line, no control characters: the name is rendered into an email body (the confirmation
+  // notice, #2710), and a newline there would let a saved name forge a line of it.
+  const trimmed = name.replace(/[\r\n\t\v\f]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  if (trimmed === '') return fail('name must be a non-empty string');
   if (trimmed.length > MAX_OPERATOR_NAME) return fail(`name must be ${MAX_OPERATOR_NAME} characters or fewer`);
-  if (typeof email !== 'string' || !EMAIL_RE.test(email.trim())) return fail('email must be an email address');
+  if (!isEmail(email)) return fail('email must be an email address');
   return ok({ name: trimmed, email: email.trim().toLowerCase() });
 }
 

@@ -126,8 +126,11 @@ has made a one-click step during Setup.
   is exactly the barrier the PWA exists to remove (ADR-055).
 - **Priorities in specialist agents.** ceo-inbox and calendar do not pin the priorities document
   in this milestone (see *Priorities: scope*).
-- **An operator role in the identity model.** Still a design issue only (#2365). The operator is
-  addressed through Setup surfaces (console, setup agent), not as a contact Curia routes to.
+- **An operator role in the identity model.** Settled as *not* a role (#2365 → #2710,
+  [ADR-068](../../docs/adr/068-operator-notices.md)): the operator is told, never talked with —
+  one-way email notices, no contact, tier or approval rights, and no principal content in them.
+  The operator is addressed through Setup surfaces (console, setup agent), not as a contact Curia
+  routes to.
 - **Principals on Microsoft 365.** This milestone supports principals with a Google account
   only: the drafts are Google Docs, and the mailbox sign-in uses a Google connector. Microsoft is
   a follow-up (mailbox sign-in, and a review route that doesn't need a Google account).
@@ -324,7 +327,8 @@ Setup: the page does.
 The console, and the phone app with it, shares one chat thread, and every console chat is
 treated as the principal (`src/channels/http/routes/chat.ts`). That matches the journey: **during
 Setup the console is the operator's, and afterwards it is the principal's.** No operator identity
-is added (#2365 stays off the critical path). Three rules keep the hand-over clean:
+is added (#2365 became the notice routing of #2710, not an identity). Three rules keep the
+hand-over clean:
 
 - **Setup chat goes to the setup agent.** Opening the Setup page starts Setup, so from the
   first message web chat goes to the setup agent, decided on the server. A database whose
@@ -770,7 +774,7 @@ pages are written.
 | Done | Drafts confirmed and a weekly session agreed | builder's call |
 | Triage switch | Off on a fresh install; on after "what to expect", by voice or chat | Joseph (switch); builder's call (chat too) |
 | Priorities scope | Coordinator, voice, recap, weekly session; no specialist pinning; the pinned description carries use, upkeep and the offer to start it; the document is the record | Joseph |
-| Operator role | Design issue only (#2365) | Joseph |
+| Operator role | Not a role: one-way email notices to the operator Setup recorded (#2710, ADR-068) | Joseph |
 | Setup surface | One Setup page in the console: every field on its step, one Save and continue per step, fields save on leaving them; the setup agent is a help panel beside it (#2358) | Joseph |
 | Google Docs in Setup | An optional extra, not required: its sign-in isn't in the console yet (#2683) | builder's call |
 | Working style in Setup | Optional extra; a starting point the principal is offered, never a decision for them | Joseph |
@@ -792,7 +796,7 @@ Tracked in milestone **v0.48 - Onboarding Journey** (#29).
 | #2362 **Deep dive** | Adds writing voice as the third draft and a contacts backfill, all fed by one stored history summary; delivery as Google Docs with a review session on the calendar; the principal edits and says when done, and Curia imports. Comment handling moved to #2712. The ADR also covers writing voice and drafts held in Google Drive. | #2360, #2361, #2338 | XL → XXL → XL |
 | #2363 Voice loads priorities | No longer waits for the deep dive: the document can be started on offer (*Priorities: scope*). | — | S |
 | #2364 Spike: text-chat sessions | Folded into #2360; closed. | — | — |
-| #2365 Design: operator role | Unchanged, still off the critical path. | — | S |
+| #2365 Design: operator role | Settled by #2710 (ADR-068): no role, no contact — the operator is emailed technical notices, one audience per notification type, with no principal content. | #2709 | S → L (#2710) |
 | #2712 Google Docs collaboration | New (2026-11-22): react to comments and know when a document is done. Not in this milestone; takes the deep-dive review as its test case once it ships. | — | L |
 
 **Critical path:** #2358 and #2361 → #2360 → #2362. #2356 (Setup half), #2357, #2359 and #2365

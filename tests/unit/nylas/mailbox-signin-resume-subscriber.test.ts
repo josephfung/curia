@@ -57,7 +57,7 @@ function setup(over: Partial<MailboxSignInResumeSubscriberDeps> = {}) {
     logger: createSilentLogger(),
     registerRouting,
     googleClientId,
-    notifier: { gateway: { sendNotification }, principalEmail: () => 'boss@example.com' },
+    notifier: { gateway: { sendNotification, canDeliverNotifications: () => true } },
     ...over,
   });
   sub.start();
@@ -174,8 +174,11 @@ describe('MailboxSignInResumeSubscriber', () => {
     const { emit, tasks, sendNotification } = setup();
     await emit(finished({ outcome: 'admin_blocked', mailboxId: undefined }));
     expect(sendNotification).toHaveBeenCalledTimes(1);
-    const notice = (sendNotification.mock.calls[0] as unknown as [{ notificationType: string; ceoEmail: string; subject: string; body: string }])[0];
-    expect(notice).toMatchObject({ notificationType: 'mailbox_signin_admin_blocked', ceoEmail: 'boss@example.com' });
+    const notice = (sendNotification.mock.calls[0] as unknown as [{ notificationType: string; subject: string; body: string }])[0];
+    // Operator-routed (#2710): the notice names its type, and the gateway resolves who that is.
+    expect(notice).toMatchObject({ notificationType: 'mailbox_signin_admin_blocked' });
+    expect(notice).not.toHaveProperty('ceoEmail');
+    expect(notice).not.toHaveProperty('recipient');
     expect(notice.body).toContain('1234-abc.apps.googleusercontent.com');
     expect(tasks()[0]!.payload.content).toContain('1234-abc.apps.googleusercontent.com');
   });
@@ -196,18 +199,23 @@ describe('MailboxSignInResumeSubscriber', () => {
   });
 
   it('admin_blocked: when the notice is not delivered, the agent is told the operator was not notified (I)', async () => {
-    const { emit, tasks } = setup({ notifier: { gateway: { sendNotification: vi.fn(async () => false) }, principalEmail: () => 'boss@example.com' } });
+    const sendNotification = vi.fn(async () => false);
+    const { emit, tasks } = setup({
+      notifier: { gateway: { sendNotification, canDeliverNotifications: () => true } },
+    });
     await emit(finished({ outcome: 'admin_blocked' }));
     const content = tasks()[0]!.payload.content;
     expect(content).not.toMatch(/operator has been/);
     expect(content).toContain("I couldn't notify the operator");
   });
 
-  it('admin_blocked: no email adapter delivers yet, so nothing is sent and the agent is told so (I)', async () => {
-    const sendNotification = vi.fn(async () => true);
-    const { emit, tasks } = setup({ notifier: { gateway: { sendNotification }, principalEmail: () => 'boss@example.com', canDeliver: () => false } });
+  it('admin_blocked: when the gateway reports nothing was published, the agent is told the operator was not notified (I)', async () => {
+    // Deliverability is the gateway's check now (#2710): it answers false when no adapter can
+    // deliver, or when there is no address, and this subscriber reports that honestly.
+    const sendNotification = vi.fn(async () => false);
+    const { emit, tasks } = setup({ notifier: { gateway: { sendNotification, canDeliverNotifications: () => true } } });
     await emit(finished({ outcome: 'admin_blocked' }));
-    expect(sendNotification).not.toHaveBeenCalled();
+    expect(sendNotification).toHaveBeenCalledOnce();
     expect(tasks()[0]!.payload.content).toContain("I couldn't notify the operator");
   });
 

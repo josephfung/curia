@@ -89,6 +89,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [065](065-bundled-in-process-embedding-model.md) | A bundled in-process embedding model (all-MiniLM-L6-v2, onnxruntime-node) is the default — no base URL means bundled; installs holding another model's vectors keep it; the implicit OpenAI default is deprecated (#2628); weights-hashed stamp, identifier guard, `knowledge_graph` health check, endpoint drift check; amends ADR-051 (#2023) | Accepted |
 | [066](066-local-speech-providers.md) | Local speech providers (amends ADR-037): a separate speech service; two-pass STT (FastConformer streaming interims, Silero VAD endpointing, Parakeet finals and voice notes); Pocket TTS (default voice alba, six curated voices) behind a spoken-form normaliser; minimum host 4 vCPU / 8 GB; Deepgram and Cartesia optional (#2469) | Proposed |
 | [067](067-typed-key-value-settings-store.md) | A typed key-value `settings` store with append-only history replaces `setup_state`; `setup_for` and the Setup phase are derived; out of the knowledge graph, no agent access (#2709) | Accepted |
+| [068](068-operator-notices.md) | Operator notices go to whoever set Curia up — one audience per notification type in a central table; one-way email, no contact or tier, no principal content, no fallback to the principal; the confirmation notice is owed until Curia can email, and a system notice records no contact (#2710) | Accepted |
 
 ## Adding new ADRs
 

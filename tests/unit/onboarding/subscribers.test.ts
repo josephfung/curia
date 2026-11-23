@@ -182,8 +182,10 @@ describe('OnboardingSubscribers', () => {
     expect(t.taskRepo.updateTask).toHaveBeenCalledTimes(1);
     expect(t.taskRepo.updateTask).toHaveBeenCalledWith('t1', { progressNote: 'Operator notice: mailbox_signin_blocked' });
     expect(t.scheduler.enqueueTaskWake).not.toHaveBeenCalled();
+    // The client id is a typed notice field (may be emailed); the free-form details bag is
+    // context only, so the log names its key and never its value (#2710).
     expect(warn).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'mailbox_signin_blocked', detailKeys: ['outcome', 'clientId'] }),
+      expect.objectContaining({ event: 'mailbox_signin_blocked', detailKeys: ['outcome'], hasClientId: true }),
       'onboarding: operator notice',
     );
     expect(JSON.stringify(warn.mock.calls)).not.toContain('client-123');

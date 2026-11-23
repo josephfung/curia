@@ -11,7 +11,9 @@ import { createScratchDatabase, type ScratchDatabase } from './scratch-database.
 import { createSilentLogger } from '../../src/logger.js';
 import {
   clearSetting,
+  countSettingHistory,
   getSetting,
+  readSettingHistory,
   setSetting,
   setSettingIfAbsent,
 } from '../../src/settings/store.js';
@@ -77,6 +79,34 @@ describeIf('settings store (Postgres)', () => {
       [KEY],
     );
     expect(rows[0]).toMatchObject({ old_value: 'signal', new_value: null });
+  });
+
+  it('reads the change history newest first, for the console (#2710)', async () => {
+    const OPERATOR = 'operator' as const;
+    await setSetting(pool, OPERATOR, { name: 'Sam', email: 'sam@example.com' }, 'console', logger);
+    await clearSetting(pool, OPERATOR, 'console', logger);
+
+    expect(await countSettingHistory(pool, OPERATOR)).toBe(2);
+    const rows = await readSettingHistory(pool, OPERATOR, { limit: 10, offset: 0 });
+    // Newest first: the clear, then the set that preceded it.
+    expect(rows[0]).toMatchObject({
+      newValue: null,
+      oldValue: { name: 'Sam', email: 'sam@example.com' },
+      updatedBy: 'console',
+    });
+    expect(rows[1]).toMatchObject({
+      oldValue: null,
+      newValue: { name: 'Sam', email: 'sam@example.com' },
+    });
+    expect(rows[0]!.changedAt).toBeInstanceOf(Date);
+
+    // Paging: one at a time, offset by the previous page.
+    const first = await readSettingHistory(pool, OPERATOR, { limit: 1, offset: 0 });
+    const second = await readSettingHistory(pool, OPERATOR, { limit: 1, offset: 1 });
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(1);
+    expect(first[0]!.id).not.toBe(second[0]!.id);
+    await clearSetting(pool, OPERATOR, 'console', logger);
   });
 
   it('writes no history row for a value that did not change', async () => {

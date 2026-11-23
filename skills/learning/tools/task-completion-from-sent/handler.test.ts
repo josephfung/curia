@@ -219,7 +219,8 @@ describe('TaskCompletionFromSentHandler', () => {
     expect(ctx.__sendNotification).toHaveBeenCalledTimes(1);
     const payload = ctx.__sendNotification.mock.calls[0]![0];
     expect(payload.notificationType).toBe('learning_proposal');
-    expect(payload.ceoEmail).toBe('ceo@example.com');
+    // Principal-routed (#2710): the gateway resolves the address; the handler names none.
+    expect(payload).not.toHaveProperty('ceoEmail');
     expect(payload.body).toContain('### Task completion from sent mail');
     // Both the undo (auto-completed) and a confirm item's reply commands are inlined.
     // Replies are by item number (#2159 Phase 3); the persisted numbers match the ones sent.

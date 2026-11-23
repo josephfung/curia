@@ -8,9 +8,22 @@ export interface OutboundQueueRow {
   channel: string;
   recipient: string;
   payload: OutboundSendRequest;
+  /**
+   * The send was a system notification (an infrastructure alert), not correspondence (#2710).
+   * The flush path must not record the recipient as a contact for one: the operator is told,
+   * never talked with, and holds no tier or approval rights (ADR-068).
+   */
+  systemNotification: boolean;
   enqueuedAt: Date;
   expiresAt: Date;
 }
+
+/**
+ * The marker that carries `systemNotification` through the JSONB payload. It is stripped by
+ * `listPending`, so it never reaches a channel client, and it needs no column or migration.
+ * Namespaced so no send request can collide with it.
+ */
+const SYSTEM_NOTIFICATION_MARKER = '__systemNotification';
 
 export interface OutboundQueueRepoConfig {
   /** Max pending rows per channel. Default 100. */
@@ -68,7 +81,10 @@ export class OutboundQueueRepo {
    * (fail closed — never silently drop). Prunes expired rows first.
    * Uses a per-channel advisory lock so concurrent enqueues cannot breach the cap.
    */
-  async enqueue(request: OutboundSendRequest): Promise<{ id: string }> {
+  async enqueue(
+    request: OutboundSendRequest,
+    options: { systemNotification?: boolean } = {},
+  ): Promise<{ id: string }> {
     const channel = request.channel;
     const client = await this.pool.connect();
     try {
@@ -94,7 +110,16 @@ export class OutboundQueueRepo {
         `INSERT INTO outbound_queue (channel, recipient, payload, expires_at)
          VALUES ($1, $2, $3::jsonb, $4)
          RETURNING id`,
-        [channel, recipient, JSON.stringify(request), expiresAt],
+        [
+          channel,
+          recipient,
+          JSON.stringify(
+            options.systemNotification === true
+              ? { ...request, [SYSTEM_NOTIFICATION_MARKER]: true }
+              : request,
+          ),
+          expiresAt,
+        ],
       );
       const id = result.rows[0]?.id;
       if (!id) throw new Error('outbound_queue insert returned no id');
@@ -132,15 +157,21 @@ export class OutboundQueueRepo {
        ORDER BY enqueued_at ASC`,
       [channel],
     );
-    return result.rows.map((row) => ({
-      id: row.id,
-      channel: row.channel,
-      recipient: row.recipient,
-      // Runtime: payload was inserted as JSONB from OutboundSendRequest.
-      payload: row.payload as unknown as OutboundSendRequest,
-      enqueuedAt: row.enqueued_at,
-      expiresAt: row.expires_at,
-    }));
+    return result.rows.map((row) => {
+      // Runtime: payload was inserted as JSONB from OutboundSendRequest, possibly with the
+      // system-notification marker. Strip it so a channel client never sees it.
+      const { [SYSTEM_NOTIFICATION_MARKER]: marker, ...payload } =
+        row.payload as unknown as OutboundSendRequest & { [SYSTEM_NOTIFICATION_MARKER]?: boolean };
+      return {
+        id: row.id,
+        channel: row.channel,
+        recipient: row.recipient,
+        payload: payload as OutboundSendRequest,
+        systemNotification: marker === true,
+        enqueuedAt: row.enqueued_at,
+        expiresAt: row.expires_at,
+      };
+    });
   }
 
   /** Delete a set of row ids (used after a successful all-or-nothing flush). */

@@ -14,7 +14,7 @@ import type { TaskRepo } from '../../../../src/db/task-repo.js';
 import type { TaskRow } from '../../../../src/db/queries/tasks.js';
 import { findOpenOnboardingTask } from '../../../../src/onboarding/state.js';
 import { ONBOARDING_CREATED_BY } from '../../../../src/onboarding/constants.js';
-import { notifyOperator, OPERATOR_EVENTS, type OperatorEvent } from '../../../../src/onboarding/notify-operator.js';
+import type { OperatorEvent } from '../../../../src/onboarding/notify-operator.js';
 import {
   DECLINED_TAG,
   isOpenTask,
@@ -26,6 +26,13 @@ import {
 } from '../../../../src/onboarding/subtasks.js';
 
 const OPS = ['status', 'open_session', 'topic_done', 'greeting_sent', 'operator_notice'] as const;
+/**
+ * The only operator notice the model may raise (#2710): trouble only it can see. Unanswered
+ * greetings, expired invitations and blocked sign-ins are raised by the code that detects them,
+ * so letting the model raise those too would let a prompt-injected turn email the operator a
+ * real-looking admin ask — and duplicate the watcher's own notice.
+ */
+const TOOL_OPERATOR_EVENTS = ['web_search_failed'] as const;
 const OUTCOMES = ['done', 'declined'] as const;
 const NOTE_MAX = 2000;
 const HOMEWORK_TAG = 'onboarding:homework';
@@ -243,16 +250,24 @@ async function greetingSent({ svc }: Deps): Promise<ToolResult> {
   return { success: true, data: { recorded: true } };
 }
 
-async function operatorNotice({ repo, parent, ctx }: Deps, input: Record<string, unknown>): Promise<ToolResult> {
+async function operatorNotice({ svc, parent }: Deps, input: Record<string, unknown>): Promise<ToolResult> {
   const event = input.event;
-  if (typeof event !== 'string' || !(OPERATOR_EVENTS as readonly string[]).includes(event)) {
-    return fail(`operator_notice requires event: one of ${OPERATOR_EVENTS.join(', ')}`);
+  if (typeof event !== 'string' || !(TOOL_OPERATOR_EVENTS as readonly string[]).includes(event)) {
+    return fail(`operator_notice requires event: one of ${TOOL_OPERATOR_EVENTS.join(', ')}`);
   }
   const details = input.details;
   if (details !== undefined && (typeof details !== 'object' || details === null || Array.isArray(details))) {
     return fail('details must be an object when given');
   }
-  const recorded = await notifyOperator({ taskRepo: repo, logger: ctx.log }, parent.id, event as OperatorEvent, details as Record<string, unknown> | undefined);
-  if (!recorded) return fail('The operator notice could not be recorded on the onboarding task. Try again shortly.');
+  // Once per run, like every other operator notice: the service shares the watcher's dedupe, so
+  // a repeated call records nothing and emails nothing. Model-supplied details go no further
+  // than the task note, the log and the audit row — the email carries the event only (#2710).
+  const result = await svc.raiseOperatorNotice(parent.id, event as OperatorEvent, {
+    details: details as Record<string, unknown> | undefined,
+  });
+  // Already raised this run is success, not a failure: it is the dedupe working, and telling the
+  // model to retry would only make it loop. Nothing is emailed a second time (#2710).
+  if (result.alreadyRaised) return { success: true, data: { alreadyRaised: true } };
+  if (!result.recorded) return fail('The operator notice could not be recorded on the onboarding task. Try again shortly.');
   return { success: true, data: { recorded: true } };
 }
