@@ -63,7 +63,7 @@
     "@fastify/cookie": "^11.1.5",
     "@fastify/cors": "^11.3.1",
     "@fastify/rate-limit": "^11.2.2",
-    "@fastify/static": "^10.1.8",
+    "@fastify/static": "^10.1.10",
     "@ghostery/adblocker-playwright": "^2.20.3",
     "@huggingface/tokenizers": "^0.2.0",
     "@livekit/rtc-node": "^1.2.1",
