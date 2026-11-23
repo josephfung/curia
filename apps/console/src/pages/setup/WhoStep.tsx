@@ -134,7 +134,7 @@ export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Prop
         <>
           <div className="setup-section">
             <span className="setup-section-label">About you</span>
-            <span className="setup-hint">Curia treats you as its operator: the person who looks after setup and admin. Later, it will bring admin and support questions to you rather than to the person it works for.</span>
+            <span className="setup-hint">Curia treats you as its operator: the person who looks after setup and admin. It will email you its technical notices, such as outages, sign-in problems and failing jobs. It won’t act on replies.</span>
           </div>
           <div className="setup-fields">
             <div className="setup-row2">

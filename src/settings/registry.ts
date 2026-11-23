@@ -71,6 +71,15 @@ const MAX_OPERATOR_NAME = 200;
 // Shape check only: the Setup route already validates richer input, and this also has to
 // accept the values migration 132 copied from setup_state.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// RFC 5321's 254-character cap, checked before the pattern runs: the pattern backtracks
+// polynomially on a long domain, and the Setup route applies the same cap (#2710).
+const MAX_EMAIL = 254;
+
+function isEmail(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  return trimmed.length <= MAX_EMAIL && EMAIL_RE.test(trimmed);
+}
 
 function ok<T>(value: T): SettingParse<T> {
   return { ok: true, value };
@@ -95,7 +104,7 @@ function parseOperator(raw: unknown): SettingParse<OperatorSetting> {
   const trimmed = name.replace(/[\r\n\t\v\f]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
   if (trimmed === '') return fail('name must be a non-empty string');
   if (trimmed.length > MAX_OPERATOR_NAME) return fail(`name must be ${MAX_OPERATOR_NAME} characters or fewer`);
-  if (typeof email !== 'string' || !EMAIL_RE.test(email.trim())) return fail('email must be an email address');
+  if (!isEmail(email)) return fail('email must be an email address');
   return ok({ name: trimmed, email: email.trim().toLowerCase() });
 }
 
@@ -107,7 +116,7 @@ function parseConfirmation(raw: unknown): SettingParse<OperatorConfirmation> {
   const extra = Object.keys(input).filter((k) => k !== 'email' && k !== 'attemptedAt' && k !== 'sentAt');
   if (extra.length > 0) return fail(`unknown field(s): ${extra.join(', ')}`);
   const email = input['email'];
-  if (typeof email !== 'string' || !EMAIL_RE.test(email.trim())) return fail('email must be an email address');
+  if (!isEmail(email)) return fail('email must be an email address');
   const attemptedAt = input['attemptedAt'];
   if (typeof attemptedAt !== 'string' || Number.isNaN(Date.parse(attemptedAt))) {
     return fail('attemptedAt must be an ISO timestamp');

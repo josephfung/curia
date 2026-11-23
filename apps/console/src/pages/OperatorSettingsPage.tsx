@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../api';
 import { SettingsLayout } from './SettingsPage';
 import { ConfigHistory, errorMessage, timeAgo, type ConfigHistoryEntry } from '../components/settings/ConfigHistory';
@@ -49,11 +49,14 @@ function confirmationLine(confirmation: Confirmation | null): string | null {
   }
 }
 
+// The server's rule (src/settings/registry.ts): the same pattern, at most 254 characters.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function OperatorSection() {
   const [loaded, setLoaded] = useState<Operator | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // The fields stay disabled until the first load lands, so nothing typed is overwritten by it.
+  const [ready, setReady] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [saving, setSaving] = useState(false);
@@ -64,10 +67,18 @@ function OperatorSection() {
   const [history, setHistory] = useState<ConfigHistoryEntry[]>([]);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
+  // Latest-request guards: a response that is not for the newest request is dropped, so a slow
+  // history fetch cannot replace a newer list, and the mount-time load cannot overwrite a save or
+  // an edit made while it was in flight.
+  const historySeq = useRef(0);
+  const loadSeq = useRef(0);
+
   const loadHistory = useCallback(async () => {
+    const seq = ++historySeq.current;
     setHistoryError(null);
     try {
       const res = await apiFetch('/api/operator/history?limit=10&offset=0');
+      if (seq !== historySeq.current) return;
       if (!res.ok) throw new Error(await errorMessage(res));
       const data = await res.json() as {
         history: Array<{
@@ -78,6 +89,7 @@ function OperatorSection() {
           changedAt: string;
         }>;
       };
+      if (seq !== historySeq.current) return;
       setHistory(data.history.map((h) => ({
         id: h.id,
         changedBy: h.changedBy,
@@ -85,21 +97,27 @@ function OperatorSection() {
         summary: `${describe(h.previous)} → ${describe(h.current)}`,
       })));
     } catch (err) {
+      if (seq !== historySeq.current) return;
       setHistoryError(err instanceof Error ? err.message : 'Failed to load change history');
     }
   }, []);
 
   useEffect(() => {
     async function load() {
+      const seq = ++loadSeq.current;
       try {
         const res = await apiFetch('/api/operator');
         if (!res.ok) throw new Error(await errorMessage(res));
         const data = await res.json() as { operator: Operator | null; confirmation?: Confirmation };
+        // A save or clear since this load started has the newer value; keep it.
+        if (seq !== loadSeq.current) return;
         setLoaded(data.operator);
         setConfirmation(data.confirmation ?? null);
         setName(data.operator?.name ?? '');
         setEmail(data.operator?.email ?? '');
+        setReady(true);
       } catch (err) {
+        if (seq !== loadSeq.current) return;
         setLoadError(err instanceof Error ? err.message : 'Failed to load the operator setting');
       }
     }
@@ -116,12 +134,13 @@ function OperatorSection() {
     ? "Add the operator's name."
     : trimmedEmail === ''
       ? "Add the operator's email."
-      : !EMAIL_RE.test(trimmedEmail)
+      : trimmedEmail.length > 254 || !EMAIL_RE.test(trimmedEmail)
         ? "That doesn't look like an email address."
         : null;
 
   async function handleSave() {
-    if (!changed || problem) return;
+    if (!ready || !changed || problem) return;
+    loadSeq.current++;
     setSaving(true);
     setOutcome(null);
     try {
@@ -146,6 +165,7 @@ function OperatorSection() {
   }
 
   async function handleClear() {
+    loadSeq.current++;
     setSaving(true);
     setOutcome(null);
     try {
@@ -208,6 +228,7 @@ function OperatorSection() {
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
+                  disabled={!ready}
                   autoComplete="off"
                   placeholder="e.g. Sam Rivera"
                 />
@@ -217,6 +238,7 @@ function OperatorSection() {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
+                  disabled={!ready}
                   autoComplete="off"
                   placeholder="sam@example.com"
                 />
@@ -238,7 +260,7 @@ function OperatorSection() {
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={!changed || saving || problem !== null}
+                disabled={!ready || !changed || saving || problem !== null}
                 onClick={() => void handleSave()}
                 title={problem ?? undefined}
               >

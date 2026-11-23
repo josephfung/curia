@@ -1536,16 +1536,17 @@ describe('EmailAdapter — undelivered notification reporting', () => {
     (mocks.outboundGateway.send as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce({ success: false, blockedReason: 'nylas 500' });
 
-    await handleNotification(createOutboundNotification({
+    const notice = createOutboundNotification({
       notificationType: 'inbox_triage_paused',
       recipient: CEO_EMAIL,
       audience: 'principal',
       subject: 'Paused',
       body: 'Body',
-    }));
+    });
+    await handleNotification(notice);
 
     expect(mocks.outboundGateway.reportNotificationUndelivered)
-      .toHaveBeenCalledWith('inbox_triage_paused', 'delivery_failed', { recipient: CEO_EMAIL });
+      .toHaveBeenCalledWith('inbox_triage_paused', 'delivery_failed', { recipient: CEO_EMAIL, notificationEventId: notice.id });
     await adapter.stop();
   });
 
@@ -1559,17 +1560,18 @@ describe('EmailAdapter — undelivered notification reporting', () => {
       blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL,
     });
 
-    await handleNotification(createOutboundNotification({
+    const notice = createOutboundNotification({
       notificationType: 'schedule_suspended',
       recipient: 'operator@example.com',
       audience: 'operator',
       subject: 'Suspended',
       body: 'Body',
-    }));
+    });
+    await handleNotification(notice);
 
     // A refusal is the rule working (#2474), recorded as such so it is not chased as a fault.
     expect(mocks.outboundGateway.reportNotificationUndelivered)
-      .toHaveBeenCalledWith('schedule_suspended', 'delivery_refused', { recipient: 'operator@example.com' });
+      .toHaveBeenCalledWith('schedule_suspended', 'delivery_refused', { recipient: 'operator@example.com', notificationEventId: notice.id });
     await adapter.stop();
   });
 
@@ -1583,16 +1585,17 @@ describe('EmailAdapter — undelivered notification reporting', () => {
       blockedReason: MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL,
     });
 
-    await handleNotification(createOutboundNotification({
+    const notice = createOutboundNotification({
       notificationType: 'schedule_suspended',
       recipient: 'operator@example.com',
       audience: 'operator',
       subject: 'Suspended',
       body: 'Body',
-    }));
+    });
+    await handleNotification(notice);
 
     expect(mocks.outboundGateway.reportNotificationUndelivered)
-      .toHaveBeenCalledWith('schedule_suspended', 'delivery_failed', { recipient: 'operator@example.com' });
+      .toHaveBeenCalledWith('schedule_suspended', 'delivery_failed', { recipient: 'operator@example.com', notificationEventId: notice.id });
     await adapter.stop();
   });
 
@@ -1602,13 +1605,14 @@ describe('EmailAdapter — undelivered notification reporting', () => {
     const adapter = makeAdapter(mocks);
     await adapter.start();
 
-    await handleNotification(createOutboundNotification({
+    const notice = createOutboundNotification({
       notificationType: 'inbox_triage_paused',
       recipient: CEO_EMAIL,
       audience: 'principal',
       subject: 'Paused',
       body: 'Body',
-    }));
+    });
+    await handleNotification(notice);
 
     expect(mocks.outboundGateway.reportNotificationUndelivered).not.toHaveBeenCalled();
     await adapter.stop();

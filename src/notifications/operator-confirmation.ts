@@ -58,9 +58,10 @@ export async function readOperatorConfirmationStatus(
 }
 
 /**
- * The confirmation could not be delivered after all (#2710). `sendNotification` reports a publish,
- * and the send happens later in the email adapter, so a refused or failed delivery arrives here
- * as a second event. Clearing `sentAt` puts the notice back to `failed`, which is what the console
+ * The confirmation could not be delivered after all (#2710). A refusal the email adapter reports
+ * while the notice is still being published already makes `sendNotification` return false, so
+ * this is the backstop for a report that arrives after it returned, when `sentAt` is recorded.
+ * Clearing `sentAt` puts the notice back to `failed`, which is what the console
  * shows and what the next boot or Start retries — otherwise a mistyped address reads as confirmed
  * on exactly the installs where notices never arrive.
  *

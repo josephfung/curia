@@ -1334,6 +1334,13 @@ export class OutboundGateway {
   private readonly sendLedger?: OutboundGatewayConfig['sendLedger'];
   private readonly notificationRecipients?: NotificationRecipientDeps;
   private readonly onNotificationUndelivered?: OutboundGatewayConfig['onNotificationUndelivered'];
+  /**
+   * Notification events being published right now, mapped to whether an adapter reported them
+   * undelivered during the publish (#2710). `bus.publish` awaits its subscribers, so the email
+   * adapter's refusal or failure usually lands before `sendNotification` returns; recording it
+   * here lets that call return false instead of a "published" the caller would record as sent.
+   */
+  private readonly notificationsInPublish = new Map<string, boolean>();
   private flushInFlight = new Set<string>();
   /** Backoff timers for HTTP channels that queued on a transient failure (#1380). */
   private flushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -2835,8 +2842,10 @@ export class OutboundGateway {
    * would break the no-duplication rule.
    *
    * Returns whether the notice was published for delivery. False means it reached no one:
-   * either there was no address (audited), or the bus refused the publish (logged). Neither
-   * throws — a notifier must not fail the operation it is reporting on.
+   * there was no address (audited), the bus refused the publish (logged), or the adapter that
+   * delivers it refused or failed the send during the publish (audited by that report). True
+   * still means "queued", not "delivered": a failure reported after the publish returned reaches
+   * callers only through `onNotificationUndelivered`. None of these throws — a notifier must not fail the operation it is reporting on.
    */
   async sendNotification(
     request: OutboundNotificationRequest,
@@ -2880,12 +2889,13 @@ export class OutboundGateway {
       return false;
     }
 
+    const event = createOutboundNotification({ ...request, recipient, audience, parentEventId });
+    this.notificationsInPublish.set(event.id, false);
     try {
-      await this.bus.publish(
-        'dispatch',
-        createOutboundNotification({ ...request, recipient, audience, parentEventId }),
-      );
-      return true;
+      await this.bus.publish('dispatch', event);
+      // An adapter that refused or failed the send during the publish reported it already (and
+      // audited it): the notice reached no one, so the caller must not record it as sent.
+      return this.notificationsInPublish.get(event.id) !== true;
     } catch (err) {
       // Non-fatal — the original block/hold is already recorded. Log so the anomaly
       // is visible in alerting but do not throw; the caller's primary operation (block
@@ -2898,6 +2908,8 @@ export class OutboundGateway {
       // operator reads. The bus may be the broken part; that attempt failing is logged as well.
       await this.auditUndeliveredNotification(request.notificationType, 'publish_failed', parentEventId);
       return false;
+    } finally {
+      this.notificationsInPublish.delete(event.id);
     }
   }
 
@@ -2964,9 +2976,17 @@ export class OutboundGateway {
        * not invalidate a newer record (#2710).
        */
       recipient?: string;
+      /**
+       * The `outbound.notification` event's id. While `sendNotification` is still publishing that
+       * event, the report makes it return false, so its caller records the miss directly.
+       */
+      notificationEventId?: string;
       parentEventId?: string;
     } = {},
   ): Promise<void> {
+    if (options.notificationEventId && this.notificationsInPublish.has(options.notificationEventId)) {
+      this.notificationsInPublish.set(options.notificationEventId, true);
+    }
     this.log.error(
       { notificationType, reason, audience: notificationAudience(notificationType) },
       'outbound-gateway: system notification was not delivered — auditing the miss',

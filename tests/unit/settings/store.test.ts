@@ -104,6 +104,16 @@ describe('settings registry', () => {
     expect(SETTINGS.operator.parse({ name: '\n\t ', email: 'sam@example.com' }).ok).toBe(false);
   });
 
+  it('caps the email at 254 characters, as the Setup route does, in both email-bearing settings', () => {
+    const at254 = `${'a'.repeat(64)}@${'b'.repeat(185)}.com`;
+    const over = `${'a'.repeat(64)}@${'b'.repeat(186)}.com`;
+    expect(at254).toHaveLength(254);
+    expect(SETTINGS.operator.parse({ name: 'Sam', email: at254 }).ok).toBe(true);
+    expect(SETTINGS.operator.parse({ name: 'Sam', email: over }).ok).toBe(false);
+    const at = '2026-11-22T12:00:00.000Z';
+    expect(SETTINGS.operator_confirmation.parse({ email: over, attemptedAt: at, sentAt: null }).ok).toBe(false);
+  });
+
   it('accepts a confirmation record and rejects a malformed one', () => {
     const at = '2026-11-22T12:00:00.000Z';
     expect(SETTINGS.operator_confirmation.parse({ email: 'Sam@Example.com', attemptedAt: at, sentAt: at }))

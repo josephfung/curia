@@ -50,6 +50,7 @@ The published payload carries the resolved `recipient` and the `audience` that c
 | `greeting_unanswered`, `invitation_expired`, `web_search_failed`, `mailbox_signin_blocked` (onboarding; new types) | operator |
 | `operator_configured` (new: the operator's own confirmation notice) | operator |
 | `inbox_triage_paused`, `contact_rate_limited`, `approval_requested`, `learning_proposal` | principal |
+| `blocked_content`, `approval_expired`, `principal_note` (no longer emitted; kept so replayed payloads resolve) | principal |
 
 A principal mailbox outage raises both types: only the principal can sign in to their own
 mailbox, so the reconnect link must never reach anyone else. The operator copy is raised only
@@ -134,10 +135,12 @@ Setup step, and a fresh install has no email account until it restarts. So the n
   onboarding (`POST /api/onboarding/start`, not the Setup page opening, which is before any email
   account exists), and immediately from the console's own Operator page — and retried on the next
   attempt while it is owed.
-- **A publish is not a delivery.** `sendNotification` reports only that the notice was published;
-  the send happens later, in the email adapter. So a refused or failed delivery is reported back
-  through the gateway's `onNotificationUndelivered` hook, which puts the confirmation back to
-  `failed` — otherwise a mistyped address would read as confirmed for good, on exactly the
+- **A publish is not a delivery.** The email adapter sends the notice while the bus delivers the
+  `outbound.notification` event, and it reports a refused or failed send to the gateway. A report
+  that arrives while `sendNotification` is still publishing that event makes it return false, so
+  the caller records the miss directly (the confirmation stays `failed`, an onboarding notice is
+  recorded as not emailed). A report that arrives after it returned goes through the gateway's
+  `onNotificationUndelivered` hook, which puts the confirmation back to `failed` — otherwise a mistyped address would read as confirmed for good, on exactly the
   installs where operator notices never arrive. The hook carries the address the notice went to,
   and the record is only cleared when it matches: a late failure for the previous operator address
   must not invalidate a newer confirmation that worked. The console says "queued" until a real

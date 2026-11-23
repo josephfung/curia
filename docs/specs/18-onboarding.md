@@ -629,8 +629,9 @@ attempts one short notice to it, recorded in the `operator_confirmation` setting
 (`{ email, attemptedAt, sentAt }`). Step 1 of a fresh install cannot send it — there is no email
 account until the restart — so the notice is *owed*: boot (once the email adapters start),
 `POST /api/onboarding/start` and the console's Operator page retry it while `sentAt` is null or the
-address has changed. A delivery the adapter later refuses or fails puts it back to `failed` through
-the gateway's `onNotificationUndelivered` hook, so "sent" never outlives a notice that never
+address has changed. A delivery the adapter refuses or fails leaves it `failed`: `sendNotification`
+returns false when the refusal arrives during its publish, and the gateway's
+`onNotificationUndelivered` hook clears `sentAt` when it arrives later, so "sent" never outlives a notice that never
 arrived. The console shows sent, pending or failed with the time, and a Setup save never blocks
 on it, nor comes at the cost of the principal and profile saves that follow it.
 
