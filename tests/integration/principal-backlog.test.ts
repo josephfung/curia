@@ -36,7 +36,6 @@ describeIf('principal backlog counts (prompt trim PR 7)', () => {
   let pool: pg.Pool;
   let tasks: TaskRepo;
   let actions: ActionLogRepo;
-  let kg: KnowledgeGraphStore;
   const nodeIds: string[] = [];
   const taskId = `principal-backlog-test-${randomUUID()}`;
   // The suite writes a pending email-send approval and principal-owned tasks, which a real
@@ -113,7 +112,6 @@ describeIf('principal backlog counts (prompt trim PR 7)', () => {
     dbVerified = true;
     tasks = new TaskRepo(pool, noopBus, logger as never, 'UTC');
     actions = new ActionLogRepo(pool, logger as never);
-    kg = KnowledgeGraphStore.createWithPostgres(pool, EmbeddingService.createForTesting(), logger as never);
   });
 
   afterAll(async () => {
