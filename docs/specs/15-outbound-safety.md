@@ -75,19 +75,12 @@ body; they never name a recipient. `NOTIFICATION_AUDIENCES`
 
 The table is a `Record` over the notification-type union, so a new type with no chosen audience
 fails typecheck. Publications carry the resolved `recipient` and the `audience` that chose it;
-`ceoEmail` is gone. A notice that reaches nobody — no address, no adapter subscribing yet, a
-refused publish, or a send the channel refused or failed — is audited as
-`outbound.notification_undelivered` (type, audience and reason only) and never redirected to the
-other person: a fallback would break the no-duplication rule. It is logged at error level, except
-`delivery_unavailable` (no adapter subscribed yet, as during boot), which is logged at warn level
-and still audited. Deliverability is checked once, in the gateway: an adapter that delivers
-notifications has subscribed, and email is outbound-ready. Email is a queueable channel, and a
-notice published while it is not ready would be queued and reported as a success. The send itself happens in the
-email adapter while the gateway publishes the notice, and the adapter reports a refused or failed
-send back, so `sendNotification` returns false for it. A send the channel queued after a
-transient failure keeps the notice's type on the queue row; if it expires unsent (a flush that
-keeps failing leaves it queued until then), the prune reports it and the gateway audits it as
-`delivery_failed`. A system notice also creates no contact: the recipient is never
+`ceoEmail` is gone. A notice the gateway cannot publish — no address, no adapter subscribing yet,
+or a refused publish — is audited as `outbound.notification_undelivered` (type, audience and
+reason only) and never redirected to the other person: a fallback would break the no-duplication
+rule. It is logged at error level, except `delivery_unavailable` (no adapter subscribed yet, as
+during boot), which is logged at warn level and still audited. A send the email adapter then fails
+is logged at error level there; nothing tracks delivery beyond that. A system notice also creates no contact: the recipient is never
 promoted, on the direct path or the queue flush, because the operator has no tier or role
 (ADR-068).
 

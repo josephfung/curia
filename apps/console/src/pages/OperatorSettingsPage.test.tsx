@@ -66,10 +66,10 @@ async function type(input: HTMLInputElement, value: string) {
 beforeEach(() => {
   mocks.calls.length = 0;
   mocks.respond = (path, method) => {
-    if (path === '/api/operator' && method === 'GET') return json({ operator: SAM, confirmation: { state: 'sent', email: SAM.email } });
+    if (path === '/api/operator' && method === 'GET') return json({ operator: SAM });
     if (path.startsWith('/api/operator/history')) return json({ history: [] });
     if (path === '/api/operator' && method === 'PUT') {
-      return json({ operator: { name: 'Alex Kim', email: 'alex@example.com' }, confirmation: { state: 'sent', email: 'alex@example.com' } });
+      return json({ operator: { name: 'Alex Kim', email: 'alex@example.com' } });
     }
     return json({});
   };

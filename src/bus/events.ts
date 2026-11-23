@@ -454,7 +454,6 @@ export type NotificationAudience = 'operator' | 'principal';
 //                           principal mailbox sign-in (#2360; carried by the onboarding notice, #2710)
 //   - 'greeting_unanswered', 'invitation_expired', 'web_search_failed': operator alerts raised while the
 //                           onboarding program runs (#2360; carried by the onboarding notice, #2710)
-//   - 'operator_configured': operator alert confirming the operator's own address was just saved (#2710)
 //   - 'principal_note':     no longer emitted (#2159: notes go to the digest queue); kept for historical audit rows
 export type NotificationType =
   | 'blocked_content'         // no longer emitted (#2159); kept for historical audit rows
@@ -473,7 +472,6 @@ export type NotificationType =
   | 'invitation_expired'      // onboarding: the app invitation link expired unused (#2360)
   | 'web_search_failed'       // onboarding: web search failed during the homework (#2360)
   | 'mailbox_signin_blocked'  // onboarding: a Workspace admin policy blocked the sign-in (#2360)
-  | 'operator_configured'     // the operator's own address was saved; a delivery smoke test (#2710)
   | 'principal_note';       // no longer emitted (#2159); kept for historical audit rows
 
 // OutboundNotificationPayload — published by the dispatch layer (via OutboundGateway.sendNotification)
@@ -519,11 +517,8 @@ export interface OutboundNotificationUndeliveredPayload {
    *   - `publish_failed`: the bus refused the publish.
    *   - `delivery_unavailable`: no email adapter that delivers notifications is subscribed yet,
    *     so a publish would reach no one.
-   *   - `delivery_refused`: the channel refused the send — the sending account is (or may be)
-   *     the principal's own mailbox, which only principal-addressed notices may use (#2474).
-   *   - `delivery_failed`: the provider send failed, or threw.
    */
-  reason: 'no_recipient' | 'publish_failed' | 'delivery_unavailable' | 'delivery_refused' | 'delivery_failed';
+  reason: 'no_recipient' | 'publish_failed' | 'delivery_unavailable';
 }
 
 interface ToolInvokePayload {

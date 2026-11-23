@@ -48,7 +48,6 @@ The published payload carries the resolved `recipient` and the `audience` that c
 | `mailbox_outage` (new: a principal mailbox outage, without the reconnect link) | operator |
 | `principal_mailbox_outage` (with the reconnect link) | principal |
 | `greeting_unanswered`, `invitation_expired`, `web_search_failed`, `mailbox_signin_blocked` (onboarding; new types) | operator |
-| `operator_configured` (new: the operator's own confirmation notice) | operator |
 | `inbox_triage_paused`, `contact_rate_limited`, `approval_requested`, `learning_proposal` | principal |
 | `blocked_content`, `approval_expired`, `principal_note` (no longer emitted; kept so replayed payloads resolve) | principal |
 
@@ -101,8 +100,8 @@ This is enforced by the review checklist and by tests, not by types: a typed ope
 considered and rejected as premature while the user and role model may still change.
 
 **Onboarding.** `notifyOperator` / `notifyOperatorOnce` (`src/onboarding/notify-operator.ts`)
-become callers of `sendNotification`, keeping the once-per-run dedupe, the progress note on the
-onboarding task and the `onboarding.operator_notice` audit callback. The four onboarding events
+become callers of `sendNotification`, keeping the once-per-run dedupe and the progress note on
+the onboarding task. The four onboarding events
 are notification types in the one table. The `setupFor=self` rule in
 `skills/onboarding/SKILL.md` still holds, since the principal is then the operator.
 
@@ -115,64 +114,25 @@ are notification types in the one table. The `setupFor=self` rule in
   turn email a real-looking admin ask ("mark the app Trusted"), and duplicate the watcher's own
   notice. The manifest and `SKILL.md` say so. A repeated call answers `alreadyRaised: true` and
   succeeds, so the model has no reason to loop.
-- **The state records what was raised, and whether it arrived.** `operatorNotified` is the
-  once-per-run guard; `operatorNoticeFailed` names events whose notice reached nobody, so the run
-  state does not claim the operator heard it. `notifyOperator` returns `{ recorded, emailed }`.
+- **The state records what was raised.** `operatorNotified` is the once-per-run guard. A notice
+  whose task note could not be written gives its event back, so a retry raises it.
 
 **Changing the operator.** The console's System → Operator page views, changes or clears the
 operator after Setup, with an explicit Save (the console's no-save-on-blur rule) and the change
 history from `settings_history` (ADR-067).
 
-**The confirmation notice is owed, not fired and forgotten.** Saving an operator address sends
-one short notice to it, because nothing else would reveal a typo: a wrong address swallows every
-operator notice silently, and there is deliberately no fallback to the principal to notice it for
-us. But the address is usually saved before Curia can send anything — "Who it's for" is the first
-Setup step, and a fresh install has no email account until it restarts. So the notice is owed:
+**No confirmation notice, and no delivery tracking.** Saving an operator sends nothing to them,
+and nothing records whether a notice arrived. These are email notifications: `sendNotification`
+reports whether a notice was published, a failed send is logged at error level by the email
+adapter, and that is all. A confirmation email with a stored "sent / pending / failed" status, retries
+at boot and Start, and outcome tracking through the outbound queue was built and then removed in
+review as far more machinery than a notification warrants. A mistyped operator address goes
+unnoticed until someone looks, as it would for any mail setting.
 
-- A second settings key, `operator_confirmation: { email, attemptedAt, sentAt }`, records the
-  last attempt for an address. `sentAt: null` means it reached nobody.
-- It is attempted wherever delivery is possible — at boot once the email adapters start, on Start
-  onboarding (`POST /api/onboarding/start`, not the Setup page opening, which is before any email
-  account exists), and immediately from the console's own Operator page — and retried on the next
-  attempt while it is owed.
-- **A publish is not a delivery.** The email adapter sends the notice while the bus delivers the
-  `outbound.notification` event, and it reports a refused or failed send to the gateway. A report
-  that arrives while `sendNotification` is still publishing that event makes it return false, so
-  the caller records the miss directly (the confirmation stays `failed`, an onboarding notice is
-  recorded as not emailed). A report that arrives after it returned goes through the gateway's
-  `onNotificationUndelivered` hook, which puts the confirmation back to `failed` — otherwise a mistyped address would read as confirmed for good, on exactly the
-  installs where operator notices never arrive. The hook carries the address the notice went to,
-  and the record is only cleared when it matches: a late failure for the previous operator address
-  must not invalidate a newer confirmation that worked. A send the adapter queues after a
-  transient provider failure is not sent either: `publishNotification` answers `queued`, and the
-  confirmation stays `failed` and owed, because a flush that fails until the row expires would
-  leave nothing to correct a `sent`. (`sendNotification` still counts `queued` as published, so
-  notifiers that retry on false do not send it twice.) The console says "queued" until a real
-  delivery receipt exists.
-- The console shows `sent`, `pending` (owed, nothing could send it yet) or `failed`, with the
-  time. Setup says "we'll email … once Curia's own email is set up" and never frames an
-  undeliverable notice as a mistake in the address, because at step 1 nothing has gone wrong.
-- A save never blocks on the notice, and never comes at the cost of the rest of the step: the
-  principal and their profile are written whatever happens to it.
-- An unchanged save sends nothing, so a console session cannot email an arbitrary address on
-  every press.
-
-**A check that must not lie about delivery.** `sendNotification` reports whether the notice was
-*published*, not delivered, so:
-- Deliverability is checked once, in the gateway (`canDeliver`), instead of at each call site: a
-  notice published before an email adapter subscribed would otherwise be reported as sent.
-- The email adapter — the only place the real outcome is known — audits a missed delivery as
-  `outbound.notification_undelivered` with `delivery_failed` or `delivery_refused`. A verified
-  principal-account refusal is `delivery_refused` (a rule working); an account it could not verify
-  is `delivery_failed`, because that is a check that failed, not a verdict.
-- Callers that do work before publishing ask `gateway.canDeliverNotifications()` first, so a
-  notice that cannot go anywhere does not burn a single-use sign-in link or write an audit row on
-  every retry. The in-gateway check stays as the backstop.
-- A refusal is not exempted. A send through an account bound to the principal's own mailbox is
-  refused unless every recipient is the principal (#2474, ADR-062); an operator notice is not
-  such a send, and must not put Curia's admin mail in the principal's Sent folder. It is audited
-  as `delivery_refused` instead of failing silently.
-- The console says "queued" rather than "delivered" wherever only a publish is known.
+**Deliverability is checked once, in the gateway.** A notice published before an email adapter
+has subscribed reaches no one, so `sendNotification` checks `canDeliver` first and audits the miss
+as `delivery_unavailable`. Callers that do work before publishing (the outage notifier mints a
+single-use sign-in link) ask `gateway.canDeliverNotifications()` first.
 
 ## Consequences
 
@@ -184,11 +144,8 @@ Setup step, and a fresh install has no email account until it restarts. So the n
 - **An install with no operator keeps today's behaviour.** The fallback is the principal, not a
   new failure mode, and the tests for the pre-operator world pass with only the recipient argument
   removed.
-- **A mistyped address that mail refuses shows at save time.** The confirmation notice is the
-  only signal, so it is attempted on every operator save and the console shows the result: a send
-  that is refused or fails reads as `failed`, and the setting still saves. A mistyped address that
-  accepts mail cannot be detected — it is a delivery attempt, not a check that the right person
-  got it (see "The confirmation is a smoke test" below).
+- **A mistyped operator address is not caught.** Nothing confirms the address. The console's
+  Operator page shows it, and notices that fail to send are logged at error level.
 - **Two people can be told about one outage.** A principal mailbox outage raises two notices, by
   design: each type carries only what its audience can act on, and the link-bearing copy is
   principal-only. With no operator set the second notice is suppressed, so nothing duplicates.
@@ -201,10 +158,6 @@ Setup step, and a fresh install has no email account until it restarts. So the n
 - **A notice no longer records its recipient at all.** The guard is at the gateway, so it holds
   for every system notice, queued or immediate; the console's Operator page remains the only
   place the operator is defined, and it grants nothing.
-- **The confirmation is a smoke test, not a delivery receipt.** It proves the address was
-  accepted by the sending pipeline. A notice that fails is visible in `operator_confirmation`
-  and in the audit row, and retried — but a mailbox that silently drops mail still fails
-  silently, as it does for any sender.
 - **The operator cache is refreshed on every write.** `createOperatorEmailLookup` answers with
   the last value it read or was told, so `database_unavailable` — raised while that read is
   failing — still reaches the current operator rather than a former one. A read that fails

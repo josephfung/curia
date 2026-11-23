@@ -13,9 +13,8 @@ import { type OnboardingState, type OnboardingStateDeps, updateOnboardingState }
  * `stillApplies`, when given, is checked on the latest state inside that update: a caller that
  * decided on an earlier read (the watcher) sends nothing if that decision no longer holds.
  * The state is written first: a failed write skips the notice (logged). A notice whose task note
- * could not be written gives the event back, so it can be raised again; one that was recorded but
- * not emailed keeps it, so a send failure never causes a duplicate. No state, or state for another task: nothing is
- * sent. Returns whether a notice was recorded. Never throws.
+ * could not be written gives the event back, so it can be raised again. No state, or state for
+ * another task: nothing is sent. Returns whether a notice was recorded. Never throws.
  */
 export async function notifyOperatorOnce(
   deps: NotifyOperatorDeps & Pick<OnboardingStateDeps, 'configStore' | 'stateLock'>,
@@ -46,7 +45,6 @@ export async function notifyOperatorOnce(
     await releaseEventClaim(deps, taskId, event);
     return false;
   }
-  await recordNoticeOutcome(deps, taskId, event, result.emailed);
   return true;
 }
 
@@ -63,35 +61,5 @@ async function releaseEventClaim(
     });
   } catch (err) {
     deps.logger.error({ err, taskId, event }, 'onboarding: could not release an unrecorded operator notice; it will not be raised again this run');
-  }
-}
-
-/**
- * Record whether the notice was actually emailed, next to the "raised" record (#2710). The run
- * state must not claim the operator heard it when the send failed; the send itself is not
- * retried within the run (the notification path would repeat on the next run, and a retry here
- * would race the same bus). Best-effort: a state write that fails is logged, and the notice is
- * still raised.
- */
-async function recordNoticeOutcome(
-  deps: Pick<NotifyOperatorDeps, 'logger'> & Pick<OnboardingStateDeps, 'configStore' | 'stateLock'>,
-  taskId: string,
-  event: OperatorEvent,
-  delivered: boolean,
-): Promise<void> {
-  try {
-    await updateOnboardingState(deps, (state) => {
-      if (state.taskId !== taskId) return null;
-      const failed = new Set(state.operatorNoticeFailed ?? []);
-      if (delivered) {
-        if (!failed.delete(event)) return null;
-      } else {
-        if (failed.has(event)) return null;
-        failed.add(event);
-      }
-      return { ...state, operatorNoticeFailed: [...failed] };
-    });
-  } catch (err) {
-    deps.logger.warn({ err, taskId, event, delivered }, 'onboarding: could not record whether the operator notice was emailed');
   }
 }

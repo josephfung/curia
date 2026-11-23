@@ -51,32 +51,14 @@ export async function fetchPrincipal(): Promise<PrincipalInfo> {
   return json<PrincipalInfo>(await apiFetch('/api/setup/principal'));
 }
 
-/** Where the operator's confirmation notice stands (#2710). `pending` means Curia owes one and
- *  will send it once it can email; `failed` means an attempt reached nobody and will be retried. */
-export type OperatorConfirmationState = 'none' | 'pending' | 'sent' | 'failed';
-
-export interface OperatorConfirmationStatus {
-  state: OperatorConfirmationState;
-  email?: string;
-  attemptedAt?: string;
-  sentAt?: string;
-}
-
-/** What PUT /api/setup/state answers. */
-export interface SaveSetupFieldsResult {
-  setup: SetupFields;
-  /** Always present on a save: the console never blocks on it, but it can say what happened. */
-  operatorConfirmation?: OperatorConfirmationStatus;
-}
-
 /** PUT /api/setup/state: a partial update; null clears a field. */
-export async function saveSetupFields(update: Partial<SetupFields>): Promise<SaveSetupFieldsResult> {
-  const data = await json<SaveSetupFieldsResult>(await apiFetch('/api/setup/state', {
+export async function saveSetupFields(update: Partial<SetupFields>): Promise<SetupFields> {
+  const data = await json<{ setup: SetupFields }>(await apiFetch('/api/setup/state', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(update),
   }));
-  return data;
+  return data.setup;
 }
 
 /**

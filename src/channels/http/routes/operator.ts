@@ -2,15 +2,8 @@
 //
 // The operator is the person who set Curia up when that was not the principal: an EA, an IT
 // person, a technical friend. Setup records them once; this route is how they are viewed,
-// changed or cleared afterwards, because EAs leave. Two rules shape it:
-//
-//   - **An explicit Save.** The console saves on a button, never on blur, which is why this is
-//     a PUT of the whole pair rather than a patch of one field (see docs/dev/review-checklist.md
-//     "stale responses" for the read side).
-//   - **A confirmation notice.** Saving an email sends one short notice to that address and the
-//     response says whether it was published. That is the smoke test for a typo — nothing else
-//     would reveal a mistyped address, and copying notices to the principal instead would break
-//     the no-duplication rule.
+// changed or cleared afterwards, because EAs leave. The console saves on an explicit button,
+// never on blur, which is why this is a PUT of the whole pair rather than a patch of one field.
 //
 // The change history comes from `settings_history` (#2709), written in the same transaction as
 // every value.
@@ -20,13 +13,6 @@ import type { Logger } from '../../../logger.js';
 import { InvalidSettingError, countSettingHistory, getSettingRecords, readSettingHistory, setSetting, clearSetting } from '../../../settings/store.js';
 import type { OperatorSetting } from '../../../settings/registry.js';
 import { SETTINGS } from '../../../settings/registry.js';
-import {
-  confirmationAfterSave,
-  readOperatorConfirmationStatus,
-  sendPendingOperatorConfirmation,
-  type OperatorConfirmationStatus,
-} from '../../../notifications/operator-confirmation.js';
-import type { OutboundGateway } from '../../../skills/outbound-gateway.js';
 import { assertSecret, CONSOLE_RATE, type SessionStore } from '../session-auth.js';
 
 /** How many history rows a page holds when the caller does not say. */
@@ -38,27 +24,19 @@ export interface OperatorRouteOptions {
   sessions: SessionStore;
   pool: Pool;
   logger: Logger;
-  /** The one system-notice path, for the confirmation (#2710). Absent: the save reports that
-   *  the notice could not be sent. */
-  outboundGateway?: Pick<OutboundGateway, 'publishNotification'>;
-  /** The console's origin, for the notice's link. */
-  appOrigin?: string;
   /**
    * Keep the gateway's cached operator address current (#2710). Called after a save or a clear,
    * so a later failing database read cannot route a `database_unavailable` notice to whoever held
    * the setting before.
    */
   onOperatorChanged?: (operator: OperatorSetting | null) => void;
-  /** Whether a channel adapter delivers notifications right now (the gateway checks it too; this
-   *  lets the response say "pending" instead of a failure when nothing can send yet). */
-  canDeliver?: () => boolean;
 }
 
 export async function operatorRoutes(
   app: FastifyInstance,
   options: OperatorRouteOptions,
 ): Promise<void> {
-  const { webAppBootstrapSecret, sessions, pool, logger, outboundGateway, appOrigin, onOperatorChanged, canDeliver } = options;
+  const { webAppBootstrapSecret, sessions, pool, logger, onOperatorChanged } = options;
 
   function requireAuth(request: FastifyRequest, reply: FastifyReply): boolean {
     return assertSecret(request, reply, webAppBootstrapSecret, sessions);
@@ -68,28 +46,14 @@ export async function operatorRoutes(
   // alerts, so it is a target worth throttling. Reads take the console read limit.
   const AUTH_RATE = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
 
-  /** Send the notice while one is owed, and answer with where it stands. Shared by both writes. */
-  async function confirmNow(): Promise<OperatorConfirmationStatus> {
-    return sendPendingOperatorConfirmation({
-      pool,
-      ...(outboundGateway ? { gateway: outboundGateway } : {}),
-      ...(canDeliver ? { canDeliver } : {}),
-      ...(appOrigin ? { appOrigin } : {}),
-      logger,
-    });
-  }
-
   // -- GET /api/operator --
   app.get('/api/operator', CONSOLE_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     try {
-      const records = await getSettingRecords(pool, ['operator', 'operator_confirmation'], logger);
-      const record = records.operator;
+      const record = (await getSettingRecords(pool, ['operator'], logger)).operator;
       return reply.send({
         operator: record ? { name: record.value.name, email: record.value.email } : null,
         updatedBy: record?.updatedBy ?? null,
-        // Sent, pending (owed, not attempted yet) or failed — and when (ADR-068).
-        confirmation: await readOperatorConfirmationStatus(pool, logger),
       });
     } catch (err) {
       request.log.error({ err }, 'GET /api/operator: failed to read the operator setting');
@@ -112,7 +76,7 @@ export async function operatorRoutes(
       try {
         await clearSetting(pool, 'operator', 'console', logger);
         onOperatorChanged?.(null);
-        return reply.send({ operator: null, confirmation: { state: 'none' } satisfies OperatorConfirmationStatus });
+        return reply.send({ operator: null });
       } catch (err) {
         request.log.error({ err }, 'PUT /api/operator: failed to clear the operator setting');
         return reply.status(500).send({ error: 'Failed to clear the operator setting. Check server logs.' });
@@ -121,17 +85,12 @@ export async function operatorRoutes(
 
     try {
       const operator: OperatorSetting = parsed.operator;
-      // An unchanged save is not a new operator: no write. It still retries a confirmation that
-      // is owed (pending or failed) — confirmNow sends nothing once it is sent — so pressing Save
-      // cannot email an address on every press, but can retry one that never got its notice.
+      // An unchanged save writes nothing, so it adds no history row.
       const current = (await getSettingRecords(pool, ['operator'], logger)).operator?.value;
       const unchanged = current?.name === operator.name && current.email === operator.email;
       if (!unchanged) await setSetting(pool, 'operator', operator, 'console', logger);
       onOperatorChanged?.(operator);
-      // After the write, so the notice goes to the address that is now stored. The setting is
-      // saved either way: a notice or status lookup that fails reports `failed`, not a 500.
-      const confirmation = await confirmationAfterSave(confirmNow, operator.email, logger);
-      return reply.send({ operator, confirmation });
+      return reply.send({ operator });
     } catch (err) {
       if (err instanceof InvalidSettingError) {
         return reply.status(400).send({ error: err.message });

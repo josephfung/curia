@@ -621,21 +621,8 @@ email. Bodies carry no principal content — no message text, addresses or objec
 only the model can see, and the other three are detected in code. It goes through the same
 once-per-run dedupe as everything else (`OnboardingService.raiseOperatorNotice`), so a repeated
 call emails once and adds no second note — and answers `{ alreadyRaised: true }` rather than a
-failure, so the model does not retry it. `operatorNotified` records what was raised;
-`operatorNoticeFailed` names events whose notice reached nobody, so the run state never claims
-the operator heard something that was never sent.
-
-**The confirmation notice is owed (#2710).** Saving an operator address from Setup or the console
-attempts one short notice to it, recorded in the `operator_confirmation` settings key
-(`{ email, attemptedAt, sentAt }`). Step 1 of a fresh install cannot send it — there is no email
-account until the restart — so the notice is *owed*: boot (once the email adapters start),
-`POST /api/onboarding/start` and the console's Operator page retry it while `sentAt` is null or the
-address has changed. A delivery the adapter refuses or fails leaves it `failed`: `sendNotification`
-returns false when the refusal arrives during its publish, and the gateway's
-`onNotificationUndelivered` hook clears `sentAt` when it arrives later. A send the adapter queued
-after a transient provider failure also leaves it `failed` and owed, so "sent" never outlives a
-notice that never arrived. The console shows sent, pending or failed with the time, and a Setup save never blocks
-on it, nor comes at the cost of the principal and profile saves that follow it.
+failure, so the model does not retry it. `operatorNotified` records what was raised; a notice
+whose task note could not be written gives its event back, so a retry raises it.
 
 ### Done
 

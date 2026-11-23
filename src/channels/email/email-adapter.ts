@@ -11,7 +11,6 @@ import type { EventBus } from '../../bus/bus.js';
 import type { TurnLanes } from '../../dispatch/turn-lanes.js';
 import type { Logger } from '../../logger.js';
 import type { OutboundGateway } from '../../skills/outbound-gateway.js';
-import { PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL } from '../../skills/outbound-gateway.js';
 import type { EmailSendRequest } from './outbound-request.js';
 import { replyDisplayName, replyRecipientSource } from './reply-recipient-provenance.js';
 import { deriveEmailReplyRecipientSet } from './reply-recipients.js';
@@ -69,18 +68,6 @@ interface QueuedInboundEmail {
   queuedAt: number;
   /** True when this item was loaded from an unacknowledged audit row. */
   replayed?: boolean;
-}
-
-/**
- * Whether a failed system-notification send was the channel refusing it outright: the sending
- * account is the principal's own mailbox, which only principal-addressed notices may use (#2474).
- * That is a rule working, so it is audited as one rather than chased as a fault.
- *
- * `MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL` is deliberately *not* a refusal: the gateway calls it "a
- * failure to check", so it is audited as `delivery_failed` — a hiccup to retry, not a verdict.
- */
-function isNotificationDeliveryRefusal(result: { blockedReason?: string }): boolean {
-  return result.blockedReason === PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL;
 }
 
 function nylasMessageIdOf(event: InboundMessageEvent): string {
@@ -474,21 +461,8 @@ export class EmailAdapter implements Channel {
             subject: notification.payload.subject,
             body: notification.payload.body,
           },
-          {
-            skipNotificationOnBlock: true,
-            isSystemNotification: true,
-            notificationType: notification.payload.notificationType,
-          },
+          { skipNotificationOnBlock: true, isSystemNotification: true },
         );
-        if (result.success && result.queued) {
-          // A transient provider failure: the send is queued for a later flush, not delivered.
-          // Tell the gateway, so a caller that records delivery does not record this as sent.
-          logger.warn(
-            { notificationType: notification.payload.notificationType, audience: notification.payload.audience },
-            'EmailAdapter: outbound.notification queued for a later flush, not delivered yet',
-          );
-          this.config.outboundGateway.reportNotificationQueued(notification.id);
-        }
         if (!result.success) {
           logger.error(
             {
@@ -500,14 +474,6 @@ export class EmailAdapter implements Channel {
             },
             'EmailAdapter: failed to deliver outbound.notification — its recipient will NOT receive this alert',
           );
-          // The gateway only knows the publish succeeded; this is the only place the real
-          // outcome is known, so the miss is audited here (#2710). A refusal (the account is the
-          // principal's own mailbox) is a rule working, not a failure to retry.
-          await this.config.outboundGateway.reportNotificationUndelivered(
-            notification.payload.notificationType,
-            isNotificationDeliveryRefusal(result) ? 'delivery_refused' : 'delivery_failed',
-            { recipient: notification.payload.recipient, notificationEventId: notification.id },
-          );
         }
       } catch (err) {
         logger.error(
@@ -518,16 +484,6 @@ export class EmailAdapter implements Channel {
           },
           'EmailAdapter: unexpected error delivering outbound.notification',
         );
-        // An unexpected throw is still a notice nobody got; record it rather than only logging.
-        try {
-          await this.config.outboundGateway.reportNotificationUndelivered(
-            notification.payload.notificationType,
-            'delivery_failed',
-            { recipient: notification.payload.recipient, notificationEventId: notification.id },
-          );
-        } catch (reportErr) {
-          logger.error({ reportErr }, 'EmailAdapter: could not audit the undelivered notification');
-        }
       }
     });
   }

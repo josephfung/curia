@@ -72,7 +72,7 @@ import {
 import type { OutboundNotificationRequest, OutboundNotificationUndeliveredPayload } from '../bus/events.js';
 import type { NotificationRecipientDeps } from '../notifications/recipients.js';
 import { resolveNotificationRecipient } from '../notifications/recipients.js';
-import { NOTIFICATION_AUDIENCES, notificationAudience } from '../notifications/audience.js';
+import { notificationAudience } from '../notifications/audience.js';
 import { askPreamble, displayName, normalizeCounterparty, type DisclosureAsk } from '../autonomy/disclosure-decisions.js';
 import { markdownToHtml } from '../format/markdown-to-html.js';
 import { bodyEndsWithSignature, emailSignatureHtml, emailSignatureText } from '../channels/email/signature.js';
@@ -263,9 +263,6 @@ export interface OutboundDraftResult extends OutboundSendResult {
    */
   draft?: { subject: string; body: string };
 }
-
-/** What became of a system notice by the time its publish returned (#2710). */
-export type NotificationOutcome = 'sent' | 'queued' | 'not_sent';
 
 export interface OutboundGatewayConfig {
   /**
@@ -487,17 +484,6 @@ export interface OutboundGatewayConfig {
    * notification has no address, so nothing is sent and the miss is audited — never a guess.
    */
   notificationRecipients?: NotificationRecipientDeps;
-  /**
-   * Told when a published notice turned out not to be delivered (#2710): the channel adapter
-   * reports a refused or failed send, and a caller that recorded "published" as success can
-   * correct itself. Best-effort — the audit row is the durable record.
-   */
-  onNotificationUndelivered?: (
-    notificationType: OutboundNotificationRequest['notificationType'],
-    reason: Extract<OutboundNotificationUndeliveredPayload['reason'], 'delivery_refused' | 'delivery_failed'>,
-    /** The address the notice was sent to, so a caller can tell which record it is about. */
-    recipient: string,
-  ) => Promise<void> | void;
 }
 
 /**
@@ -1336,14 +1322,6 @@ export class OutboundGateway {
   private readonly draftProvenance?: OutboundGatewayConfig['draftProvenance'];
   private readonly sendLedger?: OutboundGatewayConfig['sendLedger'];
   private readonly notificationRecipients?: NotificationRecipientDeps;
-  private readonly onNotificationUndelivered?: OutboundGatewayConfig['onNotificationUndelivered'];
-  /**
-   * Notification events being published right now, with what the delivering adapter reported
-   * during the publish (#2710). `bus.publish` awaits its subscribers, so the email adapter's
-   * outcome lands before `publishNotification` returns: a refusal or failure makes it `not_sent`,
-   * and a send the channel queued (a transient provider failure) makes it `queued`.
-   */
-  private readonly notificationsInPublish = new Map<string, 'published' | 'queued' | 'undelivered'>();
   private flushInFlight = new Set<string>();
   /** Backoff timers for HTTP channels that queued on a transient failure (#1380). */
   private flushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1371,8 +1349,6 @@ export class OutboundGateway {
     this.confidencePipeline = config.confidencePipeline;
     this.exportControlService = config.exportControlService;
     this.outboundQueue = config.outboundQueue;
-    // A queued system notice that expires unsent reached nobody: audit it like any other (#2710).
-    this.outboundQueue?.setExpiredNotificationHandler?.((types) => this.auditExpiredNotifications(types));
     this.outboundQueueReadiness = new Map(config.outboundQueueReadiness ?? []);
     this.gating = config.gating ?? 'tier';
     this.bandReview = config.bandReview;
@@ -1388,7 +1364,6 @@ export class OutboundGateway {
     this.draftProvenance = config.draftProvenance;
     this.sendLedger = config.sendLedger;
     this.notificationRecipients = config.notificationRecipients;
-    this.onNotificationUndelivered = config.onNotificationUndelivered;
     if (this.gating === 'band' && !this.bandReview) {
       // The filter turns contact-data-leak and Stage 2.5 off under band; without the review
       // that replaces them, sends would go out with no disclosure review at all.
@@ -1477,11 +1452,6 @@ export class OutboundGateway {
       skipNotificationOnBlock?: boolean;
       humanApproved?: boolean;
       isSystemNotification?: boolean;
-      /**
-       * The system notice's type, when this send delivers one (the email adapter's
-       * outbound.notification path). Kept on a queued row so an expiry can be audited (#2710).
-       */
-      notificationType?: OutboundNotificationRequest['notificationType'];
       /** Task event ID for action_log traceability. */
       taskEventId?: string;
       /** Conversation ID for action_log context. */
@@ -2356,7 +2326,6 @@ export class OutboundGateway {
         toSend,
         () => this.dispatchEmail(toSend),
         options?.isSystemNotification === true,
-        options?.notificationType,
       );
       if (result.success && !result.queued) {
         // A system notice is Curia reporting its own trouble, not correspondence (#2710,
@@ -2675,10 +2644,9 @@ export class OutboundGateway {
     request: OutboundSendRequest,
     dispatch: () => Promise<OutboundSendResult>,
     systemNotification = false,
-    notificationType?: OutboundNotificationRequest['notificationType'],
   ): Promise<OutboundSendResult> {
     if (this.isQueueableChannel(request.channel) && !this.isChannelOutboundReady(request.channel)) {
-      return this.enqueueInsteadOfDrop(request, systemNotification, notificationType);
+      return this.enqueueInsteadOfDrop(request, systemNotification);
     }
     const result = await dispatch();
     if (
@@ -2686,7 +2654,7 @@ export class OutboundGateway {
       && result.queueable
       && this.isQueueableChannel(request.channel)
     ) {
-      const queued = await this.enqueueInsteadOfDrop(request, systemNotification, notificationType);
+      const queued = await this.enqueueInsteadOfDrop(request, systemNotification);
       // HTTP channels (SMS) may stay "ready" while the provider is briefly down —
       // schedule a flush retry since no socket reconnect event will fire.
       if (queued.queued && this.isChannelOutboundReady(request.channel)) {
@@ -2718,16 +2686,12 @@ export class OutboundGateway {
   private async enqueueInsteadOfDrop(
     request: OutboundSendRequest,
     systemNotification = false,
-    notificationType?: OutboundNotificationRequest['notificationType'],
   ): Promise<OutboundSendResult> {
     if (!this.outboundQueue) {
       return { success: false, blockedReason: 'Outbound queue not configured' };
     }
     try {
-      const { id } = await this.outboundQueue.enqueue(request, {
-        systemNotification,
-        ...(notificationType ? { notificationType } : {}),
-      });
+      const { id } = await this.outboundQueue.enqueue(request, { systemNotification });
       this.log.info(
         { channel: request.channel, queueId: id },
         'outbound-gateway: channel disconnected — message queued for reconnect flush',
@@ -2858,30 +2822,13 @@ export class OutboundGateway {
    * would break the no-duplication rule.
    *
    * Returns whether the notice was published for delivery. False means it reached no one:
-   * there was no address (audited), the bus refused the publish (logged), or the adapter that
-   * delivers it refused or failed the send during the publish (audited by that report). True
-   * still means "queued", not "delivered": a failure reported after the publish returned reaches
-   * callers only through `onNotificationUndelivered`. None of these throws — a notifier must not fail the operation it is reporting on.
+   * either there was no address (audited), or the bus refused the publish (logged). Neither
+   * throws — a notifier must not fail the operation it is reporting on.
    */
   async sendNotification(
     request: OutboundNotificationRequest,
     parentEventId?: string,
   ): Promise<boolean> {
-    // A queued notice counts as sent here: the queue flushes it, and a notifier that retries on
-    // false would otherwise send it twice. A caller that records delivery state of its own (the
-    // operator confirmation) uses publishNotification and treats `queued` as not sent yet.
-    return (await this.publishNotification(request, parentEventId)) !== 'not_sent';
-  }
-
-  /**
-   * `sendNotification` with the outcome spelled out (#2710 review): `sent` (the adapter
-   * dispatched it), `queued` (the channel queued it after a transient failure; it is delivered on
-   * a later flush, or never if that keeps failing until the row expires), or `not_sent`.
-   */
-  async publishNotification(
-    request: OutboundNotificationRequest,
-    parentEventId?: string,
-  ): Promise<NotificationOutcome> {
     const audience = notificationAudience(request.notificationType);
 
     // Nothing can deliver a publish right now: an email adapter subscribes to
@@ -2893,7 +2840,7 @@ export class OutboundGateway {
         'outbound-gateway: no adapter delivers notifications yet — the notice is not published',
       );
       await this.auditUndeliveredNotification(request.notificationType, 'delivery_unavailable', parentEventId);
-      return 'not_sent';
+      return false;
     }
 
     let recipient: string | null = null;
@@ -2917,17 +2864,15 @@ export class OutboundGateway {
         'outbound-gateway: no address for a system notification — nothing sent, and nothing sent to the other person',
       );
       await this.auditUndeliveredNotification(request.notificationType, 'no_recipient', parentEventId);
-      return 'not_sent';
+      return false;
     }
 
-    const event = createOutboundNotification({ ...request, recipient, audience, parentEventId });
-    this.notificationsInPublish.set(event.id, 'published');
     try {
-      await this.bus.publish('dispatch', event);
-      // An adapter that refused or failed the send during the publish reported it already (and
-      // audited it): the notice reached no one, so the caller must not record it as sent.
-      const reported = this.notificationsInPublish.get(event.id);
-      return reported === 'undelivered' ? 'not_sent' : reported === 'queued' ? 'queued' : 'sent';
+      await this.bus.publish(
+        'dispatch',
+        createOutboundNotification({ ...request, recipient, audience, parentEventId }),
+      );
+      return true;
     } catch (err) {
       // Non-fatal — the original block/hold is already recorded. Log so the anomaly
       // is visible in alerting but do not throw; the caller's primary operation (block
@@ -2939,9 +2884,7 @@ export class OutboundGateway {
       // A notice nobody will receive: audit the miss too, so the failure is visible in the log an
       // operator reads. The bus may be the broken part; that attempt failing is logged as well.
       await this.auditUndeliveredNotification(request.notificationType, 'publish_failed', parentEventId);
-      return 'not_sent';
-    } finally {
-      this.notificationsInPublish.delete(event.id);
+      return false;
     }
   }
 
@@ -2974,39 +2917,12 @@ export class OutboundGateway {
   }
 
   /**
-   * Queued system notices expired unsent (#2710 review): each reached nobody, so it is logged at
-   * error level and audited as `delivery_failed`, like a send the channel failed. A flush that
-   * keeps failing leaves its row queued until it expires, so this is where such a notice ends.
-   * Never throws: the queue calls it from its own cleanup.
-   */
-  private auditExpiredNotifications(types: string[]): void {
-    for (const type of types) {
-      if (!Object.prototype.hasOwnProperty.call(NOTIFICATION_AUDIENCES, type)) {
-        this.log.warn({ notificationType: type }, 'outbound-gateway: a queued notice of an unknown type expired unsent');
-        continue;
-      }
-      const notificationType = type as OutboundNotificationRequest['notificationType'];
-      this.log.error(
-        { notificationType, audience: notificationAudience(notificationType) },
-        'outbound-gateway: a queued system notification expired unsent — auditing the miss',
-      );
-      // auditUndeliveredNotification catches and logs its own failures.
-      void this.auditUndeliveredNotification(notificationType, 'delivery_failed');
-    }
-  }
-
-  /**
    * Whether a channel adapter that delivers notifications is subscribed right now (#2710).
    * Callers that do work before publishing — minting a sign-in link, retrying an owed notice —
    * ask first, so a notice that cannot go anywhere does not cost a link or write an audit row on
    * every retry. `sendNotification` checks it too; this is the cheap pre-check, not a substitute.
    */
   canDeliverNotifications(): boolean {
-    // Email is a queueable channel (#1380): while it is not outbound-ready (an adapter between
-    // subscribing and running at start, or stopping) a send is queued and reported as a success.
-    // A notice must not be published into that window, or the caller records "published" for a
-    // notice that sits in the queue — and a flush failure or expiry would never correct it.
-    if (!this.isChannelOutboundReady('email')) return false;
     const canDeliver = this.notificationRecipients?.canDeliver;
     if (!canDeliver) return true;
     try {
@@ -3014,64 +2930,6 @@ export class OutboundGateway {
     } catch (err) {
       this.log.warn({ err }, 'outbound-gateway: could not tell whether notifications are deliverable');
       return false;
-    }
-  }
-
-  /**
-   * Record that a published notice reached nobody, from a channel adapter that knows the
-   * delivery outcome (#2710). The gateway publishes only the publish result; the send happens
-   * later, in the email adapter, so a caller's `true` means "queued", not "delivered". This is
-   * how the adapter makes a refused or failed send visible in audit_log — the only durable
-   * record a notice about trouble can leave. Best-effort: the caller is already handling a
-   * failure, so a failure to audit it is logged, not thrown.
-   */
-  async reportNotificationUndelivered(
-    notificationType: OutboundNotificationRequest['notificationType'],
-    reason: Extract<OutboundNotificationUndeliveredPayload['reason'], 'delivery_refused' | 'delivery_failed'>,
-    options: {
-      /**
-       * The address the notice was addressed to (the payload's resolved `recipient`). A caller
-       * that recorded state for that address needs it: a late failure for a previous address must
-       * not invalidate a newer record (#2710).
-       */
-      recipient?: string;
-      /**
-       * The `outbound.notification` event's id. While `sendNotification` is still publishing that
-       * event, the report makes it return false, so its caller records the miss directly.
-       */
-      notificationEventId?: string;
-      parentEventId?: string;
-    } = {},
-  ): Promise<void> {
-    if (options.notificationEventId && this.notificationsInPublish.has(options.notificationEventId)) {
-      this.notificationsInPublish.set(options.notificationEventId, 'undelivered');
-    }
-    this.log.error(
-      { notificationType, reason, audience: notificationAudience(notificationType) },
-      'outbound-gateway: system notification was not delivered — auditing the miss',
-    );
-    await this.auditUndeliveredNotification(notificationType, reason, options.parentEventId);
-    if (!this.onNotificationUndelivered) return;
-    try {
-      await this.onNotificationUndelivered(notificationType, reason, options.recipient ?? '');
-    } catch (err) {
-      // The caller's correction of its own record is best-effort; the audit row is the record.
-      this.log.error(
-        { err, notificationType, reason },
-        'outbound-gateway: the undelivered-notification hook threw',
-      );
-    }
-  }
-
-  /**
-   * The delivering adapter queued a notice instead of sending it (#2710 review): the channel had
-   * a transient failure and the send went to the outbound queue. While the notice is still being
-   * published, `publishNotification` then answers `queued`, so a caller that records delivery
-   * does not record it as sent. Outside a publish it changes nothing.
-   */
-  reportNotificationQueued(notificationEventId: string): void {
-    if (this.notificationsInPublish.get(notificationEventId) === 'published') {
-      this.notificationsInPublish.set(notificationEventId, 'queued');
     }
   }
 

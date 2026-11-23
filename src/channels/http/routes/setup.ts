@@ -43,13 +43,6 @@ import {
   type SetupStateUpdate,
 } from '../../../setup/setup-settings.js';
 import { InvalidSettingError } from '../../../settings/store.js';
-import type { OutboundGateway } from '../../../skills/outbound-gateway.js';
-import {
-  confirmationAfterSave,
-  readOperatorConfirmationStatus,
-  sendPendingOperatorConfirmation,
-  type OperatorConfirmationStatus,
-} from '../../../notifications/operator-confirmation.js';
 
 import { WorkingDocsRepo } from '../../../db/working-docs-repo.js';
 import { seedPlaybook } from '../../../onboarding/playbook.js';
@@ -95,17 +88,10 @@ export interface SetupRouteOptions {
   /** The Setup checklist (#2358). Absent: the checklist and complete routes answer 503. */
   setupChecklist?: () => Promise<SetupChecklist>;
   /**
-   * How the operator's confirmation notice is sent when Setup first records them (#2710). The
-   * one system-notice path; absent, the save still succeeds and the page says the notice was
-   * not sent.
+   * Keep the gateway's cached operator address current after a Setup save (#2710), so a later
+   * failing database read cannot route a notice to whoever held the setting before.
    */
-  outboundGateway?: Pick<OutboundGateway, 'publishNotification'>;
-  /** The console's origin, for the confirmation's link (#2710). */
-  appOrigin?: string;
-  /** Keep the gateway's cached operator address current after a Setup save (#2710). */
   onOperatorChanged?: (operator: { name: string; email: string } | null) => void;
-  /** Whether a channel adapter delivers notifications right now (#2710). */
-  canDeliver?: () => boolean;
 }
 
 // Match identity.ts: tighter rate limit on auth-sensitive routes (10/min vs the
@@ -142,10 +128,7 @@ export async function setupRoutes(
     scheduleProcessExit,
     infraLlmService,
     setupChecklist,
-    outboundGateway,
-    appOrigin,
     onOperatorChanged,
-    canDeliver,
   } = options;
 
   // Delay before process.exit so Fastify can finish flushing the 200 response.
@@ -574,34 +557,12 @@ export async function setupRoutes(
     if ('error' in parsed) return reply.status(400).send({ error: parsed.error });
     try {
       const state = await updateSetupState(pool, parsed.update, { updatedBy: 'console', logger });
-      // The confirmation notice is *owed* rather than fired here (#2710): on a fresh install
-      // this request is step 1, before Curia has any email account, so nothing can send it. It
-      // is attempted where delivery is possible (boot after the email adapters start, and Start
-      // onboarding), and recorded in `operator_confirmation` so the console can show where it
-      // got to. This response only reports the status; the page never blocks on it.
-      const operator = state.operatorEmail !== null && state.operatorName !== null
-        ? { name: state.operatorName, email: state.operatorEmail }
-        : null;
-      onOperatorChanged?.(operator);
-      // The state is saved: a failed lookup or send reports `failed` rather than a 500 (#2710).
-      const confirmation = await confirmationAfterSave(
-        () => operator
-          ? sendPendingOperatorConfirmation({
-              pool,
-              ...(outboundGateway ? { gateway: outboundGateway } : {}),
-              ...(canDeliver ? { canDeliver } : {}),
-              ...(appOrigin ? { appOrigin } : {}),
-              logger,
-            })
-          : readOperatorConfirmationStatus(pool, logger),
-        operator?.email,
-        logger,
+      onOperatorChanged?.(
+        state.operatorEmail !== null && state.operatorName !== null
+          ? { name: state.operatorName, email: state.operatorEmail }
+          : null,
       );
-      return reply.send({
-        inSetup: isInSetup(state.phase),
-        setup: publicState(state),
-        operatorConfirmation: confirmation satisfies OperatorConfirmationStatus,
-      });
+      return reply.send({ inSetup: isInSetup(state.phase), setup: publicState(state) });
     } catch (err) {
       // A cross-field rule (Myself with operator details; Someone else without them) or a
       // value that fails its schema is the caller's mistake, not a server failure.

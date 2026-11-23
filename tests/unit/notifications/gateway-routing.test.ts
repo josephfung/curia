@@ -81,30 +81,6 @@ function makeGateway(recipients: {
   return { gateway, published, bus };
 }
 
-function makeGatewayWithHook(
-  onNotificationUndelivered: (type: string, reason: string, recipient: string) => Promise<void>,
-  recipients: { principalEmail?: () => string | undefined; canDeliver?: () => boolean },
-) {
-  const published: Published[] = [];
-  const bus = {
-    publish: vi.fn(async (_layer: string, event: BusEvent) => { published.push({ event }); }),
-    subscribe: vi.fn(),
-  } as unknown as EventBus;
-  const gateway = new OutboundGateway({
-    contactService: { resolveByChannelIdentity: vi.fn().mockResolvedValue(null) } as unknown as ContactService,
-    contentFilter: { check: vi.fn() } as unknown as OutboundContentFilter,
-    bus,
-    logger: createLogger('error'),
-    notificationRecipients: {
-      principalEmail: recipients.principalEmail ?? (() => PRINCIPAL),
-      operatorEmail: async () => undefined,
-      ...(recipients.canDeliver ? { canDeliver: recipients.canDeliver } : {}),
-    },
-    onNotificationUndelivered: onNotificationUndelivered as never,
-  });
-  return { gateway, published };
-}
-
 function notices(published: Published[]) {
   return published
     .map((p) => p.event)
@@ -208,113 +184,10 @@ describe('OutboundGateway.sendNotification routing', () => {
     expect(deliverable.gateway.canDeliverNotifications()).toBe(true);
   });
 
-  it('does not publish while email is not outbound-ready, since the send would be queued as a success', async () => {
-    // Email is queueable (#1380). An adapter that has subscribed but is not running yet (or is
-    // stopping) would have its send queued and reported as success, and the caller would record
-    // "published" for a notice sitting in the queue (#2710 review).
-    const { gateway, published } = makeGateway({ principalEmail: () => PRINCIPAL, canDeliver: () => true });
-    let emailReady = false;
-    gateway.setOutboundQueueReadiness('email', () => emailReady);
-
-    expect(gateway.canDeliverNotifications()).toBe(false);
-    expect(await gateway.sendNotification({ notificationType: 'operator_configured', subject: 's', body: 'b' })).toBe(false);
-    expect(notices(published)).toEqual([]);
-    expect(undelivered(published)[0]!.payload).toMatchObject({ reason: 'delivery_unavailable' });
-
-    emailReady = true;
-    expect(gateway.canDeliverNotifications()).toBe(true);
-    expect(await gateway.sendNotification({ notificationType: 'operator_configured', subject: 's', body: 'b' })).toBe(true);
-  });
-
   it('publishes once an adapter can deliver', async () => {
     const { gateway, published } = makeGateway({ principalEmail: () => PRINCIPAL, canDeliver: () => true });
     expect(await gateway.sendNotification({ notificationType: 'inbox_triage_paused', subject: 's', body: 'b' })).toBe(true);
     expect(notices(published)).toHaveLength(1);
-  });
-
-  it('tells the onNotificationUndelivered hook, so a caller can correct "published" in its own record', async () => {
-    const hook = vi.fn(async () => {});
-    const { gateway } = makeGatewayWithHook(hook, { principalEmail: () => PRINCIPAL });
-    await gateway.reportNotificationUndelivered('operator_configured', 'delivery_refused', { recipient: OPERATOR });
-    // The address travels to the hook, so a caller can match the failure to its own record.
-    expect(hook).toHaveBeenCalledWith('operator_configured', 'delivery_refused', OPERATOR);
-  });
-
-  it('returns false when the adapter refuses the notice during the publish', async () => {
-    // bus.publish awaits its subscribers, so the email adapter's refusal arrives before
-    // sendNotification returns. Returning true there recorded a mistyped operator address as a
-    // sent confirmation for good (#2710 self-review).
-    const hook = vi.fn(async () => {});
-    const { gateway, published } = makeGatewayWithHook(hook, { principalEmail: () => PRINCIPAL });
-    const bus = (gateway as unknown as { bus: EventBus }).bus;
-    (bus.publish as ReturnType<typeof vi.fn>).mockImplementation(async (_layer: string, event: BusEvent) => {
-      published.push({ event });
-      if (event.type === 'outbound.notification') {
-        await gateway.reportNotificationUndelivered(event.payload.notificationType, 'delivery_refused', {
-          recipient: event.payload.recipient,
-          notificationEventId: event.id,
-        });
-      }
-    });
-
-    const sent = await gateway.sendNotification({ notificationType: 'operator_configured', subject: 's', body: 'b' });
-
-    expect(sent).toBe(false);
-    expect(undelivered(published)[0]!.payload).toMatchObject({ reason: 'delivery_refused' });
-    // The hook still runs: it is the backstop for a report that comes after the return.
-    expect(hook).toHaveBeenCalledWith('operator_configured', 'delivery_refused', PRINCIPAL);
-  });
-
-  it('answers queued when the adapter queued the notice during the publish, and still true to sendNotification', async () => {
-    // A transient provider failure: the email adapter's send went to the outbound queue. A caller
-    // that records delivery must see that; one that only retries on false must not resend it.
-    const { gateway, published } = makeGatewayWithHook(async () => {}, { principalEmail: () => PRINCIPAL });
-    const bus = (gateway as unknown as { bus: EventBus }).bus;
-    (bus.publish as ReturnType<typeof vi.fn>).mockImplementation(async (_layer: string, event: BusEvent) => {
-      published.push({ event });
-      if (event.type === 'outbound.notification') gateway.reportNotificationQueued(event.id);
-    });
-
-    expect(await gateway.publishNotification({ notificationType: 'operator_configured', subject: 's', body: 'b' })).toBe('queued');
-    expect(await gateway.sendNotification({ notificationType: 'schedule_suspended', subject: 's', body: 'b' })).toBe(true);
-    // A queued report for an event not being published changes nothing.
-    gateway.reportNotificationQueued('not-in-flight');
-  });
-
-  it('a refusal of a different notice during the publish does not fail this one', async () => {
-    const { gateway, published } = makeGatewayWithHook(async () => {}, { principalEmail: () => PRINCIPAL });
-    const bus = (gateway as unknown as { bus: EventBus }).bus;
-    (bus.publish as ReturnType<typeof vi.fn>).mockImplementation(async (_layer: string, event: BusEvent) => {
-      published.push({ event });
-      if (event.type === 'outbound.notification') {
-        await gateway.reportNotificationUndelivered('inbox_triage_paused', 'delivery_failed', {
-          notificationEventId: 'some-other-event',
-        });
-      }
-    });
-
-    expect(await gateway.sendNotification({ notificationType: 'operator_configured', subject: 's', body: 'b' })).toBe(true);
-  });
-
-  it('a report that arrives after the publish returned leaves that result alone and reaches the hook', async () => {
-    const hook = vi.fn(async () => {});
-    const { gateway, published } = makeGatewayWithHook(hook, { principalEmail: () => PRINCIPAL });
-    expect(await gateway.sendNotification({ notificationType: 'operator_configured', subject: 's', body: 'b' })).toBe(true);
-    const [notice] = notices(published);
-
-    await gateway.reportNotificationUndelivered('operator_configured', 'delivery_failed', {
-      recipient: PRINCIPAL,
-      notificationEventId: notice!.id,
-    });
-
-    expect(hook).toHaveBeenCalledWith('operator_configured', 'delivery_failed', PRINCIPAL);
-    // Nothing is left tracked: the next notice publishes as sent.
-    expect(await gateway.sendNotification({ notificationType: 'operator_configured', subject: 's', body: 'b' })).toBe(true);
-  });
-
-  it('a throwing hook does not throw out of the report', async () => {
-    const { gateway } = makeGatewayWithHook(async () => { throw new Error('hook broke'); }, { principalEmail: () => PRINCIPAL });
-    await expect(gateway.reportNotificationUndelivered('operator_configured', 'delivery_failed')).resolves.toBeUndefined();
   });
 
   it('sends nothing when the gateway was given no recipient lookup at all', async () => {

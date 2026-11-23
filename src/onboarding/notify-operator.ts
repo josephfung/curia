@@ -62,14 +62,11 @@ export type NotifyOperatorDeps = {
 };
 
 /**
- * What became of an operator notice. `recorded` is the task's progress note (the durable record
- * that the notice was raised); `emailed` is whether a notice was actually handed to the gateway
- * and published. They differ when there is no outbound path, or when the send failed — and the
- * run state must not claim the operator heard something that was never sent (#2710).
+ * What became of an operator notice: `recorded` is whether the task's progress note (the durable
+ * record that the notice was raised) was written. The email beside it is best-effort.
  */
 export interface OperatorNoticeResult {
   recorded: boolean;
-  emailed: boolean;
 }
 
 /** A notice to send, bound to its delivery deps. Injected where the gateway is not in reach. */
@@ -142,10 +139,8 @@ function noticeText(
 
 /**
  * Record an operator notice on the onboarding task and email it to the operator. Never throws.
- * `recorded` is false when the progress note could not be written (logged); `emailed` is false
- * when there is no outbound gateway or the send was not published. The email is best-effort
- * beside the record: a failed send is logged by the gateway at error level and audited there,
- * and does not un-record the notice. The audit call is best-effort too: once the note is written
+ * `recorded` is false when the progress note could not be written (logged). The email is
+ * best-effort beside the record: a failed send is logged, and does not un-record the notice. The audit call is best-effort too: once the note is written
  * the notice counts as recorded.
  */
 export async function notifyOperator(
@@ -158,7 +153,7 @@ export async function notifyOperator(
     await deps.taskRepo.updateTask(taskId, { progressNote: `Operator notice: ${event}` });
   } catch (err) {
     deps.logger.error({ err, taskId, event }, 'onboarding: failed to record operator notice');
-    return { recorded: false, emailed: false };
+    return { recorded: false };
   }
   // Detail values can carry model-supplied text, so logs and audit get the key names only
   // (review checklist: ids and counts, not content). Only typed facts are emailed.
@@ -168,11 +163,10 @@ export async function notifyOperator(
     'onboarding: operator notice',
   );
 
-  let emailed = false;
   if (deps.gateway) {
     const { subject, lines } = noticeText(event, notice);
     const link = deps.appOrigin?.trim();
-    emailed = await deps.gateway.sendNotification({
+    const emailed = await deps.gateway.sendNotification({
       notificationType: event,
       subject,
       body: [...lines, ...(link ? ['', `Console: ${link.replace(/\/+$/, '')}/`] : [])].join('\n'),
@@ -191,5 +185,5 @@ export async function notifyOperator(
     // Best-effort: the notice is already on the task; a failed audit must not report it unrecorded.
     deps.logger.error({ err, taskId, event }, 'onboarding: operator notice audit failed — the notice is recorded on the task');
   }
-  return { recorded: true, emailed };
+  return { recorded: true };
 }

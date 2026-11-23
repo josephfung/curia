@@ -10,7 +10,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EmailAdapter } from '../../../../src/channels/email/email-adapter.js';
 import { createLogger } from '../../../../src/logger.js';
 import type { OutboundGateway } from '../../../../src/skills/outbound-gateway.js';
-import { MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL, PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL } from '../../../../src/skills/outbound-gateway.js';
 import type { ContactService } from '../../../../src/contacts/contact-service.js';
 import type { EventBus } from '../../../../src/bus/bus.js';
 import type { NylasMessage } from '../../../../src/channels/email/nylas-client.js';
@@ -62,8 +61,6 @@ function createMocks() {
 
   const outboundGateway = {
     send: vi.fn().mockResolvedValue({ success: true, messageId: 'sent-1' }),
-    reportNotificationUndelivered: vi.fn().mockResolvedValue(undefined),
-    reportNotificationQueued: vi.fn(),
     createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'draft-1' }),
     linkGatedAction: vi.fn().mockResolvedValue(undefined),
     listEmailMessages: vi.fn().mockResolvedValue([]),
@@ -585,7 +582,7 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
       to: CEO_EMAIL,
       subject: 'Action needed — blocked outbound reply',
     }));
-    expect(sendCall[1]).toEqual({ skipNotificationOnBlock: true, isSystemNotification: true, notificationType: 'blocked_content' });
+    expect(sendCall[1]).toEqual({ skipNotificationOnBlock: true, isSystemNotification: true });
 
     await adapter.stop();
   });
@@ -1521,128 +1518,5 @@ describe('EmailAdapter — subscribeOutbound once-guard (#2312)', () => {
     // start() calls subscribeOutbound() itself; as in the suite above, the poll is not awaited.
     void adapter.start();
     expect((mocks.bus.subscribe as ReturnType<typeof vi.fn>).mock.calls.length).toBe(subscribed);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// A notice that fails to deliver is audited, not just logged (#2710)
-// ---------------------------------------------------------------------------
-
-describe('EmailAdapter — undelivered notification reporting', () => {
-  it('reports delivery_failed when the provider send fails', async () => {
-    const mocks = createMocks();
-    const handleNotification = captureHandler('outbound.notification', mocks);
-    const adapter = makeAdapter(mocks);
-    await adapter.start();
-    (mocks.outboundGateway.send as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce({ success: false, blockedReason: 'nylas 500' });
-
-    const notice = createOutboundNotification({
-      notificationType: 'inbox_triage_paused',
-      recipient: CEO_EMAIL,
-      audience: 'principal',
-      subject: 'Paused',
-      body: 'Body',
-    });
-    await handleNotification(notice);
-
-    expect(mocks.outboundGateway.reportNotificationUndelivered)
-      .toHaveBeenCalledWith('inbox_triage_paused', 'delivery_failed', { recipient: CEO_EMAIL, notificationEventId: notice.id });
-    await adapter.stop();
-  });
-
-  it('reports delivery_refused when the account is the principal\'s own mailbox', async () => {
-    const mocks = createMocks();
-    const handleNotification = captureHandler('outbound.notification', mocks);
-    const adapter = makeAdapter(mocks);
-    await adapter.start();
-    (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      success: false,
-      blockedReason: PRINCIPAL_MAILBOX_ACCOUNT_REFUSAL,
-    });
-
-    const notice = createOutboundNotification({
-      notificationType: 'schedule_suspended',
-      recipient: 'operator@example.com',
-      audience: 'operator',
-      subject: 'Suspended',
-      body: 'Body',
-    });
-    await handleNotification(notice);
-
-    // A refusal is the rule working (#2474), recorded as such so it is not chased as a fault.
-    expect(mocks.outboundGateway.reportNotificationUndelivered)
-      .toHaveBeenCalledWith('schedule_suspended', 'delivery_refused', { recipient: 'operator@example.com', notificationEventId: notice.id });
-    await adapter.stop();
-  });
-
-  it('reports an unverified-account refusal as delivery_failed, since that is a check that failed', async () => {
-    const mocks = createMocks();
-    const handleNotification = captureHandler('outbound.notification', mocks);
-    const adapter = makeAdapter(mocks);
-    await adapter.start();
-    (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      success: false,
-      blockedReason: MAILBOX_ACCOUNT_UNVERIFIED_REFUSAL,
-    });
-
-    const notice = createOutboundNotification({
-      notificationType: 'schedule_suspended',
-      recipient: 'operator@example.com',
-      audience: 'operator',
-      subject: 'Suspended',
-      body: 'Body',
-    });
-    await handleNotification(notice);
-
-    expect(mocks.outboundGateway.reportNotificationUndelivered)
-      .toHaveBeenCalledWith('schedule_suspended', 'delivery_failed', { recipient: 'operator@example.com', notificationEventId: notice.id });
-    await adapter.stop();
-  });
-
-  it('tells the gateway when the send was queued after a transient failure, and reports no failure', async () => {
-    const mocks = createMocks();
-    const handleNotification = captureHandler('outbound.notification', mocks);
-    const adapter = makeAdapter(mocks);
-    await adapter.start();
-    (mocks.outboundGateway.send as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce({ success: true, queued: true, messageId: 'queue-1' });
-
-    const notice = createOutboundNotification({
-      notificationType: 'operator_configured',
-      recipient: 'operator@example.com',
-      audience: 'operator',
-      subject: 'Confirm',
-      body: 'Body',
-    });
-    await handleNotification(notice);
-
-    expect(mocks.outboundGateway.reportNotificationQueued).toHaveBeenCalledWith(notice.id);
-    // The type travels with the send, so a queued row that expires can be audited.
-    expect(mocks.outboundGateway.send).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ isSystemNotification: true, notificationType: 'operator_configured' }),
-    );
-    expect(mocks.outboundGateway.reportNotificationUndelivered).not.toHaveBeenCalled();
-    await adapter.stop();
-  });
-
-  it('reports nothing when the notice is delivered', async () => {
-    const mocks = createMocks();
-    const handleNotification = captureHandler('outbound.notification', mocks);
-    const adapter = makeAdapter(mocks);
-    await adapter.start();
-
-    const notice = createOutboundNotification({
-      notificationType: 'inbox_triage_paused',
-      recipient: CEO_EMAIL,
-      audience: 'principal',
-      subject: 'Paused',
-      body: 'Body',
-    });
-    await handleNotification(notice);
-
-    expect(mocks.outboundGateway.reportNotificationUndelivered).not.toHaveBeenCalled();
-    await adapter.stop();
   });
 });

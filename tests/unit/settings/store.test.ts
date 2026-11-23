@@ -17,7 +17,7 @@ import {
   writeSettings,
 } from '../../../src/settings/store.js';
 
-const EXPECTED_KEYS = ['messaging_route', 'operator', 'operator_confirmation', 'setup.completed_at', 'voice_route'];
+const EXPECTED_KEYS = ['messaging_route', 'operator', 'setup.completed_at', 'voice_route'];
 
 function fakeLogger(): { logger: Pick<Logger, 'error'>; error: ReturnType<typeof vi.fn> } {
   const error = vi.fn();
@@ -104,34 +104,12 @@ describe('settings registry', () => {
     expect(SETTINGS.operator.parse({ name: '\n\t ', email: 'sam@example.com' }).ok).toBe(false);
   });
 
-  it('caps the email at 254 characters, as the Setup route does, in both email-bearing settings', () => {
+  it('caps the operator email at 254 characters, as the Setup route does', () => {
     const at254 = `${'a'.repeat(64)}@${'b'.repeat(185)}.com`;
     const over = `${'a'.repeat(64)}@${'b'.repeat(186)}.com`;
     expect(at254).toHaveLength(254);
     expect(SETTINGS.operator.parse({ name: 'Sam', email: at254 }).ok).toBe(true);
     expect(SETTINGS.operator.parse({ name: 'Sam', email: over }).ok).toBe(false);
-    const at = '2026-11-22T12:00:00.000Z';
-    expect(SETTINGS.operator_confirmation.parse({ email: over, attemptedAt: at, sentAt: null }).ok).toBe(false);
-  });
-
-  it('accepts a confirmation record and rejects a malformed one', () => {
-    const at = '2026-11-22T12:00:00.000Z';
-    expect(SETTINGS.operator_confirmation.parse({ email: 'Sam@Example.com', attemptedAt: at, sentAt: at }))
-      .toEqual(ok({ email: 'sam@example.com', attemptedAt: at, sentAt: at }));
-    // A failed attempt records a null sentAt: the notice is owed, not delivered.
-    expect(SETTINGS.operator_confirmation.parse({ email: 'sam@example.com', attemptedAt: at, sentAt: null }))
-      .toEqual(ok({ email: 'sam@example.com', attemptedAt: at, sentAt: null }));
-    for (const bad of [
-      null,
-      'sam@example.com',
-      {},
-      { email: 'nope', attemptedAt: at, sentAt: at },
-      { email: 'sam@example.com', attemptedAt: 'yesterday', sentAt: at },
-      { email: 'sam@example.com', attemptedAt: at, sentAt: 'later' },
-      { email: 'sam@example.com', attemptedAt: at, sentAt: at, extra: true },
-    ]) {
-      expect(SETTINGS.operator_confirmation.parse(bad).ok, JSON.stringify(bad)).toBe(false);
-    }
   });
 
   it('accepts only the shipped routes', () => {

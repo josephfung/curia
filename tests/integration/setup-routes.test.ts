@@ -13,8 +13,7 @@
 // against a fresh container; for local dev runs, point DATABASE_URL at an empty
 // test database, not your working dev database.
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import type { NotificationOutcome } from '../../src/skills/outbound-gateway.js';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import pg from 'pg';
@@ -35,7 +34,6 @@ import {
 import type { SetupChecklist } from '../../src/setup/checklist.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 import { completeSetup } from '../../src/setup/complete-setup.js';
-import { sendPendingOperatorConfirmation } from '../../src/notifications/operator-confirmation.js';
 import { lockSetupSingletons } from './setup-singletons-lock.js';
 import { isIdentityConfigured } from '../../src/channels/http/routes/identity.js';
 
@@ -45,12 +43,10 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
 
 const TEST_SECRET = 'setup-route-test-secret';
-/** Confirmation notices sent while saving the operator (#2710). */
-const operatorNotices = vi.fn(async (_request: { notificationType: string; subject: string; body: string }): Promise<NotificationOutcome> => 'sent');
 const AUTH_HEADER = { 'x-web-bootstrap-secret': TEST_SECRET };
 const TEST_LABEL_PREFIX = 'Setup-Route Test';
 // The settings migration 132 created for Setup (#2709). These suites own them.
-const SETUP_SETTING_KEYS = ['operator', 'operator_confirmation', 'messaging_route', 'voice_route', 'setup.completed_at'];
+const SETUP_SETTING_KEYS = ['operator', 'messaging_route', 'voice_route', 'setup.completed_at'];
 // Person labels this file writes that do not use the prefix above.
 const OWNED_KG_LABELS = [
   'Original Name',
@@ -136,9 +132,6 @@ describeIf('/api/setup/* routes', () => {
         scheduleProcessExit,
         contactService,
         entityMemory,
-        // The operator's confirmation notice (#2710): recorded, not sent anywhere.
-        outboundGateway: { publishNotification: operatorNotices },
-        appOrigin: 'https://curia.example.com',
       });
       await app.ready();
       return app;
@@ -937,7 +930,6 @@ describeIf('/api/setup/* routes', () => {
   describe('Setup page state', () => {
     let app: FastifyInstance;
     let checklist: SetupChecklist = { setupFor: 'self', tasks: [], setupComplete: false, missing: ['email'] };
-    let deliveryCheckThrows = false;
     const TEST_WRITE: SetupWriteOptions = { updatedBy: 'integration-test', logger };
     let savedSettings: Array<Record<string, unknown>> = [];
     let savedThread: string | undefined;
@@ -966,14 +958,6 @@ describeIf('/api/setup/* routes', () => {
         contactService: ContactService.createWithPostgres(pool, undefined, logger),
         entityMemory: undefined,
         setupChecklist: async () => checklist,
-        // The operator's confirmation notice (#2710). Recorded through a spy, never sent.
-        outboundGateway: { publishNotification: operatorNotices },
-        // A test makes this throw to break the confirmation step after the save has committed.
-        canDeliver: () => {
-          if (deliveryCheckThrows) throw new Error('delivery check failed');
-          return true;
-        },
-        appOrigin: 'https://curia.example.com',
       });
       await app.ready();
     });
@@ -981,8 +965,6 @@ describeIf('/api/setup/* routes', () => {
     beforeEach(async () => {
       await pool.query('DELETE FROM settings WHERE key = ANY($1::text[])', [SETUP_SETTING_KEYS]);
       checklist = { setupFor: 'self', tasks: [], setupComplete: false, missing: ['email'] };
-      operatorNotices.mockClear();
-      deliveryCheckThrows = false;
     });
 
     afterAll(async () => {
@@ -1053,72 +1035,6 @@ describeIf('/api/setup/* routes', () => {
         setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com', messagingRoute: 'slack', voiceRoute: 'app',
       });
       expect((await readSetupState(pool, logger)).messagingRoute).toBe('slack');
-    });
-
-    it('PUT /api/setup/state sends one confirmation notice when the operator is recorded (#2710)', async () => {
-      const res = await app.inject({
-        method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER,
-        payload: { setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com' },
-      });
-      expect(res.statusCode).toBe(200);
-      expect(res.json().operatorConfirmation).toMatchObject({ state: 'sent', email: 'sam@example.com' });
-      expect(operatorNotices).toHaveBeenCalledOnce();
-      const notice = operatorNotices.mock.calls[0]![0];
-      expect(notice.notificationType).toBe('operator_configured');
-      // The gateway resolves the address from the setting that was just saved.
-      expect(notice.body).toContain('Sam');
-
-      // Re-saving the same address is not a new operator: no second notice.
-      await app.inject({
-        method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER,
-        payload: { setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com' },
-      });
-      expect(operatorNotices).toHaveBeenCalledOnce();
-    });
-
-    it('PUT /api/setup/state records a failed confirmation, and keeps the setting', async () => {
-      operatorNotices.mockResolvedValueOnce('not_sent');
-      const res = await app.inject({
-        method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER,
-        payload: { setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com' },
-      });
-      expect(res.json().operatorConfirmation).toMatchObject({ state: 'failed' });
-      expect(await readSetupState(pool, logger)).toMatchObject({ operatorEmail: 'sam@example.com' });
-
-      // A failed notice is owed, not abandoned: the next attempt (boot, Start onboarding, or the
-      // console's own save) sends it, and records the success.
-      const retried = await sendPendingOperatorConfirmation({
-        pool,
-        gateway: { publishNotification: operatorNotices },
-        logger,
-      });
-      expect(retried).toMatchObject({ state: 'sent' });
-      expect(operatorNotices).toHaveBeenCalledTimes(2);
-    });
-
-    it('PUT /api/setup/state returns the saved state when the confirmation step throws (#2710 review)', async () => {
-      deliveryCheckThrows = true;
-      const res = await app.inject({
-        method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER,
-        payload: { setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com' },
-      });
-      // The save committed: a 200 with the saved fields, and a status that never says sent.
-      expect(res.statusCode).toBe(200);
-      expect(res.json().setup).toMatchObject({ operatorEmail: 'sam@example.com' });
-      expect(res.json().operatorConfirmation).toEqual({ state: 'failed', email: 'sam@example.com' });
-      expect(await readSetupState(pool, logger)).toMatchObject({ operatorEmail: 'sam@example.com' });
-    });
-
-    it('PUT /api/setup/state sends no notice when the operator is cleared', async () => {
-      await updateSetupState(pool, { setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com' }, TEST_WRITE);
-      operatorNotices.mockClear();
-      const res = await app.inject({
-        method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER,
-        payload: { setupFor: 'self' },
-      });
-      expect(res.statusCode).toBe(200);
-      expect(res.json().operatorConfirmation).toEqual({ state: 'none' });
-      expect(operatorNotices).not.toHaveBeenCalled();
     });
 
     it('POST /api/setup/start keeps what is saved, and never reopens a finished Setup', async () => {

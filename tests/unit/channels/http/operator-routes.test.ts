@@ -1,9 +1,8 @@
-// The console's Operator setting (#2710, ADR-068): view, set, clear, and the confirmation
-// notice that stands in for a fallback when the address is mistyped.
+// The console's Operator setting (#2710, ADR-068): view, set, clear and the change history.
 //
 // The store's SQL is covered against a real database in tests/integration/settings-store.test.ts;
 // this file covers the route: validation (unknown fields refused, name and email always as a
-// pair), what the response says about the confirmation notice, and that clearing means no notice.
+// pair), the saved value, and the cache refresh after every write.
 import Fastify, { type FastifyInstance } from 'fastify';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
@@ -16,12 +15,8 @@ import { createBearerAuthHook } from '../../../../src/channels/http/auth.js';
 const SECRET = 'test-bootstrap-secret';
 
 /** A pool whose settings table holds one key, and whose history holds what a test says. */
-function makePool(
-  initial: { value: unknown; updatedBy: string } | null = null,
-  initialConfirmation?: { email: string; attemptedAt: string; sentAt: string | null },
-) {
+function makePool(initial: { value: unknown; updatedBy: string } | null = null) {
   let stored = initial;
-  let confirmation = initialConfirmation;
   const history: Array<{ id: string; key: string; old_value: unknown; new_value: unknown; updated_by: string; changed_at: Date }> = [];
 
   const client = {
@@ -30,7 +25,7 @@ function makePool(
       if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
       if (sql.includes('SELECT value FROM settings')) {
         const key = String(params![0]);
-        const value = key === 'operator' ? stored?.value : key === 'operator_confirmation' ? confirmation : undefined;
+        const value = key === 'operator' ? stored?.value : undefined;
         return { rows: value === undefined ? [] : [{ value }] };
       }
       // The history INSERT also starts with "INSERT INTO settings", so it is matched first.
@@ -46,10 +41,8 @@ function makePool(
         return { rows: [] };
       }
       if (sql.includes('INSERT INTO settings')) {
-        const key = String(params![0]);
         const value = JSON.parse(String(params![1]));
-        if (key === 'operator_confirmation') confirmation = value;
-        else stored = { value, updatedBy: String(params![2]) };
+        stored = { value, updatedBy: String(params![2]) };
         return { rows: [] };
       }
       if (sql.includes('DELETE FROM settings')) {
@@ -68,7 +61,6 @@ function makePool(
       if (sql.includes('FROM settings WHERE key = ANY')) {
         const rows: Array<Record<string, unknown>> = [];
         if (stored) rows.push({ key: 'operator', value: stored.value, updated_by: stored.updatedBy });
-        if (confirmation) rows.push({ key: 'operator_confirmation', value: confirmation, updated_by: 'curia' });
         return { rows };
       }
       const forKey = (rows: typeof history) => rows.filter((row) => row.key === 'operator');
@@ -81,32 +73,28 @@ function makePool(
       throw new Error(`unexpected pool SQL: ${sql}`);
     }),
   };
-  return { pool, history, current: () => stored, confirmation: () => confirmation };
+  return { pool, history, current: () => stored };
 }
 
 interface Harness {
   app: FastifyInstance;
-  sendNotification: ReturnType<typeof vi.fn>;
+  onOperatorChanged: ReturnType<typeof vi.fn>;
 }
 
-async function makeApp(
-  pool: ReturnType<typeof makePool>['pool'],
-  opts: { withGateway?: boolean } = {},
-): Promise<Harness> {
+async function makeApp(pool: ReturnType<typeof makePool>['pool']): Promise<Harness> {
   const app = Fastify();
   await app.register(cookie);
   await app.register(rateLimit, { max: 200, timeWindow: '1 minute' });
-  const sendNotification = vi.fn().mockResolvedValue('sent');
+  const onOperatorChanged = vi.fn();
   await app.register(operatorRoutes, {
     webAppBootstrapSecret: SECRET,
     sessions: new Map() as SessionStore,
     pool: pool as never,
     logger: createSilentLogger(),
-    ...(opts.withGateway === false ? {} : { outboundGateway: { publishNotification: sendNotification } }),
-    appOrigin: 'https://curia.example.com',
+    onOperatorChanged,
   });
   await app.ready();
-  return { app, sendNotification };
+  return { app, onOperatorChanged };
 }
 
 function put(app: FastifyInstance, body: unknown) {
@@ -156,133 +144,48 @@ describe('operator routes', () => {
     const { app } = await makeApp(pool.pool);
     const res = await app.inject({ method: 'GET', url: '/api/operator', headers: { 'x-web-bootstrap-secret': SECRET } });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ operator: null, updatedBy: null, confirmation: { state: 'none' } });
+    expect(res.json()).toEqual({ operator: null, updatedBy: null });
     await app.close();
   });
 
-  it('saves the pair, stores it, and says the confirmation went out', async () => {
-    const { app, sendNotification } = await makeApp(pool.pool);
+  it('saves the pair, stores it, and refreshes the cached operator', async () => {
+    const { app, onOperatorChanged } = await makeApp(pool.pool);
     const res = await put(app, { name: 'Sam Rivera', email: 'sam@example.com' });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({
-      operator: { name: 'Sam Rivera', email: 'sam@example.com' },
-      confirmation: { state: 'sent', email: 'sam@example.com' },
-    });
+    expect(res.json()).toEqual({ operator: { name: 'Sam Rivera', email: 'sam@example.com' } });
     expect(pool.current()).toMatchObject({ value: { name: 'Sam Rivera', email: 'sam@example.com' } });
-    // The confirmation is the smoke test for a typo, and it is operator-routed.
-    expect(sendNotification).toHaveBeenCalledOnce();
-    const notice = sendNotification.mock.calls[0]![0] as { notificationType: string; body: string };
-    expect(notice.notificationType).toBe('operator_configured');
-    expect(notice.body).toContain('Sam Rivera');
-    // No recipient is named: the gateway resolves the (just saved) operator address.
-    expect(notice).not.toHaveProperty('recipient');
+    expect(onOperatorChanged).toHaveBeenCalledWith({ name: 'Sam Rivera', email: 'sam@example.com' });
     await app.close();
   });
 
-  it('reports a confirmation that could not be published, without failing the save', async () => {
-    const { app, sendNotification } = await makeApp(pool.pool);
-    sendNotification.mockResolvedValue('not_sent');
-    const res = await put(app, { name: 'Sam Rivera', email: 'sam@example.com' });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({
-      operator: { name: 'Sam Rivera', email: 'sam@example.com' },
-      confirmation: { state: 'failed', email: 'sam@example.com' },
-    });
-    // The setting is saved: a notice that failed must not undo it.
-    expect(pool.current()).not.toBeNull();
-    await app.close();
-  });
-
-  it('saves and reports the miss when no outbound gateway exists', async () => {
-    const { app } = await makeApp(pool.pool, { withGateway: false });
-    // Nothing can deliver it, so the notice is owed rather than failed: that is what the console
-    // says, and a later boot or Start retries it.
-    const res = await put(app, { name: 'Sam Rivera', email: 'sam@example.com' });
-    expect(res.json()).toMatchObject({ confirmation: { state: 'pending' } });
-    expect(pool.current()).not.toBeNull();
-    await app.close();
-  });
-
-  it('clears the operator, and sends no confirmation: there is nowhere to send it', async () => {
+  it('clears the operator, and tells the cache', async () => {
     pool = makePool({ value: { name: 'Sam Rivera', email: 'sam@example.com' }, updatedBy: 'console' });
-    const { app, sendNotification } = await makeApp(pool.pool);
+    const { app, onOperatorChanged } = await makeApp(pool.pool);
     const res = await put(app, { clear: true });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ operator: null, confirmation: { state: 'none' } });
+    expect(res.json()).toEqual({ operator: null });
     expect(pool.current()).toBeNull();
-    expect(sendNotification).not.toHaveBeenCalled();
+    expect(onOperatorChanged).toHaveBeenCalledWith(null);
     await app.close();
   });
 
-  it('does not re-send a confirmation already sent when the saved operator is unchanged', async () => {
-    const at = '2026-11-22T12:00:00.000Z';
-    pool = makePool(
-      { value: { name: 'Sam Rivera', email: 'sam@example.com' }, updatedBy: 'console' },
-      { email: 'sam@example.com', attemptedAt: at, sentAt: at },
-    );
-    const { app, sendNotification } = await makeApp(pool.pool);
-    const res = await put(app, { name: 'Sam Rivera', email: 'sam@example.com' });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ confirmation: { state: 'sent', sentAt: at } });
-    expect(sendNotification).not.toHaveBeenCalled();
-    // No write either: an unchanged save adds no history row.
-    expect(pool.history.filter((row) => row.key === 'operator')).toHaveLength(0);
-    await app.close();
-  });
-
-  it('retries an owed confirmation on an unchanged save, pending or failed, without rewriting the operator', async () => {
-    for (const owed of [undefined, { email: 'sam@example.com', attemptedAt: '2026-11-22T12:00:00.000Z', sentAt: null }]) {
-      pool = makePool({ value: { name: 'Sam Rivera', email: 'sam@example.com' }, updatedBy: 'console' }, owed);
-      const { app, sendNotification } = await makeApp(pool.pool);
-      const res = await put(app, { name: 'Sam Rivera', email: 'sam@example.com' });
-
-      expect(res.statusCode).toBe(200);
-      expect(sendNotification).toHaveBeenCalledTimes(1);
-      expect(res.json()).toMatchObject({ confirmation: { state: 'sent', email: 'sam@example.com' } });
-      expect(pool.history.filter((row) => row.key === 'operator')).toHaveLength(0);
-      await app.close();
-    }
-  });
-
-  it('keeps a committed save when the confirmation step throws: 200, saved, and failed (never sent)', async () => {
-    const { app } = await makeApp(pool.pool);
-    // The first settings read is the unchanged-save check; every read after the save fails, so
-    // working out the confirmation throws once the operator is already written.
-    const realQuery = pool.pool.query.getMockImplementation()!;
-    let reads = 0;
-    pool.pool.query.mockImplementation(async (sql: string) => {
-      if (sql.includes('FROM settings WHERE key = ANY') && ++reads > 1) throw new Error('settings read failed');
-      return realQuery(sql);
-    });
-    const res = await put(app, { name: 'Sam Rivera', email: 'sam@example.com' });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({
-      operator: { name: 'Sam Rivera', email: 'sam@example.com' },
-      confirmation: { state: 'failed', email: 'sam@example.com' },
-    });
-    expect(pool.current()).toMatchObject({ value: { name: 'Sam Rivera', email: 'sam@example.com' } });
-    await app.close();
-  });
-
-  it('reports a pending confirmation on GET while one is owed', async () => {
+  it('writes nothing when the saved operator is unchanged', async () => {
     pool = makePool({ value: { name: 'Sam Rivera', email: 'sam@example.com' }, updatedBy: 'console' });
     const { app } = await makeApp(pool.pool);
-    const res = await app.inject({ method: 'GET', url: '/api/operator', headers: { 'x-web-bootstrap-secret': SECRET } });
-    expect(res.json()).toMatchObject({ confirmation: { state: 'pending', email: 'sam@example.com' } });
+    const res = await put(app, { name: 'Sam Rivera', email: 'sam@example.com' });
+
+    expect(res.statusCode).toBe(200);
+    expect(pool.history).toHaveLength(0);
     await app.close();
   });
 
   it('answers 400 for a half-saved or invalid pair, and writes nothing', async () => {
-    const { app, sendNotification } = await makeApp(pool.pool);
+    const { app } = await makeApp(pool.pool);
     expect((await put(app, { name: 'Sam' })).statusCode).toBe(400);
     expect((await put(app, { name: 'Sam', email: 'nope' })).statusCode).toBe(400);
     expect(pool.current()).toBeNull();
-    expect(sendNotification).not.toHaveBeenCalled();
     await app.close();
   });
 

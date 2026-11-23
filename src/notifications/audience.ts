@@ -36,7 +36,6 @@ export const NOTIFICATION_AUDIENCES: Record<NotificationType, NotificationAudien
   schedule_suspended: 'operator',
   schedule_recovered: 'operator',
   mailbox_signin_admin_blocked: 'operator',
-  operator_configured: 'operator',
 
   // The onboarding program's own trouble: it is the operator's job to unblock Setup.
   greeting_unanswered: 'operator',

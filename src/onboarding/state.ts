@@ -33,13 +33,6 @@ export type OnboardingState = {
   /** The phone app invitation this run minted (app route); null or absent when it minted none. */
   invitationId?: string | null;
   operatorNotified: OperatorEvent[];
-  /**
-   * Events whose notice was recorded but could not be emailed (#2710). `operatorNotified` says
-   * what was raised, not what arrived: an event listed here may have reached nobody, and the
-   * gateway's `outbound.notification_undelivered` row is the durable record. Absent on runs
-   * written before this field existed, and when nothing failed.
-   */
-  operatorNoticeFailed?: OperatorEvent[];
 };
 
 /** Read the onboarding state. Missing → null; malformed JSON → warn and null. */
@@ -78,10 +71,7 @@ function isOnboardingState(v: object): v is OnboardingState {
     (o.greetingNudgedAt === undefined || isNullableString(o.greetingNudgedAt)) &&
     (o.invitationId === undefined || isNullableString(o.invitationId)) &&
     Array.isArray(o.operatorNotified) &&
-    o.operatorNotified.every((e) => typeof e === 'string' && (OPERATOR_EVENTS as readonly string[]).includes(e)) &&
-    (o.operatorNoticeFailed === undefined
-      || (Array.isArray(o.operatorNoticeFailed)
-        && o.operatorNoticeFailed.every((e) => typeof e === 'string' && (OPERATOR_EVENTS as readonly string[]).includes(e))))
+    o.operatorNotified.every((e) => typeof e === 'string' && (OPERATOR_EVENTS as readonly string[]).includes(e))
   );
 }
 

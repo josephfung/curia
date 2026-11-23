@@ -22,7 +22,6 @@ describe('NOTIFICATION_AUDIENCES', () => {
       schedule_suspended: 'operator',
       schedule_recovered: 'operator',
       mailbox_outage: 'operator',
-      operator_configured: 'operator',
       // Operator: onboarding trouble.
       greeting_unanswered: 'operator',
       invitation_expired: 'operator',
@@ -61,9 +60,5 @@ describe('NOTIFICATION_AUDIENCES', () => {
     for (const type of ['greeting_unanswered', 'invitation_expired', 'web_search_failed', 'mailbox_signin_blocked'] as const) {
       expect(notificationAudience(type)).toBe('operator');
     }
-  });
-
-  it('confirms an operator address to the operator, never to the principal', () => {
-    expect(notificationAudience('operator_configured')).toBe('operator');
   });
 });

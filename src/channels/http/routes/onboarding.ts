@@ -19,12 +19,6 @@ export interface OnboardingRouteOptions {
   bus: EventBus;
   logger: Logger;
   onboarding: Pick<OnboardingService, 'status' | 'start' | 'releaseTriageHold' | 'stopInvitation'>;
-  /**
-   * Retry an operator confirmation that Setup recorded but could not send (#2710). Start is a
-   * moment where a fresh install has restarted and can email, so it is when a typo'd operator
-   * address would otherwise go unnoticed. Best-effort: a failure must not fail Start.
-   */
-  retryOwedOperatorConfirmation?: () => Promise<void>;
 }
 
 // Start mints a 48-hour credential and creates tasks: the auth-sensitive limit setupRoutes uses.
@@ -46,7 +40,7 @@ function onboardingChange(configType: 'onboarding' | 'onboarding_triage_hold', o
 }
 
 export async function onboardingRoutes(app: FastifyInstance, options: OnboardingRouteOptions): Promise<void> {
-  const { webAppBootstrapSecret, sessions, bus, logger, onboarding, retryOwedOperatorConfirmation } = options;
+  const { webAppBootstrapSecret, sessions, bus, logger, onboarding } = options;
 
   function requireAuth(request: FastifyRequest, reply: FastifyReply): boolean {
     return assertSecret(request, reply, webAppBootstrapSecret, sessions);
@@ -84,16 +78,6 @@ export async function onboardingRoutes(app: FastifyInstance, options: Onboarding
       return reply.status(500).send({ error: 'Failed to start onboarding. Check server logs.' });
     }
     if (!result.ok) return reply.status(409).send(result);
-    // Onboarding started. An operator confirmation Setup still owes is attempted now (#2710);
-    // it is recorded in `operator_confirmation`, and a miss is retried on the next boot. Never
-    // awaited before the response: a send has no deadline here, and when Start schedules a
-    // restart the process exits shortly after, so the console could lose the invitation. With a
-    // restart scheduled it is skipped outright, because that boot retries it once email is up.
-    if (retryOwedOperatorConfirmation && !result.restartScheduled) {
-      void retryOwedOperatorConfirmation().catch((err: unknown) => {
-        logger.error({ err }, 'onboarding: an owed operator confirmation could not be sent — onboarding did start');
-      });
-    }
     // Onboarding started: recorded on every route. It happened, so a miss is logged, not an error.
     try {
       await bus.publish('system', onboardingChange('onboarding', true, `Onboarding started from the console (task ${result.taskId})`, actor.actorSessionId));
