@@ -24,14 +24,16 @@ Defaults live in `limits.ts`; design background is `docs/wip/2026-11-23-deep-div
      (`isPrimary`) listed in `CALENDAR_WINDOW_DAYS` (7-day) windows, `expandRecurring: true`,
      `limit` 1,000 per window, `PAGE_DELAY_MS` between windows. 90 days is 13 windows. A window
      is counted as `ceil(events / 200)` requests (at least 1), Nylas's page size. No primary
-     calendar: warn and skip that calendar. A window that hit 1,000 events or reported
-     `onIncomplete` marks the scan truncated.
+     calendar: warn, skip that calendar and mark the scan truncated. A window that hit 1,000
+     events or reported `onIncomplete` marks the scan truncated.
   2. Each mailbox's `SENT` folder via `listAllMessages`, with `VOICE_SAMPLE_SIZE` requests held
      back for step 3.
   3. Up to `VOICE_SAMPLE_SIZE` sent bodies via `getMessage` (1 request each, `PAGE_DELAY_MS`
      apart), chosen as in *Voice sample* below. A body that is gone (404) is skipped with a warning.
-  4. Each mailbox's `INBOX` folder via `listAllMessages` — the bulk, so it goes last.
-- **Listing:** `listAllMessages({ folder, receivedAfter, receivedBefore, maxScan, pageDelayMs: PAGE_DELAY_MS, onPage })`.
+  4. Each mailbox's received mail via `listAllMessages` with no folder filter — the bulk, so it
+     goes last. Everything in the window counts except messages in `SENT`, `DRAFT`, `SPAM` or
+     `TRASH`, so archived mail (Gmail mail out of `INBOX`) is received mail too.
+- **Listing:** `listAllMessages({ folder?, receivedAfter, receivedBefore, maxScan, pageDelayMs: PAGE_DELAY_MS, onPage })`.
   `maxScan` is what is left of `MAX_MESSAGES`. `onPage` adds each page's requests (retries
   included) to the count, counts rate-limited pages, and returns `false` once the request count
   reaches the step's limit, which stops paging while keeping the messages already read.
@@ -39,22 +41,28 @@ Defaults live in `limits.ts`; design background is `docs/wip/2026-11-23-deep-div
   that reports `truncated`) skips the rest of that step and marks `coverage.truncated`; later
   steps still run if budget remains (so the voice bodies get their reserved requests). The only
   overshoot is the retries inside the final page.
-- **Rate limiting is scoped to a step.** The steps are: each mailbox's calendar, each mailbox's
-  Sent listing, the voice bodies, each mailbox's Inbox listing. `listAllMessages` retries 429s
-  and doubles its page delay itself. The calendar client (Nylas SDK) does not retry, so each
-  calendar call gets one retry after a pause that starts at 2 × `PAGE_DELAY_MS` and doubles with
-  every calendar 429 in the scan (each counted in `rateLimited` and as a request). A Nylas error
-  with status 429 (retries exhausted) or 0 (a delay that would outlast a call budget) ends only
-  the step it happened in: the scan is marked truncated with a warning, what was read is kept,
-  and the next step runs. Messages from the listing call that threw are lost (the client
-  returns nothing from a failed call); events from earlier calendar windows are kept.
-- **Deduplication:** a message listed twice (self-sent mail carries both INBOX and SENT) is kept
-  and counted once.
+- **Transient failures are scoped to a step.** The steps are: each mailbox's calendar, each
+  mailbox's Sent listing, the voice bodies, each mailbox's received listing. `listAllMessages`
+  retries 429s and 5xx and doubles its page delay after a 429. The calendar client (Nylas SDK)
+  does not retry, so each calendar call gets one retry after a pause that starts at
+  2 × `PAGE_DELAY_MS` and doubles with every calendar 429 or status-0 error in the scan (each
+  counted in `rateLimited` and as a request). A transient error that outlasts the retries — 429,
+  5xx, or status 0 (the fetch itself failed: DNS, a reset, a timeout) — ends only the step it
+  happened in: the scan is marked truncated with a warning and the next step runs. A listing
+  keeps the pages it read before the failing one (`listAllMessages` returns them with `endedOn`
+  when `onPage` is set); a listing whose first page fails reads nothing. Events from earlier
+  calendar windows are kept.
+- **A total outage fails the run.** When the scan read no message and no event, and at least
+  one step ended on a transient error, it throws instead of returning an empty summary. An
+  empty mailbox with no errors still succeeds.
+- **Deduplication:** a message listed twice (self-sent mail is in both the Sent and the received
+  listing) is kept and counted once.
 - **Any other error propagates** (auth 401/403, a bad grant): the run fails.
 - **Principal addresses:** the scanned mailboxes' non-empty `address` values, plus every sender
   of a `SENT`-folder message (send-as aliases), lower-cased.
 - **Coverage:** `messagesRead` and `eventsRead` are what was returned (events deduplicated by
-  id); `requests`, `rateLimited` (pages that saw a 429) and `truncated` as above. One info line
+  id); `requests`, `rateLimited` (pages that saw a 429), `errors` (steps ended by a 5xx or a
+  failed fetch) and `truncated` as above. One info line
   logs the coverage and duration.
 
 ## The summary (`summarise`)
@@ -86,8 +94,8 @@ sender is a principal address is *principal-sent*; any other message is *receive
 
 ### Unopened
 
-Received messages that are `unread` and older than 7 days before the window's end, grouped by
-sender domain. Sorted by count descending, then domain.
+Received messages still in `INBOX` that are `unread` and older than 7 days before the window's
+end, grouped by sender domain (unread archived mail was dealt with, so it is not unopened). Sorted by count descending, then domain.
 
 ### Handed off
 

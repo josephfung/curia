@@ -34,7 +34,7 @@ const emptyScan = (): ScanResult => ({
   sentBodies: [],
   events: [],
   principalAddresses: ['ceo@acme.example.com'],
-  coverage: { messagesRead: 3, eventsRead: 0, requests: 7, rateLimited: 1, truncated: false },
+  coverage: { messagesRead: 3, eventsRead: 0, requests: 7, rateLimited: 1, errors: 0, truncated: false },
 });
 
 function setup(opts: {
@@ -159,6 +159,26 @@ describe('runDeepDive', () => {
     expect(await t.read()).toMatchObject({ status: 'failed', error: 'grant revoked' });
     expect(t.notifyOperator).toHaveBeenCalledWith('onb-1', 'deep_dive_failed');
     expect(t.taskRepo.updateTask).toHaveBeenCalledWith('onb-1', { progressNote: expect.stringContaining('Deep dive failed') });
+  });
+
+  it('a Nylas outage (the real scan reads nothing) fails the run with deep_dive_failed', async () => {
+    const t = setup({ openTask: true });
+    const down = Object.assign(new Error('unavailable'), { statusCode: 503 });
+    const deps: RunDeps = {
+      ...t.deps,
+      scan: undefined,
+      sleep: async () => {},
+      mailboxes: {
+        list: async () => [{ id: 'personal', label: 'personal', address: 'ceo@acme.example.com', isDefault: true, triageStartAt: null }],
+        ceoClient: async () => ({ listAllMessages: async () => { throw down; } }),
+        calendarClient: async () => ({ listCalendars: async () => { throw down; } }),
+      } as never,
+    };
+    await t.seed();
+    await runDeepDive(deps, running);
+    expect(await t.read()).toMatchObject({ status: 'failed', error: expect.stringMatching(/read nothing/) });
+    expect(t.workingDocsRepo.create).not.toHaveBeenCalled();
+    expect(t.notifyOperator).toHaveBeenCalledWith('onb-1', 'deep_dive_failed');
   });
 
   it('marks failed but sends no notice when no onboarding task is open', async () => {

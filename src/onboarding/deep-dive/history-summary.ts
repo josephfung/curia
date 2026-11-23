@@ -44,7 +44,15 @@ export type HistorySummary = {
   version: 1;
   generatedAt: string;
   window: { from: string; to: string };
-  coverage: { messagesRead: number; eventsRead: number; requests: number; rateLimited: number; truncated: boolean };
+  coverage: {
+    messagesRead: number;
+    eventsRead: number;
+    requests: number;
+    rateLimited: number;
+    /** Scan steps ended early by a Nylas server error or a failed fetch (429s are in rateLimited). */
+    errors: number;
+    truncated: boolean;
+  };
   principalAddresses: string[];
   correspondents: Correspondent[]; // sorted by received+sent desc
   unopened: { fromDomain: string; count: number; evidence: Evidence }[];
@@ -78,6 +86,7 @@ export const UNOPENED_AFTER_DAYS = 7;
 export const TIME_SPENT_TOP = 25;
 
 const SENT_FOLDER = 'SENT';
+const INBOX_FOLDER = 'INBOX';
 
 interface CorrespondentAcc {
   email: string;
@@ -174,7 +183,8 @@ function unopenedOf(messages: readonly NylasMessageSummary[], principal: Readonl
   const byDomain = new Map<string, Dated[]>();
   for (const m of messages) {
     const from = senderOf(m);
-    if (from === '' || principal.has(from) || !m.unread || m.date >= cutoff) continue;
+    // Unread archived mail was dealt with (filed unread), so only the inbox counts as unopened.
+    if (from === '' || principal.has(from) || !m.unread || m.date >= cutoff || !m.folders.includes(INBOX_FOLDER)) continue;
     const domain = domainOf(from);
     const list = byDomain.get(domain) ?? [];
     list.push({ id: m.id, at: m.date });

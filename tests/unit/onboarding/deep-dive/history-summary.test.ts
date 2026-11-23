@@ -15,7 +15,7 @@ const calendar = load<NylasCalendarEvent[]>('calendar.json');
 
 const TO = new Date('2026-11-23T12:00:00.000Z');
 const FROM = new Date(TO.getTime() - 90 * 86_400_000);
-const COVERAGE: HistorySummary['coverage'] = { messagesRead: 16, eventsRead: 16, requests: 40, rateLimited: 1, truncated: false };
+const COVERAGE: HistorySummary['coverage'] = { messagesRead: 16, eventsRead: 16, requests: 40, rateLimited: 1, errors: 0, truncated: false };
 
 function input(overrides: Partial<SummariseInput> = {}): SummariseInput {
   return {
@@ -156,7 +156,7 @@ describe('summarise', () => {
   });
 
   it('summarises a near-empty mailbox', () => {
-    const coverage = { messagesRead: 3, eventsRead: 0, requests: 3, rateLimited: 0, truncated: false };
+    const coverage = { messagesRead: 3, eventsRead: 0, requests: 3, rateLimited: 0, errors: 0, truncated: false };
     const three = mail.filter((m) => ['m06', 'm07', 'm16'].includes(m.id));
     const s = summarise(input({ messages: three, sentBodies: [], events: [], coverage }));
     expect(s.coverage).toEqual(coverage);
@@ -171,6 +171,22 @@ describe('summarise', () => {
     ]);
     expect(s.voiceSample).toEqual([]);
     expect(s.meetingShape).toEqual({ medianMinutes: 0, bufferMinutesMedian: 0, keptClearBlocks: [], declinedOrMoved: 0, evidence: {} });
+  });
+
+  it('counts archived mail as received, but only inbox mail as unopened', () => {
+    const old = Math.floor(TO.getTime() / 1000) - 20 * 86_400;
+    const msg = (id: string, folders: string[], from: string, to: string, date: number, unread = false): NylasMessageSummary => ({
+      id, threadId: 't-pat', subject: 'hi', from: [{ email: from }], to: [{ email: to }], cc: [],
+      snippet: '', date, unread, folders, attachments: [],
+    });
+    const messages = [
+      msg('a1', ['CATEGORY_PERSONAL'], 'pat@ext.example.com', 'ceo@acme.example.com', old, true),
+      msg('a2', ['SENT'], 'ceo@acme.example.com', 'pat@ext.example.com', old + 600),
+      msg('a3', ['IMPORTANT'], 'pat@ext.example.com', 'ceo@acme.example.com', old + 1200, true),
+    ];
+    const s = summarise(input({ messages, sentBodies: [], events: [] }));
+    expect(byEmail(s, 'pat@ext.example.com')).toMatchObject({ received: 2, sent: 1, twoWay: true });
+    expect(s.unopened).toEqual([]);
   });
 
   it('refuses an unusable timezone rather than silently finding no kept-clear blocks', () => {

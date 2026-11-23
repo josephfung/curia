@@ -283,6 +283,68 @@ describe('CeoNylasClient.listMessages — folder alias normalization', () => {
       expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
 
+    describe('a late transient failure with onPage keeps the pages already read', () => {
+      it.each([
+        ['a 429 that outlasts its retries', () => new Response('slow down', { status: 429 }), 'rate_limited'],
+        ['a 5xx that outlasts its retries', () => new Response('bad gateway', { status: 502 }), 'server_error'],
+      ] as const)('%s', async (_name, failing, endedOn) => {
+        vi.useFakeTimers();
+        try {
+          vi.spyOn(globalThis, 'fetch')
+            .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+            .mockImplementation(async () => failing());
+          const client = new CeoNylasClient('key', 'grant', logger);
+          const pages: Array<{ requests: number; rateLimited: boolean }> = [];
+
+          const pending = client.listAllMessages({ onPage: (p) => { pages.push(p); } });
+          await vi.runAllTimersAsync();
+          const result = await pending;
+
+          expect(result.messages.map((m) => m.id)).toEqual(['a']);
+          expect(result).toMatchObject({ truncated: true, endedOn });
+          // The failed page is reported too, retries included.
+          expect(pages).toHaveLength(2);
+          expect(pages[1]!.requests).toBeGreaterThan(1);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('a failed fetch (status 0)', async () => {
+        vi.spyOn(globalThis, 'fetch')
+          .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+          .mockRejectedValueOnce(new TypeError('fetch failed'));
+        const client = new CeoNylasClient('key', 'grant', logger);
+
+        const result = await client.listAllMessages({ onPage: () => true });
+
+        expect(result.messages.map((m) => m.id)).toEqual(['a']);
+        expect(result).toMatchObject({ truncated: true, endedOn: 'network' });
+      });
+
+      it('still throws when the first page fails', async () => {
+        vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('fetch failed'));
+        const client = new CeoNylasClient('key', 'grant', logger);
+        await expect(client.listAllMessages({ onPage: () => true })).rejects.toMatchObject({ status: 0 });
+      });
+
+      it('still throws on a non-transient error', async () => {
+        vi.spyOn(globalThis, 'fetch')
+          .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+          .mockResolvedValueOnce(new Response('nope', { status: 401 }));
+        const client = new CeoNylasClient('key', 'grant', logger);
+        await expect(client.listAllMessages({ onPage: () => true })).rejects.toMatchObject({ status: 401 });
+      });
+
+      it('callers without onPage keep the throw', async () => {
+        vi.spyOn(globalThis, 'fetch')
+          .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))
+          .mockRejectedValueOnce(new TypeError('fetch failed'));
+        const client = new CeoNylasClient('key', 'grant', logger);
+        await expect(client.listAllMessages({})).rejects.toMatchObject({ status: 0 });
+      });
+    });
+
     it('refuses a page delay that outlasts the call budget', async () => {
       vi.spyOn(globalThis, 'fetch')
         .mockResolvedValueOnce(json({ data: [{ id: 'a' }], next_cursor: 'C2' }))

@@ -30,6 +30,8 @@ function fakeMail(opts: {
   pageSize?: number;
   listError?: unknown;
   getError?: unknown;
+  /** The listing of this folder ('' = received) returns its first page, then ends on this error kind. */
+  endsOn?: { folder: string; kind: 'rate_limited' | 'server_error' | 'network' };
 }) {
   const listCalls: ListOpts[] = [];
   const getCalls: string[] = [];
@@ -38,6 +40,10 @@ function fakeMail(opts: {
       listCalls.push(o);
       if (opts.listError !== undefined) throw opts.listError;
       const src = opts.pages(o.folder ?? '');
+      if (opts.endsOn && opts.endsOn.folder === (o.folder ?? '') && src !== 'endless') {
+        o.onPage?.({ requests: 1, rateLimited: false });
+        return { messages: src[0] ?? [], truncated: true, endedOn: opts.endsOn.kind };
+      }
       const out: NylasMessageSummary[] = [];
       const maxScan = o.maxScan ?? 500;
       for (let i = 0; ; i++) {
@@ -88,6 +94,13 @@ function fakeCalendar(
     }),
   };
   return { client: client as unknown as NylasCalendarClient, calls };
+}
+
+function calEvent(id: string): NylasCalendarEvent {
+  return {
+    id, title: 'x', description: '', location: '', startTime: 1, endTime: 2, startDate: null, endDate: null,
+    participants: [], conferencing: null, status: 'confirmed', calendarId: 'primary-cal', busy: true, metadata: null,
+  };
 }
 
 function view(id: string, address: string): PrincipalMailboxView {
@@ -173,13 +186,79 @@ describe('scanHistory', () => {
 
   it('ends the scan as truncated, not failed, when a listing exhausts its 429 retries', async () => {
     const mail = fakeMail({ pages: () => [], listError: new NylasApiError(429, 'listAllMessages', 'rate limited') });
-    const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': fakeCalendar().client });
+    const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': fakeCalendar([calEvent('e1')]).client });
 
     const result = await scanHistory(d, ['mb-1']);
 
     // Each listing step ends on its own; the inbox is still tried after Sent gave up.
     expect(result.coverage.truncated).toBe(true);
-    expect(mail.listCalls.map((c) => c?.folder)).toEqual(['SENT', 'INBOX']);
+    expect(mail.listCalls.map((c) => c?.folder)).toEqual(['SENT', undefined]);
+  });
+
+  describe('transient Nylas failures', () => {
+    it('keeps the pages read before a late failure and marks the step truncated', async () => {
+      const mail = fakeMail({
+        pages: (folder) => (folder === 'SENT' ? [] : [[message('r1', 'INBOX', 'pat@ext.example.com', 'ceo@acme.example.com')]]),
+        endsOn: { folder: '', kind: 'server_error' },
+      });
+      const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': fakeCalendar().client });
+
+      const result = await scanHistory(d, ['mb-1']);
+
+      expect(result.messages.map((m) => m.id)).toEqual(['r1']);
+      expect(result.coverage).toMatchObject({ truncated: true, errors: 1, messagesRead: 1 });
+    });
+
+    it.each([
+      ['a 5xx', new NylasApiError(502, 'listAllMessages', 'bad gateway')],
+      ['a failed fetch', new NylasApiError(0, 'listAllMessages', 'fetch failed')],
+    ])('a step failing on its first request with %s is truncated, not fatal', async (_n, err) => {
+      const mail = fakeMail({ pages: () => [], listError: err });
+      const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': fakeCalendar([calEvent('e1')]).client });
+
+      const result = await scanHistory(d, ['mb-1']);
+
+      expect(mail.listCalls.map((c) => c?.folder)).toEqual(['SENT', undefined]);
+      expect(result.events.map((e) => e.id)).toEqual(['e1']);
+      expect(result.coverage).toMatchObject({ truncated: true, errors: 2 });
+    });
+
+    it('a total outage (nothing read, steps failed) throws', async () => {
+      const mail = fakeMail({ pages: () => [], listError: new NylasApiError(503, 'listAllMessages', 'unavailable') });
+      const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': fakeCalendar().client });
+
+      await expect(scanHistory(d, ['mb-1'])).rejects.toThrow(/read nothing/);
+    });
+
+    it('an empty mailbox with no errors succeeds', async () => {
+      const mail = fakeMail({ pages: () => [] });
+      const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': fakeCalendar().client });
+
+      const result = await scanHistory(d, ['mb-1']);
+
+      expect(result.coverage).toMatchObject({ messagesRead: 0, eventsRead: 0, errors: 0, truncated: false });
+    });
+  });
+
+  describe('received mail', () => {
+    it('lists every folder, keeps archived mail and drops spam, trash and drafts', async () => {
+      const archived = message('arch', 'IMPORTANT', 'pat@ext.example.com', 'ceo@acme.example.com');
+      const received = [
+        archived,
+        message('inb', 'INBOX', 'sam@ext.example.com', 'ceo@acme.example.com'),
+        message('spam', 'SPAM', 'x@ext.example.com', 'ceo@acme.example.com'),
+        message('trash', 'TRASH', 'y@ext.example.com', 'ceo@acme.example.com'),
+        message('draft', 'DRAFT', 'ceo@acme.example.com', 'z@ext.example.com'),
+        message('sent-late', 'SENT', 'ceo@acme.example.com', 'w@ext.example.com'),
+      ];
+      const mail = fakeMail({ pages: (folder) => (folder === 'SENT' ? [] : [received]) });
+      const d = deps([view('mb-1', 'ceo@acme.example.com')], { 'mb-1': mail.client }, { 'mb-1': fakeCalendar().client });
+
+      const result = await scanHistory(d, ['mb-1']);
+
+      expect(mail.listCalls[1]).not.toHaveProperty('folder');
+      expect(result.messages.map((m) => m.id)).toEqual(['arch', 'inb']);
+    });
   });
 
   it('propagates an auth failure', async () => {
@@ -196,7 +275,7 @@ describe('scanHistory', () => {
     });
     const sentPage = [[message('s1', 'SENT', 'ceo@acme.example.com', 'pat@ext.example.com'), message('s2', 'SENT', 'ceo@acme.example.com', 'sam@ext.example.com')]];
 
-    it('a calendar 429 storm ends the calendar step only: Sent and Inbox are still read', async () => {
+    it('a calendar 429 storm ends the calendar step only: Sent and received mail are still read', async () => {
       const mail = fakeMail({ pages: (folder) => (folder === 'SENT' ? sentPage : [[message('i1', 'INBOX', 'pat@ext.example.com', 'ceo@acme.example.com')]]) });
       // Window 1 succeeds; window 2 is rate-limited on the call and on its one retry.
       const cal = fakeCalendar([], {
@@ -211,7 +290,7 @@ describe('scanHistory', () => {
 
       expect(cal.calls).toHaveLength(3); // window 1, window 2, window 2 retried — then the step ends
       expect(result.events.map((e) => e.id)).toEqual(['e1']); // read before the storm, kept
-      expect(mail.listCalls.map((c) => c?.folder)).toEqual(['SENT', 'INBOX']);
+      expect(mail.listCalls.map((c) => c?.folder)).toEqual(['SENT', undefined]);
       expect(result.messages.map((m) => m.id)).toEqual(['s1', 's2', 'i1']);
       expect(result.coverage).toMatchObject({ truncated: true, rateLimited: 1 });
     });
@@ -253,9 +332,11 @@ describe('scanHistory', () => {
       const result = await scanHistory(d, ['mb-1']);
 
       expect(cal.calls).toEqual([]);
-      expect(mail.listCalls.map((c) => c?.folder)).toEqual(['SENT', 'INBOX']);
+      expect(mail.listCalls.map((c) => c?.folder)).toEqual(['SENT', undefined]);
       expect(result.events).toEqual([]);
       expect(result.messages).toHaveLength(2);
+      // An unread calendar is not complete coverage.
+      expect(result.coverage.truncated).toBe(true);
     });
 
     it('marks truncated when a calendar window reports an incomplete listing', async () => {
@@ -288,7 +369,7 @@ describe('scanHistory', () => {
       expect(result.coverage.requests).toBe(20);
     });
 
-    it('a voice-body 429 ends the voice step only: the inbox is still read', async () => {
+    it('a voice-body 429 ends the voice step only: received mail is still read', async () => {
       const mail = fakeMail({
         pages: (folder) => (folder === 'SENT' ? sentPage : [[message('i1', 'INBOX', 'pat@ext.example.com', 'ceo@acme.example.com')]]),
         getError: new NylasApiError(429, 'getMessage', 'rate limited'),
@@ -299,7 +380,7 @@ describe('scanHistory', () => {
 
       expect(mail.getCalls).toEqual(['s1']); // newest first; the step stops at the first 429
       expect(result.sentBodies).toEqual([]);
-      expect(mail.listCalls.map((c) => c?.folder)).toEqual(['SENT', 'INBOX']);
+      expect(mail.listCalls.map((c) => c?.folder)).toEqual(['SENT', undefined]);
       expect(result.messages.map((m) => m.id)).toContain('i1');
       expect(result.coverage.truncated).toBe(true);
     });

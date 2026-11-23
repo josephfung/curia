@@ -185,6 +185,20 @@ export class NylasApiError extends Error {
   }
 }
 
+/** How a paced listing ended early on an error it could not retry past (#2362). */
+export type ListingEndKind = 'rate_limited' | 'server_error' | 'network';
+
+/**
+ * The kind of a transient Nylas failure: 429 (rate limited), 5xx (server) or 0 (the fetch
+ * itself failed: DNS, reset, timeout). Null for anything else (auth, bad request, a bug).
+ */
+export function transientEndKind(status: number | undefined): ListingEndKind | null {
+  if (status === 429) return 'rate_limited';
+  if (status === 0) return 'network';
+  if (status !== undefined && status >= 500 && status <= 599) return 'server_error';
+  return null;
+}
+
 // ── Client ──────────────────────────────────────────────────────────────────
 
 export class CeoNylasClient {
@@ -300,10 +314,15 @@ export class CeoNylasClient {
        * Called once per page with the HTTP requests it took (retries included) and whether any was
        * a 429. Returning `false` stops paging after this page (`truncated` if a cursor remains), so
        * a caller with a request budget keeps the messages read so far (#2362).
+       *
+       * Setting it also keeps what was read when a later page fails transiently (429 or 5xx
+       * after retries, or a failed fetch): the listing returns those messages with
+       * `truncated: true` and `endedOn` naming the error, instead of throwing. A failed page
+       * is still reported to onPage (its requests count). A first page that fails still throws.
        */
       onPage?: (info: { requests: number; rateLimited: boolean }) => boolean | void;
     } = {},
-  ): Promise<{ messages: NylasMessageSummary[]; truncated: boolean }> {
+  ): Promise<{ messages: NylasMessageSummary[]; truncated: boolean; endedOn?: ListingEndKind }> {
     const maxScan = options.maxScan ?? 500;
     let pageDelayMs = options.pageDelayMs ?? 0;
     const pageSize = Math.min(options.limit ?? NYLAS_MAX_LIST_LIMIT, NYLAS_MAX_LIST_LIMIT);
@@ -320,13 +339,21 @@ export class CeoNylasClient {
       const url = `${this.#baseUrl}/messages?${params}`;
 
       const stats: RequestStats = { requests: 0, rateLimited: false };
-      const { data, nextCursor } = await this.#requestWithCursor<NylasApiMessage[]>(
-        'GET',
-        url,
-        'listAllMessages',
-        undefined,
-        stats,
-      );
+      let page: { data: NylasApiMessage[]; nextCursor?: string };
+      try {
+        page = await this.#requestWithCursor<NylasApiMessage[]>('GET', url, 'listAllMessages', undefined, stats);
+      } catch (err) {
+        if (!options.onPage) throw err;
+        options.onPage({ requests: stats.requests, rateLimited: stats.rateLimited });
+        const endedOn = err instanceof NylasApiError ? transientEndKind(err.status) : null;
+        if (endedOn === null || messages.length === 0) throw err;
+        this.log.warn(
+          { endedOn, status: (err as NylasApiError).status, read: messages.length },
+          'nylas: listAllMessages ended early on a transient error; keeping the pages already read',
+        );
+        return { messages: messages.slice(0, maxScan), truncated: true, endedOn };
+      }
+      const { data, nextCursor } = page;
       const keepGoing = options.onPage?.({ requests: stats.requests, rateLimited: stats.rateLimited });
       if (stats.rateLimited) pageDelayMs = Math.min(pageDelayMs * 2, NYLAS_MAX_BACKOFF_MS);
       messages.push(...data.map(normalizeMessageSummary));
