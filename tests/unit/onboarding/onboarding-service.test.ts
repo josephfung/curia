@@ -53,6 +53,8 @@ function makeHarness(opts: {
   /** Make a transaction statement fail (COMMIT, the lock). */
   txFail?: (sql: string) => Error | undefined;
   persistentStore?: boolean;
+  /** Whether a principal mailbox is connected (for the deep dive). Defaults false. */
+  hasMailbox?: boolean;
 } = {}) {
   const setup: SetupRow = {
     completed_at: '2026-11-20T12:00:00.000Z',
@@ -153,6 +155,7 @@ function makeHarness(opts: {
   const mintInvitation = vi.fn(async () => ({ id: 'inv-1', pairUrl: 'https://curia.example.com/pair#c=tok', expiresAt: '2026-11-22T12:00:00.000Z' }));
   const stopInvitation = vi.fn(async () => true);
   const scheduleProcessExit = vi.fn();
+  const startOnce = vi.fn(async () => ({ started: true as const }));
 
   const deps: OnboardingServiceDeps = {
     pool: pool as unknown as Pool,
@@ -172,8 +175,10 @@ function makeHarness(opts: {
     loadedAtBoot,
     persistentStore: opts.persistentStore ?? true,
     logger,
+    hasPrincipalMailbox: async () => opts.hasMailbox ?? false,
+    deepDive: { startOnce },
   };
-  return { service: new OnboardingService(deps), tasks, taskRepo, registry, scheduler, configStore, mintInvitation, stopInvitation, scheduleProcessExit, txQueries, taskQueryParams };
+  return { service: new OnboardingService(deps), startOnce, tasks, taskRepo, registry, scheduler, configStore, mintInvitation, stopInvitation, scheduleProcessExit, txQueries, taskQueryParams };
 }
 
 describe('OnboardingService.start', () => {
@@ -231,6 +236,34 @@ describe('OnboardingService.start', () => {
     const again = await h.service.start({ actor: 'operator' });
     expect(again).toEqual({ ok: false, code: 'already_started' });
     expect(h.tasks).toHaveLength(1 + FIRST_CONVERSATION_TOPICS + 1);
+  });
+
+  it('start starts the deep dive when a mailbox already exists', async () => {
+    const h = makeHarness({ enabled: ALL_REQUIRED_ENABLED, hasMailbox: true });
+    const result = await h.service.start({ actor: 'operator', confirmWorkingPrincipal: true });
+    expect(result.ok).toBe(true);
+    expect(h.startOnce).toHaveBeenCalledTimes(1);
+  });
+
+  it('start does not when none', async () => {
+    const h = makeHarness({ enabled: ALL_REQUIRED_ENABLED, hasMailbox: false });
+    const result = await h.service.start({ actor: 'operator', confirmWorkingPrincipal: true });
+    expect(result.ok).toBe(true);
+    expect(h.startOnce).not.toHaveBeenCalled();
+  });
+
+  it('a deep-dive start that throws does not fail onboarding start', async () => {
+    const h = makeHarness({ enabled: ALL_REQUIRED_ENABLED, hasMailbox: true });
+    h.startOnce.mockRejectedValueOnce(new Error('store down'));
+    const result = await h.service.start({ actor: 'operator', confirmWorkingPrincipal: true });
+    expect(result.ok).toBe(true);
+    expect(h.startOnce).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refused start starts no deep dive', async () => {
+    const h = makeHarness({ setup: { completed_at: null }, hasMailbox: true });
+    expect((await h.service.start({ actor: 'operator' })).ok).toBe(false);
+    expect(h.startOnce).not.toHaveBeenCalled();
   });
 
   it('asks to confirm a working principal, then starts once confirmed', async () => {

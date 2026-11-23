@@ -43,13 +43,16 @@ function setup(opts: { mailboxIds?: string[]; run?: (s: DeepDiveState) => Promis
     configStore,
     stateLock: (fn) => fn(),
     mailboxes: mailboxes as never,
+    workingDocsRepo: {} as never,
+    taskRepo: {} as never,
+    timezone: () => 'UTC',
     logger,
     now: () => NOW,
     run,
   });
   const read = () => readDeepDiveState(configStore);
   const seed = (s: Partial<DeepDiveState>) => writeDeepDiveState(configStore, { ...base, ...s });
-  return { svc, run, read, seed };
+  return { svc, run, read, seed, configStore };
 }
 
 const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60_000).toISOString();
@@ -112,6 +115,39 @@ describe('DeepDiveService.startOnce', () => {
       expect(s?.status).toBe('failed');
       expect(s?.error).toBe('boom');
     });
+  });
+
+  it('marks the run failed when run throws synchronously', async () => {
+    const t = setup({ run: (() => { throw new Error('sync boom'); }) as never });
+    expect(await t.svc.startOnce()).toEqual({ started: true });
+    await vi.waitFor(async () => {
+      const s = await t.read();
+      expect(s?.status).toBe('failed');
+      expect(s?.error).toBe('sync boom');
+    });
+  });
+
+  it('a late rejection does not clobber a newer forced run', async () => {
+    let reject!: (err: Error) => void;
+    const t = setup({ run: () => new Promise<void>((_r, rej) => { reject = rej; }) });
+    await t.svc.startOnce();
+    // The run finished and a newer one started (different startedAt) before the old promise rejected.
+    const newer: DeepDiveState = { ...base, status: 'scanning', startedAt: '2026-11-23T12:30:00.000Z', updatedAt: '2026-11-23T12:30:00.000Z' };
+    await writeDeepDiveState(t.configStore, newer);
+    reject(new Error('late'));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await t.read()).toEqual(newer);
+  });
+
+  it('a late rejection does not mark a delivered run failed', async () => {
+    let reject!: (err: Error) => void;
+    const t = setup({ run: () => new Promise<void>((_r, rej) => { reject = rej; }) });
+    await t.svc.startOnce();
+    const started = (await t.read())!;
+    await writeDeepDiveState(t.configStore, { ...started, status: 'delivered' });
+    reject(new Error('late'));
+    await new Promise((r) => setTimeout(r, 10));
+    expect((await t.read())?.status).toBe('delivered');
   });
 });
 

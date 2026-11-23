@@ -17,6 +17,7 @@ import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import { BUSY_WAKE_RETRIES, BUSY_WAKE_RETRY_SECONDS, ONBOARDING_CREATED_BY } from './constants.js';
 import { notifyOperatorOnce } from './notify-operator-once.js';
 import type { OperatorNotifier } from './notify-operator.js';
+import type { DeepDiveService } from './deep-dive/service.js';
 import { findOpenOnboardingTask, type OnboardingStateLock, readOnboardingState } from './state.js';
 
 export interface OnboardingSubscribersOptions {
@@ -31,6 +32,8 @@ export interface OnboardingSubscribersOptions {
   notifyOperator?: OperatorNotifier;
   /** The Google OAuth client id to trust, for a mailbox_signin_blocked notice; undefined when unknown. */
   googleClientId?: () => Promise<string | undefined>;
+  /** The deep dive (#2362): a mailbox connected during onboarding starts it. Absent: nothing starts. */
+  deepDive?: Pick<DeepDiveService, 'startOnce'>;
 }
 
 const BLOCKED_OUTCOMES: ReadonlySet<string> = new Set(['admin_blocked', 'org_internal']);
@@ -91,8 +94,17 @@ export class OnboardingSubscribers {
   private async onMailboxConnected(mailboxId: string): Promise<void> {
     const task = await findOpenOnboardingTask(this.o.taskRepo);
     if (!task) return;
+    // The deep dive (#2362) starts here, once per install; outside onboarding only an explicit
+    // re-run starts one. A failed start must not cost the principal the note and wake below.
+    if (this.o.deepDive) {
+      try {
+        const started = await this.o.deepDive.startOnce();
+        this.o.logger.info({ mailboxId, ...started }, 'onboarding: deep dive start on mailbox connect');
+      } catch (err) {
+        this.o.logger.error({ err, mailboxId }, 'onboarding: could not start the deep dive');
+      }
+    }
     // The event carries the mailbox id, never an address (#2361), so the note names the id.
-    // #2362: the deep dive starts here.
     await this.noteAndWake(
       task,
       `Mailbox connected (${mailboxId}): run the first look; pick up connect-mailbox / inbox-expectations`,

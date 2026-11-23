@@ -23,6 +23,7 @@ export const OPERATOR_EVENTS = [
   'invitation_expired',
   'web_search_failed',
   'mailbox_signin_blocked',
+  'deep_dive_failed',
 ] as const;
 export type OperatorEvent = (typeof OPERATOR_EVENTS)[number];
 
@@ -132,6 +133,15 @@ function noticeText(
           `To allow it, a Workspace administrator opens the Google Admin console → Security → Access and data control → API controls → App access control, adds the app by ${notice.clientId !== undefined ? `the OAuth client ID ${notice.clientId}` : GENERIC_CLIENT_ID}, and marks it Trusted.`,
           '',
           'Once the app is trusted, the sign-in can be tried again.',
+        ],
+      };
+    case 'deep_dive_failed':
+      return {
+        subject: 'Curia onboarding: the mailbox history review failed',
+        lines: [
+          "Curia's one-time review of the principal's mail and calendar history stopped with an error.",
+          '',
+          "Onboarding carries on without it. The cause is in Curia's logs.",
         ],
       };
   }

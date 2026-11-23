@@ -266,6 +266,7 @@ import { isNextSessionBooked, OnboardingWatcher } from './onboarding/watcher.js'
 import { readCurrentInvitationTiming } from './channels/http/pairing-invitations.js';
 import { createOnboardingTurnContext } from './onboarding/turn-context.js';
 import { createOnboardingStateLock } from './onboarding/state.js';
+import { DeepDiveService } from './onboarding/deep-dive/service.js';
 import { TriageDedupe } from './principal-mailboxes/triage-dedupe.js';
 import { unreadCandidateProbe } from './principal-mailboxes/triage-candidate.js';
 import type { TriageServices } from './principal-mailboxes/triage-services.js';
@@ -3517,6 +3518,18 @@ async function main(): Promise<void> {
     ...(outboundGateway ? { gateway: outboundGateway } : {}),
     ...(config.appOrigin ? { appOrigin: config.appOrigin } : {}),
   });
+  // The deep dive (#2362): one slow read of the principal's mail and calendar history, started on
+  // Start or a mailbox connect during onboarding, resumed by the watcher and at boot.
+  const deepDive = new DeepDiveService({
+    configStore: triageConfig,
+    stateLock: onboardingStateLock,
+    mailboxes: principalMailboxes,
+    workingDocsRepo,
+    taskRepo,
+    timezone: principalHomeTz,
+    logger,
+    notifyOperator: operatorNotifier,
+  });
   const onboardingService = new OnboardingService({
     pool,
     taskRepo,
@@ -3537,6 +3550,8 @@ async function main(): Promise<void> {
     persistentStore: entityMemory !== undefined,
     logger,
     operatorNotifier,
+    deepDive,
+    hasPrincipalMailbox: async () => (await principalMailboxes.list()).length > 0,
   });
   executionLayer.setOnboardingService(onboardingService);
   const onboardingTurnContext = createOnboardingTurnContext({ taskRepo, configStore: triageConfig, stateLock: onboardingStateLock, logger });
@@ -3920,6 +3935,7 @@ async function main(): Promise<void> {
     logger,
     notifyOperator: operatorNotifier,
     googleClientId: googleOAuthClientId,
+    deepDive,
   }).start();
 
   // Onboarding watcher (#2360): greeting follow-ups, the idle nudge and the expired-invitation notice.
@@ -3934,8 +3950,13 @@ async function main(): Promise<void> {
     readInvitation: () => readCurrentInvitationTiming(pool),
     nextSessionBooked: (taskId, now) =>
       isNextSessionBooked({ pool, listPendingAgendas: (at) => agendaStore.listPending(at) }, taskId, now),
+    deepDive,
   });
   onboardingWatcher.start();
+  // A scanning/drafting run at boot was orphaned by the restart (Start may schedule one): resume it.
+  void deepDive.resumeAtBoot().catch((err: unknown) => {
+    logger.error({ err }, 'deep-dive: boot resume failed; the watcher retries once the run looks stalled');
+  });
 
   // Agendas tied to a calendar event follow it (#2360): moved, cancelled, about to start, missed.
   // General meetings infrastructure; runs only when a calendar can be read.

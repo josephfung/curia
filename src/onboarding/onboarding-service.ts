@@ -57,6 +57,7 @@ import {
 } from './constants.js';
 import type { OperatorEvent, OperatorNotifier, OperatorNotice } from './notify-operator.js';
 import { notifyOperatorOnce } from './notify-operator-once.js';
+import type { DeepDiveService } from './deep-dive/service.js';
 
 /** Signals that the install is already in use, so starting onboarding needs confirming. */
 export const WORKING_PRINCIPAL_SIGNALS = {
@@ -210,6 +211,13 @@ export interface OnboardingServiceDeps {
    * Absent: the tool still records the notice on the task; nobody is emailed.
    */
   operatorNotifier?: OperatorNotifier;
+  /**
+   * The deep dive (#2362): Start begins it when a principal mailbox is already connected (one
+   * connected in Setup, before onboarding). Absent, or no `hasPrincipalMailbox`: nothing starts.
+   */
+  deepDive?: Pick<DeepDiveService, 'startOnce'>;
+  /** Whether any principal mailbox is connected. */
+  hasPrincipalMailbox?: () => Promise<boolean>;
   /** Defaults to the pairing-invitations mint on `pool`. */
   mintInvitation?: (origin: string) => Promise<Pick<MintedInvitation, 'id' | 'pairUrl' | 'expiresAt'>>;
   /** Defaults to the pairing-invitations stop-by-id on `pool`. */
@@ -400,7 +408,25 @@ export class OnboardingService {
         logger.error({ err }, 'onboarding: scheduleProcessExit threw — the restart will not occur');
       }
     }
+    if (result.ok) await this.startDeepDive(result.taskId);
     return result;
+  }
+
+  /**
+   * Start the deep dive after a committed Start, when a mailbox is already connected; a mailbox
+   * connected later starts it from the subscriber. A restart Start scheduled kills the job, and
+   * the next boot resumes it (DeepDiveService.resumeAtBoot). Never fails Start: logged instead.
+   */
+  private async startDeepDive(taskId: string): Promise<void> {
+    const { deepDive, hasPrincipalMailbox, logger } = this.deps;
+    if (!deepDive || !hasPrincipalMailbox) return;
+    try {
+      if (!(await hasPrincipalMailbox())) return;
+      const started = await deepDive.startOnce();
+      logger.info({ taskId, ...started }, 'onboarding: deep dive start on Start');
+    } catch (err) {
+      logger.error({ err, taskId }, 'onboarding: could not start the deep dive');
+    }
   }
 
   /**

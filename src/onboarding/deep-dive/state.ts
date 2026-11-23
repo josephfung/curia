@@ -2,7 +2,7 @@
 
 import type { ConfigStore } from '../../memory/config-store.js';
 import type { Logger } from '../../logger.js';
-import { ONBOARDING_NAMESPACE } from '../state.js';
+import { ONBOARDING_NAMESPACE, type OnboardingStateLock } from '../state.js';
 
 export const DEEP_DIVE_KEY = 'deep_dive';
 
@@ -77,4 +77,23 @@ export async function writeDeepDiveState(store: Pick<ConfigStore, 'set'>, s: Dee
 /** A run is in flight when it is scanning or drafting. */
 export function isRunning(s: DeepDiveState | null): boolean {
   return s !== null && (s.status === 'scanning' || s.status === 'drafting');
+}
+
+/**
+ * Change the run that started at `startedAt`, under the state lock, only while it is still that
+ * run and still running. Returns the written state, or null when the run was superseded (a newer
+ * forced run, or it already finished or failed) — the caller then stops without writing.
+ */
+export async function updateRunningDeepDive(
+  deps: { configStore: Pick<ConfigStore, 'get' | 'set'>; stateLock: OnboardingStateLock; logger?: Logger },
+  startedAt: string,
+  change: (current: DeepDiveState) => DeepDiveState,
+): Promise<DeepDiveState | null> {
+  return deps.stateLock(async () => {
+    const current = await readDeepDiveState(deps.configStore, deps.logger);
+    if (current === null || current.startedAt !== startedAt || !isRunning(current)) return null;
+    const next = change(current);
+    await writeDeepDiveState(deps.configStore, next);
+    return next;
+  });
 }

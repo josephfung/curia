@@ -19,5 +19,7 @@ export const TWO_WAY_MIN_MESSAGES = 3;
 export const BACKFILL_CAP = 150;
 /** A scanning/drafting run whose updatedAt is older than this is considered stalled and resumed. */
 export const STALL_MINUTES = 30;
+/** How often a running scan touches updatedAt, well inside STALL_MINUTES. */
+export const HEARTBEAT_MINUTES = 5;
 /** Output token cap for each drafting call. */
 export const DRAFT_MAX_TOKENS = 16000;

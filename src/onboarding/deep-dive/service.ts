@@ -1,20 +1,18 @@
 // service.ts — once-per-install start/resume gate for the deep-dive job (#2362).
-// The real scan/draft pipeline is injected as `run`; this class only owns run state.
+// The pipeline (run.ts) does the work; this class owns starting, resuming and the run state.
 
-import type { ConfigStore } from '../../memory/config-store.js';
-import type { PrincipalMailboxes } from '../../principal-mailboxes/service.js';
-import type { Logger } from '../../logger.js';
-import type { OnboardingStateLock } from '../state.js';
 import { STALL_MINUTES } from './limits.js';
-import { isRunning, readDeepDiveState, writeDeepDiveState, type DeepDiveState } from './state.js';
+import { runDeepDive, type RunDeps } from './run.js';
+import {
+  isRunning,
+  readDeepDiveState,
+  updateRunningDeepDive,
+  writeDeepDiveState,
+  type DeepDiveState,
+} from './state.js';
 
-export interface DeepDiveDeps {
-  configStore: Pick<ConfigStore, 'get' | 'set'>;
-  stateLock: OnboardingStateLock;
-  mailboxes: Pick<PrincipalMailboxes, 'list' | 'ceoClient' | 'calendarClient'>;
-  logger: Logger;
-  now?: () => Date;
-  /** The pipeline. Overridable in tests; later tasks supply the real one. */
+export interface DeepDiveDeps extends RunDeps {
+  /** The pipeline. Defaults to runDeepDive with these deps; overridable in tests. */
   run?: (state: DeepDiveState) => Promise<void>;
 }
 
@@ -28,8 +26,7 @@ export class DeepDiveService {
 
   constructor(private readonly deps: DeepDiveDeps) {
     this.now = deps.now ?? (() => new Date());
-    // Until the pipeline task lands there is nothing to run: finish quietly rather than pretend.
-    this.runPipeline = deps.run ?? (async () => undefined);
+    this.runPipeline = deps.run ?? ((state) => runDeepDive(deps, state));
   }
 
   /** Start the run if none has ever happened. `force` re-runs a finished one; a live one is never doubled. */
@@ -92,27 +89,32 @@ export class DeepDiveService {
     return true;
   }
 
-  /** Fire the pipeline without awaiting it; a rejection marks the run failed. */
+  /**
+   * Fire the pipeline without awaiting it. runDeepDive records its own failures (state, notice,
+   * note); this catch is the backstop for anything that escapes it, a synchronous throw included.
+   */
   private fire(state: DeepDiveState): void {
-    void this.runPipeline(state).catch((err: unknown) => {
-      this.deps.logger.error({ err }, 'deep-dive: run failed');
-      void this.markFailed(err).catch((writeErr: unknown) => {
-        this.deps.logger.error({ err: writeErr }, 'deep-dive: could not record the failure');
+    void Promise.resolve()
+      .then(() => this.runPipeline(state))
+      .catch((err: unknown) => {
+        this.deps.logger.error({ err }, 'deep-dive: run failed');
+        return this.markFailed(state.startedAt, err).catch((writeErr: unknown) => {
+          this.deps.logger.error({ err: writeErr }, 'deep-dive: could not record the failure');
+        });
       });
-    });
   }
 
-  private markFailed(err: unknown): Promise<void> {
+  /** Mark the run failed — only while the stored run is still this one (same startedAt) and running. */
+  private async markFailed(startedAt: string, err: unknown): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
-    return this.deps.stateLock(async () => {
-      const current = await readDeepDiveState(this.deps.configStore, this.deps.logger);
-      if (current === null) return;
-      await writeDeepDiveState(this.deps.configStore, {
-        ...current,
-        status: 'failed',
-        error: message,
-        updatedAt: this.now().toISOString(),
-      });
-    });
+    const written = await updateRunningDeepDive(this.deps, startedAt, (current) => ({
+      ...current,
+      status: 'failed',
+      error: message,
+      updatedAt: this.now().toISOString(),
+    }));
+    if (written === null) {
+      this.deps.logger.warn({ startedAt }, 'deep-dive: a superseded or finished run failed late; state left as is');
+    }
   }
 }
