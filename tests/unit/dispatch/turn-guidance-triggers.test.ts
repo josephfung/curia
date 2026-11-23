@@ -427,6 +427,14 @@ describe('looksLikeRunningLate', () => {
     expect(Date.now() - start).toBeLessThan(2000);
   });
 
+  it('scans many unclosed quote openers on one line in linear time', () => {
+    const start = Date.now();
+    expect(looksLikeRunningLate('x ' + "'a ".repeat(33_000))).toBe(false);
+    expect(looksLikeRunningLate('x ' + '“a '.repeat(33_000))).toBe(false);
+    expect(looksLikeRunningLate('x ' + "‘a ".repeat(33_000))).toBe(false);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
   it('keeps a refusal ahead of a hyphenated word in the same clause', () => {
     expect(looksLikeMakeRoom("I won't cancel the check-in to make room")).toBe(false);
     expect(looksLikeMakeRoom("I won't move the follow-up, I can make room")).toBe(true);
