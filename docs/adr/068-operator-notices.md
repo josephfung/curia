@@ -143,7 +143,11 @@ Setup step, and a fresh install has no email account until it restarts. So the n
   `onNotificationUndelivered` hook, which puts the confirmation back to `failed` — otherwise a mistyped address would read as confirmed for good, on exactly the
   installs where operator notices never arrive. The hook carries the address the notice went to,
   and the record is only cleared when it matches: a late failure for the previous operator address
-  must not invalidate a newer confirmation that worked. The console says "queued" until a real
+  must not invalidate a newer confirmation that worked. A send the adapter queues after a
+  transient provider failure is not sent either: `publishNotification` answers `queued`, and the
+  confirmation stays `failed` and owed, because a flush that fails until the row expires would
+  leave nothing to correct a `sent`. (`sendNotification` still counts `queued` as published, so
+  notifiers that retry on false do not send it twice.) The console says "queued" until a real
   delivery receipt exists.
 - The console shows `sent`, `pending` (owed, nothing could send it yet) or `failed`, with the
   time. Setup says "we'll email … once Curia's own email is set up" and never frames an

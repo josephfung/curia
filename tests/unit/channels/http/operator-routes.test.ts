@@ -96,13 +96,13 @@ async function makeApp(
   const app = Fastify();
   await app.register(cookie);
   await app.register(rateLimit, { max: 200, timeWindow: '1 minute' });
-  const sendNotification = vi.fn().mockResolvedValue(true);
+  const sendNotification = vi.fn().mockResolvedValue('sent');
   await app.register(operatorRoutes, {
     webAppBootstrapSecret: SECRET,
     sessions: new Map() as SessionStore,
     pool: pool as never,
     logger: createSilentLogger(),
-    ...(opts.withGateway === false ? {} : { outboundGateway: { sendNotification } }),
+    ...(opts.withGateway === false ? {} : { outboundGateway: { publishNotification: sendNotification } }),
     appOrigin: 'https://curia.example.com',
   });
   await app.ready();
@@ -182,7 +182,7 @@ describe('operator routes', () => {
 
   it('reports a confirmation that could not be published, without failing the save', async () => {
     const { app, sendNotification } = await makeApp(pool.pool);
-    sendNotification.mockResolvedValue(false);
+    sendNotification.mockResolvedValue('not_sent');
     const res = await put(app, { name: 'Sam Rivera', email: 'sam@example.com' });
 
     expect(res.statusCode).toBe(200);

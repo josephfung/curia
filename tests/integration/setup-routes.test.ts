@@ -14,6 +14,7 @@
 // test database, not your working dev database.
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import type { NotificationOutcome } from '../../src/skills/outbound-gateway.js';
 import Fastify, { type FastifyInstance } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import pg from 'pg';
@@ -45,7 +46,7 @@ const describeIf = DATABASE_URL ? describe : describe.skip;
 
 const TEST_SECRET = 'setup-route-test-secret';
 /** Confirmation notices sent while saving the operator (#2710). */
-const operatorNotices = vi.fn(async (_request: { notificationType: string; subject: string; body: string }) => true);
+const operatorNotices = vi.fn(async (_request: { notificationType: string; subject: string; body: string }): Promise<NotificationOutcome> => 'sent');
 const AUTH_HEADER = { 'x-web-bootstrap-secret': TEST_SECRET };
 const TEST_LABEL_PREFIX = 'Setup-Route Test';
 // The settings migration 132 created for Setup (#2709). These suites own them.
@@ -136,7 +137,7 @@ describeIf('/api/setup/* routes', () => {
         contactService,
         entityMemory,
         // The operator's confirmation notice (#2710): recorded, not sent anywhere.
-        outboundGateway: { sendNotification: operatorNotices },
+        outboundGateway: { publishNotification: operatorNotices },
         appOrigin: 'https://curia.example.com',
       });
       await app.ready();
@@ -966,7 +967,7 @@ describeIf('/api/setup/* routes', () => {
         entityMemory: undefined,
         setupChecklist: async () => checklist,
         // The operator's confirmation notice (#2710). Recorded through a spy, never sent.
-        outboundGateway: { sendNotification: operatorNotices },
+        outboundGateway: { publishNotification: operatorNotices },
         // A test makes this throw to break the confirmation step after the save has committed.
         canDeliver: () => {
           if (deliveryCheckThrows) throw new Error('delivery check failed');
@@ -1076,7 +1077,7 @@ describeIf('/api/setup/* routes', () => {
     });
 
     it('PUT /api/setup/state records a failed confirmation, and keeps the setting', async () => {
-      operatorNotices.mockResolvedValueOnce(false);
+      operatorNotices.mockResolvedValueOnce('not_sent');
       const res = await app.inject({
         method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER,
         payload: { setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com' },
@@ -1088,7 +1089,7 @@ describeIf('/api/setup/* routes', () => {
       // console's own save) sends it, and records the success.
       const retried = await sendPendingOperatorConfirmation({
         pool,
-        gateway: { sendNotification: operatorNotices },
+        gateway: { publishNotification: operatorNotices },
         logger,
       });
       expect(retried).toMatchObject({ state: 'sent' });

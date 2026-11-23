@@ -188,7 +188,7 @@ export interface HttpAdapterConfig {
    * The one system-notice path, for the Operator setting's confirmation notice (#2710). Absent:
    * the save still succeeds and the console reports the notice could not be sent.
    */
-  outboundGateway?: Pick<import('../../skills/outbound-gateway.js').OutboundGateway, 'sendNotification'>;
+  outboundGateway?: Pick<import('../../skills/outbound-gateway.js').OutboundGateway, 'publishNotification'>;
   /**
    * Keeps the gateway's cached operator address current after the console or Setup saves it
    * (#2710), so a later `database_unavailable` notice cannot reach a former operator.

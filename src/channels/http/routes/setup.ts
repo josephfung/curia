@@ -99,7 +99,7 @@ export interface SetupRouteOptions {
    * one system-notice path; absent, the save still succeeds and the page says the notice was
    * not sent.
    */
-  outboundGateway?: Pick<OutboundGateway, 'sendNotification'>;
+  outboundGateway?: Pick<OutboundGateway, 'publishNotification'>;
   /** The console's origin, for the confirmation's link (#2710). */
   appOrigin?: string;
   /** Keep the gateway's cached operator address current after a Setup save (#2710). */

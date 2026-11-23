@@ -118,7 +118,7 @@ export async function markOperatorConfirmationUndelivered(deps: {
 export interface PendingConfirmationDeps {
   pool: SettingsPool;
   /** The one system-notice path. Absent: nothing can be sent, so the notice stays owed. */
-  gateway?: Pick<OutboundGateway, 'sendNotification'>;
+  gateway?: Pick<OutboundGateway, 'publishNotification'>;
   /** Whether a channel adapter that delivers notifications is subscribed right now. */
   canDeliver?: () => boolean;
   appOrigin?: string;
@@ -152,7 +152,7 @@ export async function sendPendingOperatorConfirmation(
     return before;
   }
 
-  const sent = await sendOperatorConfirmation(
+  const outcome = await sendOperatorConfirmation(
     {
       gateway: deps.gateway,
       ...(deps.appOrigin ? { appOrigin: deps.appOrigin } : {}),
@@ -165,7 +165,11 @@ export async function sendPendingOperatorConfirmation(
   const next: OperatorConfirmation = {
     email: operator.email,
     attemptedAt,
-    sentAt: sent ? attemptedAt : null,
+    // Only a dispatched notice counts. A queued one stays owed (`failed`, retried by boot, Start
+    // or the console): its flush can fail until the row expires, and nothing would correct a
+    // `sent` recorded now (#2710 review). A retry may then send a second confirmation once the
+    // queue flushes the first; that is the safe direction.
+    sentAt: outcome === 'sent' ? attemptedAt : null,
   };
   try {
     await setSetting(deps.pool, 'operator_confirmation', next, 'curia', deps.logger);

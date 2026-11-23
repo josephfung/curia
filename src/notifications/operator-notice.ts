@@ -10,37 +10,38 @@
 // NOTIFICATION_AUDIENCES), and sent through the one path, OutboundGateway.sendNotification.
 import type { Logger } from '../logger.js';
 import type { OperatorSetting } from '../settings/registry.js';
-import type { OutboundGateway } from '../skills/outbound-gateway.js';
+import type { NotificationOutcome, OutboundGateway } from '../skills/outbound-gateway.js';
 
 export interface OperatorConfirmationDeps {
   /**
    * The one system-notice path. Absent (no outbound gateway, as in a Signal-only install):
    * the save still succeeds, and the console reports that the notice could not be sent.
    */
-  gateway?: Pick<OutboundGateway, 'sendNotification'>;
+  gateway?: Pick<OutboundGateway, 'publishNotification'>;
   /** The console's origin, for the notice's link. Absent: no link line. */
   appOrigin?: string;
   logger: Logger;
 }
 
 /**
- * Tell the operator their address is saved. Returns whether the notice was published (the
- * gateway accepted it; delivery is not confirmed). Never throws: a failed notice must not fail
- * the save that has already been written.
+ * Tell the operator their address is saved. Returns what became of the notice: `sent` (the email
+ * adapter dispatched it; delivery itself is not confirmed), `queued` (a transient provider failure
+ * put it in the outbound queue, so it is not sent yet), or `not_sent`. Never throws: a failed
+ * notice must not fail the save that has already been written.
  */
 export async function sendOperatorConfirmation(
   deps: OperatorConfirmationDeps,
   operator: OperatorSetting,
-): Promise<boolean> {
+): Promise<NotificationOutcome> {
   if (!deps.gateway) {
     deps.logger.warn(
       'operator notice: no outbound gateway — the operator was saved without a confirmation notice',
     );
-    return false;
+    return 'not_sent';
   }
   const link = deps.appOrigin?.trim();
   try {
-    const sent = await deps.gateway.sendNotification({
+    const outcome = await deps.gateway.publishNotification({
       notificationType: 'operator_configured',
       subject: "You're set as Curia's operator",
       body: [
@@ -58,17 +59,21 @@ export async function sendOperatorConfirmation(
         ...(link ? ['', `Console: ${link.replace(/\/+$/, '')}/`] : []),
       ].join('\n'),
     });
-    if (!sent) {
+    if (outcome === 'not_sent') {
       deps.logger.error(
         'operator notice: the confirmation could not be sent — the operator setting is saved',
       );
+    } else if (outcome === 'queued') {
+      deps.logger.warn(
+        'operator notice: the confirmation was queued after a provider failure — it stays owed until a send succeeds',
+      );
     }
-    return sent;
+    return outcome;
   } catch (err) {
     deps.logger.error(
       { err },
       'operator notice: sending the confirmation threw — the operator setting is saved',
     );
-    return false;
+    return 'not_sent';
   }
 }

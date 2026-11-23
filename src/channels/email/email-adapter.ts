@@ -476,6 +476,15 @@ export class EmailAdapter implements Channel {
           },
           { skipNotificationOnBlock: true, isSystemNotification: true },
         );
+        if (result.success && result.queued) {
+          // A transient provider failure: the send is queued for a later flush, not delivered.
+          // Tell the gateway, so a caller that records delivery does not record this as sent.
+          logger.warn(
+            { notificationType: notification.payload.notificationType, audience: notification.payload.audience },
+            'EmailAdapter: outbound.notification queued for a later flush, not delivered yet',
+          );
+          this.config.outboundGateway.reportNotificationQueued(notification.id);
+        }
         if (!result.success) {
           logger.error(
             {

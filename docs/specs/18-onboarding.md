@@ -632,8 +632,9 @@ account until the restart — so the notice is *owed*: boot (once the email adap
 `POST /api/onboarding/start` and the console's Operator page retry it while `sentAt` is null or the
 address has changed. A delivery the adapter refuses or fails leaves it `failed`: `sendNotification`
 returns false when the refusal arrives during its publish, and the gateway's
-`onNotificationUndelivered` hook clears `sentAt` when it arrives later, so "sent" never outlives a notice that never
-arrived. The console shows sent, pending or failed with the time, and a Setup save never blocks
+`onNotificationUndelivered` hook clears `sentAt` when it arrives later. A send the adapter queued
+after a transient provider failure also leaves it `failed` and owed, so "sent" never outlives a
+notice that never arrived. The console shows sent, pending or failed with the time, and a Setup save never blocks
 on it, nor comes at the cost of the principal and profile saves that follow it.
 
 ### Done

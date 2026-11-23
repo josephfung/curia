@@ -40,7 +40,7 @@ export interface OperatorRouteOptions {
   logger: Logger;
   /** The one system-notice path, for the confirmation (#2710). Absent: the save reports that
    *  the notice could not be sent. */
-  outboundGateway?: Pick<OutboundGateway, 'sendNotification'>;
+  outboundGateway?: Pick<OutboundGateway, 'publishNotification'>;
   /** The console's origin, for the notice's link. */
   appOrigin?: string;
   /**

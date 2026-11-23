@@ -63,6 +63,7 @@ function createMocks() {
   const outboundGateway = {
     send: vi.fn().mockResolvedValue({ success: true, messageId: 'sent-1' }),
     reportNotificationUndelivered: vi.fn().mockResolvedValue(undefined),
+    reportNotificationQueued: vi.fn(),
     createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'draft-1' }),
     linkGatedAction: vi.fn().mockResolvedValue(undefined),
     listEmailMessages: vi.fn().mockResolvedValue([]),
@@ -1596,6 +1597,28 @@ describe('EmailAdapter — undelivered notification reporting', () => {
 
     expect(mocks.outboundGateway.reportNotificationUndelivered)
       .toHaveBeenCalledWith('schedule_suspended', 'delivery_failed', { recipient: 'operator@example.com', notificationEventId: notice.id });
+    await adapter.stop();
+  });
+
+  it('tells the gateway when the send was queued after a transient failure, and reports no failure', async () => {
+    const mocks = createMocks();
+    const handleNotification = captureHandler('outbound.notification', mocks);
+    const adapter = makeAdapter(mocks);
+    await adapter.start();
+    (mocks.outboundGateway.send as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ success: true, queued: true, messageId: 'queue-1' });
+
+    const notice = createOutboundNotification({
+      notificationType: 'operator_configured',
+      recipient: 'operator@example.com',
+      audience: 'operator',
+      subject: 'Confirm',
+      body: 'Body',
+    });
+    await handleNotification(notice);
+
+    expect(mocks.outboundGateway.reportNotificationQueued).toHaveBeenCalledWith(notice.id);
+    expect(mocks.outboundGateway.reportNotificationUndelivered).not.toHaveBeenCalled();
     await adapter.stop();
   });
 

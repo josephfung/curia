@@ -265,6 +265,22 @@ describe('OutboundGateway.sendNotification routing', () => {
     expect(hook).toHaveBeenCalledWith('operator_configured', 'delivery_refused', PRINCIPAL);
   });
 
+  it('answers queued when the adapter queued the notice during the publish, and still true to sendNotification', async () => {
+    // A transient provider failure: the email adapter's send went to the outbound queue. A caller
+    // that records delivery must see that; one that only retries on false must not resend it.
+    const { gateway, published } = makeGatewayWithHook(async () => {}, { principalEmail: () => PRINCIPAL });
+    const bus = (gateway as unknown as { bus: EventBus }).bus;
+    (bus.publish as ReturnType<typeof vi.fn>).mockImplementation(async (_layer: string, event: BusEvent) => {
+      published.push({ event });
+      if (event.type === 'outbound.notification') gateway.reportNotificationQueued(event.id);
+    });
+
+    expect(await gateway.publishNotification({ notificationType: 'operator_configured', subject: 's', body: 'b' })).toBe('queued');
+    expect(await gateway.sendNotification({ notificationType: 'schedule_suspended', subject: 's', body: 'b' })).toBe(true);
+    // A queued report for an event not being published changes nothing.
+    gateway.reportNotificationQueued('not-in-flight');
+  });
+
   it('a refusal of a different notice during the publish does not fail this one', async () => {
     const { gateway, published } = makeGatewayWithHook(async () => {}, { principalEmail: () => PRINCIPAL });
     const bus = (gateway as unknown as { bus: EventBus }).bus;

@@ -56,7 +56,7 @@ describe('confirmationStatus', () => {
 function makeHarness(initial: { operator?: OperatorSetting; confirmation?: OperatorConfirmation }) {
   let operator = initial.operator;
   let stored = initial.confirmation;
-  const sendNotification = vi.fn().mockResolvedValue(true);
+  const sendNotification = vi.fn().mockResolvedValue('sent');
 
   const client = {
     query: vi.fn(async (sql: string, params?: unknown[]) => {
@@ -99,7 +99,7 @@ function makeHarness(initial: { operator?: OperatorSetting; confirmation?: Opera
 
   const deps: PendingConfirmationDeps = {
     pool: pool as never,
-    gateway: { sendNotification },
+    gateway: { publishNotification: sendNotification },
     logger: createSilentLogger(),
   };
   return { deps, sendNotification, stored: () => stored };
@@ -133,10 +133,24 @@ describe('sendPendingOperatorConfirmation', () => {
 
   it('records a failed attempt and leaves the notice owed', async () => {
     const h = makeHarness({ operator: OPERATOR });
-    h.sendNotification.mockResolvedValue(false);
+    h.sendNotification.mockResolvedValue('not_sent');
     const status = await sendPendingOperatorConfirmation(h.deps);
     expect(status.state).toBe('failed');
     expect(h.stored()).toMatchObject({ email: OPERATOR.email, sentAt: null });
+  });
+
+  it('keeps a queued notice owed: queued is not sent (#2710 review)', async () => {
+    // A transient provider failure queued the notice. Its flush can fail until the row expires,
+    // and nothing would correct a `sent` recorded now, so the confirmation stays failed and owed.
+    const h = makeHarness({ operator: OPERATOR });
+    h.sendNotification.mockResolvedValue('queued');
+    const status = await sendPendingOperatorConfirmation(h.deps);
+    expect(status.state).toBe('failed');
+    expect(h.stored()).toMatchObject({ email: OPERATOR.email, sentAt: null });
+
+    // The next attempt that is dispatched records it sent.
+    h.sendNotification.mockResolvedValue('sent');
+    expect((await sendPendingOperatorConfirmation(h.deps)).state).toBe('sent');
   });
 
   it('does not attempt, and records nothing, when nothing can deliver it yet', async () => {
