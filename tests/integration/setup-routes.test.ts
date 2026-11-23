@@ -936,6 +936,7 @@ describeIf('/api/setup/* routes', () => {
   describe('Setup page state', () => {
     let app: FastifyInstance;
     let checklist: SetupChecklist = { setupFor: 'self', tasks: [], setupComplete: false, missing: ['email'] };
+    let deliveryCheckThrows = false;
     const TEST_WRITE: SetupWriteOptions = { updatedBy: 'integration-test', logger };
     let savedSettings: Array<Record<string, unknown>> = [];
     let savedThread: string | undefined;
@@ -966,6 +967,11 @@ describeIf('/api/setup/* routes', () => {
         setupChecklist: async () => checklist,
         // The operator's confirmation notice (#2710). Recorded through a spy, never sent.
         outboundGateway: { sendNotification: operatorNotices },
+        // A test makes this throw to break the confirmation step after the save has committed.
+        canDeliver: () => {
+          if (deliveryCheckThrows) throw new Error('delivery check failed');
+          return true;
+        },
         appOrigin: 'https://curia.example.com',
       });
       await app.ready();
@@ -975,6 +981,7 @@ describeIf('/api/setup/* routes', () => {
       await pool.query('DELETE FROM settings WHERE key = ANY($1::text[])', [SETUP_SETTING_KEYS]);
       checklist = { setupFor: 'self', tasks: [], setupComplete: false, missing: ['email'] };
       operatorNotices.mockClear();
+      deliveryCheckThrows = false;
     });
 
     afterAll(async () => {
@@ -1086,6 +1093,19 @@ describeIf('/api/setup/* routes', () => {
       });
       expect(retried).toMatchObject({ state: 'sent' });
       expect(operatorNotices).toHaveBeenCalledTimes(2);
+    });
+
+    it('PUT /api/setup/state returns the saved state when the confirmation step throws (#2710 review)', async () => {
+      deliveryCheckThrows = true;
+      const res = await app.inject({
+        method: 'PUT', url: '/api/setup/state', headers: AUTH_HEADER,
+        payload: { setupFor: 'other', operatorName: 'Sam', operatorEmail: 'sam@example.com' },
+      });
+      // The save committed: a 200 with the saved fields, and a status that never says sent.
+      expect(res.statusCode).toBe(200);
+      expect(res.json().setup).toMatchObject({ operatorEmail: 'sam@example.com' });
+      expect(res.json().operatorConfirmation).toEqual({ state: 'failed', email: 'sam@example.com' });
+      expect(await readSetupState(pool, logger)).toMatchObject({ operatorEmail: 'sam@example.com' });
     });
 
     it('PUT /api/setup/state sends no notice when the operator is cleared', async () => {

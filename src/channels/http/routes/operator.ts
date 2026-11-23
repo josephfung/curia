@@ -21,6 +21,7 @@ import { InvalidSettingError, countSettingHistory, getSettingRecords, readSettin
 import type { OperatorSetting } from '../../../settings/registry.js';
 import { SETTINGS } from '../../../settings/registry.js';
 import {
+  confirmationAfterSave,
   readOperatorConfirmationStatus,
   sendPendingOperatorConfirmation,
   type OperatorConfirmationStatus,
@@ -120,21 +121,16 @@ export async function operatorRoutes(
 
     try {
       const operator: OperatorSetting = parsed.operator;
-      // An unchanged save is not a new operator: no write, no notice. A console session can
-      // otherwise email any address it likes on every press (#2710 review).
+      // An unchanged save is not a new operator: no write. It still retries a confirmation that
+      // is owed (pending or failed) — confirmNow sends nothing once it is sent — so pressing Save
+      // cannot email an address on every press, but can retry one that never got its notice.
       const current = (await getSettingRecords(pool, ['operator'], logger)).operator?.value;
-      if (current?.name === operator.name && current.email === operator.email) {
-        onOperatorChanged?.(operator);
-        return reply.send({
-          operator,
-          confirmation: await readOperatorConfirmationStatus(pool, logger),
-        });
-      }
-      await setSetting(pool, 'operator', operator, 'console', logger);
+      const unchanged = current?.name === operator.name && current.email === operator.email;
+      if (!unchanged) await setSetting(pool, 'operator', operator, 'console', logger);
       onOperatorChanged?.(operator);
-      // After the write, so the notice goes to the address that is now stored. A notice that
-      // cannot be sent is reported, not thrown: the setting is saved either way.
-      const confirmation = await confirmNow();
+      // After the write, so the notice goes to the address that is now stored. The setting is
+      // saved either way: a notice or status lookup that fails reports `failed`, not a 500.
+      const confirmation = await confirmationAfterSave(confirmNow, operator.email, logger);
       return reply.send({ operator, confirmation });
     } catch (err) {
       if (err instanceof InvalidSettingError) {

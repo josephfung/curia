@@ -113,6 +113,34 @@ beforeEach(() => {
   postJson.mockReset();
 });
 
+describe('WhoStep — nothing can be edited while a save is in flight (#2710 review)', () => {
+  it('disables every field and the choice while saving, so no edit is lost to the earlier save', async () => {
+    const onContinue = vi.fn();
+    const page = await mountOtherStep(onContinue, { state: 'pending', email: 'sam@example.com' });
+    let release!: () => void;
+    saveSetupFields.mockImplementation(() => new Promise((resolve) => {
+      release = () => resolve({ setup: FIELDS, operatorConfirmation: { state: 'pending', email: 'sam@example.com' } });
+    }));
+
+    const form = page.host.querySelector('form')!;
+    await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); });
+    const fields = [
+      ...page.host.querySelectorAll('input'),
+      ...page.host.querySelectorAll('select'),
+    ] as Array<HTMLInputElement | HTMLSelectElement>;
+    expect(fields).toHaveLength(7);
+    expect(fields.every((c) => c.disabled)).toBe(true);
+    // The choice is locked the way ChoiceGroup locks it: no option can be picked.
+    const choices = [...page.host.querySelectorAll('[role="radio"]')];
+    expect(choices.length).toBe(2);
+    expect(choices.every((c) => c.getAttribute('aria-disabled') === 'true')).toBe(true);
+
+    await act(async () => { release(); });
+    await settle();
+    expect([...page.host.querySelectorAll('input')].every((c) => !(c as HTMLInputElement).disabled)).toBe(true);
+  });
+});
+
 describe('WhoStep — the operator confirmation never costs the principal their profile (#2710)', () => {
   it('saves the principal and the profile even when the notice cannot be sent yet', async () => {
     const onContinue = vi.fn();

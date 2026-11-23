@@ -24,6 +24,26 @@ describe('createOperatorEmailLookup', () => {
     expect(await lookup.read()).toBe('sam@example.com');
   });
 
+  it('does not let a read that started before a clear restore the cleared operator (#2710 review)', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const db = {
+      query: vi.fn(async () => {
+        await gate;
+        return { rows: [{ key: 'operator', value: { name: 'Sam', email: 'sam@example.com' }, updated_by: 'console' }] };
+      }),
+    };
+    const lookup = createOperatorEmailLookup(db as never, logger());
+    const pending = lookup.read();
+    lookup.remember(null);
+    release();
+    expect(await pending).toBeUndefined();
+
+    // A later failing read answers with the cleared value, not the former operator.
+    db.query.mockRejectedValue(new Error('down'));
+    expect(await lookup.read()).toBeUndefined();
+  });
+
   it('answers with the last address read when the database fails', async () => {
     const db = dbReturning({ name: 'Sam', email: 'sam@example.com' });
     const log = logger();

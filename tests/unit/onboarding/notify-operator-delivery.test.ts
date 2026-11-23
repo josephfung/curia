@@ -47,6 +47,22 @@ function makeDeps(overrides: {
 }
 
 describe('notifyOperator delivery', () => {
+  it('says the greeting was never recorded, not that it went unanswered, when none was sent (#2710 review)', async () => {
+    const { gateway, sendNotification } = makeGateway();
+    const { deps } = makeDeps({ gateway });
+    await notifyOperator(deps, 'task-1', 'greeting_unanswered', { greetingNotRecorded: true });
+    const request = sendNotification.mock.calls[0]![0];
+    expect(request.subject).toContain('never recorded');
+    expect(request.body).not.toContain('went unanswered');
+    expect(request.body).not.toContain('Nothing is broken');
+    expect(request.body).toContain('console');
+
+    // The answered-nothing case keeps its own text.
+    const plain = makeGateway();
+    await notifyOperator(makeDeps({ gateway: plain.gateway }).deps, 'task-1', 'greeting_unanswered');
+    expect(plain.sendNotification.mock.calls[0]![0].body).toContain('went unanswered');
+  });
+
   it('emails every operator event through sendNotification, keeping the progress note', async () => {
     for (const event of OPERATOR_EVENTS) {
       const { gateway, sendNotification } = makeGateway();
@@ -203,6 +219,25 @@ describe('notifyOperatorOnce delivery', () => {
     await expect(notifyOperatorOnce(second, 'task-1', 'web_search_failed')).resolves.toBe(true);
     const deliveredState = JSON.parse(fresh.data.get(`${ONBOARDING_NAMESPACE}/${ONBOARDING_STATE_KEY}`)!) as OnboardingState;
     expect(deliveredState.operatorNoticeFailed ?? []).toEqual([]);
+  });
+
+  it('gives the event back when the task note could not be written, so a retry raises it (#2710 review)', async () => {
+    const { gateway, sendNotification } = makeGateway();
+    const { deps, updateTask } = makeDeps({ gateway });
+    updateTask.mockRejectedValueOnce(new Error('db down'));
+    const { store, data } = stateStore(RUN);
+    const once = { ...deps, configStore: store, stateLock: <T>(fn: () => Promise<T>) => fn() };
+
+    await expect(notifyOperatorOnce(once, 'task-1', 'web_search_failed')).resolves.toBe(false);
+    let saved = JSON.parse(data.get(`${ONBOARDING_NAMESPACE}/${ONBOARDING_STATE_KEY}`)!) as OnboardingState;
+    expect(saved.operatorNotified).not.toContain('web_search_failed');
+    expect(sendNotification).not.toHaveBeenCalled();
+
+    // The retry the tool asks for now records and sends it.
+    await expect(notifyOperatorOnce(once, 'task-1', 'web_search_failed')).resolves.toBe(true);
+    saved = JSON.parse(data.get(`${ONBOARDING_NAMESPACE}/${ONBOARDING_STATE_KEY}`)!) as OnboardingState;
+    expect(saved.operatorNotified).toEqual(['web_search_failed']);
+    expect(sendNotification).toHaveBeenCalledOnce();
   });
 
   it('delegates to an injected notifier, which is how the tool path reaches the gateway', async () => {

@@ -124,6 +124,7 @@ export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Prop
         label="Who Curia is for"
         value={setupFor}
         onChange={edit(setSetupFor)}
+        disabled={saving}
         options={[
           { value: 'self', title: 'Myself', description: 'You’ll set it up, then go straight into your first conversation.' },
           { value: 'other', title: 'Someone else', description: 'An executive you work for. You set things up; they get an invitation when you’re ready.' },
@@ -139,10 +140,10 @@ export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Prop
           <div className="setup-fields">
             <div className="setup-row2">
               <label className="setup-field">Your name
-                <input type="text" value={operatorName} onChange={(e) => edit(setOperatorName)(e.target.value)} autoComplete="name" />
+                <input type="text" value={operatorName} onChange={(e) => edit(setOperatorName)(e.target.value)} autoComplete="name" disabled={saving} />
               </label>
               <label className="setup-field">Your email
-                <input type="email" value={operatorEmail} onChange={(e) => edit(setOperatorEmail)(e.target.value)} autoComplete="email" />
+                <input type="email" value={operatorEmail} onChange={(e) => edit(setOperatorEmail)(e.target.value)} autoComplete="email" disabled={saving} />
               </label>
             </div>
           </div>
@@ -158,24 +159,24 @@ export function WhoStep({ fields, principal, onSaved, onContinue, onHelp }: Prop
           <div className="setup-fields">
             <div className="setup-row2">
               <label className="setup-field">Full name
-                <input id="setup-principal-name" type="text" value={name} onChange={(e) => edit(setName)(e.target.value)} />
+                <input id="setup-principal-name" type="text" value={name} onChange={(e) => edit(setName)(e.target.value)} disabled={saving} />
               </label>
               <label className="setup-field"><span className="setup-field-label">Title <span className="setup-hint">(optional)</span></span>
-                <input type="text" value={title} onChange={(e) => edit(setTitle)(e.target.value)} />
+                <input type="text" value={title} onChange={(e) => edit(setTitle)(e.target.value)} disabled={saving} />
               </label>
             </div>
             <label className="setup-field">Email
-              <input id="setup-principal-email" type="email" value={email} onChange={(e) => edit(setEmail)(e.target.value)} />
+              <input id="setup-principal-email" type="email" value={email} onChange={(e) => edit(setEmail)(e.target.value)} disabled={saving} />
             </label>
             <div className="setup-row2">
               <label className="setup-field">Timezone
-                <select value={timezone} onChange={(e) => edit(setTimezone)(e.target.value)}>
+                <select value={timezone} onChange={(e) => edit(setTimezone)(e.target.value)} disabled={saving}>
                   {!IANA_ZONES.includes(timezone) && <option value={timezone}>{timezone}</option>}
                   {IANA_ZONES.map((z) => <option key={z} value={z}>{z}</option>)}
                 </select>
               </label>
               <label className="setup-field"><span className="setup-field-label">Pronouns <span className="setup-hint">(optional)</span></span>
-                <input type="text" value={pronouns} onChange={(e) => edit(setPronouns)(e.target.value)} placeholder="she/her" />
+                <input type="text" value={pronouns} onChange={(e) => edit(setPronouns)(e.target.value)} placeholder="she/her" disabled={saving} />
               </label>
             </div>
           </div>

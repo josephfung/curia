@@ -32,6 +32,11 @@ export interface OperatorNotice {
   /** mailbox_signin_blocked: the Google OAuth client id a Workspace admin must trust. */
   clientId?: string;
   /**
+   * greeting_unanswered: no greeting was ever recorded (the watcher's `greeting_not_recorded`),
+   * so there is no reply to wait for. Set by Curia, never by a model.
+   */
+  greetingNotRecorded?: boolean;
+  /**
    * Context for the task note, the log and the audit row only — never the email. These values
    * can be model-supplied (a tool call's `details`), so only their key names are logged.
    */
@@ -85,6 +90,16 @@ function noticeText(
 ): { subject: string; lines: string[] } {
   switch (event) {
     case 'greeting_unanswered':
+      if (notice.greetingNotRecorded === true) {
+        return {
+          subject: 'Curia onboarding: the greeting was never recorded as sent',
+          lines: [
+            'Curia started onboarding, but no greeting to the principal was recorded as sent, even after it was asked again.',
+            '',
+            'There is no reply to wait for. Check where onboarding got to in the console.',
+          ],
+        };
+      }
       return {
         subject: 'Curia onboarding: the greeting went unanswered',
         lines: [

@@ -606,9 +606,10 @@ watcher and the subscribers raise each event at most once per onboarding.
 
 The events are `greeting_unanswered`, `invitation_expired`, `mailbox_signin_blocked` and
 `web_search_failed`. All four are operator-routed in `NOTIFICATION_AUDIENCES`
-(`src/notifications/audience.ts`), so the gateway addresses them: the operator's email when
-Setup was for someone else, and the principal's when it was for them themself — a "Myself"
-install behaves exactly as before. When Setup was for the principal themself, Curia also tells
+(`src/notifications/audience.ts`), so the gateway addresses them from the current `operator`
+setting: the operator's email when one is set, and the principal's when none is — a "Myself"
+install behaves exactly as before. The setting, not the original Setup choice, decides: an
+operator saved later in the console receives them, and clearing it sends them to the principal. When Setup was for the principal themself, Curia also tells
 them directly in the conversation.
 
 The emailed text carries the event and, for a blocked sign-in, the Google OAuth client id to

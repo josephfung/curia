@@ -162,6 +162,35 @@ describe('MailboxOutageNotifier', () => {
       await n.record('work', 'Work', false);
       expect(sendNotification).toHaveBeenCalledTimes(3);
     });
+
+    it('tells the operator even when the principal alert is refused, without claiming the owner was told', async () => {
+      // A refused principal alert (the account is the principal's own mailbox) must not keep the
+      // operator in the dark (#2710 review).
+      const sendNotification = vi.fn(async (req: { notificationType: string }) => req.notificationType === 'mailbox_outage');
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      const n = new MailboxOutageNotifier({
+        gateway: { sendNotification, canDeliverNotifications: () => true },
+        hasOperator: async () => true,
+        logger: logger as never,
+      });
+      await n.record('work', 'Work', false);
+
+      const calls = sendNotification.mock.calls.map((c) => c[0] as unknown as { notificationType: string; body: string });
+      expect(calls.map((c) => c.notificationType)).toEqual(['principal_mailbox_outage', 'mailbox_outage']);
+      expect(calls[1]!.body).not.toContain('already told');
+      expect(calls[1]!.body).toContain('could not send the mailbox owner their alert');
+
+      // The next probe retries the principal alert only: the operator has heard.
+      await n.record('work', 'Work', false);
+      const types = sendNotification.mock.calls.map((c) => (c[0] as { notificationType: string }).notificationType);
+      expect(types).toEqual(['principal_mailbox_outage', 'mailbox_outage', 'principal_mailbox_outage']);
+    });
+
+    it('says the owner was told when the principal alert went out', async () => {
+      const { n, sendNotification } = make(true, async () => true);
+      await n.record('work', 'Work', false);
+      expect((sendNotification.mock.calls[1]![0] as { body: string }).body).toContain('Curia has already told the mailbox owner');
+    });
   });
 
   describe('reconnect link (#2361)', () => {

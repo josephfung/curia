@@ -180,9 +180,11 @@ Setup step, and a fresh install has no email account until it restarts. So the n
 - **An install with no operator keeps today's behaviour.** The fallback is the principal, not a
   new failure mode, and the tests for the pre-operator world pass with only the recipient argument
   removed.
-- **A mistyped operator address is caught at save time, not later.** The confirmation notice is
-  the only signal, so it goes out on every operator save and the console shows the result. If the
-  operator's mail is down at save time, the notice fails visibly and the setting still saves.
+- **A mistyped address that mail refuses shows at save time.** The confirmation notice is the
+  only signal, so it is attempted on every operator save and the console shows the result: a send
+  that is refused or fails reads as `failed`, and the setting still saves. A mistyped address that
+  accepts mail cannot be detected — it is a delivery attempt, not a check that the right person
+  got it (see "The confirmation is a smoke test" below).
 - **Two people can be told about one outage.** A principal mailbox outage raises two notices, by
   design: each type carries only what its audience can act on, and the link-bearing copy is
   principal-only. With no operator set the second notice is suppressed, so nothing duplicates.

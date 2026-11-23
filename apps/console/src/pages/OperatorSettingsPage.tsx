@@ -55,7 +55,8 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function OperatorSection() {
   const [loaded, setLoaded] = useState<Operator | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  // The fields stay disabled until the first load lands, so nothing typed is overwritten by it.
+  // The fields stay disabled until the first load lands, and while a save or clear is in flight,
+  // so nothing typed is overwritten by a response for earlier values.
   const [ready, setReady] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -228,7 +229,7 @@ function OperatorSection() {
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  disabled={!ready}
+                  disabled={!ready || saving}
                   autoComplete="off"
                   placeholder="e.g. Sam Rivera"
                 />
@@ -238,7 +239,7 @@ function OperatorSection() {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  disabled={!ready}
+                  disabled={!ready || saving}
                   autoComplete="off"
                   placeholder="sam@example.com"
                 />

@@ -82,7 +82,7 @@ export class MailboxOutageNotifier {
     }
 
     if (this.alerted.has(mailboxId)) {
-      if (!this.operatorAlerted.has(mailboxId)) await this.notifyOperatorOfOutage(mailboxId, label);
+      if (!this.operatorAlerted.has(mailboxId)) await this.notifyOperatorOfOutage(mailboxId, label, true);
       return;
     }
 
@@ -135,14 +135,14 @@ export class MailboxOutageNotifier {
     });
     if (!sent) {
       this.log.error({ mailboxId }, 'Principal mailbox outage: alert could not be sent; will retry on the next failing probe');
-      return;
+    } else {
+      this.alerted.add(mailboxId);
+      this.log.error({ mailboxId }, 'Principal mailbox outage: alert sent');
     }
-
-    this.alerted.add(mailboxId);
-    this.log.error({ mailboxId }, 'Principal mailbox outage: alert sent');
     // The operator hears the same outage without the link: only the principal can sign in to
-    // their own mailbox, so the operator's copy says what happened and that no action is needed.
-    await this.notifyOperatorOfOutage(mailboxId, label);
+    // their own mailbox. Sent whether or not the principal's alert went out (#2710 review): a
+    // refused principal alert must not keep the operator from hearing about it too.
+    await this.notifyOperatorOfOutage(mailboxId, label, sent);
   }
 
   /**
@@ -151,7 +151,7 @@ export class MailboxOutageNotifier {
    * principal can use. A failed send is left unrecorded so the next failing probe retries it;
    * the gateway logs it at error level and audits it.
    */
-  private async notifyOperatorOfOutage(mailboxId: string, label: string): Promise<void> {
+  private async notifyOperatorOfOutage(mailboxId: string, label: string, principalTold: boolean): Promise<void> {
     if (this.operatorAlerted.has(mailboxId)) return;
     if (!this.deps.gateway.canDeliverNotifications()) return;
     // The dependency contract is "never throws" (createOperatorEmailLookup answers false rather
@@ -165,7 +165,9 @@ export class MailboxOutageNotifier {
         `Curia's health check for the principal's "${label}" mailbox is failing.`,
         '',
         'Mail and calendar for that account are not being read or written until it is reachable again.',
-        'Curia has already told the mailbox owner; nothing here needs you.',
+        principalTold
+          ? 'Curia has already told the mailbox owner; nothing here needs you.'
+          : 'Curia could not send the mailbox owner their alert yet and will keep trying. Only they can sign in to their mailbox again.',
         '',
         'You will not get another notice for this mailbox until it has recovered and failed again.',
       ].join('\n'),
@@ -176,7 +178,7 @@ export class MailboxOutageNotifier {
     }
     this.log.error(
       { mailboxId },
-      'Principal mailbox outage: the operator notice could not be sent; the principal was already told; retrying on the next failing probe',
+      'Principal mailbox outage: the operator notice could not be sent; retrying on the next failing probe',
     );
   }
 }

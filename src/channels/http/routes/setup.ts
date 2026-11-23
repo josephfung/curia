@@ -45,6 +45,7 @@ import {
 import { InvalidSettingError } from '../../../settings/store.js';
 import type { OutboundGateway } from '../../../skills/outbound-gateway.js';
 import {
+  confirmationAfterSave,
   readOperatorConfirmationStatus,
   sendPendingOperatorConfirmation,
   type OperatorConfirmationStatus,
@@ -582,15 +583,20 @@ export async function setupRoutes(
         ? { name: state.operatorName, email: state.operatorEmail }
         : null;
       onOperatorChanged?.(operator);
-      const confirmation = operator
-        ? await sendPendingOperatorConfirmation({
-            pool,
-            ...(outboundGateway ? { gateway: outboundGateway } : {}),
-            ...(canDeliver ? { canDeliver } : {}),
-            ...(appOrigin ? { appOrigin } : {}),
-            logger,
-          })
-        : await readOperatorConfirmationStatus(pool, logger);
+      // The state is saved: a failed lookup or send reports `failed` rather than a 500 (#2710).
+      const confirmation = await confirmationAfterSave(
+        () => operator
+          ? sendPendingOperatorConfirmation({
+              pool,
+              ...(outboundGateway ? { gateway: outboundGateway } : {}),
+              ...(canDeliver ? { canDeliver } : {}),
+              ...(appOrigin ? { appOrigin } : {}),
+              logger,
+            })
+          : readOperatorConfirmationStatus(pool, logger),
+        operator?.email,
+        logger,
+      );
       return reply.send({
         inSetup: isInSetup(state.phase),
         setup: publicState(state),

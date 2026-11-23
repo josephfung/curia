@@ -130,7 +130,9 @@ export class OnboardingWatcher {
             deps,
             task.id,
             'greeting_unanswered',
-            state.greetingSentAt === null ? { details: { reason: 'greeting_not_recorded' } } : undefined,
+            state.greetingSentAt === null
+              ? { greetingNotRecorded: true, details: { reason: 'greeting_not_recorded' } }
+              : undefined,
             stillApplies,
           );
           break;

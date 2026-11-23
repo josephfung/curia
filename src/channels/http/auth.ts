@@ -82,6 +82,8 @@ const SELF_AUTHED_API_PREFIXES = [
   // Starting onboarding (#2360): the console's dashboard alert and Start button, and the triage
   // hold release, authenticate the same way (assertSecret).
   '/api/onboarding',
+  // The console's Operator page (#2710): assertSecret, like the Setup routes it continues.
+  '/api/operator',
   // Telnyx SMS webhooks authenticate via Ed25519 signature, not bearer token (ADR-036).
   '/api/webhooks/telnyx',
 ];

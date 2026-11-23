@@ -144,6 +144,24 @@ describe('OperatorPage', () => {
     expect(inputs()[1]!.value).toBe(SAM.email);
   });
 
+  it('keeps the fields disabled while a save is in flight, so an edit made then is not overwritten', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const base = mocks.respond;
+    mocks.respond = async (path, method) => {
+      if (path === '/api/operator' && method === 'PUT') await gate;
+      return base(path, method);
+    };
+    await mount();
+    const [name] = inputs();
+    await type(name!, 'Alex Kim');
+    await act(async () => { button('Save')!.click(); });
+    expect(inputs().every((i) => i.disabled)).toBe(true);
+    await act(async () => { release(); });
+    await settle();
+    expect(inputs().every((i) => !i.disabled)).toBe(true);
+  });
+
   it('ignores a history response that is not for the latest request', async () => {
     // The mount-time history request is slow and stale; the one after Save is newer and wins.
     let releaseFirst!: () => void;

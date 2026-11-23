@@ -38,11 +38,17 @@ export function createOperatorEmailLookup(
   let lastKnown: string | undefined;
   /** Whether any read has succeeded, so `undefined` means "no operator" rather than "unknown". */
   let everRead = false;
+  /** Bumped by `remember`, so a read that started before a save or clear cannot overwrite it. */
+  let revision = 0;
 
   return {
     async read() {
+      const startRevision = revision;
       try {
-        lastKnown = (await getSetting(db, 'operator', logger))?.email;
+        const email = (await getSetting(db, 'operator', logger))?.email;
+        // A save or clear landed while this read was in flight: it is newer, keep it.
+        if (startRevision !== revision) return lastKnown;
+        lastKnown = email;
         everRead = true;
         return lastKnown;
       } catch (err) {
@@ -63,6 +69,7 @@ export function createOperatorEmailLookup(
       }
     },
     remember(operator) {
+      revision += 1;
       lastKnown = operator?.email;
       everRead = true;
     },

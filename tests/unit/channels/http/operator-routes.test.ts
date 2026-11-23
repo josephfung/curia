@@ -15,9 +15,12 @@ import type { SessionStore } from '../../../../src/channels/http/session-auth.js
 const SECRET = 'test-bootstrap-secret';
 
 /** A pool whose settings table holds one key, and whose history holds what a test says. */
-function makePool(initial: { value: unknown; updatedBy: string } | null = null) {
+function makePool(
+  initial: { value: unknown; updatedBy: string } | null = null,
+  initialConfirmation?: { email: string; attemptedAt: string; sentAt: string | null },
+) {
   let stored = initial;
-  let confirmation: { email: string; attemptedAt: string; sentAt: string | null } | undefined;
+  let confirmation = initialConfirmation;
   const history: Array<{ id: string; key: string; old_value: unknown; new_value: unknown; updated_by: string; changed_at: Date }> = [];
 
   const client = {
@@ -213,13 +216,55 @@ describe('operator routes', () => {
     await app.close();
   });
 
-  it('does not re-send the confirmation when the saved operator is unchanged', async () => {
-    pool = makePool({ value: { name: 'Sam Rivera', email: 'sam@example.com' }, updatedBy: 'console' });
+  it('does not re-send a confirmation already sent when the saved operator is unchanged', async () => {
+    const at = '2026-11-22T12:00:00.000Z';
+    pool = makePool(
+      { value: { name: 'Sam Rivera', email: 'sam@example.com' }, updatedBy: 'console' },
+      { email: 'sam@example.com', attemptedAt: at, sentAt: at },
+    );
     const { app, sendNotification } = await makeApp(pool.pool);
     const res = await put(app, { name: 'Sam Rivera', email: 'sam@example.com' });
 
     expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ confirmation: { state: 'sent', sentAt: at } });
     expect(sendNotification).not.toHaveBeenCalled();
+    // No write either: an unchanged save adds no history row.
+    expect(pool.history.filter((row) => row.key === 'operator')).toHaveLength(0);
+    await app.close();
+  });
+
+  it('retries an owed confirmation on an unchanged save, pending or failed, without rewriting the operator', async () => {
+    for (const owed of [undefined, { email: 'sam@example.com', attemptedAt: '2026-11-22T12:00:00.000Z', sentAt: null }]) {
+      pool = makePool({ value: { name: 'Sam Rivera', email: 'sam@example.com' }, updatedBy: 'console' }, owed);
+      const { app, sendNotification } = await makeApp(pool.pool);
+      const res = await put(app, { name: 'Sam Rivera', email: 'sam@example.com' });
+
+      expect(res.statusCode).toBe(200);
+      expect(sendNotification).toHaveBeenCalledTimes(1);
+      expect(res.json()).toMatchObject({ confirmation: { state: 'sent', email: 'sam@example.com' } });
+      expect(pool.history.filter((row) => row.key === 'operator')).toHaveLength(0);
+      await app.close();
+    }
+  });
+
+  it('keeps a committed save when the confirmation step throws: 200, saved, and failed (never sent)', async () => {
+    const { app } = await makeApp(pool.pool);
+    // The first settings read is the unchanged-save check; every read after the save fails, so
+    // working out the confirmation throws once the operator is already written.
+    const realQuery = pool.pool.query.getMockImplementation()!;
+    let reads = 0;
+    pool.pool.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM settings WHERE key = ANY') && ++reads > 1) throw new Error('settings read failed');
+      return realQuery(sql);
+    });
+    const res = await put(app, { name: 'Sam Rivera', email: 'sam@example.com' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      operator: { name: 'Sam Rivera', email: 'sam@example.com' },
+      confirmation: { state: 'failed', email: 'sam@example.com' },
+    });
+    expect(pool.current()).toMatchObject({ value: { name: 'Sam Rivera', email: 'sam@example.com' } });
     await app.close();
   });
 

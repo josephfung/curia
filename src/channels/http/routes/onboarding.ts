@@ -85,13 +85,14 @@ export async function onboardingRoutes(app: FastifyInstance, options: Onboarding
     }
     if (!result.ok) return reply.status(409).send(result);
     // Onboarding started. An operator confirmation Setup still owes is attempted now (#2710);
-    // it is recorded in `operator_confirmation`, and a miss here is retried on the next boot.
-    if (retryOwedOperatorConfirmation) {
-      try {
-        await retryOwedOperatorConfirmation();
-      } catch (err) {
+    // it is recorded in `operator_confirmation`, and a miss is retried on the next boot. Never
+    // awaited before the response: a send has no deadline here, and when Start schedules a
+    // restart the process exits shortly after, so the console could lose the invitation. With a
+    // restart scheduled it is skipped outright, because that boot retries it once email is up.
+    if (retryOwedOperatorConfirmation && !result.restartScheduled) {
+      void retryOwedOperatorConfirmation().catch((err: unknown) => {
         logger.error({ err }, 'onboarding: an owed operator confirmation could not be sent — onboarding did start');
-      }
+      });
     }
     // Onboarding started: recorded on every route. It happened, so a miss is logged, not an error.
     try {

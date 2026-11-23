@@ -71,6 +71,27 @@ describe('POST /api/onboarding/start', () => {
     await app.close();
   });
 
+  it('answers without waiting for the confirmation send (#2710 review)', async () => {
+    // A send that never settles must not hold the invitation back.
+    const retry = vi.fn(() => new Promise<void>(() => {}));
+    const { app } = await appWith({ retryOwedOperatorConfirmation: retry });
+    const res = await app.inject({ method: 'POST', url: '/api/onboarding/start', headers: SESSION_HEADERS, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ invitation: { id: 'inv-1' } });
+    expect(retry).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
+  it('skips the confirmation when Start schedules a restart: the boot after it retries', async () => {
+    const retry = vi.fn(async () => {});
+    const { app, onboarding } = await appWith({ retryOwedOperatorConfirmation: retry });
+    onboarding.start.mockResolvedValue({ ...STARTED, restartScheduled: true } as never);
+    const res = await app.inject({ method: 'POST', url: '/api/onboarding/start', headers: SESSION_HEADERS, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(retry).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it('refuses the access-key header without a console session (401) and starts nothing', async () => {
     const { app, onboarding } = await appWith();
     const res = await app.inject({

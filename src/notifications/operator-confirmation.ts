@@ -48,6 +48,24 @@ export function confirmationStatus(
     : { state: 'failed', email: operator.email, attemptedAt: confirmation.attemptedAt };
 }
 
+/**
+ * The confirmation status after a save, or a stand-in when working it out failed (#2710 review).
+ * The save already committed, so a failed lookup or send must not turn it into a 500: the
+ * response says `failed` (nothing claims it was sent) and the next boot or Start retries it.
+ */
+export async function confirmationAfterSave(
+  work: () => Promise<OperatorConfirmationStatus>,
+  operatorEmail: string | undefined,
+  logger: Pick<Logger, 'error'>,
+): Promise<OperatorConfirmationStatus> {
+  try {
+    return await work();
+  } catch (err) {
+    logger.error({ err }, 'operator confirmation: could not work out the status after a save — the save stands');
+    return operatorEmail !== undefined ? { state: 'failed', email: operatorEmail } : { state: 'none' };
+  }
+}
+
 /** Read both keys and derive the status. One query. */
 export async function readOperatorConfirmationStatus(
   db: Parameters<typeof getSettingRecords>[0],

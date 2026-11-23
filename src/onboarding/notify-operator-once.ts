@@ -12,8 +12,9 @@ import { type OnboardingState, type OnboardingStateDeps, updateOnboardingState }
  * change to another field (greeting sent, a principal turn, a watcher update) is never clobbered.
  * `stillApplies`, when given, is checked on the latest state inside that update: a caller that
  * decided on an earlier read (the watcher) sends nothing if that decision no longer holds.
- * The state is written first: a failed write skips the notice (logged), and a failed notice is
- * not retried, as notifyOperator never throws. No state, or state for another task: nothing is
+ * The state is written first: a failed write skips the notice (logged). A notice whose task note
+ * could not be written gives the event back, so it can be raised again; one that was recorded but
+ * not emailed keeps it, so a send failure never causes a duplicate. No state, or state for another task: nothing is
  * sent. Returns whether a notice was recorded. Never throws.
  */
 export async function notifyOperatorOnce(
@@ -39,8 +40,30 @@ export async function notifyOperatorOnce(
   const result: OperatorNoticeResult = deps.notifier
     ? await deps.notifier(taskId, event, notice)
     : await notifyOperator(deps, taskId, event, notice);
+  if (!result.recorded) {
+    // Nothing was recorded and nothing was sent (#2710 review): give the event back, so a retry
+    // (the tool asks the model for one) raises it rather than answering "already raised".
+    await releaseEventClaim(deps, taskId, event);
+    return false;
+  }
   await recordNoticeOutcome(deps, taskId, event, result.emailed);
-  return result.recorded;
+  return true;
+}
+
+/** Undo the claim on an event whose notice was never recorded. Best-effort: logged on failure. */
+async function releaseEventClaim(
+  deps: Pick<NotifyOperatorDeps, 'logger'> & Pick<OnboardingStateDeps, 'configStore' | 'stateLock'>,
+  taskId: string,
+  event: OperatorEvent,
+): Promise<void> {
+  try {
+    await updateOnboardingState(deps, (state) => {
+      if (state.taskId !== taskId || !state.operatorNotified.includes(event)) return null;
+      return { ...state, operatorNotified: state.operatorNotified.filter((e) => e !== event) };
+    });
+  } catch (err) {
+    deps.logger.error({ err, taskId, event }, 'onboarding: could not release an unrecorded operator notice; it will not be raised again this run');
+  }
 }
 
 /**
